@@ -57,7 +57,7 @@ The viewers in the browser live in the `web/` package: the `<caliper-view>`
 element, the notebook widget built on it, and the viewer page. The element
 decides per view what draws it. Where WebGPU gives an adapter, Caliper's own
 view layer compiled to WebAssembly (`web/wasm`, drawn by the
-[WebGPU backend](../explanations/rendering.md#the-webgpu-backend)) draws the
+[WebGPU backend](../applets/rendering.md#the-webgpu-backend)) draws the
 kinds its loader lists, which are now all five: heatmaps, images, points,
 series and histograms. A kind the loader does not list is drawn by small views
 written for the browser in TypeScript. Without an adapter the TypeScript views

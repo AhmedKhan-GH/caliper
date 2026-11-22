@@ -93,7 +93,7 @@ The app, `caliper dev`, `caliper list` and `caliper shot` search these folders, 
 3. The user applets folder: `CALIPER_USER_APPLETS_DIR` when it is set and not empty, otherwise `applets/` under the app-data folder.
 4. The `applets/` folder beside the executable, which holds the applets shipped with the app.
 
-[Spec applets](manifest.md#where-spec-applets-are-found) are found in the same folders and one folder down. The app, `caliper dev`, `caliper shot` and `caliper list` also search the builder's workspace's `applets/` folder ([The workspace](#the-workspace)) between items 2 and 3: the folder of `--workspace`, else of `CALIPER_WORKSPACE`, else `workspace/` in the app-data folder. They only read it, so a workspace that has not been opened yet is not created.
+[Spec applets](../applets/manifest.md#where-spec-applets-are-found) are found in the same folders and one folder down. The app, `caliper dev`, `caliper shot` and `caliper list` also search the builder's workspace's `applets/` folder ([The workspace](#the-workspace)) between items 2 and 3: the folder of `--workspace`, else of `CALIPER_WORKSPACE`, else `workspace/` in the app-data folder. They only read it, so a workspace that has not been opened yet is not created.
 
 Each development folder, from items 1 and 2, is resolved as described in [Build folders](#build-folders). A folder named twice is searched once, at its first position, and empty entries are skipped. When several folders hold copies of one applet id, the host loads the highest version that passes every check, and at equal versions the copy found first; the other copies that pass are `SHADOWED`. [Several copies of one applet](../explanations/compatibility.md#several-copies-of-one-applet) states the rule, and [Folders and environment variables](environment.md) gives the folders on each platform.
 
@@ -105,7 +105,7 @@ Each development folder, from items 1 and 2, is resolved as described in [Build 
 
 ### caliper list
 
-Lists every applet in the search folders, without opening any library. Applets are ordered by the position of their folder in the search order, then by id, then from the highest version down. Each applet takes one line, with its status, id, version, kind and folder in columns. The kind is `library` for a compiled applet and `spec` for a [spec applet](manifest.md#spec-applets), whose folder is the applet's own folder. A refused, failed or shadowed applet has its reason on the next line, indented under the id:
+Lists every applet in the search folders, without opening any library. Applets are ordered by the position of their folder in the search order, then by id, then from the highest version down. Each applet takes one line, with its status, id, version, kind and folder in columns. The kind is `library` for a compiled applet and `spec` for a [spec applet](../applets/manifest.md#spec-applets), whose folder is the applet's own folder. A refused, failed or shadowed applet has its reason on the next line, indented under the id:
 
 ```text
 READY     dev.caliper.pulse-scope  0.1.0  library  <development folder>
@@ -136,7 +136,7 @@ READY  dev.caliper.pulse-scope  0.1.0  library  <folder>/applets
 1 of 1 applets pass the checks
 ```
 
-`check` validates each [spec applet](manifest.md#spec-applets) that passes the listing checks in full, with the builder's spec library, as a launch does, and prints every error and warning of the validator under it, each with the spec's file name, its line and column, its severity and its stable code. A spec with an error fails, and its first error is its reason; warnings do not fail it. `<folder>` may be the folder of one spec applet, or a folder that holds spec applets one folder down, such as a workspace's `applets/` folder:
+`check` validates each [spec applet](../applets/manifest.md#spec-applets) that passes the listing checks in full, with the builder's spec library, as a launch does, and prints every error and warning of the validator under it, each with the spec's file name, its line and column, its severity and its stable code. A spec with an error fails, and its first error is its reason; warnings do not fail it. `<folder>` may be the folder of one spec applet, or a folder that holds spec applets one folder down, such as a workspace's `applets/` folder:
 
 ```text
 FAILED  local.broken     0.1.0  spec  <folder>/broken
@@ -227,7 +227,7 @@ When none of them holds the SDK, `build` says where it looked and lets CMake sea
 - the configure fails. When CMake found no working C++ compiler, no build tool for its generator, or no SDK, a last line says which and how to install it, such as `caliper: no Caliper SDK was found. Install it from a Caliper build with cmake --install <build folder> --prefix <prefix> --component sdk, then set CALIPER_SDK_DIR=<prefix> or use the prefix ~/caliper-sdk`;
 - the build fails, or an applet in the build folder fails the checks.
 
-`build` is built and tested on macOS. The Windows build refuses it (see [On Windows](#on-windows)); configure and build there with CMake as [SDK package](sdk-package.md#using-the-package) describes.
+`build` is built and tested on macOS. The Windows build refuses it (see [On Windows](#on-windows)); configure and build there with CMake as [SDK package](../applets/sdk-package.md#using-the-package) describes.
 
 ### caliper info
 

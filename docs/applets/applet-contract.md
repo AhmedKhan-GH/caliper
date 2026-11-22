@@ -1,4 +1,4 @@
-# ABI — epoch 2
+# Applet Contract
 
 The header below is the frozen applet contract and the single source for it. This page embeds it verbatim, so the docs build fails if the file moves. [Compatibility and epochs](../explanations/compatibility.md) explains how the contract grows.
 

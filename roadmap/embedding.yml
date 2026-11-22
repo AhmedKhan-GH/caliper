@@ -18,7 +18,7 @@ features:
     status: shipped
     summary: Points draw in the browser through the WebGPU renderer, as instanced quads with the native colour rule and depth test, because WebGPU draws a point one pixel wide.
     depends_on: [EMB-04]
-    docs: docs/explanations/rendering.md#the-webgpu-backend
+    docs: docs/applets/rendering.md#the-webgpu-backend
     design: design/streaming-and-embedding.md#the-web-viewer
     issue: null
 

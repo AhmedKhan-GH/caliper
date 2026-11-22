@@ -2,7 +2,7 @@
 
 This page explains how a tensor goes from a training step to pixels without a CPU round trip, on each platform. It
 covers where the bytes live, when it is safe to read them, how many times they are copied on each path, and what the
-fallback costs. The renderer seam it relies on is described in [Rendering](../explanations/rendering.md), and the Windows
+fallback costs. The renderer seam it relies on is described in [Rendering](../applets/rendering.md), and the Windows
 interop machinery in [Vulkan and CUDA on Windows](../explanations/vulkan-cuda.md).
 
 ## What the words mean
@@ -21,7 +21,7 @@ path actually ran that frame.
 ## How a tensor reaches a texture
 
 An applet never talks to a graphics API. It fills a `CaliperTensor`, a plain C struct whose `device` field says where
-the bytes live, and hands it to the [`tensor_bridge.v1`](../references/service-tensor-bridge-v1.md) service. The
+the bytes live, and hands it to the [`tensor_bridge.v1`](../applets/services/caliper-tensor-bridge-v1.md) service. The
 backend behind the host turns it into a texture in whatever way that platform does best, and returns an
 `ImTextureID` for `ImGui::Image`. The contract says nothing about Metal or Vulkan, which is why `CALIPER_DEV_CUDA`
 was in the device enum before the Windows backend existed.
@@ -137,7 +137,7 @@ also not needed. Correctness rests on two invariants that the applet owns, and b
 The triple buffer alone would let the frame read a slot whose producer writes are still in flight. The drain alone
 would let the worker overwrite a slot while it is being read. Together they make the in-place path safe without the
 stream-ordered gate that the texture path uses. The rule is part of the contract in the
-[geometry reference](../references/service-geometry-v1.md), so a new worker-to-frame publish path inherits it.
+[geometry reference](../applets/services/caliper-geometry-v1.md), so a new worker-to-frame publish path inherits it.
 
 ### What the stream-ordered rung buys
 
@@ -156,7 +156,7 @@ about a millisecond where an update costs a fraction of one.
 A texture update normally reads a tensor wherever it lies. Imported allocations go one step further: the applet
 exports a block of device memory once, the host imports it once, and from then on both the texture path and the
 geometry path address the memory as an allocation id plus a byte offset. This is
-[`caliper.tensor_bridge.v1_2`](../references/service-tensor-bridge-v1.md), and it is opt-in per allocation.
+[`caliper.tensor_bridge.v1_2`](../applets/services/caliper-tensor-bridge-v1.md), and it is opt-in per allocation.
 
 **Windows.** An applet allocates its torch CUDA tensors from `caliper::adapters::ExportablePool`, a torch `MemPool`
 whose blocks are created with `cuMemCreate` and a shareable handle. The host imports each block into Vulkan on first

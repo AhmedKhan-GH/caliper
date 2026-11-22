@@ -13,7 +13,7 @@ point of the service. You call `submit(label, fn, user)` from `on_frame` (or
 anywhere), and the host runs `fn` on a **host worker thread**. Your frame stays
 fluid while the work grinds. Job functions are **trusted code**. The Caliper host
 runs each one under its crash guard, the same best-effort containment it puts
-around `frame()` (see [the trust model](../explanations/trust-model.md)); it is
+around `frame()` (see [the trust model](../trust-model.md)); it is
 not a sandbox, and the header lets other hosts (the fixture host, an embedder's
 own) run jobs with no guard at all. Keep job code as disciplined as you would
 keep any code that runs without a net.
@@ -41,7 +41,7 @@ does:
 
 | Job submitted from | On a fault or exception |
 |---|---|
-| an applet entry point (`create`, `initialize`, `frame`, `cleanup`, `destroy`), or another job submitted from one | The job fails, and the applet is quarantined before the host calls it again: at its next `frame()`, or at teardown. Its status reads `crashed in background job "{label}": {fault}` (see [Refusal messages](refusals.md#quarantined-messages)). A job that threw leaves the applet restartable with `⌘R Restart`; a job that took a signal needs a Caliper restart. |
+| an applet entry point (`create`, `initialize`, `frame`, `cleanup`, `destroy`), or another job submitted from one | The job fails, and the applet is quarantined before the host calls it again: at its next `frame()`, or at teardown. Its status reads `crashed in background job "{label}": {fault}` (see [Refusal messages](../../references/refusals.md#quarantined-messages)). A job that threw leaves the applet restartable with `⌘R Restart`; a job that took a signal needs a Caliper restart. |
 | a thread the applet started itself | The job fails. The applet keeps running. |
 | an embedder, through `caliper_core_get_service` | The job fails. No applet is quarantined. |
 
@@ -94,7 +94,7 @@ while the strip is open.
 submission failed (for example, a headless host that does not vend the service).
 `is_running`/`progress_of` on an unknown or finished id return `false`/`0`.
 
-The [ML applet tutorial](../tutorials/first-ml-applet.md) walks a consumer:
+The [ML applet tutorial](../first-ml-applet.md) walks a consumer:
 SineScope (`examples/sine_scope/`) submits an MLP training loop, polls
 `cancelled()` each step, publishes loss under a mutex, and does the bounded-wait
 teardown described above.

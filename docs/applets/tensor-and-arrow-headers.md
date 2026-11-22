@@ -1,10 +1,34 @@
-# Arrow C Data Interface (`caliper/arrow_c.h`)
+# Tensor and Arrow Headers
 
-Tabular results from [`caliper.data.v1`](service-data-v1.md) cross the frozen ABI
-as **Apache Arrow C Data Interface** structures. This page explains why, and what
+This page describes the two interchange headers of the SDK: `caliper/tensor.h` for tensors and `caliper/arrow_c.h` for tables.
+
+## Tensor Header
+
+The tensor interchange type, DLPack-aligned and frozen. This section embeds the header verbatim; the docs build fails if the file moves.
+
+`CaliperTensor` is a **type, not a service**: a plain struct that describes a
+block of memory (dtype, shape, strides in elements, device, and an optional
+stream) the way DLPack does, so a torch, numpy, or mlx tensor is a cast away
+rather than a copy. It is passed *into* services, not vended by one. The
+services that take it are [`caliper.metrics.v1`](services/caliper-metrics-v1.md), whose
+`image()` accepts a CPU-resident, contiguous, HWC `u8` tensor,
+[`caliper.tensor_bridge.v1`](services/caliper-tensor-bridge-v1.md) and its revisions
+`v1_1` and `v1_2`, which turn a tensor on any supported device into a texture,
+and [`caliper.geometry.v1`](services/caliper-geometry-v1.md) through `v1_3`, which read
+tensors as point and primitive data. The layout is frozen so that GPU-resident
+tensors can cross the ABI with no CPU staging.
+
+```c
+--8<-- "sdk/include/caliper/tensor.h"
+```
+
+## Arrow Header
+
+Tabular results from [`caliper.data.v1`](services/caliper-data-v1.md) cross the frozen ABI
+as **Apache Arrow C Data Interface** structures. This section explains why, and what
 the vendored header is.
 
-## What it is
+### What it is
 
 The [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html)
 is a tiny, stable, language-agnostic ABI for passing columnar data between
@@ -20,7 +44,7 @@ projects.
 (which sets the callback to NULL). A struct whose `release` is NULL is empty —
 that is also how end-of-stream is signalled.
 
-## Why it is the ABI's tabular boundary
+### Why it is the ABI's tabular boundary
 
 Caliper's contract is a **frozen C ABI**: no third-party type may
 appear in a service header, or the applet and host would have to agree on that
@@ -32,12 +56,12 @@ frozen structs and interoperate by layout alone. DuckDB exports its results as
 these structs natively, so `data.v1` gets a zero-invention path from SQL result to
 applet.
 
-## The vendored header
+### The vendored header
 
 `sdk/include/caliper/arrow_c.h` is the spec's definitions copied verbatim. Two
 details matter:
 
-- It is the **one** header [`data_v1.h`](service-data-v1.md) is allowed to
+- It is the **one** header [`data_v1.h`](services/caliper-data-v1.md) is allowed to
   include — the frozen `data.v1` struct references `ArrowArrayStream*` from here.
 - Its include guards are the spec's own **`ARROW_C_DATA_INTERFACE` /
   `ARROW_C_STREAM_INTERFACE`** (not `#pragma once`). That is deliberate: another
@@ -45,7 +69,7 @@ details matter:
   in the same translation unit **coexists** without redefinition, because whichever
   copy is included first wins and the rest compile to nothing.
 
-Most applets never touch these structs directly — the [`caliper::Data`](sugar.md)
+Most applets never touch these structs directly — the [`caliper::Data`](cpp-sugar.md)
 sugar's `drain_numeric` helper walks the stream and releases it for you. Reach for
 the raw interface only when you need non-numeric columns or streaming control.
 

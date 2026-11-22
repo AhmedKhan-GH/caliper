@@ -1,4 +1,4 @@
-# Trust model
+# Trust Model
 
 Caliper runs applets **in-process**: an applet is a shared library the host
 `dlopen`s and calls directly. That buys raw performance and a zero-ceremony API
@@ -24,7 +24,7 @@ legibly, before they can turn into undefined behaviour.
 
 Two checks back the manifest up. The applet's `id` names its data folder, so the
 parser accepts only path-safe ids (`[a-z0-9.-]`, see
-[Manifest](../references/manifest.md)) and the loader checks again before it
+[Manifest](manifest.md)) and the loader checks again before it
 builds the path: a crafted id such as `../../x` cannot reach outside the data
 root. And after the `dlopen`, the loader checks the binary's own list of
 required services against the host, so a manifest that under-declares cannot
@@ -198,7 +198,7 @@ everything else here, would need an out-of-process boundary, which Caliper does 
 
 ## Spec applets are data
 
-A [spec applet](../references/manifest.md#spec-applets) is a folder with a
+A [spec applet](manifest.md#spec-applets) is a folder with a
 manifest and a spec, a text file of sources, panels and a layout, and no
 library. The loader lists it and never maps or executes anything for it: there
 is no `dlopen`, no descriptor is called, and no applet entry point runs, so the
@@ -225,7 +225,7 @@ names for development.
 
 The loader trusts the files in the folders it scans. Two things are in place around them, and two are not.
 
-- **Digests.** The artifact store ([`caliper.artifacts.v1`](../references/service-artifacts-v1.md)) keys every stored file by its sha256 digest, so identical bytes are stored once and a file is always found by its content.
+- **Digests.** The artifact store ([`caliper.artifacts.v1`](services/caliper-artifacts-v1.md)) keys every stored file by its sha256 digest, so identical bytes are stored once and a file is always found by its content.
 - **Signing is undecided.** The loader does not check a signature on an applet. Whether and how third-party applets will be signed is an open question, to be settled before the first third-party applet ships.
 - **Data folders are a convention.** Each applet gets its own data folder, `data/<id>/` under the app-data root. Nothing enforces it. An applet runs in the host's process with the host's file permissions and can read any file the host can read. The restriction on the id (`[a-z0-9.-]`) only keeps the folder name a single, safe path component.
 - **No sandbox.** Everything in this page that sounds like a boundary is containment of faults, not protection against a hostile applet. Load only applets you trust.

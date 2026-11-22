@@ -1,4 +1,4 @@
-# Your first ML applet
+# First ML Applet
 
 The ladder from an empty window to a live machine-learning demonstration,
 one capability per stage. We build **SineScope**: a tiny MLP that learns
@@ -18,7 +18,7 @@ cmake --build --preset release
 CALIPER_AUTOLAUNCH=dev.example.sine-scope ./cmake-build-release/caliper
 ```
 
-Prereqs: [Development basics](development-basics.md) (the mental model),
+Prereqs: [Development basics](../tutorials/development-basics.md) (the mental model),
 [Your first applet](first-applet.md) (the hello walkthrough).
 
 ## Stage 0 — the build and the manifest
@@ -129,7 +129,7 @@ politely instead of failing:
 ```
 
 (The tutorial stages the weights to CPU for simplicity;
-[`tensor_bridge.v1`](../references/service-tensor-bridge-v1.md) also draws device
+[`tensor_bridge.v1`](services/caliper-tensor-bridge-v1.md) also draws device
 tensors without them leaving the GPU.)
 
 Cleanup grows its symmetric duties — cancel, bounded wait, release:

@@ -31,7 +31,7 @@ Inside it:
 | `streams/` | The stream files, one `<pid>.json` (mode 0600, in a folder of mode 0700) for each script whose `caliper.serve()` listens: its stream link with the token and what the app's session list shows of it, removed when the server closes. The app's `F4 Attach to process` lists these streams; see [Attach to a stream by its link](../python/script-attachment.md#attach-to-a-stream-by-its-link). |
 | `imgui.ini` | The saved window layout. Delete it to return to the default layouts. |
 | `fonts/SternbildDisplay-Regular.otf` | The default location of the display face, used when `CALIPER_DISPLAY_FONT` is not set. |
-| `metrics.duckdb`, `data.duckdb`, `artifacts.duckdb` | The stores behind [`metrics.v1`](service-metrics-v1.md), [`data.v1`](service-data-v1.md) and [`artifacts.v1`](service-artifacts-v1.md). |
+| `metrics.duckdb`, `data.duckdb`, `artifacts.duckdb` | The stores behind [`metrics.v1`](../applets/services/caliper-metrics-v1.md), [`data.v1`](../applets/services/caliper-data-v1.md) and [`artifacts.v1`](../applets/services/caliper-artifacts-v1.md). |
 | `artifacts/` | The content-addressed files of `artifacts.v1`. |
 | `workspace/` | The builder's default workspace: its loaders, specs, saved spec applets, the command journal `journal/commands.jsonl` and `workspace.duckdb`. The app creates it only when the builder first needs it, and `--workspace` or `CALIPER_WORKSPACE` names another folder in its place. See [The workspace](cli.md#the-workspace). |
 
@@ -147,4 +147,4 @@ On Windows the Vulkan renderer reports how each tensor update travelled. Each di
 
 Other host lines carry a tag: `[jobs]` for failed jobs and jobs still running at shutdown, `[ui]` for a UI state unwound after an applet fault, `[metrics]`, `[artifacts]` and `[data]` when a store fails to open, `[duckdb]` for an ignored limit override, `[live]` for session events, and `[session]` for the builder session: its workspace opened, not opened or closed, each command that changed the workspace, and the command script's failures and end. A program that embeds the core through Caliper Embed receives its own `renderer: <name>` line through `log_fn`, and applet log lines tagged `[applet] `.
 
-The device that `caliper.device.v1` reports is found at startup: Metal on Apple, and the CUDA driver API elsewhere. See [`caliper.device.v1`](service-device-v1.md).
+The device that `caliper.device.v1` reports is found at startup: Metal on Apple, and the CUDA driver API elsewhere. See [`caliper.device.v1`](../applets/services/caliper-device-v1.md).

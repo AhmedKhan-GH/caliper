@@ -1,4 +1,4 @@
-# Debug an applet
+# Applet Debugging
 
 An applet is a shared library the host loads at runtime, so you don't debug it as
 its own program — you attach a debugger to the running **`caliper`** host. The
@@ -11,7 +11,7 @@ inspection inside `on_init` / `on_frame` / `on_cleanup`.
 Build both the host and your applet with debug info, then launch and attach.
 The host builds with the `debug` preset in your Caliper checkout, and the
 applet builds in its own folder against the installed SDK, as in
-[Your first applet](../tutorials/first-applet.md#4-build-it), with
+[Your first applet](first-applet.md#4-build-it), with
 `-DCMAKE_BUILD_TYPE=Debug`. Start the host with `caliper dev` and the applet's
 build folder, so that it loads your debug build first.
 
@@ -88,7 +88,7 @@ after the host has gone Home. Activity logs it as a `job failed` row. If the job
 was submitted from one of the applet's entry points, the applet is quarantined
 as well: Activity's next row is `quarantined`, and the status reads
 `crashed in background job "train": <reason>` (see
-[`caliper.jobs.v1`](../references/service-jobs-v1.md)).
+[`caliper.jobs.v1`](services/caliper-jobs-v1.md)).
 
 When a fault interrupts the applet's UI code, the host unwinds whatever the
 applet left open and prints what it closed, e.g.
@@ -138,7 +138,7 @@ timers, working from the outside in.
 **The frame watchdog.** The host times the applet's `on_frame` call. When it
 exceeds about 250 ms for three consecutive frames, the menu bar shows
 `slow: long work belongs in background jobs` and the flag stays until the applet
-is relaunched (see [the trust model](../explanations/trust-model.md#frame-watchdog)).
+is relaunched (see [the trust model](trust-model.md#frame-watchdog)).
 The watchdog times only `on_frame`. A stall in rendering, in presenting or in a
 different thread's contention with the frame thread does not raise it, so a
 frame that feels slow with no flag raised points away from your frame function.
@@ -176,7 +176,7 @@ and each rebuild took longer than the last. The fixes that apply to any applet:
   generation counter.
 - Build tables for live visualization as `TEMP` tables, which live in memory and
   do not write to the store's log. See
-  [`caliper.data.v1`](../references/service-data-v1.md#persistence-and-high-frequency-rebuilds).
+  [`caliper.data.v1`](services/caliper-data-v1.md#persistence-and-high-frequency-rebuilds).
 - Create a texture once and call `update_texture` afterwards. On Vulkan with CUDA
   a create costs several times an update, so releasing and re-creating a texture
   every refresh is a frame-thread cost.

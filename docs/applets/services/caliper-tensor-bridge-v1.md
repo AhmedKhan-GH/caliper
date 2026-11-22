@@ -20,8 +20,8 @@ if a file moves.
 ## Semantics
 
 On the native backends the tensor's device memory becomes the texture with no CPU round trip. The ABI never names a
-graphics API, so the renderer stays swappable (see [Rendering](../explanations/rendering.md)). What the paths cost is in
-[Zero-copy tensor visualization](../python/zero-copy-tensors.md).
+graphics API, so the renderer stays swappable (see [Rendering](../rendering.md)). What the paths cost is in
+[Zero-copy tensor visualization](../../python/zero-copy-tensors.md).
 
 ### Acceptance rules
 
@@ -34,12 +34,12 @@ The host validates every tensor before it becomes a texture. A violation returns
 - the tensor is **contiguous** (row-major, no gaps);
 - its device is **CPU or the active backend's device** (Metal on macOS, CUDA on Windows).
 
-The applet-side [torch adapter](adapters.md) enforces the mirror of these rules before the tensor reaches the host,
+The applet-side [torch adapter](../adapters.md) enforces the mirror of these rules before the tensor reaches the host,
 and rejects rather than silently copying.
 
 ### Frame thread only
 
-Every bridge entry point is frame-thread-only. Unlike [`caliper.metrics.v1`](service-metrics-v1.md), which a job thread
+Every bridge entry point is frame-thread-only. Unlike [`caliper.metrics.v1`](caliper-metrics-v1.md), which a job thread
 may call, the bridge touches renderer state and must be called from the applet's `frame()`. In the usual pattern the
 training worker snapshots weights under a mutex and never calls the bridge, and the frame thread reads that snapshot
 and does every upload. Textures are owned by the frame thread and released on it, after the job wait and before
@@ -60,7 +60,7 @@ Each path is tested by uploading known tensors, reading the texture back and com
 reference. The `caliper_gfx_tests` suite has an environment per backend: OpenGL, Metal, Vulkan (CPU-staged rows) and
 Vulkan with CUDA (device rows). The `compute` path is exact against `map_f32_to_rgba8` at ragged sizes such as 4 by 4,
 5 by 3 and 17 by 9, and the `blit` path against `expand_u8_to_rgba8`. The Windows ladder is described in
-[Vulkan and CUDA on Windows](../explanations/vulkan-cuda.md).
+[Vulkan and CUDA on Windows](../../explanations/vulkan-cuda.md).
 
 !!! note "One tensor cannot be both"
     A single tensor is either zero-copy on Metal or accepted on OpenGL, not both. The OpenGL bridge's active device is
@@ -77,7 +77,7 @@ Vulkan with CUDA (device rows). The `compute` path is exact against `map_f32_to_
 
 Creating a texture costs far more than updating one. On the Windows backend, creating and releasing a texture at
 applet sizes costs about 1 ms together, and an update costs from about 30 microseconds to 1.4 ms depending on the texture size
-([measured costs](../explanations/vulkan-cuda.md#measured-costs)).
+([measured costs](../../explanations/vulkan-cuda.md#measured-costs)).
 
 !!! warning "The range is pinned in v1"
     `update_texture` has no colormap-range channel. The `[vmin,vmax]` of a colormapped texture is fixed at creation.
@@ -115,12 +115,12 @@ stream ordering where the host honors it.
 On a host that vends `caliper.tensor_bridge.v1_1`, the `caps()` query says what is honored. Metal honors
 stream-ordered handoff, and Vulkan honors it when the device exports timeline semaphores. Where it is honored the adapter skips the drain
 and puts the producer's stream in `CaliperTensor.stream`. Otherwise v1's drain applies. The adapter side and the
-reasons are in [Adapters](adapters.md) and
-[Zero-copy tensor visualization](../python/zero-copy-tensors.md#the-sync-ladder).
+reasons are in [Adapters](../adapters.md) and
+[Zero-copy tensor visualization](../../python/zero-copy-tensors.md#the-sync-ladder).
 
 ## Additive revisions: v1_1 and v1_2
 
-Two additive revisions extend the bridge under one discipline, the [growth rules](../explanations/compatibility.md#growth-rules).
+Two additive revisions extend the bridge under one discipline, the [growth rules](../../explanations/compatibility.md#growth-rules).
 The struct is prefix-identical, with the same members in the same order and with the same semantics. New members are
 appended, and each revision has one new capability bit. There is no ABI epoch bump, and the earlier headers, tables
 and ids stay frozen. An applet negotiates by asking the host for each id and calling `caps()`. A missing id or an
@@ -151,6 +151,6 @@ tensor data.
   place, so `[offset_bytes, offset_bytes + extent)` must not be rewritten until the next update of the same texture.
 
 `CaliperAllocId` is an opaque `uint64_t`: `0` is invalid, and it is compare-only. It is the import machinery that
-[`caliper.geometry.v1` and its revisions](service-geometry-v1.md) draw from. Geometry sources are pairs of
+[`caliper.geometry.v1` and its revisions](caliper-geometry-v1.md) draw from. Geometry sources are pairs of
 `(CaliperAllocId, byte offset)` into these same imports, and they reuse the caches, gates and lifecycle of v1_2. The
-applet side of an import is [`ExportablePool`](torch-on-each-platform.md#opting-in-to-exportablepool).
+applet side of an import is [`ExportablePool`](../torch-per-platform.md#opting-in-to-exportablepool).

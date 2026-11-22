@@ -25,7 +25,7 @@ The `hello` applet and `throwing_applet` are built first, because the loader tes
 
 ## The fixture host
 
-`sdk/testing/caliper/fixture_host.h` is a headless fake `CaliperHost`. It serves `caliper.log.v1` and returns `NULL` for every other service, and a test can inject a table for any other service with `provide`. It lets an applet's logic and the sugar run without launching the UI. Only one fixture exists per process. The CMake target is `caliper::sdk_testing`; see [C++ sugar](../references/sugar.md) for its use in an applet's own tests.
+`sdk/testing/caliper/fixture_host.h` is a headless fake `CaliperHost`. It serves `caliper.log.v1` and returns `NULL` for every other service, and a test can inject a table for any other service with `provide`. It lets an applet's logic and the sugar run without launching the UI. Only one fixture exists per process. The CMake target is `caliper::sdk_testing`; see [C++ sugar](../applets/cpp-sugar.md) for its use in an applet's own tests.
 
 ## The pixel-exact graphics suite
 
@@ -65,7 +65,7 @@ The app-data guard backs this up ([Folders and environment variables](../referen
 
 ## Package and boundary tests
 
-`caliper_sdk_install` (label `sdk`) proves that an applet can build against the installed SDK alone, and that it cannot include `<caliper/embed.h>`. It installs the SDK component of the build into a work folder, copies `tests/sdk_install_probe` and `examples/hello` there, and builds each copy with only `-DCMAKE_PREFIX_PATH` pointing at the install. It then runs the probe, which draws a headless frame with the installed UI stack and calls the fixture host, checks that hello's library and its stamped manifest exist with the expected `[build]` lines, and fails if either build refers to a file in the source tree. `tests/sdk_install_probe/run.cmake` holds the steps, and `CALIPER_SDK_PROBE_DIR` sets the work folder, which CI points outside the checkout. See [SDK package](../references/sdk-package.md).
+`caliper_sdk_install` (label `sdk`) proves that an applet can build against the installed SDK alone, and that it cannot include `<caliper/embed.h>`. It installs the SDK component of the build into a work folder, copies `tests/sdk_install_probe` and `examples/hello` there, and builds each copy with only `-DCMAKE_PREFIX_PATH` pointing at the install. It then runs the probe, which draws a headless frame with the installed UI stack and calls the fixture host, checks that hello's library and its stamped manifest exist with the expected `[build]` lines, and fails if either build refers to a file in the source tree. `tests/sdk_install_probe/run.cmake` holds the steps, and `CALIPER_SDK_PROBE_DIR` sets the work folder, which CI points outside the checkout. See [SDK package](../applets/sdk-package.md).
 
 `caliper_sdk_install` also checks that the SDK holds none of the embedding headers, and builds an applet source that includes `caliper/embed.h` against every SDK target, which must fail because the header is not found. When the build has the embedding library, the test first installs the `caliper-embed` package into the same prefix, so the check holds with both packages installed together: the embedding headers live under an include root of their own.
 

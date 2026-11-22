@@ -1,8 +1,6 @@
 nav:
   - index.md
   - compatibility.md
-  - trust-model.md
-  - rendering.md
   - vulkan-cuda.md
   - testing.md
   - ui-principles.md

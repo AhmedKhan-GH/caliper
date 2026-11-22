@@ -9,4 +9,5 @@ nav:
       - introduction/python-quickstart.md
       - introduction/architecture.md
   - Python: python
+  - Applets: applets
   - Roadmap: roadmap

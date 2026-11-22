@@ -2,7 +2,7 @@
 
 Before the host loads any applet code, it runs a pure **negotiation** check over
 the applet's manifest and the host's own capabilities (see
-[Manifest](manifest.md) and [ABI (epoch 2)](abi.md)). If the applet is
+[Manifest](../applets/manifest.md) and [ABI (epoch 2)](../applets/applet-contract.md)). If the applet is
 incompatible, negotiation refuses it and the landing screen shows one of the
 messages below as the applet's status text — no code from the applet is
 executed.
@@ -92,8 +92,8 @@ its own reason, so the landing screen shows why a newer copy was passed over.
 
 | Message template | When it fires | What to do |
 |------------------|---------------|------------|
-| _(manifest parser text, passed through verbatim)_ | `scan()` could not parse `caliper.toml` — malformed TOML or a missing/invalid required field. The error is whatever the [manifest](manifest.md) parser reported. | Fix the manifest as the message describes; see [Manifest](manifest.md) for the required fields and formats. |
-| `applet.id is not a valid applet id (lowercase reverse-DNS, [a-z0-9.-]): {id}` | The parser's own message for an `id` that breaks the [id rules](manifest.md#applet-ids): a character outside `[a-z0-9.-]`, an empty segment (`..`, a leading or trailing dot), or more than 128 characters. | Rename the applet to a lowercase reverse-DNS id, and use the same id in the descriptor. |
+| _(manifest parser text, passed through verbatim)_ | `scan()` could not parse `caliper.toml` — malformed TOML or a missing/invalid required field. The error is whatever the [manifest](../applets/manifest.md) parser reported. | Fix the manifest as the message describes; see [Manifest](../applets/manifest.md) for the required fields and formats. |
+| `applet.id is not a valid applet id (lowercase reverse-DNS, [a-z0-9.-]): {id}` | The parser's own message for an `id` that breaks the [id rules](../applets/manifest.md#applet-ids): a character outside `[a-z0-9.-]`, an empty segment (`..`, a leading or trailing dot), or more than 128 characters. | Rename the applet to a lowercase reverse-DNS id, and use the same id in the descriptor. |
 | `applet id is not path-safe: {id}` | The loader's own check of the id, made before it builds the applet's data folder path. The parser refuses the same ids first, so this appears only for a manifest that reached the loader another way. | As above. |
 | `applet binary not found next to {manifest_filename}` | `scan()` found the manifest but no sibling shared library. The loader looks for `<stem>` and `lib<stem>` with the platform extension (`.dylib`/`.so`/`.dll`) beside `<stem>.caliper.toml`. | Ship the compiled applet library next to its manifest, named to match the manifest's stem. |
 | `load failed: {dlerror}` | `dlopen`/`LoadLibrary` failed at `launch()` — a corrupt image, a wrong architecture, or an unresolved dependency. `{dlerror}` is the OS loader's own text. | Rebuild the applet for this platform/arch and make sure its dependencies resolve. |
@@ -115,7 +115,7 @@ its own reason, so the landing screen shows why a newer copy was passed over.
 | `crashed in initialize(): {fault}` | The applet faulted inside `initialize()`. After a signal the instance is abandoned — `destroy()` is **not** called on it; after an exception it is kept for Restart, which calls `destroy()` (not `cleanup()`, since `initialize()` never succeeded). | Fix the fault in the applet's init path, then restart it. |
 | `crashed in frame(): {fault}` | The applet faulted during a `frame()` call. The instance's `frame()` is never called again; after a signal the instance is abandoned, after an exception it is kept for Restart. | Fix the fault in the applet's per-frame path, then restart it. |
 | `crashed during teardown: {fault}` | The applet faulted in `cleanup()` or `destroy()` while shutting down. Teardown stops; the dylib is left mapped. After an exception in `cleanup()`, the `destroy()` still owed is made by Restart. | Fix the fault in the applet's teardown path, then restart it. |
-| `crashed in background job "{label}": {fault}` | A job the applet submitted through `caliper.jobs.v1` — from one of its entry points, or from another of its jobs — faulted or threw (see [jobs.v1](service-jobs-v1.md)). The loader quarantines the applet before its next `frame()` or at teardown, whichever comes first; a `frame()` already running finishes. A job that threw leaves the applet restartable; a job that took a signal does not. | Fix the fault in the job function, then restart the applet. |
+| `crashed in background job "{label}": {fault}` | A job the applet submitted through `caliper.jobs.v1` — from one of its entry points, or from another of its jobs — faulted or threw (see [jobs.v1](../applets/services/caliper-jobs-v1.md)). The loader quarantines the applet before its next `frame()` or at teardown, whichever comes first; a `frame()` already running finishes. A job that threw leaves the applet restartable; a job that took a signal does not. | Fix the fault in the job function, then restart the applet. |
 | `crashed while restarting: {fault}` | Restart's guarded `cleanup()` or `destroy()` of the old instance faulted. The applet is quarantined again with this reason; after a throw from `cleanup()`, a later Restart tries the old instance's `destroy()` again. | Fix the fault in the applet's teardown path; after a signal, restart Caliper. |
 
 `{fault}` is the crash guard's description of the fault: a signal such as
@@ -148,7 +148,7 @@ C++ exception, and a restart of Caliper when it was a signal (see
 
 ## Spec applets
 
-A [spec applet](manifest.md#spec-applets) has no library, so none of the steps that open or call one applies to it: there is no `dlopen`, no descriptor, no lifecycle hook, and it is never `QUARANTINED`. The loader lists it with the same statuses, `READY`, `REFUSED`, `FAILED` and `SHADOWED`, and chooses among copies of one id by the same rule, whatever their kind.
+A [spec applet](../applets/manifest.md#spec-applets) has no library, so none of the steps that open or call one applies to it: there is no `dlopen`, no descriptor, no lifecycle hook, and it is never `QUARANTINED`. The loader lists it with the same statuses, `READY`, `REFUSED`, `FAILED` and `SHADOWED`, and chooses among copies of one id by the same rule, whatever their kind.
 
 When the loader lists a spec applet it makes only the cheap checks, in this order: the manifest parses (its messages are the parser's, as for a compiled applet, and include the keys a spec applet refuses), the id is path-safe, the spec file passes the file checks, its `caliper_spec` line is read, then `min_host`, the spec runtime and the spec format version. The first failure wins. The full validation of the spec runs when the applet is launched and in `caliper check`, through the builder's spec library, and its first error becomes the applet's reason.
 

@@ -12,7 +12,7 @@ Service id: `caliper.data.v1`.
 
 Datasets become **named, shared, queryable resources** instead of per-applet
 private downloads. The query engine is the host's embedded DuckDB; results cross
-the ABI as [**Arrow C streams**](arrow.md) — no DuckDB or Arrow C++ type ever
+the ABI as [**Arrow C streams**](../tensor-and-arrow-headers.md#arrow-header) — no DuckDB or Arrow C++ type ever
 appears in the frozen header. Four entry points, all callable from a **job
 thread**.
 
@@ -51,7 +51,7 @@ This is the sharp edge — read it before you drain a stream.
 ### Threading and errors
 
 `query`/`register_dataset`/`open_dataset` serialize on one internal mutex (the
-[artifacts](service-artifacts-v1.md#threading-and-string-lifetime)/metrics model).
+[artifacts](caliper-artifacts-v1.md#threading-and-string-lifetime)/metrics model).
 `last_error()` is **thread-local**: each thread sees only the error of *its* last
 failing call, so one thread's failure never clobbers another's diagnostic. If the
 store failed to open at start-up the service is still vended but inert (every call
@@ -80,13 +80,13 @@ for data that should outlive the session.
 Run the rebuild on a thread the applet owns, never on the frame thread. A query
 is file and catalog work whose cost differs by platform, and a slow one on the
 frame thread stalls every window. See
-[The frame loop](../introduction/architecture.md#the-frame-loop).
+[The frame loop](../../introduction/architecture.md#the-frame-loop).
 
 ### Resource limits
 
 The host runs three DuckDB stores: `data.duckdb` for this service,
-`metrics.duckdb` for [`caliper.metrics.v1`](service-metrics-v1.md) and the
-[`caliper.artifacts.v1`](service-artifacts-v1.md) index. Each opens with its own thread
+`metrics.duckdb` for [`caliper.metrics.v1`](caliper-metrics-v1.md) and the
+[`caliper.artifacts.v1`](caliper-artifacts-v1.md) index. Each opens with its own thread
 count and memory limit instead of DuckDB's defaults (every hardware thread and
 80% of RAM, per instance). This section is the one place the limits are
 described; the metrics and artifacts pages link here.
@@ -144,7 +144,7 @@ CALIPER_DUCKDB_MEMORY_LIMIT=1GB CALIPER_DUCKDB_DATA_MEMORY_LIMIT=8GB ./build/cal
 
 ### C++ sugar
 
-The [`caliper::Data`](sugar.md) wrapper is falsy-inert when absent and exposes
+The [`caliper::Data`](../cpp-sugar.md) wrapper is falsy-inert when absent and exposes
 the raw stream API plus one helper — `drain_numeric` — that drains an
 all-numeric-columns result into column-major `double`s **and releases the
 stream**, so simple consumers never touch Arrow buffers:

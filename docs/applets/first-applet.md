@@ -1,6 +1,6 @@
-# Your first applet
+# First Applet
 
-*(New here? [Development basics](development-basics.md) explains what you write vs. what the host provides, and where every library comes from.)*
+*(New here? [Development basics](../tutorials/development-basics.md) explains what you write vs. what the host provides, and where every library comes from.)*
 
 This walks the **hello** applet — the smallest complete Caliper applet on ABI
 epoch 2. It is the canonical starting point: one manifest, one macro, three
@@ -45,7 +45,7 @@ required = ["caliper.ui.v1", "caliper.log.v1"]
 half-working `Host`. The `id`, `version`, and `services` here **must agree** with
 the fields you pass to the `CALIPER_APPLET` macro (below) — the loader verifies
 the two and rejects the applet if they drift. See
-[reference/manifest.md](../references/manifest.md) for the full schema.
+[reference/manifest.md](manifest.md) for the full schema.
 
 ## 2. The macro
 
@@ -73,7 +73,7 @@ Your class overrides three methods from `caliper::Applet`:
 - **`on_init(Host& host)`** runs once when the applet is opened. The `Host&` is
   valid for your whole lifetime — keep the pointer. Do setup here, and log
   through the host (`host.log_info(...)`), never `printf` (see
-  [howto/debug-an-applet.md](../guides/debug-an-applet.md) for why). Return
+  [howto/debug-an-applet.md](applet-debugging.md) for why). Return
   `false` to abort loading.
 
 - **`on_frame(const Frame& f)`** runs every frame. Everything visible happens
@@ -170,12 +170,12 @@ provides `caliper_add_applet()` itself; an applet of your own can drop the `if`
 and keep its three lines. `caliper_add_applet()` checks the manifest when you
 configure, builds the library against `caliper::sdk` and `caliper::ui_stack`,
 and writes a copy of the manifest beside it with a `[build]` table that records
-the SDK version and the UI-stack hash. [SDK package](../references/sdk-package.md)
+the SDK version and the UI-stack hash. [SDK package](sdk-package.md)
 describes the function and the package.
 
 This tutorial copies hello so that the walk above matches the code you build.
 To start an applet of your own, `caliper new <name>` writes a project of the
-same shape, as [Development basics](development-basics.md#the-development-loop)
+same shape, as [Development basics](../tutorials/development-basics.md#the-development-loop)
 shows.
 
 ## 5. Load it into Caliper
@@ -220,5 +220,5 @@ way must ship. If the row is missing, run `caliper check` on the folder. If its
 status is `REFUSED`, `FAILED` or `QUARANTINED` instead of `READY`, the **Inspector** shows the
 loader's reason under Status (see the
 [refusal reference](../references/refusals.md)). Esc, or the `esc Home` button,
-returns to the landing screen. [Development basics](development-basics.md#the-landing-screen)
+returns to the landing screen. [Development basics](../tutorials/development-basics.md#the-landing-screen)
 describes the panes and keys.

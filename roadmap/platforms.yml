@@ -9,7 +9,7 @@ features:
     status: shipped
     summary: macOS is the primary platform, where the host draws with its own Metal renderer and takes tensors from torch on MPS without a copy.
     depends_on: []
-    docs: docs/explanations/rendering.md#backends
+    docs: docs/applets/rendering.md#backends
     issue: null
 
   - id: PLT-02

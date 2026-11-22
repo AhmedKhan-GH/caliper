@@ -16,8 +16,8 @@ package](#the-caliper-embed-package), as `embed_host` does in the
 [Embed Caliper in a program](../guides/embed-caliper.md) walks through it.
 
 This page describes the embedder-facing contract. It is not the applet-facing
-ABI: applets link `caliper::sdk` and use [`caliper/abi.h`](abi.md) and the
-[C++ sugar](sugar.md). `caliper/embed.h` lives on a separate include root, so an
+ABI: applets link `caliper::sdk` and use [`caliper/abi.h`](../applets/applet-contract.md) and the
+[C++ sugar](../applets/cpp-sugar.md). `caliper/embed.h` lives on a separate include root, so an
 applet cannot `#include <caliper/embed.h>`. Embedding a core from inside an
 applet would be a category error, and the include topology rules that spelling
 out: the installed headers sit under `include/caliper-embed`, which no SDK
@@ -113,7 +113,7 @@ those canvases and never paints applet pixels.
 | `HostRenderer` + tensor bridge + geometry | **Caliper Embed** | the zero-copy claim travels with the core |
 | Applet loader + service registry + services | **Caliper Embed** | the same registry applets already see |
 | libtorch (one per process) | **Caliper Embed** | the embedder must NOT link its own torch; the core owns device/pack policy |
-| Crash containment | **Caliper Embed** | applet faults are caught by the core's guard and surfaced via `crash_fn`; the embedder is not taken down. The guard's signal handlers are installed once per process and pass faults outside applet calls on to the handlers installed before them, so an embedder's own crash reporter still sees its own crashes ([trust model](../explanations/trust-model.md#every-applet-call-is-guarded)) |
+| Crash containment | **Caliper Embed** | applet faults are caught by the core's guard and surfaced via `crash_fn`; the embedder is not taken down. The guard's signal handlers are installed once per process and pass faults outside applet calls on to the handlers installed before them, so an embedder's own crash reporter still sees its own crashes ([trust model](../applets/trust-model.md#every-applet-call-is-guarded)) |
 
 ## Per-core settings and limits
 

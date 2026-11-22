@@ -9,7 +9,7 @@ features:
     status: shipped
     summary: The spec format describes a dashboard as text, with sources, panels built from seven primitives, bindings and a layout, in a TOML form and a canonical JSON form.
     depends_on: []
-    docs: docs/references/manifest.md#spec-applets
+    docs: docs/applets/manifest.md#spec-applets
     design: design/spec-format.md
     issue: null
 
@@ -72,7 +72,7 @@ features:
     status: shipped
     summary: A spec applet is a folder with a manifest and a spec and no library, which the loader lists, validates and the app draws as a page without running applet code.
     depends_on: [COR-05, SPC-02]
-    docs: docs/references/manifest.md#spec-applets
+    docs: docs/applets/manifest.md#spec-applets
     design: design/spec-format.md#the-manifest-of-a-spec-applet
     issue: null
 

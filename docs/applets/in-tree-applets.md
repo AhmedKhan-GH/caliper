@@ -1,11 +1,11 @@
-# Applets
+# In-Tree Applets
 
 This page lists the applets on the `main` branch. Each entry gives the
 applet's manifest id, what it shows, the service revisions it asks for and what
 it does when a capability is missing. The service lists come from each
 applet's `*.caliper.toml`; every applet also requires `caliper.ui.v1` and
 `caliper.log.v1`, which the entries leave out. The manifest format is in
-[Manifest](manifest.md), and the services are in the [catalog](services.md).
+[Manifest](manifest.md), and the services are in the [catalog](services/service-catalog.md).
 
 Nine applets live under `applets/`. Two tutorial applets and an embedding example
 live under `examples/`. The core build compiles no applet: each applet folder
@@ -17,7 +17,7 @@ Several applets share one pattern, described in
 [Zero-copy](../python/zero-copy-tensors.md). A worker thread computes with torch and
 writes into tensors allocated from an
 [`ExportablePool`](adapters.md#exportable_poolhpp), and the renderer draws from
-that same memory through [`caliper.geometry.v1`](service-geometry-v1.md) without a
+that same memory through [`caliper.geometry.v1`](services/caliper-geometry-v1.md) without a
 copy. Each of these applets states in its window whether the zero-copy path
 actually drew the current frame, and says which fallback ran when it did not
 ([Platform rules](../introduction/architecture.md#platform-rules)).
@@ -162,7 +162,7 @@ actually drew the current frame, and says which fallback ran when it did not
 
 - **Manifest id:** `dev.caliper.pulse-scope`, version 0.1.0.
 - **Shows:** this machine's own vitals. PulseScope enumerates every
-  [`caliper.feed.v1`](service-feed-v1.md) channel the host provides and draws one
+  [`caliper.feed.v1`](services/caliper-feed-v1.md) channel the host provides and draws one
   strip chart per channel from a job-thread poller at about 10 Hz. Each chart has
   the current value and units, a "last sample N.N s ago" label that marks a stale
   channel, and a cumulative "lost M samples" counter that makes the feed's
@@ -224,14 +224,14 @@ Hello always, and SineScope in a build with libtorch.
   the framebuffer size and DPI scale. It requires only `caliper.ui.v1` and
   `caliper.log.v1`, and it is the fixture the loader tests load.
   `CALIPER_HELLO_CRASH` makes it fault on purpose, to exercise the crash guard.
-  The [first applet tutorial](../tutorials/first-applet.md) builds it.
+  The [first applet tutorial](first-applet.md) builds it.
 - **SineScope** (`dev.example.sine-scope`, `examples/sine_scope`). A two-layer MLP
   with 32 hidden units learns `sin(x)` live: the loss curve, the prediction
   against the target and the first-layer weights as a heatmap. It requires
   `caliper.jobs.v1` and `caliper.device.v1`, and optionally
   `caliper.tensor_bridge.v1` and `caliper.metrics.v1`. It builds only in a
   configuration that links libtorch. The
-  [first ML applet tutorial](../tutorials/first-ml-applet.md) builds it.
+  [first ML applet tutorial](first-ml-applet.md) builds it.
 
 ## Embedding example
 
@@ -243,7 +243,7 @@ executable, and it builds outside the repository against the installed
 `caliper-embed` package with only `find_package(caliper-embed)`; inside the core
 build it links the in-tree target. `CALIPER_EMBED_OFFSCREEN=1` runs it in an
 offscreen mode that opens no window, and `CALIPER_EMBED_EXIT_AFTER=<seconds>`
-closes it automatically. There is no Linux host. See [Embedding](embedding.md)
+closes it automatically. There is no Linux host. See [Embedding](../references/embedding.md)
 and [Embed Caliper in a program](../guides/embed-caliper.md).
 
 ## Archived applets

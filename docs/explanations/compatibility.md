@@ -33,8 +33,8 @@ Every type that crosses the boundary follows the same rules:
 
 | Type | Why not | Interchange used |
 |---|---|---|
-| `torch::Tensor` | The libtorch C++ ABI differs between versions and builds, so using it would tie every applet to the host's torch. | `CaliperTensor`: a raw pointer with dtype, shape, strides and device. See [Tensor](../references/tensor.md). |
-| `duckdb::*` | The same reason. | SQL strings in, Arrow C streams out. See [Arrow](../references/arrow.md). |
+| `torch::Tensor` | The libtorch C++ ABI differs between versions and builds, so using it would tie every applet to the host's torch. | `CaliperTensor`: a raw pointer with dtype, shape, strides and device. See [Tensor](../applets/tensor-and-arrow-headers.md#tensor-header). |
+| `duckdb::*` | The same reason. | SQL strings in, Arrow C streams out. See [Arrow](../applets/tensor-and-arrow-headers.md#arrow-header). |
 | `std::string`, `std::vector` | The libstdc++, libc++ and MSVC layouts differ. | `const char*`, or a pointer and a length. |
 | Exceptions | They are undefined across runtimes. | A `bool` or error-code return, plus `caliper.log.v1`. |
 | ImGui, Metal, Vulkan, OpenGL handles | They would fix the renderer. | `CaliperTextureId`, an opaque 64-bit handle. |
@@ -63,11 +63,11 @@ Four layers are versioned separately, so that a change in one rarely forces a ch
 | [Each applet's version](#each-applets-version-and-what-it-requires) | The applet and what it requires | Semver, chosen by the applet's author | `[applet].version`, `[compat]` and `[services]` |
 | [The version of stored data](#the-version-of-each-applets-stored-data) | The applet's data folder | An integer of at least 1, chosen by the applet's author | `[data].schema` |
 
-The host application has a semver version of its own, which an applet compares against in `[compat].min_host`. The keys are listed in [Manifest](../references/manifest.md#schema).
+The host application has a semver version of its own, which an applet compares against in `[compat].min_host`. The keys are listed in [Manifest](../applets/manifest.md#schema).
 
 ### The host ABI epoch and service revisions
 
-The ABI epoch is an integer, 2 today, that versions the frozen contract: the entry points in [`abi.h`](../references/abi.md), the `CaliperHost` layout and the UI-stack pin. A host speaks exactly one epoch, and the epoch check is exact equality. Before it opens an applet's library, the host compares `[compat].abi_epoch` with its own epoch and refuses an applet built for an older or a newer epoch. A host never also accepts the previous epoch, so an epoch change means rebuilding every applet. After opening the library, it checks that the descriptor carries the same epoch.
+The ABI epoch is an integer, 2 today, that versions the frozen contract: the entry points in [`abi.h`](../applets/applet-contract.md), the `CaliperHost` layout and the UI-stack pin. A host speaks exactly one epoch, and the epoch check is exact equality. Before it opens an applet's library, the host compares `[compat].abi_epoch` with its own epoch and refuses an applet built for an older or a newer epoch. A host never also accepts the previous epoch, so an epoch change means rebuilding every applet. After opening the library, it checks that the descriptor carries the same epoch.
 
 Within an epoch, each service is versioned by its id. `caliper.geometry.v1` is the first version of a table, `caliper.geometry.v1_1` to `caliper.geometry.v1_3` are revisions that append to it, and a major id such as `caliper.metrics.v2` is reserved for an incompatible change. No service has needed a major id so far.
 
@@ -89,10 +89,10 @@ Under these rules an applet built years ago keeps running on a new host, and a n
 
 The SDK is the installed `caliper-sdk` package, and it is versioned by semver; it is 0.2.0 today, at epoch 2. From version 1.0 on, a patch version fixes the SDK without changing what it offers, a minor version adds services, sugar or build helpers within the same epoch, and the major version changes when the epoch changes, and only then. Each major version then builds applets for one epoch, and an applet that builds with one minor version builds with every later one. Before 1.0, a minor version may also change the epoch. The package's version file uses CMake's `SameMajorVersion` rule: `find_package(caliper-sdk <version>)` accepts an installed SDK with the same major version, at or above the one requested, and without a version it accepts any installed SDK. While the major version is 0, a request for 0.2 therefore also accepts a later 0.x SDK built for another epoch, and `caliper_add_applet()` then stops the configure, because the manifest's `abi_epoch` must equal the SDK's epoch.
 
-The build records how an applet was built. `caliper_add_applet()` copies the manifest that the author writes to the folder beside the built library and adds a `[build]` table to the copy ([SDK package](../references/sdk-package.md#the-stamped-manifest)). Nobody writes the `[build]` table by hand. It holds two keys:
+The build records how an applet was built. `caliper_add_applet()` copies the manifest that the author writes to the folder beside the built library and adds a `[build]` table to the copy ([SDK package](../applets/sdk-package.md#the-stamped-manifest)). Nobody writes the `[build]` table by hand. It holds two keys:
 
 - `[build].sdk` is the SDK version that built the applet. It is a record for diagnosis, for example when reading a bug report, and the host never compares it. Compatibility is decided by the epoch, the UI-stack hash and service negotiation, not by comparing SDK versions. An applet built with a newer minor version therefore runs on any host of its epoch that serves the services it requires, and a host that lacks one of them refuses the applet by naming that service.
-- `[build].ui_stack` is a hash of the ImGui version number, the checked-out commits of ImGui, ImPlot, ImPlot3D and ImGuiFileDialog, the `imconfig.h` and the UI-stack definitions that the applet was compiled against ([The UI-stack hash](../references/sdk-package.md#the-ui-stack-hash)). Uncommitted edits to those libraries' sources do not change it. An applet shares the host's ImGui context, so a mismatch that the epoch number does not catch, such as a changed `imconfig`, would crash in ways that are hard to trace. When the key is present and differs from the host's own hash, the host refuses the applet before it opens the library. A manifest without the key, or a host built without a hash, is not checked.
+- `[build].ui_stack` is a hash of the ImGui version number, the checked-out commits of ImGui, ImPlot, ImPlot3D and ImGuiFileDialog, the `imconfig.h` and the UI-stack definitions that the applet was compiled against ([The UI-stack hash](../applets/sdk-package.md#the-ui-stack-hash)). Uncommitted edits to those libraries' sources do not change it. An applet shares the host's ImGui context, so a mismatch that the epoch number does not catch, such as a changed `imconfig`, would crash in ways that are hard to trace. When the key is present and differs from the host's own hash, the host refuses the applet before it opens the library. A manifest without the key, or a host built without a hash, is not checked.
 
 ### Each applet's version and what it requires
 
@@ -115,7 +115,7 @@ Several copies of one applet id can be installed at once, for example a copy shi
 The host searches in this order:
 
 1. The development folders: the `caliper dev` folder, those given with `--applets <dir>` in order, then those in `CALIPER_APPLET_PATH` (see [Caliper CLI](../references/cli.md#the-search-order)).
-2. The open workspace's `applets/` folder, which holds [spec applets](../references/manifest.md#spec-applets) only, when a workspace is open. The app does not open one yet.
+2. The open workspace's `applets/` folder, which holds [spec applets](../applets/manifest.md#spec-applets) only, when a workspace is open. The app does not open one yet.
 3. The user applets folder.
 4. The `applets/` folder beside the executable, which holds the applets shipped with the app.
 

@@ -5,7 +5,7 @@ site_dir: build/wiki-site
 # In the repository, not on the site: the cookbook is written around the applets, which are
 # not shipped.
 exclude_docs: |
-  guides/ml-applet-cookbook.md
+  applets/ml-applet-cookbook.md
 # Broken anchors fail the strict build too, like broken links.
 validation:
   anchors: warn

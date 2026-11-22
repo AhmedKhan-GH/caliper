@@ -16,7 +16,7 @@ Service id `caliper.log.v1` — timestamped log lines from an applet into the ho
   `HH:MM:SS` timestamp and its level tag and writes it to **stderr**. A program that
   embeds the core through Caliper Embed and sets `log_fn` in its `CaliperCoreDesc` receives the
   applet lines through that callback instead, tagged `[applet] `, and nothing
-  goes to stderr; see [Embedding](embedding.md).
+  goes to stderr; see [Embedding](../../references/embedding.md).
 - **Levels.** `level` is one of `CALIPER_LOG_DEBUG`/`INFO`/`WARN`/`ERROR`; any
   value outside `0..3` is treated as `INFO`.
 - **Threading.** Unlike `caliper.ui.v1`, `log()` may be called from any thread

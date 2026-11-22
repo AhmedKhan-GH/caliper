@@ -100,4 +100,4 @@ is present; the probe fails closed at start and no SDK is linked.
 Whatever is unavailable is simply not a channel, never a faked value. A consumer
 displays whatever enumerates, and on a host with no channels it says so in one
 line and draws nothing. PulseScope does exactly this (see
-[Applets](applets.md)).
+[Applets](../in-tree-applets.md)).

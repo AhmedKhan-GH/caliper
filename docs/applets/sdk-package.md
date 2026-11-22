@@ -1,4 +1,4 @@
-# SDK package
+# SDK Package
 
 The SDK installs as the `caliper-sdk` CMake package, version 0.2.0. An applet builds against it from a folder of its own with `find_package(caliper-sdk)` and `caliper_add_applet()`, and needs nothing else from the Caliper source tree. On macOS the host runs on macOS 14 (Sonoma) or later, and an applet built against the package is built for the same minimum unless its project chooses another. How the SDK version relates to the ABI epoch is in [The SDK version](../explanations/compatibility.md#the-sdk-version).
 
@@ -53,7 +53,7 @@ cmake --build build
 |---|---|
 | `caliper::sdk` | The headers under `include/caliper/`. It compiles nothing. |
 | `caliper::ui_stack` | A static library compiled inside the applet's build from the pinned sources, with position-independent code and the host's UI-stack definitions. It holds no GLFW, GLEW or ImGui backend, because an applet draws into the host's ImGui context and never talks to a window or a graphics API. |
-| `caliper::sdk_testing` | The fixture host and doctest, for an applet's own tests without a window. See [C++ sugar](sugar.md). |
+| `caliper::sdk_testing` | The fixture host and doctest, for an applet's own tests without a window. See [C++ sugar](cpp-sugar.md). |
 
 The UI stack ships as sources rather than prebuilt libraries because a prebuilt static library would tie every applet to the compiler, standard library, build type and runtime library of the SDK build: on Windows a Release `/MD` library does not link into a Debug applet, and ImGuiFileDialog uses the STL. Compiling the sources with the applet's own toolchain avoids that, and the UI-stack hash names the commits, the `imconfig.h` and the definitions they were compiled from. The cost is a few seconds of compile time in each applet build folder.
 

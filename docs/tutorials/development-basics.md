@@ -2,7 +2,7 @@
 
 What building on Caliper actually looks like: what code you write, what code
 is already running, where every library comes from, and the edit-build-run
-loop. Read this before [Your first applet](first-applet.md).
+loop. Read this before [Your first applet](../applets/first-applet.md).
 
 ## The mental model
 
@@ -39,7 +39,7 @@ toolchains and system prerequisites must still be installed; see the root
 
 The division is deliberate: what must be *shared* (UI stack, libtorch) is
 pinned and provided; what is *yours* (curl) you link privately; what is
-*persistent* (DuckDB) hides behind frozen service tables. [SDK package](../references/sdk-package.md)
+*persistent* (DuckDB) hides behind frozen service tables. [SDK package](../applets/sdk-package.md)
 describes what the installed SDK holds.
 
 ## Anatomy of an applet
@@ -56,7 +56,7 @@ examples/hello/
 - **Manifest**: id (reverse-DNS), name, version, summary, required/optional
   service lists. The `id` and `version` must be **byte-identical** between
   the manifest and the descriptor in the `CALIPER_APPLET` macro call, or the loader refuses (the
-  applet is listed with the reason, not a crash). See [manifest reference](../references/manifest.md).
+  applet is listed with the reason, not a crash). See [manifest reference](../applets/manifest.md).
 - **The macro**: the `CALIPER_APPLET(...)` at the bottom of your `.cpp`
   generates the epoch-2 C ABI glue — the descriptor plus exception walls on
   every entry point. You never write `extern "C"` yourself.
@@ -75,7 +75,7 @@ This is everything — all three files. They live in this repository as
 `examples/hello/`, which builds on its own against the installed SDK and inside
 the core build as the fixture the loader tests load, and the listings
 below are the actual files, embedded verbatim — they cannot drift from what
-compiles. [Your first applet](first-applet.md) walks this same file line by
+compiles. [Your first applet](../applets/first-applet.md) walks this same file line by
 line:
 
 ```cpp title="examples/hello/hello.cpp"
@@ -94,7 +94,7 @@ Note what is **absent**: no `main`, no window, no GL/Metal, no ImGui
 context creation, no event loop, no `extern "C"`. The macro plus the host
 supply all of it. Growing from here toward ML means adding a `jobs.v1`
 training job and the bridge — that path is
-[Your first ML applet](first-ml-applet.md).
+[Your first ML applet](../applets/first-ml-applet.md).
 
 ## The development loop
 
@@ -343,8 +343,8 @@ would report the suite as passed.
 ## Reading order
 
 1. This page — the lay of the land.
-2. [Your first applet](first-applet.md) — walk hello line by line.
-3. [Your first ML applet](first-ml-applet.md) — the staged climb: compute,
+2. [Your first applet](../applets/first-applet.md) — walk hello line by line.
+3. [Your first ML applet](../applets/first-ml-applet.md) — the staged climb: compute,
    then torch, then live plots, then the bridge — one capability per stage.
-4. Per-service [reference pages](../references/service-jobs-v1.md) — the
+4. Per-service [reference pages](../applets/services/caliper-jobs-v1.md) — the
    contracts, when you need exact semantics.

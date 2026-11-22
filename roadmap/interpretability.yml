@@ -9,7 +9,7 @@ features:
     status: shipped
     summary: GPTScope is an applet that trains a small character-level language model live and shows what it has learned in seven windows, each answering one question.
     depends_on: [COR-03]
-    docs: docs/references/applets.md#gptscope
+    docs: docs/applets/in-tree-applets.md#gptscope
     issue: null
 
   - id: INT-02
@@ -17,7 +17,7 @@ features:
     status: shipped
     summary: ThoughtSpace draws the model's residual stream as a 3-D constellation, with every token's state at every depth as a point and a trail joining the depths.
     depends_on: [INT-01]
-    docs: docs/references/applets.md#gptscope
+    docs: docs/applets/in-tree-applets.md#gptscope
     issue: null
 
   - id: INT-03
@@ -25,7 +25,7 @@ features:
     status: shipped
     summary: The head views plot each attention head by mean attended distance and entropy, and draw the attention matrix of a selected head as a texture.
     depends_on: [INT-01]
-    docs: docs/references/applets.md#gptscope
+    docs: docs/applets/in-tree-applets.md#gptscope
     issue: null
 
   - id: INT-04
@@ -214,7 +214,7 @@ features:
     status: shipped
     summary: EmbedScope trains a small MNIST network with a learned 3-D bottleneck and draws the test set's embeddings as a live scatter of ten classes, with SQL panels.
     depends_on: [REN-04, RUN-01]
-    docs: docs/references/applets.md#embedscope
+    docs: docs/applets/in-tree-applets.md#embedscope
     issue: null
 
   - id: INT-28

@@ -9,10 +9,10 @@ Caliper is built from source. This version of the repository is host 0.6.0, SDK 
 ## Where to start
 
 - [Development basics](tutorials/development-basics.md) explains the host, the applet and the build.
-- [Your first applet](tutorials/first-applet.md) builds the smallest UI applet.
-- [Your first ML applet](tutorials/first-ml-applet.md) adds jobs, metrics, device selection and tensor views.
+- [Your first applet](applets/first-applet.md) builds the smallest UI applet.
+- [Your first ML applet](applets/first-ml-applet.md) adds jobs, metrics, device selection and tensor views.
 - [Embedding Caliper](references/embedding.md) describes the embeddable host interface.
-- [The ABI](references/abi.md) is the contract between host and applets.
+- [The ABI](applets/applet-contract.md) is the contract between host and applets.
 
 ## Backends
 
@@ -22,7 +22,7 @@ Caliper is built from source. This version of the repository is host 0.6.0, SDK 
 | Vulkan and CUDA | Windows default | A CUDA kernel writes a tensor update straight into the Vulkan image, with no copy. |
 | OpenGL 3.3 | Fallback on every platform | The host stages tensor uploads through the CPU. |
 
-[Rendering](explanations/rendering.md) explains how the host chooses a backend, and [`caliper.tensor_bridge.v1`](references/service-tensor-bridge-v1.md) lists what each backend accepts.
+[Rendering](applets/rendering.md) explains how the host chooses a backend, and [`caliper.tensor_bridge.v1`](applets/services/caliper-tensor-bridge-v1.md) lists what each backend accepts.
 
 ## The documentation
 

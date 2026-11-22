@@ -5,10 +5,10 @@ Service ids `caliper.geometry.v1` (instanced points) and its additive revisions
 (textures on meshes), and `caliper.geometry.v1_3`
 (instanced transforms). Imported 3-D geometry: an applet
 writes vertices/indices/normals/attributes into device memory, exports them once
-through [`caliper.tensor_bridge.v1_2`](service-tensor-bridge-v1.md), and the host draws
+through [`caliper.tensor_bridge.v1_2`](caliper-tensor-bridge-v1.md), and the host draws
 them **in place** — zero copies of the geometry data — into an offscreen view
 texture you show with `ImGui::Image`. How the draw works on each backend is in
-[Rendering](../explanations/rendering.md#the-geometry-path). This page embeds the headers verbatim; the
+[Rendering](../rendering.md#the-geometry-path). This page embeds the headers verbatim; the
 docs build fails if any embedded file moves.
 
 Deliberately a **new** service, not a tensor-bridge revision: the bridge's frozen
@@ -84,7 +84,7 @@ fallback.
 
 `attr_alloc != 0` selects a contiguous `(count,)` f32 scalar per point at
 `attr_offset`, colormapped through the shared LUTs over `[vmin, vmax]` (same index
-rule as `texture_from_tensor_mapped`, see [tensor-bridge](service-tensor-bridge-v1.md));
+rule as `texture_from_tensor_mapped`, see [tensor-bridge](caliper-tensor-bridge-v1.md));
 `attr_alloc == 0` draws flat white and ignores `attr_offset`/`colormap`. `size_px`
 is point size in pixels (clamped to device limits). Points blend **additively with
 no depth test** — v1 is built for particle clouds: order-independent, no sort.
@@ -98,9 +98,9 @@ the applet.
 The addressed bytes are read **in place** and must not be rewritten until this
 view's next draw. On the worker side, drain the producer stream/queue once at the
 handoff **before** publishing the slot (this is the triple-buffer / ready-slot
-discipline the exemplars use with [`caliper.jobs.v1`](service-jobs-v1.md)); the frame
+discipline the exemplars use with [`caliper.jobs.v1`](caliper-jobs-v1.md)); the frame
 thread does every draw and never touches the learner's tensors. The reasons for the two halves of this rule are in
-[Zero-copy tensor visualization](../python/zero-copy-tensors.md#geometry-stays-on-the-drain-rung).
+[Zero-copy tensor visualization](../../python/zero-copy-tensors.md#geometry-stays-on-the-drain-rung).
 
 ## caliper.geometry.v1_1 — general primitives
 
@@ -460,7 +460,7 @@ the source. Set only the fields your draw needs.
 
 A small net's prediction over
 a grid is written into imported device tensors each training step by a
-[`jobs.v1`](service-jobs-v1.md) worker and drawn the **same frame** as Lambert-lit
+[`jobs.v1`](caliper-jobs-v1.md) worker and drawn the **same frame** as Lambert-lit
 triangles + a wireframe overlay + the training minibatch as additive points. The
 worker publishes into triple-buffered slots and drains the device once before
 flipping the ready slot; the frame thread snapshots the display slot under one
@@ -536,6 +536,6 @@ and the CPU fallback runs instead.
 
 ---
 
-See also: [`caliper.tensor_bridge.v1`](service-tensor-bridge-v1.md) for the import
-machinery geometry draws from, and [`caliper.jobs.v1`](service-jobs-v1.md) for the
+See also: [`caliper.tensor_bridge.v1`](caliper-tensor-bridge-v1.md) for the import
+machinery geometry draws from, and [`caliper.jobs.v1`](caliper-jobs-v1.md) for the
 worker/frame threading the exemplars use to feed it.

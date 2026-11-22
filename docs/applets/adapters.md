@@ -8,11 +8,11 @@ pool, the OBJ loader and the orbit camera.
 ## torch.hpp
 
 `caliper/adapters/torch.hpp` is a **header-only** bridge from a `torch::Tensor`
-to the frozen [`CaliperTensor`](tensor.md) It compiles
+to the frozen [`CaliperTensor`](tensor-and-arrow-headers.md#tensor-header) It compiles
 against the **applet's** libtorch and is **never** included by the host: torch
 stays out of the ABI. The host links no torch — it consumes only the
 `CaliperTensor` this adapter produces, then hands it to
-[`caliper.tensor_bridge.v1`](service-tensor-bridge-v1.md).
+[`caliper.tensor_bridge.v1`](services/caliper-tensor-bridge-v1.md).
 
 Three entry points, one ladder:
 
@@ -180,13 +180,13 @@ The members an applet uses:
 | `registry()` | The pool's `AllocRegistry`. |
 
 The returned `BridgeRef` goes to the `*_from_alloc` calls of
-[`caliper.tensor_bridge.v1_2`](service-tensor-bridge-v1.md). Release and import calls belong to the frame thread, and the pool's
+[`caliper.tensor_bridge.v1_2`](services/caliper-tensor-bridge-v1.md). Release and import calls belong to the frame thread, and the pool's
 destructor releases the imports it made. Torch may free a block from any
 thread, so the pool queues the release of that block's import and drains the
 queue on the frame thread, in `to_bridge` and in the destructor. FieldScope, FlowScope, GPTScope, SculptScope,
 MeshScope, InstanceScope and TwinScope all allocate their drawn buffers this way (see
-[Applets](applets.md)). The platform differences are in
-[Torch on each platform](torch-on-each-platform.md).
+[Applets](in-tree-applets.md)). The platform differences are in
+[Torch on each platform](torch-per-platform.md).
 
 ## obj.hpp
 

@@ -35,7 +35,7 @@ training lives (never the frame thread). The host serializes writes internally
 (a mutex over one DuckDB connection in v1), so concurrent jobs are safe. The host
 also destroys the metrics store *after* it joins job threads, so a scalar logged
 in the last instant before a cancel lands cannot fault — for a job that honours
-cancel; the join gives up after 5 s (see [`caliper.jobs.v1`](service-jobs-v1.md)).
+cancel; the join gives up after 5 s (see [`caliper.jobs.v1`](caliper-jobs-v1.md)).
 
 ### Resource limits
 
@@ -44,7 +44,7 @@ memory limit, sized from the machine's RAM and cores. Override them with
 `CALIPER_DUCKDB_METRICS_THREADS` and `CALIPER_DUCKDB_METRICS_MEMORY_LIMIT`, or
 the all-stores `CALIPER_DUCKDB_THREADS` and `CALIPER_DUCKDB_MEMORY_LIMIT`. The
 defaults and the precedence are in
-[`caliper.data.v1`: Resource limits](service-data-v1.md#resource-limits).
+[`caliper.data.v1`: Resource limits](caliper-data-v1.md#resource-limits).
 
 ### v1 image limitation
 
@@ -63,7 +63,7 @@ runs are read back through `caliper.metrics.v1_1.query` or from SQL tools.
 ## caliper.metrics.v1_1
 
 `caliper.metrics.v1` is write-only across the ABI and immutable, so a consumer
-such as an embedding host ([Embedding Caliper](embedding.md#reaching-services-from-a-host))
+such as an embedding host ([Embedding Caliper](../../references/embedding.md#reaching-services-from-a-host))
 cannot list runs or read scalars through it. `caliper.metrics.v1_1` is the
 additive read revision.
 Its table starts with the byte-identical v1 writer prefix, and appends two
@@ -76,7 +76,7 @@ entries: `query` and `last_error`.
 ### query
 
 `query(sql_utf8, out)` runs one SQL statement against the metrics store and
-streams the result as Arrow ([Arrow interchange](arrow.md)).
+streams the result as Arrow ([Arrow interchange](../tensor-and-arrow-headers.md#arrow-header)).
 
 - **One SELECT only.** The host parses the text without executing it and refuses
   anything that is not exactly one `SELECT` statement. That blocks statement

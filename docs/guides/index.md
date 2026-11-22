@@ -4,7 +4,7 @@ Guides answer one practical question each. They assume you have finished the [tu
 
 | Page | Question it answers |
 |---|---|
-| [Debug an applet](debug-an-applet.md) | How do I attach a debugger, read the logs and find out why an applet was refused or quarantined? |
+| [Debug an applet](../applets/applet-debugging.md) | How do I attach a debugger, read the logs and find out why an applet was refused or quarantined? |
 | [Embed Caliper in a program](embed-caliper.md) | How do I run Caliper applets inside a view of my own program with the `caliper-embed` package? |
 | [Attach to a running script](../python/script-attachment.md) | How do I open a live view of a Python script that is already running? |
 | [Run a hub](../python/hub-setup.md) | How do I stream several scripts to one address and keep a run viewable after its script ends? |

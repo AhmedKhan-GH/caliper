@@ -17,7 +17,7 @@ features:
     status: shipped
     summary: ABI epoch 2 is the frozen C header that defines the contract between the host and every applet, and its epoch changes only when the contract breaks.
     depends_on: []
-    docs: docs/references/abi.md
+    docs: docs/applets/applet-contract.md
     issue: null
 
   - id: COR-03
@@ -25,7 +25,7 @@ features:
     status: shipped
     summary: The 19 service ids are 11 services and their additive revisions, which an applet obtains by id from the host and which the host refuses to serve when it lacks the capability.
     depends_on: [COR-02]
-    docs: docs/references/services.md#the-ids
+    docs: docs/applets/services/service-catalog.md#the-ids
     issue: null
 
   - id: COR-04
@@ -33,7 +33,7 @@ features:
     status: shipped
     summary: The SDK package is the caliper-sdk CMake package, which installs the headers, the pinned UI stack and caliper_add_applet() so that an applet builds outside the Caliper source tree.
     depends_on: [COR-03]
-    docs: docs/references/sdk-package.md
+    docs: docs/applets/sdk-package.md
     issue: null
 
   - id: COR-05
@@ -41,7 +41,7 @@ features:
     status: shipped
     summary: An applet manifest is a TOML file beside each applet that declares its identity, ABI epoch, minimum host version and required services, and the host parses it before it loads any code.
     depends_on: [COR-02]
-    docs: docs/references/manifest.md#schema
+    docs: docs/applets/manifest.md#schema
     issue: null
 
   - id: COR-06
@@ -105,7 +105,7 @@ features:
     status: shipped
     summary: The in-tree applets are nine applets under applets/ and the tutorial examples, and each builds on its own against the installed SDK rather than in the core build.
     depends_on: [COR-04]
-    docs: docs/references/applets.md
+    docs: docs/applets/in-tree-applets.md
     issue: null
 
   - id: COR-14
@@ -340,7 +340,7 @@ features:
     status: shipped
     summary: caliper.ui.v1 gives an applet the ImGui, ImPlot and ImPlot3D contexts and the host allocator, and caliper.ui.v1_1 adds the role of each window in the docked layout.
     depends_on: [COR-03]
-    docs: docs/references/service-ui-v1.md
+    docs: docs/applets/services/caliper-ui-v1.md
     issue: null
 
   - id: COR-45
@@ -348,7 +348,7 @@ features:
     status: shipped
     summary: caliper.log.v1 writes timestamped log lines from an applet into the host console from any thread.
     depends_on: [COR-03]
-    docs: docs/references/service-log-v1.md
+    docs: docs/applets/services/caliper-log-v1.md
     issue: null
 
   - id: COR-46
@@ -356,7 +356,7 @@ features:
     status: shipped
     summary: caliper.jobs.v1 runs background work on a host worker thread with progress and cancellation, under the crash guard, so that the frame thread stays fluid.
     depends_on: [COR-03]
-    docs: docs/references/service-jobs-v1.md
+    docs: docs/applets/services/caliper-jobs-v1.md
     issue: null
 
   - id: COR-47
@@ -364,7 +364,7 @@ features:
     status: shipped
     summary: caliper.device.v1 reports the compute device the host found, the CPU, CUDA or Metal, so that an applet maps it to its own framework while the host stays framework-agnostic.
     depends_on: [COR-03]
-    docs: docs/references/service-device-v1.md
+    docs: docs/applets/services/caliper-device-v1.md
     issue: null
 
   - id: COR-48
@@ -372,7 +372,7 @@ features:
     status: shipped
     summary: caliper.data.v1 runs SQL over the host's embedded DuckDB store, shares datasets as named resources and returns results as Arrow streams.
     depends_on: [COR-03, COR-50]
-    docs: docs/references/service-data-v1.md
+    docs: docs/applets/services/caliper-data-v1.md
     issue: null
 
   - id: COR-49
@@ -380,7 +380,7 @@ features:
     status: shipped
     summary: CaliperTensor is the frozen type, aligned with DLPack, that describes a block of memory by dtype, shape, strides, device and stream, so that a tensor passes into a service without a copy.
     depends_on: [COR-02]
-    docs: docs/references/tensor.md
+    docs: docs/applets/tensor-and-arrow-headers.md#tensor-header
     issue: null
 
   - id: COR-50
@@ -388,7 +388,7 @@ features:
     status: shipped
     summary: Tables cross the ABI as structures of the Arrow C Data Interface, so that the SDK headers hold no DuckDB or framework type.
     depends_on: [COR-02]
-    docs: docs/references/arrow.md
+    docs: docs/applets/tensor-and-arrow-headers.md#arrow-header
     issue: null
 
   - id: COR-51
@@ -396,7 +396,7 @@ features:
     status: shipped
     summary: caliper.hpp is an optional header-only C++20 layer with an Applet class, the CALIPER_APPLET macro and typed wrappers for the services.
     depends_on: [COR-04]
-    docs: docs/references/sugar.md#the-caliper_applet-macro
+    docs: docs/applets/cpp-sugar.md#the-caliper_applet-macro
     issue: null
 
   - id: COR-52
@@ -404,7 +404,7 @@ features:
     status: shipped
     summary: The SDK's fixture host runs an applet's lifecycle and its jobs in a test without a window or a GPU, so that an applet can be developed test first.
     depends_on: [COR-51]
-    docs: docs/references/sugar.md#fixture-host-tdd-recipe
+    docs: docs/applets/cpp-sugar.md#fixture-host-tdd-recipe
     issue: null
 
   - id: COR-53
@@ -412,5 +412,5 @@ features:
     status: shipped
     summary: The host runs every applet call under a guard, quarantines an applet that faults, and reports a frame that stalls, as containment rather than a sandbox.
     depends_on: [COR-01]
-    docs: docs/explanations/trust-model.md#a-faulting-applet-is-quarantined
+    docs: docs/applets/trust-model.md#a-faulting-applet-is-quarantined
     issue: null

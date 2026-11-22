@@ -30,7 +30,7 @@ The host scans these folders at startup, in this order:
 
 Spec applets are found in the same folders and also one folder down, as [Where spec applets are found](#where-spec-applets-are-found) says.
 
-Dropping a manifest and its library into the user applets folder, or running `caliper install <folder>`, installs an applet. When several folders hold copies of one applet id, the host loads one of them, as [Several copies of one applet](../explanations/compatibility.md#several-copies-of-one-applet) describes. [Caliper CLI](cli.md#the-search-order) gives the search order in full, and [Folders and environment variables](environment.md) gives the folders on each platform and the variables that change them.
+Dropping a manifest and its library into the user applets folder, or running `caliper install <folder>`, installs an applet. When several folders hold copies of one applet id, the host loads one of them, as [Several copies of one applet](../explanations/compatibility.md#several-copies-of-one-applet) describes. [Caliper CLI](../references/cli.md#the-search-order) gives the search order in full, and [Folders and environment variables](../references/environment.md) gives the folders on each platform and the variables that change them.
 
 ## Schema
 
@@ -117,7 +117,7 @@ Its keys mean what they mean for a compiled applet, with these differences:
 
 The keys that only a library can honour are refused rather than ignored, so that a manifest written for a library, with `kind = "spec"` added by mistake, is never taken for a spec applet. Unknown keys and tables are ignored, as for a compiled applet. A manifest without `kind`, or with `kind = "library"`, is a compiled applet exactly as before, and a `spec` key in it is an unknown key.
 
-A spec applet names the version of the spec format it needs in the spec itself, with the key `caliper_spec`, written before the spec's first table as `caliper_spec = 0`. The host reads that line when it lists the applet and refuses a version it cannot read (see [Refusal messages](refusals.md#spec-applets)).
+A spec applet names the version of the spec format it needs in the spec itself, with the key `caliper_spec`, written before the spec's first table as `caliper_spec = 0`. The host reads that line when it lists the applet and refuses a version it cannot read (see [Refusal messages](../references/refusals.md#spec-applets)).
 
 ### Spec applet ids
 
@@ -125,7 +125,7 @@ A workspace names its applets with workspace ids, `[a-z][a-z0-9_-]{0,63}`, which
 
 ### Where spec applets are found
 
-The loader looks for spec applets in the folders of the [search order](cli.md#the-search-order), in two places:
+The loader looks for spec applets in the folders of the [search order](../references/cli.md#the-search-order), in two places:
 
 - a manifest of kind `"spec"` directly in a searched folder, as a compiled applet's manifest is, which is how `caliper check <folder>` takes the folder of one spec applet;
 - a manifest of kind `"spec"` one folder down, in `<folder>/<name>/`, which is how a workspace keeps its applets. Outside a workspace, any other manifest one folder down is not looked at, as before, since compiled applets are flat. Folders whose names start with `.`, folders that are symbolic links, and more than 4096 folders of one searched folder are skipped.
@@ -148,7 +148,7 @@ so it is restricted to a form that is always a single, safe path component:
 `a..b` and `../../escape` are not. A manifest with an invalid id is listed as
 `FAILED` with the message
 `applet.id is not a valid applet id (lowercase reverse-DNS, [a-z0-9.-]): <id>`
-(see [Refusal messages](refusals.md#failed-messages)), and no data folder is
+(see [Refusal messages](../references/refusals.md#failed-messages)), and no data folder is
 created for it.
 
 ## Example
@@ -161,5 +161,5 @@ source of truth:
 --8<-- "examples/hello/hello.caliper.toml"
 ```
 
-See [tutorials/first-applet.md](../tutorials/first-applet.md) for a full walk of
+See [tutorials/first-applet.md](first-applet.md) for a full walk of
 the applet this manifest belongs to.

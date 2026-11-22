@@ -12,7 +12,7 @@ embedded file moves.
 ## Export is a terminal sink
 
 Export is the one place where pixels leave the one-way data flow described in
-[Platform rules](../introduction/architecture.md#platform-rules). The readback it performs feeds a
+[Platform rules](../../introduction/architecture.md#platform-rules). The readback it performs feeds a
 file on disk, and nothing returns to compute: no export call hands pixels, a
 texture or a tensor back to the applet. Caliper exports **pixel-exact view
 images plus a sidecar** and does not compose figures. Axes, captions, typography
@@ -37,7 +37,7 @@ failure rolls the PNG back rather than orphaning it.
 When the geometry primitives capability is absent (headless, or a host without
 the renderer path) the export capability bit is unset and **every entry point is
 inert**: no file is written. This is the
-[fallback rule](../introduction/architecture.md#platform-rules) at work, not a bug.
+[fallback rule](../../introduction/architecture.md#platform-rules) at work, not a bug.
 
 ```c
 --8<-- "sdk/include/caliper/services/export_v1.h"
@@ -71,7 +71,7 @@ with it: `caps()` bit 0 (`CALIPER_EXPORT_CAP_VIEW_PNG`) is set **iff**
 ## Frame-thread only
 
 Every entry point composes the **frame-thread-owned** renderer, so export
-carries the same rule as [`caliper.geometry.v1`](service-geometry-v1.md): call it from
+carries the same rule as [`caliper.geometry.v1`](caliper-geometry-v1.md): call it from
 the `caliper_core_frame()` thread only. Calling from any other thread races the
 renderer's texture/geometry maps. The sequence bookkeeping (one sequence live at
 a time in v0) is guarded by a mutex, but that mutex serializes **bookkeeping
@@ -175,7 +175,7 @@ A 300-frame sequence at 30 fps becomes a 10 s clip this way.
 ImPlot chart panes (strip charts, metrics plots) are **ImGui chrome, not
 exportable views** — they are not tensors re-rendered offscreen, so export does
 not touch them. Their paper path is the one that already ships: the numbers go to
-**SQL via [`caliper.metrics.v1_1`](service-metrics-v1.md)** and into matplotlib
+**SQL via [`caliper.metrics.v1_1`](caliper-metrics-v1.md)** and into matplotlib
 downstream. Export is for the 3-D views whose pixels *are* the tensors; charts
 are for the metrics surface. 
 
@@ -210,7 +210,7 @@ correct real-time regardless.
 ## caliper.export.v1_1 — `last_error()`
 
 An additive revision under the same discipline as `caliper.metrics.v1_1` and
-the [bridge revisions](service-tensor-bridge-v1.md#additive-revisions-v1_1-and-v1_2):
+the [bridge revisions](caliper-tensor-bridge-v1.md#additive-revisions-v1_1-and-v1_2):
 `CaliperExportV1_1` repeats the v1 table byte for
 byte, `reserved0` included and still `NULL`, and appends one entry,
 `last_error()`. There is no ABI epoch bump. `caliper.export.v1` is still vended,
@@ -229,7 +229,7 @@ the first three, or an `end_sequence()` whose `sequence.json` could not be
 written. After any of the four succeeds, `last_error()` returns `""`. `caps()`
 and `last_error()` leave the status alone. The string is host-owned, never
 `NULL`, and valid until the next export call on the same thread — the
-`last_error()` contract of [`caliper.data.v1`](service-data-v1.md#threading-and-errors)
+`last_error()` contract of [`caliper.data.v1`](caliper-data-v1.md#threading-and-errors)
 and `caliper.metrics.v1_1`. Export is frame-thread only, so in practice there is
 one status.
 
@@ -262,6 +262,6 @@ if (ex11) {
 
 ---
 
-See also: [`caliper.geometry.v1`](service-geometry-v1.md) for the draw path and camera
-vocabulary export composes, and [`caliper.metrics.v1_1`](service-metrics-v1.md) for the
+See also: [`caliper.geometry.v1`](caliper-geometry-v1.md) for the draw path and camera
+vocabulary export composes, and [`caliper.metrics.v1_1`](caliper-metrics-v1.md) for the
 chart/metrics paper path export deliberately does not cover.

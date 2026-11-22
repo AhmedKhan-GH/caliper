@@ -38,7 +38,7 @@ or refuses it if the spec changed meanwhile so that it would mean something else
 request nobody decides in time is withdrawn. Activity lists each request when it starts waiting and when it ends.
 
 The two roles share one journal and one undo history, and their commands run one at a time in one order. What an agent builds is
-data (specs and loaders), never code that runs in Caliper's process; the [trust model](trust-model.md) explains why
+data (specs and loaders), never code that runs in Caliper's process; the [trust model](../applets/trust-model.md) explains why
 that matters.
 
 ## The side chat

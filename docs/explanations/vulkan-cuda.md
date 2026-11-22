@@ -3,7 +3,7 @@
 On Windows with an NVIDIA GPU, Caliper renders with Vulkan and shares GPU memory with CUDA, so a torch tensor reaches
 the screen without passing through host memory. This page explains how the two APIs are paired, which path an update
 takes, how the paths are synchronized, and what each costs. The renderer seam is described in
-[Rendering](rendering.md), and the general idea in [Zero-copy tensor visualization](../python/zero-copy-tensors.md).
+[Rendering](../applets/rendering.md), and the general idea in [Zero-copy tensor visualization](../python/zero-copy-tensors.md).
 
 The backend is `src/host/renderer/vulkan_renderer.cpp`, a Windows-only translation unit. The host loads the CUDA driver
 API from `nvcuda.dll` at run time (`src/host/cuda_driver.h`) and uses the Vulkan loader that ships with the GPU
@@ -25,7 +25,7 @@ software Vulkan drivers. Vulkan still renders, and the bridge CPU-stages tensors
 ## Which path an update takes
 
 Interop has two parts that work independently: the memory that is shared between the APIs, and how the work is
-ordered between them. The update ladder is described first in [Rendering](rendering.md#the-update-ladder-on-windows).
+ordered between them. The update ladder is described first in [Rendering](../applets/rendering.md#the-update-ladder-on-windows).
 This section gives the detail.
 
 ### The direct image path

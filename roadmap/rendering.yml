@@ -9,7 +9,7 @@ features:
     status: shipped
     summary: The Metal renderer is the default on macOS and reads PyTorch's MPS buffers in place with a compute pass or a blit, so a tensor reaches a texture without a CPU copy.
     depends_on: []
-    docs: docs/explanations/rendering.md#backends
+    docs: docs/applets/rendering.md#backends
     issue: null
 
   - id: REN-02
@@ -33,7 +33,7 @@ features:
     status: shipped
     summary: caliper.geometry.v1 draws instanced points from vertex data that an applet exports once from device memory, into an offscreen view texture, with no copy of the data.
     depends_on: [REN-08]
-    docs: docs/references/service-geometry-v1.md#calipergeometryv1-instanced-points
+    docs: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1-instanced-points
     issue: null
 
   - id: REN-05
@@ -41,7 +41,7 @@ features:
     status: shipped
     summary: caliper.geometry.v1_1 adds general primitives (triangles, lines and indexed draws), depth views and one atomic gated frame to the geometry service.
     depends_on: [REN-04]
-    docs: docs/references/service-geometry-v1.md#calipergeometryv1_1-general-primitives
+    docs: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1_1-general-primitives
     issue: null
 
   - id: REN-06
@@ -49,7 +49,7 @@ features:
     status: shipped
     summary: caliper.geometry.v1_2 adds textures on meshes, drawn with a colour mode that samples an imported texture.
     depends_on: [REN-05]
-    docs: docs/references/service-geometry-v1.md#calipergeometryv1_2-textures-on-meshes
+    docs: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1_2-textures-on-meshes
     issue: null
 
   - id: REN-07
@@ -57,7 +57,7 @@ features:
     status: shipped
     summary: caliper.geometry.v1_3 adds instanced transforms, so one mesh draws many times with a transform for each instance.
     depends_on: [REN-06]
-    docs: docs/references/service-geometry-v1.md#calipergeometryv1_3-instanced-transforms
+    docs: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1_3-instanced-transforms
     issue: null
 
   - id: REN-08
@@ -530,7 +530,7 @@ features:
     status: shipped
     summary: caliper.tensor_bridge.v1 to v1_2 turn a CaliperTensor into a live texture in the same frame, with a handoff ordered on the stream and imported device allocations.
     depends_on: [COR-49, REN-08]
-    docs: docs/references/service-tensor-bridge-v1.md
+    docs: docs/applets/services/caliper-tensor-bridge-v1.md
     issue: null
 
   - id: REN-65
@@ -538,7 +538,7 @@ features:
     status: shipped
     summary: caliper.export.v1 draws a draw list again offscreen at any resolution into a pixel-exact PNG with a JSON provenance file, and into frame sequences.
     depends_on: [REN-05]
-    docs: docs/references/service-export-v1.md
+    docs: docs/applets/services/caliper-export-v1.md
     issue: null
 
   - id: REN-66
@@ -546,7 +546,7 @@ features:
     status: shipped
     summary: torch.hpp turns a torch tensor into a CaliperTensor, refuses a tensor it cannot share rather than copying it, and applies the rules of MPS and CUDA.
     depends_on: [COR-49, REN-08]
-    docs: docs/references/adapters.md#torchhpp
+    docs: docs/applets/adapters.md#torchhpp
     issue: null
 
   - id: REN-67
@@ -554,7 +554,7 @@ features:
     status: shipped
     summary: ExportablePool allocates the tensors that the renderer draws in place, and an allocation registry tracks the allocations the host can import.
     depends_on: [REN-08]
-    docs: docs/references/adapters.md#exportable_poolhpp
+    docs: docs/applets/adapters.md#exportable_poolhpp
     issue: null
 
   - id: REN-68
@@ -562,7 +562,7 @@ features:
     status: shipped
     summary: Two adapters give an applet an OBJ mesh loader and an orbit camera with picking under the cursor.
     depends_on: [REN-05]
-    docs: docs/references/adapters.md#objhpp
+    docs: docs/applets/adapters.md#objhpp
     issue: null
 
   - id: REN-69
@@ -570,7 +570,7 @@ features:
     status: shipped
     summary: The WebGPU renderer draws the browser views of the WebAssembly module, with a colormap pass whose thresholds come from the CPU reference and instanced quads for points.
     depends_on: [EMB-04]
-    docs: docs/explanations/rendering.md#the-webgpu-backend
+    docs: docs/applets/rendering.md#the-webgpu-backend
     issue: null
 
   - id: REN-70
@@ -578,7 +578,7 @@ features:
     status: shipped
     summary: FieldScope simulates charged particles in electromagnetic fields, 200,000 of them on a GPU, and draws them in place from device memory.
     depends_on: [REN-04]
-    docs: docs/references/applets.md#fieldscope
+    docs: docs/applets/in-tree-applets.md#fieldscope
     issue: null
 
   - id: REN-71
@@ -586,7 +586,7 @@ features:
     status: shipped
     summary: FlowScope drives a flow field of one million particles on a GPU, drawn in place from the simulation's buffers.
     depends_on: [REN-04]
-    docs: docs/references/applets.md#flowscope
+    docs: docs/applets/in-tree-applets.md#flowscope
     issue: null
 
   - id: REN-72
@@ -594,7 +594,7 @@ features:
     status: shipped
     summary: InstanceScope draws a field of procedural gems with one instanced draw call, with poses and tints computed again on the device every frame.
     depends_on: [REN-07]
-    docs: docs/references/applets.md#instancescope
+    docs: docs/applets/in-tree-applets.md#instancescope
     issue: null
 
   - id: REN-73
@@ -602,7 +602,7 @@ features:
     status: shipped
     summary: MeshScope trains a small network on a 2-D surface while it runs and draws its prediction as lit triangles with a wireframe, with export of figures and recordings.
     depends_on: [REN-65]
-    docs: docs/references/applets.md#meshscope
+    docs: docs/applets/in-tree-applets.md#meshscope
     issue: null
 
   - id: REN-74
@@ -610,7 +610,7 @@ features:
     status: shipped
     summary: SculptScope trains a small network that maps latent codes to a cloud of 150,000 points fitted to a target shape, with the last layer writing the buffer the GPU draws.
     depends_on: [REN-04]
-    docs: docs/references/applets.md#sculptscope
+    docs: docs/applets/in-tree-applets.md#sculptscope
     issue: null
 
   - id: REN-75
@@ -618,5 +618,5 @@ features:
     status: shipped
     summary: TwinScope runs a synthetic heat twin of a textured housing, with the simulated physics and the learned belief side by side.
     depends_on: [REN-06, REN-65]
-    docs: docs/references/applets.md#twinscope
+    docs: docs/applets/in-tree-applets.md#twinscope
     issue: null
