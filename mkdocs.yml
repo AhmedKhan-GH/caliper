@@ -21,8 +21,10 @@ theme:
     primary: custom
     accent: custom
   features:
+    - navigation.tabs
     - navigation.sections
     - navigation.indexes
+    - navigation.prune
     - content.code.copy
     - search.suggest
 extra:

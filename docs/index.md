@@ -26,9 +26,6 @@ Caliper is built from source. This version of the repository is host 0.6.0, SDK 
 
 ## The documentation
 
-- [Tutorials](tutorials/index.md) are start-to-finish lessons.
-- [Guides](guides/index.md) are task recipes for debugging, attaching to scripts and continuous integration.
-- [References](references/index.md) list the ABI, the manifest, the service tables, the adapters, embedding, the C++ sugar and the folders and environment variables.
-- [Explanations](explanations/index.md) cover rendering, compatibility, trust and the architecture.
+The documentation is arranged in areas, one per tab: [Introduction](introduction/index.md), [Python](python/index.md), [Applets](applets/index.md), [Builder](builder/index.md), [Agents](agents/index.md), [Web and Embedding](web/index.md), [Reference](reference/index.md), [Development](development/index.md) and [Roadmap](roadmap/index.md).
 
 Plans for work that is not built yet, with the roadmap, are kept in the repository's `design/` folder and are not part of this site.
