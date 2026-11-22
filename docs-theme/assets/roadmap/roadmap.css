@@ -77,8 +77,7 @@
 }
 .roadmap-sw--planned { border-color: var(--rm-planned); background: color-mix(in srgb, var(--rm-planned) 26%, var(--rm-stage)); }
 .roadmap-sw--idea { border-color: var(--rm-idea); border-style: dashed; border-width: 1.5px; }
-.roadmap-sw--decision { border: 0; }
-.roadmap-sw--decision svg { display: block; width: 100%; height: 100%; fill: var(--rm-stage); stroke: var(--rm-decision); stroke-width: 2; }
+.roadmap-sw--decision { border-color: var(--rm-decision); border-width: 2px; background: var(--rm-stage); }
 .roadmap-sw--ref { border-color: var(--rm-ref); border-width: 1px; }
 .roadmap-ln { flex: none; display: inline-block; width: 1.5rem; height: 0; border-top: 1.5px solid var(--rm-edge); }
 .roadmap-ln--draft { border-top-style: dotted; border-top-width: 2px; }

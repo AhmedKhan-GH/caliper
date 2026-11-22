@@ -6,7 +6,7 @@
   "use strict";
 
   var NODE_W = 184, REF_W = 160, PAD_X = 10, PAD_TOP = 7, ID_LINE = 13, ID_GAP = 2, TITLE_LINE = 15,
-    PAD_BOTTOM = 8, CUT = 7, MARGIN = 24, HEADING_H = 38, PILLAR_GAP = 72, CORNER = 6;
+    PAD_BOTTOM = 8, MARGIN = 24, HEADING_H = 38, PILLAR_GAP = 72, CORNER = 6;
   var ZOOM_MIN = 0.75, ZOOM_MAX = 1.5;
   var TEXT_FONT = '"Plex Condensed", sans-serif', CODE_FONT = '"Source Code Pro", monospace';
   var ELK_OPTIONS = {
@@ -181,11 +181,6 @@
   }
 
   function shapeFor(n, status) {
-    if (status === "decision") {
-      var x = n.x, y = n.y, w = n.width, h = n.height;
-      return sv("polygon", { "class": "rm-shape", points: [x + CUT, y, x + w - CUT, y, x + w, y + CUT, x + w, y + h - CUT,
-        x + w - CUT, y + h, x + CUT, y + h, x, y + h - CUT, x, y + CUT].join(" ") });
-    }
     return sv("rect", { "class": "rm-shape", x: n.x, y: n.y, width: n.width, height: n.height, rx: 4, ry: 4 });
   }
 
@@ -284,12 +279,6 @@
     var legend = el("div", "roadmap-legend");
     ["shipped", "built", "progress", "planned", "idea", "decision"].forEach(function (s) {
       var item = el("span"), sw = el("i", "roadmap-sw roadmap-sw--" + s);
-      if (s === "decision") {
-        /* The node's own cut-corner shape, which CSS borders cannot draw. */
-        var mini = sv("svg", { viewBox: "0 0 30 16", "aria-hidden": "true" });
-        mini.appendChild(sv("polygon", { points: "6,1 24,1 29,6 29,10 24,15 6,15 1,10 1,6" }));
-        sw.appendChild(mini);
-      }
       item.append(sw, document.createTextNode(STATUS_LABEL[s]));
       legend.appendChild(item);
     });
