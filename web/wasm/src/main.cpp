@@ -22,6 +22,7 @@
 // through promises: main() requests the adapter, the adapter callback requests
 // the device, and the device callback builds everything, connects and starts
 // the frame loop. No Asyncify is needed.
+#include "draw_parity.h"
 #include "fonts.h"
 #include "gfx_selftest.h"
 #include "scene_selftest.h"
@@ -31,6 +32,7 @@
 #include "page_style.h"
 #include "source_poll.h"
 #include "web_input.h"
+#include "web_programs.h"
 
 #include "caliper/embed.h"
 #include "caliper/live_net.h"   // CALIPER_NET_BYE_NORMAL
@@ -87,6 +89,10 @@ struct Page {
     WebGpuRenderer* renderer = nullptr;   // owned by the hosted core
     CaliperCore* core = nullptr;
     std::unique_ptr<NetSource> net;
+    // The draw halves of pieces that the script relays, and the feeds of the scene views that
+    // draw them (web_programs.h).
+    std::unique_ptr<caliper_web::WebPrograms> programs;
+    uint64_t programs_published = 0;
     caliper_web::PollState poll;
     std::string adapter_text;
     std::string error;
@@ -118,6 +124,7 @@ struct Page {
 
     std::string selftest;                 // the graphics layer's self-test: "" or its report
     std::string scene_selftest;           // the last scene row: "" or its report
+    std::string draw_parity;              // the pixel comparison's draw: "" or its report
 
     bool ready = false;                   // the first snapshot was applied
     bool destroyed = false;
@@ -199,6 +206,8 @@ void publish() {
     put("gfxErrors", gerr.c_str());
     put("gfxSelftest", g.selftest.c_str());
     put("sceneSelftest", g.scene_selftest.c_str());
+    put("drawParity", g.draw_parity.c_str());
+    put("programs", g.programs ? g.programs->status_json().c_str() : "[]");
     put("state", g.net ? g.net->state_text().c_str() : "starting");
     put("messages", g.net ? (double)g.net->messages() : 0.0);
     put("bytes", g.net ? (double)g.net->bytes() : 0.0);
@@ -659,6 +668,34 @@ void publish_selftest_images() {
         }, im.name.c_str(), im.w, im.h, im.rgba.data(), (int)im.rgba.size());
 }
 
+// The pixel comparison's results, for the browser test:
+// Module.caliperDrawParity = {id: {code, message, where, line, column, color: Uint8Array, ids: Uint8Array}}.
+void publish_parity() {
+    EM_ASM({ Module["caliperDrawParity"] = {}; });
+    for (const caliper_web::ParityResult& r : caliper_web::draw_parity_results())
+        EM_ASM({
+            Module["caliperDrawParity"][UTF8ToString($0)] = ({
+                "code": UTF8ToString($1), "message": UTF8ToString($2), "where": UTF8ToString($3),
+                "line": $4, "column": $5,
+                "color": HEAPU8.slice($6, $6 + $7), "ids": HEAPU8.slice($8, $8 + $9)});
+        }, r.id.c_str(), r.code.c_str(), r.message.c_str(), r.where.c_str(), (int)r.line, (int)r.column,
+           r.color.data(), (int)r.color.size(), r.ids.data(), (int)r.ids.size());
+}
+
+// The draw halves of pieces: the finished browser checks and the refusals that WebGPU reported,
+// then each scene view whose name is a program's panel gets that panel's feed.
+void pump_programs() {
+    if (!g.programs || !g.renderer || !g.renderer->gfx()) return;
+    g.programs->pump(g.renderer->gfx()->device_errors());
+    for (const std::string& panel : g.programs->panels())
+        if (caliper_live_views::SceneView* sv = caliper_live_views::scene_view(g.core, panel.c_str()))
+            sv->set_draw_feed(g.programs->feed(panel));
+    if (g.programs->revision() != g.programs_published) {
+        g.programs_published = g.programs->revision();
+        g.publish_soon = true;
+    }
+}
+
 void frame() {
     const double t0 = emscripten_get_now();
     if (caliper_web::gfx_selftest_running() && g.renderer && g.renderer->gfx() &&
@@ -673,6 +710,12 @@ void frame() {
         publish();
     }
 
+    if (caliper_web::draw_parity_running() && g.renderer && g.renderer->gfx() &&
+        caliper_web::draw_parity_poll(*g.renderer->gfx(), g.renderer->gfx()->device_errors(), &g.draw_parity)) {
+        publish_parity();
+        publish();
+    }
+
     if (g.net && caliper_web::poll_source(g.core, *g.net, g.poll) > 0 && !g.ready) {
         g.ready = true;   // the first snapshot is drawn this frame
         EM_ASM({
@@ -680,6 +723,7 @@ void frame() {
             if (f) f();
         });
     }
+    pump_programs();
     const double t_poll = emscripten_get_now();
 
     const caliper_web::FrameSize fs = caliper_web::input_new_frame();
@@ -765,6 +809,7 @@ void start() {
     if (!g.core) return fail("caliper_core_create_hosted refused");
     g.core->views_bare = !g.cfg.header;
     caliper_live_views::set_event_sink(g.core, on_event);
+    g.programs = std::make_unique<caliper_web::WebPrograms>(g.device);
 
     if (g.cfg.src.empty()) {
         fail("no stream: set caliperConfig.src to the ws:// URL of a Caliper stream");
@@ -779,6 +824,12 @@ void start() {
                 var f = Module["onDataView"];
                 if (f) f(UTF8ToString($0), JSON.parse(UTF8ToString($1)));
             }, view.c_str(), json.c_str());
+        };
+        cb.program = [](const caliper_net::wire::Program& m) {
+            if (g.programs) g.programs->on_program(m);
+        };
+        cb.resource = [](const caliper_net::wire::Resource& r) {
+            if (g.programs) g.programs->on_resource(r);
         };
         g.net = std::make_unique<NetSource>(o, cb);
         g.poll.relative_stamps = true;   // live_clock.h: latency above the fastest message
@@ -911,6 +962,27 @@ EMSCRIPTEN_KEEPALIVE int caliper_views_scene_selftest(const char* name) {
     return 1;
 }
 
+// Starts the browser's side of the pixel comparison (draw_parity.h) on the fixture that the app's
+// side wrote: `frames` (n bytes of length-prefixed PROGRAM and RESOURCE frames) and `plan` (its
+// JSON). The report comes in caliperStats.drawParity and the targets in Module.caliperDrawParity.
+// 1 when it started.
+EMSCRIPTEN_KEEPALIVE int caliper_views_draw_parity(const uint8_t* frames, int n, const char* plan) {
+    if (!g.renderer || !g.renderer->gfx() || !g.device || n < 0) {
+        g.draw_parity = "fail not started: the renderer is not up";
+        publish();
+        return 0;
+    }
+    std::string why;
+    if (!caliper_web::draw_parity_start(*g.renderer->gfx(), g.device, frames, size_t(n), plan ? plan : "", &why)) {
+        g.draw_parity = "fail not started: " + why;
+        publish();
+        return 0;
+    }
+    g.draw_parity.clear();
+    publish();
+    return 1;
+}
+
 // The colormap keys that this build derives at run time for the range (vmin, vmax), from its own
 // CPU reference (src/host/gfx/colormap_keys.h), as the scene views derive them: the browser test
 // compares them with the case file that the native tool writes. Module.caliperColormapKeys =
@@ -939,8 +1011,10 @@ EMSCRIPTEN_KEEPALIVE void caliper_views_destroy() {
         caliper_core_destroy_hosted(g.core);   // releases the views; the renderer is ours
         g.core = nullptr;
     }
+    g.programs.reset();                             // the feeds, after the scene views that read them
     caliper_host::services_set_renderer(nullptr);   // drops the bridge before its renderer
     caliper_web::scene_selftest_stop();             // its scene view, before the backend
+    caliper_web::draw_parity_stop();                // its runtimes and targets, before the backend
     delete g.renderer;                              // shutdown(): textures, ImGui backend, surface
     g.renderer = nullptr;
     g.net.reset();
