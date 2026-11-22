@@ -333,6 +333,8 @@ A reader refuses a version it does not know with `spec.unsupported_version`, who
 
 A later reader keeps reading version 0. It migrates an older document in its JSON form, one version at a time, before decoding it, and the canonical writer then writes the newest version, so a saved spec moves forward only when it is saved. Version 0 has no migrations.
 
+Version 1 adds the primitive `scene` and the array `control`, and [Instruments](instruments.md) defines both. The library reads the versions 0 and 1. Version 1 is a strict superset of version 0, so the migration changes only the number, and the canonical writers write the version that the spec holds. A version 0 document that uses a key of version 1 gets the errors of version 0, `spec.unknown_primitive` or `spec.unknown_key`. An edit that adds a scene panel or a control to a version 0 spec raises its version to 1 in the same step (`required_version()` in `spec.h`). The schema of version 1 is `src/builder/spec/schema/caliper-spec-v1.schema.json`, and `caliper-mcp` serves it as a second resource.
+
 ## Validation
 
 Checking a spec has two stages, which the library keeps apart:
