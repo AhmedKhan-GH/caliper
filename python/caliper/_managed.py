@@ -11,6 +11,7 @@ is Caliper-specific:
 | ``CALIPER_RUN_PARAMS`` | Optional JSON object of parameter name to value |
 | ``CALIPER_RUN_RESUME`` | Optional checkpoint file to load before the first step (a fork) |
 | ``CALIPER_RUN_PARENT`` | Optional id of the parent run (a fork) |
+| ``CALIPER_RUN_APP_PID`` | The process id of the app whose model runner started the run |
 
 In a managed run, ``caliper.watch(model, optimizer)`` and ``caliper.watch(model)`` also do these
 things, in this order:
@@ -36,16 +37,20 @@ before the weights change, and returns the path. The file is a ``torch.save`` di
 (``caliper._adapter.TorchAdapter.state``). ``caliper.stop`` makes the hook of that checkpoint
 send what is pending and raise ``SystemExit(0)`` before the weights change. It also ends a pause.
 
-A managed run does not outlive the process that started it. On POSIX, ``prepare`` starts a daemon
-thread that reads the parent's process id every ``PARENT_POLL_S`` seconds. When the parent ends,
-also in a crash where the app cannot end its children, the process gets a new parent, and the
-thread ends the run at once with exit code ``PARENT_GONE_EXIT``. Nothing reads the run after that,
-so the thread does not wait for a checkpoint.
+A managed run does not outlive the app that started it. On POSIX, the import of this module in a
+process with ``CALIPER_RUN_DIR`` and ``CALIPER_RUN_APP_PID`` starts a daemon thread, and so does
+``prepare``. It looks every ``PARENT_POLL_S`` seconds whether the app still runs: while the app is
+this process's parent, whether the parent changed, else whether a process of that id exists. When
+the app ended, also in a crash where the app cannot end its children and also before the import,
+the thread ends the run at once with exit code ``PARENT_GONE_EXIT``. Nothing reads the run after
+that, so the thread does not wait for a checkpoint. Without ``CALIPER_RUN_APP_PID`` the thread
+watches the parent's process id, from ``prepare`` on.
 """
 from __future__ import annotations
 
 import json
 import os
+import secrets
 import sys
 import threading
 import time
@@ -61,6 +66,7 @@ ENV_LINK = "CALIPER_RUN_LINK_FILE"
 ENV_PARAMS = "CALIPER_RUN_PARAMS"
 ENV_RESUME = "CALIPER_RUN_RESUME"
 ENV_PARENT = "CALIPER_RUN_PARENT"
+ENV_APP_PID = "CALIPER_RUN_APP_PID"
 _VARS = (ENV_ID, ENV_DIR, ENV_LINK, ENV_PARAMS, ENV_RESUME, ENV_PARENT)
 
 CHECKPOINT = "caliper.checkpoint"
@@ -72,11 +78,11 @@ FORMAT = "caliper.checkpoint"
 VERSION = 1
 """The ``version`` field of a checkpoint file."""
 FLUSH_S = 2.0
-# How often the run checks that the process that started it still runs, and the exit code when it
+"""Seconds that a stop waits at most for pending snapshots before the script ends."""
+# How often the run checks that the app that started it still runs, and the exit code when it
 # does not.
 PARENT_POLL_S = 0.5
 PARENT_GONE_EXIT = 1
-"""Seconds that a stop waits at most for pending snapshots before the script ends."""
 NONE = object()
 """What ``value`` returns for a parameter that the runner gives no value."""
 
@@ -97,11 +103,34 @@ def _params(text):
     return got
 
 
+def _temp_name(folder: str, base: str) -> str:
+    """A new name for the temporary file of ``_write`` beside ``base``."""
+    return os.path.join(folder, f".{base}.{os.getpid()}.{secrets.token_hex(8)}.tmp")
+
+
+_TEMP_FLAGS = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+               | getattr(os, "O_BINARY", 0))
+
+
 def _write(path: str, data: bytes) -> None:
-    """Write ``data`` to ``path`` atomically (a file of mode 0600 beside it, then a rename)."""
+    """Write ``data`` to ``path`` atomically: a new file of mode 0600 beside it, then a rename.
+
+    The temporary file is created with ``O_EXCL | O_NOFOLLOW``, so that no file or link that is
+    there already, such as one that another user put into the run folder, is written through.
+
+    Raises:
+        FileExistsError: When eight new names were all taken.
+    """
     folder, base = os.path.split(os.path.abspath(path))
-    tmp = os.path.join(folder, f".{base}.{os.getpid()}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    for _ in range(8):
+        tmp = _temp_name(folder, base)
+        try:
+            fd = os.open(tmp, _TEMP_FLAGS, 0o600)
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise FileExistsError(f"no new temporary name beside {path}")
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
@@ -291,11 +320,35 @@ _run = None
 _parent_watch = None
 
 
-def _parent_gone(ppid: int, interval: float) -> None:
-    while os.getppid() == ppid:
+def _alive(pid: int) -> bool:
+    """Whether a process of id ``pid`` exists (POSIX; ``os.kill`` ends a process on Windows)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _app_pid(env=None):
+    """``CALIPER_RUN_APP_PID`` as a process id, or ``None`` when it is not set or not valid."""
+    text = (os.environ if env is None else env).get(ENV_APP_PID) or ""
+    try:
+        pid = int(text)
+    except ValueError:
+        return None
+    return pid if pid > 1 and pid != os.getpid() else None
+
+
+def _parent_gone(app: int, ppid: int, interval: float) -> None:
+    # While the app is the parent, a new parent says that it ended, also before its parent reaped it.
+    while (os.getppid() == ppid) if app == ppid else _alive(app):
         time.sleep(interval)
     try:
-        sys.stderr.write(f"caliper: the process {ppid} that started this managed run ended, so "
+        sys.stderr.write(f"caliper: the process {app} that started this managed run ended, so "
                          "the run ends\n")
         sys.stderr.flush()
     except Exception:                    # noqa: BLE001 - the exit goes on
@@ -304,18 +357,19 @@ def _parent_gone(ppid: int, interval: float) -> None:
 
 
 def watch_parent(interval: float = PARENT_POLL_S) -> bool:
-    """End this process when the process that started it ends (POSIX), once per process.
+    """End this process when the app that started it ends (POSIX), once per process.
 
     The app ends its children by their process ids when it closes. After a crash of the app
-    nothing does, so the child itself sees that its parent changed and exits with
-    ``PARENT_GONE_EXIT``.
+    nothing does, so the child itself sees that the app ended and exits with
+    ``PARENT_GONE_EXIT``. The app is ``CALIPER_RUN_APP_PID``, else the parent.
 
     Args:
-        interval (float): Seconds between two reads of the parent's process id.
+        interval (float): Seconds between two looks.
 
     Returns:
         bool: Whether a watch runs now. ``False`` on Windows, where the runner's job object ends
-        the children, and when the parent is already the init process.
+        the children, and without ``CALIPER_RUN_APP_PID`` when the parent is already the init
+        process.
     """
     global _parent_watch
     if _parent_watch is not None:
@@ -323,9 +377,12 @@ def watch_parent(interval: float = PARENT_POLL_S) -> bool:
     if os.name != "posix":
         return False
     ppid = os.getppid()
-    if ppid <= 1:
-        return False
-    _parent_watch = threading.Thread(target=_parent_gone, args=(ppid, interval),
+    app = _app_pid()
+    if app is None:
+        if ppid <= 1:
+            return False
+        app = ppid
+    _parent_watch = threading.Thread(target=_parent_gone, args=(app, ppid, interval),
                                      name="caliper-parent-watch", daemon=True)
     _parent_watch.start()
     return True
@@ -348,3 +405,9 @@ def value(name: str):
     """The value that the managed run gives parameter ``name`` at its registration, or ``NONE``."""
     run = current()
     return NONE if run is None else run.values.get(name, NONE)
+
+
+# A run of the model runner watches its app from the import of this module on, so that a crash of
+# the app before watch() also ends it.
+if os.environ.get(ENV_DIR) and os.environ.get(ENV_APP_PID):
+    watch_parent()
