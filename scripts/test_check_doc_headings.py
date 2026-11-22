@@ -46,6 +46,11 @@ class JudgeTest(unittest.TestCase):
             with self.subTest(heading=heading):
                 self.assertIsNone(chk.judge(heading))
 
+    def test_architecture_names_pass(self):
+        for heading in ("Wheel Build Job for arm64", "Linux x86-64"):
+            with self.subTest(heading=heading):
+                self.assertIsNone(chk.judge(heading))
+
     def test_failing(self):
         for heading, reason in FAILING:
             with self.subTest(heading=heading):

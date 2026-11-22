@@ -43,7 +43,7 @@ MINOR_WORDS = frozenset(
 
 # Lower-case identifiers that appear in headings without backticks.
 IDENTIFIER_WORDS = frozenset(
-    "macos ios npm pip uv git ctest cmake caliper".split()
+    "macos ios npm pip uv git ctest cmake caliper arm64 x86".split()
 )
 
 ARTICLE_WORDS = {"the", "a", "an"}

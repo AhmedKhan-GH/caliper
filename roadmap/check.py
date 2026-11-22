@@ -3,12 +3,16 @@
 Prints one line per problem as `<file>: <id>: <message>`. Exits 1 when there is an error and 0
 otherwise. Warnings are printed with the word warning and do not change the exit code.
 
+Candidate files under roadmap/candidates/ are checked on their own and stay out of the registry,
+the graph, the coverage check and the counts.
+
 The ledger under roadmap/coverage/ names where each feature comes from. Every entry maps to ids
 that exist or gives a reason, and every `##` and `###` heading of each plan page under design/
 appears in that page's ledger file, so a new plan heading without an entry fails the check.
 """
 
 import argparse
+import importlib.util
 import json
 import re
 import sys
@@ -23,6 +27,7 @@ import build
 STATUSES = build.STATUS_ORDER
 # Pages under design/ that index the folder rather than plan work.
 DESIGN_INDEXES = ("README.md", "index.md")
+CANDIDATES = "candidates"
 # A title is a short name, so it never starts with an article.
 ARTICLE = re.compile(r"^(the|a|an)\s", re.I)
 
@@ -43,6 +48,21 @@ def _has_todo(value):
 
 def _todo_fields(feature):
     return [k for k, v in feature.items() if _has_todo(v)]
+
+
+_JUDGE = []
+
+
+def _judge(title):
+    """The docs title rule of scripts/check_doc_headings.py: None when the title passes."""
+    if not _JUDGE:
+        path = build.ROOT / "scripts" / "check_doc_headings.py"
+        spec = importlib.util.spec_from_file_location("check_doc_headings", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules.setdefault("check_doc_headings", module)
+        spec.loader.exec_module(module)
+        _JUDGE.append(module.judge)
+    return _JUDGE[0](title)
 
 
 def _find_cycle(graph):
@@ -192,6 +212,80 @@ def check_coverage(root, features, errors, warnings):
     return len(groups), sum(len(g["entries"]) for _, g in groups)
 
 
+def check_candidates(root, features, pillars, errors):
+    """Checks roadmap/candidates/*.yml against the registry. Candidates are not features.
+
+    pillars maps each registry prefix to its file stem. Returns (candidates, files) read.
+    """
+    folder = root / "roadmap" / CANDIDATES
+    if not folder.is_dir():
+        return 0, 0
+    for extra in sorted(folder.glob("*.yaml")):
+        errors.append("roadmap/%s/%s: -: candidate files end in .yml, so this file is not read"
+                      % (CANDIDATES, extra.name))
+    schema_path = folder / "schema.json"
+    if not schema_path.is_file():
+        errors.append("roadmap/%s/schema.json: -: the candidates' schema is missing" % CANDIDATES)
+        return 0, 0
+    validator = jsonschema.Draft202012Validator(
+        json.loads(schema_path.read_text(encoding="utf-8")))
+
+    groups = []
+    for path in sorted(folder.glob("*.yml")):
+        name = "roadmap/%s/%s" % (CANDIDATES, path.name)
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as err:
+            errors.append("%s: -: not valid YAML: %s" % (name, err))
+            continue
+        problems = sorted(validator.iter_errors(data), key=lambda e: list(map(str, e.path)))
+        for err in problems:
+            where = "/".join(str(p) for p in err.absolute_path) or "-"
+            errors.append("%s: -: schema: %s: %s" % (name, where, err.message))
+        if not problems:
+            groups.append((name, path.stem, data))
+
+    titles = {f["title"].casefold(): fid for fid, (_, f) in features.items()}
+    prefixes, keys = {}, {}
+    for name, stem, data in groups:
+        pillar = data["pillar"]
+        if pillar in prefixes:
+            errors.append("%s: -: duplicate pillar %s, also used by %s"
+                          % (name, pillar, prefixes[pillar]))
+        prefixes.setdefault(pillar, name)
+        if data.get("proposed"):
+            if pillar in pillars:
+                errors.append("%s: -: proposed pillar %s is already a registry prefix"
+                              % (name, pillar))
+        elif pillar not in pillars:
+            errors.append("%s: -: pillar %s is not a registry prefix" % (name, pillar))
+        elif pillars[pillar] != stem:
+            errors.append("%s: -: the file for pillar %s must be named %s.yml"
+                          % (name, pillar, pillars[pillar]))
+        reason = _judge(data["title"])
+        if reason:
+            errors.append("%s: -: the title \"%s\" %s" % (name, data["title"], reason))
+        if _has_todo(data):
+            errors.append("%s: -: contains TODO" % name)
+        for c in data["candidates"]:
+            key = c["key"]
+            if key in keys:
+                errors.append("%s: %s: duplicate key, also in %s" % (name, key, keys[key]))
+            keys.setdefault(key, name)
+            if key.casefold() in {fid.casefold() for fid in features}:
+                errors.append("%s: %s: the key is a registry feature id" % (name, key))
+            reason = _judge(c["title"])
+            if reason:
+                errors.append("%s: %s: the title \"%s\" %s" % (name, key, c["title"], reason))
+            if c["title"].casefold() in titles:
+                errors.append("%s: %s: the title is the title of the feature %s"
+                              % (name, key, titles[c["title"].casefold()]))
+            for dep in c.get("depends_on") or []:
+                if dep not in features:
+                    errors.append("%s: %s: depends_on %s, which does not exist" % (name, key, dep))
+    return sum(len(d["candidates"]) for _, _, d in groups), len(groups)
+
+
 def run_checks(root):
     """Returns (errors, warnings, summary) for the registry under root."""
     root = Path(root)
@@ -329,6 +423,9 @@ def run_checks(root):
 
     ledger_files, ledger_entries = check_coverage(root, features, errors, warnings)
 
+    candidates, candidate_files = check_candidates(
+        root, features, {d["prefix"]: Path(n).stem for n, d in valid}, errors)
+
     counts = Counter(f["status"] for _, f in features.values())
     in_progress = sum(1 for _, f in features.values() if f.get("in_progress"))
     edges = sum(len(v) for v in graph.values())
@@ -336,6 +433,8 @@ def run_checks(root):
         len(features), edges, ", ".join("%d %s" % (counts[s], s) for s in STATUSES), in_progress)
     if ledger_files:
         summary += ", %d ledger entries in %d files" % (ledger_entries, ledger_files)
+    if candidate_files:
+        summary += ", %d candidates in %d files" % (candidates, candidate_files)
     return errors, warnings, summary
 
 

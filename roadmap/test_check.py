@@ -514,6 +514,186 @@ entries:
         self.assertError(self.check()[0], "roadmap/coverage", "missing")
 
 
+CANDIDATE_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["pillar", "title", "proposed", "candidates"],
+    "properties": {
+        "pillar": {"type": "string"},
+        "title": {"type": "string"},
+        "proposed": {"type": "boolean"},
+        "description": {"type": "string"},
+        "candidates": {"type": "array", "items": {
+            "type": "object",
+            "required": ["key", "title", "summary", "origin"],
+            "properties": {
+                "key": {"type": "string"},
+                "title": {"type": "string"},
+                "summary": {"type": "string"},
+                "origin": {"enum": ["cut", "plan-idea", "adjacent-work", "field"]},
+                "depends_on": {"type": "array", "items": {"type": "string"}},
+            },
+        }},
+    },
+}
+
+CAND_CORE = """\
+pillar: COR
+title: Core Runtime
+proposed: false
+candidates:
+  - key: host-tracing
+    title: Host Tracing
+    summary: Traces the host.
+    origin: cut
+    depends_on: [COR-01]
+  - key: abi-diff
+    title: ABI Diff
+    summary: Diffs two headers.
+    origin: field
+"""
+
+CAND_DATA = """\
+pillar: DAT
+title: Datasets
+proposed: true
+description: Dataset tools.
+candidates:
+  - key: dataset-health
+    title: Dataset Health Report
+    summary: Reports on a dataset.
+    origin: field
+    depends_on: [REN-01]
+"""
+
+
+class CandidateTest(unittest.TestCase):
+    """Candidate files under roadmap/candidates/ are checked and stay out of the registry."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = make_repo(self._tmp.name)
+        self.folder = self.root / "roadmap" / "candidates"
+        self.folder.mkdir()
+        (self.folder / "schema.json").write_text(json.dumps(CANDIDATE_SCHEMA), encoding="utf-8")
+        self.write("core", CAND_CORE)
+        self.write("datasets", CAND_DATA)
+
+    def write(self, stem, text, ext=".yml"):
+        (self.folder / (stem + ext)).write_text(text, encoding="utf-8")
+
+    def edit(self, stem, old, new):
+        path = self.folder / (stem + ".yml")
+        text = path.read_text(encoding="utf-8")
+        self.assertIn(old, text)
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+    def check(self):
+        return check.run_checks(self.root)
+
+    def assertError(self, errors, *fragments):
+        self.assertTrue(any(all(f in e for f in fragments) for e in errors),
+                        "no error with %r in %r" % (fragments, errors))
+
+    def test_valid(self):
+        errors, warnings, summary = self.check()
+        self.assertEqual((errors, warnings), ([], []))
+        self.assertIn("4 features, 3 edges", summary)
+        self.assertIn("2 ledger entries in 2 files", summary)
+        self.assertTrue(summary.endswith(", 3 candidates in 2 files"), summary)
+
+    def test_no_folder_changes_nothing(self):
+        shutil.rmtree(self.folder)
+        errors, _, summary = self.check()
+        self.assertEqual(errors, [])
+        self.assertNotIn("candidates", summary)
+
+    def test_candidates_stay_out_of_the_counts(self):
+        _, _, with_candidates = self.check()
+        shutil.rmtree(self.folder)
+        _, _, without = self.check()
+        self.assertTrue(with_candidates.startswith(without), (with_candidates, without))
+
+    def test_schema_failure(self):
+        self.edit("core", "origin: cut", "origin: other")
+        self.assertError(self.check()[0], "roadmap/candidates/core.yml", "schema", "origin")
+
+    def test_invalid_yaml(self):
+        self.write("core", "pillar: [COR\n")
+        self.assertError(self.check()[0], "roadmap/candidates/core.yml", "not valid YAML")
+
+    def test_missing_schema(self):
+        (self.folder / "schema.json").unlink()
+        self.assertError(self.check()[0], "roadmap/candidates/schema.json", "schema is missing")
+
+    def test_yaml_extension_is_not_read(self):
+        self.write("rendering", CAND_CORE, ext=".yaml")
+        self.assertError(self.check()[0], "roadmap/candidates/rendering.yaml", "not read")
+
+    def test_existing_pillar_must_be_a_registry_prefix(self):
+        self.edit("core", "pillar: COR", "pillar: XYZ")
+        self.assertError(self.check()[0], "roadmap/candidates/core.yml", "XYZ is not a registry prefix")
+
+    def test_existing_pillar_file_stem(self):
+        self.write("rendering", CAND_CORE.replace("key: host", "key: rhost").replace(
+            "key: abi", "key: rabi"))
+        self.assertError(self.check()[0], "roadmap/candidates/rendering.yml", "COR", "core.yml")
+
+    def test_proposed_prefix_is_new(self):
+        self.edit("datasets", "pillar: DAT", "pillar: REN")
+        self.assertError(self.check()[0], "roadmap/candidates/datasets.yml",
+                         "proposed pillar REN is already a registry prefix")
+
+    def test_prefixes_are_unique(self):
+        self.write("more-data", CAND_DATA.replace("dataset-health", "other-key").replace(
+            "Dataset Health Report", "Other Report"))
+        self.assertError(self.check()[0], "more-data.yml", "duplicate pillar DAT", "datasets.yml")
+
+    def test_keys_are_unique_across_files(self):
+        self.write("more-data", CAND_DATA.replace("pillar: DAT", "pillar: SCI").replace(
+            "Dataset Health Report", "Other Report"))
+        self.assertError(self.check()[0], "more-data.yml", "dataset-health", "duplicate key",
+                         "datasets.yml")
+
+    def test_depends_on_must_exist(self):
+        self.edit("core", "[COR-01]", "[COR-99]")
+        self.assertError(self.check()[0], "roadmap/candidates/core.yml", "host-tracing",
+                         "depends_on COR-99, which does not exist")
+
+    def test_candidate_title_rule(self):
+        for title, reason in (("The Host Tracing", "article"), ("Host tracing", "Title Case"),
+                              ("Host Tracing?", "question"), ("Host: Tracing", "colon")):
+            with self.subTest(title=title):
+                self.write("core", CAND_CORE)
+                self.edit("core", "title: Host Tracing", "title: '%s'" % title)
+                errors, _, _ = self.check()
+                self.assertError(errors, "host-tracing", title, reason)
+
+    def test_file_title_rule(self):
+        self.edit("core", "title: Core Runtime", "title: Core runtime")
+        self.assertError(self.check()[0], "roadmap/candidates/core.yml", "-:", "Core runtime")
+
+    def test_key_is_not_a_feature_id(self):
+        self.edit("core", "key: abi-diff", "key: cor-03")
+        self.assertError(self.check()[0], "cor-03", "registry feature id")
+
+    def test_title_is_not_a_feature_title(self):
+        self.edit("core", "title: ABI Diff", "title: packaging")
+        self.assertError(self.check()[0], "abi-diff", "title of the feature COR-03")
+
+    def test_no_todo(self):
+        self.edit("core", "Traces the host.", "TODO write this.")
+        self.assertError(self.check()[0], "roadmap/candidates/core.yml", "contains TODO")
+
+    def test_candidates_do_not_satisfy_the_registry(self):
+        self.edit("core", "[COR-01]", "[REN-01]")
+        errors, _, _ = self.check()
+        self.assertEqual(errors, [])
+        self.edit("datasets", "[REN-01]", "[DAT-01]")
+        self.assertError(self.check()[0], "dataset-health", "DAT-01, which does not exist")
+
+
 class BuildTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
