@@ -60,6 +60,8 @@ struct InstrumentContext {
     LoaderStore* store = nullptr;
     DataSources* sources = nullptr;
     ResolveLimits limits;
+    // The workspace folder, where selection.set finds a program's workspace piece.
+    std::string workspace;
 };
 
 // state_commands.cpp: state.set, state.get and control.set.
