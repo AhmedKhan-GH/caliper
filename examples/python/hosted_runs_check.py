@@ -25,13 +25,21 @@ sys.path.insert(0, str(ROOT / "tests" / "hosted_runs"))
 import driver  # noqa: E402
 
 
+# Where a build folder holds each program.
+PLACES = {"caliper": "caliper", "caliper-mcp": "src/builder/mcp/caliper-mcp"}
+
+
 def find(name):
-    """The built program of the first build folder that has it."""
-    for folder in sorted(ROOT.glob("cmake-build-*")) + sorted(ROOT.glob("build*")):
-        for hit in folder.rglob(name):
-            if hit.is_file():
-                return str(hit)
-    return None
+    """The program of the newest build folder that holds both the app and caliper-mcp.
+
+    A checkout can hold several build folders, and an old one can hold an app from before hosted
+    runs existed, so the folder with the newest app wins, not the first folder by name."""
+    folders = [f for f in list(ROOT.glob("cmake-build-*")) + list(ROOT.glob("build*"))
+               if all((f / place).is_file() for place in PLACES.values())]
+    if not folders:
+        return None
+    newest = max(folders, key=lambda f: (f / PLACES["caliper"]).stat().st_mtime)
+    return str(newest / PLACES[name])
 
 
 def main():
