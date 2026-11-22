@@ -7,8 +7,10 @@
 #include <caliper_builder/loaders/inference.h>
 #include <caliper_builder/loaders/loader.h>
 #include <caliper_builder/loaders/paths.h>
+#include <caliper_builder/session/intervene_commands.h>
 #include <caliper_builder/session/line_diff.h>
 #include <caliper_builder/session/panel_data.h>
+#include <caliper_builder/session/program_commands.h>
 #include <caliper_builder/session/spec_edit.h>
 #include <caliper_builder/spec/format.h>
 
@@ -143,6 +145,8 @@ struct Session::Impl {
     std::shared_ptr<EventRing> events = std::make_shared<EventRing>();
     std::atomic<RunControl*> run_control{nullptr};
     std::atomic<ModelRunner*> model_runner{nullptr};
+    std::atomic<ProgramHost*> program_host{nullptr};
+    std::atomic<StageHost*> stage_host{nullptr};
     std::string workspace;
     SessionOptions options;
     std::unique_ptr<LoaderStore> store;
@@ -1507,6 +1511,14 @@ struct Session::Impl {
         return runner_command(ctx, model_runner.load(), workspace, approved);
     }
     CommandOutput events_wait(const CommandContext& ctx) { return events_wait_command(ctx, *events); }
+    // stage.check and program.status (design/gpu-programs.md).
+    CommandOutput program_cmd(const CommandContext& ctx) {
+        std::lock_guard<std::mutex> lock(doc_mutex);
+        static const spec::Spec kNone;
+        return program_command(ctx, doc ? doc->spec : kNone, program_host.load(), stage_host.load());
+    }
+    // The intervention commands (design/gpu-programs.md).
+    CommandOutput intervene_cmd(const CommandContext& ctx) { return intervene_command(ctx, run_control.load()); }
 
     // ---- the approval feed
     // The registry tells of each approval as it goes (set_approval_observer):
@@ -1568,8 +1580,13 @@ struct Session::Impl {
         bind("spec.validate", &Impl::spec_validate);
         for (const char* name : {"spec.set_text", "source.add", "source.patch", "source.remove", "panel.create",
                                  "panel.patch", "panel.remove", "layout.place", "layout.set", "control.create",
-                                 "control.patch", "control.remove"})
+                                 "control.patch", "control.remove", "stage.set", "stage.remove", "program.create",
+                                 "program.patch", "program.remove"})
             bind(name, &Impl::spec_edit);
+        // The stages, programs and interventions (design/gpu-programs.md).
+        for (const char* name : {"stage.check", "program.status"}) bind(name, &Impl::program_cmd);
+        for (const char* name : {"intervene.points", "intervene.set", "intervene.clear", "intervene.list"})
+            bind(name, &Impl::intervene_cmd);
         // The run commands and events.wait (design/instruments.md).
         for (const char* name : {"run.state", "run.set_param", "run.action", "run.pause"}) bind(name, &Impl::run_cmd);
         for (const char* name : {"run.list", "run.start", "run.fork", "run.stop", "run.logs"})
@@ -1843,6 +1860,10 @@ CommandResult Session::invoke(CommandInvocation invocation) {
 void Session::set_run_control(RunControl* control) { impl_->run_control.store(control); }
 void Session::set_model_runner(ModelRunner* runner) { impl_->model_runner.store(runner); }
 ModelRunner* Session::model_runner() const { return impl_->model_runner.load(); }
+void Session::set_program_host(ProgramHost* host) { impl_->program_host.store(host); }
+ProgramHost* Session::program_host() const { return impl_->program_host.load(); }
+void Session::set_stage_host(StageHost* host) { impl_->stage_host.store(host); }
+StageHost* Session::stage_host() const { return impl_->stage_host.load(); }
 RunControl* Session::run_control() const { return impl_->run_control.load(); }
 EventRing& Session::events() { return *impl_->events; }
 

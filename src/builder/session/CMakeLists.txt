@@ -21,9 +21,12 @@ add_library(caliper_builder_session STATIC
     context_bundle.cpp
     control_edit.cpp
     event_ring.cpp
+    intervene_commands.cpp
     line_diff.cpp
     loader_catalog.cpp
     panel_data.cpp
+    program_commands.cpp
+    program_edit.cpp
     resolve.cpp
     run_commands.cpp
     runner_commands.cpp
@@ -32,8 +35,8 @@ add_library(caliper_builder_session STATIC
     util.cpp)
 target_include_directories(caliper_builder_session PUBLIC "${CALIPER_BUILDER_INCLUDE_ROOT}")
 target_link_libraries(caliper_builder_session
-    PUBLIC caliper_builder_spec caliper_builder_catalog caliper_builder_commands caliper_builder_loaders
-           nlohmann_json::nlohmann_json
+    PUBLIC caliper_builder_spec caliper_builder_programs caliper_builder_catalog caliper_builder_commands
+           caliper_builder_loaders nlohmann_json::nlohmann_json
     PRIVATE tomlplusplus::tomlplusplus)
 target_compile_features(caliper_builder_session PUBLIC cxx_std_17)
 if(NOT MSVC)
@@ -63,6 +66,8 @@ caliper_builder_add_tests(session
         tests/test_events.cpp
         tests/test_run_commands.cpp
         tests/test_runner_commands.cpp
+        tests/test_program_commands.cpp
+        tests/test_intervene_commands.cpp
         tests/test_line_diff.cpp
         tests/test_table_conformance.cpp
         tests/test_spec_edit.cpp

@@ -22,7 +22,8 @@ add_library(caliper_spec_runtime STATIC
     spec_layout.cpp
     spec_prepare.cpp
     spec_runtime.cpp
-    spec_offscreen.cpp)
+    spec_offscreen.cpp
+    spec_stages.cpp)
 target_include_directories(caliper_spec_runtime PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_spec_runtime PUBLIC libcaliper caliper_builder_session caliper_sternbild_ui)
 set_target_properties(caliper_spec_runtime PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)

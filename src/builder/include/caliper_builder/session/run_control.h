@@ -87,6 +87,36 @@ inline constexpr const char* kRunBadValue = "run.bad_value";                  //
 inline constexpr const char* kRunNoStep = "run.no_step";                      // pause or step before the first step
 inline constexpr const char* kRunRefused = "run.refused";                     // the script or the hub refused it
 
+// ---- interventions (design/gpu-programs.md, Interventions)
+// The error codes of the intervention commands.
+inline constexpr const char* kInterveneUnknownPoint = "intervene.unknown_point";  // the model has no such point
+inline constexpr const char* kInterveneOpReserved = "intervene.op_reserved";      // scale, steer or patch
+inline constexpr const char* kInterveneBadRange = "intervene.bad_range";          // until_step not above from_step
+inline constexpr const char* kInterveneNotSupported = "intervene.not_supported";  // no capability interventions
+
+// One intervention point, from the script's CONTROLS key interventions.points:
+// each module of model.named_modules() by its dotted name, and each head of
+// an attention module as "<module>#<h>".
+struct InterventionPoint {
+    std::string point;
+    std::string kind = "module";               // "module" or "head"
+    std::string module;                        // the module's dotted name
+    std::optional<std::int64_t> head;          // a head's index
+    std::string type;                          // the module's class name
+    std::optional<std::vector<std::int64_t>> shape;   // the last output's shape; null before the first step
+};
+
+// One intervention, as intervene.set sends it and as CONTROLS key
+// interventions.active gives it back.
+struct Intervention {
+    std::string point;
+    std::string op = "ablate";                 // the only op built; scale, steer and patch are reserved
+    std::optional<std::int64_t> from_step;     // null: the next step
+    std::optional<std::int64_t> until_step;    // null: until cleared
+    std::optional<std::int64_t> since_step;    // the step the script applied it at; null while pending
+    std::string state = "pending";             // "pending", "active" or "ended"
+};
+
 class RunControl {
 public:
     virtual ~RunControl() = default;
@@ -99,6 +129,32 @@ public:
     virtual Error run_action(const std::string& name) = 0;
     // Sends {op: "pause"}, {op: "resume"} or {op: "step", count}.
     virtual Error pause(RunPauseOp op, std::int64_t count) = 0;
+
+    // The interventions (design/gpu-programs.md, Intervention Wire). A script
+    // that announced the capability `interventions` sends its points and its
+    // interventions in CONTROLS, and takes CONTROL {op: "intervene"}. The
+    // defaults answer for a run control without interventions: no points, and
+    // command.not_available for a change. intervene.points, intervene.list,
+    // intervene.set and intervene.clear call these four.
+    //
+    // Whether the attached script announced `interventions`.
+    virtual bool interventions_supported() { return false; }
+    // The points of the attached model, from its last CONTROLS message.
+    virtual std::vector<InterventionPoint> intervention_points() { return {}; }
+    // The interventions, the pending ones first.
+    virtual std::vector<Intervention> interventions() { return {}; }
+    // Sends {op: "intervene", intervene: {set: {point, op, from_step,
+    // until_step}}}. The script applies it at its next step.
+    virtual Error intervene_set(const Intervention& intervention) {
+        (void)intervention;
+        return Error("command.not_available", "This run control takes no interventions.");
+    }
+    // Sends {op: "intervene", intervene: {clear: point}}, or {clear_all: true}
+    // when `point` is empty.
+    virtual Error intervene_clear(const std::string& point) {
+        (void)point;
+        return Error("command.not_available", "This run control takes no interventions.");
+    }
 };
 
 // The handler of run.state, run.set_param, run.action and run.pause, by the

@@ -114,13 +114,14 @@ const char* event_kind_name(EventKind kind) {
         case EventKind::run: return "run";
         case EventKind::spec: return "spec";
         case EventKind::approval: return "approval";
+        case EventKind::program: return "program";
     }
     return "pick";
 }
 
 std::optional<EventKind> event_kind_from_name(std::string_view name) {
     for (EventKind k : {EventKind::pick, EventKind::select, EventKind::control, EventKind::run, EventKind::spec,
-                        EventKind::approval})
+                        EventKind::approval, EventKind::program})
         if (name == event_kind_name(k)) return k;
     return std::nullopt;
 }
@@ -134,10 +135,14 @@ const std::vector<const char*>& kind_keys(EventKind kind) {
     static const std::vector<const char*> control = {"control", "bind", "value"};
     // The runner's change (design/hosted-runs.md, Runner Events) adds run,
     // parent, exit_code and error.
+    // An intervention applied at a step (design/gpu-programs.md) adds point and op.
     static const std::vector<const char*> run = {"change", "state",  "step",   "name",      "value", "status", "text",
-                                                 "attached", "script", "run", "parent", "exit_code", "error"};
+                                                 "attached", "script", "run", "parent", "exit_code", "error",
+                                                 "point", "op"};
     static const std::vector<const char*> spec = {"command", "event", "applet"};
     static const std::vector<const char*> approval = {"approval", "command", "state", "target"};
+    // design/gpu-programs.md, Program Events.
+    static const std::vector<const char*> program = {"program", "change", "host", "code", "message", "line", "column"};
     switch (kind) {
         case EventKind::pick: return pick;
         case EventKind::select: return select;
@@ -145,6 +150,7 @@ const std::vector<const char*>& kind_keys(EventKind kind) {
         case EventKind::run: return run;
         case EventKind::spec: return spec;
         case EventKind::approval: return approval;
+        case EventKind::program: return program;
     }
     return pick;
 }
