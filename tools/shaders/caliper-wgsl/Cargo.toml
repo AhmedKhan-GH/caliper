@@ -11,6 +11,10 @@ name = "caliper_wgsl"
 path = "src/lib.rs"
 crate-type = ["staticlib"]
 
+[features]
+# Adds caliper_wgsl_test_panic, the hook for the C test of the panic guard; the shipped library omits it.
+test-hooks = []
+
 [dependencies]
 # The same pin as the developer-time driver (tools/shaders/naga-driver), so that an agent's
 # program and a built-in shader go through one translator. Cargo.lock is the driver's lock

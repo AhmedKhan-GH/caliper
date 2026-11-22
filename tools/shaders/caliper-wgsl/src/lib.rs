@@ -51,6 +51,10 @@ pub struct Options {
 }
 
 // The developer-time driver's values (tools/shaders/naga-driver/src/main.rs).
+// The largest max_source_bytes that check_options accepts, 16 MiB; the same value as
+// CALIPER_WGSL_MAX_SOURCE_BYTES_LIMIT in include/caliper/wgsl.h.
+const MAX_SOURCE_BYTES_LIMIT: usize = 16 << 20;
+
 const DEFAULT_OPTIONS: Options = Options {
     max_source_bytes: 1 << 20,
     msl_version_major: 2,
@@ -193,6 +197,12 @@ fn utf8_location(bytes: &[u8], offset: usize) -> SourceLocation {
 }
 
 fn check_options(o: &Options) -> Result<(), Failure> {
+    if o.max_source_bytes > MAX_SOURCE_BYTES_LIMIT {
+        return Err(Failure::new(
+            STATUS_ARGUMENT,
+            format!("max_source_bytes is more than {MAX_SOURCE_BYTES_LIMIT}"),
+        ));
+    }
     let msl_ok = o.msl_version_major == 1 || o.msl_version_major == 2 || o.msl_version_major == 3;
     let spv_ok = o.spirv_version_major == 1 && o.spirv_version_minor <= 6;
     if !msl_ok || o.msl_version_minor > 9 {
@@ -207,14 +217,20 @@ fn check_options(o: &Options) -> Result<(), Failure> {
     Ok(())
 }
 
-fn create(source: &[u8], options: Options) -> Result<Module, Failure> {
-    check_options(&options)?;
-    if source.len() > options.max_source_bytes {
+// Refuses a source size above max_source_bytes. The size is the caller's claim, thus this runs
+// before the source is read.
+fn check_source_size(size: usize, options: &Options) -> Result<(), Failure> {
+    if size > options.max_source_bytes {
         return Err(Failure::new(
             STATUS_TOO_LARGE,
-            format!("the source has {} bytes, more than the limit of {}", source.len(), options.max_source_bytes),
+            format!("the source has {size} bytes, more than the limit of {}", options.max_source_bytes),
         ));
     }
+    Ok(())
+}
+
+// The options and the size of source are already checked.
+fn create(source: &[u8], options: Options) -> Result<Module, Failure> {
     let text = std::str::from_utf8(source).map_err(|e| {
         let mut f = Failure::new(STATUS_PARSE, "the source is not valid UTF-8");
         f.location = Some(utf8_location(source, e.valid_up_to()));
@@ -527,6 +543,8 @@ pub unsafe extern "C" fn caliper_wgsl_module_create(
         }
         // SAFETY: options is NULL or a readable caliper_wgsl_options.
         let options = unsafe { options.as_ref() }.copied().unwrap_or(DEFAULT_OPTIONS);
+        check_options(&options)?;
+        check_source_size(size, &options)?;
         let bytes: &[u8] = if size == 0 {
             &[]
         } else {
@@ -674,7 +692,68 @@ pub unsafe extern "C" fn caliper_wgsl_error_free(error: *mut Error) {
     e.column = 0;
 }
 
+// Only in a build with the test-hooks feature; the shipped library has no such function.
+#[cfg(feature = "test-hooks")]
 #[no_mangle]
 pub unsafe extern "C" fn caliper_wgsl_test_panic(error: *mut Error) -> i32 {
     guard(error, || -> Result<(), Failure> { panic!("caliper_wgsl_test_panic") })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_error() -> Error {
+        Error { status: STATUS_OK, line: 0, column: 0, message: ptr::null_mut(), report: ptr::null_mut() }
+    }
+
+    fn message_of(error: &Error) -> String {
+        assert!(!error.message.is_null());
+        // SAFETY: message is a string that write_error made.
+        unsafe { CStr::from_ptr(error.message) }.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn guard_turns_a_panic_into_the_internal_status() {
+        let mut error = empty_error();
+        let status = guard(&mut error, || -> Result<(), Failure> { panic!("boom") });
+        assert_eq!(status, STATUS_INTERNAL);
+        assert_eq!(error.status, STATUS_INTERNAL);
+        assert!(message_of(&error).contains("boom"));
+        // SAFETY: error was filled by this library.
+        unsafe { caliper_wgsl_error_free(&mut error) };
+    }
+
+    #[test]
+    fn max_source_bytes_above_the_limit_is_an_argument_error() {
+        let mut options = DEFAULT_OPTIONS;
+        options.max_source_bytes = MAX_SOURCE_BYTES_LIMIT + 1;
+        let source = b"a";
+        let mut module: *mut Module = ptr::null_mut();
+        let mut error = empty_error();
+        // SAFETY: the pointers are valid.
+        let status = unsafe {
+            caliper_wgsl_module_create(source.as_ptr() as *const c_char, source.len(), &options, &mut module, &mut error)
+        };
+        assert_eq!(status, STATUS_ARGUMENT);
+        assert!(module.is_null());
+        assert!(message_of(&error).contains("max_source_bytes is more than 16777216"));
+        // SAFETY: error was filled by this library.
+        unsafe { caliper_wgsl_error_free(&mut error) };
+    }
+
+    #[test]
+    fn a_size_of_usize_max_is_too_large_and_reads_nothing() {
+        let byte = b'a';
+        let mut module: *mut Module = ptr::null_mut();
+        let mut error = empty_error();
+        // SAFETY: the pointers are valid; the library must reject the size before it reads the source.
+        let status = unsafe {
+            caliper_wgsl_module_create(&byte as *const u8 as *const c_char, usize::MAX, ptr::null(), &mut module, &mut error)
+        };
+        assert_eq!(status, STATUS_TOO_LARGE);
+        assert!(module.is_null());
+        // SAFETY: error was filled by this library.
+        unsafe { caliper_wgsl_error_free(&mut error) };
+    }
 }

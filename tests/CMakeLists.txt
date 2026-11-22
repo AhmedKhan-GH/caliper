@@ -876,13 +876,18 @@ endif()  # CALIPER_WITH_TORCH (applet model tests)
 # caliper_wgsl_tests: the runtime WGSL compiler (tools/shaders/caliper-wgsl) through its C
 # interface: one valid compute program validates and translates to MSL and SPIR-V, built-in
 # programs translate byte for byte as the developer-time driver did, invalid sources fail with
-# their message and place, and a caught panic returns an error. No GPU. Labelled wgsl; without
+# their message and place, and a caught panic returns an error. The panic check runs only when
+# CALIPER_WGSL_HAS_TEST_HOOKS is ON, that is, for a library built from source with the test
+# hooks; a prebuilt library has no panic hook. No GPU. Labelled wgsl; without
 # the library (cmake/CaliperWgsl.cmake) the test reports a skip.
 if(TARGET caliper::wgsl)
     add_executable(caliper_wgsl_tests wgsl/wgsl_tests.cpp)
     target_include_directories(caliper_wgsl_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
     target_link_libraries(caliper_wgsl_tests PRIVATE doctest::doctest caliper::wgsl)
     set_target_properties(caliper_wgsl_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    if(CALIPER_WGSL_HAS_TEST_HOOKS)
+        target_compile_definitions(caliper_wgsl_tests PRIVATE CALIPER_WGSL_TEST_HOOKS)
+    endif()
     add_test(NAME caliper_wgsl_tests COMMAND caliper_wgsl_tests)
 else()
     add_test(NAME caliper_wgsl_tests COMMAND ${CMAKE_COMMAND} -E echo "caliper_wgsl_tests skipped: no caliper_wgsl library")

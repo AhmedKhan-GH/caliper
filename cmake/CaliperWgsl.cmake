@@ -56,6 +56,7 @@ endif()
 set(_wgsl_dir "${CMAKE_BINARY_DIR}/caliper-wgsl")
 set(_wgsl_lib "")
 set(_wgsl_build_target "")
+set(CALIPER_WGSL_HAS_TEST_HOOKS OFF)
 
 if(CALIPER_WGSL_LIBRARY)
     if(NOT EXISTS "${CALIPER_WGSL_LIBRARY}")
@@ -73,13 +74,16 @@ elseif(CALIPER_WGSL_FROM_SOURCE)
     set(_wgsl_lib "${_wgsl_dir}/source/lib/${_wgsl_file}")
     add_custom_command(
         OUTPUT "${_wgsl_lib}"
-        COMMAND "${Python3_EXECUTABLE}" "${_wgsl_crate}/build_library.py" --out "${_wgsl_dir}/source"
+        COMMAND "${Python3_EXECUTABLE}" "${_wgsl_crate}/build_library.py" --out "${_wgsl_dir}/source" --test-hooks
         DEPENDS "${_wgsl_crate}/Cargo.toml" "${_wgsl_crate}/Cargo.lock" "${_wgsl_crate}/src/lib.rs"
                 "${_wgsl_crate}/build_library.py"
         COMMENT "Building caliper_wgsl (Naga ${CALIPER_WGSL_NAGA_VERSION}) with cargo"
         USES_TERMINAL VERBATIM)
     add_custom_target(caliper_wgsl_build DEPENDS "${_wgsl_lib}")
     set(_wgsl_build_target caliper_wgsl_build)
+    # This build is a developer and test build, thus it has the test hooks (caliper_wgsl_test_panic).
+    # The shipped archives come from build_library.py without --test-hooks and have none.
+    set(CALIPER_WGSL_HAS_TEST_HOOKS ON)
 else()
     set(_wgsl_archive "caliper_wgsl-${CALIPER_WGSL_PREBUILT_VERSION}-${_wgsl_platform}.tar.gz")
     set(_wgsl_hash "${CALIPER_WGSL_SHA256_${_wgsl_platform}}")
