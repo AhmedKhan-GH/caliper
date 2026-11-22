@@ -5,8 +5,8 @@
     python3 scripts/site_vram_figures.py --write site/index.html   # replace both figures in the page
 
 Where a visualised tensor's bytes physically live, which silicon touches them, and how the memory is laid out,
-for Apple Silicon (Metal) and an NVIDIA GPU (Vulkan + CUDA). Facts from docs/explanations/zero-copy.md and
-docs/explanations/vulkan-cuda.md; the layouts are schematic, not die maps. Styled by the page's .hw rules.
+for Apple Silicon (Metal) and an NVIDIA GPU (Vulkan + CUDA). Facts from docs/python/zero-copy-tensors.md and
+docs/development/vulkan-and-cuda.md; the layouts are schematic, not die maps. Styled by the page's .hw rules.
 """
 import sys
 from pathlib import Path

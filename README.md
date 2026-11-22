@@ -22,7 +22,7 @@
   <a href="https://ahmedkhan-gh.github.io/caliper/"><b>Website</b></a> ·
   <a href="https://ahmedkhan-gh.github.io/caliper/docs/">Documentation</a> ·
   <a href="design/roadmap.md">Roadmap</a> ·
-  <a href="docs/references/applets.md">Applets</a>
+  <a href="docs/applets/in-tree-applets.md">Applets</a>
 </p>
 
 <br>
@@ -62,8 +62,8 @@ cmake --build --preset release
 
 The core build compiles no applets. Applets build against the installed SDK
 (`cmake --install cmake-build-release --prefix <prefix> --component sdk`), each in
-its own folder; [Your first applet](docs/tutorials/first-applet.md) walks through
-it, and [SDK package](docs/references/sdk-package.md) describes the package.
+its own folder; [Your first applet](docs/applets/first-applet.md) walks through
+it, and [SDK package](docs/applets/sdk-package.md) describes the package.
 
 `--preset release-notorch` builds the host without LibTorch, into
 `cmake-build-notorch/`. The presets need CMake 3.25 or later.
@@ -100,6 +100,7 @@ it, and [SDK package](docs/references/sdk-package.md) describes the package.
 | `CALIPER_BUILD_VIEWER` | ON | Build `caliper_viewer`, the live viewer process (macOS) |
 | `CALIPER_BUILD_EXAMPLES` | ON | Build the embedding example, `examples/embed_host`. The tutorial applets `hello` and `sine_scope` build with the tests instead. |
 | `CALIPER_BUILD_OPENGLLAMA` | OFF | Build the archived opengllama applet; needs `CALIPER_WITH_LLAMA` |
+| `CALIPER_WITH_BUILDER` | ON, but OFF on Windows | Build the builder under `src/builder/` (its libraries, `caliper-mcp`, `caliper-acp-harness`, `caliper-builder-host` and their tests) and link DuckDB's json extension into the host's DuckDB. The Python wheel sets it OFF. |
 | `CALIPER_STATIC_CRT` | OFF | Use the static MSVC runtime (`/MT`) instead of the dynamic one |
 
 **Examples:**
@@ -143,7 +144,7 @@ At run time LibTorch chooses the device. The same archive runs on the CPU when n
 
 ## Python package
 
-Caliper LIB, the `python/caliper` package, opens a live Caliper session from a training script, so that `caliper.show` and the other view calls draw into the viewer. See [`docs/references/python-api.md`](docs/references/python-api.md). It is built with `CALIPER_BUILD_PYTHON=ON` or as a wheel through `pyproject.toml`.
+Caliper LIB, the `python/caliper` package, opens a live Caliper session from a training script, so that `caliper.show` and the other view calls draw into the viewer. See [`docs/python/caliper-lib-api.md`](docs/python/caliper-lib-api.md). It is built with `CALIPER_BUILD_PYTHON=ON` or as a wheel through `pyproject.toml`.
 
 ## Project structure
 
@@ -253,7 +254,7 @@ Caliper is licensed under the [Apache License 2.0](LICENSE), the host and the SD
 
 ## Third-party licenses
 
-Caliper uses the following open-source libraries. Their license texts can be found in the respective directories under `third_party/` and `assets/fonts/`. The libraries that CMake fetches at configure time carry their own license files in their source trees.
+Caliper uses the following open-source libraries. Their license texts can be found in the respective directories under `third_party/` and `assets/fonts/`, and beside the JavaScript libraries the docs site's roadmap page loads, under `docs-theme/assets/roadmap/vendor/`. The libraries that CMake fetches at configure time carry their own license files in their source trees.
 
 | Library | License | Copyright | Permits |
 |---|---|---|---|
@@ -272,6 +273,7 @@ Caliper uses the following open-source libraries. Their license texts can be fou
 | [slang](https://github.com/MikePopoloski/slang) | MIT | Michael Popoloski | Use, modify, and distribute freely provided the license notice is included. |
 | [stb](https://github.com/nothings/stb) | MIT / public domain | Sean Barrett and contributors | Use, modify, and distribute freely. |
 | [toml++](https://github.com/marzer/tomlplusplus) | MIT | Mark Gillard | Use, modify, and distribute freely provided the license notice is included. |
+| [JSON for Modern C++](https://github.com/nlohmann/json) | MIT | 2013-2026 Niels Lohmann | Use, modify, and distribute freely provided the license notice is included. |
 | [doctest](https://github.com/doctest/doctest) | MIT | Viktor Kirilov | Use, modify, and distribute freely provided the license notice is included. |
 | [nanobind](https://github.com/wjakob/nanobind) | BSD 3-Clause | Wenzel Jakob | Use, modify, and distribute freely provided the license notice is included and the project name is not used for endorsement. |
 | [zlib](https://github.com/madler/zlib) | Zlib | Jean-loup Gailly and Mark Adler | Use, modify, and distribute freely with no attribution required in binaries. |
@@ -282,6 +284,7 @@ Caliper uses the following open-source libraries. Their license texts can be fou
 | [Naga](https://github.com/gfx-rs/wgpu) | MIT or Apache 2.0 | 2025 The gfx-rs developers | Use, modify, and distribute freely provided the license notice is included. |
 | [IBM Plex Sans Condensed](https://github.com/IBM/plex) | SIL OFL 1.1 | 2017 IBM Corp. | Use, embed, and redistribute freely; the font may not be sold on its own. |
 | [Source Code Pro](https://github.com/adobe-fonts/source-code-pro) | SIL OFL 1.1 | 2010, 2012 Adobe Systems Incorporated | Use, embed, and redistribute freely; the font may not be sold on its own. |
+| [elkjs](https://github.com/kieler/elkjs) | EPL 2.0 (dual-licensed EPL 2.0 or GPL 3.0 or later; used under EPL 2.0) | 2017-2021 Kiel University and others | Use, modify, and distribute provided the license text is included and changes to the files are published under the same license. |
 
 Naga, the shader translator, runs only at developer time and in CI's check of its output, through the driver in `tools/shaders/naga-driver/`, which pins Naga 30.0.2 and which cargo builds with Naga's own license files from crates.io. Only its generated output is committed (the MSL and SPIR-V under `src/host/gfx/shaders/generated/`), so building Caliper needs no Rust and no shader tool.
 

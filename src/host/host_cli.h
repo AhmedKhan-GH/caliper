@@ -7,10 +7,11 @@
 // into an offscreen canvas (shot.h) and opens no window either.
 //
 //   caliper [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] [--hidden]
-//                                             start the app
+//           [--workspace <dir>]               start the app
 //   caliper dev <folder> [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]]
-//               [--hidden]                    start the app, <folder> searched first
-//   caliper list [--applets <dir>]...         list the applets in search order
+//               [--hidden] [--workspace <dir>] start the app, <folder> searched first
+//   caliper list [--applets <dir>]... [--workspace <dir>]
+//                                             list the applets in search order
 //   caliper check <folder>                    run the pre-load checks on <folder>
 //   caliper install <folder>                  check, then copy into the user folder
 //   caliper new <name> [<dir>]                create an applet from a template
@@ -18,7 +19,7 @@
 //   caliper info                              print versions and served services
 //   caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]
 //                [--frames <N>] --out <file.png> [--api [--api-port <n>] [--allow-control]]
-//                                             write the applet page as a PNG
+//                [--workspace <dir>]          write the applet page as a PNG
 //   caliper serve [--port <n>] [--token-file <file>] [--assets <dir>]
 //                                             run the hub of wire protocol v3
 //   caliper --help                            print the usage
@@ -52,6 +53,12 @@
 // its window never shown: no Dock icon, no menu bar, no focus (main.cpp).
 // It applies to starting the app and to dev.
 //
+// `--workspace <dir>` (or `--workspace=<dir>`) names the builder's workspace
+// folder (src/host/builder/app_session.h) for the app, dev and shot, in place
+// of CALIPER_WORKSPACE and of workspace/ under the app-data folder
+// (workspace_choice below). A workspace that cannot be opened leaves the app
+// running without the builder and says why.
+//
 // On Windows, `serve`, `build`, `--api` and `--url` are refused before
 // anything starts, with one message (windows_unavailable below).
 //
@@ -77,6 +84,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <ostream>
 #include <string>
 #include <system_error>
@@ -104,6 +112,7 @@ struct CommandLine {
     bool hidden = false;                    // --hidden: the app's window is never shown
     std::string url;                        // --url: a stream link to attach to at start
     bool allow_control = false;             // --allow-control: the hub forwards controls
+    std::string workspace;                  // --workspace: the builder's workspace folder
     std::string error;                      // set: print it and the usage, exit 2
 
     // shot's options, with their defaults.
@@ -116,9 +125,10 @@ struct CommandLine {
 
 inline const char* usage_text() {
     return "usage: caliper [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] [--hidden]\n"
+           "               [--workspace <dir>]\n"
            "       caliper dev <folder> [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]]\n"
-           "                   [--hidden]\n"
-           "       caliper list [--applets <dir>]...\n"
+           "                   [--hidden] [--workspace <dir>]\n"
+           "       caliper list [--applets <dir>]... [--workspace <dir>]\n"
            "       caliper check <folder>\n"
            "       caliper install <folder>\n"
            "       caliper new <name> [<dir>]\n"
@@ -126,6 +136,7 @@ inline const char* usage_text() {
            "       caliper info\n"
            "       caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]\n"
            "                    [--frames <N>] --out <file.png> [--api [--api-port <n>] [--allow-control]]\n"
+           "                    [--workspace <dir>]\n"
            "       caliper serve [--port <n>] [--token-file <file>] [--assets <dir>] [--allow-control]\n"
            "       caliper --help\n";
 }
@@ -301,6 +312,25 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
             cl.url = value;
             continue;
         }
+        // The builder's workspace: --workspace <dir>.
+        if (arg == "--workspace" || arg.rfind("--workspace=", 0) == 0) {
+            std::string value;
+            if (arg == "--workspace") {
+                if (i + 1 < argc && argv[i + 1]) value = argv[++i];
+            } else {
+                value = arg.substr(std::string("--workspace=").size());
+            }
+            if (value.empty() || value.rfind("--", 0) == 0) {
+                cl.error = "--workspace needs a folder";
+                return cl;
+            }
+            if (!cl.workspace.empty()) {
+                cl.error = "--workspace is given twice";
+                return cl;
+            }
+            cl.workspace = value;
+            continue;
+        }
         // Caliper API: --api, a flag, and --api-port <n>.
         if (arg == "--api") {
             cl.api = true;
@@ -442,6 +472,9 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
     if (cl.error.empty() && !cl.url.empty() && cl.command != C::Run && cl.command != C::Dev &&
         cl.command != C::Help)
         cl.error = "--url applies only to starting the app and dev";
+    if (cl.error.empty() && !cl.workspace.empty() && cl.command != C::Run && cl.command != C::Dev &&
+        cl.command != C::Shot && cl.command != C::List && cl.command != C::Help)
+        cl.error = "--workspace applies only to starting the app, dev, shot and list";
     if (cl.error.empty() && cl.allow_control && cl.command != C::Serve && cl.command != C::Help) {
         if (cl.command != C::Run && cl.command != C::Dev && cl.command != C::Shot)
             cl.error = "--allow-control applies only to serve, and to the app, dev and shot with --api";
@@ -449,6 +482,43 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
             cl.error = "--allow-control needs --api when starting the app, dev or shot";
     }
     return cl;
+}
+
+// The builder's workspace folder (src/host/builder/app_session.h):
+// --workspace, else CALIPER_WORKSPACE when it is set and not empty, else
+// `default_dir`, workspace/ under the app-data folder
+// (caliper::default_workspace_dir()). `chosen` is false for the default,
+// which the app opens only when something first needs it; a chosen folder is
+// opened as soon as the app has drawn its first frame. A relative path is
+// taken from the working directory.
+struct WorkspaceChoice {
+    std::string dir;
+    bool chosen = false;
+    const char* from = "default";   // "--workspace", "CALIPER_WORKSPACE" or "default"
+};
+
+inline WorkspaceChoice workspace_choice(const CommandLine& cl, const char* env,
+                                        const std::string& default_dir) {
+    WorkspaceChoice w;
+    if (!cl.workspace.empty()) {
+        w.dir = cl.workspace;
+        w.chosen = true;
+        w.from = "--workspace";
+    } else if (env && *env) {
+        w.dir = env;
+        w.chosen = true;
+        w.from = "CALIPER_WORKSPACE";
+    } else {
+        w.dir = default_dir;
+    }
+    std::error_code ec;
+    std::filesystem::path abs = std::filesystem::absolute(std::filesystem::path(w.dir), ec);
+    if (ec) return w;
+    abs = abs.lexically_normal();
+    // "work/" is the folder "work": a trailing separator leaves an empty file name.
+    if (!abs.has_filename() && abs.has_relative_path()) abs = abs.parent_path();
+    w.dir = abs.string();
+    return w;
 }
 
 // What the subcommands read from the host. main() fills it with the
@@ -462,6 +532,9 @@ struct CliContext {
     const char* applet_path_env = nullptr;   // CALIPER_APPLET_PATH
     std::string hub_file;               // serve: where producers find the hub ("" none)
     std::string exe_dir;                // build: the executable's folder, for the SDK search
+    // list: the builder's workspace (workspace_choice), whose applets/ folder
+    // holds spec applets; "" for none. Only read.
+    std::string workspace_dir;
 };
 
 namespace cli_detail {
@@ -493,19 +566,27 @@ inline std::string list_id(const AppletEntry& a) {
     return a.manifest.id.empty() ? a.manifest.name : a.manifest.id;
 }
 
-// One line per applet: status, id, version, folder, in columns; a refused,
-// failed or shadowed applet's reason on the next line, under the id.
-inline void print_entries(const AppletLoader& L, std::ostream& out) {
+// One line per applet: status, id, version, kind (library or spec), folder,
+// in columns; a refused, failed or shadowed applet's reason on the next line,
+// under the id. `notes`, when given, holds lines to print under an entry
+// after its reason, or in its place for a failed entry: check's diagnostics
+// of a spec applet, whose first error is the reason of a failed one.
+inline void print_entries(const AppletLoader& L, std::ostream& out,
+                          const std::map<int, std::vector<std::string>>* notes = nullptr) {
     const std::vector<int> order = list_order(L);
     auto id_of = [](const AppletEntry& a) { return list_id(a); };
     auto version_of = [](const AppletEntry& a) {
         return a.manifest.version.empty() ? std::string("-") : a.manifest.version;
     };
-    size_t ws = 0, wi = 0, wv = 0;
+    auto kind_of = [](const AppletEntry& a) {
+        return std::string(applet_kind_word(a.manifest.kind));
+    };
+    size_t ws = 0, wi = 0, wv = 0, wk = 0;
     for (int i : order) {
         ws = std::max(ws, std::string(applet_status_word(L.at(i).status)).size());
         wi = std::max(wi, id_of(L.at(i)).size());
         wv = std::max(wv, version_of(L.at(i)).size());
+        wk = std::max(wk, kind_of(L.at(i)).size());
     }
     auto pad = [](const std::string& s, size_t w) {
         return s + std::string(w > s.size() ? w - s.size() : 0, ' ');
@@ -513,13 +594,25 @@ inline void print_entries(const AppletLoader& L, std::ostream& out) {
     for (int i : order) {
         const AppletEntry& a = L.at(i);
         out << pad(applet_status_word(a.status), ws) << "  " << pad(id_of(a), wi)
-            << "  " << pad(version_of(a), wv) << "  " << a.folder << "\n";
-        if (a.status != AppletStatus::Ready && !a.status_text.empty())
-            out << std::string(ws + 2, ' ') << a.status_text << "\n";
+            << "  " << pad(version_of(a), wv) << "  " << pad(kind_of(a), wk) << "  "
+            << a.folder << "\n";
+        const std::vector<std::string>* lines = nullptr;
+        if (notes)
+            if (auto it = notes->find(i); it != notes->end()) lines = &it->second;
+        // A failed spec applet's reason is its first error, which its
+        // diagnostics hold too.
+        const bool reason = a.status != AppletStatus::Ready && !a.status_text.empty() &&
+                            !(lines && a.status == AppletStatus::Failed);
+        if (reason) out << std::string(ws + 2, ' ') << a.status_text << "\n";
+        if (lines)
+            for (const std::string& line : *lines) out << std::string(ws + 2, ' ') << line << "\n";
     }
 }
 
 // Scans one folder and prints it; the number of applets that do not pass.
+// A spec applet that passes the listing checks is then validated in full
+// (AppletLoader::check_spec), and its diagnostics are printed under it with
+// their lines and columns; one with an error fails.
 inline int check_folder(const std::string& folder, AppletLoader& L,
                         std::ostream& out, std::ostream& err) {
     std::error_code ec;
@@ -537,7 +630,17 @@ inline int check_folder(const std::string& folder, AppletLoader& L,
     }
     if (resolve_applet_folder(folder) != folder)   // its applets/ subfolder
         out << "using the applets in " << dirs.front() << "\n";
-    print_entries(L, out);
+    std::map<int, std::vector<std::string>> notes;
+    for (int i = 0; i < L.count(); i++) {
+        const AppletEntry& a = L.at(i);
+        if (a.manifest.kind != AppletKind::Spec || !passes(a)) continue;
+        std::vector<SpecDiagnostic> found;
+        L.check_spec(i, &found);
+        const std::string file = fs::path(a.spec_path).filename().string();
+        for (const SpecDiagnostic& d : found)
+            notes[i].push_back(format_spec_diagnostic(file, d, true));
+    }
+    print_entries(L, out, &notes);
     int failing = 0;
     for (int i = 0; i < L.count(); i++) failing += passes(L.at(i)) ? 0 : 1;
     return failing;
@@ -650,8 +753,9 @@ inline std::string replace_all(std::string s, const std::string& from,
 inline int run_list(const CommandLine& cl, const CliContext& ctx, std::ostream& out,
                     std::ostream& /*err*/) {
     AppletLoader L(ctx.caps, ctx.data_root);
+    L.set_workspace(ctx.workspace_dir);
     L.scan(applet_search_dirs(cl.applet_dirs, ctx.applet_path_env, ctx.user_dir,
-                              ctx.shipped_dir));
+                              ctx.shipped_dir, ctx.workspace_dir));
     if (L.count() == 0) {
         out << "no applets found\n";
         return 0;
@@ -697,6 +801,13 @@ inline int run_install(const CommandLine& cl, const CliContext& ctx, std::ostrea
             << " applets do not pass the checks\n";
         return 1;
     }
+    // A spec applet has no library to place; it lives in a workspace.
+    for (int i = 0; i < L.count(); i++)
+        if (L.at(i).manifest.kind == AppletKind::Spec) {
+            err << "caliper: nothing installed; " << L.at(i).manifest.id
+                << " is a spec applet, which install does not take\n";
+            return 1;
+        }
     fs::create_directories(ctx.user_dir, ec);
     if (!fs::is_directory(ctx.user_dir, ec)) {
         err << "caliper: cannot create " << ctx.user_dir << "\n";
@@ -1010,9 +1121,10 @@ inline std::string info_json(const CliContext& ctx) {
 }
 
 // What `caliper list` prints for the applets of `L`, in its order, as a JSON
-// object {"applets": [{"status", "id", "version", "folder", "reason"}]}: the
-// status word, the version ("" when the manifest has none) and the reason that
-// list prints under the id ("" for a READY applet).
+// object {"applets": [{"status", "id", "version", "kind", "folder", "reason"}]}:
+// the status word, the version ("" when the manifest has none), the kind
+// ("library" or "spec") and the reason that list prints under the id ("" for
+// a READY applet).
 inline std::string applets_json(const AppletLoader& L) {
     using caliper_net::Json;
     Json list = Json::array();
@@ -1022,6 +1134,7 @@ inline std::string applets_json(const AppletLoader& L) {
         e.set("status", applet_status_word(a.status));
         e.set("id", cli_detail::list_id(a));
         e.set("version", a.manifest.version);
+        e.set("kind", applet_kind_word(a.manifest.kind));
         e.set("folder", a.folder);
         e.set("reason", a.status == AppletStatus::Ready ? std::string() : a.status_text);
         list.push(std::move(e));

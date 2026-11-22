@@ -1,0 +1,23 @@
+{% extends "main.html" %}
+
+{% block styles %}
+  {{ super() }}
+  <link rel="stylesheet" href="{{ 'assets/roadmap/roadmap.css' | url }}">
+  {% if page.meta and page.meta.candidates_navigator %}
+    <link rel="stylesheet" href="{{ 'assets/roadmap/navigator.css' | url }}">
+  {% endif %}
+{% endblock %}
+
+{% block scripts %}
+  {{ super() }}
+  {% if page.meta and (page.meta.roadmap_graph or page.meta.candidates_navigator) %}
+    <script src="{{ 'assets/roadmap/window.js' | url }}"></script>
+  {% endif %}
+  {% if page.meta and page.meta.roadmap_graph %}
+    <script src="{{ 'assets/roadmap/vendor/elkjs-0.12.1/elk.bundled.js' | url }}"></script>
+    <script src="{{ 'assets/roadmap/roadmap.js' | url }}"></script>
+  {% endif %}
+  {% if page.meta and page.meta.candidates_navigator %}
+    <script src="{{ 'assets/roadmap/navigator.js' | url }}"></script>
+  {% endif %}
+{% endblock %}

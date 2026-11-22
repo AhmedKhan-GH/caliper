@@ -1,0 +1,215 @@
+#pragma once
+// CommandRegistry: the command layer's core (design/command-layer.md). It
+// maps command names to descriptors and handlers, and runs an invocation:
+//   1. checks the invocation, finds the command, validates the arguments
+//      against its schema, then checks that a handler is bound and, for a
+//      frame_thread command, the thread (command.invalid_invocation,
+//      command.unknown, command.invalid_args, command.not_bound,
+//      command.wrong_thread);
+//   2. asks the approval policy, and on ask parks the invocation with what
+//      the approval review gives (a spec edit's diff) and answers
+//      command.needs_approval with an approval id;
+//   3. runs the handler; an exception that escapes it becomes
+//      command.handler_failed, and a handler that invokes a command gets
+//      command.reentrant;
+//   4. for a mutating command, writes the journal's do event (also for a
+//      failure or a denial) and files the undo record in the history, then
+//      runs the handler's follow-ups, if any, as one step of their own. A
+//      handler that reports `no_effect` (a dry run, or an edit that changed
+//      nothing) is treated as a read: no undo step is filed, the redo stack
+//      and merging are kept, and no journal line is written unless the
+//      journal also records read-only commands.
+// history.undo, history.redo and history.list are built in: every registry
+// has them, bound to the history it owns. Undo and redo are the person's
+// tools (their descriptors say agents = false), so the origins agent and mcp
+// get command.not_allowed for them; an agent reverts a change with an edit. Undoing or redoing a step asks the
+// approval policy about each destructive command in it, with the history
+// command's origin; a failed undo or redo rolls the step back, drops the
+// steps that depend on it and answers history.undo_failed or
+// history.redo_failed (history.inconsistent if the rollback fails too).
+//
+// The registry runs one invocation at a time under one lock that also covers
+// the history, the journal and the approvals. It is safe to call from any
+// thread, and invoke() runs the command on the calling thread; the queue
+// (queue.h) brings invocations to the frame thread. No function here throws.
+#include <caliper_builder/commands/approval.h>
+#include <caliper_builder/commands/command.h>
+#include <caliper_builder/commands/history.h>
+#include <caliper_builder/commands/journal.h>
+#include <caliper_builder/error.h>
+
+#include <nlohmann/json.hpp>
+
+#include <chrono>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <utility>
+#include <vector>
+
+namespace caliper_builder {
+
+struct CommandContext {
+    const CommandInvocation& invocation;
+    const CommandDescriptor& descriptor;
+    bool redo = false;  // the handler runs again to redo its command
+};
+
+// What a handler returns: a result object or an error, and for a mutating
+// command that succeeded, its undo record (UndoRecord::none() when it cannot
+// be undone). `no_effect` says that the command changed nothing, as a dry run
+// does whether it succeeds or fails, so the registry treats it as a read and
+// ignores any undo record.
+//
+// `follow_ups` are invocations that the registry runs after the handler
+// succeeds, in order, as one new undo step (preview.commit returns the edits
+// of the preview it commits). They share one non-empty group, and each names a
+// bound command that mutates, is not destructive and is not a history
+// command, with arguments that pass its schema; all are checked before any
+// runs. They are not sent to the approval policy, because the handler's own
+// invocation was the approval, and they take the ids <id>.1, <id>.2, ...
+// The handler's own invocation is journaled first, then each follow-up that
+// changed something. When one fails, the ones that ran are undone, newest
+// first, none of them is journaled, and the invocation fails with that error.
+// The handler's own undo record and `no_effect` are ignored when it returns
+// follow-ups.
+struct CommandOutput {
+    nlohmann::json result = nlohmann::json::object();
+    Error error;
+    UndoRecord undo;
+    bool no_effect = false;
+    std::vector<CommandInvocation> follow_ups;
+
+    static CommandOutput ok(nlohmann::json result, UndoRecord undo = UndoRecord::none());
+    static CommandOutput fail(Error error);
+    // A success that changed nothing.
+    static CommandOutput unchanged(nlohmann::json result);
+};
+
+using CommandHandler = std::function<CommandOutput(const CommandContext&)>;
+
+struct RegistryOptions {
+    bool check_results = false;  // validate every result against its schema (the tests do)
+    HistoryLimits history;
+    std::size_t max_pending = 64;
+    std::function<std::chrono::steady_clock::time_point()> steady_now;  // for the merge window; tests set it
+    std::function<std::chrono::system_clock::time_point()> wall_now;    // for timestamps; tests set it
+};
+
+// The descriptors of history.undo, history.redo and history.list.
+std::vector<CommandDescriptor> history_command_descriptors();
+
+class CommandRegistry {
+public:
+    explicit CommandRegistry(RegistryOptions options = {});
+    CommandRegistry(const CommandRegistry&) = delete;
+    CommandRegistry& operator=(const CommandRegistry&) = delete;
+
+    // Adds a command, with or without its handler (command.bad_descriptor
+    // for a descriptor that fails check_command_descriptor() or a name taken).
+    Error add(CommandDescriptor descriptor, CommandHandler handler = {});
+    // Adds every descriptor that is not there yet, such as the descriptor
+    // table; the history commands keep their built-in handlers.
+    Error add_all(const std::vector<CommandDescriptor>& descriptors);
+    Error bind(std::string_view name, CommandHandler handler);
+
+    std::optional<CommandDescriptor> descriptor(std::string_view name) const;
+    std::vector<CommandDescriptor> descriptors() const;  // in the order added
+    bool is_bound(std::string_view name) const;
+
+    void set_approval_policy(ApprovalPolicy policy);  // empty: the default policy
+    void set_approval_review(ApprovalReview review);  // empty: no review is kept
+    void set_approval_check(ApprovalCheck check);     // empty: an approval always holds
+    void set_approval_notes(ApprovalNotes notes);     // empty: no notes
+    void set_journal(CommandJournal* journal);        // not owned; may be null
+    void set_frame_thread(std::optional<std::thread::id> id);
+
+    CommandResult invoke(CommandInvocation invocation);
+    // Runs a parked invocation the person approved. When the approval check
+    // says that the content it was approved for changed, the approval is
+    // void: with `reissue` (a caller still waits for the outcome), the policy
+    // is asked again and, if it asks, the invocation is parked anew with the
+    // review of the new content and the call answers command.needs_approval
+    // with the new approval id; without, it answers history.conflict, which
+    // is journaled like a denial.
+    CommandResult approve(const std::string& approval_id, bool reissue = false);
+    CommandResult deny(const std::string& approval_id);
+    // Withdraws an invocation whose wait for approval ran out: it is journaled
+    // like a denial and answers command.approval_timeout.
+    CommandResult expire_approval(const std::string& approval_id);
+    bool cancel_approval(const std::string& approval_id);  // drops it unanswered, unjournaled
+    std::size_t cancel_pending();                          // drops them all
+    std::vector<PendingApproval> pending_approvals() const;
+
+    // The last error from writing the journal; commands do not fail for it.
+    Error journal_error() const;
+
+    struct HistoryState {
+        bool can_undo = false;
+        bool can_redo = false;
+        std::vector<HistoryStepSummary> undo;  // newest first
+        std::vector<HistoryStepSummary> redo;
+        std::size_t bytes = 0;
+    };
+    HistoryState history_state(std::size_t limit = 50) const;
+
+private:
+    struct Entry {
+        CommandDescriptor descriptor;
+        CommandHandler handler;
+    };
+    struct Parked {
+        std::string approval;
+        CommandInvocation invocation;
+        std::string requested_at;
+        std::vector<std::uint64_t> steps;  // for history.undo and history.redo: the steps it would touch
+        nlohmann::json review;             // what the ApprovalReview gave
+    };
+
+    CommandResult run(const CommandInvocation& inv, const Entry& entry, const std::vector<std::uint64_t>& steps,
+                      const std::string& allowed_by = {});
+    ApprovalNote ask_notes(const CommandDescriptor& d, const CommandInvocation& inv);
+    CommandResult run_follow_ups(const CommandInvocation& inv, const Entry& entry, CommandOutput& out);
+    CommandResult run_history_move(const CommandInvocation& inv, bool undo, const std::vector<std::uint64_t>& steps);
+    CommandResult run_history_list(const CommandInvocation& inv);
+    std::pair<ApprovalDecision, std::vector<std::uint64_t>> history_decision(const CommandInvocation& inv, bool undo);
+    ApprovalDecision ask_policy(const CommandDescriptor& d, const CommandInvocation& inv);
+    CommandOutput call(const Entry& entry, const CommandInvocation& inv, bool redo);
+    Error undo_record(HistoryRecord& record, const CommandInvocation& by);
+    Error redo_record(HistoryRecord& record, const CommandInvocation& by);
+    Error undo_step(HistoryStep& step, const CommandInvocation& by);
+    Error redo_step(HistoryStep& step, const CommandInvocation& by);
+    std::uint64_t journal_do(const CommandInvocation& inv, bool ok, const std::string& error,
+                             const std::string& allowed_by = {});
+    void journal_history(const CommandInvocation& inv, bool undo, const std::string& group,
+                         std::vector<std::uint64_t> seqs, bool ok, const std::string& error);
+    bool wrong_thread(const CommandDescriptor& d) const;
+    std::string now_text() const;
+    CommandResult finish_refused(const CommandInvocation& inv, const Entry& entry, const std::string& code,
+                                 std::string message);
+    CommandResult decide(const std::string& approval_id, const std::string& code);
+    CommandResult park(const CommandInvocation& inv, const Entry& entry, std::vector<std::uint64_t> steps);
+
+    RegistryOptions options_;
+    mutable std::recursive_mutex mutex_;
+    std::map<std::string, Entry, std::less<>> commands_;
+    std::vector<std::string> order_;
+    std::vector<Parked> pending_;
+    CommandHistory history_;
+    CommandJournal* journal_ = nullptr;
+    ApprovalPolicy policy_;
+    ApprovalReview review_;
+    ApprovalCheck check_;
+    ApprovalNotes notes_;
+    std::optional<std::thread::id> frame_thread_;
+    std::uint64_t next_invocation_ = 1;
+    std::uint64_t next_approval_ = 1;
+    Error journal_error_;
+};
+
+}  // namespace caliper_builder

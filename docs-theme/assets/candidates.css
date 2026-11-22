@@ -1,0 +1,14 @@
+/* Candidates: a text filter and compact cards. */
+.md-typeset input.candidate-filter {
+  display: block; box-sizing: border-box; width: 100%; max-width: 22rem; margin: 0 0 1.2rem; padding: .35rem .6rem;
+  background: var(--plate); color: var(--parchment); border: 1px solid var(--rule-faint); border-radius: 4px; font: inherit; font-size: .75rem;
+}
+.md-typeset input.candidate-filter:focus-visible { outline: none; border-color: var(--bronze); }
+.md-typeset input.candidate-filter::placeholder { color: var(--faint); }
+.md-typeset ul:has(> li > p > strong:only-child) { list-style: none; margin: 0 0 1.4rem; padding: 0; }
+.md-typeset ul:has(> li > p > strong:only-child) > li {
+  margin: 0 0 .5rem; padding: .45rem .8rem; background: var(--plate); border: 1px solid var(--rule-faint); border-radius: 4px;
+}
+.md-typeset ul:has(> li > p > strong:only-child) > li > p { margin: .15rem 0; font-size: .72rem; line-height: 1.45; }
+.md-typeset ul:has(> li > p > strong:only-child) > li > p:first-child { color: var(--parchment); font-size: .78rem; }
+.md-typeset ul:has(> li > p > strong:only-child) > li[hidden], .md-typeset ul[hidden], .md-typeset h2[hidden] { display: none; }

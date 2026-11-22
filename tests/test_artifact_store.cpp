@@ -1,5 +1,5 @@
 // ArtifactStore — the content-addressed blob store behind caliper.artifacts.v1
-// (docs/references/service-artifacts-v1.md, docs/explanations/testing.md): put round-trips a digest, identical bytes
+// (docs/applets/services/caliper-artifacts-v1.md, docs/development/testing.md): put round-trips a digest, identical bytes
 // dedup to one file, a name resolves to its newest digest, unknowns are inert.
 #include <doctest/doctest.h>
 

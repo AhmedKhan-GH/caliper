@@ -25,7 +25,7 @@ void set_applet_log_sink(void (*sink)(void* userdata, CaliperLogLevel level,
 void set_dock_hint_sink(void (*sink)(void* userdata, const char* window_title,
                                      uint32_t role),
                         void* userdata);
-// Host-side service registry (docs/references/abi.md). Call services_init() once
+// Host-side service registry (docs/applets/applet-contract.md). Call services_init() once
 // after the ImGui/ImPlot/ImPlot3D contexts exist; tables are static and live
 // for the process lifetime (the ABI's pointer-validity guarantee).
 void services_init();

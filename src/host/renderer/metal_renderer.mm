@@ -1,4 +1,4 @@
-// Metal backend for the HostRenderer seam (docs/explanations/rendering.md).
+// Metal backend for the HostRenderer seam (docs/applets/rendering.md).
 // make_metal_renderer() (declared in host_renderer.h) constructs it and
 // core_select_renderer() chooses it on macOS. There is no fallback: if its
 // start fails, the app, caliper shot and the embedding core refuse with

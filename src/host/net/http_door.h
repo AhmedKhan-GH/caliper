@@ -93,6 +93,11 @@ public:
           stream_path_(std::move(stream_path)), stream_alias_(std::move(stream_alias)),
           other_(std::move(other)) {}
 
+    // For a server whose stream takes more than one token: the upgrade's
+    // token passes when `ok` returns true for it (constant time), in place of
+    // comparing it with the session token. Unset, the session token alone.
+    void set_token_check(std::function<bool(const std::string&)> ok) { token_ok_ = std::move(ok); }
+
     // True for the stream's path and its alias.
     bool is_stream(const std::string& path) const {
         return path == stream_path_ || (!stream_alias_.empty() && path == stream_alias_);
@@ -105,6 +110,7 @@ public:
 
 private:
     std::string token_;
+    std::function<bool(const std::string&)> token_ok_;
     uint16_t port_;
     const StaticFiles* files_;
     std::string fallback_;

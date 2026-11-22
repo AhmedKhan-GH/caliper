@@ -65,6 +65,15 @@ public:
     uint32_t read(const char* channel_id, CaliperFeedSample* buf,
                   uint32_t max, uint64_t* cursor);
 
+    // --- the builder's feed catalog (catalog_providers/feed_catalog.h) ---
+
+    // The ring of channel `id`: its capacity and the newest seq (0 before the
+    // first push), so a reader knows how many samples are buffered without
+    // copying them. False, outputs untouched, for an unknown channel. Takes
+    // only the channel's own mutex, like read().
+    bool ring_state(const std::string& id, uint32_t* capacity,
+                    uint64_t* newest_seq) const;
+
 private:
     struct Channel {
         std::string id;

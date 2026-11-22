@@ -5,8 +5,8 @@ on:
     branches: [main]
     # The docs, the design pages, their theme, and the sources the docs embed as snippets.
     paths: ['site/**', 'docs/**', 'design/**', 'docs-theme/**', 'mkdocs.yml',
-            'sdk/include/**', 'include/caliper/**', 'examples/**',
-            '.github/workflows/pages.yml']
+            'sdk/include/**', 'include/caliper/**', 'python/caliper/**', 'examples/**', 'roadmap/**',
+            'candidates/**', '.github/workflows/pages.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -29,8 +29,9 @@ jobs:
       # The docs (MkDocs Material) are served under /docs/ on the same Pages
       # site; --strict keeps the snippet-embedded headers honest.
       # awesome-nav builds the navigation from the docs/ folders and their .nav.yml files.
+      # mkdocstrings and its Python handler render the Python API reference from the docstrings.
       # Pinned as in the Docs workflow, which checks the same builds on pull requests.
-      - run: pip install mkdocs==1.6.1 mkdocs-material==9.8.1 mkdocs-awesome-nav==3.3.0 pymdown-extensions==13.1
+      - run: pip install mkdocs==1.6.1 mkdocs-material==9.8.1 mkdocs-awesome-nav==3.3.0 pymdown-extensions==13.1 mkdocstrings==1.0.8 mkdocstrings-python==2.0.10 griffelib==2.4.1 mkdocs-autorefs==1.4.5 ruff==0.17.3
       - run: mkdocs build --strict
       # The design pages are checked, not published: they build into
       # build/design-site, which the Pages artifact below leaves out.

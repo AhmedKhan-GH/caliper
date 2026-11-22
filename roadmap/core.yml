@@ -1,0 +1,469 @@
+# yaml-language-server: $schema=schema.json
+prefix: COR
+title: Core Runtime and SDK
+order: 1
+summary: This pillar covers the host, the frozen applet ABI and its service ids, the SDK package and manifests, and the caliper subcommands, and it plans the move of applets out of the core repository and their distribution.
+features:
+  - id: COR-01
+    title: Host
+    status: shipped
+    scope: supporting
+    summary: The host is the native application that loads applets, serves them framework services through a frozen C ABI, draws the interface and names no applet itself.
+    depends_on: []
+    docs: docs/introduction/architecture.md#components
+    issue: null
+
+  - id: COR-02
+    title: ABI Epoch 2
+    status: shipped
+    scope: supporting
+    summary: ABI epoch 2 is the frozen C header that defines the contract between the host and every applet, and its epoch changes only when the contract breaks.
+    depends_on: []
+    docs: docs/applets/applet-contract.md
+    issue: null
+
+  - id: COR-03
+    title: Service IDs
+    status: shipped
+    scope: supporting
+    summary: The 19 service ids are 11 services and their additive revisions, which an applet obtains by id from the host and which the host refuses to serve when it lacks the capability.
+    depends_on: [COR-02]
+    docs: docs/applets/services/service-catalog.md#service-ids
+    issue: null
+
+  - id: COR-04
+    title: SDK Package
+    status: shipped
+    scope: supporting
+    summary: The SDK package is the caliper-sdk CMake package, which installs the headers, the pinned UI stack and caliper_add_applet() so that an applet builds outside the Caliper source tree.
+    depends_on: [COR-03]
+    docs: docs/applets/sdk-package.md
+    issue: null
+
+  - id: COR-05
+    title: Applet Manifests
+    status: shipped
+    scope: supporting
+    summary: An applet manifest is a TOML file beside each applet that declares its identity, ABI epoch, minimum host version and required services, and the host parses it before it loads any code.
+    depends_on: [COR-02]
+    docs: docs/applets/manifest.md#schema
+    issue: null
+
+  - id: COR-06
+    title: Applets Loaded from Outside the Repository
+    status: shipped
+    scope: supporting
+    summary: The host searches development folders, the user applets folder and the app in a fixed order, chooses one copy of each applet id and checks its manifest before opening the library.
+    depends_on: [COR-01, COR-05]
+    docs: docs/reference/cli.md#search-order
+    issue: null
+
+  - id: COR-07
+    title: caliper check
+    status: shipped
+    scope: supporting
+    summary: caliper check runs the host's pre-load checks on every applet in one folder, without opening any library, and reports whether each is ready.
+    depends_on: [COR-06]
+    docs: docs/reference/applet-commands.md#caliper-check
+    issue: null
+
+  - id: COR-08
+    title: caliper shot
+    status: shipped
+    scope: supporting
+    summary: caliper shot draws one applet's page without a window, as the app draws it, and writes the last frame as a PNG.
+    depends_on: [COR-06]
+    docs: docs/reference/shot-and-serve-commands.md#caliper-shot
+    issue: null
+
+  - id: COR-09
+    title: caliper dev
+    status: shipped
+    scope: supporting
+    summary: caliper dev starts the app with an applet's build folder searched first, so that a rebuilt applet loads without being installed.
+    depends_on: [COR-06]
+    docs: docs/reference/cli.md#app-startup
+    issue: null
+
+  - id: COR-10
+    title: caliper build
+    status: shipped
+    scope: supporting
+    summary: caliper build configures and builds an applet's folder against the installed SDK with CMake, then runs the checks of caliper check on the result.
+    depends_on: [COR-04, COR-07]
+    docs: docs/reference/applet-commands.md#caliper-build
+    issue: null
+
+  - id: COR-11
+    title: caliper serve
+    status: shipped
+    scope: supporting
+    summary: caliper serve runs the hub of wire protocol v3 without a window or a GPU, so that producers connect to it and viewers attach to their sessions.
+    depends_on: [STR-06]
+    docs: docs/reference/shot-and-serve-commands.md#caliper-serve
+    issue: null
+
+  - id: COR-12
+    title: caliper install
+    status: shipped
+    scope: supporting
+    summary: caliper install checks a local folder of applets and, when every one passes, copies them into the user applets folder in one all-or-nothing step.
+    depends_on: [COR-07]
+    docs: docs/reference/applet-commands.md#caliper-install
+    issue: null
+
+  - id: COR-13
+    title: In-Tree Applets
+    status: shipped
+    scope: supporting
+    summary: The in-tree applets are nine applets under applets/ and the tutorial examples, and each builds on its own against the installed SDK rather than in the core build.
+    depends_on: [COR-04]
+    docs: docs/applets/in-tree-applets.md
+    issue: null
+
+  - id: COR-14
+    title: Inspector Parts as Core Services
+    status: planned
+    scope: peripheral
+    summary: This work moves the inspector applet's general pieces into core services, each in its own commit with tests, while the inspector's own panes stay in the applet.
+    depends_on: [INT-05, INT-20]
+    design: design/roadmap.md#phase-1-one-core-with-versioned-applets
+    issue: null
+
+  - id: COR-15
+    title: Acceptance Test
+    status: planned
+    scope: supporting
+    summary: The acceptance test checks that the inspector and two existing scopes each build from their own repository against the installed SDK, load into a released Caliper, and that two versions of one applet resolve correctly.
+    depends_on: [COR-04, COR-06, COR-14]
+    design: design/roadmap.md#phase-1-one-core-with-versioned-applets
+    issue: null
+
+  - id: COR-16
+    title: caliper-applets Repository
+    status: planned
+    scope: supporting
+    summary: A caliper-applets repository holds the first-party scopes with their history, the inspector moves to a repository of its own, and CALIPER_BUILD_APPLETS goes away.
+    depends_on: [COR-15]
+    design: design/applets-outside-the-core.md#moving-the-applets-out
+    issue: null
+
+  - id: COR-17
+    title: Signed Shipped Applets
+    status: planned
+    scope: peripheral
+    summary: Shipped applets sit in the app bundle's PlugIns folder and are signed with the app, so that the bundle is never written after it ships.
+    depends_on: [COR-13, PLT-04]
+    design: design/applets-outside-the-core.md#where-applets-are-stored
+    issue: null
+
+  - id: COR-18
+    title: Applet Registry
+    status: planned
+    scope: supporting
+    summary: The applet registry holds an index of releases per platform and ABI epoch, and it gives the app a Browse tab, install by id and version, and publishing by pull request.
+    depends_on: [COR-17, COR-24, COR-28]
+    design: design/registry.md
+    issue: null
+
+  - id: COR-19
+    title: .caliperapp Bundles
+    status: idea
+    scope: supporting
+    summary: A .caliperapp bundle is a folder that holds an applet with per-platform binaries, with manifest keys for platforms, authors, licence and runtimes.
+    depends_on: [COR-05]
+    design: design/roadmap.md#undecided
+    issue: null
+
+  - id: COR-20
+    title: Hot Reload
+    status: idea
+    scope: supporting
+    summary: Hot reload would reload a rebuilt applet in the running app, and it needs entry points such as save_state, load_state, on_suspend and on_resume.
+    depends_on: [COR-09]
+    design: design/applets-outside-the-core.md#hot-reload
+    issue: null
+
+  - id: COR-21
+    title: SDK Conformance
+    status: idea
+    scope: supporting
+    summary: SDK conformance would add a conformance checker and a set of reference applets built against each SDK release.
+    depends_on: [COR-16]
+    design: design/roadmap.md#undecided
+    issue: null
+
+  - id: COR-22
+    title: Applets in Separate Processes
+    status: idea
+    scope: supporting
+    summary: Applets in separate processes would run each applet in a process of its own, apart from the host, instead of as a library loaded into it.
+    depends_on: [COR-06]
+    design: design/roadmap.md#undecided
+    issue: null
+
+  - id: COR-23
+    title: Signed Third-Party Applets
+    status: idea
+    scope: peripheral
+    summary: Signed third-party applets need a signing policy for applets built outside Caliper, so that a notarized host accepts them without weakening library validation.
+    depends_on: [COR-24, COR-30]
+    design: design/applets-outside-the-core.md#signing-on-macos
+    issue: null
+
+  - id: COR-24
+    title: Registry Order
+    status: decision
+    scope: supporting
+    summary: This decision sets how the applet registry, custom views and signed third-party applets are ordered against each other.
+    depends_on: []
+    issue: null
+
+  - id: COR-25
+    title: ABI Epoch 3
+    status: planned
+    scope: supporting
+    summary: Each graphics service keeps one version under one ABI epoch bump, every applet in the repository is rebuilt against SDK 0.3.0, and an applet built for epoch 2 is refused with the epoch message.
+    depends_on: [REN-16]
+    sprint: 4
+    issue: null
+
+  - id: COR-26
+    title: caliper open
+    status: planned
+    scope: supporting
+    summary: caliper open opens a recording file in the app, and the app can be offered as the opener of .mcap files.
+    depends_on: [STR-29]
+    sprint: 4
+    issue: null
+
+  - id: COR-27
+    title: Quiet Job Kind
+    status: planned
+    scope: supporting
+    summary: A job kind of the jobs service dismisses its own finished notice, so that a long computation can stay on the service instead of moving to its own thread.
+    depends_on: [COR-03]
+    issue: null
+
+  - id: COR-28
+    title: Install from a URL, Package and Publish
+    status: planned
+    scope: supporting
+    summary: caliper install takes a URL and checks a bundle's checksum and the macOS quarantine flag, and caliper package and caliper publish build and submit a bundle.
+    depends_on: [COR-12, COR-19]
+    issue: null
+
+  - id: COR-29
+    title: SDK as a Release Asset
+    status: planned
+    scope: supporting
+    summary: The SDK is published as a release asset beside each release of the app, and a separate SDK repository waits until outside contributors exist.
+    depends_on: [COR-16]
+    issue: null
+
+  - id: COR-30
+    title: Permissions Manifest for Native Applets
+    status: planned
+    scope: supporting
+    summary: A native applet's manifest states what the applet may use, so that a person can accept a signed applet without reading its code.
+    depends_on: [COR-05, COR-17]
+    issue: null
+
+  - id: COR-31
+    title: Applets Written in Python
+    status: idea
+    scope: supporting
+    summary: An applet could be written in Python rather than C++ and loaded by the host.
+    depends_on: [COR-05]
+    issue: null
+
+  - id: COR-32
+    title: Scripting Bindings
+    status: idea
+    scope: peripheral
+    summary: Bindings for a scripting language could let programs outside C++ call the host and its services.
+    depends_on: [COR-04]
+    issue: null
+
+  - id: COR-33
+    title: Runtime Packs
+    status: idea
+    scope: supporting
+    summary: The host could install and manage each large runtime, such as libtorch, once, instead of every applet bundling its own copy, with the limit that applets needing different versions cannot share a session.
+    depends_on: [COR-16]
+    issue: null
+
+  - id: COR-34
+    title: Live Input Service
+    status: idea
+    scope: core
+    summary: Applet manifests could declare live input slots that the host binds through a live_input service.
+    depends_on: [COR-05]
+    issue: null
+
+  - id: COR-35
+    title: More Feed Sources
+    status: idea
+    scope: peripheral
+    summary: Applets could register channels of the feed service, and the host could read channels from serial, UDP or MQTT.
+    depends_on: [COR-03]
+    issue: null
+
+  - id: COR-36
+    title: Digital Twin Applets
+    status: idea
+    scope: peripheral
+    summary: A population twin built on InstanceScope's per-variant reduction and a machine thermal twin fed by the feed service could become applets.
+    depends_on: [COR-13]
+    issue: null
+
+  - id: COR-37
+    title: Plasma Control Applet
+    status: idea
+    scope: peripheral
+    summary: An actor-critic policy that steers FieldScope's plasma could become an applet of its own.
+    depends_on: [COR-13]
+    issue: null
+
+  - id: COR-38
+    title: Reviewer Bundle
+    status: idea
+    scope: supporting
+    summary: One download could run an applet and its demo on a machine that has never built Caliper.
+    depends_on: [COR-19]
+    issue: null
+
+  - id: COR-39
+    title: caliper list
+    status: shipped
+    scope: supporting
+    summary: caliper list prints every applet in the search folders with its status, id, version, kind and folder, and the reason for one that is refused, failed or shadowed, without opening any library.
+    depends_on: [COR-06]
+    docs: docs/reference/applet-commands.md#caliper-list
+    issue: null
+
+  - id: COR-40
+    title: caliper info
+    status: shipped
+    scope: supporting
+    summary: caliper info prints the host version, its ABI epoch, the SDK version, the libtorch version, the UI stack hash and one line for each service the host serves.
+    depends_on: [COR-03]
+    docs: docs/reference/applet-commands.md#caliper-info
+    issue: null
+
+  - id: COR-41
+    title: caliper new
+    status: shipped
+    scope: supporting
+    summary: caliper new creates an applet project from a template built into the executable, with a manifest, a source file, a CMake file and a test.
+    depends_on: [COR-04]
+    docs: docs/reference/applet-commands.md#caliper-new
+    issue: null
+
+  - id: COR-42
+    title: Hidden App Window
+    status: shipped
+    scope: supporting
+    summary: The --hidden option runs the real app with its renderer and frame loop but never shows its window, so that a test or an agent can drive the whole app through Caliper API.
+    depends_on: [COR-01]
+    docs: docs/reference/cli.md#hidden-window
+    issue: null
+
+  - id: COR-43
+    title: Landing Screen
+    status: shipped
+    scope: supporting
+    summary: The landing screen has a command bar, the Projects, Instruments, Inspector and Activity panes and a status bar, and it lists, launches and restarts applets and attaches to live sessions.
+    depends_on: [COR-01]
+    docs: docs/development/development-basics.md#landing-screen
+    issue: null
+
+  - id: COR-44
+    title: UI Service
+    status: shipped
+    scope: supporting
+    summary: caliper.ui.v1 gives an applet the ImGui, ImPlot and ImPlot3D contexts and the host allocator, and caliper.ui.v1_1 adds the role of each window in the docked layout.
+    depends_on: [COR-03]
+    docs: docs/applets/services/caliper-ui-v1.md
+    issue: null
+
+  - id: COR-45
+    title: Log Service
+    status: shipped
+    scope: supporting
+    summary: caliper.log.v1 writes timestamped log lines from an applet into the host console from any thread.
+    depends_on: [COR-03]
+    docs: docs/applets/services/caliper-log-v1.md
+    issue: null
+
+  - id: COR-46
+    title: Jobs Service
+    status: shipped
+    scope: supporting
+    summary: caliper.jobs.v1 runs background work on a host worker thread with progress and cancellation, under the crash guard, so that the frame thread stays fluid.
+    depends_on: [COR-03]
+    docs: docs/applets/services/caliper-jobs-v1.md
+    issue: null
+
+  - id: COR-47
+    title: Device Service
+    status: shipped
+    scope: supporting
+    summary: caliper.device.v1 reports the compute device the host found, the CPU, CUDA or Metal, so that an applet maps it to its own framework while the host stays framework-agnostic.
+    depends_on: [COR-03]
+    docs: docs/applets/services/caliper-device-v1.md
+    issue: null
+
+  - id: COR-48
+    title: Data Service
+    status: shipped
+    scope: supporting
+    summary: caliper.data.v1 runs SQL over the host's embedded DuckDB store, shares datasets as named resources and returns results as Arrow streams.
+    depends_on: [COR-03, COR-50]
+    docs: docs/applets/services/caliper-data-v1.md
+    issue: null
+
+  - id: COR-49
+    title: CaliperTensor
+    status: shipped
+    scope: core
+    summary: CaliperTensor is the frozen type, aligned with DLPack, that describes a block of memory by dtype, shape, strides, device and stream, so that a tensor passes into a service without a copy.
+    depends_on: [COR-02]
+    docs: docs/applets/tensor-and-arrow-headers.md#tensor-header
+    issue: null
+
+  - id: COR-50
+    title: Arrow Table Boundary
+    status: shipped
+    scope: supporting
+    summary: Tables cross the ABI as structures of the Arrow C Data Interface, so that the SDK headers hold no DuckDB or framework type.
+    depends_on: [COR-02]
+    docs: docs/applets/tensor-and-arrow-headers.md#arrow-header
+    issue: null
+
+  - id: COR-51
+    title: C++ Sugar for Applets
+    status: shipped
+    scope: supporting
+    summary: caliper.hpp is an optional header-only C++20 layer with an Applet class, the CALIPER_APPLET macro and typed wrappers for the services.
+    depends_on: [COR-04]
+    docs: docs/applets/cpp-sugar.md#caliper_applet-macro
+    issue: null
+
+  - id: COR-52
+    title: Fixture Host for Applet Tests
+    status: shipped
+    scope: supporting
+    summary: The SDK's fixture host runs an applet's lifecycle and its jobs in a test without a window or a GPU, so that an applet can be developed test first.
+    depends_on: [COR-51]
+    docs: docs/applets/cpp-sugar.md#fixture-host-tdd-recipe
+    issue: null
+
+  - id: COR-53
+    title: Crash Guard and Frame Watchdog
+    status: shipped
+    scope: supporting
+    summary: The host runs every applet call under a guard, quarantines an applet that faults, and reports a frame that stalls, as containment rather than a sandbox.
+    depends_on: [COR-01]
+    docs: docs/applets/trust-model.md#fault-quarantine
+    issue: null

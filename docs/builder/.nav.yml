@@ -1,0 +1,5 @@
+nav:
+  - index.md
+  - Reference:
+      - builder-pane.md
+      - workspace.md

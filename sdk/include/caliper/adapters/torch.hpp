@@ -1,6 +1,6 @@
 #pragma once
 /* caliper/adapters/torch.hpp — header-only bridge from a torch::Tensor to the
- * frozen CaliperTensor (docs/references/tensor.md). It compiles against the APPLET's
+ * frozen CaliperTensor (docs/applets/tensor-and-arrow-headers.md#tensor-header). It compiles against the APPLET's
  * libtorch and is NEVER included by the host: torch stays out of the ABI.
  * The host links no torch; it consumes only the CaliperTensor this produces.
  *
@@ -159,7 +159,7 @@ inline std::optional<CaliperTensor> to_tensor(const at::Tensor& t) {
     if (t.is_cuda()) {
         // Unlike MPS there is no buffer-object cast: data_ptr() IS the device
         // address (storage offset already applied), and the Vulkan backend
-        // copies from it in-VRAM (docs/explanations/zero-copy.md). Contiguity was enforced above;
+        // copies from it in-VRAM (docs/python/zero-copy-tensors.md). Contiguity was enforced above;
         // views with a nonzero storage offset are therefore fine here.
         out.data = t.data_ptr();
         out.device = CALIPER_DEV_CUDA;

@@ -18,7 +18,7 @@
 // the learned 3-D bottleneck sharpens. ImPlot3D (no graphics API calls) =>
 // renderer-agnostic (§6c): Metal on macOS, Vulkan on Windows.
 //
-// Threading discipline (docs/guides/ml-applet-cookbook.md is the full
+// Threading discipline (docs/applets/ml-applet-cookbook.md is the full
 // treatment): the worker publishes under a mutex with generation counters —
 // OWNED std::vector copies for plot data, and device-resident tensor HANDLES
 // for the weight display tensors (handle swaps are refcount bumps; the frame

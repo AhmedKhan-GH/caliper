@@ -1,0 +1,499 @@
+# yaml-language-server: $schema=schema.json
+title: Windows parity plan page
+kind: page
+source: design/windows-parity.md
+ref: main
+summary: The plan page design/windows-parity.md on main, and the newer version on the sprint4-pr1-main2
+  branch, which adds a section on how the sprints add to the page, a table under each step and a tenth
+  step for scenes and recordings; entries read from it name that ref.
+not_features:
+- The steps
+entries:
+- heading: Windows parity
+  item: Brings Windows level with macOS once the macOS sprints finish; Vulkan with CUDA interop is the
+    fast path; MSVC with the dynamic CRT; Linux not planned for now. Main's version.
+  ids:
+  - PLT-05
+  - PLT-02
+- heading: Windows parity
+  ref: sprint4-pr1-main2
+  item: Intro of the newer page adds the renderer core, scenes and recordings to the scope.
+  ids:
+  - PLT-05
+- heading: Where Windows stands
+  item: CI builds and tests the core on windows-latest, skipping embed_scope and gpt_scope; the runner
+    has no GPU so GPU rows skip.
+  ids:
+  - PLT-03
+  - PLT-05
+- heading: Where Windows stands
+  item: The Vulkan backend, CUDA interop and gfx suite were verified on Windows hardware before.
+  ids:
+  - PLT-02
+  - REN-02
+- heading: Where Windows stands
+  item: 'Code already handles several Windows details: LoadLibraryA, ; separator, %APPDATA%, LockFileEx,
+    caliper shot on Vulkan offscreen, the caliper-embed package.'
+  ids:
+  - COR-06
+  - COR-08
+  - EMB-07
+- heading: Where Windows stands
+  item: No one has yet run on Windows hardware applets from outside the repository, the CLI subcommands,
+    caliper shot or the embed package.
+  ids:
+  - PLT-06
+  - PLT-10
+- heading: Where Windows stands
+  item: The network stream, hub, Caliper API, caliper build, web viewer and notebook widget are built
+    and tested on macOS; the WebSocket layer, hub and API are compiled, not tested on Windows.
+  ids:
+  - PLT-08
+  - PLT-09
+  - STR-05
+  - STR-06
+  - AGT-01
+- heading: Where Windows stands
+  item: The executable refuses caliper serve, caliper build, --api and --url on Windows.
+  ids:
+  - PLT-08
+  - PLT-06
+- heading: Where Windows stands
+  item: The app's network source, live attach and shared-memory sessions are macOS only.
+  ids:
+  - PLT-08
+  - STR-20
+- heading: Where Windows stands
+  item: A script scripts/check_windows_includes.py checks Windows-lane includes on macOS.
+  ids:
+  - PLT-05
+- heading: Where Windows stands
+  item: 'The builder''s agent pieces build on Windows but stop where they need POSIX: Process, the caliper-mcp
+    HTTP client and the key store answer unsupported.'
+  ids:
+  - PLT-13
+- heading: Where Windows stands
+  ref: sprint4-pr1-main2
+  item: The renderer core, scenes and recordings are designed and not built; Vulkan backend of the graphics
+    layer belongs to this page; sprint 4 reduces the Vulkan renderer when the tensor bridge moves onto
+    the layer; Windows refuses bridge textures, geometry views, scene service, PNG exports and embedding
+    views until Dawn lands; Windows work is deferred.
+  ids:
+  - REN-09
+  - REN-16
+  - PLT-02
+  - PLT-11
+- heading: 1. Build and test baseline
+  item: Run full CI on windows-latest for every new package and subcommand; run the gfx, export and embed
+    suites on hardware with zero skips.
+  ids:
+  - PLT-05
+- heading: 1. Build and test baseline
+  ref: sprint4-pr1-main2
+  item: 'Changed: run the embed suite with zero skips; the gfx and export suites run with zero skips only
+    with the Vulkan backend of step 7.'
+  ids:
+  - PLT-05
+- heading: 1. Build and test baseline
+  ref: sprint4-pr1-main2
+  item: 'Register on Windows the tests CMake leaves out: caliper_cli_serve, _api, _app_hidden, _build
+    and the live suites (2 days).'
+  ids:
+  - PLT-05
+- heading: 1. Build and test baseline
+  ref: sprint4-pr1-main2
+  item: Build and test the src/builder/ libraries in the Windows lane (2 days).
+  ids:
+  - PLT-05
+  - PLT-13
+- heading: 1. Build and test baseline
+  ref: sprint4-pr1-main2
+  item: Add a web job on a Windows runner (1 day).
+  ids:
+  - PLT-09
+- heading: 2. The applet platform
+  item: 'Loading: LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR or AddDllDirectory so DLLs beside an applet are found.'
+  ids:
+  - PLT-06
+- heading: 2. The applet platform
+  item: 'Search paths: long paths and paths with spaces.'
+  ids:
+  - PLT-06
+- heading: 2. The applet platform
+  item: The libtorch pin names the CUDA variant, such as cu124, and the loader refuses a mismatch.
+  ids:
+  - PLT-06
+- heading: 2. The applet platform
+  item: Install over a loaded DLL says clearly that the running app has the applet loaded.
+  ids:
+  - PLT-06
+- heading: 2. The applet platform
+  item: 'The CLI and the app''s console: a GUI-subsystem app plus a console entry point such as caliper.com.'
+  ids:
+  - PLT-06
+- heading: 2. The applet platform
+  item: caliper shot kept as is and compared with a macOS shot.
+  ids:
+  - PLT-06
+  - COR-08
+- heading: 2. The applet platform
+  item: Dock roles need nothing Windows-specific; check them in a shot capture.
+  ids:
+  - PLT-06
+- heading: 2. The applet platform
+  item: caliper build on Windows through a CreateProcess runner, lifting its refusal.
+  ids:
+  - PLT-06
+  - COR-10
+- heading: 2. The applet platform
+  ref: sprint4-pr1-main2
+  item: caliper build on Windows depends on the process helper of step 9 (2 days).
+  ids:
+  - PLT-06
+  - PLT-13
+- heading: 2. The applet platform
+  ref: sprint4-pr1-main2
+  item: 'The hidden app mode caliper --hidden on Windows: window, taskbar button and focus stay hidden
+    (1 day).'
+  ids:
+  - PLT-06
+  - PLT-08
+- heading: 3. Caliper LIB
+  item: 'Wheels: Windows wheels with MSVC tested against CUDA PyTorch.'
+  ids:
+  - PLT-07
+- heading: 3. Caliper LIB
+  item: The local session on named shared memory with CUDA tensors, copied on the device without blocking
+    training.
+  ids:
+  - STR-20
+  - PLT-07
+- heading: 3. Caliper LIB
+  item: The network transport is verified and its training overhead measured on CUDA.
+  ids:
+  - PLT-07
+- heading: 3. Caliper LIB
+  item: The in-process window on Vulkan.
+  ids:
+  - PLT-07
+- heading: 3. Caliper LIB
+  ref: sprint4-pr1-main2
+  item: 'Native modules for Windows: both are Objective-C++ today, so no wheel can be built (5 days).'
+  ids:
+  - PLT-07
+- heading: 3. Caliper LIB
+  ref: sprint4-pr1-main2
+  item: caliper.serve() on Windows, verified with CUDA tensors (1 day).
+  ids:
+  - PLT-07
+  - STR-05
+- heading: 3. Caliper LIB
+  ref: sprint4-pr1-main2
+  item: The native sender with zero-copy on CUDA, imported through Vulkan external memory (8 days).
+  ids:
+  - PLT-07
+  - STR-20
+- heading: 3. Caliper LIB
+  ref: sprint4-pr1-main2
+  item: The scene layout of the shared-memory session on named shared memory (3 days).
+  ids:
+  - STR-20
+  - STR-09
+- heading: 3. Caliper LIB
+  ref: sprint4-pr1-main2
+  item: CUDA benchmarks, bench_live.py and bench_show.py (2 days).
+  ids:
+  - PLT-07
+- heading: 3. Caliper LIB
+  ref: sprint4-pr1-main2
+  item: The staging script of the Python build in a form that runs on Windows (0.5 days).
+  ids:
+  - PLT-07
+- heading: 3. Caliper LIB
+  ref: sprint4-pr1-main2
+  item: Arrays from JAX and CuPy through DLPack (3 days).
+  ids:
+  - STR-36
+- heading: 4. Streaming, the hub and Caliper API
+  item: The app's network source, caliper serve hub and API v0 on Winsock, with socket tests first and
+    refusals lifted as tests run.
+  ids:
+  - PLT-08
+- heading: 4. Streaming, the hub and Caliper API
+  item: Bind to 127.0.0.1 only so the firewall never prompts.
+  ids:
+  - PLT-08
+- heading: 4. Streaming, the hub and Caliper API
+  item: Keep the API token file in %APPDATA%\Caliper\, readable only by the user.
+  ids:
+  - PLT-08
+- heading: 4. Streaming, the hub and Caliper API
+  ref: sprint4-pr1-main2
+  item: The hub and API transport on Winsock (1 day).
+  ids:
+  - PLT-08
+- heading: 4. Streaming, the hub and Caliper API
+  ref: sprint4-pr1-main2
+  item: Owner-only access to the hub, API and token files (1 day).
+  ids:
+  - PLT-08
+- heading: 4. Streaming, the hub and Caliper API
+  ref: sprint4-pr1-main2
+  item: Stopping caliper serve cleanly through a console control handler (1 day).
+  ids:
+  - PLT-08
+- heading: 4. Streaming, the hub and Caliper API
+  ref: sprint4-pr1-main2
+  item: The app's network source, depending on the graphics layer's import paths and the Vulkan backend
+    or Dawn (4 days).
+  ids:
+  - PLT-08
+  - REN-09
+- heading: 4. Streaming, the hub and Caliper API
+  ref: sprint4-pr1-main2
+  item: GET /v0/capture.png in the windowed app on Vulkan (2 days).
+  ids:
+  - PLT-08
+  - AGT-01
+- heading: 4. Streaming, the hub and Caliper API
+  ref: sprint4-pr1-main2
+  item: 'Recording in the hub: caliper serve --record and --recordings, growing files, crash recovery,
+    offsets past 4 GiB (2 days).'
+  ids:
+  - STR-15
+  - PLT-08
+- heading: 5. The web viewer and notebooks
+  item: Check the web viewer in Chrome and Edge on Windows, where WebGPU runs on Direct3D 12.
+  ids:
+  - PLT-09
+  - EMB-01
+- heading: 5. The web viewer and notebooks
+  item: Check the notebook widget in JupyterLab and Visual Studio Code.
+  ids:
+  - PLT-09
+  - STR-07
+- heading: 5. The web viewer and notebooks
+  ref: sprint4-pr1-main2
+  item: 'Scenes reach a browser on Windows before the native app: the loss-landscape demo in Chrome and
+    Edge through caliper.serve().'
+  ids:
+  - STR-11
+  - STR-10
+  - PLT-09
+- heading: 5. The web viewer and notebooks
+  ref: sprint4-pr1-main2
+  item: The WebAssembly build of the web viewer on Windows, whose build script is bash (1 day).
+  ids:
+  - PLT-09
+  - EMB-04
+- heading: 5. The web viewer and notebooks
+  ref: sprint4-pr1-main2
+  item: A Direct3D project in the browser tests (1 day).
+  ids:
+  - PLT-09
+- heading: 5. The web viewer and notebooks
+  ref: sprint4-pr1-main2
+  item: The scene parity tests of Web geometry in Chrome and Edge on Direct3D 12 and the loss-landscape
+    demo in a notebook (1 day).
+  ids:
+  - PLT-09
+  - REN-12
+  - STR-11
+- heading: 6. Caliper Embed
+  item: Run the installed caliper-embed package on Windows hardware, including the Win32 embed_host in
+    a window and offscreen.
+  ids:
+  - PLT-10
+- heading: 6. Caliper Embed
+  item: Hosting examples for WPF (HwndHost), WinForms and Qt.
+  ids:
+  - PLT-10
+  - EMB-24
+- heading: 6. Caliper Embed
+  item: Decide on WinUI 3, which expects a DXGI swap chain, needing Vulkan-DXGI interop or the Dawn path.
+  ids:
+  - PLT-10
+  - PLT-17
+- heading: 7. Renderer fallbacks
+  item: 'The WebGPU backend through Dawn as the native fallback on Windows: Direct3D 12 and 11, SwiftShader.'
+  ids:
+  - PLT-11
+  - REN-25
+- heading: 7. Renderer fallbacks
+  item: Retire the GLEW OpenGL fallback once Dawn covers its cases (main's text).
+  ids:
+  - REN-17
+- heading: 7. Renderer fallbacks
+  ref: sprint4-pr1-main2
+  item: 'Changed: the GLEW OpenGL fallback is already gone, retired by sprint 4 before Dawn; until Dawn
+    is verified a Windows machine without working Vulkan refuses to start.'
+  ids:
+  - REN-17
+  - PLT-11
+- heading: 7. Renderer fallbacks
+  ref: sprint4-pr1-main2
+  item: The Vulkan backend of the graphics layer, with the CUDA direct, buffer and semaphore paths private,
+    the texture path, scene service and points view on it (8 days).
+  ids:
+  - REN-09
+  - REN-02
+  - REN-53
+- heading: 7. Renderer fallbacks
+  ref: sprint4-pr1-main2
+  item: 'The single-version graphics services on Windows: tensor bridge with CUDA import, scene service
+    and export from imported CUDA blocks, and the scopes on the scene service compared with macOS captures
+    (1.5 days).'
+  ids:
+  - REN-16
+  - REN-53
+- heading: 7. Renderer fallbacks
+  ref: sprint4-pr1-main2
+  item: The Dawn fallback on Direct3D 12 and 11 and SwiftShader, verified on Windows (2 days).
+  ids:
+  - PLT-11
+  - REN-25
+- heading: 7. Renderer fallbacks
+  ref: sprint4-pr1-main2
+  item: Scenes, bridge textures and embedding views draw through Dawn with a reported copy before the
+    Vulkan backend lands (1 day).
+  ids:
+  - PLT-11
+  - REN-25
+- heading: 7. Renderer fallbacks
+  ref: sprint4-pr1-main2
+  item: The zero-copy measurement on Windows against a build of the last commit that had the old Vulkan
+    paths (2 days).
+  ids:
+  - REN-53
+- heading: 7. Renderer fallbacks
+  ref: sprint4-pr1-main2
+  item: The CUDA direct kernel rewritten from the shared colormap header, deciding by integer keys (1
+    day).
+  ids:
+  - REN-14
+  - REN-53
+- heading: 7. Renderer fallbacks
+  ref: sprint4-pr1-main2
+  item: The Windows build loses its build-time glslang; the Vulkan backend takes SPIR-V that Naga generates
+    from the WGSL sources.
+  ids:
+  - REN-10
+  - REN-53
+- heading: 8. Signing, packaging and distribution
+  item: Authenticode-sign the app, CLI entry point and first-party applet DLLs; plan for SmartScreen reputation.
+  ids:
+  - PLT-12
+- heading: 8. Signing, packaging and distribution
+  item: Decide the signing policy for third-party applet DLLs, the Windows side of the macOS question.
+  ids:
+  - COR-23
+  - COR-24
+- heading: 8. Signing, packaging and distribution
+  item: Package with an installer (MSIX or MSI) and publish through winget, putting the CLI on PATH.
+  ids:
+  - PLT-12
+- heading: 8. Signing, packaging and distribution
+  ref: sprint4-pr1-main2
+  item: Sign and package caliper-mcp and the agent sidecar with the app (0.5 days).
+  ids:
+  - PLT-12
+  - AGT-02
+  - AGT-10
+- heading: 8. Signing, packaging and distribution
+  ref: sprint4-pr1-main2
+  item: Offer the app as an opener of .mcap files without taking the extension from another program (0.5
+    days).
+  ids:
+  - PLT-12
+  - COR-26
+- heading: 9. The builder's agents
+  item: 'Process spawning: Process on Windows without a shell or console window, stopping the whole child
+    tree.'
+  ids:
+  - PLT-13
+- heading: 9. The builder's agents
+  item: caliper-mcp's HTTP client on Winsock, on 127.0.0.1 only.
+  ids:
+  - PLT-13
+  - AGT-02
+- heading: 9. The builder's agents
+  item: The key store in the Windows Credential Manager, one entry per provider.
+  ids:
+  - PLT-13
+  - AGT-05
+- heading: 9. The builder's agents
+  item: 'Local model servers: Ollama on Windows needs no preset change; opencode binaries exist; GPU contention
+    note applies.'
+  ids:
+  - PLT-13
+  - AGT-04
+  - AGT-07
+- heading: 9. The builder's agents
+  item: Turn the builder on and port the thirteen translation units that the include check lists.
+  ids:
+  - PLT-13
+- heading: 9. The builder's agents
+  item: 'The shortcut: Ctrl+K in place of Cmd-K.'
+  ids:
+  - PLT-13
+  - AGT-05
+- heading: Order
+  item: Steps 1 and 2 first; 3 to 5 follow the macOS order of surfaces; step 9 follows step 4; Embed,
+    fallbacks and distribution last (main's text).
+  ids:
+  - PLT-05
+  - PLT-06
+  - PLT-13
+- heading: Order
+  ref: sprint4-pr1-main2
+  item: 'Changed: scenes reach Windows in three stages (browser, app through Dawn with a copy, in place
+    through Vulkan); Dawn before the Vulkan backend; step 9 needs steps 1 and 4 and its process helper
+    comes early; step 10 after steps 3, 7 and 9.'
+  ids:
+  - PLT-11
+  - PLT-13
+- heading: How the sprints add to this page
+  ref: sprint4-pr1-main2
+  item: Each macOS sprint adds what Windows needs; tables per step give sprint, dependency and builder
+    days; sprint 2 streaming and web, sprint 3 builder, sprint 4 renderer core, scenes and recordings.
+  reason: context
+- heading: 10. Scenes and recordings
+  ref: sprint4-pr1-main2
+  item: 'The recording file library on Windows: MapViewOfFile, reading a file another process is writing,
+    crash recovery (2 days).'
+  ids:
+  - STR-12
+  - COR-26
+- heading: 10. Scenes and recordings
+  ref: sprint4-pr1-main2
+  item: The app's recorder, the workspace tables and caliper open <file> on Windows (1 day).
+  ids:
+  - STR-14
+  - COR-26
+- heading: 10. Scenes and recordings
+  ref: sprint4-pr1-main2
+  item: 'The scene view on Vulkan with CUDA: import of scene slots, the pick pass, the up-axis switch
+    and capture rows (2 days).'
+  ids:
+  - REN-12
+  - REN-15
+  - REN-53
+- heading: 10. Scenes and recordings
+  ref: sprint4-pr1-main2
+  item: The loss-landscape demo and the four demos on CUDA, written for MPS (2 days).
+  ids:
+  - STR-11
+- heading: 10. Scenes and recordings
+  ref: sprint4-pr1-main2
+  item: 'Slice planes and isosurfaces on CUDA: the device-side slice and the marching-cubes kernel (3
+    days).'
+  ids:
+  - REN-26
+  - REN-27
+- heading: 10. Scenes and recordings
+  ref: sprint4-pr1-main2
+  item: Done when the training-run demo runs on a Windows machine with CUDA, its scene draws in place,
+    and its recording reopens and scrubs in the app and a browser.
+  ids:
+  - STR-11
+  - STR-13

@@ -12,7 +12,7 @@
 // and its chrome (intro screen, docking shell, jobs tray, styling); it calls
 // these at the exact points it used to run the inline code.
 //
-// ORDERING IS LOAD-BEARING (docs/explanations/rendering.md): the ImGui contexts
+// ORDERING IS LOAD-BEARING (docs/applets/rendering.md): the ImGui contexts
 // must exist before HostRenderer::init() wires the ImGui backend; the contexts
 // are destroyed AFTER HostRenderer::shutdown(). Do not reorder — every
 // documented reordering crashes (MTLTexture UAF / ImGui-backend teardown).

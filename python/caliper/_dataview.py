@@ -1,6 +1,6 @@
 """Data views: which part of a tensor travels to a viewer.
 
-The rules are those of the wire protocol (docs/references/wire-protocol.md,
+The rules are those of the wire protocol (docs/reference/wire-protocol.md,
 "Data views"); this module applies them in the producer. A view offers one or
 more named sources, each a tensor with named dims. A data view names a source,
 indexes dims, reduces dims, can tile one dim of a heatmap, and sets a budget:
@@ -90,8 +90,11 @@ _MEMBERS = ("source", "index", "reduce", "tile")
 
 
 class DataViewError(ValueError):
-    """A data view that does not resolve (the protocol's ``bad_data_view``).
-    The message is plain text that names the rule, fit to send to a viewer."""
+    """A `ValueError` for a data view that breaks a rule.
+
+    The error is the `bad_data_view` of the wire protocol. Its message is plain text that names the
+    broken rule and is fit to send to a viewer. The view keeps the data view it had.
+    """
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 #pragma once
 // wire.h: the C++ codec of wire protocol v3 (caliper/live_net.h,
-// docs/references/wire-protocol.md), the native twin of python/caliper/
+// docs/reference/wire-protocol.md), the native twin of python/caliper/
 // _wire.py. Host-internal C++17; no sockets (ws.h carries the bytes).
 //
 // FRAMES. decode_frame() applies the protocol's decoding steps 1 to 9 in their
@@ -44,6 +44,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -65,6 +66,11 @@ namespace wire {
 // `path` is CALIPER_NET_PATH except for a server that mounts the endpoint
 // elsewhere: Caliper API serves the same stream at /v0/stream (api/api_server.h).
 int upgrade_status(const HttpRequest& r, const std::string& session_token, uint16_t port,
+                   const std::string& path = CALIPER_NET_PATH);
+// The same checks, in the same order, for a server that accepts more than one
+// token (Caliper API: api/api_server.h): the token parameter passes when
+// `token_ok` returns true for it, and `token_ok` compares in constant time.
+int upgrade_status(const HttpRequest& r, const std::function<bool(const std::string&)>& token_ok, uint16_t port,
                    const std::string& path = CALIPER_NET_PATH);
 // The single rules, for a server that serves plain HTTP on the same port (the
 // Host check applies to those requests too).

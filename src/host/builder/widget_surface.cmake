@@ -1,0 +1,95 @@
+# The widget agent's inline surface (src/host/builder/widget_surface.h,
+# design/widget-agent.md), included from the top-level CMakeLists.txt after
+# the spec runtime. Built only with CALIPER_WITH_BUILDER.
+#
+#   caliper_widget_surface   the surface's state machine, its layout and its
+#                            ImGui side, the WidgetAgent interface with the
+#                            scripted agent, the agent over AcpClient, and the
+#                            diff card it shares with the approval cards
+#   caliper-widget-shot      a development tool, not installed: the surface
+#                            driven through a scripted scenario on one panel of
+#                            a spec, a PNG at each state
+#   caliper_widget_surface_tests   ctest caliper_widget_surface (headless) and
+#                            caliper_widget_surface_gpu (the offscreen canvas
+#                            and caliper-widget-shot as a process)
+if(NOT TARGET caliper_spec_runtime)
+    return()
+endif()
+
+set(_widget_dir ${CMAKE_SOURCE_DIR}/src/host/builder)
+add_library(caliper_widget_surface STATIC
+    ${_widget_dir}/widget_agent.cpp
+    ${_widget_dir}/widget_agent_acp.cpp
+    ${_widget_dir}/widget_app.cpp
+    ${_widget_dir}/widget_surface.cpp
+    ${_widget_dir}/diff_card.cpp)
+# Where the app finds caliper-agent's package and the command table until the
+# sidecar is packaged with a Python runtime (widget_app.h); only this file.
+set_source_files_properties(${_widget_dir}/widget_app.cpp PROPERTIES
+    COMPILE_DEFINITIONS "CALIPER_WIDGET_AGENT_SOURCE=\"${CMAKE_SOURCE_DIR}/src/builder\"")
+target_include_directories(caliper_widget_surface PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
+target_link_libraries(caliper_widget_surface PUBLIC caliper_spec_runtime caliper_builder_session caliper_builder_acp
+    caliper_builder_agent)
+set_target_properties(caliper_widget_surface PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(caliper_widget_surface PRIVATE -Wall -Wextra)
+endif()
+
+# The app's spec page owns an InlineWidget (spec_page.cpp).
+if(TARGET caliper)
+    target_link_libraries(caliper PRIVATE caliper_widget_surface)
+endif()
+
+add_executable(caliper-widget-shot ${_widget_dir}/widget_shot_main.cpp)
+target_link_libraries(caliper-widget-shot PRIVATE caliper_widget_surface)
+set_target_properties(caliper-widget-shot PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+caliper_spec_runtime_fonts(caliper-widget-shot)
+
+if(BUILD_TESTS AND TARGET doctest::doctest)
+    add_executable(caliper_widget_surface_tests
+        ${_widget_dir}/tests/test_main.cpp
+        ${_widget_dir}/tests/test_widget_surface.cpp
+        ${_widget_dir}/tests/test_widget_targets.cpp
+        ${_widget_dir}/tests/test_widget_layout.cpp
+        ${_widget_dir}/tests/test_widget_shot.cpp
+        ${_widget_dir}/tests/test_widget_agent_acp.cpp
+        ${_widget_dir}/tests/test_widget_app.cpp)
+    target_link_libraries(caliper_widget_surface_tests PRIVATE caliper_widget_surface doctest::doctest
+        caliper_builder_duckdb caliper_builder_session_host)
+    target_include_directories(caliper_widget_surface_tests PRIVATE ${THIRD_PARTY_DIR}/stb
+        ${CMAKE_SOURCE_DIR}/src/host/spec_runtime/tests)
+    target_compile_definitions(caliper_widget_surface_tests PRIVATE
+        CALIPER_SPEC_FIXTURES="${CMAKE_SOURCE_DIR}/src/builder/spec/tests/fixtures"
+        CALIPER_SPEC_TEST_TMP="${CMAKE_CURRENT_BINARY_DIR}/widget-test-tmp"
+        CALIPER_WIDGET_SHOT_EXE="$<TARGET_FILE:caliper-widget-shot>"
+        CALIPER_BUILDER_SOURCE_DIR="${CMAKE_SOURCE_DIR}/src/builder"
+        CALIPER_BUILDER_TEST_PYTHON="${CALIPER_BUILDER_TEST_PYTHON}"
+        CALIPER_ACP_STUB_AGENT="$<TARGET_FILE:caliper_acp_stub_agent>")
+    set_target_properties(caliper_widget_surface_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    add_dependencies(caliper_widget_surface_tests caliper-widget-shot caliper_acp_stub_agent)
+    # Headless: the state machine over a real session, the preview's life,
+    # the compact diff and the layout.
+    add_test(NAME caliper_widget_surface COMMAND caliper_widget_surface_tests --test-suite-exclude=gpu,agent,app)
+    # Offscreen: caliper-widget-shot as a process, checked by image properties.
+    add_test(NAME caliper_widget_surface_gpu COMMAND caliper_widget_surface_tests --test-suite=gpu)
+    # The agent over ACP: the real caliper-agent sidecar with its scripted
+    # model and a fake key, driven by the surface; skipped without
+    # CALIPER_BUILDER_TEST_PYTHON.
+    add_test(NAME caliper_widget_surface_agent COMMAND caliper_widget_surface_tests --test-suite=agent)
+    set_tests_properties(caliper_widget_surface caliper_widget_surface_gpu caliper_widget_surface_agent
+        PROPERTIES LABELS "builder;widget")
+    set_tests_properties(caliper_widget_surface_gpu PROPERTIES TIMEOUT 300)
+    # No test of the surface may reach a model off this machine: with the
+    # switch, caliper-agent refuses to build a real provider client.
+    set_tests_properties(caliper_widget_surface caliper_widget_surface_gpu caliper_widget_surface_agent
+        PROPERTIES ENVIRONMENT "CALIPER_AGENT_OFFLINE=1")
+    # ⌘K in the hidden app with the real sidecar on a test script (POSIX).
+    if(TARGET caliper AND NOT WIN32)
+        add_test(NAME caliper_widget_app COMMAND caliper_widget_surface_tests --test-suite=app)
+        set_tests_properties(caliper_widget_app PROPERTIES LABELS "builder;widget;cli" TIMEOUT 300
+            ENVIRONMENT "CALIPER_AGENT_OFFLINE=1;CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>"
+            SKIP_REGULAR_EXPRESSION "caliper_widget_app skipped")
+    endif()
+    set_tests_properties(caliper_widget_surface_agent PROPERTIES TIMEOUT 300
+        SKIP_REGULAR_EXPRESSION "caliper_widget_surface_agent skipped")
+endif()

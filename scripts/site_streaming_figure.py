@@ -5,7 +5,7 @@
 
 What happens between a training script and the viewer when the script calls caliper.show(): the snapshot is a
 GPU copy on torch's own stream into POSIX shared memory, and the viewer draws the newest completed slot from the
-same pages. Facts from docs/explanations/live-streaming.md (sessions, snapshots, sampling, sync).
+same pages. Facts from docs/python/live-streaming.md (sessions, snapshots, sampling, sync).
 
 Every node, arrow, slot and heatmap carries an id the page's script animates: illustrative weights are computed,
 copied into a slot, published, claimed and drawn, one training step per cycle, with the matching lines lit in the

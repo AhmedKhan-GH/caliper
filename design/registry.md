@@ -1,6 +1,6 @@
 # Applet registry
 
-This page proposes a registry for applets. Nothing described here is built. The host has no Browse tab, no registry client, no download and no index format. Today an applet is installed from a local folder, with `caliper install <folder>` or by copying its manifest and library into the user applets folder; see Caliper CLI (`docs/references/cli.md`) and Manifest (`docs/references/manifest.md`).
+This page proposes a registry for applets. Nothing described here is built. The host has no Browse tab, no registry client, no download and no index format. Today an applet is installed from a local folder, with `caliper install <folder>` or by copying its manifest and library into the user applets folder; see Caliper CLI (`docs/reference/cli.md`) and Manifest (`docs/applets/manifest.md`).
 
 ## Proposal
 
@@ -13,7 +13,7 @@ Sideloading continues to work and is not replaced. A registry lists applets and 
 - **Browse tab.** The landing screen gains a tab that reads the registry index, filters it to releases that match the host's platform and ABI epoch, and lists them with their summary and tags.
 - **Install by id and version.** A release is installed by its applet id and version. The host downloads the artifact for its platform, checks the sha256 digest against the index, and places the manifest and library in the user's applets folder. The existing loader then finds it like any other applet.
 - **Update and uninstall.** The tab marks an installed applet whose index entry has a newer compatible release, and removes an installed applet's files on request.
-- **Compatibility filtering.** A release the host cannot load is listed as incompatible, with the reason, instead of being hidden. The refusal text is the one the loader already uses for an epoch or `min_host` mismatch; see Refusal messages (`docs/references/refusals.md`).
+- **Compatibility filtering.** A release the host cannot load is listed as incompatible, with the reason, instead of being hidden. The refusal text is the one the loader already uses for an epoch or `min_host` mismatch; see Refusal messages (`docs/reference/refusal-messages.md`).
 
 ## Metadata for each release
 

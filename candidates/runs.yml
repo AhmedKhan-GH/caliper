@@ -1,0 +1,287 @@
+# yaml-language-server: $schema=schema.json
+pillar: RUN
+title: Runs and Comparison
+proposed: false
+candidates:
+  - key: difference-across-shapes
+    title: "Difference Views Across Shapes"
+    summary: "A difference view aligns two runs whose tensors differ in shape, such as two architectures."
+    serves: "Two model sizes are compared layer by layer."
+    origin: plan-idea
+    depends_on: [RUN-08]
+  - key: run-table
+    title: "Run Table"
+    summary: "A table has one row per run and a column for each configuration key, summary metric and tag, with sorting, filters and saved column sets."
+    serves: "The best run among hundreds is found without opening each."
+    origin: field
+    depends_on: [RUN-04]
+  - key: config-diff
+    title: "Configuration Diff"
+    summary: "Only the configuration keys that differ between chosen runs are shown, with nested keys flattened."
+    serves: "A person explains why two runs behaved differently."
+    origin: field
+    depends_on: [RUN-05]
+  - key: parameter-importance
+    title: "Parameter Importance"
+    summary: "Hyperparameters are ranked by their relation to a chosen metric across runs."
+    serves: "A person decides which settings matter before the next sweep."
+    origin: field
+    depends_on: [RUN-13]
+  - key: run-scatter
+    title: "Scatter of Runs"
+    summary: "Any two configuration or metric columns are plotted against each other, one point per run, coloured by a third."
+    serves: "Trade-offs such as size against accuracy are seen."
+    origin: field
+    depends_on: [RUN-04]
+  - key: sweep-launcher
+    title: "Sweep Launcher"
+    summary: "A grid or search definition expands into runs, which are tracked in one table with live status and the best value so far."
+    serves: "Hyperparameter and ablation studies are run from one place."
+    origin: field
+    depends_on: [RUN-13, STR-03]
+  - key: trial-pruning-view
+    title: "Trial Pruning View"
+    summary: "The trials a search stopped early are shown with the intermediate values that caused it."
+    serves: "A person checks that early stopping does not cut good runs."
+    origin: field
+    depends_on: [RUN-13]
+  - key: response-surface-plots
+    title: "Response Surface Plots"
+    summary: "The objective is plotted against one or two parameters across all trials, as slices and contours."
+    serves: "A sweep's response is read."
+    origin: field
+    depends_on: [RUN-13]
+  - key: pareto-front
+    title: "Pareto Front View"
+    summary: "Trials with several objectives are plotted, and the non-dominated set is highlighted."
+    serves: "A person chooses between accuracy, latency and size."
+    origin: field
+    depends_on: [RUN-13]
+  - key: run-grouping
+    title: "Run Grouping"
+    summary: "Runs are grouped by any configuration key, and each group's curves are drawn as a mean with spread."
+    serves: "Settings are compared across seeds, not single runs."
+    origin: field
+    depends_on: [RUN-09]
+  - key: smoothing-and-resampling
+    title: "Smoothing and Resampling"
+    summary: "Curves are smoothed and resampled to a shared grid, with the raw curve kept faint behind."
+    serves: "Noisy curves are read without losing spikes."
+    origin: field
+    depends_on: [RUN-01]
+  - key: x-axis-choice
+    title: "Axis Choice for Curves"
+    summary: "The same curves are plotted against step, wall time, relative time, tokens, samples or compute."
+    serves: "Runs with different batch sizes are compared fairly."
+    origin: field
+    depends_on: [RUN-06]
+  - key: metric-pattern-search
+    title: "Metric Search by Pattern"
+    summary: "Metrics are found by a glob or regular expression, and all matches are plotted."
+    serves: "Thousands of logged series are navigated."
+    origin: field
+    depends_on: [RUN-01]
+  - key: run-query-language
+    title: "Query Language over Runs"
+    summary: "An expression over configuration, metrics and tags filters and groups runs."
+    serves: "Runs are selected precisely in a large history."
+    origin: field
+    depends_on: [RUN-03]
+  - key: tags-and-notes
+    title: "Tags and Notes"
+    summary: "A run carries free tags and Markdown notes, searchable from the history."
+    serves: "A person records what a run was for and what it showed."
+    origin: field
+    depends_on: [RUN-04]
+  - key: run-state
+    title: "Run State and Crash Status"
+    summary: "Runs are marked running, finished, failed or stalled from missed heartbeats, with their last log lines."
+    serves: "Dead jobs are noticed quickly."
+    origin: field
+    depends_on: [RUN-03]
+  - key: run-alerts
+    title: "Run Alerts"
+    summary: "A rule on any stream raises a local notice or runs a hook when a metric crosses a threshold, turns non-finite, stalls or a run ends."
+    serves: "Long runs need no watching."
+    origin: field
+    depends_on: [RUN-01, STR-03]
+  - key: baseline-monitors
+    title: "Baseline Monitors"
+    summary: "A rule compares a live series with a baseline run and shows its state beside the chart."
+    serves: "Regressions are caught while training."
+    origin: field
+    depends_on: [RUN-05]
+  - key: system-metrics-per-run
+    title: "System Metrics per Run"
+    summary: "GPU use, memory, power, temperature, CPU, disk and network are recorded on the run's own timeline."
+    serves: "Slowdowns are related to hardware behaviour."
+    origin: field
+    depends_on: [STR-42, RUN-03]
+  - key: code-capture
+    title: "Code and Git Capture"
+    summary: "Each run records its commit, uncommitted changes and entry script."
+    serves: "A result is reproduced exactly."
+    origin: field
+    depends_on: [RUN-03]
+  - key: environment-capture
+    title: "Environment Capture"
+    summary: "Each run records its interpreter, packages, drivers, hardware and environment variables, with secrets filtered."
+    serves: "Runs that differ between machines are explained."
+    origin: field
+    depends_on: [RUN-03]
+  - key: seed-capture
+    title: "Seed and Determinism Capture"
+    summary: "Random seeds, determinism flags and data-order seeds are recorded, with a warning when a run cannot repeat."
+    serves: "Real effects are separated from seed noise."
+    origin: field
+    depends_on: [RUN-03]
+  - key: rerun-from-record
+    title: "Recorded-Run Rerun"
+    summary: "A run is launched again from its recorded configuration, code and environment, with chosen keys changed."
+    serves: "A person iterates without retyping a setup."
+    origin: field
+    depends_on: [RUN-03]
+  - key: config-tree-view
+    title: "Configuration Tree View"
+    summary: "A nested configuration is shown as a tree, with each value linked to the file that set it."
+    serves: "Large composed configurations are read."
+    origin: field
+    depends_on: [RUN-03]
+  - key: artifact-lineage
+    title: "Artifact Lineage Graph"
+    summary: "A graph joins datasets, runs and models, each artifact linked to the run that made it and the runs that used it."
+    serves: "A model is traced back to its data and code."
+    origin: field
+    depends_on: [RUN-02]
+  - key: artifact-aliases
+    title: "Artifact Versions and Aliases"
+    summary: "An artifact keeps numbered versions with movable names such as best and latest, and a diff between versions."
+    serves: "Evaluation points at the right checkpoint."
+    origin: field
+    depends_on: [RUN-02]
+  - key: model-registry-view
+    title: "Model Registry View"
+    summary: "Models are listed with their stage, the run each came from and the checks each passed."
+    serves: "A checkpoint is promoted with a recorded reason."
+    origin: field
+    depends_on: [RUN-02]
+  - key: model-cards
+    title: "Model Cards"
+    summary: "A model's intended use, data, metrics and limits are kept as structured text beside the checkpoint."
+    serves: "A model is documented for later readers."
+    origin: field
+    depends_on: [RUN-02]
+  - key: run-reports
+    title: "Run Reports"
+    summary: "Chosen charts, tables and text are composed into a saved page that stays linked to the runs' data."
+    serves: "A finding is shared with its evidence."
+    origin: field
+    depends_on: [RUN-05, SPC-01]
+  - key: run-calendar
+    title: "Run Calendar"
+    summary: "Runs are laid on a calendar or Gantt chart by start and end, coloured by status."
+    serves: "A person sees what ran when."
+    origin: field
+    depends_on: [RUN-03]
+  - key: pipeline-step-graph
+    title: "Pipeline Step Graph"
+    summary: "A multi-step workflow is drawn with each step's inputs, outputs, cache hits and timing."
+    serves: "A person finds where a pipeline reran or failed."
+    origin: field
+    depends_on: [RUN-03]
+  - key: run-family-tree
+    title: "Run Family Tree"
+    summary: "Which run was forked, resumed or warm-started from which is recorded and drawn."
+    serves: "Branching training histories are followed."
+    origin: field
+    depends_on: [RUN-03]
+  - key: branch-run-from-checkpoint
+    title: "Checkpoint-Branched Run"
+    summary: "A new run starts from a saved state with changed parameters, and is linked to its parent."
+    serves: "What-if branches of training and simulation are explored."
+    origin: field
+    depends_on: [RUN-10, STR-03]
+  - key: metric-definitions
+    title: "Metric Definitions"
+    summary: "Each metric is named with its meaning, direction, unit and aggregation."
+    serves: "Best-run selection is consistent everywhere."
+    origin: field
+    depends_on: [RUN-01]
+  - key: summary-rules
+    title: "Summary Metric Rules"
+    summary: "Final, best, minimum, maximum or last-window summaries are computed per series and used as table columns."
+    serves: "Runs are ranked by the right number."
+    origin: field
+    depends_on: [RUN-01]
+  - key: histograms-over-steps
+    title: "Histograms over Steps"
+    summary: "A logged histogram's change over steps is drawn as ridgelines or a heat strip."
+    serves: "A person watches a distribution shift."
+    origin: field
+    depends_on: [RUN-01]
+  - key: media-step-slider
+    title: "Step Slider for Logged Media"
+    summary: "Logged images, audio and text are browsed by step, with runs side by side."
+    serves: "Outputs, not only scalars, are compared over training."
+    origin: field
+    depends_on: [RUN-01, RUN-05]
+  - key: console-capture
+    title: "Console Capture per Run"
+    summary: "A run's console output is kept with search and links from a line to the charts at that time."
+    serves: "A failure is read beside the metric that spiked."
+    origin: field
+    depends_on: [REN-51, RUN-03]
+  - key: offline-run-merge
+    title: "Offline Run Merge"
+    summary: "Runs recorded on a machine with no connection are merged into the history later."
+    serves: "Isolated machines contribute to one history."
+    origin: field
+    depends_on: [RUN-03]
+  - key: chart-region-notes
+    title: "Notes on Chart Regions"
+    summary: "A region of a chart, such as a restart or a schedule change, is marked with a labelled band that other charts show."
+    serves: "Events in a run's history are remembered."
+    origin: field
+    depends_on: [RUN-06]
+  - key: baseline-comparison-mode
+    title: "Baseline Comparison Mode"
+    summary: "One run is pinned as the baseline, and every other run's metrics show as differences from it."
+    serves: "Changes are judged against a reference."
+    origin: field
+    depends_on: [RUN-08]
+  - key: statistical-comparison
+    title: "Statistical Comparison of Runs"
+    summary: "Confidence intervals, tests across seeds and the probability of improvement are computed between groups."
+    serves: "A person decides whether a change is real."
+    origin: field
+    depends_on: [RUN-09]
+  - key: cost-per-run
+    title: "Compute and Energy per Run"
+    summary: "GPU hours and estimated energy are totalled per run and per group."
+    serves: "Results are weighed against the compute spent."
+    origin: field
+    depends_on: [RUN-03]
+  - key: scaling-law-fits
+    title: "Scaling-Law Fits"
+    summary: "Power laws are fitted to loss against compute, data or size across runs, with extrapolation."
+    serves: "Larger runs are planned."
+    origin: field
+    depends_on: [RUN-05]
+  - key: training-callbacks
+    title: "Training Loop Callbacks"
+    summary: "Ready callbacks for common training frameworks log metrics, tensors and controls."
+    serves: "A training script needs no edits beyond one line."
+    origin: field
+    depends_on: [STR-01, RUN-01]
+  - key: logger-adapters
+    title: "Logger Adapters"
+    summary: "Logger classes let a script's existing logging calls feed Caliper's run store live."
+    serves: "Caliper is adopted without rewriting logging."
+    origin: field
+    depends_on: [RUN-01]
+  - key: natural-language-run-query
+    title: "Natural-Language Run Query"
+    summary: "A question about the runs is answered with the query that produced the answer shown."
+    serves: "Runs are found without writing queries."
+    origin: field
+    depends_on: [RUN-03, AGT-03]

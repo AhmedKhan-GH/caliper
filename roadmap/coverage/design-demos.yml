@@ -1,0 +1,94 @@
+# yaml-language-server: $schema=schema.json
+title: Demos plan page
+kind: page
+source: design/demos.md
+ref: sprint4
+summary: The plan page design/demos.md, which only the sprint4 branch holds, in its newest version there,
+  read heading by heading.
+not_features:
+- How every demo is made
+- Open decisions
+entries:
+- heading: What is built and what is planned
+  item: Demo 0 is built on the sprint's own build branch and under verification; nothing else on the page
+    is built. The demos rest on built pieces of sprint 2 (controls of protocol 3.1, caliper.serve, the
+    web viewer, the live_training notebook) and on main's Python API.
+  ids:
+  - STR-11
+- heading: The increment demo, a loss landscape
+  item: 'Demo 0, the loss landscape: the loss surface around the current weights over the plane of the
+    path''s two principal components, with the optimizer''s path, in a notebook and the browser viewer,
+    recomputed on the device every 2,000 steps by default.'
+  ids:
+  - STR-11
+- heading: The increment demo, a loss landscape
+  item: 'Demo 0''s numerical module: snapshots and the plane of the path, filter-normalised random directions
+    as a switch, the grid evaluated on the device with vmap, the projection.'
+  ids:
+  - STR-11
+- heading: The increment demo, a loss landscape
+  item: Demo 0's tutorial, headless test and cost row (python/bench/bench_landscape.py).
+  ids:
+  - STR-11
+- heading: The first demo, structure from motion
+  item: 'Demo 1, structure from motion: which frames of a moving shot does structure-from-motion place
+    least accurately; sparse cloud, a frustum per frame, camera path coloured by reprojection error, scrubbed
+    on a frame timeline; Tears of Steel footage under CC BY 3.0 and pycolmap.'
+  ids:
+  - REN-54
+- heading: The second demo, a robot arm
+  item: 'Demo 2, the robot arm: where along a straight reach a Franka Panda approaches a singularity;
+    entity transforms, meshes, a trail coloured by manipulability; Apache-2.0 MuJoCo Menagerie model.'
+  ids:
+  - REN-55
+- heading: The third demo, detection boxes
+  item: 'Demo 3, detection boxes: in which frames the detector loses a person who is still in view; a
+    2-D scene with encoded frames, boxes with labels and a text log of frames where the person count dips;
+    RT-DETR with Apache-2.0 weights.'
+  ids:
+  - REN-56
+- heading: The fourth demo, a training run
+  item: 'Demo 4, the training run: when during training the ten Fashion-MNIST classes separate in the
+    last hidden layer; 2,000 probe images as a 3-D cloud with the class table, GPU projection by warm-started
+    orthogonal iteration, live then scrubbed on step.'
+  ids:
+  - STR-30
+- heading: The order of building
+  item: 'Order: demo 0 first, then demo 4 (least of the scene model, newest and riskiest recordings and
+    scrubber), then 2, 3 and 1; each about 2 builder days once dependencies exist, demo 1 needs a third
+    day, demo 0 needs 3. The table maps each demo to the renderer core, scenes, web geometry, recordings
+    and protocol pieces it needs.'
+  ids:
+  - STR-11
+  - STR-30
+  - REN-55
+  - REN-56
+  - REN-54
+- heading: Limits
+  item: 'Limits: data still to verify (film URL and size, package licences, whether a shot reconstructs),
+    COCO-trained weights, large downloads that skip CI, zero-copy only for the app on the same machine,
+    no bitwise determinism on MPS, demo 0''s plane and omissions, a defect of the app''s run bar.'
+  ids:
+  - STR-11
+- heading: Limits
+  item: 'Demo 0''s omissions by the user''s decision: evaluation mode for the surface, keeping the path
+    inside the box at a small span, a test that the landscape leaves training unchanged, a finer grid,
+    a switch of the height, a projected path, a span tied to the recent path.'
+  ids:
+  - STR-11
+- heading: Decisions
+  item: 'Decisions: data and model choices for demos 1 to 4 (Tears of Steel, pycolmap, the Panda, manipulability,
+    RT-DETR, Fashion-MNIST perceptron), PCA by warm-started orthogonal iteration, encoded frames, references
+    made on the first verified run, demo 4''s test in every CI run.'
+  ids:
+  - STR-30
+  - REN-55
+  - REN-56
+  - REN-54
+- heading: Decisions
+  item: 'Demo 0 decisions: the loss landscape as the first visible increment, sprint 2''s notebook model,
+    the path''s principal-component plane by default, Gram-matrix snapshots refitted every N steps, first
+    plane at step 40, defaults and cost budget of 1.5 times, cost rows against the committed baseline,
+    fixed box and anchor, log loss range, vmap over rows of 41 grid points.'
+  ids:
+  - STR-11

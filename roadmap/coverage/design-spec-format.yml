@@ -1,0 +1,371 @@
+# yaml-language-server: $schema=schema.json
+title: Spec format plan page
+kind: page
+source: design/spec-format.md
+ref: main
+summary: The plan page design/spec-format.md on main, read heading by heading; each plan heading has an
+  entry or is listed as holding no feature.
+entries:
+- heading: What is built and what is planned
+  item: The library caliper_builder_spec parses a spec, validates it, writes canonical TOML and JSON and
+    applies a JSON merge patch to one panel or source.
+  ids:
+  - SPC-01
+  - SPC-02
+- heading: What is built and what is planned
+  item: The JSON Schema of the canonical JSON form and the tests of the library.
+  ids:
+  - SPC-01
+- heading: What is built and what is planned
+  item: The command handlers that edit a spec (spec.*, source.*, panel.*, layout.*) live in the builder
+    session.
+  ids:
+  - SPC-05
+  - SPC-06
+- heading: What is built and what is planned
+  item: The first slice of the spec runtime that draws a spec's panels natively, with the development
+    harness caliper-spec-shot and the renderer behind panel.render.
+  ids:
+  - SPC-08
+- heading: What is built and what is planned
+  item: 'The first slice of the browser viewer: a saved spec applet opens in a browser tab from the running
+    app.'
+  ids:
+  - EMB-06
+- heading: What is built and what is planned
+  item: The loader knows the spec applet's manifest, lists spec applets from the search folders and the
+    workspace, and validates their spec with the builder.
+  ids:
+  - SPC-08
+  - COR-06
+- heading: What is built and what is planned
+  item: 'Planned: the page of the app that shows a spec applet, which calls the runtime.'
+  ids:
+  - SPC-07
+  - SPC-08
+- heading: What is built and what is planned
+  item: 'Planned: the data of live:, feed: and metric: sources in the spec runtime.'
+  ids:
+  - SPC-04
+  - SPC-08
+- heading: What is built and what is planned
+  item: 'Planned: the rest of the browser viewer, with its data from a hub or a page that caliper.serve()
+    serves, live sources over the stream and the tensor transforms in the page.'
+  ids:
+  - EMB-27
+- heading: Two examples
+  item: Two test fixtures, the contracts' attention-entropy spec and a three-panel dashboard over a table
+    source and a tensor source, are embedded as examples.
+  ids:
+  - SPC-01
+- heading: The document
+  item: A spec is one strict TOML table with caliper_spec, applet, source, panel, layout and x; an unknown
+    key is spec.unknown_key and a spec with no panels is valid.
+  ids:
+  - SPC-01
+- heading: The applet
+  item: The applet table gives the spec's id, title, description and extensions, and the id grammar shared
+    by the applet, sources and panels.
+  ids:
+  - SPC-01
+- heading: Sources
+  item: 'A source has an id and exactly one of three forms: catalog, sql or from, with optional tensor
+    transforms; a source of none or several forms is spec.source_form.'
+  ids:
+  - SPC-01
+- heading: Tensor transforms
+  item: The three tensor transforms slice, reduce (mean, sum, min, max, std, var, norm, argmax, argmin,
+    entropy) and normalise (minmax, zscore, softmax, l2), with result shapes and dtypes and shape checks
+    when the source resolver knows the input.
+  ids:
+  - SPC-01
+- heading: Panels
+  item: A panel is one primitive with its slots bound to sources, a title, options and an extension table.
+  ids:
+  - SPC-01
+- heading: Bindings
+  item: A binding names a whole source or one column of a tabular source as source-id.column; series.y
+    takes one binding or a list of up to 16.
+  ids:
+  - SPC-01
+- heading: The primitives
+  item: The seven primitives are the live view types of Caliper LIB plus table and text, each with a wire
+    form and slot rules checked as spec.slot_mismatch.
+  ids:
+  - SPC-01
+- heading: series
+  item: The series primitive draws lines over an index or an x column, with up to 16 y bindings.
+  ids:
+  - SPC-01
+- heading: heatmap
+  item: The heatmap primitive draws a colour-mapped rank-2 tensor.
+  ids:
+  - SPC-01
+- heading: points
+  item: The points primitive draws a 2-D or 3-D point cloud from columns or one positions tensor, with
+    colour, size and a class-label rule that draws integer colours with the categorical palette.
+  ids:
+  - SPC-01
+- heading: histogram
+  item: The histogram primitive counts the values of a numeric column or of any tensor in bins.
+  ids:
+  - SPC-01
+- heading: table
+  item: The table primitive shows the rows of a whole tabular source, with an optional columns option.
+  ids:
+  - SPC-01
+- heading: image
+  item: The image primitive draws a [H, W], [H, W, 3] or [H, W, 4] tensor as an image.
+  ids:
+  - SPC-01
+- heading: text
+  item: The text primitive shows static text, a bound value or both.
+  ids:
+  - SPC-01
+- heading: Options
+  item: 'Each primitive takes a small set of options: axis labels, ranges, log scales, colormap (viridis,
+    magma, rdbu, greys), bins, columns and text.'
+  ids:
+  - SPC-01
+- heading: Layout
+  item: The layout is a tree of panel ids, splits (horizontal or vertical, with a ratio for two children)
+    and tabs, with depth and size limits and a default vertical stack.
+  ids:
+  - SPC-01
+- heading: Extensions
+  item: A table named x is allowed in the document, applet, sources, transforms, panels, options and layout
+    nodes for a tool's own data; validation ignores it and the writers keep it.
+  ids:
+  - SPC-01
+- heading: Reserved names
+  item: The primitive name scene is reserved for 3-D scenes and the catalog kind recording for recorded
+    sessions; version 0 refuses both.
+  ids:
+  - SPC-11
+  - STR-12
+- heading: Reserved names
+  item: The scene primitive, added with its slots by a later version of the format.
+  ids:
+  - SPC-11
+- heading: Reserved names
+  item: The recording catalog kind, added when the catalog lists recordings stored beside the loaders'
+    tables.
+  ids:
+  - STR-12
+  - SPC-11
+- heading: Values
+  item: 'A spec holds only values the canonical JSON form carries to a browser: no dates, no null, no
+    non-finite numbers, safe integers only and valid UTF-8.'
+  ids:
+  - SPC-01
+- heading: The canonical forms
+  item: A spec has one canonical TOML text and one canonical JSON form, both deterministic functions of
+    the parsed Spec.
+  ids:
+  - SPC-01
+- heading: Canonical TOML
+  item: The canonical TOML writer fixes table and key order, keeps no comments and writes floats so they
+    read back exactly.
+  ids:
+  - SPC-01
+- heading: Canonical JSON
+  item: The canonical JSON form has sorted keys and compact UTF-8, and the JSON Schema caliper-spec-v0.schema.json
+    (draft 2020-12) describes its structure.
+  ids:
+  - SPC-01
+- heading: Versioning
+  item: caliper_spec is the format version; a new key, primitive, option, colormap or transform makes
+    a new version, an unknown version is refused with spec.unsupported_version, and later readers migrate
+    older documents in their JSON form.
+  ids:
+  - SPC-01
+- heading: Validation
+  item: Checking a spec has two stages, parsing (with line and column for TOML) and validation, which
+    reports errors and warnings with stable codes and document paths.
+  ids:
+  - SPC-02
+- heading: Error codes
+  item: The table of more than thirty stable spec.* codes with severity and stage, including the warnings
+    spec.not_portable, spec.unresolved_source, spec.unused_source and spec.unplaced_panel.
+  ids:
+  - SPC-02
+- heading: The source resolver
+  item: Validation takes an optional SourceResolver that maps a catalog id to its kind, columns, dtype,
+    shape and wire flag, so columns, ranks and portability are checked without the spec module depending
+    on the catalog.
+  ids:
+  - SPC-02
+  - SPC-04
+- heading: The browser
+  item: 'The portability rule: a spec runs in the browser when every bound catalog source has a wire form,
+    otherwise validation warns spec.not_portable.'
+  ids:
+  - EMB-06
+  - SPC-02
+- heading: The browser
+  item: A sql source reaches the browser by running where the data lives (version 0 default) or later
+    in the page with DuckDB-WASM.
+  ids:
+  - EMB-29
+- heading: What is built of the browser viewer
+  item: 'The app resolves and the browser draws: the read-only panel.data command sends each panel''s
+    data compact and within the runtime''s bounds, as JSON with base64 arrays.'
+  ids:
+  - EMB-06
+  - SPC-05
+- heading: What is built of the browser viewer
+  item: Refresh by version hash and the known argument, with the page polling the spec and each panel
+    once a second.
+  ids:
+  - EMB-06
+- heading: What is built of the browser viewer
+  item: The page is the entry web/src/spec/ built into one spec.html embedded in the executable, with
+    a layout port to TypeScript and the native look drawn on a canvas.
+  ids:
+  - EMB-06
+  - EMB-03
+- heading: What is built of the browser viewer
+  item: 'Opening it: with --api the app prints the page link and writes spec_url to the API file; the
+    link carries a viewer token that opens only the page and read-only commands from the origin viewer.'
+  ids:
+  - EMB-06
+  - AGT-01
+- heading: What is built of the browser viewer
+  item: 'Tests of the browser viewer: session, commands, API and Playwright cases including an end-to-end
+    run against the hidden app.'
+  ids:
+  - EMB-06
+- heading: What is built of the browser viewer
+  item: 'Recorded limits of the slice: polling instead of following the stream, and no tooltips, selection
+    or zoom in the page.'
+  ids:
+  - EMB-28
+  - EMB-27
+- heading: What is built of the browser viewer
+  item: 'Recorded limits of the slice: edits of the open spec show in the browser only once saved, and
+    a 3-D cloud lacks wall grids and tick labels.'
+  ids:
+  - EMB-06
+- heading: The spec runtime
+  item: The spec runtime library caliper_spec_runtime lays out panels as whole-pixel rectangles, resolves
+    data only when it changes and prepares bounded arrays to draw.
+  ids:
+  - SPC-08
+- heading: The spec runtime
+  item: Drawing of each primitive in the app's look, with titles, one colour key across panels and named
+    states such as Source offline and No data.
+  ids:
+  - SPC-08
+- heading: The spec runtime
+  item: Seams for the pages (draw into any area, set_preview, set_overlay) that the builder pane and the
+    widget agent use.
+  ids:
+  - SPC-08
+  - AGT-05
+- heading: The spec runtime
+  item: SpecOffscreen and OffscreenPanelRenderer draw a panel off screen into a PNG, which is what panel.render
+    returns.
+  ids:
+  - SPC-08
+  - COR-08
+- heading: The spec runtime
+  item: The development tool caliper-spec-shot draws a saved spec applet or a spec file to a PNG; it is
+    not installed.
+  ids:
+  - SPC-08
+- heading: The spec runtime
+  item: Tests caliper_spec_runtime and caliper_spec_runtime_gpu.
+  ids:
+  - SPC-08
+- heading: The spec runtime
+  item: 'Recorded limits: resolving on the frame thread holds a frame for a slow query, a time-typed series
+    x column is not read, and only one offscreen canvas may exist without an ImGui context.'
+  ids:
+  - SPC-08
+- heading: The manifest of a spec applet
+  item: A saved spec applet is a folder with <id>.caliper.toml (kind = "spec", spec = file name) and <id>.spec.toml
+    and no library; library-only manifest keys are refused.
+  ids:
+  - SPC-08
+- heading: The manifest of a spec applet
+  item: applet.save maps the workspace id to a manifest id local.<id> with _ replaced by -, writes name
+    and summary from the spec and version 0.1.0.
+  ids:
+  - SPC-08
+  - SPC-05
+- heading: The spec applet in the loader
+  item: The manifest parser reads kind without the builder, and the loader lists spec applets in the search
+    folders, one folder down and in the workspace's applets/ folder.
+  ids:
+  - SPC-08
+  - COR-06
+- heading: The spec applet in the loader
+  item: check_spec parses and validates a spec when the applet is checked or launched; caliper list and
+    caliper check print the kind and the validator's diagnostics, caliper install refuses a spec applet
+    and GET /v0/applets has a kind field.
+  ids:
+  - SPC-08
+  - COR-07
+  - COR-12
+  - AGT-01
+- heading: Limits
+  item: 'Every size of a spec is bounded with its own error code: 512 KiB text, 64 sources, 64 panels,
+    16 transforms, 8 layout levels and so on.'
+  ids:
+  - SPC-01
+  - SPC-02
+- heading: Recorded limits of version 0
+  item: The canonical writer keeps no comments, so description carries prose.
+  ids:
+  - SPC-01
+- heading: Recorded limits of version 0
+  item: Validation cannot check bindings to the columns of a sql source's result; the command layer may
+    later describe a query with DuckDB and check them.
+  ids:
+  - SPC-37
+- heading: Recorded limits of version 0
+  item: 'A spec draws data and does not edit it: no controls, no linked selection between panels and no
+    time windows over live sources.'
+  ids:
+  - SPC-12
+  - SPC-38
+- heading: Recorded limits of version 0
+  item: A series has no per-line labels or colours.
+  ids:
+  - SPC-39
+- heading: Recorded limits of version 0
+  item: A split of more than two children shares its space equally, with no uneven ratios.
+  ids:
+  - SPC-01
+- heading: Recorded limits of version 0
+  item: A sql source cannot run in a page that caliper.serve() serves.
+  ids:
+  - EMB-29
+  - EMB-27
+- heading: The library
+  item: 'The library''s four headers: spec.h value types, format.h parse and write, validate.h with SourceResolver
+    and check_toml, and patch.h with RFC 7386 merge patches.'
+  ids:
+  - SPC-01
+  - SPC-02
+- heading: Tests
+  item: 'The builder_spec tests: fixtures, round trips, every error code, hostile input, merge patches
+    and the JSON Schema checked with a test-only checker.'
+  ids:
+  - SPC-01
+  - SPC-02
+- heading: Decisions
+  item: 'Recorded design decisions of the spec format: separate id sets, no x in bind, strict parsing,
+    safe integers, 512 KiB limit, no id change by a patch and others.'
+  ids:
+  - SPC-01
+- heading: Decisions
+  item: A patch cannot change an id; a rename is a separate command, not in v0.
+  ids:
+  - SPC-40
+- heading: Defects in the contracts
+  item: 'Four fixes to the sprint 3 contracts: no x table in bind, ratio only with two children, applet.save
+    maps _ to -, and abi_epoch not required for a spec applet.'
+  ids:
+  - SPC-01
+  - SPC-08

@@ -1,0 +1,65 @@
+# yaml-language-server: $schema=schema.json
+pillar: EMB
+title: Web and Embedding
+proposed: false
+candidates:
+  - key: webgl-scene-path
+    title: "WebGL Scene Path"
+    summary: "Scenes draw fully through WebGL 2 in browsers that lack WebGPU."
+    serves: "A shared scene opens on older browsers and devices with every primitive."
+    origin: cut
+    depends_on: [EMB-17]
+  - key: editor-side-panel-extension
+    title: "Editor Extension"
+    summary: "An extension for code editors that shows live views next to the script and follows its run."
+    serves: "Keeps code and its visual output in one window."
+    origin: field
+    depends_on: [STR-01, STR-05]
+  - key: jump-to-logging-line
+    title: "Logging Line Navigation"
+    summary: "A click on any value in a view that opens the source line that logged it."
+    serves: "Links a surprising plot point back to the code that made it."
+    origin: field
+    depends_on: [STR-01, STR-12]
+  - key: debugger-tensor-hand-off
+    title: "Debugger Integration for Tensors"
+    summary: "A debug adapter action that sends a paused session's tensors and variables to views."
+    serves: "Lets a bug in tensor code be inspected visually at the breakpoint."
+    origin: field
+    depends_on: [STR-01, STR-05]
+  - key: notebook-magics
+    title: "Notebook Magics"
+    summary: "Short cell commands that open a view, attach to a stream or save a recording."
+    serves: "Makes notebook use quick and readable."
+    origin: field
+    depends_on: [STR-07]
+  - key: other-notebook-front-ends
+    title: "Additional Notebook Front Ends"
+    summary: "Widgets that work in more notebook environments, including those that run in a browser tab."
+    serves: "Lets people use their usual notebook tool with live views."
+    origin: field
+    depends_on: [STR-07, EMB-07]
+  - key: widget-toolkit-adapters
+    title: "Adapters for Other Widget Toolkits"
+    summary: "Embeddable view widgets for more desktop and web interface toolkits."
+    serves: "Lets existing research tools show live views without a rewrite."
+    origin: field
+    depends_on: [EMB-24, EMB-07]
+  - key: embed-in-docs-sites
+    title: "Embedding in Static Documentation Sites"
+    summary: "A plugin for documentation generators that places live views and recordings in pages."
+    serves: "Lets project docs carry interactive examples."
+    origin: field
+    depends_on: [EMB-13, EMB-07]
+  - key: editor-inline-previews
+    title: "Inline Previews in the Editor"
+    summary: "Small thumbnails of the latest value of a logged tensor beside its source line."
+    serves: "Gives instant feedback while writing numerical code."
+    origin: field
+    depends_on: [STR-01]
+  - key: language-server-hints
+    title: "Language Server Hints for the Library"
+    summary: "Completion and hover help for logging calls, names and view types."
+    serves: "Lowers the cost of learning the library."
+    origin: field
+    depends_on: [STR-01]

@@ -1,4 +1,4 @@
-// Epoch-2 fixture applet (docs/references/applets.md): loader-test substrate and the
+// Epoch-2 fixture applet (docs/applets/in-tree-applets.md): loader-test substrate and the
 // "hello world" of the sugar layer. Kept deliberately tiny.
 #include <caliper/caliper.hpp>
 #include <cmath>

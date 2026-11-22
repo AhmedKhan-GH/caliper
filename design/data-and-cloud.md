@@ -15,7 +15,7 @@ Caliper Platform, the registry and exchange of applets and widgets, is a third p
 
 ## Local history and recording
 
-These are planned for the desktop app, after Phase 1 and after the streaming work. They build on what the desktop app already keeps on the machine, under its app-data folder (see `docs/references/environment.md`): the DuckDB-backed data service and the metrics and artifacts stores.
+These are planned for the desktop app, after Phase 1 and after the streaming work. They build on what the desktop app already keeps on the machine, under its app-data folder (see `docs/reference/folders-and-environment.md`): the DuckDB-backed data service and the metrics and artifacts stores.
 
 - **Run history.** The desktop app keeps the runs that the metrics and artifacts stores already record, and shows them as a history that outlives each session.
 - **Comparing runs.** The desktop app shows two or more runs from that history side by side.

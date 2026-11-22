@@ -1,5 +1,5 @@
 // net_source.h: the browser's caliper_live::Source over wire protocol v3
-// (caliper/live_net.h, docs/references/wire-protocol.md).
+// (caliper/live_net.h, docs/reference/wire-protocol.md).
 //
 // A viewer connection on the browser's own WebSocket (Emscripten's websocket
 // API): HELLO (with the capability scenes of the protocol 3.2 draft), WELCOME,

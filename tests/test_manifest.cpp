@@ -107,7 +107,7 @@ TEST_CASE("applet id validation") {
     CHECK(is_valid_applet_id(std::string(128, 'a')));
 }
 
-// The versioning keys (docs/explanations/compatibility.md): [compat].torch,
+// The versioning keys (docs/development/compatibility-and-epochs.md): [compat].torch,
 // [build].sdk, [build].ui_stack and [data].schema, all optional.
 static const char* kMinimal =
     "[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=2\n";
@@ -164,4 +164,124 @@ TEST_CASE("manifest: [build].sdk is a record, never an error") {
     auto r = parse_manifest_text(std::string(kMinimal) + "[build]\nsdk=7\n");
     REQUIRE(r.ok);
     CHECK(r.manifest.sdk.empty());
+}
+
+// ---- spec applets (kind = "spec") --------------------------------------------
+// docs/applets/manifest.md, "Spec applets": a manifest and a spec, no
+// library; the manifest needs no [compat] and refuses what only a library can
+// honour.
+static const char* kSpecManifest =
+    "[applet]\nid=\"local.demo\"\nname=\"Demo\"\nversion=\"0.1.0\"\n"
+    "kind=\"spec\"\nspec=\"demo.spec.toml\"\n";
+
+TEST_CASE("manifest: a spec applet needs no [compat] and names its spec") {
+    auto r = parse_manifest_text(kSpecManifest);
+    REQUIRE(r.ok);
+    CHECK(r.manifest.kind == AppletKind::Spec);
+    CHECK(r.manifest.spec == "demo.spec.toml");
+    CHECK(r.manifest.abi_epoch == 0);
+    CHECK(r.manifest.min_host.empty());
+
+    // summary, tag and [compat].min_host keep their meaning.
+    auto full = parse_manifest_text(std::string(kSpecManifest) +
+                                    "summary=\"One line.\"\ntag=\"Run\"\n"
+                                    "[compat]\nmin_host=\"0.6.0\"\n[future]\nx=1\n");
+    REQUIRE(full.ok);
+    CHECK(full.manifest.summary == "One line.");
+    CHECK(full.manifest.tag == "Run");
+    CHECK(full.manifest.min_host == "0.6.0");
+
+    // What applet.save writes (design/builder-session.md) parses as it is.
+    auto saved = parse_manifest_text(
+        "[applet]\nid = \"local.my-view\"\nname = \"My view\"\nversion = \"0.1.0\"\n"
+        "summary = \"Loss over steps.\"\nkind = \"spec\"\nspec = \"my_view.spec.toml\"\n");
+    REQUIRE(saved.ok);
+    CHECK(saved.manifest.spec == "my_view.spec.toml");
+}
+
+TEST_CASE("manifest: an absent or library kind is a compiled applet as before") {
+    auto absent = parse_manifest_text(kMinimal);
+    REQUIRE(absent.ok);
+    CHECK(absent.manifest.kind == AppletKind::Library);
+    auto library = parse_manifest_text(
+        "[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\nkind=\"library\"\n"
+        "[compat]\nabi_epoch=2\n");
+    REQUIRE(library.ok);
+    CHECK(library.manifest.kind == AppletKind::Library);
+    // A library still needs its epoch; spec is an unknown key to it, ignored.
+    auto no_epoch = parse_manifest_text(
+        "[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\nkind=\"library\"\n");
+    CHECK_FALSE(no_epoch.ok);
+    CHECK(no_epoch.error.find("abi_epoch") != std::string::npos);
+    auto stray = parse_manifest_text(
+        "[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\nspec=\"x.spec.toml\"\n"
+        "[compat]\nabi_epoch=2\n");
+    REQUIRE(stray.ok);
+    CHECK(stray.manifest.kind == AppletKind::Library);
+    CHECK(stray.manifest.spec.empty());
+}
+
+TEST_CASE("manifest: each refusal of a spec applet's manifest, keeping its kind") {
+    const std::string head =
+        "[applet]\nid=\"local.demo\"\nname=\"Demo\"\nversion=\"0.1.0\"\nkind=\"spec\"\n";
+    const std::string with_spec = head + "spec=\"demo.spec.toml\"\n";
+    struct Case { std::string toml; const char* needle; };
+    const Case cases[] = {
+        {head, "manifest missing applet.spec"},
+        {head + "spec=\"\"\n", "applet.spec is not a plain file name"},
+        {head + "spec=\"../demo.spec.toml\"\n", "applet.spec is not a plain file name"},
+        {head + "spec=\"sub/demo.spec.toml\"\n", "applet.spec is not a plain file name"},
+        {head + "spec=\"sub\\\\demo.spec.toml\"\n", "applet.spec is not a plain file name"},
+        {head + "spec=\"/etc/demo.spec.toml\"\n", "applet.spec is not a plain file name"},
+        {head + "spec=\"C:demo.spec.toml\"\n", "applet.spec is not a plain file name"},
+        {head + "spec=\"..\"\n", "applet.spec is not a plain file name"},
+        {head + "spec=\"a\\u0001b\"\n", "applet.spec is not a plain file name"},
+        {head + "spec=7\n", "applet.spec is not a plain file name"},
+        {with_spec + "[compat]\nabi_epoch=2\n", "compat.abi_epoch does not apply to a spec applet"},
+        {with_spec + "[compat]\ntorch=\"2.5.1\"\n", "compat.torch does not apply to a spec applet"},
+        {with_spec + "[compat]\nmin_host=\"soon\"\n", "compat.min_host is not strict semver"},
+        {"compat=3\n" + with_spec, "[compat] is not a table"},
+        {with_spec + "[build]\nsdk=\"0.7.0\"\n", "[build] does not apply to a spec applet"},
+        {with_spec + "[services]\nrequired=[\"caliper.ui.v1\"]\n", "[services] does not apply"},
+        {with_spec + "[data]\nschema=1\n", "[data] does not apply to a spec applet"},
+        // The identity is checked as for any applet, before the kind's keys.
+        {"[applet]\nid=\"local.my_view\"\nname=\"A\"\nversion=\"0.1.0\"\nkind=\"spec\"\n"
+         "spec=\"a.spec.toml\"\n", "applet id"},
+        {"[applet]\nid=\"local.a\"\nversion=\"0.1.0\"\nkind=\"spec\"\nspec=\"a.spec.toml\"\n",
+         "applet.name"},
+    };
+    for (const auto& c : cases) {
+        CAPTURE(c.toml);
+        auto r = parse_manifest_text(c.toml);
+        CHECK_FALSE(r.ok);
+        CHECK(r.error.find(c.needle) != std::string::npos);
+        CHECK(r.manifest.kind == AppletKind::Spec);
+    }
+}
+
+TEST_CASE("manifest: an unknown kind is a manifest error") {
+    for (const char* kind : {"kind=\"wasm\"\n", "kind=\"Spec\"\n", "kind=1\n"}) {
+        CAPTURE(kind);
+        auto r = parse_manifest_text(
+            std::string("[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\n") + kind +
+            "[compat]\nabi_epoch=2\n");
+        CHECK_FALSE(r.ok);
+        CHECK(r.error.find("applet.kind") != std::string::npos);
+        CHECK(r.manifest.kind == AppletKind::Library);
+    }
+}
+
+TEST_CASE("plain file names") {
+    CHECK(is_plain_file_name("demo.spec.toml"));
+    CHECK(is_plain_file_name("my_view.spec.toml"));
+    CHECK(is_plain_file_name(".hidden"));
+    CHECK(is_plain_file_name("..x"));
+    CHECK(is_plain_file_name(std::string(255, 'a')));
+    CHECK_FALSE(is_plain_file_name(std::string(256, 'a')));
+    for (const char* bad : {"", ".", "..", "a/b", "a\\b", "/abs", "c:x", "a\nb", "a\x7f"}) {
+        CAPTURE(bad);
+        CHECK_FALSE(is_plain_file_name(bad));
+    }
+    CHECK(std::string(applet_kind_word(AppletKind::Spec)) == "spec");
+    CHECK(std::string(applet_kind_word(AppletKind::Library)) == "library");
 }

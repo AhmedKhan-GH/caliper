@@ -3,7 +3,7 @@
 A viewer can pause, resume and single-step the training loop, change the
 parameters the script registered, run the actions it registered, and select
 items that every view of the session then highlights
-(docs/references/wire-protocol.md, "Controls" and "Linked selection"). This
+(docs/reference/wire-protocol.md, "Controls" and "Linked selection"). This
 module holds all of that state for the process, one :class:`Controls` object,
 ``CONTROLS``, behind the public calls of caliper/__init__.py:
 
@@ -203,12 +203,19 @@ def _scalar(v):
 # parameters
 # ===========================================================================
 class Param:
-    """A parameter of the running script, made by :func:`caliper.param`.
+    """A parameter that viewers can change while the script runs, made by [`param`][caliper.param].
 
-    ``value`` is what the script reads now (any thread). A viewer's change
-    reaches it at the next ``caliper.step()``, or at once while the script
-    has called no checkpoint yet. ``set(v)`` changes it from the script, at
-    once; ``remove()`` takes it away from the viewers."""
+    The script reads `value` in its loop. A viewer changes it through the stream.
+
+    Attributes:
+        name (str): The name of the parameter.
+        type (str): `"boolean"`, `"integer"`, `"number"` or `"choice"`.
+        min (int | float | None): The lower end of the range, or `None`.
+        max (int | float | None): The upper end of the range, or `None`.
+        log (bool): Whether a viewer draws the slider on a log scale.
+        choices (tuple[str, ...] | None): The choices of a `"choice"` parameter, or `None`.
+        help (str | None): The tooltip, or `None`.
+    """
     __slots__ = ("name", "type", "min", "max", "log", "choices", "help", "_value", "_pending",
                  "_ctl", "removed")
 
@@ -222,24 +229,43 @@ class Param:
 
     @property
     def value(self):
+        """The current value, to read in the loop, from any thread.
+
+        It changes only in [`step`][caliper.step], or at once before the first `step()` of the
+        script.
+        """
         return self._value
 
     @property
     def pending(self):
-        """The value a viewer set that the script reads from the next
-        checkpoint on, or None."""
+        """A value from a viewer that `value` takes at the next `step()`, or `None`."""
         p = self._pending
         return None if p is _NO else p
 
     def set(self, value):
-        """Set the value from the script, at once and for every viewer:
-        checked and clamped as a viewer's value is. Returns the value set.
-        Raises ValueError for a value of another type or an unknown choice."""
+        """Set the value from the script, at once and for every viewer.
+
+        The value is checked and clamped like a value from a viewer.
+
+        Args:
+            value (bool | int | float | str): The new value, of the type of the parameter.
+
+        Returns:
+            bool | int | float | str: The value set.
+
+        Raises:
+            ValueError: When the value has another type or is not one of the choices.
+        """
         return self._ctl._script_set(self, value)
 
     def remove(self) -> bool:
-        """Take the parameter away; ``value`` keeps its last value. True if it
-        was registered."""
+        """Take the parameter away from the viewers.
+
+        `value` keeps its last value.
+
+        Returns:
+            bool: `True` if the parameter was registered.
+        """
         return self._ctl._remove_param(self)
 
     def entry(self) -> dict:
@@ -319,11 +345,15 @@ def _param_spec(name, value, lo, hi, log, choices, help):
 # actions
 # ===========================================================================
 class Action:
-    """An action of the running script, made by :func:`caliper.action`.
+    """A function that viewers can run, made by [`action`][caliper.action].
 
-    A viewer's request runs ``fn()`` at the next ``caliper.step()``, on the
-    thread that calls it. Calling the Action from Python runs ``fn`` now, on
-    the caller's thread. ``remove()`` takes it away from the viewers."""
+    A request of a viewer runs `fn()` at the next `caliper.step()`, on the thread that calls it.
+
+    Attributes:
+        name (str): The name of the action.
+        fn (Callable[[], object]): The registered function.
+        help (str | None): The tooltip, or `None`.
+    """
     __slots__ = ("name", "fn", "help", "queued", "running", "waiters", "run_id", "_ctl",
                  "removed", "__wrapped__")
 
@@ -337,11 +367,17 @@ class Action:
         self.__wrapped__ = fn
 
     def __call__(self, *args, **kwargs):
+        """Run `fn` at once, on the thread of the caller, and return what it returns."""
         return self.fn(*args, **kwargs)
 
     def remove(self) -> bool:
-        """Take the action away; a run that waits is answered unknown_control.
-        True if it was registered."""
+        """Take the action away from the viewers.
+
+        A run that waits is answered `unknown_control`.
+
+        Returns:
+            bool: `True` if the action was registered.
+        """
         return self._ctl._remove_action(self)
 
     def entry(self) -> dict:
@@ -396,14 +432,14 @@ def _fields(names) -> list:
 
 
 class ItemSpace:
-    """A set of items numbered from 0 that several views index, such as the
-    samples of a test set, made by :func:`caliper.items`.
+    """A set of items numbered from 0 that several views index, made by [`items`][caliper.items].
 
-    ``selection`` is the current selection (item ids, ascending), which a
-    viewer or :meth:`select` set; it changes while a cell runs. ``details``
-    gives a viewer a few fields of the selected items: a table, a mapping
-    from field names to sequences indexed by item id, or a function
-    ``fn(ids) -> {field: values}`` (or a list of one dict per item)."""
+    An example is the samples of an evaluation set. A selection in one view highlights the same
+    items in every view that names the space.
+
+    Attributes:
+        name (str): The name of the item space.
+    """
     __slots__ = ("name", "_ctl", "_table", "_fields", "_fn", "_selection", "_truncated",
                  "_view", "_version", "_details", "_details_error", "_settled")
 
@@ -423,6 +459,10 @@ class ItemSpace:
 
     @property
     def selection(self) -> list:
+        """The list of selected item ids, ascending.
+
+        A viewer or `select` set it. It is current even while a notebook cell runs.
+        """
         return list(self._selection)
 
     @property
@@ -430,9 +470,19 @@ class ItemSpace:
         return self._truncated
 
     def select(self, items) -> list:
-        """Set the selection from the script, for every viewer (an empty
-        sequence clears it). Returns the item ids as viewers get them:
-        ascending, without repeats, at most 32,768."""
+        """Set the selection from the script, for every viewer.
+
+        An empty sequence clears it.
+
+        Args:
+            items (Iterable[int]): The item ids to select.
+
+        Returns:
+            list[int]: The item ids as viewers get them: ascending, without repeats, at most 32,768.
+
+        Raises:
+            ValueError: When an id is negative.
+        """
         ids = [int(i) for i in items]
         if any(i < 0 for i in ids):
             raise ValueError("item ids are non-negative integers")
@@ -440,6 +490,7 @@ class ItemSpace:
         return self.selection
 
     def clear(self) -> None:
+        """Clear the selection for every viewer."""
         self.select(())
 
     @staticmethod

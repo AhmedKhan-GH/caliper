@@ -1,0 +1,959 @@
+# yaml-language-server: $schema=schema.json
+pillar: INT
+title: Interpretability and Interventions
+proposed: false
+candidates:
+  - key: weight-diff-discovery
+    title: "Weight Diff Discovery"
+    summary: "A tool compares a base and an edited model of one architecture and lists every changed tensor with its rank and factors."
+    serves: "A person learns where a fine-tune, an edit or a merge actually changed a model."
+    origin: adjacent-work
+    depends_on: [INT-06]
+  - key: layer-stack-view
+    title: "Layer Stack View"
+    summary: "A 3-D view draws a model as a stack of layers divided into its weight tensors, each raised and lit by a chosen measure."
+    serves: "A person sees at once which layers and tensors a change or a statistic concentrates in."
+    origin: adjacent-work
+    depends_on: [INT-07]
+  - key: edit-anatomy-view
+    title: "Edit Anatomy View"
+    summary: "A view draws a weight change as a surface with its singular spectrum and its leading factors as ribbons."
+    serves: "A person reads the rank and the read and write directions of an edit."
+    origin: adjacent-work
+    depends_on: [INT-06]
+  - key: continuous-edit-dose
+    title: "Continuous Edit Dose"
+    summary: "One control scales a low-rank weight edit continuously, and every view follows it."
+    serves: "A person finds the strength at which an edit starts to help and to harm."
+    origin: adjacent-work
+    depends_on: [INT-10]
+  - key: live-edit-probe
+    title: "Live Probe of an Edited Model"
+    summary: "A selected prompt is generated with the model at a chosen edit strength, streaming its tokens and the edited neurons' activations beside the base model."
+    serves: "A person watches an edit act token by token on one example."
+    origin: adjacent-work
+    depends_on: [INT-08, INT-09]
+  - key: vocabulary-direction-view
+    title: "Vocabulary Direction View"
+    summary: "The tokens that a residual direction raises and lowers through the unembedding are laid out by their logit change."
+    serves: "A person reads what a direction, an edit or a feature means in words."
+    origin: adjacent-work
+    depends_on: [INT-28]
+  - key: qkv-space-view
+    title: "Query, Key and Value Space View"
+    summary: "A 3-D view shows the same tokens mapped into a head's query, key and value spaces."
+    serves: "A person sees how one head separates what a token asks for from what it offers."
+    origin: adjacent-work
+    depends_on: [INT-03]
+  - key: score-projection-view
+    title: "Score as Projection View"
+    summary: "A query and every key are drawn as arrows from one origin, with each score as the key's projection onto the query."
+    serves: "A person sees why one token attends to another."
+    origin: adjacent-work
+    depends_on: [INT-03]
+  - key: attention-arc-view
+    title: "Attention Arc View"
+    summary: "Attention from one token is drawn as arcs over the text, with weight as thickness and a number on each arc."
+    serves: "A person reads one head's pattern on a sentence without a matrix."
+    origin: adjacent-work
+    depends_on: [INT-03]
+  - key: softmax-temperature-view
+    title: "Softmax Temperature View"
+    summary: "A control changes the temperature of a softmax, and the weights and arcs change with it."
+    serves: "A person sees how scaling and temperature sharpen attention or sampling."
+    origin: adjacent-work
+    depends_on: [INT-03]
+  - key: causal-mask-view
+    title: "Causal Mask View"
+    summary: "A view shows the mask of an attention layer and the growing triangle of attention as tokens are generated."
+    serves: "A person sees what each position may read."
+    origin: adjacent-work
+    depends_on: [INT-03]
+  - key: head-subspace-view
+    title: "Head Subspace View"
+    summary: "Each head of a layer is drawn in its own low-dimensional subspace, with the output mix that joins them."
+    serves: "A person sees what each head contributes to the layer's output."
+    origin: adjacent-work
+    depends_on: [INT-03]
+  - key: position-encoding-view
+    title: "Position Encoding View"
+    summary: "A view shows sinusoidal and rotary position encodings, the rotary one as rotations of query and key pairs."
+    serves: "A person sees how a model knows order and relative distance."
+    origin: adjacent-work
+    depends_on: [INT-03]
+  - key: head-type-catalogue
+    title: "Head Type Catalogue"
+    summary: "Every head of a model is scored against known kinds, such as previous-token, positional and induction heads."
+    serves: "A person finds the heads worth studying in a new model."
+    origin: adjacent-work
+    depends_on: [INT-16]
+  - key: linear-attention-comparison
+    title: "Linear Attention Comparison"
+    summary: "Softmax attention and linear attention are shown on the same input in the same views."
+    serves: "A person sees what an efficient attention variant keeps and loses."
+    origin: adjacent-work
+    depends_on: [INT-03]
+  - key: live-probe-any-architecture
+    title: "Live Probe for Any Architecture"
+    summary: "The live probe generates with any base and edited model pair, not only the one supplied architecture."
+    serves: "A person watches the effect of any weight edit on a generation."
+    origin: adjacent-work
+    depends_on: [INT-09, INT-08]
+  - key: draggable-token-vectors
+    title: "Draggable Token Vectors"
+    summary: "A person drags a token or a key in a 3-D scene and sees its query and score change as it moves."
+    serves: "A learner or researcher tests how a position in the space changes what a head attends to."
+    origin: adjacent-work
+    depends_on: [INT-03]
+  - key: weighted-sum-hull-view
+    title: "Weighted-Sum View"
+    summary: "A 3-D view shows each attention output as a point inside the hull of the value vectors, pulled towards the values it attends to."
+    serves: "A person sees an attention output as a convex combination of values."
+    origin: adjacent-work
+    depends_on: [INT-03]
+  - key: scaling-variance-histograms
+    title: "Scaling Variance Histograms"
+    summary: "Two histograms of dot products at small and large dimension are shown before and after division by the square root of the key size."
+    serves: "A person sees why attention scores are scaled before the softmax."
+    origin: adjacent-work
+    depends_on: [INT-03]
+  - key: sae-loader
+    title: "Sparse Autoencoder Loader"
+    summary: "A trained dictionary of features for a layer is loaded and applied to live activations as a new source."
+    serves: "A person reads a running model in features, not neurons."
+    origin: field
+    depends_on: [INT-05]
+  - key: feature-dashboard
+    title: "Feature Dashboard"
+    summary: "One page per dictionary feature shows its top examples, activation histogram, logit effects and firing density."
+    serves: "A person learns what one feature means."
+    origin: field
+    depends_on: [INT-05]
+  - key: top-activating-examples
+    title: "Top-Activating Example Browser"
+    summary: "Dataset examples that most activate a chosen feature, neuron or direction are ranked with their tokens highlighted."
+    serves: "A person forms a hypothesis about a unit's role."
+    origin: field
+    depends_on: [INT-05]
+  - key: feature-density-histogram
+    title: "Feature Density Histogram"
+    summary: "The log firing frequency of every feature is drawn as a histogram, with dead and dense features flagged."
+    serves: "A person judges a dictionary's health during and after its training."
+    origin: field
+    depends_on: [STR-45]
+  - key: dictionary-training-monitor
+    title: "Dictionary Training Monitor"
+    summary: "A dictionary's reconstruction loss, sparsity, dead features and recovered loss are tracked live as it trains."
+    serves: "A person tunes sparsity and resampling while the dictionary trains."
+    origin: field
+    depends_on: [STR-45]
+  - key: feature-splitting-tree
+    title: "Feature Splitting Tree"
+    summary: "A tree shows how one feature in a small dictionary splits into several in larger dictionaries."
+    serves: "A person studies how fine a concept a dictionary resolves."
+    origin: field
+    depends_on: [INT-05]
+  - key: feature-similarity-map
+    title: "Feature Similarity Map"
+    summary: "Features are mapped by the similarity of their decoder directions, with nearest features listed."
+    serves: "A person finds related, duplicate and absorbed features."
+    origin: field
+    depends_on: [INT-27]
+  - key: feature-absorption-check
+    title: "Feature Absorption Check"
+    summary: "A check finds features that stop firing where a more specific feature has taken over."
+    serves: "A person audits a dictionary before trusting it."
+    origin: field
+    depends_on: [INT-05]
+  - key: feature-search
+    title: "Feature Search"
+    summary: "Features are found by an example text, by the tokens they promote or by their label."
+    serves: "A person locates a concept in a dictionary."
+    origin: field
+    depends_on: [INT-05]
+  - key: automated-feature-labels
+    title: "Automated Feature Labels"
+    summary: "A model writes an explanation for each feature and scores it by predicting the feature's activations."
+    serves: "Feature reading scales beyond what a person can review."
+    origin: field
+    depends_on: [INT-05, AGT-01]
+  - key: feature-steering
+    title: "Feature Steering"
+    summary: "A control clamps or scales one dictionary feature during generation and compares the outputs."
+    serves: "A person tests a feature's causal role."
+    origin: field
+    depends_on: [INT-13]
+  - key: feature-raster
+    title: "Feature Activations Along a Prompt"
+    summary: "Chosen features are drawn token by token along a prompt as a raster."
+    serves: "A person sees where a concept is active in context."
+    origin: field
+    depends_on: [INT-05]
+  - key: dictionary-quality-metrics
+    title: "Dictionary Quality Metrics"
+    summary: "Reconstruction error, sparsity, explained variance and recovered loss are compared across dictionaries and layers."
+    serves: "A person chooses between dictionary variants."
+    origin: field
+    depends_on: [RUN-05]
+  - key: transcoders-and-crosscoders
+    title: "Transcoders and Crosscoders"
+    summary: "Layer-to-layer and cross-layer replacement dictionaries are loaded as sources, with each feature's read and write maps."
+    serves: "A person traces computation through MLP layers."
+    origin: field
+    depends_on: [INT-05]
+  - key: crosscoder-model-diff
+    title: "Crosscoder Model Diff"
+    summary: "Each shared feature's relative strength in two models or checkpoints is plotted to find features only one has."
+    serves: "A person learns what a fine-tune added or removed."
+    origin: field
+    depends_on: [RUN-05]
+  - key: attribution-graph-view
+    title: "Attribution Graph View"
+    summary: "An interactive graph of features and tokens with weighted edges explains one output of one prompt."
+    serves: "A person traces the computation behind an answer."
+    origin: field
+    depends_on: [INT-15]
+  - key: attribution-graph-pruning
+    title: "Attribution Graph Pruning"
+    summary: "Thresholds on node and edge influence prune a graph, which lays out again as they move."
+    serves: "A large graph becomes legible."
+    origin: field
+    depends_on: [INT-15]
+  - key: supernodes
+    title: "Supernodes"
+    summary: "Graph nodes are grouped under names, and the grouping is saved."
+    serves: "A person turns a graph into a readable account."
+    origin: field
+    depends_on: [INT-15]
+  - key: graph-node-interventions
+    title: "Interventions from Graph Nodes"
+    summary: "Selected graph nodes are zeroed or set, and the model is run again to show the change."
+    serves: "A person validates a traced circuit causally."
+    origin: field
+    depends_on: [INT-10]
+  - key: error-nodes
+    title: "Error Nodes"
+    summary: "The part of a computation that a replacement model does not explain appears as nodes with their share of influence."
+    serves: "A person knows how far a trace can be trusted."
+    origin: field
+    depends_on: [INT-15]
+  - key: attribution-graph-library
+    title: "Attribution Graph Library"
+    summary: "Graphs are saved by prompt with tags and notes, and two graphs can be compared."
+    serves: "Circuit findings stay reproducible."
+    origin: field
+    depends_on: [RUN-03]
+  - key: logit-lens
+    title: "Logit Lens View"
+    summary: "A grid shows, for every layer and position, the top token decoded from the residual stream."
+    serves: "A person sees at which depth a prediction forms."
+    origin: field
+    depends_on: [INT-05]
+  - key: tuned-lens
+    title: "Tuned Lens View"
+    summary: "The lens grid uses a trained translator per layer, with the translators' training shown."
+    serves: "Early layers are read more faithfully."
+    origin: field
+    depends_on: [INT-05]
+  - key: lens-rank-and-entropy
+    title: "Lens Rank and Entropy Tracks"
+    summary: "The rank of the final answer and the entropy of the lens distribution are plotted through depth."
+    serves: "A person measures how a prediction converges."
+    origin: field
+    depends_on: [INT-29]
+  - key: direct-logit-attribution
+    title: "Direct Logit Attribution"
+    summary: "Each head, MLP and neuron's direct contribution to a chosen logit difference is drawn as bars and a heatmap."
+    serves: "A person finds which components write an answer."
+    origin: field
+    depends_on: [INT-05]
+  - key: logit-difference-metric
+    title: "Logit Difference Metrics"
+    summary: "A metric is defined from token pairs once and reused by every patching and attribution tool."
+    serves: "Measurements stay consistent across experiments."
+    origin: field
+    depends_on: [INT-10]
+  - key: patching-sweep
+    title: "Patching Sweep"
+    summary: "A grid shows the effect of patching by layer, position and component, computed over a batch of runs."
+    serves: "A person locates where information flows."
+    origin: field
+    depends_on: [INT-14, INT-17]
+  - key: path-patching
+    title: "Path Patching"
+    summary: "Activations are patched along a chosen sender-to-receiver path, with the effect plotted per head pair."
+    serves: "A person separates direct from indirect effects."
+    origin: field
+    depends_on: [INT-14]
+  - key: causal-tracing-map
+    title: "Causal Tracing Map"
+    summary: "A layer-by-token map shows how much restoring each state of a corrupted run recovers the answer."
+    serves: "A person finds where a fact is recalled."
+    origin: field
+    depends_on: [INT-14]
+  - key: attribution-patching
+    title: "Attribution Patching"
+    summary: "A gradient approximation of a patching sweep is computed from one forward and one backward pass."
+    serves: "Components are screened cheaply before exact patching."
+    origin: field
+    depends_on: [INT-14]
+  - key: edge-attribution
+    title: "Edge Attribution"
+    summary: "Every edge of the model's computation graph is scored, and the strongest form a circuit."
+    serves: "Circuits are found in models too large to search by hand."
+    origin: field
+    depends_on: [INT-14]
+  - key: automated-circuit-discovery
+    title: "Automated Circuit Discovery"
+    summary: "A search finds a small subgraph that keeps a behaviour, with faithfulness and completeness reported."
+    serves: "A person gets a candidate circuit to verify."
+    origin: field
+    depends_on: [INT-14]
+  - key: circuit-faithfulness-curve
+    title: "Circuit Faithfulness Curve"
+    summary: "The behaviour a circuit recovers is plotted against its size."
+    serves: "Circuit candidates are compared fairly."
+    origin: field
+    depends_on: [INT-14]
+  - key: causal-scrubbing
+    title: "Causal Scrubbing"
+    summary: "Activations are resampled according to a hypothesis, and the loss recovered is reported."
+    serves: "A circuit hypothesis is tested rigorously."
+    origin: field
+    depends_on: [INT-14]
+  - key: prompt-pair-manager
+    title: "Clean and Corrupted Prompt Pairs"
+    summary: "Sets of clean and corrupted prompts are kept with their tokens aligned."
+    serves: "Patching experiments are set up once and reused."
+    origin: field
+    depends_on: [INT-10]
+  - key: resample-ablation
+    title: "Resample Ablation Baselines"
+    summary: "An ablation replaces an activation with one resampled from other inputs, beside the zero and mean choices."
+    serves: "Ablations stay on the data distribution."
+    origin: field
+    depends_on: [INT-11]
+  - key: linear-probe-trainer
+    title: "Linear Probe Trainer"
+    summary: "A probe is fitted on a chosen layer's activations, with its accuracy shown live."
+    serves: "A person asks whether a property is linearly readable."
+    origin: field
+    depends_on: [INT-05]
+  - key: probe-sweep
+    title: "Probe Sweep over Layers"
+    summary: "One probe task's accuracy is drawn per layer and position as a heatmap."
+    serves: "A person locates where a property emerges."
+    origin: field
+    depends_on: [INT-05]
+  - key: probe-over-training
+    title: "Probe Accuracy over Training"
+    summary: "Probes are fitted at each checkpoint, and their accuracy is plotted by layer and step."
+    serves: "A person sees when information appears in a model."
+    origin: field
+    depends_on: [RUN-10]
+  - key: probe-to-direction
+    title: "Probe Direction as Steering Direction"
+    summary: "A trained probe's weight vector becomes a direction for the intervention tools."
+    serves: "A person moves from reading a property to controlling it."
+    origin: field
+    depends_on: [INT-13]
+  - key: control-task-baseline
+    title: "Control-Task Probe Baseline"
+    summary: "A probe is compared with one trained on shuffled labels."
+    serves: "A person guards against a probe that memorises."
+    origin: field
+    depends_on: [INT-05]
+  - key: representation-similarity
+    title: "Representation Similarity Matrix"
+    summary: "The similarity between every pair of layers is drawn as a matrix, within one model or between two."
+    serves: "A person finds blocks of depth and compares models."
+    origin: field
+    depends_on: [INT-05]
+  - key: activation-atlas
+    title: "Activation Atlas"
+    summary: "A layer's activations are clustered into a map, each cell drawn by what it represents."
+    serves: "A person surveys what a layer holds."
+    origin: field
+    depends_on: [INT-27]
+  - key: neuron-page
+    title: "Neuron Page"
+    summary: "One page per neuron shows its activation histogram, top tokens, output weights and logit effect."
+    serves: "A person reads a single neuron."
+    origin: field
+    depends_on: [INT-05]
+  - key: text-heat-overlay
+    title: "Model-Value Text Colouring"
+    summary: "The tokens of a prompt are coloured by any scalar taken from the model."
+    serves: "Per-token quantities are read at a glance."
+    origin: field
+    depends_on: [INT-05]
+  - key: attention-rollout
+    title: "Attention Rollout and Flow"
+    summary: "Attention is propagated across layers to estimate each token's influence."
+    serves: "A person gets an aggregate attribution through depth."
+    origin: field
+    depends_on: [INT-03]
+  - key: ov-qk-circuits
+    title: "OV and QK Circuit View"
+    summary: "A head's OV and QK matrices are shown as token-to-token maps through the embedding and unembedding."
+    serves: "A person reads what a head looks for and what it writes."
+    origin: field
+    depends_on: [INT-03]
+  - key: composition-scores
+    title: "Composition Scores"
+    summary: "Query, key and value composition between heads of different layers is drawn as a matrix."
+    serves: "A person finds heads that work together."
+    origin: field
+    depends_on: [INT-03]
+  - key: virtual-weights
+    title: "Virtual Weights Browser"
+    summary: "Weights are multiplied across layers to show direct paths from what one component writes to what another reads."
+    serves: "Information flow is traced without any data."
+    origin: field
+    depends_on: [INT-06]
+  - key: attention-sink-detector
+    title: "Attention Sink Detector"
+    summary: "The share of attention each head places on the first or special tokens is measured per layer."
+    serves: "A person separates sink behaviour from real patterns."
+    origin: field
+    depends_on: [INT-03]
+  - key: long-context-attention
+    title: "Long-Context Attention Map"
+    summary: "Attention over a whole long sequence is reduced to a map with bands and retrieval heads marked."
+    serves: "A person studies behaviour over long contexts."
+    origin: field
+    depends_on: [INT-03, STR-08]
+  - key: singular-spectrum
+    title: "Singular Value Spectrum of Weights"
+    summary: "The singular values of any weight matrix are plotted per layer and over training, with effective rank."
+    serves: "A person spots low-rank structure and spectral growth."
+    origin: field
+    depends_on: [INT-06]
+  - key: power-law-spectrum
+    title: "Power-Law Fit of Weight Spectra"
+    summary: "A power law is fitted to each layer's eigenvalue spectrum, and its exponent reported."
+    serves: "A layer's quality is judged without data."
+    origin: field
+    depends_on: [INT-06]
+  - key: task-vector-arithmetic
+    title: "Task Vector Arithmetic"
+    summary: "Weight differences are added, subtracted and scaled, and the resulting model is tested live."
+    serves: "A person explores edits and merges in weight space."
+    origin: field
+    depends_on: [INT-09]
+  - key: model-merge-explorer
+    title: "Model Merge Explorer"
+    summary: "Two or three models are interpolated along a line or plane, with metrics plotted over it."
+    serves: "A person studies merging and mode connectivity."
+    origin: field
+    depends_on: [INT-09]
+  - key: adapter-inspector
+    title: "Low-Rank Adapter Inspector"
+    summary: "Each adapter's rank, norm, singular values and effective update are shown per layer, with a merge toggle."
+    serves: "A person understands what a fine-tune did."
+    origin: field
+    depends_on: [INT-06]
+  - key: rank-one-edit-workbench
+    title: "Rank-One Edit Workbench"
+    summary: "A rank-one edit of a fact is applied to an MLP layer and tested for locality and generalisation."
+    serves: "A person studies model editing."
+    origin: field
+    depends_on: [INT-10]
+  - key: edit-locality-probe
+    title: "Edit Locality Probe"
+    summary: "A bank of unrelated prompts is run before and after an edit, and the drift is plotted."
+    serves: "Side effects of an edit are measured."
+    origin: field
+    depends_on: [INT-10]
+  - key: tied-weights-view
+    title: "Embedding and Unembedding Comparison"
+    summary: "Input and output embeddings are shown as paired maps with token-level similarity."
+    serves: "A person understands a model's input and output spaces."
+    origin: field
+    depends_on: [INT-28]
+  - key: learning-coefficient
+    title: "Local Learning Coefficient Estimate"
+    summary: "A sampling estimate of the local learning coefficient is tracked through training."
+    serves: "Phase transitions in training are detected."
+    origin: field
+    depends_on: [STR-45]
+  - key: phase-transition-detector
+    title: "Phase Transition Detector"
+    summary: "Abrupt shifts in loss, representation rank or head behaviour are flagged along a run."
+    serves: "A person finds the stages of a model's development."
+    origin: field
+    depends_on: [RUN-01]
+  - key: superposition-toy-model
+    title: "Superposition Toy Model"
+    summary: "An applet trains a small autoencoder across a sparsity sweep and draws the geometry of its features."
+    serves: "Superposition is taught and tested."
+    origin: field
+    depends_on: [INT-30]
+  - key: feature-geometry-view
+    title: "Feature Geometry View"
+    summary: "The Gram matrix and polygon arrangement of features in a hidden layer are drawn."
+    serves: "A person sees how features interfere."
+    origin: field
+    depends_on: [INT-06]
+  - key: steering-vector-library
+    title: "Steering Vector Library"
+    summary: "Named, versioned directions are kept with their layer, coefficient and notes."
+    serves: "Directions are reused and shared."
+    origin: field
+    depends_on: [INT-13]
+  - key: contrastive-direction-builder
+    title: "Contrastive Direction Builder"
+    summary: "A direction is computed from two prompt sets by mean difference or principal components."
+    serves: "A person makes a concept or refusal direction."
+    origin: field
+    depends_on: [INT-13]
+  - key: direction-sweep
+    title: "Direction Sweep over Layers"
+    summary: "A direction's alignment with each layer's residual and its causal effect are plotted by layer."
+    serves: "A person finds the best layer to steer."
+    origin: field
+    depends_on: [INT-13]
+  - key: direction-ablation
+    title: "Direction Ablation Across Layers"
+    summary: "One direction is projected out of every layer at once."
+    serves: "A person tests whether a direction is necessary."
+    origin: field
+    depends_on: [INT-11]
+  - key: steering-coefficient-sweep
+    title: "Steering Coefficient Sweep"
+    summary: "A grid of coefficients and layers is run, with outputs and metrics shown together."
+    serves: "A person finds the useful range of a steering direction."
+    origin: field
+    depends_on: [INT-13]
+  - key: activation-cache
+    title: "Activation Cache"
+    summary: "Activations are cached on disk by model, prompt set, hook and layer, for every tool to reuse."
+    serves: "Experiments stop recomputing the same passes."
+    origin: field
+    depends_on: [INT-10]
+  - key: activation-dataset-browser
+    title: "Dataset Browser with Activations"
+    summary: "A dataset is paged with chosen activations per token and filtered by a threshold."
+    serves: "A person finds examples for any unit."
+    origin: field
+    depends_on: [INT-05]
+  - key: prompt-activation-compare
+    title: "Activation Comparison of Two Prompts"
+    summary: "Two prompts run side by side with matched hooks and a difference per token."
+    serves: "A person contrasts how a model treats two inputs."
+    origin: field
+    depends_on: [INT-05]
+  - key: automated-interpretability-agent
+    title: "Automated Interpretability Agent"
+    summary: "An agent proposes an explanation for a unit or head, tests it with interventions and scores it."
+    serves: "Interpretability scales with compute."
+    origin: field
+    depends_on: [INT-10, AGT-02]
+  - key: saliency-overlay
+    title: "Saliency Overlay"
+    summary: "Gradient attributions are overlaid on an input image or text, with a choice of method."
+    serves: "A person sees which inputs drove an output."
+    origin: field
+    depends_on: [INT-05]
+  - key: integrated-gradients
+    title: "Integrated Gradients"
+    summary: "Path-integral attribution is computed with a chosen baseline and step count, and its convergence reported."
+    serves: "Attributions are faithful and checked."
+    origin: field
+    depends_on: [INT-05]
+  - key: class-activation-maps
+    title: "Class Activation Maps"
+    summary: "Class evidence is mapped over an image from a chosen layer's features."
+    serves: "A person localises what a vision model responds to."
+    origin: field
+    depends_on: [INT-05]
+  - key: occlusion-sweep
+    title: "Occlusion Sweep"
+    summary: "A mask slides over an input, and the output change is plotted."
+    serves: "Attribution needs no gradients."
+    origin: field
+    depends_on: [INT-10]
+  - key: feature-visualisation
+    title: "Feature Visualisation by Optimisation"
+    summary: "An input is optimised to maximise a neuron or channel, with robustness transforms."
+    serves: "A person sees what a unit detects."
+    origin: field
+    depends_on: [INT-09]
+  - key: channel-atlas
+    title: "Channel Atlas"
+    summary: "A grid shows the optimised visualisation of every channel of a layer."
+    serves: "A person surveys a vision layer."
+    origin: field
+    depends_on: [INT-09]
+  - key: patch-attribution
+    title: "Patch Attribution in Vision Transformers"
+    summary: "Each image patch is scored by rollout, gradients or occlusion."
+    serves: "A vision transformer's prediction is explained."
+    origin: field
+    depends_on: [INT-03]
+  - key: attention-on-images
+    title: "Attention Overlay on Images"
+    summary: "A chosen head's attention from the class token is drawn over the image."
+    serves: "Heads of vision models are read."
+    origin: field
+    depends_on: [INT-03]
+  - key: concept-activation-vectors
+    title: "Concept Activation Vectors"
+    summary: "A concept direction is learned from example inputs, and a model's sensitivity to it is measured."
+    serves: "Human concepts are tested in a model's features."
+    origin: field
+    depends_on: [INT-13]
+  - key: adversarial-explorer
+    title: "Adversarial Perturbation Explorer"
+    summary: "A bounded perturbation is built live, and the prediction's flip is shown."
+    serves: "A person studies robustness."
+    origin: field
+    depends_on: [INT-09]
+  - key: diffusion-cross-attention
+    title: "Cross-Attention Maps of Diffusion Models"
+    summary: "Each prompt token's spatial attention is shown over the denoising steps."
+    serves: "A person sees which words control which regions."
+    origin: field
+    depends_on: [INT-03]
+  - key: denoising-trajectory
+    title: "Denoising Trajectory View"
+    summary: "The predicted clean image, the noise estimate and the latent are shown at each step on a timeline."
+    serves: "A person understands a sampling path."
+    origin: field
+    depends_on: [STR-13]
+  - key: latent-traversal
+    title: "Latent Traversal"
+    summary: "Controls move through latent dimensions or between two latents, and the output follows."
+    serves: "A person probes a generative model's latent space."
+    origin: field
+    depends_on: [INT-04]
+  - key: diffusion-steering
+    title: "Steering of Diffusion Models"
+    summary: "A direction is added inside the denoiser, and the outputs change."
+    serves: "Concepts are edited in image models."
+    origin: field
+    depends_on: [INT-13]
+  - key: audio-attribution
+    title: "Attribution on Spectrograms"
+    summary: "A model's attention and attribution are overlaid on a spectrogram with aligned playback."
+    serves: "Speech and audio models are read."
+    origin: field
+    depends_on: [INT-05]
+  - key: speech-alignment
+    title: "Speech Alignment View"
+    summary: "The alignment between audio frames and output tokens is drawn."
+    serves: "Speech models are debugged."
+    origin: field
+    depends_on: [INT-05]
+  - key: value-map
+    title: "Value and Policy Maps"
+    summary: "A value or policy function is drawn over the state space as it trains."
+    serves: "A person sees what a policy believes."
+    origin: field
+    depends_on: [STR-45]
+  - key: observation-saliency
+    title: "Observation Saliency"
+    summary: "An action preference is attributed to parts of the observation."
+    serves: "A policy's choice is explained."
+    origin: field
+    depends_on: [INT-05]
+  - key: graph-network-explainer
+    title: "Graph Network Explainer"
+    summary: "The nodes and edges that drive a graph network's prediction are highlighted."
+    serves: "Graph models are explained."
+    origin: field
+    depends_on: [REN-42]
+  - key: message-passing-view
+    title: "Message-Passing View"
+    summary: "Messages between nodes are animated layer by layer."
+    serves: "A person sees propagation and oversmoothing."
+    origin: field
+    depends_on: [REN-42]
+  - key: tabular-attribution
+    title: "Tabular Attribution"
+    summary: "Additive Shapley attributions are shown per row, with summary and dependence plots."
+    serves: "Predictions of tabular models are explained."
+    origin: field
+    depends_on: [COR-48]
+  - key: partial-dependence
+    title: "Partial Dependence Curves"
+    summary: "A model's response is plotted as one or two features vary, per example and on average."
+    serves: "Feature effects are studied."
+    origin: field
+    depends_on: [COR-48]
+  - key: multimodal-alignment
+    title: "Image and Text Alignment Map"
+    summary: "The similarity between image patches and text tokens is drawn as a map."
+    serves: "Grounding in vision-language models is checked."
+    origin: field
+    depends_on: [INT-05]
+  - key: recurrent-state-trace
+    title: "Recurrent State Trace"
+    summary: "The hidden state and gates of a recurrent or state-space model are drawn along a sequence."
+    serves: "A person sees a model's memory at work."
+    origin: field
+    depends_on: [INT-05]
+  - key: state-space-kernel
+    title: "State-Space Kernel View"
+    summary: "The implicit kernel and decay of a state-space layer are drawn."
+    serves: "A layer's memory length is read."
+    origin: field
+    depends_on: [INT-06]
+  - key: expert-routing-view
+    title: "Expert Routing View"
+    summary: "The router's choices, each expert's load and token-to-expert paths are shown per layer."
+    serves: "Mixture-of-experts models are balanced and read."
+    origin: field
+    depends_on: [INT-05]
+  - key: tokeniser-inspector
+    title: "Tokeniser Inspector"
+    summary: "A string is shown as tokens with ids, byte spans, merges and unusual tokens."
+    serves: "Tokenisation errors are found."
+    origin: field
+    depends_on: [INT-09]
+  - key: vocabulary-scan
+    title: "Vocabulary Quality Scan"
+    summary: "Under-trained, glitch and duplicate tokens are found from embedding norms and neighbours."
+    serves: "Anomalous tokens are found before they cause failures."
+    origin: field
+    depends_on: [INT-28]
+  - key: projection-chooser
+    title: "Projection Chooser"
+    summary: "One source is projected by PCA, UMAP, t-SNE or PaCMAP, with parameters changed live."
+    serves: "No single projection misleads."
+    origin: field
+    depends_on: [INT-27]
+  - key: projection-stability
+    title: "Projection Stability Check"
+    summary: "Projections are compared across seeds and parameters, and persistent neighbours are shown."
+    serves: "Structure is told from artefact."
+    origin: field
+    depends_on: [INT-27]
+  - key: parametric-projection
+    title: "Parametric Projection"
+    summary: "A small network learns the projection, so new points map at once and views stay consistent during training."
+    serves: "Evolving embeddings are followed without jumps."
+    origin: field
+    depends_on: [INT-26]
+  - key: neighbourhood-preservation
+    title: "Neighbourhood Preservation Metrics"
+    summary: "Trustworthiness and continuity scores are reported for a projection."
+    serves: "A map's quality is known."
+    origin: field
+    depends_on: [INT-27]
+  - key: density-overlay
+    title: "Density Overlay on Maps"
+    summary: "Density contours or a heat layer are drawn over a 2-D map."
+    serves: "Crowded regions are read."
+    origin: field
+    depends_on: [INT-27]
+  - key: cluster-labels
+    title: "Clusters with Generated Labels"
+    summary: "Density clusters are found and named, at several zoom levels."
+    serves: "A large collection is navigated by topic."
+    origin: field
+    depends_on: [INT-27]
+  - key: nearest-neighbour-inspector
+    title: "Nearest-Neighbour Inspector"
+    summary: "A picked point lists its nearest neighbours in the original and the projected space, with distances."
+    serves: "Local structure is checked."
+    origin: field
+    depends_on: [INT-27, REN-15]
+  - key: neighbour-disagreement
+    title: "Neighbour Disagreement View"
+    summary: "Points whose neighbours differ between two models or spaces are highlighted."
+    serves: "A person finds what changed between two representations."
+    origin: field
+    depends_on: [INT-27]
+  - key: embedding-drift
+    title: "Embedding Drift Between Checkpoints"
+    summary: "Each point is followed across checkpoints with trails and displacement statistics."
+    serves: "A person sees how representations move in training."
+    origin: field
+    depends_on: [INT-27, RUN-10]
+  - key: space-alignment
+    title: "Alignment of Two Embedding Spaces"
+    summary: "Two spaces are aligned by rotation or a learned map, and the residuals shown."
+    serves: "Two models are compared in one frame."
+    origin: field
+    depends_on: [INT-27]
+  - key: named-selection-groups
+    title: "Named Selection Groups"
+    summary: "A selection is saved as a named group and reused as a label, a filter or a direction."
+    serves: "A person defines a concept by pointing."
+    origin: field
+    depends_on: [REN-46]
+  - key: metadata-crossfilter
+    title: "Metadata Filters on Maps"
+    summary: "Linked histograms of metadata filter a map, and a selection on the map filters them."
+    serves: "A dataset is sliced on its map."
+    origin: field
+    depends_on: [INT-27]
+  - key: text-search-on-map
+    title: "Text Search on Maps"
+    summary: "A query is embedded, and its nearest points are highlighted."
+    serves: "Examples are found by meaning."
+    origin: field
+    depends_on: [INT-27]
+  - key: vector-index-inspector
+    title: "Vector Index Inspector"
+    summary: "An approximate index's structure and its recall against exact search are shown."
+    serves: "Vector search is tuned."
+    origin: field
+    depends_on: [INT-27]
+  - key: anisotropy-report
+    title: "Anisotropy Report"
+    summary: "Average cosine, the share of the top principal component and the norm distribution of a space are reported."
+    serves: "Degenerate geometry is spotted."
+    origin: field
+    depends_on: [INT-27]
+  - key: intrinsic-dimension
+    title: "Intrinsic Dimension Estimate"
+    summary: "Local and global dimension estimates are computed per layer."
+    serves: "Representation complexity is measured."
+    origin: field
+    depends_on: [INT-05]
+  - key: hubness
+    title: "Hubness Measure"
+    summary: "How often each point is another's neighbour is counted."
+    serves: "Hubs that distort retrieval are found."
+    origin: field
+    depends_on: [INT-27]
+  - key: hyperbolic-views
+    title: "Hyperbolic and Spherical Views"
+    summary: "Embeddings of those geometries are drawn on a Poincare disk or a sphere."
+    serves: "Hierarchies and directions are shown in their own geometry."
+    origin: field
+    depends_on: [INT-27]
+  - key: distance-histogram
+    title: "Pairwise Distance Histogram"
+    summary: "The distribution of distances and angles between sampled pairs is drawn."
+    serves: "Concentration of distances is spotted."
+    origin: field
+    depends_on: [INT-27]
+  - key: concept-axes
+    title: "Axes by Concept"
+    summary: "A map's axes are defined by two chosen directions or word pairs."
+    serves: "A plane is read by meaning."
+    origin: field
+    depends_on: [INT-27]
+  - key: persistent-homology
+    title: "Persistent Homology Barcodes"
+    summary: "The topology of a point cloud is shown as barcodes or a persistence diagram."
+    serves: "The shape of an embedding is measured."
+    origin: field
+    depends_on: [INT-27]
+  - key: next-token-panel
+    title: "Next-Token Distribution Panel"
+    summary: "The top tokens with probabilities and entropy are shown, with the sampler's settings applied live."
+    serves: "Sampling is understood."
+    origin: field
+    depends_on: [INT-09]
+  - key: sampler-lab
+    title: "Sampler Lab"
+    summary: "Temperature, top-k, nucleus, min-p and typical sampling are compared on the same logits."
+    serves: "Decoding is tuned."
+    origin: field
+    depends_on: [INT-09]
+  - key: token-tree
+    title: "Token Probability Tree"
+    summary: "Alternatives at each step form a tree that expands on a click."
+    serves: "A person sees the paths a model did not take."
+    origin: field
+    depends_on: [INT-09]
+  - key: beam-view
+    title: "Beam Search View"
+    summary: "Beams, scores and pruning are shown per step."
+    serves: "Beam decoding is debugged."
+    origin: field
+    depends_on: [INT-09]
+  - key: surprisal-strip
+    title: "Per-Token Surprisal Strip"
+    summary: "Each token is coloured by its log probability, with alternatives on hover."
+    serves: "Uncertain and invented spans are spotted."
+    origin: field
+    depends_on: [INT-09]
+  - key: branch-from-token
+    title: "Token Branching"
+    summary: "A person forces another token at a position, and generation continues as a new branch."
+    serves: "Counterfactual generations are compared."
+    origin: field
+    depends_on: [INT-09]
+  - key: kv-cache-inspector
+    title: "Key-Value Cache Inspector"
+    summary: "The size, occupancy and content of the cache are shown per layer and head."
+    serves: "Memory and context use are analysed."
+    origin: field
+    depends_on: [INT-09]
+  - key: kv-cache-compression
+    title: "Cache Compression View"
+    summary: "The entries that an eviction or quantisation policy keeps, and the output change, are shown."
+    serves: "Cache policies are tuned."
+    origin: field
+    depends_on: [INT-09]
+  - key: chat-template-inspector
+    title: "Chat Template Inspector"
+    summary: "The exact rendered prompt is shown with its special tokens and role boundaries."
+    serves: "Template errors are caught."
+    origin: field
+    depends_on: [INT-09]
+  - key: context-window-map
+    title: "Context Window Map"
+    summary: "A bar shows where each message, tool result and document sits in the context."
+    serves: "Context is budgeted."
+    origin: field
+    depends_on: [AGT-03]
+  - key: reasoning-trace-view
+    title: "Reasoning Trace View"
+    summary: "A chain of reasoning is divided into steps with timing, token cost and branches."
+    serves: "Reasoning behaviour is studied."
+    origin: field
+    depends_on: [INT-09]
+  - key: reasoning-step-attribution
+    title: "Reasoning Step Attribution"
+    summary: "Each reasoning sentence is removed or resampled, and its effect on the answer scored."
+    serves: "The steps that matter are found."
+    origin: field
+    depends_on: [INT-10]
+  - key: quantisation-error-by-layer
+    title: "Quantisation Error by Layer"
+    summary: "Full and quantised weights and activations are compared layer by layer, with the output error."
+    serves: "A person chooses which layers keep high precision."
+    origin: field
+    depends_on: [INT-06]
+  - key: outlier-channels
+    title: "Outlier Channel View"
+    summary: "Each channel's activation magnitude is drawn, which exposes massive activations."
+    serves: "Quantisation and instability are anticipated."
+    origin: field
+    depends_on: [INT-06]
+  - key: residual-norm-plot
+    title: "Residual Norm by Layer and Position"
+    summary: "The norm of the residual stream is plotted by layer and token position."
+    serves: "Scale and anomalies are understood."
+    origin: field
+    depends_on: [INT-05]
+  - key: speculative-decoding-monitor
+    title: "Speculative Decoding Monitor"
+    summary: "Draft tokens, accepts and rejects and the acceptance rate are shown per position."
+    serves: "Speed-ups are tuned."
+    origin: field
+    depends_on: [INT-09]
+  - key: prompt-sensitivity
+    title: "Prompt Sensitivity Sweep"
+    summary: "A set of rephrasings is run, and the variance of the outputs plotted."
+    serves: "Robustness to wording is measured."
+    origin: field
+    depends_on: [INT-09]
+  - key: memorisation-probe
+    title: "Memorisation Probe"
+    summary: "Loss on suspected training text is compared with loss on paraphrases."
+    serves: "Contamination is checked."
+    origin: field
+    depends_on: [INT-09]
+  - key: in-context-learning-curve
+    title: "In-Context Learning Curve"
+    summary: "Accuracy is plotted against the number of shots, per checkpoint."
+    serves: "The emergence of in-context learning is tracked."
+    origin: field
+    depends_on: [RUN-10]

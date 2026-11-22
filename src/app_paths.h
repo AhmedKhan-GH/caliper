@@ -16,6 +16,21 @@
 // CALIPER_DATA_DIR, when set and not empty, replaces that folder for the whole
 // process (it is read once, at the first lookup), and an embedder's
 // set_app_data_dir_override() replaces both.
+//
+// THE GUARD. A test or hidden run never uses the person's own folder: in such
+// a run, a lookup that would resolve to the OS folder above, because neither
+// CALIPER_DATA_DIR nor an override names another, prints one line on standard
+// error and ends the process with exit code 1 before anything is created or
+// opened there. A run is a test or hidden run when
+//   - app_data_guard() was called: the app with --hidden (main.cpp) and the
+//     test binaries (tests/test_run_marker.cpp);
+//   - CALIPER_HIDDEN is 1, or any CALIPER_TEST_* variable is set and not
+//     empty: the input driver, the tests' hooks, and CALIPER_TEST_RUN=1, which
+//     ctest sets for every entry (CaliperOfflineTests.cmake).
+// A data folder given explicitly, even the OS folder itself, is used as given.
+// A visible app, `caliper shot` (which keeps its stores in a temporary folder
+// unless CALIPER_DATA_DIR is set) and an embedder's core are not guarded runs
+// by themselves.
 // ============================================================================
 
 namespace caliper {
@@ -40,6 +55,14 @@ std::string app_data_location();
 // the stores open; not intended for concurrent mutation.
 void set_app_data_dir_override(const std::string& dir);
 
+// Marks this process as a test or hidden run (THE GUARD above). `what` names
+// it in the refusal and must outlive the process (a string literal). Call it
+// before the first lookup; the hidden app calls it as it starts.
+void app_data_guard(const char* what);
+
+// Why this process is a test or hidden run, "" when it is not.
+std::string app_data_guard_reason();
+
 // The folder that holds the running executable, "" when the OS cannot say.
 std::string executable_dir();
 
@@ -50,5 +73,10 @@ std::string shipped_applets_dir();
 // The user applets folder: CALIPER_USER_APPLETS_DIR when it is set and not
 // empty, otherwise applets/ under the app-data folder. Creates nothing.
 std::string user_applets_dir();
+
+// The builder's default workspace: workspace/ under the app-data folder, so
+// CALIPER_DATA_DIR moves it too. --workspace and CALIPER_WORKSPACE choose
+// another (host_cli.h, workspace_choice). Creates nothing.
+std::string default_workspace_dir();
 
 } // namespace caliper

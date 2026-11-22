@@ -3,9 +3,9 @@
 // to it and each becomes a session; viewers connect to it, list the sessions,
 // attach to one, subscribe to its views and send data view requests and
 // events, which the hub forwards to that session's producer. The reference
-// page docs/references/wire-protocol.md states the protocol ("The producer
+// page docs/reference/wire-protocol.md states the protocol ("The producer
 // connection to a hub", "Choosing a session", "Flow control", "Limits"); the
-// guide docs/guides/run-a-hub.md states what this hub keeps and for how long.
+// guide docs/python/hub-setup.md states what this hub keeps and for how long.
 // Host-internal C++17 on net/ws.h, net/wire.h and net/http_door.h; no window,
 // renderer or GPU.
 //
@@ -102,7 +102,7 @@ struct HubOptions {
     // default: every CONTROL is then answered `forbidden` (--allow-control).
     bool allow_control = false;
 
-    // Bounds. Each is documented in docs/guides/run-a-hub.md.
+    // Bounds. Each is documented in docs/python/hub-setup.md.
     size_t max_viewers = 256;          // viewer connections
     size_t max_producers = 64;         // live sessions
     size_t max_ended_sessions = 32;    // ended sessions kept, the oldest go first
@@ -135,6 +135,25 @@ struct HubOptions {
     std::function<void(ConnId, const HttpRequest&)> on_request;
     std::function<void()> on_tick;
     int tick_ms = 0;
+    // For an embedded server whose stream takes more than one token (Caliper
+    // API: its session token, and the tokens of the agents it serves). When
+    // set, an upgrade's token is checked with it in place of `token` (which
+    // must still be valid, and which viewer_url() gives): kRefused answers
+    // 403 as a wrong token does, kWatch opens a connection that receives
+    // everything but may not control (its WELCOME sets `control` false and a
+    // CONTROL is answered `forbidden`, as without allow_control) or publish
+    // (a producer's HELLO is answered ERROR `unsupported` and closed with
+    // 4002, as caliper.serve() refuses producers), and kFull one that may
+    // publish, and control when allow_control is on. Called on the hub's
+    // thread at each upgrade, so a token issued or revoked later counts from
+    // the next upgrade; it compares in constant time.
+    enum class StreamAccess { kRefused, kWatch, kFull };
+    std::function<StreamAccess(const std::string& token)> stream_access;
+    // For an embedded server with an endpoint that takes a body (Caliper
+    // API's command endpoint): the most body bytes to read for a request head,
+    // 0 for none, as net/ws.h's Options::body_limit. A body must arrive within
+    // handshake_timeout_ms. Called on the hub's thread, before the Host check.
+    std::function<size_t(const HttpRequest&)> body_limit;
 };
 
 // Counters and sizes, as of the end of the hub's last loop round.

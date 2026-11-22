@@ -1,6 +1,8 @@
 """Shared fixtures. One CaliperCore per process: a module fixture (re)creates
 the offscreen core at the size that module needs; views are removed after every
 test so tests do not see each other's state."""
+import os
+
 import numpy as np
 import pytest
 import torch
@@ -21,6 +23,25 @@ def offscreen256():
     caliper.offscreen(256, 256)
     yield
     caliper.close()
+
+
+# Every test, and every process a test starts, is a test run: without a data
+# folder of its own it is refused your app-data folder (caliper._net.app_data_dir,
+# src/app_paths.h), rather than writing into it.
+os.environ["CALIPER_TEST_RUN"] = "1"
+
+
+@pytest.fixture(scope="session")
+def _app_data(tmp_path_factory):
+    return str(tmp_path_factory.mktemp("app-data"))
+
+
+@pytest.fixture(autouse=True)
+def _private_app_data(_app_data, monkeypatch):
+    """caliper.serve() writes its stream file into Caliper's app-data folder;
+    the tests keep it in a folder of their own, never the user's (a test that
+    needs another one sets CALIPER_DATA_DIR itself)."""
+    monkeypatch.setenv("CALIPER_DATA_DIR", _app_data)
 
 
 @pytest.fixture(autouse=True)

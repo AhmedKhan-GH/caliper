@@ -355,7 +355,7 @@ TEST_CASE("stream_to_tensor: cuda handoff survives a concurrently-training threa
     if (!cuda_ok()) CALIPER_SKIP_NO_CUDA();
 #if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>) && \
     __has_include(<cuda_runtime_api.h>)
-    // CUDA twin of the MPS stress case above (docs/explanations/vulkan-cuda.md). On MPS the equivalent race SIGABRTed within a few hundred
+    // CUDA twin of the MPS stress case above (docs/development/vulkan-and-cuda.md). On MPS the equivalent race SIGABRTed within a few hundred
     // handoffs because torch's public stream calls are not internally
     // serialized. The CUDA handoff is only a getCurrentCUDAStream() handle
     // read and CUDA driver calls are thread-safe by API contract, so no

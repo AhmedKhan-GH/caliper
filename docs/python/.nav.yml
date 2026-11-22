@@ -1,0 +1,22 @@
+nav:
+  - index.md
+  - Tutorials:
+      - notebook-training-runs.md
+  - Guides:
+      - script-attachment.md
+      - stream-links.md
+      - script-control.md
+      - hub-setup.md
+  - Concepts:
+      - live-streaming.md
+      - network-streaming.md
+      - data-views.md
+      - zero-copy-tensors.md
+  - Reference:
+      - caliper-lib-api.md
+      - view-calls.md
+      - routes-and-inspection.md
+      - network-streaming-calls.md
+      - data-view-calls.md
+      - run-control-calls.md
+      - viewer.md

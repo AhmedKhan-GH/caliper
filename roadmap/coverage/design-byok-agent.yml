@@ -1,0 +1,243 @@
+# yaml-language-server: $schema=schema.json
+title: Widget agent sidecar plan page
+kind: page
+source: design/byok-agent.md
+ref: main
+summary: The plan page design/byok-agent.md on main, read heading by heading; each plan heading has an
+  entry or is listed as holding no feature.
+entries:
+- heading: The shape
+  item: caliper-agent is a Python sidecar speaking ACP as an agent, running Caliper's loop on Pydantic
+    AI, reaching the command layer only through Caliper API.
+  ids:
+  - AGT-05
+- heading: Starting the sidecar
+  item: The sidecar starts as python -I -m caliper_agent with options for preset, provider, base URL,
+    model, effort, capability overrides, cache folder, scopes, tools, compaction, widget requests and
+    a usage log.
+  ids:
+  - AGT-05
+- heading: Starting the sidecar
+  item: caliper-agent probe is a second command that checks a model's tool calling, vision and context
+    length.
+  ids:
+  - AGT-16
+- heading: ACP, agent side
+  item: 'The sidecar''s ACP methods: initialize, session/new, set_config_option, prompt, cancel, close,
+    with limits of 16 sessions and 8 MiB lines.'
+  ids:
+  - AGT-05
+- heading: Config options
+  item: Config options model, effort and review, not modes.
+  ids:
+  - AGT-05
+- heading: What the client receives
+  item: Session updates and statuses sent as thoughts with _meta.caliper.status (retry, refusal, compaction,
+    strict_off, limit, no_tools, no_vision).
+  ids:
+  - AGT-05
+- heading: Stop reasons
+  item: Mapping of model stop reasons to ACP stop reasons and error codes of failed turns.
+  ids:
+  - AGT-05
+- heading: Tools
+  item: Tools generated from the command descriptor table with reversible names, stripped schemas, up
+    to 20 strict tools, and agent-disallowed commands left out.
+  ids:
+  - AGT-05
+  - SPC-05
+- heading: Tools
+  item: Tool schemas that carry a type list are sent as anyOf; nullable values in the command table remain
+    an open question for caliper-mcp.
+  ids:
+  - AGT-05
+- heading: Widget sessions
+  item: 'Widget sessions in the sidecar: _meta.caliper.widget, scoped tools, the preview header, widget
+    prompt, budget, handoff tool and answer metadata.'
+  ids:
+  - AGT-05
+- heading: Widget sessions
+  item: Tool calls go through Caliper API with origin agent and a per-turn group so a prompt's edits undo
+    as one step.
+  ids:
+  - AGT-05
+  - AGT-01
+- heading: Widget sessions
+  item: An empty value on an optional argument is checked against the full schema before a call; no rule
+    treats it as omitted yet.
+  ids:
+  - AGT-08
+- heading: The loop
+  item: The loop runs on Pydantic AI's agent graph step by step, with sequential tool calls, an append-only
+    history, and cancellation with a result for every call.
+  ids:
+  - AGT-05
+- heading: Approval and spec diffs
+  item: The general role asks with session/request_permission for destructive commands and previewable
+    edits, after a dry-run diff, unless Caliper reviews them itself.
+  ids:
+  - AGT-05
+  - AGT-06
+- heading: The system prompt
+  item: One fixed system prompt for the general role and a shorter fixed prompt for widget sessions.
+  ids:
+  - AGT-05
+- heading: Claude API settings and why
+  item: 'Claude settings: native Anthropic provider, adaptive summarized thinking, effort set on every
+    request, strict tools, caching and compaction, with no fallbacks or sampling parameters.'
+  ids:
+  - AGT-05
+- heading: Claude API settings and why
+  item: One default effort, high, for every model in the general role.
+  ids:
+  - AGT-05
+- heading: Prompt caching and how it is verified
+  item: Prompt caching of the tools and system prompt, verified in tests and with a real key through the
+    usage log.
+  ids:
+  - AGT-05
+- heading: Prompt caching and how it is verified
+  item: Per-message effort, a beta, is left for later.
+  ids:
+  - AGT-05
+- heading: Refusals
+  item: A refusal ends the turn, removes the prompt and later messages from the history, and shows a neutral
+    message with three ways forward.
+  ids:
+  - AGT-05
+- heading: Refusals
+  item: Server-side refusal fallbacks are off behind one switch until Pydantic AI keeps the reply's fallback
+    block.
+  ids:
+  - AGT-05
+- heading: Errors and retries
+  item: Errors are sorted into auth, quota, bad request and retryable classes; retries run through the
+    on_model_request_error hook with up to five attempts.
+  ids:
+  - AGT-05
+- heading: Compaction and long sessions
+  item: Server-side compaction at 150,000 tokens is on by default and --no-compaction turns it off.
+  ids:
+  - AGT-05
+- heading: The key's whole life
+  item: The person's own Claude key goes from the settings field to the Keychain, into the sidecar's environment
+    at spawn, never in argv, scrubbed from every output.
+  ids:
+  - AGT-15
+- heading: The key store
+  item: KeyStore with set, has and remove and no getter, the macOS Keychain implementation, one item per
+    provider, and a stub on Windows with the Credential Manager store planned.
+  ids:
+  - AGT-15
+- heading: The key store
+  item: The Windows Credential Manager key store.
+  ids:
+  - PLT-13
+- heading: Checked against the protocol's schema
+  item: Every message the sidecar sends was validated against ACP's v1 schema, and the check is now a
+    test.
+  ids:
+  - AGT-05
+- heading: Providers
+  item: 'The provider layer is Pydantic AI: Claude natively and every other model through the OpenAI-compatible
+    route.'
+  ids:
+  - AGT-15
+- heading: The six checks
+  item: The spike's six checks, cancellation, retry state, Claude features, stop reasons, other models
+    and footprint, each pinned by a test.
+  ids:
+  - AGT-05
+- heading: What other models can do
+  item: A model without tool calling or vision is handled by lowering what the sidecar assumes, and the
+    probe learns it in advance.
+  ids:
+  - AGT-16
+- heading: Ollama's own chat API and the context length
+  item: The Ollama preset uses Ollama's native chat API with a context length of 16,384 tokens for the
+    widget role and 32,768 for the general role, no silent truncation and a context cache note.
+  ids:
+  - AGT-04
+  - AGT-05
+- heading: Ollama's own chat API and the context length
+  item: 'Open: compaction of a conversation that no longer fits a local model''s context, instead of ending
+    the turn.'
+  ids:
+  - AGT-28
+- heading: One run on a local model
+  item: One manual run of the dashboard prompt on a local model through the OpenAI-compatible route, 135
+    seconds.
+  ids:
+  - AGT-05
+- heading: The ACP Python SDK
+  item: The official ACP Python SDK is used in tests only, and the hand-written agent side stays.
+  ids:
+  - AGT-05
+- heading: Security notes for the later security pass
+  item: 'Security notes: fixed hosts, the test and offline switches, the import path, prompt injection,
+    what leaves the machine, key in memory, logging, supply chain and limits.'
+  ids:
+  - AGT-05
+- heading: Security notes for the later security pass
+  item: A lock file and a packaged runtime come with the wiring into the app.
+  ids:
+  - AGT-10
+- heading: Tests
+  item: Tests of the sidecar run offline with a scripted model, a stubbed Claude transport and fake servers,
+    under ctest as builder_agent_py and related entries.
+  ids:
+  - AGT-05
+- heading: The manual check
+  item: The manual check with a real key through caliper-acp-harness; it was not run on this branch.
+  ids:
+  - AGT-05
+- heading: The manual check in the app
+  item: The manual check in the app with a real Claude key and with a local Ollama model, covering settings,
+    probe, address warnings, Shared GPU and command-K.
+  ids:
+  - AGT-05
+  - AGT-04
+- heading: What is built and what waits
+  item: 'What is built: the sidecar modules, the package, the key store, presets, widget sessions, conformance
+    suite and tests.'
+  ids:
+  - AGT-05
+- heading: What is built and what waits
+  item: 'Waits: a packaged Python runtime with a lock file so the app finds the sidecar without CALIPER_AGENT_PYTHON.'
+  ids:
+  - AGT-10
+- heading: What is built and what waits
+  item: 'Waits: status lines from _meta.caliper.status shown in the app.'
+  ids:
+  - AGT-05
+- heading: What is built and what waits
+  item: 'Waits: server-side refusal fallbacks.'
+  ids:
+  - AGT-05
+- heading: What is built and what waits
+  item: 'Waits: the Windows Credential Manager store.'
+  ids:
+  - PLT-13
+- heading: What is built and what waits
+  item: 'Waits: per-message effort and context editing for old captures, both betas.'
+  ids:
+  - AGT-05
+- heading: What is built and what waits
+  item: 'Waits: compaction of a conversation that no longer fits a local model''s context length.'
+  ids:
+  - AGT-28
+- heading: What is built and what waits
+  item: 'Waits: session/load in the sidecar.'
+  ids:
+  - AGT-05
+- heading: Decisions
+  item: 'Decisions of the sidecar: a Python process speaking ACP, the loop on Pydantic AI, tools from
+    the table, config options, statuses as thoughts, approval rules, refusal handling, the key read once,
+    scrubbing at every exit, widget sessions in one process, and the handoff tool.'
+  ids:
+  - AGT-05
+- heading: Notes on the contracts
+  item: 'Notes on the contracts: the agent origin over Caliper API, two approvals merged, fallbacks off,
+    and other providers through Pydantic AI instead of each vendor''s SDK.'
+  ids:
+  - AGT-05

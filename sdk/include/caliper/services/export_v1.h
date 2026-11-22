@@ -1,87 +1,72 @@
 #pragma once
-/* caliper.export.v1 — the terminal sink: pixel-exact view PNGs + a provenance
- * sidecar (docs/references/service-export-v1.md). Export re-renders a submitted draw list
- * OFFSCREEN at any requested resolution through pieces that already ship and
- * are already byte-exact tested — geometry.v1_3's create_view_ex + the existing
- * draw_primitives host path + the promoted debug_readback_rgba8 — then encodes
- * the tightly-packed RGBA8 to PNG (stb_image_write, vendored) and writes a JSON
- * sidecar next to it. No new render code, no retained draw state; the pixels
- * that leave are the tensors, bit-for-bit.
- *
- * Immediate-mode, mirrors the geometry.v1_3 draw signature (v1_3 records,
- * stride-widened exactly like geometry.v1_3): the caller hands the SAME arrays
- * it draws with. Video assembly stays OUTSIDE the ABI — the wiki documents the
- * one ffmpeg line over the numbered frames a sequence writes.
- *
- * Refusal purity extends to the FILESYSTEM: a refused export (missing gate, bad
- * w/h, unwritable path, readback failure, a draw the geometry gate battery
- * rejects) returns 0 and leaves the disk EXACTLY as it was — no file created,
- * no pre-existing file truncated (the PNG is written to a temp name and
- * atomically renamed; the sidecar follows only after the PNG lands).
- *
- * FRAME-THREAD ONLY: every entry point composes the frame-thread-owned
- * renderer (offscreen view create → the geometry draw path → readback), so it
- * carries the same rule as caliper.geometry.v1 — call from the caliper_core_
- * frame() thread only. Calling from any other thread races the renderer; the
- * sequence mutex serializes bookkeeping, it does NOT make export any-thread.
- *
- * Determinism: same draws + camera + clear + (w,h) on the SAME backend →
- * BYTE-IDENTICAL PNG across calls (the readback is deterministic, the byte-exact
- * matrix is built on it, stb PNG encode is deterministic). Cross-backend is NOT
- * byte-identical (Lambert ±2 LSB carries over) — the sidecar's `backend` field
- * makes that honest.
- *
- * IMMUTABLE once published; additive growth lands as export.v1_1. */
+/* caliper.export.v1 — the terminal sink: pixel-exact view PNGs and a provenance sidecar
+ * (docs/applets/services/caliper-export-v1.md). Export re-renders a submitted draw list offscreen through the
+ * geometry draw path and writes the pixels to disk. Call it from the caliper_core_frame() thread only. A refused
+ * export leaves the disk as it was. Immutable once published: additive growth is export.v1_1. */
 #include <stdint.h>
 #include <caliper/services/geometry_v1_3.h>   /* CaliperGeomCamera, CaliperGeomDrawV1_3 */
 
+/** The id of this service, which `get_service` takes. */
 #define CALIPER_EXPORT_V1 "caliper.export.v1"
 
-/* caps() bit 0: view_png / sequences are live. Set IFF the geometry primitives
- * cap (CALIPER_GEOM_CAP_PRIMITIVES) is live on this host — export is a veneer
- * over that path, so it degrades in lockstep with it (absent renderer / headless
- * → 0, every entry point inert, no file ever written). */
+/**
+ * Bit 0 of `caps()`, which means that `view_png` and the sequence entries are live. It is set if and only if the
+ * geometry primitives capability `CALIPER_GEOM_CAP_PRIMITIVES` is live on the host. Without it, every entry is inert
+ * and writes no file.
+ */
 #define CALIPER_EXPORT_CAP_VIEW_PNG (1u << 0)
 
-/* Largest accepted dimension (inclusive). w or h of 0 or > this is refused. */
+/** The largest width or height that export accepts, inclusive. A dimension of 0 or above this is refused. */
 #define CALIPER_EXPORT_MAX_DIM 16384u
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/**
+ * The export service.
+ *
+ * Every entry uses the renderer that the frame thread owns, so call it from that thread only. The draw arguments
+ * have the form of `draw_primitives` in `caliper.geometry.v1_3`, and the caller passes the same arrays that it draws
+ * with. A refused call returns 0 and creates no file and truncates no existing file.
+ */
 typedef struct CaliperExportV1 {
+    /** `sizeof(CaliperExportV1)` as the host built it. */
     uint32_t struct_size;
+    /** Return the capability bits. Bit 0 is `CALIPER_EXPORT_CAP_VIEW_PNG`. */
     uint32_t (*caps)(void);
-    /* Render `draws` (v1_3 records, stride-widened exactly like geometry.v1_3)
-     * into a fresh offscreen (w,h) target and write:
-     *   <path>        — PNG, tightly-packed RGBA8, top-down (row 0 = top).
-     *   <path>.json   — the provenance sidecar (docs/references/service-export-v1.md), written
-     *                   atomically AFTER the PNG succeeds.
-     * Returns 1 on success; 0 on refusal. On ANY refusal — no gate/renderer,
-     * cam==0, w/h 0 or > CALIPER_EXPORT_MAX_DIM, unwritable path, readback
-     * failure, or a draw the geometry gate battery rejects — NO file is created
-     * and NO pre-existing file is truncated. Same gate battery, same reason
-     * strings, same atomicity as draw_primitives (it IS draw_primitives).
-     * state_json is nullable and copied VERBATIM into the sidecar's "state". */
+    /**
+     * Render `draws` into a new offscreen target of `w` by `h` pixels and write the PNG to `path` and the
+     * provenance sidecar to `<path>.json`. The PNG holds tightly packed RGBA8 pixels with row 0 at the top, and the
+     * sidecar follows only after the PNG lands. Return 1 on success, or 0 on a refusal, which has the same gates and
+     * reason strings as `draw_primitives`. A refusal comes from a missing gate or renderer, a `NULL` `cam`, a
+     * dimension of 0 or above `CALIPER_EXPORT_MAX_DIM`, an unwritable path, a failed readback or a draw that the
+     * geometry gates reject. `state_json` can be `NULL`, and the sidecar copies it verbatim into its "state" field.
+     */
     uint32_t (*view_png)(const char* path, uint32_t w, uint32_t h,
                          const CaliperGeomCamera* cam,
                          const CaliperGeomDrawV1_3* draws,
                          uint32_t draw_count, uint32_t draw_stride,
                          uint32_t clear_rgba,
                          const char* state_json);
-    /* Frame sequences: same per-frame contract as view_png, frames written as
-     * <dir>/frame_%06u.png, plus ONE sidecar for the whole sequence written at
-     * end (<dir>/sequence.json, carrying frame_count). begin_sequence returns a
-     * non-zero handle (0 = refusal); frame() renders one numbered frame (1 ok /
-     * 0 refusal); end_sequence() finalizes + drops the handle. ONE sequence live
-     * at a time (v0); begin while one is active is refused. */
+    /**
+     * Start a frame sequence of `w` by `h` pixels in the directory `dir` and return a handle, or 0 on a refusal.
+     * The frames are written as `<dir>/frame_%06u.png`, and `end_sequence` writes one sidecar for the whole
+     * sequence as `<dir>/sequence.json` with the frame count. Only one sequence can be live, so a call while
+     * another is active is refused. `state_json` can be `NULL`.
+     */
     uint64_t (*begin_sequence)(const char* dir, uint32_t w, uint32_t h,
                                const char* state_json);
+    /** Render one numbered frame of the sequence `seq` as `view_png` does. Return 1 on success, or 0 on a refusal. */
     uint32_t (*frame)(uint64_t seq, const CaliperGeomCamera* cam,
                       const CaliperGeomDrawV1_3* draws, uint32_t draw_count,
                       uint32_t draw_stride, uint32_t clear_rgba);
+    /**
+     * Finish the sequence `seq`, write its sidecar and drop the handle. The call returns nothing, so a failed
+     * sidecar write only reaches the host log. The frames stay on disk, and the handle is dropped in any case.
+     */
     void     (*end_sequence)(uint64_t seq);
+    /** Reserved. Always `NULL`. */
     void*    reserved0;
 } CaliperExportV1;
 

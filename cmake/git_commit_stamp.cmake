@@ -1,5 +1,5 @@
 # Regenerates the git-commit stamp header at BUILD time (export.v1 sidecar —
-# docs/references/service-export-v1.md: provenance must track the bytes being built, not the last
+# docs/applets/services/caliper-export-v1.md: provenance must track the bytes being built, not the last
 # configure). Writes only when the content changes, so incremental builds do
 # not recompile host_services.cpp gratuitously.
 execute_process(

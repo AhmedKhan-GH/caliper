@@ -1,33 +1,32 @@
-# Caliper
+# Overview
 
-Caliper is a desktop application that draws live graphics from tensors that stay on the GPU. A host program owns the window, the renderer and the frame loop. Applets are shared libraries that the host loads at run time. An applet supplies ImGui user interface and compute, and talks to the host through a frozen C ABI and a set of named service tables.
+Caliper is a desktop application that draws live graphics from tensors that stay on the GPU. It is for people who train models and write tools for them. A host program owns the window, the renderer and the frame loop. Applets are shared libraries that the host loads at run time. Caliper is built from source. This version of the repository is host 0.6.0, SDK 0.1.0 and ABI epoch 2.
 
-Tensors reach the screen without a trip through the CPU on the Metal and Vulkan paths. There is no fallback renderer yet: where neither Metal nor Vulkan starts, Caliper refuses with a message that says why. A Python package can open a live session from a running training script and show it in the Caliper viewer.
+## Components
 
-Caliper is built from source. This version of the repository is host 0.6.0, SDK 0.1.0 and ABI epoch 2.
+The host draws and the applets supply content. An applet adds ImGui user interface and compute, and it talks to the host through a frozen C ABI and named service tables. [Development basics](development/development-basics.md) explains the host, the applet and the build, and [The ABI](applets/applet-contract.md) is the contract between them.
 
-## Where to start
+Caliper LIB is the Python package `caliper`. A training script calls `show()` and its sibling calls, and the tensors become live views. The views appear in the Caliper app, in the `caliper-viewer` program, in a notebook widget or in a browser tab. A hub, started with `caliper serve`, holds the sessions of several scripts at one address.
 
-- [Development basics](tutorials/development-basics.md) explains the host, the applet and the build.
-- [Your first applet](tutorials/first-applet.md) builds the smallest UI applet.
-- [Your first ML applet](tutorials/first-ml-applet.md) adds jobs, metrics, device selection and tensor views.
-- [Embedding Caliper](references/embedding.md) describes the embeddable host interface.
-- [The ABI](references/abi.md) is the contract between host and applets.
+```mermaid
+flowchart LR
+    script[Training Script] -->|view calls| lib[Caliper LIB]
+    lib -->|snapshots| app[Caliper App]
+    lib -->|stream| hub[Hub]
+    hub -->|stream| web[Browser Views]
+    app -->|loads| applets[Applets]
+    builder[Builder] -->|commands| app
+    agents[Agents] -->|commands| app
+```
 
 ## Backends
 
-| Backend | Where it is used | How tensors reach the screen |
-|---|---|---|
-| Metal and MPS | macOS default | Metal processes accepted MPS buffers directly, without host staging. |
-| Vulkan and CUDA | Windows default | A CUDA kernel writes a tensor update straight into the Vulkan image, with no copy. |
+On the Metal and Vulkan paths, tensors reach the screen without a trip through the CPU. On macOS the default is Metal with MPS, and Metal processes accepted MPS buffers without host staging. On Windows the default is Vulkan with CUDA, and a CUDA kernel writes a tensor update straight into the Vulkan image. OpenGL 3.3 is the fallback on every platform. The host stages tensor uploads through the CPU on that path.
 
-[Rendering](explanations/rendering.md) explains how the host chooses a backend, and [`caliper.tensor_bridge.v1`](references/service-tensor-bridge-v1.md) lists what each backend accepts.
+The host reports the path that drew each image and claims zero-copy only when that path ran. [Rendering](applets/rendering.md) explains how the host chooses a backend.
 
-## The documentation
+## Entry Points
 
-- [Tutorials](tutorials/index.md) are start-to-finish lessons.
-- [Guides](guides/index.md) are task recipes for debugging, attaching to scripts and continuous integration.
-- [References](references/index.md) list the ABI, the manifest, the service tables, the adapters, embedding, the C++ sugar and the folders and environment variables.
-- [Explanations](explanations/index.md) cover rendering, compatibility, trust and the architecture.
+A reader who wants live views of a PyTorch run starts with Caliper LIB. The [Introduction](introduction/index.md) and [Python](python/index.md) areas cover that path. A reader who wants to write an applet starts with [Your first applet](applets/first-applet.md), which builds the smallest UI applet.
 
-Plans for work that is not built yet, with the roadmap, are kept in the repository's `design/` folder and are not part of this site.
+The builder lets you assemble a dashboard from sources and panels by hand. Agents work in the app too. A widget agent edits one target in place, an agent in the side chat takes bigger jobs, and an outside agent can drive the app through the MCP server and the HTTP API. [Embedding Caliper](web/embedding-api.md) describes how another program hosts the applet canvas. Plans for work that is not built yet live in the repository's `design/` folder and are not part of this site.

@@ -21,7 +21,7 @@ const char* display_name(const char* name) {
 }  // namespace
 
 std::unique_ptr<HostRenderer> core_select_renderer(std::string* why) {
-    // Renderer seam (docs/explanations/rendering.md): backend hints run before
+    // Renderer seam (docs/applets/rendering.md): backend hints run before
     // the window exists; init() runs after. Metal on Apple and Vulkan on
     // Windows (device-resident CUDA tensors through external-memory interop).
     const char* want = std::getenv("CALIPER_RENDERER");

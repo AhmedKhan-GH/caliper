@@ -13,7 +13,7 @@ updates:
     commit-message:
       prefix: "Deps"
     ignore:
-      # The UI stack pin defines the applet ABI epoch (docs/explanations/compatibility.md), so it moves only on purpose.
+      # The UI stack pin defines the applet ABI epoch (docs/development/compatibility-and-epochs.md), so it moves only on purpose.
       - dependency-name: "third_party/imgui"
       - dependency-name: "third_party/implot"
       - dependency-name: "third_party/implot3d"

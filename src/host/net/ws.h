@@ -45,6 +45,14 @@
 // max_header_bytes, or one not complete within header_timeout_ms, closes the
 // TCP connection (a request gets 400 or 431 first when possible).
 //
+// REQUEST BODIES. The server reads no request body unless Options::body_limit
+// lets it: given a request head with a Content-Length (and no
+// Transfer-Encoding), it returns the most bytes it takes for that request, and
+// when the Content-Length is within that, the server reads the body within
+// body_timeout_ms (408 and close beyond) and reports the Request with it in
+// HttpRequest::body. Any other request is reported as soon as its head is
+// complete, with an empty body, and the owner refuses it as it sees fit.
+//
 // LOOPBACK. The server listens on 127.0.0.1 unless told otherwise, and the
 // client connects only to numeric IPv4 hosts and "localhost" (127.0.0.1): there
 // is no name resolution. Applying the protocol's 403 rules (token, Host,
@@ -57,6 +65,7 @@
 // connection that asks for no event.
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -82,6 +91,8 @@ enum : uint16_t {
     kCloseTooBig = 1009,            // a message over max_message_bytes
 };
 
+struct HttpRequest;
+
 struct Options {
     size_t max_message_bytes = size_t(64) << 20;   // CALIPER_NET_MAX_FRAME_BYTES
     size_t max_header_bytes = 16 * 1024;           // the HTTP head of the handshake
@@ -91,6 +102,10 @@ struct Options {
     int header_timeout_ms = 10000;     // the HTTP head must complete in this time
     int close_timeout_ms = 2000;       // wait this long for the peer's close frame
     size_t max_connections = 1024;     // server: TCP connections beyond are closed at once
+    // Server: the most body bytes to read for a request head (see REQUEST
+    // BODIES above); null or 0 reads no body. Called on the polling thread.
+    std::function<size_t(const HttpRequest&)> body_limit;
+    int body_timeout_ms = 10000;       // a body allowed by body_limit must arrive in this time
 };
 
 // What the server parsed from a request head (Event::Request).
@@ -106,6 +121,7 @@ struct HttpRequest {
                               // Upgrade: websocket, Connection: upgrade, version 13,
                               // a 16-byte Sec-WebSocket-Key)
     std::vector<std::pair<std::string, std::string>> headers;   // names lower-cased
+    std::string body;      // the body, only when Options::body_limit let the server read it
 
     // The first header of that (lower-case) name, "" when absent.
     std::string header(const std::string& lower_name) const;

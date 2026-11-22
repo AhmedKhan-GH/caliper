@@ -1,0 +1,274 @@
+# yaml-language-server: $schema=schema.json
+title: Builder pane plan page
+kind: page
+source: design/builder-pane.md
+ref: main
+summary: The plan page design/builder-pane.md on main, read heading by heading; each plan heading has
+  an entry or is listed as holding no feature.
+entries:
+- heading: What is built and what is left
+  item: 'The builder pane as built: the library caliper_builder_pane with BuilderPane, its pure edit helpers,
+    the region layout, the ImGui drawing, and the spec page layout.'
+  ids:
+  - SPC-07
+- heading: What is built and what is left
+  item: Sources lists the catalog one kind at a time and groups metrics by run.
+  ids:
+  - SPC-04
+  - SPC-07
+- heading: What is built and what is left
+  item: A panel is removed with the cross on its strip, Remove panel in its right-click menu or the delete
+    key, as one panel.remove, with undo and redo on the dashboard page.
+  ids:
+  - SPC-09
+- heading: What is built and what is left
+  item: While the inline prompt is open or a preview is shown, no panel offers removal, so the person
+    accepts or rejects first.
+  ids:
+  - SPC-09
+  - AGT-05
+- heading: What is built and what is left
+  item: 'Fixes made after the dry run of building a dashboard by hand: the empty canvas line, slice and
+    reduce axes with ranges and names, a slice index kept in range, Open in browser, and the landing''s
+    Projects listing dashboards.'
+  ids:
+  - SPC-07
+  - EMB-06
+- heading: What is built and what is left
+  item: The pane on the live page is left to do.
+  ids:
+  - SPC-30
+- heading: What is built and what is left
+  item: The builder is off on Windows, so the pane is left for the Windows work.
+  ids:
+  - PLT-13
+- heading: What is built and what is left
+  item: 'Open item: Activity shows a row for every layout.set of one divider drag; they are to be grouped
+    as the side chat groups repeated calls of one command.'
+  reason: maintenance
+- heading: What is built and what is left
+  item: 'Open item: nothing tells a person that F3 New dashboard takes the command line''s text as the
+    new dashboard''s title.'
+  reason: maintenance
+- heading: What is built and what is left
+  item: caliper-builder-shot, the capture tool that builds the three-panel dashboard through the pane's
+    own input, and the test targets.
+  ids:
+  - SPC-07
+- heading: What is built and what is left
+  item: The hidden input driver's builder steps and the page bar items (named rectangles remove, panel
+    and menu).
+  ids:
+  - SPC-07
+- heading: The regions
+  item: Build mode adds a Sources and Primitives column on the left, a Properties column on the right
+    and a spec text strip under the canvas, computed as plain rectangles with fixed shares and minimums.
+  ids:
+  - SPC-07
+- heading: The regions
+  item: 'On a small window the regions give way in a fixed order: the text strip, then the columns, and
+    the canvas never goes below its minimum.'
+  ids:
+  - SPC-07
+- heading: The regions
+  item: With the side chat open in build mode, the chat keeps its column width and Properties takes 45
+    percent of the column above it.
+  ids:
+  - SPC-07
+  - AGT-03
+- heading: Sources
+  item: The source palette lists the spec's own sources first and then the catalog's by kind (Tables,
+    Tensors, Live, Feeds, Metrics), each with its shape, a filter line, and columns for tabular rows.
+  ids:
+  - SPC-04
+  - SPC-07
+- heading: Sources
+  item: Metrics are grouped by run, newest first, with the newest five shown until Show all, and the filter
+    searches every run.
+  ids:
+  - SPC-04
+  - SPC-07
+- heading: Sources
+  item: The pane reads the catalog one kind at a time with the largest limit and pages a cut metric list
+    by the next character of its name.
+  ids:
+  - SPC-04
+  - SPC-07
+- heading: Sources
+  item: A row is selected and dragged, or added with Enter, the Add button or a double click, to make
+    a panel of the default primitive.
+  ids:
+  - SPC-07
+- heading: Primitives
+  item: The primitive palette lists the seven primitives; a click adds a panel bound to the selected source
+    by the pane's rules, and a primitive that does not fit is faint with the validator's message.
+  ids:
+  - SPC-07
+  - SPC-01
+- heading: Primitives
+  item: Fit hints say in the source's own terms why nothing was bound, and a panel is only made with its
+    required slots, except a text panel.
+  ids:
+  - SPC-07
+- heading: The canvas
+  item: The canvas is the spec runtime's own drawing, with an empty-state hint in build mode and focus
+    by click with the bronze frame.
+  ids:
+  - SPC-07
+- heading: The canvas
+  item: Moving a panel by its title strip onto another panel's edge, centre (tabs) or the canvas border.
+  ids:
+  - SPC-07
+- heading: The canvas
+  item: Resizing by dragging a split's divider, in hundredths from 0.05 to 0.95.
+  ids:
+  - SPC-07
+- heading: The canvas
+  item: Dropping a source, column or primitive onto the canvas makes a panel, and dropping onto a slot
+    binds it, with a drop preview outline and the validator's message for a drop that does not fit.
+  ids:
+  - SPC-07
+- heading: The canvas
+  item: Removing the focused panel with the delete key.
+  ids:
+  - SPC-09
+- heading: Properties
+  item: 'The property inspector for a panel: id, primitive, title, bindings one row per slot with validation,
+    and the options its primitive takes.'
+  ids:
+  - SPC-07
+- heading: Properties
+  item: 'The property inspector for a source: id, catalog id, shape and an ordered list of transforms
+    (slice, reduce, normalise) with axis names, ranges and the shape after each.'
+  ids:
+  - SPC-07
+  - SPC-01
+- heading: Properties
+  item: With nothing focused, Properties edits the spec's id, title and description and shows counts and
+    its file.
+  ids:
+  - SPC-07
+- heading: The spec text
+  item: The spec text strip shows the canonical TOML read-only with line numbers, and Edit turns it into
+    an editor whose valid drafts apply at once with spec.set_text.
+  ids:
+  - SPC-07
+  - SPC-02
+- heading: The spec text
+  item: 'The text is the source of truth: the canvas, Properties and the strip read one OpenSpec of the
+    session, and an invalid draft shows diagnostics at their lines and blocks other edits.'
+  ids:
+  - SPC-07
+  - SPC-02
+- heading: The spec text
+  item: The read-only strip scrolls to the last changed line from any origin.
+  ids:
+  - SPC-07
+- heading: Gestures and commands
+  item: Every gesture is a command from the builder origin, one group per gesture, one undo step, checked
+    on a copy before sending.
+  ids:
+  - SPC-07
+  - SPC-05
+- heading: Gestures and commands
+  item: Renames, left placements and a new panel at an edge reuse spec.set_text and layout.set instead
+    of new commands.
+  ids:
+  - SPC-07
+  - SPC-05
+- heading: Gestures and commands
+  item: The page bar shows the last refusal's code, and gestures are refused with builder.busy while a
+    long command holds the session.
+  ids:
+  - SPC-07
+- heading: Keys
+  item: 'Keyboard shortcuts of build mode: Build, Text, Edit, Undo and Redo, Save, Add, Remove and Escape,
+    with Ctrl in place of the command key off macOS.'
+  ids:
+  - SPC-07
+- heading: The file drop
+  item: Files dropped on the window import through data.import from the ui origin, select the new sources
+    and list each refused path with its reason.
+  ids:
+  - SPC-07
+  - SPC-03
+- heading: The file drop
+  item: 'A drop lands according to the page: build mode on the spec page, a new or open spec from the
+    landing, a new Untitled spec beside live sources on the live page, and a log line on an applet''s
+    page.'
+  ids:
+  - SPC-07
+- heading: A new dashboard
+  item: F3 New dashboard on the landing screen makes a spec with the command line's text as its title,
+    an id derived from it, in build mode.
+  ids:
+  - SPC-07
+- heading: A new dashboard
+  item: The landing's Projects pane lists the workspace's dashboards with name, id and status, in one
+    selection order with Instruments.
+  ids:
+  - SPC-07
+  - SPC-08
+- heading: The capture tool
+  item: caliper-builder-shot builds the dashboard through the pane's own input and writes six PNG steps.
+  ids:
+  - SPC-07
+- heading: The pane on the spec page
+  item: The spec page owns one BuilderPane with a page bar (Build, Text, Undo, Redo, Save), key routing,
+    and the chat drawn in the right column in build mode.
+  ids:
+  - SPC-07
+- heading: The pane on the spec page
+  item: Open in browser hands the saved dashboard to the app, which starts Caliper API on loopback if
+    needed and opens the viewer link with the viewer token.
+  ids:
+  - EMB-06
+  - SPC-07
+- heading: The pane on the spec page
+  item: An approved agent edit, a command-K Accept and a hand edit share one history, so Undo takes back
+    whichever came last.
+  ids:
+  - SPC-07
+  - AGT-05
+- heading: Tests
+  item: 'Tests of the pane: caliper_builder_pane (headless), caliper_builder_pane_gpu, caliper_builder_app,
+    and extra checks of axes, names, slice clamping and split records.'
+  ids:
+  - SPC-07
+- heading: Decisions
+  item: 'Decisions that fix the pane''s rules: panels made bound or not at all, renames as spec.set_text,
+    one group per gesture, checks on a copy, ratio in hundredths.'
+  ids:
+  - SPC-07
+- heading: Decisions
+  item: Save changes to <name>? is asked before F3 New dashboard, opening another dashboard from the landing
+    and closing the window; agent paths are reviewed on cards instead.
+  ids:
+  - SPC-07
+- heading: Decisions
+  item: A drop on the live page starts a new dashboard beside the stream's live sources, and an unsaved
+    open spec takes the files instead.
+  ids:
+  - SPC-07
+- heading: Decisions
+  item: Open in browser keeps the API running until the app quits and the link carries only the viewer
+    token.
+  ids:
+  - EMB-06
+  - AGT-01
+- heading: Decisions
+  item: 'An agent never ends the person''s running applet: an agent''s spec.new, spec.open or applet.open
+    opens the spec in the session, and F6 Dashboard on the landing returns to it.'
+  ids:
+  - SPC-07
+  - AGT-02
+- heading: Decisions
+  item: The person's dashboards are listed under Projects, not Instruments; a slice index outside its
+    axis is set to the nearer end with a note.
+  ids:
+  - SPC-07
+- heading: Limits
+  item: 'Limits of the pane: splits of more than two children do not drag, tabs are not dragged by their
+    tab, transforms are not reordered, no Selection tab, and bindings list only the spec''s sources.'
+  ids:
+  - SPC-07

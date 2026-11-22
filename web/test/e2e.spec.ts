@@ -98,19 +98,28 @@ test('a selection in the page reaches the producer as an event', async ({ page, 
   await page.goto(producer.url);
   await plates(page, 6);
   const el = page.locator('caliper-view[view="weights"]');
-  const s = await state(page, 'weights');
-  const area = s.area as { x: number; y: number; w: number; h: number };
-  const box = (await el.locator('.body').boundingBox())!;
-  // Cells are area.w / 64 wide and area.h / 48 high; drag from cell (2, 4) to cell (5, 9).
-  const at = (r: number, c: number) => [box.x + area.x + (c + 0.5) * (area.w / 64), box.y + area.y + (r + 0.5) * (area.h / 48)];
-  const [x0, y0] = at(2, 4), [x1, y1] = at(5, 9);
-  await page.keyboard.down('Shift');
-  await page.mouse.move(x0, y0);
-  await page.mouse.down();
-  await page.mouse.move(x1, y1, { steps: 4 });
-  await page.mouse.up();
-  await page.keyboard.up('Shift');
-  await roundTrip.poll(() => producer.events.filter((e) => e.type === 'select')).toEqual([
+  const selects = () => producer.events.filter((e) => e.type === 'select');
+  // The drag is measured and made again until the producer has the event: on
+  // a loaded runner the page can still be laying out after its views connect,
+  // and a drag measured before that lands off the cells and selects nothing.
+  await expect(async () => {
+    if (selects().length === 0) {
+      const s = await state(page, 'weights');
+      const area = s.area as { x: number; y: number; w: number; h: number };
+      const box = (await el.locator('.body').boundingBox())!;
+      // Cells are area.w / 64 wide and area.h / 48 high; drag from cell (2, 4) to cell (5, 9).
+      const at = (r: number, c: number) => [box.x + area.x + (c + 0.5) * (area.w / 64), box.y + area.y + (r + 0.5) * (area.h / 48)];
+      const [x0, y0] = at(2, 4), [x1, y1] = at(5, 9);
+      await page.keyboard.down('Shift');
+      await page.mouse.move(x0, y0);
+      await page.mouse.down();
+      await page.mouse.move(x1, y1, { steps: 4 });
+      await page.mouse.up();
+      await page.keyboard.up('Shift');
+    }
+    await expect.poll(() => selects().length, { timeout: 10_000 }).toBeGreaterThan(0);
+  }).toPass({ timeout: 45_000 });
+  expect(selects()).toEqual([
     expect.objectContaining({ view: 'weights', type: 'select', detail: { rows: [2, 6], cols: [4, 10] } }),
   ]);
   const ev = producer.events.find((e) => e.type === 'select')!;

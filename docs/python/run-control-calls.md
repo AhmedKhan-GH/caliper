@@ -1,0 +1,76 @@
+---
+kind: reference
+figure: none
+---
+
+# Run Control Calls
+
+The run control calls let viewers pause a training loop, change its parameters, run its actions and link selections across views.
+
+## Controls
+
+Controls let viewers reach back into the running script. They pause, resume and single-step its training loop, change the parameters it registered and run the actions it registered. Linked selection makes a selection in one view highlight the same items in the other views.
+
+Both travel on the stream as messages of wire protocol 3.1 ([Controls](../reference/run-control-messages.md#controls) and [Linked selection](../reference/linked-selection-messages.md#linked-selection)). Thus they work while a notebook cell runs, when the kernel cannot read widget messages. The viewers of `caliper.serve()` may control unless it started with `control=False`. The viewers of a hub that `connect()` streams to may control only when the hub started with `--allow-control`. Both senders carry them.
+
+[Script Control](script-control.md) uses them in a training loop. Every call also works without a server. Parameters keep their values, `step()` returns at once, and Python code can call an action.
+
+[](){#caliper.step}
+### `step`
+
+::: caliper.step
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
+
+[](){#caliper.pause}
+### `pause`
+
+::: caliper.pause
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
+
+[](){#caliper.param}
+### `param`
+
+::: caliper.param
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
+
+::: caliper.Param
+    options:
+      members: [value, pending, set, remove]
+
+[](){#caliper.action}
+### `action`
+
+::: caliper.action
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
+
+::: caliper.Action
+    options:
+      members: [__call__, remove]
+
+[](){#caliper.items}
+### `items`
+
+::: caliper.items
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
+
+::: caliper.ItemSpace
+    options:
+      members: [selection, select, clear]
+
+[](){#caliper.controls}
+### `controls`
+
+::: caliper.controls
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false

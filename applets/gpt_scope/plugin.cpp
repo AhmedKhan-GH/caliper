@@ -1,7 +1,7 @@
 #include <caliper/caliper.hpp>
 #include "gpt_model.h"
 
-// Epoch-2 entry (docs/references/abi.md). All applet logic lives in GPTScopeApplet;
+// Epoch-2 entry (docs/applets/applet-contract.md). All applet logic lives in GPTScopeApplet;
 // this file is only the ABI bridge — the established adapter shape. ui::connect
 // is handled by the macro. The id/version below are byte-identical to
 // gpt_scope.caliper.toml (the loader rejects any disagreement).

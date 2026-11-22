@@ -1,5 +1,5 @@
 #pragma once
-// Headless fake CaliperHost (docs/explanations/testing.md, "fixture host"): TDD applets and
+// Headless fake CaliperHost (docs/development/testing.md, "fixture host"): TDD applets and
 // sugar without launching UI. Vends log.v1, and ui.v1_1 for its dock hints
 // only: that table has no UI contexts (its context getters return NULL), and
 // it records every dock_hint() call, so a test can assert the roles an applet

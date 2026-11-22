@@ -1,4 +1,4 @@
-// Loading from outside the core (docs/explanations/compatibility.md, "Several
+// Loading from outside the core (docs/development/compatibility-and-epochs.md, "Several
 // copies of one applet"): the search order, CALIPER_APPLET_PATH, the
 // --applets command line, and the choice between copies of one id.
 #include <doctest/doctest.h>

@@ -210,7 +210,7 @@ struct VmmApi {
 const VmmApi* vmm_api();
 
 // ---------------------------------------------------------------------------
-// OPTIONAL direct-image surface (docs/explanations/vulkan-cuda.md): what the
+// OPTIONAL direct-image surface (docs/development/vulkan-and-cuda.md): what the
 // renderer needs to launch a kernel that writes a VkImage. A SEPARATE table for
 // the same reason as vmm_api(): a hole here costs only the direct path, and the
 // renderer stays on its buffer path. Layouts mirror cuda.h's v1 ABI.

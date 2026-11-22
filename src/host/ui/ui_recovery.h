@@ -1,6 +1,6 @@
 #pragma once
 // ============================================================================
-// UI stack recovery after an applet fault (crash_guard.h, docs/explanations/trust-model.md).
+// UI stack recovery after an applet fault (crash_guard.h, docs/applets/trust-model.md).
 // An applet that throws or faults partway through frame() leaves open
 // whatever it had begun on the shared ImGui / ImPlot / ImPlot3D contexts
 // (caliper.ui.v1): windows, child windows, tables, tab bars, tree nodes,

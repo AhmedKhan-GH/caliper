@@ -209,7 +209,7 @@ TEST_CASE("loader: descriptor-required service missing refuses with the friendly
 }
 
 // ---------------------------------------------------------------------------
-// Data-schema stamp (docs/explanations/compatibility.md, "The version of each
+// Data-schema stamp (docs/development/compatibility-and-epochs.md, "The version of each
 // applet's stored data").
 // ---------------------------------------------------------------------------
 

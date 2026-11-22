@@ -1,0 +1,255 @@
+# yaml-language-server: $schema=schema.json
+title: Recordings plan page
+kind: page
+source: design/recordings.md
+ref: sprint4
+summary: The plan page design/recordings.md, which only the sprint4 branch holds, in its newest version
+  there, read heading by heading.
+entries:
+- heading: What is built and what is planned
+  item: Nothing on this page is built; it rests on protocol 3.1, series retention, the hub's ended sessions,
+    sprint 3's workspace and reserved names, the metrics store and the web package's codec. The evidence
+    for the file is a structural check of MCAP, kept outside the repository.
+  ids:
+  - STR-12
+- heading: The recording model
+  item: Overview of timelines, stamps, calls, recorders, what is stored and what a recording can answer.
+  ids:
+  - STR-12
+- heading: Timelines
+  item: 'Timelines: step, time and up to six of the script''s own, ids 0 to 7, never removed during a
+    session.'
+  ids:
+  - STR-23
+- heading: Stamps and static items
+  item: Stamps read at the call on every timeline, absent stamps, and static items (static=True) present
+    at every position.
+  ids:
+  - STR-23
+- heading: The calls in Caliper LIB
+  item: caliper.step, caliper.timeline, caliper.set_time and caliper.record(path, ...) with views, rates,
+    data_views, budget, horizon, sync and full (Caliper LIB, 2 days for record).
+  ids:
+  - STR-12
+  - STR-23
+- heading: Recorders
+  item: 'Three recorders: Caliper LIB (caliper.record), the hub (caliper serve --record) and the Caliper
+    app (Record in the session toolbar or the setting Record sessions when they start); a recorder is
+    a subscriber that stores the live frames.'
+  ids:
+  - STR-12
+  - STR-14
+  - STR-15
+- heading: What a recording stores
+  item: Stored items per view kind (heatmap, image, points, series, histogram, bars, scene, text) plus
+    VIEWS and CONTROLS, each stored as the live frame.
+  ids:
+  - STR-12
+- heading: What a recording can and cannot answer
+  item: A recording shows every recorded view at any position under latest-at at its recorded rate and
+    data view, and cannot serve data views never recorded.
+  ids:
+  - STR-12
+- heading: Retention and downsampling
+  item: Retention and downsampling overview.
+  ids:
+  - STR-12
+- heading: Rates
+  item: Per-view recording rates (2 per second for heatmaps, images, points, histograms and bars; 10 per
+    second per scene entity part) and rates= or --record-rate.
+  ids:
+  - STR-12
+- heading: Budgets
+  item: 'Memory and disk budgets: a 64 MiB write queue, 4 GiB per recording by default, 512 MiB live buffer
+    in a browser.'
+  ids:
+  - STR-12
+- heading: Thinning
+  item: 'Logarithmic thinning by count per view and entity part: recent data whole, old data at density
+    halving with each doubling of age, never removing static items, clears, class tables, series or text.'
+  ids:
+  - STR-12
+- heading: Series and text
+  item: Series kept whole to 4,194,304 values then decimated in buckets of 64 keeping min and max; text
+    limited too.
+  ids:
+  - STR-12
+- heading: Keyframes for scenes
+  item: Keyframes per scene point to the items holding its state so that latest-at reads at most 512 entries
+    after one.
+  ids:
+  - STR-12
+- heading: When the budget is reached
+  item: 'Order of action at the budget: compact closed segments, halve the horizon, decimate series, drop
+    the oldest band, stop recording snapshots; never delete a recording.'
+  ids:
+  - STR-12
+- heading: Storage in the workspace
+  item: Recordings in workspace/recordings/<id>.mcap and the index in workspace.duckdb under the schema
+    caliper_recordings.
+  ids:
+  - STR-29
+- heading: Payloads in files, the index in the database
+  item: Payloads stay in the files and are read in place or by range request; the index and small data
+    live in DuckDB and can be rebuilt from the files.
+  ids:
+  - STR-29
+- heading: The schema `caliper_recordings`
+  item: Tables recordings, timelines, views, items, entities, series_values, text_lines and controls,
+    and a SQL view per series or text view.
+  ids:
+  - STR-29
+- heading: The catalog kind `recording`
+  item: The recording provider lists one entry per recorded view and one per recording as sprint 3's CatalogEntry,
+    so a recording is opened and queried like a source.
+  ids:
+  - STR-29
+- heading: The metrics store
+  item: The metrics store and recordings stay separate and meet in the catalog.
+  ids:
+  - RUN-01
+- heading: The recording file
+  item: Overview of the MCAP recording file.
+  ids:
+  - STR-12
+- heading: Why MCAP
+  item: The container is MCAP with the extension .mcap, chosen by the user for its official readers and
+    command-line tool.
+  ids:
+  - STR-12
+- heading: The file
+  item: Channels per view and per entity part, message encoding caliper.wire3, schemas per kind, log_time
+    from the time stamp, and a caliper.segment metadata record.
+  ids:
+  - STR-12
+- heading: The timeline and keyframe index
+  item: The caliper.index and caliper.index.delta attachments, validated against the file and rebuilt
+    when stale, answer latest-at by binary search and scene state from keyframes.
+  ids:
+  - STR-12
+- heading: Alignment
+  item: A private padding record before each large frame aligns its arrays to 16 KiB for no-copy reads.
+  ids:
+  - STR-12
+- heading: Compression
+  item: Small frames in zstd chunks and large frames raw, through a patch of the official writer pinned
+    at 2.2.0.
+  ids:
+  - STR-12
+- heading: Segments and the manifest
+  item: A single file up to 1 GiB, then a folder of segments with a manifest, a roll-over, thinning and
+    compaction per segment; each segment is a valid MCAP file.
+  ids:
+  - STR-12
+- heading: Guarantees
+  item: 'Atomic, consistent, isolated and durable: commit points, a delta index per commit, an exclusive
+    writer lock, and a sync cadence of one second by default (sync=, full=).'
+  ids:
+  - STR-12
+- heading: Recovery and the standard tools
+  item: Caliper repairs its own files and never uses mcap recover; the page tabulates what the mcap tool
+    does with Caliper files.
+  ids:
+  - STR-12
+- heading: Standard MCAP and Caliper's additions
+  item: Table of the additions (encoding, index attachments, metadata, profile, padding opcode 0xCA, segments,
+    mixed compression) and what a standard reader does with each; standard payloads are a decision not
+    taken.
+  ids:
+  - STR-12
+- heading: Exporting to Parquet
+  item: caliper export <recording> --to parquet with --out, --view and --arrays writes items, series,
+    text, controls and optional array tables (2 days).
+  ids:
+  - STR-28
+- heading: Limits of the format
+  item: 'The format''s own limits: the in-memory index of about 40 bytes per item, sizes, and features
+    that standard tools lose.'
+  ids:
+  - STR-12
+- heading: Opening a recording
+  item: 'Three ways to open a recording: in the Caliper app (catalog entry, drop a .mcap, caliper open),
+    in a browser with no server (drop or ?recording=<url>), and through the hub (caliper serve --recordings).'
+  ids:
+  - STR-14
+  - STR-15
+  - COR-26
+  - STR-26
+- heading: The scrubber
+  item: The scrubber moves one cursor along the timelines of a recording or live session; overview.
+  ids:
+  - STR-13
+- heading: The control
+  item: The scrubber control in the app and in a browser, with the live edge and the hatched part that
+    thinning removed.
+  ids:
+  - STR-13
+  - STR-27
+- heading: Timelines and the cursor
+  item: The cursor holds a value per timeline; the user chooses which timeline drives it.
+  ids:
+  - STR-13
+- heading: What each view shows at the cursor
+  item: 'Latest-at per view kind: each view shows its newest item at or before the cursor.'
+  ids:
+  - STR-13
+- heading: Playing
+  item: Playback advances the cursor at a chosen speed with the server-side rate limits.
+  ids:
+  - STR-13
+- heading: Live sessions
+  item: A live session is scrubbed from the live buffer, and the scrubber says how far back it reaches.
+  ids:
+  - STR-13
+- heading: Selections and controls while scrubbing
+  item: Selections and recorded controls behave under the cursor.
+  ids:
+  - STR-13
+- heading: Keyboard
+  item: Keyboard shortcuts for the scrubber.
+  ids:
+  - STR-13
+- heading: Several views in step
+  item: One cursor per session page keeps every view in step, with generations through a hub.
+  ids:
+  - STR-13
+  - RUN-06
+- heading: Size
+  item: 'Recordings take 25 builder days in increment 7: C++ recorder and reader 18, Caliper LIB 2, browser
+    reader 3, Parquet export 2; the app''s recorder is in increment 8 and the hub''s moved to sprint 5.'
+  ids:
+  - STR-12
+  - STR-26
+  - STR-28
+- heading: Limits
+  item: 'Limits: only what was recorded, copies off the device, budgets thin old data, the in-memory index,
+    generic tools do not draw, durability rests on reasoning, one writer per recording, macOS first.'
+  ids:
+  - STR-12
+- heading: Changes to the shared contracts
+  item: Absent stamps, caliper.step as the 3.1 checkpoint, and pinning time with caliper.set_time.
+  ids:
+  - STR-23
+- heading: Decisions
+  item: 'Decisions: MCAP and .mcap, a recorded item is the live frame, custom encoding caliper.wire3,
+    index as attachments, padding record, mixed compression, segments with a manifest, ACID with a one-second
+    sync, own recovery, payloads in files, logarithmic thinning, keyframes, Parquet export, one cursor
+    per page, no automatic deletion, recording only when started, caliper open starts the app.'
+  ids:
+  - STR-12
+  - STR-13
+  - STR-14
+  - COR-26
+  - STR-28
+- heading: Open decisions
+  item: 'Time windows: latest-at is the only rule in sprint 4, a per-view window for trails is planned
+    in sprint 5.'
+  ids:
+  - REN-20
+  - STR-13
+- heading: Open decisions
+  item: Default rates and budget (2 Hz and 4 GiB or a bytes-per-second target), copying dropped files,
+    carrying the writer patch or offering it upstream, a decoder of caliper.wire3 for generic viewers,
+    and alignment of mid-sized frames.
+  ids:
+  - STR-12

@@ -1,0 +1,27 @@
+{
+  "version": 0,
+  "about": "The widget agent's provider presets (design/widget-agent.md, Presets). caliper-agent reads this file at start (caliper_agent/presets.py, --preset), and the key store embeds it at build time (src/builder/agent/key_store.cpp), so both know the same ids, base URLs and key variables. Each preset's id is also the account of its key in the operating system's credential store; a Custom entry's account is custom- followed by the first 12 hexadecimal digits of the SHA-256 of its base URL. key is required, optional or none; key_env is the variable in which the key reaches the sidecar (never argv). The model is the person's choice for every preset; the Claude preset offers the sidecar's four Claude models, listed in models with their names, and the efforts the Claude API takes, which the app's settings show (a test keeps them equal to caliper_agent/claude.py). A test keeps this table and the design page's equal. chat_api ollama (the Ollama preset) sends chat requests to Ollama's own /api/chat instead of /v1/chat/completions, since only that API takes the context length (options.num_ctx) the model is loaded with; context_length is that context length for each role, the widget agent's (⌘K) and the general one's (the side chat), which the person's setting replaces: the widget agent's Context length in the app, and --context-length on caliper-agent's command line (caliper_agent/ollama_native.py).",
+  "presets": [
+    {"id": "anthropic", "name": "Claude", "api": "claude", "base_url": "https://api.anthropic.com",
+     "key": "required", "key_env": "ANTHROPIC_API_KEY", "local": false, "default_model": null,
+     "models": [{"id": "claude-opus-5-5", "name": "Claude Opus 5.5"},
+                {"id": "claude-sonnet-5-5", "name": "Claude Sonnet 5.5"},
+                {"id": "claude-haiku-5-5", "name": "Claude Haiku 5.5"},
+                {"id": "claude-fable-5-2", "name": "Claude Fable 5.2"}],
+     "efforts": ["low", "medium", "high", "xhigh", "max"]},
+    {"id": "openai", "name": "OpenAI", "api": "openai-compatible", "base_url": "https://api.openai.com/v1",
+     "key": "required", "key_env": "CALIPER_MODEL_API_KEY", "local": false, "default_model": null},
+    {"id": "gemini", "name": "Gemini", "api": "openai-compatible",
+     "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+     "key": "required", "key_env": "CALIPER_MODEL_API_KEY", "local": false, "default_model": null},
+    {"id": "openrouter", "name": "OpenRouter", "api": "openai-compatible", "base_url": "https://openrouter.ai/api/v1",
+     "key": "required", "key_env": "CALIPER_MODEL_API_KEY", "local": false, "default_model": null},
+    {"id": "ollama", "name": "Ollama", "api": "openai-compatible", "base_url": "http://localhost:11434/v1",
+     "key": "none", "key_env": null, "local": true, "default_model": null,
+     "chat_api": "ollama", "context_length": {"widget": 16384, "general": 32768}},
+    {"id": "lmstudio", "name": "LM Studio", "api": "openai-compatible", "base_url": "http://localhost:1234/v1",
+     "key": "none", "key_env": null, "local": true, "default_model": null},
+    {"id": "custom", "name": "Custom", "api": "openai-compatible", "base_url": null,
+     "key": "optional", "key_env": "CALIPER_MODEL_API_KEY", "local": false, "default_model": null}
+  ]
+}

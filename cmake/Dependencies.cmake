@@ -177,6 +177,14 @@ if(WIN32)
         set(DUCKDB_EXPLICIT_PLATFORM "windows_x86" CACHE STRING "" FORCE)
     endif()
 endif()
+# DuckDB links its parquet and core_functions extensions statically in every
+# build (third_party/duckdb/extension/extension_config.cmake), and links more
+# when they are named in BUILD_EXTENSIONS (extension_build_tools.cmake). The
+# builder's loaders read JSON and JSONL files with the json extension, so a
+# build with the builder names json there.
+if(CALIPER_WITH_BUILDER)
+    set(BUILD_EXTENSIONS json)
+endif()
 add_subdirectory(${THIRD_PARTY_DIR}/duckdb EXCLUDE_FROM_ALL)
 # DuckDB's own CMakeLists hard-sets CMAKE_MSVC_RUNTIME_LIBRARY to the STATIC
 # CRT for its whole subtree, which conflicts with our /MD policy (host +
@@ -213,13 +221,20 @@ target_compile_definitions(duckdb_static INTERFACE DUCKDB_BUILD_LIBRARY)
 # ALL_OBJECT_FILES *after* src/ has already created duckdb_static, so the
 # extension-loader symbols (ExtensionHelper::LoadAllExtensions etc.) end up
 # in a sibling target instead of inside duckdb_static. Link that sibling
-# explicitly here.
-list(APPEND CALIPER_DEPENDENCY_LIBS
+# explicitly here. The generated loader names every statically linked
+# extension and loads each one when a database opens, so every target that
+# links it links all of them: CALIPER_DUCKDB_LIBS is that one list, used here,
+# by caliper_host_lib and by the builder's caliper_builder_duckdb.
+set(CALIPER_DUCKDB_LIBS
     duckdb_static
     duckdb_generated_extension_loader
     parquet_extension
     core_functions_extension
 )
+if(CALIPER_WITH_BUILDER)
+    list(APPEND CALIPER_DUCKDB_LIBS json_extension)
+endif()
+list(APPEND CALIPER_DEPENDENCY_LIBS ${CALIPER_DUCKDB_LIBS})
 message(STATUS "    ✓ DuckDB configured (target: duckdb_static)")
 
 # --- slang (SystemVerilog compiler library) ---

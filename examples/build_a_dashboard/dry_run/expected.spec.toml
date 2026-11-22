@@ -1,0 +1,45 @@
+caliper_spec = 0
+
+[applet]
+id = "training-run"
+title = "Training run"
+
+[[source]]
+id = "run_metrics"
+catalog = "table:run_metrics"
+
+[[source]]
+id = "attention_attn"
+catalog = "tensor:attention_attn"
+  [[source.transform]]
+  op = "slice"
+  axis = 0
+  index = 1
+  [[source.transform]]
+  op = "slice"
+  axis = 0
+  index = 2
+
+[[panel]]
+id = "series"
+primitive = "series"
+title = "Loss and accuracy"
+bind = { x = "run_metrics.step", y = ["run_metrics.loss", "run_metrics.accuracy"] }
+options = { x_label = "Step" }
+
+[[panel]]
+id = "heatmap"
+primitive = "heatmap"
+title = "Attention of layer 1, head 2"
+bind = { values = "attention_attn" }
+options = { x_label = "Key", y_label = "Query" }
+
+[[panel]]
+id = "table"
+primitive = "table"
+bind = { rows = "run_metrics" }
+
+[layout]
+split = "vertical"
+ratio = 0.62
+children = [{ split = "horizontal", children = ["series", "heatmap"] }, "table"]

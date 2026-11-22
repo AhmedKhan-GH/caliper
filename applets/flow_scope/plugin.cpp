@@ -1,7 +1,7 @@
 #include <caliper/caliper.hpp>
 #include "flow_scope.h"
 
-// Epoch-2 entry (docs/references/abi.md) — the established adapter shape: all logic
+// Epoch-2 entry (docs/applets/applet-contract.md) — the established adapter shape: all logic
 // lives in FlowScopeApplet, this file is only the ABI bridge. id/version are
 // byte-identical to flow_scope.caliper.toml (the loader rejects disagreement).
 class FlowScopePlugin final : public caliper::Applet {

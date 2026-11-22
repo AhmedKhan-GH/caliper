@@ -1,0 +1,472 @@
+# yaml-language-server: $schema=schema.json
+title: Scenes plan page
+kind: page
+source: design/scenes.md
+ref: sprint4
+summary: The plan page design/scenes.md, which only the sprint4 branch holds, in its newest version there,
+  read heading by heading.
+entries:
+- heading: What is built and what is planned
+  item: The page states that nothing on it is built; it rests on built pieces and on the planned renderer
+    core.
+  ids:
+  - REN-09
+  - REN-11
+- heading: What is built and what is planned
+  item: The points live view of Caliper LIB, which becomes the points primitive of a scene.
+  ids:
+  - STR-01
+- heading: What is built and what is planned
+  item: Protocol v2 shared-memory session and wire protocol 3.1 with data views, events, controls and
+    linked selection.
+  ids:
+  - STR-04
+  - STR-03
+  - STR-08
+- heading: What is built and what is planned
+  item: The geometry service caliper.geometry.v1 to v1_3, which the scene service replaces.
+  ids:
+  - REN-04
+  - REN-05
+  - REN-06
+  - REN-07
+- heading: What is built and what is planned
+  item: Sprint 3's spec format reserves the panel primitive name scene and the catalog kind recording.
+  ids:
+  - SPC-11
+- heading: What is built and what is planned
+  item: 'The renderer core, planned and built first in sprint 4: a graphics layer and a scene core.'
+  ids:
+  - REN-09
+  - REN-11
+- heading: The scene model
+  item: 'Section heading for the scene model: spaces, entities, transforms, cameras, the class table,
+    primitives, clearing and limits.'
+  ids:
+  - REN-11
+- heading: Scenes and spaces
+  item: A scene is one live view of the new kind scene (kind id 6 proposed), 2-D or 3-D, with up, units
+    and a right-handed 3-D space; the native scene view draws it.
+  ids:
+  - REN-12
+  - REN-11
+- heading: Scenes and spaces
+  item: Up to 64 scenes in a session, named 1 to 63 bytes.
+  ids:
+  - REN-12
+- heading: The up-axis switch
+  item: A Y up and Z up control in the header of every 3-D view, key U, remembered per view, changing
+    only the camera basis and never the data.
+  ids:
+  - REN-43
+- heading: The up-axis switch
+  item: Headless tests of the switch at the scene core and the view level.
+  ids:
+  - REN-43
+- heading: The scale bar
+  item: A scale bar in the bottom-right of every scene view in the scene's units, measured at the orbit
+    target in 3-D, exact in 2-D, with SI prefixes for known units.
+  ids:
+  - REN-44
+- heading: The scale bar
+  item: The scale bar is drawn by the view layer with ImGui, and the TypeScript fallback repeats the rule
+    on its canvas.
+  ids:
+  - REN-44
+- heading: The scale bar
+  item: A shared table of zoom levels tests the scale bar in C++ and TypeScript.
+  ids:
+  - REN-44
+- heading: Entities and entity paths
+  item: Entities named by entity paths of up to 16 segments, holding one transform, one camera and one
+    batch per primitive type; logging again replaces; missing parents are created.
+  ids:
+  - REN-11
+  - REN-40
+- heading: Entity transforms
+  item: Entity transforms as parts (translation, rotation, scale) or a 4 x 4 matrix, composed down the
+    path, in 2-D and 3-D, from numbers, arrays or device tensors.
+  ids:
+  - REN-40
+- heading: Cameras and the camera's pixel space
+  item: Pinhole cameras held by entities, drawn as frustums, with children in the camera's pixel space,
+    looking through a camera, and depth images back-projected to point clouds.
+  ids:
+  - REN-39
+- heading: The class table
+  item: A class table of up to 4,096 entries mapping class ids to labels and colours, used by points,
+    boxes and segmentation images, with a 16-colour fallback.
+  ids:
+  - REN-41
+- heading: Primitives
+  item: Points primitive with colours, values through a colormap, class ids, radii, labels and additive
+    blend.
+  ids:
+  - REN-12
+  - STR-10
+- heading: Primitives
+  item: Lines primitive as segments, strips or index-pair edges, with width, colours and values.
+  ids:
+  - REN-12
+  - STR-10
+- heading: Primitives
+  item: Mesh primitive with indices, normals, colours, values or a texture, and instance poses with instance
+    colours or values.
+  ids:
+  - REN-12
+  - STR-10
+- heading: Primitives
+  item: Arrows and boxes primitives, boxes with rotations, classes, labels, fill and 2-D corner form.
+  ids:
+  - REN-37
+- heading: Primitives
+  item: Images in colour, depth, segmentation and encoded JPEG or PNG forms, up to 8,192 pixels a side.
+  ids:
+  - REN-38
+- heading: Primitives
+  item: Labels, one per item or one for all, at most 512 drawn at once.
+  ids:
+  - REN-41
+- heading: Primitives
+  item: Additive blend for points and lines, and instanced meshes, added to the scene model for the applets.
+  ids:
+  - REN-34
+- heading: Primitives
+  item: 'The index-clamp contract holds for scenes: an out-of-range index draws the last vertex, through
+    a clamp compute pass.'
+  ids:
+  - REN-11
+- heading: Clearing and static items
+  item: Clear (recursive or static) and static items that are present at every position and retained by
+    the producer for late viewers.
+  ids:
+  - STR-10
+- heading: Limits
+  item: 'Scene limits: 64 scenes, 1,024 entities, 2,048 batches, 4,194,304 points or vertices per batch,
+    4,096 labels, 4,096 classes, 8,192-pixel images.'
+  ids:
+  - REN-12
+- heading: The text log
+  item: A text log live view (kind 7 proposed) of lines with levels, retained last 4,096 lines, filtering
+    and search, with click to move the recording cursor.
+  ids:
+  - REN-51
+- heading: The bar chart
+  item: A bar chart live view (kind 8 proposed) of up to 4,096 labelled values, with data views, picks
+    and range selects.
+  ids:
+  - REN-52
+- heading: Caliper LIB
+  item: Section heading for the Caliper LIB calls of scenes, text and bars.
+  ids:
+  - STR-10
+- heading: scene
+  item: caliper.scene(name, space, up, units, rate, data_view, view_camera) creates a scene; caliper.remove
+    and caliper.widget(kind="scene") work with it.
+  ids:
+  - STR-10
+- heading: The starting camera
+  item: The view_camera argument sets the camera on which a 3-D view opens, as an orbit dict or a camera
+    entity path, sized about 2 builder days.
+  ids:
+  - REN-45
+- heading: The starting camera
+  item: Preset views, orthographic projection, following an entity, saved viewpoints, linked cameras and
+    a fly mode are not in this sprint.
+  ids:
+  - REN-23
+  - RUN-07
+  - REN-50
+  - REN-47
+- heading: The scene's calls
+  item: scene.points, lines, arrows, boxes and mesh calls with static and rate arguments, and checks run
+    on every call.
+  ids:
+  - STR-10
+  - REN-37
+- heading: The scene's calls
+  item: scene.image, depth and segmentation calls.
+  ids:
+  - REN-38
+- heading: The scene's calls
+  item: scene.camera, transform, classes and clear calls.
+  ids:
+  - REN-39
+  - REN-40
+  - REN-41
+  - STR-10
+- heading: Index-pair edges
+  item: scene.lines draws graph edges as (E, 2) index pairs through an edge gather in the clamp pass;
+    (2, E) is refused.
+  ids:
+  - REN-42
+- heading: Index-pair edges
+  item: Tests of index-pair edges in Caliper LIB and against references natively and in Chromium.
+  ids:
+  - REN-42
+- heading: text and bars
+  item: caliper.text and caliper.bars calls.
+  ids:
+  - REN-51
+  - REN-52
+- heading: Stamps on the timelines
+  item: Every scene, text and bars call is stamped on the step, time and script timelines; static calls
+    have no stamp.
+  ids:
+  - STR-12
+- heading: A worked example
+  item: A robot simulation example with a static cloud, a stereo rig and an arm of three links.
+  ids:
+  - STR-10
+- heading: Keeping scene data on the device
+  item: Section heading on keeping scene data on the device.
+  ids:
+  - STR-10
+- heading: What each route copies
+  item: A scene snapshot is one device-side copy per route (in-process window, shared-memory session,
+    network) and drawn in place from the slot; applet routes are zero-copy.
+  ids:
+  - STR-10
+- heading: Growing the shared-memory session
+  item: 'The shared-memory scene layout: kind 6 control row, a directory segment of entity, batch and
+    class tables and arena segments of per-batch slots; protocol stays at version 2 with kinds 6 to 8
+    and a features word.'
+  ids:
+  - STR-24
+- heading: Data views of a scene
+  item: A scene data view with entity include and exclude filters and budgets max_points, max_items, max_vertices
+    and max_extent.
+  ids:
+  - STR-25
+- heading: Drawing a scene natively
+  item: Section heading on drawing a scene natively.
+  ids:
+  - REN-12
+- heading: The scene core and the graphics layer
+  item: The native scene view is the scene core compiling entities into a draw list; the points live view
+    becomes a scene of one entity.
+  ids:
+  - REN-11
+  - REN-12
+  - REN-32
+- heading: From primitives to draws
+  item: Points and lines as instanced quads, arrows, boxes, meshes, images, cameras, entity axes and labels
+    drawn through the graphics layer; entity transforms as per-draw matrices.
+  ids:
+  - REN-12
+  - REN-11
+- heading: From primitives to draws
+  item: Entity axes shown when the person turns axes on.
+  ids:
+  - REN-39
+- heading: What the scene view needs from the renderer core
+  item: 'The seven things the view needs from the graphics layer and the scene core: import, instanced
+    draws, indexed draws, texture fills, depth, per-draw uniforms and an ID target.'
+  ids:
+  - REN-09
+  - REN-11
+- heading: Applets
+  item: Applets draw scenes through the scene service, which replaces the geometry service.
+  ids:
+  - REN-35
+- heading: Picking, hover and selection
+  item: Hover and click use the pick pass of the scene core with exact entity, primitive and item.
+  ids:
+  - REN-15
+- heading: Picking, hover and selection
+  item: Lasso and rectangle selection project points and box centres on the CPU.
+  ids:
+  - REN-46
+- heading: Picking, hover and selection
+  item: Pick, hover and select events carry entity, primitive, index and row_id over protocol 3.1.
+  ids:
+  - REN-46
+- heading: Picking, hover and selection
+  item: 'Linked selection: a batch logged with items maps its row ids to an item space and selections
+    highlight matching items in other views.'
+  ids:
+  - REN-46
+- heading: Interaction with the script
+  item: Controls of protocol 3.1 work with scenes, and scene events reach Python through on_event, events()
+    and the widget's selection.
+  ids:
+  - REN-46
+- heading: The scene service for applets
+  item: The scene service caliper.scene.v1 offers the scene model to applets and replaces the geometry
+    service, with four differences.
+  ids:
+  - REN-35
+- heading: The service and its version
+  item: Service id caliper.scene.v1 declared in sdk/include/caliper/services/scene_v1.h, one table.
+  ids:
+  - REN-35
+- heading: Naming an array
+  item: CaliperSceneArray names an imported allocation, a tensor or no array, so applets draw their own
+    memory in place.
+  ids:
+  - REN-35
+- heading: The table
+  item: The CaliperSceneV1 table with create, per-primitive calls, transform, camera, classes, clear,
+    view_camera, retired, view, poll_event and last_error, and two capability bits.
+  ids:
+  - REN-35
+- heading: Frames, atomicity and memory stability
+  item: Updates only on the frame thread, per-part refusal, tokens that retire when bytes may be rewritten.
+  ids:
+  - REN-35
+- heading: The view in the applet's window
+  item: view() draws the scene view as one ImGui item in the applet's window, owned by the host with camera,
+    switch, picking and overlays.
+  ids:
+  - REN-35
+- heading: Events
+  item: poll_event returns hover, pick and select events to the applet.
+  ids:
+  - REN-35
+- heading: Capabilities and refusals
+  item: Two capability bits, CAP_DRAW and CAP_IN_PLACE, and refusals read from host metadata.
+  ids:
+  - REN-35
+- heading: What an applet's scene gains
+  item: An applet gains the shared camera, the up-axis switch, picking, depth, scale bar, labels, export
+    and recordings from the host.
+  ids:
+  - REN-35
+- heading: Export
+  item: caliper.export.v1 renders a scene offscreen at any size through the scene core instead of geometry
+    records.
+  ids:
+  - REN-16
+- heading: Wire-capable scenes
+  item: An applet's scene is wire-capable when every array is host-readable and fits the wire, so it can
+    be sent like a script's scene.
+  ids:
+  - STR-31
+- heading: The C++ sugar
+  item: caliper::Scene and caliper::SceneArray in caliper.hpp wrap the scene service table with builders.
+  ids:
+  - REN-35
+- heading: Tests
+  item: Headless tests of the scene service on the recording backend in both CI lanes, with capture rows
+    on Metal.
+  ids:
+  - REN-35
+- heading: From the geometry service
+  item: Each geometry service capability is covered, added to the scene model, or dropped (triangle strips,
+    unlit triangles, per-draw state, applet cameras, the rigidity gate).
+  ids:
+  - REN-16
+  - REN-35
+- heading: From the geometry service
+  item: 'The change of contract: rows follow the parity rules instead of byte-exact pixels against one
+    CPU reference.'
+  ids:
+  - REN-16
+- heading: Changes to the shared contracts
+  item: 'Contract changes: 2-D up axis, camera entities hold no primitive, 2-D transforms, depth scale,
+    additive arrays, additive blending and instanced meshes.'
+  ids:
+  - REN-11
+  - REN-34
+- heading: Decisions
+  item: 'Decision: right-handed with +y up by default and a switch in every 3-D view.'
+  ids:
+  - REN-43
+- heading: Decisions
+  item: 'Decision: a starting camera from the script and no other viewport work in this sprint.'
+  ids:
+  - REN-45
+- heading: Decisions
+  item: Decisions on images under cameras, retained static items, per-call checks, one copy per snapshot
+    and no borrowing.
+  ids:
+  - REN-38
+  - STR-10
+- heading: Decisions
+  item: 'Decision: index-pair edges on lines, (E, 2) only, drawn through a gather.'
+  ids:
+  - REN-42
+- heading: Decisions
+  item: Decisions on the 1,024 entity limit, device-given transforms read on the CPU, a pick pass for
+    hover and click with CPU lasso, and a mesh over budget becoming its bounding box.
+  ids:
+  - REN-11
+  - REN-15
+  - REN-46
+  - STR-25
+- heading: Decisions
+  item: Decisions on the text log, the names caliper.text, caliper.bars and caliper.scene, and separate
+    depth and segmentation calls.
+  ids:
+  - REN-51
+  - REN-52
+  - REN-38
+- heading: Decisions
+  item: 'Decision: the shared-memory protocol keeps version 2.'
+  ids:
+  - STR-24
+- heading: Decisions
+  item: 'Decision: a scale bar from the scene''s units, measured at the orbit target.'
+  ids:
+  - REN-44
+- heading: Decisions
+  item: 'Decisions for the scene service: replacing the geometry service (about 25.5 builder days against
+    about 8.5), the view as an ImGui item, refusal per part, tokens, arrays naming allocations or tensors,
+    additions and drops, a texture as an image array.'
+  ids:
+  - REN-35
+- heading: Left to sprint 5
+  item: 'More shapes: ellipsoids, capsules, cylinders and planes drawn from their parameters.'
+  ids:
+  - REN-21
+- heading: Left to sprint 5
+  item: Mesh files through sprint 3's loaders and a URDF helper in Caliper LIB.
+  ids:
+  - REN-18
+  - REN-19
+- heading: Left to sprint 5
+  item: Events from the app back to the script over shared memory through an event ring in the scene's
+    directory segment.
+  ids:
+  - STR-32
+- heading: Left to sprint 5
+  item: Named frames through the import of robot recordings, translated into the entity tree.
+  ids:
+  - STR-22
+- heading: Left to sprint 5
+  item: 'The viewport features: preset views, orthographic projection, following an entity, saved viewpoints
+    and linked cameras.'
+  ids:
+  - REN-23
+  - RUN-07
+  - REN-50
+  - REN-47
+- heading: Left to sprint 5
+  item: Trails over a time window, slice planes and isosurfaces of 3-D fields, and comparing runs.
+  ids:
+  - REN-20
+  - REN-26
+  - REN-27
+- heading: Left to sprint 5
+  item: Drawing of the text log and bar chart natively, in DOM and in Canvas 2D, and applet scenes in
+    recordings and through the hub.
+  ids:
+  - REN-51
+  - REN-52
+  - STR-31
+- heading: Left to sprint 5
+  item: Compressed video stays out entirely; only single JPEG and PNG frames travel.
+  ids:
+  - REN-38
+- heading: Open decisions
+  item: 'Open decision: borrowing static tensors without a copy, always copy or a copy=False flag.'
+  ids:
+  - STR-10
+- heading: Open decisions
+  item: 'Open decision: sprint 2 must confirm or replace the kind ids 6, 7 and 8.'
+  ids:
+  - STR-09
+- heading: Open decisions
+  item: 'Open decision: 1,024 or 4,096 entities per scene.'
+  ids:
+  - REN-11

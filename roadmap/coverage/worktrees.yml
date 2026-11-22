@@ -1,0 +1,6 @@
+# yaml-language-server: $schema=schema.json
+title: Uncommitted work
+kind: worktrees
+summary: The uncommitted changes in every worktree of the repository, looked at with git status and git
+  diff. Every worktree was clean apart from its pinned third_party folders, so this group holds no entries.
+entries: []

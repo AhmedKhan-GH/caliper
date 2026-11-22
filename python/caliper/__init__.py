@@ -91,7 +91,15 @@ def _check_main_thread(what: str) -> None:
 
 @dataclass
 class ShowStats:
-    """What a call returned in the synchronous offscreen mode (always truthy)."""
+    """The result of a view call in the synchronous offscreen mode, always truthy.
+
+    Attributes:
+        name (str): The view id.
+        kind (str): The kind of the view, such as `"heatmap"`.
+        path (str): The renderer path, such as `"compute-imported"`.
+        imported (bool): `True` when the core read the slot buffer in place.
+        total_ms (float): The time of the call in milliseconds.
+    """
     name: str
     kind: str
     path: str          # renderer path: "compute-imported" / "blit-imported" / "points-imported" ...
@@ -252,23 +260,57 @@ def _cmap(cmap) -> int:
 # ---------------------------------------------------------------------------
 def show(t, name: str = "tensor", cmap="viridis", vmin=None, vmax=None, rate=None, *,
          dims=None, data_view=None, items=None, _raw: bool = False):
-    """Show/update view ``name`` with tensor ``t``. Returns at once.
+    """Show or update view `name` with tensor `t` as a heatmap or an RGBA image.
 
-    * 2-D -> heatmap (float32; autoscaled on the GPU unless vmin/vmax given)
-    * (C,H,W) with C in (3,4) / (H,W,3|4) -> RGBA image (floats clamped to [0,1])
-    * (C,H,W) other C -> channel mosaic heatmap;  (N,C,H,W) -> first item
-    ``rate``: snapshots per second for this view (default 60, 0 = every call;
-    the offscreen test mode defaults to every call).
-    ``dims``: one name per dimension of t (for an image, of all but the RGB(A)
-    one); the view then offers t as a source that a viewer can index, reduce
-    and tile, and shows its data view instead of the rules above.
-    ``data_view``: the view's default data view (see :func:`set_data_view`).
-    ``items``: the item space of the rows (a str), or {dim: space}, for
-    linked selection (see :func:`items`).
+    The call returns at once. With `dims` or `data_view`, the view shows a data view of `t`
+    instead of the layouts below ([Data Views](data-view-calls.md#data-views)).
 
-    Returns True if a snapshot was taken, False when the call was rate limited,
-    the ring was full or nothing is attached; a :class:`ShowStats` in the
-    synchronous offscreen mode."""
+    | Input | Shown as |
+    |---|---|
+    | 0-D or 1-D | A 1xN heatmap strip |
+    | 2-D `(H, W)` | Heatmap (cast to float32 in the copy kernel) |
+    | `(H, W, 3)` or `(H, W, 4)` | RGBA image |
+    | `(1, H, W)` | Heatmap |
+    | `(3, H, W)` or `(4, H, W)` | RGBA image |
+    | `(C, H, W)`, any other C | Channel mosaic heatmap: ceil(sqrt(C)) columns, empty cells NaN, range over all channels |
+    | `(N, C, H, W)` | Item 0, then as above |
+    | More than 4 dims | Leading dims stacked as channels, `(-1, H, W)` |
+
+    A 3-D tensor whose last dimension is 3 or 4 is read as `(H, W, C)` if it is uint8 or its first
+    dimension is not 1, 3 or 4. Otherwise it is read as `(C, H, W)`.
+
+    Image values follow these rules: uint8 stays as it is, floating point is clamped to [0, 1] and
+    scaled to 255, and other integers are clamped to 0..255. A missing alpha channel is 255.
+    Booleans
+    become float32 (uint8 for an image), and complex tensors become their magnitude. With autoscale,
+    a non-finite range keeps the last finite one, and a flat range widens by +-0.5. NaN values draw
+    as colormap index 0.
+
+    Args:
+        t (torch.Tensor): The tensor, in one of the layouts above.
+        name (str): View id. The same name updates the view in place. Non-empty, with no `##`.
+        cmap (str | int): `"viridis"`, `"magma"` or `"rdbu"` (case-insensitive), or 0, 1 or 2.
+        vmin (float | None): Fixed lower end of the colormap range. `None` takes that end from a GPU
+            `aminmax` of the snapshot. Each end is independent, and both must be finite.
+        vmax (float | None): Fixed upper end of the colormap range, as for `vmin`.
+        rate (float | None): Snapshots per second for this view ([Rate Limit][rate-limit]).
+        dims (Sequence[str] | None): One name for each dimension of `t`, or for an image all but
+            the color one ([Data Views](data-view-calls.md#data-views)).
+        data_view (dict | None): The default data view of the view, in the form of
+            [`set_data_view`][caliper.set_data_view].
+        items (str | dict | None): The item space of the rows, as a name or as `{dim: space}`, for
+            linked selection. See [`items`][caliper.items].
+
+    Returns:
+        bool | ShowStats: `True` if a route took a snapshot. `False` when the call was rate
+            limited, all slots were busy or nothing is attached. A [`ShowStats`][caliper.ShowStats]
+            in the synchronous offscreen mode.
+
+    Raises:
+        ValueError: When `name` is empty or holds `##`, when `cmap` is unknown, when `vmin` or
+            `vmax` is not finite, or when `rate` is negative or NaN.
+        DataViewError: When `data_view` does not fit `t`.
+    """
     _name_ok(name)
     if items is not None:
         _CTL.view_items_call(name, "heatmap", items)
@@ -292,15 +334,44 @@ def _points_plan(z, labels, classes, cm, rng):
 
 def points(z, labels=None, name: str = "points", classes=None, cmap="viridis", vmin=None,
            vmax=None, rate=None, *, dims=None, data_view=None, items=None):
-    """Scatter of ``z`` (N, 2) or (N, 3) (2-D: pan/zoom, 3-D: orbit), coloured by
-    ``labels`` (N,): categorical with ``classes=K`` (labels 0..K-1), otherwise
-    colormapped over their range. ``dims``: one name per dimension of z but the
-    coordinates, ending with the point dimension, which makes z a source of
-    data views (labels follow the kept dimension, and above the budget points
-    and labels are sampled with a stride); ``data_view``: the default data
-    view; ``items``: the item space of the points (a str), or {dim: space},
-    for linked selection (see :func:`items`). Same return values as
-    :func:`show`."""
+    """Show or update view `name` as a scatter of the points `z`.
+
+    `z` is `(N, 2)` (pan and zoom) or `(N, 3)` (orbit). Any dtype is cast to float32 on its device,
+    and N must be at least 1. The bounding box for auto-fit is computed on the device. With `dims`
+    or `data_view`, `z` is a source of data views and `labels` follows its kept dimension. Above
+    the point budget, points and labels are sampled with a stride. See
+    [Data Views](data-view-calls.md#data-views).
+
+    Args:
+        z (torch.Tensor): The points, `(N, 2)` or `(N, 3)`. With `dims`, one more leading
+            dimension per name.
+        labels (torch.Tensor | None): Per-point labels or values, shape `(N,)`, on the device of `z`
+            or on the CPU. CPU labels for MPS points are copied to the device without waiting for
+            its queue, from a private copy. The caller may reuse its tensor at once. Nothing is
+            copied the other way. `None` draws one flat color.
+        name (str): View id. The same name updates the view in place.
+        classes (int | None): K categorical labels 0..K-1, drawn with a fixed 16-color palette
+            (label L gets color L mod 16). Needs `labels`.
+        cmap (str | int): Without `classes`, labels are colormapped as for [`show`][caliper.show].
+        vmin (float | None): Lower end of the label range. Without `classes`, `None` autoscales
+            as for `show`.
+        vmax (float | None): Upper end of the label range, as for `vmin`.
+        rate (float | None): Snapshots per second for this view ([Rate Limit][rate-limit]).
+        dims (Sequence[str] | None): One name for each dimension of `z` but the last, ending with
+            the point dimension.
+        data_view (dict | None): The default data view of the view.
+        items (str | dict | None): The item space of the points, as a name or as `{dim: space}`,
+            for linked selection. See [`items`][caliper.items].
+
+    Returns:
+        bool | ShowStats: As for [`show`][caliper.show].
+
+    Raises:
+        ValueError: When `z` has a wrong shape, when the label count is not N, when `labels` is
+            on a device other than the device of `z` or the CPU, when `classes` is below 1, or when
+            `classes` is given without `labels`.
+        DataViewError: When `data_view` does not fit `z`.
+    """
     _name_ok(name)
     if items is not None:
         _CTL.view_items_call(name, "points", items)
@@ -324,9 +395,32 @@ def _hist_plan(t, bins, _c, _d, _e):
 
 def histogram(t, name: str = "histogram", bins: int = 64, rate=None, *, dims=None,
               data_view=None):
-    """Histogram of every element of ``t`` over its [min, max], binned on the
-    tensor's device. ``dims`` and ``data_view`` as for :func:`show`; the
-    histogram bins the data view. Same return values as :func:`show`."""
+    """Show or update view `name` as the bin counts of every element of `t` over its [min, max].
+
+    The tensor is flattened and cast to float32, and it needs at least one element. The range comes
+    from a GPU `aminmax`. Constant data uses [v - 1, v + 1] as `torch.histc` does, and NaN values
+    fall into bin 0.
+
+    On MPS the binning runs on the device (`index_add_`) because `torch.histc` on MPS reads its
+    range back to the host and drains the queue. On the CPU it is `torch.histc`. With `dims` or
+    `data_view`, the histogram bins the data view of `t`. See
+    [Data Views](data-view-calls.md#data-views).
+
+    Args:
+        t (torch.Tensor): The tensor.
+        name (str): View id. The same name updates the view in place.
+        bins (int): Number of bins, in 1..65536.
+        rate (float | None): Snapshots per second for this view ([Rate Limit][rate-limit]).
+        dims (Sequence[str] | None): One name for each dimension of `t`.
+        data_view (dict | None): The default data view of the view.
+
+    Returns:
+        bool | ShowStats: As for [`show`][caliper.show].
+
+    Raises:
+        ValueError: When `bins` is outside 1..65536 or `t` is empty.
+        DataViewError: When `data_view` does not fit `t`.
+    """
     _name_ok(name)
     for r in _routes or _auto_routes():
         if r.transport.attached():
@@ -340,11 +434,32 @@ def histogram(t, name: str = "histogram", bins: int = 64, rate=None, *, dims=Non
 
 
 def series(value, name: str = "series", rate=None, *, items=None):
-    """Append ``value`` (a float, a 0-d tensor or a 1-D tensor of values) to the
-    series ``name`` (a ring of the last 4096 values, on the value's device).
-    Every call appends; the view is updated at most ``rate`` times per second.
-    ``items``: the item space that the series' index numbers, for linked
-    selection (see :func:`items`)."""
+    """Append `value` to the series `name`.
+
+    The value is a Python `int` or `float`, a 0-d tensor, or a tensor of several values. Pass
+    `loss.detach()`, not `loss.item()`, to avoid a GPU sync. A tensor of several values is
+    flattened, and more than 4096 values keep the last 4096.
+
+    The series is a ring of the last [`SERIES_CAPACITY`][caliper.SERIES_CAPACITY] (4096) float32
+    values on the device of the value. A CPU series that later receives device values moves to the
+    device with one host-to-device copy of its history. The x axis is the append index. Values
+    offered while nothing is attached are not recorded. Every call appends on every attached route,
+    and the view is republished at most `rate` times per second ([Rate Limit][rate-limit]).
+
+    Args:
+        value (float | torch.Tensor): The value or values to append.
+        name (str): View id. The same name appends to the same series.
+        rate (float | None): Republications per second for this view.
+        items (str | None): The item space that the series index numbers, for linked selection.
+            A series has no dims, so this is a name only. See [`items`][caliper.items].
+
+    Returns:
+        bool | ShowStats: As for [`show`][caliper.show]. A series also returns `True` when a
+            server of [`serve`][caliper.serve] recorded the value.
+
+    Raises:
+        ValueError: When `value` is an empty tensor or `name` is invalid.
+    """
     _name_ok(name)
     if items is not None:
         _CTL.view_items_call(name, "series", items)
@@ -380,13 +495,58 @@ def series(value, name: str = "series", rate=None, *, items=None):
 
 def watch(model, activations: bool = True, gradients: bool = False, every: int = 1,
           include=None, rate=None, groups=True):
-    """Show a module's activations (forward hooks, channel mosaics) and/or its
-    parameter gradients (heatmaps) as views named ``<module>.act`` and
-    ``<module>.<param>.grad``. Returns a handle; ``handle.remove()`` removes the hooks.
-    ``include``: module names / glob patterns, or a predicate(name, module).
-    ``groups``: also offer the grouped views ``weights``, ``activations`` and
-    ``gradients``, one heatmap each whose data view picks the module or
-    parameter (a str prefixes their names with ``<str>.``; False: none)."""
+    """Hook a module so that `show` displays its outputs and gradients.
+
+    The call returns a [`WatchHandle`][caliper._watch.WatchHandle]. The root module is labeled with
+    its class name in lower case.
+
+    The grouped views are heatmaps with [data views](data-view-calls.md#data-views). Their sources
+    are the selected modules or their parameters, so one widget can switch between layers. The same
+    hooks feed them, so `watch()` adds no hook for them.
+
+    | View | Sources | Dims | Default data view |
+    |---|---|---|---|
+    | `weights` | `<module>.<param>`, every parameter with 2 or more dims | `out`, `in` (higher-rank weights reshaped to `(out, -1)`) | The first source, whole |
+    | `activations` | `<module>`, with `activations=True` | From the rank: `batch`, `feature`, or `batch`, `position`, `feature`, or `batch`, `channel`, `height`, `width`, or `batch`, `channel`, `length` for a 1-D convolution | The first module, its leading dims at index 0 |
+    | `gradients` | `<module>.<param>`, with `gradients=True`, as the `.grad` views | As `weights` | The first source, whole |
+
+    The weights and gradients have the same two dims, so `{"source": "fc2.weight"}` alone switches
+    between them. Activations of different ranks have different dims. A request for another module
+    must name its own `index`, and `{}` for a 2-D output.
+
+    `weights` takes a snapshot when its module runs forward and on [`update`][caliper.update]. With
+    `activations=False`, it takes the snapshot after its gradient accumulates. A source does tensor
+    work only when a route needs it. The window and the session need the source of the default data
+    view, and a server needs the sources that its subscriptions select. The hook of any other source
+    records the shape and returns.
+
+    A view has at most 64 sources, so a group keeps the first 64. Sources with names longer than 63
+    bytes are left out, each with a `RuntimeWarning`.
+
+    Args:
+        model (torch.nn.Module): The module to hook.
+        activations (bool): A forward hook per selected module shows its output as `<module>.act`.
+            A tuple output gives its first tensor. Only floating-point, non-empty tensors show.
+            `(N, C, H, W)` outputs show item 0 as a channel mosaic, and `(N, F)` outputs show a
+            heatmap.
+        gradients (bool): Each selected module shows the gradient of its own parameters that have 2
+            or more dims and `requires_grad`, as `<module>.<param>.grad` with colormap rdbu.
+            Higher-rank weights are reshaped to `(out, -1)`.
+        every (int): Show 1 of every N hook calls (per hook). Must be at least 1.
+        include (str | Sequence[str] | Callable[[str, torch.nn.Module], bool] | None): `None`
+            selects leaf modules. Strings are `fnmatch` patterns over `named_modules()` names. A
+            callable is `predicate(name, module) -> bool`.
+        rate (float | None): Passed to `show`.
+        groups (bool | str): Also offer the grouped views above. A string prefixes their names with
+            `<string>.`, and `False` offers none.
+
+    Returns:
+        WatchHandle: The handle of the hooks. Its `remove()` takes them off.
+
+    Raises:
+        TypeError: When `model` is not a `torch.nn.Module`.
+        ValueError: When `every` is below 1.
+    """
     from ._watch import watch as _w
     return _w(model, activations=activations, gradients=gradients, every=every,
               include=include, rate=rate, groups=groups)
@@ -406,28 +566,45 @@ _DV_OPTIONS = {"heatmap": ("cmap", "vmin", "vmax"), "image": (),
 
 def offer(name: str, sources, kind: str = "heatmap", dims=None, *, data_view=None, rate=None,
           items=None, **options):
-    """Offer ``sources`` as the sources of view ``name``; a viewer, or
-    :func:`set_data_view`, picks one of them and a data view of it.
+    """Register view `name` with several sources, for tensors that no view call shows.
 
-    ``sources`` maps source names to tensors (read at each snapshot, so a tensor
-    updated in place stays current) or to callables that return the current
-    tensor or None (called under ``torch.no_grad()``: once now to learn the
-    shape, then only when the source is selected and a snapshot is due). A
-    single tensor or callable is one source named ``name``. ``dims`` names the
-    dimensions: one tuple for every source, or a dict of tuples per source
-    (default ``dim0``, ``dim1``, ...); an image source has one more dimension,
-    RGB(A), and a points source a last one with 2 or 3 coordinates, which are
-    not named. ``kind`` is "heatmap", "image", "points" or "histogram".
-    ``data_view`` is the view's default data view. ``options`` are the matching
-    call's arguments: ``cmap``, ``vmin`` and ``vmax`` (heatmap, points),
-    ``labels`` (a tensor or callable, along the kept dimension) and ``classes``
-    (points), ``bins`` (histogram). ``items``: the item space of the item axis
-    (a heatmap's or image's first dim, the point dim), or {dim: space}, for
-    linked selection (see :func:`items`).
+    Examples are attention maps or the output of a layer on a fixed probe batch. A viewer, or
+    [`set_data_view`][caliper.set_data_view], picks one source and a data view of it. The view takes
+    snapshots when the training loop calls [`update`][caliper.update]. A later `offer()` of the same
+    name replaces the view.
 
-    The view takes snapshots when the training loop calls :func:`update`.
-    Replaces an earlier view of the same name. Returns the default data view,
-    resolved, or None while no source has a tensor."""
+    A tensor is read at each snapshot, so a tensor updated in place, such as a parameter, stays
+    current. A callable runs under `torch.no_grad()`, once at the call to learn the shape and then
+    only when a route needs that source and a snapshot is due.
+
+    Args:
+        name (str): View id.
+        sources (torch.Tensor | Callable[[], object] | dict): Maps source names to tensors or to
+            callables that return the current tensor or `None`. A single tensor or callable is one
+            source named `name`.
+        kind (str): `"heatmap"`, `"image"`, `"points"` or `"histogram"`. A series has no sources.
+        dims (Sequence[str] | dict | None): One tuple of dimension names for every source, or a dict
+            of tuples per source. The default is `dim0`, `dim1`, ... An image source has one more
+            dimension, RGB(A), and a points source a last one with 2 or 3 coordinates. Neither is
+            named.
+        data_view (dict | None): The default data view of the view.
+        rate (float | None): Snapshots per second for this view ([Rate Limit][rate-limit]).
+        items (str | dict | None): The item space of the item axis (the first dimension of a heatmap
+            or image, or the point dimension), as a name or as `{dim: space}`, for linked selection.
+            See [`items`][caliper.items].
+        **options (object): The arguments of the matching call: `cmap`, `vmin` and `vmax`
+            (heatmap, points), `labels` (a tensor or a callable, along the kept dimension) and
+            `classes` (points), and `bins` (histogram).
+
+    Returns:
+        dict | None: The default data view, resolved, or `None` while the default source has no
+            tensor.
+
+    Raises:
+        TypeError: When an option is unknown for `kind`.
+        ValueError: When `kind` is unknown or is a series, or when an option value is invalid.
+        DataViewError: When `data_view` does not fit the sources.
+    """
     _name_ok(name)
     kind = _dataview._kind(kind)
     if kind == "series":
@@ -441,11 +618,22 @@ def offer(name: str, sources, kind: str = "heatmap", dims=None, *, data_view=Non
 
 
 def update(name: str | None = None):
-    """Take a snapshot of every view registered with :func:`offer` (and the
-    ``weights`` view of :func:`watch`) that is due, or of view ``name`` only:
-    of the source each route needs (the default data view's for the window and
-    the session, the subscriptions' for a server). Same return values as
-    :func:`show`; for every view, True if any took one."""
+    """Take a snapshot of every offered view that is due, and of the `weights` of `watch()`.
+
+    With `name`, the call takes a snapshot of that view only. It takes each snapshot of the source
+    that each route needs: the one of the default data view for the window and the session, and the
+    ones of the subscriptions for a server. Call it in the training loop.
+
+    Args:
+        name (str | None): The view to update. `None` updates every view that is due.
+
+    Returns:
+        bool | ShowStats: As for [`show`][caliper.show]. For every view, `True` if any took a
+            snapshot.
+
+    Raises:
+        ValueError: When `name` was not offered.
+    """
     entries = None
     if name is not None:
         e = _dataview.REGISTRY.get(name)
@@ -469,22 +657,40 @@ def update(name: str | None = None):
 
 
 def data_view(name: str):
-    """The default data view of view ``name``, resolved: a dict with
-    ``source``, ``index``, ``reduce`` and ``budget``, and ``tile`` for a tiled
-    heatmap. None when the view offers no data views or has no data yet."""
+    """Return the default data view of view `name`, resolved.
+
+    Args:
+        name (str): View id.
+
+    Returns:
+        dict | None: A dict with `source`, `index`, `reduce` and `budget`, and `tile` when the
+            heatmap tiles. `None` when the view offers no data views or has no data yet.
+    """
     return _dataview.REGISTRY.resolved(name)
 
 
 def set_data_view(name: str, request=None):
-    """Set the default data view of view ``name`` (any thread; used from the
-    next snapshot). ``request`` is a dict, or its JSON text, with any of
-    ``source``, ``index``, ``reduce``, ``tile`` and ``budget``. A member it
-    names replaces the current one as a whole (``budget`` key by key), and the
-    others stay, so ``{}`` changes nothing; None returns to the default the view
-    was registered with. Returns the resolved data view; raises
-    :class:`DataViewError` when it does not fit the view, which keeps the data
-    view it had. A request for a view that does not exist yet, or has no data
-    yet, is kept and checked at its first snapshot; then None is returned."""
+    """Set the default data view of view `name`, from any thread.
+
+    The next snapshot uses it, and the next VIEWS message carries it. A subscription with its own
+    data view keeps it. The fields of `request` replace the fields of the current default as a
+    whole (`budget` key by key), and the other fields stay, so `{}` changes nothing. A request for
+    a view that does not exist yet, or has no data yet, is kept and checked at its first snapshot.
+    See [Data Views](data-view-calls.md#data-views) for the fields.
+
+    Args:
+        name (str): View id.
+        request (dict | str | None): A dict, or its JSON text, with any of `source`, `index`,
+            `reduce`, `tile` and `budget`. `None` returns to the default that the view was
+            registered with.
+
+    Returns:
+        dict | None: The resolved data view, or `None` when the view does not exist yet or has no
+            data yet.
+
+    Raises:
+        DataViewError: When the request does not fit the view. The view keeps the data view it had.
+    """
     return _dataview.REGISTRY.request(name, request)
 
 
@@ -605,10 +811,25 @@ def _script_name() -> str:
 
 def session(auto_launch: bool = False, viewer_path: str | None = None,
             script_name: str | None = None):
-    """Open (or return) the live session other processes attach to (the
-    Caliper app, caliper-viewer). The first call of a script opens it
-    implicitly with ``auto_launch=False``; ``auto_launch=True`` also starts a
-    viewer. Returns the SessionTransport."""
+    """Open the live session, or return the open one.
+
+    Attach to the session from the Caliper app (F4 Attach to process) or from
+    `caliper-viewer`. The first view call of a script opens it implicitly with
+    `auto_launch=False`, unless `CALIPER_SESSION=0`.
+
+    Args:
+        auto_launch (bool): `True` also spawns `caliper-viewer --session <token>`, unless a spawned
+            viewer is running or a viewer is attached.
+        viewer_path (str | None): Overrides the viewer binary.
+        script_name (str | None): The name that viewers show. `None` takes the basename of
+            `sys.argv[0]`.
+
+    Returns:
+        caliper.live.SessionTransport: The open session.
+
+    Raises:
+        RuntimeError: When the build has no session transport.
+    """
     global _session_route
     with LOCK:
         if _session_route is not None and not _session_route.closed:
@@ -632,13 +853,45 @@ def session(auto_launch: bool = False, viewer_path: str | None = None,
 def window(width: int = 1280, height: int = 800, title: str = "caliper", *,
            offscreen: bool = False, fps: float = 60.0, rate=None, activate: bool = True,
            heartbeat: bool = False):
-    """Open the in-process Caliper window (main thread only) and route every
-    call to it. ``offscreen=True`` renders on an offscreen canvas (same render
-    thread, no window: benchmarks, CI, :func:`render`). Returns the Window
-    (``.run(fn)``, ``.stats()``, ``.close()``); an open one is returned as is.
+    """Open the in-process window and route every call to it.
 
-    Limits: input waits during long steps unless :func:`run` gives the main
-    thread to Caliper; a crash of the script takes the window down too."""
+    An open window of the same kind is returned as is, and any other canvas is replaced.
+    Call this function on the main thread only.
+
+    The core of the window keeps its data in `$CALIPER_DATA_DIR`, else in a private temporary
+    directory that closes with the window. The data are its stores, the data folders of the
+    applets and its `imgui.ini`.
+
+    The window has these limits:
+
+    - macOS delivers input only to the main thread. Input waits during long steps unless
+      [`run`][caliper.run] gives the main thread to Caliper. Outside `run()`, a view call on the
+      main thread pumps events at most 60 times a second.
+    - A crash of the script takes the window down, and a hung window hangs the script.
+    - A process has one core, so only one window or offscreen canvas exists at a time.
+
+    While open, the window holds an `NSProcessInfo` user-initiated, latency-critical activity.
+    Without it, macOS App Nap throttles the process of an occluded window.
+
+    Args:
+        width (int): Width of the window.
+        height (int): Height of the window.
+        title (str): Title of the window.
+        offscreen (bool): `True` drives an offscreen canvas from the same render thread (CI,
+            `render()`).
+        fps (float): Frame rate of the render thread.
+        rate (float | None): Default snapshot rate of the route. `None` takes 60 per second.
+        activate (bool): `False` shows the window without taking focus from the terminal.
+        heartbeat (bool): `True` adds a view named `caliper.render` that scrolls one texel per
+            rendered frame. A screenshot then shows whether the canvas repaints.
+
+    Returns:
+        caliper._inproc.Window: The window. Its `run`, `stats`, `render` and `close` members work as
+            the functions of the same name.
+
+    Raises:
+        RuntimeError: When called off the main thread.
+    """
     _check_main_thread("window")
     global _window
     from ._inproc import Window
@@ -655,9 +908,27 @@ def window(width: int = 1280, height: int = 800, title: str = "caliper", *,
 
 
 def offscreen(width: int = 256, height: int = 256):
-    """Synchronous offscreen canvas (tests, notebooks): every call waits for its
-    snapshot, applies it and is readable at once (view_info, view_readback,
-    read_pixels, render). Replaces an open window (one core per process)."""
+    """Open the synchronous offscreen canvas for tests and notebooks.
+
+    It replaces an open window. Call this function on the main thread only.
+
+    The canvas has no render thread. Each call waits for the GPU event of its snapshot,
+    applies it on the calling thread and renders a frame (at most 60 per second). Thus
+    [`view_info`][caliper.view_info], [`view_readback`][caliper.view_readback] and
+    [`render`][caliper.render] see the call at once. The default rate is every call. In a
+    notebook, `caliper.render()` returns the composited frame as an `(H, W, 4)` uint8 array
+    to display.
+
+    Args:
+        width (int): Width of the canvas.
+        height (int): Height of the canvas.
+
+    Returns:
+        caliper._inproc.Window: The canvas.
+
+    Raises:
+        RuntimeError: When called off the main thread.
+    """
     _check_main_thread("offscreen")
     global _window
     from ._inproc import Window
@@ -671,9 +942,27 @@ def offscreen(width: int = 256, height: int = 256):
 
 
 def run(fn, *args, **kwargs):
-    """Run ``fn(*args, **kwargs)``. With a window open, fn runs on a worker
-    thread and the main thread keeps the window interactive; otherwise fn just
-    runs. Returns fn's result."""
+    """Run `fn(*args, **kwargs)`, on a worker thread when a window is open.
+
+    With a window open, the main thread keeps the window interactive while `fn` runs.
+    Otherwise `run` calls `fn` directly.
+
+    The worker is a daemon thread named `caliper.train`. Ctrl-C reaches the thread as
+    `KeyboardInterrupt`. If the user closes the window, `fn` keeps running and its view calls
+    become no-ops. The window closes when `fn` returns.
+
+    Args:
+        fn (Callable): The function to run.
+        *args (object): Positional arguments of `fn`.
+        **kwargs (object): Keyword arguments of `fn`.
+
+    Returns:
+        object: The result of `fn`.
+
+    Raises:
+        RuntimeError: When a window is open and the call is not on the main thread.
+        Exception: Any exception of `fn`, re-raised on the calling thread.
+    """
     w = _window
     if w is not None and not w.closed and not w.offscreen:
         return w.run(fn, *args, **kwargs)
@@ -681,8 +970,16 @@ def run(fn, *args, **kwargs):
 
 
 def flush(timeout: float = 5.0) -> int:
-    """Publish every pending snapshot (polls their GPU events; not for the
-    training loop). Returns how many are still pending after ``timeout``."""
+    """Publish every pending snapshot and poll their GPU events.
+
+    The call is not for the training loop.
+
+    Args:
+        timeout (float): Seconds to wait at most.
+
+    Returns:
+        int: How many snapshots are still pending after `timeout`.
+    """
     with LOCK:
         return sum(r.ring.flush(timeout=timeout) for r in _routes if _has_viewer(r.transport))
 
@@ -697,9 +994,18 @@ def _has_viewer(transport) -> bool:
 
 
 def spin(seconds: float | None = None) -> None:
-    """Flush pending snapshots, then keep the view alive: with a window, run
-    its event loop until it is closed (or ``seconds``); with a session, wait
-    for the viewer to exit (or ``seconds``)."""
+    """Flush pending snapshots, then keep the view alive.
+
+    With a window, run its event loop until it closes or `seconds` pass. With a session, wait
+    until the viewer exits or `seconds` pass. The wait ends at once when no viewer is attached
+    and none was spawned.
+
+    Args:
+        seconds (float | None): Seconds to wait at most. `None` waits without a limit.
+
+    Raises:
+        RuntimeError: When a window is open and the call is not on the main thread.
+    """
     flush()
     w = _window
     if w is not None and not w.closed and not w.sync:
@@ -716,8 +1022,10 @@ def spin(seconds: float | None = None) -> None:
 
 
 def close() -> None:
-    """Close every transport (window, offscreen canvas, session). A later call
-    opens a new session again."""
+    """Close every route: the window, the offscreen canvas and the session.
+
+    The next view call opens a new session. The call also runs at interpreter exit.
+    """
     global _window, _session_route, _auto_tried
     with LOCK:
         w, _window = _window, None
@@ -735,8 +1043,14 @@ def close() -> None:
 
 
 def remove(name: str) -> bool:
-    """Remove view ``name`` from every transport. Returns True if the in-process
-    core had it."""
+    """Remove view `name` from every route.
+
+    Args:
+        name (str): The view id.
+
+    Returns:
+        bool: `True` if the in-process core had the view.
+    """
     found = False
     _dataview.REGISTRY.remove(name)
     sc = sys.modules.get(__name__ + "._scene")     # scenes, when a script made one
@@ -761,7 +1075,26 @@ def remove(name: str) -> bool:
 
 
 def stats() -> dict:
-    """Ring counters per route plus the window's render stats."""
+    """Return the ring counters per route plus the render stats of the window.
+
+    The call works without a core. The result has one entry per route. The key `"session"`
+    holds `ring` counters and `transport` (the result of
+    [`SessionTransport.stats()`][caliper.live.SessionTransport.stats]). The key `"window"` holds
+    `ring` plus the render stats below. Any other route has its `repr` as key.
+
+    The ring counters are `taken`, `published`, `skipped` (rate limit), `ring_full`,
+    `superseded` (a newer snapshot completed first), `appended` (series values), `allocs` and
+    `recreated`.
+
+    The window render stats are `running`, `fps`, `frames`, `published`, `superseded`,
+    `drawn`, `deferred_takes`, `errors`, `last_error`, `stats_unreadable`, `nonfinite_range`,
+    `queued`, `max_frame_gap_ms`, `events_applied` and `heatmap_live_apply`. The sample lists
+    are `latency_ms` (snapshot to first frame drawn with it), `tick_ms` and `frame_gap_ms`.
+    `Window.stats(reset=True)` clears them.
+
+    Returns:
+        dict: The stats per route.
+    """
     with LOCK:
         out = {}
         for r in _routes:
@@ -787,7 +1120,17 @@ def _require_window(what: str):
 
 
 def frame() -> float:
-    """Render one frame now. Returns its wall time in ms."""
+    """Render one frame now.
+
+    For a real window, call this function on the main thread.
+
+    Returns:
+        float: The wall time of the frame in ms.
+
+    Raises:
+        RuntimeError: Without a `window()` or `offscreen()`, or for a real window off the main
+            thread.
+    """
     w = _require_window("frame")
     if not w.offscreen:
         _check_main_thread("frame")
@@ -796,66 +1139,179 @@ def frame() -> float:
 
 
 def render():
-    """(H, W, 4) uint8 of a freshly composited frame (offscreen canvases)."""
+    """Render a frame and return its pixels (offscreen canvases).
+
+    Returns:
+        numpy.ndarray: A freshly composited frame, `(H, W, 4)` uint8.
+
+    Raises:
+        RuntimeError: Without a `window()` or `offscreen()`, or when the canvas is not offscreen.
+    """
     return _require_window("render").render()
 
 
 def read_pixels():
-    """(H, W, 4) uint8 copy of the last composited frame (offscreen canvases)."""
+    """Return a copy of the last composited frame (offscreen canvases).
+
+    Returns:
+        numpy.ndarray: The frame, `(H, W, 4)` uint8.
+
+    Raises:
+        RuntimeError: Without a `window()` or `offscreen()`.
+    """
     return _require_window("read_pixels").core.read_pixels()
 
 
 def view_info(name: str) -> dict:
-    """The embed v1.2 view of a heatmap/image (path, size, updates, creates)."""
+    """Return the state of a heatmap or image view.
+
+    The result has `path`, `width`, `height`, `device` (`"metal"` or `"cpu"`), `updates`,
+    `last_update_ms`, `imported` and `creates`.
+
+    Args:
+        name (str): The view id.
+
+    Returns:
+        dict: The state of the view.
+
+    Raises:
+        RuntimeError: Without a `window()` or `offscreen()`.
+    """
     return _require_window("view_info").core.view_info(name)
 
 
 def view_readback(name: str):
-    """(H, W, 4) uint8 readback of a heatmap/image view's texture."""
+    """Read back the texture of a heatmap or image view.
+
+    Args:
+        name (str): The view id.
+
+    Returns:
+        numpy.ndarray: The texture, `(H, W, 4)` uint8.
+
+    Raises:
+        RuntimeError: Without a `window()` or `offscreen()`.
+    """
     return _require_window("view_readback").core.view_readback(name)
 
 
 def view_remove(name: str) -> None:
+    """Remove view `name`, as [`remove`][caliper.remove] does.
+
+    Args:
+        name (str): The view id.
+    """
     remove(name)
 
 
 def view_count() -> int:
+    """Count the heatmap and image views.
+
+    Returns:
+        int: The number of views. 0 without a core.
+    """
     w = _window
     return w.core.view_count() if w is not None and not w.closed else 0
 
 
 def live_view_info(name: str) -> dict:
-    """The typed live view (caliper_core_live_view_info): kind, path, updates,
-    latency_ms, read_done, count..."""
+    """Return the state of any typed view.
+
+    The result has `kind` (1 heatmap, 2 image, 3 points, 4 series, 5 histogram), `path`,
+    `width`, `height`, `updates`, `creates`, `dropped`, `seq`, `stamp_ns`, `last_apply_ms`,
+    `latency_ms`, `imported`, `read_done` and `count`.
+
+    Args:
+        name (str): The view id.
+
+    Returns:
+        dict: The state of the view.
+
+    Raises:
+        RuntimeError: Without a `window()` or `offscreen()`.
+    """
     return _require_window("live_view_info").core.live_view_info(name)
 
 
 def live_view_values(name: str):
-    """Series values (oldest first) or histogram counts the view holds."""
+    """Return the series values or the histogram counts that a view holds.
+
+    Series values come oldest first.
+
+    Args:
+        name (str): The view id.
+
+    Returns:
+        numpy.ndarray: A float32 array of the values or counts.
+
+    Raises:
+        RuntimeError: Without a `window()` or `offscreen()`.
+    """
     return _require_window("live_view_values").core.live_view_values(name)
 
 
 def live_view_readback(name: str):
-    """(H, W, 4) uint8 of a texture-backed typed view (heatmap, image, points)."""
+    """Read back a heatmap, image or points view.
+
+    Args:
+        name (str): The view id.
+
+    Returns:
+        numpy.ndarray: The texture, `(H, W, 4)` uint8.
+
+    Raises:
+        RuntimeError: Without a `window()` or `offscreen()`.
+    """
     return _require_window("live_view_readback").core.live_view_readback(name)
 
 
 def live_pause(paused: bool = True) -> None:
-    """Freeze the display (snapshots keep flowing and are dropped)."""
+    """Freeze the display of every typed view.
+
+    Snapshots keep flowing and are dropped.
+
+    Args:
+        paused (bool): `True` freezes the display, `False` resumes it.
+
+    Raises:
+        RuntimeError: Without a `window()` or `offscreen()`.
+    """
     _require_window("live_pause").core.live_set_paused(paused)
 
 
 def live_paused() -> bool:
+    """Tell whether the display of the typed views is frozen.
+
+    Returns:
+        bool: `True` while paused. `False` without a core.
+    """
     w = _window
     return bool(w.core.live_paused()) if w is not None and not w.closed else False
 
 
 def colormap_lut(name="viridis"):
-    """The core's 256-entry LUT as uint32 (R | G<<8 | B<<16 | A<<24)."""
+    """Return a colormap as a look-up table.
+
+    The call needs no core.
+
+    Args:
+        name (str | int): `"viridis"`, `"magma"` or `"rdbu"`, or 0, 1 or 2.
+
+    Returns:
+        numpy.ndarray: A `(256,)` uint32 array. Each entry is `R | G<<8 | B<<16 | A<<24`.
+
+    Raises:
+        ValueError: When `name` is not a known colormap.
+    """
     return _load_native().colormap_lut(cmap_index(name))
 
 
 def log_lines() -> list[str]:
+    """Return the log lines of the core.
+
+    Returns:
+        list[str]: The lines. `[]` without a core.
+    """
     w = _window
     return w.core.log_lines() if w is not None and not w.closed else []
 
@@ -876,11 +1332,28 @@ __all__ += ["widget"]
 
 
 def widget(name: str, kind: str | None = None, *, height: int = 320):
-    """A live view of the stream inline in a notebook cell (an anywidget fed by
-    the stream socket, not by Jupyter's message channel). ``kind`` is "series",
-    "heatmap", "image", "points", "histogram" or "scene"; None takes it from the stream.
-    Starts :func:`serve` when no server runs. The widget's ``selection`` and
-    ``data_view`` traits carry what the viewer picks back to Python."""
+    """Show the live view `name` in a notebook cell, as an anywidget widget.
+
+    The widget reads the WebSocket stream of the server directly, not the message channel of the
+    notebook, so it keeps updating while a cell runs. It is an ipywidgets widget, so `HBox` and
+    `VBox` lay several out together.
+
+    When no server runs, `widget()` starts one with [`serve`][caliper.serve]. Without anywidget
+    installed, the call raises `ImportError` and names the extra `caliper[notebook]`.
+
+    Args:
+        name (str): The view to show. The widget may be created before the first call of the view.
+        kind (str | None): `"series"`, `"heatmap"`, `"image"`, `"points"`, `"histogram"` or
+            `"scene"`. `None` takes the kind from the stream.
+        height (int): Height of the whole widget, header included, in CSS pixels.
+
+    Returns:
+        CaliperWidget: The widget, with the traits and the `on_select` method listed below.
+
+    Raises:
+        ValueError: When `name` is not a non-empty string or `kind` is unknown.
+        ImportError: When anywidget is not installed.
+    """
     from ._widget import widget as _widget
     return _widget(name, kind, height=height)
 
@@ -894,15 +1367,37 @@ _series_tap = None                  # its series tap while it runs
 
 
 def serve(port: int = 0, *, control: bool = True):
-    """Stream every view of this process to viewers on this machine: the
-    browser page at the URL this prints (``http://127.0.0.1:<port>/?token=<token>``),
-    the notebook widget and the Caliper app. ``port=0`` picks a free port.
-    ``control=False`` makes every viewer read-only: none may pause the run,
-    change a parameter or run an action (see :func:`step`).
-    Returns the server (``url``, ``port``, ``token``, ``stream_url``,
-    ``session``, ``control``, ``stats()``, ``on_event(fn)``, ``events()``,
-    ``close()``; also a context manager); a second call returns the running
-    server. Loopback only, with a session token. :func:`close` stops it."""
+    """Start the stream server of this process, print its link, and return the server.
+
+    The link is `http://127.0.0.1:<port>/?token=<token>`. Viewers on this machine use it: the
+    browser page, the notebook widget and the Caliper app. A second call while the server runs
+    returns the same server. [`close`][caliper.close] stops it.
+
+    The server listens on 127.0.0.1 only and makes a new random session token. While it listens,
+    it writes the stream file `streams/<pid>.json` in the app-data folder of Caliper
+    (`$CALIPER_DATA_DIR` when set, see [Environment](../reference/folders-and-environment.md)).
+    The file has mode 0600 in a folder of mode 0700. It holds the pid, the machine name, the
+    session id, the script name, the start time, the port, the stream link with its token,
+    `control` and the view names. The server rewrites the file when the views change.
+
+    The Caliper app lists the stream from this file in `F4 Attach to process`, so it attaches
+    without a pasted link. `close()` removes the file, and the next listing of the app removes
+    the file of a killed script. A file that cannot be written leaves the server running, and the
+    printed link still attaches.
+
+    The server is one more route. Every view call is offered to it. A view takes a snapshot for
+    it only while a viewer subscribes to that view, once for each data view that its
+    subscriptions ask for. The snapshots are computed on the device and copied into pinned host
+    memory without waiting, so the call still returns at once.
+
+    Args:
+        port (int): TCP port on 127.0.0.1. 0 lets the system choose a free port.
+        control (bool): Whether viewers may pause the run, change parameters and run actions
+            ([Controls](run-control-calls.md#controls)). `False` shows them read-only.
+
+    Returns:
+        NetServer: The running server. It works as a context manager that closes it.
+    """
     from ._net import serve as _serve
     return _serve(port, control=control)
 
@@ -911,14 +1406,36 @@ __all__ += ["connect"]
 
 
 def connect(url: str | None = None):
-    """Stream every view of this process to a `caliper serve` hub on this
-    machine, as well as to serve()'s viewers if it runs. ``url`` is the hub's
-    stream URL with its token (or the viewer link it prints); without it,
-    $CALIPER_HUB_URL, then the hub file ($CALIPER_HUB_FILE, or hub.json in
-    Caliper's app-data folder). Returns at once; the connection retries with
-    back-off and never blocks training. Returns the connection (``url``,
-    ``session``, ``state``, ``connected``, ``stats()``, ``close()``). Needs the
-    native sender (caliper._netio). :func:`close` ends it."""
+    """Stream every view of this process, as a producer, to a `caliper serve` hub on this machine.
+
+    The call returns the connection. [Hub Setup](hub-setup.md) explains the hub.
+
+    `connect()` returns at once and never blocks the training loop, because the native sender
+    connects in the background. When the hub cannot be reached or the connection drops, the
+    sender tries again after 0.5 seconds and doubles the wait up to 30 seconds. It proposes the
+    session id that the hub assigned, so the hub resumes the session. It stops when the hub ends
+    the connection with BYE `replaced`.
+
+    The views reach the hub through the same calls as for [`serve`][caliper.serve]. A view takes
+    a snapshot for the hub only while a viewer of the hub watches it. Caliper LIB keeps one
+    producer per process, so `serve()` and `connect()` in one script share it, and every view
+    call reaches both. [`close`][caliper.close] ends the connection as well.
+
+    Args:
+        url (str | None): The stream URL of the hub with its token,
+            `ws://127.0.0.1:<port>/v3/stream?token=<token>`, or the viewer link that the hub
+            prints. `None` reads `CALIPER_HUB_URL`, then the hub file: `CALIPER_HUB_FILE`, or
+            `hub.json` in the app-data folder (`~/Library/Application Support/Caliper/hub.json`
+            on macOS).
+
+    Returns:
+        HubConnection: The connection to the hub.
+
+    Raises:
+        ValueError: When the URL has no token or names a host other than 127.0.0.1 or localhost.
+        RuntimeError: When no URL is given and there is no hub file, or when the native sender
+            (`caliper._netio`) is not built.
+    """
     from ._net import connect as _connect
     return _connect(url)
 
@@ -935,14 +1452,37 @@ _CTL = _controls.CONTROLS
 
 
 def step(step=None) -> None:
-    """The checkpoint of the training loop: call it once per step, on the
-    training thread. It sets the parameter values that viewers changed, runs
-    the actions they asked for, in order, and waits while a viewer has paused
-    the run, until a viewer resumes or steps it, the server closes, or no
-    connection that may control has been open for 10 s. Ctrl-C or a
-    notebook's interrupt ends the wait. ``step``: this step's number, shown to
-    viewers (default: one more than the last). With nothing waiting it only
-    counts the step."""
+    """Mark the checkpoint of the training loop, where the controls change the script.
+
+    Call it once per step, on the training thread, between two steps. It is the only place where
+    the controls change the script. There it sets the parameter values that viewers changed, runs
+    the actions they asked for in the order they asked, and waits while a viewer has paused the
+    run.
+
+    A waiting `step()` returns in these cases:
+
+    - A viewer resumes the run or asks for a number of single steps.
+    - The server closes.
+    - No connection that may control has been open for 10 seconds. A page reload stays well
+      within this time.
+
+    While it waits, it still sets values and runs actions as they arrive. Ctrl-C, or the
+    interrupt of a notebook, ends the wait with `KeyboardInterrupt`, and the run is no longer
+    paused afterward. Right before it waits, it sends the snapshots and series values of the step
+    where it paused. The run state goes to each viewer after them, so a view that reads `paused`
+    already shows that step ([What a viewer may rely
+    on](../reference/run-control-messages.md#what-a-viewer-may-rely-on-when-a-run-pauses)).
+
+    With nothing waiting, a call only counts the step and reads one flag. It costs the same with a
+    viewer attached or not.
+
+    Before the first `step()` of the script, viewers can change parameters, which then take
+    effect at once. They cannot pause the run, and actions wait for the first checkpoint.
+
+    Args:
+        step (int | None): The number of the step, which viewers show where the run paused.
+            `None` counts the calls.
+    """
     c = _CTL
     if step is None:
         c.n += 1
@@ -953,55 +1493,181 @@ def step(step=None) -> None:
 
 
 def pause() -> bool:
-    """Pause the run at the next :func:`step`, as a viewer's Pause button does;
-    a viewer resumes or steps it. Returns False, with a warning, when no stream
-    server runs, since no viewer could resume it."""
+    """Pause the run at the next [`step`][caliper.step], as the Pause button of a viewer does.
+
+    Use it for example when the loss stops being finite. A viewer resumes the run. When no stream
+    server runs, no viewer could resume it. The call then does nothing and warns with a
+    `RuntimeWarning`. When a server runs but no connection may control it, the call warns that the
+    run resumes after 10 seconds.
+
+    Returns:
+        bool: `True` when the run is paused, `False` when no stream server runs.
+    """
     return _CTL.pause()
 
 
 def param(name: str, value, *, min=None, max=None, log=False, choices=None, help=None) -> Param:
-    """A parameter that viewers can change while the script runs. The type
-    comes from ``value``: a bool is a toggle, an int an integer, a float a
-    number, and a str one of ``choices``. ``min`` and ``max`` bound a number
-    or an integer (a viewer's value is clamped to them), ``log=True`` draws
-    its slider on a log scale (it needs min > 0 and max), and ``help`` is a
-    tooltip. Returns a :class:`Param`: read ``.value`` in the loop; a
-    viewer's change reaches it at the next :func:`step`, or at once while the
-    script has called no step yet. ``.set(v)`` changes it from the script and
-    ``.remove()`` takes it away. Registering a name again replaces it."""
+    """Register a parameter that viewers can change while the script runs.
+
+    ```python
+    lr = caliper.param("lr", 1e-3, min=1e-5, max=1e-1, log=True, help="learning rate")
+    for batch in loader:
+        caliper.step()
+        for group in opt.param_groups:
+            group["lr"] = lr.value
+    ```
+
+    The type of the value sets the type of the parameter:
+
+    | `value` | Type | A viewer shows |
+    |---|---|---|
+    | `bool` | `boolean` | A toggle |
+    | `int` | `integer` | A slider or a field |
+    | `float` | `number` | A slider or a field |
+    | `str`, with `choices` | `choice` | A menu |
+
+    A value from a viewer is checked and clamped. A number or an integer is clamped to `min` and
+    `max`, an integer must be a whole number, and a choice must be one of `choices`. The value
+    reaches `Param.value` at the next [`step`][caliper.step], or at once before the first `step()`
+    of the script. When a viewer sends several values before a `step()`, the last one wins.
+    Registering a name again replaces the parameter. A script has at most 64 parameters.
+
+    Args:
+        name (str): 1 to 63 bytes. Registering a name again replaces the parameter.
+        value (bool | int | float | str): The first value. Its type sets the type of the parameter.
+        min (int | float | None): The lower end of the range of a number or an integer. A value
+            from a viewer is clamped to it.
+        max (int | float | None): The upper end of the range of a number or an integer. A value
+            from a viewer is clamped to it.
+        log (bool): Draw the slider on a log scale. Needs `min` greater than 0 and `max`.
+        choices (Sequence[str] | None): The choices of a `str` value, 1 to 64.
+        help (str | None): A tooltip, at most 1,024 bytes.
+
+    Returns:
+        Param: The registered parameter. Read its `value` in the loop.
+
+    Raises:
+        ValueError: When an argument is out of range, for example `log` without `min` and `max`,
+            a `value` outside `min` and `max`, or more than 64 parameters.
+        TypeError: When `value` is a `str` without `choices`, or of another unsupported type.
+    """
     return _CTL.param(name, value, min=min, max=max, log=log, choices=choices, help=help)
 
 
 def action(name: str, fn=None, *, help=None):
-    """Register ``fn``, a function without arguments, as an action that a
-    viewer can run: it runs at the next :func:`step`, on the training thread,
-    and the text of what it returns, or of the error it raises, goes back to
-    the viewer that asked. Works as a decorator, ``@caliper.action("save
-    checkpoint")``. Returns an :class:`Action`, which calls ``fn`` when called
-    and has ``.remove()``. Registering a name again replaces it."""
+    """Register a function that viewers can run, as an action.
+
+    ```python
+    @caliper.action("save checkpoint", help="saves the model's weights")
+    def save_checkpoint():
+        torch.save(model.state_dict(), "checkpoint.pt")
+        return "saved checkpoint.pt"
+    ```
+
+    `caliper.action(name, fn)` registers `fn`, a function without arguments. `caliper.action(name)`
+    does the same as a decorator. A request of a viewer runs the function at the next
+    [`step`][caliper.step], on the training thread, after the parameter values are set. Requests
+    run one at a time in the order they arrived. A request for an action that already waits joins
+    that run.
+
+    The text that `fn` returns goes back to the viewer that asked, cut to 1,024 bytes. An
+    exception goes back to that viewer with its message and appears in the script as a
+    `RuntimeWarning`. It does not stop the loop. A request that no `step()` has run within 10
+    minutes fails with a time-out. A script has at most 64 actions, and registering a name again
+    replaces the action.
+
+    Args:
+        name (str): The name of the action, 1 to 63 bytes.
+        fn (Callable[[], object] | None): The function to run. `None` returns a decorator.
+        help (str | None): A tooltip, at most 1,024 bytes.
+
+    Returns:
+        Action: The registered action, or a decorator that returns it when `fn` is `None`.
+
+    Raises:
+        ValueError: When `name` is not 1 to 63 bytes, or when there are more than 64 actions.
+        TypeError: When `fn` is not callable.
+    """
     if fn is None:
         return lambda f: _CTL.action(name, f, help=help)
     return _CTL.action(name, fn, help=help)
 
 
 def items(space: str, details=None) -> ItemSpace:
-    """The item space ``space``: items numbered from 0, such as the samples
-    of a test set, that the ``items=`` of several views index, so that a
-    selection in one view highlights the same items in the others.
-    ``details`` gives a viewer a few fields of the selected items: a mapping
-    {field: sequence indexed by item id} (copied once, now), or a function
-    ``fn(ids)`` that returns {field: values} or one dict per item. The
-    function runs on the thread "caliper.details", never on the training
-    thread, so it must only read data that the loop does not change in place.
-    Returns an :class:`ItemSpace` with ``.selection`` (the item ids viewers
-    selected, current even while a cell runs) and ``.select(ids)``."""
+    """Register the item space `space` for linked selection, with optional details.
+
+    ```python
+    caliper.items("eval", details={"class": eval_labels})
+    caliper.points(z, eval_labels, "embedding", classes=10, items="eval")
+    caliper.show(probabilities, "predictions", items="eval")
+    ```
+
+    An item space is a set of items numbered from 0 that several views index, such as the samples
+    of an evaluation set. A view names the item space of its item axis with `items=`, a keyword of
+    `show`, `points`, `series` and `offer`:
+
+    | Call | `items="eval"` names the space of |
+    |---|---|
+    | `show` | Its rows: the first dimension, or the first of `dims` |
+    | `points` | Its points: the point dimension |
+    | `series` | Its index, the number of values appended before each value |
+    | `offer` | The first dimension of each source, or the point dimension of points |
+
+    `items={"sample": "eval"}` names the dimensions of `dims` instead. A histogram has no item
+    axis. A selection made on an axis with an item space highlights the same items in every view
+    of the session that names the space: the points, the rows of a heatmap and markers on a
+    series. A call without `items=` has no extra cost.
+
+    `details` gives a viewer a few fields of the selected items, shown in a small table under the
+    view where the selection was made. It is one of two forms:
+
+    - A mapping `{field: sequence}` indexed by item id, copied to the host once, at the call.
+    - A function `fn(ids)` that returns `{field: values}` in the order of `ids`, or one dict per
+      item.
+
+    The function runs on the thread `caliper.details`, never on the training thread, and has 2
+    seconds. It must read only data that the loop does not change in place, such as labels or
+    arrays that the script computed before. Details cover the first 32 selected items and at most
+    16 fields. Each value is a number, a string of at most 256 bytes, a boolean or `None`.
+
+    A session has at most 16 item spaces. Python code also receives each select event through
+    `server.on_event`, `server.events()`, `widget.selection` and `on_select`. Its `detail` has
+    `space` and `items` too.
+
+    Args:
+        space (str): The name of the item space, 1 to 63 bytes.
+        details (dict | Callable[[Sequence[int]], object] | None): The details of the selected
+            items, in one of the two forms above.
+
+    Returns:
+        ItemSpace: The item space, with the current selection and the calls to change it.
+
+    Raises:
+        ValueError: When a name is invalid, a details column has too many fields, or the session
+            would have more than 16 item spaces.
+        TypeError: When `details` is neither a mapping nor a function.
+    """
     return _CTL.items(space, details)
 
 
 def controls(*, height: int = 160):
-    """A notebook widget with the run controls, every parameter and every
-    action of this script (the notebook extra). Starts :func:`serve` when no
-    server runs."""
+    """Show the run controls, parameters and actions of the script in a notebook widget.
+
+    The widget is like [`widget`][caliper.widget]. It shows the run state, the Pause, Resume and
+    Step buttons, every parameter and every action of the script, and the result of the last
+    action it ran. It reads the stream directly, so it works while a cell runs, and it starts
+    [`serve`][caliper.serve] when no server runs. Its traits are `src` and `height`. The header of
+    every view widget also shows the run state and the Pause, Resume and Step buttons.
+
+    A build whose browser assets lack the module of the panel, `caliper-controls-widget.js`,
+    warns and shows a note in its place. The call needs the notebook extra `caliper[notebook]`.
+
+    Args:
+        height (int): Height of the whole panel in CSS pixels.
+
+    Returns:
+        anywidget.AnyWidget: The controls panel.
+    """
     from ._widget import controls as _controls_widget
     return _controls_widget(height=height)
 

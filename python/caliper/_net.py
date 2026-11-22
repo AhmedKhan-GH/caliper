@@ -4,7 +4,7 @@
 training process, on its own thread with its own asyncio loop. Viewers (the
 browser page this server also serves, the notebook widget, the native app)
 connect to ``ws://127.0.0.1:<port>/v3/stream?token=<token>`` and speak the
-protocol of include/caliper/live_net.h and docs/references/wire-protocol.md,
+protocol of include/caliper/live_net.h and docs/reference/wire-protocol.md,
 through the codec caliper/_wire.py.
 
 The pieces, from the training loop outwards:
@@ -124,7 +124,7 @@ def redact(text: str, token: str | None = None) -> str:
 
 
 def origin_ok(origin: str | None) -> bool:
-    """The protocol's Origin rule (docs/references/wire-protocol.md)."""
+    """The protocol's Origin rule (docs/reference/wire-protocol.md)."""
     if origin is None:
         return True
     return (origin == "null" or bool(_ORIGIN_LOOPBACK.match(origin))
@@ -571,6 +571,7 @@ class Link:
 # ===========================================================================
 class _Producer:
     controls = None                            # 3.1: the server's caliper._net_controls.ControlsPort
+    stream_file = None                         # serve()'s StreamFile, told when the view list changes
 
     def __init__(self, ring: NetRing, identity: dict, transport: "NetTransport"):
         self.ring = ring
@@ -715,6 +716,9 @@ class _Producer:
                 del self.hist[st]
             for link in list(self.links):
                 link.views_changed(views)
+            sf = self.stream_file
+            if sf is not None:
+                sf.views(views)
         busy = False
         with ring.lock:
             pend = ring.pending
@@ -1134,16 +1138,19 @@ class _Listener:
 # the server object
 # ===========================================================================
 class NetServer:
-    """What ``caliper.serve()`` returns: the running stream server.
+    """The running stream server, returned by [`serve`][caliper.serve].
 
-    ``url`` is the viewer page (``http://127.0.0.1:<port>/?token=<token>``),
-    ``stream_url`` the WebSocket endpoint, ``port``, ``token`` and ``session``
-    (the session id) identify it, and ``closed`` says whether it still runs.
-    ``on_event(fn)`` registers a function that receives every viewer event as a
-    dict (on a thread of its own, never the training thread); ``events()``
-    returns and clears the events received since the last call (at most 256).
-    ``close()`` ends every connection with BYE and stops the server; it also
-    runs at ``caliper.close()`` and at interpreter exit."""
+    It works as a context manager that closes the server on exit.
+
+    Attributes:
+        url (str): The link of the viewer page, with the token.
+        stream_url (str): The `ws://` URL of the stream, with the token.
+        port (int): The port the server listens on.
+        token (str): The session token.
+        closed (bool): `True` once the server is stopped.
+    """
+
+    _stream_file = None                 # serve()'s StreamFile while it listens
 
     def __init__(self, port: int = 0, *, engine=None, control: bool = True):
         port = int(port)
@@ -1187,12 +1194,13 @@ class NetServer:
 
     @property
     def control(self) -> bool:
-        """Whether viewers may control the script (``serve(control=...)``)."""
+        """Whether viewers may control the run, as `serve()` was told."""
         c = self.producer.controls
         return c is not None and c.allow
 
     @property
     def session(self) -> str:
+        """The session id that viewers see, `clp-<pid>-<6 hex>`."""
         return self.identity["id"]
 
     # -- the network thread -------------------------------------------------------
@@ -1252,11 +1260,26 @@ class NetServer:
 
     # -- events --------------------------------------------------------------------
     def on_event(self, fn: Callable[[dict], Any]) -> Callable[[dict], Any]:
-        """Call ``fn(event)`` for every viewer event from now on (usable as a
-        decorator). ``event`` is a dict: ``view``, ``type`` ("select", "pick",
-        "hover"), ``detail``, ``sub``, ``seq``, ``data_view``, ``connection``,
-        ``time``. ``fn`` runs on the thread "caliper.events"; an exception in it
-        is reported as a warning and does not stop later events."""
+        """Call `fn(event)` for every viewer event from now on.
+
+        An event is a dict with `view`, `type` (`"select"`, `"pick"` or `"hover"`), `detail`, `sub`,
+        `seq`, `data_view`, `connection` and `time`. The `detail` is in source indices, as the
+        [Wire Protocol](../reference/data-messages.md#events) reference lists for each kind. Events
+        are data for Python code to read, and nothing in them runs as a command.
+
+        The functions run on a thread named `caliper.events`, never on the training thread. An
+        exception in one becomes a `RuntimeWarning` and does not stop the others. The server keeps
+        at most 256 unread events for `events()` and drops the oldest.
+
+        Args:
+            fn (Callable[[dict], object]): The function to call with each event.
+
+        Returns:
+            Callable[[dict], object]: `fn`, so the method also works as a decorator.
+
+        Raises:
+            TypeError: When `fn` is not callable.
+        """
         if not callable(fn):
             raise TypeError("on_event() takes a callable")
         p = self.producer
@@ -1269,6 +1292,14 @@ class NetServer:
         return fn
 
     def remove_event_handler(self, fn) -> bool:
+        """Stop calls to `fn`.
+
+        Args:
+            fn (Callable[[dict], object]): A function registered with `on_event`.
+
+        Returns:
+            bool: `True` if the function was registered.
+        """
         try:
             self.producer.handlers.remove(fn)
             return True
@@ -1289,8 +1320,13 @@ class NetServer:
                                   RuntimeWarning, stacklevel=1)
 
     def events(self) -> list[dict]:
-        """The viewer events received since the last call, oldest first, and
-        clears them. Never blocks."""
+        """Return the events received since the last call, oldest first, and clear them.
+
+        The call never blocks. The server keeps at most 256 unread events and drops the oldest.
+
+        Returns:
+            list[dict]: The events, in the form that `on_event` describes.
+        """
         out = []
         d = self.producer.events
         while True:
@@ -1301,6 +1337,13 @@ class NetServer:
 
     # -- inspection ----------------------------------------------------------------
     def stats(self) -> dict:
+        """Return the state and the counters of the server.
+
+        Returns:
+            dict: `url`, `port`, `session`, `closed`, `attached` (connected viewers), `connections`,
+                `views` (per view its `id`, `kind`, `groups` of subscriptions with one data view,
+                and `seq`), `series` (values retained per series) and counters.
+        """
         p = self.producer
         links = []
         for ln in list(p.links):
@@ -1319,10 +1362,15 @@ class NetServer:
 
     # -- lifetime -------------------------------------------------------------------
     def close(self) -> None:
-        """Deliver what is pending (at most about a second), end every
-        connection with BYE and stop the server. Idempotent."""
+        """Deliver what is pending for about a second, end every connection and stop the server.
+
+        The call may be made more than once. It also runs at `caliper.close()` and at interpreter
+        exit, and it removes the stream file.
+        """
         if self.closed:
             return
+        if self._stream_file is not None:
+            self._stream_file.remove()          # the app stops listing it before it goes
         if self._loop.is_running() and threading.current_thread() is not self._thread:
             try:
                 # gathered series values (moved only if this thread gathered
@@ -1471,10 +1519,188 @@ def serve(port: int = 0, control: bool = True) -> NetServer:
             s = _make_server(port, control)
             _add_route(s)
         caliper._server = s
+        sf = StreamFile(s)
+        s._stream_file = sf
+        s.producer.stream_file = sf
+        sf.write()
     print(s.url, flush=True)
     from ._assets import note_missing_views
     note_missing_views()
     return s
+
+
+# ---------------------------------------------------------------------------
+# the stream file: how the Caliper app on this machine finds serve()'s stream
+# ---------------------------------------------------------------------------
+class AppDataRefused(RuntimeError):
+    """A test or hidden run asked for the app-data folder without a data folder
+    of its own (app_data_dir())."""
+
+
+def _test_run_reason() -> str:
+    """Why this process is a test or hidden run, "" when it is not, by the
+    app's rule (src/app_paths.h, THE GUARD): CALIPER_HIDDEN=1, or a
+    CALIPER_TEST_* variable that is set and not empty, such as the
+    CALIPER_TEST_RUN=1 that ctest and the package's own tests set."""
+    if os.environ.get("CALIPER_HIDDEN") == "1":
+        return "the hidden app (CALIPER_HIDDEN=1)"
+    for k in sorted(os.environ):
+        if k.startswith("CALIPER_TEST_") and os.environ[k]:
+            return f"a test run ({k} is set)"
+    return ""
+
+
+def app_data_dir() -> str:
+    """Caliper's app-data folder by the app's own rule (src/app_paths.cpp):
+    $CALIPER_DATA_DIR when it is set and not empty, else the folder of the OS.
+    A test or hidden run never gets the folder of the OS: it raises
+    AppDataRefused, so that serve() and connect() fail with that message
+    rather than writing into your own app-data folder."""
+    d = os.environ.get("CALIPER_DATA_DIR")
+    if d:
+        return d
+    home = os.path.expanduser("~")
+    if sys.platform == "darwin":
+        folder = os.path.join(home, "Library", "Application Support", "Caliper")
+    elif os.name == "nt":
+        folder = os.path.join(os.environ.get("APPDATA") or os.getcwd(), "Caliper")
+    else:
+        xdg = os.environ.get("XDG_DATA_HOME")
+        folder = os.path.join(xdg, "caliper") if xdg else os.path.join(home, ".local", "share", "caliper")
+    why = _test_run_reason()
+    if why:
+        raise AppDataRefused(f"caliper: {why} has no data folder of its own and would use your app-data "
+                             f"folder {folder}; set CALIPER_DATA_DIR to a folder of its own")
+    return folder
+
+
+STREAM_FILE_VERSION = 1
+
+
+class StreamFile:
+    """``<app data>/streams/<pid>.json`` while serve()'s server listens: what
+    the Caliper app's session list (F4 Attach to process) reads to list this
+    stream beside the shared-memory sessions and attach to it without the
+    link being pasted. It holds the server's stream URL with its token, the
+    same token as the link serve() prints, so it is written with mode 0600 in
+    a folder of mode 0700 (the owner only, as the hub file and the API file
+    are), and the app lists it only for the same user on the same machine
+    (``host``), with a live ``pid`` and a stream URL on 127.0.0.1. It is
+    rewritten when the view list changes (the pump thread), and removed when
+    the server closes; a killed script's file is removed by the app's next
+    listing. Writing it is best effort: a failure leaves serve() working, and
+    the link still attaches."""
+
+    def __init__(self, server):
+        self.server = server
+        self.path = os.path.join(app_data_dir(), "streams", f"{os.getpid()}.json")
+        self._lock = threading.Lock()
+        self._views: tuple | None = None
+        self._closed = False
+
+    def _names(self) -> tuple:
+        ring = self.server.ring
+        with ring.lock:
+            return tuple(ring.views)
+
+    def text(self, views: tuple) -> str:
+        s = self.server
+        info = {"version": STREAM_FILE_VERSION, "pid": os.getpid(), "host": _host_name(),
+                "session": s.identity["id"], "script": s.identity["script"],
+                "start_unix_ms": s.identity["start_unix_ms"], "port": s.port,
+                "stream_url": s.stream_url, "control": bool(s.control), "views": list(views)}
+        return json.dumps(info, indent=2, sort_keys=True) + "\n"
+
+    def write(self, views: tuple | None = None) -> bool:
+        """(Re)writes the file atomically; True when it was written."""
+        with self._lock:
+            if self._closed or not self.server.stream_url:
+                return False
+            if views is None:
+                views = self._names()
+            body = self.text(views).encode("utf-8")
+            folder = os.path.dirname(self.path)
+            tmp = f"{self.path}.tmp.{os.getpid()}"
+            try:
+                os.makedirs(folder, mode=0o700, exist_ok=True)
+                # The token goes only into a folder of this user's that no one
+                # else can enter: a shared or pre-made folder could hold a
+                # link at the file's name that leads elsewhere.
+                why = _private_folder(folder)
+                if why:
+                    self._refuse(folder, why)
+                    return False
+                try:
+                    os.unlink(tmp)                    # a leftover of this pid's; only this user writes here
+                except FileNotFoundError:
+                    pass
+                # Made new, never through a link, with its mode set at creation.
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+                fd = os.open(tmp, flags, 0o600)
+                try:
+                    os.write(fd, body)
+                finally:
+                    os.close(fd)
+                os.replace(tmp, self.path)
+            except OSError as e:
+                _log.debug("cannot write the stream file %s: %s", self.path, e)
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                return False
+            self._views = views
+            return True
+
+    def _refuse(self, folder: str, why: str) -> None:
+        """Says once, on the script's standard error and without the token, why
+        the Caliper app will not list this stream."""
+        if getattr(self, "_refused", False):
+            return
+        self._refused = True
+        print(f"caliper: the stream file is not written, so the Caliper app's session list does not show this "
+              f"stream; attach with its link instead: {folder} {why}", file=sys.stderr, flush=True)
+
+    def views(self, names) -> None:
+        """The view list changed (the pump thread): rewrite when the names did."""
+        names = tuple(names)
+        if names != self._views:
+            self.write(names)
+
+    def remove(self) -> None:
+        """Removes the file and writes no more (idempotent)."""
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            try:
+                os.unlink(self.path)
+            except OSError:
+                pass
+
+
+def _private_folder(folder: str) -> str:
+    """'' when `folder` is a folder of this user's that no one else may read or
+    write (POSIX); otherwise why it is not."""
+    if os.name == "nt":
+        return ""
+    import stat
+    st = os.lstat(folder)
+    if not stat.S_ISDIR(st.st_mode):
+        return "is not a folder"
+    if st.st_uid != os.getuid():
+        return "is not owned by this user"
+    if st.st_mode & 0o077:
+        return "can be read or entered by other users (it needs mode 0700)"
+    return ""
+
+
+def _host_name() -> str:
+    import socket
+    try:
+        return socket.gethostname()
+    except OSError:
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -1486,15 +1712,7 @@ def hub_file() -> str:
     p = os.environ.get("CALIPER_HUB_FILE")
     if p:
         return p
-    home = os.path.expanduser("~")
-    if sys.platform == "darwin":
-        base = os.path.join(home, "Library", "Application Support", "Caliper")
-    elif os.name == "nt":
-        base = os.path.join(os.environ.get("APPDATA") or os.getcwd(), "Caliper")
-    else:
-        xdg = os.environ.get("XDG_DATA_HOME")
-        base = os.path.join(xdg, "caliper") if xdg else os.path.join(home, ".local", "share", "caliper")
-    return os.path.join(base, "hub.json")
+    return os.path.join(app_data_dir(), "hub.json")
 
 
 def hub_stream_url(url: str | None = None) -> str:

@@ -8,16 +8,16 @@ This page is the only place for the order and status of work. Each phase links t
 
 On 15 November 2026, `main` holds the host, the SDK with its 19 service ids, Caliper Embed, the embeddable core, which installs as the `caliper-embed` 1.4.0 package, Caliper LIB, the Python package, and nine applets that live in the tree but that the core build does not compile. The SDK installs as the `caliper-sdk` 0.2.0 package, and every applet builds against it. The loader enforces the whole versioning contract, searches development folders and loads one copy of each applet. The inspector applet is being developed on the `inspector` branch and is not on `main`. The references and explanations under `docs/` describe what is built.
 
-Streaming to notebooks, browsers and the Caliper app, the hub, Caliper API v0 and `caliper build` are built as well. Network streaming (`docs/explanations/network-streaming.md`), Caliper API (`docs/references/api.md`) and Caliper CLI (`docs/references/cli.md`) describe them, and [Streaming and embedding](#streaming-and-embedding) below lists what remains.
+Streaming to notebooks, browsers and the Caliper app, the hub, Caliper API v0 and `caliper build` are built as well. Network streaming (`docs/python/network-streaming.md`), Caliper API (`docs/agents/http-api.md`) and Caliper CLI (`docs/reference/cli.md`) describe them, and [Streaming and embedding](#streaming-and-embedding) below lists what remains.
 
 ## Phase 1: one core with versioned applets
 
-1. Done: the versioning contract and the promotion rule are written in Compatibility and epochs (`docs/explanations/compatibility.md`).
-2. Done: the SDK installs as the `caliper-sdk` package, with the headers, the CMake config, the pinned UI stack and `caliper_add_applet()`; see SDK package (`docs/references/sdk-package.md`).
+1. Done: the versioning contract and the promotion rule are written in Compatibility and epochs (`docs/development/compatibility-and-epochs.md`).
+2. Done: the SDK installs as the `caliper-sdk` package, with the headers, the CMake config, the pinned UI stack and `caliper_add_applet()`; see SDK package (`docs/applets/sdk-package.md`).
 3. Make the host name no applet. Done: windows dock by role, the core build compiles no applets, and CI builds the core without applets and checks that the host names none. Still to do: CI starts the empty core and checks that the landing screen shows its empty state.
 4. Load applets from outside the repository. Done: development paths through `--applets <dir>` and `CALIPER_APPLET_PATH`, the user applets folder, and the search order with one copy chosen per id. Still to do: shipped applets signed in the app bundle.
-5. Done: the `caliper` subcommands `list`, `check`, `info`, `new`, `install <folder>`, `dev` and `shot`, the `--applets <dir>` flag and `CALIPER_APPLET_PATH`; see Caliper CLI (`docs/references/cli.md`). `caliper shot` draws an applet's page as the app draws it, with nothing on screen, and writes it as a PNG. It is the first piece of the capture service that Phase 2 promotes.
-6. Done: the minimal embedding package, which is the `caliper-embed` package with its one shared library, `caliper_embed_api_version()`, and `examples/embed_host` built outside the repository and run offscreen; see Embed Caliper in a program (`docs/guides/embed-caliper.md`).
+5. Done: the `caliper` subcommands `list`, `check`, `info`, `new`, `install <folder>`, `dev` and `shot`, the `--applets <dir>` flag and `CALIPER_APPLET_PATH`; see Caliper CLI (`docs/reference/cli.md`). `caliper shot` draws an applet's page as the app draws it, with nothing on screen, and writes it as a PNG. It is the first piece of the capture service that Phase 2 promotes.
+6. Done: the minimal embedding package, which is the `caliper-embed` package with its one shared library, `caliper_embed_api_version()`, and `examples/embed_host` built outside the repository and run offscreen; see Embed Caliper in a program (`docs/web/program-embedding.md`).
 7. Move the inspector applet's general pieces into the core as services, each in its own commit with tests. Its own panes stay in the applet.
 8. Acceptance: the inspector and two existing scopes each build from their own repository against the installed SDK and load into a released Caliper. Two versions of one applet resolve correctly.
 9. Move the first-party scopes to a `caliper-applets` repository, and the inspector to its own repository.
@@ -36,9 +36,11 @@ Plan: [Platform candidates](platform-candidates.md).
 
 ## Phase 3: agent-built panels
 
-A command layer with undo, a catalog of every data source, a spec runtime with about six primitives (series, heatmap, points, mesh, table, histogram), a spec applet kind in the loader, and an MCP server so Claude Code or Codex can build and check panels.
+Someone drops data into the app, makes loaders and builds visuals from inside the app: by hand in a WYSIWYG builder pane, with their own agent in the side chat, with the widget agent on one panel, selection, file or property, or from an agent outside the app over MCP. Everything built is data, a spec or a loader. The parts are a command layer with undo, a journal, approvals and previews; loaders that turn dropped files into sources; a catalog of every source; a spec format with seven primitives (series, heatmap, points, histogram, table, image, text) and its runtime; a spec applet kind in the loader; the MCP server `caliper-mcp`; the side chat, which runs any ACP agent on any model it supports, local models included; and the widget agent `caliper-agent`, which proposes changes in place with Claude today and later with other models, hosted or local, through an OpenAI-compatible API.
 
-Plan: [Applet builder](applet-builder.md).
+Built as libraries and tools under `src/builder/`, with tests, and not yet wired into the app: the spec format and its validator, the loaders and their readers, the catalog, the command layer, the session that binds them, `caliper-mcp`, the ACP client and the sidecar `caliper-agent`. Still to do, in the app: the command endpoints of Caliper API, the spec runtime and the spec applet kind, drag and drop, the builder pane, the side chat and the widget agent's inline surface.
+
+Plan: [Builder overview](builder-overview.md), which links to the page of each part; [Applet builder](applet-builder.md) is the earlier proposal.
 
 ## Phase 4: the registry
 
@@ -50,11 +52,11 @@ Plan: [Applet registry](registry.md).
 
 ### API
 
-Caliper LIB (`docs/references/python-api.md`), Caliper Embed (`docs/references/embedding.md`) and version 0 of Caliper API (`docs/references/api.md`), the HTTP interface to the running app, are built. The full API comes later, with the command layer of [Phase 3](#phase-3-agent-built-panels), which is what lets a program drive the app's state from outside.
+Caliper LIB (`docs/python/caliper-lib-api.md`), Caliper Embed (`docs/web/embedding-api.md`) and version 0 of Caliper API (`docs/agents/http-api.md`), the HTTP interface to the running app, are built. The full API comes later, with the command layer of [Phase 3](#phase-3-agent-built-panels), which is what lets a program drive the app's state from outside.
 
 ### Caliper CLI
 
-The subcommands that are built, among them `build` and `serve`, are described in Caliper CLI (`docs/references/cli.md`). `caliper install <url>`, `caliper package` and `caliper publish` come later, with the `.caliperapp` bundle format, the signing policy and the [registry](#phase-4-the-registry). Hot reload comes later too, and its entry points are [undecided](#undecided).
+The subcommands that are built, among them `build` and `serve`, are described in Caliper CLI (`docs/reference/cli.md`). `caliper install <url>`, `caliper package` and `caliper publish` come later, with the `.caliperapp` bundle format, the signing policy and the [registry](#phase-4-the-registry). Hot reload comes later too, and its entry points are [undecided](#undecided).
 
 ### MCP
 
@@ -74,11 +76,11 @@ If agents need to see the screen sooner, the capture service moves earlier, not 
 
 [Streaming and embedding](streaming-and-embedding.md) gives the plan for what remains of using Caliper from other programs. The surfaces come in this order: Python scripts and notebooks, the web viewer, C++ embedding, Rust bindings and Swift. Data streaming is the only way Caliper reaches a browser.
 
-Built so far: the minimal embedding package; network streaming over wire protocol v3 (`docs/references/wire-protocol.md`), with data views, `caliper.serve()`, the notebook widgets and, from version 3.1, controls that let a viewer pause and step the training loop, change registered parameters and run registered actions; the Caliper app and `caliper-viewer` attached to a stream by its link; the hub, `caliper serve`, with `caliper.connect()`; and the browser views, where Caliper's own view layer, compiled to WebAssembly and drawn through WebGPU, draws every live view kind and the views written for the browser in TypeScript draw where WebGPU is absent. Network streaming (`docs/explanations/network-streaming.md`) describes the design and links the references. Measured on a quiet machine against the commit-matched control, streaming costs `python/bench/bench_net.py`'s training loop 1 to 2.5 % of its throughput for one view with one or two viewers (a 1024 by 1024 heatmap 1.8 %, the loss series 1 %, 100,000 points 2 to 2.5 %), 3 to 4.6 % for all three together, and at most 1 % with no viewer; the table is in Cost of streaming, in that page.
+Built so far: the minimal embedding package; network streaming over wire protocol v3 (`docs/reference/wire-protocol.md`), with data views, `caliper.serve()`, the notebook widgets and, from version 3.1, controls that let a viewer pause and step the training loop, change registered parameters and run registered actions; the Caliper app and `caliper-viewer` attached to a stream by its link; the hub, `caliper serve`, with `caliper.connect()`; and the browser views, where Caliper's own view layer, compiled to WebAssembly and drawn through WebGPU, draws every live view kind and the views written for the browser in TypeScript draw where WebGPU is absent. Network streaming (`docs/python/network-streaming.md`) describes the design and links the references. Measured on a quiet machine against the commit-matched control, streaming costs `python/bench/bench_net.py`'s training loop 1 to 2.5 % of its throughput for one view with one or two viewers (a 1024 by 1024 heatmap 1.8 %, the loss series 1 %, 100,000 points 2 to 2.5 %), 3 to 4.6 % for all three together, and at most 1 % with no viewer; the table is in Cost of streaming, in that page.
 
 Still to do, in this order:
 
-1. Interventions on a model, such as ablating a head or steering along a direction, after the controls of wire protocol 3.1 (`docs/references/wire-protocol.md`). They come with the inspector work.
+1. Interventions on a model, such as ablating a head or steering along a direction, after the controls of wire protocol 3.1 (`docs/reference/wire-protocol.md`). They come with the inspector work.
 2. The rest of the web viewer's order in [The web viewer](streaming-and-embedding.md#the-web-viewer):
     1. For the views that are built: the clipboard and multi-touch in the canvas, a CI job for the module's checks, and testing in Safari, Firefox and on Windows.
     2. Every built-in view: points are built; the geometry path and ImPlot3D remain.
@@ -118,7 +120,7 @@ Caliper's own Metal backend on macOS and Vulkan backend on Windows stay the norm
 4. Give applets a scene service. Applets draw in 3-D through `caliper.scene.v1`, which offers the scene model of Caliper LIB to the applet ABI with the shared camera, picking and the overlays, and the geometry service is deleted once its applets have moved, as the user decided ([Scenes](scenes.md#the-scene-service-for-applets)).
 5. Keep one version of each graphics service. In sprint 4 the tensor bridge and the export service each collapse to one version, the scene service starts with one, the embedding library's two kinds of tensor views become one, and the ABI epoch is bumped once, from 2 to 3, where the service ids change, with every applet in this repository updated in the same changes, as the user decided. Applets and embedding hosts outside this repository stop loading until they are rebuilt against the new SDK, and those that drew through the geometry service until they are rewritten onto the scene service. One of them is ported in sprint 4 by the user's decision; whether to update the others is the user's decision.
 
-Caliper then maintains three backends: Metal, Vulkan and WebGPU. The Vulkan backend of the layer comes with [Windows parity](windows-parity.md); until then the Windows app draws its ImGui pages and refuses textures, geometry and applet scenes. The user has accepted that gap: Windows and Vulkan are deferred until the user moves to the Windows machine. The renderers that exist today are described in Rendering (`docs/explanations/rendering.md`).
+Caliper then maintains three backends: Metal, Vulkan and WebGPU. The Vulkan backend of the layer comes with [Windows parity](windows-parity.md); until then the Windows app draws its ImGui pages and refuses textures, geometry and applet scenes. The user has accepted that gap: Windows and Vulkan are deferred until the user moves to the Windows machine. The renderers that exist today are described in Rendering (`docs/applets/rendering.md`).
 
 ## Windows parity
 
@@ -131,14 +133,14 @@ Windows parity follows the macOS sprints; [Windows parity](windows-parity.md) gi
 - Fix stale code comments: the `sql_job` comment in `applets/embed_scope/embed_scope.cpp` (the code uses `sql_thread`), and the `CALIPER_VULKAN_SELFTEST` comment in `src/host/cuda_driver.h` (no code reads it).
 - Measure EmbedScope's training step time on a Mac without the device drain, then retire the comment in `embed_scope.cpp` that says the drain dominates step time.
 - GPTScope's head heatmap releases and re-creates its texture on every probe when the zero-copy pool is not in use. Create it once and update it.
-- EmbedScope saves its checkpoint with `artifacts.put` on the frame thread when Save is clicked. Move the save into a job, as the frame-thread rule (`docs/explanations/architecture.md`) requires.
+- EmbedScope saves its checkpoint with `artifacts.put` on the frame thread when Save is clicked. Move the save into a job, as the frame-thread rule (`docs/introduction/architecture.md`) requires.
 - Add the Vulkan mirror of the `geometry.v1_2` textured POINT row in `tests/gfx`, which exists only for Metal.
 - Re-check the G15 instance-offset gate in the Metal and Vulkan backends, not only in the bridge, and isolate the Metal G1 to G12 re-gate in its own test.
 - CI: cache the FetchContent downloads outside `cmake-build-release`, and cache or shallow-clone `third_party/`, which is now the longest step of a warm run.
 
 ## Not now
 
-A WYSIWYG editor inside the app, an agent inside the app, Lua or WebAssembly applets, third-party native applets, and accounts. Accounts belong to Caliper Cloud, not the desktop app ([Data and Cloud](data-and-cloud.md)).
+Lua or WebAssembly applets, third-party native applets, and accounts. Accounts belong to Caliper Cloud, not the desktop app ([Data and Cloud](data-and-cloud.md)).
 
 Linux is not planned for now.
 
@@ -146,7 +148,7 @@ A second native host is not needed now. `examples/embed_host` stays as the embed
 
 ## Invariants
 
-Every phase keeps these rules. Platform rules (`docs/explanations/architecture.md`) gives the reasons.
+Every phase keeps these rules. Platform rules (`docs/introduction/architecture.md`) gives the reasons.
 
 - Data flows from tensors to pixels, one way.
 - Applets supply no shaders.

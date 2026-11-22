@@ -1,0 +1,269 @@
+# yaml-language-server: $schema=schema.json
+title: Builder session plan page
+kind: page
+source: design/builder-session.md
+ref: main
+summary: The plan page design/builder-session.md on main, read heading by heading; each plan heading has
+  an entry or is listed as holding no feature.
+entries:
+- heading: What is built and what is planned
+  item: 'The library caliper_builder_session: Session, SessionHost, spec edits as pure functions, a line
+    diff, the loader catalog provider, resolved panel data, stacked previews, review of spec edits and
+    the widget agent''s context bundle.'
+  ids:
+  - SPC-06
+- heading: What is built and what is planned
+  item: The library caliper_builder_session_host and the tool caliper-builder-host, a development stand-in
+    for the app's command endpoints.
+  ids:
+  - SPC-06
+- heading: What is built and what is planned
+  item: 'The seam for sources the app serves: CatalogDataSource, DataSources, the generation of a panel
+    with its probe, and the cache of transformed tensors.'
+  ids:
+  - SPC-06
+  - SPC-04
+- heading: What is built and what is planned
+  item: 'The session in the app: the app, caliper dev and caliper shot own one session, drain its queue
+    on the frame thread, run long commands on the job system and show each journaled command in Activity.'
+  ids:
+  - SPC-06
+- heading: What is built and what is planned
+  item: The spec page that draws the open spec with the spec runtime, panel.render through the offscreen
+    renderer and the app's API server serving the command endpoints.
+  ids:
+  - SPC-07
+  - SPC-08
+  - AGT-01
+- heading: What is built and what is planned
+  item: The catalog providers and data sources for live views, feed channels and metrics.
+  ids:
+  - SPC-04
+- heading: What is built and what is planned
+  item: 'Planned: removing caliper-builder-host and moving the tests of caliper-mcp and caliper-agent
+    to caliper --hidden --api.'
+  reason: maintenance
+- heading: What is built and what is planned
+  item: 'Planned: the live, feed and metric catalog providers.'
+  ids:
+  - SPC-04
+- heading: What is built and what is planned
+  item: 'Planned: the approval cards, so the person sees and decides what an agent''s command waits for.'
+  ids:
+  - SPC-05
+  - AGT-06
+- heading: The session
+  item: Session::open(workspace) holds the loader store, the catalog, the open spec, the journal, the
+    registry and the queue.
+  ids:
+  - SPC-06
+- heading: The commands it binds
+  item: 'The table of command groups the session binds: catalog, data, loader, spec, source, panel, layout,
+    preview, applet, review and history.'
+  ids:
+  - SPC-06
+  - SPC-05
+- heading: What SessionHost leaves to the app
+  item: Five commands (app.info, app.applets, app.launch, panel.render, capture.frame) need the running
+    app and are bound through SessionHost.
+  ids:
+  - SPC-06
+- heading: Editing the open spec
+  item: Every spec edit goes through apply_spec_edit(), validated with a catalog-backed resolver, with
+    dry_run, diff and no_effect handling.
+  ids:
+  - SPC-06
+  - SPC-05
+- heading: Undo
+  item: Every edit returns a closure pair that checks the document and fails with history.conflict.
+  ids:
+  - SPC-05
+- heading: Diffs
+  item: unified_line_diff() writes a diff -u style diff with three lines of context and bounded work.
+  ids:
+  - SPC-06
+- heading: Stacked previews
+  item: The session keeps each preview as a refreshed copy of the open spec, with limits, expiry and preview.commit
+    returning follow-ups.
+  ids:
+  - SPC-05
+  - AGT-05
+- heading: Review of spec edits
+  item: The session's policy holds an edit of the open spec from a reviewed origin (agent and mcp by default)
+    with a diff card and runs it only as it was shown.
+  ids:
+  - AGT-06
+  - SPC-05
+- heading: Loaders, paths and approval
+  item: Loader commands record their undo, accept outside paths only from ui and builder or earlier grants,
+    and ask before an agent runs a Python loader.
+  ids:
+  - SPC-03
+  - SPC-05
+- heading: Loaders, paths and approval
+  item: loader.delete with keep_outputs answers loader.unsupported because the store deletes a loader's
+    outputs with it.
+  ids:
+  - SPC-03
+- heading: Applets
+  item: applet.save writes the spec and manifest atomically, applet.open and spec.open check paths, and
+    applet.list lists spec applets.
+  ids:
+  - SPC-08
+  - SPC-05
+- heading: Resolving a panel's data
+  item: Session::resolve() follows from-chains, maps tensors, applies transforms with size bounds, reads
+    tables through a bounded query and reads served roots through data sources.
+  ids:
+  - SPC-06
+  - SPC-08
+- heading: Refresh
+  item: A generation per served source, a cheap panel_generation() probe and a cache of transformed tensors
+    keyed by generation make a live panel cost a microsecond when nothing changed.
+  ids:
+  - SPC-06
+  - SPC-04
+- heading: The catalog provider
+  item: LoaderCatalogProvider turns each loaded source into a catalog entry with bounded strings.
+  ids:
+  - SPC-04
+- heading: The command table and the spec format
+  item: The command table's schemas accept exactly what the spec format accepts, and a conformance test
+    keeps them in line.
+  ids:
+  - SPC-05
+  - SPC-01
+- heading: The session in the app
+  item: AppSession owns the Session, drains its queue on the frame thread and implements SessionHost;
+    a build without the builder opens nothing.
+  ids:
+  - SPC-06
+- heading: The workspace
+  item: The workspace is the folder of --workspace, else CALIPER_WORKSPACE, else workspace/ under the
+    app-data folder.
+  ids:
+  - SPC-06
+- heading: Opening
+  item: A chosen workspace opens on a worker after the first frame and the default workspace only when
+    first needed.
+  ids:
+  - SPC-06
+- heading: The frame loop
+  item: frame() drains the queue within a 4 ms budget and sends long commands to a worker, holds the queue
+    for capture.frame and runs the rest on the frame thread.
+  ids:
+  - SPC-06
+- heading: Long commands and the registry's lock
+  item: While a loader runs on the worker the frame thread leaves the queue, registry and store alone,
+    so later commands wait in order.
+  ids:
+  - SPC-06
+  - SPC-05
+- heading: Caliper API
+  item: AppSession::command_gateway() serves the command table at once and opens the workspace on a first
+    command.
+  ids:
+  - AGT-01
+  - SPC-06
+- heading: SessionHost
+  item: The app implements app.info, app.applets, app.launch, capture.frame and panel.render for the session.
+  ids:
+  - SPC-06
+  - COR-08
+- heading: The spec page
+  item: The spec page draws the open spec after any successful applet.open, lists the workspace's spec
+    applets under Projects, and gives each key one meaning (command input, inline prompt, Escape).
+  ids:
+  - SPC-07
+  - SPC-08
+- heading: Activity
+  item: Every journaled command becomes one Activity line with the origin, the command and its error code.
+  ids:
+  - SPC-06
+- heading: Shutdown
+  item: close() shuts the queue down, waits for the worker and the script, then closes the journal and
+    the database before main() returns.
+  ids:
+  - SPC-06
+- heading: The command script
+  item: CALIPER_COMMAND_SCRIPT runs a file of JSON-line invocations through the queue and CALIPER_COMMAND_RESULTS
+    records each result; it runs only in the hidden app and in caliper shot.
+  ids:
+  - SPC-29
+- heading: The start-up cost
+  item: 'Measured start-up cost: the session adds nothing distinguishable from noise and a workspace opens
+    in 5 to 6 ms.'
+  ids:
+  - SPC-06
+- heading: Tests
+  item: The tests caliper_app_session and caliper_app_session_hidden drive the app's session with a fake
+    frame loop and a real hidden app.
+  ids:
+  - SPC-06
+- heading: The stand-in host
+  item: caliper-builder-host serves GET /v0/commands and POST /v0/commands/{name} with strict HTTP/1.1,
+    origin by token, approval holds and options for review and approval; a development tool, not part
+    of the product.
+  ids:
+  - SPC-06
+  - AGT-01
+- heading: How the wiring replaces it
+  item: The app's own API server and session replace the stand-in, which is then removed with its tests
+    moved to caliper --hidden --api.
+  reason: maintenance
+- heading: The acceptance tests
+  item: 'Two headless acceptance tests: an in-process build of the dashboard with undo, redo, save, reopen
+    and replay, and a run over HTTP against the stand-in with approvals.'
+  ids:
+  - SPC-06
+  - SPC-05
+- heading: Decisions
+  item: 'Recorded decisions of the session: dry_run and diff on every edit, no_effect decided by the handler,
+    outside paths granted only by the person, long commands on a worker and a command script as the test
+    path.'
+  ids:
+  - SPC-06
+- heading: Changes to the contracts and to the earlier pages
+  item: 'Fixes to contracts section 8, the command layer page and the widget agent page: agent origin
+    for the sidecar, diff and applied, preview and review, and the replacement of planned Session calls
+    by preview commands.'
+  ids:
+  - SPC-06
+  - AGT-05
+- heading: Limits
+  item: Preview edits are in memory only, so a restart drops them as it drops the undo history.
+  ids:
+  - SPC-05
+- heading: Limits
+  item: The session reads live views, feed channels and metrics only through data sources the app registers.
+  ids:
+  - SPC-04
+  - SPC-06
+- heading: Limits
+  item: loader.delete with keep_outputs needs LoaderStore::remove(id, keep_outputs).
+  ids:
+  - SPC-03
+- heading: Limits
+  item: 'Undo and replay stop at the session: saved applets and loader tables stay, and replay rebuilds
+    the open spec but not the loaders.'
+  ids:
+  - SPC-05
+- heading: Limits
+  item: The stand-in serves no stream, info, applets or capture and runs on macOS and Linux only.
+  ids:
+  - SPC-06
+- heading: Limits
+  item: Every command waits while a loader runs on the worker, reads included, and history.redo of an
+    import runs its loaders on the frame thread.
+  ids:
+  - SPC-05
+- heading: Limits
+  item: Going Home from an applet joins every job of the host's job system, so it waits for a running
+    loader up to five seconds.
+  ids:
+  - SPC-06
+- heading: Limits
+  item: The app has no approval UI yet, so an agent's command that needs approval waits for its caller's
+    time limit.
+  ids:
+  - AGT-06

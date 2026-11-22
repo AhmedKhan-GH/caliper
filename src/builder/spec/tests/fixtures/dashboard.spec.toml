@@ -1,0 +1,53 @@
+# A dashboard of three panels over one table source and one tensor source.
+caliper_spec = 0
+
+[applet]
+id = "run42-dashboard"
+title = "Run 42"
+description = """
+Loss and accuracy of run 42, the attention of its first layer,
+and the metrics as a table."""
+
+[[source]]
+id = "metrics"
+catalog = "table:run42_metrics"        # columns step, loss, accuracy
+
+[[source]]
+id = "attn"
+catalog = "tensor:attn_weights"        # [layers, heads, tokens, tokens]
+  [[source.transform]]
+  op = "slice"
+  axis = 0
+  index = 0                            # the first layer: [heads, tokens, tokens]
+  [[source.transform]]
+  op = "reduce"
+  axis = 0
+  fn = "mean"                          # the mean over heads: [tokens, tokens]
+  [[source.transform]]
+  op = "normalise"
+  mode = "minmax"
+
+[[panel]]
+id = "curves"
+primitive = "series"
+title = "Loss and accuracy"
+bind = { x = "metrics.step", y = ["metrics.loss", "metrics.accuracy"] }
+options = { x_label = "Step", y_log = true }
+
+[[panel]]
+id = "attention"
+primitive = "heatmap"
+title = "Mean attention of layer 0"
+bind = { values = "attn" }
+options = { colormap = "magma", range = [0.0, 1.0], x_label = "Key", y_label = "Query" }
+
+[[panel]]
+id = "rows"
+primitive = "table"
+bind = { rows = "metrics" }
+options = { columns = ["step", "loss"] }
+
+[layout]
+split = "vertical"
+ratio = 0.65
+children = [{ split = "horizontal", children = ["curves", "attention"] }, "rows"]

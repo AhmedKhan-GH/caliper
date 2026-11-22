@@ -9,7 +9,7 @@
 //   idx = floor(clamp((v-vmin)/(vmax-vmin),0,1)*255 + 0.5); NaN -> 0;
 //   degenerate range (vmax <= vmin) -> 0.
 // Indices are pulled as u32 and clamped against vertex_count so out-of-range
-// values are defined (no OOB-read UB — docs/references/service-geometry-v1.md).
+// values are defined (no OOB-read UB — docs/applets/services/caliper-geometry-v1.md).
 
 // Bindings (set 0) — matches the renderer's descriptor set layout.
 layout(std430, set = 0, binding = 0) readonly buffer Pos  { float pos[];  };

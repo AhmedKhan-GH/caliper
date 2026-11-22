@@ -5,6 +5,9 @@ data, made by asking for them rather than by writing C++. It records what the cu
 what stands in the way, a proposed design and the changes it needs. Nothing here is built yet, and the open decisions
 are listed at the end.
 
+!!! note "Status"
+    This proposal is being built. [Builder overview](builder-overview.md) maps the parts, says what is built and what waits, and links to the page of each part. Two things changed since this page was written: a WYSIWYG builder pane and agents inside the app are now part of the plan, and the app has two agent roles, a side chat that runs the user's own agent ([ACP integration](acp-integration.md)) and an inline widget agent ([Widget agent](widget-agent.md)). Where this page and those pages differ, those pages hold.
+
 The proposal in one sentence: the agent builds applets as **data**, a declarative panel spec that one host-side
 runtime draws, and it edits them through a **command layer** that an in-app agent and outside agents share. Compiled
 applets remain the path for panels that outgrow the spec.
@@ -13,10 +16,10 @@ applets remain the path for panels that outgrow the spec.
 
 | Piece | Where | Why it matters for a builder |
 |---|---|---|
-| A service registry | `sdk/include/caliper/abi.h` (`get_service`) | New services, such as a catalog or commands, are added beside the old ones without breaking any applet (see `docs/explanations/compatibility.md`). |
-| SQL over the embedded store | `caliper.data.v1` (`docs/references/service-data-v1.md`) | The agent can query and bind tabular data on the spot; results come back as Arrow streams. |
-| Live telemetry | `caliper.feed.v1` (`docs/references/service-feed-v1.md`) | Enumerable channels with timestamps, read without blocking. |
-| Metrics | `caliper.metrics.v1` (`docs/references/service-metrics-v1.md`) | Runs, tags and steps in TensorBoard's vocabulary. |
+| A service registry | `sdk/include/caliper/abi.h` (`get_service`) | New services, such as a catalog or commands, are added beside the old ones without breaking any applet (see `docs/development/compatibility-and-epochs.md`). |
+| SQL over the embedded store | `caliper.data.v1` (`docs/applets/services/caliper-data-v1.md`) | The agent can query and bind tabular data on the spot; results come back as Arrow streams. |
+| Live telemetry | `caliper.feed.v1` (`docs/applets/services/caliper-feed-v1.md`) | Enumerable channels with timestamps, read without blocking. |
+| Metrics | `caliper.metrics.v1` (`docs/applets/services/caliper-metrics-v1.md`) | Runs, tags and steps in TensorBoard's vocabulary. |
 | Live views | `python/caliper` (`show`, `points`, `series`, `histogram`), drawn by `src/host/live/live_views_draw.cpp` | Visuals that need no applet code already exist: the host draws them by type and name. |
 | A guarded loader | `src/host/applet_loader.h` | Manifest-first checks, guarded calls, quarantine and restart. |
 | A frame watchdog | `src/host/frame_watchdog.h` | A bound on panels that take too long. |
@@ -25,7 +28,7 @@ applets remain the path for panels that outgrow the spec.
 
 - **Applets are compiled C++.** The loader keeps every library image mapped and never unloads it, so new code cannot
   be hot-reloaded under the same name.
-- **In-process code is trusted code.** The Trust model (`docs/explanations/trust-model.md`) says so plainly, and real
+- **In-process code is trusted code.** The Trust model (`docs/applets/trust-model.md`) says so plainly, and real
   isolation would need applets that run out of process, which do not exist. Loading native code that an agent wrote into the app's process is therefore risky.
 - **No command layer.** UI actions are not typed, scriptable commands, so there is nothing for an agent to call.
 - **No catalog.** Each service lists its own data, but nothing gives the agent one view of every source with its
@@ -33,7 +36,7 @@ applets remain the path for panels that outgrow the spec.
 - **No capture.** The agent cannot render a panel to an image to check its own work. A host automation and capture
   service is already a [platform candidate](platform-candidates.md).
 - **Layout only by role.** Applets dock their windows by the roles they give through
-  `caliper.ui.v1_1` (`docs/references/service-ui-v1-1.md`), and nothing places a window by command, so an agent cannot
+  `caliper.ui.v1_1` (`docs/applets/services/caliper-ui-v1-1.md`), and nothing places a window by command, so an agent cannot
   place panels.
 
 ## Three ways an agent could build an applet
@@ -234,7 +237,7 @@ Caliper ── spawns ──► claude-agent-acp / codex-acp / gemini …
 
 ## Open decisions
 
-- **Which agents to support first** through ACP, and whether a built-in BYOK agent is needed at all.
+- **Which agents to support first** through ACP. Decided: Caliper detects Claude Code, Codex, Gemini CLI and opencode, and any other ACP agent can be added by its command, as [ACP integration](acp-integration.md) describes; the built-in agent became the widget agent ([Widget agent](widget-agent.md)).
 - **Sharing.** Whether spec-built applets can be shared and installed like compiled ones, and through which registry.
 - **The first primitives.** Which visuals and controls the spec supports first, and which stay compiled-only.
 - **Scripting.** Whether custom logic should eventually come from Lua, WASM or a Python sidecar, or wait until specs

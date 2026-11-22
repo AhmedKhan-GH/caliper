@@ -1,453 +1,431 @@
 /* ===========================================================================
- * caliper/embed.h — the embed C ABI (libcaliper / Compass R4, L2a)
+ * caliper/embed.h - the embed C ABI of libcaliper
  *
- * This is the SEAM that makes "embeddable" true: the small C ABI a host binary
- * (Compass's wx chrome, examples/embed_host, the caliper exe eventually) uses
- * to run the applet canvas — ImGui + HostRenderer + bridge + geometry — inside
- * a view it owns, WITHOUT linking ImGui, torch, or any renderer type.
- *
- * WHO CALLS THIS: embedders (hosts). NOT applets. The applet-facing ABI is
- * <caliper/abi.h> + the sugar; this header lives on a SEPARATE include root
- * (top-level include/, a PUBLIC include dir of the libcaliper target only) so
- * an applet — which links caliper::sdk (sdk/include) and never libcaliper —
- * physically cannot #include it. An applet embedding a core would be a category
- * error; the include topology forbids it.
- *
- * C, not C++ (like the applet contract): a host built years apart from
- * libcaliper must still embed it. C++ sugar for host authors can ship later.
- *
- * ---------------------------------------------------------------------------
- * LIFECYCLE & THREADING CONSTRAINTS (design §4.3 — verbatim, an embedder that
- * ignores these gets crashes the core cannot prevent):
- *
- *  - THE CORE NEVER OWNS THE EVENT LOOP. caliper_core_frame() does exactly ONE
- *    frame and returns: no polling, no sleeping, no vsync wait. The embedder
- *    calls it from ITS loop (wx idle/timer, a GLFW loop, a CVDisplayLink, ...).
- *    That is the whole difference between a library and a host.
- *
- *  - INPUT CROSSES AS DATA, NOT TOOLKIT TYPES. The embedder translates its own
- *    GLFW/AppKit/wx events into CaliperInputEvent; the core feeds ImGuiIO. No
- *    GLFWwindow, NSEvent, or wxEvent ever appears here.
- *
- *  - ONE ImGui CONTEXT PER CANVAS, owned by the core. The embedder never
- *    touches ImGui state; the allocator handoff stays internal.
- *
- *  - ONE CaliperCore PER PROCESS in v0 (the one-libtorch-per-process policy
- *    already binds the process). caliper_core_create refuses a second live
- *    core with a NULL return; shut the first down first.
- *
- *  - CRASH CONTAINMENT. An applet fault is caught by the core's existing crash
- *    guard, surfaced through CaliperCoreDesc.crash_fn, and the applet is
- *    quarantined — the embedder is NOT taken down with it.
- *
- *  - FRAME-THREAD DISCIPLINE carries over: call frame()/event()/attach/read
- *    from ONE thread (the UI thread). Applet torch work runs on jobs threads
- *    and draws from snapshots; that contract is unchanged and internal.
+ * The small C ABI that a host binary uses to run the applet canvas inside a view it owns, without
+ * linking ImGui, torch or any renderer type. Embedders call it, applets never do. The header sits
+ * on its own include root, so an applet that links caliper::sdk cannot include it.
+ * The docs page "Embedding API" explains ownership, threading and limits.
  * ===========================================================================*/
 #ifndef CALIPER_EMBED_H
 #define CALIPER_EMBED_H
 
 #include <stddef.h>   /* size_t   */
 #include <stdint.h>   /* uint32_t */
-/* v1.2 views: CaliperTensor (the SDK's DLPack-aligned interchange type, pure C;
- * sdk/include rides libcaliper's PUBLIC caliper::sdk link). */
+/* v1.2 views: CaliperTensor, the SDK interchange type (pure C). */
 #include <caliper/tensor.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Bumped when this ABI grows a field. The struct_size FIRST-member on every
- * struct is the compatibility gate, and the rule is exact: the core requires
- * caller->struct_size >= the core's own sizeof(...) and REFUSES otherwise (a
- * caller built against an OLDER, smaller header is rejected, not silently
- * misread). Fields are append-only; when the ABI grows, CALIPER_EMBED_API_VERSION
- * bumps and the new fields land after the old ones, so a caller compiled against
- * a header at least as new as the core passes the size gate and every field the
- * core reads is present. Newer-caller / older-core is out of scope in v0 (one
- * libcaliper per process, built together). */
+/**
+ * The major version of this ABI, which is the major part of `CALIPER_EMBED_VERSION`.
+ *
+ * It bumps when the ABI grows a field. Every struct starts with `struct_size`, which is the
+ * compatibility gate. The core requires `struct_size` to be at least its own `sizeof` for the struct
+ * and refuses a smaller one, so a caller built against an older header is rejected and never
+ * misread. Fields are append-only and land after the old ones. A caller built against a header at
+ * least as new as the core passes the gate and finds every field the core reads. A newer caller
+ * with an older core is not supported.
+ */
 #define CALIPER_EMBED_API_VERSION 1
 
-/* ---------------------------------------------------------------------------
- * v1.1 — the "consumer" pass (docs/references/embedding.md). ALL additive; every v1 struct is byte-stable and no
- * struct grew a member, so CALIPER_EMBED_API_VERSION stays 1 (the size gate is
- * about struct fields; v1.1's additions are a new free function plus semantics
- * activated on EXISTING reserved fields). A v1 caller links and runs unchanged.
- *
- * HONESTY REGISTER (what v1.1 changed against the v0 gaps):
- *   - get_service           ADDED  — caliper_core_get_service: a host consumes
- *                                     the applets' service tables (P2/P3).
- *   - data_dir gap          CLOSED — CaliperCoreDesc.data_dir now roots the
- *                                     stores (was reserved/ignored in v0).
- *   - log-singleton gap     CLOSED — applet caliper.log.v1 lines route to
- *                                     CaliperLogFn (was stderr-only in v0).
- *   - one-core-per-process  REMAINS — create still refuses a second live core.
- *   - one-canvas-per-core   REMAINS — attach_canvas still refuses a second.
- * ------------------------------------------------------------------------- */
+/* v1.1 added `caliper_core_get_service`, the `data_dir` root and the routing of applet log lines.
+ * It changed no struct, so `CALIPER_EMBED_API_VERSION` stays 1. */
 
-/* Opaque handle. One live instance per process in v0 (see header note). */
+/** The opaque handle of one core. A process holds one live core at a time. */
 typedef struct CaliperCore CaliperCore;
 
-/* Which HostRenderer backend the core embeds. DEFAULT resolves to the platform
- * backend (Metal on Apple, Vulkan on Windows); with CALIPER_RENDERER=gl, which
- * asks for the removed OpenGL renderer, create refuses. There is no fallback
- * renderer: when the backend cannot start, attach_canvas refuses, and
- * last_error names the renderer and why it could not start. */
+/**
+ * The HostRenderer backend that the core embeds.
+ *
+ * There is no fallback renderer. `caliper_core_create` refuses when `CALIPER_RENDERER=gl` asks for
+ * the removed OpenGL renderer, and `caliper_core_attach_canvas` refuses when the backend cannot
+ * start, with a last error that names the renderer and why it could not start.
+ */
 typedef enum CaliperRenderer {
+    /** The platform backend, Metal on Apple and Vulkan on Windows. */
     CALIPER_RENDERER_DEFAULT = 0,
+    /** The Metal backend. */
     CALIPER_RENDERER_METAL   = 1,
+    /** The Vulkan backend. */
     CALIPER_RENDERER_VULKAN  = 2
 } CaliperRenderer;
 
-/* Diagnostics sink. NULL -> stderr. Receives BOTH streams, distinguishable by a
- * prefix on the message (v1.1):
- *   - CORE diagnostics (renderer pick, refusals, crash text) arrive UNtagged.
- *   - APPLET caliper.log.v1 lines arrive tagged "[applet] " (v1.1 routes the
- *     applet log service here when this callback is set — it was stderr-only in
- *     v0; a host surfaces them in a native Log pane, not stderr).
- * `level` is the CaliperLogLevel value (0=DEBUG..3=ERROR). `message` is valid
- * only for the call. Called from the frame thread for core lines, and from any
- * thread for applet log lines (log.v1 is worker-callable) — a host sink that
- * touches shared UI state must marshal to its UI thread itself. */
+/**
+ * The diagnostics sink of a core.
+ *
+ * The callback receives two streams, which differ by a prefix on the message. Core diagnostics
+ * such as the renderer choice, refusals and crash text arrive untagged. Applet `caliper.log.v1`
+ * lines arrive tagged with `[applet] `. `level` is a `CaliperLogLevel` value, from 0 for debug to
+ * 3 for error. `message` is valid only during the call. The core calls the sink from the frame
+ * thread for its own lines and from any thread for applet lines, so a sink that touches shared
+ * UI state must marshal to its UI thread. With a `NULL` sink, both streams go to stderr.
+ */
 typedef void (*CaliperLogFn)(void* userdata, int level, const char* message);
 
-/* Applet-fault callback (§4.3). Fired AFTER the faulting applet is quarantined
- * and torn down; the core keeps running. applet_id/fault are valid only for the
- * duration of the call. NULL -> the fault is logged and swallowed. */
+/**
+ * The applet-fault callback of a core.
+ *
+ * The core fires it after it has quarantined and torn down the faulting applet, and the core keeps
+ * running. `applet_id` and `fault` are valid only during the call. With a `NULL` callback, the core
+ * logs the fault and swallows it.
+ */
 typedef void (*CaliperCrashFn)(void* userdata, const char* applet_id,
                                const char* fault);
 
+/**
+ * The settings of a core, which `caliper_core_create` takes.
+ *
+ * Set `struct_size` to `sizeof(CaliperCoreDesc)` and zero every field that you do not use.
+ */
 typedef struct CaliperCoreDesc {
-    size_t          struct_size;   /* = sizeof(CaliperCoreDesc); FIRST member. */
-    CaliperRenderer renderer;      /* backend to embed.                        */
-    const char*     data_dir;      /* v1.1: per-core app-data root. NON-NULL
-                                    * routes metrics/artifacts/applet-data under
-                                    * this directory (created if missing) — a
-                                    * document app's per-project root. NULL keeps
-                                    * the OS default byte-for-byte (the caliper
-                                    * exe passes NULL). Valid for one live core;
-                                    * restored on shutdown (one core per process).
-                                    * Also holds the ImGui window layout
-                                    * (<data_dir>/imgui.ini); with NULL no layout
-                                    * is persisted and nothing is written to the
-                                    * process's working directory.               */
-    const char*     applets_dir;   /* extra applet scan dir; NULL -> default
-                                    * discovery (app-data/applets + exe-side). */
-    CaliperLogFn    log_fn;        /* NULL -> stderr.                          */
-    CaliperCrashFn  crash_fn;      /* NULL -> log-and-swallow.                 */
-    void*           userdata;      /* passed back to log_fn / crash_fn.        */
+    /** `sizeof(CaliperCoreDesc)`, as the caller built it. It must be the first member. */
+    size_t          struct_size;
+    /** The backend to embed. */
+    CaliperRenderer renderer;
+    /**
+     * The per-core app-data root, or `NULL` for the default of the operating system. A directory
+     * (created if missing) holds the metrics, artifacts and applet data stores of this core and
+     * the window layout in `imgui.ini`. With `NULL`, the core keeps no layout and writes nothing to
+     * the working directory. The setting lasts for the one live core and ends at shutdown.
+     */
+    const char*     data_dir;
+    /** An extra applet search folder, or `NULL` for the default discovery. */
+    const char*     applets_dir;
+    /** The diagnostics sink, or `NULL` for stderr. */
+    CaliperLogFn    log_fn;
+    /** The applet-fault callback, or `NULL` to log and swallow faults. */
+    CaliperCrashFn  crash_fn;
+    /** The pointer that the core passes back to `log_fn` and `crash_fn`. */
+    void*           userdata;
 } CaliperCoreDesc;
 
+/** The kind of canvas that `caliper_core_attach_canvas` creates. */
 typedef enum CaliperCanvasMode {
-    CALIPER_CANVAS_WINDOW    = 0,  /* native_view is an NSView* / HWND.        */
-    CALIPER_CANVAS_OFFSCREEN = 1   /* no view; render to a texture, read back. */
+    /** The canvas paints into a native view. `native_view` is an `NSView*` or an `HWND`. */
+    CALIPER_CANVAS_WINDOW    = 0,
+    /**
+     * The canvas has no view. The core renders to a texture, which `caliper_core_read_pixels` reads
+     * back.
+     */
+    CALIPER_CANVAS_OFFSCREEN = 1
 } CaliperCanvasMode;
 
+/** The settings of the canvas, which `caliper_core_attach_canvas` takes. */
 typedef struct CaliperCanvasDesc {
-    size_t            struct_size; /* = sizeof(CaliperCanvasDesc); FIRST.      */
+    /** `sizeof(CaliperCanvasDesc)`, as the caller built it. It must be the first member. */
+    size_t            struct_size;
+    /** Whether the canvas paints into a native view or renders offscreen. */
     CaliperCanvasMode mode;
-    int               width;       /* physical pixels.                        */
-    int               height;      /* physical pixels.                        */
-    float             content_scale; /* DPI scale (1.0 = 1x); <=0 -> 1.0.     */
+    /** The width of the canvas in physical pixels. */
+    int               width;
+    /** The height of the canvas in physical pixels. */
+    int               height;
+    /** The display scale, where 1.0 is one pixel per point. A value of 0 or less means 1.0. */
+    float             content_scale;
 } CaliperCanvasDesc;
 
+/**
+ * The type of an input event.
+ *
+ * Each constant names the fields of `CaliperInputEvent` that the core reads for that type.
+ */
 typedef enum CaliperEventType {
-    CALIPER_EVENT_MOUSE_MOVE    = 0, /* uses x, y (physical px)               */
-    CALIPER_EVENT_MOUSE_BUTTON  = 1, /* uses button, down                     */
-    CALIPER_EVENT_MOUSE_SCROLL  = 2, /* uses dx, dy                           */
-    CALIPER_EVENT_KEY           = 3, /* uses key (== ImGuiKey), down, mods    */
-    CALIPER_EVENT_TEXT          = 4, /* uses codepoint                        */
-    CALIPER_EVENT_RESIZE        = 5, /* uses width, height (physical px)      */
-    CALIPER_EVENT_CONTENT_SCALE = 6, /* uses scale                            */
-    CALIPER_EVENT_FOCUS         = 7  /* uses focused (0/1)                    */
+    /** The mouse moved. The core reads `x` and `y`, in physical pixels. */
+    CALIPER_EVENT_MOUSE_MOVE    = 0,
+    /** A mouse button changed. The core reads `button` and `down`. */
+    CALIPER_EVENT_MOUSE_BUTTON  = 1,
+    /** The mouse wheel or a trackpad scrolled. The core reads `dx` and `dy`. */
+    CALIPER_EVENT_MOUSE_SCROLL  = 2,
+    /** A key changed. The core reads `key`, which is an `ImGuiKey` value, and `down` and `mods`. */
+    CALIPER_EVENT_KEY           = 3,
+    /** A character was typed. The core reads `codepoint`. */
+    CALIPER_EVENT_TEXT          = 4,
+    /** The canvas changed size. The core reads `width` and `height`, in physical pixels. */
+    CALIPER_EVENT_RESIZE        = 5,
+    /** The display scale changed. The core reads `scale`. */
+    CALIPER_EVENT_CONTENT_SCALE = 6,
+    /** The canvas gained or lost focus. The core reads `focused`, which is 0 or 1. */
+    CALIPER_EVENT_FOCUS         = 7
 } CaliperEventType;
 
-/* Bit flags for CaliperInputEvent.mods (a KEY event's modifier state). */
 enum {
+    /** Bit flag in `CaliperInputEvent.mods` for the Control key. */
     CALIPER_MOD_CTRL  = 1 << 0,
+    /** Bit flag in `CaliperInputEvent.mods` for the Shift key. */
     CALIPER_MOD_SHIFT = 1 << 1,
+    /** Bit flag in `CaliperInputEvent.mods` for the Alt key. */
     CALIPER_MOD_ALT   = 1 << 2,
+    /** Bit flag in `CaliperInputEvent.mods` for the Super key. */
     CALIPER_MOD_SUPER = 1 << 3
 };
 
-/* One toolkit-neutral input event. Only the fields named in the CaliperEventType
- * comment above are read for a given type; leave the rest zero. */
+/**
+ * One toolkit-neutral input event.
+ *
+ * The core reads only the fields that the comment of the `CaliperEventType` constant names. Leave
+ * the other fields zero.
+ */
 typedef struct CaliperInputEvent {
-    size_t           struct_size;  /* = sizeof(CaliperInputEvent); FIRST.     */
+    /** `sizeof(CaliperInputEvent)`, as the caller built it. It must be the first member. */
+    size_t           struct_size;
+    /** The type of the event. */
     CaliperEventType type;
-    float            x, y;         /* mouse position (physical px)            */
-    float            dx, dy;       /* scroll delta                            */
-    int              button;       /* 0=left, 1=right, 2=middle               */
-    int              down;         /* 0/1 for button/key press state          */
-    int              key;          /* CaliperKey == ImGuiKey value            */
-    int              mods;         /* CALIPER_MOD_* bitset                     */
-    unsigned int     codepoint;    /* UTF-32 for CALIPER_EVENT_TEXT           */
-    int              width, height;/* CALIPER_EVENT_RESIZE (physical px)      */
-    float            scale;        /* CALIPER_EVENT_CONTENT_SCALE             */
-    int              focused;      /* CALIPER_EVENT_FOCUS                     */
+    /** The mouse position in physical pixels. */
+    float            x, y;
+    /** The scroll delta. */
+    float            dx, dy;
+    /** The mouse button: 0 for left, 1 for right and 2 for middle. */
+    int              button;
+    /** The press state of a button or key event: 1 for down and 0 for up. */
+    int              down;
+    /** The key, as an `ImGuiKey` value. */
+    int              key;
+    /** The modifier state of a key event, as a bit set of the `CALIPER_MOD_*` flags. */
+    int              mods;
+    /** The typed character as a UTF-32 code point. */
+    unsigned int     codepoint;
+    /** The new size of the canvas in physical pixels. */
+    int              width, height;
+    /** The new display scale. */
+    float            scale;
+    /** 1 when the canvas has focus, otherwise 0. */
+    int              focused;
 } CaliperInputEvent;
 
 /* --- Lifecycle ---------------------------------------------------------- */
 
-/* Create the core (ImGui context + renderer + service registry + loader, in
- * the L1-proven order). Returns NULL and logs on: a second live core, an
- * unsupported renderer for this OS, or CALIPER_RENDERER=gl. The renderer
- * starts at attach_canvas. */
+/**
+ * Create the core, which holds the ImGui context, the renderer, the service registry and the loader.
+ * Return `NULL` and log the reason for a second live core, a renderer that this system does not
+ * support or `CALIPER_RENDERER=gl`. The renderer starts at `caliper_core_attach_canvas`.
+ */
 CaliperCore* caliper_core_create(const CaliperCoreDesc* desc);
 
-/* Tear down: unload the applet, join jobs, close stores, drop the renderer and
- * ImGui context — the exact reverse order of create (crash-order load-bearing,
- * see the impl). Safe on NULL. Clears the one-core-per-process lock. */
+/**
+ * Tear down the core in the reverse order of creation: unload the applet, join the jobs, close the
+ * stores and drop the renderer and the ImGui context. Safe on `NULL`. The call also ends the
+ * one-core-per-process limit, and the `CaliperCore*` is dead afterward.
+ */
 void caliper_core_shutdown(CaliperCore* core);
 
-/* Attach the applet canvas. native_view is an NSView* / HWND for CANVAS_WINDOW,
- * ignored (pass NULL) for CANVAS_OFFSCREEN. Returns 1 on success, 0 on refusal
- * (the renderer could not start, canvas already attached, bad size) — a 0
- * leaves the core usable and sets last_error. When the renderer could not
- * start, last_error is "attach_canvas: the Metal renderer could not start
- * (<why>), and there is no fallback renderer until the WebGPU fallback through
- * Dawn lands" (Vulkan on Windows). v0: one canvas per core. */
+/**
+ * Attach the one canvas of the core. `native_view` is an `NSView*` or an `HWND` for
+ * `CALIPER_CANVAS_WINDOW`, and `NULL` for `CALIPER_CANVAS_OFFSCREEN`. Return 1 on success, or 0 when
+ * the core refuses because the renderer could not start, a canvas is attached already or the size
+ * is invalid. A refusal leaves the core usable and sets the last error. When the renderer could not
+ * start, the last error is "attach_canvas: the Metal renderer could not start (<why>), and there is
+ * no fallback renderer until the WebGPU fallback through Dawn lands", with Vulkan on Windows.
+ */
 int  caliper_core_attach_canvas(CaliperCore* core, void* native_view,
                                 const CaliperCanvasDesc* desc);
 
-/* Pump exactly ONE frame: clear the canvas, run the loaded applet's draw under
- * the crash guard, composite + present/store. No-op (sets last_error) if no
- * canvas is attached. Never blocks on the event loop. */
+/**
+ * Run exactly one frame: clear the canvas, draw the loaded applet under the crash guard, then
+ * composite and present or store the result. The call never polls, sleeps or waits for vsync.
+ * Without an attached canvas it does nothing except set the last error.
+ */
 void caliper_core_frame(CaliperCore* core);
 
-/* Feed one input event into the core's ImGuiIO. No-op before a canvas exists. */
+/** Feed one input event into the core. The call does nothing before a canvas exists. */
 void caliper_core_event(CaliperCore* core, const CaliperInputEvent* event);
 
-/* --- Applet control (reuses the loader's manifest discovery) ------------- */
+/* --- Applet control ------------------------------------------------------ */
 
-/* Load + launch the applet whose manifest id matches (e.g. "dev.example.my-applet").
- * Returns 1 on success, 0 if unknown/refused/failed (last_error set). A canvas
- * must be attached FIRST — an applet's launch/first frame touches the renderer's
- * ImGui backend, so load before attach_canvas is an honest refusal, not a crash.
- *
- * TEARDOWN-FIRST SEMANTICS. Any currently-loaded applet is torn down FIRST
- * (workers joined, then the instance), and only THEN is the new one launched —
- * so init jobs the new applet schedules are never cancelled by the old one's
- * teardown. Two consequences follow, both intentional:
- *   - Reloading the SAME id is a clean RESTART: the running instance is torn
- *     down (on_cleanup) and a fresh one launched (on_init) — no state carries
- *     over.
- *   - A FAILED launch leaves NO applet loaded, not the previous one: once the
- *     old applet is torn down it is gone even if the new launch is refused.
- * An UNKNOWN id is the one exception — it refuses up front (0, last_error set)
- * WITHOUT disturbing a running applet, so a typo cannot kill the live session. */
+/**
+ * Load and launch the applet whose manifest id is `manifest_id`, for example
+ * `dev.example.my-applet`. Return 1 on success, or 0 when the id is unknown or the launch is refused
+ * or fails, with the last error set. Attach a canvas first, because the first frame of an applet
+ * touches the ImGui backend of the renderer. The core tears down a loaded applet first, so
+ * reloading the same id restarts the applet with no carried state, and a failed launch leaves no
+ * applet loaded. An unknown id is the one exception: the call refuses it at once and leaves a
+ * running applet alone.
+ */
 int  caliper_core_load_applet(CaliperCore* core, const char* manifest_id);
 
-/* Tear down the loaded applet (jobs joined first, then instance). No-op if none
- * is loaded. Call between frames. */
+/**
+ * Tear down the loaded applet by joining its jobs and then dropping the instance. The call does
+ * nothing when no applet is loaded. Call it between frames.
+ */
 void caliper_core_unload_applet(CaliperCore* core);
 
-/* --- Offscreen readback (the automatable + byte-compare surface, §7) ----- */
+/* --- Offscreen readback -------------------------------------------------- */
 
-/* Copy the LAST composited frame's pixels to buf as tightly-packed RGBA8,
- * `stride` bytes per row (>= width*4). Returns 1 on success, 0 if the canvas is
- * not offscreen, buf is NULL, or stride is too small. */
+/**
+ * Copy the last composited frame to `buf` as tightly packed RGBA8 with `stride` bytes per row,
+ * where `stride` is at least the width times 4. Return 1 on success, or 0 when the canvas is not
+ * offscreen, `buf` is `NULL` or `stride` is too small.
+ */
 int  caliper_core_read_pixels(CaliperCore* core, void* buf, int stride);
 
-/* Human-readable reason for the most recent refusal (empty string if none).
- * Valid until the next core call. Never NULL for a non-NULL core. */
+/**
+ * Return the reason for the most recent refusal, or an empty string when there is none. The string
+ * is never `NULL` for a live core and stays valid until the next call on that core.
+ */
 const char* caliper_core_last_error(CaliperCore* core);
 
-/* --- Service consumption (v1.1) — the host becomes a CONSUMER, not just a
- * picture-in-picture embedder ------------------------------------------------
- *
- * Returns the SAME service table an applet receives via CaliperHost.get_service
- * for `id` (the applets' own vocabulary: "caliper.metrics.v1", "caliper.jobs.v1",
- * "caliper.artifacts.v1", "caliper.data.v1", ...). Cast the result to the matching
- * Caliper<Name>V1 struct from the caliper/services headers and call its thunks
- * as an applet would — no renderer/torch/ImGui type crosses the seam (the
- * interchange is C ABI + CaliperTensor + Arrow C streams). C++ hosts may use the
- * caliper.hpp sugar.
- *
- * Returns NULL for an unknown id or a NULL core. The pointer is a process-static
- * table (embed.h's pointer-validity guarantee): valid from create until
- * caliper_core_shutdown, after which — like every other call here — the
- * CaliperCore* is dead and must not be used.
- *
- * THREADING CONTRACT (§3.2 — VERIFIED against the implementations, not assumed;
- * an embedder that ignores it gets data races the core cannot prevent). Two
- * classes:
- *
- *  - ANY-THREAD services — call from any thread, including a host UI thread that
- *    is NOT the caliper_core_frame() thread, concurrently with an applet's
- *    worker writes:
- *      * caliper.metrics.v1   — MetricsStore holds ONE DuckDB connection under
- *                               ONE mutex; every writer AND reader (runs/
- *                               scalars/histograms) takes it, so host-thread
- *                               reads racing applet-thread writes serialize
- *                               (verified: metrics_store.cpp — lock_guard on
- *                               every method).
- *      * caliper.artifacts.v1 — same one-connection-one-mutex model; put/
- *                               path_of/exists/by_run all lock (artifact_store
- *                               .cpp). path_of returns a thread_local buffer,
- *                               valid until the next artifacts call ON THAT
- *                               THREAD.
- *      * caliper.data.v1      — one mutex over query/register/open_dataset
- *                               (data_store.cpp); last_error() is thread-local
- *                               (each thread sees ITS last failing call).
- *      * caliper.jobs.v1      — cross-thread BY DESIGN (submit/cancel/is_running
- *                               /progress over the process JobSystem).
- *      * caliper.device.v1    — reads an immutable negotiated-at-startup record.
- *      * caliper.log.v1       — reentrant; callable from worker threads (routes
- *                               to log_fn when installed, else stderr — below).
- *
- *  - FRAME-THREAD-ONLY services — call ONLY from the thread that calls
- *    caliper_core_frame(); they touch the renderer / the single ImGui context:
- *      * caliper.tensor_bridge.v1 / v1.1 / v1.2  (GPU upload, draw-adjacent)
- *      * caliper.geometry.v1 ... v1.3            (GPU draw)
- *      * caliper.ui.v1                           (the ImGui/ImPlot contexts —
- *                                                 meaningless to a host anyway)
- *
- * P3 caveat (one torch per process, never the host's): a host pushes
- * PARAMETERS; an APPLET's worker produces device tensors. The bridge's host-side
- * use is CPU-staged uploads on the frame thread only. */
+/* --- Service consumption (v1.1) ------------------------------------------ */
+
+/**
+ * Return the service table that an applet receives from `CaliperHost.get_service` for `id`, such as
+ * `caliper.metrics.v1` or `caliper.jobs.v1`, or `NULL` for an unknown id or a `NULL` core. Cast the
+ * result to the matching struct of the `caliper/services` headers and call its function pointers
+ * as an applet does. The table is static for the process and valid from creation until
+ * `caliper_core_shutdown`. The metrics, artifacts, data, jobs, device and log services may run on
+ * any thread, while the tensor bridge, geometry and UI services are frame-thread only.
+ */
 const void* caliper_core_get_service(CaliperCore* core, const char* id);
 
-/* ---------------------------------------------------------------------------
- * v1.2 — built-in tensor views (the Python entry point's caliper.show). Additive.
- * ---------------------------------------------------------------------------
- * A host hands the core a CaliperTensor and the CORE draws it: a texture made
- * through the process tensor bridge, plus an ImGui window titled with the view's
- * name, composited in caliper_core_frame AFTER the loaded applet's draw (so views
- * work with no applet loaded and alongside one). No ImGui, renderer or texture
- * type crosses the seam — the caller only names views and passes tensors. Same
- * name = update the existing view in place. Views are drawn in creation order.
- *
- * WHAT IS ACCEPTED (validated here, refused with last_error otherwise; the
- * Python layer pre-converts everything else into one of these two shapes):
- *   - 2-D f32 (H,W): colormapped through `colormap` over [vmin, vmax]
- *     (CaliperColormap: 0 viridis, 1 magma, 2 rdbu; idx = clamp((v-vmin)/
- *     (vmax-vmin),0,1)*255+0.5, NaN -> idx 0 — the bridge's frozen rule).
- *   - 3-D u8 (H,W,4) RGBA: shown as-is. C must be 4 (no RGB/gray here).
- *   Row-major contiguous (strides in ELEMENTS), each dim in 1..16384, device
- *   CPU or METAL. For a CPU tensor the bytes are read at data + byte_offset.
- *
- * TWO DEVICE PATHS, NO SILENT FALLBACK:
- *   - CPU: CPU-staged upload (path "cpu-staged"). The bytes are copied before
- *     return; the caller may free/rewrite them immediately.
- *   - METAL: ZERO-COPY. tensor->data is an in-process id<MTLBuffer> (DLPack's
- *     kDLMetal `data`: the storage's MTLBuffer object pointer) and byte_offset is
- *     DLPack's byte_offset (must be a multiple of 4). The view imports the buffer
- *     (a strong retain — tensor_bridge.v1_2 import_allocation, cached per view
- *     and re-imported when the buffer pointer changes) and the renderer reads it
- *     IN PLACE at byte_offset on the GPU (path "compute-imported" for f32,
- *     "blit-imported" for u8; info.imported = 1). If the device path refuses
- *     (wrong GPU, buffer shorter than byte_offset + extent, no import cap), the
- *     call FAILS — the core never quietly downloads a METAL tensor to the host.
- *   tensor->stream is passed through (a non-NULL MTLCommandQueue* GPU-orders the
- *   read after that queue's committed work, bridge v1.1); NULL is the normal
- *   case for a caller that synchronized first.
- *
- * SYNC / MEMORY-STABILITY CONTRACT (from tensor_bridge_v1_2.h, verbatim in
- * spirit): the GPU reads [byte_offset, byte_offset + extent) of the buffer AFTER
- * this call returns, unless WAIT_GPU is set. So:
- *   - BEFORE the call the producer must have FINISHED writing those bytes (the
- *     Python layer snapshots on torch's stream and polls a torch.mps.Event until
- *     the snapshot completed, never a synchronize; device-side ordering only
- *     covers producer work committed BEFORE the call).
- *   - WITHOUT CALIPER_VIEW_FLAG_WAIT_GPU the bytes must not be rewritten until
- *     the next update of the same view (or the next caliper_core_frame).
- *   - WITH CALIPER_VIEW_FLAG_WAIT_GPU the call blocks until the renderer's read
- *     has completed, so on return the caller may rewrite or free the buffer at
- *     once. The wait is measured: info.last_update_ms includes it.
- *   The texture is the view's own copy of the pixels; the source buffer is only
- *   read during the update. A view keeps its last MTLBuffer RETAINED (the import)
- *   until it is updated from a different buffer or removed.
- *
- * MAPPING CHANGES: a different vmin/vmax/colormap on an existing f32 view re-pins
- * the mapping and re-maps the new tensor into the SAME texture (info.creates does
- * not move). A different shape/dtype recreates the texture (creates += 1).
- *
- * THREADING: FRAME-THREAD ONLY — every function below except
- * caliper_core_colormap_lut must be called from the thread that calls
- * caliper_core_frame(), between frames (same class as caliper.tensor_bridge.*).
- * Views need an attached canvas (the renderer's device exists only after
- * attach_canvas); view_tensor before attach is an honest refusal. Views are
- * destroyed (textures and imports released) by caliper_core_shutdown, before the
- * renderer is torn down.
- * ------------------------------------------------------------------------- */
+/* --- Built-in tensor views (v1.2) ----------------------------------------
+ * A host hands the core a CaliperTensor and the core draws it in an ImGui window that carries the
+ * name of the view. Views need an attached canvas. Every call below except
+ * `caliper_core_colormap_lut` runs on the frame thread between frames. */
+
+/** Defined as 1 when the header declares the view calls, so that a host can test for them. */
 #define CALIPER_EMBED_HAVE_VIEWS 1
 
 enum {
-    CALIPER_VIEW_FLAG_RAW      = 1 << 0,  /* draw the texture 1:1 at canvas (0,0), no window chrome/padding (tests) */
-    CALIPER_VIEW_FLAG_WAIT_GPU = 1 << 1   /* block until the device update completed (safe handoff; measured cost) */
+    /** Bit flag to draw the texture 1:1 at the canvas origin with no window chrome, for tests. */
+    CALIPER_VIEW_FLAG_RAW      = 1 << 0,
+    /**
+     * Bit flag to block until the device update completes, which makes the handoff safe and adds a
+     * measured cost.
+     */
+    CALIPER_VIEW_FLAG_WAIT_GPU = 1 << 1
 };
 
+/**
+ * One tensor view to create or update, which `caliper_core_view_tensor` takes.
+ *
+ * The core accepts two layouts and refuses any other with a reason in the last error. A 2-D f32
+ * tensor of shape `(H,W)` is colormapped over `[vmin, vmax]`. A 3-D u8 tensor of shape `(H,W,4)` is
+ * RGBA and shows as is. The tensor must be row-major contiguous, with strides in elements and each
+ * dimension in 1 to 16384, on device CPU or METAL.
+ *
+ * For a CPU tensor, the core reads the bytes at `data + byte_offset` and copies them before the
+ * call returns. For a METAL tensor, `data` is an in-process `id<MTLBuffer>` and the renderer reads
+ * it in place without a copy. The call fails when the device path refuses, and the core never
+ * downloads a METAL tensor to the host. The GPU reads the buffer after the call returns unless
+ * `CALIPER_VIEW_FLAG_WAIT_GPU` is set, so the producer must have finished writing before the call.
+ */
 typedef struct CaliperViewDesc {
-    size_t               struct_size;   /* = sizeof(CaliperViewDesc) */
-    const char*          name;          /* view id; same name = update in place */
-    const CaliperTensor* tensor;        /* 2-D f32 (H,W) or 3-D u8 (H,W,4); CPU or METAL */
-    uint64_t             byte_offset;   /* METAL only: byte offset into tensor->data's MTLBuffer (DLPack byte_offset) */
-    int32_t              colormap;      /* CaliperColormap for 2-D f32 (0 viridis, 1 magma, 2 rdbu) */
-    float                vmin, vmax;    /* mapping range for 2-D f32 */
-    uint32_t             flags;         /* CALIPER_VIEW_FLAG_* */
+    /** `sizeof(CaliperViewDesc)`, as the caller built it. */
+    size_t               struct_size;
+    /** The id and window title of the view. The same name updates the existing view in place. */
+    const char*          name;
+    /** The tensor to draw, either 2-D f32 `(H,W)` or 3-D u8 `(H,W,4)`, on device CPU or METAL. */
+    const CaliperTensor* tensor;
+    /**
+     * For METAL only, the byte offset into the `MTLBuffer` of `tensor->data`, as in DLPack. It must
+     * be a multiple of 4.
+     */
+    uint64_t             byte_offset;
+    /** The `CaliperColormap` for a 2-D f32 tensor: 0 for viridis, 1 for magma and 2 for rdbu. */
+    int32_t              colormap;
+    /** The mapping range of a 2-D f32 tensor. Both ends must be finite. */
+    float                vmin, vmax;
+    /** A bit set of the `CALIPER_VIEW_FLAG_*` flags. */
+    uint32_t             flags;
 } CaliperViewDesc;
 
+/** The measured state of one view, which `caliper_core_view_info` fills. */
 typedef struct CaliperViewInfo {
+    /** `sizeof(CaliperViewInfo)`, as the caller built it. */
     size_t      struct_size;
-    const char* path;          /* renderer path of the LAST update: "compute-imported", "blit-imported", "compute", "blit", "cpu-staged"; valid until the next core call */
-    int32_t     width, height; /* texture size in texels */
-    int32_t     device;        /* CaliperDeviceKind of the last tensor */
-    uint64_t    updates;       /* number of successful updates */
-    double      last_update_ms;/* CPU wall time of the last view_tensor call (includes the GPU wait when WAIT_GPU) */
-    int32_t     imported;      /* 1 if the last update read an imported MTLBuffer in place (zero-copy), else 0 */
-    uint64_t    creates;       /* texture (re)creations: 1 after the first show, +1 per shape/dtype change; a mapping change does not bump it */
+    /**
+     * The renderer path of the last update: `compute-imported`, `blit-imported`, `compute`, `blit`
+     * or `cpu-staged`. It stays valid until the next core call.
+     */
+    const char* path;
+    /** The size of the texture in texels. */
+    int32_t     width, height;
+    /** The `CaliperDeviceKind` of the last tensor. */
+    int32_t     device;
+    /** The number of successful updates. */
+    uint64_t    updates;
+    /**
+     * The CPU wall time of the last `caliper_core_view_tensor` call in milliseconds, including the
+     * GPU wait when `CALIPER_VIEW_FLAG_WAIT_GPU` was set.
+     */
+    double      last_update_ms;
+    /**
+     * 1 when the last update read an imported `MTLBuffer` in place, which is the zero-copy case,
+     * otherwise 0.
+     */
+    int32_t     imported;
+    /**
+     * The number of texture creations: 1 after the first show and 1 more for each shape or dtype
+     * change. A mapping change does not count.
+     */
+    uint64_t    creates;
 } CaliperViewInfo;
 
-/* Frame-thread only (same thread as caliper_core_frame). Creates or updates the
- * named view. Returns 1 on success, 0 with last_error set. A failed FIRST show
- * leaves no view; a failed update of an existing view keeps its previous pixels. */
+/**
+ * Create the view named `desc->name`, or update it when it exists. Return 1 on success, or 0 with
+ * the last error set. A failed first show leaves no view, and a failed update keeps the previous
+ * pixels of the view. A different `vmin`, `vmax` or colormap on an existing f32 view maps the new
+ * tensor into the same texture, while a different shape or dtype recreates the texture.
+ */
 int caliper_core_view_tensor(CaliperCore* core, const CaliperViewDesc* desc);
-int caliper_core_view_remove(CaliperCore* core, const char* name);    /* 1 if removed */
+/**
+ * Remove the view named `name` and release its texture and import. Return 1 if the view existed and
+ * was removed, otherwise 0.
+ */
+int caliper_core_view_remove(CaliperCore* core, const char* name);
+/** Return the number of views. */
 int caliper_core_view_count(CaliperCore* core);
-int caliper_core_view_info(CaliperCore* core, const char* name, CaliperViewInfo* out); /* 1 on success */
-/* Test/measurement surface: copy the view's TEXTURE (not the canvas) to buf as tightly
- * packed RGBA8 (width*height*4 bytes). 1 on success. */
+/**
+ * Fill `out` with the measured state of the view named `name`. Return 1 on success, otherwise 0.
+ */
+int caliper_core_view_info(CaliperCore* core, const char* name, CaliperViewInfo* out);
+/**
+ * Copy the texture of the view named `name`, not the canvas, to `buf` as tightly packed RGBA8 of
+ * `width*height*4` bytes, for tests and measurement. `buf_bytes` is the size of `buf`. Return 1 on
+ * success, otherwise 0.
+ */
 int caliper_core_view_readback(CaliperCore* core, const char* name, void* buf, size_t buf_bytes);
-/* The built-in 256-entry RGBA8 LUT for a colormap (CPU reference for tests). 1 on success.
- * Each entry packs r | g<<8 | b<<16 | a<<24. Needs no core; callable from any thread. */
+/**
+ * Copy the built-in 256-entry RGBA8 table of `colormap` to `out256`, as a CPU reference for tests.
+ * Each entry packs `r | g<<8 | b<<16 | a<<24`. Return 1 on success, otherwise 0. The call needs no
+ * core and may run on any thread.
+ */
 int caliper_core_colormap_lut(int32_t colormap, uint32_t out256[256]);
 
-/* ---------------------------------------------------------------------------
- * v1.4 — the version call. Additive: no struct changed, so
- * CALIPER_EMBED_API_VERSION stays 1.
- * ---------------------------------------------------------------------------
- * CALIPER_EMBED_VERSION is the version of THIS header, encoded as
- * (major << 16) | (minor << 8) | patch:
- *   - major is CALIPER_EMBED_API_VERSION, which bumps when a struct grows (the
- *     struct_size gate above);
- *   - minor counts the additive sections on that major: v1.1 (services, data_dir,
- *     log routing), v1.2 (tensor views), v1.3 (typed live views,
- *     caliper/live_views.h) and v1.4 (this call). The next additive section
- *     bumps it;
- *   - patch counts library fixes that change no declaration.
- * caliper_embed_api_version() returns the same encoding for the library the
- * process loaded. An embedder built against this header runs on a library of
- * the same major whose minor is at least CALIPER_EMBED_VERSION_MINOR:
- *
- *   uint32_t lib = caliper_embed_api_version();
- *   if ((lib >> 16) != CALIPER_EMBED_VERSION_MAJOR ||
- *       ((lib >> 8) & 0xff) < CALIPER_EMBED_VERSION_MINOR)
- *       ... the library is of another major or older than this header.
- *
- * The macros are plain integer constant expressions, usable in #if. The call
- * needs no core and is callable from any thread.
- * ------------------------------------------------------------------------- */
+/* --- Version (v1.4) ------------------------------------------------------- */
+
+/**
+ * Build a version number from its parts, in the encoding `(major << 16) | (minor << 8) | patch`. The
+ * macro is an integer constant expression, so `#if` can test it.
+ */
 #define CALIPER_EMBED_MAKE_VERSION(major, minor, patch) \
     (((major) << 16) | ((minor) << 8) | (patch))
+/**
+ * The major version of this header, which equals `CALIPER_EMBED_API_VERSION`. It bumps when a
+ * struct grows.
+ */
 #define CALIPER_EMBED_VERSION_MAJOR CALIPER_EMBED_API_VERSION
+/**
+ * The minor version of this header. It counts the additive sections: v1.1 services, v1.2 tensor
+ * views, v1.3 typed live views and v1.4 the version call.
+ */
 #define CALIPER_EMBED_VERSION_MINOR 4
+/** The patch version of this header. It counts library fixes that change no declaration. */
 #define CALIPER_EMBED_VERSION_PATCH 0
+/**
+ * The version of this header, built with `CALIPER_EMBED_MAKE_VERSION` from the major, minor and
+ * patch parts.
+ */
 #define CALIPER_EMBED_VERSION                                   \
     CALIPER_EMBED_MAKE_VERSION(CALIPER_EMBED_VERSION_MAJOR,     \
                                CALIPER_EMBED_VERSION_MINOR,     \
                                CALIPER_EMBED_VERSION_PATCH)
 
+/**
+ * Return the version of the library that the process loaded, in the encoding of
+ * `CALIPER_EMBED_VERSION`. An embedder runs on a library of the same major whose minor is at least
+ * `CALIPER_EMBED_VERSION_MINOR`. The call needs no core and may run on any thread.
+ */
 uint32_t caliper_embed_api_version(void);
 
 #ifdef __cplusplus

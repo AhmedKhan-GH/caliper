@@ -163,7 +163,8 @@ bool HttpDoor::answer(Server& server, ConnId c, const HttpRequest& r) {
         return false;
     }
     if (is_stream(r.path)) {
-        const int status = wire::upgrade_status(r, token_, port_, r.path);
+        const int status = token_ok_ ? wire::upgrade_status(r, token_ok_, port_, r.path)
+                                     : wire::upgrade_status(r, token_, port_, r.path);
         if (status != 0) {
             if (r.has_origin && !wire::origin_allowed(r.origin)) {
                 ++stats_.refused_origin;

@@ -1,0 +1,65 @@
+# yaml-language-server: $schema=schema.json
+title: Applet registry plan page
+kind: page
+source: design/registry.md
+ref: main
+summary: The plan page design/registry.md on main, read heading by heading; each plan heading has an entry
+  or is listed as holding no feature.
+entries:
+- heading: Applet registry
+  item: 'Nothing is built: the host has no Browse tab, registry client, download or index format; applets
+    install from a local folder.'
+  ids:
+  - COR-18
+  - COR-12
+- heading: Proposal
+  item: A registry at caliperapp.ai backed by a repository that takes publications by pull request; sideloading
+    continues and the registry never gates loading.
+  ids:
+  - COR-18
+- heading: What the host would do
+  item: 'Browse tab: reads the index and lists releases that match the host''s platform and ABI epoch.'
+  ids:
+  - COR-18
+- heading: What the host would do
+  item: 'Install by id and version: download, sha256 check, place in the user applets folder.'
+  ids:
+  - COR-18
+- heading: What the host would do
+  item: Update and uninstall from the tab.
+  ids:
+  - COR-18
+- heading: What the host would do
+  item: 'Compatibility filtering: incompatible releases are listed with the loader''s refusal text.'
+  ids:
+  - COR-18
+- heading: Metadata for each release
+  item: 'Release entry fields: version, abi_epoch, min_host and per-platform artifacts with url and sha256,
+    plus applet id, name, summary, tags and source location.'
+  ids:
+  - COR-18
+- heading: Publishing
+  item: Authors open a pull request; automatic checks validate the entry, URLs, digests, epoch and min_host;
+    maintainer review is optional.
+  ids:
+  - COR-18
+- heading: Open questions
+  item: Whether signing a release is required and by whom.
+  ids:
+  - COR-23
+  - COR-24
+- heading: Open questions
+  item: Where the host stores the downloaded index and how long it trusts the cache.
+  ids:
+  - COR-18
+- heading: Open questions
+  item: How a release that depends on a libtorch version is described in the index.
+  ids:
+  - COR-18
+  - COR-33
+- heading: Open questions
+  item: Whether the installed layout stays the flat sidecar folder or follows the plan in Applets outside
+    the core.
+  ids:
+  - COR-16
+  - COR-18
