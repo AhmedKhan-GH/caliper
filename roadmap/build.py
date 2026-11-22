@@ -55,6 +55,13 @@ BADGE_LABELS = {"shipped": "Shipped", "built": "Built", "progress": "In progress
 FEATURE_KEYS = ["id", "title", "status", "summary", "depends_on", "sprint", "docs",
                 "branches", "in_progress", "design", "issue", "draft"]
 COVERAGE = "coverage"
+CANDIDATES = "candidates"
+# Candidate origins in the order their sections appear: (value, section title, count column).
+ORIGINS = [("cut", "Scope Cuts"), ("plan-idea", "Plan Ideas"),
+           ("adjacent-work", "Adjacent Work"), ("field", "Field")]
+# The proposed pillars follow the registry's pillars in this order.
+PROPOSED_ORDER = ["datasets", "training-diagnostics", "evaluation", "profiling-and-systems",
+                  "robotics-and-simulation", "scientific-fields", "publishing-and-teaching"]
 
 
 class RegistryError(Exception):
@@ -244,6 +251,111 @@ def read_coverage(root):
     return groups
 
 
+# Candidates
+
+def read_candidates(root, features):
+    """Returns the candidate pillars under root/roadmap/candidates, existing pillars first.
+
+    Candidates are ideas outside the registry: they are read here and nowhere else, so they never
+    reach the graph, the data files or any count. Each pillar is its YAML mapping with its file
+    stem under `slug`. A dependency that is not a registry id raises RegistryError.
+    """
+    folder = Path(root) / "roadmap" / CANDIDATES
+    pillars = []
+    for path in sorted(folder.glob("*.yml")):
+        name = "roadmap/%s/%s" % (CANDIDATES, path.name)
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as err:
+            raise RegistryError("%s: not valid YAML: %s" % (name, err))
+        if not isinstance(data, dict):
+            raise RegistryError("%s: not a pillar mapping" % name)
+        data = dict(data)
+        data["slug"] = path.stem
+        data["candidates"] = list(data.get("candidates") or [])
+        for item in data["candidates"]:
+            for dep in item.get("depends_on") or []:
+                if dep not in features:
+                    raise RegistryError("%s: %s: depends_on %s, which does not exist"
+                                        % (name, item["key"], dep))
+        pillars.append(data)
+
+    order = {Path(name).stem: data["order"] for name, data in read_files(root)}
+
+    def rank(p):
+        if p["slug"] in PROPOSED_ORDER:
+            return (1, PROPOSED_ORDER.index(p["slug"]))
+        return (0, order.get(p["slug"], 0))
+    pillars.sort(key=lambda p: (rank(p), p["slug"]))
+    return pillars
+
+
+def _origin_counts(pillar):
+    counts = {origin: 0 for origin, _ in ORIGINS}
+    for item in pillar["candidates"]:
+        counts[item["origin"]] += 1
+    return counts
+
+
+def candidates_index(pillars):
+    lines = ["# Candidates", "",
+             "Candidates are ideas that are not in the registry. They are kept here to mine as "
+             "Caliper grows, and they appear in no graph or count of the roadmap.", "",
+             "| Pillar | " + " | ".join(title for _, title in ORIGINS) + " | Total |",
+             "| --- |" + " ---: |" * (len(ORIGINS) + 1)]
+    totals = {origin: 0 for origin, _ in ORIGINS}
+    for p in pillars:
+        counts = _origin_counts(p)
+        for origin, n in counts.items():
+            totals[origin] += n
+        lines.append("| [%s](%s.md) | %s | %d |" % (
+            md(p["title"]), p["slug"], " | ".join(str(counts[o]) for o, _ in ORIGINS),
+            len(p["candidates"])))
+    lines.append("| **Total** | %s | **%d** |" % (
+        " | ".join("**%d**" % totals[o] for o, _ in ORIGINS), sum(totals.values())))
+    lines += ["", "## Proposed Pillars", "",
+              "These pillars do not exist in the registry. Each is a group of candidates that "
+              "could become a pillar of its own.", ""]
+    for p in pillars:
+        if not p.get("proposed"):
+            continue
+        lines += ["### [%s](%s.md)" % (md(p["title"]), p["slug"]), "",
+                  md(p.get("description") or ""), ""]
+        if p.get("alternative"):
+            lines += ["Alternative: %s" % md(p["alternative"]), ""]
+    return "\n".join(lines)
+
+
+def candidates_page(pillar, features, by_prefix):
+    lines = ["---", "candidates_filter: true", "---", "", "# " + md(pillar["title"]), ""]
+    if pillar.get("proposed"):
+        lines += [md(pillar.get("description") or ""), ""]
+        if pillar.get("alternative"):
+            lines += ["Alternative: %s" % md(pillar["alternative"]), ""]
+    else:
+        target = by_prefix[pillar["pillar"]]
+        lines += ["These candidates are not in the registry. The pillar itself is on the "
+                  "[%s](../%s.md) roadmap page." % (md(target["title"]), target["slug"]), ""]
+    lines += ['<input type="search" class="candidate-filter" aria-label="Filter candidates" '
+              'placeholder="Filter candidates">', ""]
+    for origin, title in ORIGINS:
+        items = [c for c in pillar["candidates"] if c["origin"] == origin]
+        if not items:
+            continue
+        lines += ["## " + title, ""]
+        for c in items:
+            lines.append("- **%s**" % md(c["title"]))
+            lines += ["", "    " + md(c["summary"]), ""]
+            if c.get("serves"):
+                lines += ["    Serves: %s" % md(c["serves"]), ""]
+            deps = c.get("depends_on") or []
+            if deps:
+                links = ", ".join("[%s](../%s.md)" % (d, d.lower()) for d in sorted(deps, key=id_key))
+                lines += ["    Depends on: " + links, ""]
+        lines.append("")
+    return "\n".join(lines)
+
+
 # Pages
 
 def _heading_link(root, base_dir, ref, kind, base):
@@ -278,7 +390,9 @@ def pillar_page(pillar):
     lines = ["---", "template: roadmap.html", "---", "", "# " + md(pillar["title"]), "",
              md(pillar["summary"]), "",
              "The [roadmap graph](index.md) shows how these features depend on features in "
-             "other pillars.", ""]
+             "other pillars.",
+             "Ideas for this pillar that are not in the registry are on its "
+             "[candidates page](%s/%s.md)." % (CANDIDATES, pillar["slug"]), ""]
     for status in SHOWN_ORDER:
         items = [f for f in pillar["features"] if shown_status(f) == status]
         if not items:
@@ -453,6 +567,12 @@ def generate(root, site=DEFAULT_SITE):
     for fid in sorted(features, key=id_key):
         out.append(("roadmap/%s.md" % fid.lower(),
                     feature_page(features[fid], by_prefix, features, root, GITHUB), False))
+    cand = read_candidates(root, features)
+    if cand:
+        out.append(("roadmap/%s/index.md" % CANDIDATES, candidates_index(cand), True))
+        for p in cand:
+            out.append(("roadmap/%s/%s.md" % (CANDIDATES, p["slug"]),
+                        candidates_page(p, features, by_prefix), True))
     out.append(("roadmap/graph.json", graph_json(pillars, features), True))
     out.append(("roadmap.json", registry_json(pillars, features, site), True))
     return out

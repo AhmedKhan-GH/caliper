@@ -764,7 +764,10 @@ class HookTest(unittest.TestCase):
             files = config.plugins.on_files(Files([]), config=config)
             uris = {f.src_uri: f for f in files}
             pillars, features = build.load_registry(build.ROOT)
-            self.assertEqual(len(uris), len(pillars) + len(features) + 2)
+            # One page per candidate file plus the candidates index, when the folder exists.
+            folder = build.ROOT / "roadmap" / "candidates"
+            extra = len(list(folder.glob("*.yml"))) + 1 if folder.is_dir() else 0
+            self.assertEqual(len(uris), len(pillars) + len(features) + 2 + extra)
             self.assertEqual(uris["roadmap/cor-01.md"].inclusion, InclusionLevel.NOT_IN_NAV)
             self.assertNotEqual(uris["roadmap/core.md"].inclusion, InclusionLevel.NOT_IN_NAV)
             site = json.loads(uris["roadmap.json"].content_string)["site"]

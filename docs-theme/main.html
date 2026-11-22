@@ -3,6 +3,9 @@
 {% block styles %}
   {{ super() }}
   <link rel="stylesheet" href="{{ 'assets/sternbild.css' | url }}">
+  {% if page.meta and page.meta.candidates_filter %}
+    <link rel="stylesheet" href="{{ 'assets/candidates.css' | url }}">
+  {% endif %}
 {% endblock %}
 
 {#- Material's right-hand "On this page" sidebar is dropped: the page's headings are listed under the H1 instead
@@ -50,4 +53,7 @@
 {% block scripts %}
   {{ super() }}
   <script src="{{ 'assets/toc.js' | url }}"></script>
+  {% if page.meta and page.meta.candidates_filter %}
+    <script src="{{ 'assets/candidates.js' | url }}"></script>
+  {% endif %}
 {% endblock %}

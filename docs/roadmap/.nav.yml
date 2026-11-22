@@ -9,3 +9,21 @@ nav:
   - interpretability.md
   - embedding.md
   - platforms.md
+  - Candidates:
+    - candidates/index.md
+    - candidates/core.md
+    - candidates/rendering.md
+    - candidates/streaming.md
+    - candidates/builder.md
+    - candidates/agents.md
+    - candidates/runs.md
+    - candidates/interpretability.md
+    - candidates/embedding.md
+    - candidates/platforms.md
+    - candidates/datasets.md
+    - candidates/training-diagnostics.md
+    - candidates/evaluation.md
+    - candidates/profiling-and-systems.md
+    - candidates/robotics-and-simulation.md
+    - candidates/scientific-fields.md
+    - candidates/publishing-and-teaching.md
