@@ -1,0 +1,13 @@
+# The versions the docs are built with, read by the Docs and Deploy Pages workflows and by a local build.
+# mkdocstrings, mkdocstrings-python, griffelib and mkdocs-autorefs render the Python API reference, ruff
+# formats its signatures, and sternbild-docs is the shared theme, roadmap generator and docs checks.
+mkdocs==1.6.1
+mkdocs-material==9.8.1
+mkdocs-awesome-nav==3.3.0
+pymdown-extensions==13.1
+mkdocstrings==1.0.8
+mkdocstrings-python==2.0.10
+griffelib==2.4.1
+mkdocs-autorefs==1.4.5
+ruff==0.17.3
+sternbild-docs @ git+https://github.com/AhmedKhan-GH/organization@docs-v1.0.0#subdirectory=packages/sternbild-docs

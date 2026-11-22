@@ -12,10 +12,6 @@ validation:
   anchors: warn
 theme:
   name: material
-  # The docs site's theme: icons, fonts and the stylesheet.
-  custom_dir: ../docs-theme
-  logo: assets/caliper-icon.svg
-  favicon: assets/caliper-icon.svg
   font: false
   palette:
     scheme: slate
@@ -27,9 +23,13 @@ theme:
     - content.code.copy
     - search.suggest
 # The navigation follows this folder; .nav.yml sets its order.
+# The sternbild plugin supplies the docs site's theme and the brand icon.
 plugins:
   - search
   - awesome-nav
+  - sternbild:
+      icon: assets/brand/caliper-icon-minerals.svg
+      contents: false
 # The docs site's extensions, so that a page renders the same in both builds. Snippets resolve
 # against the working directory, which is the repository root.
 markdown_extensions:
