@@ -6,7 +6,7 @@ The page states the spec additions, the validator codes, the commands, the event
 
 ## Status
 
-Nothing on this page is in the code. A preparation step adds the value types, the codec and schema keys, the command descriptors with handlers that answer `command.not_implemented`, the event keys and the hooks in the shared files. Parallel work then fills these interfaces, one feature set for each part.
+The interfaces are in the code, and the features are not. The value types, the codec, the schema keys, the eighteen command descriptors, the event keys and the hooks in the shared files exist. The codec reads and writes every new key, and each command answers `command.not_implemented`. Until a feature is built, the validator refuses its keys with `spec.not_built`, so that a spec never reaches code that ignores a key. Parallel work then fills these interfaces, one feature set for each part.
 
 ## Spec Additions
 
@@ -399,7 +399,7 @@ The app keeps the recent values of a source in its own memory, in the builder se
 ```toml
 [[source]]
 id = "act"
-catalog = "live:blocks.0.attn.act"
+catalog = "live:blocks.0.attn.proj.act"
 history = 2048
 transform = [
   { op = "reduce", fn = "norm", axis = 2 },
@@ -408,7 +408,8 @@ transform = [
 ```
 
 - **Value.** The app keeps the value after the longest run of the source's steps from the start that read no reference. A source without references thus keeps its final value.
-- **Steps.** The app keeps each value that it receives, with the step of the stamp of the snapshot, or else the run's step at arrival. It keeps one value for each step, and a later value of a step replaces the earlier one. A program's cadence of N steps gives values N steps apart.
+- **Steps.** The app keeps each value that it receives, with the step of the stamp of the snapshot, or else the run's step at arrival. It keeps one value for each step, and a later value of a step replaces the earlier one. A program's cadence of N steps gives values N steps apart. A watched view publishes at most 60 times a second, so a fast run keeps steps with gaps between them.
+- **Stamps.** No snapshot carries a step stamp today: the script's sender writes a sequence number and a time only, although the wire's `timelines` capability carries stamps. This work makes the sender stamp each snapshot with the run's step, and the live catalog keep the step of each view's newest snapshot.
 - **Depth.** `history` is from 0 to 65,536 steps. A source whose root is a live tensor and that has no `from` keeps 64 steps by default. Other sources keep none by default. A series already keeps its own ring and needs no `history`.
 - **Budget.** All kept steps of the open spec share 512 MiB. When the requested steps need more, the app shortens the largest rings first, and `cursor.get` gives the depth that each source keeps.
 - **Reset.** A new attachment, a change of the source's chain and the opening of a spec clear the source's kept steps.
@@ -626,7 +627,7 @@ Eighteen commands join the command layer and the MCP tool table. The `edit` comm
 | `camera.set` | `panel`, then `view` or `orbit` | The orbit | `change` |
 | `camera.save` | `panel`, `name` | The diff | `edit` |
 
-`entity.set` creates an entity or replaces the entity with the same path, and `annotation.set` does the same by id. `panel.create` and `panel.patch` also accept the arrays `entity` and `annotation`. `selection.set` makes the same pick event, field values and state writes as a person's pick, with the origin of the caller.
+`camera.get` and `camera.set` need the app's view, and the app answers them. `camera.save` asks the app for the current orbit first and then edits the spec. `entity.set` creates an entity or replaces the entity with the same path, and `annotation.set` does the same by id. `panel.create` and `panel.patch` also accept the arrays `entity` and `annotation`. `selection.set` makes the same pick event, field values and state writes as a person's pick, with the origin of the caller.
 
 ### Command Errors
 
@@ -659,6 +660,7 @@ The codes below join the validator. The sections above state when each applies.
 | `spec.bad_format` | Error |
 | `program.params_mismatch`, `stage.params_mismatch` | Error |
 | `spec.state_writers` | Warning |
+| `spec.not_built` | Error, until the feature that reads the key is built |
 
 Existing codes cover the rest: `spec.duplicate_id`, `spec.out_of_range`, `spec.bad_value`, `spec.bad_transform`, `spec.bad_layout`, `spec.unknown_slot`, `spec.missing_slot`, `spec.slot_mismatch`, `spec.unknown_option`, `spec.missing_key`, `spec.control_mismatch` and `spec.too_many`. The control kinds `range`, `picker` and `text` stop giving `spec.unsupported_control`.
 
@@ -682,7 +684,7 @@ Two event kinds are new, and two kinds gain keys. Each new key joins the list of
 | Operators | Steps after a shipped step or a window, through the CPU reference | The first operator of a live tensor source, on the producer runtime |
 | Program parameters | Evaluation, and stage uniforms | New values at the next pass |
 | Controls and shortcuts | All, and parameters as today | New parameter values, as today |
-| Step history and cursor | All | Stamps on its snapshots, as today |
+| Step history and cursor | All | Step stamps on its snapshots, which this work adds |
 | Bound text, annotations and layout | All | Nothing |
 
 ## Browser Position
@@ -707,7 +709,7 @@ The tests prove each piece without a window:
 
 ## Acceptance Test
 
-The acceptance test drives `caliper-mcp` against the hidden app with `CALIPER_AGENT_OFFLINE=1`. Its driver and transcript are in `tests/instrument_building/`, and its check script is `examples/python/instrument_building_check.py`. The run is a small transformer whose only Caliper line is `caliper.watch(model, optimizer)`. The test builds the instrument of the training debugger demo without the agent's own programs, from the outputs of the attention modules. It does these steps in this order:
+The acceptance test drives `caliper-mcp` against the hidden app with `CALIPER_AGENT_OFFLINE=1`. Its driver and transcript are in `tests/instrument_building/`, and its check script is `examples/python/instrument_building_check.py`. The run is a small transformer whose only Caliper line is `caliper.watch(model, optimizer)`. The test builds the instrument of the training debugger demo without the agent's own programs, from the outputs of the output projections of the attention blocks. It does these steps in this order:
 
 1. It records the SHA-256 list of the app bundle, `caliper-mcp` and the installed Python package.
 2. It starts the managed run with `run.start` and reads the catalog.
@@ -773,7 +775,8 @@ Each decision below has its reason in one line.
 
 ## Open Points
 
-- **Attention weights.** The watch hook publishes module outputs, not attention weights. The acceptance test uses module outputs until the training debugger's watch extension adds the weights.
-- **Snapshot stamps.** A snapshot without a stamp gets the run's step at arrival, which can be one step late. The joined wire path must show whether every watched view carries a stamp.
+- **Attention weights.** The watch hook publishes the output of each leaf module as `<module>.act`, the first tensor of a tuple output, and no attention weights. An attention block that holds other modules is not a leaf, and so the acceptance test reads a leaf inside it, such as its output projection `blocks.0.attn.proj.act` of shape (B, T, D).
+- **Snapshot stamps.** Resolved: no watched view carries a stamp today, and the live catalog keeps no step. The step history adds both, and until then a value gets the run's step at arrival, which can be one step late.
+- **Camera save in the journal.** The session gives `camera.save` the app's orbit in its arguments before the edit runs. A replay of the journal needs that orbit in the recorded arguments, and the camera work decides whether the journal records it or the command refuses a replay without it.
 - **Budget.** The 512 MiB of kept steps is an estimate. It needs a measurement with the medium model.
 - **Registry entries.** State variables, the time transport, bound text, annotations and segmented groups have no registry ids of their own. The coverage file maps them to the nearest entries.
