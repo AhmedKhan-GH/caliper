@@ -208,6 +208,32 @@ std::string code_of(const cs::Piece& p) { return cp::check_piece_manifest(p).cod
 
 }  // namespace
 
+TEST_CASE("a published resource holds at most the bytes of one RESOURCE section, a private one 64 MiB") {
+    // 4,194,304 elements of 16 bytes: exactly 64 MiB, above CALIPER_NET_RESOURCE_MAX_BYTES.
+    cs::Piece p = arcs_piece();
+    p.resources[0].layout.element = "vec4<f32>";
+    p.resources[0].count = cs::piece_limits::kCountMax;
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    p.resources[0].publish = false;
+    CHECK(code_of(p).empty());
+    p.resources[0].publish = true;
+    p.resources[0].count = std::uint32_t(cs::piece_limits::kPublishedBytesMax / 16);
+    CHECK(code_of(p).empty());
+    // A texture of 4,096 by 4,096 texels holds 64 MiB too; 4,096 by 4,092 fits exactly.
+    p = arcs_piece();
+    p.resources[0].kind = cs::ResourceKind::texture;
+    p.resources[0].layout = {};
+    p.resources[0].count = 0;
+    p.resources[0].width = p.resources[0].height = cs::piece_limits::kTextureSideMax;
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    p.resources[0].publish = false;
+    CHECK(code_of(p).empty());
+    p.resources[0].publish = true;
+    p.resources[0].height = 4092;
+    CHECK(code_of(p).empty());
+    CHECK(std::uint64_t(4096) * 4092 * 4 == cs::piece_limits::kPublishedBytesMax);
+}
+
 TEST_CASE("a piece name is a lowercase name of at most 32 bytes and a version from 1 to 1000000") {
     CHECK(cp::check_piece_name("attention_arcs", 1).ok());
     CHECK(cp::check_piece_name("a", 1000000).ok());
