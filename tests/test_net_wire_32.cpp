@@ -142,6 +142,7 @@ TEST_CASE("net/wire 3.2: every golden frame decodes as described and encodes bac
         if (f.type == CALIPER_NET_MSG_SCENE_CLASSES) CHECK(std::holds_alternative<SceneClasses>(m));
         if (f.type == CALIPER_NET_MSG_PROGRAM) CHECK(std::holds_alternative<Program>(m));
         if (f.type == CALIPER_NET_MSG_PROGRAM_STATE) CHECK(std::holds_alternative<ProgramState>(m));
+        if (f.type == CALIPER_NET_MSG_RESOURCE) CHECK(std::holds_alternative<Resource>(m));
 
         std::vector<uint8_t> again;
         std::string err;
@@ -363,6 +364,88 @@ TEST_CASE("net/wire 3.2 program status items of a tensor and of an operator") {
         Message m;
         CHECK(decode_bytes(bytes, &m).ok() == valid);
     }
+}
+
+TEST_CASE("net/wire 3.2: instances of pieces and resources carry their golden values") {
+    std::vector<std::vector<uint8_t>> keep;   // a decoded Section points into its buffer
+    auto load = [&](const char* name) {
+        keep.push_back(read_bytes(v32_dir() / (std::string(name) + ".bin")));
+        Message m;
+        const DecodeResult r = decode_bytes(keep.back(), &m);
+        REQUIRE_MESSAGE(r.ok(), name << ": " << r.error_code << ": " << r.message);
+        return m;
+    };
+    const Program p = std::get<Program>(load("program_set_piece"));
+    CHECK(p.request_id == 31);
+    CHECK(p.id == "heads");
+    CHECK(p.piece.find("name")->as_string() == "head_bars");
+    CHECK(p.piece.find("hash")->as_string().compare(0, 7, "sha256:") == 0);
+    CHECK(p.bind.find("attn")->as_string() == "live:blocks.0.attn");
+    CHECK(p.panel == std::optional<std::string>("bars"));
+    CHECK(p.segments.size() == 2);
+    CHECK(p.declaration.is_null());
+    CHECK_FALSE(p.wgsl);
+    REQUIRE(p.common);
+    REQUIRE(p.derive);
+    REQUIRE(p.draw);
+    CHECK(p.derive->find("mean_heads") != std::string::npos);
+    CHECK(p.draw->find("\xc2\xb5") != std::string::npos);
+    const Program relay = std::get<Program>(load("program_set_piece_draw"));
+    CHECK(relay.request_id == 0);
+    CHECK_FALSE(relay.derive);
+    CHECK(relay.draw == p.draw);
+    const ProgramState st = std::get<ProgramState>(load("program_state_piece"));
+    CHECK(st.programs.at(0).find("kind")->as_string() == "piece");
+
+    const std::vector<uint8_t>* frame = nullptr;
+    const Resource b = std::get<Resource>(load("resource_buffer"));
+    frame = &keep.back();
+    CHECK(b.program == "heads");
+    CHECK(b.step == 1200);
+    CHECK(b.count == 4);
+    CHECK(b.stride == 4);
+    CHECK_FALSE(b.width);
+    REQUIRE(b.data.size == 16);
+    // The section is a view of the frame's bytes, not a copy.
+    CHECK(b.data.data >= frame->data());
+    CHECK(b.data.data + b.data.size <= frame->data() + frame->size());
+    float first = 0;
+    std::memcpy(&first, b.data.data, 4);
+    CHECK(first == 0.5f);
+    const Resource t = std::get<Resource>(load("resource_texture"));
+    CHECK(t.width == std::optional<uint32_t>(2));
+    CHECK(t.height == std::optional<uint32_t>(2));
+    CHECK(t.step == 1210);
+    const Resource e = std::get<Resource>(load("resource_empty"));
+    CHECK(e.count == 0);
+    CHECK(e.stride == 24);
+    CHECK(e.data.size == 0);
+}
+
+TEST_CASE("net/wire 3.2: a resource whose count times stride wraps in 32 bits is refused") {
+    // count * stride = 2^32 + 256: a 32-bit product would equal the section's 256 bytes.
+    const std::vector<uint8_t> zeros(256, 0);
+    Resource r;
+    r.program = "arcs";
+    r.resource = "arcs";
+    r.count = 16777217u;
+    r.stride = 256;
+    r.data = Section::make(CALIPER_NET_SECTION_RESOURCE, CALIPER_NET_DTYPE_U8, {256}, zeros.data(), zeros.size());
+    std::vector<uint8_t> bytes;
+    std::string err;
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    Message m;
+    const DecodeResult res = decode_bytes(bytes, &m);
+    CHECK(res.status == DecodeResult::Status::BadMessage);
+    CHECK(res.error_code == "bad_request");
+    // At the byte limit's count the check passes and only the section's length decides.
+    r.count = CALIPER_NET_RESOURCE_MAX_BYTES / 256;
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    CHECK(decode_bytes(bytes, &m).message.find("count * stride") != std::string::npos);
+    r.count = 1;
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    REQUIRE(decode_bytes(bytes, &m).ok());
+    CHECK(std::get<Resource>(m).data.size == 256);
 }
 
 TEST_CASE("net/wire 3.2: decoded scene messages carry the golden values") {

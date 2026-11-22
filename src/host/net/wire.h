@@ -470,6 +470,14 @@ struct Program {                     // viewer to producer: install or replace (
     std::optional<std::string> wgsl;     // set: the section "wgsl", the source as UTF-8
     std::optional<std::string> sha256;   // set: of the source, 64 lowercase hex digits
     std::optional<std::string> scene;    // set: the scene of a geometry output (needed for geometry)
+    // A set of an instance of a piece (capability "resources"; design/programmable-graphics.md, Resource
+    // Message), in place of declaration, scene, sha256 and wgsl: the pin {name, version, hash}, the
+    // manifest, the bindings and the segments as given (checked on decode, null when absent), the
+    // instance's values in `params`, the panel, and the sections with the imports resolved, of which
+    // derive or draw is present. A producer sends the draw half alone, with request_id 0, to a viewer.
+    Json piece, manifest, bind, segments;
+    std::optional<std::string> panel;
+    std::optional<std::string> common, derive, draw;
 };
 struct ProgramState {                // producer to viewer: the status item of each program, in installation order
     static constexpr uint16_t kType = CALIPER_NET_MSG_PROGRAM_STATE;
@@ -477,6 +485,18 @@ struct ProgramState {                // producer to viewer: the status item of e
     std::optional<uint32_t> request_id;   // the PROGRAM it answers; absent for an unrequested one
     std::optional<uint64_t> step;         // the script's step
     std::optional<double> step_ms;        // the base step time b of the cadence
+};
+// 3.2 draft, capability "resources" (design/programmable-graphics.md, Resource Message): one version of
+// one published resource of a program, as a derive pass wrote it at a step of the run's cadence.
+struct Resource {                    // producer to viewer or hub, hub to viewer
+    static constexpr uint16_t kType = CALIPER_NET_MSG_RESOURCE;
+    std::string program;             // the program's id
+    std::string resource;            // the resource's id, a WGSL name of 1 to 63 bytes
+    uint64_t step = 0;               // the run's step at the pass: the version's step stamp
+    uint32_t count = 0;              // valid elements
+    uint32_t stride = 0;             // bytes of one element: a multiple of 4 from 4 to CALIPER_NET_RESOURCE_STRIDE_MAX
+    std::optional<uint32_t> width, height;   // a texture: count == width * height and stride 4
+    Section data;                    // "resource": u8 (count * stride,), inside the frame on decode
 };
 // Stamp text: decimal digits with an optional leading minus, at most 20 characters, a signed 64-bit value.
 bool stamp_text_ok(const std::string& v);
@@ -542,7 +562,8 @@ bool resolve_scene_data_view(const Json& view, const Json& request, Json* out, s
 using Message = std::variant<Hello, Welcome, Bye, Error, Ping, Pong, Sessions, Attach, Views, Subscribe,
                              Unsubscribe, ViewRequest, ViewReply, Snapshot, Series, Event, Controls, Control,
                              ControlReply, Selection, SceneUpdate, SceneTransforms, SceneClear, SceneClasses,
-                             Text, Recordings, RecordingOpen, Cursor, TimeState, Program, ProgramState, Unknown>;
+                             Text, Recordings, RecordingOpen, Cursor, TimeState, Program, ProgramState, Resource,
+                             Unknown>;
 
 struct DecodeResult {
     enum class Status { Ok, BadFrame, BadMessage };
