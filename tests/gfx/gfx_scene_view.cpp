@@ -1243,6 +1243,52 @@ TEST_CASE("gfx/Metal scene view: switching to Z up draws the point at +z above t
     CHECK_FALSE(v.scale_bar_on());
 }
 
+// The up-axis switch, the scale bar and the reset meet looking through a camera entity (the right-click
+// menu's camera, kept by path): the bar hides as it does through the view's own pinhole, since such a
+// picture has no depth to measure at (design/scenes.md, "A scale bar from the scene's units"); a switch
+// made there applies when the orbit returns; and a reset returns to the view's own camera.
+TEST_CASE("gfx/Metal scene view: looking through a camera entity hides the scale bar, keeps a switch for the orbit and ends with a reset") {
+    namespace cs = caliper_scene;
+    primitive_fixtures::Fixture f = primitive_fixtures::through();
+    ViewRig rig;
+    if (!rig.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str())) CALIPER_SKIP_NO_GPU("no Metal device");
+    SceneView& v = *rig.view;
+    primitive_rows::Row row;
+    row.fixture = f;
+    REQUIRE_MESSAGE(row.draw(v), row.error);
+    constexpr uint32_t W = primitive_fixtures::kSize;
+    std::string why;
+    REQUIRE(v.looking_through() == "rig/left");
+    REQUIRE(std::holds_alternative<cs::ThroughPinhole>(v.effective_camera()));
+    CHECK(v.camera_text().find(" through rig/left") != std::string::npos);
+    CHECK_FALSE(v.scale_bar(W, W).visible);
+    // A switch made while looking through: the picture stays the camera's, and the orbit takes the mode.
+    REQUIRE(std::get<cs::Orbit>(v.camera()).up == cs::Axis::PosZ);
+    REQUIRE(v.switch_up(cs::Axis::PosY));
+    REQUIRE_MESSAGE(v.render(W, W, 1.0f, primitive_fixtures::kClear, &why), why);
+    CHECK(std::holds_alternative<cs::ThroughPinhole>(v.effective_camera()));
+    CHECK_FALSE(v.scale_bar(W, W).visible);
+    REQUIRE(v.look_through("", &why));
+    REQUIRE_MESSAGE(v.render(W, W, 1.0f, primitive_fixtures::kClear, &why), why);
+    CHECK(std::holds_alternative<cs::Orbit>(v.effective_camera()));
+    CHECK(std::get<cs::Orbit>(v.camera()).up == cs::Axis::PosY);
+    CHECK(v.up_mode() == cs::Axis::PosY);
+    CHECK(v.scale_bar(W, W).visible);
+    CHECK(v.camera_text().find(" through") == std::string::npos);
+    // A reset while looking through returns to the view's own orbit about the scene's up.
+    REQUIRE(v.look_through("rig/left", &why));
+    v.reset();
+    REQUIRE_MESSAGE(v.render(W, W, 1.0f, primitive_fixtures::kClear, &why), why);
+    CHECK(v.looking_through().empty());
+    CHECK(std::holds_alternative<cs::Orbit>(v.effective_camera()));
+    CHECK(std::get<cs::Orbit>(v.camera()).up == cs::Axis::PosZ);
+    CHECK(v.scale_bar(W, W).visible);
+    // The view's own pinhole camera, with no entity looked through, names no path.
+    v.camera() = cs::ThroughPinhole{};
+    CHECK(v.camera_text().find(" through") == std::string::npos);
+    CHECK_FALSE(v.scale_bar(W, W).visible);
+}
+
 TEST_CASE("gfx/Metal scene view: a 2-D scene has no up-axis switch and an exact scale bar") {
     namespace cs = caliper_scene;
     ViewRig rig;

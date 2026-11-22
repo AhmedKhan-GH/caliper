@@ -172,10 +172,11 @@ public:
     // The header's segments: Y up and Z up, then the scene's own axis or the mode when either is
     // another one. Empty in 2-D, which has no switch.
     std::vector<caliper_scene::Axis> up_choices() const;
-    // The view as it opens: the scene's up, the default angles and the fit. The scale bar option stays.
+    // The view as it opens: the scene's up, the default angles and the fit, on its own camera (a camera
+    // looked through is left). The scale bar option stays.
     void reset();
-    // The scale bar of a picture of w x h logical pixels (scene/scale_bar.h); hidden while the
-    // option is off.
+    // The scale bar of a picture of w x h logical pixels (scene/scale_bar.h) at the camera the view
+    // draws with; hidden while the option is off and while it looks through a pinhole.
     caliper_scene::ScaleBar scale_bar(double w, double h) const;
     bool scale_bar_on() const { return scale_bar_on_; }
     void set_scale_bar(bool on) { scale_bar_on_ = on; }

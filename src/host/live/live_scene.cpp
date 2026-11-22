@@ -1177,6 +1177,7 @@ void SceneView::reset() {
         p.y_down = tree_.up() == Axis::NegY;
         camera_ = p;
     }
+    through_.clear();
     up_mode_ = tree_.up();
     up_chosen_ = moved_ = fitted_ = was_through_ = false;
     changed();
@@ -1196,7 +1197,7 @@ void SceneView::restore(const Settings& s) {
 
 ScaleBar SceneView::scale_bar(double w, double h) const {
     if (!scale_bar_on_) return {};
-    return caliper_scene::scale_bar(camera_, tree_.scene_bounds().valid, tree_.units(), w, h);
+    return caliper_scene::scale_bar(effective_camera(), tree_.scene_bounds().valid, tree_.units(), w, h);
 }
 
 // ---- drawing ---------------------------------------------------------------------------------------
@@ -1445,7 +1446,7 @@ std::string SceneView::camera_text() const {
         std::snprintf(t, sizeof t, "pinhole");
     }
     std::string out = std::string(t) + " target_px " + std::to_string(width_) + " " + std::to_string(height_);
-    if (std::holds_alternative<ThroughPinhole>(effective_camera())) out += " through " + through_;
+    if (!through_.empty() && std::holds_alternative<ThroughPinhole>(effective_camera())) out += " through " + through_;
     return out;
 }
 
