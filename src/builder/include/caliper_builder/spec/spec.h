@@ -28,6 +28,7 @@
 #include <nlohmann/json.hpp>
 
 #include <caliper_builder/error.h>
+#include <caliper_builder/spec/instrument.h>
 
 namespace caliper_builder::spec {
 
@@ -135,7 +136,9 @@ struct Panel {
     nlohmann::json x;
 };
 
-// A layout node: a panel id, a split or tabs.
+// A layout node: a panel id, a split or tabs. From spec version 1 a leaf's
+// `panel` may also name a control (instrument.h), since panels and controls
+// share one set of ids.
 struct LayoutNode {
     enum class Kind { panel, split, tabs };
     Kind kind = Kind::panel;
@@ -162,11 +165,13 @@ struct Spec {
     std::vector<Source> sources;
     std::vector<Panel> panels;
     std::optional<LayoutNode> layout;
+    std::vector<Control> controls;   // `control`, spec version 1 (instrument.h); empty in version 0
     nlohmann::json x;
 
-    // The first source or panel with this id, or null.
+    // The first source, panel or control with this id, or null.
     const Source* find_source(std::string_view id) const;
     const Panel* find_panel(std::string_view id) const;
+    const Control* find_control(std::string_view id) const;
 };
 
 bool operator==(const Transform& a, const Transform& b);

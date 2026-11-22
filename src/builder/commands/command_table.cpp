@@ -171,7 +171,8 @@ const std::pair<const char*, const char*> kFragments[] = {
         "positions": {"$use": "binding", "description": "points: a tensor of shape [n, 2] or [n, 3], instead of x, y and z."},
         "values": {"$use": "binding", "description": "heatmap: a rank-2 tensor; histogram: the values to count; image: a tensor [H, W], [H, W, 3] or [H, W, 4]."},
         "rows": {"$use": "id", "description": "table: the id of a tabular source whose rows are shown."},
-        "value": {"$use": "binding", "description": "text: a column, shown as its last value, or a tensor of one element."}}})json"},
+        "value": {"$use": "binding", "description": "text: a column, shown as its last value, or a tensor of one element."},
+        "scene": {"type": "string", "minLength": 6, "maxLength": 256, "pattern": "^live:.+$", "description": "scene (spec version 1): the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes."}}})json"},
 
     {"options", R"json({
       "type": "object", "additionalProperties": false, "required": [],
@@ -187,13 +188,26 @@ const std::pair<const char*, const char*> kFragments[] = {
         "colormap": {"type": "string", "enum": ["viridis", "magma", "rdbu", "greys"], "description": "heatmap, points and image: the colormap; viridis by default, greys for a one-channel image."},
         "bins": {"type": "integer", "minimum": 1, "maximum": 65536, "description": "histogram: the number of bins, from 1 to 65536; 64 by default."},
         "columns": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"type": "string", "minLength": 1, "maxLength": 255}, "description": "table: the columns to show, in order, each once."},
-        "text": {"type": "string", "maxLength": 16384, "description": "text: static text to show."}}})json"},
+        "text": {"type": "string", "maxLength": 16384, "description": "text: static text to show."},
+        "up": {"type": "string", "enum": ["+x", "-x", "+y", "-y", "+z", "-z"], "description": "scene: the axis kept upright; the scene's own when absent."},
+        "view_camera": {"type": ["object", "string"], "additionalProperties": false, "required": [], "minLength": 1, "maxLength": 255,
+                        "description": "scene: the camera the panel opens on, an orbit object or the entity path of a camera in the scene; the scene's own when absent.",
+                        "properties": {
+                          "target": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number"}, "description": "The point the orbit looks at."},
+                          "distance": {"type": "number", "minimum": 0, "description": "The distance from the target, above 0."},
+                          "azimuth": {"type": "number", "description": "The orbit's azimuth in degrees, read against up."},
+                          "elevation": {"type": "number", "minimum": -89, "maximum": 89, "description": "The orbit's elevation in degrees, from -89 to 89."}}},
+        "include": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"type": "string", "minLength": 1, "maxLength": 255}, "description": "scene: entity path patterns to draw, where * matches one path segment and ** any number; every entity when absent."},
+        "exclude": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"type": "string", "minLength": 1, "maxLength": 255}, "description": "scene: entity path patterns not to draw, applied after include."},
+        "labels": {"type": "boolean", "description": "scene: whether the entities' labels are drawn; true by default."},
+        "axes": {"type": "boolean", "description": "scene: whether the axes and the ground grid are drawn; true by default."},
+        "scale_bar": {"type": "boolean", "description": "scene: whether a scale bar in the scene's units is drawn; false by default."}}})json"},
 
     {"panel", R"json({
       "type": "object", "additionalProperties": false, "required": ["id", "primitive", "title", "bind", "options"],
       "properties": {
         "id": {"$use": "id", "description": "The panel's id."},
-        "primitive": {"type": "string", "enum": ["series", "heatmap", "points", "histogram", "table", "image", "text"], "description": "What the panel draws."},
+        "primitive": {"type": "string", "enum": ["series", "heatmap", "points", "histogram", "table", "image", "text", "scene"], "description": "What the panel draws."},
         "title": {"type": ["string", "null"], "description": "The panel's title, or null when it has none."},
         "bind": {"$use": "bind", "description": "The panel's bindings, by slot."},
         "options": {"$use": "options", "description": "The panel's options."}}})json"},
@@ -201,15 +215,100 @@ const std::pair<const char*, const char*> kFragments[] = {
     {"layout", R"json({
       "type": "object", "additionalProperties": false, "required": ["root", "nodes"],
       "properties": {
-        "root": {"$use": "id", "description": "The id of the top node, or of the one panel when the layout is a single panel."},
+        "root": {"$use": "id", "description": "The id of the top node, or of the one panel or control when the layout is a single leaf."},
         "nodes": {"type": "array", "maxItems": 256, "description": "The nodes of the layout, in any order. Each splits its space between its children or shows them as tabs.",
                   "items": {"type": "object", "additionalProperties": false, "required": ["id", "split", "children"],
                             "properties": {
-                              "id": {"$use": "id", "description": "The node's id; it must not be a panel's id."},
+                              "id": {"$use": "id", "description": "The node's id; it must not be a panel's or a control's id."},
                               "split": {"type": "string", "enum": ["horizontal", "vertical", "tabs"], "description": "horizontal puts the children side by side, vertical one above another, tabs in tabs."},
                               "ratio": {"type": ["number", "null"], "minimum": 0.05, "maximum": 0.95, "description": "For a split of exactly two children, the share of the first, from 0.05 to 0.95; null for an even split and for tabs."},
                               "title": {"type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "The node's tab label when it is a child of tabs, or null."},
-                              "children": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$use": "id"}, "description": "Panel ids and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once."}}}}}})json"},
+                              "children": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$use": "id"}, "description": "Panel ids, control ids (spec version 1) and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once."}}}}}})json"},
+
+    // Spec version 1 controls (design/instruments.md, Control Table).
+    {"control_bind", R"json({"type": "string", "minLength": 5, "maxLength": 320, "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value)$",
+      "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, or value for a value the spec holds. A slider binds param: or value; a button binds action: or run:pause. run.state lists the names."})json"},
+
+    {"control_options", R"json({
+      "type": "object", "additionalProperties": false, "required": [],
+      "properties": {
+        "min": {"type": "number", "description": "slider: the low end of the range; with param:, the parameter's own minimum when absent."},
+        "max": {"type": "number", "description": "slider: the high end of the range, above min; with param:, the parameter's own maximum when absent."},
+        "step": {"type": "number", "minimum": 0, "description": "slider: the step between values, above 0; continuous when absent."},
+        "log": {"type": "boolean", "description": "slider: a log scale, which needs min above 0; with param:, the parameter's own scale when absent."},
+        "value": {"type": "number", "description": "slider bound to value: the value it starts with; min when absent."}}})json"},
+
+    {"control", R"json({
+      "type": "object", "additionalProperties": false, "required": ["id", "kind", "title", "bind", "options"],
+      "properties": {
+        "id": {"$use": "id", "description": "The control's id."},
+        "kind": {"type": "string", "enum": ["slider", "button", "range", "toggle", "picker", "text"], "description": "What the control is."},
+        "title": {"type": ["string", "null"], "description": "The control's title, or null when it has none."},
+        "bind": {"type": "string", "description": "The control's target, such as param:lr."},
+        "options": {"$use": "control_options", "description": "The control's options."}}})json"},
+
+    {"run_param", R"json({
+      "type": "object", "additionalProperties": false, "required": ["name", "type", "value", "pending"],
+      "properties": {
+        "name": {"type": "string", "description": "The parameter's name, as the script registered it with caliper.param."},
+        "type": {"type": "string", "enum": ["number", "integer", "boolean", "choice"], "description": "The parameter's type."},
+        "value": {"type": ["number", "integer", "boolean", "string"], "description": "The value the script uses now."},
+        "pending": {"type": ["number", "integer", "boolean", "string", "null"], "description": "A value that was sent and applies at the script's next step, or null."},
+        "min": {"type": "number", "description": "The lowest value the script accepts; absent when it set none."},
+        "max": {"type": "number", "description": "The highest value the script accepts; absent when it set none."},
+        "log": {"type": "boolean", "description": "Whether the parameter is shown on a log scale."},
+        "choices": {"type": "array", "items": {"type": "string"}, "description": "A choice parameter's values."},
+        "help": {"type": "string", "description": "The script's one-line help for the parameter."}}})json"},
+
+    {"run_action", R"json({
+      "type": "object", "additionalProperties": false, "required": ["name", "running", "queued"],
+      "properties": {
+        "name": {"type": "string", "description": "The action's name, as the script registered it with caliper.action."},
+        "running": {"type": "boolean", "description": "Whether the action runs now."},
+        "queued": {"type": "boolean", "description": "Whether a run of the action waits for the script's next step."},
+        "help": {"type": "string", "description": "The script's one-line help for the action."}}})json"},
+
+    {"run_state_name", R"json({"type": "string", "enum": ["none", "running", "pausing", "paused", "stepping"], "description": "The run's state: none before the script's first step, then running, pausing (a pause waits for the next step), paused or stepping."})json"},
+
+    {"event", R"json({
+      "type": "object", "additionalProperties": false, "required": ["seq", "time", "kind", "panel", "view", "origin"],
+      "properties": {
+        "seq": {"type": "integer", "minimum": 1, "description": "The event's number; it grows by one with each event the app records."},
+        "time": {"type": "string", "description": "When the app recorded it, in UTC ISO 8601 with milliseconds."},
+        "kind": {"type": "string", "enum": ["pick", "select", "control", "run", "spec", "approval"], "description": "What happened."},
+        "panel": {"type": ["string", "null"], "description": "The spec panel or control it happened in, or null."},
+        "view": {"type": ["string", "null"], "description": "pick and select: the live view, such as the scene's name; null otherwise."},
+        "origin": {"type": "string", "enum": ["ui", "builder", "agent", "mcp", "api", "script"], "description": "Who caused it: ui for the person in the app, script for the running script, else the origin of the command."},
+        "entity": {"type": "string", "description": "pick: the entity path of the item picked."},
+        "primitive": {"type": "string", "description": "pick: the scene part of the item, such as points or boxes."},
+        "index": {"type": "integer", "minimum": 0, "description": "pick: the item's index in the batch the script sent."},
+        "row_id": {"type": ["integer", "null"], "description": "pick: the item's row in the script's source tensor, or null when the scene does not say."},
+        "position": {"type": ["array", "null"], "minItems": 3, "maxItems": 3, "items": {"type": "number"}, "description": "pick: the point hit, in scene coordinates, or null without depth."},
+        "pixel": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "integer"}, "description": "pick on an image: the pixel, x then y."},
+        "entities": {"type": "array", "maxItems": 256, "description": "select: the items selected by entity; empty when the selection was cleared.",
+                     "items": {"type": "object", "additionalProperties": false, "required": ["entity", "primitive", "indices", "row_ids"],
+                               "properties": {
+                                 "entity": {"type": "string", "description": "The entity path."},
+                                 "primitive": {"type": "string", "description": "The scene part."},
+                                 "indices": {"type": "array", "items": {"type": "integer"}, "description": "The items' indices in the batch."},
+                                 "row_ids": {"type": "array", "items": {"type": ["integer", "null"]}, "description": "The items' rows in the source tensor."}}}},
+        "truncated": {"type": "boolean", "description": "select: whether the selection held more than 32768 items and was cut."},
+        "control": {"type": "string", "description": "control: the control's id."},
+        "bind": {"type": "string", "description": "control: the control's target, such as param:lr."},
+        "change": {"type": "string", "enum": ["state", "param", "action", "attach"], "description": "run: what changed: the run's state, a parameter applied at a step, the end of an action, or the attachment of a script."},
+        "state": {"type": "string", "description": "run with change state: the run's new state; approval: pending, approved, denied or expired."},
+        "step": {"type": ["integer", "null"], "description": "run: the script's step when it changed, or null before the first step."},
+        "name": {"type": "string", "description": "run with change param or action: the parameter's or the action's name."},
+        "value": {"type": ["number", "integer", "boolean", "string", "null"], "description": "control: the control's new value; run with change param: the value the script applied."},
+        "status": {"type": "string", "enum": ["ok", "error"], "description": "run with change action: how the action ended."},
+        "text": {"type": "string", "description": "run with change action: the text the action returned, or its error message."},
+        "attached": {"type": "boolean", "description": "run with change attach: whether a script is attached now."},
+        "script": {"type": "string", "description": "run with change attach: the attached script's name."},
+        "command": {"type": "string", "description": "spec and approval: the command, such as panel.create."},
+        "event": {"type": "string", "enum": ["do", "undo", "redo"], "description": "spec: whether the command was done, undone or redone."},
+        "applet": {"type": "string", "description": "spec: the open spec's applet id."},
+        "approval": {"type": "string", "description": "approval: the approval's id."},
+        "target": {"type": "string", "description": "approval of a run command: the parameter or the action it names."}}})json"},
 
     // What a spec edit returns besides its own fields.
     {"warnings", R"json({"type": "array", "items": {"$use": "diagnostic"}, "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer."})json"},
@@ -610,7 +709,7 @@ const Row kRows[] = {
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "primitive"],
       "properties": {
         "id": {"$use": "id", "description": "The new panel's id."},
-        "primitive": {"type": "string", "enum": ["series", "heatmap", "points", "histogram", "table", "image", "text"], "description": "What the panel draws. Required slots: series y; heatmap values; points x and y, or positions; histogram values; table rows; image values; text none."},
+        "primitive": {"type": "string", "enum": ["series", "heatmap", "points", "histogram", "table", "image", "text", "scene"], "description": "What the panel draws. Required slots: series y; heatmap values; points x and y, or positions; histogram values; table rows; image values; text none; scene scene (spec version 1)."},
         "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The panel's title; the id when absent."},
         "bind": {"$use": "bind", "description": "The bindings by slot: a spec source id, or <source>.<column> for one column of a tabular source."},
         "options": {"$use": "options", "description": "The primitive's options."},
@@ -639,7 +738,7 @@ const Row kRows[] = {
                   "description": "The keys to change; null removes one.",
                   "properties": {
                     "title": {"type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "The panel's title."},
-                    "primitive": {"type": "string", "enum": ["series", "heatmap", "points", "histogram", "table", "image", "text"], "description": "What the panel draws."},
+                    "primitive": {"type": "string", "enum": ["series", "heatmap", "points", "histogram", "table", "image", "text", "scene"], "description": "What the panel draws."},
                     "bind": {"$patch": "bind", "description": "Slots to bind, or null to unbind one."},
                     "options": {"$patch": "options", "description": "Options to set, or null to clear one."}}},
         "dry_run": {"$use": "dry_run"}}})json",
@@ -717,8 +816,8 @@ const Row kRows[] = {
      " The result holds the change as a diff; with dry_run true the change is only checked and not applied.",
      R"json({"type": "object", "additionalProperties": false, "required": ["panel", "target", "where"],
       "properties": {
-        "panel": {"$use": "id", "description": "The id of the panel to place."},
-        "target": {"$use": "id", "description": "The id of the panel to place it next to."},
+        "panel": {"$use": "id", "description": "The id of the panel, or of the control (spec version 1), to place."},
+        "target": {"$use": "id", "description": "The id of the panel or control to place it next to."},
         "where": {"type": "string", "enum": ["beside", "above", "below", "tabbed"], "description": "Where to place it, relative to the target."},
         "ratio": {"type": "number", "minimum": 0.05, "maximum": 0.95, "default": 0.5, "description": "The share of the space the placed panel gets; 0.5 when absent."},
         "dry_run": {"$use": "dry_run"}}})json",
@@ -870,6 +969,154 @@ const Row kRows[] = {
      "Returns the frame the app draws, the whole window, as a PNG image, so that you can see the app as the person "
      "does. It changes nothing.",
      kNoArgs, R"json({"$use": "png"})json", "{}"},
+
+    // control (spec version 1; design/instruments.md)
+    {"control.create", true, false, true,
+     "Adds a control to the open spec: a slider or a button that the person and you can use. bind names its one "
+     "target: param:<name> for a parameter of the running script, action:<name> for an action of it, run:pause for "
+     "pausing and resuming the run, or value for a value the spec holds. run.state lists the parameters and actions. "
+     "A control is a leaf of the layout, like a panel: place puts it next to a panel or control, and without place it "
+     "goes under the whole layout. Undo removes it. The result holds the change as a diff; with dry_run true the "
+     "change is only checked and not applied.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "kind", "bind"],
+      "properties": {
+        "id": {"$use": "id", "description": "The new control's id; panels and controls share one set of ids."},
+        "kind": {"type": "string", "enum": ["slider", "button", "range", "toggle", "picker", "text"], "description": "slider sets a number in a range; button acts once when pressed. range, toggle, picker and text are reserved and refused with spec.unsupported_control until they are built."},
+        "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The control's label; the id when absent."},
+        "bind": {"$use": "control_bind"},
+        "options": {"$use": "control_options", "description": "The control's options."},
+        "place": {"type": "object", "additionalProperties": false, "required": ["target", "where"],
+                  "description": "Where to put the control, next to a panel or control of the layout.",
+                  "properties": {
+                    "target": {"$use": "id", "description": "The id of a panel or control already in the layout."},
+                    "where": {"type": "string", "enum": ["beside", "above", "below", "tabbed"], "description": "beside puts it to the right of the target; tabbed shows both in tabs."},
+                    "ratio": {"type": "number", "minimum": 0.05, "maximum": 0.95, "default": 0.5, "description": "The share of the space the new control gets; 0.5 when absent."}}},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "warnings", "diff", "applied"],
+      "properties": {
+        "id": {"type": "string", "description": "The new control's id."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
+     R"json({"id": "lr", "kind": "slider", "title": "Learning rate", "bind": "param:lr", "options": {"log": true}, "place": {"target": "world", "where": "below", "ratio": 0.15}})json"},
+    {"control.patch", true, false, true,
+     "Changes a control of the open spec with a JSON merge patch (RFC 7386) of its kind, title, bind and options: the "
+     "keys given replace the control's own, a key set to null is removed, and options merge key by key. The id "
+     "cannot change. The id comes from spec.get. Undo restores the control. The result holds the change as a diff; "
+     "with dry_run true the change is only checked and not applied.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "patch"],
+      "properties": {
+        "id": {"$use": "id", "description": "The control's id in the open spec."},
+        "patch": {"type": "object", "additionalProperties": false, "required": [],
+                  "description": "The keys to change; null removes one.",
+                  "properties": {
+                    "kind": {"type": "string", "enum": ["slider", "button", "range", "toggle", "picker", "text"], "description": "What the control is."},
+                    "title": {"type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "The control's label."},
+                    "bind": {"$use": "control_bind"},
+                    "options": {"$patch": "control_options", "description": "Options to set, or null to clear one."}}},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["control", "warnings", "diff", "applied"],
+      "properties": {
+        "control": {"$use": "control", "description": "The control as it is now, or would be after a dry run."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
+     R"json({"id": "lr", "patch": {"title": "Learning rate", "options": {"min": 0.0001, "max": 0.1}}})json"},
+    {"control.remove", true, false, true,
+     "Removes a control from the open spec and from its layout. The id comes from spec.get. Undo restores it in its "
+     "place. The result holds the change as a diff; with dry_run true the change is only checked and not applied.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id"],
+      "properties": {
+        "id": {"$use": "id", "description": "The control's id in the open spec."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "warnings", "diff", "applied"],
+      "properties": {
+        "id": {"type": "string", "description": "The removed control's id."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
+     R"json({"id": "lr"})json"},
+
+    // run (design/instruments.md)
+    {"run.state", false, false, true,
+     "Returns the state of the script that the app is attached to: whether one is attached, whether the app may "
+     "control it and why not, the run's state and step, its parameters with their values, ranges and pending "
+     "values, and its actions. It changes nothing.",
+     kNoArgs,
+     R"json({"type": "object", "additionalProperties": false, "required": ["attached", "control", "state", "params", "actions"],
+      "properties": {
+        "attached": {"type": "boolean", "description": "Whether a script is attached to the app."},
+        "script": {"type": "string", "description": "The attached script's name; absent when none is attached."},
+        "control": {"type": "boolean", "description": "Whether the app may pause the run, set its parameters and run its actions."},
+        "why_not": {"type": "string", "description": "When control is false, the reason in one sentence, such as a stream started without control."},
+        "state": {"$use": "run_state_name"},
+        "step": {"type": ["integer", "null"], "description": "The script's step, the count of its caliper.step() calls, or null before the first."},
+        "steps_left": {"type": ["integer", "null"], "description": "While stepping, the steps left before the run pauses again; null otherwise."},
+        "params": {"type": "array", "maxItems": 64, "items": {"$use": "run_param"}, "description": "The parameters the script registered, in its order."},
+        "actions": {"type": "array", "maxItems": 64, "items": {"$use": "run_action"}, "description": "The actions the script registered, in its order."}}})json",
+     "{}"},
+    {"run.set_param", false, false, true,
+     "Sets one parameter of the running script, such as its learning rate. The value applies at the script's next "
+     "step (caliper.step(), or each optimizer step under caliper.watch(model, optimizer)), and the script clamps it "
+     "to the parameter's range. The result says the value is pending; a run event of change param reports the value "
+     "the script applied, through events.wait. run.state lists the parameters.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["name", "value"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 63, "description": "The parameter's name, from run.state."},
+        "value": {"type": ["number", "integer", "boolean", "string"], "description": "The new value: a number for a number or integer parameter, true or false for a boolean, one of the choices for a choice."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["name", "value", "pending"],
+      "properties": {
+        "name": {"type": "string", "description": "The parameter's name."},
+        "value": {"type": ["number", "integer", "boolean", "string"], "description": "The value sent."},
+        "pending": {"type": "boolean", "description": "True: the value waits for the script's next step."}}})json",
+     R"json({"name": "lr", "value": 0.001})json"},
+    {"run.action", false, false, true,
+     "Runs one action that the running script registered with caliper.action, such as saving a checkpoint. The "
+     "script runs it at its next step; the result says it is queued, and a run event of change action brings the "
+     "text it returned, or its error, through events.wait. run.state lists the actions.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["name"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 63, "description": "The action's name, from run.state."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["name", "queued"],
+      "properties": {
+        "name": {"type": "string", "description": "The action's name."},
+        "queued": {"type": "boolean", "description": "True: the action waits for the script's next step."}}})json",
+     R"json({"name": "save_checkpoint"})json"},
+    {"run.pause", false, false, true,
+     "Pauses the running script at its next step, resumes it, or lets it run a number of steps and pause again. "
+     "A script pauses only at a step, so a pause before its first step is refused. The result gives the state the "
+     "request was sent in; run.state and the run events of change state follow it.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["op"],
+      "properties": {
+        "op": {"type": "string", "enum": ["pause", "resume", "step"], "description": "pause stops at the next step; resume runs on; step runs count steps, then pauses."},
+        "count": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 1, "description": "step: the number of steps to run; 1 when absent."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["op", "state"],
+      "properties": {
+        "op": {"type": "string", "description": "The request sent."},
+        "state": {"$use": "run_state_name"}}})json",
+     R"json({"op": "pause"})json"},
+
+    // events (design/instruments.md)
+    {"events.wait", false, false, false,
+     "Returns the events that came after a cursor: picks and selections in the app's views and scene panels, "
+     "changes of controls, changes of the running script (state, parameters, actions, attachment), edits of the open "
+     "spec and approvals. It answers at once when events wait, and otherwise holds the call until one comes or "
+     "timeout_s ends. Pass the cursor of each result to the next call. The app keeps the last 1024 events; lost "
+     "counts those that were dropped before you read them. Hovers are not events. It changes nothing.",
+     R"json({"type": "object", "additionalProperties": false, "required": [],
+      "properties": {
+        "cursor": {"type": "integer", "minimum": 0, "default": 0, "description": "The cursor of the previous result; 0, the default, returns the oldest events the app still keeps."},
+        "kinds": {"type": "array", "minItems": 1, "maxItems": 6, "items": {"type": "string", "enum": ["pick", "select", "control", "run", "spec", "approval"]}, "description": "Only these kinds; every kind when absent."},
+        "panels": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$use": "id"}, "description": "Only events of these panels or controls; events of every panel and of none when absent."},
+        "timeout_s": {"type": "number", "minimum": 0, "maximum": 60, "default": 10, "description": "How long to wait for a first event, in seconds, at most 60; 10 when absent, 0 to answer at once."},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 256, "default": 64, "description": "The most events returned; 64 when absent."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["events", "cursor", "lost", "more"],
+      "properties": {
+        "events": {"type": "array", "maxItems": 256, "items": {"$use": "event"}, "description": "The events that match, oldest first."},
+        "cursor": {"type": "integer", "minimum": 0, "description": "The cursor to pass to the next call: past every event this call looked at, matching or not."},
+        "lost": {"type": "integer", "minimum": 0, "description": "How many events after the given cursor the app dropped before this call, because the ring keeps 1024; 0 when none."},
+        "more": {"type": "boolean", "description": "Whether more matching events wait after cursor, beyond limit."}}})json",
+     R"json({"cursor": 0, "kinds": ["pick"], "panels": ["world"], "timeout_s": 30})json"},
 };
 
 // Turns an object schema into the schema of its merge patch: nothing is
@@ -972,6 +1219,14 @@ const std::pair<const char*, CommandEffect> kEffects[] = {
     {"applet.list", E::read},
     {"review.status", E::read},
     {"capture.frame", E::read},
+    {"control.create", E::edit},
+    {"control.patch", E::edit},
+    {"control.remove", E::edit},
+    {"run.state", E::read},
+    {"run.set_param", E::run},
+    {"run.action", E::run},
+    {"run.pause", E::run},
+    {"events.wait", E::read},
     {"history.undo", E::change},
     {"history.redo", E::change},
     {"history.list", E::read},

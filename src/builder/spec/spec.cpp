@@ -125,6 +125,12 @@ const Panel* Spec::find_panel(std::string_view id) const {
     return nullptr;
 }
 
+const Control* Spec::find_control(std::string_view id) const {
+    for (const Control& c : controls)
+        if (c.id == id) return &c;
+    return nullptr;
+}
+
 bool operator==(const Transform& a, const Transform& b) {
     return a.op == b.op && a.axis == b.axis && a.axis_list == b.axis_list && a.index == b.index &&
            a.start == b.start && a.stop == b.stop && a.step == b.step && a.fn == b.fn && a.keepdims == b.keepdims &&
@@ -160,7 +166,7 @@ bool operator==(const Applet& a, const Applet& b) {
 
 bool operator==(const Spec& a, const Spec& b) {
     return a.version == b.version && a.applet == b.applet && a.sources == b.sources && a.panels == b.panels &&
-           a.layout == b.layout && a.x == b.x;
+           a.layout == b.layout && a.controls == b.controls && a.x == b.x;
 }
 
 Error Diagnostic::to_error() const {

@@ -139,6 +139,9 @@ struct Preview {
 };
 
 struct Session::Impl {
+    // Declared first, so that it outlives the journal that feeds it.
+    std::shared_ptr<EventRing> events = std::make_shared<EventRing>();
+    std::atomic<RunControl*> run_control{nullptr};
     std::string workspace;
     SessionOptions options;
     std::unique_ptr<LoaderStore> store;
@@ -1493,6 +1496,9 @@ struct Session::Impl {
                                static_cast<int>(int_arg(ctx.invocation.args, "height", 500)));
     }
 
+    CommandOutput run_cmd(const CommandContext& ctx) { return run_command(ctx, run_control.load()); }
+    CommandOutput events_wait(const CommandContext& ctx) { return events_wait_command(ctx, *events); }
+
     void bind_all() {
         auto bind = [this](const char* name, CommandOutput (Impl::*fn)(const CommandContext&)) {
             registry->bind(name, [this, fn](const CommandContext& ctx) {
@@ -1527,8 +1533,12 @@ struct Session::Impl {
         bind("spec.get", &Impl::spec_get);
         bind("spec.validate", &Impl::spec_validate);
         for (const char* name : {"spec.set_text", "source.add", "source.patch", "source.remove", "panel.create",
-                                 "panel.patch", "panel.remove", "layout.place", "layout.set"})
+                                 "panel.patch", "panel.remove", "layout.place", "layout.set", "control.create",
+                                 "control.patch", "control.remove"})
             bind(name, &Impl::spec_edit);
+        // The run commands and events.wait (design/instruments.md).
+        for (const char* name : {"run.state", "run.set_param", "run.action", "run.pause"}) bind(name, &Impl::run_cmd);
+        bind("events.wait", &Impl::events_wait);
         bind("preview.begin", &Impl::preview_begin);
         bind("preview.diff", &Impl::preview_diff);
         bind("preview.commit", &Impl::preview_commit);
@@ -1618,10 +1628,11 @@ struct Session::Impl {
         c.python = base == ApprovalDecision::ask && python_pending(key);
         std::lock_guard<std::mutex> lock(perm_mutex);
         c.mode = mode_of(who);
-        c.session_rule = (who == AgentPrincipal::chat ? chat_session_rules : mcp_session_rules).count(inv.name) > 0;
+        const std::string rule = permission_rule_key(inv);
+        c.session_rule = (who == AgentPrincipal::chat ? chat_session_rules : mcp_session_rules).count(rule) > 0;
         const std::string agent = rule_agent(who);
         c.saved_rule = !agent.empty() && std::find(perms.rules.begin(), perms.rules.end(),
-                                                   AgentRule{agent, inv.name}) != perms.rules.end();
+                                                   AgentRule{agent, rule}) != perms.rules.end();
         const PermissionVerdict v = decide_agent_permission(d, inv, base, c);
         last_note = {key, ApprovalNote{v.message, v.allowed_by}};
         return v.decision;
@@ -1664,6 +1675,11 @@ struct Session::Impl {
         // With review on for its origin, an edit that changes the open spec
         // waits for the person, with its diff.
         if (!review_of(inv).is_null()) return ApprovalDecision::ask;
+        // Acting on the running script waits for the person when an agent
+        // asks (design/instruments.md, Run Effect Class); the modes and the
+        // rules then apply.
+        if (d.effect == CommandEffect::run && (inv.origin == CommandOrigin::agent || inv.origin == CommandOrigin::mcp))
+            return ApprovalDecision::ask;
         return default_approval_policy(d, inv);
     }
 };
@@ -1693,6 +1709,13 @@ Session::Open Session::open(const std::string& workspace, SessionOptions options
             out.error = e;
             return out;
         }
+        // Each journaled command also reaches the event ring, before the app's
+        // own hook (design/instruments.md, Event Feeds).
+        im.options.journal.on_append = [ring = im.events, app = std::move(im.options.journal.on_append)](
+                                           const JournalEvent& e) {
+            note_journal_event(*ring, e);
+            if (app) app(e);
+        };
         CommandJournal::Open j = CommandJournal::open((im.ws() / "journal" / "commands.jsonl").u8string(), im.options.journal);
         if (j.error) {
             out.error = j.error;
@@ -1746,6 +1769,10 @@ CommandResult Session::invoke(CommandInvocation invocation) {
     }
     return impl_->registry->invoke(std::move(invocation));
 }
+
+void Session::set_run_control(RunControl* control) { impl_->run_control.store(control); }
+RunControl* Session::run_control() const { return impl_->run_control.load(); }
+EventRing& Session::events() { return *impl_->events; }
 
 void Session::set_host(std::shared_ptr<SessionHost> host) {
     Impl& im = *impl_;
@@ -1943,6 +1970,7 @@ void Session::close() {
         impl_->closed = true;
     }
     if (impl_->queue) impl_->queue->shutdown();
+    impl_->events->close();   // wakes a caller held in wait_for_events()
     if (impl_->registry) impl_->registry->set_journal(nullptr);
     if (impl_->journal) impl_->journal->close();
 }

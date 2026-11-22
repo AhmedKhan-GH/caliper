@@ -16,9 +16,12 @@ namespace {
 
 std::string dump(const json& j) { return j.dump(-1, ' ', false, json::error_handler_t::replace); }
 
-// Commands that do not mutate the workspace but change what the app shows,
-// so they are not read-only in MCP's sense.
-bool changes_the_app_view(const CommandDescriptor& d) { return d.name == "app.launch"; }
+// Commands that do not mutate the workspace but change what the app shows, or
+// act on the running script (the effect run), so they are not read-only in
+// MCP's sense.
+bool changes_the_app_view(const CommandDescriptor& d) {
+    return d.name == "app.launch" || d.effect == CommandEffect::run;
+}
 
 }  // namespace
 

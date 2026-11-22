@@ -18,6 +18,7 @@ endif()
 # runtime draws with, is defined in the root CMakeLists.txt beside the caliper
 # executable, which links the same library.
 add_library(caliper_spec_runtime STATIC
+    spec_controls.cpp
     spec_layout.cpp
     spec_prepare.cpp
     spec_runtime.cpp
@@ -61,6 +62,7 @@ caliper_spec_runtime_fonts(caliper-spec-shot)
 if(BUILD_TESTS AND TARGET doctest::doctest)
     add_executable(caliper_spec_runtime_tests
         tests/test_main.cpp
+        tests/test_spec_controls.cpp
         tests/test_spec_layout.cpp
         tests/test_spec_prepare.cpp
         tests/test_spec_generation.cpp

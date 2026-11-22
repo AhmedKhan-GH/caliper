@@ -81,6 +81,7 @@ bool invocation_changes(const CommandDescriptor& d, const CommandInvocation& inv
             return !dry_run && inv.preview.empty();
         }
         case CommandEffect::change:
+        case CommandEffect::run:
         case CommandEffect::unset: return true;
     }
     return true;
@@ -124,6 +125,12 @@ bool valid_rule_agent(std::string_view agent) {
     for (const char ch : agent)
         if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-')) return false;
     return true;
+}
+
+std::string permission_rule_key(const CommandInvocation& invocation) {
+    // Stub of the interface: the rule of a run command for one parameter or
+    // one action is built by the track "controls" (design/instruments.md).
+    return invocation.name;
 }
 
 bool rule_command_allowed(std::string_view command) {

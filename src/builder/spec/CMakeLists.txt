@@ -3,6 +3,7 @@
 # back and applies merge patches to one panel or source.
 add_library(caliper_builder_spec STATIC
     common.cpp
+    instrument.cpp
     json_form.cpp
     patch.cpp
     spec.cpp
