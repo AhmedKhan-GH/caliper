@@ -414,6 +414,12 @@ def parse_header(path: str) -> Header:
     rest = _norm(_DOC_RE.sub(" ", "".join(buf)))
     if rest:
         raise HeaderError("%s: text after the last declaration: '%s'" % (path, rest[:80]))
+    # "typedef struct X X;" before "struct X { ... };" names one type: the definition keeps the comment of either.
+    defined = {d.name: d for d in decls if d.kind == "struct"}
+    for d in decls:
+        if d.kind == "opaque" and d.name in defined and not defined[d.name].doc:
+            defined[d.name].doc = d.doc
+    decls = [d for d in decls if not (d.kind == "opaque" and d.name in defined)]
     return Header(path, decls)
 
 
@@ -513,11 +519,14 @@ def _cell(text: str) -> str:
     return "".join(p if p.startswith("`") else p.replace("|", "\\|") for p in parts)
 
 
-def _anchor(name: str, seen: set) -> str:
-    if name in seen:
-        return ""
-    seen.add(name)
-    return '<span id="%s"></span>' % name
+def _name(label: str, anchor: str, seen: set, code: bool = True) -> str:
+    """The first cell of a row: the name in a span that the theme keeps on one line (class c-api-name), with the
+    symbol as its id the first time the page shows it, so that a link can point at the row."""
+    ident = ""
+    if anchor not in seen:
+        seen.add(anchor)
+        ident = ' id="%s"' % anchor
+    return '<span class="c-api-name"%s>%s</span>' % (ident, _code(label) if code else label)
 
 
 def render(header: Header, directive: Directive, seen: set) -> str:
@@ -534,13 +543,13 @@ def render(header: Header, directive: Directive, seen: set) -> str:
                 name = "%s.%s" % (owner, item.names[0])
                 label = name if many else item.names[0]
                 sig = "%s (%s)" % (item.ret, item.params)
-            out.append("| %s%s | %s | %s |" % (_anchor(name, seen), _code(label), _code(sig), _cell(item.doc)))
+            out.append("| %s | %s | %s |" % (_name(label, name, seen), _code(sig), _cell(item.doc)))
         return "\n".join(out)
     if directive.kind == "ids":
         out = ["| Name | Value | Description |", "|---|---|---|"]
         for d in rows:
             label = d.name + (d.params if d.kind == "macro" else "")
-            out.append("| %s%s | %s | %s |" % (_anchor(d.name, seen), _code(label), _code(d.value), _cell(d.doc)))
+            out.append("| %s | %s | %s |" % (_name(label, d.name, seen), _code(d.value), _cell(d.doc)))
         return "\n".join(out)
     blocks = []
     for d in rows:
@@ -553,14 +562,13 @@ def render(header: Header, directive: Directive, seen: set) -> str:
             table = ["| Field | Type | Description |", "|---|---|---|"]
             for mem in d.members:
                 label = ", ".join(_code(nm) for nm in mem.names)
-                table.append("| %s%s | %s | %s |" % (_anchor("%s.%s" % (d.name, mem.names[0]), seen), label,
-                                                    _code(mem.type), _cell(mem.doc)))
+                table.append("| %s | %s | %s |" % (_name(label, "%s.%s" % (d.name, mem.names[0]), seen, False),
+                                                  _code(mem.type), _cell(mem.doc)))
             part.append("\n".join(table))
         elif d.kind == "enum":
             table = ["| Constant | Value | Description |", "|---|---|---|"]
             for c in d.members:
-                table.append("| %s%s | %s | %s |" % (_anchor(c.name, seen), _code(c.name), _code(c.value),
-                                                    _cell(c.doc)))
+                table.append("| %s | %s | %s |" % (_name(c.name, c.name, seen), _code(c.value), _cell(c.doc)))
             part.append("\n".join(table))
         elif d.kind == "callback":
             part.append("```c\ntypedef %s (*%s)(%s);\n```" % (d.ret, d.name, d.params))

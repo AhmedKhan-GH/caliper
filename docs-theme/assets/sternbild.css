@@ -267,3 +267,27 @@ body { background: var(--ground); -webkit-font-smoothing: antialiased; }
 .md-typeset .docs-tree .dt-section.is-open > .dt-toggle::before { transform: rotate(90deg); }
 .md-typeset .docs-tree .dt-root > .dt-section > .dt-toggle { font-size: .86rem; text-transform: uppercase; letter-spacing: .08em; padding-top: .45rem; }
 .md-typeset .docs-tree .dt-page a { display: inline-block; padding: .15rem 0 .15rem .15rem; font-size: .8rem; }
+
+/* API reference. The Python entries come from mkdocstrings (docstrings), the C tables from docs-theme/hooks/c_reference.py
+   (header comments). An object heading names an identifier, so it keeps its case in the code face, as code does in any
+   heading. Section titles (Arguments, Returns, Raises, Attributes) are eyebrows over their tables, like the navigation's
+   section titles. A class's members sit on a hairline under it. */
+.md-typeset .doc-heading .doc-object-name {
+  font-family: var(--md-code-font); text-transform: none; letter-spacing: 0; font-size: .85em; color: var(--parchment);
+  background: var(--plate); border-radius: 3px; padding: .05em .35em;
+}
+.md-typeset h4.doc-heading { font-size: .8rem; margin: 1.6em 0 .6em; }
+.md-typeset .doc-signature { margin: .6em 0 1em; }
+.md-typeset .doc-contents > p:first-child { color: var(--parchment); }
+.md-typeset .doc-section-title {
+  display: block; margin-top: 1.4em; font-family: var(--text, "Plex Condensed"); font-weight: normal; font-size: .6rem;
+  letter-spacing: .2em; text-transform: uppercase; color: var(--bronze);
+}
+.md-typeset .doc-class > .doc-contents > .doc-children { margin-top: 1.2em; padding-left: .9rem; border-left: 1px solid var(--rule-faint); }
+/* An attribute or property of a class: its signature line would only repeat its name. */
+.md-typeset .doc-class .doc-children .doc-attribute > .doc-signature { display: none; }
+.md-typeset .doc-contents td code { white-space: nowrap; }
+.md-typeset .doc-contents td .doc-md-description code { white-space: normal; }
+/* The name column of the generated C tables stays on one line. */
+.md-typeset .c-api-name { white-space: nowrap; }
+.md-typeset .c-api-name code { word-break: normal; }
