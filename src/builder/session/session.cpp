@@ -1500,10 +1500,10 @@ struct Session::Impl {
     CommandOutput run_cmd(const CommandContext& ctx) {
         return run_command(ctx, run_control.load(), model_runner.load());
     }
-    // A start or a fork runs only when the person approved its card
-    // (python_approved), as a Python loader does (design/hosted-runs.md).
+    // A start or a fork runs only when the person approved its card, from
+    // every origin (design/hosted-runs.md, Review Card).
     CommandOutput runner_cmd(const CommandContext& ctx) {
-        const bool approved = !starts_run(ctx.invocation.name) || python_approved(ctx.invocation);
+        const bool approved = !starts_run(ctx.invocation.name) || run_approved(ctx.invocation);
         return runner_command(ctx, model_runner.load(), workspace, approved);
     }
     CommandOutput events_wait(const CommandContext& ctx) { return events_wait_command(ctx, *events); }
@@ -1600,10 +1600,8 @@ struct Session::Impl {
     static bool starts_run(const std::string& name) { return name == "run.start" || name == "run.fork"; }
 
     // Whether an invocation runs a Python loader's script: loader.run of one,
-    // or loader.create or loader.update of one with run set; or starts a
-    // managed run.
+    // or loader.create or loader.update of one with run set.
     bool runs_python(const CommandInvocation& inv) {
-        if (starts_run(inv.name)) return true;
         if (inv.name == "loader.run") {
             LoaderStore::LoaderGet got = store->get(str_arg(inv.args, "id"));
             return !got.error && is_python(got.loader);
@@ -1620,6 +1618,17 @@ struct Session::Impl {
     // which reaches its handler only once the person approved it.
     bool python_approved(const CommandInvocation& inv) {
         if (user_origin(inv.origin)) return true;
+        const std::string key = invocation_key(inv);
+        std::lock_guard<std::mutex> lock(python_mutex);
+        const auto it = std::find(python_asked.begin(), python_asked.end(), key);
+        if (it == python_asked.end()) return false;
+        python_asked.erase(it);
+        return true;
+    }
+
+    // Whether the policy asked about this start or fork, which reaches its
+    // handler only once the person approved it; the key is used up.
+    bool run_approved(const CommandInvocation& inv) {
         const std::string key = invocation_key(inv);
         std::lock_guard<std::mutex> lock(python_mutex);
         const auto it = std::find(python_asked.begin(), python_asked.end(), key);
@@ -1692,6 +1701,17 @@ struct Session::Impl {
     }
 
     ApprovalDecision base_policy(const CommandDescriptor& d, const CommandInvocation& inv) {
+        if (starts_run(inv.name)) {
+            // A start or a fork of a managed run runs Python code: it waits for
+            // a card from every origin, the person's own panel too
+            // (design/hosted-runs.md, Review Card). A request that its handler
+            // refuses anyway goes through, so that the reason comes at once.
+            if (runner_precheck(inv, model_runner.load(), workspace)) return ApprovalDecision::allow;
+            std::lock_guard<std::mutex> lock(python_mutex);
+            python_asked.push_back(invocation_key(inv));
+            while (python_asked.size() > 256) python_asked.pop_front();
+            return ApprovalDecision::ask;
+        }
         if (!user_origin(inv.origin) && runs_python(inv)) {
             // Running a script runs the user's code, so every such invocation
             // asks, whatever the command's flags say.

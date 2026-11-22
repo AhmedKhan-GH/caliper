@@ -80,6 +80,10 @@
 //   asked about and the person approved; a redo never runs a script.
 // - applet.save from agent, mcp or api asks only when it would overwrite a
 //   saved applet, since writing a new one destroys nothing.
+// - run.start and run.fork (runner_commands.h) start a managed run, which runs
+//   Python code: they ask for every origin, ui and builder too, in every
+//   mode, and no rule removes their card; only a request that their handler
+//   refuses anyway goes through without one.
 //
 // Agent permissions (permissions.h). The policy above is the Ask mode. The
 // side chat's agent (origin agent, client "chat") and caliper-mcp's clients

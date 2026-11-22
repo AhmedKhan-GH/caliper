@@ -123,6 +123,27 @@ CommandResult send(Session& s, const std::string& name, json args, CommandOrigin
     return s.invoke(std::move(inv));
 }
 
+// Runs a start or a fork that must wait for its card, approves the card as
+// the person, and returns the result.
+json approved(Session& s, const std::string& name, json args, CommandOrigin origin = CommandOrigin::ui) {
+    const CommandResult r = send(s, name, std::move(args), origin, "");
+    INFO(name << " answered " << (r.ok ? r.result.dump() : r.error.code + ": " + r.error.message));
+    REQUIRE(r.error.code == "command.needs_approval");
+    const CommandResult done = s.registry().approve(r.approval);
+    INFO(name << " after approval: " << done.error.code << ": " << done.error.message);
+    REQUIRE(done.ok);
+    return done.result;
+}
+
+// A managed run that runs, as the fake runner lists it.
+RunEntry running(const std::string& id) {
+    RunEntry e;
+    e.id = id;
+    e.state = "running";
+    e.script = "scripts/train.py";
+    return e;
+}
+
 }  // namespace
 
 TEST_CASE("runner commands: a session without a model runner answers command.not_available") {
@@ -159,8 +180,9 @@ TEST_CASE("runner commands: run.start takes only a file of the workspace and che
     CHECK(err(*f.s, "run.start", {{"script", "scripts/train.py"}, {"params", twice}}) == "command.invalid_args");
     CHECK(f.runner.starts.empty());
 
-    const json r = ok(*f.s, "run.start",
-                      {{"script", "scripts/train.py"}, {"args", {"--epochs", "3"}}, {"params", json::array({{{"name", "lr"}, {"value", 0.01}}})}, {"id", "base"}});
+    const json r = approved(*f.s, "run.start",
+                            {{"script", "scripts/train.py"}, {"args", {"--epochs", "3"}},
+                             {"params", json::array({{{"name", "lr"}, {"value", 0.01}}})}, {"id", "base"}});
     REQUIRE(f.runner.starts.size() == 1);
     const RunStartRequest& req = f.runner.starts[0];
     CHECK(req.script == "scripts/train.py");
@@ -174,7 +196,7 @@ TEST_CASE("runner commands: run.start takes only a file of the workspace and che
     CHECK(r["run"]["parent"].is_null());
     CHECK(r["run"]["params"] == json::array({{{"name", "lr"}, {"value", 0.01}}}));
     // An absolute path in the workspace is the same script.
-    ok(*f.s, "run.start", {{"script", f.ws + "/scripts/train.py"}});
+    approved(*f.s, "run.start", {{"script", f.ws + "/scripts/train.py"}});
     CHECK(f.runner.starts.at(1).script == "scripts/train.py");
     CHECK(f.runner.starts.at(1).id.empty());
 
@@ -185,6 +207,7 @@ TEST_CASE("runner commands: run.start takes only a file of the workspace and che
 
 TEST_CASE("runner commands: a start and a fork show a card in every mode, and no rule removes it") {
     Fixture f("runner_card");
+    f.runner.runs.push_back(running("train-1"));
     const json start{{"script", "scripts/train.py"}};
     // mcp in Ask: the card, with no rule on it; approved, the start runs.
     CommandResult r = send(*f.s, "run.start", start, CommandOrigin::mcp, "");
@@ -203,13 +226,20 @@ TEST_CASE("runner commands: a start and a fork show a card in every mode, and no
           "command.needs_approval");
     REQUIRE(f.s->set_agent_mode(AgentPrincipal::mcp, AgentMode::accept_edits).ok());
     CHECK(send(*f.s, "run.start", start, CommandOrigin::mcp, "").error.code == "command.needs_approval");
-    // The API asks too; the person's own click does not.
+    // The API asks too, and so does the person's own panel (origin ui).
     CHECK(send(*f.s, "run.start", start, CommandOrigin::api, "").error.code == "command.needs_approval");
+    CHECK(send(*f.s, "run.start", start, CommandOrigin::ui, "").error.code == "command.needs_approval");
+    CHECK(send(*f.s, "run.fork", {{"run", "train-1"}}, CommandOrigin::builder, "").error.code ==
+          "command.needs_approval");
     f.s->registry().cancel_pending();
     CHECK(f.runner.starts.size() == 1);
     CHECK(f.runner.forks.empty());
-    ok(*f.s, "run.start", start, CommandOrigin::builder);
+    approved(*f.s, "run.start", start, CommandOrigin::builder);
     CHECK(f.runner.starts.size() == 2);
+    // A request that its handler refuses gets no card: the reason comes at once.
+    CHECK(send(*f.s, "run.start", {{"script", "missing.py"}}, CommandOrigin::mcp, "").error.code == kRunScriptRefused);
+    CHECK(send(*f.s, "run.fork", {{"run", "gone"}}, CommandOrigin::mcp, "").error.code == kRunNotFound);
+    CHECK(f.s->registry().pending_approvals().empty());
 
     // Read only refuses them.
     REQUIRE(f.s->set_agent_mode(AgentPrincipal::mcp, AgentMode::read_only).ok());
@@ -230,16 +260,23 @@ TEST_CASE("runner commands: a start and a fork show a card in every mode, and no
 
 TEST_CASE("runner commands: run.fork, run.stop and run.logs need a managed run and pass their arguments") {
     Fixture f("runner_fork");
+    f.runner.runs.push_back(running("train-1"));
+    RunEntry ended = running("ended-1");
+    ended.state = "exited";
+    f.runner.runs.push_back(ended);
     CHECK(err(*f.s, "run.fork", {{"run", "user"}}) == kRunNotManaged);
     CHECK(err(*f.s, "run.stop", {{"run", "user"}}) == kRunNotManaged);
     CHECK(err(*f.s, "run.logs", {{"run", "user"}}) == kRunNotManaged);
     CHECK(err(*f.s, "run.fork", {{"run", "nope"}}) == kRunNotFound);
+    CHECK(err(*f.s, "run.fork", {{"run", "ended-1"}}) == kRunNotReady);
+    CHECK(f.runner.forks.empty());
 
-    const json fork = ok(*f.s, "run.fork", {{"run", "train-1"}, {"params", json::array({{{"name", "lr"}, {"value", 0.001}}})}});
+    const json fork =
+        approved(*f.s, "run.fork", {{"run", "train-1"}, {"params", json::array({{{"name", "lr"}, {"value", 0.001}}})}});
     CHECK(fork["run"]["parent"] == "train-1");
     CHECK(fork["run"]["id"] == "train-2");
-    REQUIRE(f.runner.forks.size() == 2);
-    CHECK(f.runner.forks[1].params == json{{"lr", 0.001}});
+    REQUIRE(f.runner.forks.size() == 1);
+    CHECK(f.runner.forks[0].params == json{{"lr", 0.001}});
 
     CHECK(ok(*f.s, "run.stop", {{"run", "train-1"}})["run"]["stopping"] == true);
     ok(*f.s, "run.stop", {{"run", "train-1"}, {"kill_after_s", 0}});

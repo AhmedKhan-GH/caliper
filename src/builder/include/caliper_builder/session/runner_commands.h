@@ -117,10 +117,18 @@ public:
 // invocation's name. `runner` is the session's model runner, or null, which
 // answers command.not_available. `workspace` is the session's canonical
 // workspace folder. `approved` says whether the person approved this start or
-// fork on its card, or the origin is the person's own (ui, builder); the
-// handler refuses a start or a fork without it.
+// fork on its card; the handler refuses a start or a fork without it.
 CommandOutput runner_command(const CommandContext& context, ModelRunner* runner, const std::string& workspace,
                              bool approved);
+
+// Why a start or a fork would be refused before anything runs: no runner, a
+// script outside the workspace, bad parameters or id, the person's script
+// as a parent, or a parent that is not there or not running. An empty Error
+// when it may run. The session's policy lets a refused request through
+// without a card, so that its handler answers with the reason at once, and
+// asks the person on a card about every other start or fork, from every
+// origin (design/hosted-runs.md, Review Card).
+Error runner_precheck(const CommandInvocation& invocation, ModelRunner* runner, const std::string& workspace);
 
 // The handler of the run commands of M1 with the argument `run`: without it,
 // run_command(context, control); with it, the run control that `runner`

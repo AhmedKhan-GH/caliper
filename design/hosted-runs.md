@@ -11,7 +11,7 @@ The commands, the review card, the runner and the run sources are in code. The p
 | `src/builder/include/caliper_builder/session/runner_commands.h` | The `ModelRunner` interface of the session and the command handlers |
 | `src/builder/session/runner_commands.cpp` | `run.list`, `run.start`, `run.stop`, `run.fork` and `run.logs` |
 | `src/host/runner/child_process.h` | The child process interface, with `child_process_posix.cpp` and `child_process_win.cpp` |
-| `src/host/runner/run_link.h` | The runner's own viewer connection to one managed run |
+| `src/host/runner/run_connection.h` | The runner's own viewer connection to one managed run |
 | `src/host/runner/model_runner.h` | The app's model runner, its run table and its run sources |
 
 ## Process Contract
@@ -81,7 +81,7 @@ A run that ends with the exit code 0, or that ends after a stop, is `exited`. A 
 
 ## Review Card
 
-A managed run executes Python code, thus `run.start` and `run.fork` always wait for a card, as a Python loader does. The card shows for every origin except `ui` and `builder`, and in every mode. No rule of a session and no saved rule removes it, and Allow all does not either. The mode Read only refuses the two commands. `run.stop` is a `run` command as in M1: it asks the origins `agent` and `mcp`, and a rule can allow it.
+A managed run executes Python code, thus `run.start` and `run.fork` always wait for a card. The card shows for every origin, also for `ui` and `builder`, so that the person's own runs panel shows the same card. It shows in every mode. No rule of a session and no saved rule removes it, and Allow all does not either. The mode Read only refuses the two commands. A request that the handler refuses anyway, such as a script outside the workspace or a parent that does not run, gets no card, and its error comes at once. `run.stop` is a `run` command as in M1: it asks the origins `agent` and `mcp`, and a rule can allow it.
 
 | Command | Card Text |
 |---|---|

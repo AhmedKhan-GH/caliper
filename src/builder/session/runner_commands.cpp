@@ -164,6 +164,34 @@ CommandOutput logs(const json& args, ModelRunner& runner) {
 
 }  // namespace
 
+Error runner_precheck(const CommandInvocation& inv, ModelRunner* runner, const std::string& workspace) {
+    if (!runner) return fail("command.not_available", "This session has no model runner.", inv.name);
+    try {
+        const json& args = inv.args;
+        json params;
+        std::string id;
+        if (Error e = params_arg(args, &params)) return e;
+        if (Error e = id_arg(args, &id)) return e;
+        if (inv.name == "run.start") {
+            RunStartRequest req;
+            return script_arg(args, workspace, &req);
+        }
+        if (inv.name == "run.fork") {
+            const std::string parent = str_arg(args, "run");
+            if (parent == kUserRunId) return fail(kRunNotManaged, "The person's script cannot fork.", "args.run");
+            for (const RunEntry& e : runner->list())
+                if (e.id == parent && e.managed)
+                    return e.state == "running" || e.state == "paused"
+                               ? Error()
+                               : fail(kRunNotReady, "The run " + parent + " is " + e.state + ".", "args.run");
+            return fail(kRunNotFound, "There is no run " + parent + ".", "args.run");
+        }
+    } catch (const std::exception& e) {
+        return fail(kRunStartFailed, e.what(), inv.name);
+    }
+    return {};
+}
+
 bool valid_run_id(const std::string& id) {
     if (id.empty() || id.size() > kRunMaxIdBytes) return false;
     for (const char ch : id)
@@ -200,8 +228,12 @@ CommandOutput runner_command(const CommandContext& context, ModelRunner* runner,
             for (const auto& e : runner->list()) runs.push_back(run_entry_json(e));
             return CommandOutput::ok(json{{"runs", std::move(runs)}});
         }
-        if (name == "run.start") return start(args, *runner, workspace, approved);
-        if (name == "run.fork") return fork(args, *runner, approved);
+        if (name == "run.start" || name == "run.fork") {
+            // The same reasons as the policy's, before the approval counts.
+            if (Error e = runner_precheck(context.invocation, runner, workspace)) return CommandOutput::fail(std::move(e));
+            if (name == "run.start") return start(args, *runner, workspace, approved);
+            return fork(args, *runner, approved);
+        }
         if (name == "run.stop") return stop(args, *runner);
         if (name == "run.logs") return logs(args, *runner);
         return CommandOutput::fail(fail("command.unknown", "This is not a runner command.", name));
