@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
@@ -849,6 +851,52 @@ entries:
                                                "slug": "rendering", "order": 2,
                                                "url": "rendering/"})
 
+    def write_candidates(self, **texts):
+        folder = self.root / "roadmap" / "candidates"
+        folder.mkdir()
+        (folder / "schema.json").write_text(json.dumps(CANDIDATE_SCHEMA), encoding="utf-8")
+        for stem, text in texts.items():
+            (folder / (stem + ".yml")).write_text(text, encoding="utf-8")
+
+    def test_candidates_json(self):
+        in_progress = self.root / "roadmap" / "core.yml"
+        in_progress.write_text(in_progress.read_text().replace(
+            "branches: [feature/packaging]",
+            "branches: [feature/packaging]\n    in_progress: true"), encoding="utf-8")
+        core = CAND_CORE.replace("depends_on: [COR-01]", "serves: Debugging.\n"
+                                 "    depends_on: [COR-03, COR-01]")
+        data = CAND_DATA.replace("candidates:", "alternative: Fold into the core.\ncandidates:")
+        self.write_candidates(datasets=data, core=core)
+        self.run_build()
+        out = json.loads((self.out / "roadmap" / "candidates.json").read_text())
+        self.assertEqual([o["origin"] for o in out["origins"]],
+                         [origin for origin, _ in build.ORIGINS])
+        self.assertEqual(out["origins"][0], {"origin": "cut", "title": "Scope Cuts"})
+        # Existing pillars come first, then the proposed ones.
+        self.assertEqual([p["prefix"] for p in out["pillars"]], ["COR", "DAT"])
+        core, data = out["pillars"]
+        self.assertEqual((core["slug"], core["proposed"], core["url"]),
+                         ("core", False, "candidates/core/"))
+        self.assertEqual((core["description"], core["alternative"]), (None, None))
+        self.assertEqual((data["description"], data["alternative"]),
+                         ("Dataset tools.", "Fold into the core."))
+        # Candidates keep their file order, and dependencies sort by number.
+        self.assertEqual([c["key"] for c in core["candidates"]], ["host-tracing", "abi-diff"])
+        self.assertEqual(core["candidates"][0]["depends_on"], ["COR-01", "COR-03"])
+        self.assertEqual(core["candidates"][0]["serves"], "Debugging.")
+        self.assertEqual(core["candidates"][1]["depends_on"], [])
+        # Only the features that a candidate depends on, in id order.
+        self.assertEqual(list(out["features"]), ["COR-01", "COR-03", "REN-01"])
+        self.assertEqual(out["features"]["COR-03"],
+                         {"title": "Packaging", "status": "progress", "url": "cor-03/",
+                          "graph": "./#COR-03"})
+        self.assertEqual(out["features"]["COR-01"]["status"], "shipped")
+        self.assertEqual(out["features"]["REN-01"]["status"], "planned")
+
+    def test_no_candidates_json_without_the_folder(self):
+        self.run_build()
+        self.assertFalse((self.out / "roadmap" / "candidates.json").exists())
+
     def test_registry_json(self):
         self.run_build()
         data = json.loads((self.out / "roadmap.json").read_text())
@@ -944,15 +992,21 @@ class HookTest(unittest.TestCase):
             files = config.plugins.on_files(Files([]), config=config)
             uris = {f.src_uri: f for f in files}
             pillars, features = build.load_registry(build.ROOT)
-            # One page per candidate file plus the candidates index, when the folder exists.
+            # One page per candidate file, the candidates index and its data file, when the
+            # folder exists.
             folder = build.ROOT / "roadmap" / "candidates"
-            extra = len(list(folder.glob("*.yml"))) + 1 if folder.is_dir() else 0
+            extra = len(list(folder.glob("*.yml"))) + 2 if folder.is_dir() else 0
             self.assertEqual(len(uris), len(pillars) + len(features) + 2 + extra)
             self.assertEqual(uris["roadmap/cor-01.md"].inclusion, InclusionLevel.NOT_IN_NAV)
             self.assertNotEqual(uris["roadmap/core.md"].inclusion, InclusionLevel.NOT_IN_NAV)
             site = json.loads(uris["roadmap.json"].content_string)["site"]
             self.assertEqual(site, "https://example.org/docs/")
             self.assertIn("nodes", json.loads(uris["roadmap/graph.json"].content_string))
+            if folder.is_dir():
+                data = json.loads(uris["roadmap/candidates.json"].content_string)
+                total = sum(len(yaml.safe_load(f.read_text(encoding="utf-8"))["candidates"] or [])
+                            for f in folder.glob("*.yml"))
+                self.assertEqual(sum(len(p["candidates"]) for p in data["pillars"]), total)
 
 
 if __name__ == "__main__":

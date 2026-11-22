@@ -526,6 +526,27 @@ def graph_json(pillars, features):
         "nodes": nodes, "edges": edges})
 
 
+def candidates_json(cand_pillars, features):
+    """The data file of the candidates navigator; its URLs are relative to roadmap/."""
+    used = {dep for p in cand_pillars for c in p["candidates"] for dep in c.get("depends_on") or []}
+    return _dump({
+        "origins": [{"origin": origin, "title": title} for origin, title in ORIGINS],
+        "pillars": [
+            {"prefix": p["pillar"], "slug": p["slug"], "title": p["title"],
+             "proposed": p["proposed"], "description": p.get("description"),
+             "alternative": p.get("alternative"), "url": "%s/%s/" % (CANDIDATES, p["slug"]),
+             "candidates": [
+                 {"key": c["key"], "title": c["title"], "summary": c["summary"],
+                  "serves": c.get("serves"), "origin": c["origin"],
+                  "depends_on": sorted(c.get("depends_on") or [], key=id_key)}
+                 for c in p["candidates"]]}
+            for p in cand_pillars],
+        "features": {
+            fid: {"title": features[fid]["title"], "status": shown_status(features[fid]),
+                  "url": fid.lower() + "/", "graph": "./#" + fid}
+            for fid in sorted(used, key=id_key)}})
+
+
 def _source_ref(group, entry):
     """A ledger entry for roadmap.json: its ledger file and the fields that place the item."""
     ref = {"ledger": group["file"], "item": entry["item"]}
@@ -573,6 +594,7 @@ def generate(root, site=DEFAULT_SITE):
         for p in cand:
             out.append(("roadmap/%s/%s.md" % (CANDIDATES, p["slug"]),
                         candidates_page(p, features, by_prefix), True))
+        out.append(("roadmap/candidates.json", candidates_json(cand, features), True))
     out.append(("roadmap/graph.json", graph_json(pillars, features), True))
     out.append(("roadmap.json", registry_json(pillars, features, site), True))
     return out
