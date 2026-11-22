@@ -204,6 +204,13 @@ TEST_CASE("the schema of spec version 1 is a second resource beside version 0's"
     CHECK(schema.at("properties").at("caliper_spec").at("const") == 1);
     CHECK(schema.at("$defs").contains("panel_scene"));
     CHECK(schema.at("$defs").contains("control"));
+    // The GPU programs, the stages and the provenance table (design/gpu-programs.md).
+    for (const char* key : {"program", "stage", "provenance"}) {
+        CAPTURE(key);
+        CHECK(schema.at("properties").contains(key));
+        CHECK(schema.at("$defs").contains(key));
+    }
+    CHECK(entries[1].description.find("GPU programs") != std::string::npos);
 
     // A text of its own replaces the compiled-in one; without version 0's schema there is none.
     o.spec_schema_v1_text = "{\"v\": 1}";
