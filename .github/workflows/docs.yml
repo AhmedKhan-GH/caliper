@@ -7,6 +7,7 @@ on:
     # as snippets.
     paths: ['docs/**', 'design/**', 'docs-theme/**', 'mkdocs.yml',
             'sdk/include/**', 'include/caliper/**', 'examples/**', 'roadmap/**',
+            'scripts/check_doc_headings.py', 'scripts/test_check_doc_headings.py',
             '.github/workflows/docs.yml']
   workflow_dispatch:
 permissions:
@@ -34,5 +35,9 @@ jobs:
       # Validates the roadmap registry in roadmap/ against its schema and rules.
       - run: python roadmap/check.py
       - run: python -m unittest discover -s roadmap -p 'test_*.py' -v
+      # Fails on docs headings that break the title rule (Title Case, no leading
+      # article or Your, no colon, no question) and tests the check.
+      - run: python scripts/check_doc_headings.py
+      - run: python -m unittest scripts/test_check_doc_headings.py -v
       - run: mkdocs build --strict
       - run: mkdocs build --strict -f design/mkdocs.yml
