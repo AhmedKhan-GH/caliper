@@ -261,24 +261,113 @@ bool set_bool(std::optional<bool>& slot, const json& v) {
 }
 
 // Applies an options object to `options`: each key sets or, with null,
-// clears its option. Refuses an unknown key or a value of the wrong type.
+// clears its option. `min` and `max` take a number or a binding reference,
+// `value` a number (a slider's) or any other start value, `choices` values or
+// tables { value, label, key }, and `format` and `fields` a readout's bound
+// text. Refuses an unknown key or a value of the wrong type; the validator
+// checks which options the kind takes and their values.
 Error merge_options(spec::ControlOptions& options, const json& patch, const std::string& where) {
     if (patch.is_null()) {
         options = spec::ControlOptions{};
         return {};
     }
     if (!patch.is_object()) return fail("spec.wrong_type", "options is a table.", where);
+    auto wrong = [&](const std::string& key, const char* what) {
+        return fail("spec.wrong_type", "The option " + key + " is " + what + ".", where + "." + key);
+    };
+    auto text = [&](std::optional<std::string>& slot, const json& v) {
+        if (v.is_null()) slot.reset();
+        else if (v.is_string()) slot = v.get<std::string>();
+        else return false;
+        return true;
+    };
     for (const auto& [key, v] : patch.items()) {
-        bool ok = false;
-        if (key == "min") ok = set_number(options.min, v);
-        else if (key == "max") ok = set_number(options.max, v);
-        else if (key == "step") ok = set_number(options.step, v);
-        else if (key == "value") ok = set_number(options.value, v);
-        else if (key == "log") ok = set_bool(options.log, v);
-        else return fail("spec.unknown_option", "A control has no option " + key + ".", where + "." + key);
-        if (!ok)
-            return fail("spec.wrong_type",
-                        "The option " + key + (key == "log" ? " is true or false." : " is a number."), where + "." + key);
+        const std::string at = where + "." + key;
+        if (key == "min" || key == "max") {
+            std::optional<double>& slot = key == "min" ? options.min : options.max;
+            if (spec::looks_like_reference(v)) {
+                auto r = spec::parse_reference(v);
+                if (!r) return fail("spec.bad_reference", "The option " + key + " is not a binding reference.", at);
+                slot.reset();
+                options.references[key] = *r;
+                continue;
+            }
+            if (!set_number(slot, v)) return wrong(key, "a number or a binding reference");
+            options.references.erase(key);
+        } else if (key == "step" || key == "min_span" || key == "speed") {
+            std::optional<double>& slot = key == "step" ? options.step : key == "min_span" ? options.min_span : options.speed;
+            if (!set_number(slot, v)) return wrong(key, "a number");
+        } else if (key == "log" || key == "multiple" || key == "follow" || key == "keys") {
+            std::optional<bool>& slot = key == "log"        ? options.log
+                                        : key == "multiple" ? options.multiple
+                                        : key == "follow"   ? options.follow
+                                                            : options.keys;
+            if (!set_bool(slot, v)) return wrong(key, "true or false");
+        } else if (key == "value") {
+            options.value.reset();
+            options.value_other = nullptr;
+            if (v.is_number()) options.value = v.get<double>();
+            else options.value_other = v;
+        } else if (key == "choices") {
+            options.choices.clear();
+            if (v.is_null()) continue;
+            if (!v.is_array()) return wrong(key, "a list of choices");
+            for (const auto& item : v) {
+                spec::Choice ch;
+                if (item.is_object()) {
+                    ch.table = true;
+                    for (const auto& [k, x] : item.items())
+                        if (k != "value" && k != "label" && k != "key")
+                            return fail("spec.unknown_key", "A choice has the keys value, label and key.", at);
+                    if (!item.contains("value")) return fail("spec.missing_key", "A choice needs its value.", at);
+                    ch.value = item["value"];
+                    if (item.contains("label") && !item["label"].is_string()) return wrong(key, "a list of choices");
+                    if (item.contains("key") && !item["key"].is_string()) return wrong(key, "a list of choices");
+                    if (item.contains("label")) ch.label = item["label"].get<std::string>();
+                    if (item.contains("key")) ch.key = item["key"].get<std::string>();
+                } else {
+                    ch.value = item;
+                }
+                options.choices.push_back(std::move(ch));
+            }
+        } else if (key == "choices_from" || key == "placeholder") {
+            if (!text(key == "choices_from" ? options.choices_from : options.placeholder, v)) return wrong(key, "a text");
+        } else if (key == "max_length") {
+            if (v.is_null()) options.max_length.reset();
+            else if (v.is_number_integer()) options.max_length = v.get<std::int64_t>();
+            else return wrong(key, "an integer");
+        } else if (key == "format") {
+            if (v.is_null()) {
+                options.bound_text.reset();
+                continue;
+            }
+            if (!v.is_string()) return wrong(key, "a text");
+            if (!options.bound_text) options.bound_text = spec::BoundText{};
+            options.bound_text->format = v.get<std::string>();
+        } else if (key == "fields") {
+            if (v.is_null()) {
+                if (options.bound_text) options.bound_text->fields.clear();
+                continue;
+            }
+            if (!v.is_object()) return wrong(key, "a table of names");
+            if (!options.bound_text) options.bound_text = spec::BoundText{};
+            options.bound_text->fields.clear();
+            for (const auto& [name, field] : v.items()) {
+                if (field.is_string()) {
+                    options.bound_text->fields[name] = field.get<std::string>();
+                } else if (auto r = spec::parse_reference(field)) {
+                    options.bound_text->fields[name] = *r;
+                } else {
+                    return fail("spec.bad_reference",
+                                "The field " + name + " is a source id or a binding reference.", at + "." + name);
+                }
+            }
+        } else if (key == "x") {
+            if (!v.is_null() && !v.is_object()) return wrong(key, "an extension table");
+            options.x = v;
+        } else {
+            return fail("spec.unknown_option", "A control has no option " + key + ".", at);
+        }
     }
     return {};
 }
@@ -287,7 +376,8 @@ Error set_kind(Control& c, const json& v, const std::string& where) {
     const auto kind = v.is_string() ? spec::control_kind_from_name(v.get<std::string>()) : std::nullopt;
     if (!kind)
         return fail("spec.unknown_control_kind",
-                    "A control's kind is slider, button, range, toggle, picker or text.", where);
+                    "A control's kind is slider, button, range, toggle, picker, text, segmented, readout or transport.",
+                    where);
     c.kind = *kind;
     return {};
 }
@@ -305,12 +395,45 @@ void raise_version(spec::Spec& s) {
 // A control as the result of control.patch shows it: id, kind, title (null
 // when absent), bind and options (an empty object when none), without `x`.
 json control_result_json(const Control& c) {
+    const spec::ControlOptions& o = c.options;
     json options = json::object();
-    if (c.options.min) options["min"] = *c.options.min;
-    if (c.options.max) options["max"] = *c.options.max;
-    if (c.options.step) options["step"] = *c.options.step;
-    if (c.options.log) options["log"] = *c.options.log;
-    if (c.options.value) options["value"] = *c.options.value;
+    if (o.min) options["min"] = *o.min;
+    if (o.max) options["max"] = *o.max;
+    for (const auto& [key, ref] : o.references) options[key] = spec::reference_json(ref);
+    if (o.step) options["step"] = *o.step;
+    if (o.log) options["log"] = *o.log;
+    if (o.value) options["value"] = *o.value;
+    if (!o.value_other.is_null()) options["value"] = o.value_other;
+    if (!o.choices.empty()) {
+        json list = json::array();
+        for (const auto& ch : o.choices) {
+            if (!ch.table) {
+                list.push_back(ch.value);
+                continue;
+            }
+            json t{{"value", ch.value}};
+            if (ch.label) t["label"] = *ch.label;
+            if (ch.key) t["key"] = *ch.key;
+            list.push_back(std::move(t));
+        }
+        options["choices"] = std::move(list);
+    }
+    if (o.choices_from) options["choices_from"] = *o.choices_from;
+    if (o.multiple) options["multiple"] = *o.multiple;
+    if (o.placeholder) options["placeholder"] = *o.placeholder;
+    if (o.max_length) options["max_length"] = *o.max_length;
+    if (o.min_span) options["min_span"] = *o.min_span;
+    if (o.follow) options["follow"] = *o.follow;
+    if (o.speed) options["speed"] = *o.speed;
+    if (o.keys) options["keys"] = *o.keys;
+    if (o.bound_text) {
+        options["format"] = o.bound_text->format;
+        json fields = json::object();
+        for (const auto& [name, field] : o.bound_text->fields)
+            fields[name] = std::holds_alternative<std::string>(field) ? json(std::get<std::string>(field))
+                                                                       : spec::reference_json(std::get<spec::Reference>(field));
+        if (!fields.empty()) options["fields"] = std::move(fields);
+    }
     return json{{"id", c.id},
                 {"kind", spec::control_kind_name(c.kind)},
                 {"title", c.title ? json(*c.title) : json()},
