@@ -565,7 +565,7 @@ TEST_CASE("the item decoders take the keys of version 1") {
                                                   "options": {"min": 0.001, "max": 1.0, "log": true}})"));
     auto bad = cs::control_from_json(json::parse(R"({"id": "k", "kind": "dial", "bind": "value"})"), "control[3]");
     CHECK(has(bad.diagnostics, "spec.unknown_control_kind", "control[3].kind"));
-    // A value built in code can hold infinity or NaN, which JSON text cannot; a control refuses both.
+    // A value built in code can hold infinity or NaN, which JSON text cannot; check_values refuses both.
     json huge = json::parse(R"({"id": "k", "kind": "slider", "bind": "value", "options": {}})");
     huge["options"]["max"] = std::numeric_limits<double>::infinity();
     CHECK(has(cs::control_from_json(huge, "control[0]").diagnostics, "spec.out_of_range", "control[0].options.max"));
