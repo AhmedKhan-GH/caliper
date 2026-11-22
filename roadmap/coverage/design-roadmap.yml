@@ -524,7 +524,6 @@ entries:
 - heading: Undecided
   item: 'Research publishing beyond export: applets written in Python.'
   ids:
-  - SPC-19
   - COR-31
 - heading: Undecided
   item: 'Artifacts redesign: a checkpoint browser with previews and resuming training from a checkpoint.'
@@ -607,7 +606,6 @@ entries:
 - heading: Undecided
   item: 'GPTScope follow-ups: point picking in ThoughtSpace.'
   ids:
-  - REN-15
   - INT-25
 - heading: Undecided
   item: 'GPTScope follow-ups: a learned projection in ThoughtSpace.'
