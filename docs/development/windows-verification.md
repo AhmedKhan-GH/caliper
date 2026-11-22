@@ -45,14 +45,13 @@ Then run the gfx suite on its own and read it closely:
 ctest --preset release -L gfx --output-on-failure
 ```
 
-The gfx suite has four environments. The Vulkan ones matter most here.
+The gfx suite has three environments, all on Vulkan, which are the point of this procedure.
 
 | Rows | What they check | Needs |
 |---|---|---|
 | `gfx/Vulkan` | The CPU-staged matrix on the Vulkan backend, byte-exact against the CPU reference | Any Vulkan driver |
 | `gfx/Vulkan+CUDA` | The device paths against the same reference: `compute`, the direct kernels, mixed update paths, refusal of unsafe tensors, burst updates ordered by the semaphore, `alloc_shared`, imported allocations and the timing rows | A UUID-paired CUDA device, the only one in the machine |
 | `gfx/geometry` | Points, primitives, textured meshes and instanced transforms drawn from imported allocations, and every gate that refuses a whole frame. Results are byte-exact, except the lit rows, which allow two LSBs | The gate rows need no CUDA. The drawing rows need imported CUDA blocks |
-| `gfx` (OpenGL) | The CPU-staged matrix on OpenGL | A window with an OpenGL context |
 
 To iterate on one path, select rows by name with doctest, for example `caliper_gfx_tests -tc="gfx/Vulkan+CUDA*"`.
 
@@ -76,7 +75,7 @@ Open an applet that trains on CUDA. For repeatable runs, set `CALIPER_EMBED_AUTO
 
 | Line | Meaning |
 |---|---|
-| `[renderer] vulkan` | The Vulkan backend initialized. `[renderer] vulkan init failed; falling back to gl` means it did not, and everything after runs on OpenGL |
+| `[renderer] vulkan` | The Vulkan backend initialized. If it cannot start, the app prints `caliper: the Vulkan renderer could not start (<reason>), and there is no fallback renderer until the WebGPU fallback through Dawn lands` and exits with 1, because there is no fallback renderer |
 | `[vulkan] device path: sync mode: pipelined (shared timeline semaphores)` | The Vulkan device paired with a CUDA device and exports timeline semaphores. The stream-ordered handoff is honored |
 | `[vulkan] device path: sync mode: synchronous (timeline semaphores unavailable)` | Paired, but without pipelining. The direct path is unavailable and adapters keep draining |
 | no `sync mode` line | Interop is not paired. Check that the Vulkan device is the NVIDIA GPU |
@@ -98,11 +97,10 @@ Set `CALIPER_VULKAN_STATS=1` before launch and quit the application normally. At
 
 The counts show how many updates took each path, how often a kernel waited on a frame, and how long the frame thread blocked in `retire()`. Compare them with [the measured costs](performance.md#vulkan-and-cuda-costs), and compare only runs that are alike. Thermal throttling on a laptop changes training speed by itself, so repeat each run and alternate the configurations.
 
-Three configurations of the same binary isolate a change:
+Two configurations of the same binary isolate a change:
 
 - **Default.** The direct path where it applies.
 - **`CALIPER_VULKAN_NO_DIRECT=1`.** Every update takes the buffer path. Use it to confirm that the fallback works and to compare costs.
-- **`CALIPER_RENDERER=gl`.** The OpenGL backend. The applet shows an identical image and says it is on its fallback, with no zero-copy claim.
 
 ### Validation Layers
 
