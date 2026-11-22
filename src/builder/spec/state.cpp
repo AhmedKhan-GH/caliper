@@ -45,8 +45,7 @@ nlohmann::json state_initial_value(const StateVar& state) {
 
 // ---- the fit of a value -------------------------------------------------------
 // Shared by the validator (validate_states.cpp, validate_controls.cpp) and the
-// session's values (values.cpp), which declare it beside their use, because
-// state.h has no declaration of it yet.
+// session's values (values.cpp); state.h declares it.
 
 namespace {
 

@@ -60,10 +60,9 @@ inline bool operator!=(const SceneOptions& a, const SceneOptions& b) { return !(
 // empty when the binding has another form.
 std::optional<std::string> live_scene_name(std::string_view binding);
 
-// The kinds of a control. Caliper builds slider, button and toggle; the others are part of
-// the format and refused by the validator with spec.unsupported_control until
-// they are built. `segmented`, `readout` and `transport` join with
-// design/instrument-interface.md.
+// The kinds of a control (design/instruments.md, Control Table): slider, button and toggle,
+// and from design/instrument-interface.md range, picker, text, segmented,
+// readout and transport. The app draws every kind.
 enum class ControlKind { slider, button, range, toggle, picker, text, segmented, readout, transport };
 
 // "slider", "button", "range", "toggle", "picker", "text", "segmented",

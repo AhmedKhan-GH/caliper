@@ -392,7 +392,7 @@ TEST_CASE("programs: program.status lists the spec's items with what each host r
 }
 
 TEST_CASE("programs: program.status lists the program of an operator that runs in the script, with kind operator") {
-    // The command table does not take the operator steps yet, thus the spec comes from TOML.
+    // program.status reads the spec it is given, so the test parses it from TOML without a session.
     const spec::ParseResult parsed = spec::parse_toml(
         "caliper_spec = 1\n[applet]\nid = \"ops\"\n[[source]]\nid = \"w\"\n"
         "catalog = \"live:blocks.0.attn.proj.weight\"\ntransform = [{ op = \"surface\", max_cells = 4096 }]\n"

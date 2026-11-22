@@ -41,10 +41,9 @@ std::string doc(const std::string& panel_tail, const std::string& tail = "") {
            panel_tail + tail;                                 // 22 on
 }
 
-// The diagnostics of `text` that this part of the validator gives: every
-// error and warning except spec.not_built and spec.unsupported_control at a
-// path outside annotations, legends, scale bars, bound texts and layout,
-// which other parts give until they are built (state, the range control).
+// The diagnostics of `text` that these checks give: every error and warning,
+// except spec.not_built and spec.unsupported_control at a path outside
+// annotations, legends, scale bars, bound texts and layout.
 std::vector<cs::Diagnostic> ours(const std::string& text) {
     const cs::ValidationReport r = cs::check_toml(text, fixture_resolver());
     std::vector<cs::Diagnostic> out;
