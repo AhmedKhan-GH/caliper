@@ -301,6 +301,43 @@ options = { select = { state = "token", field = "column", entity = "terrain" } }
     CHECK(values.value(column) == -1);
 }
 
+// A program's pick gives its item map's own field when the field's name is also a key of the pick, such as
+// index: a select and a selection reference read the item's value, not the pick's tensor indices.
+TEST_CASE("state: an item map field named as a pick key reads the item's value") {
+    const spec::Spec sp = parse(R"(
+[[state]]
+id = "point"
+type = "integer"
+min = 0
+max = 1000
+
+[[panel]]
+id = "world"
+primitive = "scene"
+bind = { scene = "live:model" }
+options = { select = { state = "point", field = "index" } }
+)");
+    ValueStore values;
+    values.reset(sp);
+    Recorder recorder;
+    PickFields picked;
+    picked.entity = "cloud";
+    picked.program = "cloud";
+    picked.item = 41;
+    picked.step = 9;
+    picked.program_fields = {{"index", 41.0}};
+    picked.tensor_index = std::array<std::int64_t, 4>{41, -1, -1, -1};
+    values.record_pick("world", picked, CommandOrigin::ui, &recorder);
+    CHECK(values.value(state_ref("point")) == 41);
+    spec::Reference index;
+    index.kind = spec::Reference::Kind::selection;
+    index.target = "world";
+    index.field = "index";
+    CHECK(values.value(index) == 41.0);
+    // The pick's own keys stay as they were.
+    CHECK(pick_fields_json(picked)["index"] == json::array({41, -1, -1, -1}));
+}
+
 // selection.get and selection.set through the session.
 TEST_CASE("state: selection commands") {
     auto s = open_session(fresh_dir("state-selection") + "/workspace");
