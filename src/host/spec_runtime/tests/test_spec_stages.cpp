@@ -9,6 +9,7 @@
 #include "spec_test_canvas.h"
 
 #include "gfx/metal_backend.h"
+#include "gfx/recording_backend.h"
 #include "live/live_scene.h"
 #include "net/wire.h"
 #include "gfx/shaders/generated/programs.h"
@@ -294,6 +295,92 @@ TEST_CASE("stages: the host compiles the stages of a scene panel, refuses one wi
     CHECK(b->vertex);
 }
 
+TEST_CASE("stages: a frame with stages that does not finish stops them without a wait") {
+    CHECK(StageWatchdog::pending(StageWatchdog::kHangMs / 2) == StageWatchdog::Action::none);
+    CHECK(StageWatchdog::pending(StageWatchdog::kHangMs * 2) == StageWatchdog::Action::stop);
+    if (!have_compiler()) {
+        MESSAGE("skipped: this build has no caliper-wgsl library");
+        return;
+    }
+    const bool sandbox = have_sandbox();
+    AppStageHost host(sandbox ? caliper_host::StageChecks::sandbox() : passing_checks());
+    Recorder rec;
+    host.set_events(&rec);
+    host.reconcile(scene_spec({stage("view", "cloud", spec::StageKind::material, kRed)}));
+    StageSource* src = host.source("view");
+    REQUIRE(src);
+    REQUIRE(src->build("cloud", Primitive::Points));
+    const uint64_t rev = src->revision();
+    src->frame_pending(StageWatchdog::kHangMs / 2);   // a slow frame: the stages stay
+    CHECK(src->revision() == rev);
+    CHECK(host.status()[0].state == "compiled");
+    src->frame_pending(StageWatchdog::kHangMs + 500.0);
+    CHECK(src->revision() != rev);
+    CHECK_FALSE(src->build("cloud", Primitive::Points));   // the panel draws without them
+    const std::vector<cb::ProgramStatus> st = host.status();
+    CHECK(st[0].state == "stopped");
+    REQUIRE(st[0].error);
+    CHECK(st[0].error->code == pg::kStageOverTime);
+    CHECK(st[0].error->message.find("did not finish in 1500 ms") != std::string::npos);
+    CHECK(st[0].error->message.find("cannot be stopped") != std::string::npos);
+    CHECK(rec.changes().back() == "stopped view/cloud/material");
+}
+
+// A scene view over the recording backend, whose frames complete only when the case says: the
+// view reports how long its oldest frame with a stage waits, and never waits for it itself.
+TEST_CASE("stages: a scene view reports a frame with stages that has not completed") {
+    if (!have_compiler()) {
+        MESSAGE("skipped: this build has no caliper-wgsl library");
+        return;
+    }
+    caliper_gfx::RecordingBackend gfx;
+    gfx.set_auto_complete(false);
+    caliper_live_views::SceneView v(gfx, caliper_gfx::shaders::kMetalPrograms);
+    std::string why;
+    REQUIRE_MESSAGE(v.init(&why), why);
+    v.describe(caliper_net::wire::SceneView{CALIPER_NET_SPACE_3D, "+y", ""});
+    const float xyz[9] = {-1.0f, -1.0f, 0.0f, 0.0f, 0.5f, 0.0f, 1.0f, -0.5f, 0.0f};
+    caliper_net::wire::SceneUpdate u;
+    u.sub = 1;
+    u.view = "stages";
+    u.seq = 1;
+    u.path = "cloud";
+    u.part = CALIPER_NET_PART_POINTS;
+    u.params.set("size", caliper_net::Json(8.0));
+    u.arrays.push_back(caliper_net::wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {3, 3}, xyz, sizeof xyz));
+    REQUIRE_MESSAGE(v.apply(u, &why), why);
+
+    struct Pending final : StageSource {
+        std::shared_ptr<const StageBuild> b;
+        std::vector<double> waits;
+        std::shared_ptr<const StageBuild> build(std::string_view p, Primitive prim) const override {
+            return b && p == "cloud" && prim == b->primitive ? b : nullptr;
+        }
+        uint64_t revision() const override { return 1; }
+        float time_s() const override { return 0.0f; }
+        void refused(const StageBuild&, const std::string&) override {}
+        void frames_done(double, uint32_t, bool) override {}
+        void frame_pending(double waited_ms) override { waits.push_back(waited_ms); }
+    } src;
+    const std::string red = kRed;
+    const caliper_host::StageCompile c = caliper_host::compile_stage_program(Primitive::Points, &red, nullptr, "view");
+    REQUIRE(c.build);
+    src.b = c.build;
+    REQUIRE_MESSAGE(v.render(64, 64, 1.0f, 0xff000000u, &why), why);   // a frame without the source
+    v.set_stage_source(&src);
+    REQUIRE_MESSAGE(v.render(64, 64, 1.0f, 0xff000000u, &why), why);
+    REQUIRE(v.staged_draws() == 1);
+    v.poll();
+    v.poll();
+    REQUIRE(src.waits.size() == 2);
+    CHECK(src.waits[0] >= 0.0);
+    CHECK(src.waits[1] >= src.waits[0]);   // the same frame, waiting longer
+    gfx.finish(gfx.submitted().back().serial);
+    v.poll();
+    CHECK(src.waits.size() == 2);          // completed: nothing waits
+    v.set_stage_source(nullptr);
+}
+
 TEST_SUITE("gpu") {
 
 namespace {
@@ -531,6 +618,52 @@ TEST_CASE("stages: a material stage recolours points, a vertex stage moves them,
     CHECK(drawn(&staged) == plain);
     CHECK(staged == 0);
     CHECK(cache.size() == 0);
+}
+
+TEST_CASE("stages: a stage that indexes out of range draws, with zero for each read past its resource") {
+    if (!have_compiler()) {
+        MESSAGE("skipped: this build has no caliper-wgsl library");
+        return;
+    }
+    StageRig rig;
+    if (!rig.init()) {
+        MESSAGE("skipped: no Metal device");
+        return;
+    }
+    uint32_t staged = 0;
+    const std::vector<uint8_t> plain = rig.draw(nullptr, &staged);
+    // A texel load far outside the class table and a column far past the uniform's matrix read
+    // zero; the local array's index is clamped to its last element, 1.0. Thus magenta.
+    const std::string far = R"(fn material(in: MaterialIn) -> vec4<f32> {
+    let far = u32(in.color.a * 0.0) + 100000u;
+    var local = array<f32, 4>(0.0, 0.0, 0.0, 1.0);
+    let texel = textureLoad(class_table, vec2<u32>(far, far), 0);
+    let column = p.mvp[far];
+    return vec4<f32>(local[far] + texel.r + column.x, texel.g + column.y, 1.0 + column.z, 1.0);
+}
+)";
+    const caliper_host::StageCompile c = caliper_host::compile_stage_program(Primitive::Points, &far, nullptr, "test");
+    REQUIRE_MESSAGE(c.build, c.verdict.message);
+    CHECK(c.build->msl.find("DefaultConstructible") != std::string::npos);
+    StageCache cache(*rig.gfx);
+    OneSource src;
+    src.b = c.build;
+    cache.set_source(&src);
+    cache.begin_frame();
+    const std::vector<uint8_t> drawn = rig.draw(&cache, &staged);
+    cache.end_frame();
+    CHECK_MESSAGE(src.refusal.empty(), src.refusal);
+    CHECK(staged == 1);
+    capture("stage-out-of-range.png", drawn);
+    size_t covered = 0, magenta = 0;
+    for (int y = 0; y < StageRig::kSide; ++y)
+        for (int x = 0; x < StageRig::kSide; ++x) {
+            if (pixel(plain, x, y) != StageRig::kClear) ++covered;
+            if (pixel(drawn, x, y) == 0xffff00ffu) ++magenta;
+        }
+    CHECK(covered > 0);
+    CHECK(magenta == covered);
+    cache.set_source(nullptr);
 }
 
 TEST_CASE("stages: a scene view draws its panel's stages, again on a new revision, and reports their frames") {

@@ -156,10 +156,15 @@ public:
 
     // Pushes the run events of the changes since the last call into `sink`,
     // with `intervene` when the script applied an intervention (its point,
-    // its op and the step it applied it at) or stopped one (op null).
+    // its op and the step it applied it at) or stopped one (op null). The
+    // interventions applied when the link dropped stay known: when the same
+    // script attaches again, each one that it no longer applies, such as one
+    // it ended because no viewer that may control stayed connected, is a
+    // stop (op null) at the script's step.
     void feed(caliper_builder::EventSink& sink);
     // The `intervene` events of the CONTROLS key "interventions" against the
-    // last one seen; `baseline` records without events. Called by feed().
+    // last one seen; `baseline` records the new ones without events, and
+    // still reports a stop of one known before it. Called by feed().
     void feed_interventions(const nlohmann::json& interventions, const nlohmann::json& step, bool baseline,
                             caliper_builder::EventSink& sink);
 
@@ -179,6 +184,8 @@ private:
     std::map<std::string, std::pair<nlohmann::json, nlohmann::json>> params_;   // name: value, pending
     std::map<std::string, std::uint64_t> results_;                              // action: at_ns of its last result
     std::map<std::pair<std::string, std::string>, nlohmann::json> applied_;    // (point, op): the step applied at
+    std::string dropped_script_;                                                // the script of the dropped link
+    std::map<std::pair<std::string, std::string>, nlohmann::json> dropped_;    // its applied_ then
 };
 
 // The points and the interventions of a CONTROLS key "interventions"

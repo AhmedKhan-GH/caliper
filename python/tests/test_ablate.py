@@ -11,6 +11,7 @@ Needs torch and pytest:
 from __future__ import annotations
 
 import sys
+import time
 import warnings
 from pathlib import Path
 
@@ -427,3 +428,70 @@ def test_wire_control_intervene_and_controls_interventions():
     _train(model, batch, ctl)
     assert _hooks(model) == 0
     route.detach()
+
+
+class _Controllers(_Transport):
+    """A transport whose count of connections that may control the test sets."""
+
+    def __init__(self, n):
+        super().__init__()
+        self.n = n
+
+    def controllers(self):
+        return self.n
+
+
+def test_interventions_end_when_no_controller_stays_for_the_linger_time(monkeypatch):
+    from caliper import _net_programs
+    monkeypatch.setattr(_net_programs, "LINGER_S", 0.3)
+    monkeypatch.setattr(C, "LINGER_CHECK_S", 0.0)
+    model, batch = _model(), _batch()
+    ctl = C.Controls()
+    t = _Controllers(1)
+    route = ctl.attach(t)
+    ctl.interventions_on(model)
+    base = _loss(model, batch)
+    _train(model, batch, ctl)
+    assert _intervene(ctl, {"set": {"point": "blocks.1.attn", "op": "ablate"}}) is None
+    _train(model, batch, ctl)
+    assert _hooks(model) == 1
+    t.n = 0                                             # the viewer that set it goes
+    _train(model, batch, ctl)
+    assert _hooks(model) == 1                           # inside the linger time
+    t.n = 1                                             # a reload comes back in time
+    _train(model, batch, ctl)
+    t.n = 0
+    _train(model, batch, ctl)
+    time.sleep(0.2)
+    _train(model, batch, ctl)
+    assert _hooks(model) == 1                           # the linger started again at the return
+    time.sleep(0.35)
+    with pytest.warns(RuntimeWarning, match="interventions on blocks.1.attn ended"):
+        _train(model, batch, ctl)
+    assert _hooks(model) == 0 and torch.equal(_loss(model, batch), base)
+    iv = ctl.summary()["interventions"][0]
+    assert iv["state"] == "ended" and "no connection that may control" in iv["error"]
+    assert ctl.summary()["interventions_lingered"] == 1
+    controls = [m for ty, m in t.out if ty != "reply"]
+    assert controls[-1]["interventions"]["active"][0]["state"] == "ended"
+    route.detach()
+
+
+def test_interventions_end_when_the_server_goes(monkeypatch):
+    from caliper import _net_programs
+    monkeypatch.setattr(_net_programs, "LINGER_S", 0.2)
+    monkeypatch.setattr(C, "LINGER_CHECK_S", 0.0)
+    model, batch = _model(), _batch()
+    ctl = C.Controls()
+    route = ctl.attach(_Controllers(1))
+    ctl.interventions_on(model)
+    _train(model, batch, ctl)
+    assert _intervene(ctl, {"set": {"point": "blocks.0.attn", "op": "ablate"}}) is None
+    _train(model, batch, ctl)
+    assert _hooks(model) == 1
+    route.detach()                                      # no route at all: nobody may control
+    _train(model, batch, ctl)
+    time.sleep(0.25)
+    with pytest.warns(RuntimeWarning):
+        _train(model, batch, ctl)
+    assert _hooks(model) == 0

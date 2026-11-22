@@ -199,11 +199,32 @@ void caliper_producer_release(caliper_producer* runtime, uint32_t tensor);
 caliper_producer_status caliper_producer_compile(caliper_producer* runtime, const caliper_producer_program_desc* desc,
                                                  uint32_t* program, caliper_producer_error* error);
 
+/* Checks and translates a program's WGSL and compiles its MSL and compute
+ * pipeline for `device` (an id<MTLDevice>, NULL for the system's default
+ * device) ahead of caliper_producer_compile(), without a runtime. A later
+ * caliper_producer_compile() of the same source and entry on that device takes
+ * the compiled library and pipeline, thus its compile takes the time of the
+ * checks and the binder only. It uses no runtime, thus another thread may call
+ * it while the training thread runs passes. A refusal here comes again from
+ * caliper_producer_compile(). */
+caliper_producer_status caliper_producer_prepare(void* device, const char* wgsl, size_t wgsl_size, const char* entry,
+                                                 caliper_producer_error* error);
+
+/* Binds the import `tensor` in place of `old_tensor` in each binding of the
+ * program, without a compile: the tensor of an input moved to new storage, as
+ * a gradient or a module output does at each step, with the same size. The
+ * program keeps its state and its counts. A new import of another byte size is
+ * refused with "program.import_refused"; the program then compiles again. */
+caliper_producer_status caliper_producer_rebind(caliper_producer* runtime, uint32_t program, uint32_t old_tensor,
+                                                uint32_t tensor, caliper_producer_error* error);
+
 /* Runs one pass of `programs` (one submit for each, in order) and waits for it,
  * at most `timeout_ms`. The caller calls it only after the framework's work on
  * the bound tensors is complete (TorchAdapter.framework_done()). A program over
  * its time limit on 3 passes in a row stops with "program.over_time". A timeout
- * stops every program and returns CALIPER_PRODUCER_TIMEOUT. */
+ * stops every program and returns CALIPER_PRODUCER_TIMEOUT. The pass itself
+ * cannot be stopped: the GPU runs it until the driver ends the work, and the
+ * runtime only stops waiting for it. */
 caliper_producer_status caliper_producer_run(caliper_producer* runtime, const uint32_t* programs, size_t count,
                                              const caliper_producer_frame* frame, double timeout_ms,
                                              caliper_producer_pass* pass, caliper_producer_error* error);
@@ -220,8 +241,16 @@ caliper_producer_status caliper_producer_read_status(caliper_producer* runtime, 
 /* Removes a program and frees its outputs. */
 void caliper_producer_remove(caliper_producer* runtime, uint32_t program);
 
-/* Stops every program, releases every import and frees the runtime. NULL is a no-op. */
+/* Stops every program, releases every import and frees the runtime. NULL is a
+ * no-op. It never waits for the GPU: while a pass still runs, as after a
+ * timeout, the runtime's GPU objects, with the buffers of its imports, wait in
+ * a reaper until the driver ends that work. */
 void caliper_producer_destroy(caliper_producer* runtime);
+
+/* The number of destroyed runtimes whose last pass still runs on the GPU. The
+ * caller keeps the tensors of their imports, such as their DLPack capsules,
+ * until it is 0. */
+size_t caliper_producer_reaping(void);
 
 void caliper_producer_error_free(caliper_producer_error* error);
 

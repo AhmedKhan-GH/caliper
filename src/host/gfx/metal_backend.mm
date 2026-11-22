@@ -27,8 +27,10 @@
 #import <Metal/Metal.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <deque>
+#include <mutex>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -119,6 +121,46 @@ struct MTex {
     bool shared = false;
 };
 
+// The backends whose Metal objects wait in the reaper for the GPU to end their last submit.
+std::atomic<size_t> g_reaping{0};
+
+// MSL that metal_precompile() compiled ahead of create_program, oldest first.
+struct Precompiled {
+    uint64_t device = 0;
+    bool fast_math = false;
+    std::string msl;
+    id<MTLLibrary> library = nil;
+    std::vector<std::pair<std::string, id<MTLComputePipelineState>>> pipelines;
+};
+std::mutex g_precompiled_mutex;
+std::deque<Precompiled> g_precompiled;
+constexpr size_t kPrecompiledMax = 8;
+
+// Takes the precompiled library of this text, if one waits.
+Precompiled take_precompiled(uint64_t device, bool fast_math, const char* msl) {
+    std::lock_guard<std::mutex> lock(g_precompiled_mutex);
+    for (auto it = g_precompiled.begin(); it != g_precompiled.end(); ++it)
+        if (it->device == device && it->fast_math == fast_math && it->msl == msl) {
+            Precompiled out = std::move(*it);
+            g_precompiled.erase(it);
+            return out;
+        }
+    return {};
+}
+
+MTLCompileOptions* compile_options(bool fast_math) {
+    MTLCompileOptions* opts = [MTLCompileOptions new];
+    if (@available(macOS 15.0, *)) {
+        opts.mathMode = fast_math ? MTLMathModeFast : MTLMathModeSafe;
+    } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        opts.fastMathEnabled = fast_math ? YES : NO;
+#pragma clang diagnostic pop
+    }
+    return opts;
+}
+
 // A ring of shared memory for the uniform arenas. A region is reused once the submit that
 // read it completed; when no region is free the ring grows into a new buffer and the old one
 // is dropped once its last submit completed. Nothing ever waits.
@@ -198,6 +240,8 @@ public:
         set_programs(shaders::kMetalPrograms, shaders::kProgramCount);
     }
 
+    bool reap_ = false;   // the destructor gives the objects to the reaper instead of a wait
+
     // The geometry service's adapter (metal_backend.h): a live buffer's or texture's Metal object.
     id<MTLBuffer> buffer_object(Buffer b) const {
         return alive(b) && handle_slot(b.id) < buffers_.size() ? buffers_[handle_slot(b.id)] : nil;
@@ -206,8 +250,44 @@ public:
         return alive(t) && handle_slot(t.id) < textures_.size() ? textures_[handle_slot(t.id)].texture : nil;
     }
 
+    // A backend waits for its last submit when it goes, because its submits hold no references
+    // (commandBufferWithUnretainedReferences) and the renderer's teardown needs that order.
+    // destroy_metal_backend_without_wait() sets reap_: then, while the last submit still runs, as
+    // a pass that does not end, the Metal objects go to a reaper instead. A marker committed
+    // after that submit on the same queue completes when the driver ends the work, and its
+    // handler releases them. The GPU cannot be stopped; the destroying thread only stops waiting.
     ~MetalBackend() override {
-        if (!inflight_.empty()) [inflight_.back().cb waitUntilCompleted];
+        if (!reap_) {
+            if (!inflight_.empty()) [inflight_.back().cb waitUntilCompleted];
+            return;
+        }
+        if (inflight_.empty() || inflight_.back().cb.status >= MTLCommandBufferStatusCompleted) return;
+        auto kept = std::make_shared<Reaped>();
+        kept->ring = std::move(ring_);
+        kept->inflight = std::move(inflight_);
+        kept->buffers = std::move(buffers_);
+        kept->readbacks = std::move(readbacks_);
+        kept->textures = std::move(textures_);
+        kept->samplers = std::move(samplers_);
+        kept->libraries = std::move(libraries_);
+        kept->pipes = std::move(pipes_);
+        kept->groups = std::move(groups_);
+        kept->buffer_writes = std::move(buffer_writes_);
+        kept->texture_writes = std::move(texture_writes_);
+        kept->events = std::move(producer_events_);
+        @autoreleasepool {
+            id<MTLCommandBuffer> marker = [queue_ commandBuffer];
+            if (marker == nil) {   // no marker: the objects stay until the process exits
+                new std::shared_ptr<Reaped>(std::move(kept));
+                return;
+            }
+            g_reaping.fetch_add(1);
+            [marker addCompletedHandler:^(id<MTLCommandBuffer>) {
+                kept->inflight.clear();
+                g_reaping.fetch_sub(1);
+            }];
+            [marker commit];
+        }
     }
 
 protected:
@@ -258,18 +338,17 @@ protected:
     bool on_create_program(uint32_t slot, const ProgramDesc& d, std::string* error) override {
         if (d.msl == nullptr) { *error = "the program has no MSL source"; return false; }
         grow(libraries_, slot);
-        MTLCompileOptions* opts = [MTLCompileOptions new];
-        if (@available(macOS 15.0, *)) {
-            opts.mathMode = d.fast_math ? MTLMathModeFast : MTLMathModeSafe;
-        } else {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-            opts.fastMathEnabled = d.fast_math ? YES : NO;
-#pragma clang diagnostic pop
+        grow(precompiled_, slot);
+        Precompiled pre = take_precompiled(device_.registryID, d.fast_math, d.msl);
+        id<MTLLibrary> lib = pre.library;
+        if (lib == nil) {
+            NSError* err = nil;
+            lib = [device_ newLibraryWithSource:[NSString stringWithUTF8String:d.msl]
+                                        options:compile_options(d.fast_math)
+                                          error:&err];
+            if (lib == nil) { *error = "MSL compile failed: " + ns_error(err); return false; }
         }
-        NSError* err = nil;
-        id<MTLLibrary> lib = [device_ newLibraryWithSource:[NSString stringWithUTF8String:d.msl] options:opts error:&err];
-        if (lib == nil) { *error = "MSL compile failed: " + ns_error(err); return false; }
+        precompiled_[slot] = std::move(pre.pipelines);
         for (uint32_t i = 0; i < d.entry_count; ++i)
             if ([lib newFunctionWithName:[NSString stringWithUTF8String:d.entries[i].name]] == nil) {
                 *error = std::string("the MSL has no function ") + d.entries[i].name;
@@ -396,10 +475,14 @@ protected:
     bool on_create_compute_pipeline(uint32_t slot, const ComputePipelineDesc& d, std::string* error) override {
         grow(pipes_, slot);
         id<MTLLibrary> lib = libraries_[handle_slot(d.program.id)];
-        id<MTLFunction> f = [lib newFunctionWithName:[NSString stringWithUTF8String:d.entry]];
-        NSError* err = nil;
         MPipe p;
-        p.compute = f ? [device_ newComputePipelineStateWithFunction:f error:&err] : nil;
+        for (const auto& [name, pipe] : precompiled_[handle_slot(d.program.id)])
+            if (name == d.entry) p.compute = pipe;
+        NSError* err = nil;
+        if (p.compute == nil) {
+            id<MTLFunction> f = [lib newFunctionWithName:[NSString stringWithUTF8String:d.entry]];
+            p.compute = f ? [device_ newComputePipelineStateWithFunction:f error:&err] : nil;
+        }
         if (p.compute == nil) { *error = "compute pipeline: " + ns_error(err); return false; }
         fill_layout(p, d.program);
         const EntryInfo* e = program_info(d.program).entry(d.entry, kStageCompute);
@@ -454,7 +537,10 @@ protected:
                 if (slot < texture_writes_.size()) texture_writes_[slot] = nil;
                 break;
             case HandleKind::Sampler: if (slot < samplers_.size()) samplers_[slot] = nil; break;
-            case HandleKind::Program: if (slot < libraries_.size()) libraries_[slot] = nil; break;
+            case HandleKind::Program:
+                if (slot < libraries_.size()) libraries_[slot] = nil;
+                if (slot < precompiled_.size()) precompiled_[slot].clear();
+                break;
             case HandleKind::Pipeline: if (slot < pipes_.size()) pipes_[slot] = MPipe{}; break;
             case HandleKind::BindGroup: if (slot < groups_.size()) groups_[slot] = MGroup{}; break;
             case HandleKind::Readback: if (slot < readbacks_.size()) readbacks_[slot] = nil; break;
@@ -874,6 +960,20 @@ protected:
 
 private:
     struct Inflight { Serial serial; id<MTLCommandBuffer> cb; };
+    struct QueueEvent { id<MTLSharedEvent> event = nil; uint64_t value = 0; };
+    // The Metal objects of a backend that went while its last submit ran (~MetalBackend).
+    struct Reaped {
+        UniformRing ring;
+        std::deque<Inflight> inflight;
+        std::vector<id<MTLBuffer>> buffers, readbacks;
+        std::vector<MTex> textures;
+        std::vector<id<MTLSamplerState>> samplers;
+        std::vector<id<MTLLibrary>> libraries;
+        std::vector<MPipe> pipes;
+        std::vector<MGroup> groups;
+        std::vector<id<MTLCommandBuffer>> buffer_writes, texture_writes;
+        std::unordered_map<void*, QueueEvent> events;
+    };
     id<MTLDevice> device_;
     id<MTLCommandQueue> queue_;
     bool unified_ = true;
@@ -884,13 +984,14 @@ private:
     std::vector<MTex> textures_;
     std::vector<id<MTLSamplerState>> samplers_;
     std::vector<id<MTLLibrary>> libraries_;
+    // The compute pipelines that metal_precompile() made for each program's library, by entry.
+    std::vector<std::vector<std::pair<std::string, id<MTLComputePipelineState>>>> precompiled_;
     std::vector<MPipe> pipes_;
     std::vector<MGroup> groups_;
     std::vector<id<MTLBuffer>> readbacks_;
     // The command buffer of each resource's last queued write, until it completed.
     std::vector<id<MTLCommandBuffer>> buffer_writes_, texture_writes_;
     // One event per producer queue that an update was ordered after, with its last signalled value.
-    struct QueueEvent { id<MTLSharedEvent> event = nil; uint64_t value = 0; };
     std::unordered_map<void*, QueueEvent> producer_events_;
 };
 
@@ -905,6 +1006,49 @@ void* metal_texture(Backend& b, Texture texture) {
     auto* m = dynamic_cast<MetalBackend*>(&b);
     return m ? (__bridge void*)m->texture_object(texture) : nullptr;
 }
+
+bool metal_precompile(void* mtl_device, const char* msl, const char* const* compute_entries, size_t entry_count,
+                      bool fast_math, std::string* error) {
+    id<MTLDevice> device = (__bridge id<MTLDevice>)mtl_device;
+    if (device == nil || msl == nullptr) {
+        if (error) *error = "no device or no MSL";
+        return false;
+    }
+    @autoreleasepool {
+        Precompiled pre;
+        pre.device = device.registryID;
+        pre.fast_math = fast_math;
+        pre.msl = msl;
+        NSError* err = nil;
+        pre.library = [device newLibraryWithSource:[NSString stringWithUTF8String:msl]
+                                           options:compile_options(fast_math)
+                                             error:&err];
+        if (pre.library == nil) {
+            if (error) *error = "MSL compile failed: " + ns_error(err);
+            return false;
+        }
+        for (size_t i = 0; i < entry_count; ++i) {
+            id<MTLFunction> f = [pre.library newFunctionWithName:[NSString stringWithUTF8String:compute_entries[i]]];
+            id<MTLComputePipelineState> pipe = f ? [device newComputePipelineStateWithFunction:f error:&err] : nil;
+            if (pipe == nil) {
+                if (error) *error = "compute pipeline: " + ns_error(err);
+                return false;
+            }
+            pre.pipelines.emplace_back(compute_entries[i], pipe);
+        }
+        std::lock_guard<std::mutex> lock(g_precompiled_mutex);
+        g_precompiled.push_back(std::move(pre));
+        while (g_precompiled.size() > kPrecompiledMax) g_precompiled.pop_front();
+    }
+    return true;
+}
+
+void destroy_metal_backend_without_wait(std::unique_ptr<Backend> backend) {
+    if (auto* m = dynamic_cast<MetalBackend*>(backend.get())) m->reap_ = true;
+    backend.reset();
+}
+
+size_t metal_backends_reaping() { return g_reaping.load(); }
 
 std::unique_ptr<Backend> make_metal_backend(void* mtl_device, void* mtl_command_queue) {
     if (mtl_device == nullptr || mtl_command_queue == nullptr) return nullptr;

@@ -137,6 +137,8 @@ STEPS_REPORT_S = 0.1                   # while stepping, steps_left goes out at 
                                        # this often
 RUN_REPORT_S = 1.0                     # while running, the step goes out at most this
                                        # often, at the first checkpoint after it
+LINGER_CHECK_S = 0.25                  # while an intervention acts or waits, the connections
+                                       # that may control are counted at most this often
 
 # The interventions (design/gpu-programs.md, Interventions): CONTROL op "intervene" and the
 # CONTROLS key "interventions" of capability "interventions" (3.2 draft).
@@ -810,6 +812,9 @@ class Controls:
         self._iv_model: Interventions | None = None   # the watched model of the interventions
         self._ivs: dict = {}                     # (point, op) -> _Intervention, oldest first
         self._iv_due = False                     # the next checkpoint has intervention work
+        self._alone_since = None                 # no connection that may control since then,
+                                                 # while an intervention acts or waits
+        self._linger_next = 0.0                  # the next count of those connections
 
     # -- the checkpoint (the training thread) ----------------------------------
     def step(self, step=None) -> None:
@@ -881,9 +886,10 @@ class Controls:
 
     def _service(self) -> None:
         """Set pending values and interventions, then run the queued actions in order."""
+        controllers = self._controllers_due()
         with self.lock:
             changed = self._apply_pending()
-            changed = self._apply_interventions() or changed
+            changed = self._apply_interventions(controllers) or changed
         if changed:
             self._publish()
         while True:
@@ -1464,17 +1470,63 @@ class Controls:
         n = self.n
         return int(n) + 1 if isinstance(n, numbers.Integral) and not isinstance(n, bool) else 1
 
-    def _apply_interventions(self) -> bool:
+    def _controllers_due(self):
+        """The number of connections that may control, when a count is due: while an intervention
+        acts or waits, at most every ``LINGER_CHECK_S``. None otherwise. The routes are counted
+        outside the lock, as the pause's wait counts them."""
+        now = time.monotonic()
+        with self.lock:
+            if not any(iv.state != IV_ENDED and not iv.clear for iv in self._ivs.values()):
+                self._alone_since = None             # a later intervention waits a whole linger
+                return None
+            if now < self._linger_next:
+                return None
+            self._linger_next = now + LINGER_CHECK_S
+            routes = list(self.routes)
+        return sum(r._controllers() for r in routes) if routes else 0
+
+    def _linger(self, controllers: int) -> bool:
+        """End every intervention once no connection that may control stayed connected for the
+        linger time that also removes the GPU programs (``caliper._net_programs.LINGER_S``):
+        nobody could see or clear it any more (lock held). True if one ended."""
+        from ._net_programs import LINGER_S
+        now = time.monotonic()
+        if controllers > 0:
+            self._alone_since = None
+            return False
+        if self._alone_since is None:
+            self._alone_since = now
+        if now - self._alone_since < LINGER_S:
+            return False
+        self._alone_since = None
+        ended = []
+        for iv in self._ivs.values():
+            if iv.state == IV_ENDED or iv.clear:
+                continue
+            self._unhook(iv)
+            iv.state = IV_ENDED
+            iv.error = (f"ended: no connection that may control the run stayed for {LINGER_S:g} s")
+            ended.append(iv.point)
+        if ended:
+            self.counters["interventions_lingered"] += len(ended)
+            warnings.warn(f"caliper: no connection that may control the run stayed for {LINGER_S:g} s, "
+                          f"so the interventions on {', '.join(ended)} ended", RuntimeWarning,
+                          stacklevel=2)
+        return bool(ended)
+
+    def _apply_interventions(self, controllers=None) -> bool:
         """At a checkpoint (the training thread, lock held): put on or take off the hooks so that
-        each intervention acts from its first step until the step it ends before, and end one
-        whose hook failed. True if a state changed."""
+        each intervention acts from its first step until the step it ends before, end one whose
+        hook failed, and end each one when ``controllers`` (a count of the connections that may
+        control, or None for no count now) stayed 0 for the linger time. True if a state
+        changed."""
         if not self._iv_due:
             return False
         m = self._iv_model
         if m is None:
             self._iv_due = False
             return False
-        changed = False
+        changed = controllers is not None and self._linger(controllers)
         if m._shapes_off is not None and self.state != RUN_NONE:
             shapes_off, m._shapes_off = m._shapes_off, None
             try:

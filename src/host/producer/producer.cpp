@@ -45,6 +45,16 @@ caliper_producer_status caliper_producer_compile(caliper_producer*, const calipe
     return unsupported(error);
 }
 
+caliper_producer_status caliper_producer_prepare(void*, const char*, size_t, const char*,
+                                                 caliper_producer_error* error) {
+    return unsupported(error);
+}
+
+caliper_producer_status caliper_producer_rebind(caliper_producer*, uint32_t, uint32_t, uint32_t,
+                                                caliper_producer_error* error) {
+    return unsupported(error);
+}
+
 caliper_producer_status caliper_producer_run(caliper_producer*, const uint32_t*, size_t,
                                              const caliper_producer_frame*, double, caliper_producer_pass*,
                                              caliper_producer_error* error) {
@@ -64,6 +74,8 @@ caliper_producer_status caliper_producer_read_status(caliper_producer*, uint32_t
 void caliper_producer_remove(caliper_producer*, uint32_t) {}
 
 void caliper_producer_destroy(caliper_producer*) {}
+
+size_t caliper_producer_reaping(void) { return 0; }
 
 void caliper_producer_error_free(caliper_producer_error* error) {
     if (!error) return;

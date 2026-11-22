@@ -10,9 +10,12 @@
 
 #include "producer/caliper_producer.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -202,6 +205,55 @@ TEST_CASE("the runtime imports a tensor in place, runs a geometry pass and reads
     caliper_producer_error_free(&e);
 }
 
+TEST_CASE("an input bound again to new storage of the same size runs without a compile") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    // A prepare compiles the source ahead; the compile then takes its library.
+    caliper_producer_error e{};
+    const caliper_producer_status prepared = caliper_producer_prepare(nullptr, kRowNorms, std::strlen(kRowNorms), nullptr, &e);
+    caliper_producer_error_free(&e);
+    Desc d(kRowNorms, f.w);
+    uint32_t prog = 0;
+    if (!compile_or_skip(f.rt, d.d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+    CHECK(prepared == CALIPER_PRODUCER_OK);
+    caliper_producer_frame frame{1, 0.0, 1};
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+
+    // The gradient's new storage: rows of r + 5.
+    id<MTLBuffer> moved = [f.device newBufferWithLength:4096 options:MTLResourceStorageModeShared];
+    auto* m = static_cast<float*>([moved contents]);
+    for (uint32_t r = 0; r < kRows; ++r)
+        for (uint32_t c = 0; c < kCols; ++c) m[r * kCols + c] = float(r) + 5.0f;
+    caliper_producer_tensor t = f.desc_of(0, kRows * kCols * 4);
+    t.buffer = (__bridge void*)moved;
+    uint32_t h = 0;
+    REQUIRE(caliper_producer_import(f.rt, &t, &h, &e) == CALIPER_PRODUCER_OK);
+    REQUIRE(caliper_producer_rebind(f.rt, prog, f.w, h, &e) == CALIPER_PRODUCER_OK);
+    caliper_producer_release(f.rt, f.w);   // the old storage goes; the program no longer binds it
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+    caliper_producer_program_status st{};
+    REQUIRE(caliper_producer_read_status(f.rt, prog, &st) == CALIPER_PRODUCER_OK);
+    CHECK(st.state == CALIPER_PRODUCER_RUNNING);
+    CHECK(st.runs == 2);   // the same program: its count goes on
+    caliper_producer_output out{};
+    REQUIRE(caliper_producer_read_output(f.rt, prog, "positions", &out, &e) == CALIPER_PRODUCER_OK);
+    REQUIRE(out.count == kRows);
+    const float* p = static_cast<const float*>([(__bridge id<MTLBuffer>)out.buffer contents]);
+    for (uint32_t i = 0; i < kRows; ++i)
+        CHECK(p[i * 3 + 1] == doctest::Approx((p[i * 3] + 5.0f) * std::sqrt(8.0f)).epsilon(1e-5));
+
+    // Another size needs a compile: refused, and the program keeps its binding.
+    t.byte_size = 64;
+    uint32_t small = 0;
+    REQUIRE(caliper_producer_import(f.rt, &t, &small, &e) == CALIPER_PRODUCER_OK);
+    CHECK(caliper_producer_rebind(f.rt, prog, h, small, &e) == CALIPER_PRODUCER_REFUSED);
+    REQUIRE(e.code);
+    CHECK(std::string(e.code) == "program.import_refused");
+    caliper_producer_error_free(&e);
+    CHECK(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+    caliper_producer_error_free(&e);
+}
+
 TEST_CASE("a pixels program writes its packed RGBA8 image") {
     Fixture f;
     if (f.device == nil) { MESSAGE("no Metal device"); return; }
@@ -228,6 +280,133 @@ fn run(@builtin(global_invocation_id) id: vec3<u32>) {
     const uint32_t* px = static_cast<const uint32_t*>([(__bridge id<MTLBuffer>)out.buffer contents]);
     CHECK(px[0] == 0xFF000000u);       // x 0, y 0: black, opaque
     CHECK(px[7] == 0xFF00FFFFu);       // x 3, y 1: red and green, opaque (R in the low byte)
+    caliper_producer_error_free(&e);
+}
+
+// A store far outside the output values, at an index the script gives through the input aim:
+// the index that, without bounds checks, lands in the tensor guard, which the pass also binds.
+const char* kFarStore = R"(@group(0) @binding(0) var<storage, read> aim: array<i32>;
+@group(0) @binding(1) var<storage, read> guard: array<f32>;
+@group(0) @binding(2) var<storage, read_write> positions: array<f32>;
+@group(0) @binding(3) var<storage, read_write> values: array<f32>;
+@group(0) @binding(4) var<storage, read_write> count: atomic<u32>;
+@compute @workgroup_size(64)
+fn run(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (id.x >= 4u) { return; }
+    let i = atomicAdd(&count, 1u);
+    positions[i * 3u] = f32(id.x);
+    positions[i * 3u + 1u] = guard[0];
+    positions[i * 3u + 2u] = 0.0;
+    values[i] = f32(id.x) + 10.0;
+    if (id.x == 0u) {
+        values[aim[0]] = 12345.0;
+        values[u32(aim[0]) + 4000000000u] = 12345.0;
+    }
+}
+)";
+
+TEST_CASE("a store far outside an output leaves a tensor after it and the rest of the output unchanged") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    constexpr float kSentinel = 7.0f;
+    id<MTLBuffer> aim = [f.device newBufferWithLength:4096 options:MTLResourceStorageModeShared];
+    id<MTLBuffer> guard = [f.device newBufferWithLength:65536 options:MTLResourceStorageModeShared];
+    auto* g = static_cast<float*>([guard contents]);
+    for (size_t i = 0; i < 65536 / 4; ++i) g[i] = kSentinel;
+    std::memset([aim contents], 0, 4096);
+    auto import = [&](id<MTLBuffer> b, const char* name, uint64_t bytes, uint32_t dtype) {
+        caliper_producer_tensor t{};
+        t.name = name;
+        t.buffer = (__bridge void*)b;
+        t.byte_size = bytes;
+        t.dtype = dtype;
+        t.ndim = 1;
+        t.shape[0] = int64_t(bytes / 4);
+        uint32_t h = 0;
+        caliper_producer_error e{};
+        REQUIRE(caliper_producer_import(f.rt, &t, &h, &e) == CALIPER_PRODUCER_OK);
+        return h;
+    };
+    const uint32_t aim_h = import(aim, "aim", 16, CALIPER_PRODUCER_I32);
+    const uint32_t guard_h = import(guard, "guard", 65536, CALIPER_PRODUCER_F32);
+
+    caliper_producer_input inputs[2] = {{"aim", aim_h}, {"guard", guard_h}};
+    const char* arrays[2] = {"positions", "values"};
+    Desc d(kFarStore, 0);
+    d.d.inputs = inputs;
+    d.d.input_count = 2;
+    d.d.arrays = arrays;
+    d.d.array_count = 2;
+    uint32_t prog = 0;
+    caliper_producer_error e{};
+    if (!compile_or_skip(f.rt, d.d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+
+    // The index from values' first element to the middle of guard, in elements of 4 bytes.
+    caliper_producer_output out{};
+    REQUIRE(caliper_producer_read_output(f.rt, prog, "values", &out, &e) == CALIPER_PRODUCER_OK);
+    id<MTLBuffer> values = (__bridge id<MTLBuffer>)out.buffer;
+    const int64_t delta = int64_t(guard.gpuAddress + 32768) - int64_t(values.gpuAddress);
+    REQUIRE(delta % 4 == 0);
+    if (delta / 4 > INT32_MAX || delta / 4 < INT32_MIN) {
+        MESSAGE("guard is more than 8 GiB from the output: the case cannot aim at it");
+        return;
+    }
+    static_cast<int32_t*>([aim contents])[0] = int32_t(delta / 4);
+    MESSAGE("the store aims ", delta, " bytes from the output's first element");
+
+    caliper_producer_frame frame{1, 0.0, 1};
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+    size_t changed = 0;
+    for (size_t i = 0; i < 65536 / 4; ++i) changed += g[i] != kSentinel;
+    CHECK(changed == 0);
+    REQUIRE(caliper_producer_read_output(f.rt, prog, "values", &out, &e) == CALIPER_PRODUCER_OK);
+    REQUIRE(out.count == 4);
+    const float* v = static_cast<const float*>([values contents]);
+    std::vector<bool> seen(4, false);
+    for (uint32_t i = 0; i < 4; ++i) {
+        const float x = v[i] - 10.0f;
+        REQUIRE((x >= 0.0f && x < 4.0f));
+        seen[size_t(x)] = true;
+    }
+    for (bool s : seen) CHECK(s);
+    REQUIRE(caliper_producer_read_output(f.rt, prog, "positions", &out, &e) == CALIPER_PRODUCER_OK);
+    const float* pos = static_cast<const float*>([(__bridge id<MTLBuffer>)out.buffer contents]);
+    for (uint32_t i = 0; i < 4; ++i) CHECK(pos[i * 3 + 1] == kSentinel);
+    caliper_producer_error_free(&e);
+}
+
+TEST_CASE("a load far past an input reads zero, not the next tensor in the same storage") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    // The import w covers bytes 0 to 127 of the storage; another tensor fills the rest of it.
+    auto* t = static_cast<float*>([f.tensor contents]);
+    for (size_t i = kRows * kCols; i < 4096 / 4; ++i) t[i] = 9.0f;
+    Desc d(R"(@group(0) @binding(0) var<storage, read> w: array<f32>;
+@group(0) @binding(1) var<storage, read_write> positions: array<f32>;
+@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;
+@compute @workgroup_size(64)
+fn run(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (id.x >= 4u) { return; }
+    let i = atomicAdd(&count, 1u);
+    positions[i * 3u] = f32(id.x);
+    positions[i * 3u + 1u] = w[id.x * 8u];
+    positions[i * 3u + 2u] = w[200u + id.x];
+}
+)", f.w);
+    uint32_t prog = 0;
+    caliper_producer_error e{};
+    if (!compile_or_skip(f.rt, d.d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+    caliper_producer_frame frame{1, 0.0, 1};
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+    caliper_producer_output out{};
+    REQUIRE(caliper_producer_read_output(f.rt, prog, "positions", &out, &e) == CALIPER_PRODUCER_OK);
+    REQUIRE(out.count == 4);
+    const float* p = static_cast<const float*>([(__bridge id<MTLBuffer>)out.buffer contents]);
+    for (uint32_t i = 0; i < 4; ++i) {
+        const auto row = uint32_t(p[i * 3]);
+        CHECK(p[i * 3 + 1] == float(row) + 1.0f);   // in range: the row's first column, row + 1
+        CHECK(p[i * 3 + 2] == 0.0f);                // out of range: zero, not 9
+    }
     caliper_producer_error_free(&e);
 }
 
@@ -347,4 +526,65 @@ TEST_CASE("the watchdog stops a program over its time limit, and a timeout stops
     uint32_t after = 0;
     CHECK(caliper_producer_compile(f.rt, &d.d, &after, &e) == CALIPER_PRODUCER_TIMEOUT);
     caliper_producer_error_free(&e);
+}
+
+TEST_CASE("after a timeout the runtime goes without a wait while its pass still runs on the GPU") {
+    using clock = std::chrono::steady_clock;
+    const auto settle = clock::now() + std::chrono::seconds(20);   // the reaper of earlier cases
+    while (caliper_producer_reaping() != 0 && clock::now() < settle)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    REQUIRE(caliper_producer_reaping() == 0);
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    // One invocation that loops w[1] times: the case sets the count so that the pass lasts
+    // about 400 ms, far past a timeout of 50 ms.
+    Desc d(R"(@group(0) @binding(0) var<storage, read> w: array<f32>;
+@group(0) @binding(1) var<storage, read_write> positions: array<f32>;
+@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;
+@compute @workgroup_size(1)
+fn run(@builtin(global_invocation_id) id: vec3<u32>) {
+    var s = w[0];
+    let n = u32(w[1]);
+    for (var k = 0u; k < n; k++) { s = s * 0.999999 + w[k % 8u]; }
+    let i = atomicAdd(&count, 1u);
+    positions[i * 3u] = s;
+    positions[i * 3u + 1u] = 0.0;
+    positions[i * 3u + 2u] = 0.0;
+}
+)", f.w);
+    d.d.max_count = 1;
+    d.d.workgroups[0] = d.d.workgroups[1] = d.d.workgroups[2] = 1;
+    auto* w = static_cast<float*>([f.tensor contents]);
+    w[1] = 100000.0f;
+    uint32_t prog = 0;
+    caliper_producer_error e{};
+    if (!compile_or_skip(f.rt, d.d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+    caliper_producer_frame frame{1, 0.0, 1};
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 5000.0, nullptr, &e) == CALIPER_PRODUCER_OK);
+    caliper_producer_program_status st{};
+    REQUIRE(caliper_producer_read_status(f.rt, prog, &st) == CALIPER_PRODUCER_OK);
+    REQUIRE(st.last_pass_ms > 0.0);
+    w[1] = float(std::min(1e9, 100000.0 * 400.0 / st.last_pass_ms));
+    MESSAGE("100000 iterations took ", st.last_pass_ms, " ms; the long pass runs ", w[1], " of them");
+
+    const auto t0 = clock::now();
+    CHECK(caliper_producer_run(f.rt, &prog, 1, &frame, 50.0, nullptr, &e) == CALIPER_PRODUCER_TIMEOUT);
+    REQUIRE(e.code);
+    CHECK(std::string(e.code) == "program.timeout");
+    CHECK(std::string(e.message).find("cannot be stopped") != std::string::npos);
+    caliper_producer_error_free(&e);
+    const auto t1 = clock::now();
+    caliper_producer_destroy(f.rt);   // no wait for the pass that still runs
+    f.rt = nullptr;
+    const double destroy_ms = std::chrono::duration<double, std::milli>(clock::now() - t1).count();
+    const size_t reaping = caliper_producer_reaping();
+    MESSAGE("the timeout came after ", std::chrono::duration<double, std::milli>(t1 - t0).count(),
+            " ms; the destroy took ", destroy_ms, " ms");
+    CHECK(destroy_ms < 50.0);
+    CHECK(reaping == 1);
+    // The reaper lets the runtime's objects go when the GPU ends the pass.
+    const auto deadline = clock::now() + std::chrono::seconds(20);
+    while (caliper_producer_reaping() != 0 && clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    CHECK(caliper_producer_reaping() == 0);
 }

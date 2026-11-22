@@ -668,3 +668,161 @@ def test_programs_that_share_a_moving_gradient_both_keep_running(run):
     assert [s["state"] for s in st] == ["running", "running"], st
     assert [s["runs"] for s in st] == [4, 4]          # steps 8 to 11
     assert P.stats()["imports"] == 1                 # the older imports were released
+
+
+class _TimesOut:
+    """The real runtime, whose passes time out as a pass that never ends does."""
+
+    def __init__(self, rt):
+        self._rt = rt
+
+    def run(self, *args, **kw):
+        raise RuntimeError("program.timeout", "The pass did not finish in time.", 0, 0, 3)
+
+    def __getattr__(self, name):
+        return getattr(self._rt, name)
+
+
+@needs_device
+def test_activation_hooks_leave_the_model_when_the_last_program_stops(run):
+    net, opt, _, _ = run
+    decl, src = _geometry(4, source="live:fc.act")
+    P.install("acts", decl, src, scene="s")
+    assert set(P._ACT_HOOKS) == {"fc"} and len(net.fc._forward_hooks) == 1
+    _train(net, opt, P.WARMUP_STEPS + 2)
+    assert P.status()[0]["state"] == "running"
+    P._STATE["rt"] = _TimesOut(P._STATE["rt"])
+    _train(net, opt, 1, first=50)
+    st = P.status()[0]
+    assert st["state"] == "stopped" and st["error"]["code"] == "program.timeout"
+    # The program stays installed, stopped; nothing reads the module's output any more.
+    assert not P._ACT_HOOKS and not P._ACTS and not net.fc._forward_hooks
+
+
+def test_activation_hooks_stay_while_another_program_needs_them(monkeypatch):
+    net = Net()
+    P.attach(net, None)
+    try:
+        for pid in ("a", "b"):
+            p = P._Program(pid, {"inputs": [{"var": "w", "source": "live:fc.act"}],
+                                 "output": {"kind": "pixels", "width": 1, "height": 1}}, "", None, "")
+            with pytest.raises(P._Waiting):
+                P._resolve("fc.act")                 # registers the hook, as a compile does
+            p.state = "waiting"
+            P._PROGS[pid] = p
+        with P._LOCK:
+            P._set_active()
+        assert len(net.fc._forward_hooks) == 1
+        with P._LOCK:
+            P._PROGS["a"].state = "refused"
+            P._set_active()
+        assert len(net.fc._forward_hooks) == 1       # b still reads fc's output
+        with P._LOCK:
+            P._PROGS["b"].state = "stopped"
+            P._set_active()
+        assert not net.fc._forward_hooks and not P._ACT_HOOKS
+    finally:
+        P._PROGS.clear()
+        P.detach()
+
+
+SPIN = """@group(0) @binding(0) var<storage, read> w: array<f32>;
+@group(0) @binding(1) var<storage, read> spin: array<f32>;
+@group(0) @binding(2) var<storage, read_write> positions: array<f32>;
+@group(0) @binding(3) var<storage, read_write> count: atomic<u32>;
+@compute @workgroup_size(1)
+fn run(@builtin(global_invocation_id) id: vec3<u32>) {
+    var s = w[0];
+    let n = u32(spin[0]);
+    for (var k = 0u; k < n; k++) { s = s * 0.999999 + w[k % 8u]; }
+    let i = atomicAdd(&count, 1u);
+    positions[i * 3u] = s;
+    positions[i * 3u + 1u] = 0.0;
+    positions[i * 3u + 2u] = 0.0;
+}
+"""
+
+
+@needs_device
+def test_training_keeps_its_step_rate_after_a_pass_times_out(run):
+    """A pass that runs far longer than the timeout: the step with the timeout returns after the
+    timeout while the GPU still runs the pass, and the next steps keep the rate of the steps
+    before it."""
+    import time
+    from caliper import _producer
+    net, opt, _, _ = run
+
+    def timed(first, steps):
+        out = []
+        for i in range(first, first + steps):
+            t = time.perf_counter()
+            _train(net, opt, 1, first=i)
+            out.append(time.perf_counter() - t)
+        return out
+
+    timed(0, 3)                                      # MPS warms up
+    baseline = timed(3, 5)                           # steps without a program
+    net.register_buffer("spin", torch.tensor([1e5, 0.0, 0.0, 0.0], device="mps"))
+    decl = {"inputs": [{"var": "w", "source": "live:fc.weight"}, {"var": "spin", "source": "live:spin"}],
+            "output": {"kind": "geometry", "panel": "p", "part": "points", "max_count": 1,
+                       "arrays": ["positions"]},
+            "limits": {"time_ms": 50}, "workgroups": [1, 1, 1]}
+    assert P.install("spin", decl, SPIN, scene="s")["state"] == "compiled"
+    _train(net, opt, P.WARMUP_STEPS + 1, first=10)   # one pass of 100,000 iterations
+    st = P.status()[0]
+    assert st["state"] == "running" and st["last_pass_ms"]
+    target_ms = 2000.0                               # 4 times the timeout of max(100, 10 x 50) ms
+    net.spin[0] = min(2e9, 1e5 * target_ms / st["last_pass_ms"])
+    torch.mps.synchronize()
+
+    before = timed(20, 1)                            # the long pass, with the timeout
+    reaping = _producer.reaping()
+    st = P.status()[0]
+    after = timed(21, 10)
+    assert st["state"] == "stopped" and st["error"]["code"] == "program.timeout", st
+    assert "cannot be stopped" in st["error"]["message"]
+    assert reaping == 1, "the step returned only after the GPU ended the pass"
+    assert before[0] < 1.0, before                   # the timeout of 0.5 s, not the pass of 2 s
+    assert sorted(after)[5] < 3 * sorted(baseline)[2] + 0.02, (after, baseline)
+    deadline = time.monotonic() + 30
+    while _producer.reaping() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert _producer.reaping() == 0
+    P._reap()
+    assert not P._ABANDONED
+
+
+class _Counting:
+    """The real runtime, counting its compiles and its binds of new storage."""
+
+    def __init__(self, rt):
+        self._rt, self.programs, self.rebinds = rt, 0, 0
+
+    def program(self, *args, **kw):
+        self.programs += 1
+        return self._rt.program(*args, **kw)
+
+    def rebind(self, *args, **kw):
+        self.rebinds += 1
+        return self._rt.rebind(*args, **kw)
+
+    def __getattr__(self, name):
+        return getattr(self._rt, name)
+
+
+@needs_device
+def test_a_gradient_in_new_storage_at_each_step_binds_again_without_a_compile(run):
+    net, opt, calls, _ = run
+    decl, src = _geometry(4, source="live:fc.weight.grad")
+    assert P.install("g", decl, src, scene="s")["state"] == "waiting"
+    _train(net, opt, P.WARMUP_STEPS + 1)             # the first compile, at the first pass
+    counting = P._STATE["rt"] = _Counting(P._STATE["rt"])
+    _train(net, opt, 6, first=20)
+    assert counting.programs == 0, "a pass compiled the program again"
+    st = P.status()[0]
+    assert st["state"] == "running" and st["runs"] == 7
+    norms = net.fc.weight.grad.norm(dim=1).cpu()      # the gradient that the last pass read
+    pos = calls[-1][2].cpu()
+    for row, norm in zip(pos[:, 0].tolist(), pos[:, 1].tolist()):
+        assert norm == pytest.approx(float(norms[int(row)]), rel=1e-4)
+    assert P.stats()["imports"] == 1

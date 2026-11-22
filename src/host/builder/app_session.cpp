@@ -375,10 +375,12 @@ void AppRunControl::feed_interventions(const json& interventions, const json& st
             if (it == applied_.end() || it->second != since)
                 push_run(sink, json{{"change", "intervene"}, {"point", key.first}, {"op", key.second}, {"step", since}});
         }
-        for (const auto& [key, since] : applied_)
-            if (!now.count(key))
-                push_run(sink, json{{"change", "intervene"}, {"point", key.first}, {"op", nullptr}, {"step", step}});
     }
+    // A stop also in a baseline: applied_ then holds what the same script applied before its
+    // link dropped (feed()), else nothing.
+    for (const auto& [key, since] : applied_)
+        if (!now.count(key))
+            push_run(sink, json{{"change", "intervene"}, {"point", key.first}, {"op", nullptr}, {"step", step}});
     applied_ = std::move(now);
 }
 
@@ -387,6 +389,10 @@ void AppRunControl::feed(cb::EventSink& sink) {
     const std::string script = attached ? link_->script() : std::string();
     if (attached != attached_ || (attached && script != script_)) {
         push_run(sink, json{{"change", "attach"}, {"attached", attached}, {"script", attached ? script : script_}});
+        if (attached_ && !attached) {   // what the script applied stays known for its return
+            dropped_script_ = script_;
+            dropped_ = std::move(applied_);
+        }
         attached_ = attached;
         script_ = attached ? script : std::string();
         have_ = false;
@@ -395,6 +401,11 @@ void AppRunControl::feed(cb::EventSink& sink) {
         params_.clear();
         results_.clear();
         applied_.clear();
+        if (attached) {
+            if (script == dropped_script_) applied_ = std::move(dropped_);
+            dropped_.clear();
+            dropped_script_.clear();
+        }
     }
     if (!attached) return;
     const caliper_live::Controls* c = link_->controls();
