@@ -44,7 +44,7 @@ Without `--assets`, the link opens a short note that says where the page is. The
 
 ## Script Connection
 
-A script connects to `ws://127.0.0.1:<port>/v3/stream?token=<token>` as a producer, as [The producer connection to a hub](../reference/wire-protocol.md#the-producer-connection-to-a-hub) describes. It sends HELLO with the role `producer` and its session identity: an id, the script's name, its pid and the time it started streaming. The hub answers WELCOME with the id it chose. It keeps the proposed id unless a live session of another process holds it, in which case it appends `-2`, `-3` and so on. The script then sends its list of views, and from then on the hub is its one viewer: it subscribes to the views that viewers ask for, at the rate they ask for, and forwards their events.
+A script connects to `ws://127.0.0.1:<port>/v3/stream?token=<token>` as a producer, as [The producer connection to a hub](../reference/wire-protocol.md#producer-connection) describes. It sends HELLO with the role `producer` and its session identity: an id, the script's name, its pid and the time it started streaming. The hub answers WELCOME with the id it chose. It keeps the proposed id unless a live session of another process holds it, in which case it appends `-2`, `-3` and so on. The script then sends its list of views, and from then on the hub is its one viewer: it subscribes to the views that viewers ask for, at the rate they ask for, and forwards their events.
 
 Scripts on the same machine find the hub through the **hub file**, which the hub writes when it starts and removes when it stops. It is `hub.json` in the app-data folder (`~/Library/Application Support/Caliper/hub.json` on macOS), or the path in `CALIPER_HUB_FILE`. Only its owner can read it, because it holds the token along with the port.
 
@@ -114,7 +114,7 @@ On an Apple silicon Mac, a 512 × 512 heatmap at 60 Hz reaches four viewers thro
 
 ## Controls and Selections
 
-From [protocol 3.1](../reference/wire-protocol.md#controls-through-a-hub), a viewer can pause, resume and step a script's training loop, change the parameters the script registered and run its actions, and a selection in one view highlights the same items in the session's other views. The hub announces both capabilities, `controls` and `selection`, to viewers and to scripts.
+From [protocol 3.1](../reference/wire-protocol.md#hub-forwarding), a viewer can pause, resume and step a script's training loop, change the parameters the script registered and run its actions, and a selection in one view highlights the same items in the session's other views. The hub announces both capabilities, `controls` and `selection`, to viewers and to scripts.
 
 **Controls are off unless you allow them.** Without `--allow-control` the hub forwards no control: it tells every viewer in its WELCOME that it may not control, and answers every CONTROL itself with the error `forbidden`. Viewers still show the run state, the parameters and the actions, without letting them be changed. Start the hub with the option to forward controls:
 

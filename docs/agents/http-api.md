@@ -3,7 +3,7 @@
 Caliper API is an HTTP interface to the running app. Version 0 lists the applets, launches one, takes data streams over [wire protocol v3](../reference/wire-protocol.md), returns a capture of the frame the app draws, runs the commands of the command layer, through which specs, loaders and sources are built with undo, a journal and approvals, and serves the browser viewer of spec applets. It listens on 127.0.0.1 only, behind tokens that also say who sends each command, and it is off unless the app starts with `--api`, or the [side chat or Open in browser starts it](#app-startup). The server is in `src/host/api/api_server.h`, and `src/host/api/app_api.h` starts it for the app and for `caliper shot`.
 
 !!! note "Status"
-    Version 0, built and tested on macOS. A capture works in the app's window on Metal and in the windowless mode, `caliper shot --api`; on the GL and Vulkan renderers the app in its window answers a capture with 501. The command endpoints serve the command layer of the app's builder session, in the app, `caliper dev` and `caliper shot` built with `CALIPER_WITH_BUILDER` (`src/host/builder/app_session.h`, over `src/host/api/session_gateway.h`); a build without the builder answers 404 on them, and `caliper-mcp` reads that as an app with no command layer. The Windows build refuses `--api` for now, as [Caliper CLI](../reference/cli.md#on-windows) describes.
+    Version 0, built and tested on macOS. A capture works in the app's window on Metal and in the windowless mode, `caliper shot --api`; on the GL and Vulkan renderers the app in its window answers a capture with 501. The command endpoints serve the command layer of the app's builder session, in the app, `caliper dev` and `caliper shot` built with `CALIPER_WITH_BUILDER` (`src/host/builder/app_session.h`, over `src/host/api/session_gateway.h`); a build without the builder answers 404 on them, and `caliper-mcp` reads that as an app with no command layer. The Windows build refuses `--api` for now, as [Caliper CLI](../reference/cli.md#windows-limits) describes.
 
 | Method and path | What it does |
 |---|---|
@@ -83,7 +83,7 @@ A capture is read from the offscreen canvas at the end of a frame, with the read
 
 ## Security
 
-Every request gets the checks of the stream ([The upgrade request](../reference/wire-protocol.md#the-upgrade-request)):
+Every request gets the checks of the stream ([The upgrade request](../reference/wire-protocol.md#upgrade-request)):
 
 - The server listens on 127.0.0.1 only.
 - The `Host` header must be `127.0.0.1:<port>` or `localhost:<port>`, with the API's port. Anything else is refused with 403, as a guard against DNS rebinding.
@@ -152,7 +152,7 @@ Opens the page of the applet with that manifest id, as a click on its row on the
 
 The frame the app draws, as an opaque PNG, read back at the end of the next frame without drawing an extra one:
 
-- In the app's window, the PNG is the frame the window presents, at the window's framebuffer size in pixels (twice the window's size in points on a Retina display). This works with the window hidden too ([`--hidden`](../reference/cli.md#the-hidden-window)), which is how tests and agents drive the whole app with nothing on screen. The renderer copies that frame on the GPU as it presents it, and a later frame picks the copy up, so the frame loop never waits for it. This works on Metal. On the GL and Vulkan renderers the window's frame cannot be read back yet, and a capture is answered with 501 and the reason.
+- In the app's window, the PNG is the frame the window presents, at the window's framebuffer size in pixels (twice the window's size in points on a Retina display). This works with the window hidden too ([`--hidden`](../reference/cli.md#hidden-window)), which is how tests and agents drive the whole app with nothing on screen. The renderer copies that frame on the GPU as it presents it, and a later frame picks the copy up, so the frame loop never waits for it. This works on Metal. On the GL and Vulkan renderers the window's frame cannot be read back yet, and a capture is answered with 501 and the reason.
 - In the windowless mode, the PNG is the offscreen canvas at the end of a frame, of the size `caliper shot --size` gives, 1600 by 1000 by default.
 
 A capture waits for the app's frames like every call that needs the frame thread, so it is answered with 504 when no frame is drawn within 5 seconds. The PNG is encoded on a thread of its own, so the frame loop does not wait for the encoder either.
@@ -189,7 +189,7 @@ Runs the command `{name}`, such as `spec.new` or `panel.patch`. The body is the 
 
 The answer is the command layer's result envelope, with 200 whether the command succeeded or not. The server gives each invocation an id, `api-<n>`.
 
-The commands act on the builder session's workspace, the folder of `--workspace` or `CALIPER_WORKSPACE`, else `workspace/` in the app-data folder ([Caliper CLI](../reference/cli.md#the-workspace)). The default workspace is opened by the first command that arrives, so the first call may take a few milliseconds longer; a command that arrives while the workspace is still opening waits for it, and one that arrives when it cannot be opened answers `command.not_available` with the reason. The table of `GET /v0/commands` needs no workspace. When `applet.open` succeeds, from any origin, the app shows the spec page with that applet's spec, as Caliper CLI describes under [The workspace](../reference/cli.md#the-workspace). An agent's first look is a read too when no spec is open: `spec.get` then answers `{"open": false}` and nothing else, not an error, and with a spec open its result carries `"open": true` with the spec.
+The commands act on the builder session's workspace, the folder of `--workspace` or `CALIPER_WORKSPACE`, else `workspace/` in the app-data folder ([Caliper CLI](../reference/cli.md#workspace)). The default workspace is opened by the first command that arrives, so the first call may take a few milliseconds longer; a command that arrives while the workspace is still opening waits for it, and one that arrives when it cannot be opened answers `command.not_available` with the reason. The table of `GET /v0/commands` needs no workspace. When `applet.open` succeeds, from any origin, the app shows the spec page with that applet's spec, as Caliper CLI describes under [The workspace](../reference/cli.md#workspace). An agent's first look is a read too when no spec is open: `spec.get` then answers `{"open": false}` and nothing else, not an error, and with a spec open its result carries `"open": true` with the spec.
 
 ```json
 {"id":"api-7","ok":true,"result":{"applied":true,"diff":"...","id":"note","warnings":[]}}

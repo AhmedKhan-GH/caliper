@@ -2,7 +2,7 @@
 
 This page lists where Caliper keeps its files, every environment variable the source reads, and the startup log lines that report which renderer and device path are in use.
 
-## The app-data folder
+## App-Data Folder
 
 The host keeps everything it writes under one folder, computed in `src/app_paths.cpp`.
 
@@ -22,7 +22,7 @@ Inside it:
 
 | Path | What it holds |
 |---|---|
-| `applets/` | The user applets folder: applet libraries and their `.caliper.toml` manifests, unless `CALIPER_USER_APPLETS_DIR` names another folder. The host searches it after the development folders and before the `applets/` folder next to the executable, and `caliper install` copies into it. See [Caliper CLI](cli.md#the-search-order). |
+| `applets/` | The user applets folder: applet libraries and their `.caliper.toml` manifests, unless `CALIPER_USER_APPLETS_DIR` names another folder. The host searches it after the development folders and before the `applets/` folder next to the executable, and `caliper install` copies into it. See [Caliper CLI](cli.md#search-order). |
 | `data/<id>/` | One folder per applet, named by the manifest `id`. The host creates it and passes it to the applet as `host.data_dir()`. For an applet that declares `[data].schema`, the host keeps the highest schema that has opened the folder in `.caliper-data.toml` inside it, and holds a lock on `.caliper-data.lock` beside it while it raises that value, so that two processes opening the folder at once cannot record the lower schema. |
 | `hub.json` | The hub file, while `caliper serve` runs: the hub's port and session token, for producers on this machine (mode 0600). See [Caliper CLI](cli.md#caliper-serve). |
 | `api.json` | The API file, while the app or `caliper shot` serves [Caliper API](../agents/http-api.md): its address, the token of outside agents, whose commands are reviewed, and the link of its spec page (mode 0600), removed when the process exits. Your own session token is not in it: it is printed on the start line only. Without `CALIPER_DATA_DIR`, `shot` writes it into its temporary folder with its stores, so a shot never replaces the API file of the app you are running; its start line names the file. |
@@ -33,9 +33,9 @@ Inside it:
 | `fonts/SternbildDisplay-Regular.otf` | The default location of the display face, used when `CALIPER_DISPLAY_FONT` is not set. |
 | `metrics.duckdb`, `data.duckdb`, `artifacts.duckdb` | The stores behind [`metrics.v1`](../applets/services/caliper-metrics-v1.md), [`data.v1`](../applets/services/caliper-data-v1.md) and [`artifacts.v1`](../applets/services/caliper-artifacts-v1.md). |
 | `artifacts/` | The content-addressed files of `artifacts.v1`. |
-| `workspace/` | The builder's default workspace: its loaders, specs, saved spec applets, the command journal `journal/commands.jsonl` and `workspace.duckdb`. The app creates it only when the builder first needs it, and `--workspace` or `CALIPER_WORKSPACE` names another folder in its place. See [The workspace](cli.md#the-workspace). |
+| `workspace/` | The builder's default workspace: its loaders, specs, saved spec applets, the command journal `journal/commands.jsonl` and `workspace.duckdb`. The app creates it only when the builder first needs it, and `--workspace` or `CALIPER_WORKSPACE` names another folder in its place. See [The workspace](cli.md#workspace). |
 
-## Host variables
+## Host Variables
 
 The `caliper` executable reads these. The first six are development hooks for screenshots, recordings, headless checks and clean-exit runs.
 
@@ -52,10 +52,10 @@ The `caliper` executable reads these. The first six are development hooks for sc
 | `CALIPER_TEST_APPROVALS=<file>` | A testing aid, read only with `--hidden`: the person's decisions on the approval cards, one line each, `approve <command> [<origin>]` or `deny <command> [<origin>]` (such as `approve panel.create mcp`), or for a card that offers rules `session <command> [<origin>]` (Allow always for this session) or `always <command> [<origin>]` (Always allow), each applied to the oldest waiting card that matches, through the same path as the cards' buttons. The app reads lines as they are appended; a line that matches no card yet waits for one, and a malformed line is reported on stderr and dropped. Each card prints `[approval]` lines to stderr when it starts waiting and when it ends. See `src/host/builder/approval_cards.h`. | `src/main.cpp` |
 | `CALIPER_TEST_OPEN_URL=<file>` | A testing aid, read only with `--hidden`: ⌘O Open in browser on the spec page appends the link it would open, the browser viewer's with the viewer token, as one line to this file, in place of opening the person's browser. A hidden app without it opens nothing, starts no Caliper API for it, and says so on standard error (`[browser] not opened: ...`) and in Activity. See [Caliper API](../agents/http-api.md#app-startup). | `src/main.cpp` |
 | `CALIPER_TEST_SPEC_UI_SHOTS=<folder>` | Where `CALIPER_TEST_SPEC_UI` writes its shots; the working folder without it. | `src/main.cpp` |
-| `CALIPER_HIDDEN=1` | A testing aid, as `--hidden`: runs the real app with its window never shown, no Dock icon and no menu bar, reads and writes no `imgui.ini`, and closes the window normally on SIGINT and SIGTERM. See [The hidden window](cli.md#the-hidden-window). | `src/main.cpp` |
-| `CALIPER_TEST_RUN=1` | Marks the process, and every process it starts, as a test run, which never uses your own app-data folder: without `CALIPER_DATA_DIR` it stops at the first lookup ([The app-data folder](#the-app-data-folder)). ctest sets it for every entry and the tests of Caliper LIB set it; any other `CALIPER_TEST_*` variable that is set and not empty has the same effect. | `src/app_paths.cpp`, `python/caliper/_net.py`, `src/builder/mcp/api_file.cpp` |
-| `CALIPER_WORKSPACE` | The builder's workspace folder, in place of `workspace/` under the app-data folder, when it is set and not empty and `--workspace` is not given. The app, `caliper dev` and `caliper shot` open it once they have drawn their first frame. See [The workspace](cli.md#the-workspace). | `src/host/builder/app_hooks.h` |
-| `CALIPER_COMMAND_SCRIPT=<file>` | A testing and demo aid: a file of JSON lines, one builder command each, that the hidden app (`--hidden`, with the app or `caliper dev`) or `caliper shot` runs through the command queue once its workspace is open, with the origin `ui` unless a line gives another. A visible app ignores it and says so, since a script may approve as the person does. `shot` draws frames until the script is done. See [The workspace](cli.md#the-workspace). | `src/host/builder/app_hooks.h` |
+| `CALIPER_HIDDEN=1` | A testing aid, as `--hidden`: runs the real app with its window never shown, no Dock icon and no menu bar, reads and writes no `imgui.ini`, and closes the window normally on SIGINT and SIGTERM. See [The hidden window](cli.md#hidden-window). | `src/main.cpp` |
+| `CALIPER_TEST_RUN=1` | Marks the process, and every process it starts, as a test run, which never uses your own app-data folder: without `CALIPER_DATA_DIR` it stops at the first lookup ([The app-data folder](#app-data-folder)). ctest sets it for every entry and the tests of Caliper LIB set it; any other `CALIPER_TEST_*` variable that is set and not empty has the same effect. | `src/app_paths.cpp`, `python/caliper/_net.py`, `src/builder/mcp/api_file.cpp` |
+| `CALIPER_WORKSPACE` | The builder's workspace folder, in place of `workspace/` under the app-data folder, when it is set and not empty and `--workspace` is not given. The app, `caliper dev` and `caliper shot` open it once they have drawn their first frame. See [The workspace](cli.md#workspace). | `src/host/builder/app_hooks.h` |
+| `CALIPER_COMMAND_SCRIPT=<file>` | A testing and demo aid: a file of JSON lines, one builder command each, that the hidden app (`--hidden`, with the app or `caliper dev`) or `caliper shot` runs through the command queue once its workspace is open, with the origin `ui` unless a line gives another. A visible app ignores it and says so, since a script may approve as the person does. `shot` draws frames until the script is done. See [The workspace](cli.md#workspace). | `src/host/builder/app_hooks.h` |
 | `CALIPER_COMMAND_RESULTS=<file>` | The file that receives the result of each command of `CALIPER_COMMAND_SCRIPT`, one JSON line each, then a line `{"done": true, "commands", "failed"}`. It is replaced at each run. | `src/host/builder/app_hooks.h` |
 | `CALIPER_AGENT_PYTHON=<interpreter>` | The Python interpreter, with the dependencies of `caliper-agent`, with which the app starts the widget agent's sidecar for ⌘K on a spec page. Until `caliper-agent` is packaged with a Python runtime, the widget agent has no provider without it, and the inline prompt offers only Ask in chat. The sidecar also needs Caliper API (`--api`) and a key in the system key store. | `src/host/builder/widget_app.cpp` |
 | `CALIPER_AGENT_SOURCE=<folder>` | The folder that holds `agent/caliper_agent/` and `commands/command_table.json`, in place of this build's `src/builder`. | `src/host/builder/widget_app.cpp` |
@@ -66,7 +66,7 @@ The `caliper` executable reads these. The first six are development hooks for sc
 | `CALIPER_DISPLAY_FONT` | The path of the display font file, in place of `fonts/SternbildDisplay-Regular.otf` in the app-data folder. | `src/host/ui/sternbild_fonts.cpp` |
 | `CALIPER_HUB_FILE` | The path of the hub file that `caliper serve` writes, in place of `hub.json` in the app-data folder, when it is set and not empty. | `src/main.cpp` |
 | `CALIPER_API_TOKEN` | Not read by Caliper. The name the examples of [Caliper API](../agents/http-api.md#worked-examples) use for your session token, which you copy from the app's start line into your own shell, so that your scripts run commands without review; Caliper never writes that token to a file. | none |
-| `CALIPER_API=1` | Serves [Caliper API](../agents/http-api.md) as `--api` does, for the app, `caliper dev` and `caliper shot`. Any other value leaves it off. On Windows it is ignored, and a line on standard error says so ([Caliper CLI](cli.md#on-windows)). | `src/host/api/app_api.cpp` |
+| `CALIPER_API=1` | Serves [Caliper API](../agents/http-api.md) as `--api` does, for the app, `caliper dev` and `caliper shot`. Any other value leaves it off. On Windows it is ignored, and a line on standard error says so ([Caliper CLI](cli.md#windows-limits)). | `src/host/api/app_api.cpp` |
 | `CALIPER_SDK_DIR` | The prefix of the installed SDK that [`caliper build`](cli.md#caliper-build) configures against, when it is set and not empty; a folder without the SDK is an error. Without it, `build` looks beside the executable and in `caliper-sdk` in the home folder. | `src/host/cli_build.cpp` |
 | `CALIPER_CMAKE` | The cmake that `caliper build` runs, in place of `cmake` on `PATH`, when it is set and not empty. | `src/host/cli_build.cpp` |
 | `CALIPER_DATA_DIR` | The app-data folder, in place of the one for the OS. It moves the whole folder: the three stores and `artifacts/`, `imgui.ini`, every applet's data folder under `data/`, the live session files under `live/`, the stream files of `caliper.serve()` under `streams/`, the hub file `hub.json` of `caliper serve`, the API file `api.json`, the side chat's settings `side-chat.json`, the default location of the display face under `fonts/`, the builder's default workspace `workspace/` and, unless `CALIPER_USER_APPLETS_DIR` is set, the user applets folder `applets/`. It is read once, at the first lookup. An embedder's `CaliperCoreDesc.data_dir` wins over it for everything but `live/`. The viewer sets it from its `--data-dir` flag, and the test suite sets it to a work folder so that no test opens the user's stores. | `src/app_paths.cpp`, `src/host/live/live_shm.h`, `src/host/live/viewer_main.mm` |
@@ -75,7 +75,7 @@ The `caliper` executable reads these. The first six are development hooks for sc
 
 On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shorten paths in the Activity log and to find the app-data folder.
 
-## Renderer variables
+## Renderer Variables
 
 | Variable | What it does | Read in |
 |---|---|---|
@@ -83,7 +83,7 @@ On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shor
 | `CALIPER_VULKAN_NO_DIRECT` | Set to any value, it turns off the [direct path](../development/vulkan-and-cuda.md#the-direct-image-path), where a CUDA kernel writes the Vulkan image, so updates use the buffer path. | `src/host/renderer/vulkan_renderer.cpp` |
 | `CALIPER_VULKAN_STATS` | Set to any value, the Vulkan renderer prints one summary line at shutdown with frame times and the count of direct and buffer updates. | `src/host/renderer/vulkan_renderer.cpp` |
 
-## Applet and example variables
+## Applet and Example Variables
 
 | Variable | What it does | Read in |
 |---|---|---|
@@ -98,7 +98,7 @@ On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shor
 | `CALIPER_EMBED_EXIT_AFTER=<seconds>` | The `embed_host` example closes its window after that many seconds. In offscreen mode it draws frames for that many seconds, 1 by default. | `examples/embed_host/main.mm`, `examples/embed_host/main_win32.cpp`, `examples/embed_host/embed_host.h` |
 | `CALIPER_EMBED_OFFSCREEN` | Any value other than empty or `0` runs the `embed_host` example in offscreen mode: it opens no window, draws the applet on a 1280 by 800 offscreen canvas at about 60 frames a second, reads the last frame back, prints how many frames it drew and how many pixels the applet drew, and exits with 0 only when the applet drew. | `examples/embed_host/embed_host.h` |
 
-## Test variables
+## Test Variables
 
 | Variable | What it does | Read in |
 |---|---|---|
@@ -109,7 +109,7 @@ On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shor
 
 The metrics, data, loader, embed and live tests also set `CALIPER_DUCKDB_*`, `CALIPER_HELLO_*` and `CALIPER_DATA_DIR` themselves to exercise the code that reads them. ctest runs every test binary that opens the stores, and every command-line test, with `CALIPER_DATA_DIR` on a folder in the build tree, and runs the command-line tests with `CALIPER_APPLET_PATH` unset. See [Development basics](../development/development-basics.md) for how the GPU skip variables behave.
 
-## Python variables
+## Python Variables
 
 | Variable | What it does | Read in |
 |---|---|---|
@@ -125,7 +125,7 @@ The metrics, data, loader, embed and live tests also set `CALIPER_DUCKDB_*`, `CA
 
 See [Caliper LIB](../python/caliper-lib-api.md) for the calls themselves.
 
-## Startup log lines
+## Startup Log Lines
 
 The `caliper` executable writes these to stderr and, for the renderer, to the Activity pane.
 

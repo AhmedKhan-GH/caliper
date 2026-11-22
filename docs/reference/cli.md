@@ -22,7 +22,7 @@ usage: caliper [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--al
 
 Results go to standard output, and errors go to standard error, each starting with `caliper:`. Apart from `shot`, which runs an applet and opens the stores in a temporary folder or in `CALIPER_DATA_DIR` (see [caliper shot](#caliper-shot)), no subcommand opens the metrics, data or artifacts store. `list`, `check`, `info`, `new` and `--help` create nothing in the app-data folder, `install` writes only the user applets folder, and `shot` without `CALIPER_DATA_DIR` creates nothing there either.
 
-## Starting the app
+## App Startup
 
 `caliper` with no subcommand starts the app. `--applets <dir>`, or `--applets=<dir>`, adds a development folder to the search. It may be given more than once, and the folders are searched in the order given. It is accepted when starting the app and with `dev`, `list` and `shot`; with any other subcommand it is a usage error, and so is `--applets` followed by an argument that starts with `--`, such as `--applets --help`. An argument that starts with `-psn_`, which Finder passes to an app it launches on older versions of macOS, is ignored.
 
@@ -42,9 +42,9 @@ Results go to standard output, and errors go to standard error, each starting wi
 
 `--api-port` also takes the form `--api-port=<n>`. `--api` takes no value. When the port is taken, the app starts without the API and says why on standard error and in the Activity pane, and `shot` exits with 1. With `--api`, SIGINT and SIGTERM end the frames of `shot` early, and it then writes its image as usual.
 
-### The workspace
+### Workspace
 
-The app, `caliper dev` and `caliper shot` hold one builder session for a workspace: a folder of loaders, specs, saved spec applets, the command journal and the workspace's database, which the builder's commands act on. `--workspace <dir>`, or `--workspace=<dir>`, names the folder, and `CALIPER_WORKSPACE`, when it is set and not empty, names it when the option is not given. Without either, the workspace is `workspace/` in the app-data folder, which `CALIPER_DATA_DIR` moves with the rest ([Folders and environment variables](folders-and-environment.md#the-app-data-folder)). A relative path is taken from the working directory. The option is accepted when starting the app and with `dev`, `shot` and `list`, may be given once and needs a value; with any other subcommand it is a usage error. The code is in `src/host/builder/app_session.h`.
+The app, `caliper dev` and `caliper shot` hold one builder session for a workspace: a folder of loaders, specs, saved spec applets, the command journal and the workspace's database, which the builder's commands act on. `--workspace <dir>`, or `--workspace=<dir>`, names the folder, and `CALIPER_WORKSPACE`, when it is set and not empty, names it when the option is not given. Without either, the workspace is `workspace/` in the app-data folder, which `CALIPER_DATA_DIR` moves with the rest ([Folders and environment variables](folders-and-environment.md#app-data-folder)). A relative path is taken from the working directory. The option is accepted when starting the app and with `dev`, `shot` and `list`, may be given once and needs a value; with any other subcommand it is a usage error. The code is in `src/host/builder/app_session.h`.
 
 The session costs nothing at start-up. A workspace named by `--workspace` or `CALIPER_WORKSPACE` is opened on a worker thread once the app has drawn its first frame, and the folder and its layout are created when they are missing. The default workspace is opened only when something first needs it, such as a command through Caliper API, so the app started without either creates nothing there. Once the workspace is open, standard error says so with the time it took, and the Activity pane shows a `workspace` line:
 
@@ -62,9 +62,9 @@ Every `applet.open` that succeeds, whether it came from the command script, from
 
 Launching a spec applet opens the same page: a click or Enter on its row on the landing screen, `CALIPER_AUTOLAUNCH`, `app.launch` and `POST /v0/applets/{id}/launch` with its manifest id. Its spec is validated first, as `caliper check` does. One saved in the workspace opens through the session's `applet.open`, sent from the `ui` origin for the person's own launches and from the caller's origin for `app.launch` and `POST /v0/applets/{id}/launch` (so an agent's launch over unsaved changes waits on an approval card), so the page appears once that command has run, a frame or two later, and opens the default workspace when it is not open yet; one found in another search folder is drawn from its file as it is, over the workspace's data, without becoming the open spec. The applet is `ACTIVE` in the list while the page shows it and `READY` again after Home, which returns to its row. The workspace's spec applets are listed under Projects on the landing screen, and the others under Instruments. After each `applet.save` the app lists the workspace's `applets/` folder again, so a saved applet appears on the landing screen at once, `ACTIVE` and selected while its page shows it; while a compiled applet's page is open this waits until it closes. The Inspector shows a spec applet's kind, the spec's format version, its numbers of panels and sources, and its spec file, relative to the workspace for an applet saved there and with the home folder written `~` otherwise, in place of a compiled applet's epoch, services and binary. `CALIPER_HOME_AFTER` goes Home from the spec page as it does from the other pages. `caliper shot` draws the same page ([caliper shot](#caliper-shot)), and `panel.render` draws one panel of the open spec with the same code on a canvas of its own. The code is in `src/host/builder/spec_page.h`. With `--api`, a saved spec applet of the workspace also opens in a browser, drawn with the same layout and look from the data the app sends, at the link the app prints, `http://127.0.0.1:<port>/v0/spec?token=<viewer token>&applet=<id>` ([Caliper API](../agents/http-api.md#get-v0spec)).
 
-A testing and demo aid drives the session without Caliper API: `CALIPER_COMMAND_SCRIPT` names a file of JSON lines, one command each, such as `{"name": "spec.new", "args": {"id": "board", "title": "Board"}}`. The origin is `ui` unless a line gives another, and empty lines and lines that start with `#` are skipped. Once the workspace is open, the commands run one after another through the command queue, as a client's do, and when `CALIPER_COMMAND_RESULTS` names a file, each result is written there as one JSON line, `{"line", "name", "id", "ok", "result"}` or with `error` in place of `result`, followed by `{"done": true, "commands", "failed"}`. Standard error ends with `[session] script done: <n> commands, <m> failed`. A command that asks for the person's approval, such as a destructive one or, from `mcp` and `agent`, an edit of the open spec under review, never holds the script: its result is `command.needs_approval` with the approval id, the approval stays pending, and the script goes on. A line with `"approve": true` approves its command as the person would, when it asks, and its result then carries `"approved"` with the approval id. With a script, the workspace opens after the first frame even when it is the default, and `shot` keeps drawing frames until the script is done. The variables are read only when the app, `dev` or `shot` start. Since a script may approve as the person does, it runs only where nobody watches a window: in the [hidden window](#the-hidden-window) (`--hidden`, with the app or `dev`) and in `shot`. An app with a visible window ignores the script, says so on standard error with a `[session]` line, and lists "command script refused" in Activity.
+A testing and demo aid drives the session without Caliper API: `CALIPER_COMMAND_SCRIPT` names a file of JSON lines, one command each, such as `{"name": "spec.new", "args": {"id": "board", "title": "Board"}}`. The origin is `ui` unless a line gives another, and empty lines and lines that start with `#` are skipped. Once the workspace is open, the commands run one after another through the command queue, as a client's do, and when `CALIPER_COMMAND_RESULTS` names a file, each result is written there as one JSON line, `{"line", "name", "id", "ok", "result"}` or with `error` in place of `result`, followed by `{"done": true, "commands", "failed"}`. Standard error ends with `[session] script done: <n> commands, <m> failed`. A command that asks for the person's approval, such as a destructive one or, from `mcp` and `agent`, an edit of the open spec under review, never holds the script: its result is `command.needs_approval` with the approval id, the approval stays pending, and the script goes on. A line with `"approve": true` approves its command as the person would, when it asks, and its result then carries `"approved"` with the approval id. With a script, the workspace opens after the first frame even when it is the default, and `shot` keeps drawing frames until the script is done. The variables are read only when the app, `dev` or `shot` start. Since a script may approve as the person does, it runs only where nobody watches a window: in the [hidden window](#hidden-window) (`--hidden`, with the app or `dev`) and in `shot`. An app with a visible window ignores the script, says so on standard error with a `[session]` line, and lists "command script refused" in Activity.
 
-### The hidden window
+### Hidden Window
 
 `--hidden` is a testing aid: it runs the real app, with its renderer and its frame loop, but never shows its window. Setting `CALIPER_HIDDEN=1` does the same. It is accepted when starting the app and with `dev`; with any other subcommand it is a usage error, and it takes no value. With `--api` it lets a test or an agent drive the whole app through [Caliper API](../agents/http-api.md), captures included, with nothing on screen.
 
@@ -73,7 +73,7 @@ In this mode the app starts as the test binaries that open hidden windows do ([T
 - On macOS the process has no Dock icon and no menu bar, and it is never activated: the activation policy is `NSApplicationActivationPolicyProhibited` before and after GLFW starts, and GLFW builds no menu bar.
 - The window is created invisible and unfocused, and nothing shows it later. Should anything make it visible, the app hides it again at once and says so on standard error.
 - The window is 1280 by 800 in screen coordinates on every display, unless `CALIPER_WINDOW_SIZE` sets another size, so captures have the same size everywhere: the framebuffer is that size times the display's scale.
-- The app reads and writes no `imgui.ini`, so every run shows the layout of a first run and the saved layout is left alone. It needs `CALIPER_DATA_DIR`: a hidden app never uses your own app-data folder, and without the variable it stops before it creates anything, with `caliper: the hidden app (--hidden) has no data folder of its own ...` on standard error and exit code 1 ([The app-data folder](folders-and-environment.md#the-app-data-folder)).
+- The app reads and writes no `imgui.ini`, so every run shows the layout of a first run and the saved layout is left alone. It needs `CALIPER_DATA_DIR`: a hidden app never uses your own app-data folder, and without the variable it stops before it creates anything, with `caliper: the hidden app (--hidden) has no data folder of its own ...` on standard error and exit code 1 ([The app-data folder](folders-and-environment.md#app-data-folder)).
 - SIGINT and SIGTERM close the window as a click on its close button would, so the full teardown runs and the API file is removed. `CALIPER_EXIT_AFTER` works as usual.
 - `CALIPER_TEST_UI` plays scripted clicks, typing and drags into the live page, only in this mode ([Host variables](folders-and-environment.md#host-variables)). With `--url`, a test attaches the hidden app to a stream and drives its run bar and its views as a person would.
 - `CALIPER_TEST_APPROVALS` names a file of decisions on the approval cards, such as `approve panel.create mcp`, only in this mode ([Host variables](folders-and-environment.md#host-variables)), so a test approves or denies an agent's held request as the person would.
@@ -84,7 +84,7 @@ At start-up the app prints one line to standard error that says the window is no
 [hidden] the window is not shown (visible 0, focused 0, background policy 1, framebuffer 2560x1600)
 ```
 
-## The search order
+## Search Order
 
 The app, `caliper dev`, `caliper list` and `caliper shot` search these folders, in this order:
 
@@ -93,17 +93,17 @@ The app, `caliper dev`, `caliper list` and `caliper shot` search these folders, 
 3. The user applets folder: `CALIPER_USER_APPLETS_DIR` when it is set and not empty, otherwise `applets/` under the app-data folder.
 4. The `applets/` folder beside the executable, which holds the applets shipped with the app.
 
-[Spec applets](../applets/manifest.md#spec-applet-search-order) are found in the same folders and one folder down. The app, `caliper dev`, `caliper shot` and `caliper list` also search the builder's workspace's `applets/` folder ([The workspace](#the-workspace)) between items 2 and 3: the folder of `--workspace`, else of `CALIPER_WORKSPACE`, else `workspace/` in the app-data folder. They only read it, so a workspace that has not been opened yet is not created.
+[Spec applets](../applets/manifest.md#spec-applet-search-order) are found in the same folders and one folder down. The app, `caliper dev`, `caliper shot` and `caliper list` also search the builder's workspace's `applets/` folder ([The workspace](#workspace)) between items 2 and 3: the folder of `--workspace`, else of `CALIPER_WORKSPACE`, else `workspace/` in the app-data folder. They only read it, so a workspace that has not been opened yet is not created.
 
 Each development folder, from items 1 and 2, is resolved as described in [Build folders](#build-folders). A folder named twice is searched once, at its first position, and empty entries are skipped. When several folders hold copies of one applet id, the host loads the highest version that passes every check, and at equal versions the copy found first; the other copies that pass are `SHADOWED`. [Several copies of one applet](../development/compatibility-and-epochs.md#several-copies-of-one-applet) states the rule, and [Folders and environment variables](folders-and-environment.md) gives the folders on each platform.
 
-## Build folders
+## Build Folders
 
 `caliper_add_applet()` puts an applet's library and manifest in the `applets/` folder of its build folder. So that the build folder itself can be named, a development folder that holds no manifest (`<stem>.caliper.toml`) of its own, but whose `applets/` subfolder holds one, stands for that subfolder. This applies to the `dev` folder, the `--applets` folders, the folders in `CALIPER_APPLET_PATH`, and the folders given to `check` and `install`. A folder that holds a manifest of its own is used as given, even when it also has an `applets/` subfolder. The user applets folder and the `applets/` folder beside the executable are always used as given.
 
 ## Subcommands
 
-### caliper list
+### `caliper list`
 
 Lists every applet in the search folders, without opening any library. Applets are ordered by the position of their folder in the search order, then by id, then from the highest version down. Each applet takes one line, with its status, id, version, kind and folder in columns. The kind is `library` for a compiled applet and `spec` for a [spec applet](../applets/manifest.md#spec-applets), whose folder is the applet's own folder. A refused, failed or shadowed applet has its reason on the next line, indented under the id:
 
@@ -119,7 +119,7 @@ READY     dev.caliper.hello        0.1.0  library  <applets folder beside the ex
 
 The status is `READY`, `REFUSED`, `FAILED` or `SHADOWED`; the reasons are those in [Refusal messages](refusal-messages.md). Folders are printed as absolute paths. `list` makes only the checks of the listing: it reads a spec applet's manifest and the first lines of its spec, and does not validate the spec. When no folder holds an applet, `list` prints `no applets found`. It always exits with 0.
 
-### caliper check <folder>
+### `caliper check`
 
 Runs the checks that the host makes before it opens a library on every applet in one folder, and only that folder, with this host's capabilities (see `caliper info`). It opens no library. The data-schema check reads the stamps in the app-data folder. The output is the same lines as `list`, then a summary:
 
@@ -150,7 +150,7 @@ A host built without the builder lists every spec applet as `REFUSED`, so it doe
 
 An applet passes when it is `READY` or `SHADOWED`. `check` exits with 0 when every applet passes, and with 1 when any does not, when `<folder>` is not a folder (`caliper: not a folder: <folder>`), or when neither it nor its `applets/` subfolder holds an applet (`caliper: no applets in <folder>`).
 
-### caliper install <folder>
+### `caliper install`
 
 Runs the same checks on a local folder, and when every applet passes, copies each applet into the user applets folder: its library, then its asset folder `assets/<stem>/` beside the library when there is one, then its manifest. An applet that reads files from beside its library keeps them in that folder, and its own build stages them there, as the in-tree applets do; an installed asset folder replaces the old one as a whole. Other files beside the library are not copied. A build folder is resolved as for `check`, with the same `using the applets in` line.
 
@@ -162,7 +162,7 @@ installed dev.caliper.pulse-scope 0.1.0 in <user applets folder>
 
 When any applet fails a check, `install` copies nothing, prints `caliper: nothing installed; N of M applets do not pass the checks`, and exits with 1. `install` does not take spec applets, which live in a workspace: when the folder holds one, it copies nothing, prints `caliper: nothing installed; <id> is a spec applet, which install does not take`, and exits with 1. It also exits with 1 when `<folder>` is the user applets folder itself, when that folder cannot be created, or when a copy fails, which it reports as `caliper: nothing installed; <reason>`. A URL in place of a folder is a usage error (`caliper: install takes a local folder, not <url>`), with exit code 2.
 
-### caliper new <name> [<dir>]
+### `caliper new`
 
 Creates an applet project from a template built into the executable. `<name>` is either a short name or a full applet id:
 
@@ -189,7 +189,7 @@ created <dir> for applet dev.example.my-viewer
 
 The comment at the top of the generated `CMakeLists.txt` gives the next steps: configure with `-DCMAKE_PREFIX_PATH=<sdk prefix>`, build, run `ctest --test-dir build`, and run `caliper dev build/applets`. [caliper build](#caliper-build) does the first two and the checks in one step.
 
-### caliper build <folder>
+### `caliper build`
 
 Configures and builds an applet's folder against the installed SDK with CMake, then runs the checks of [caliper check](#caliper-check) on the result. The folder must hold a `CMakeLists.txt` that finds `caliper-sdk`, such as one that `caliper new` writes. The build goes into `<folder>/build`, in the Release configuration, and the library and its manifest land in `<folder>/build/applets`, where `caliper dev` and `caliper install` take them. It runs these steps, and prints what CMake prints as it comes:
 
@@ -227,9 +227,9 @@ When none of them holds the SDK, `build` says where it looked and lets CMake sea
 - the configure fails. When CMake found no working C++ compiler, no build tool for its generator, or no SDK, a last line says which and how to install it, such as `caliper: no Caliper SDK was found. Install it from a Caliper build with cmake --install <build folder> --prefix <prefix> --component sdk, then set CALIPER_SDK_DIR=<prefix> or use the prefix ~/caliper-sdk`;
 - the build fails, or an applet in the build folder fails the checks.
 
-`build` is built and tested on macOS. The Windows build refuses it (see [On Windows](#on-windows)); configure and build there with CMake as [SDK package](../applets/sdk-package.md#package-usage) describes.
+`build` is built and tested on macOS. The Windows build refuses it (see [On Windows](#windows-limits)); configure and build there with CMake as [SDK package](../applets/sdk-package.md#package-usage) describes.
 
-### caliper info
+### `caliper info`
 
 Prints the host's version, its ABI epoch, the SDK version it was built with, its libtorch version, its UI-stack hash, and one line for each service it serves, in sorted order. A value the build does not define prints as `unknown` for the SDK and `none` for libtorch and the UI-stack hash. From a release build:
 
@@ -245,9 +245,9 @@ service caliper.data.v1
 service caliper.ui.v1_1
 ```
 
-### caliper shot
+### `caliper shot`
 
-Draws the app's applet page for one applet without a window, and writes the last frame as a PNG. It runs the code that the app runs for the applet page (`src/host/ui/applet_page.h`): the page bar, the status bar and, while a job runs or a failure is kept, the jobs tray's strip above the status bar, all three unless `CALIPER_CHROMELESS=1`, then the dock space over the area they leave, docking by role and the applet's own frame. The tray's strip appears once a job has run for half a second, so a shot of an applet that starts a job when it launches needs more than 30 frames to show it. It finds the applet in [the search order](#the-search-order), with the `--applets` folders first, launches it as the app launches an applet, draws the frames at about 60 a second, and writes the last one:
+Draws the app's applet page for one applet without a window, and writes the last frame as a PNG. It runs the code that the app runs for the applet page (`src/host/ui/applet_page.h`): the page bar, the status bar and, while a job runs or a failure is kept, the jobs tray's strip above the status bar, all three unless `CALIPER_CHROMELESS=1`, then the dock space over the area they leave, docking by role and the applet's own frame. The tray's strip appears once a job has run for half a second, so a shot of an applet that starts a job when it launches needs more than 30 frames to show it. It finds the applet in [the search order](#search-order), with the `--applets` folders first, launches it as the app launches an applet, draws the frames at about 60 a second, and writes the last one:
 
 ```text
 caliper shot --applets build --launch com.example.my-viewer --out page.png
@@ -272,7 +272,7 @@ Nothing appears on screen. `shot` draws into the renderer's offscreen canvas, th
 - When `CALIPER_DATA_DIR` is set and not empty, the stores and the applet's data folder `data/<id>/` are in that folder, as they are for the app, so an image can show data that the applet saved there.
 - When it is not set, `shot` creates a temporary folder under the system's temporary folder (`TMPDIR` on macOS and Linux, `TMP` or `TEMP` on Windows), uses it as the app-data folder, and removes it before it exits. The applet starts with an empty data folder, and nothing is written in the app-data folder.
 
-In both cases `shot` searches the user applets folder, as the app does, and only reads it. `--workspace` and `CALIPER_WORKSPACE` name the builder's workspace as they do for the app ([The workspace](#the-workspace)); without them the workspace is `workspace/` in the folder above, the temporary one when `CALIPER_DATA_DIR` is not set, and it opens only when a command script, a spec applet or a command of Caliper API needs it. The session's `capture.frame` reads the canvas back at the end of the frame drawn next. The display face, which only the landing screen's wordmark uses, is loaded only when `CALIPER_DISPLAY_FONT` names it.
+In both cases `shot` searches the user applets folder, as the app does, and only reads it. `--workspace` and `CALIPER_WORKSPACE` name the builder's workspace as they do for the app ([The workspace](#workspace)); without them the workspace is `workspace/` in the folder above, the temporary one when `CALIPER_DATA_DIR` is not set, and it opens only when a command script, a spec applet or a command of Caliper API needs it. The session's `capture.frame` reads the canvas back at the end of the frame drawn next. The display face, which only the landing screen's wordmark uses, is loaded only when `CALIPER_DISPLAY_FONT` names it.
 
 For a spec applet, `shot` draws the spec page: a spec applet that the search finds by its manifest id, such as `local.run42-dashboard`, or, when no search folder has an applet with the id and the id is written as a workspace's applet id (a lowercase letter, then up to 63 lowercase letters, digits, `_` and `-`, with no dots), the workspace's applet of that id. Once the workspace is open and the command script, if any, is done, it opens the applet, with `applet.open` when it is in the workspace and from its file otherwise, then draws at least 10 more frames so that the plots fit their data, and writes the last one. A command script can therefore build and save the applet in the same run. When the workspace has no such applet, `shot` exits with 1. Whatever `--launch` named, an `applet.open` that succeeds while `shot` runs, from the command script or through Caliper API, shows the spec page from then on, as in the app:
 
@@ -294,7 +294,7 @@ The applet runs as it runs in the app: its `on_init`, its frames and any jobs it
 
 The id and the image's folder are checked before anything is drawn or created.
 
-### caliper serve
+### `caliper serve`
 
 Runs the hub of [wire protocol v3](wire-protocol.md): producers, such as training scripts, connect out to it and each becomes a session, and viewers (the browser viewer page, the notebook widget, the Caliper app) connect to it, list the sessions and attach to one. It needs no window, renderer or GPU, and listens on 127.0.0.1 only. [Run a hub](../python/hub-setup.md) explains how to use it, what it keeps and its limits.
 
@@ -303,7 +303,7 @@ Runs the hub of [wire protocol v3](wire-protocol.md): producers, such as trainin
 | `--port <n>` | The port to listen on, 0 to 65535. The default is 7340. 0 takes any free port. |
 | `--token-file <file>` | Read the session token from the first line of `<file>` instead of making a random one. The token must be 22 to 128 characters of `A-Z`, `a-z`, `0-9`, `_` and `-`. On macOS and Linux, the file must not be readable or writable by other users (`chmod 600`). |
 | `--assets <dir>` | Serve the viewer page and its files from `<dir>`, such as the `caliper/_web/` folder of Caliper LIB. Without it, `/` answers with a short note that says where the page is. |
-| `--allow-control` | Forward viewers' controls, of [wire protocol 3.1](wire-protocol.md#controls-through-a-hub), to the script of each viewer's own session: pause, resume, step, setting a registered parameter and running a registered action. Off by default: without it the hub answers every control with `forbidden`, and viewers show the controls without letting them be changed. |
+| `--allow-control` | Forward viewers' controls, of [wire protocol 3.1](wire-protocol.md#hub-forwarding), to the script of each viewer's own session: pause, resume, step, setting a registered parameter and running a registered action. Off by default: without it the hub answers every control with `forbidden`, and viewers show the controls without letting them be changed. |
 
 The options with a value also take the form `--port=<n>`. They apply only to `serve`, except `--allow-control`, which also applies with `--api` (see [Caliper API](#caliper-api)), and takes no value. The token is never given on the command line, where other users could read it from the process list. Without `--token-file`, the hub makes a random token of 32 characters (24 random bytes) for this run.
 
@@ -330,23 +330,23 @@ The **hub file** tells producers on the same machine where the hub is. It is `hu
 
 SIGINT (Ctrl-C) or SIGTERM stops the hub: it sends BYE `shutdown` on every connection, closes them with code 1001, removes the hub file, prints `hub stopped` and exits with 0. It exits with 1 when the port is taken, the token file cannot be used, or the `--assets` folder does not exist. When the default port is taken, another hub is probably running; start this one with `--port`.
 
-### caliper --help
+### `caliper --help`
 
 Prints the usage to standard output and exits with 0. `-h` and `help` do the same.
 
-## Exit codes
+## Exit Codes
 
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | A check failed, nothing was found, or a file operation failed. `build` also exits with 1 when CMake, a compiler or the SDK is missing or the build fails, `dev` when its folder is not a folder, `shot` when its applet cannot be launched or is quarantined, when the renderer cannot draw offscreen, or when Caliper API cannot listen, and `serve` when it cannot listen or cannot use its token file or assets folder. On Windows, `serve`, `build`, `--api` and `--url` exit with 1 before anything starts ([On Windows](#on-windows)). A test or hidden run that would use your own app-data folder exits with 1 too: the hidden app, and `shot` in a test run, without `CALIPER_DATA_DIR` ([The app-data folder](folders-and-environment.md#the-app-data-folder)). |
+| 1 | A check failed, nothing was found, or a file operation failed. `build` also exits with 1 when CMake, a compiler or the SDK is missing or the build fails, `dev` when its folder is not a folder, `shot` when its applet cannot be launched or is quarantined, when the renderer cannot draw offscreen, or when Caliper API cannot listen, and `serve` when it cannot listen or cannot use its token file or assets folder. On Windows, `serve`, `build`, `--api` and `--url` exit with 1 before anything starts ([On Windows](#windows-limits)). A test or hidden run that would use your own app-data folder exits with 1 too: the hidden app, and `shot` in a test run, without `CALIPER_DATA_DIR` ([The app-data folder](folders-and-environment.md#app-data-folder)). |
 | 2 | The command line is wrong: an unknown command or option, a missing or extra operand, `--applets`, `--url`, `--api`, `--api-port`, `--hidden` or `--workspace` with a subcommand that does not take it, `--url` without a link or given twice, `--workspace` without a folder or given twice, `--api-port` or `--allow-control` without `--api` when starting the app, `dev` or `shot`, an option of `shot` or `serve` with another subcommand, a missing or unusable value of `--launch`, `--out`, `--size` or `--frames`, a port out of range, a URL given to `install`, or a name that `new` cannot use. For an unknown command or option and for wrong operands, the usage follows the error on standard error. |
 
-## On Windows
+## Windows Limits
 
 The Windows build refuses `caliper serve`, `caliper build`, `--api` (when starting the app, with `dev` and with `shot`) and `--url` before anything starts. It prints one line, such as `caliper: caliper serve is not available on Windows yet`, and exits with 1. A wrong command line is still a usage error with exit code 2. The code of these pieces compiles on Windows but is untested there: the socket tests of the WebSocket layer, the hub and Caliper API do not run in the Windows CI lane, and the network source that `--url` attaches through exists on macOS only. `CALIPER_API=1` is ignored on Windows, and a line on standard error says so. Every other subcommand behaves as this page describes.
 
-## Environment variables
+## Environment Variables
 
 | Variable | Effect |
 |---|---|
@@ -355,10 +355,10 @@ The Windows build refuses `caliper serve`, `caliper build`, `--api` (when starti
 | `CALIPER_DATA_DIR` | Moves the whole app-data folder: the stores, `imgui.ini`, `data/`, `live/` and, unless `CALIPER_USER_APPLETS_DIR` is set, the user applets folder `applets/`. `check` reads its data-schema stamps there and `install` copies into its `applets/`; `list`, `check`, `info`, `new` and `--help` create nothing in it, whether it is set or not. `shot` keeps its stores and the applet's data folder there when it is set, and in a temporary folder when it is not. |
 | `CALIPER_CHROMELESS` | `1` draws the applet page without the page bar, the status bar and the jobs tray, in the app and in `shot`. |
 | `CALIPER_HUB_FILE` | Replaces the path of the hub file that `serve` writes, `hub.json` in the app-data folder, when it is set and not empty. |
-| `CALIPER_API` | `1` serves [Caliper API](../agents/http-api.md) as `--api` does, when starting the app and with `dev` and `shot`. Ignored on Windows ([On Windows](#on-windows)). |
-| `CALIPER_HIDDEN` | `1` runs the app with its window never shown, as `--hidden` does: a testing aid (see [The hidden window](#the-hidden-window)). |
-| `CALIPER_WORKSPACE` | The builder's workspace folder, when it is set and not empty and `--workspace` is not given, for the app, `dev` and `shot` (see [The workspace](#the-workspace)). |
-| `CALIPER_COMMAND_SCRIPT`, `CALIPER_COMMAND_RESULTS` | A file of commands that the hidden app (`--hidden`, with the app or `dev`) or `shot` runs through the builder session once its workspace is open, and the file that receives their results: a testing and demo aid (see [The workspace](#the-workspace)). A visible app ignores them. |
+| `CALIPER_API` | `1` serves [Caliper API](../agents/http-api.md) as `--api` does, when starting the app and with `dev` and `shot`. Ignored on Windows ([On Windows](#windows-limits)). |
+| `CALIPER_HIDDEN` | `1` runs the app with its window never shown, as `--hidden` does: a testing aid (see [The hidden window](#hidden-window)). |
+| `CALIPER_WORKSPACE` | The builder's workspace folder, when it is set and not empty and `--workspace` is not given, for the app, `dev` and `shot` (see [The workspace](#workspace)). |
+| `CALIPER_COMMAND_SCRIPT`, `CALIPER_COMMAND_RESULTS` | A file of commands that the hidden app (`--hidden`, with the app or `dev`) or `shot` runs through the builder session once its workspace is open, and the file that receives their results: a testing and demo aid (see [The workspace](#workspace)). A visible app ignores them. |
 | `CALIPER_SDK_DIR` | The prefix of the installed SDK that `build` uses, when it is set and not empty. |
 | `CALIPER_CMAKE` | The cmake that `build` runs, when it is set and not empty. |
 

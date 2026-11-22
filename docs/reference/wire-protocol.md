@@ -1,13 +1,13 @@
 # Wire Protocol
 
-Protocol v3 carries live data from a training process to viewers over one WebSocket: to a browser tab, a Jupyter widget, the hub and the native Caliper app. From version 3.1 it also carries a viewer's controls back to the script. This page specifies it completely. The header `include/caliper/live_net.h` defines its constants and frame header, and is [embedded at the end of this page](#the-header-verbatim). The folder `tests/fixtures/wire_v3` holds [golden frames](#golden-frames) that every implementation decodes in its tests.
+Protocol v3 carries live data from a training process to viewers over one WebSocket: to a browser tab, a Jupyter widget, the hub and the native Caliper app. From version 3.1 it also carries a viewer's controls back to the script. This page specifies it completely. The header `include/caliper/live_net.h` defines its constants and frame header, and is [embedded at the end of this page](#header-listing). The folder `tests/fixtures/wire_v3` holds [golden frames](#golden-frames) that every implementation decodes in its tests.
 
 !!! note "Status"
     Version 3.1, which adds [controls](#controls) and [linked selection](#linked-selection) to 3.0. It is used on the loopback interface only, with a session token, until a dedicated security review. [Network streaming](../python/network-streaming.md) explains the design decisions behind it.
 
 Protocol v2 ([`caliper/live.h`](../python/live-streaming.md), shared memory) is unchanged. v2 stays the zero-copy path between two processes on the same machine. v3 sends copies of reduced snapshots over a socket. A producer reduces each snapshot on its own device before it sends it, so the copy is small.
 
-## Roles and terms
+## Roles and Terms
 
 | Role | What it is | What it does |
 |---|---|---|
@@ -35,9 +35,9 @@ These pages use the following terms with one meaning each.
 - A **subscription** is a viewer's request for one view under one data view. A viewer chooses its number, `sub`.
 - A **snapshot** is the reduced payload of a view at one moment, sent for one subscription.
 
-## Opening a connection
+## Connection Setup
 
-### The upgrade request
+### Upgrade Request
 
 A client opens a connection with a WebSocket upgrade (RFC 6455) of `GET /v3/stream?token=<session token>`. The session token travels as the query parameter `token` because a browser cannot set headers on a WebSocket. The server makes these checks before it upgrades, in this order:
 
@@ -46,7 +46,7 @@ A client opens a connection with a WebSocket upgrade (RFC 6455) of `GET /v3/stre
 | Path | The path is exactly `/v3/stream` | HTTP 404 |
 | Host | The `Host` header is `127.0.0.1:<port>` or `localhost:<port>`, where `<port>` is the port the server listens on and the host name is compared ASCII case-insensitively. When the server listens on port 80, the forms without a port are accepted too. Anything else could be a DNS rebinding attack | HTTP 403 |
 | Origin | The `Origin` header is absent or accepted by the rule below | HTTP 403 |
-| Token | The `token` parameter is present and equal to the server's session token, compared in constant time. A server may accept further tokens of its own, as the hub of Caliper API does ([Who may control](#who-may-control)) | HTTP 403 |
+| Token | The `token` parameter is present and equal to the server's session token, compared in constant time. A server may accept further tokens of its own, as the hub of Caliper API does ([Who may control](#control-permissions)) | HTTP 403 |
 
 The `Origin` header is accepted when its value is one of these:
 
@@ -62,7 +62,7 @@ The server may serve plain HTTP on the same port, such as the viewer page at `/`
 
 A session token is 22 to 128 characters of `A-Z`, `a-z`, `0-9`, `_` and `-`, made from at least 128 random bits, for example by Python's `secrets.token_urlsafe(16)`. The viewer page should remove the token from its address bar once it has read it.
 
-### Hello and welcome
+### Handshake
 
 After the upgrade the client sends HELLO, and the server answers WELCOME. Neither side sends anything else before them, except BYE. A server closes with code 4003 when no HELLO arrives within 10 seconds, and a client closes with 4003 when no WELCOME arrives within 10 seconds of its HELLO. Each side learns the other's minor version from the header of HELLO or WELCOME.
 
@@ -70,11 +70,11 @@ After the upgrade the client sends HELLO, and the server answers WELCOME. Neithe
 |---|---|---|
 | `caliper.serve()` | Viewers | Producers, with close code 4002 |
 | The hub | Viewers and producers | Nothing by role |
-| The hub of Caliper API | Viewers; producers with the session token | Producers on a token that may only watch ([Who may control](#who-may-control)), with close code 4002 |
+| The hub of Caliper API | Viewers; producers with the session token | Producers on a token that may only watch ([Who may control](#control-permissions)), with close code 4002 |
 
 A server that has reached its connection limit closes with 4005 after the HELLO. Either side may send an ERROR with `fatal` true just before such a close, to explain it.
 
-### Choosing a session
+### Session Choice
 
 Right after WELCOME on a viewer connection, the server sends SESSIONS, the list of the sessions it holds, and sends it again whenever that list changes. `caliper.serve()` lists exactly one session, its own.
 
@@ -84,7 +84,7 @@ ATTACH names a session id. The server answers with VIEWS for that session, which
 
 When an attached session ends, the hub keeps it in the list with state `ended`, and the viewer keeps the last frames it drew. When the producer of `caliper.serve()` ends, it closes every connection with BYE `shutdown` and close code 1001.
 
-### The producer connection to a hub
+### Producer Connection
 
 A producer that connects to a hub sends HELLO with role `producer` and its session identity: `id`, `script`, `pid` and `start_unix_ms`. The hub keeps the proposed id unless a live session of another process holds it. In that case it appends `-2`, `-3` and so on. WELCOME carries the identity with the id the hub chose. A producer that reconnects with the same id, pid and start time resumes its session: the hub closes the old connection, if it is still open, with BYE `replaced` and code 1000, and its viewers stay attached.
 
@@ -94,10 +94,10 @@ After WELCOME the producer sends VIEWS. On this connection the hub acts as the p
 - shares one producer subscription among viewers whose resolved data views are equal, at the largest `max_rate` among them;
 - keeps the latest snapshot of every producer subscription and the retained series values, so that a viewer that subscribes late gets them at once;
 - forwards every viewer's events to the producer;
-- from 3.1, forwards the controls of the viewers it allows to the producer and the producer's CONTROLS and SELECTION to the session's viewers, as [Controls through a hub](#controls-through-a-hub) describes;
+- from 3.1, forwards the controls of the viewers it allows to the producer and the producer's CONTROLS and SELECTION to the session's viewers, as [Controls through a hub](#hub-forwarding) describes;
 - resubscribes after a producer resumes its session.
 
-### Staying connected and closing
+### Keepalive and Closing
 
 A peer that has received nothing for 10 seconds sends PING, and the other side answers with PONG carrying the same nonce. A peer that has received nothing for 30 seconds closes with code 4004. Browsers cannot send WebSocket control pings, which is why the protocol has its own.
 
@@ -107,7 +107,7 @@ To close, a peer sends BYE with a reason and then closes the WebSocket with the 
 
 Every WebSocket message is one binary **frame**. All integers in it are little-endian.
 
-### The frame layout
+### Frame Layout
 
 | Offset | Size | Type | Field | Rule |
 |---|---|---|---|---|
@@ -158,7 +158,7 @@ A raw section holds the product of `shape` times the item size bytes, little-end
 
 The ids are the values of `CaliperDType` (`caliper/tensor.h`). Producers of 3.1 send only `f32` and `u8` payloads. The other ids are defined so that a receiver can name what it refuses.
 
-### Decoding a frame
+### Frame Decoding
 
 A receiver applies these checks in this order, so that every implementation rejects a bad frame with the same close code:
 
@@ -176,7 +176,7 @@ A receiver applies these checks in this order, so that every implementation reje
 
 `minor`, `flags`, `reserved` and the padding bytes are never grounds to reject a frame. A frame that passes every check is **well formed**. A well-formed frame whose message is invalid, such as one with a missing field, an unknown view or a bad data view, is answered with an ERROR message, and the connection stays open. A section with an encoding or dtype the receiver does not support makes it ignore the message and answer ERROR `unsupported`.
 
-## Message types
+## Message Types
 
 | Id | Name | Direction | Sections | Answer |
 |---|---|---|---|---|
@@ -203,9 +203,9 @@ A receiver applies these checks in this order, so that every implementation reje
 
 The types from `0x0050` are additions of 3.1. A sender sends CONTROLS, CONTROL and CONTROL_REPLY only to a peer that announced the capability `controls`, and SELECTION only to a peer that announced `selection` ([Versioning](#versioning)). Type 0 is never sent. A known message sent in the wrong direction, or before HELLO and WELCOME, is a protocol error (4000). A message of an unknown type is ignored.
 
-Each message below gives the header fields that depend on it and the keys of its metadata. Keys marked optional may be absent. Bytes 0 to 7 and 10 to 23 of the header follow [the frame layout](#the-frame-layout) in every message.
+Each message below gives the header fields that depend on it and the keys of its metadata. Keys marked optional may be absent. Bytes 0 to 7 and 10 to 23 of the header follow [the frame layout](#frame-layout) in every message.
 
-### hello
+### `hello`
 
 | Part | Content |
 |---|---|
@@ -219,7 +219,7 @@ Each message below gives the header fields that depend on it and the keys of its
 | `software` | object, optional | `{"name", "version"}` of the client, for display and logs |
 | `session` | object, required for a producer | The producer's session identity: `id` (1 to 63 characters of `A-Z`, `a-z`, `0-9`, `.`, `_`, `-`), `script` (the script's name), `pid`, and `start_unix_ms` (wall-clock milliseconds when the process started streaming) |
 
-### welcome
+### `welcome`
 
 | Part | Content |
 |---|---|
@@ -234,7 +234,7 @@ Each message below gives the header fields that depend on it and the keys of its
 | `session` | object, optional | From a producer, its own session identity. From a hub to a producer, the identity with the id the hub chose. Absent from a hub to a viewer |
 | `control` | boolean, optional | 3.1, sent to a client that announced `controls`. To a viewer: true when the server accepts CONTROL from this connection. From a hub to a producer: true when the hub forwards its viewers' controls. Absent means false |
 
-### bye
+### `bye`
 
 | Part | Content |
 |---|---|
@@ -248,7 +248,7 @@ Each message below gives the header fields that depend on it and the keys of its
 
 The sender closes the WebSocket right after BYE.
 
-### error
+### `error`
 
 | Part | Content |
 |---|---|
@@ -263,7 +263,7 @@ The sender closes the WebSocket right after BYE.
 | `in_reply_to` | integer, optional | The type of the message that caused the error |
 | `request_id`, `sub`, `view`, `session` | optional | The fields of that message that identify what failed |
 
-### ping and pong
+### `ping` and `pong`
 
 | Part | Content |
 |---|---|
@@ -274,7 +274,7 @@ The sender closes the WebSocket right after BYE.
 |---|---|---|
 | `nonce` | integer (uint32) | Chosen by the sender of PING and echoed by PONG |
 
-### sessions
+### `sessions`
 
 | Part | Content |
 |---|---|
@@ -293,7 +293,7 @@ Each session object has the identity keys `id`, `script`, `pid` and `start_unix_
 | `views` | integer | The number of views the session has |
 | `capabilities` | array of strings, optional | The producer's capabilities |
 
-### attach
+### `attach`
 
 | Part | Content |
 |---|---|
@@ -304,7 +304,7 @@ Each session object has the identity keys `id`, `script`, `pid` and `start_unix_
 |---|---|---|
 | `session` | string or null | The session id to attach to, or null to detach. The key is required |
 
-### views
+### `views`
 
 | Part | Content |
 |---|---|
@@ -323,13 +323,13 @@ The producer sends the full list again whenever it changes: a view is added or r
 | `id` | integer | Never reused within the session. A view re-created with the same name gets a new id |
 | `name` | string | 1 to 63 bytes, unique in the session |
 | `kind` | integer | The live view: 1 heatmap, 2 image, 3 points, 4 series, 5 histogram (the values of `CaliperLiveKind`) |
-| `sources` | array of objects | What the view's data views can draw from: see [What a view offers](#what-a-view-offers). Empty for a series |
+| `sources` | array of objects | What the view's data views can draw from: see [What a view offers](#view-sources). Empty for a series |
 | `default` | object, optional | The view's default data view. Absent means `{}` |
 | `items` | string, optional | 3.1, series only: the [item space](#item-spaces) that the series' absolute index numbers |
 
 When a view disappears from the list or its id changes, the producer ends the subscriptions that named it. A viewer subscribes again if it still wants the view.
 
-### subscribe
+### `subscribe`
 
 | Part | Content |
 |---|---|
@@ -346,7 +346,7 @@ When a view disappears from the list or its id changes, the producer ends the su
 
 The producer answers with VIEW_REPLY. On success the subscription is open and VIEW_REPLY carries the resolved data view. On failure VIEW_REPLY carries an error and no subscription exists. A connection holds at most 256 subscriptions; one more is answered with the error `limit`.
 
-### unsubscribe
+### `unsubscribe`
 
 | Part | Content |
 |---|---|
@@ -359,7 +359,7 @@ The producer answers with VIEW_REPLY. On success the subscription is open and VI
 
 The producer discards the pending snapshot and series values of the subscription.
 
-### view_request
+### `view_request`
 
 | Part | Content |
 |---|---|
@@ -375,7 +375,7 @@ The producer discards the pending snapshot and series values of the subscription
 
 A zoom, a pan at another resolution, or a choice of layer, head or slice is a view request. On success the subscription switches to the new data view. On failure it keeps the data view it had. Snapshots made under the old data view may still arrive after the reply. Each snapshot names its data view, so the viewer can tell them apart.
 
-### view_reply
+### `view_reply`
 
 | Part | Content |
 |---|---|
@@ -392,7 +392,7 @@ A zoom, a pan at another resolution, or a choice of layer, head or slice is a vi
 
 A reply carries exactly one of `data_view` and `error`.
 
-### snapshot
+### `snapshot`
 
 | Part | Content |
 |---|---|
@@ -427,7 +427,7 @@ A reply carries exactly one of `data_view` and `error`.
 
 A viewer draws a range end from `stats` when its flag is set. As in protocol v2, a non-finite range from `stats` keeps the last finite one, a flat range widens by 0.5 on each side, and a NaN value draws as colormap index 0. Categorical labels draw with the fixed 16-colour palette, label L in colour L mod 16. Unlike protocol v2, 2-D points travel as `(N, 2)` rather than padded to `(N, 3)`.
 
-### series
+### `series`
 
 | Part | Content |
 |---|---|
@@ -445,7 +445,7 @@ A viewer draws a range end from `stats` when its flag is set. As in protocol v2,
 
 A series travels only as SERIES messages, never as snapshots. On subscribe the producer first sends the values it retains, the backfill, in as many messages as needed, and from then on the new values. The x axis of a series is its absolute index. A viewer stores values by index: a message that starts past the end it holds leaves a gap, and one that overlaps values it holds replaces them. A series view that is re-created gets a new view id, and its indices start at 0 again.
 
-### event
+### `event`
 
 | Part | Content |
 |---|---|
@@ -461,7 +461,7 @@ A series travels only as SERIES messages, never as snapshots. On subscribe the p
 | `seq` | integer, optional | The `seq` of the snapshot the viewer was showing |
 | `data_view` | object, optional | That snapshot's data view |
 
-### controls
+### `controls`
 
 | Part | Content |
 |---|---|
@@ -500,7 +500,7 @@ The producer sends CONTROLS right after the VIEWS that confirms an attachment, a
 | `queued` | boolean | A run of the action waits for a checkpoint |
 | `help` | string, optional | At most 1,024 bytes, for a tooltip |
 
-### control
+### `control`
 
 | Part | Content |
 |---|---|
@@ -515,9 +515,9 @@ The producer sends CONTROLS right after the VIEWS that confirms an attachment, a
 | `value` | number, boolean or string | `set` only: the new value |
 | `count` | integer (uint32), optional | `step` only: how many steps the loop runs before it pauses, at least 1. Default 1 |
 
-A receiver ignores the keys that do not belong to the op. The key `args` is reserved for typed action arguments in a later version: a viewer sends it only to a producer that announced a capability for it, and 3.1 defines none. A viewer sends CONTROL only as [Who may control](#who-may-control) allows, and at most 30 `set` requests per second for one parameter, for example while a slider is dragged, ending with the value where the drag stops. A producer or a hub answers a CONTROL from a peer that did not announce `controls` in its HELLO with an ERROR `bad_request`, which names the request in `in_reply_to` and `request_id`, and keeps the connection.
+A receiver ignores the keys that do not belong to the op. The key `args` is reserved for typed action arguments in a later version: a viewer sends it only to a producer that announced a capability for it, and 3.1 defines none. A viewer sends CONTROL only as [Who may control](#control-permissions) allows, and at most 30 `set` requests per second for one parameter, for example while a slider is dragged, ending with the value where the drag stops. A producer or a hub answers a CONTROL from a peer that did not announce `controls` in its HELLO with an ERROR `bad_request`, which names the request in `in_reply_to` and `request_id`, and keeps the connection.
 
-### control_reply
+### `control_reply`
 
 | Part | Content |
 |---|---|
@@ -536,7 +536,7 @@ A receiver ignores the keys that do not belong to the op. The key `args` is rese
 
 The producer answers each CONTROL with one CONTROL_REPLY, to its sender only. The exception is an accepted `run`: it is answered `queued` at once and later once more, `ok` when the action returned, or `error` with `action_failed`, `timeout` or `unknown_control`. A refused CONTROL is answered `error` at once and changes nothing. A malformed CONTROL, such as one without `request_id`, is answered with an ERROR `bad_request`, as any malformed message is.
 
-### selection
+### `selection`
 
 | Part | Content |
 |---|---|
@@ -554,11 +554,11 @@ The producer answers each CONTROL with one CONTROL_REPLY, to its sender only. Th
 
 After the CONTROLS of an attachment, or after its VIEWS for a viewer without `controls`, the producer sends one SELECTION for each item space whose selection is not empty. It sends SELECTION to every viewer whenever a space's selection or its details change.
 
-## Data views
+## Data Views
 
 A data view is a slice, selection, projection or aggregation of a source that the producer computes on its device. Only the result travels. A viewer requests a data view with SUBSCRIBE or VIEW_REQUEST, the producer resolves it and answers with the resolved form, and every snapshot names the resolved data view that produced it. The schema is deliberately small: it names a source, indexes dimensions, reduces dimensions, and sets a size budget.
 
-### What a view offers
+### View Sources
 
 Each view in VIEWS lists its sources, so that a viewer can build a picker for layers, heads and slices without guessing.
 
@@ -570,7 +570,7 @@ Each view in VIEWS lists its sources, so that a viewer can build a picker for la
 
 A view has at most 64 sources. The dims of an image source are its height and width; the RGBA channels are not a dim. The dims of a points source end with the point dim; the coordinates are not a dim. A series view has no sources.
 
-### The data view object
+### Data View Object
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -591,7 +591,7 @@ An index counts from 0. A negative index or bound counts from the end of the dim
 
 A budget value under 1 (under 0 for `max_backfill`) is an error, and a value over the limit is treated as the limit.
 
-### Resolving a data view
+### Data View Resolution
 
 The producer resolves a requested data view as follows.
 
@@ -606,7 +606,7 @@ The resolved data view has the same members as a request, with every default fil
 
 The producer computes the data view on its device in this order: it takes the source, applies `index`, applies `reduce` one dim at a time in the source's dim order, lays out the tile mosaic, and then meets the budget by pooling (heatmap and image) or sampling (points). Points are sampled with a stride, so the sample stays the same while the source's size does not change.
 
-### Payload axes
+### Payload Axes
 
 `axes` in a snapshot lists the kept dims in payload order, one object each. For a tiled heatmap the tile dim comes first, then the cell's rows and columns. For other kinds the kept dims keep their source order.
 
@@ -621,7 +621,7 @@ Payload index i stands for the selected positions from `floor(i × count / size)
 
 A tiled heatmap of C cells has `cols = ceil(sqrt(C))` and `rows = ceil(C / cols)`. Each cell is pooled to `min(H, max(1, floor(max_extent / rows)))` rows and `min(W, max(1, floor(max_extent / cols)))` columns. Cell t is at row `t div cols` and column `t mod cols`, and the cells left over are filled with NaN. This is the channel mosaic of `caliper.show()`.
 
-### Data views of each kind
+### Data View Kinds
 
 | Kind | Kept dims | Payload | Budget |
 |---|---|---|---|
@@ -647,13 +647,13 @@ Coordinates in `detail` are source indices, computed from the snapshot's [payloa
 
 A `select` whose `detail` is `{}` clears the selection. A viewer sends at most 30 hover events per second per view, and drops a hover rather than queueing it. The producer keeps at most 256 unread events per connection and drops the oldest.
 
-In 3.1 the `detail` of a `select` also carries `space` and `items` when the selection is made on an axis with an item space: see [Selecting](#selecting).
+In 3.1 the `detail` of a `select` also carries `space` and `items` when the selection is made on an axis with an item space: see [Selecting](#selection-flow).
 
 ## Controls
 
 Controls let a viewer reach back into the running script: pause, resume and single-step its training loop, change parameters it registered, and run actions it registered. They travel on the stream, so they work while a notebook cell runs and the kernel cannot read widget messages. Controls are the capability `controls` of 3.1. Interventions on a model, such as ablating a head or steering along a direction, are not part of 3.1; they will come in a later version as new ops with typed arguments in the reserved key `args`, behind a capability of their own.
 
-### The checkpoint
+### Checkpoint
 
 A script opts in by calling a checkpoint in its training loop, once per step, on its training thread (`caliper.step()` in Caliper LIB, the Python package). The checkpoint is the only safe point: only there does the producer apply parameter values, run actions or hold the loop. At each checkpoint the training thread, in this order:
 
@@ -663,7 +663,7 @@ A script opts in by calling a checkpoint in its training loop, once per step, on
 
 The producer keeps a waiting checkpoint interruptible, so that the person running the script can still stop it, for example with Ctrl-C or a notebook's interrupt; after such an interrupt the run is no longer paused. A paused run also resumes when its server closes, or when no connection that may control it has been open for 10 seconds (`CALIPER_NET_RELEASE_GRACE_MS`), which leaves a viewer time to reload its page.
 
-### Pause, resume and step
+### Pause, Resume and Step
 
 | State | Meaning |
 |---|---|
@@ -706,7 +706,7 @@ Queued runs start at checkpoints, one at a time, in the order they were accepted
 
 A producer handles the CONTROL messages of one connection in the order they arrive, and those of several connections in the order it receives them. For a parameter the latest accepted value wins. Actions run one at a time in the order they were accepted, and at most one run of each action waits, so at most 64 runs wait. CONTROLS is coalesced like VIEWS: a newer one replaces an unsent older one.
 
-### Who may control
+### Control Permissions
 
 A viewer sends CONTROL only when all three hold: the WELCOME of the server it is connected to announced `controls` and set `control` true, and the session it is attached to lists `controls` among its capabilities. A viewer that may not control still shows the run state, the parameters and the actions, without letting them be changed. A selection is not a control: every viewer may select.
 
@@ -714,7 +714,7 @@ A viewer sends CONTROL only when all three hold: the WELCOME of the server it is
 - **The hub**, `caliper serve` of Caliper CLI, forwards no control unless it was started with `--allow-control`, which is off by default. Without it, its WELCOME sets `control` false, to viewers and to producers, and it answers every CONTROL itself with `forbidden`.
 - **The hub of Caliper API**, in the app, takes the person's session token and also the tokens it gives agents ([Caliper API](../agents/http-api.md#command-origin)). A viewer connected with an agent's token watches: its WELCOME sets `control` false and the hub answers its CONTROL with `forbidden`, even with `--allow-control`, and a producer's HELLO on such a token is refused as `caliper.serve()` refuses producers. A viewer connected with the session token may control as with `caliper serve`.
 
-### Controls through a hub
+### Hub Forwarding
 
 A hub that implements 3.1 announces `controls` and `selection` in its WELCOME. It then:
 
@@ -725,11 +725,11 @@ A hub that implements 3.1 announces `controls` and `selection` in its WELCOME. I
 
 A viewer drops its controls and selections when VIEWS names another session or none.
 
-## Linked selection
+## Linked Selection
 
 A selection in one view highlights the matching items in the other views of the same session: the points of an embedding, the rows of a heatmap, markers on a series. Linked selection is the capability `selection` of 3.1.
 
-### Item spaces
+### Item Spaces
 
 An **item space** is a named set of items numbered from 0, such as the samples of a test set. A producer declares in VIEWS which axes index the items of a space:
 
@@ -738,13 +738,13 @@ An **item space** is a named set of items numbered from 0, such as the samples o
 
 The point dim of an embedding and the `sample` dim of a heatmap with the same space show the same items. A viewer maps a payload position to a source index with the snapshot's [payload axes](#payload-axes), which the points' `row_id` already does for a sample of points, and the source index is the item id. A pooled heatmap row or column stands for several items and is highlighted when any of them is selected. A session uses at most 16 item spaces. A producer adds `items` to VIEWS only for a peer that announced `selection`.
 
-### Selecting
+### Selection Flow
 
 A viewer that selects on an axis with an item space adds two keys to the `detail` of its select EVENT, besides the keys of its kind: `space`, the item space, and `items`, the selected item ids, at most 32,768, with `truncated` set when it cut them. For points they are the `row_ids`; for a heatmap or an image, the source indices of the selected rows, or of the selected columns when only the columns have a space; for a series, the indices in `steps`. `items` empty clears the space's selection. A viewer adds them only when the server announced `selection`.
 
 The producer keeps one current selection for each item space. On a select event with `space`, it replaces that space's selection with the event's items, made ascending and without repeats, and sends SELECTION to every viewer, the one that selected included. Every viewer then draws the same highlight in every view that maps the space. The script can set a selection too, which reaches the viewers the same way, without `view`. Python code reads the select event as it always did.
 
-### Item details
+### Item Details
 
 The script may provide details for an item space: a few fields of each item, from a static table or from a function it registered. For each new selection, the producer looks up the details of its first 32 items and sends them in SELECTION as `details`:
 
@@ -756,7 +756,7 @@ The script may provide details for an item space: a few fields of each item, fro
 
 The function runs neither on the training thread nor on the network thread, and has 2 seconds (`CALIPER_NET_DETAILS_TIMEOUT_MS`). A producer may send a selection at once and send it again with its details. When the details fail or time out, the selection goes without them and `details_error` says why. A viewer shows them in a small table beside the view in which the selection was made. It never sends code or names fields to compute.
 
-## Flow control
+## Flow Control
 
 Nothing in the protocol lets a slow viewer block a producer, and training is never blocked by a connection.
 
@@ -770,7 +770,7 @@ Nothing in the protocol lets a slow viewer block a producer, and training is nev
 - A producer sends at most `max_rate` messages per second for each subscription.
 - A hub applies the same rules on each viewer connection, so one slow viewer does not slow the others or the producer.
 
-## Limits
+## Resource Limits
 
 | Constant | Value | Meaning |
 |---|---|---|
@@ -836,7 +836,7 @@ The major version is 3 and the minor version is 1. Both are in every frame's hea
 | 3.1 | `caliper.serve()` of 3.0 | WELCOME announces neither capability, so the viewer shows no controls and sends no item ids |
 | 3.1 | A 3.0 hub with a 3.1 producer | The hub's WELCOME announces neither capability, so neither the viewer nor the producer uses the additions. The session list may name the producer's capabilities, but a viewer goes by the WELCOME of the server it is connected to |
 
-## Close codes
+## Close Codes
 
 | Code | Name | When |
 |---|---|---|
@@ -851,7 +851,7 @@ The major version is 3 and the minor version is 1. Both are in every frame's hea
 | 4004 | `CALIPER_NET_CLOSE_IDLE_TIMEOUT` | Nothing received for 30 seconds |
 | 4005 | `CALIPER_NET_CLOSE_SERVER_FULL` | The server's connection limit |
 
-## Error codes
+## Error Codes
 
 | Code | Meaning |
 |---|---|
@@ -876,7 +876,7 @@ Network streaming stays on the local machine, on the loopback interface and with
 
 The stream carries data, viewer events and, from 3.1, control requests. It never carries host commands or the command layer. No message carries code. A CONTROL can only name a parameter or an action that the script registered, matched exactly; the producer checks and clamps every value; and an action takes no argument from the viewer. The only code that a message makes a producer run is such a registered action, at a checkpoint on the training thread. A hub forwards controls only when it was started with `--allow-control`, and only to the producer of the viewer's own session.
 
-## Worked example
+## Worked Example
 
 This is the golden frame `tests/fixtures/wire_v3/series.bin`: three values 2.5, 1.25 and 0.75 of the series `loss`, the first three values ever appended, for subscription 3. It is the frame of a 3.0 sender, so its minor version is 0; a 3.1 sender writes 1 there.
 
@@ -920,7 +920,7 @@ The metadata, in canonical form:
 
 The values section starts at offset 152, so a browser reads it as `new Float32Array(buffer, 152, 3)`.
 
-## Golden frames
+## Golden Frames
 
 `tests/fixtures/wire_v3` holds one frame per message type, a few more to cover sections and options, and a set of frames to reject. `generate.py` in that folder writes them with `python/caliper/_wire.py`, and `python/tests/test_wire.py` checks that it reproduces every byte.
 
@@ -935,7 +935,7 @@ The values section starts at offset 152, so a browser reads it as `new Float32Ar
 
 Every implementation of the protocol, the Python codec, the native `NetSource`, the hub and the TypeScript viewer, decodes these files in its own tests. The 3.0 frames keep minor 0, as a 3.0 sender wrote them, so an implementation that knows only 3.0 keeps passing. An implementation that encodes a decoded golden frame again to compare bytes encodes it at the frame's own minor. It reads `v3_1/` once it implements 3.1; a 3.0 decoder finds those frames well formed, with the new types unknown to it.
 
-## The header, verbatim
+## Header Listing
 
 This page embeds the real header; the docs build fails if the file moves.
 

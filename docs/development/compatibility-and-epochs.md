@@ -114,7 +114,7 @@ Several copies of one applet id can be installed at once, for example a copy shi
 
 The host searches in this order:
 
-1. The development folders: the `caliper dev` folder, those given with `--applets <dir>` in order, then those in `CALIPER_APPLET_PATH` (see [Caliper CLI](../reference/cli.md#the-search-order)).
+1. The development folders: the `caliper dev` folder, those given with `--applets <dir>` in order, then those in `CALIPER_APPLET_PATH` (see [Caliper CLI](../reference/cli.md#search-order)).
 2. The open workspace's `applets/` folder, which holds [spec applets](../applets/manifest.md#spec-applets) only, when a workspace is open. The app does not open one yet.
 3. The user applets folder.
 4. The `applets/` folder beside the executable, which holds the applets shipped with the app.

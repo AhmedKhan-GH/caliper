@@ -30,7 +30,7 @@ The host scans these folders at startup, in this order:
 
 Spec applets are found in the same folders and also one folder down, as [Where spec applets are found](#spec-applet-search-order) says.
 
-Dropping a manifest and its library into the user applets folder, or running `caliper install <folder>`, installs an applet. When several folders hold copies of one applet id, the host loads one of them, as [Several copies of one applet](../development/compatibility-and-epochs.md#several-copies-of-one-applet) describes. [Caliper CLI](../reference/cli.md#the-search-order) gives the search order in full, and [Folders and environment variables](../reference/folders-and-environment.md) gives the folders on each platform and the variables that change them.
+Dropping a manifest and its library into the user applets folder, or running `caliper install <folder>`, installs an applet. When several folders hold copies of one applet id, the host loads one of them, as [Several copies of one applet](../development/compatibility-and-epochs.md#several-copies-of-one-applet) describes. [Caliper CLI](../reference/cli.md#search-order) gives the search order in full, and [Folders and environment variables](../reference/folders-and-environment.md) gives the folders on each platform and the variables that change them.
 
 ## Schema
 
@@ -125,7 +125,7 @@ A workspace names its applets with workspace ids, `[a-z][a-z0-9_-]{0,63}`, which
 
 ### Spec Applet Search Order
 
-The loader looks for spec applets in the folders of the [search order](../reference/cli.md#the-search-order), in two places:
+The loader looks for spec applets in the folders of the [search order](../reference/cli.md#search-order), in two places:
 
 - a manifest of kind `"spec"` directly in a searched folder, as a compiled applet's manifest is, which is how `caliper check <folder>` takes the folder of one spec applet;
 - a manifest of kind `"spec"` one folder down, in `<folder>/<name>/`, which is how a workspace keeps its applets. Outside a workspace, any other manifest one folder down is not looked at, as before, since compiled applets are flat. Folders whose names start with `.`, folders that are symbolic links, and more than 4096 folders of one searched folder are skipped.

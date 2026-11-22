@@ -49,7 +49,7 @@ features:
     status: shipped
     summary: The host searches development folders, the user applets folder and the app in a fixed order, chooses one copy of each applet id and checks its manifest before opening the library.
     depends_on: [COR-01, COR-05]
-    docs: docs/reference/cli.md#the-search-order
+    docs: docs/reference/cli.md#search-order
     issue: null
 
   - id: COR-07
@@ -73,7 +73,7 @@ features:
     status: shipped
     summary: caliper dev starts the app with an applet's build folder searched first, so that a rebuilt applet loads without being installed.
     depends_on: [COR-06]
-    docs: docs/reference/cli.md#starting-the-app
+    docs: docs/reference/cli.md#app-startup
     issue: null
 
   - id: COR-10
@@ -324,7 +324,7 @@ features:
     status: shipped
     summary: The --hidden option runs the real app with its renderer and frame loop but never shows its window, so that a test or an agent can drive the whole app through Caliper API.
     depends_on: [COR-01]
-    docs: docs/reference/cli.md#the-hidden-window
+    docs: docs/reference/cli.md#hidden-window
     issue: null
 
   - id: COR-43

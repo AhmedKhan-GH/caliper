@@ -4,7 +4,7 @@ kind: docs
 summary: 'The pages of the docs site, which describe what is shipped on main: each CLI subcommand, service,
   applet, reference, guide and explanation, mapped to the shipped feature it describes.'
 entries:
-- page: docs/reference/cli.md#starting-the-app
+- page: docs/reference/cli.md#app-startup
   item: Starting the app with caliper, with --applets folders and --url to attach to a stream at start.
   ids:
   - COR-06
@@ -13,7 +13,7 @@ entries:
   item: The --api, --api-port and --allow-control options that serve Caliper API from the running app.
   ids:
   - AGT-01
-- page: docs/reference/cli.md#the-workspace
+- page: docs/reference/cli.md#workspace
   item: The --workspace option and the builder session that the app, caliper dev and caliper shot hold.
   ids:
   - SPC-06
@@ -22,12 +22,12 @@ entries:
   ids:
   - SPC-08
   - EMB-06
-- page: docs/reference/cli.md#the-hidden-window
+- page: docs/reference/cli.md#hidden-window
   item: The --hidden option runs the real app with its window never shown, so a test or an agent can drive
     it through Caliper API.
   ids:
   - COR-42
-- page: docs/reference/cli.md#the-search-order
+- page: docs/reference/cli.md#search-order
   item: The fixed search order of development folders, CALIPER_APPLET_PATH, the user applets folder and
     the app folder.
   ids:
@@ -83,7 +83,7 @@ entries:
   item: Exit codes 0, 1 and 2 of the subcommands.
   ids:
   - COR-07
-- page: docs/reference/cli.md#on-windows
+- page: docs/reference/cli.md#windows-limits
   item: The Windows build refuses caliper serve, caliper build, --api and --url before anything starts.
   ids:
   - PLT-06
@@ -561,7 +561,7 @@ entries:
   item: Producer, hub and viewer roles of wire protocol v3.
   ids:
   - STR-02
-- page: docs/reference/wire-protocol.md#opening-a-connection
+- page: docs/reference/wire-protocol.md#connection-setup
   item: The upgrade request, hello and welcome, choosing a session and the producer connection to a hub.
   ids:
   - STR-02
@@ -596,7 +596,7 @@ entries:
   ids:
   - STR-02
   - STR-05
-- page: docs/reference/wire-protocol.md#limits
+- page: docs/reference/wire-protocol.md#resource-limits
   item: The limits of the protocol.
   ids:
   - STR-02
@@ -624,7 +624,7 @@ entries:
   item: Golden frames pin the byte layout.
   ids:
   - STR-02
-- page: docs/reference/wire-protocol.md#the-header-verbatim
+- page: docs/reference/wire-protocol.md#header-listing
   item: The protocol header verbatim.
   ids:
   - STR-02
@@ -935,7 +935,7 @@ entries:
   item: The frozen epoch 2 ABI header.
   ids:
   - COR-02
-- page: docs/reference/folders-and-environment.md#the-app-data-folder
+- page: docs/reference/folders-and-environment.md#app-data-folder
   item: The app-data folder where the host keeps what it writes.
   ids:
   - COR-01

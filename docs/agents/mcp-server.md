@@ -19,7 +19,7 @@ executable to its agent.
 2. `caliper-mcp`, which ships beside the `caliper` executable; a development build puts it at `src/builder/mcp/caliper-mcp` in the build folder.
 
 While the API is on, the app writes the **API file**, `api.json` in the app-data folder ([Folders and environment
-variables](../reference/folders-and-environment.md#the-app-data-folder)), for example `~/Library/Application Support/Caliper/api.json` on macOS,
+variables](../reference/folders-and-environment.md#app-data-folder)), for example `~/Library/Application Support/Caliper/api.json` on macOS,
 with mode 0600, and removes it when it exits. The file holds the address and the token of outside agents. That token
 runs commands as the origin `mcp`: each change an outside agent makes to the open spec waits on an approval card in
 the app until you approve or deny it, and so does each command that deletes or overwrites saved data

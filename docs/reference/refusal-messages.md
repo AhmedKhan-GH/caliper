@@ -12,7 +12,7 @@ version → UI-stack hash → libtorch version → required services → data sc
 The first failing check wins, so only one message is ever shown. These strings
 are contractual: the loader and the landing screen reuse them verbatim.
 
-## Negotiation refusals
+## Negotiation Refusals
 
 | Message template | When it fires | What to do |
 |------------------|---------------|------------|
@@ -45,7 +45,7 @@ against the host's services. A service missing there gives the same
 same `Refused` status, before `create()` runs; the binary stays mapped. This
 catches a manifest whose `required` list leaves out a service the binary needs.
 
-## Loader statuses
+## Loader Statuses
 
 Negotiation is only the first gate. Once an applet passes it, the **loader**
 is what actually finds the binary, `dlopen`s it, checks the
@@ -81,14 +81,14 @@ runs. Everything from `load failed` downward happens only inside `launch()`.
 
 A copy can also be **Shadowed**. Of the copies of one applet id that pass
 negotiation, the loader keeps one `Ready`: the highest version, and at equal
-versions the copy found first in the [search order](cli.md#the-search-order).
+versions the copy found first in the [search order](cli.md#search-order).
 Every other passing copy is `Shadowed`, with the text
 `Version {version} in {folder} is used instead.`, where `{version}` and
 `{folder}` name the chosen copy. A shadowed copy is never launched, and the
 status bar's count of instruments leaves it out. A refused or failed copy keeps
 its own reason, so the landing screen shows why a newer copy was passed over.
 
-### Failed messages
+### Failed Messages
 
 | Message template | When it fires | What to do |
 |------------------|---------------|------------|
@@ -107,7 +107,7 @@ its own reason, so the landing screen shows why a newer copy was passed over.
 | `create() returned null` | `create()` ran cleanly but returned no instance — the applet declined to construct itself (e.g. an internal precondition failed). | Investigate the applet's `create`; return a valid instance or surface the real error from `initialize` instead. |
 | `initialize() returned false` | `initialize()` ran cleanly but reported failure. The loader then calls `destroy()` on the instance and marks the applet Failed. | Check the applet's own logs for why init refused (a required service or resource it couldn't obtain). |
 
-### Quarantined messages
+### Quarantined Messages
 
 | Message template | When it fires | What to do |
 |------------------|---------------|------------|
@@ -146,13 +146,13 @@ C++ exception, and a restart of Caliper when it was a signal (see
     landing screen reads the statuses every frame, so a mid-session quarantine
     shows up as soon as the host returns to it.
 
-## Spec applets
+## Spec Applets
 
 A [spec applet](../applets/manifest.md#spec-applets) has no library, so none of the steps that open or call one applies to it: there is no `dlopen`, no descriptor, no lifecycle hook, and it is never `QUARANTINED`. The loader lists it with the same statuses, `READY`, `REFUSED`, `FAILED` and `SHADOWED`, and chooses among copies of one id by the same rule, whatever their kind.
 
 When the loader lists a spec applet it makes only the cheap checks, in this order: the manifest parses (its messages are the parser's, as for a compiled applet, and include the keys a spec applet refuses), the id is path-safe, the spec file passes the file checks, its `caliper_spec` line is read, then `min_host`, the spec runtime and the spec format version. The first failure wins. The full validation of the spec runs when the applet is launched and in `caliper check`, through the builder's spec library, and its first error becomes the applet's reason.
 
-### Spec applet refusals
+### Spec Applet Refusals
 
 | Message template | When it fires | What to do |
 |------------------|---------------|------------|
@@ -161,7 +161,7 @@ When the loader lists a spec applet it makes only the cheap checks, in this orde
 | `Written in spec format {spec_version}; this host reads spec format {host_version} — update Caliper to open it.` | The spec's `caliper_spec` is a later version than this host reads. For an earlier version that the host does not read, the message ends after `{host_version}`. | Open the applet with a newer Caliper. |
 | `A workspace holds spec applets only; a compiled applet is installed in the user applets folder.` | A compiled applet's manifest is in the open workspace's `applets/` folder or one folder below it. Its library is never opened. | Install the compiled applet with `caliper install`, and keep the workspace for spec applets. |
 
-### Spec applet failures
+### Spec Applet Failures
 
 | Message template | When it fires | What to do |
 |------------------|---------------|------------|
