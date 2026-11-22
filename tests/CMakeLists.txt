@@ -980,15 +980,16 @@ if(NOT WIN32 AND CALIPER_WITH_BUILDER AND _acceptance_python)
         SKIP_RETURN_CODE 77)
 endif()
 
-# The path of a piece's derive half (design/programmable-graphics.md, Resource Message): the hidden app and
-# caliper-mcp as above, with the training script of the GPU programs test. tests/piece_path/driver.py writes a
-# workspace piece, creates its instance, and checks that the script runs its derive pass on the live weight and that
-# program_read gives the published elements from the app's step history. It exits 77 where the GPU programs test
-# does.
+# The path of a piece with both halves (design/programmable-graphics.md): the hidden app and caliper-mcp as above,
+# with the training script of the GPU programs test. tests/piece_path/driver.py writes a workspace piece, creates its
+# instance in a scene panel, and checks that the script runs its derive pass on the live weight, that program_read
+# gives the published elements from the app's step history, that the draw half draws them, and that selection_set
+# marks a picked item. It exits 77 where the GPU programs test does.
 if(NOT WIN32 AND CALIPER_WITH_BUILDER AND _acceptance_python)
     add_test(NAME caliper_piece_path_acceptance COMMAND "${_acceptance_python}" "${CMAKE_CURRENT_SOURCE_DIR}/piece_path/driver.py"
         --app "$<TARGET_FILE:caliper>" --mcp "$<TARGET_FILE:caliper-mcp>" --python "${_acceptance_python}"
-        --work "${CMAKE_CURRENT_BINARY_DIR}/piece-path-work")
+        --work "${CMAKE_CURRENT_BINARY_DIR}/piece-path-work"
+        --capture-dir "${CMAKE_CURRENT_BINARY_DIR}/piece-path-captures")
     set_tests_properties(caliper_piece_path_acceptance PROPERTIES LABELS "pieces;acceptance" TIMEOUT 300
         SKIP_RETURN_CODE 77)
 endif()

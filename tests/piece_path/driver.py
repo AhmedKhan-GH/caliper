@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""The end-to-end check of a piece's derive half, through the command layer, without a draw half.
+"""The end-to-end check of a piece with both halves, through the command layer.
 
 It starts the hidden app with no script and caliper-mcp as a child over stdio, and lets the model runner start the
 small training script of the GPU programs test (tests/gpu_programs/train.py) in a throwaway workspace. Then it
-writes a workspace piece with `piece_update`, creates an instance of it with `program_create`, and checks the whole
-path: the app sends the instance to the script as PROGRAM, the script's derive pass runs at `caliper.step()` on the
-live weight `0.weight` and publishes its resource as RESOURCE, the app keeps the versions in the step history, and
-`program_read` returns the elements. The piece computes the norm of each row of the weight, beside the row's index,
-so that a wrong layout, an unread tensor or a lost version shows. The driver waits on events and on published
-state, never for a fixed time, and runs without a window and without the network.
+writes a workspace piece with `piece_update`, creates an instance of it in a scene panel with `program_create`, and
+checks the whole path: the app sends the instance to the script as PROGRAM, the script's derive pass runs at
+`caliper.step()` on the live weight `0.weight` and publishes its resource as RESOURCE, the app keeps the versions in
+the step history, `program_read` returns the elements, the draw half draws a bar for each row in the panel, and
+`selection_set` on a bar gives its fields and marks it in the picture. The piece computes the norm of each row of
+the weight, beside the row's index, so that a wrong layout, an unread tensor or a lost version shows. The driver
+waits on events and on published state, never for a fixed time, and runs without a window and without the network.
 
 Exit code 0 passes, 77 skips (no app, no torch, no Metal, no native sender, no producer module), 1 fails.
 
-usage: driver.py --app <caliper> --mcp <caliper-mcp> --python <python> --work <dir> [--limit-s 240]
+usage: driver.py --app <caliper> --mcp <caliper-mcp> --python <python> --work <dir> [--capture-dir <dir>]
+                 [--limit-s 240]
 """
 import argparse
 import importlib.util
