@@ -338,6 +338,7 @@ def test_the_gate_holds_snapshots_back_between_passes(monkeypatch):
     import time
     now = time.perf_counter()
     r.views["v"].offer_t = now                    # the offer is fresh: no refresh is due
+    r.views["v"].seen = now                       # and the view is called at each step
     r.step_tick(1, now)
     assert r.next_due > now                       # attached() is False until the gate opens
     assert not r.due("v", r.default_interval, now)
@@ -447,3 +448,96 @@ def test_a_watched_float_series_wakes_the_sender_at_most_at_the_session_rate(mon
     elapsed = time.perf_counter() - t0
     assert len(wakes) <= 1 + elapsed / r.tick_interval
     assert len(r.series["lr"].q) == 251          # every value is kept for the sender
+
+
+# ---- the real ring on the fake clock --------------------------------------------------------------
+class _RingClock:
+    """The clock of caliper._net_ring as the fake clock of a Sim."""
+
+    def __init__(self, s):
+        import time
+        self.perf_counter = s.clock
+        self.monotonic_ns, self.time_ns, self.sleep = time.monotonic_ns, time.time_ns, time.sleep
+
+
+def _ring_on_clock(monkeypatch, s, names):
+    """A real ring on the fake clock of ``s``, with a subscribed view of each name in ``names``,
+    and the view calls of one step as caliper._dispatch makes them: NetTransport.attached(),
+    then due() and take_call(). The sender is not there, thus each snapshot's staging buffers
+    are free again at once. Returns the ring and a function that makes the calls of one step
+    and returns the snapshots they took as (name, gate open) pairs."""
+    import torch
+    from caliper._convert import plan_show
+    from caliper._net_dataview import Call
+    monkeypatch.setattr(_net_ring, "time", _RingClock(s))
+    r = _net_ring.NetRing()
+    t = torch.ones(4, 4)
+    plan = plan_show(t, 0, None, None, False)
+    args = (t, 0, None, None, False)
+    for name in names:
+        r._register(Call(plan.kind, name, plan, args), s.t)
+        v = r.views[name]
+        v.seen = s.t                              # as take_call() leaves a view it registers
+        g = _net_ring.Group(name, r.engine.resolve(v.entry(), None), "k")
+        g.subs[(_Link(), 1)] = None
+        v.groups["k"] = g
+    r.changed()
+
+    def calls(names_now):
+        took = []
+        for name in names_now:
+            now = s.t
+            if now >= r.next_due and r.due(name, r.default_interval, now):   # attached(), due()
+                if r.take_call(name, plan, now, args):
+                    took.append((name, r.gate_open))
+        for p in r.pending:
+            p.stage.busy = False
+        r.pending.clear()
+        return took
+    return r, calls
+
+
+def _train_views(s, r, calls, steps, gap, every):
+    """Train ``steps`` steps on the ring of _ring_on_clock: view "rare" is called every ``gap``
+    steps, and view "every", when ``every``, at each step. Returns the snapshots as (step, name,
+    gate open) and the held times of the checkpoints that closed the gate."""
+    took, holds = [], []
+    for k in range(steps):
+        names = (["every"] if every else []) + (["rare"] if k % gap == 0 else [])
+        took += [(k, name, gate) for name, gate in calls(names)]
+        s.t += s.cpu
+        s.queued += s.gpu
+        P.at_step(k)
+        if not r.gate_open:
+            holds.append(r.held_t)
+    return took, holds
+
+
+def test_a_view_called_less_than_once_a_second_keeps_updating(loop, monkeypatch):
+    # A subscribed view called every 2 s while the script calls caliper.step(): its calls between
+    # passes once returned after attached(), so the passes never saw it again, and it showed its
+    # first snapshot for good. A call held back while its group is overdue by more than FLOOR_S
+    # now takes its snapshot.
+    s = loop(cpu=1.0e-3, gpu=1.0e-3)
+    r, calls = _ring_on_clock(monkeypatch, s, ["rare"])
+    gap = 2000                                    # steps of about 1 ms
+    took, _ = _train_views(s, r, calls, 12 * gap, gap, every=False)
+    assert [k for k, _, _ in took] == list(range(0, 12 * gap, gap))
+    assert r.counters["held"] == 11               # the first call came before the checkpoints
+
+
+def test_a_view_called_at_each_step_keeps_to_the_passes(loop, monkeypatch):
+    # Beside the view called every 2 s, a view called at each step takes its snapshots only in
+    # the passes, and without the rare view no checkpoint lets a call through the closed gate.
+    s = loop(cpu=1.0e-3, gpu=1.0e-3)
+    r, calls = _ring_on_clock(monkeypatch, s, ["every", "rare"])
+    gap = 2000
+    took, _ = _train_views(s, r, calls, 12 * gap, gap, every=True)
+    assert [k for k, name, _ in took if name == "rare"] == list(range(0, 12 * gap, gap))
+    every = [(k, gate) for k, name, gate in took if name == "every"]
+    assert len(every) > 100 and all(gate for k, gate in every if k > 0)
+    s2 = loop(cpu=1.0e-3, gpu=1.0e-3)
+    r2, calls2 = _ring_on_clock(monkeypatch, s2, ["every"])
+    took2, holds = _train_views(s2, r2, calls2, 6 * gap, gap, every=True)
+    assert holds and all(h == math.inf for h in holds)
+    assert r2.counters["held"] == 0 and all(gate for k, _, gate in took2 if k > 0)
