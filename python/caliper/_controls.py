@@ -135,6 +135,8 @@ WAIT_POLL_S = 0.1                      # a waiting checkpoint wakes this often, 
                                        # Ctrl-C and departed controllers are seen
 STEPS_REPORT_S = 0.1                   # while stepping, steps_left goes out at most
                                        # this often
+RUN_REPORT_S = 1.0                     # while running, the step goes out at most this
+                                       # often, at the first checkpoint after it
 
 _ITEM_KINDS = ("heatmap", "image", "points", "series")
 _INT_EXACT = 1 << 53
@@ -709,8 +711,9 @@ class Controls:
         self.busy = True                         # step() takes the slow path
         self.n = 0                               # the script's step number
         self.state = RUN_NONE
-        self.state_step = None                   # the step where the state last changed
         self.steps_left = 0
+        self._report_due = False                 # the next checkpoint sends the step
+        self._report_armed = False               # a timer of RUN_REPORT_S is on its way
         self._steps_reported = 0.0
         self.params: dict[str, Param] = {}
         self.actions: dict[str, Action] = {}
@@ -743,7 +746,6 @@ class Controls:
         with self.lock:
             if self.state == RUN_NONE:
                 self.state = RUN_RUNNING
-                self.state_step = self.n
                 publish = True
             elif self.state == RUN_STEPPING:
                 self.steps_left -= 1
@@ -752,6 +754,9 @@ class Controls:
                     self.state = RUN_PAUSING
                 elif time.monotonic() - self._steps_reported >= STEPS_REPORT_S:
                     publish = True
+            if self._report_due:
+                self._report_due = False
+                publish = True
             self._update_busy()
         if publish:
             self._publish()
@@ -765,7 +770,21 @@ class Controls:
 
     def _update_busy(self) -> None:
         self.busy = (self.state in (RUN_NONE, RUN_PAUSING, RUN_STEPPING)
-                     or self._npending > 0 or bool(self.queue))
+                     or self._npending > 0 or bool(self.queue) or self._report_due)
+
+    def _arm_report(self) -> None:
+        """While the run runs, have the first checkpoint after RUN_REPORT_S send
+        CONTROLS with its step (lock held)."""
+        if self.state == RUN_RUNNING and not self._report_armed:
+            self._report_armed = True
+            self._timers.at(time.monotonic() + RUN_REPORT_S, self._report)
+
+    def _report(self) -> None:
+        with self.lock:
+            self._report_armed = False
+            if self.state == RUN_RUNNING and self.routes:
+                self._report_due = True
+                self.busy = True
 
     def _apply_pending(self) -> bool:
         """Set every pending value (lock held). True if one was set."""
@@ -825,7 +844,6 @@ class Controls:
             if self.state != RUN_PAUSING:
                 return
             self.state = RUN_PAUSED
-            self.state_step = self.n
         for hook in list(self.wait_hooks):
             try:
                 hook()
@@ -864,7 +882,6 @@ class Controls:
             if self.state not in (RUN_PAUSED, RUN_PAUSING, RUN_STEPPING):
                 return
             self.state = RUN_RUNNING
-            self.state_step = self.n
             self.steps_left = 0
             self._update_busy()
             self.cond.notify_all()
@@ -1107,12 +1124,10 @@ class Controls:
             elif op == w.OP_RESUME:
                 if self.state in (RUN_PAUSING, RUN_PAUSED, RUN_STEPPING):
                     self.state = RUN_RUNNING
-                    self.state_step = self.n
                     self.steps_left = 0
             elif op == w.OP_STEP:
                 self.state = RUN_STEPPING
                 self.steps_left = msg.count or 1
-                self.state_step = self.n
                 self._steps_reported = time.monotonic()
             elif op == w.OP_SET:
                 p = self.params.get(name)
@@ -1236,7 +1251,7 @@ class Controls:
     # -- messages ------------------------------------------------------------------
     def _run_obj(self) -> dict:
         r = {"state": self.state}
-        s = self.state_step
+        s = self.n if self.state != RUN_NONE else None     # the step of the latest checkpoint
         if isinstance(s, numbers.Integral) and not isinstance(s, bool) and s >= 0:
             r["step"] = int(s)
         if self.state == RUN_STEPPING:
@@ -1276,6 +1291,7 @@ class Controls:
                 routes = list(self.routes)
                 if self.state == RUN_STEPPING:
                     self._steps_reported = time.monotonic()
+                self._arm_report()
             self.counters["controls_out"] += 1
             for r in routes:
                 r._broadcast(w.MsgType.CONTROLS, meta, after_data)
@@ -1297,6 +1313,7 @@ class Controls:
         r = Route(self, transport)
         with self.lock:
             self.routes.append(r)
+            self._arm_report()
         return r
 
     def _detach(self, route: Route) -> None:

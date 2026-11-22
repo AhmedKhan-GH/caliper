@@ -1524,8 +1524,8 @@ def step(step=None) -> None:
     already shows that step ([What a viewer may rely
     on](../reference/run-control-messages.md#what-a-viewer-may-rely-on-when-a-run-pauses)).
 
-    With nothing waiting, a call only counts the step and reads one flag. It costs the same with a
-    viewer attached or not.
+    With nothing waiting, a call only counts the step and reads one flag. While the run runs and
+    a server is open, the first call after each second also sends the step number to the viewers.
 
     Before the first `step()` of the script, viewers can change parameters, which then take
     effect at once. They cannot pause the run, and actions wait for the first checkpoint.
