@@ -1140,13 +1140,15 @@ struct ProgramHost {
     std::map<std::string, caliper_draw::Selected> picked;   // the newest program pick of each panel
     std::int64_t last_step = -1;
     std::uint64_t moves = 0;
+    std::function<std::string()> workspace;                 // the app's workspace folder, for its pieces
 };
 
 ProgramHost& program_host() {
     static ProgramHost* h = [] {
         auto* p = new ProgramHost();
-        // A pin resolves to an inline piece of the spec or to the built-in library.
-        p->host.set_resolver([](const spec::Spec& s, const spec::Program& program, spec::Piece* out) {
+        // A pin resolves to an inline piece of the spec, a piece of the app's workspace or one of
+        // the built-in library.
+        p->host.set_resolver([p](const spec::Spec& s, const spec::Program& program, spec::Piece* out) {
             caliper_draw::Verdict v;
             if (!program.piece) {
                 v.code = caliper_builder::programs::kPieceMissing;
@@ -1154,7 +1156,8 @@ ProgramHost& program_host() {
                 return v;
             }
             caliper_builder::FoundPiece f =
-                caliper_builder::resolve_pin(caliper_builder::PieceLibrary::builtin(), std::string(), s, *program.piece);
+                caliper_builder::resolve_pin(caliper_builder::PieceLibrary::builtin(),
+                                             p->workspace ? p->workspace() : std::string(), s, *program.piece);
             if (f.error) {
                 v.code = f.error.code;
                 v.message = f.error.message;
@@ -1223,6 +1226,10 @@ bool same_starting(const caliper_scene::StartingCamera& a, const caliper_scene::
 }
 
 }  // namespace
+
+void set_program_workspace(std::function<std::string()> workspace) {
+    program_host().workspace = std::move(workspace);
+}
 
 caliper_live_views::SceneView* SpecRuntime::entity_view(const std::string& panel_id) {
     auto it = scenes_->entities.find(panel_id);

@@ -410,4 +410,9 @@ private:
     std::unique_ptr<SceneStates> scenes_;
 };
 
+// Where the programs of the spec's scene panels find workspace pieces: a function that gives the
+// app's workspace folder, read when the programs are reconciled. Without it a program pinned to a
+// workspace piece is refused with piece.missing. Frame thread.
+void set_program_workspace(std::function<std::string()> workspace);
+
 }  // namespace caliper_host

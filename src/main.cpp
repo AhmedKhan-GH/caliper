@@ -636,6 +636,8 @@ public:
             return f.piece;
         });
         session_.set_stage_host(caliper_host::app_stage_host());
+        // The scene panels' programs draw workspace pieces too.
+        caliper_host::set_program_workspace([this] { return session_.workspace(); });
         // The model runner of Hosted Runs (design/hosted-runs.md): its runs
         // live in the workspace's runs folder, and run.list, run.start,
         // run.fork, run.stop and run.logs act through it.
