@@ -200,6 +200,47 @@ Every view function except `caliper_core_colormap_lut` is **frame-thread only**.
 
 The header `caliper/live_views.h` builds on this section. `caliper_core_live_apply` takes a `CaliperLiveSnapshot` of one of five kinds (heatmap, image, points, series, histogram) and keeps a typed view of that name. Heatmap and image live views are drawn through the tensor view of the same name, so `caliper_core_view_info`, `_readback`, `_count` and `_remove` keep working for them. The header documents the payload contract for each kind, the claim rule that `caliper_core_live_view_read_done` reports for each kind, and the pause flag of each core. The header `caliper/live.h` is the shared-memory session protocol, with the client and viewer C API that feed it from another process. Both work on macOS with Metal only. The design is in [Live streaming](../python/live-streaming.md).
 
+## Live Session Attachment
+
+An embed host attaches to the live session of a training script with the C calls of `caliper/live.h`. The Caliper app uses the same calls for "Attach to process", and `caliper-viewer` uses them too. The app owns its window and renderer, so it attaches through a hosted core that borrows them, and its session list follows the same rules as the viewer's list.
+
+Listing sessions works from any thread. The `caliper_core_live_*` calls need an embed core with an attached canvas, and they run on its frame thread:
+
+```c
+#include <caliper/live.h>
+
+/* List sessions (any thread). struct_size must be set on every entry. */
+CaliperLiveSessionInfo s[16];
+for (int i = 0; i < 16; ++i) s[i].struct_size = sizeof s[i];
+int n = caliper_live_list_sessions(s, 16);      /* newest first; -1 + caliper_live_last_error() */
+
+/* Attach: by token, by pid, by a stream link, or show the built-in session list. */
+caliper_core_live_attach(core, s[0].session);
+caliper_core_live_attach_pid(core, pid, NULL);  /* NULL = the default data root */
+caliper_core_live_attach_url(core, "ws://127.0.0.1:8765/v3/stream?token=...");
+caliper_core_live_picker(core, 1, NULL);        /* list with Attach buttons; Detach returns to it */
+
+/* Every frame, before caliper_core_frame. */
+caliper_core_live_poll(core);                   /* claim newest snapshots, write the heartbeat */
+caliper_core_frame(core);
+
+caliper_core_live_detach(core);                 /* release claims, clear the heartbeat */
+```
+
+| Call | Purpose |
+|---|---|
+| `caliper_live_data_root()` | The resolved default data root |
+| `caliper_live_list_sessions(out, cap)` / `_in(root, out, cap)` | Lists sessions newest first, reclaims stale ones and returns the count |
+| `caliper_core_live_attach(core, token)` | Attaches by token. It refuses an unknown token, another protocol version and a session that another live viewer holds |
+| `caliper_core_live_attach_pid(core, pid, root)` | Attaches to the session of process `pid` |
+| `caliper_core_live_attach_url(core, link)` | Attaches to a stream by its link. It waits up to 2 s for the server and fails with the reason when nothing listens or the server refuses |
+| `caliper_core_live_picker(core, enable, root)` | Draws the session list while the core is not attached |
+| `caliper_core_live_poll(core)` | Applies the newest completed snapshot of every view and writes the heartbeat, once per frame. It returns -1 when the core is not attached |
+| `caliper_core_live_detach(core)` | Drops the views and claims and clears the heartbeat |
+| `caliper_core_live_status` / `_view_status` | Gives the counters that the status window shows |
+
+A host whose window can be hidden must keep its frame timer running. macOS slows the frames of a hidden window, and a slow viewer writes its heartbeat late. A stale heartbeat stops the script's snapshots while the user is still attached. For this reason, `caliper-viewer` holds an `NSProcessInfo` activity with `NSActivityUserInitiatedAllowingIdleSystemSleep | NSActivityLatencyCritical`, and the Caliper app holds the same activity while a session is attached.
+
 ## `caliper-embed` Package
 
 `cmake --install <build> --prefix <prefix> --component embed` installs the `caliper-embed` CMake package on macOS and Windows. It is separate from the SDK (`--component sdk`) and goes into the prefix of the SDK or a prefix of its own.

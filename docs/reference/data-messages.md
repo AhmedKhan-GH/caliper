@@ -104,10 +104,3 @@ Coordinates in `detail` are source indices, computed from the [payload axes](dat
 A `select` whose `detail` is `{}` clears the selection. A viewer sends at most 30 hover events per second per view, and it drops a hover and does not queue it. The producer keeps at most 256 unread events per connection and drops the oldest.
 
 In 3.1, the `detail` of a `select` also carries `space` and `items` when the viewer selects on an axis with an item space. [Selection Flow](linked-selection-messages.md#selection-flow) describes them.
-
-## Related Pages
-
-- [Wire Protocol](wire-protocol.md)
-- [Wire Frames](wire-frames.md)
-- [Data View Messages](data-view-messages.md)
-- [Linked Selection Messages](linked-selection-messages.md)

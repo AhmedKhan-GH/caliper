@@ -1,46 +1,31 @@
 # Applets
 
-Applets are shared libraries that the Caliper app loads at run time. These pages show how to write and debug an applet. They also describe how the host renders and contains it, and the contract and services it uses.
+Applets are the units of work that the Caliper app loads and shows. This area is for developers who write an applet in C++, and for readers who want to know how the host runs one. It covers how to write, build and debug an applet, and how the host draws and contains it.
 
-## Tutorials
+## Applet Kinds
 
-- [First Applet](first-applet.md)
-- [First ML Applet](first-ml-applet.md)
+A compiled applet is a shared library. The host opens it at run time and calls it through a small C contract. The applet draws its pages with ImGui and ImPlot, and it asks the host for what it needs. A spec applet is different. It has no library, only a manifest and a spec file of sources, panels and a layout. The app draws it as a page and never runs it.
 
-## Guides
+Every applet ships a manifest. The host reads the manifest before it loads any code. The manifest names the applet, the ABI epoch of its build and the services it needs. If the host cannot meet the manifest, it refuses the applet and says why on the landing screen. [Manifest](manifest.md) gives the full schema.
 
-- [Applet Debugging](applet-debugging.md)
+## Host Services
 
-The [ML Applet Cookbook](https://github.com/AhmedKhan-GH/caliper/blob/main/docs/applets/ml-applet-cookbook.md) collects patterns from the applets in this repository. It stays in the repository and does not appear on this site, because the applets are not shipped.
+An applet does not reach into the host. It asks for a service by id, such as `caliper.log.v1` for log lines or `caliper.jobs.v1` for background work. A revision of a service is a new id that adds calls and never changes the old ones. Thus an applet built against an older id keeps working. The [Service Catalog](services/service-catalog.md) lists every id the host serves.
 
-## Concepts
+The host draws tensors on the GPU and hides the graphics backend from the applet. The applet hands a tensor to the tensor bridge and receives a texture id. [Rendering](rendering.md) explains how this works on each platform.
 
-- [Rendering](rendering.md)
-- [Trust Model](trust-model.md)
+```mermaid
+flowchart LR
+    manifest[Manifest] -->|declares needs| host[Host]
+    lib[Applet library] -->|descriptor| host
+    host -->|service tables| lib
+    lib -->|tensors| bridge[Tensor bridge]
+    bridge -->|textures| renderer[Renderer]
+    renderer -->|frames| window[Window]
+```
 
-## Reference
+## Applet Workflow
 
-- [Applet Contract](applet-contract.md)
-- [Manifest](manifest.md)
-- [SDK Package](sdk-package.md)
-- [C++ Sugar](cpp-sugar.md)
-- [Tensor and Arrow Headers](tensor-and-arrow-headers.md)
-- [Adapters](adapters.md)
-- [Torch per Platform](torch-per-platform.md)
-- [In-Tree Applets](in-tree-applets.md)
+A new applet starts from the SDK, which installs as a CMake package. The applet builds in its own folder with `caliper_add_applet()`. Then `caliper check` tests it against the host, and `caliper dev` runs it from the build folder. [First Applet](first-applet.md) walks through this path with the smallest complete example, and [First ML Applet](first-ml-applet.md) adds a small model.
 
-## Services
-
-- [Service Catalog](services/service-catalog.md)
-- [caliper.ui.v1](services/caliper-ui-v1.md)
-- [caliper.ui.v1_1](services/caliper-ui-v1-1.md)
-- [caliper.log.v1](services/caliper-log-v1.md)
-- [caliper.jobs.v1](services/caliper-jobs-v1.md)
-- [caliper.device.v1](services/caliper-device-v1.md)
-- [caliper.metrics.v1 and v1_1](services/caliper-metrics-v1.md)
-- [caliper.tensor_bridge.v1, v1_1 and v1_2](services/caliper-tensor-bridge-v1.md)
-- [caliper.geometry.v1 to v1_3](services/caliper-geometry-v1.md)
-- [caliper.export.v1 and v1_1](services/caliper-export-v1.md)
-- [caliper.artifacts.v1](services/caliper-artifacts-v1.md)
-- [caliper.data.v1](services/caliper-data-v1.md)
-- [caliper.feed.v1](services/caliper-feed-v1.md)
+A compiled applet runs in the host process with the host's privileges, so the host treats it as trusted code. The host limits the harm of a fault. It guards every call into the applet and quarantines an applet that fails. [Trust Model](trust-model.md) describes these checks. When an applet misbehaves, you attach a debugger to the running host, as [Applet Debugging](applet-debugging.md) shows.

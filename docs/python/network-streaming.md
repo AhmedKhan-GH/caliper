@@ -93,11 +93,3 @@ The link that `caliper.serve()` prints carries the token. Anyone who has the lin
 The stream carries data and nothing else. Snapshots and series go to the viewer. Subscriptions, data view requests and viewer events (`select`, `pick` and `hover`) go back. A data view request can name only a slice, selection or reduction of a source that the producer offered. An event is data that the Python code of the producer reads, through `server.on_event()` or `server.events()`. The stream does not carry host commands, and nothing that a viewer sends runs as code.
 
 The server cannot listen on another interface, and the stream is not encrypted. This is permitted because the stream does not leave the loopback interface.
-
-## Related Pages
-
-- [Live Streaming](live-streaming.md)
-- [Data Views](data-views.md)
-- [Caliper LIB API](network-streaming-calls.md#serve)
-- [Wire Protocol](../reference/wire-protocol.md)
-- [Notebook Training Runs](notebook-training-runs.md)

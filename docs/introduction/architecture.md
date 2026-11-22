@@ -78,11 +78,3 @@ The purpose of the instrument is to show the state of a model. Shaders from appl
 ### Fallback Paths
 
 A missing capability falls back to a slower path that works, and the host reports that. The host never makes a wrong image and never prints a status line that is not true. It claims zero-copy only when the zero-copy path drew the image. Thus applets operate on all machines, and users can trust what the instrument reports. The cost is a second tested path for each capability.
-
-## Related Pages
-
-- [Applet Contract](../applets/applet-contract.md)
-- [Rendering](../applets/rendering.md)
-- [Trust Model](../applets/trust-model.md)
-- [Compatibility and Epochs](../development/compatibility-and-epochs.md)
-- [Embedding API](../web/embedding-api.md)

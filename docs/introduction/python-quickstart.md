@@ -143,10 +143,3 @@ sess.wait_attached(15.0)                     # optional: wait for the first hear
 ## Result
 
 The live page shows one window for each of the five views, and the views update at up to 60 fps. The script does not wait for Caliper. If you detach with `⌘D Detach`, the training continues and you can attach again. When the script stops, the page keeps the last frames and shows `SESSION ENDED`.
-
-## Related Pages
-
-- [Live Streaming](../python/live-streaming.md)
-- [Script Attachment](../python/script-attachment.md)
-- [Caliper LIB API](../python/caliper-lib-api.md)
-- [Development Basics](../development/development-basics.md)

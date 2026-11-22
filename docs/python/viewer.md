@@ -153,11 +153,3 @@ The run bar shows the run state, the parameters and the actions to all viewers. 
 - The session is live. The controls of an ended session stay visible and are off.
 
 Before the first checkpoint of the script, Pause, Step and the actions are off with `the script has called no checkpoint yet`. A parameter can already change, and the script reads it at once. The stream carries only these requests and never a command to the app or the computer.
-
-## Related Pages
-
-- [Script Attachment](script-attachment.md)
-- [Stream Links](stream-links.md)
-- [Script Control](script-control.md)
-- [Wire Protocol](../reference/wire-protocol.md)
-- [Python Quickstart](../introduction/python-quickstart.md)

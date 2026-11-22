@@ -73,11 +73,3 @@ caliper.show(attention, "attention", dims=("layer", "sequence", "head", "query",
 widget.data_view = {"index": {"layer": 0, "sequence": 0}, "reduce": {"head": "max"}}
 caliper.set_data_view("attention", {"index": {"layer": 0, "sequence": 2, "head": 1}})
 ```
-
-## Related Pages
-
-- [Caliper LIB API](caliper-lib-api.md)
-- [View Calls](view-calls.md)
-- [Network Streaming Calls](network-streaming-calls.md)
-- [Data Views](data-views.md)
-- [Wire Protocol](../reference/wire-protocol.md)

@@ -119,10 +119,3 @@ the count of edits.
 `session/cancel` stops a running prompt, which answers `cancelled`. The preview stays as it is. `session/close`, which the
 agent declares as `sessionCapabilities.close`, cancels a running prompt and waits up to 10 seconds for it to end. It then
 forgets the session and answers `{}`. A sidecar keeps at most 16 sessions.
-
-## Related Pages
-
-- [Widget Agent](widget-agent.md)
-- [Widget Agent Startup](widget-agent-startup.md)
-- [Inline Prompt](inline-prompt.md)
-- [Caliper API](http-api.md)

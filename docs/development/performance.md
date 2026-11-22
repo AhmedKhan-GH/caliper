@@ -184,10 +184,3 @@ Measured on one RTX 500 Ada laptop GPU, driver 596.47, Release build. Small samp
 ## CI Build Cache
 
 With sccache, the CI build step takes about 13 min cold and about 1 min warm on macOS. On Windows, it takes about 26 min cold and about 3 min warm. The sccache entries of both lanes total about 130 MB.
-
-## Related Pages
-
-- [Live Streaming](../python/live-streaming.md)
-- [Live Session Layout](live-session-layout.md)
-- [Caliper LIB API](../python/caliper-lib-api.md)
-- [Testing](testing.md)

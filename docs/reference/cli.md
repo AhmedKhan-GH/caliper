@@ -131,11 +131,3 @@ The Windows build refuses `caliper serve`, `caliper build`, `--api` (when starti
 | `CALIPER_CMAKE` | The cmake that `build` runs, when it is set and not empty. |
 
 [Folders and environment variables](folders-and-environment.md) lists every variable the host reads.
-
-## Related Pages
-
-- [Applet Commands](applet-commands.md)
-- [Shot and Serve Commands](shot-and-serve-commands.md)
-- [Workspace](../builder/workspace.md)
-- [Folders and environment variables](folders-and-environment.md)
-- [Wire protocol](wire-protocol.md)

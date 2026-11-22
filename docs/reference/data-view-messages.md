@@ -135,11 +135,3 @@ A tiled heatmap of C cells has `cols = ceil(sqrt(C))` and `rows = ceil(C / cols)
 | Points | 1 (the point dim) | `f32` `(N, D)` after stride sampling, with `aux` sampled alike | `max_points` |
 | Histogram | Any | The counts of every element of the result over its range, binned on the device | none |
 | Series | No sources | SERIES messages | `max_backfill` |
-
-## Related Pages
-
-- [Wire Protocol](wire-protocol.md)
-- [Wire Frames](wire-frames.md)
-- [Data Messages](data-messages.md)
-- [Data Views](../python/data-views.md)
-- [Data view calls](../python/data-view-calls.md)

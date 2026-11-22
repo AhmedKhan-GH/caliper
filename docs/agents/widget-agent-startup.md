@@ -159,10 +159,3 @@ A request that does not fit, by the estimate or by the server's refusal, ends th
 says that the conversation no longer fits the model's context and that the person can start again or raise the context
 length. A reply that stops at the end of the context also ends the turn with `max_tokens`, and none of its tool calls
 runs. For a server whose context length the agent did not choose, the agent checks nothing.
-
-## Related Pages
-
-- [Widget Agent](widget-agent.md)
-- [Widget Session Protocol](widget-session-protocol.md)
-- [Inline Prompt](inline-prompt.md)
-- [Set up the widget agent](widget-agent-setup.md)

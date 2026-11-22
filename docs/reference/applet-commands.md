@@ -153,10 +153,3 @@ service caliper.data.v1
 ...
 service caliper.ui.v1_1
 ```
-
-## Related Pages
-
-- [CLI](cli.md)
-- [Shot and Serve Commands](shot-and-serve-commands.md)
-- [Refusal messages](refusal-messages.md)
-- [SDK package](../applets/sdk-package.md)

@@ -103,11 +103,3 @@ The viewer subscribes to all views of the session, each with its default data vi
 ## Security
 
 The token in the link is the only secret of a stream. The viewer does not print it, and messages show the link without its query. Only links to 127.0.0.1 or `localhost` are accepted. The stream file has mode 0600 in a folder of mode 0700. The app attaches with the token of the file as it does with a pasted link, and thus a listing gives no access that the link does not give.
-
-## Related Pages
-
-- [Viewer](viewer.md)
-- [Script Attachment](script-attachment.md)
-- [Network Streaming](network-streaming.md)
-- [Hub Setup](hub-setup.md)
-- [Wire Protocol](../reference/wire-protocol.md)

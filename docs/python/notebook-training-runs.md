@@ -221,11 +221,3 @@ The server listens only on 127.0.0.1, thus the browser and the kernel must opera
 ## Security
 
 The server makes a new random session token at each start, and it refuses a stream connection that does not have the token. Events from a viewer are data for your code to read, and nothing in them operates as a command.
-
-## Related Pages
-
-- [Script Control](script-control.md)
-- [Caliper LIB API](caliper-lib-api.md)
-- [Network Streaming](network-streaming.md)
-- [Python Quickstart](../introduction/python-quickstart.md)
-- [Wire Protocol](../reference/wire-protocol.md)

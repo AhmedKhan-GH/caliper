@@ -129,12 +129,3 @@ The widget has these traits, synced through anywidget:
 The `detail` of an event is in source indices. For a `select` in a points view it holds `indices`, the positions in the points that were shown, and `row_ids`, their source indices. The [Wire Protocol](../reference/wire-protocol.md) reference lists the detail of every kind. `w.on_select(callback)` calls `callback(selection)` each time the browser reports a new selection, and `w.on_select(callback, remove=True)` stops it.
 
 Traits travel over the message channel of the notebook, which the kernel reads only while no cell runs. A selection made during a long cell reaches `selection` when the cell ends. A `data_view` set from Python reaches the widget at once. A data view chosen in the picker of the widget goes to the producer over the stream and takes effect during the cell.
-
-## Related Pages
-
-- [Caliper LIB API](caliper-lib-api.md)
-- [Data View Calls](data-view-calls.md)
-- [Run Control Calls](run-control-calls.md)
-- [Network Streaming](network-streaming.md)
-- [Hub Setup](hub-setup.md)
-- [Wire Protocol](../reference/wire-protocol.md)

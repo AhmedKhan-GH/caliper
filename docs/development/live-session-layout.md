@@ -70,10 +70,3 @@ The live protocol is at v2 in `include/caliper/live.h`, and the embed typed view
 | Viewer Core | `live_core` | `src/host/live/live_core.cpp` |
 | Hosted Viewer | The Caliper app's hosted Caliper Embed | `src/host/live/live_attach.h` |
 | Caliper Embed | `caliper_core_live_apply()`, where both transports end | `include/caliper/live_views.h` |
-
-## Related Pages
-
-- [Live Streaming](../python/live-streaming.md)
-- [Performance](performance.md)
-- [Folders and Environment](../reference/folders-and-environment.md)
-- [Embedding API](../web/embedding-api.md)

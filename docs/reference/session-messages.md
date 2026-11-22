@@ -71,9 +71,3 @@ Each session object has the identity keys `id`, `script`, `pid` and `start_unix_
 | Key | Type | Meaning |
 |---|---|---|
 | `session` | string or null | The session id to attach to, or null to detach. The key is required |
-
-## Related Pages
-
-- [Wire Protocol](wire-protocol.md)
-- [Wire Frames](wire-frames.md)
-- [Data Messages](data-messages.md)

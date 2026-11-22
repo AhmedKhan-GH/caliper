@@ -56,10 +56,3 @@ SELECTION has no section. The [message types](wire-protocol.md#message-types) ta
 | `details_error` | string, optional | Why `details` is missing although the script provides details for the space, at most 1,024 bytes |
 
 After the CONTROLS of an attachment, or after its VIEWS for a viewer without `controls`, the producer sends one SELECTION for each item space whose selection is not empty. It sends SELECTION to every viewer whenever the selection or the details of a space change.
-
-## Related Pages
-
-- [Wire Protocol](wire-protocol.md)
-- [Wire Frames](wire-frames.md)
-- [Data Messages](data-messages.md)
-- [Run Control Messages](run-control-messages.md)

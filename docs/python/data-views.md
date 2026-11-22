@@ -51,9 +51,3 @@ The script sets the default data view of a view, with the `data_view` argument o
 ## Rate and Budget
 
 Data views and sampling divide the work. Sampling in time, with the rate limit, decides how often a view travels. Data views and the budget decide how much of the view travels each time.
-
-## Related Pages
-
-- [Network Streaming](network-streaming.md)
-- [Caliper LIB API](data-view-calls.md#data-views)
-- [Wire Protocol](../reference/data-view-messages.md#data-views)

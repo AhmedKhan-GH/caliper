@@ -163,10 +163,3 @@ CONTROL_REPLY has no section.
 | `error` | object | With the status `error` only: `{"code", "message"}`, with a code from the [error codes](wire-protocol.md#error-codes) |
 
 The producer answers each CONTROL with one CONTROL_REPLY, to its sender only. The exception is an accepted `run`. The producer answers it `queued` at once and answers it again later: `ok` when the action returned, or `error` with `action_failed`, `timeout` or `unknown_control`. A refused CONTROL gets `error` at once and changes nothing. A malformed CONTROL, such as one without `request_id`, gets an ERROR `bad_request`, as any malformed message does.
-
-## Related Pages
-
-- [Wire Protocol](wire-protocol.md)
-- [Wire Frames](wire-frames.md)
-- [Linked Selection Messages](linked-selection-messages.md)
-- [Run control calls](../python/run-control-calls.md)

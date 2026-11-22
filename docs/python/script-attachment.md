@@ -112,11 +112,3 @@ The row of the session reads `attached` in the Projects pane, and the live page 
 ## Limits
 
 Attachment works only on macOS with Metal, on the local computer and for the same user. A session has one viewer, as [Live Streaming](live-streaming.md#limits) shows.
-
-## Related Pages
-
-- [Viewer](viewer.md)
-- [Stream Links](stream-links.md)
-- [Live Streaming](live-streaming.md)
-- [Python Quickstart](../introduction/python-quickstart.md)
-- [Embedding API](../web/embedding-api.md)

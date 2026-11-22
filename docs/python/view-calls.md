@@ -137,10 +137,3 @@ A snapshot is a few torch operations queued on the stream of the tensor. They wr
 The snapshot code calls no `.item()`, `.cpu()`, `.numpy()`, `.tolist()` and no `synchronize()`. It detects completion by polling a `torch.mps.Event`. `synchronize()` appears only in `flush()` and `close()`.
 
 A CPU tensor is copied once into the slot. Tensors on any other device (CUDA) have no zero-copy path on macOS, and one host copy moves them to the CPU first. Labels for `points` may move host to device, never device to host.
-
-## Related Pages
-
-- [Caliper LIB API](caliper-lib-api.md)
-- [Routes and Inspection](routes-and-inspection.md)
-- [Data View Calls](data-view-calls.md)
-- [Live Streaming](live-streaming.md)

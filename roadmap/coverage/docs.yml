@@ -1096,7 +1096,7 @@ entries:
   item: One viewer per session today.
   ids:
   - STR-18
-- page: docs/web/embedding-api.md
+- page: docs/web/embedding-api.md#live-session-attachment
   item: Attach from an embed host.
   ids:
   - EMB-07

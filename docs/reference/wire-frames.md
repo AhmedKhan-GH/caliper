@@ -122,9 +122,3 @@ The metadata, in canonical form:
 ```
 
 The values section starts at offset 152, so a browser reads it as `new Float32Array(buffer, 152, 3)`.
-
-## Related Pages
-
-- [Wire Protocol](wire-protocol.md)
-- [Session Messages](session-messages.md)
-- [Data Messages](data-messages.md)

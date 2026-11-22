@@ -113,11 +113,3 @@ In the in-process mode with `run()`, the worker thread cannot call `signal.signa
 ## Security
 
 Only the same user can attach, because the shared-memory names and the session file have mode 0600. A live session has no network path.
-
-## Related Pages
-
-- [Python Quickstart](../introduction/python-quickstart.md)
-- [Script Attachment](script-attachment.md)
-- [Caliper LIB API](caliper-lib-api.md)
-- [Embedding API](../web/embedding-api.md)
-- [Performance](../development/performance.md)

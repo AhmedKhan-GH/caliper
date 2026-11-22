@@ -148,10 +148,3 @@ The app starts `caliper-agent` with `--preset`, `--base-url` (Ollama, LM Studio 
 
 The settings name that state in a tag: No provider, Invalid address, No model, No key or No tool calling. While the GPU
 note applies, the prompt row shows it after the model that the session reports.
-
-## Related Pages
-
-- [Widget Agent](widget-agent.md)
-- [Widget Agent Startup](widget-agent-startup.md)
-- [Widget Session Protocol](widget-session-protocol.md)
-- [Set up the widget agent](widget-agent-setup.md)

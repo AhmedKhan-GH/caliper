@@ -110,10 +110,3 @@ The window render stats are `running`, `fps`, `frames`, `published`, `superseded
 | `wait_viewer(timeout=None)` | Wait until the viewer is gone. `True` if it is |
 | `stats()` | Session, file, script, attached, viewer pid and heartbeat age, and per view the publish and claim counters |
 | `close()` | Remove the session file and unlink the shared memory, never waiting for the viewer |
-
-## Related Pages
-
-- [Caliper LIB API](caliper-lib-api.md)
-- [View Calls](view-calls.md)
-- [Script Attachment](script-attachment.md)
-- [Live Streaming](live-streaming.md)

@@ -97,11 +97,3 @@ The **hub file** tells producers on the same machine where the hub is. It is `hu
 | `url` | The viewer link, with the token |
 
 SIGINT (Ctrl-C) or SIGTERM stops the hub. The hub sends BYE `shutdown` on every connection, closes them with code 1001, removes the hub file, prints `hub stopped` and exits with 0. It exits with 1 when the port is taken, the token file cannot be used, or the `--assets` folder does not exist. When the default port is taken, another hub is probably running, so start this one with `--port`.
-
-## Related Pages
-
-- [CLI](cli.md)
-- [Applet Commands](applet-commands.md)
-- [Wire protocol](wire-protocol.md)
-- [Run a hub](../python/hub-setup.md)
-- [Workspace](../builder/workspace.md)

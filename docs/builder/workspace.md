@@ -49,10 +49,3 @@ When the workspace is open, the commands run one after another through the comma
 A command can ask for the person's approval. Examples are a destructive command and, from `mcp` and `agent`, an edit of the open spec under review. Such a command never holds the script. Its result is `command.needs_approval` with the approval id, the approval stays pending, and the script goes on. A line with `"approve": true` approves its command as the person would, when it asks. Its result then carries `"approved"` with the approval id.
 
 A script may approve as the person does, so it runs only where nobody watches a window. These places are the [hidden window](../reference/cli.md#hidden-window) (`--hidden`, with the app or `dev`) and `shot`. An app with a visible window ignores the script. It says so on standard error with a `[session]` line, and lists "command script refused" in Activity.
-
-## Related Pages
-
-- [CLI](../reference/cli.md)
-- [Builder Pane](builder-pane.md)
-- [Shot and Serve Commands](../reference/shot-and-serve-commands.md)
-- [Caliper API](../agents/http-api.md)

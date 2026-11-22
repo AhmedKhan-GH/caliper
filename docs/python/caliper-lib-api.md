@@ -39,10 +39,3 @@ View names in a session are 1 to 63 bytes, and a session holds at most 64 views.
 ## Threading
 
 Any thread may call the view calls (`show`, `points`, `series`, `histogram` and the hooks of `watch`), `flush`, `remove` and `stats`. A module lock serializes them. `window()` and `offscreen()` must be called from the main thread. `run()`, `frame()` and `spin()` must also be called from the main thread while a real window is open. They raise `RuntimeError` otherwise.
-
-## Related Pages
-
-- [Live Streaming](live-streaming.md)
-- [Network Streaming](network-streaming.md)
-- [Data Views](data-views.md)
-- [Performance](../development/performance.md)

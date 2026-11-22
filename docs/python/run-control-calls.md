@@ -138,10 +138,3 @@ caliper.controls(*, height=160)
 ```
 
 A notebook widget, like `widget()`, with the run state, the Pause, Resume and Step buttons, every parameter and every action of the script, and the result of the last action it ran. It reads the stream directly, so it works while a cell runs, and it starts `serve()` when no server runs. Its traits are `src` and `height`. The header of every view widget also shows the run state and the Pause, Resume and Step buttons. A build whose browser assets lack the module of the panel, `caliper-controls-widget.js`, warns and shows a note in its place.
-
-## Related Pages
-
-- [Caliper LIB API](caliper-lib-api.md)
-- [Network Streaming Calls](network-streaming-calls.md)
-- [Script Control](script-control.md)
-- [Wire Protocol](../reference/wire-protocol.md)
