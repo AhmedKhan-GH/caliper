@@ -183,6 +183,12 @@ struct HubStats {
     uint64_t scenes_in = 0, scenes_out = 0, scenes_superseded = 0;
     uint64_t scene_pieces_dropped = 0;   // pieces of a split update whose piece 0 the hub did not hold
     uint64_t retained_scene_bytes = 0;
+    // 3.2 draft, capability "resources": RESOURCE versions in, out and replaced by a newer version of
+    // the same resource while waiting, the draw halves that producers relayed and the hub sent to
+    // viewers, and the bytes of the newest versions kept for late viewers
+    uint64_t resources_in = 0, resources_out = 0, resources_superseded = 0, resources_dropped = 0;
+    uint64_t program_relays_in = 0, program_relays_out = 0;
+    uint64_t retained_resource_bytes = 0;
     size_t controls_waiting = 0;            // CONTROLs waiting for the producer's answer
     uint64_t refused_host = 0, refused_origin = 0, refused_token = 0, refused_full = 0;
     uint64_t http_files = 0, http_not_found = 0;
