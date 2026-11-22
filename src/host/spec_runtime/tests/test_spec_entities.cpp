@@ -14,8 +14,10 @@
 #include "spec_runtime/spec_runtime.h"
 
 #include "export_service.h"
+#if defined(__APPLE__)
 #include "gfx/metal_backend.h"
 #include "gfx/shaders/generated/programs_metal.h"
+#endif
 #include "live/live_scene.h"
 #include "scene/camera.h"
 
@@ -142,6 +144,7 @@ struct Events : caliper_builder::EventSink {
 SpecRuntime::SceneLayer canvas_layer(SpecOffscreen* c) {
     return [c](std::unique_ptr<caliper_gfx::Backend>* owned, caliper_gfx::Backend** gfx,
                const caliper_gfx::ProgramDesc** programs, std::string* why) {
+#if defined(__APPLE__)
         *owned = caliper_gfx::make_metal_backend(c->native_device(), c->native_queue());
         if (!*owned) {
             *why = "no Metal backend";
@@ -150,6 +153,14 @@ SpecRuntime::SceneLayer canvas_layer(SpecOffscreen* c) {
         *gfx = owned->get();
         *programs = caliper_gfx::shaders::kMetalPrograms;
         return true;
+#else
+        (void)c;
+        (void)owned;
+        (void)gfx;
+        (void)programs;
+        *why = "the scene layer of these tests is Metal's";
+        return false;
+#endif
     };
 }
 

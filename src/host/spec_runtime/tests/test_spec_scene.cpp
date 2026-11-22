@@ -62,8 +62,10 @@ TEST_CASE("scene panel: the test seam asks for a pick only in a scene panel of t
 #include "spec_runtime/spec_offscreen.h"
 
 #include "export_service.h"
+#if defined(__APPLE__)
 #include "gfx/metal_backend.h"
 #include "gfx/shaders/generated/programs_metal.h"
+#endif
 #include "live/live_scene.h"
 #include "net/json.h"
 #include "net/wire.h"
@@ -74,6 +76,7 @@ TEST_CASE("scene panel: the test seam asks for a pick only in a scene panel of t
 #include <cmath>
 #include <cstdlib>
 
+#if defined(__APPLE__)
 namespace {
 
 namespace wire = caliper_net::wire;
@@ -224,3 +227,4 @@ TEST_CASE("scene view: view_camera from the scene's description opens the view a
     REQUIRE(v.render(400, 300, 1.0f, 0xff161616u, &why));
     CHECK(std::get<caliper_scene::Orbit>(v.camera()).distance == doctest::Approx(4.0));
 }
+#endif  // __APPLE__
