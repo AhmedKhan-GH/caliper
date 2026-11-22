@@ -226,3 +226,39 @@ TEST_CASE("command_table.json carries the aligned schemas") {
     CHECK((*create)["args"]["properties"].contains("dry_run"));
     CHECK((*create)["result"]["required"] == json({"id", "warnings", "diff", "applied"}));
 }
+
+TEST_CASE("every program and stage of the programs fixture passes the table's schemas") {
+    const spec::Spec s = parse_fixture("programs.spec.toml");
+    REQUIRE(spec::validate(s).ok());
+    REQUIRE_FALSE(s.programs.empty());
+    for (const spec::Program& p : s.programs) {
+        CAPTURE(p.id);
+        json args = spec::to_json(p);
+        args.erase("x");
+        check_passes("program.create", args);
+        const Error r = validate_command_value(result_schema("program.patch")["properties"]["program"], args,
+                                               "result.program");
+        CHECK_MESSAGE(r.ok(), r.where << ": " << r.message);
+        json patch = args;
+        patch.erase("id");
+        check_passes("program.patch", json{{"id", p.id}, {"patch", patch}});
+        // The arguments decode back to the same program, apart from `x`.
+        auto back = spec::program_from_json(args);
+        REQUIRE(back.ok());
+        spec::Program plain = p;
+        plain.x = nullptr;
+        CHECK(back.value == plain);
+    }
+    for (const spec::Stage& st : s.stages) {
+        json args = spec::to_json(st);
+        args.erase("x");
+        check_passes("stage.set", args);
+        check_passes("stage.remove", json{{"panel", st.panel}, {"entity", st.entity}, {"kind", args["kind"]}});
+    }
+    // What the program table refuses, the spec refuses too.
+    check_refused("program.create",
+                  json::parse(R"({"id": "p", "wgsl": "x", "inputs": [], "output": {"kind": "geometry", "panel": "w", "max_count": 0, "arrays": ["positions"]}})"),
+                  "args.output.max_count");
+    check_refused("stage.set", json::parse(R"({"panel": "w", "entity": "e", "kind": "compute", "wgsl": "x"})"),
+                  "args.kind");
+}
