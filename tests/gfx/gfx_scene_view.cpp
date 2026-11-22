@@ -944,6 +944,55 @@ TEST_CASE("gfx/Metal scene view: a late attach receives a reset and the state; c
     CHECK_MESSAGE(v.render(32, 32, 1.0f, 0xff000000u, &why), why);
 }
 
+TEST_CASE("gfx/Metal scene view: row ids follow the payload axes, and producer values that overflow keep the index") {
+    ViewRig rig;
+    if (!rig.init()) CALIPER_SKIP_NO_GPU("no Metal device");
+    SceneView& v = *rig.view;
+    Wire w;
+    const float p[9] = {0, 0, 0, 1, 1, 1, 2, 2, 2};
+    uint64_t seq = 1;
+    auto cloud = [&](int64_t start, int64_t step, int64_t count, int64_t size) {
+        wire::SceneUpdate u = update("cloud", CALIPER_NET_PART_POINTS, ++seq, false);
+        u.arrays.push_back(wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {3, 3}, p, sizeof p));
+        Json ax = Json::object();
+        ax.set("dim", "point");
+        ax.set("start", start);
+        ax.set("step", step);
+        ax.set("count", count);
+        ax.set("size", size);
+        Json axes = Json::array();
+        axes.push(ax);
+        u.axes = axes;
+        std::string why;
+        REQUIRE_MESSAGE(feed(v, w.roundtrip(u), &why), why);
+    };
+    auto id = [&](int64_t i) { return v.row_id("cloud", Primitive::Points, i); };
+    // Three of 30 source rows from row 4 in steps of 2: index i is source row 4 + 2 × floor(10 i).
+    cloud(4, 2, 30, 3);
+    CHECK(id(0) == 4);
+    CHECK(id(1) == 24);
+    CHECK(id(2) == 44);
+    CHECK(id(-1) == -1);
+    // index × count, or the row times step, past int64_t: the index stays (each was undefined).
+    const int64_t big = INT64_MAX;
+    cloud(0, 1, big, 3);
+    CHECK(id(0) == 0);
+    CHECK(id(1) == big / 3);
+    CHECK(id(2) == 2);
+    cloud(big - 1, 2, 3, 3);
+    CHECK(id(0) == big - 1);
+    CHECK(id(1) == 1);
+    cloud(0, big, 3, 3);
+    CHECK(id(1) == big);
+    CHECK(id(2) == 2);
+    // A negative start or count, a step below 1 or no size map nothing.
+    const int64_t odd[5][4] = {{-1, 1, 3, 3}, {0, 0, 3, 3}, {0, -2, 3, 3}, {0, 1, -3, 3}, {0, 1, 3, 0}};
+    for (const auto& a : odd) {
+        cloud(a[0], a[1], a[2], a[3]);
+        CHECK(id(2) == 2);
+    }
+}
+
 TEST_CASE("gfx/Metal scene view: an update of one batch reuses its buffers and redraws; nothing changes, nothing draws") {
     ViewRig rig;
     if (!rig.init()) CALIPER_SKIP_NO_GPU("no Metal device");

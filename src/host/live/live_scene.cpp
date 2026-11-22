@@ -633,10 +633,15 @@ bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
             const caliper_net::Json* j = ax.find(k);
             return j && j->get_i64(&v) ? v : d;
         };
-        slot.ax_start = get("start", 0);
-        slot.ax_step = get("step", 1);
-        slot.ax_count = get("count", 0);
-        slot.ax_size = get("size", 0);
+        // The producer's values: an axis with a negative start or count, a step below 1 or no size maps
+        // nothing (row_id gives the batch index), and row_id checks its products against these.
+        const int64_t start = get("start", 0), step = get("step", 1), count = get("count", 0), size = get("size", 0);
+        if (start >= 0 && step >= 1 && count >= 0 && size >= 1) {
+            slot.ax_start = start;
+            slot.ax_step = step;
+            slot.ax_count = count;
+            slot.ax_size = size;
+        }
     }
     slot.cpu_rows = std::move(cpu_rows);   // the batch's CPU views point into these buffers
     slot.cpu_ids = std::move(cpu_ids);
@@ -810,7 +815,12 @@ int64_t SceneView::row_id(const std::string& path, Primitive p, int64_t index) c
     const auto it = slots_.find(Key{path, int(p), fixed});
     if (it == slots_.end() || it->second.ax_size <= 0) return index;
     const Slot& s = it->second;
-    return s.ax_start + (index * s.ax_count) / s.ax_size * s.ax_step;
+    // start >= 0, step >= 1, count >= 0 and size >= 1 (see apply): every product is checked, and an
+    // index whose source row int64_t cannot hold keeps its batch index.
+    if (index < 0 || (s.ax_count && index > INT64_MAX / s.ax_count)) return index;
+    const int64_t q = index * s.ax_count / s.ax_size;
+    if (q && s.ax_step > (INT64_MAX - s.ax_start) / q) return index;
+    return s.ax_start + q * s.ax_step;
 }
 
 std::string SceneView::pick_detail(const Hit& h) const {
