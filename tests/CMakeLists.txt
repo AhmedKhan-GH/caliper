@@ -773,6 +773,14 @@ endif()
 # loopback (net/ws.h server, net/wire.h encoder) streams every kind to a core
 # attached by URL (caliper_core_live_attach_url, live_net_source.h).
 target_sources(caliper_live_tests PRIVATE test_live_net.cpp)
+# The app's program host over the builder session (AppProgramHost in
+# live_programs.h): the status items of program.status and the `program`
+# events. Only this file sees the builder half of the header.
+if(CALIPER_WITH_BUILDER)
+    target_sources(caliper_live_tests PRIVATE test_live_programs_host.cpp)
+    set_source_files_properties(test_live_programs_host.cpp PROPERTIES COMPILE_DEFINITIONS CALIPER_WITH_BUILDER=1)
+    target_link_libraries(caliper_live_tests PRIVATE caliper_builder_session)
+endif()
 # The 3.1 golden frames (tests/fixtures/wire_v3/v3_1) that the native source
 # must tolerate.
 target_compile_definitions(caliper_live_tests PRIVATE CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
