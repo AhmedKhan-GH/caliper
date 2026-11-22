@@ -287,8 +287,11 @@ struct StepHistory::Impl {
         r.versions.erase(it);
     }
 
+    // Drops a ring and its newest step, so that the next ring of the key
+    // starts no epoch against the versions of the one dropped.
     void drop_ring(std::map<std::string, ResourceRing>::iterator it) {
         resource_bytes -= it->second.bytes;
+        newest.erase("resource:" + it->first);
         resources.erase(it);
     }
 
