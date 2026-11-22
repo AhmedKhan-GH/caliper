@@ -35,11 +35,20 @@ before the weights change, and returns the path. The file is a ``torch.save`` di
 ``model``, ``optimizer``, ``format``, ``version``, ``run``, ``parent``, ``step`` and ``params``
 (``caliper._adapter.TorchAdapter.state``). ``caliper.stop`` makes the hook of that checkpoint
 send what is pending and raise ``SystemExit(0)`` before the weights change. It also ends a pause.
+
+A managed run does not outlive the process that started it. On POSIX, ``prepare`` starts a daemon
+thread that reads the parent's process id every ``PARENT_POLL_S`` seconds. When the parent ends,
+also in a crash where the app cannot end its children, the process gets a new parent, and the
+thread ends the run at once with exit code ``PARENT_GONE_EXIT``. Nothing reads the run after that,
+so the thread does not wait for a checkpoint.
 """
 from __future__ import annotations
 
 import json
 import os
+import sys
+import threading
+import time
 import warnings
 
 from ._adapter import TORCH
@@ -63,6 +72,10 @@ FORMAT = "caliper.checkpoint"
 VERSION = 1
 """The ``version`` field of a checkpoint file."""
 FLUSH_S = 2.0
+# How often the run checks that the process that started it still runs, and the exit code when it
+# does not.
+PARENT_POLL_S = 0.5
+PARENT_GONE_EXIT = 1
 """Seconds that a stop waits at most for pending snapshots before the script ends."""
 NONE = object()
 """What ``value`` returns for a parameter that the runner gives no value."""
@@ -170,6 +183,7 @@ class ManagedRun:
             RuntimeError: When the model does not match the checkpoint.
         """
         self._pkg = pkg
+        watch_parent()
         with pkg.LOCK:
             pkg._auto_tried = True       # the server carries the views, not the shared memory
         pkg.serve()
@@ -274,6 +288,47 @@ def _set(p, v) -> None:
 
 _key = None
 _run = None
+_parent_watch = None
+
+
+def _parent_gone(ppid: int, interval: float) -> None:
+    while os.getppid() == ppid:
+        time.sleep(interval)
+    try:
+        sys.stderr.write(f"caliper: the process {ppid} that started this managed run ended, so "
+                         "the run ends\n")
+        sys.stderr.flush()
+    except Exception:                    # noqa: BLE001 - the exit goes on
+        pass
+    os._exit(PARENT_GONE_EXIT)
+
+
+def watch_parent(interval: float = PARENT_POLL_S) -> bool:
+    """End this process when the process that started it ends (POSIX), once per process.
+
+    The app ends its children by their process ids when it closes. After a crash of the app
+    nothing does, so the child itself sees that its parent changed and exits with
+    ``PARENT_GONE_EXIT``.
+
+    Args:
+        interval (float): Seconds between two reads of the parent's process id.
+
+    Returns:
+        bool: Whether a watch runs now. ``False`` on Windows, where the runner's job object ends
+        the children, and when the parent is already the init process.
+    """
+    global _parent_watch
+    if _parent_watch is not None:
+        return True
+    if os.name != "posix":
+        return False
+    ppid = os.getppid()
+    if ppid <= 1:
+        return False
+    _parent_watch = threading.Thread(target=_parent_gone, args=(ppid, interval),
+                                     name="caliper-parent-watch", daemon=True)
+    _parent_watch.start()
+    return True
 
 
 def current():

@@ -3,7 +3,8 @@ does (the CALIPER_RUN_* variables, output into output.log) and acts as the runne
 link that the script writes into its link file. The link file is written, the parameter values
 apply, the action caliper.checkpoint writes a loadable file, a fork resumes from it at the
 checkpoint's step with a changed parameter and its first loss continues the parent's,
-caliper.stop ends the process with exit code 0, and watch(model) alone serves an inference loop.
+caliper.stop ends the process with exit code 0, watch(model) alone serves an inference loop, and a
+run ends when the process that started it ends without ending it.
 
 The scripts pace their loops with a short sleep; the tests wait only on files and messages."""
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import signal
 import stat
 import subprocess
 import sys
@@ -239,3 +241,52 @@ def test_values_that_do_not_fit_warn_or_clamp(tmp_path, monkeypatch):
         assert M.current().values == {}
     monkeypatch.delenv("CALIPER_RUN_DIR")
     assert M.current() is None and ctl.param("c", 0.5).value == 0.5
+
+
+LAUNCH = """
+import os, subprocess, sys, time
+script, steps, pid_file, log, link = sys.argv[1:6]
+child = subprocess.Popen([sys.executable, script, steps], stdout=open(log, "wb"),
+                         stderr=subprocess.STDOUT)
+with open(pid_file, "w") as f:
+    f.write(str(child.pid))
+end = time.monotonic() + 60
+while not os.path.exists(link) and child.poll() is None and time.monotonic() < end:
+    time.sleep(0.02)
+os._exit(0)                       # as in a crash of the app: nothing ends the child
+"""
+
+
+@pytest.mark.skipif(os.name != "posix", reason="the job object of the runner covers Windows")
+def test_a_run_ends_when_the_process_that_started_it_ends(tmp_path):
+    """The parent of a serving managed run exits without ending it; the run sees its new parent
+    and exits within a few seconds, and says why in its output."""
+    run_dir = tmp_path / "runs" / "orphan"
+    run_dir.mkdir(parents=True)
+    script, launch = tmp_path / "script.py", tmp_path / "launch.py"
+    script.write_text(TRAIN)
+    launch.write_text(LAUNCH)
+    pid_file, log, link = tmp_path / "pid", run_dir / "output.log", run_dir / "link"
+    env = dict(os.environ, PYTHONPATH=PYTHONPATH, CALIPER_SESSION="0", CALIPER_NETIO="0",
+               CALIPER_RUN_ID="orphan", CALIPER_RUN_DIR=str(run_dir),
+               CALIPER_RUN_LINK_FILE=str(link))
+    for k in ("CALIPER_RUN_PARAMS", "CALIPER_RUN_RESUME", "CALIPER_RUN_PARENT"):
+        env.pop(k, None)
+    subprocess.run([sys.executable, str(launch), str(script), str(run_dir / "steps.jsonl"),
+                    str(pid_file), str(log), str(link)], env=env, timeout=120, check=True)
+    pid = int(pid_file.read_text())
+    alive = True
+    end = time.monotonic() + 15
+    while time.monotonic() < end:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            alive = False
+            break
+        time.sleep(0.05)
+    if alive:
+        os.kill(pid, signal.SIGKILL)      # by its own pid, so that no process is left
+    text = log.read_text(errors="replace")
+    assert link.exists(), text
+    assert not alive, f"the run {pid} outlived its parent:\n{text}"
+    assert "that started this managed run ended" in text
