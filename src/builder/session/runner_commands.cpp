@@ -144,16 +144,6 @@ std::string shown(const std::string& s, bool name = false, bool value = false) {
     return out + "\"";
 }
 
-std::string value_text(const json& v) {
-    if (v.is_string()) {
-        const std::string s = v.get<std::string>();
-        const bool plain = !s.empty() && s.find_first_of(" \t,\"") == std::string::npos && !reads_as_scalar(s);
-        return plain ? s : "\"" + s + "\"";
-    }
-    if (v.is_boolean()) return v.get<bool>() ? "true" : "false";
-    return v.dump();
-}
-
 // A value as a card shows it: a string as shown() gives it, a Boolean as true
 // or false, and a number as JSON writes it.
 std::string card_value(const json& v) {
@@ -388,7 +378,7 @@ std::string run_params_text(const json& params) {
     std::string out;
     auto add = [&out](const std::string& name, const json& value) {
         if (!out.empty()) out += ' ';
-        out += name + "=" + value_text(value);
+        out += shown(name, true) + "=" + card_value(value);
     };
     if (params.is_object()) {
         for (auto it = params.begin(); it != params.end(); ++it) add(it.key(), it.value());
@@ -405,15 +395,8 @@ std::string run_card_text(const CommandInvocation& inv, const std::string& scrip
     // passes the limits, so nothing here is cut.
     const json& a = inv.args;
     const auto params = [&a] {
-        std::string out;
         const auto it = a.find("params");
-        if (it == a.end() || !it->is_array()) return out;
-        for (const auto& p : *it) {
-            if (!p.is_object() || !p.contains("name") || !p["name"].is_string() || !p.contains("value")) continue;
-            if (!out.empty()) out += ' ';
-            out += shown(p["name"].get<std::string>(), true) + "=" + card_value(p["value"]);
-        }
-        return out;
+        return it != a.end() && it->is_array() ? run_params_text(*it) : std::string();
     };
     if (inv.name == "run.start") {
         std::string args;

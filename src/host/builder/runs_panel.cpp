@@ -13,6 +13,7 @@
 #include <cfloat>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <set>
@@ -25,42 +26,166 @@ using nlohmann::json;
 
 namespace {
 
-// One word of a field: its text without the quotes, and whether it had any.
+// One word of a field: its text with the quotes taken away and their escapes
+// read, the place in it of its first '=' outside quotes, whether quotes
+// follow that '=', and the word as the person typed it.
 struct Word {
     std::string text;
+    std::size_t eq = std::string::npos;
     bool quoted = false;
+    std::string typed;
 };
 
-// Splits at spaces (and at commas when `commas`); double quotes keep both
-// inside one word. False for an open quote.
-bool words_of(const std::string& text, bool commas, std::vector<Word>* out) {
+int hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+// The `n` hex digits at text[i], or -1.
+long hex_at(const std::string& text, std::size_t i, std::size_t n) {
+    if (i + n > text.size()) return -1;
+    long v = 0;
+    for (std::size_t k = 0; k < n; ++k) {
+        const int d = hex_digit(text[i + k]);
+        if (d < 0) return -1;
+        v = v * 16 + d;
+    }
+    return v;
+}
+
+void put_utf8(std::string& out, std::uint32_t cp) {
+    if (cp < 0x80) {
+        out += static_cast<char>(cp);
+    } else if (cp < 0x800) {
+        out += static_cast<char>(0xC0 | (cp >> 6));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+        out += static_cast<char>(0xE0 | (cp >> 12));
+        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else {
+        out += static_cast<char>(0xF0 | (cp >> 18));
+        out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    }
+}
+
+// Reads the escape at text[i], a backslash in quotes, as the card writes it
+// (cb::run_card_text()): the escapes of JSON, with a surrogate pair as one
+// character. Appends the character to *out and moves i past the escape; false
+// with *problem for any other escape, also for the card's \xHH of a byte that
+// is not UTF-8, which the session refuses before any card shows.
+bool read_escape(const std::string& text, std::size_t& i, const std::string& field, std::string* out,
+                 std::string* problem) {
+    if (i + 1 >= text.size()) {
+        *problem = "A quote in " + field + " is not closed.";
+        return false;
+    }
+    const char e = text[i + 1];
+    const char* simple = nullptr;
+    switch (e) {
+        case '"': simple = "\""; break;
+        case '\\': simple = "\\"; break;
+        case '/': simple = "/"; break;
+        case 'b': simple = "\b"; break;
+        case 'f': simple = "\f"; break;
+        case 'n': simple = "\n"; break;
+        case 'r': simple = "\r"; break;
+        case 't': simple = "\t"; break;
+        default: break;
+    }
+    if (simple) {
+        *out += simple;
+        i += 2;
+        return true;
+    }
+    if (e == 'u') {
+        const long first = hex_at(text, i + 2, 4);
+        if (first < 0) {
+            *problem = field + " has a \\u in quotes without four hex digits.";
+            return false;
+        }
+        std::uint32_t cp = static_cast<std::uint32_t>(first);
+        std::size_t len = 6;
+        if (cp >= 0xD800 && cp <= 0xDBFF) {
+            const long second = text.compare(i + 6, 2, "\\u") == 0 ? hex_at(text, i + 8, 4) : -1;
+            if (second >= 0xDC00 && second <= 0xDFFF) {
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (static_cast<std::uint32_t>(second) - 0xDC00);
+                len = 12;
+            }
+        }
+        if (cp >= 0xD800 && cp <= 0xDFFF) {
+            *problem = field + " has the escape " + text.substr(i, 6) + " in quotes without its other half.";
+            return false;
+        }
+        put_utf8(*out, cp);
+        i += len;
+        return true;
+    }
+    const unsigned char lead = static_cast<unsigned char>(e);
+    const std::size_t n = (lead & 0xE0) == 0xC0 ? 2 : (lead & 0xF0) == 0xE0 ? 3 : (lead & 0xF8) == 0xF0 ? 4 : 1;
+    *problem = field + " has the escape \\" + text.substr(i + 1, n) +
+               " in quotes, which is not known; write \\\\ for a backslash.";
+    return false;
+}
+
+// Splits a field into words as the card writes its texts: at spaces (and at
+// commas when `commas`), where double quotes keep spaces, commas and '='
+// inside one word and read the card's escapes (read_escape()). Outside quotes
+// every character is itself, a backslash too. False with *problem for an
+// open quote or an escape that the card does not write.
+bool words_of(const std::string& text, bool commas, const std::string& field, std::vector<Word>* out,
+              std::string* problem) {
     out->clear();
     Word w;
     bool in_word = false, in_quote = false;
-    for (char c : text) {
+    std::size_t start = 0;
+    for (std::size_t i = 0; i < text.size();) {
+        const char c = text[i];
         if (in_quote) {
-            if (c == '"')
+            if (c == '"') {
                 in_quote = false;
-            else
+                ++i;
+            } else if (c == '\\') {
+                if (!read_escape(text, i, field, &w.text, problem)) return false;
+            } else {
                 w.text += c;
+                ++i;
+            }
             continue;
         }
         if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || (commas && c == ',')) {
-            if (in_word) out->push_back(std::move(w));
+            if (in_word) {
+                w.typed = text.substr(start, i - start);
+                out->push_back(std::move(w));
+            }
             w = Word();
             in_word = false;
+            ++i;
             continue;
         }
+        if (!in_word) start = i;
         in_word = true;
         if (c == '"') {
             in_quote = true;
-            w.quoted = true;
+            if (w.eq != std::string::npos) w.quoted = true;
         } else {
+            if (c == '=' && w.eq == std::string::npos) w.eq = w.text.size();
             w.text += c;
         }
+        ++i;
     }
-    if (in_quote) return false;
-    if (in_word) out->push_back(std::move(w));
+    if (in_quote) {
+        *problem = "A quote in " + field + " is not closed.";
+        return false;
+    }
+    if (in_word) {
+        w.typed = text.substr(start);
+        out->push_back(std::move(w));
+    }
     return true;
 }
 
@@ -131,17 +256,35 @@ std::vector<std::string> cells_of(const cb::RunEntry& e) {
 const char* kColumnTitles[RunsPanelLayout::kColumns] = {"Id", "State", "Script", "Parent", "Step", "Detail"};
 const float kColumnShares[RunsPanelLayout::kColumns] = {0.16f, 0.12f, 0.26f, 0.14f, 0.10f, 0.22f};
 
-// The words of `text` in lines no wider than `width`.
+// The card's text in lines no wider than `width`, broken at spaces, and
+// inside a word wider than a line after its last character that fits. The
+// text is not read: every character shows, in order, quotes and escapes too,
+// and the lines joined at their breaks give the text back.
 std::vector<std::string> wrap(const std::string& text, float width, const RunsMeasure& measure) {
     std::vector<std::string> lines;
-    std::vector<Word> words;
-    if (!words_of(text, false, &words)) words = {Word{text, false}};
     std::string line;
-    for (const auto& w : words) {
-        const std::string next = line.empty() ? w.text : line + " " + w.text;
+    for (std::size_t i = 0; i <= text.size();) {
+        std::size_t j = text.find(' ', i);
+        if (j == std::string::npos) j = text.size();
+        std::string word = text.substr(i, j - i);
+        i = j + 1;
+        while (measure(word) > width) {
+            if (!line.empty()) lines.push_back(std::move(line));
+            line.clear();
+            std::size_t cut = 0;
+            while (cut < word.size()) {
+                std::size_t next = cut + 1;
+                while (next < word.size() && (static_cast<unsigned char>(word[next]) & 0xC0) == 0x80) ++next;
+                if (cut > 0 && measure(word.substr(0, next)) > width) break;
+                cut = next;
+            }
+            lines.push_back(word.substr(0, cut));
+            word.erase(0, cut);
+        }
+        const std::string next = line.empty() ? word : line + " " + word;
         if (!line.empty() && measure(next) > width) {
-            lines.push_back(line);
-            line = w.text;
+            lines.push_back(std::move(line));
+            line = word;
         } else {
             line = next;
         }
@@ -157,18 +300,14 @@ std::vector<std::string> wrap(const std::string& text, float width, const RunsMe
 bool parse_run_params(const std::string& text, json* pairs, std::string* problem) {
     *pairs = json::array();
     std::vector<Word> words;
-    if (!words_of(text, true, &words)) {
-        *problem = "A quote in Parameters is not closed.";
-        return false;
-    }
+    if (!words_of(text, true, "Parameters", &words, problem)) return false;
     std::set<std::string> seen;
     for (const auto& w : words) {
-        const std::size_t eq = w.text.find('=');
-        if (eq == std::string::npos) {
-            *problem = "Parameter " + w.text + " has no value; write name=value.";
+        if (w.eq == std::string::npos) {
+            *problem = "Parameter " + w.typed + " has no value; write name=value.";
             return false;
         }
-        const std::string name = w.text.substr(0, eq), value = w.text.substr(eq + 1);
+        const std::string name = w.text.substr(0, w.eq), value = w.text.substr(w.eq + 1);
         if (name.empty()) {
             *problem = "A parameter has no name.";
             return false;
@@ -197,10 +336,7 @@ bool parse_run_params(const std::string& text, json* pairs, std::string* problem
 bool split_run_args(const std::string& text, std::vector<std::string>* args, std::string* problem) {
     args->clear();
     std::vector<Word> words;
-    if (!words_of(text, false, &words)) {
-        *problem = "A quote in Arguments is not closed.";
-        return false;
-    }
+    if (!words_of(text, false, "Arguments", &words, problem)) return false;
     if (words.size() > cb::kRunMaxArgs) {
         *problem = "A run takes at most " + std::to_string(cb::kRunMaxArgs) + " arguments.";
         return false;

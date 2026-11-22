@@ -37,14 +37,15 @@ before the weights change, and returns the path. The file is a ``torch.save`` di
 (``caliper._adapter.TorchAdapter.state``). ``caliper.stop`` makes the hook of that checkpoint
 send what is pending and raise ``SystemExit(0)`` before the weights change. It also ends a pause.
 
-A managed run does not outlive the app that started it. On POSIX, the import of this module in a
-process with ``CALIPER_RUN_DIR`` and ``CALIPER_RUN_APP_PID`` starts a daemon thread, and so does
-``prepare``. It looks every ``PARENT_POLL_S`` seconds whether the app still runs: while the app is
-this process's parent, whether the parent changed, else whether a process of that id exists. When
-the app ended, also in a crash where the app cannot end its children and also before the import,
-the thread ends the run at once with exit code ``PARENT_GONE_EXIT``. Nothing reads the run after
-that, so the thread does not wait for a checkpoint. Without ``CALIPER_RUN_APP_PID`` the thread
-watches the parent's process id, from ``prepare`` on.
+A managed run does not outlive the app that started it. On POSIX, ``import caliper`` in a process
+with ``CALIPER_RUN_APP_PID`` imports this module and starts a daemon thread (``watch_parent``), and
+so does ``prepare``. Without the variable, ``import caliper`` imports nothing of this module. The
+thread looks every ``PARENT_POLL_S`` seconds whether the app still runs: while the app is this
+process's parent, whether the parent changed, else whether a process of that id exists. When the
+app ended, also in a crash where the app cannot end its children and also before the import, the
+thread ends the run at once with exit code ``PARENT_GONE_EXIT``. Nothing reads the run after that,
+so the thread does not wait for a checkpoint. Without ``CALIPER_RUN_APP_PID`` the thread watches
+the parent's process id, from ``prepare`` on.
 """
 from __future__ import annotations
 
@@ -406,8 +407,3 @@ def value(name: str):
     run = current()
     return NONE if run is None else run.values.get(name, NONE)
 
-
-# A run of the model runner watches its app from the import of this module on, so that a crash of
-# the app before watch() also ends it.
-if os.environ.get(ENV_DIR) and os.environ.get(ENV_APP_PID):
-    watch_parent()

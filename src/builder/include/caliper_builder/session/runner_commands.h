@@ -79,9 +79,10 @@ nlohmann::json run_entry_json(const RunEntry& entry);
 bool valid_run_id(const std::string& id);
 
 // Parameters as name=value pairs separated by spaces, "lr=0.05 opt=adam",
-// from an object of values by name or from the command table's pairs. A
-// string value that reads as a number, true or false, or that holds a space,
-// a tab, a comma or a quote, is in double quotes.
+// from an object of values by name or from the command table's pairs, with
+// each name and string value as run_card_text() shows every text: the card's
+// parameters are this text, and the runs panel's Parameters field reads it
+// back to the same names and values.
 std::string run_params_text(const nlohmann::json& params);
 
 // The card text of run.start, run.fork and run.stop (design/hosted-runs.md,

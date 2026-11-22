@@ -42,6 +42,12 @@ import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+# A process that the app's model runner started ends when the app ends, also when the app crashes
+# before the script calls watch() or param(). Without CALIPER_RUN_APP_PID nothing of this loads.
+if os.environ.get("CALIPER_RUN_APP_PID"):
+    from . import _managed
+    _managed.watch_parent()
+
 from ._convert import (CMAPS, SERIES_CAPACITY, check_range, cmap_index, plan_histogram,
                        plan_points, plan_series, plan_show)
 from . import _dataview

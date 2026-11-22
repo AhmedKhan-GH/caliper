@@ -321,6 +321,62 @@ def test_a_run_ends_when_its_app_ended_before_the_import(tmp_path):
     assert f"the process {gone.pid} that started this managed run ended" in text
 
 
+@pytest.mark.skipif(os.name != "posix", reason="the job object of the runner covers Windows")
+def test_import_caliper_alone_ends_a_run_whose_app_ended(tmp_path):
+    """A script that imports caliper and calls neither watch() nor param() still ends when the app
+    named by CALIPER_RUN_APP_PID ended, with the reason in its output."""
+    gone = subprocess.Popen([sys.executable, "-c", "pass"])
+    gone.wait(timeout=60)                 # an app that ended: its id names no process now
+    run_dir = tmp_path / "runs" / "bare"
+    run_dir.mkdir(parents=True)
+    script = tmp_path / "script.py"
+    script.write_text("import time\nimport caliper\ntime.sleep(60)\n")
+    env = dict(os.environ, PYTHONPATH=PYTHONPATH, CALIPER_SESSION="0", CALIPER_NETIO="0",
+               CALIPER_RUN_ID="bare", CALIPER_RUN_DIR=str(run_dir),
+               CALIPER_RUN_LINK_FILE=str(run_dir / "link"), CALIPER_RUN_APP_PID=str(gone.pid))
+    for k in ("CALIPER_RUN_PARAMS", "CALIPER_RUN_RESUME", "CALIPER_RUN_PARENT"):
+        env.pop(k, None)
+    proc = subprocess.Popen([sys.executable, str(script)], env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT)
+    try:
+        out, _ = proc.communicate(timeout=20)
+    except subprocess.TimeoutExpired:
+        proc.kill()                       # by its own pid, so that no process is left
+        out, _ = proc.communicate()
+    text = out.decode(errors="replace")
+    assert proc.returncode == M.PARENT_GONE_EXIT, text
+    assert f"the process {gone.pid} that started this managed run ended" in text
+
+
+IMPORT_PROBE = """
+import json, sys, threading
+import caliper
+print(json.dumps({"managed": "caliper._managed" in sys.modules, "torch": "torch" in sys.modules,
+                  "watch": any(t.name == "caliper-parent-watch" for t in threading.enumerate())}))
+"""
+
+
+def test_import_caliper_watches_the_app_only_when_the_app_is_named(tmp_path):
+    """Without CALIPER_RUN_APP_PID, import caliper imports neither caliper._managed nor torch and
+    starts no thread; with it, the import starts the watch of the app and still imports no torch."""
+    env = dict(os.environ, PYTHONPATH=PYTHONPATH, CALIPER_SESSION="0", CALIPER_NETIO="0")
+    for k in M._VARS + (M.ENV_APP_PID,):
+        env.pop(k, None)
+
+    def probe(env):
+        done = subprocess.run([sys.executable, "-c", IMPORT_PROBE], env=env, cwd=str(tmp_path),
+                              capture_output=True, timeout=60)
+        assert done.returncode == 0, done.stderr.decode(errors="replace")
+        return json.loads(done.stdout.decode().strip().splitlines()[-1])
+
+    assert probe(dict(env, CALIPER_RUN_ID="plain", CALIPER_RUN_DIR=str(tmp_path))) == \
+        {"managed": False, "torch": False, "watch": False}
+    assert probe(env) == {"managed": False, "torch": False, "watch": False}
+    # This process is the app: it runs while the probe looks.
+    named = probe(dict(env, CALIPER_RUN_APP_PID=str(os.getpid())))
+    assert named == {"managed": True, "torch": False, "watch": os.name == "posix"}
+
+
 def test_write_never_writes_through_a_link(tmp_path, monkeypatch):
     """The temporary file of _write is new (O_EXCL | O_NOFOLLOW): a link at its name is refused and
     the file that the link names is not changed; a normal write gives mode 0600."""
