@@ -435,6 +435,8 @@ struct SpecPage::Impl {
         // session's event ring and the app's run control, which acts on the
         // attached script.
         runtime->set_instruments(s ? &s->events() : nullptr, app.run_control());
+        // The values that references read and the kept steps (design/instrument-interface.md).
+        runtime->set_instrument_state(s ? &s->values() : nullptr, s ? &s->history() : nullptr);
         if (s == bound) return;
         if (widget) {
             // Its session has gone or changed: the surface forgets its
@@ -686,8 +688,13 @@ struct SpecPage::Impl {
             // Instruments (design/instruments.md): the session's event ring and
             // the app's run control, which the app sets and takes back while
             // a script is attached, so they are read at each frame.
-            if (cb::Session* ses = app ? app->session() : nullptr) runtime->set_instruments(&ses->events(), ses->run_control());
-            else runtime->set_instruments(nullptr, nullptr);
+            if (cb::Session* ses = app ? app->session() : nullptr) {
+                runtime->set_instruments(&ses->events(), ses->run_control());
+                runtime->set_instrument_state(&ses->values(), &ses->history());
+            } else {
+                runtime->set_instruments(nullptr, nullptr);
+                runtime->set_instrument_state(nullptr, nullptr);
+            }
             // The page routes ⌘K and Escape (spec_key_action); the surface
             // takes Enter on its card and polls its agent.
             if (widget) widget->frame(look, focused, /*keys=*/false);

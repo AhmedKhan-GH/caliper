@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace caliper_scene {
 
@@ -40,6 +41,13 @@ struct StageProgram {
     bool material = false;          // the program holds a material stage
     bool vertex = false;            // the program holds a vertex stage
     uint64_t source_hash = 0;       // of the composed source, for the runtime's cache
+    // The stage's `params` (design/instrument-interface.md, Program
+    // Parameters): the bytes of the uniform struct `Params` that the prelude
+    // declares, one 4-byte field for each name in struct order, padded to 16
+    // bytes; empty when the stage has none. A changed value rewrites these
+    // bytes and needs no compile; the backend binds them as the stage's
+    // uniform at the next frame.
+    std::vector<uint8_t> params;
 };
 
 // The stages of a scene panel, which the compiler asks while it compiles.
