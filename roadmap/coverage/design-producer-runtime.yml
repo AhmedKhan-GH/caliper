@@ -2,7 +2,7 @@
 title: Producer runtime plan page
 kind: page
 source: design/producer-runtime.md
-summary: The plan page design/producer-runtime.md, the design of the producer runtime that M2 builds,
+summary: The plan page design/producer-runtime.md, the design of the producer runtime,
   with the measurements of its design spike, read heading by heading.
 not_features:
 - Measurements
@@ -76,6 +76,6 @@ entries:
   ids:
   - REN-08
 - heading: Work Items
-  item: The M2 work items of the producer runtime with their sizes.
+  item: The work items of the producer runtime with their sizes.
   ids:
   - SPC-14

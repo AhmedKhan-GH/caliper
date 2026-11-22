@@ -701,7 +701,7 @@ target_include_directories(caliper PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
 
 # House fonts (SIL OFL, in-repo under assets/fonts) ship beside the executable
 # like applets do: <exe dir>/assets/fonts. Dev builds also know the source tree
-# so a stale copy never hides a font edit. The founder's Sternbild Display face
+# so a stale copy never hides a font edit. The Sternbild Display face
 # is NOT in the repo; sternbild_fonts.cpp loads it from a user path at runtime.
 add_custom_command(TARGET caliper POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory

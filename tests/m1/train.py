@@ -1,4 +1,4 @@
-"""The training script of the M1 acceptance test: a small model and optimizer with a fixed seed.
+"""The training script of the instrument acceptance test: a small model and optimizer with a fixed seed.
 
 Its only Caliper line is `caliper.watch(model, optimizer)`. After each optimizer step it reads the
 learning rate that the step used. It prints `lr <value> step <n>` when that rate changes, so that

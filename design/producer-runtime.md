@@ -1,8 +1,8 @@
 # Producer Runtime
 
-This page plans the producer runtime of M2. The producer runtime is the graphics layer without a window, loaded as a native module into the process of a PyTorch training script. Caliper's own WGSL compute then reads training tensors in place, and only the results travel to a viewer.
+This page plans the producer runtime. The producer runtime is the graphics layer without a window, loaded as a native module into the process of a PyTorch training script. Caliper's own WGSL compute then reads training tensors in place, and only the results travel to a viewer.
 
-A design spike measured the plan on one machine before M2 starts: an Apple M5 Max with macOS, Metal and the MPS backend of torch. The spike code is not part of the repository. It linked a small library against the graphics layer (`src/host/gfx/`) and called it from Python. The measurements and their method are in [Measurements](#measurements).
+A design spike measured the plan on one machine before the work starts: an Apple M5 Max with macOS, Metal and the MPS backend of torch. The spike code is not part of the repository. It linked a small library against the graphics layer (`src/host/gfx/`) and called it from Python. The measurements and their method are in [Measurements](#measurements).
 
 ## Design
 
@@ -10,7 +10,7 @@ A design spike measured the plan on one machine before M2 starts: an Apple M5 Ma
 
 The runtime has three parts, and each part has one owner:
 
-- **Native module.** `caliper._producer` is a nanobind module, built as `caliper._native` is built, that links the graphics layer with the Metal backend (the Vulkan backend on Windows and Linux) and the Naga library of the compiler track. It holds one `caliper_gfx::Backend`, the imports of the bound tensors, the programs and their output buffers.
+- **Native module.** `caliper._producer` is a nanobind module, built as `caliper._native` is built, that links the graphics layer with the Metal backend (the Vulkan backend on Windows and Linux) and the Naga library of the shader compiler. It holds one `caliper_gfx::Backend`, the imports of the bound tensors, the programs and their output buffers.
 - **Framework adapter.** `caliper._adapters.torch` is the only part that knows torch. It gives a tensor as a DLPack capsule, it gives the two sync points, and it installs the hooks. A later framework needs only a new adapter.
 - **Python facade.** The facade belongs to `caliper.watch(model, optimizer)`. It runs the programs at `caliper.step()`, keeps the budget, and gives each output to the publish path of a `caliper.scene` call.
 
@@ -43,8 +43,8 @@ class TorchAdapter:
         optimizer.register_step_pre_hook for parameters."""
 
     def hooks(self, model, optimizer, on_outputs, on_grads, on_step) -> None: ...
-    def probe(self, model, inputs) -> "PyCapsule": ...                 # M11
-    def state(self, model, optimizer) -> bytes: ...                    # M4
+    def probe(self, model, inputs) -> "PyCapsule": ...                 # for a later probe feature
+    def state(self, model, optimizer) -> bytes: ...                    # for a later state feature
 ```
 
 The native module has this interface. Each call runs on the thread that calls `caliper.step()`.
@@ -80,7 +80,7 @@ A program can never write a training tensor. Three checks enforce this, and the 
 
 1. **WGSL validation.** Naga refuses a store to a `var<storage, read>` binding. The spike's program with `w[base] = 0.0;` failed with "writing to this location is not permitted".
 2. **Binder rule.** The runtime refuses a program whose declaration binds a training tensor to a binding that is not `var<storage, read>` (`BindingType::Storage` in the reflection). The spike refused a program that declares the tensor binding `read_write`, before `create_program`.
-3. **Layer rule.** `ExternalBuffer` gets a `read_only` field. The core refuses a bind group that puts a read-only import in a `StorageReadWrite` binding. The spike showed that the core accepts such a bind group today. Thus this field is an M2 task. An import already has no `kCopyDst` usage, and `write_buffer` already refuses a buffer without it.
+3. **Layer rule.** `ExternalBuffer` gets a `read_only` field. The core refuses a bind group that puts a read-only import in a `StorageReadWrite` binding. The spike showed that the core accepts such a bind group today. Thus this field is part of the work. An import already has no `kCopyDst` usage, and `write_buffer` already refuses a buffer without it.
 
 Naga's MSL also declares the binding `const device`, and the Metal compiler refuses a write to it.
 
@@ -120,7 +120,7 @@ The spike measured the first use, from the load of its library to the end of the
 
 ### Method
 
-The spike translated one WGSL program with the pinned Naga driver (`tools/shaders/naga-driver`, Naga 30.0.2), because the Naga library of the compiler track was not ready. The program computes the norm of each row of one bound weight, one invocation per row, and writes one float per row. A Python script gave the tensor through `__dlpack__()`, and the spike library made the backend with `make_metal_backend` on the tensor's device and imported the buffer with `import_buffer`.
+The spike translated one WGSL program with the pinned Naga driver (`tools/shaders/naga-driver`, Naga 30.0.2), because the Naga library of the shader compiler was not ready. The program computes the norm of each row of one bound weight, one invocation per row, and writes one float per row. A Python script gave the tensor through `__dlpack__()`, and the spike library made the backend with `make_metal_backend` on the tensor's device and imported the buffer with `import_buffer`.
 
 The training loop is a multilayer perceptron with AdamW and mean squared error, on fixed random batches with seed 0, in two sizes. The small model has layers 784, 1024, 1024 and 10 with a batch of 256, and 1,500 timed steps. The medium model has layers 2048, 4096, 4096 and 2048 with a batch of 512, and 250 timed steps. Each run has 30 steps of warm-up. Each number is the median steps per second of five runs, one process per run, with the modes in a different order in each repetition. The first series ran the modes with a pass every N steps with a sync point on each step, which was a fault of the spike. Thus a second series ran them again, with the sync points only on the pass steps, beside its own base. A run took less than 6 seconds, and the peak memory footprint was 0.47 GB for the small model and 1.6 GB for the medium model under `/usr/bin/time -l`. The runs held one heavy slot while the other slots were free, and the 1-minute load average before each run is in the table.
 
@@ -177,9 +177,9 @@ Vulkan with CUDA on Windows and Linux is expected to follow the same design: tor
 
 ## Work Items
 
-| Work item | Size in builder days | Depends on |
+| Work item | Size in days | Depends on |
 |---|---|---|
-| `caliper._producer`: the native module, its build in the wheel, and the Python facade | 2 | The Naga library of the compiler track |
+| `caliper._producer`: the native module, its build in the wheel, and the Python facade | 2 | The Naga library of the shader compiler |
 | Torch adapter: export, the two sync points, the step pre-hook and the version check | 1 | None |
 | Read-only imports in the layer, with the binder rule and its tests | 1 | None |
 | Budget per step: step time, the rate N, skip and the reason in the view | 1 | The adapter |
@@ -188,7 +188,7 @@ Vulkan with CUDA on Windows and Linux is expected to follow the same design: tor
 | Load-on-demand test and the counters of REN-31 for the three routes | 0.5 | The facade |
 | Failure paths: refusals, timeouts and a lost device | 0.5 | The facade |
 
-These items come to 9 builder days. The M2 estimate of 8 days for the producer runtime does not include the in-process scene route, and the shared-memory route waits for scenes through shared memory.
+These items come to 9 days. The shared-memory route waits for scenes through shared memory.
 
 ## Decisions
 
@@ -200,5 +200,5 @@ These items come to 9 builder days. The M2 estimate of 8 days for the producer r
 
 ## Open Decisions
 
-- **Deferred wait.** A wait in the next optimizer step pre-hook gave 95.8 % instead of 93.0 % on the medium model, but 41.1 % instead of 64.1 % on the small model, with runs from 397 to 643 steps per second. The cause is not known. Recommendation: keep the wait at once in M2, and measure the deferred wait again with the GPU time per pass before it becomes an option.
-- **GPU-side sync with torch's queue.** A module built against the torch C++ API could make torch's queue signal and wait on a shared event and remove the CPU waits. Recommendation: not in M2. Revisit if the budget lowers the rate of the demo models below one pass per 10 steps.
+- **Deferred wait.** A wait in the next optimizer step pre-hook gave 95.8 % instead of 93.0 % on the medium model, but 41.1 % instead of 64.1 % on the small model, with runs from 397 to 643 steps per second. The cause is not known. Recommendation: keep the wait at once in the first version, and measure the deferred wait again with the GPU time per pass before it becomes an option.
+- **GPU-side sync with torch's queue.** A module built against the torch C++ API could make torch's queue signal and wait on a shared event and remove the CPU waits. Recommendation: not in the first version. Revisit if the budget lowers the rate of the demo models below one pass per 10 steps.

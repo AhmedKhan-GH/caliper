@@ -5,7 +5,6 @@ source: design/instruments.md
 summary: The plan page design/instruments.md, read heading by heading; each plan heading has an entry
   or is listed as holding no feature.
 not_features:
-- Status
 - Open Points
 entries:
 - heading: Spec Version 1

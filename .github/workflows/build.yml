@@ -27,7 +27,7 @@ concurrency:
 # from scratch.
 env:
   LIBTORCH_VERSION: 2.5.1
-  # The Python torch of the M1 acceptance test matches the libtorch the build fetches.
+  # The Python torch of the instrument acceptance test matches the libtorch the build fetches.
   M1_TORCH_VERSION: 2.5.1
   SCCACHE_GHA_ENABLED: "true"
 
@@ -53,7 +53,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: v0.19.0
-      # The M1 acceptance test (tests/m1/driver.py) runs a training script with torch and the native
+      # The instrument acceptance test (tests/m1/driver.py) runs a training script with torch and the native
       # network sender, so a virtual environment holds a pinned torch, numpy and websockets, and
       # scripts/build_netio.py builds caliper._netio into the checkout with that Python. The pip
       # downloads are cached by the torch pin.
@@ -64,12 +64,12 @@ jobs:
         with:
           path: ~/Library/Caches/pip
           key: pip-m1-macos-arm64-torch${{ env.M1_TORCH_VERSION }}
-      - name: Make the M1 Python
+      - name: Make the instrument test Python
         run: |
           python3 -m venv "$RUNNER_TEMP/m1-py"
           "$RUNNER_TEMP/m1-py/bin/pip" install "torch==$M1_TORCH_VERSION" numpy websockets nanobind
           "$RUNNER_TEMP/m1-py/bin/python" scripts/build_netio.py
-          PYTHONPATH=python "$RUNNER_TEMP/m1-py/bin/python" -c "import torch, caliper, caliper._netio; print('M1 Python ready, torch', torch.__version__)"
+          PYTHONPATH=python "$RUNNER_TEMP/m1-py/bin/python" -c "import torch, caliper, caliper._netio; print('Instrument test Python ready, torch', torch.__version__)"
       # slang (SystemVerilog) is vendored but linked by nothing; its submodule pin is not always
       # fetchable, and the fallback is a newer slang that needs C++20, so CI skips configuring it.
       # The Metal backend is Objective-C++, so the OBJC/OBJCXX launchers are set as well.
@@ -98,23 +98,23 @@ jobs:
       # that must have a GPU sets CALIPER_REQUIRE_GPU=1 to turn them into
       # failures.
       - run: ctest --test-dir cmake-build-release --output-on-failure --timeout 600
-      # The M1 acceptance test on its own, so that its result is visible. A skip because the runner has
+      # The instrument acceptance test on its own, so that its result is visible. A skip because the runner has
       # no Metal device is accepted. A skip because torch or the native network sender is missing is a
       # setup error, and so is any other outcome that is neither a pass nor a Metal skip.
-      - name: M1 acceptance test
+      - name: Instrument acceptance test
         run: |
           set -o pipefail
           log="$RUNNER_TEMP/m1-acceptance.log"
           ctest --test-dir cmake-build-release -R caliper_m1_acceptance --output-on-failure -V --timeout 300 | tee "$log"
           if grep -q "caliper_m1_acceptance passed" "$log"; then
-            echo "M1 acceptance: RAN and passed"
+            echo "Instrument acceptance: RAN and passed"
           elif grep -q "caliper_m1_acceptance skipped: .*Metal" "$log"; then
-            echo "M1 acceptance: SKIPPED because the runner has no Metal device"
+            echo "Instrument acceptance: SKIPPED because the runner has no Metal device"
           elif grep -q "caliper_m1_acceptance skipped: torch or the native network sender is missing" "$log"; then
-            echo "::error::M1 acceptance: SKIPPED because torch or the native network sender is missing (CI setup error)"
+            echo "::error::Instrument acceptance: SKIPPED because torch or the native network sender is missing (CI setup error)"
             exit 1
           else
-            echo "::error::M1 acceptance: neither passed nor skipped for lack of Metal"
+            echo "::error::Instrument acceptance: neither passed nor skipped for lack of Metal"
             exit 1
           fi
       - if: failure()

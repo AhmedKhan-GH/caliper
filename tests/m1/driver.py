@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The driver of the M1 acceptance test and the founder check.
+"""The driver of the instrument acceptance test and the instrument check.
 
 It starts tests/m1/train.py, starts the hidden app on the script's stream link and caliper-mcp
 as a child over stdio, and sends tests/m1/transcript.jsonl through the MCP tools. It waits on the

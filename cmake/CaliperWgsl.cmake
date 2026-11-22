@@ -22,7 +22,7 @@
 # The Python wheel configures this same tree (pyproject.toml), thus it gets the target in the
 # same way: a define in [tool.scikit-build.cmake.define], such as CALIPER_WGSL_DOWNLOAD = "ON"
 # once the archives are pinned, or SKBUILD_CMAKE_DEFINE=CALIPER_WGSL_LIBRARY=<file> for one
-# build. The library is static, thus the native module that uses it (the producer runtime of M2)
+# build. The library is static, thus the native module that uses it (the producer runtime)
 # links caliper::wgsl under if(TARGET caliper::wgsl) and the wheel carries no extra file.
 
 set(CALIPER_WGSL_LIBRARY "" CACHE FILEPATH "Prebuilt caliper_wgsl static library (empty: none)")
