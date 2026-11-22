@@ -398,6 +398,8 @@ class Link:
             self.attach(msg.session)
         elif t is _wire.Control and self.p.controls is not None:
             self.p.controls.on_control(self, msg)
+        elif t is _wire.Program and self.p.controls is not None:
+            self.p.controls.programs.on_program(self, msg)
         elif t is _wire.Bye:
             raise _Fatal(_wire.CLOSE_NORMAL, "bye")
         elif t is _wire.Error:
