@@ -8,6 +8,7 @@ not_features:
 - Measurements
 - Method
 - Results
+- Runtime Results
 - Documented and Undocumented Behavior
 - Risks
 - Decisions
@@ -54,6 +55,11 @@ entries:
   - REN-10
 - heading: Budget per Step
   item: At most 4 % of the step time, with an adaptive rate and a skip over the time limit.
+  ids:
+  - SPC-14
+- heading: Cadence Measurement
+  item: The step time T and the cost C of a pass step measured between two empty queues of torch, for
+    the cadence N.
   ids:
   - SPC-14
 - heading: Output Path
