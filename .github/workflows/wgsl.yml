@@ -16,9 +16,11 @@ on:
         default: false
 permissions:
   contents: read
+# A newer run on the same ref cancels an older one. A publish run has its own group, thus
+# nothing cancels it and it cancels no other run.
 concurrency:
-  group: wgsl-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish) && format('wgsl-publish-{0}', github.run_id) || format('wgsl-{0}', github.ref) }}
+  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && inputs.publish) }}
 
 jobs:
   # The runtime WGSL compiler (tools/shaders/caliper-wgsl) is a Rust static library that Caliper's
@@ -54,6 +56,8 @@ jobs:
           key: caliper-wgsl-${{ matrix.platform }}-${{ hashFiles('tools/shaders/caliper-wgsl/Cargo.lock', 'tools/shaders/caliper-wgsl/Cargo.toml', 'tools/shaders/caliper-wgsl/src/**') }}
       - name: Build the library
         run: python tools/shaders/caliper-wgsl/build_library.py --out wgsl-out --archive
+      - name: Run the Rust unit tests
+        run: cargo test --locked --manifest-path tools/shaders/caliper-wgsl/Cargo.toml --target-dir wgsl-out/cargo-target
       - name: System libraries of the static link
         run: |
           cargo rustc --release --locked --manifest-path tools/shaders/caliper-wgsl/Cargo.toml \
@@ -85,11 +89,12 @@ jobs:
             wgsl-out/*.sha256
           if-no-files-found: error
 
-  # On a manual run with publish set, the archives become the assets of the release
+  # On a manual run from main with publish set, the archives become the assets of the release
   # caliper-wgsl-<version>, with their hashes, which go into tools/shaders/caliper-wgsl/prebuilt.cmake.
+  # A run from another ref builds and tests but publishes nothing.
   publish:
     needs: build
-    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
