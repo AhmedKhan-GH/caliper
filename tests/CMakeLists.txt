@@ -895,7 +895,7 @@ set_tests_properties(caliper_wgsl_tests PROPERTIES LABELS "wgsl")
 # as a child. tests/m1/driver.py runs tests/m1/transcript.jsonl through the MCP tools and exits 77
 # where the app, Metal, torch or the native network sender is missing, which ctest reports as skipped.
 # CALIPER_M1_PYTHON names a Python with torch; the builder's test Python or the one found is the default.
-if(NOT WIN32 AND CALIPER_WITH_BUILDER AND TARGET caliper-mcp)
+if(NOT WIN32 AND CALIPER_WITH_BUILDER)
     set(CALIPER_M1_PYTHON "" CACHE FILEPATH "A Python with torch for the M1 acceptance test; empty uses the test Python")
     set(_m1_python "${CALIPER_M1_PYTHON}")
     if(NOT _m1_python AND CALIPER_BUILDER_TEST_PYTHON)
