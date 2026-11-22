@@ -157,6 +157,18 @@ struct ItemAxis {
 // retired, at most one take() (only while no previous claim is held), and after
 // it either drew() (applied) or unclaim() (the apply failed).
 //
+// One version of a published resource of a program, as the stream received it
+// (RESOURCE of wire protocol 3.2, design/programmable-graphics.md, Resource
+// Message): the run's step at the pass, the valid elements and their bytes.
+struct ReceivedResource {
+    std::string program, resource;
+    int64_t step = 0;
+    uint32_t count = 0;                  // valid elements
+    uint32_t stride = 0;                 // bytes of one element
+    uint32_t width = 0, height = 0;      // a texture's size; 0 for a buffer
+    std::shared_ptr<const std::vector<uint8_t>> bytes;   // count * stride bytes
+};
+
 // Claims (what a producer may rely on): a view has at most two claimed
 // snapshots. take() moves the current claim to "previous" and claims the
 // newest completed snapshot; the previous one stays claimed until
@@ -273,6 +285,14 @@ public:
     // pass_ms, share, budget and limit), as JSON text by view name; a view
     // whose snapshots carry none is left out.
     virtual std::map<std::string, std::string> view_cadences() { return {}; }
+
+    // ---- wire protocol 3.2 draft: resources (frame thread) -----------------------
+    // Whether the attached script takes instances of pieces: it and the server
+    // announced `programs` and `resources`, and programs may go out now.
+    virtual bool takes_pieces() { return false; }
+    // The RESOURCE versions since the last call, the newest of each resource,
+    // in the order each began to wait.
+    virtual std::vector<ReceivedResource> take_resources() { return {}; }
 };
 
 // Why open_shm_source returned NULL.

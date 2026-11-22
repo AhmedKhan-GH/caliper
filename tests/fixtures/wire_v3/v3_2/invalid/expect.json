@@ -285,6 +285,96 @@
   "program_params_string.bin": {
     "error": "bad_request"
   },
+  "program_piece_bind_kind.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_bind_many.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_bind_name.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_bind_program.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_bind_resource.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_bind_tensor_long.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_common_utf8.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_declaration.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_derive_utf8.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_draw_big.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_draw_dtype.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_draw_empty.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_halves.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_hash_prefix.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_hash_upper.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_manifest_list.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_manifest_missing.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_name.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_name_digit.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_name_long.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_panel.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_params.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_pin_list.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_segment_line.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_segment_part.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_segments_many.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_sha256.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_version.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_version_big.bin": {
+    "error": "bad_request"
+  },
+  "program_piece_wgsl.bin": {
+    "error": "bad_request"
+  },
   "program_pixels_side.bin": {
     "error": "bad_request"
   },
@@ -385,6 +475,72 @@
     "error": "bad_request"
   },
   "recordings_id.bin": {
+    "error": "bad_request"
+  },
+  "resource_count_missing.bin": {
+    "error": "bad_request"
+  },
+  "resource_count_u32.bin": {
+    "error": "bad_request"
+  },
+  "resource_count_wrap.bin": {
+    "error": "bad_request"
+  },
+  "resource_name.bin": {
+    "error": "bad_request"
+  },
+  "resource_name_digit.bin": {
+    "error": "bad_request"
+  },
+  "resource_over_max.bin": {
+    "error": "bad_request"
+  },
+  "resource_program.bin": {
+    "error": "bad_request"
+  },
+  "resource_program_missing.bin": {
+    "error": "bad_request"
+  },
+  "resource_section_2d.bin": {
+    "error": "bad_request"
+  },
+  "resource_section_dtype.bin": {
+    "error": "bad_request"
+  },
+  "resource_section_missing.bin": {
+    "error": "bad_request"
+  },
+  "resource_section_short.bin": {
+    "error": "bad_request"
+  },
+  "resource_step.bin": {
+    "error": "bad_request"
+  },
+  "resource_step_big.bin": {
+    "error": "bad_request"
+  },
+  "resource_step_float.bin": {
+    "error": "bad_request"
+  },
+  "resource_stride_big.bin": {
+    "error": "bad_request"
+  },
+  "resource_stride_odd.bin": {
+    "error": "bad_request"
+  },
+  "resource_stride_zero.bin": {
+    "error": "bad_request"
+  },
+  "resource_texture_count.bin": {
+    "error": "bad_request"
+  },
+  "resource_texture_side.bin": {
+    "error": "bad_request"
+  },
+  "resource_texture_stride.bin": {
+    "error": "bad_request"
+  },
+  "resource_width_alone.bin": {
     "error": "bad_request"
   },
   "segments_odd.bin": {

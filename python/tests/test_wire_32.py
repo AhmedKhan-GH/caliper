@@ -36,7 +36,7 @@ EXPECT = json.loads((V32 / "invalid" / "expect.json").read_text())
 def test_the_frames_are_there():
     assert len(VALID) >= 60
     types = {w.decode_frame((FIXTURES / f"{n}.bin").read_bytes()).type for n in VALID}
-    assert {0x70, 0x71, 0x72, 0x73, 0x74, 0x78, 0x79, 0x7A, 0x7B, 0x80, 0x81} <= types
+    assert {0x70, 0x71, 0x72, 0x73, 0x74, 0x78, 0x79, 0x7A, 0x7B, 0x80, 0x81, 0x82} <= types
     msgs = [w.decode((FIXTURES / f"{n}.bin").read_bytes()) for n in VALID]
     parts = {m.part for m in msgs if isinstance(m, w.SceneUpdate)}
     assert parts == set(w.PARTS)
@@ -62,7 +62,9 @@ def test_frame_matches_description(name):
     assert struct.unpack_from("<IHHHHIIHH", buf, 0) == (
         h["magic"], h["major"], h["minor"], h["type"], h["flags"], h["frame_len"],
         h["meta_len"], h["section_count"], h["reserved"])
-    assert h["minor"] == w.MINOR_3_2 == 2 and h["flags"] == 0 and len(buf) <= 600
+    # An instance of a piece carries its manifest and its WGSL, thus a larger frame.
+    most = 2048 if "_piece" in name else 600
+    assert h["minor"] == w.MINOR_3_2 == 2 and h["flags"] == 0 and len(buf) <= most
     f = w.decode_frame(buf)
     assert f.meta == desc["meta"]
     for s, d in zip(f.sections, desc["sections"]):
@@ -177,7 +179,7 @@ def test_31_receivers_find_the_frames_well_formed():
     for n in VALID:
         f = w.decode_frame((FIXTURES / f"{n}.bin").read_bytes())
         assert f.type in (0x01, 0x02, 0x10, 0x20, 0x24, 0x30, 0x31, 0x50, 0x51, 0x52, 0x70, 0x71,
-                          0x72, 0x73, 0x74, 0x78, 0x79, 0x7A, 0x7B, 0x80, 0x81)
+                          0x72, 0x73, 0x74, 0x78, 0x79, 0x7A, 0x7B, 0x80, 0x81, 0x82)
 
 
 @pytest.mark.parametrize("name", sorted(EXPECT))
@@ -450,7 +452,7 @@ def test_page_example_is_the_golden_frame():
     assert rows == {"0070": "scene_update", "0071": "scene_transforms", "0072": "scene_clear",
                     "0073": "scene_classes", "0074": "text", "0078": "recordings",
                     "0079": "recording_open", "007a": "cursor", "007b": "time_state",
-                    "0080": "program", "0081": "program_state"}
+                    "0080": "program", "0081": "program_state", "0082": "resource"}
 
 
 
@@ -737,3 +739,72 @@ def test_program_codec_rules():
     # A wgsl section of exactly the limit passes.
     big = "a" * w.PROGRAM_SOURCE_MAX
     assert len(w.decode(w.encode(w.Program(1, "set", "img", decl, big, sha))).wgsl) == len(big)
+
+
+def test_golden_values_of_pieces_and_resources():
+    p = _d("program_set_piece")
+    assert (p.op, p.id, p.request_id, p.panel) == ("set", "heads", 31, "bars")
+    assert p.piece == {"name": "head_bars", "version": 2, "hash": p.piece["hash"]}
+    assert p.piece["hash"].startswith("sha256:") and p.manifest["resources"][0]["id"] == "heads"
+    assert p.bind == {"attn": "live:blocks.0.attn"} and p.params == {"gain": 2.0}
+    assert [x["part"] for x in p.segments] == ["lib/colormap@1", "common.wgsl"]
+    assert p.declaration is None and p.wgsl is None and p.sha256 is None
+    assert "mean_heads" in p.derive and "\u00b5" in p.draw and "colormap__viridis" in p.common
+    f = w.decode_frame((V32 / "program_set_piece.bin").read_bytes())
+    assert [s.name for s in f.sections] == ["common", "derive", "draw"]
+    relay = _d("program_set_piece_draw")
+    assert (relay.request_id, relay.derive) == (0, None) and relay.draw == p.draw
+    assert _d("program_remove_piece").request_id == 0
+    assert _d("program_state_piece").programs[0]["kind"] == "piece"
+    b = _d("resource_buffer")
+    assert (b.program, b.resource, b.step, b.count, b.stride, b.width) == ("heads", "heads", 1200, 4, 4, None)
+    assert np.frombuffer(b.data, np.float32).tolist() == [0.5, 0.25, 0.125, 0.0625]
+    st = _d("resource_struct")
+    assert (st.count, st.stride, len(st.data)) == (2, 24, 48)
+    assert np.frombuffer(st.data, np.uint32)[:4].tolist() == [3, 1, 1, 2]
+    t = _d("resource_texture")
+    assert (t.width, t.height, t.count, t.stride, t.step) == (2, 2, 4, 4, 1210)
+    assert np.frombuffer(t.data, np.uint32)[0] == 0xff0000ff
+    e = _d("resource_empty")
+    assert (e.count, e.stride, len(e.data)) == (0, 24, 0)
+
+
+def test_resource_codec_rules():
+    data = np.arange(12, dtype=np.float32)
+    r = w.Resource("arcs", "arcs", 7, 2, 24, data)
+    buf = w.encode(r)
+    back = w.decode(buf)
+    assert (back.program, back.resource, back.step, back.count, back.stride) == ("arcs", "arcs", 7, 2, 24)
+    assert isinstance(back.data, memoryview) and bytes(back.data) == data.tobytes()   # a view, no copy
+    # The section's length must equal count * stride.
+    with pytest.raises(w.MessageError, match="count \\* stride"):
+        w.decode(w.encode(w.Resource("arcs", "arcs", 7, 3, 24, data)))
+    # A count past the byte limit is refused before any product is taken.
+    frame = w.encode_frame(w.MsgType.RESOURCE, {"program": "a", "resource": "r", "step": 0,
+                                                "count": 2**32 - 1, "stride": 256},
+                           [w.Section.from_array("resource", np.zeros(256, np.uint8))])
+    with pytest.raises(w.MessageError, match="at most 67043328 bytes"):
+        w.decode(frame)
+    # The limit leaves room for the header and the metadata in one frame.
+    assert w.RESOURCE_MAX_BYTES + 65536 == w.MAX_FRAME_BYTES
+
+
+def test_instance_codec_rules():
+    src = "@fragment fn f() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }"
+    pin = {"name": "dots", "version": 1, "hash": "sha256:" + "0" * 64}
+    inst = w.Program(4, "set", "dots", piece=pin, manifest={"name": "dots"}, draw=src)
+    assert w.decode(w.encode(inst)) == inst
+    # A draw half of exactly the limit passes; one byte more is refused.
+    big = "a" * w.PROGRAM_SOURCE_MAX
+    assert len(w.decode(w.encode(w.Program(4, "set", "dots", piece=pin, manifest={},
+                                             derive=big))).derive) == len(big)
+    with pytest.raises(w.MessageError):
+        w.decode(w.encode(w.Program(4, "set", "dots", piece=pin, manifest={}, derive=big + "a")))
+    common = "b" * w.PIECE_COMMON_MAX
+    ok = w.Program(4, "set", "dots", piece=pin, manifest={}, common=common, draw=src)
+    assert len(w.decode(w.encode(ok)).common) == w.PIECE_COMMON_MAX
+    with pytest.raises(w.MessageError):
+        w.decode(w.encode(w.Program(4, "set", "dots", piece=pin, manifest={}, common=common + "b",
+                                    draw=src)))
+    # A params op of an instance keeps the params form.
+    assert w.decode(w.encode(w.Program(5, "params", "dots", params={"gain": 1}))).piece is None

@@ -1905,6 +1905,131 @@ void check_declaration(const Json& d) {
     opt(d, "builtin", [](const Json& v) { return bounded_text(&v, kBuiltinMax); }, "a string of 1 to 32 bytes");
 }
 
+// ---- 3.2 draft: instances of pieces and their resources (capability "resources") ----------------------
+// The pin of a piece: name [a-z][a-z0-9_]* of 1 to 32 bytes, version 1 to 1,000,000, and hash "sha256:" with
+// 64 lowercase hex digits.
+bool piece_pin_ok(const Json& v) {
+    if (!v.is_object()) return false;
+    const Json* name = v.find("name");
+    if (!name || !name->is_string()) return false;
+    const std::string& n = name->as_string();
+    if (n.empty() || n.size() > CALIPER_NET_PIECE_NAME_MAX || !lower(n[0])) return false;
+    for (char c : n)
+        if (!(lower(c) || digit(c) || c == '_')) return false;
+    const Json* version = v.find("version");
+    if (!version || !int_in(*version, 1, CALIPER_NET_PIECE_VERSION_MAX)) return false;
+    const Json* hash = v.find("hash");
+    if (!hash || !hash->is_string() || hash->as_string().compare(0, 7, "sha256:") != 0) return false;
+    const Json hex(hash->as_string().substr(7));
+    return sha256_hex_ok(&hex);
+}
+// One value of "bind": live:<a tensor name of 1 to 255 bytes>, or program:<program id>/<resource name>.
+bool binding_ok(const Json& v) {
+    if (!v.is_string()) return false;
+    const std::string& s = v.as_string();
+    if (s.compare(0, 5, "live:") == 0) return s.size() > 5 && s.size() - 5 <= CALIPER_NET_TENSOR_NAME_MAX;
+    if (s.compare(0, 8, "program:") != 0) return false;
+    const size_t slash = s.find('/', 8);
+    if (slash == std::string::npos) return false;
+    const Json id(s.substr(8, slash - 8));
+    return program_id_ok(&id) && param_name_ok(s.substr(slash + 1));
+}
+bool bind_ok(const Json& v) {
+    if (!v.is_object() || v.size() > CALIPER_NET_PROGRAM_MAX_INPUTS) return false;
+    for (const auto& kv : v.members())
+        if (!param_name_ok(kv.first) || !binding_ok(kv.second)) return false;
+    return true;
+}
+bool segments_ok(const Json& v) {
+    if (!v.is_array() || v.size() > CALIPER_NET_PIECE_SEGMENTS_MAX) return false;
+    for (const Json& x : v.items()) {
+        if (!x.is_object() || !name_ok(x.find("part"))) return false;
+        const Json* first = x.find("first_line");
+        const Json* lines = x.find("lines");
+        if (!first || !int_in(*first, 1, 0xffffffffull) || !lines || !is_u32(*lines)) return false;
+    }
+    return true;
+}
+// An optional (B,) u8 section of 1 to `most` bytes of UTF-8.
+std::optional<std::string> text_section(const Frame& f, const char* name, uint64_t most) {
+    const Section* s = f.section(name);
+    if (!s) return std::nullopt;
+    if (!s->is(CALIPER_NET_DTYPE_U8, 1)) bad(std::string("'") + name + "' must be a (B,) u8 section");
+    if (s->shape[0] < 1 || (uint64_t)s->shape[0] > most)
+        bad(std::string("'") + name + "' holds 1 to " + std::to_string(most) + " bytes, got " +
+            std::to_string(s->shape[0]));
+    if (!utf8_ok(s->data, (size_t)s->shape[0])) bad(std::string("'") + name + "' is not UTF-8");
+    return std::string(reinterpret_cast<const char*>(s->data), (size_t)s->shape[0]);
+}
+// The set of an instance of a piece, in _wire.py's order: no key or section of the one-pass form, piece,
+// manifest, bind, params, panel, segments, then the sections common, derive and draw.
+void program_instance(const Frame& f, Program* p) {
+    const Json& m = f.meta;
+    if (m.find("declaration") || m.find("scene") || m.find("sha256") || f.section(CALIPER_NET_SECTION_WGSL))
+        bad("an instance of a piece carries no 'declaration', 'scene', 'sha256' or 'wgsl'");
+    p->piece = req(m, "piece", piece_pin_ok, "a pin {name, version, hash}");
+    p->manifest = req(m, "manifest", is_obj, "an object");
+    if (const Json* v = opt(m, "bind", bind_ok, "at most 8 inputs bound to live:<tensor> or program:<id>/<resource>"))
+        p->bind = *v;
+    if (const Json* v = opt(m, "params", params_ok, "1 to 16 names (WGSL field names) of finite numbers"))
+        p->params = *v;
+    if (const Json* v = opt(m, "panel", is_name, "a panel id")) p->panel = v->as_string();
+    if (const Json* v = opt(m, "segments", segments_ok, "at most 16 segments {part, first_line, lines}"))
+        p->segments = *v;
+    p->common = text_section(f, CALIPER_NET_SECTION_COMMON, CALIPER_NET_PIECE_COMMON_MAX);
+    p->derive = text_section(f, CALIPER_NET_SECTION_DERIVE, CALIPER_NET_PROGRAM_SOURCE_MAX);
+    p->draw = text_section(f, CALIPER_NET_SECTION_DRAW, CALIPER_NET_PROGRAM_SOURCE_MAX);
+    if (!p->derive && !p->draw) bad("an instance of a piece carries the section 'derive' or 'draw'");
+}
+
+// RESOURCE, in _wire.py's order: program, resource, step, count, stride, width and height, the byte limit
+// on count before any product, then the section. Each product below is of values already bounded, thus
+// none wraps: width and height are at most 4096, and count is at most RESOURCE_MAX_BYTES / stride.
+Resource resource(const Frame& f) {
+    const Json& m = f.meta;
+    Resource r;
+    r.program = req(m, "program", [](const Json& v) { return program_id_ok(&v); },
+                    "a program id of at most 55 bytes").as_string();
+    r.resource = req(m, "resource", [](const Json& v) { return v.is_string() && param_name_ok(v.as_string()); },
+                     "a WGSL name of 1 to 63 bytes").as_string();
+    r.step = u64(req(m, "step", is_safe_uint, "an unsigned integer"));
+    r.count = u32(req(m, "count", is_u32, "a uint32"));
+    r.stride = u32(req(m, "stride", [](const Json& v) {
+                           return int_in(v, 4, CALIPER_NET_RESOURCE_STRIDE_MAX) && u64(v) % 4 == 0;
+                       }, "a multiple of 4 from 4 to 256"));
+    auto side = [](const Json& v) { return int_in(v, 1, CALIPER_NET_RESOURCE_SIDE_MAX); };
+    const Json* width = opt(m, "width", side, "an integer from 1 to 4096");
+    const Json* height = opt(m, "height", side, "an integer from 1 to 4096");
+    if (!width != !height) bad("a texture holds both 'width' and 'height'");
+    if (width) {
+        if (r.stride != 4 || (uint64_t)r.count != u64(*width) * u64(*height))
+            bad("a texture has a stride of 4 and width * height elements");
+        r.width = u32(*width);
+        r.height = u32(*height);
+    }
+    if (r.count > CALIPER_NET_RESOURCE_MAX_BYTES / r.stride)
+        bad("a resource holds at most " + std::to_string(CALIPER_NET_RESOURCE_MAX_BYTES) + " bytes");
+    const Section* s = f.section(CALIPER_NET_SECTION_RESOURCE);
+    if (!s || !s->is(CALIPER_NET_DTYPE_U8, 1)) bad("a resource needs a (B,) u8 'resource' section");
+    const uint64_t want = (uint64_t)r.count * r.stride;
+    if (s->shape[0] < 0 || (uint64_t)s->shape[0] != want)
+        bad("'resource' holds count * stride = " + std::to_string(want) + " bytes, got " + std::to_string(s->shape[0]));
+    r.data = *s;
+    return r;
+}
+
+void resource_to_meta(const Resource& r, Json& m, std::vector<Section>& sections) {
+    m.set("program", r.program);
+    m.set("resource", r.resource);
+    m.set("step", r.step);
+    m.set("count", r.count);
+    m.set("stride", r.stride);
+    if (r.width) m.set("width", *r.width);
+    if (r.height) m.set("height", *r.height);
+    sections.push_back(Section::make(CALIPER_NET_SECTION_RESOURCE, CALIPER_NET_DTYPE_U8, {(int64_t)r.data.size},
+                                     r.data.data, r.data.size));
+}
+
 Program program(const Frame& f) {
     const Json& m = f.meta;
     Program p;
@@ -1919,6 +2044,10 @@ Program program(const Frame& f) {
         if (m.find("declaration")) bad("a params op carries no 'declaration'");
         if (!f.sections.empty()) bad("a params op carries no section");
         p.params = req(m, "params", params_ok, "1 to 16 names (WGSL field names) of finite numbers");
+        return p;
+    }
+    if (m.find("piece")) {
+        program_instance(f, &p);
         return p;
     }
     const Json& d = req(m, "declaration", is_obj, "an object");
@@ -1951,7 +2080,8 @@ bool status_item(const Json& v) {
     const Json* kind = v.find("kind");
     const Json* state = v.find("state");
     // A status item's kind: the output's kind, or "operator" for the program of a built-in operator.
-    if (!(kind && one_of(*kind, {kOutputGeometry, kOutputPixels, kOutputTensor, "operator"}))) return false;
+    if (!(kind && one_of(*kind, {kOutputGeometry, kOutputPixels, kOutputTensor, "operator", CALIPER_NET_STATUS_PIECE})))
+        return false;
     if (!(state && one_of(*state, {"waiting", "review", "compiled", "running", "refused", "stopped"}))) return false;
     auto every = [](const Json& x) { return int_in(x, 1, CALIPER_NET_PROGRAM_EVERY_MAX); };
     if (!opt_ok(v, "every", every) || !opt_ok(v, "every_min", every) || !opt_ok(v, "last_pass_ms", is_nonneg) ||
@@ -1993,9 +2123,21 @@ void program_to_meta(const Program& p, Json& m, std::vector<Section>& sections) 
     if (!p.params.is_null()) m.set("params", p.params);
     if (p.scene) m.set("scene", *p.scene);
     if (p.sha256) m.set("sha256", *p.sha256);
-    if (p.wgsl)
-        sections.push_back(Section::make(CALIPER_NET_SECTION_WGSL, CALIPER_NET_DTYPE_U8, {(int64_t)p.wgsl->size()},
-                                         p.wgsl->data(), p.wgsl->size()));
+    if (!p.piece.is_null()) m.set("piece", p.piece);
+    if (!p.manifest.is_null()) m.set("manifest", p.manifest);
+    if (!p.bind.is_null()) m.set("bind", p.bind);
+    if (p.panel) m.set("panel", *p.panel);
+    if (!p.segments.is_null()) m.set("segments", p.segments);
+    // The sections in _wire.py's order: wgsl, common, derive, draw.
+    const std::pair<const char*, const std::optional<std::string>*> texts[] = {
+        {CALIPER_NET_SECTION_WGSL, &p.wgsl},
+        {CALIPER_NET_SECTION_COMMON, &p.common},
+        {CALIPER_NET_SECTION_DERIVE, &p.derive},
+        {CALIPER_NET_SECTION_DRAW, &p.draw}};
+    for (const auto& [name, text] : texts)
+        if (*text)
+            sections.push_back(Section::make(name, CALIPER_NET_DTYPE_U8, {(int64_t)(*text)->size()}, (*text)->data(),
+                                             (*text)->size()));
 }
 
 void program_state_to_meta(const ProgramState& s, Json& m) {
@@ -2206,6 +2348,8 @@ Encoded to_meta(const Message& msg) {
         program_to_meta(*pg, m, e.sections);
     } else if (const auto* ps = std::get_if<ProgramState>(&msg)) {
         program_state_to_meta(*ps, m);
+    } else if (const auto* rc = std::get_if<Resource>(&msg)) {
+        resource_to_meta(*rc, m, e.sections);
     } else if (const auto* u = std::get_if<Unknown>(&msg)) {
         m = u->meta.is_object() ? u->meta : Json::object();
         m.erase("sections");
@@ -2520,6 +2664,7 @@ DecodeResult decode(const uint8_t* buf, size_t n, Message* out) {
             case CALIPER_NET_MSG_TIME_STATE: *out = time_state(f); break;
             case CALIPER_NET_MSG_PROGRAM: *out = program(f); break;
             case CALIPER_NET_MSG_PROGRAM_STATE: *out = program_state(f); break;
+            case CALIPER_NET_MSG_RESOURCE: *out = resource(f); break;
             default: *out = Unknown{f.type, f.meta, f.sections}; break;
         }
     } catch (const MsgError& e) {
@@ -2581,6 +2726,7 @@ const char* type_name(uint16_t type) {
         case CALIPER_NET_MSG_TIME_STATE: return "time_state";
         case CALIPER_NET_MSG_PROGRAM: return "program";
         case CALIPER_NET_MSG_PROGRAM_STATE: return "program_state";
+        case CALIPER_NET_MSG_RESOURCE: return "resource";
         default: return "?";
     }
 }

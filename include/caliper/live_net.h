@@ -382,7 +382,7 @@ static inline uint32_t caliper_net_align(uint32_t n) {
  *
  * Provisional proposals: the minor version 2, the
  * capabilities, the kinds scene (6), text (7) and bars (8), the messages
- * 0x0070 to 0x0074, 0x0078 to 0x007B, 0x0080 and 0x0081, the dtype u16 (6), the error codes
+ * 0x0070 to 0x0074, 0x0078 to 0x007B and 0x0080 to 0x0082, the dtype u16 (6), the error codes
  * and the limits below. Each is one line here, so
  * a renumbering changes one line (the dtype also has one line in
  * caliper_net_dtype_size above). docs/reference/wire-protocol-3-2.md states
@@ -560,21 +560,41 @@ static inline uint32_t caliper_net_align(uint32_t n) {
 #define CALIPER_NET_PROGRAM_WORKGROUPS_MAX 65535u     /* each of the three "workgroups"     */
 /* 3.2 draft, programmable graphics (design/programmable-graphics.md, Resource Message).
  * "resources": a producer under caliper.watch(model, optimizer) announces it
- * beside "programs". A PROGRAM of an instance of a piece carries the sections
- * "derive", "draw" and "common" in place of "wgsl". After a derive pass, the
- * producer sends each published resource that the pass wrote as one RESOURCE
- * message, type 0x0082, with the section "resource", to each viewer or hub
- * that announced "resources", and it sends the draw half of each installed
- * program to such a viewer as PROGRAM with the sections "draw" and "common".
- * The type 0x0082 is reserved here and defined with its codecs; until then
- * every codec refuses the sections and the type. */
+ * beside "programs", a viewer that draws pieces announces it in HELLO, and a
+ * hub announces it to both. A PROGRAM "set" of an instance of a piece holds
+ * "piece" ({name, version, hash}) and "manifest" (a JSON object), and may
+ * hold "bind", "params", "panel" and "segments", in place of "declaration",
+ * "scene" and "sha256"; it carries the sections "common", "derive" and
+ * "draw" (each UTF-8, with the imports resolved) in place of "wgsl", with
+ * "derive" or "draw" or both. A viewer sends one only to a producer that
+ * announced "resources". After a derive pass, the producer sends each
+ * published resource that the pass wrote as one RESOURCE with the section
+ * "resource" to each viewer or hub that announced "resources". It sends the
+ * draw half of each installed program to such a peer as PROGRAM "set" with
+ * request_id 0 and without the section "derive", when the peer attaches and
+ * after each install, and PROGRAM "remove" with request_id 0 after a
+ * removal. RESOURCE holds "program", "resource", "step" (the run's step at
+ * the pass), "count" (valid elements), "stride" (bytes of one element, a
+ * multiple of 4) and, for a texture, "width" and "height" (count = width *
+ * height, stride 4); its section holds exactly count * stride bytes.
+ * PROGRAM_STATE gives an instance the status kind "piece".
+ * docs/reference/wire-protocol-3-2.md states the keys and checks. */
 #define CALIPER_NET_CAP_RESOURCES        "resources"  /* RESOURCE, and PROGRAM of a piece          */
+#define CALIPER_NET_MSG_RESOURCE         0x0082u      /* P -> V/H, H -> V   one version of one published resource */
 #define CALIPER_NET_SECTION_DERIVE       "derive"     /* u8 (B,): the derive half's WGSL    */
 #define CALIPER_NET_SECTION_DRAW         "draw"       /* u8 (B,): the draw half's WGSL      */
-#define CALIPER_NET_SECTION_COMMON       "common"     /* u8 (B,): the WGSL of both halves   */
+#define CALIPER_NET_SECTION_COMMON       "common"     /* u8 (B,): the lib modules and common.wgsl */
 #define CALIPER_NET_SECTION_RESOURCE     "resource"   /* u8 (B,): the valid bytes of one resource */
+#define CALIPER_NET_STATUS_PIECE         "piece"      /* PROGRAM_STATE "kind" of an instance */
 #define CALIPER_NET_MAX_RESOURCES        8u           /* resources of one program           */
-#define CALIPER_NET_RESOURCE_MAX_BYTES   67108864u    /* bytes of the section "resource"    */
+/* A resource of 64 MiB less 64 KiB fits one frame of CALIPER_NET_MAX_FRAME_BYTES with its metadata. */
+#define CALIPER_NET_RESOURCE_MAX_BYTES   67043328u    /* bytes of the section "resource"    */
+#define CALIPER_NET_RESOURCE_STRIDE_MAX  256u         /* "stride": the bytes of one element */
+#define CALIPER_NET_RESOURCE_SIDE_MAX    4096u        /* a texture's "width" and "height"   */
+#define CALIPER_NET_PIECE_NAME_MAX       32u          /* bytes of "piece" "name", [a-z][a-z0-9_]* */
+#define CALIPER_NET_PIECE_VERSION_MAX    1000000u     /* "piece" "version", from 1          */
+#define CALIPER_NET_PIECE_COMMON_MAX     589824u      /* bytes of "common": 8 lib modules and common.wgsl of 64 KiB each */
+#define CALIPER_NET_PIECE_SEGMENTS_MAX   16u          /* items of "segments"                */
 #define CALIPER_NET_TENSOR_NAME_MAX      255u         /* bytes of an input's "source"       */
 
 #ifdef __cplusplus

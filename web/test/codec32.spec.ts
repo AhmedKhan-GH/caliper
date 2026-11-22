@@ -28,7 +28,8 @@ import {
   CAP_INTERVENTIONS, CAP_PROGRAMS, INTERVENE_ABLATE, MAX_INTERVENTIONS, MAX_POINTS_LISTED, MAX_PROGRAMS, POINT_MAX, PROGRAM_EVERY_MAX,
   PROGRAM_ID_MAX, PROGRAM_MAX_COUNT, PROGRAM_MAX_INPUTS, PROGRAM_MEMORY_MB_MAX, PROGRAM_REMOVE, PROGRAM_SET, PROGRAM_SIDE_MAX,
   PROGRAM_SOURCE_MAX, PROGRAM_STATE_RATE_HZ, PROGRAM_TIME_MS_MAX, PROGRAM_WORKGROUPS_MAX, TENSOR_NAME_MAX,
-  type ControlMsg, type ControlsMsg, type ProgramMsg, type ProgramStateMsg,
+  PIECE_COMMON_MAX, PIECE_NAME_MAX, PIECE_SEGMENTS_MAX, PIECE_VERSION_MAX, RESOURCE_MAX_BYTES, RESOURCE_SIDE_MAX, RESOURCE_STRIDE_MAX, STATUS_PIECE,
+  type ControlMsg, type ControlsMsg, type Message, type ProgramMsg, type ProgramStateMsg, type ResourceMsg,
   type CursorMsg, type SceneClassesMsg, type SceneTransformsMsg, type SceneUpdateMsg, type SnapshotMsg, type TextMsg, type TimeStateMsg,
   type ViewEntry, type ViewsMsg,
 } from '../src/protocol/messages.js';
@@ -336,6 +337,15 @@ test('the 3.2 constants agree with include/caliper/live_net.h', () => {
     CALIPER_NET_MAX_PROGRAMS: MAX_PROGRAMS,
     CALIPER_NET_PROGRAM_ID_MAX: PROGRAM_ID_MAX,
     CALIPER_NET_PROGRAM_SOURCE_MAX: PROGRAM_SOURCE_MAX,
+    CALIPER_NET_MSG_RESOURCE: MSG.resource,
+    CALIPER_NET_RESOURCE_MAX_BYTES: RESOURCE_MAX_BYTES,
+    CALIPER_NET_RESOURCE_STRIDE_MAX: RESOURCE_STRIDE_MAX,
+    CALIPER_NET_RESOURCE_SIDE_MAX: RESOURCE_SIDE_MAX,
+    CALIPER_NET_PIECE_NAME_MAX: PIECE_NAME_MAX,
+    CALIPER_NET_PIECE_VERSION_MAX: PIECE_VERSION_MAX,
+    CALIPER_NET_PIECE_COMMON_MAX: PIECE_COMMON_MAX,
+    CALIPER_NET_PIECE_SEGMENTS_MAX: PIECE_SEGMENTS_MAX,
+    CALIPER_NET_STATUS_PIECE: STATUS_PIECE,
     CALIPER_NET_PROGRAM_STATE_RATE_HZ: PROGRAM_STATE_RATE_HZ,
     CALIPER_NET_POINT_MAX: POINT_MAX,
     CALIPER_NET_MAX_POINTS_LISTED: MAX_POINTS_LISTED,
@@ -1008,4 +1018,53 @@ test('golden values of programs and interventions', async () => {
   expect(c.interventions!.points.map((x) => x.kind)).toEqual(['module', 'head']);
   expect(c.interventions!.active[0].state).toBe('active');
   expect((decode(new Uint8Array(fs.readFileSync(path.join(goldenFrames(), 'v3_1', 'controls.bin')))) as ControlsMsg).interventions).toBeUndefined();
+});
+
+test('golden values of instances of pieces and resources', () => {
+  const sec = (name: string) => decodeFrame(read(`${name}.bin`)).sections.map((x) => x.name);
+  const p = frame32('program_set_piece') as ProgramMsg;
+  expect(sec('program_set_piece')).toEqual(['common', 'derive', 'draw']);
+  expect([p.op, p.id, p.request_id, p.panel]).toEqual(['set', 'heads', 31, 'bars']);
+  expect(p.piece).toEqual({ name: 'head_bars', version: 2, hash: 'sha256:6aa44eda0c257cd658221f0f7d0fddfc7cd77c0d9529e812d63b62c5cfb1a040' });
+  expect(p.bind).toEqual({ attn: 'live:blocks.0.attn' });
+  expect(p.params).toEqual({ gain: 2 });
+  expect(p.segments).toEqual([{ part: 'lib/colormap@1', first_line: 1, lines: 1 }, { part: 'common.wgsl', first_line: 2, lines: 1 }]);
+  expect(p.declaration).toBeUndefined();
+  expect(p.wgsl).toBeUndefined();
+  expect(p.derive).toContain('fn mean_heads');
+  expect(p.draw).toContain('fn bar_vertex');
+  expect(p.draw).toContain('\u00b5');
+  expect(p.common).toContain('fn bar_height');
+  expect((p.manifest as { name: string }).name).toBe('head_bars');
+  const d = frame32('program_set_piece_draw') as ProgramMsg;
+  expect(sec('program_set_piece_draw')).toEqual(['common', 'draw']);
+  expect([d.request_id, d.derive, d.piece!.name]).toEqual([0, undefined, 'head_bars']);
+  expect(d.draw).toBe(p.draw);
+  expect(d.common).toBe(p.common);
+  const r = frame32('program_remove_piece') as ProgramMsg;
+  expect([r.op, r.request_id]).toEqual(['remove', 0]);
+  const st = frame32('program_state_piece') as ProgramStateMsg;
+  expect([st.step, st.programs[0].kind, st.programs[0].state, st.programs[0].runs]).toEqual([1200, STATUS_PIECE, 'running', 4]);
+
+  const b = frame32('resource_buffer') as ResourceMsg;
+  expect([b.type, b.program, b.resource, b.step, b.count, b.stride, b.width, b.height]).toEqual(['resource', 'heads', 'heads', 1200, 4, 4, undefined, undefined]);
+  const f = decodeFrame(read('resource_buffer.bin'));
+  expect(Array.from(new Float32Array(b.data.slice().buffer))).toEqual([0.5, 0.25, 0.125, 0.0625]);
+  const t = frame32('resource_texture') as ResourceMsg;
+  expect([t.program, t.resource, t.width, t.height, t.count, t.stride, t.step, t.data.length]).toEqual(['arcs', 'glow', 2, 2, 4, 4, 1210, 16]);
+  const u = frame32('resource_struct') as ResourceMsg;
+  expect(u.data.length).toBe(u.count * u.stride);
+  const e = frame32('resource_empty') as ResourceMsg;
+  expect([e.count, e.stride, e.step, e.data.length]).toEqual([0, 24, 1220, 0]);
+
+  // The data is a view of the frame's own buffer, not a copy.
+  const bytes = read('resource_buffer.bin');
+  const view = decode(bytes) as ResourceMsg;
+  expect(view.data.buffer).toBe(bytes.buffer);
+  expect(f.sections[0].bytes.byteLength).toBe(16);
+  // A decoded golden frame without a float key encodes to its bytes (the generic round trip above covers the others by metadata).
+  for (const n of ['program_state_piece', 'resource_empty', 'resource_struct', 'resource_texture']) {
+    const raw = read(`${n}.bin`);
+    expect(Array.from(encode(decode(raw) as Message, PROTOCOL_MINOR_3_2)), n).toEqual(Array.from(raw));
+  }
 });

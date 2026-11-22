@@ -17,6 +17,11 @@
 // move the cursor on the command thread; every member function takes its own
 // lock. The session creates one StepHistory (Session::history()), and
 // history.cpp defines it.
+//
+// The step history also keeps the versions of each published resource of
+// the open spec's programs, under "<program>/<resource>"
+// (design/programmable-graphics.md, Kept Versions), beside the sources'
+// kept steps, so that the step cursor scrubs them too.
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -38,6 +43,45 @@ inline constexpr std::uint64_t kHistoryBudgetBytes = std::uint64_t(512) << 20;
 // leaves the rest of the budget to the other sources; a reduce step before
 // the source's history point keeps more.
 inline constexpr std::uint64_t kHistorySourceBytes = kHistoryBudgetBytes / 4;
+
+// The kept versions of one published resource: `keep` of the piece's
+// resource, 256 when absent and at most 4,096.
+inline constexpr std::uint32_t kResourceKeepDefault = 256;
+inline constexpr std::uint32_t kResourceKeepMax = 4096;
+// All resources together keep at most half the budget, and one resource at
+// most kHistorySourceBytes; the sources share the rest.
+inline constexpr std::uint64_t kHistoryResourceBytes = kHistoryBudgetBytes / 2;
+
+// One field of a resource's element as program.read gives it: its WGSL type
+// (f32, i32, u32, vec2<f32>, vec4<f32>, vec2<u32> or vec4<u32>) and its byte
+// offset in the element.
+struct ResourceField {
+    std::string name;
+    std::string type;
+    std::uint32_t offset = 0;
+};
+
+// One version of a published resource: the valid elements that a derive pass
+// wrote at a step of the run, as RESOURCE carried them.
+struct ResourceVersion {
+    std::int64_t step = 0;
+    std::uint32_t count = 0;                 // valid elements
+    std::uint32_t stride = 0;                // bytes of one element
+    std::uint32_t width = 0, height = 0;     // a texture's size; 0 for a buffer
+    std::shared_ptr<const std::vector<std::uint8_t>> bytes;   // count * stride bytes, shared with readers
+    std::uint64_t nbytes() const { return bytes ? bytes->size() : 0; }
+};
+
+// What one resource keeps, for program.read.
+struct KeptResource {
+    std::string key;                         // "<program>/<resource>"
+    std::int64_t first = 0, last = 0;        // the oldest and newest kept step
+    std::int64_t versions = 0;
+    std::uint32_t keep = kResourceKeepDefault;
+    std::int64_t stride = 0;                 // the thinning stride in steps; 0 while every version is kept
+    std::uint64_t bytes = 0;
+    std::vector<ResourceField> fields;       // the element's fields; empty when not known
+};
 
 // The fields of the cursor (design/instrument-interface.md, Cursor).
 struct CursorState {
@@ -70,7 +114,9 @@ public:
     StepHistory& operator=(const StepHistory&) = delete;
 
     // Sets each source's depth and history point from the spec, keeps what
-    // still fits and clears what changed.
+    // still fits and clears what changed. The versions of a resource of a
+    // program that the spec no longer has, or that pins another piece, are
+    // dropped.
     void configure(const spec::Spec& spec);
     // Clears every source, for a new attachment.
     void clear();
@@ -88,13 +134,31 @@ public:
     // source gives each value with its step.
     void append_series(const std::string& catalog_id, std::int64_t step, double value);
 
+    // A new version of the resource `resource` of the program `program`, an
+    // instance of a piece in the open spec (else the version is not kept).
+    // `keep` is the piece's `keep` for it (0: kResourceKeepDefault), and
+    // `fields` its element's fields. A version at a step below the newest
+    // step of the same resource starts a new epoch, as append() does. When
+    // the ring holds `keep` versions or kHistorySourceBytes, every second
+    // kept version is dropped, and from then on a version is kept only when
+    // its step is at least twice the former stride after the newest kept
+    // one; the newest version is always there until a later one replaces it.
+    // Thus the kept versions span the whole run evenly.
+    void append_resource(const std::string& program, const std::string& resource, std::uint32_t keep,
+                         std::vector<ResourceField> fields, ResourceVersion version);
+    // The newest kept version of "<program>/<resource>" at or before `step`.
+    std::optional<ResourceVersion> resource_at(const std::string& key, std::int64_t step) const;
+    // What each resource keeps, by key.
+    std::vector<KeptResource> kept_resources() const;
+
     // The newest kept value of `source` at or before `step`.
     std::optional<std::pair<std::int64_t, TensorData>> at(const std::string& source, std::int64_t step) const;
     // The kept values of `source` from `lo` to `hi`, both included, oldest first.
     std::vector<std::pair<std::int64_t, TensorData>> window(const std::string& source, std::int64_t lo,
                                                             std::int64_t hi) const;
     std::vector<KeptSource> kept() const;
-    // The union of the kept steps of every source, for a step back or forward.
+    // The union of the kept steps of every source and every resource, for a
+    // step back or forward.
     std::vector<std::int64_t> kept_steps() const;
 
     CursorState cursor() const;
