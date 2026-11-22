@@ -217,6 +217,7 @@ def run(a):
             for k, v in s.get("expect", {}).items():
                 if body.get(k) != v:
                     raise Fail(f"{name}: {k} is {body.get(k)!r}, expected {v!r}")
+            result.setdefault("ok_steps", []).append(name)
             if s["tool"] == "events_wait":
                 found = None
                 end = time.monotonic() + 60
