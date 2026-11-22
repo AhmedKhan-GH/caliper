@@ -23,6 +23,15 @@ values to the uniform ``params`` of a program, which its next pass reads without
 program of a built-in operator reports the kind ``operator``. A refused or stopped program is an
 error of its panel, never of the script: no function here raises for it.
 
+PIECES. :func:`install_piece` installs an instance of a piece (``design/programmable-graphics.md``):
+its derive half runs several compute passes in their order in one submit at a pass of the same
+cadence, under the same limits, and writes named, typed resources that keep their contents between
+runs. After each run the facade copies each published resource that a pass of the run writes (and
+each static one after the first run) and sends it as one RESOURCE message to each viewer that
+announced ``resources``, through the controls port of either sender. It also relays the draw half,
+PROGRAM without the section ``derive``, to each such viewer after the install and when the viewer
+attaches, before its first resource. A piece without a derive half is only relayed.
+
 VIEWS. The same cadence gates the snapshots of the network route (caliper._net_ring) while a
 viewer subscribes, so that everything viewers ask of the run (snapshots, series chunks, scene
 colors, operators and programs) keeps to one budget. The checkpoint before a step decides whether
@@ -62,7 +71,7 @@ import time
 import warnings
 from collections import deque
 
-__all__ = ["install", "remove", "set_params", "status", "at_step", "loaded"]
+__all__ = ["install", "install_piece", "remove", "set_params", "status", "at_step", "loaded"]
 
 ACTIVE = False
 """Whether a program may run; ``caliper.step()`` calls :func:`at_step` only while it is true."""
@@ -99,6 +108,7 @@ _ARRAYS = ("positions", "colors", "values", "radii")
 
 _LOCK = threading.RLock()
 _PROGS: dict = {}       # id -> _Program, in the order of installation
+_DRAWN: dict = {}       # id -> _Program of a piece without a derive half, only relayed
 _IMPORTS: dict = {}     # input name -> its newest _Import
 _LIVE: dict = {}        # handle -> each _Import not released yet (an older one may still be bound)
 _ACTS: dict = {}        # module name -> its last output, for the inputs <module>.act
@@ -303,7 +313,9 @@ class _Program:
     __slots__ = ("id", "decl", "wgsl", "sha256", "scene", "kind", "inputs", "output", "every_min",
                  "time_ms", "memory_mb", "handle", "state", "error", "runs", "last_step",
                  "last_pass_ms", "memory_bytes", "warm", "every", "t0", "bound", "pass_times",
-                 "params", "builtin", "shape")
+                 "params", "builtin", "shape", "piece", "manifest", "bind", "panel", "segments",
+                 "common", "draw", "types", "resources", "passes", "param_types", "written",
+                 "sent_static", "static_frames", "relayed")
 
     def __init__(self, pid, decl, wgsl, scene, sha256):
         self.id = pid
@@ -334,6 +346,18 @@ class _Program:
         self.t0 = _clock()
         self.bound = {}         # var -> the _Import it was compiled with
         self.pass_times = deque(maxlen=RATE_PASSES + 1)   # the clock at its last passes
+        self.piece = None       # a piece's instance: the pin {name, version, hash, from}
+        self.manifest = None
+        self.bind, self.panel, self.segments = {}, None, None
+        self.common, self.draw = "", ""
+        self.types = {}         # input name -> (kind, dtype)
+        self.resources = []     # the manifest's resources, checked
+        self.passes = []        # (entry, workgroups, writes) of the derive half
+        self.param_types = {}   # param name -> f32, i32 or u32
+        self.written = set()    # the resources that a pass names in `writes`
+        self.sent_static = False
+        self.static_frames = {}  # resource id -> the RESOURCE frame of a static resource
+        self.relayed = _LinkSet()  # the viewers that got the draw half
 
     def passes_per_s(self):
         """The passes a second on the run's wall clock over the last ``RATE_PASSES`` passes, or
@@ -347,6 +371,7 @@ class _Program:
         b, d, share = _CAD.step_s(), _CAD.cost_s(), _CAD.share()
         return {
             "id": self.id, "kind": "operator" if self.builtin else self.kind, "state": self.state,
+            **({"piece": dict(self.piece)} if self.piece else {}),
             "every": self.every,
             "every_min": self.every_min, "last_pass_ms": self.last_pass_ms,
             "last_cost_ms": None if d is None else d * 1e3,
@@ -561,6 +586,9 @@ def _check(p: _Program) -> None:
 
 def _compile(p: _Program) -> None:
     """Import the inputs and compile the program; raises _Refused or _Waiting."""
+    if p.kind == "piece":
+        _compile_piece(p)
+        return
     bound = {}
     for var, src in p.inputs:
         name = src[len("live:"):]
@@ -728,7 +756,7 @@ def _remove(program_id: str):
     with _LOCK:
         p = _PROGS.pop(str(program_id), None)
         if p is None:
-            return None
+            return _DRAWN.pop(str(program_id), None)
         rt = _STATE["rt"]
         if rt is not None and p.handle is not None:
             rt.remove(p.handle)
@@ -744,6 +772,9 @@ def _remove(program_id: str):
 def remove(program_id: str) -> None:
     """Stop and remove a program, and clear its output; an unknown id does nothing."""
     p = _remove(program_id)
+    if p is not None and p.kind == "piece":
+        _relay_removal(p)
+        return
     if p is None or p.runs == 0:
         return
     try:
@@ -759,7 +790,7 @@ def remove(program_id: str) -> None:
 def status() -> list:
     """Return one status item for each installed program, in the order of installation."""
     with _LOCK:
-        return [p.item() for p in _PROGS.values()]
+        return [p.item() for p in _PROGS.values()] + [p.item() for p in _DRAWN.values()]
 
 
 def loaded() -> bool:
@@ -1170,8 +1201,11 @@ def _rebind(p: _Program, var: str, t, im: _Import) -> bool:
     return True
 
 
-def _outputs(rt, p: _Program) -> dict:
-    """The outputs of the last pass as tensors over the runtime's buffers, without a copy."""
+def _outputs(rt, p: _Program):
+    """The outputs of the last pass as tensors over the runtime's buffers, without a copy; for a
+    piece, the RESOURCE frames of its published resources."""
+    if p.kind == "piece":
+        return _resource_frames(rt, p)
     import torch
     names = {"pixels": ["pixels"], "tensor": ["out"]}.get(p.kind) or list(p.output.get("arrays") or [])
     out = {}
@@ -1187,7 +1221,11 @@ def _entity(p: _Program) -> str:
 
 
 def _publish(p: _Program, outs: dict) -> None:
-    """Give the outputs to the publish path of caliper.scene or caliper.show."""
+    """Give the outputs to the publish path of caliper.scene or caliper.show; a piece's
+    resources go to the viewers that announced ``resources``."""
+    if p.kind == "piece":
+        _send_resources(p, outs)
+        return
     pkg = sys.modules[__package__]
     try:
         if p.kind == "pixels":
@@ -1221,3 +1259,342 @@ def _publish(p: _Program, outs: dict) -> None:
             sc.points(_entity(p), pos, **kw)
     except Exception as e:  # the publish path never stops the step
         _warn_once(("publish", p.id), f"caliper: publishing the output of program {p.id} failed: {e!r}")
+
+
+# ---- pieces: the derive half, its resources and the relay of the draw half --------------------
+RESOURCE_TYPE = 0x0082  # RESOURCE (include/caliper/live_net.h), one published resource
+PIECE_PASSES_MAX = 8
+PIECE_RESOURCES_MAX = 8
+PIECE_FIELDS_MAX = 16
+PIECE_COUNT_MAX = 4194304
+PIECE_SIDE_MAX = 4096
+WORKGROUPS_MAX = 65535
+_DTYPES = ("f32", "i32", "u32")
+
+
+class _LinkSet:
+    """The viewers that got a draw half, by identity, without keeping a closed link alive."""
+
+    def __init__(self):
+        import weakref
+        self._refs = []
+        self._weakref = weakref.ref
+
+    def __contains__(self, link) -> bool:
+        return any(r() is link for r in self._refs)
+
+    def add(self, link) -> None:
+        try:
+            ref = self._weakref(link)
+        except TypeError:                            # a link without weak references
+            ref = (lambda link=link: link)
+        self._refs = [r for r in self._refs if r() is not None] + [ref]
+
+
+def install_piece(program_id: str, *, piece: dict, manifest: dict, bind: dict | None = None,
+                  params: dict | None = None, panel: str | None = None, segments=None,
+                  common: str = "", derive: str = "", draw: str = "") -> dict:
+    """Install an instance of a piece, or replace the program with the same id.
+
+    The derive half runs at the pass steps of the shared cadence and publishes its resources as
+    RESOURCE messages; the draw half goes to each viewer that announced ``resources``.
+
+    Args:
+        program_id: The program's id.
+        piece: The pin: ``name``, ``version``, ``hash`` and ``from``.
+        manifest: The piece's manifest as JSON (``design/programmable-graphics.md``, Piece
+            Manifest).
+        bind: Each tensor input's ``live:<name>`` (a buffer input's binding is the viewer's).
+        params: A number for each parameter that does not keep its default.
+        panel: The scene panel of the draw half.
+        segments: The lines of the lib modules and ``common.wgsl`` in ``common``, as PROGRAM
+            carries them.
+        common: The section ``common``: the lib modules and ``common.wgsl``, imports resolved.
+        derive: The section ``derive``: ``derive.wgsl``, imports resolved.
+        draw: The section ``draw``: ``draw.wgsl``, imports resolved.
+
+    Returns:
+        dict: The program's status item, as :func:`install` returns it, with the kind ``piece``.
+    """
+    _remove(program_id)
+    with _LOCK:
+        if _ABANDONED:
+            _reap()
+        if not ACTIVE:
+            _CAD.reset()
+            _STATE.update(dense=True, drained=0, short=0, long=0, switches=0)
+            if _STATE["marks"]:
+                _STATE["marks"].clear()
+        p = _Program(str(program_id), {}, str(derive or ""), None, "")
+        p.kind = "piece"
+        p.piece = dict(piece or {})
+        p.manifest = dict(manifest or {})
+        p.bind = dict(bind or {})
+        p.panel = panel
+        p.segments = segments
+        p.common, p.draw = str(common or ""), str(draw or "")
+        p.sha256 = str(p.piece.get("hash") or "").removeprefix("sha256:")
+        has_derive = isinstance(p.manifest.get("derive"), dict)
+        (_PROGS if has_derive else _DRAWN)[p.id] = p
+        try:
+            _check_piece(p, params)
+            if has_derive:
+                _compile(p)
+            else:
+                p.state = "compiled"
+        except _Waiting:
+            p.state = "waiting"
+        except _Refused as r:
+            p.state = "refused"
+            p.error = r.error
+        _set_active()
+        item = p.item()
+    if p.state != "refused":
+        _relay(p)
+    _notify([item])
+    return item
+
+
+def _check_piece(p: _Program, values) -> None:
+    """The facade's part of a piece's manifest: the types that the native call takes. The runtime
+    checks every count, size and name again before anything runs."""
+    m = p.manifest
+
+    def bad(text, code="piece.bad_manifest"):
+        raise _Refused(code, text)
+
+    def whole(v, lo, hi, what):
+        if not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi:
+            bad(f"{what} is a whole number from {lo} to {hi}.")
+        return v
+
+    inputs = m.get("inputs") or []
+    if not isinstance(inputs, list) or len(inputs) > INPUTS_MAX:
+        bad(f"A piece has at most {INPUTS_MAX} inputs.")
+    p.inputs, p.types = [], {}
+    for x in inputs:
+        if not isinstance(x, dict) or not isinstance(x.get("name"), str):
+            bad("An input needs a name.")
+        kind, dtype = x.get("kind", "tensor"), x.get("dtype", "f32")
+        if kind not in ("tensor", "buffer") or dtype not in _DTYPES:
+            bad(f"The input {x['name']} is a tensor of f32, i32 or u32, or a buffer.")
+        src = ""
+        if kind == "tensor":
+            src = p.bind.get(x["name"])
+            if not isinstance(src, str) or not src.startswith("live:") or len(src) == len("live:"):
+                raise _Refused("piece.bad_binding",
+                               f"The tensor input {x['name']} needs a binding live:<tensor>.")
+        p.inputs.append((x["name"], src))
+        p.types[x["name"]] = (kind, dtype)
+    declared = m.get("params") or []
+    if not isinstance(declared, list) or len(declared) > PARAMS_MAX:
+        bad(f"A piece has at most {PARAMS_MAX} params.")
+    given = dict(values or {})
+    p.params, p.param_types = {}, {}
+    for x in declared:
+        if not isinstance(x, dict) or not isinstance(x.get("name"), str) or \
+                x.get("type", "f32") not in _DTYPES:
+            bad("A param needs a name and the type f32, i32 or u32.")
+        v = given.get(x["name"], x.get("default", 0))
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+            v = x.get("default", 0)                  # a binding reference: the app sends its number
+        p.params[x["name"]] = float(v)
+        p.param_types[x["name"]] = x.get("type", "f32")
+    resources = m.get("resources") or []
+    if not isinstance(resources, list) or len(resources) > PIECE_RESOURCES_MAX:
+        bad(f"A piece has at most {PIECE_RESOURCES_MAX} resources.", "program.bad_resource")
+    p.resources = []
+    for x in resources:
+        if not isinstance(x, dict) or not isinstance(x.get("id"), str) or \
+                x.get("kind", "buffer") not in ("buffer", "texture"):
+            bad("A resource needs an id and the kind buffer or texture.", "program.bad_resource")
+        fields = x.get("fields") or []
+        if not isinstance(fields, list) or len(fields) > PIECE_FIELDS_MAX or \
+                not all(isinstance(f, str) for f in fields):
+            bad(f"The resource {x['id']} has at most {PIECE_FIELDS_MAX} fields name: type.",
+                "program.bad_layout")
+        texture = x.get("kind") == "texture"
+        r = {"id": x["id"], "kind": "texture" if texture else "buffer",
+             "element": str(x.get("element") or ""), "struct": str(x.get("struct") or ""),
+             "fields": list(fields),
+             "count": 0 if texture else whole(x.get("count", 0), 1, PIECE_COUNT_MAX, f"{x['id']}.count"),
+             "width": whole(x.get("width", 0), 1, PIECE_SIDE_MAX, f"{x['id']}.width") if texture else 0,
+             "height": whole(x.get("height", 0), 1, PIECE_SIDE_MAX, f"{x['id']}.height") if texture else 0,
+             "counted": bool(x.get("counted", False)), "publish": bool(x.get("publish", True)),
+             "clear": bool(x.get("clear", False))}
+        p.resources.append(r)
+    ids = {r["id"] for r in p.resources}
+    d = m.get("derive")
+    p.passes, p.written = [], set()
+    if not isinstance(d, dict):
+        return
+    passes = d.get("passes") or []
+    if not isinstance(passes, list) or not 1 <= len(passes) <= PIECE_PASSES_MAX:
+        bad(f"A derive half has 1 to {PIECE_PASSES_MAX} passes.", "program.bad_pass")
+    for i, x in enumerate(passes):
+        if not isinstance(x, dict) or not isinstance(x.get("entry"), str):
+            bad(f"derive.passes[{i}] needs an entry point.", "program.bad_pass")
+        wg = x.get("workgroups", [1, 1, 1])
+        if not isinstance(wg, list) or len(wg) != 3:
+            bad(f"derive.passes[{i}].workgroups holds three counts.", "program.bad_pass")
+        wg = tuple(whole(n, 1, WORKGROUPS_MAX, f"derive.passes[{i}].workgroups") for n in wg)
+        writes = x.get("writes") or []
+        if not isinstance(writes, list) or not all(isinstance(w, str) and w in ids for w in writes):
+            raise _Refused("program.unknown_resource",
+                           f"derive.passes[{i}].writes names a resource that the piece lacks.")
+        p.passes.append((x["entry"], wg, list(writes)))
+        p.written.update(writes)
+    if not p.wgsl:
+        bad("A piece with a derive half needs the section derive.")
+    p.every_min = whole(d.get("every", 1), 1, EVERY_MAX, "derive.every")
+    t = d.get("time_ms", TIME_MS_DEFAULT)
+    if isinstance(t, bool) or not isinstance(t, (int, float)) or not 0 < t <= TIME_MS_MAX:
+        bad(f"derive.time_ms is above 0 and at most {TIME_MS_MAX:g}.", "program.over_limits")
+    p.time_ms = float(t)
+    p.memory_mb = whole(d.get("memory_mb", MEMORY_MB_DEFAULT), 1, MEMORY_MB_MAX, "derive.memory_mb")
+
+
+def _compile_piece(p: _Program) -> None:
+    """Import the tensor inputs and compile the derive half; raises _Refused or _Waiting."""
+    bound, inputs = {}, []
+    for name, src in p.inputs:
+        kind, dtype = p.types[name]
+        if kind != "tensor":
+            inputs.append((name, 0, dtype))          # the place of a buffer input
+            continue
+        tname = src[len("live:"):]
+        t = _resolve(tname)
+        if t is None:
+            raise _Refused("program.unknown_input", f"The script has no tensor named {tname}.")
+        bound[name] = _import(tname, t)
+        inputs.append((name, bound[name].handle, dtype))
+    rt = _runtime()
+    resources = [(r["id"], r["kind"], r["element"], r["struct"], r["fields"], r["count"], r["width"],
+                  r["height"], r["counted"], r["publish"], r["clear"]) for r in p.resources]
+    params = [(k, p.param_types[k], v) for k, v in p.params.items()]
+    old = p.handle
+    try:
+        h = rt.derive(p.id, p.wgsl, p.common, inputs, resources, p.passes, params, time_ms=p.time_ms,
+                      memory_bytes=p.memory_mb << 20, piece_hash=p.piece.get("hash") or None)
+    except RuntimeError as e:
+        raise _refusal(e) from e
+    if old is not None:
+        rt.remove(old)
+    p.handle = h
+    p.bound = bound
+    p.sent_static = False                            # new resources: the static ones go again
+    p.static_frames = {}
+    st = rt.status(h)
+    p.memory_bytes = int(st.get("memory_bytes") or 0)
+    if p.state != "running":
+        p.state = "compiled"
+    p.error = None
+
+
+def _resource_frames(rt, p: _Program) -> list:
+    """The RESOURCE frame of each published resource that a pass of the last run wrote, and of
+    each static one after the first run, with a copy of its valid bytes."""
+    from . import _wire
+    first = not p.sent_static
+    frames = []
+    for r in p.resources:
+        if not r["publish"] or (r["id"] not in p.written and not first):
+            continue
+        data, count, stride = rt.resource(p.handle, r["id"])
+        if len(data) > _wire.RESOURCE_MAX_BYTES:
+            continue                                 # the runtime bounds a resource at 64 MiB
+        meta = {"program": p.id, "resource": r["id"], "step": int(p.last_step or 0),
+                "count": int(count), "stride": int(stride)}
+        if r["kind"] == "texture":
+            meta.update(width=r["width"], height=r["height"])
+        section = _wire.Section(_wire.SECTION_RESOURCE, int(_wire.DType.U8), (len(data),),
+                                memoryview(data))
+        frame = _wire.encode_frame(RESOURCE_TYPE, meta, [section])
+        if r["id"] not in p.written:
+            p.static_frames[r["id"]] = frame
+        frames.append(frame)
+    p.sent_static = True
+    return frames
+
+
+def _controls_ports() -> list:
+    """The controls port of each running server of either sender."""
+    try:
+        from . import _net_programs
+        return [port.controls for port in list(_net_programs._ports)
+                if not getattr(port, "closed", False) and getattr(port, "controls", None) is not None]
+    except Exception:
+        return []
+
+
+def _resource_links(ctl) -> list:
+    from . import _wire
+    links = getattr(getattr(getattr(ctl, "server", None), "producer", None), "links", ())
+    return [ln for ln in list(links) if _wire.CAP_RESOURCES in getattr(ln, "caps", ())
+            and getattr(ln, "attached", False) and not getattr(ln, "closed", True)]
+
+
+def _relay_frame(p: _Program, op: str = "set") -> bytes:
+    """PROGRAM of a piece's instance without the section ``derive``: what a viewer draws."""
+    from . import _wire
+    import numpy as np
+    meta = {"request_id": 0, "op": op, "id": p.id}
+    sections = []
+    if op == "set":
+        meta.update({k: v for k, v in (("piece", p.piece), ("manifest", p.manifest), ("bind", p.bind),
+                                       ("params", p.params), ("panel", p.panel),
+                                       ("segments", p.segments)) if v is not None})
+        for name, text in ((_wire.SECTION_COMMON, p.common), (_wire.SECTION_DRAW, p.draw)):
+            if text:
+                sections.append(_wire.Section.from_array(
+                    name, np.frombuffer(text.encode("utf-8"), dtype=np.uint8)))
+    return _wire.encode_frame(_wire.MsgType.PROGRAM, meta, sections)
+
+
+def _relay_to(p: _Program, ctl, links) -> None:
+    from . import _wire
+    frame = None
+    for ln in links:
+        if ln in p.relayed:
+            continue
+        if frame is None:
+            frame = _relay_frame(p)
+        ctl.post(ln, frame, _wire.CAP_RESOURCES)
+        for f in p.static_frames.values():
+            ctl.post(ln, f, _wire.CAP_RESOURCES)
+        p.relayed.add(ln)
+
+
+def _relay(p: _Program) -> None:
+    """Send the draw half to each viewer that announced ``resources``, after an install."""
+    try:
+        for ctl in _controls_ports():
+            _relay_to(p, ctl, _resource_links(ctl))
+    except Exception as e:  # the relay never stops the script
+        _warn_once(("relay", p.id), f"caliper: relaying the draw half of {p.id} failed: {e!r}")
+
+
+def _relay_removal(p: _Program) -> None:
+    from . import _wire
+    try:
+        for ctl in _controls_ports():
+            if _resource_links(ctl):
+                ctl.post(None, _relay_frame(p, "remove"), _wire.CAP_RESOURCES)
+    except Exception as e:
+        _warn_once(("relay", p.id), f"caliper: relaying the removal of {p.id} failed: {e!r}")
+
+
+def _send_resources(p: _Program, frames: list) -> None:
+    """Give the RESOURCE frames of a pass to the viewers: first the draw half to each viewer that
+    attached since, then the frames to every viewer that announced ``resources``."""
+    from . import _wire
+    try:
+        for ctl in _controls_ports():
+            links = _resource_links(ctl)
+            if not links:
+                continue
+            _relay_to(p, ctl, links)
+            for frame in frames:
+                ctl.post(None, frame, _wire.CAP_RESOURCES)
+    except Exception as e:  # the publish path never stops the step
+        _warn_once(("publish", p.id), f"caliper: sending the resources of {p.id} failed: {e!r}")
