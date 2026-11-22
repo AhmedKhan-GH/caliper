@@ -3141,6 +3141,11 @@ class Program(_Msg):
         if op == PROGRAM_REMOVE:
             return cls(rid, op, pid)
         if op == PROGRAM_PARAMS:
+            # Values alone: a params op never declares or carries a program.
+            if "declaration" in m:
+                _bad("a params op carries no 'declaration'")
+            if f.sections:
+                _bad("a params op carries no section")
             ps = _req(m, "params", _params_ok, f"1 to {PROGRAM_PARAMS_MAX} names of a WGSL field "
                       "with finite numbers")
             return cls(rid, op, pid, params=ps)
