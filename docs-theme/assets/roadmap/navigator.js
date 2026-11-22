@@ -59,7 +59,7 @@
       sizeWindow();
     }
     canvas.appendChild(RoadmapWindow.zoomControls(function () { setZoom(zoom / ZOOM_STEP); },
-      function () { setZoom(zoom * ZOOM_STEP); }, "Reset", function () { setZoom(1); }));
+      function () { setZoom(zoom * ZOOM_STEP); }, "Reset", function () { setZoom(1); scroll.scrollTop = 0; }));
     scroll.addEventListener("wheel", function (e) {
       if (!e.ctrlKey) return;
       e.preventDefault();

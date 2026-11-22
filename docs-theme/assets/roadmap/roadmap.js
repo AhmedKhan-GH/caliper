@@ -322,7 +322,7 @@
     }
     api.setView = setView;
 
-    /* Zoom buttons: out and in around the canvas's centre, and Fit, which shows the whole graph. */
+    /* Zoom buttons: out and in around the canvas's centre, and Reset, which goes back to the first view. */
     function zoomBy(f) {
       if (!layout) return;
       var cx = canvas.clientWidth / 2, cy = canvas.clientHeight / 2;
@@ -330,14 +330,13 @@
       setView(cx - (cx - view.x) * k / view.k, cy - (cy - view.y) * k / view.k, k);
       hideTip();
     }
-    function fitAll() {
+    function resetView() {
       if (!layout) return;
-      var k = Math.min((canvas.clientWidth - 2 * MARGIN) / layout.width, (canvas.clientHeight - 2 * MARGIN) / layout.height);
-      setView(MARGIN, MARGIN, k);
+      setView(0, 0, 1);
       hideTip();
     }
     canvas.appendChild(RoadmapWindow.zoomControls(function () { zoomBy(1 / ZOOM_STEP); },
-      function () { zoomBy(ZOOM_STEP); }, "Fit", fitAll));
+      function () { zoomBy(ZOOM_STEP); }, "Reset", resetView));
     api.view = function () { return { x: view.x, y: view.y, k: view.k }; };
 
     var found = null;
