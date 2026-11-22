@@ -1,6 +1,7 @@
 // The protocol engine on its own, with an in-memory sink and no app: the
 // JSON-RPC handling of hostile lines, both eras of MCP, the tools from the
 // built-in table, and the resources.
+#include <caliper_builder/programs/pieces.h>
 #include <caliper_builder/mcp/server.h>
 
 #include <caliper_builder/commands/command_table.h>
@@ -381,8 +382,14 @@ TEST_CASE("resources are listed in pages and read by URI") {
         REQUIRE(pages < 10);
     }
     CHECK(pages == 3);
-    // 451 pages, the two spec schemas compiled in, and the command table.
-    CHECK(seen.size() == 454);
+    // 451 pages, the two spec schemas compiled in, the command table, and
+    // the files of the built-in library of pieces.
+    std::size_t library = 0;
+    for (const std::string& uri : seen) library += uri.rfind(kLibraryUriPrefix, 0) == 0;
+    CHECK(library >= 4);
+    CHECK(library == caliper_builder::programs::library_files().size());
+    CHECK(seen.size() - library == 454);
+    CHECK(seen.count(std::string(kLibraryUriPrefix) + "lib/colormap/1.wgsl") == 1);
     CHECK(seen.count(kCommandTableUri) == 1);
     CHECK(seen.count(kSpecSchemaUri) == 1);
     CHECK(seen.count("caliper://docs/index.md") == 1);

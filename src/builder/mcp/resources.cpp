@@ -1,5 +1,6 @@
 // The MCP resources of caliper-mcp (resources.h).
 #include <caliper_builder/mcp/resources.h>
+#include <caliper_builder/programs/pieces.h>
 
 #include "codec.h"
 
@@ -66,6 +67,11 @@ std::string real_folder(const std::string& dir, Error* error, const char* what) 
         return {};
     }
     return real.string();
+}
+
+// The MIME type of a library file: WGSL or TOML.
+std::string library_mime(std::string_view path) {
+    return path.size() >= 5 && path.substr(path.size() - 5) == ".toml" ? "application/toml" : "text/wgsl";
 }
 
 }  // namespace
@@ -196,6 +202,18 @@ std::vector<ResourceEntry> ResourceStore::list(bool* truncated) const {
         r.size = options_.spec_schema_v1_text.size();
         out.push_back(std::move(r));
     }
+    if (options_.library) {
+        for (const programs::LibraryFile& f : programs::library_files()) {
+            ResourceEntry r;
+            r.uri = kLibraryUriPrefix + std::string(f.path);
+            r.name = std::string(f.path);
+            r.description = f.path.rfind("lib/", 0) == 0 ? "A lib module of the built-in library of pieces."
+                                                         : "A file of a piece of the built-in library.";
+            r.mime_type = library_mime(f.path);
+            r.size = f.text.size();
+            out.push_back(std::move(r));
+        }
+    }
     std::sort(out.begin(), out.end(), [](const ResourceEntry& a, const ResourceEntry& b) { return a.uri < b.uri; });
     return out;
 }
@@ -257,6 +275,16 @@ ResourceContent ResourceStore::read(const std::string& uri) const {
         out.mime_type = "application/schema+json";
         out.text = options_.spec_schema_v1_text;
         return out;
+    }
+    const std::string library = kLibraryUriPrefix;
+    if (options_.library && uri.compare(0, library.size(), library) == 0) {
+        const std::string_view path = std::string_view(uri).substr(library.size());
+        for (const programs::LibraryFile& f : programs::library_files()) {
+            if (f.path != path) continue;
+            out.mime_type = library_mime(f.path);
+            out.text = std::string(f.text);
+            return out;
+        }
     }
     if (uri == kSpecSchemaUri && !options_.spec_schema_text.empty()) {
         out.mime_type = "application/schema+json";

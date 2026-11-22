@@ -15,6 +15,13 @@
 //   caliper://commands/command_table.json
 //                              the command table the tools come from; the
 //                              server adds it, since it depends on the app
+//   caliper://library/<path>   a file of the built-in library of pieces
+//                              (design/programmable-graphics.md, Library
+//                              Pieces): lib/<module>/<version>.wgsl and
+//                              pieces/<name>/<version>/piece.toml and its WGSL
+//                              files, compiled into caliper-mcp, so that an
+//                              agent reads a piece before it pins, copies or
+//                              imitates it
 //
 // The two folders are confined. A path in a URI is percent-decoded once and
 // must then be segments of A-Z a-z 0-9 . _ - that are not empty and do not
@@ -45,6 +52,7 @@ constexpr const char* kSdkUriPrefix = "caliper://sdk/";
 constexpr const char* kSpecSchemaUri = "caliper://schema/caliper-spec-v0.schema.json";
 constexpr const char* kSpecSchemaV1Uri = "caliper://schema/caliper-spec-v1.schema.json";
 constexpr const char* kCommandTableUri = "caliper://commands/command_table.json";
+constexpr const char* kLibraryUriPrefix = "caliper://library/";
 
 struct ResourceEntry {
     std::string uri;
@@ -71,6 +79,7 @@ struct ResourceOptions {
     // The schema of spec version 1. Empty: the one compiled in, whenever the
     // version 0 schema is served; with no version 0 schema, none.
     std::string spec_schema_v1_text;
+    bool library = false;           // serve the built-in library of pieces; caliper-mcp's server does
     std::size_t max_files = 5000;   // per folder
     int max_depth = 16;
     std::size_t max_file_bytes = 4u << 20;

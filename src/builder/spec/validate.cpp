@@ -3,6 +3,7 @@
 // transforms when a SourceResolver knows the catalog sources.
 #include <caliper_builder/spec/validate.h>
 
+#include <caliper_builder/programs/pieces.h>
 #include <caliper_builder/programs/sandbox.h>
 
 #include <algorithm>
@@ -135,6 +136,7 @@ public:
         for (std::size_t i = 0; i < spec_.panels.size(); ++i) panel(i);
         for (std::size_t i = 0; i < spec_.controls.size() && i < limits::kControls; ++i) control(i);
         for (std::size_t i = 0; i < spec_.programs.size() && i < program_limits::kPrograms; ++i) program(i);
+        pieces();
         stages();
         provenance();
         layout();
@@ -403,10 +405,123 @@ private:
         }
     }
 
+    // ---- pieces and their instances (design/programmable-graphics.md) ----------
+    // The validator holds the form of a pin, the bindings and the panel of an
+    // instance, and checks each inline piece alone (programs/pieces.h). Whether
+    // a pinned piece exists and has the pinned hash is the editor's and the
+    // hosts' check: a missing or changed piece refuses its program with
+    // piece.missing or piece.hash_mismatch, and the spec still opens.
+
+    static bool hash_form(const std::string& h) {
+        bool ok = h.size() == 71 && h.compare(0, 7, "sha256:") == 0;
+        for (std::size_t i = 7; ok && i < h.size(); ++i) ok = (h[i] >= '0' && h[i] <= '9') || (h[i] >= 'a' && h[i] <= 'f');
+        return ok;
+    }
+
+    static bool lower_id(const std::string& s) {
+        bool ok = !s.empty() && s.size() <= 32 && s[0] >= 'a' && s[0] <= 'z';
+        for (char c : s) ok = ok && ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_');
+        return ok;
+    }
+
+    const Piece* inline_piece(const std::string& name, std::uint32_t version) const {
+        for (const Piece& p : spec_.pieces)
+            if (p.name == name && p.version == version) return &p;
+        return nullptr;
+    }
+
+    void instance(const Program& p, const std::string& path) {
+        extension(p.x, path + ".x");
+        const PieceRef& pin = *p.piece;
+        verdict(programs::check_piece_name(pin.name, pin.version), path + ".piece");
+        if (!pin.hash.empty() && !hash_form(pin.hash))
+            sink_.error("spec.bad_value", "A pin's hash is sha256: and 64 lowercase hex digits.", path + ".piece.hash");
+        if (p.panel) scene_target(*p.panel, path + ".panel", programs::kProgramBadTarget, "The program's draw half");
+        for (const auto& [input, target] : p.bind) {
+            const std::string bp = path + ".bind." + input;
+            if (!lower_id(input)) {
+                sink_.error(programs::kPieceBadBinding, quote(input) + " is not the name of an input of a piece.", bp);
+                continue;
+            }
+            if (target.rfind("live:", 0) == 0 && target.size() > 5) continue;
+            const std::size_t slash = target.find('/');
+            const bool program_form = target.rfind("program:", 0) == 0 && slash != std::string::npos &&
+                                      valid_id(target.substr(8, slash - 8)) && lower_id(target.substr(slash + 1));
+            if (!program_form) {
+                sink_.error(programs::kPieceBadBinding,
+                            "The binding " + quote(target) +
+                                " is live:<tensor> for a tensor input or program:<id>/<resource> for a buffer input.",
+                            bp);
+                continue;
+            }
+            const std::string other = target.substr(8, slash - 8);
+            if (other == p.id) {
+                sink_.error(programs::kPieceCycle, "The program binds a resource of its own.", bp);
+            } else if (!spec_.find_program(other)) {
+                sink_.error(programs::kPieceBadBinding,
+                            "The binding names the program " + quote(other) + ", which is not a program of this spec.",
+                            bp);
+            }
+        }
+        if (p.params.size() > kParams)
+            sink_.error("spec.too_many",
+                        "The program has " + std::to_string(p.params.size()) + " params; the limit is " +
+                            std::to_string(kParams) + ".",
+                        path + ".params");
+        for (const auto& kv : p.params)
+            if (!lower_id(kv.first))
+                sink_.error("spec.bad_value", quote(kv.first) + " is not the name of a parameter of a piece.",
+                            path + ".params." + kv.first);
+        if (pin.from == PieceFrom::inline_piece)
+            if (const Piece* piece = inline_piece(pin.name, pin.version); piece && piece->draw && !p.panel)
+                sink_.error("spec.missing_key", "A program of a piece that draws needs the key \"panel\".",
+                            path + ".panel");
+    }
+
+    void pieces() {
+        std::set<std::pair<std::string, std::uint32_t>> seen;
+        for (std::size_t i = 0; i < spec_.pieces.size(); ++i) {
+            const Piece& piece = spec_.pieces[i];
+            const std::string path = index_path(kPiecesKey, i);
+            if (!seen.insert({piece.name, piece.version}).second)
+                sink_.error("spec.duplicate_id",
+                            "Two inline pieces have the name " + quote(piece.name) + " and the version " +
+                                std::to_string(piece.version) + ".",
+                            path + ".name");
+            if (piece.description.size()) text(piece.description, path + ".description", limits::kTitleChars,
+                                               TextKind::line, false);
+            const programs::Verdict manifest = programs::check_piece_manifest(piece);
+            verdict(manifest, path);
+            if (!manifest.ok()) continue;
+            bool sources_ok = true;
+            for (const auto& [file, wgsl] : piece.files) {
+                programs::Verdict v = programs::check_piece_source(wgsl, piece_limits::kFileBytes);
+                if (v.ok()) continue;
+                sources_ok = false;
+                if (v.line) v.message += " (" + file + ", line " + std::to_string(v.line) + ", column " +
+                                         std::to_string(v.column) + ")";
+                sink_.error(v.code, v.message, path + ".files." + file.substr(0, file.find('.')));
+            }
+            if (!sources_ok) continue;
+            programs::Verdict r = programs::resolve_imports(piece).verdict;
+            if (r.ok()) continue;
+            if (r.line) {
+                r.message += " (" + r.where + ", line " + std::to_string(r.line) + ", column " +
+                             std::to_string(r.column) + ")";
+                r.where = "files." + r.where.substr(0, r.where.find('.'));
+            }
+            verdict(r, path);
+        }
+    }
+
     void program(std::size_t i) {
         const Program& p = spec_.programs[i];
         const std::string path = index_path("program", i);
         if (p.title) text(*p.title, path + ".title", limits::kTitleChars, TextKind::line, false);
+        if (is_piece_instance(p)) {
+            instance(p, path);
+            return;
+        }
         text(p.wgsl, path + ".wgsl", limits::kStringChars, TextKind::long_text, false);
         extension(p.x, path + ".x");
         verdict(programs::check_declaration(p), path);

@@ -22,12 +22,11 @@
 // pieces.cpp needs only the standard library and spec/piece.h, because the
 // browser module compiles it beside the app and the script's native module.
 // The functions are defined in src/builder/programs/: pieces.cpp (names,
-// paths, imports, hash, places), piece_checks.cpp (layouts and the checks
-// of the manifest, the files and the bindings), compose_derive.cpp,
-// compose_draw.cpp and piece_reflection.cpp. Until pieces are built, every
-// function but draw_prelude(), lib_module() and lib_modules() answers
-// program.not_built. Nothing here throws. Every
-// function is safe from any thread.
+// paths, imports, hash, the source check and places), piece_checks.cpp
+// (layouts and the checks of the manifest, the WebGPU limits and the
+// bindings), compose_derive.cpp, compose_draw.cpp and piece_reflection.cpp.
+// A composer or the reflection check answers program.not_built until its
+// part is built. Nothing here throws. Every function is safe from any thread.
 #include <caliper_builder/programs/reflection.h>
 #include <caliper_builder/spec/piece.h>
 
@@ -103,6 +102,16 @@ std::string_view draw_prelude();
 // there is none. A released version never changes.
 std::vector<std::string_view> lib_modules();
 std::string_view lib_module(std::string_view name_at_version);
+// One file of the built-in library (src/builder/programs/library/): its path
+// below library/, such as "lib/colormap/1.wgsl" or
+// "pieces/points/1/piece.toml", and its text. The build embeds the lib
+// modules and the piece.toml and WGSL files of each library piece, in the
+// order of their paths; the samples of library pieces are not embedded.
+struct LibraryFile {
+    std::string_view path;
+    std::string_view text;
+};
+std::vector<LibraryFile> library_files();
 
 // ---- names and paths (design/programmable-graphics.md, Piece Files)
 // A piece name is [a-z][a-z0-9_]{0,31} and a version 1 to kVersionMax, so
@@ -157,7 +166,8 @@ struct ElementLayout {
     std::uint32_t align = 0;
     std::vector<FieldLayout> fields;
 };
-// A bad field type or a stride over kStrideMax is program.bad_layout.
+// A bad field type or a stride over kStrideMax is program.bad_layout. A plain
+// element has one field without a name.
 Verdict element_layout(const spec::Layout& layout, ElementLayout* out);
 
 // ---- composition
@@ -189,18 +199,21 @@ Composed compose_derive(const spec::Piece& piece, const Resolved& resolved);
 Composed compose_draw(const spec::Piece& piece, const Resolved& resolved, std::size_t pass);
 
 // ---- checks, in the order of Check Order
-// 1. The manifest: name and version, the kinds, layouts, counts, sizes and
+// 2. The manifest: name and version, the kinds, layouts, counts, sizes and
 //    limits, the passes' names and values, the targets' order, the item map,
-//    the text table, the params' ranges, and the WebGPU limits of 7.
+//    the text table, the params' ranges, the samples, and check_web_limits().
+//    The first failure is the verdict, with `where` its key path, such as
+//    draw.passes[1].target.
 Verdict check_piece_manifest(const spec::Piece& piece);
-// 3. One file: its size limit, no directive, no @group or @binding, and no
-//    declaration of a caliper_, Caliper or CALIPER_ name or of a name with "__".
+// 4. One file: its size limit (piece.bad_path above it, as Piece Files
+//    says), no directive, no @group or @binding, and no declaration of
+//    caliper or a caliper_, Caliper or CALIPER_ name or of a name with "__".
 Verdict check_piece_source(std::string_view wgsl, std::size_t max_bytes);
-// 6. A compiled pass: its entry points and their stages, workgroup sizes, the
+// 7. A compiled pass: its entry points and their stages, workgroup sizes, the
 //    vertex outputs against the fragment inputs, the fragment outputs against
 //    the pass's target and pick, and each binding against the header.
 Verdict check_piece_reflection(const spec::Piece& piece, Half half, std::size_t pass, const Reflection& reflection);
-// 7. The default limits of WebGPU that a pass must keep to run in a browser:
+// Part of 2. The default limits of WebGPU that a pass must keep to run in a browser:
 //    storage buffers and sampled textures in one stage, bind groups,
 //    inter-stage variables, workgroup sizes and buffer binding sizes.
 Verdict check_web_limits(const spec::Piece& piece);

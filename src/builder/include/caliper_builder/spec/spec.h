@@ -252,7 +252,7 @@ struct Spec {
     std::vector<Control> controls;   // `control`, spec version 1 (instrument.h); empty in version 0
     std::vector<Program> programs;   // `program`, spec version 1 (program.h); empty in version 0
     std::vector<Stage> stages;       // `stage`, spec version 1 (program.h); empty in version 0
-    std::vector<Piece> pieces;       // `piece`, inline pieces (piece.h); the codec refuses the key until it reads it
+    std::vector<Piece> pieces;       // `piece`, inline pieces (piece.h), spec version 1
     std::vector<StateVar> states;    // `state`, spec version 1 (state.h); empty in version 0
     Provenance provenance;           // `provenance`, spec version 1 (program.h); empty for the person's own spec
     nlohmann::json x;
@@ -310,5 +310,30 @@ bool has_errors(const std::vector<Diagnostic>& diagnostics);
 // {"severity": "error", "code": ..., "message": ..., "path": ..., "line": n, "column": n};
 // line and column only when known.
 nlohmann::json to_json(const Diagnostic& d);
+
+// ---- pieces (piece.h, design/programmable-graphics.md, Piece Files)
+// The codec of format.h reads and writes a spec's inline pieces in its array
+// `piece` and a program's pin, bindings and panel. These read and write one
+// piece alone, for the piece commands and the workspace's piece.toml; they
+// are declared here beside the types, and defined in json_form.cpp and
+// toml_form.cpp. A piece's JSON is the canonical manifest of
+// programs::canonical_manifest(), its `hash` when it has one, and its WGSL in
+// `files` under common, derive and draw; piece.toml holds the manifest and
+// the hash without the files.
+struct PieceParse {
+    Piece piece;
+    std::vector<Diagnostic> diagnostics;
+    bool ok() const { return !has_errors(diagnostics); }
+};
+// One piece from its JSON form, with spec.* codes for a key, a type or a
+// missing key; `path` prefixes the diagnostics' paths.
+PieceParse piece_from_json_value(const nlohmann::json& item, const std::string& path = "piece");
+// One piece from the text of a piece.toml, with the lines and columns of the
+// diagnostics; the files stay empty.
+PieceParse piece_from_toml(std::string_view text);
+nlohmann::json to_json(const Piece& piece);
+nlohmann::json to_json(const PieceRef& pin);
+// The text of a piece.toml: the manifest and the hash, without the files.
+std::string piece_to_toml(const Piece& piece);
 
 }  // namespace caliper_builder::spec

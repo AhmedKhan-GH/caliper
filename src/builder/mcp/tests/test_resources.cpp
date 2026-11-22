@@ -221,3 +221,25 @@ TEST_CASE("the schema of spec version 1 is a second resource beside version 0's"
     CHECK(none.list().empty());
     CHECK(none.read(kSpecSchemaV1Uri).error.code == "mcp.resource_not_found");
 }
+
+TEST_CASE("the built-in library of pieces is served read-only under caliper://library/") {
+    ResourceStore store;
+    ResourceOptions o;
+    o.library = true;
+    REQUIRE(store.open(o).ok());
+    std::set<std::string> uris;
+    for (const ResourceEntry& e : store.list()) uris.insert(e.uri);
+    for (const char* m : {"colormap", "pick", "camera", "easing"})
+        CHECK(uris.count(std::string(kLibraryUriPrefix) + "lib/" + m + "/1.wgsl") == 1);
+    const ResourceContent c = store.read(std::string(kLibraryUriPrefix) + "lib/colormap/1.wgsl");
+    REQUIRE(c.error.ok());
+    CHECK(c.mime_type == "text/wgsl");
+    CHECK(c.text.find("fn colormap__magma") != std::string::npos);
+    for (const char* bad : {"lib/colormap/2.wgsl", "lib/../lib/colormap/1.wgsl", "lib/colormap/1.wgsl/", "/etc/hosts",
+                            "../../draw_prelude.wgsl", "pieces/../lib/pick/1.wgsl"})
+        CHECK(store.read(std::string(kLibraryUriPrefix) + bad).error.code == "mcp.resource_not_found");
+    o.library = false;
+    ResourceStore none;
+    REQUIRE(none.open(o).ok());
+    for (const ResourceEntry& e : none.list()) CHECK(e.uri.rfind(kLibraryUriPrefix, 0) != 0);
+}

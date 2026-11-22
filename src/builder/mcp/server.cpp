@@ -657,6 +657,7 @@ Error Server::open() {
     ro.docs_dir = impl_->opt.docs_dir;
     ro.sdk_dir = impl_->opt.sdk_dir;
     ro.spec_schema_text = impl_->opt.spec_schema_text;
+    ro.library = true;  // the built-in library of pieces (design/programmable-graphics.md, Library Pieces)
     return impl_->resources.open(ro);
 }
 
