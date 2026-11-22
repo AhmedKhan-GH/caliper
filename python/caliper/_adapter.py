@@ -45,6 +45,9 @@ class TorchAdapter:
         self._tap_lock = threading.Lock()
         self._tap_users = 0
         self._tap_orig = None
+        self._event = None                  # the torch.mps.Event of framework_done
+        self._optimizers: list = []         # the optimizers that hooks() saw
+        self._hooks: dict = {}              # id(model) -> the handles that hooks() made
 
     # -- M2: the producer runtime -----------------------------------------------
     def export(self, tensor):
@@ -61,20 +64,33 @@ class TorchAdapter:
             PyCapsule: The DLPack capsule of the tensor.
 
         Raises:
-            NotImplementedError: Until the producer runtime of M2.
+            ValueError: When the tensor is not contiguous.
+            RuntimeError: When this torch cannot export the tensor's device through DLPack (torch
+                2.6.0 cannot export an MPS tensor).
         """
-        raise NotImplementedError("TorchAdapter.export arrives with the producer runtime (M2)")
+        if not tensor.is_contiguous():
+            raise ValueError("the tensor is not contiguous, and the producer runtime never copies a "
+                             "tensor")
+        try:
+            return tensor.detach().__dlpack__()     # detach shares the storage; no copy
+        except (BufferError, TypeError) as e:
+            raise RuntimeError(f"this torch cannot export the tensor through DLPack: {e}") from e
 
     def framework_done(self) -> None:
         """Wait on the CPU until torch's work on every bound tensor is complete.
 
         On MPS this records a ``torch.mps.Event`` after ``optimizer.step()`` and synchronizes it.
-
-        Raises:
-            NotImplementedError: Until the producer runtime of M2.
+        On CUDA it synchronizes the device, and on the CPU it returns at once.
         """
-        raise NotImplementedError("TorchAdapter.framework_done arrives with the producer "
-                                  "runtime (M2)")
+        import torch
+        if torch.backends.mps.is_available():
+            ev = self._event
+            if ev is None:
+                ev = self._event = torch.mps.Event()
+            ev.record()
+            ev.synchronize()
+        elif torch.cuda.is_available():
+            torch.cuda.synchronize()
 
     def before_write(self, callback) -> None:
         """Call ``callback`` before torch writes a bound tensor again.
@@ -85,10 +101,13 @@ class TorchAdapter:
             callback (Callable[[], None]): Called on the training thread.
 
         Raises:
-            NotImplementedError: Until the producer runtime of M2.
+            RuntimeError: When :meth:`hooks` has seen no optimizer yet.
         """
-        raise NotImplementedError("TorchAdapter.before_write arrives with the producer "
-                                  "runtime (M2)")
+        if not self._optimizers:
+            raise RuntimeError("before_write needs the optimizer that hooks() was given")
+        for opt in self._optimizers:
+            h = opt.register_step_pre_hook(lambda *_a, **_k: callback())
+            self._hooks.setdefault(id(opt), []).append(h)
 
     def hooks(self, model, optimizer, on_outputs, on_grads, on_step) -> None:
         """Call back with the outputs and the gradients of modules, and at each optimizer step.
@@ -100,10 +119,33 @@ class TorchAdapter:
             on_grads (Callable): Called with a parameter's name and its gradient.
             on_step (Callable[[], None]): Called before each optimizer step.
 
-        Raises:
-            NotImplementedError: Until the producer runtime of M2.
+        A callback that is ``None`` installs no hook, thus a caller pays only for what it uses.
+        The module of ``model`` itself has the name ``""``. :meth:`unhook` removes the hooks.
         """
-        raise NotImplementedError("TorchAdapter.hooks arrives with the producer runtime (M2)")
+        made = self._hooks.setdefault(id(model), [])
+        if on_outputs is not None:
+            for name, mod in model.named_modules():
+                made.append(mod.register_forward_hook(
+                    lambda _m, _i, out, name=name: on_outputs(name, out)))
+        if on_grads is not None:
+            for name, p in model.named_parameters():
+                if p.requires_grad:
+                    made.append(p.register_post_accumulate_grad_hook(
+                        lambda t, name=name: on_grads(name, t.grad)))
+        if optimizer is not None:
+            if all(o is not optimizer for o in self._optimizers):
+                self._optimizers.append(optimizer)
+            if on_step is not None:
+                made.append(optimizer.register_step_pre_hook(lambda *_a, **_k: on_step()))
+
+    def unhook(self, model) -> None:
+        """Remove the hooks that :meth:`hooks` put on ``model``.
+
+        Args:
+            model (torch.nn.Module): The model that :meth:`hooks` was given.
+        """
+        for h in self._hooks.pop(id(model), []):
+            h.remove()
 
     def probe(self, model, inputs):
         """Run ``model`` forward on ``inputs`` that Caliper supplies, without gradients.
