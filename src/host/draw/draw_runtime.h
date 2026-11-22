@@ -136,6 +136,9 @@ struct PickedItem {
     std::uint32_t item = 0;
     std::int64_t step = -1;
     std::vector<std::pair<std::string, double>> fields;
+    // The first four scalar integer fields of the item map, in its order, as tensor indices;
+    // -1 where there are fewer, or for a value above the range of i32.
+    std::array<std::int32_t, 4> index{-1, -1, -1, -1};
 };
 
 // A label of the text table: a world position, its text and its priority,
