@@ -422,3 +422,75 @@ TEST_CASE("pieces: a spec that pins a missing or changed piece opens, and its pr
     CHECK(status["programs"][0]["error"]["code"] == "piece.missing");
     CHECK(hash.size() == 71);
 }
+
+namespace {
+
+struct ViewerHost : StageHost {
+    std::vector<ProgramStatus> items;
+    void reconcile(const spec::Spec&) override {}
+    std::vector<ProgramStatus> status() const override { return items; }
+};
+
+struct Events : EventSink {
+    std::vector<Event> got;
+    std::uint64_t push(Event event) override {
+        got.push_back(std::move(event));
+        return got.size();
+    }
+};
+
+}  // namespace
+
+TEST_CASE("pieces: program.status takes an instance's draw object from the viewer's host, and events name the half") {
+    auto s = piece_session("piece_draw_status");
+    ok(*s, "piece.update", {{"piece", uv_field()}});
+    ok(*s, "program.create", {{"id", "field"}, {"piece", {{"name", "uv_field"}, {"from", "workspace"}}}, {"panel", "world"}});
+    // Without a host that draws it, the manifest gives the limits.
+    json status = ok(*s, "program.status", {{"id", "field"}});
+    CHECK(status["programs"][0]["draw"]["state"] == "waiting");
+    CHECK(status["programs"][0]["draw"]["frame_ms"].is_null());
+
+    ViewerHost viewer;
+    ProgramStatus item;
+    item.id = "field";
+    item.kind = "piece";
+    item.host = "viewer";
+    item.half = "draw";
+    DrawStatus d;
+    d.state = "stopped";
+    d.frame_ms = 6.5;
+    d.frame_limit_ms = 4;
+    d.memory_bytes = 1024;
+    d.memory_limit_bytes = 64u << 20;
+    d.resource_step = 120;
+    d.error = ProgramError{"program.draw_over_time", "The pass draw.passes[0] took 6.5 ms of its 4 ms.", 0, 0};
+    d.error_where = "draw.passes[0]";
+    item.draw = d;
+    viewer.items = {item};
+    s->set_stage_host(&viewer);
+    status = ok(*s, "program.status", {{"id", "field"}});
+    const json& draw = status["programs"][0]["draw"];
+    CHECK(draw["state"] == "stopped");
+    CHECK(draw["frame_ms"] == 6.5);
+    CHECK(draw["memory_bytes"] == 1024);
+    CHECK(draw["resource_step"] == 120);
+    CHECK(draw["error"]["code"] == "program.draw_over_time");
+    CHECK(draw["error"]["where"] == "draw.passes[0]");
+    CHECK(status["stages"].empty());
+    s->set_stage_host(nullptr);
+
+    // The event of an instance's half names the half and its pass; another program's has neither.
+    Events events;
+    item.state = "stopped";
+    item.pass = 0;
+    item.error = d.error;
+    push_program_event(events, item, "stopped");
+    ProgramStatus plain;
+    plain.id = "rows";
+    push_program_event(events, plain, "compiled");
+    REQUIRE(events.got.size() == 2);
+    CHECK(events.got[0].fields["half"] == "draw");
+    CHECK(events.got[0].fields["pass"] == 0);
+    CHECK(!events.got[1].fields.contains("half"));
+    CHECK(!events.got[1].fields.contains("pass"));
+}

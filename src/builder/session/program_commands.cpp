@@ -21,6 +21,24 @@ namespace caliper_builder {
 
 using nlohmann::json;
 
+namespace {
+
+// program.status's `draw` object of an instance.
+json draw_status_json(const DrawStatus& d) {
+    auto opt = [](const auto& v) { return v ? json(*v) : json(nullptr); };
+    json out = {{"state", d.state},
+                {"frame_ms", opt(d.frame_ms)},
+                {"frame_limit_ms", d.frame_limit_ms},
+                {"memory_bytes", d.memory_bytes},
+                {"memory_limit_bytes", d.memory_limit_bytes},
+                {"resource_step", opt(d.resource_step)},
+                {"error", nullptr}};
+    if (d.error) out["error"] = {{"code", d.error->code}, {"message", d.error->message}, {"where", d.error_where}};
+    return out;
+}
+
+}  // namespace
+
 json program_status_json(const ProgramStatus& s) {
     auto opt = [](const auto& v) { return v ? json(*v) : json(nullptr); };
     json out = {{"id", s.id},
@@ -45,6 +63,8 @@ json program_status_json(const ProgramStatus& s) {
                         {"message", s.error->message},
                         {"line", s.error->line},
                         {"column", s.error->column}};
+    if (s.piece) out["piece"] = spec::to_json(*s.piece);
+    if (s.draw) out["draw"] = draw_status_json(*s.draw);
     return out;
 }
 
@@ -59,6 +79,11 @@ void push_program_event(EventSink& sink, const ProgramStatus& s, std::string_vie
         e.fields["message"] = s.error->message;
         e.fields["line"] = s.error->line;
         e.fields["column"] = s.error->column;
+    }
+    // An instance's half and its pass (design/programmable-graphics.md, Status and Events).
+    if (!s.half.empty()) {
+        e.fields["half"] = s.half;
+        e.fields["pass"] = s.pass ? json(*s.pass) : json(nullptr);
     }
     sink.push(std::move(e));
 }
@@ -151,7 +176,7 @@ ProgramStatus unhosted(const spec::Spec& s, std::string id, std::string kind, st
 // not resolve, in review when a foreign spec's provenance lacks the piece's
 // hash, and waiting otherwise.
 json instance_status(const spec::Spec& s, const spec::Program& p, const ProgramStatus* hosted,
-                     const std::string& workspace) {
+                     const ProgramStatus* drawn, const std::string& workspace) {
     const FoundPiece found = resolve_pin(PieceLibrary::builtin(), workspace, s, *p.piece);
     json out;
     if (hosted) {
@@ -176,7 +201,11 @@ json instance_status(const spec::Spec& s, const spec::Program& p, const ProgramS
     }
     out["kind"] = "piece";
     out["piece"] = spec::to_json(*p.piece);
-    if (!found.error && found.piece.draw) {
+    // The viewer's host that draws the instance reports its draw object (the
+    // stage host's item of the same id); else the manifest gives its limits,
+    // and the state follows the pin.
+    if (drawn && drawn->draw) out["draw"] = draw_status_json(*drawn->draw);
+    if (!found.error && found.piece.draw && !out.contains("draw")) {
         const spec::Draw& d = *found.piece.draw;
         const std::string state = out["state"] == "refused" ? "refused" : "waiting";
         out["draw"] = {{"state", state},
@@ -207,7 +236,8 @@ CommandOutput program_status(const json& args, const spec::Spec& s, const Progra
     for (const spec::Program& p : s.programs) {
         if (!only.empty() && p.id != only) continue;
         if (p.piece) {
-            programs_out.push_back(instance_status(s, p, reported(hosted_programs, p.id), workspace));
+            programs_out.push_back(
+                instance_status(s, p, reported(hosted_programs, p.id), reported(hosted_stages, p.id), workspace));
             continue;
         }
         if (const ProgramStatus* st = reported(hosted_programs, p.id)) {

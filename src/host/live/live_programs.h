@@ -807,6 +807,8 @@ public:
             if (j->is_string() && !j->as_string().empty()) s.sha256 = j->as_string();
         if (!r.error_code.empty())
             s.error = caliper_builder::ProgramError{r.error_code, r.error_message, r.line, r.column};
+        // The script runs an instance's derive half; its events name that half.
+        if (r.want.kind == "piece" && !r.want.derive.empty()) s.half = "derive";
         return s;
     }
 
