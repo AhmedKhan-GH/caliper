@@ -37,6 +37,8 @@ extra:
 hooks:
   - roadmap/build.py
   - docs-theme/hooks/contents.py
+  # Fills the C API reference tables (<!-- c-api ... --> placeholders) from the headers' doc comments.
+  - docs-theme/hooks/c_reference.py
 # A local `mkdocs serve` rebuilds when the registry, the Python package or the C headers change.
 watch:
   - roadmap
