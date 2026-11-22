@@ -138,4 +138,10 @@ SceneRectResult draw_scene_in_rect(CaliperCore* core, const std::string& name, c
                                    ImVec2 size, const SceneRectOptions& options, SceneRectState& state,
                                    const SceneRectSink& sink);
 
+// The same for a scene view that the caller owns, such as the scene of a spec panel's entities
+// (spec_entities.h), at `pixel_scale` physical pixels per logical pixel.
+SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, const char* imgui_id, ImVec2 p0,
+                                        ImVec2 size, const SceneRectOptions& options, SceneRectState& state,
+                                        const SceneRectSink& sink);
+
 }  // namespace caliper_live_views

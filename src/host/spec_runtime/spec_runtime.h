@@ -54,6 +54,10 @@
 #include <vector>
 
 struct CaliperCore;   // the app's core, whose live views hold the live scenes
+namespace caliper_gfx {
+class Backend;
+struct ProgramDesc;
+}  // namespace caliper_gfx
 
 namespace caliper_builder {
 class Session;
@@ -65,6 +69,8 @@ class StepHistory;
 }
 
 namespace caliper_host {
+
+class SpecScene;   // spec_entities.h
 
 struct SpecInstrumentHost;   // spec_instruments.h
 
@@ -328,6 +334,21 @@ public:
     // content of the scene panel `panel_id`, at its next draw, as if the
     // person clicked there. False when the spec has no such scene panel.
     bool pick_scene(const std::string& panel_id, float u, float v);
+    // Where the scene of a panel's entities draws: a function that makes a backend of the
+    // graphics layer and gives its table of generated programs (live_views_scene.h,
+    // open_layer). Without one, the runtime asks the live core's renderer; an offscreen canvas
+    // gives its own device here (spec_offscreen.h).
+    using SceneLayer = std::function<bool(std::unique_ptr<caliper_gfx::Backend>* owned, caliper_gfx::Backend** gfx,
+                                          const caliper_gfx::ProgramDesc** programs, std::string* why)>;
+    void set_scene_layer(SceneLayer layer) { scene_layer_ = std::move(layer); }
+    // The scene view of a scene panel with entities, made on first use and up to date with its
+    // entities, or null when the panel has none or no backend can start.
+    caliper_live_views::SceneView* entity_view(const std::string& panel_id);
+    // The scene view that a scene panel shows: its entities' own view, or the live core's view
+    // of the scene that it binds; null when it has none yet (camera.get and camera.set).
+    caliper_live_views::SceneView* scene_view_of(const std::string& panel_id);
+    // The entities of a scene panel as the runtime built them last, or null.
+    const SpecScene* entity_scene(const std::string& panel_id) const;
 
     // The layout of the last draw.
     const SpecLayout& layout() const { return layout_; }
@@ -349,6 +370,8 @@ private:
     // Sets e.view.scene for a scene panel: draws through the live core and
     // pushes its picks and selections.
     void bind_scene(Entry& e);
+    // Sets e.view.scene for a scene panel with entities: draws its own scene view.
+    void bind_entity_scene(Entry& e);
 
     struct SceneStates;   // the gesture and pick state of each scene panel (live_views_scene.h)
 
@@ -376,6 +399,7 @@ private:
     // What the instrument hooks get, for the spec shown.
     SpecInstrumentHost instrument_host(const caliper_builder::spec::Spec* shown) const;
     std::function<CaliperCore*()> core_;
+    SceneLayer scene_layer_;
     std::unique_ptr<SceneStates> scenes_;
 };
 
