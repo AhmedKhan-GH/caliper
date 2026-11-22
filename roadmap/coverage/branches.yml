@@ -1,0 +1,1445 @@
+# yaml-language-server: $schema=schema.json
+title: Branch map
+kind: branches
+summary: 'Every branch with commits that main lacks, compared with main and with each other by patch id
+  and commit subject: whether its work is on main, contained in another branch, superseded, abandoned
+  or unique, and for unique work what it built and whether it is finished.'
+entries:
+- branch: origin/dependabot/github_actions/actions-38840113c2
+  state: unique
+  commits: 1 commit, 8d1c809e
+  item: 'Dependency bump from Dependabot: CI: Bump the actions group across 1 directory with 4 updates.'
+  reason: maintenance
+- branch: origin/dependabot/submodules/third_party/glew-f1dbf34
+  state: unique
+  commits: 1 commit, 0b8b1a20
+  item: 'Dependency bump from Dependabot: Deps: Bump third_party/glew from `ee5586b` to `f1dbf34`.'
+  reason: maintenance
+- branch: origin/dependabot/submodules/third_party/glfw-d9d6f0f
+  state: unique
+  commits: 1 commit, c09ed36f
+  item: 'Dependency bump from Dependabot: Deps: Bump third_party/glfw from `3d89365` to `d9d6f0f`.'
+  reason: maintenance
+- branch: origin/dependabot/submodules/third_party/glm-6f14f47
+  state: unique
+  commits: 1 commit, b7e9a850
+  item: 'Dependency bump from Dependabot: Deps: Bump third_party/glm from `e7970a8` to `6f14f47`.'
+  reason: maintenance
+- branch: origin/dependabot/submodules/third_party/imgui-node-editor-1e0e494
+  state: unique
+  commits: 1 commit, 5b3be61d
+  item: 'Dependency bump from Dependabot: Deps: Bump third_party/imgui-node-editor from `55a7dbf` to `1e0e494`.'
+  reason: maintenance
+- branch: origin/dependabot/submodules/third_party/slang-f68b2d0
+  state: unique
+  commits: 1 commit, 8ca837ce
+  item: 'Dependency bump from Dependabot: Deps: Bump third_party/slang from `8b408a3` to `f68b2d0`.'
+  reason: maintenance
+- branch: origin/dependabot/uv/python-12e94f7de6
+  state: unique
+  commits: 1 commit, fc8001a6
+  item: 'Dependency bump from Dependabot: Python: Bump the python group across 1 directory with 2 updates.'
+  reason: maintenance
+- branch: origin/site-minerals-logos
+  state: on-main
+  commits: 0 commits that main lacks (1 ahead of the merge base)
+  item: Work on the Minerals Caliper icon on the site, docs and README, which reached main through a pull
+    request (patch ids and subjects match).
+  ids:
+  - COR-01
+- branch: site-minerals-logos
+  state: on-main
+  commits: 0 commits that main lacks (1 ahead of the merge base)
+  item: Work on the Minerals Caliper icon on the site, docs and README, which reached main through a pull
+    request (patch ids and subjects match).
+  ids:
+  - COR-01
+- branch: sprint2-lutfix
+  state: on-main
+  commits: 0 commits that main lacks (5 ahead of the merge base)
+  item: Work on Metal colouring of value-coloured live points, which reached main through a pull request
+    (patch ids and subjects match).
+  ids:
+  - EMB-02
+  - REN-01
+- branch: sprint2-macos14
+  state: on-main
+  commits: 0 commits that main lacks (6 ahead of the merge base)
+  item: Work on the macOS 14 deployment target and its documentation, which reached main through a pull
+    request (patch ids and subjects match).
+  ids:
+  - PLT-01
+  - EMB-07
+- branch: sprint2-nbfix
+  state: on-main
+  commits: 0 commits that main lacks (9 ahead of the merge base)
+  item: Work on notebook guide fixes for the WebAssembly views, which reached main through a pull request
+    (patch ids and subjects match).
+  ids:
+  - STR-07
+  - EMB-04
+- branch: sprint2-points3d
+  state: on-main
+  commits: 0 commits that main lacks (8 ahead of the merge base)
+  item: Work on the 3-D points box, depth cues, default camera and rotation, documented, which reached
+    main through a pull request (patch ids and subjects match).
+  ids:
+  - EMB-02
+  - STR-04
+- branch: sprint2-proto
+  state: on-main
+  commits: 0 commits that main lacks (3 ahead of the merge base)
+  item: Work on the measured cost of streaming moved into the docs, which reached main through a pull
+    request (patch ids and subjects match).
+  ids:
+  - STR-04
+  - STR-05
+- branch: sprint2-review-cpp
+  state: on-main
+  commits: 0 commits that main lacks (4 ahead of the merge base)
+  item: Work on network tests that wait on state instead of fixed sleeps, which reached main through a
+    pull request (patch ids and subjects match).
+  ids:
+  - STR-05
+- branch: sprint2-review-py
+  state: on-main
+  commits: 0 commits that main lacks (7 ahead of the merge base)
+  item: Work on a check that a stalled viewer makes no view call wait, which reached main through a pull
+    request (patch ids and subjects match).
+  ids:
+  - STR-05
+  - STR-01
+- branch: sprint2-spikedoc
+  state: on-main
+  commits: 0 commits that main lacks (9 ahead of the merge base)
+  item: Work on a strict build of the design pages in the Pages workflow, which reached main through a
+    pull request (patch ids and subjects match).
+  ids:
+  - STR-05
+- branch: sprint2-wasmci
+  state: on-main
+  commits: 0 commits that main lacks (15 ahead of the merge base)
+  item: Work on building and fetching the WebAssembly views in CI, which reached main through a pull request
+    (patch ids and subjects match).
+  ids:
+  - EMB-04
+- branch: sprint2-webci
+  state: on-main
+  commits: 0 commits that main lacks (3 ahead of the merge base)
+  item: Work on browser tests that tolerate a transient drawn state, which reached main through a pull
+    request (patch ids and subjects match).
+  ids:
+  - EMB-03
+  - EMB-04
+- branch: sprint2-winci
+  state: on-main
+  commits: 0 commits that main lacks (5 ahead of the merge base)
+  item: Work on the Windows include check, which reached main through a pull request (patch ids and subjects
+    match).
+  ids:
+  - PLT-03
+  - PLT-05
+- branch: sprint2-windows
+  state: on-main
+  commits: 0 commits that main lacks (9 ahead of the merge base)
+  item: Work on Windows build search tests and refusals of network features, which reached main through
+    a pull request (patch ids and subjects match).
+  ids:
+  - PLT-05
+- branch: sprint3
+  state: on-main
+  commits: 0 commits that main lacks (82 ahead of the merge base)
+  item: Work on the sprint 3 integration of the builder, side chat and widget agent, which reached main
+    through a pull request (patch ids and subjects match).
+  ids:
+  - SPC-07
+  - AGT-03
+  - AGT-05
+- branch: sprint3-acp
+  state: on-main
+  commits: 0 commits that main lacks (7 ahead of the merge base)
+  item: Work on caliper-acp-harness, one headless ACP session, which reached main through a pull request
+    (patch ids and subjects match).
+  ids:
+  - AGT-03
+- branch: sprint3-agent
+  state: on-main
+  commits: 0 commits that main lacks (66 ahead of the merge base)
+  item: Work on the BYOK widget agent and its end-to-end test on the real command layer, which reached
+    main through a pull request (patch ids and subjects match).
+  ids:
+  - AGT-05
+- branch: sprint3-commands
+  state: on-main
+  commits: 0 commits that main lacks (34 ahead of the merge base)
+  item: Work on the command layer and its worked test, which reached main through a pull request (patch
+    ids and subjects match).
+  ids:
+  - SPC-05
+- branch: sprint3-int-api
+  state: on-main
+  commits: 0 commits that main lacks (96 ahead of the merge base)
+  item: Work on the command endpoints of Caliper API, which reached main through a pull request (patch
+    ids and subjects match).
+  ids:
+  - AGT-01
+  - SPC-05
+- branch: sprint3-int-cards
+  state: on-main
+  commits: 0 commits that main lacks (188 ahead of the merge base)
+  item: Work on approval cards in the ACP integration, which reached main through a pull request (patch
+    ids and subjects match).
+  ids:
+  - AGT-03
+  - AGT-06
+- branch: sprint3-int-chat
+  state: on-main
+  commits: 0 commits that main lacks (219 ahead of the merge base)
+  item: Work on the side chat rows and approvals, which reached main through a pull request (patch ids
+    and subjects match).
+  ids:
+  - AGT-03
+- branch: sprint3-int-hostbuild
+  state: on-main
+  commits: 0 commits that main lacks (87 ahead of the merge base)
+  item: Work on the CALIPER_WITH_BUILDER build option, which reached main through a pull request (patch
+    ids and subjects match).
+  ids:
+  - SPC-06
+- branch: sprint3-int-inline
+  state: on-main
+  commits: 0 commits that main lacks (238 ahead of the merge base)
+  item: Work on the inline surface of the widget agent, which reached main through a pull request (patch
+    ids and subjects match).
+  ids:
+  - AGT-05
+- branch: sprint3-int-kind
+  state: on-main
+  commits: 0 commits that main lacks (107 ahead of the merge base)
+  item: Work on the loader kinds in the spec format, which reached main through a pull request (patch
+    ids and subjects match).
+  ids:
+  - SPC-03
+  - SPC-04
+- branch: sprint3-int-models
+  state: on-main
+  commits: 0 commits that main lacks (232 ahead of the merge base)
+  item: Work on the setup guide to the built settings and models, which reached main through a pull request
+    (patch ids and subjects match).
+  ids:
+  - AGT-05
+  - AGT-04
+- branch: sprint3-int-page
+  state: on-main
+  commits: 0 commits that main lacks (168 ahead of the merge base)
+  item: Work on the spec page keeping an attached live session, which reached main through a pull request
+    (patch ids and subjects match).
+  ids:
+  - EMB-06
+  - SPC-07
+- branch: sprint3-int-pane
+  state: on-main
+  commits: 0 commits that main lacks (224 ahead of the merge base)
+  item: Work on the builder pane and dropped files, which reached main through a pull request (patch ids
+    and subjects match).
+  ids:
+  - SPC-07
+- branch: sprint3-int-pr2fix
+  state: on-main
+  commits: 0 commits that main lacks (7 ahead of the merge base)
+  item: Work on a fix of the widget agent settings, which reached main through a pull request (patch ids
+    and subjects match).
+  ids:
+  - AGT-05
+- branch: sprint3-int-providers
+  state: on-main
+  commits: 0 commits that main lacks (93 ahead of the merge base)
+  item: Work on catalog providers for live views, feed channels and metrics, which reached main through
+    a pull request (patch ids and subjects match).
+  ids:
+  - SPC-04
+- branch: sprint3-int-quitfix
+  state: on-main
+  commits: 0 commits that main lacks (229 ahead of the merge base)
+  item: Work on the inline surface forgetting its preview, which reached main through a pull request (patch
+    ids and subjects match).
+  ids:
+  - AGT-05
+- branch: sprint3-int-review
+  state: on-main
+  commits: 0 commits that main lacks (94 ahead of the merge base)
+  item: Work on the review of spec edits, which reached main through a pull request (patch ids and subjects
+    match).
+  ids:
+  - SPC-05
+- branch: sprint3-int-runtime
+  state: on-main
+  commits: 0 commits that main lacks (123 ahead of the merge base)
+  item: Work on the spec runtime and spec applets, which reached main through a pull request (patch ids
+    and subjects match).
+  ids:
+  - SPC-08
+- branch: sprint3-int-session
+  state: on-main
+  commits: 0 commits that main lacks (92 ahead of the merge base)
+  item: Work on the builder session in the app, which reached main through a pull request (patch ids and
+    subjects match).
+  ids:
+  - SPC-06
+- branch: sprint3-int-web
+  state: on-main
+  commits: 0 commits that main lacks (184 ahead of the merge base)
+  item: Work on the spec page tests, which reached main through a pull request (patch ids and subjects
+    match).
+  ids:
+  - EMB-06
+- branch: sprint3-int-widget
+  state: on-main
+  commits: 0 commits that main lacks (109 ahead of the merge base)
+  item: Work on widget field matching, which reached main through a pull request (patch ids and subjects
+    match).
+  ids:
+  - AGT-05
+- branch: sprint3-integration-pre-rebase
+  state: on-main
+  commits: 0 commits that main lacks (226 ahead of the merge base)
+  item: Work on the sprint 3 integration before a rebase, which reached main through a pull request (patch
+    ids and subjects match).
+  ids:
+  - SPC-07
+  - AGT-03
+  - AGT-05
+- branch: sprint3-loaders
+  state: on-main
+  commits: 0 commits that main lacks (24 ahead of the merge base)
+  item: Work on the loaders, which reached main through a pull request (patch ids and subjects match).
+  ids:
+  - SPC-03
+- branch: sprint3-mcp
+  state: on-main
+  commits: 0 commits that main lacks (63 ahead of the merge base)
+  item: Work on caliper-mcp and its acceptance test, which reached main through a pull request (patch
+    ids and subjects match).
+  ids:
+  - AGT-02
+- branch: sprint3-pydantic-ai
+  state: on-main
+  commits: 0 commits that main lacks (82 ahead of the merge base)
+  item: Work on Pydantic AI as the widget agent framework, which reached main through a pull request (patch
+    ids and subjects match).
+  ids:
+  - AGT-05
+- branch: sprint3-pyloader
+  state: on-main
+  commits: 0 commits that main lacks (38 ahead of the merge base)
+  item: Work on the Python loader, which reached main through a pull request (patch ids and subjects match).
+  ids:
+  - SPC-03
+- branch: sprint3-rebase-trial
+  state: on-main
+  commits: 0 commits that main lacks (75 ahead of the merge base)
+  item: Work on moving the builder design pages to design/, which reached main through a pull request
+    (patch ids and subjects match).
+  ids:
+  - SPC-06
+- branch: sprint3-roles
+  state: on-main
+  commits: 0 commits that main lacks (73 ahead of the merge base)
+  item: Work on naming the side chat and the widget agent, which reached main through a pull request (patch
+    ids and subjects match).
+  ids:
+  - AGT-03
+  - AGT-05
+- branch: sprint3-session
+  state: on-main
+  commits: 0 commits that main lacks (59 ahead of the merge base)
+  item: Work on builder sessions and dry runs of spec edits, which reached main through a pull request
+    (patch ids and subjects match).
+  ids:
+  - SPC-06
+  - SPC-05
+- branch: sprint3-spec
+  state: on-main
+  commits: 0 commits that main lacks (15 ahead of the merge base)
+  item: Work on the order of diagnostics in the spec validator, which reached main through a pull request
+    (patch ids and subjects match).
+  ids:
+  - SPC-02
+- branch: sprint3-int-fix-app
+  state: on-main
+  commits: 0 commits that main lacks
+  item: Work on treating an approval reissued for changed content as no outcome, which reached main through
+    a pull request (patch ids and subjects match).
+  ids:
+  - AGT-06
+  - SPC-05
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 35 commits that main lacks by patch and subject (30 also on origin/inspector, 5 only on inspector),
+    62 ahead of main in all
+  item: Overview of the branch. It holds the inspector applet with its tensor view, 3-D model view, requests
+    to a script, a language model run from the app, and the J-space Trace pane with interventions. Its
+    host side is an MLX example script. 30 commits are on origin/inspector; five are only local (the uv
+    lock, the data script for a landing page figure, GrokScope, two research examples, a path change).
+  ids:
+  - INT-05
+  - INT-06
+  - INT-07
+  - INT-08
+  - INT-09
+  - INT-15
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 1 commit, 1a53fbd1
+  item: Requests from the app to a script. A script serves requests over a Unix socket next to its session
+    (python/caliper/requests.py); the app sends a request, the handler streams events back, and Stop cancels
+    it. The first inspector windows (Inference, Model, Tensor) come with it.
+  ids:
+  - INT-08
+  - INT-05
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 2 commits, 24830b5e fd8334a8
+  item: Binary transport for tensors. Whole tensors travel as raw bfloat16 or float32 row chunks (tensor_values,
+    capped at 2 MB per reply) and region samples as base64 float32.
+  ids:
+  - INT-08
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 1 commit, 85257ddb
+  item: The JSON reader of the request channel is patched to read UTF-8 bytes above 127 and decode unicode
+    escapes, applied at configure time like the llama.cpp patch.
+  ids:
+  - INT-08
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 1 commit, b3eabdf3
+  item: 'Running Qwen3.5-0.8B from the app with MLX: generation with the chat template (thinking on or
+    off), the tensor list, sampled views and in-memory weight edits with exact revert; docs/live-requests.md
+    documents the protocol.'
+  ids:
+  - INT-09
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 1 commit, f19f429b
+  item: Run to max tokens bans the end-of-turn tokens so that the model writes to the limit, in the trace
+    and in plain generation.
+  ids:
+  - INT-09
+  - INT-15
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 1 commit, fff0f56c
+  item: 'The tensor view at its true shape: square cells, a value plot for a 1-D tensor, a zoomable viewport
+    that samples the visible region down to single cells, colour scale and coordinates; the start screen
+    lists running scripts that offer requests, with Attach.'
+  ids:
+  - INT-06
+  - INT-05
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 5 commits, bc8c582a 7e388e58 d808819a 7668a766 6a4517bc
+  item: 'Tensor view cell selection and editing: select a cell, type a value, minimap of the zoom, crisp
+    cells then a grid then values; averaging of the cells under each sample; a continuous camera with
+    instant zoom; a folded map, row scrollbar and go-to-cell for very tall tensors; no beating at mid
+    zoom.'
+  ids:
+  - INT-06
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 2 commits, fff0f56c f84d7c52
+  item: 'The 3-D model view: every tensor of the model as a panel sized to its shape and textured with
+    its heatmap, grouped and stacked by layer, with hover, selection, Fit and Focus selected, and outlines
+    on edited tensors.'
+  ids:
+  - INT-07
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 5 commits, ca38faf2 a4c24506 9c555602 b18713e7 c60c2d4f
+  item: 'Navigation of the 3-D model view: a view cube, then an axis navigator in the house style with
+    Move, Zoom and Fit buttons, zoom toward the pointer, mipmapped panels with 2x supersampling (HostRenderer
+    gains mipmapped texture creation), and removal of the ImGuizmo submodule.'
+  ids:
+  - INT-07
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 1 commit, f84d7c52
+  item: The inspector tiled as docked panes (Model, Model 3D over Tensor, Inference) with pane headers,
+    kept splitter proportions and Reset layout; the Sternbild theme and fonts move into libcaliper.
+  ids:
+  - INT-05
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 1 commit, 06bf7e43
+  item: Reading the model through a Jacobian lens (unembed of final norm of the average Jacobian from
+    block l to the last block, for Qwen3.5-0.8B with a lens file converted from a published fit) in qwen_jspace.py,
+    which runs the text model block by block so the residual stream can be read and changed after any
+    block. Follows the J-space paper and its reference code.
+  ids:
+  - INT-15
+  - INT-32
+  - INT-18
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 2 commits, 06bf7e43 cfa67232
+  item: 'Interventions in J-space across a band of layers at chosen or all positions: ablation of the
+    k most active lens tokens (sparing the clean run top outputs), removal of given tokens directions,
+    swapping two lens coordinates, and injecting a direction scaled by the layer mean residual norm; a
+    seed makes intact and intervened runs sample alike.'
+  ids:
+  - INT-32
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 5 commits, cfa67232 6a4517bc f179dd2d cf9e8beb b8925f9e
+  item: 'The Trace pane: a grid of layers by token positions that shows each residual top J-lens or logit-lens
+    word inked by probability, hover lists the top ten, a side list per layer at the cursor, interventions
+    written in the pane, and Compare that runs the prompt intact and then intervened with one seed and
+    marks changed cells; follows the newest token as the model writes.'
+  ids:
+  - INT-15
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 2 commits, b8925f9e d5bd0cfb
+  item: Generate in the Inference pane runs a trace and streams the J-space grid and, for the six full-attention
+    layers of Qwen3.5-0.8B, the attention patterns recomputed from queries, keys and mask, token by token;
+    both lenses are read in one stacked unembedding (about 6 to 39 tokens a second).
+  ids:
+  - INT-15
+  - INT-09
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 3 commits, 4118a3a6 59692488 fce1053b
+  item: A playback clock for the Trace pane that replays the computation at a chosen pace from 30 seconds
+    a layer to full speed with Pause and Step, never running ahead of the model, plus a tape above the
+    grid that shows the whole trace squeezed to the grid width.
+  ids:
+  - INT-15
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 2 commits, 13b4176b 9c84b561
+  item: The Embedding view draws all 248,320 rows of the embedding table in 3-D (UMAP or PCA, grouped
+    by kind, legend toggles, hover names a token) through a GeomCanvas of imported Metal buffers; the
+    Qwen host serves embedding_map and decode.
+  ids:
+  - INT-28
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 2 commits, 13b4176b 9c84b561
+  item: The Trajectories view draws each token of the run as a path up the lens layers in a PCA plane
+    fitted once after prefill, following the run as trace events stream in; a path turns teal from the
+    layer where the J-lens settles on the next token.
+  ids:
+  - INT-29
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 1 commit, 72275e31 (only on the local inspector, not on origin/inspector)
+  item: GrokScope, an applet in which a one-hidden-layer network learns (a + b) mod 113, memorises first
+    and generalises thousands of steps later, drawing a tower of Fourier-plane rings of its token embedding.
+  ids:
+  - INT-30
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 1 commit, 0c4f577e (only on the local inspector)
+  item: Two research examples written as live scripts. induction_heads.py finds GPT-2 small induction
+    heads with induction and previous-token scores per head, attention patterns and a zero-ablation of
+    the top heads. truth_direction.py finds a truth direction in Qwen2.5-1.5B and pushes along it across
+    six layers.
+  ids:
+  - INT-31
+  - INT-16
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 2 commits, 4a15a8dd 792faa18
+  item: A lock file for the Python dependencies with uv, and a path change in the Qwen examples.
+  reason: maintenance
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 1 commit, 948c2106
+  item: A data script and data for the landing page two-hop figure.
+  reason: docs
+- branch: inspector
+  state: unique
+  wip: false
+  commits: about 27 commits, for example 4f3c7ef1 8122449b 1ed6c617 d5d2742d 257da347 c766ec7f
+  item: 'Landing-page work on the branch: development section, platform and graphics libraries, frame
+    traces, Download buttons, Sternbild line and footer, written before the site moved to main. Main carries
+    the site by matching subjects.'
+  reason: docs
+- branch: inspector
+  state: unique
+  wip: false
+  commits: about 8 commits, 76502e34 dd738e60 89d70bed 7234c0ee 93228094 20007f41 be58fd66 39e325d2
+  item: Landing-page sections for products that are not yet released.
+  reason: out-of-scope
+- branch: inspector
+  state: unique
+  wip: false
+  commits: 5 commits, 97bb5f37 4fb30eee 0ff511f0 6f9bde74 0dd1a9c3
+  item: Caliper icon revisions (solid hinge discs, dark interior derived from the arms, hero width) from
+    2026-11-13 and 2026-11-14; main now uses the Minerals icon from pull request 15.
+  reason: docs
+- branch: origin/inspector
+  state: contained
+  in:
+  - inspector
+  wip: false
+  commits: 30 commits that main lacks, none unique; all are on inspector
+  item: The pushed copy of the inspector branch, up to 6c73d7a8 and including the Trace, Embedding and
+    Trajectories work; inspector holds five more commits.
+  ids:
+  - INT-05
+  - INT-15
+- branch: sprint3-int-docs
+  state: superseded
+  in:
+  - main
+  wip: true
+  commits: 1 commit, 91ce803a
+  item: 'A WIP commit that rewrites the walk-through README with steps 2 and 6 from their dry runs and
+    fixes stale lines in the builder overview. It lists what was not done: docs pages, the overview rows
+    for the cmdk, chat and live work, the roadmap and a PR3.md.'
+  ids:
+  - SPC-07
+  - AGT-05
+- branch: sprint3-int-fix-approvals
+  state: abandoned
+  wip: false
+  commits: 2 commits, dbd859dd 6dee779a
+  item: An approval card for an undo or redo from an origin under review, added in dbd859dd and reverted
+    in 6dee779a because history.undo and history.redo are refused to agents instead.
+  ids:
+  - AGT-06
+  - SPC-05
+- branch: sprint2-pyctl2
+  state: superseded
+  in:
+  - main
+  wip: false
+  commits: 1 commit, 6a86cf8c; the other 16 are on main
+  item: A roadmap edit that marks the controls of wire protocol 3.1 as done through caliper.serve() and
+    the hub on both senders, with interventions on a model as the next step.
+  ids:
+  - STR-03
+  - INT-04
+  - INT-10
+- branch: origin/feat/zerocopy-arbitrary-cuda
+  state: abandoned
+  wip: false
+  commits: 1 commit, feb7b78b
+  item: A front-matter edit of WHITEPAPER.md (author, repository and sibling project links), on a branch
+    from July 2026.
+  reason: abandoned
+- branch: origin/feat/grad-cam-saliency
+  state: on-main
+  wip: false
+  commits: 0 commits that main lacks (54 ahead of its merge base)
+  item: An older line of applet work from May 2026 (activation flow views, sampling settings and a demo
+    applet with saliency), all matched on main by patch id.
+  reason: on-main
+- branch: sprint4
+  state: unique
+  wip: false
+  commits: 63 commits, all plan pages (62 unique, the rest shared with the build branches)
+  item: 'Sprint 4 plan pages only: the design pages with as-built updates and the trim (62 unique commits).'
+  reason: docs
+- branch: sprint4-base
+  state: contained
+  in:
+  - sprint4-build
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  wip: false
+  commits: 10 commits, none outside sprint4-integ3
+  item: Early base of the renderer core stream (step-0 baseline, counters, shader and graphics layer groundwork).
+  ids:
+  - REN-09
+- branch: sprint4-build
+  state: contained
+  in:
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  - sprint4-pr2
+  wip: false
+  commits: 165 commits, none outside sprint4-integ3
+  item: 'Head of pull request 1 (546bacaa): sprint 4 through demo 0 with every review fix.'
+  ids:
+  - REN-09
+  - REN-10
+  - REN-11
+  - REN-12
+  - REN-13
+  - REN-14
+  - STR-09
+  - STR-10
+  - STR-11
+- branch: sprint4-build-pre-rebase
+  state: contained
+  in:
+  - sprint4-build
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  wip: false
+  commits: 134 commits, none outside sprint4-integ3
+  item: Build branch before the rebase on main.
+  ids:
+  - REN-11
+  - STR-11
+- branch: sprint4-carry2
+  state: contained
+  in:
+  - sprint4-integ3
+  - sprint4-pr2
+  wip: false
+  commits: 187 commits, none outside sprint4-integ3
+  item: Pull request 2 carry branch, with step 5, run bar fixes, step 7, step 9, up-axis and scale bar.
+  ids:
+  - REN-17
+- branch: sprint4-cmap
+  state: contained
+  in:
+  - sprint4-build
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  wip: false
+  commits: 75 commits, none outside sprint4-integ3
+  item: Colormap by keys, first form.
+  ids:
+  - REN-14
+- branch: sprint4-cmapint
+  state: contained
+  in:
+  - sprint4-build
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  wip: false
+  commits: 113 commits, none outside sprint4-integ3
+  item: Colormap by keys integrated with the scene view.
+  ids:
+  - REN-14
+- branch: sprint4-demo0
+  state: contained
+  in:
+  - sprint4-build
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  wip: false
+  commits: 77 commits, none outside sprint4-integ3
+  item: Demo 0, the loss landscape.
+  ids:
+  - STR-11
+- branch: sprint4-draws
+  state: unique
+  wip: true
+  commits: '175 commits, 7 not in sprint4-integ3: 5f6baeee, 4a9141af, 9100d951, eb955cdc, be193a50, 8af6d51f,
+    78dd925e'
+  item: Every remaining primitive drawn, the pick pass, annotations over a camera image; WIP hover and
+    selections.
+  ids:
+  - REN-12
+  - REN-15
+- branch: sprint4-fixgfx
+  state: contained
+  in:
+  - sprint4-build
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  wip: false
+  commits: 146 commits, none outside sprint4-integ3
+  item: Review fixes for the graphics layer and browser scene check.
+  ids:
+  - REN-09
+  - REN-13
+- branch: sprint4-fixnet
+  state: contained
+  in:
+  - sprint4-build
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  wip: false
+  commits: 144 commits, none outside sprint4-integ3
+  item: Review fixes for the network route of scenes, first round.
+  ids:
+  - STR-09
+- branch: sprint4-fixnet2
+  state: contained
+  in:
+  - sprint4-build
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  wip: false
+  commits: 153 commits, none outside sprint4-integ3
+  item: Review fixes for the network route of scenes, second round.
+  ids:
+  - STR-09
+- branch: sprint4-gfx
+  state: contained
+  in:
+  - sprint4-build
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  wip: false
+  commits: 19 commits, none outside sprint4-integ3
+  item: The graphics layer and its Metal backend.
+  ids:
+  - REN-09
+- branch: sprint4-integ
+  state: contained
+  in:
+  - sprint4-build
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  wip: false
+  commits: 34 commits, none outside sprint4-integ3
+  item: First integration of the renderer core streams.
+  ids:
+  - REN-09
+  - REN-11
+- branch: sprint4-integ3
+  state: unique
+  wip: false
+  commits: 209 commits not on main, the superset of the finished build branches; the six branches draws,
+    rec, tex, time, ts9, points hold 30 commits outside it
+  item: 'Third integration branch: every finished build branch (protocol 3.2 series, step 5, 7, 9, scale
+    bar, up-axis, rest of scene calls, first draws commit).'
+  ids:
+  - REN-09
+  - REN-10
+  - REN-11
+  - REN-12
+  - REN-13
+  - REN-14
+  - REN-17
+  - STR-09
+  - STR-10
+  - STR-11
+- branch: sprint4-nogl
+  state: contained
+  in:
+  - sprint4-carry2
+  - sprint4-integ3
+  - sprint4-pr2
+  wip: false
+  commits: 141 commits, none outside sprint4-integ3
+  item: Step 5, retiring OpenGL and GLEW.
+  ids:
+  - REN-17
+- branch: sprint4-points
+  state: superseded
+  in:
+  - sprint4-integ3
+  wip: false
+  commits: '141 commits, 2 not in sprint4-integ3: 6a40dab8, ce979e26'
+  item: Step 7, points on the scene core; its last two commits are reworded copies.
+  ids:
+  - REN-32
+- branch: sprint4-polish
+  state: contained
+  in:
+  - sprint4-build
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  wip: false
+  commits: 87 commits, none outside sprint4-integ3
+  item: Test and polish pass on the scene route.
+  ids:
+  - STR-09
+- branch: sprint4-pr1-main2
+  state: contained
+  in:
+  - sprint4-build
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  wip: false
+  commits: 165 commits, none outside sprint4-integ3
+  item: Pull request 1 candidate, 546bacaa with main merged in.
+  ids:
+  - REN-09
+  - REN-10
+  - REN-11
+  - REN-12
+  - REN-13
+  - REN-14
+  - STR-09
+  - STR-10
+  - STR-11
+- branch: sprint4-pr2
+  state: contained
+  in:
+  - sprint4-integ3
+  wip: false
+  commits: 198 commits, none outside sprint4-integ3
+  item: Pull request 2, stacked on pull request 1.
+  ids:
+  - REN-17
+- branch: sprint4-proto3
+  state: contained
+  in:
+  - sprint4-integ3
+  wip: false
+  commits: 175 commits, none outside sprint4-integ3
+  item: All of protocol 3.2 in the three codecs, every caliper.scene call, both senders and the hub.
+  ids:
+  - STR-09
+  - STR-10
+- branch: sprint4-proto32
+  state: contained
+  in:
+  - sprint4-build
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  wip: false
+  commits: 23 commits, none outside sprint4-integ3
+  item: Scenes subset of protocol 3.2 and the first caliper.scene calls.
+  ids:
+  - STR-09
+  - STR-10
+- branch: sprint4-rebase
+  state: contained
+  in:
+  - sprint4-build
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  wip: false
+  commits: 138 commits, none outside sprint4-integ3
+  item: Rebase of the build branch on main.
+  reason: contained
+- branch: sprint4-rec
+  state: unique
+  wip: false
+  commits: '152 commits, 13 not in sprint4-integ3: 531169a8, 3581efd0, 20a218c1, 5b93a511, a2b54f09, 732b0466,
+    937dee1b, 5c55d1d4, f9481def, 8fc7aae5, 897fb282, 22324a12, fea84d47'
+  item: The MCAP recorder and reader in C++.
+  ids:
+  - STR-12
+  - STR-13
+- branch: sprint4-runbar
+  state: contained
+  in:
+  - sprint4-carry2
+  - sprint4-integ3
+  - sprint4-pr2
+  wip: false
+  commits: 137 commits, none outside sprint4-integ3
+  item: Run bar fixes with caliper.flush() and demo 0 browser row.
+  ids:
+  - INT-04
+  - STR-11
+- branch: sprint4-scene
+  state: contained
+  in:
+  - sprint4-build
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  wip: false
+  commits: 21 commits, none outside sprint4-integ3
+  item: The scene core.
+  ids:
+  - REN-11
+- branch: sprint4-shaders
+  state: contained
+  in:
+  - sprint4-build
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  wip: false
+  commits: 12 commits, none outside sprint4-integ3
+  item: The shader generator with Naga.
+  ids:
+  - REN-10
+- branch: sprint4-tex
+  state: unique
+  wip: true
+  commits: '170 commits, 5 not in sprint4-integ3: 86b0c610, 0ccbc336, 2789214b, 49177fd8, f612aea8'
+  item: Step 8, the texture path on the graphics layer; the move itself is WIP.
+  ids:
+  - REN-09
+  - REN-33
+- branch: sprint4-time
+  state: unique
+  wip: true
+  commits: '177 commits, 2 not in sprint4-integ3: 6273f1d1, ab10d6ea'
+  item: Timelines in Caliper LIB on both senders; WIP hub forwarding of stamps.
+  ids:
+  - STR-23
+- branch: sprint4-ts9
+  state: superseded
+  in:
+  - sprint4-integ3
+  wip: false
+  commits: '176 commits, 1 not in sprint4-integ3: 92a70847'
+  item: Step 9 and the scale bar; its one unique commit is an early WIP interface later completed on integ3.
+  ids:
+  - REN-44
+- branch: sprint4-verify
+  state: contained
+  in:
+  - sprint4-build
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  wip: false
+  commits: 70 commits, none outside sprint4-integ3
+  item: Verification fixes of the browser views.
+  ids:
+  - REN-13
+- branch: sprint4-view
+  state: contained
+  in:
+  - sprint4-build
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  wip: false
+  commits: 74 commits, none outside sprint4-integ3
+  item: The scene view, native and in WebAssembly.
+  ids:
+  - REN-12
+- branch: sprint4-webgpu
+  state: contained
+  in:
+  - sprint4-build
+  - sprint4-carry2
+  - sprint4-draws
+  - sprint4-integ3
+  wip: false
+  commits: 25 commits, none outside sprint4-integ3
+  item: The WebGPU backend of the graphics layer.
+  ids:
+  - REN-13
+- branch: sprint4-integ3
+  state: unique
+  commits: 725132e6, c22a721b, 8edce482, 38dd154d, 4b3e6cfe, f1e426d3, 994e1d79
+  item: The graphics layer, a backend-neutral core with handle tables and validation, the interface header,
+    and its Metal backend on the renderer's own device and queue.
+  ids:
+  - REN-09
+- branch: sprint4-integ3
+  state: unique
+  commits: a82e6f91, 2ef40f99, 7e61bf40, 5a563a27
+  item: 'Graphics layer tests and docs: Metal rows (quad list, indexed draw, depth, additive blend, instanced
+    row), arena padding note, Rendering page section.'
+  ids:
+  - REN-09
+- branch: sprint4-integ3
+  state: unique
+  commits: d6fbe5d1, 85cf7888, 5169aa93
+  item: 'Graphics layer fixes: queued Metal texture writes, device poll calls, frame validation of a texture
+    a pass renders to, and the Windows-safe format attribute.'
+  ids:
+  - REN-09
+- branch: sprint4-integ3
+  state: unique
+  commits: ca2aebb7, 3d1fc8fd, bc87fa60, a67fc22f, cf7b56cf
+  item: 'The shader generator: WGSL sources translated by a pinned Naga 30.0.2 driver into MSL, SPIR-V
+    and WGSL programs, with a regeneration check.'
+  ids:
+  - REN-10
+- branch: sprint4-integ3
+  state: unique
+  commits: 9e748d41, 8f8835b3, e7afd3e6, 1db29207, 340f2183, a10abdfa
+  item: 'Shader tests, CI and guide: headless Metal compile test, Chromium WGSL compile spec, CI without
+    -Werror, the Write a shader guide, Naga in the licence table.'
+  ids:
+  - REN-10
+- branch: sprint4-integ3
+  state: unique
+  commits: 1040e56d, fb4b247c, 55d34c5a, 89f855ae, a98ff142, 34b3205e, 9035f2e8, 82d95d25, 5dacca8b, ad12132b
+  item: 'The scene core, the one camera and scene model: store, world matrices in double, orbit cameras
+    and fits, compiler to draw lists, BackendResources over the graphics layer, built without floating-point
+    contraction.'
+  ids:
+  - REN-11
+- branch: sprint4-integ3
+  state: unique
+  commits: f82fc769, e2d54a0b, 470fcb4a, 8eb830cf, dbec1773, 8f1635d9, 2c4b8ea3, 138aa0c0, e4a3cf20, 0c936c7f,
+    4a15b7aa, 37f524eb
+  item: 'Scene core rows of the graphics suite on Metal: the one-entity fixture, the 41 by 41 surface
+    row, an opt-in timing row, and the design pages and Rendering docs for the scene core.'
+  ids:
+  - REN-11
+- branch: sprint4-integ3
+  state: unique
+  commits: 8676cb5a, 65fb62b1, 80259d39, a2f9644d, cdd41d4e, 809978e1, d53c1148, dc592c3d, 546bacaa, 968db549
+  item: The scene view, live view kind 6, drawing a scene of the scene core in the app and fed by the
+    app's network source, with the default camera and ERROR unsupported for parts not yet drawn.
+  ids:
+  - REN-12
+- branch: sprint4-integ3
+  state: unique
+  commits: b3d7d039, 81394bc6, ee637d2f, 02b0fb9a
+  item: 'Scene view tests: end to end test with the hidden app attached late, the network source against
+    a fake producer, wait-based scene tests, queue rules for a paused view.'
+  ids:
+  - REN-12
+- branch: sprint4-integ3
+  state: unique
+  commits: 79efd6ca, 5b85e429
+  item: Scene view docs, measurements and the tutorial note on the scale bar.
+  ids:
+  - REN-12
+- branch: sprint4-integ3
+  state: unique
+  commits: 82cc4160, 12910c3f, b004c31b, d7a0c19c, a6fe68f2, b56fa3d3, 9b4e0b50
+  item: The WebGPU backend of the graphics layer on webgpu.h, with the browser views drawing their resources
+    through the layer, a validation error scope per submit and a self-test in the page.
+  ids:
+  - REN-13
+  - EMB-04
+- branch: sprint4-integ3
+  state: unique
+  commits: ef189663, ee2bc751, cb9d8d0e, 132b6d85, 7d1e899e, 03bbb7a7
+  item: 'Scene drawing in the WebAssembly views: the module compiles the scene view, the TypeScript client
+    gains kind scene and the scenes capability.'
+  ids:
+  - REN-13
+  - REN-12
+- branch: sprint4-integ3
+  state: unique
+  commits: 0e8f6bfb, a70a8911, 25cab979
+  item: Browser views docs and module sizes.
+  ids:
+  - REN-13
+- branch: sprint4-integ3
+  state: unique
+  commits: c61ce977, 111cdeb8, c1f24435, 73392d01, cf644939, 8486a08a, 553a9ed8, 7d8d34cd, 153f3b6a, 147b4e04,
+    2f8658d5, 06e2e2e6, 35c89d71, 5c584db9, e95d8d26, 4eba8c7f
+  item: The colormap by keys, a colormap decided by integer comparisons against keys from the CPU reference,
+    in the 4,112-byte block, with a compute program, Metal and browser rows and exhaustive tests over
+    every float.
+  ids:
+  - REN-14
+- branch: sprint4-integ3
+  state: unique
+  commits: 750edb30, a10865e4, f558ab1a, 1d1538e7, 7341775c, e55a98ad, 42c5161e, ad2f005b, a4600345, 19f47158
+  item: 'Colormap measurements and docs: timing rows, step 6 results, deriving cost, resident memory,
+    the decision for keys everywhere.'
+  ids:
+  - REN-14
+- branch: sprint4-integ3
+  state: unique
+  commits: ed1e13e3, 0019f916, 3b921891, bb1aadcd, 437eb439, cfb54828, 64078a53, 435b9ab3
+  item: 'Protocol 3.2 and its three codecs (Python, C++, TypeScript): the scenes capability, SCENE_UPDATE
+    and SCENE_CLEAR first, then every part of SCENE_UPDATE, SCENE_TRANSFORMS and SCENE_CLASSES, with golden
+    frames and checks in the same order.'
+  ids:
+  - STR-09
+- branch: sprint4-integ3
+  state: unique
+  commits: fd97ad02
+  item: Timelines, stamps, text, bars and recording messages of protocol 3.2 in the codecs (the VIEWS
+    key timelines, stamps on SNAPSHOT, SERIES and CONTROLS, static snapshots, TEXT, bar charts, split
+    updates, recording messages), reproducing the draft's two example frames byte for byte.
+  ids:
+  - STR-09
+  - STR-23
+- branch: sprint4-integ3
+  state: unique
+  commits: 7d0de741, c7e6de34, a309817d
+  item: Protocol 3.2 docs, eleven readings of the draft, test variables, the attach guide, and rebuilt
+    browser bundles.
+  ids:
+  - STR-09
+- branch: sprint4-integ3
+  state: unique
+  commits: 5a69b9f4, 3a22baac, 4ad8fdc1, efc1aeed, 078cedde
+  item: Caliper LIB caliper.scene, the first calls (scene.points, scene.lines, scene.mesh) on both senders,
+    with a default budget gathered on the device, retained static items and rate limits, and a nothing-attached
+    cost of about 2.5 to 3 microseconds.
+  ids:
+  - STR-10
+- branch: sprint4-integ3
+  state: unique
+  commits: 9b8405c4
+  item: The rest of the caliper.scene calls (arrows, boxes, images, depth and segmentation images, cameras,
+    entity transforms, class table, clears, index-pair edges, class ids, labels, normals, textures and
+    view_camera).
+  ids:
+  - STR-10
+  - REN-42
+  - REN-45
+- branch: sprint4-integ3
+  state: unique
+  commits: d0ff8947, 92afbbee, b6ed1bf7, 3236d239, 1c5fc75c, 01de675b, 435447d9, d33b7a5d, 65462943, 8163cf51,
+    a15d3cce, b52327b3
+  item: 'The hub''s scene support: it announces scenes, keeps the newest batch per entity part, class
+    table and transforms for a late viewer, splits large batches, and bounds its in-order queues.'
+  ids:
+  - STR-06
+  - STR-09
+- branch: sprint4-integ3
+  state: unique
+  commits: 68b08a4a, 6ccaedde, f3b191f9, 2b87a023, a397a193, 58725a72, 905f6c94, 5d2a030f, 32e0a83f, b939feca,
+    406a2ab3, c0f2e26d, 9ca7c3d1, f9c89736, b5b86fa2, af6d4bee, 07f8df61, a4327f9a, cf8b9083, e950ec02,
+    3022b381, 5c9059e0, ce3a6485, 8db78455, d6528508, c2a8095c, 23629aa3, b0d1a575, effe9fd3
+  item: 'Demo 0, the loss landscape: a Landscape that streams the loss surface around a model''s weights
+    as a mesh with the path and PCA plane, a notebook, a tutorial, headless and capture rows, and a cost
+    benchmark.'
+  ids:
+  - STR-11
+- branch: sprint4-integ3
+  state: unique
+  commits: e4bd1496
+  item: Costs of the scene calls and the benchmark rows for demo 0.
+  ids:
+  - STR-11
+  - STR-10
+- branch: sprint4-integ3
+  state: unique
+  commits: 44ddb36c, bfa99aa7, 36c3ede4
+  item: 'The run bar fixes: the bar names a step only for a paused run, exposes its state text for tests,
+    and caliper.flush() flushes every route with a viewer.'
+  ids:
+  - INT-04
+- branch: sprint4-integ3
+  state: unique
+  commits: eb60c8e8, 958859ca, 0d41c0c6, 73ed1698, 809a9bfa, cd53dc83, cceb23c2, 27be830e
+  item: 'Step 5, retiring OpenGL: the OpenGL renderer, GLEW and the CI caching are removed, and where
+    the platform''s renderer cannot start the app, caliper shot and the embedding core say so and exit.'
+  ids:
+  - REN-17
+  - REN-03
+- branch: sprint4-integ3
+  state: unique
+  commits: 5a46367b, c9246111, cc6361f3, c8625f37, e16160e9, ecbfd01b, 48455f31, 53ee2499
+  item: 'Step 7, the points view on the scene core: its payload becomes one points batch of a scene, with
+    the depth cues and exact colours ported, the old Metal staging deleted, and rows against the old path''s
+    images.'
+  ids:
+  - REN-11
+  - REN-32
+- branch: sprint4-integ3
+  state: unique
+  commits: 8343711b, d6546edd, 3b1b0cb6, e33eadb3
+  item: Step 9, the TypeScript WebGPU views removed, so that the WebAssembly views are the browser's one
+    WebGPU path.
+  ids:
+  - EMB-03
+  - EMB-04
+  - EMB-16
+- branch: sprint4-integ3
+  state: unique
+  commits: 7085d613, 4e271d4b, 968645f7
+  item: The scene view's up-axis switch (Y up and Z up, key U, remembered by view name) with Metal rows
+    and live view tests.
+  ids:
+  - REN-12
+  - REN-43
+- branch: sprint4-integ3
+  state: unique
+  commits: e5055199, b6a5eac5, 9d3a0af3
+  item: 'The scale bar: the rule in the scene core (longest of 1, 2 and 5 times a power of ten within
+    a fifth of the picture), drawn in the app and published by the WebAssembly module.'
+  ids:
+  - REN-12
+  - REN-44
+- branch: sprint4-integ3
+  state: unique
+  commits: 9ac42ed4, 4f0aa44e, 815e65eb, 14a1f605, c210f4b1, 9fb95eca, 6c4802fb, 331eb90c, 68fd631d, 42a08111
+  item: 'Counters and a baseline for the renderer: copy counters, Metal frame statistics, a points row
+    in bench_live.py and the step-0 baseline.'
+  ids:
+  - REN-09
+  - REN-31
+- branch: sprint4-integ3
+  state: unique
+  commits: 58619088, 0ed86028
+  item: 'Picking in the scene core: the pick window around the pointer, the pick pass with entries into
+    an RG32Uint target and a Picker that drops superseded results, with the graphics suite''s pick row
+    on Metal.'
+  ids:
+  - REN-15
+- branch: sprint4-integ3
+  state: unique
+  commits: 092ff248
+  item: Clearing named parts of an entity or a subtree in the scene core, the first commit of the draws
+    series.
+  ids:
+  - REN-11
+  - STR-10
+- branch: sprint4-integ3
+  state: unique
+  commits: ced4f50a, 8a155386, c06cdeda
+  item: 'Maintenance of the scene and layer paths and merges: checked-in bundles rebuilt, a Windows getloadavg
+    guard, a stable benchmark start.'
+  reason: maintenance
+- branch: sprint4-draws
+  state: unique
+  commits: 78dd925e, 8af6d51f, be193a50
+  item: 'Every remaining scene primitive drawn natively and in the browser: arrows, boxes with class ids,
+    labels and fill, index-pair edges, meshes with normals or a texture, colour, grey, depth and segmentation
+    images, cameras, entity transforms, class tables, with a CPU reference of every draw and browser scene
+    rows.'
+  ids:
+  - REN-12
+  - REN-11
+  - REN-37
+  - REN-38
+  - REN-40
+  - REN-41
+  - REN-39
+  - REN-42
+- branch: sprint4-draws
+  state: unique
+  commits: eb955cdc
+  item: Docs for what the scene view draws, the primitive rows and the scene self-test.
+  ids:
+  - REN-12
+- branch: sprint4-draws
+  state: unique
+  commits: 9100d951
+  item: 'The pick pass on the graphics layer (PickPass in the scene core: pick variants into a 16 by 16
+    RG32Uint window with two asynchronous readbacks) and the scene view''s request_pick, poll_pick and
+    event detail, with rows that pick every primitive.'
+  ids:
+  - REN-15
+- branch: sprint4-draws
+  state: unique
+  commits: 4a9141af
+  item: 'Annotations over a camera''s image: a pinhole camera''s 2-D entities draw and pick over the images
+    on its image plane, whether the image is opaque or translucent.'
+  ids:
+  - REN-12
+  - REN-15
+  - REN-39
+- branch: sprint4-draws
+  state: unique
+  commits: 5f6baeee
+  item: Hover, click, rectangle and lasso selections and linked highlights in the app's scene view (select_polygon,
+    clear_selection, set_linked), with picks sent through the event sink at most 30 a second.
+  ids:
+  - REN-15
+  - REN-46
+- branch: sprint4-time
+  state: unique
+  commits: ab10d6ea
+  item: 'Timelines in Caliper LIB: step, time and up to six timelines of the script''s own (caliper.step,
+    caliper.timeline, caliper.set_time), stamped once at each call on both senders and sent only to peers
+    that announced timelines, with a test that a frozen 3.1 codec decodes every frame.'
+  ids:
+  - STR-12
+  - STR-23
+- branch: sprint4-time
+  state: unique
+  commits: 6273f1d1
+  item: 'The hub''s timelines: the hub announces timelines, keeps a session''s timelines and each retained
+    series value''s stamp, and forwards stamps only to viewers that announced them.'
+  ids:
+  - STR-06
+  - STR-12
+  - STR-09
+  - STR-23
+- branch: sprint4-rec
+  state: unique
+  commits: fea84d47, 22324a12, 897fb282
+  item: 'The MCAP recording format layer and recorder: our own MCAP writer and reader (no MCAP library),
+    CRC-32, zstd 1.5.7 chunks, one channel per view, scene, entity part and session, commit points, a
+    writer lock, index and footer.'
+  ids:
+  - STR-12
+- branch: sprint4-rec
+  state: unique
+  commits: 8fc7aae5, f9481def, 5c55d1d4
+  item: 'The recording reader and recovery: opens a file, a folder through its manifest or a segment alone,
+    recovers a segment whose writer died at its last commit point, follows a file being written, and answers
+    latest-at and scene state through keyframes.'
+  ids:
+  - STR-12
+- branch: sprint4-rec
+  state: unique
+  commits: 20a218c1, 937dee1b, 5b93a511
+  item: The recorder on its own thread behind a bounded write queue (a full queue never blocks the producer
+    and drops series points counted by kind), with thinning, the disk budget and compaction beside the
+    writer.
+  ids:
+  - STR-12
+- branch: sprint4-rec
+  state: unique
+  commits: 3581efd0
+  item: 'The scrubber''s queries in the recording reader: each timeline''s range, the state of every view
+    and scene at a cursor, stepping over positions and switching timelines.'
+  ids:
+  - STR-13
+- branch: sprint4-rec
+  state: unique
+  commits: 531169a8, a2b54f09, 732b0466
+  item: 'Recording tests and fixtures: truncation and damage tests, comparison with the official MCAP
+    Python reader, and shared fixtures (finished and torn recording) for the TypeScript reader.'
+  ids:
+  - STR-12
+  - STR-26
+- branch: sprint4-tex
+  state: unique
+  commits: 2789214b, 49177fd8, 86b0c610
+  item: 'The texture path on the graphics layer (step 8): the layer gains update_texture_from_tensor and
+    fill_texture_from_buffer and the generated fill_texture program; the move of the tensor bridge, embed
+    views, export readback and live views onto the layer is unfinished.'
+  ids:
+  - REN-09
+  - REN-33
+- branch: sprint4-tex
+  state: unique
+  commits: f612aea8, 0ccbc336
+  item: Texture path references from the old path (98 cases) and the MSVC format-attribute guard.
+  ids:
+  - REN-09
+- branch: sprint4-ts9
+  state: unique
+  commits: 92a70847
+  item: Scale bar interface header in the scene core, an early WIP superseded by e5055199 on integ3.
+  ids:
+  - REN-12
+  - REN-44
+- branch: sprint4-points
+  state: unique
+  commits: 6a40dab8, ce979e26
+  item: Points step 7 closing commits (deletion of the old path, pixel-difference row wording), reworded
+    copies of e16160e9 and 48455f31 on integ3.
+  ids:
+  - REN-11
+  - REN-32
+- branch: sprint4
+  state: unique
+  commits: bae8c25b, 79f62254, 4ca5f9e6, 57c61634, ad09cceb, adc6721e
+  item: 'Sprint 4 plan pages: renderer core, scenes, recordings, protocol 3.2 draft, web geometry and
+    demos, with the trim (Dawn fallback to Windows parity, outside applet port deferred, text log, bar
+    chart drawing, demos 1 to 3, hub recordings and scene fallbacks to sprint 5).'
+  reason: docs

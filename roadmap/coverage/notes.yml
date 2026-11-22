@@ -1,0 +1,1149 @@
+# yaml-language-server: $schema=schema.json
+title: Orchestrators' notes
+kind: notes
+summary: 'The notes that the orchestrators of sprints 2, 3 and 4 kept beside the build: handoffs, status
+  files, reviews and pull request drafts, which record what was built, deferred or moved between sprints.
+  Build and test logs are left out. Paths are relative to the notes folder.'
+entries:
+- file: _notes/HANDOFF-sprint3.md
+  item: Integration head, the verification runs of pull request 1 and the merge mechanics of sprint 3.
+  reason: context
+- file: _notes/HANDOFF-sprint3.md
+  item: Pull request 1 of sprint 3 (the builder libraries, caliper-mcp, the side chat, the widget agent,
+    the builder pane) was pushed as PR 17 and merged into main.
+  ids:
+  - SPC-06
+  - SPC-07
+  - AGT-02
+  - AGT-03
+  - AGT-05
+- file: _notes/HANDOFF-sprint3.md
+  item: The widget agent settings in the app and the three other entry points of the inline prompt (selection,
+    dropped file, property) were built on sprint3-int-models and sprint3-int-inline, carried onto sprint3-pr2
+    and merged as PR 18.
+  ids:
+  - AGT-05
+- file: _notes/HANDOFF-sprint3.md
+  item: 'Review items deferred to the design pages: the expectation on preview.commit, approvals from
+    api that never expire, and a command joining another origin''s undo step.'
+  ids:
+  - AGT-11
+- file: _notes/HANDOFF-sprint3.md
+  item: 'Deferred review items for the chat: the life cycle of the API the chat starts, and a second app
+    overwriting api.json.'
+  ids:
+  - AGT-03
+  - AGT-01
+- file: _notes/HANDOFF-sprint3.md
+  item: Timing in tests that wait on time, listed in the byok-agent and acp-integration design pages.
+  reason: maintenance
+- file: _notes/HANDOFF-sprint3.md
+  item: Revoking a token does not close a stream that is already open; not yet on a design page.
+  reason: maintenance
+- file: _notes/HANDOFF-sprint3.md
+  item: The note on GPU contention while a live run is attached was deferred from pull request 1, then
+    built as the Shared GPU note in the settings and on the prompt row, and later in the side chat.
+  ids:
+  - AGT-05
+  - AGT-04
+- file: _notes/HANDOFF-sprint3.md
+  item: Packaging of caliper-mcp and caliper-agent with a bundled Python was deferred out of sprint 3.
+  ids:
+  - AGT-10
+  - AGT-02
+- file: _notes/HANDOFF-sprint3.md
+  item: The rest of the browser spec page was deferred beyond pull request 1.
+  ids:
+  - EMB-06
+- file: _notes/HANDOFF-sprint3.md
+  item: The reshape step in the spec, needed for the attention entropy case, was held for the user's yes
+    and then moved to sprint 5, to be built only if real use needs it.
+  ids:
+  - SPC-13
+- file: _notes/HANDOFF-sprint3.md
+  item: The chat in the builder pane's right column, the local-model setting and the packaging of caliper-mcp
+    were listed as unfinished after pull request 2.
+  ids:
+  - AGT-05
+- file: _notes/HANDOFF-sprint3.md
+  item: The walk-through examples/build_a_dashboard with six steps, a dry run per step and run_all.py,
+    built by four builders on separate branches.
+  ids:
+  - SPC-07
+  - AGT-03
+  - AGT-05
+- file: _notes/HANDOFF-sprint3.md
+  item: 'The Ollama context fix: a translating transport to Ollama''s native chat API with num_ctx and
+    keep_alive, a warning in the settings for a large cache, and the user''s allowed fallback alias for
+    the demo only.'
+  ids:
+  - AGT-04
+  - AGT-05
+- file: _notes/HANDOFF-sprint3.md
+  item: Side chat's Local model setting, the Shared GPU note in the chat and cmd-K on a source's properties
+    were the three small items of sprint 3.
+  ids:
+  - AGT-04
+- file: _notes/HANDOFF-sprint3.md
+  item: 'Live-session handling in the app: serve() streams listed under F4, the live session stays attached
+    across pages with an explicit Detach, a drop on the live page starts a new spec, and Save changes
+    before the person''s own action replaces unsaved work.'
+  ids:
+  - SPC-07
+- file: _notes/HANDOFF-sprint3.md
+  item: Open in browser control that works without --api, dashboards listed under Projects, transform
+    axes with their index range and one line on the empty canvas.
+  ids:
+  - EMB-06
+  - SPC-07
+- file: _notes/HANDOFF-sprint3.md
+  item: A launch carries the caller's origin and answers PENDING_APPROVAL; the design for holding a launch
+    as one approval command is an open item and was not built, by decision.
+  ids:
+  - AGT-12
+  - AGT-01
+  - AGT-06
+- file: _notes/HANDOFF-sprint3.md
+  item: A null on an optional argument counts as left out, before validation (sprint 3 fix); the planned
+    empty-value case is separate.
+  ids:
+  - AGT-08
+- file: _notes/HANDOFF-sprint3.md
+  item: 'Sprint 3 final pull request: hash, verification runs, four reviews and their fixes, memory rules
+    for the model runs.'
+  reason: context
+- file: _notes/HANDOFF-sprint3.md
+  item: 'Sprint 3.1 was merged (PR 19 for the third sprint 3 PR, then sprint3.1 at beff1624): test data
+    isolation with a guard, agent permission modes, metrics grouped by run in Sources and the ways to
+    remove a panel.'
+  ids:
+  - AGT-06
+  - SPC-09
+  - RUN-01
+- file: _notes/HANDOFF-sprint3.md
+  item: The person's real app-data folder must never be touched; the inspector checkout does not have
+    the isolation fix and writes into it when its tests run.
+  reason: maintenance
+- file: _notes/HANDOFF-sprint3.md
+  item: 'The queued round after sprint 3.1: the Data view, empty optional arguments, offering the Ollama
+    preset and the documented setup building the native sender and the WebAssembly views.'
+  ids:
+  - SPC-10
+  - AGT-08
+  - AGT-07
+  - PLT-18
+- file: _notes/HANDOFF-sprint4.md
+  item: Pause of sprint 4, the two heads of pull request 1 and the orchestrator's verification tables
+    of 546bacaa and the merge with main.
+  reason: context
+- file: _notes/HANDOFF-sprint4.md
+  item: 'Pull request 1 content is finished and held on sprint4-pr1-main2 at 44840c5b: graphics layer,
+    shader generation, scene core, scene view, WebGPU backend, colormap by keys, protocol 3.2 subset,
+    caliper.scene and demo 0.'
+  ids:
+  - REN-09
+  - REN-10
+  - REN-11
+  - REN-12
+  - REN-13
+  - REN-14
+  - STR-09
+  - STR-10
+  - STR-11
+- file: _notes/HANDOFF-sprint4.md
+  item: A flaky Python test, test_offer_and_update_fetch_only_what_is_subscribed, timed out once at load
+    13 and passed alone three times; check first on resuming.
+  reason: maintenance
+- file: _notes/HANDOFF-sprint4.md
+  item: caliper_cli_api fails in the release-notorch preset because it builds no sine-scope applet; Python
+    tests need the wheel's native modules.
+  reason: maintenance
+- file: _notes/HANDOFF-sprint4.md
+  item: 'State of pull request 1: held by the coordinator, review findings (7 majors, 15 minors) fixed,
+    two merges with main and their conflicts.'
+  reason: context
+- file: _notes/HANDOFF-sprint4.md
+  item: 'The reviewer''s major findings were fixed with tests: the hub''s retained scene state bound,
+    a queued Metal write ordering, index clamps of an unsubmitted frame, scene buffer release on reset,
+    the viewer queue never dropping a reset, the browser recolour check, and the demo grid orientation.'
+  ids:
+  - REN-09
+  - REN-10
+  - REN-11
+  - REN-12
+  - STR-09
+- file: _notes/HANDOFF-sprint4.md
+  item: 'Step 5 retired OpenGL and GLEW: the end of the OpenGL fallback is built and carried into sprint4-pr2.'
+  ids:
+  - REN-17
+- file: _notes/HANDOFF-sprint4.md
+  item: Step 7 moved the points view onto the scene core with its depth cues, box, rotate toggle and exact
+    colours ported; the old path is deleted.
+  ids:
+  - REN-32
+- file: _notes/HANDOFF-sprint4.md
+  item: Step 9 removed the TypeScript WebGPU views, leaving the WebAssembly views as the browser's one
+    WebGPU path.
+  ids:
+  - EMB-16
+- file: _notes/HANDOFF-sprint4.md
+  item: The scene view's up-axis switch and scale bar are built on sprint4-pr2.
+  ids:
+  - REN-43
+  - REN-44
+- file: _notes/HANDOFF-sprint4.md
+  item: The run bar fixes with the caliper.flush() fix and the browser capture row's fix are on sprint4-pr2.
+  ids:
+  - REN-12
+  - STR-11
+- file: _notes/HANDOFF-sprint4.md
+  item: The remaining parts of protocol 3.2 (transforms, class tables, stamps, recording messages, split
+    updates), every caliper.scene call, both senders and the hub are finished on sprint4-proto3 and carried
+    onto sprint4-integ3.
+  ids:
+  - STR-09
+  - STR-10
+- file: _notes/HANDOFF-sprint4.md
+  item: Every remaining primitive (arrows, boxes, images, cameras, entity transforms, class tables, labels,
+    index-pair edges) is drawn in the scene core, the app and the browser on sprint4-draws.
+  ids:
+  - REN-37
+  - REN-38
+  - REN-39
+  - REN-40
+  - REN-41
+  - REN-42
+- file: _notes/HANDOFF-sprint4.md
+  item: The pick pass is built on sprint4-draws; annotations draw and pick over their camera's image.
+  ids:
+  - REN-15
+- file: _notes/HANDOFF-sprint4.md
+  item: Hover, click, selections and linked highlights in the scene view are unfinished (WIP).
+  ids:
+  - REN-46
+- file: _notes/HANDOFF-sprint4.md
+  item: Caliper LIB still refuses items= on points, so linked selection of scene points is covered by
+    the native test only.
+  ids:
+  - REN-46
+  - STR-10
+- file: _notes/HANDOFF-sprint4.md
+  item: Timelines in Caliper LIB are finished on both senders; the hub forwarding stamps only to viewers
+    that announced timelines is unfinished (WIP).
+  ids:
+  - STR-23
+- file: _notes/HANDOFF-sprint4.md
+  item: Part 2 of sprint4-time, the data views of a scene, is not started; caliper.text and caliper.bars
+    are out of scope by decision.
+  ids:
+  - STR-25
+- file: _notes/HANDOFF-sprint4.md
+  item: 'The MCAP recorder and reader in C++ are built on sprint4-rec: format, recorder, reader, recovery,
+    tailing, lock, segments, thinning, writer thread with compaction, and the scrubber''s queries.'
+  ids:
+  - STR-12
+- file: _notes/HANDOFF-sprint4.md
+  item: 'Remaining recorder work: the ThreadSanitizer build documentation, the TypeScript reader, the
+    Parquet recommendation and the Windows question.'
+  ids:
+  - STR-26
+  - STR-28
+  - PLT-16
+- file: _notes/HANDOFF-sprint4.md
+  item: 'Step 8, the texture path on the graphics layer: reference rows, the fill program and the layer''s
+    texture operations are committed; the move is WIP and must not be carried.'
+  ids:
+  - REN-33
+- file: _notes/HANDOFF-sprint4.md
+  item: Sprint4 design branch with as-built updates and the trim, to be synced to the build branch with
+    sync-design.py.
+  reason: context
+- file: _notes/HANDOFF-sprint4.md
+  item: Branches carried into others (nogl, runbar, points, ts9, carry2, fixgfx, fixnet2, rebase) need
+    nothing further.
+  reason: context
+- file: _notes/HANDOFF-sprint4.md
+  item: Pull request 2 verification run on 5b85e429 and its partial review (3 majors, 11 minors); it is
+    stacked on 546bacaa and needs the pull request 1 head merged in.
+  reason: context
+- file: _notes/HANDOFF-sprint4.md
+  item: Committed before and after measurements of step 7, step 8, step 9, the run bar cost, the pick
+    pass cost and pull request 1's cost numbers are held for one quiet window.
+  ids:
+  - REN-32
+- file: _notes/HANDOFF-sprint4.md
+  item: A small set of old 3-D images or an independent reference for the cloud comparison in CI (review
+    item M2).
+  ids:
+  - REN-32
+- file: _notes/HANDOFF-sprint4.md
+  item: 'Open small items: image bind groups release, storage aliasing not refused by the core, scene.mjs
+    not run in CI, viewer scene queue bounded by messages, missing environment reference variables, the
+    browser plate background, encoded images not drawn.'
+  reason: maintenance
+- file: _notes/HANDOFF-sprint4.md
+  item: The browser element has no up-axis switch and no way to hide the scale bar.
+  ids:
+  - REN-43
+  - REN-44
+- file: _notes/HANDOFF-sprint4.md
+  item: Encoded images are not drawn.
+  ids:
+  - REN-38
+- file: _notes/HANDOFF-sprint4.md
+  item: Flaky sprint 2 tests controls.spec.ts:175, test_slower_rates_hold_with_ticks[native-mps] and test_calls_never_block_on_queued_gpu_work
+    to pass on to sprint 2's lead.
+  reason: maintenance
+- file: _notes/HANDOFF-sprint4.md
+  item: 'Decision: colormap keys everywhere in the cheaper exact form, a 4,112-byte block with integer
+    comparisons exact against the CPU reference.'
+  ids:
+  - REN-14
+- file: _notes/HANDOFF-sprint4.md
+  item: 'Decisions: the double-precision camera is the scene core''s convention and the scene view''s
+    default camera is the points view''s from camera_defaults.h.'
+  ids:
+  - REN-11
+  - REN-12
+- file: _notes/HANDOFF-sprint4.md
+  item: 'Decision: 3-D points on Metal are exact squares as in the browser; the bounded sprite difference
+    is accepted.'
+  ids:
+  - REN-32
+- file: _notes/HANDOFF-sprint4.md
+  item: 'Decision: the new texture path takes the CPU reference''s level where the old fast-math shader
+    was one level off in 8 cases.'
+  ids:
+  - REN-33
+  - REN-14
+- file: _notes/HANDOFF-sprint4.md
+  item: 'Decision: demo 0''s defaults and its known limits (training-mode evaluation, path leaving the
+    box, uniform grid, no non-interference test).'
+  ids:
+  - STR-11
+- file: _notes/HANDOFF-sprint4.md
+  item: 'Decision: recordings use Caliper''s own MCAP writer and reader, recovery cuts at the last commit
+    point, and a full queue never blocks the producer.'
+  ids:
+  - STR-12
+- file: _notes/HANDOFF-sprint4.md
+  item: 'Trim: the Dawn fallback (step 15, 5 days) moved to Windows parity.'
+  ids:
+  - REN-25
+- file: _notes/HANDOFF-sprint4.md
+  item: 'Trim: the port of one applet from outside the repository (step 16, 3 days) moved to when it is
+    needed.'
+  ids:
+  - REN-35
+- file: _notes/HANDOFF-sprint4.md
+  item: 'Trim: budgets with the refusal line and lost-device handling, and the TypeScript scene fallback,
+    moved to sprint 5.'
+  ids:
+  - EMB-18
+  - EMB-17
+- file: _notes/HANDOFF-sprint4.md
+  item: 'Trim: text log and bar chart drawing with their Caliper LIB calls moved to sprint 5; their wire
+    codec stays.'
+  ids:
+  - REN-51
+  - REN-52
+- file: _notes/HANDOFF-sprint4.md
+  item: 'Trim: demos 2, 3 and 1 moved to sprint 5.'
+  ids:
+  - REN-54
+  - REN-55
+  - REN-56
+- file: _notes/HANDOFF-sprint4.md
+  item: 'Trim: recordings through the hub with spec version 1 and applet scenes in recordings moved to
+    sprint 5.'
+  ids:
+  - STR-15
+  - SPC-11
+  - STR-31
+  - SPC-22
+- file: _notes/HANDOFF-sprint4.md
+  item: Sprint totals after the trim (162 builder days for sprint 4, 94 for sprint 5), batching of verification,
+    regular main merges and slot priority.
+  reason: context
+- file: _notes/HANDOFF-sprint4.md
+  item: 'The three actions on resuming: restart the builders from their STATUS files (integ3, draws, time,
+    rec, tex), with the sprint 4 design pages synced when the third pull request is stable.'
+  ids:
+  - REN-35
+  - COR-25
+- file: _notes/SPRINT4-BUILD.md
+  item: 'Builder rules for sprint 4: the rule of every step (small commits, measurements before and after,
+    byte-exact checks, offscreen captures), heavy jobs, memory, commits and reports.'
+  reason: context
+- file: _notes/SPRINT4-BUILD.md
+  item: Rule that each migration step replaces the old code and deletes it in the same series, with no
+    dual paths and no backwards compatibility in the graphics API.
+  ids:
+  - REN-09
+  - REN-10
+  - REN-11
+- file: _notes/SPRINT4-BUILD.md
+  item: 'Decision: the shader translator is a pinned Naga run at developer time; generated MSL and SPIR-V
+    are committed and a check regenerates them; building Caliper needs no Rust.'
+  ids:
+  - REN-10
+- file: _notes/SPRINT4-BUILD.md
+  item: 'Pull request order for sprint 4: the minimum cut, then the loss-landscape increment, then one
+    per migration or scene increment, the orchestrator writes PR-n.md and the coordinator pushes.'
+  reason: context
+- file: _notes/DESIGN-RULES.md
+  item: 'Writing rules for the sprint 4 designers: design only, plain sentences, one term per concept,
+    state what is built and planned, record decisions with reasons and open decisions.'
+  reason: context
+- file: s4-gfx/STATUS.md
+  item: The graphics layer core, the recording backend and the Metal backend, with the layer's rows in
+    the graphics suite; the encode timing row was not run for lack of a quiet window.
+  ids:
+  - REN-09
+- file: s4-gfx/STATUS.md
+  item: gfx.h builds as C++17 and the layer includes no platform headers, so a Vulkan backend can be added
+    later.
+  ids:
+  - REN-09
+  - PLT-05
+- file: s4-gfx/STATUS.md
+  item: The CPU encode timing row of the layer needs a quiet machine and has not been run.
+  ids:
+  - REN-09
+- file: s4-shaders/STATUS.md
+  item: Generated uniform structs, ProgramDesc tables and MSL, SPIR-V and WGSL for the scene programs,
+    with generate.py --check, a SPIR-V validation script and a CI workflow.
+  ids:
+  - REN-10
+- file: s4-shaders/STATUS.md
+  item: docs/guides/write-a-shader.md describes how to write a shader program.
+  ids:
+  - REN-10
+- file: s4-scene/STATUS.md
+  item: 'The scene core: store, matrices, cameras and fits, a compiler to draw lists, picking, and BackendResources
+    over a Backend; it never calls a Backend itself.'
+  ids:
+  - REN-11
+- file: s4-integ/STATUS.md
+  item: The first scene is drawn on Metal through the whole renderer core, checked against a CPU rasterisation
+    with 0 failing pixels.
+  ids:
+  - REN-11
+  - REN-09
+- file: s4-integ/STATUS.md
+  item: Compile and submit timing rows of the scene core need a quiet window; the figures taken at load
+    5.57 are not quiet.
+  ids:
+  - REN-31
+- file: s4-webgpu/STATUS.md
+  item: The layer's WebGPU backend runs in the browser and the browser renderer draws through the layer;
+    its own implementations and WGSL are deleted.
+  ids:
+  - REN-13
+- file: s4-webgpu/STATUS.md
+  item: Limits has no compute limits (256 invocations on WebGPU, 128 in compatibility mode), so the core
+    cannot validate workgroup sizes; the backend refuses an oversize workgroup and a blended write of
+    the ID target on a compatibility device.
+  ids:
+  - REN-13
+  - REN-09
+- file: s4-view/STATUS.md
+  item: The scene view draws in the app and in the browser, with captures and a timing row (compile about
+    0.005 ms, GPU 0.062 ms at 512 by 512).
+  ids:
+  - REN-12
+- file: s4-view/STATUS.md
+  item: Source::take_scene and live/scene_queue.h are the seam through which a source of scene messages
+    feeds the scene view.
+  ids:
+  - STR-09
+  - REN-12
+- file: s4-proto32/STATUS.md
+  item: The protocol 3.2 scenes subset in the three codecs, with golden frames and a reference page, and
+    the hub forwarding scenes.
+  ids:
+  - STR-09
+- file: s4-proto32/STATUS.md
+  item: caliper.scene with points, lines and mesh, on both senders, with cheaper scene calls and per-device
+    budget sampling.
+  ids:
+  - STR-10
+- file: s4-proto32/STATUS.md
+  item: The web client does not announce the scenes capability until the view that draws scenes adds it
+    to HELLO.
+  ids:
+  - EMB-12
+  - STR-09
+- file: s4-proto3/STATUS.md
+  item: Every part of SCENE_UPDATE, SCENE_TRANSFORMS, SCENE_CLASSES, stamp sections and recording messages
+    (RECORDINGS, RECORDING_OPEN, CURSOR, TIME_STATE) are in the three codecs; split updates are assembled
+    by the sources.
+  ids:
+  - STR-09
+- file: s4-proto3/STATUS.md
+  item: Caliper LIB scene calls on both senders and the hub's class tables, transforms, cameras and split
+    updates.
+  ids:
+  - STR-10
+  - STR-23
+- file: s4-proto3/STATUS.md
+  item: Until the scene view draws a part, the sources refuse it with ERROR unsupported and a note; scene_not_drawn
+    changes when a new part is drawn.
+  ids:
+  - REN-12
+  - REN-38
+  - REN-37
+- file: s4-cmap/STATUS.md
+  item: A shared key derivation and a cache of key blocks (colormap_keys.h), then the cheaper exact 4,112-byte
+    block with per-program fast math.
+  ids:
+  - REN-14
+- file: s4-cmapint/STATUS.md
+  item: Step 6 integrated onto the integration head as 26 commits; the scene view owns its cache and scene_colormap_keys.h
+    is deleted.
+  ids:
+  - REN-14
+- file: s4-cmapint/RESULT.md
+  item: Exhaustive colormap tests over 60,129,542,144 inputs on the CPU and on Metal, with the memory
+    measured first; the timing row shows +2.5 and +6.4 microseconds for 1,024 and 2,048 squared heatmaps.
+  ids:
+  - REN-14
+- file: s4-cmapint/RESULT.md
+  item: The WebGPU renderer's heatmap pass is not moved to keys here; step 8 replaces the texture path.
+  ids:
+  - REN-33
+  - REN-14
+- file: s4-cmapint/RESULT.md
+  item: The module size table in web/wasm/README.md and the design pages web-geometry.md and renderer-core.md
+    still give the old block size and module size.
+  reason: maintenance
+- file: s4-demo0/STATUS.md
+  item: 'Demo 0, the loss landscape: landscape.py, the notebook, tests/demos, a cost benchmark and a docs
+    tutorial; the cost ratio fell from about 2.0 to 1.20 with the new defaults.'
+  ids:
+  - STR-11
+- file: s4-points/RESULT.md
+  item: 'Step 7: the points view on the scene core, with 36 recorded reference cases, a CPU reference
+    rasterisation, one set of uniform bytes on every backend and the old path deleted; the before and
+    after measurements were not taken.'
+  ids:
+  - REN-32
+- file: s4-points/RESULT.md
+  item: A payload above 4,194,304 points a batch continues on child entities; labels go through the colormap
+    keys with the palette at every level rather than the class table.
+  ids:
+  - REN-32
+  - REN-11
+- file: s4-points/STATUS.md
+  item: 'Interfaces added for other streams: ExternalBuffer transient, HostRenderer note_draw_gpu_ms,
+    caliper_scene compiled without floating-point contraction, the uniform bytes check and the graphics
+    suite''s reference mode.'
+  ids:
+  - REN-32
+- file: s4-carry2/STATUS.md
+  item: Steps 5, 7 and the run bar are carried onto sprint4-carry2 and verified (ctest 45 of 46, 914 Python
+    tests, browser suites, prepush).
+  ids:
+  - REN-17
+  - REN-32
+  - EMB-16
+- file: s4-carry2/STATUS.md
+  item: The release preset with libtorch, the browser webgpu project, the training notebook check and
+    every timing were not run.
+  ids:
+  - REN-32
+- file: s4-carry2/PORT.md
+  item: Sprint 2's points behaviours (default camera, box, ground, depth cues, selection at full strength,
+    rotate tool, exact colours) are ported onto the scene core and each has a proving test.
+  ids:
+  - REN-32
+  - REN-43
+- file: s4-carry2/PORT.md
+  item: The Vulkan renderer no longer draws the points view; points draw only through the scene core,
+    on Metal and in the browser.
+  ids:
+  - REN-53
+  - PLT-11
+- file: s4-carry2/CONFLICTS.md
+  item: Conflict resolutions of the three series carried onto sprint4-carry2 and the demo browser reference
+    regenerated after the camera change.
+  reason: context
+- file: s4-rebase/RESULT.md
+  item: 'Merge of origin/main (sprint 2) into sprint 4: head 4eba8c7f, merge commit 81a6452c, with sprint
+    2''s colormap and depth cue changes ported onto the layer.'
+  reason: context
+- file: s4-rebase/RESULT.md
+  item: After the merge the scene view's default camera is the points view's; demo 0's pixel reference
+    was replaced under the new camera.
+  ids:
+  - REN-12
+  - STR-11
+- file: s4-rebase/CONFLICTS.md
+  item: Conflict record of the merge with main, including two semantic conflicts git did not report (the
+    default camera and the Windows include check).
+  reason: context
+- file: s4-integ3/STATUS.md
+  item: 'The third pull request in progress: the protocol series is carried on sprint4-integ3, and the
+    draws series is picked up to its first commit, with the rest, the meeting points and final suites
+    still to do.'
+  ids:
+  - STR-09
+  - REN-37
+  - REN-38
+  - REN-39
+  - REN-40
+  - REN-41
+  - REN-42
+- file: s4-integ3/STATUS.md
+  item: 'Meeting points to check when joining draws and the base: the switch and bar with every primitive,
+    looking through a camera then switching up, the bar through a camera, the uniform-bytes check for
+    new programs and the CPU reference of the draws taken from the shipped module.'
+  ids:
+  - REN-43
+  - REN-44
+  - REN-12
+- file: s4-integ3/CONFLICTS.md
+  item: Conflicts met in carrying proto3 and draws onto the second pull request, with the saved resolution
+    of 78dd925e.
+  reason: context
+- file: s4-draws/STATUS.md
+  item: Remaining draws applied natively and in the browser, with a CPU reference and graphics suite rows
+    on Metal and browser rows per primitive.
+  ids:
+  - REN-37
+  - REN-38
+  - REN-39
+  - REN-40
+  - REN-41
+  - REN-42
+- file: s4-draws/STATUS.md
+  item: The pick pass with asynchronous readbacks and the image-plane draw order; picks every primitive
+    fixture.
+  ids:
+  - REN-15
+- file: s4-draws/STATUS.md
+  item: Hover, click, rectangle and lasso selections and linked highlights in the app's scene view, passing
+    their tests; unfinished.
+  ids:
+  - REN-46
+- file: s4-draws/STATUS.md
+  item: A Python test of scene events through caliper.serve() with the hidden app is not written.
+  ids:
+  - REN-46
+- file: s4-draws/STATUS.md
+  item: docs for the pick pass, hover, click, selections and the highlight (rendering.md and testing.md)
+    are not written.
+  ids:
+  - REN-15
+  - REN-46
+- file: s4-draws/STATUS.md
+  item: The pick pass's timing half, the per-pick cost, is held.
+  ids:
+  - REN-15
+- file: s4-time/STATUS.md
+  item: 'Timelines in Caliper LIB on both senders: step, time and up to six of the script''s own, caliper.timeline,
+    caliper.set_time, static=, stamps on every snapshot, series, control and scene item.'
+  ids:
+  - STR-23
+- file: s4-time/STATUS.md
+  item: The hub announces timelines and forwards stamps, static and timelines only to viewers that announced
+    them, with a new hub test; unfinished.
+  ids:
+  - STR-23
+- file: s4-time/STATUS.md
+  item: The Python test through the real hub with the frozen 3.1 codec as the viewer is not written; full
+    suites and docs are pending.
+  ids:
+  - STR-23
+- file: s4-time/STATUS.md
+  item: 'Part 2, scene data views: entity filters and budgets per part in the senders, the hub and the
+    codecs.'
+  ids:
+  - STR-25
+- file: s4-time/STATUS.md
+  item: The recorder should read the stamp once at the call through caliper._timelines.stamp() and take_call,
+    the series tap, scene items and CONTROLS stamp interfaces.
+  ids:
+  - STR-12
+  - STR-23
+- file: s4-rec/STATUS.md
+  item: The MCAP recorder and reader in C++ with recovery to the last commit point, tailing, locks, segments,
+    thinning, compaction, an async writer and the scrubber's queries, clean under ThreadSanitizer; 24
+    and later 29 test cases.
+  ids:
+  - STR-12
+- file: s4-rec/STATUS.md
+  item: 'caliper.record: Python bindings over the Recorder with a writer thread and a 64 MiB coalescing
+    queue, and the 3.2 stamps from Caliper LIB, are not built.'
+  ids:
+  - STR-12
+- file: s4-rec/STATUS.md
+  item: The browser reader in TypeScript is not started; the plan is web/src/recording/ with fzstd and
+    a Readable interface.
+  ids:
+  - STR-26
+- file: s4-rec/STATUS.md
+  item: 'Parquet export: DuckDB''s writer already linked into the app is compared with Apache Arrow and
+    a writer of our own; it needs the Recording items, frames and timelines.'
+  ids:
+  - STR-28
+- file: s4-rec/STATUS.md
+  item: The scrubber's queries (range, state_at, first_position, step, switch_timeline) are in the reader;
+    the scrubber itself is not built.
+  ids:
+  - STR-13
+- file: s4-rec/STATUS.md
+  item: The recording file layer is POSIX (flock, mmap, fsync, pwrite, rename over an open file); Windows
+    excludes the folder from the build until a Windows file layer is written.
+  ids:
+  - PLT-16
+  - STR-12
+- file: s4-rec/STATUS.md
+  item: 'Hub parts not built: one Recorder per session and the RECORDINGS ranges per timeline; budget
+    step 3 (decimating series and dropping text) needs the SERIES and TEXT frames of the 3.2 codec.'
+  ids:
+  - STR-12
+  - STR-14
+- file: s4-rec/STATUS.md
+  item: Twelve design changes for design/recordings.md are listed, including own MCAP writer, recovery
+    at commit points, thinning that keeps the first update after a clear, a static layer and compaction
+    on the writer's thread.
+  ids:
+  - STR-12
+- file: s4-rec/STATUS.md
+  item: The ThreadSanitizer build command is still to be added to docs/explanations/testing.md.
+  ids:
+  - STR-12
+- file: s4-tex/STATUS.md
+  item: 'Step 8: the texture path through the graphics layer with the fill program and the layer''s texture
+    operations committed; the move that deletes the old path is WIP, and the old path''s deletion waits
+    for the orchestrator''s rerun.'
+  ids:
+  - REN-33
+- file: s4-tex/STATUS.md
+  item: After the move the Vulkan renderer is reduced to the window, canvas and ImGui, and the old texture
+    code, the PTX kernel and GLSL shaders are deleted.
+  ids:
+  - REN-33
+  - REN-53
+- file: s4-tex/STATUS.md
+  item: Docs for rendering, testing, environment, vulkan-cuda, zero-copy and the tensor bridge service
+    are drafted but not committed.
+  ids:
+  - REN-33
+- file: s4-ts9/STATUS.md
+  item: 'Step 9: the TypeScript WebGPU views are removed with references taken first and the docs updated.'
+  ids:
+  - EMB-16
+- file: s4-ts9/STATUS.md
+  item: The scale bar rule and tests, the scene view's switch_up, header segments, the U key, the display
+    menu and the bar drawn with ImGui, remembered by view name.
+  ids:
+  - REN-43
+  - REN-44
+- file: s4-nogl/STATUS.md
+  item: 'Step 5: OpenGL and GLEW are retired; a renderer that cannot start gives a refusal message, and
+    the gfx suite has no GL rows.'
+  ids:
+  - REN-17
+- file: s4-verify/show-row/summary.md
+  item: 'Ten-repeat comparison of the caliper.show baseline row: snapshot calls 51.34 before and 47.71
+    microseconds after, steps per second and latency unchanged.'
+  ids:
+  - REN-31
+- file: s4-orch/pr1/PR-1.md
+  item: Description of pull request 1 at 546bacaa with its evidence table, reviews and known gaps.
+  reason: context
+- file: s4-orch/pr1/PR-1.md
+  item: 'Known gap: the graphics layer has no Vulkan backend, by decision; the Windows lane builds and
+    runs only the tests that need no renderer.'
+  ids:
+  - REN-53
+  - REN-09
+- file: s4-orch/pr1/PR-1.md
+  item: 'Known gap: the scene view draws points, lines and meshes only; the other parts, picking and the
+    applet service come in later parts.'
+  ids:
+  - REN-12
+  - REN-15
+- file: s4-orch/pr1/PR-1.md
+  item: 'Known limits of demo 0: evaluation in the current training mode, the path leaving the box below
+    span 2/3, a uniform grid and no test that showing the surface leaves training untouched.'
+  ids:
+  - STR-11
+- file: s4-orch/pr1/PR-1.md
+  item: Viewer scene queue bounded by messages and not bytes; a second send of state after the hub resubscribes;
+    image bind groups not released; storage aliasing accepted by the core; scene.mjs not in CI; design
+    pages behind what is built.
+  reason: maintenance
+- file: s4-orch/pr1/REVIEW.md
+  item: 'Independent review of pull request 1: no blockers, 7 majors and 15 minors across the protocol,
+    hub, scene core, scene view, shaders and demo.'
+  reason: context
+- file: s4-orch/pr2/REVIEW.md
+  item: 'Partial review of pull request 2 (steps 5, 7, 9 and the scene view''s additions): no blockers,
+    3 majors, 11 minors.'
+  reason: context
+- file: s4-orch/pr2/REVIEW.md
+  item: 'Review items: no committed measurements for step 7, no independent 3-D reference in CI, the browser
+    draws the scale bar with no way to hide it, and two things step 7 should delete are left.'
+  ids:
+  - REN-32
+  - REN-43
+- file: sprint3-integration/PR.md
+  item: 'Libraries under src/builder: the spec format, validator and schema, loaders, the catalog, the
+    command layer and the session.'
+  ids:
+  - SPC-01
+  - SPC-03
+  - SPC-04
+  - SPC-05
+  - SPC-06
+- file: sprint3-integration/PR.md
+  item: caliper-mcp, a stdio MCP server whose tools mirror the commands.
+  ids:
+  - AGT-02
+- file: sprint3-integration/PR.md
+  item: The side chat runs the person's own ACP agent as a subprocess on its own login and hands it caliper-mcp;
+    local models work through any ACP agent.
+  ids:
+  - AGT-03
+  - AGT-04
+- file: sprint3-integration/PR.md
+  item: The widget agent, caliper-agent, a sidecar on Pydantic AI opened inline with cmd-K, with the key
+    only in the OS credential store.
+  ids:
+  - AGT-05
+- file: sprint3-integration/PR.md
+  item: 'In the app: command endpoints of Caliper API, spec runtime and spec applet kind, catalog providers,
+    builder pane, drag and drop, approval cards and stacked previews; in the browser GET /v0/spec, panel.data
+    and a viewer token.'
+  ids:
+  - SPC-07
+  - SPC-08
+  - AGT-01
+  - EMB-06
+- file: sprint3-integration/PR.md
+  item: CALIPER_WITH_BUILDER is off on Windows and in the wheel; thirteen units are skipped by the Windows
+    include check.
+  ids:
+  - PLT-13
+  - SPC-06
+- file: sprint3-integration/PR.md
+  item: 'Behaviour changes: api.json holds an mcp token, the origin comes from the token, and mcp and
+    agent tokens watch only on the stream.'
+  ids:
+  - AGT-06
+  - AGT-01
+- file: sprint3-integration/PR.md
+  item: Verification table and the review of pull request 1 with ten findings, six fixed and four deferred,
+    plus three test-only CI fixes.
+  reason: context
+- file: sprint3-integration/PR.md
+  item: 'Deferred findings 7 and 8: approvals from api never expire, and a command can join another origin''s
+    undo step.'
+  ids:
+  - AGT-11
+- file: sprint3-integration/PR.md
+  item: 'Known gap: the attention entropy case needs a reshape step, since a stream carries at most three
+    dimensions per heatmap view.'
+  ids:
+  - SPC-13
+- file: sprint3-integration/PR.md
+  item: 'Known gap: packaging of caliper-mcp and caliper-agent.'
+  ids:
+  - AGT-10
+  - AGT-02
+- file: sprint3-integration/PR.md
+  item: Revoking a token does not close a stream that is already open.
+  reason: maintenance
+- file: sprint3-integration/PR2.md
+  item: 'The widget agent''s settings in the app: provider preset, base URL, model, effort, key and capabilities,
+    kept in widget-agent.json without the key.'
+  ids:
+  - AGT-05
+- file: sprint3-integration/PR2.md
+  item: 'Three more entry points for cmd-K: a selection, a dropped file and a property.'
+  ids:
+  - AGT-05
+- file: sprint3-integration/PR2.md
+  item: The Shared GPU note in the settings and on the prompt row.
+  ids:
+  - AGT-04
+  - AGT-05
+- file: sprint3-integration/PR2.md
+  item: Verification of PR 2 at 9103d9c0 and the review of 7af0275f with nine findings; three deferred
+    to design/widget-agent.md.
+  reason: context
+- file: sprint3-integration/PR2.md
+  item: 'Known gaps of PR 2: the settings change test checks the sidecar''s token and not its process
+    ending, and a settings listener after shutdown.'
+  reason: maintenance
+- file: sprint3-integration/PR2.md
+  item: 'Known gap: packaging of caliper-agent with a Python runtime.'
+  ids:
+  - AGT-10
+- file: sprint3-integration/PR3.md
+  item: The walk-through examples/build_a_dashboard with six steps and dry runs.
+  ids:
+  - AGT-03
+  - AGT-05
+  - SPC-07
+- file: sprint3-integration/PR3.md
+  item: The Ollama preset talks to Ollama's own chat API with context per role (16,384 for cmd-K, 32,768
+    for the side chat), keep_alive on every request, and caliper-agent can be the side chat's agent.
+  ids:
+  - AGT-04
+  - AGT-05
+- file: sprint3-integration/PR3.md
+  item: A launch carries the caller's origin; an agent's launch over unsaved changes is held and answers
+    PENDING_APPROVAL.
+  ids:
+  - AGT-12
+  - AGT-06
+  - AGT-01
+- file: sprint3-integration/PR3.md
+  item: The side chat's agent never falls back to api.json, and a permission card is labelled with the
+    agent's own title.
+  ids:
+  - AGT-03
+  - AGT-06
+- file: sprint3-integration/PR3.md
+  item: A null on an optional argument counts as the argument left out; spec.get with no spec open answers
+    open false.
+  ids:
+  - AGT-08
+- file: sprint3-integration/PR3.md
+  item: No silent truncation of the model context, a budget of six model requests for cmd-K, and a changed
+    context length applies like other settings.
+  ids:
+  - AGT-05
+  - AGT-04
+- file: sprint3-integration/PR3.md
+  item: 'The person''s work: Save changes prompt, live session stays attached with Detach, serve() streams
+    under F4, files dropped on the live page, dashboards under Projects, cmd-O Open in browser and F6
+    Dashboard.'
+  ids:
+  - SPC-07
+  - EMB-06
+- file: sprint3-integration/PR3.md
+  item: Verification of PR 3 at 2075dd7a and its four reviews; confirmed sound areas.
+  reason: context
+- file: sprint3-integration/PR3.md
+  item: 'Known gap: a launch is not held as one command and shares one pending slot with a person''s launch
+    in the same frame.'
+  ids:
+  - AGT-12
+- file: sprint3-integration/PR3.md
+  item: 'Known gap: offering to compact a conversation that no longer fits the context is not built; the
+    turn ends with a message.'
+  ids:
+  - AGT-28
+- file: sprint3-integration/PR3.md
+  item: 'Known gap: local models send empty strings for optional arguments and the first call fails before
+    it is retried without them.'
+  ids:
+  - AGT-08
+  - AGT-05
+- file: sprint3-integration/PR3.md
+  item: The reshape step and packaging caliper-agent and caliper-mcp with a Python moved to sprint 5.
+  ids:
+  - AGT-10
+  - SPC-13
+- file: sprint3-integration/PR3.md
+  item: 'Smaller known gaps: repeated layout.set rows in Activity, the F3 title hint, tiled attention
+    axis ticks, a source''s panels not redrawn from a cmd-K preview, the input driver''s click page browser,
+    two fixes without tests, and CI not yet having built the branch.'
+  reason: maintenance
+- file: sprint3-integration/PR31.md
+  item: 'Tests keep out of the person''s data: every ctest entry gets its own data folder and a guard
+    stops a test or hidden run that would use the person''s app-data folder.'
+  reason: merged
+- file: sprint3-integration/PR31.md
+  item: Agent permission modes Ask, Accept edits, Read only and Allow all, the card's three answers and
+    saved rules with Revoke in settings.
+  ids:
+  - AGT-06
+- file: sprint3-integration/PR31.md
+  item: Metrics in the builder's Sources list grouped by run, newest first, with the catalog listed one
+    kind at a time.
+  ids:
+  - RUN-01
+- file: sprint3-integration/PR31.md
+  item: 'Obvious ways to remove a panel: the cross, the menu entry and the Delete key, with cmd-Z on the
+    dashboard page.'
+  ids:
+  - SPC-09
+- file: sprint3-integration/PR31.md
+  item: The next round's four planned items were recorded in design/builder-overview.md.
+  ids:
+  - SPC-10
+  - AGT-08
+  - AGT-07
+  - PLT-18
+- file: sprint3-integration/PR31.md
+  item: 'Known gap: deny rules are not built.'
+  ids:
+  - AGT-30
+- file: sprint3-integration/PR31.md
+  item: 'Known gaps: the Python package''s tests were not run, the browser tests and the sidecar''s default
+    API file are not guarded, custom agents share one rule key, and the close cross covers the end of
+    a strip''s stats.'
+  reason: maintenance
+- file: sprint3-integration/PR31.md
+  item: Verification of 3.1 at c55f3e3e with no independent review by the coordinator's decision.
+  reason: context
+- file: sprint3-integration/SPRINT31-BRIEF.md
+  item: 'Shared brief for the sprint 3.1 builders: rules about the real app-data folder, heavy jobs, commits
+    and the final reply.'
+  reason: context
+- file: sprint3-integration/DEMO-BRIEF.md
+  item: 'Shared brief for the demo builders: the six steps of the walk-through, fixed file names and the
+    rules that forbid paid accounts and a visible window.'
+  reason: context
+- file: sprint3-integration/DEMO-BRIEF.md
+  item: 'The walk-through''s six steps: stream a training run, drop files and build by hand, cmd-K on
+    a local model, the side chat, an outside agent over caliper-mcp, and save, reopen and the browser.'
+  ids:
+  - AGT-03
+  - AGT-05
+  - SPC-07
+- file: sprint3-integration/RULES.md
+  item: Shared rules copy for sprint 3 builders.
+  reason: context
+- file: s3-chat/demo/readme-section.md
+  item: 'README section for step 4: the side chat with caliper-agent as the custom command on a local
+    model through chat-agent.sh, with a 32,768 token context.'
+  ids:
+  - AGT-03
+  - AGT-04
+- file: s3-pane/demo3/README-section.md
+  item: README section for the walk-through's drop, build and browser steps.
+  ids:
+  - SPC-07
+  - EMB-06
+- file: s3-pane/demo3/design-full.md
+  item: Full copy of a design page for the builder pane's demo.
+  ids:
+  - SPC-07
+- file: s3-pane/demo3/docs-full.md
+  item: Full copy of a docs page for the builder pane's demo.
+  ids:
+  - SPC-07
+- file: sprint2/PR.md
+  item: Wire protocol v3 and 3.1 with golden frames decoded by the Python, C++ and TypeScript codecs.
+  ids:
+  - STR-02
+  - STR-03
+- file: sprint2/PR.md
+  item: 'Caliper LIB: caliper.serve, caliper.widget, caliper.controls, caliper.connect, a native sender
+    and a Python fallback.'
+  ids:
+  - STR-01
+  - STR-05
+  - STR-07
+- file: sprint2/PR.md
+  item: 'Data views: a viewer asks for a slice, selection or reduction of a tensor under a size budget.'
+  ids:
+  - STR-08
+- file: sprint2/PR.md
+  item: 'Browser views: caliper-view and caliper-controls elements with WebAssembly views on WebGPU and
+    TypeScript views on Canvas 2D.'
+  ids:
+  - EMB-05
+  - EMB-04
+  - EMB-03
+- file: sprint2/PR.md
+  item: The hub, caliper serve, with --allow-control off by default.
+  ids:
+  - STR-06
+- file: sprint2/PR.md
+  item: Caliper API v0 and the caliper serve and caliper build subcommands.
+  ids:
+  - AGT-01
+  - COR-11
+- file: sprint2/PR.md
+  item: 'Interactive controls: caliper.step, param, action and items.'
+  ids:
+  - STR-03
+  - STR-07
+- file: sprint2/PR.md
+  item: macOS 14 deployment target, WebAssembly views built in CI with a pinned Emscripten, and new workflows
+    for the browser views and docs builds.
+  ids:
+  - PLT-03
+  - PLT-01
+- file: sprint2/PR.md
+  item: Test evidence of sprint 2 and fixes after the first CI runs, including the CI project split of
+    the browser specs.
+  reason: context
+- file: sprint2/PR.md
+  item: 'Measured cost of streaming on MPS: 98.2 percent of control for a 1024 square heatmap, with the
+    cost goal of 3 percent met for single views and missed for all three views with two viewers (4.6 percent).'
+  ids:
+  - STR-05
+- file: sprint2/PR.md
+  item: 'Review defects fixed in sprint 2: quadratic JSON parsing, unbounded control queues (now 65,536
+    messages and 16 MiB), 4096 by 4096 heatmap refusal, and the session token in error text.'
+  ids:
+  - STR-05
+- file: sprint2/PR.md
+  item: Network security as a whole (remote sessions, TLS, authentication) is deferred to a later pass.
+  ids:
+  - STR-17
+- file: sprint2/PR.md
+  item: 'Windows is untested at run time: caliper serve, caliper build, --api and --url refuse there and
+    the socket, hub and API tests are not built; follow-up is to compile and run the network layer on
+    Windows.'
+  ids:
+  - PLT-08
+  - PLT-05
+- file: sprint2/PR.md
+  item: VS Code notebooks are unverified; the Browser views job had not passed on a hosted runner; the
+    wheel job had not run; two unexplained single test failures.
+  reason: maintenance
+- file: sprint2/PR.md
+  item: Window capture through GET /v0/capture.png works on Metal only and answers 501 on the other renderers.
+  ids:
+  - AGT-01
+  - REN-36
+- file: sprint2/PR.md
+  item: Vulkan did not draw the 3-D points depth cues or the exact value colours for points.
+  ids:
+  - REN-53
+  - REN-32
+- file: sprint2/PR.md
+  item: 'Follow-up: interventions on a model, ablating a head and steering a direction, with the inspector
+    work.'
+  ids:
+  - INT-10
+- file: sprint2/PR.md
+  item: 'Follow-up: WebTransport beside the WebSocket, and the security review that must come before any
+    session leaves the machine.'
+  ids:
+  - STR-16
+  - STR-17
+- file: sprint2/PR.md
+  item: 'Follow-up: a clock exchange in the protocol, so that viewers can show absolute latency.'
+  ids:
+  - STR-47
+- file: sprint2/PR.md
+  item: 'Follow-up: a release workflow that attaches the WebAssembly views and publishes the wheel.'
+  ids:
+  - PLT-19
+- file: sprint2/PR.md
+  item: 'Follow-up: the remaining differences between the two browser renderers, square against round
+    points and a fixed range with equal ends.'
+  ids:
+  - EMB-04
+  - REN-32
+- file: sprint2/PR.md
+  item: 'Follow-up: a fresh per-tick cost breakdown and a new measurement of the Python sender.'
+  ids:
+  - STR-05
+- file: roadmap/BRIEF.md
+  item: The brief of the roadmap's first pass lists support for MLX and JAX under interpretability and
+    interventions, which the plans read in this pass do not repeat for JAX.
+  ids:
+  - INT-18
+  - INT-19
