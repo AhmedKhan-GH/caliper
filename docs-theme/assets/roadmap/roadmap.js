@@ -291,9 +291,7 @@
     var sb = RoadmapWindow.searchBox("Find a feature by id or title", "Find a feature by id or title, then press Enter");
     var input = sb.input;
     var pillarList = el("div", "roadmap-pillars");
-    /* Candidates: ideas kept outside the registry, on their own pages under candidates/. */
-    var cand = RoadmapWindow.railLink("candidates/", "Candidates", "Ideas outside the registry, by pillar");
-    rail.append(legend, sb.box, sb.status, pillarList, cand);
+    rail.append(legend, sb.box, sb.status, pillarList);
 
     var canvas = el("div", "roadmap-canvas");
     var svg = sv("svg", { "class": "roadmap-svg", role: "img", "aria-label": "Roadmap graph of every feature by pillar" });

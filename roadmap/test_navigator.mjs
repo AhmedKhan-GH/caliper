@@ -671,9 +671,8 @@ try {
       const gGot = s.links.map((l) => new URL(l.href).pathname);
       if (gGot.join() !== gWant.join() || gGot.some((g) => !/^\/roadmap\/[a-z0-9-]+\/$/.test(g))) bad.push(`graph: pillar hrefs ${short(gGot, 3)} differ from /roadmap/<slug>/ of graph.json`);
       await status200(s.links.map((l) => l.href), bad, "graph link");
-      const cl = s.railLinks.find((l) => new URL(l.href).pathname === "/roadmap/candidates/");
-      if (!cl) bad.push("graph: no Candidates rail link to /roadmap/candidates/");
-      else if (!cl.shown) bad.push("graph: the Candidates rail link is hidden");
+      // Candidates has its own header tab, so neither rail links to the other page.
+      if (s.railLinks.length) bad.push(`graph: ${s.railLinks.length} rail links shown, expected none`);
       if (s.headings.some((h) => h === "Pillars")) bad.push('graph: the article still has a "Pillars" heading');
       if (s.scrollW > s.clientW + 1) bad.push(`graph page scrolls sideways (${s.scrollW} > ${s.clientW})`);
       await shot(ph, "roadmap-phone.png", true);

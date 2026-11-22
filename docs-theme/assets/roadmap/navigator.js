@@ -286,7 +286,6 @@
         sections[p.prefix] = sec;
         scroll.appendChild(sec);
       });
-      rail.appendChild(RoadmapWindow.railLink(new URL("./", jsonUrl).href, "Roadmap Graph", "Features in the registry, by pillar"));
     }
 
     function fromHash() {

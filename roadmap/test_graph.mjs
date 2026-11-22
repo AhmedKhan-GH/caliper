@@ -446,7 +446,7 @@ try {
   });
 
   // 12
-  await check(12, "on a phone the rail's pillar links and the Candidates link take the graph's place", async () => {
+  await check(12, "on a phone the rail's pillar links take the graph's place, with no Candidates link (it has its own tab)", async () => {
     const bad = [];
     const phoneCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, colorScheme: "dark" });
     try {
@@ -472,7 +472,7 @@ try {
         const r = await fetch(`${base}${href}`);
         if (r.status !== 200) bad.push(`${href} returns ${r.status}`);
       }
-      if (s.cand !== "/roadmap/candidates/") bad.push(`Candidates link ${s.cand}`);
+      if (s.cand) bad.push(`unexpected Candidates rail link ${s.cand}`);
       if (s.wide) bad.push("the page scrolls sideways");
       await ph.click(`.roadmap-pillars a[data-pillar="${graph.pillars[0].prefix}"]`);
       await ph.waitForURL(`**/roadmap/${graph.pillars[0].url}`, { timeout: 5000 }).catch(() => bad.push("a tap on a pillar link does not open its page"));

@@ -1009,9 +1009,9 @@ class HookTest(unittest.TestCase):
             self.assertEqual(uris["roadmap/cor-01.md"].inclusion, InclusionLevel.NOT_IN_NAV)
             self.assertNotEqual(uris["roadmap/core.md"].inclusion, InclusionLevel.NOT_IN_NAV)
             if folder.is_dir():
-                # The candidate pages are reached from the graph's rail, not the sidebar.
-                for uri in ["roadmap/candidates/index.md"] + [
-                        "roadmap/candidates/%s.md" % f.stem for f in folder.glob("*.yml")]:
+                # The navigator is its own header tab; its pillar pages stay out of the sidebar.
+                self.assertNotEqual(uris["roadmap/candidates/index.md"].inclusion, InclusionLevel.NOT_IN_NAV)
+                for uri in ["roadmap/candidates/%s.md" % f.stem for f in folder.glob("*.yml")]:
                     self.assertEqual(uris[uri].inclusion, InclusionLevel.NOT_IN_NAV, uri)
             site = json.loads(uris["roadmap.json"].content_string)["site"]
             self.assertEqual(site, "https://example.org/docs/")
