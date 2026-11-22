@@ -1422,20 +1422,24 @@ entries:
   ids:
   - REN-09
 - branch: sprint4-ts9
-  state: unique
+  state: superseded
   commits: 92a70847
   item: Scale bar interface header in the scene core, an early WIP superseded by e5055199 on integ3.
   ids:
   - REN-12
   - REN-44
+  in:
+  - sprint4-integ3
 - branch: sprint4-points
-  state: unique
+  state: superseded
   commits: 6a40dab8, ce979e26
   item: Points step 7 closing commits (deletion of the old path, pixel-difference row wording), reworded
     copies of e16160e9 and 48455f31 on integ3.
   ids:
   - REN-11
   - REN-32
+  in:
+  - sprint4-integ3
 - branch: sprint4
   state: unique
   commits: bae8c25b, 79f62254, 4ca5f9e6, 57c61634, ad09cceb, adc6721e
