@@ -897,39 +897,39 @@ set_tests_properties(caliper_wgsl_tests PROPERTIES LABELS "wgsl")
 
 # The instrument acceptance test (design/instruments.md, Acceptance Test): a script whose only
 # Caliper line is caliper.watch(model, optimizer), the hidden app attached to it, and caliper-mcp
-# as a child. tests/m1/driver.py runs tests/m1/transcript.jsonl through the MCP tools and exits 77
+# as a child. tests/instruments/driver.py runs tests/instruments/transcript.jsonl through the MCP tools and exits 77
 # where the app, Metal, torch or the native network sender is missing, which ctest reports as skipped.
-# CALIPER_M1_PYTHON names a Python with torch; the builder's test Python or the one found is the default.
+# CALIPER_ACCEPTANCE_PYTHON names a Python with torch; the builder's test Python or the one found is the default.
 if(NOT WIN32 AND CALIPER_WITH_BUILDER)
-    set(CALIPER_M1_PYTHON "" CACHE FILEPATH "A Python with torch for the instrument acceptance test; empty uses the test Python")
-    set(_m1_python "${CALIPER_M1_PYTHON}")
-    if(NOT _m1_python AND CALIPER_BUILDER_TEST_PYTHON)
-        set(_m1_python "${CALIPER_BUILDER_TEST_PYTHON}")
+    set(CALIPER_ACCEPTANCE_PYTHON "" CACHE FILEPATH "A Python with torch for the instrument acceptance test; empty uses the test Python")
+    set(_acceptance_python "${CALIPER_ACCEPTANCE_PYTHON}")
+    if(NOT _acceptance_python AND CALIPER_BUILDER_TEST_PYTHON)
+        set(_acceptance_python "${CALIPER_BUILDER_TEST_PYTHON}")
     endif()
-    if(NOT _m1_python)
+    if(NOT _acceptance_python)
         find_package(Python3 COMPONENTS Interpreter QUIET)
         if(Python3_FOUND)
-            set(_m1_python "${Python3_EXECUTABLE}")
+            set(_acceptance_python "${Python3_EXECUTABLE}")
         endif()
     endif()
-    if(_m1_python)
-        add_test(NAME caliper_m1_acceptance COMMAND "${_m1_python}" "${CMAKE_CURRENT_SOURCE_DIR}/m1/driver.py"
-            --app "$<TARGET_FILE:caliper>" --mcp "$<TARGET_FILE:caliper-mcp>" --python "${_m1_python}"
-            --work "${CMAKE_CURRENT_BINARY_DIR}/m1-work")
-        set_tests_properties(caliper_m1_acceptance PROPERTIES LABELS "m1;acceptance" TIMEOUT 300
+    if(_acceptance_python)
+        add_test(NAME caliper_instrument_acceptance COMMAND "${_acceptance_python}" "${CMAKE_CURRENT_SOURCE_DIR}/instruments/driver.py"
+            --app "$<TARGET_FILE:caliper>" --mcp "$<TARGET_FILE:caliper-mcp>" --python "${_acceptance_python}"
+            --work "${CMAKE_CURRENT_BINARY_DIR}/instrument-work")
+        set_tests_properties(caliper_instrument_acceptance PROPERTIES LABELS "instruments;acceptance" TIMEOUT 300
             SKIP_RETURN_CODE 77)
     endif()
 endif()
 
 # The acceptance test of hosted runs (design/hosted-runs.md): the hidden app with no script, and caliper-mcp as a
-# child. tests/m4/driver.py runs tests/m4/transcript.jsonl through the MCP tools: the model runner starts
-# tests/m4/train.py as a managed run, forks it, draws both loss curves, stops both, starts and stops
-# tests/m4/infer.py, and checks by pid that no child process is left. It exits 77 where the app, Metal or
-# torch is missing. It uses the Python of the M1 acceptance test (CALIPER_M1_PYTHON).
-if(NOT WIN32 AND CALIPER_WITH_BUILDER AND _m1_python)
-    add_test(NAME caliper_m4_acceptance COMMAND "${_m1_python}" "${CMAKE_CURRENT_SOURCE_DIR}/m4/driver.py"
-        --app "$<TARGET_FILE:caliper>" --mcp "$<TARGET_FILE:caliper-mcp>" --python "${_m1_python}"
-        --work "${CMAKE_CURRENT_BINARY_DIR}/m4-work")
-    set_tests_properties(caliper_m4_acceptance PROPERTIES LABELS "m4;acceptance" TIMEOUT 300
+# child. tests/hosted_runs/driver.py runs tests/hosted_runs/transcript.jsonl through the MCP tools: the model runner starts
+# tests/hosted_runs/train.py as a managed run, forks it, draws both loss curves, stops both, starts and stops
+# tests/hosted_runs/infer.py, and checks by pid that no child process is left. It exits 77 where the app, Metal or
+# torch is missing. It uses the Python of the instrument acceptance test (CALIPER_ACCEPTANCE_PYTHON).
+if(NOT WIN32 AND CALIPER_WITH_BUILDER AND _acceptance_python)
+    add_test(NAME caliper_hosted_runs_acceptance COMMAND "${_acceptance_python}" "${CMAKE_CURRENT_SOURCE_DIR}/hosted_runs/driver.py"
+        --app "$<TARGET_FILE:caliper>" --mcp "$<TARGET_FILE:caliper-mcp>" --python "${_acceptance_python}"
+        --work "${CMAKE_CURRENT_BINARY_DIR}/hosted-runs-work")
+    set_tests_properties(caliper_hosted_runs_acceptance PROPERTIES LABELS "hosted_runs;acceptance" TIMEOUT 300
         SKIP_RETURN_CODE 77)
 endif()

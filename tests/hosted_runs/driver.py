@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """The driver of the hosted runs acceptance test and its check script.
 
-It starts the hidden app with no script and caliper-mcp as a child over stdio, copies tests/m4/train.py
-and tests/m4/infer.py into a throwaway workspace, and sends tests/m4/transcript.jsonl through the MCP
+It starts the hidden app with no script and caliper-mcp as a child over stdio, copies tests/hosted_runs/train.py
+and tests/hosted_runs/infer.py into a throwaway workspace, and sends tests/hosted_runs/transcript.jsonl through the MCP
 tools. The model runner of the app starts, forks and stops the scripts. The driver waits on events and on
 published state, never for a fixed time. Without a window and without the network. Exit code 0 passes,
 77 skips (no app, no torch, no Metal), 1 fails.
@@ -414,13 +414,13 @@ def main():
     try:
         res = run(a)
     except Skip as e:
-        print(f"caliper_m4_acceptance skipped: {e}")
+        print(f"caliper_hosted_runs_acceptance skipped: {e}")
         return SKIP
     except Fail as e:
-        print(f"caliper_m4_acceptance FAILED: {e}")
+        print(f"caliper_hosted_runs_acceptance FAILED: {e}")
         return 1
     print(json.dumps(res, indent=2))
-    print("caliper_m4_acceptance passed")
+    print("caliper_hosted_runs_acceptance passed")
     return 0
 
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The check of hosted runs.
 
-It runs the transcript of the hosted runs acceptance test (tests/m4/transcript.jsonl): the hidden app
+It runs the transcript of the hosted runs acceptance test (tests/hosted_runs/transcript.jsonl): the hidden app
 with no script, and caliper-mcp as the agent's only way in. The agent starts a training script as a
 managed run, forks it with a lower learning rate, draws both loss curves in one panel, reads the log,
 and stops both runs. Then it starts and stops an inference script. No window opens.
@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "tests" / "m4"))
+sys.path.insert(0, str(ROOT / "tests" / "hosted_runs"))
 import driver  # noqa: E402
 
 
@@ -44,7 +44,7 @@ def main():
     work = Path(a.capture_dir) / "work"     # the logs of the run; removed at the end
     args = argparse.Namespace(app=a.app, mcp=a.mcp, python=a.python, work=str(work),
                               capture_dir=a.capture_dir, limit_s=290,
-                              transcript=str(ROOT / "tests" / "m4" / "transcript.jsonl"))
+                              transcript=str(ROOT / "tests" / "hosted_runs" / "transcript.jsonl"))
     try:
         res = driver.run(args)
     except driver.Skip as e:

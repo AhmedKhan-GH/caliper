@@ -97,6 +97,6 @@ def test_the_loss_tap_is_counted_and_comes_off():
     lambda a: a.hooks(None, None, None, None, None),
     lambda a: a.probe(None, None),
 ])
-def test_the_functions_of_m2_wait_for_it(call):
+def test_the_unavailable_functions_raise(call):
     with pytest.raises(NotImplementedError):
         call(TorchAdapter())

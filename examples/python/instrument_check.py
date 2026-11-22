@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The instrument check.
 
-It runs the transcript of the acceptance test (tests/m1/transcript.jsonl): a training script with
+It runs the transcript of the acceptance test (tests/instruments/transcript.jsonl): a training script with
 one Caliper line, the hidden app on its stream, and caliper-mcp as the agent's only way in. The agent
 adds a scene panel and a slider, changes the learning rate, and receives a pick. No window opens.
 
@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "tests" / "m1"))
+sys.path.insert(0, str(ROOT / "tests" / "instruments"))
 import driver  # noqa: E402
 
 BUILDS = ("cmake-build-release", "cmake-build-notorch")
@@ -54,7 +54,7 @@ def find_python():
 
 def caliper_lines():
     """The lines of the training script that use Caliper, apart from its import."""
-    code = (ROOT / "tests" / "m1" / "train.py").read_text().split('"""')[2].splitlines()
+    code = (ROOT / "tests" / "instruments" / "train.py").read_text().split('"""')[2].splitlines()
     return [l.strip() for l in code if "caliper." in l and not l.lstrip().startswith(("#", "import "))]
 
 
@@ -79,7 +79,7 @@ def main():
     work = out / "work"     # the logs of the run; removed at the end
     args = argparse.Namespace(app=app, mcp=mcp, python=python, work=str(work),
                               capture_dir=str(out), limit_s=290,
-                              transcript=str(ROOT / "tests" / "m1" / "transcript.jsonl"))
+                              transcript=str(ROOT / "tests" / "instruments" / "transcript.jsonl"))
     try:
         res = driver.run(args)
     except driver.Skip as e:

@@ -5,11 +5,11 @@ interface, so that a later framework needs only a new adapter. The interface fol
 ``design/producer-runtime.md`` ("Framework Adapter Interface") and the "Framework Adapter" section
 of the trajectory spec:
 
-- ``export``: a tensor as a DLPack capsule, without a copy (M2).
-- ``framework_done`` and ``before_write``: the two sync points of the producer runtime (M2).
-- ``hooks``: call back with module outputs, gradients and each optimizer step (M2).
-- ``probe``: run the model forward on inputs that Caliper supplies (M11).
-- ``state`` and ``restore``: save and load the model and the optimizer, for a fork (M4).
+- ``export``: a tensor as a DLPack capsule, without a copy.
+- ``framework_done`` and ``before_write``: the two sync points of the producer runtime.
+- ``hooks``: call back with module outputs, gradients and each optimizer step.
+- ``probe``: run the model forward on inputs that Caliper supplies.
+- ``state`` and ``restore``: save and load the model and the optimizer, for a fork.
 
 M4 implements ``state`` and ``restore``, and the loss tap of ``caliper.watch(model, optimizer)``
 (the wrapper of ``torch.autograd.backward``) lives here because it patches torch. The other
@@ -59,9 +59,9 @@ class TorchAdapter:
             PyCapsule: The DLPack capsule of the tensor.
 
         Raises:
-            NotImplementedError: Until the producer runtime of M2.
+            NotImplementedError: Not available yet.
         """
-        raise NotImplementedError("TorchAdapter.export arrives with the producer runtime (M2)")
+        raise NotImplementedError("TorchAdapter.export is not available")
 
     def framework_done(self) -> None:
         """Wait on the CPU until torch's work on every bound tensor is complete.
@@ -69,10 +69,9 @@ class TorchAdapter:
         On MPS this records a ``torch.mps.Event`` after ``optimizer.step()`` and synchronizes it.
 
         Raises:
-            NotImplementedError: Until the producer runtime of M2.
+            NotImplementedError: Not available yet.
         """
-        raise NotImplementedError("TorchAdapter.framework_done arrives with the producer "
-                                  "runtime (M2)")
+        raise NotImplementedError("TorchAdapter.framework_done is not available")
 
     def before_write(self, callback) -> None:
         """Call ``callback`` before torch writes a bound tensor again.
@@ -83,10 +82,9 @@ class TorchAdapter:
             callback (Callable[[], None]): Called on the training thread.
 
         Raises:
-            NotImplementedError: Until the producer runtime of M2.
+            NotImplementedError: Not available yet.
         """
-        raise NotImplementedError("TorchAdapter.before_write arrives with the producer "
-                                  "runtime (M2)")
+        raise NotImplementedError("TorchAdapter.before_write is not available")
 
     def hooks(self, model, optimizer, on_outputs, on_grads, on_step) -> None:
         """Call back with the outputs and the gradients of modules, and at each optimizer step.
@@ -99,9 +97,9 @@ class TorchAdapter:
             on_step (Callable[[], None]): Called before each optimizer step.
 
         Raises:
-            NotImplementedError: Until the producer runtime of M2.
+            NotImplementedError: Not available yet.
         """
-        raise NotImplementedError("TorchAdapter.hooks arrives with the producer runtime (M2)")
+        raise NotImplementedError("TorchAdapter.hooks is not available")
 
     def probe(self, model, inputs):
         """Run ``model`` forward on ``inputs`` that Caliper supplies, without gradients.
@@ -114,11 +112,11 @@ class TorchAdapter:
             PyCapsule: The outputs as a DLPack capsule.
 
         Raises:
-            NotImplementedError: Until the operators of M11.
+            NotImplementedError: Not available yet.
         """
-        raise NotImplementedError("TorchAdapter.probe arrives with the operators (M11)")
+        raise NotImplementedError("TorchAdapter.probe is not available")
 
-    # -- M4: state of a fork ---------------------------------------------------------
+    # -- State of a fork -----------------------------------------------------
     def state(self, model, optimizer=None, extra=None) -> bytes:
         """Serialize the state of ``model`` and ``optimizer``, with ``extra`` fields, as bytes.
 
