@@ -144,6 +144,9 @@ set(CALIPER_UI_STACK_DEFINITIONS "")
 # This file handles all third-party dependencies
 include(cmake/Dependencies.cmake)
 
+# The runtime WGSL compiler, the imported target caliper::wgsl when its library is present.
+include(cmake/CaliperWgsl.cmake)
+
 # ============================================================================
 # Caliper SDK (installable package, in-tree source)
 # ============================================================================
