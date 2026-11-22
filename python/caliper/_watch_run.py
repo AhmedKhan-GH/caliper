@@ -15,6 +15,9 @@ that ``optimizer.step(closure)`` returns, and wrapping ``optimizer.step`` would 
 of a learning rate scheduler, so the loss of a closure is the 0-d tensor that its own
 ``backward()`` ran on.
 
+A MANAGED RUN (``caliper._managed``) ends at the checkpoint where its stop action ran: the
+pre-hook raises ``SystemExit(0)`` right after caliper.step(), before the weights change.
+
 LEARNING RATE AND A SCHEDULER. The parameter ``lr`` is the rate of parameter group 0 at the step
 where a new value applies; the other groups move by the same factor. Without a scheduler, the hook
 writes the new rates into the groups, where they stay. A torch learning rate scheduler (it puts
@@ -91,7 +94,7 @@ class RunHooks:
         armed (bool): Whether the next forward pass records the scene's colors.
     """
 
-    def __init__(self, pkg, handle, optimizer, scene: bool, rate=None):
+    def __init__(self, pkg, handle, optimizer, scene: bool, rate=None, managed=None):
         import torch
         if not (hasattr(optimizer, "register_step_pre_hook")
                 and hasattr(optimizer, "param_groups")):
@@ -99,6 +102,7 @@ class RunHooks:
         self.pkg = pkg
         self.opt = optimizer
         self.rate = rate
+        self.managed = managed          # caliper._managed.ManagedRun or None
         self.factor = 1.0
         self._saved = None               # the scheduler's rates while the step runs
         self._written = None
@@ -121,7 +125,8 @@ class RunHooks:
             self.lr = pkg.param("lr", start, min=start / LR_DOWN, max=start * LR_UP, log=True,
                                 help="The learning rate of parameter group 0. A new value applies "
                                      "at the next step and moves every group by the same factor.")
-            self._seen = self.lr._version
+            # a value that the model runner set at registration applies at the first step
+            self._seen = self.lr._version if self.lr.value == start else -1
         else:
             warnings.warn(f"caliper.watch: parameter group 0 has the learning rate {start!r}, so "
                           "the parameter 'lr' is not registered", RuntimeWarning, stacklevel=4)
@@ -248,6 +253,9 @@ class RunHooks:
     def _pre(self, opt, args, kwargs):
         self._loss_tick()
         self.pkg.step()
+        m = self.managed
+        if m is not None and m.stopping:
+            m.exit()                     # SystemExit(0) before the weights change
         groups = opt.param_groups
         if groups:
             self.pkg.series(self._apply_lr(groups), "lr", rate=self.rate)
