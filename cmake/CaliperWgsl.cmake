@@ -128,10 +128,11 @@ if(_wgsl_lib)
         IMPORTED_LOCATION "${_wgsl_lib}"
         INTERFACE_INCLUDE_DIRECTORIES "${_wgsl_crate}/include"
         INTERFACE_COMPILE_DEFINITIONS "CALIPER_HAS_WGSL=1")
-    # The system libraries that Rust's standard library needs in a static link.
+    # The system libraries that Rust's standard library needs in a static link. On Windows,
+    # synchronization holds WaitOnAddress and WakeByAddress, which its locks use.
     if(WIN32)
         set_property(TARGET caliper_wgsl PROPERTY INTERFACE_LINK_LIBRARIES
-            kernel32 advapi32 ntdll userenv ws2_32 dbghelp bcrypt)
+            kernel32 advapi32 ntdll userenv ws2_32 dbghelp bcrypt synchronization)
     elseif(NOT APPLE)
         find_package(Threads REQUIRED)
         set_property(TARGET caliper_wgsl PROPERTY INTERFACE_LINK_LIBRARIES
