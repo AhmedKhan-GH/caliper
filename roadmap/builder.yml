@@ -182,7 +182,7 @@ features:
   - id: SPC-19
     title: Python Sidecar
     status: planned
-    scope: supporting
+    scope: core
     summary: A sidecar service starts a Python process beside an applet, with a version handshake, a cache version that triggers a rebuild and a synthetic-data mode.
     depends_on: []
     design: design/platform-candidates.md#candidates

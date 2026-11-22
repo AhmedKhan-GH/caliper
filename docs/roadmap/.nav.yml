@@ -1,5 +1,6 @@
 nav:
   - index.md
+  - direction.md
   - core.md
   - rendering.md
   - streaming.md
