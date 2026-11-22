@@ -42,7 +42,7 @@ The runner writes the standard output and the standard error of each run into `o
 
 The app attaches to one run at a time. It attaches to a new run when that run becomes ready. The commands `run.state`, `run.set_param`, `run.action` and `run.pause` take an optional `run` argument. When it names a run that the app does not show, the app switches its attachment to that run at the next frame.
 
-A panel can draw the data of a run that the app does not show. The catalog source `run:<id>/<view>` names the series `<view>` of the managed run `<id>`, such as `run:train-1/loss`. The runner reads it through its own connection to the run, and it keeps the last 262,144 values of each series until the app closes. A `series` panel draws it as it draws `live:loss`. Thus one panel with the sources `live:loss` and `run:train-1/loss` shows a run and its fork side by side. `catalog.list` with the kind `run` shows these sources.
+A panel can draw the data of a run that the app does not show. The catalog source `run:<id>/<view>` names the series `<view>` of the managed run `<id>`, such as `run:train-1/loss`. The runner reads it through its own connection to the run, and it keeps the last 262,144 values of each series until the app closes. A `series` panel draws it as it draws `live:loss`. The series of a fork start at the step of its checkpoint, but `live:loss` of the run that the app shows counts its values from 0. Thus one panel with the sources `run:train-1/loss` and `run:train-2/loss` shows a run and its fork on one step axis, where the fork branches from its parent. `catalog.list` with the kind `run` shows these sources.
 
 ## Errors
 

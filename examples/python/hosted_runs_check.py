@@ -57,7 +57,8 @@ def main():
         subprocess.run(["rm", "-rf", str(work)], check=False)
     print(f"Capture: {res.get('capture')}")
     print("Runs after the fork: " + json.dumps(res.get("pair")))
-    print(f"The app showed {res.get('attached')}; the other run came through its run source.")
+    print(f"The app showed {res.get('attached')}; both curves came through run sources, on one step "
+          "axis.")
     print("No child process is left.")
     return 0
 

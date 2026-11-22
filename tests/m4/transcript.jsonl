@@ -8,8 +8,8 @@
 {"step": "forked", "wait_state": {"run": "{child}", "states": ["running"]}}
 {"step": "pair", "tool": "run_list", "arguments": {}, "expect_runs": {"train-1": {"state": "running"}, "{child}": {"state": "running", "parent": "train-1"}}}
 {"step": "pids2", "record_pids": "train.py"}
-{"step": "source_a", "tool": "source_add", "arguments": {"id": "loss_a", "catalog": "live:loss"}}
-{"step": "source_b", "tool": "source_add", "arguments": {"id": "loss_b", "catalog": "run:{other}/loss"}}
+{"step": "source_a", "tool": "source_add", "arguments": {"id": "loss_a", "catalog": "run:{child}/loss"}}
+{"step": "source_b", "tool": "source_add", "arguments": {"id": "loss_b", "catalog": "run:train-1/loss"}}
 {"step": "panel", "tool": "panel_create", "arguments": {"id": "losses", "primitive": "series", "title": "Loss of Both Runs", "bind": {"y": ["loss_a", "loss_b"]}}}
 {"step": "data", "panel_has_lines": {"panel": "losses", "lines": 2}}
 {"step": "capture", "capture": "m4_two_runs"}
