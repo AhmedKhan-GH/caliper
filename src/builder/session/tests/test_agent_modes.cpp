@@ -184,6 +184,35 @@ TEST_CASE("rules: for this session, and saved ones that survive a restart and ar
     CHECK(chat(*f.s, "loader.delete", {{"id", f.loader()}}).error.code == "command.needs_approval");
 }
 
+TEST_CASE("rules: a run command's rule allows its one parameter or action, for this session and saved") {
+    Fixture f("modes-run-rules");
+    const json lr = {{"name", "lr"}, {"value", 0.01}};
+    CommandResult r = send(*f.s, "run.set_param", lr, CommandOrigin::mcp, "");
+    REQUIRE(r.error.code == "command.needs_approval");
+    PendingApproval p = f.s->registry().pending_approvals().at(0);
+    REQUIRE(f.s->approval_offers_rules(p.invocation));
+    REQUIRE(f.s->allow_always(p.invocation, RuleScope::session).ok());
+    f.s->registry().cancel_pending();
+    // lr runs without a card now; this session has no run control, so the
+    // command answers command.not_available. Another parameter still asks.
+    CHECK(send(*f.s, "run.set_param", lr, CommandOrigin::mcp, "").error.code == "command.not_available");
+    CHECK(send(*f.s, "run.set_param", {{"name", "momentum"}, {"value", 0.9}}, CommandOrigin::mcp, "").error.code ==
+          "command.needs_approval");
+    f.s->registry().cancel_pending();
+
+    r = send(*f.s, "run.action", {{"name", "save"}}, CommandOrigin::mcp, "");
+    REQUIRE(r.error.code == "command.needs_approval");
+    p = f.s->registry().pending_approvals().at(0);
+    REQUIRE(f.s->allow_always(p.invocation, RuleScope::saved).ok());
+    f.s->registry().cancel_pending();
+    CHECK(f.s->saved_agent_rules() == std::vector<AgentRule>{{"mcp", "run.action:save"}});
+    f.reopen();
+    CHECK(send(*f.s, "run.action", {{"name", "save"}}, CommandOrigin::mcp, "").error.code == "command.not_available");
+    CHECK(send(*f.s, "run.action", {{"name", "other"}}, CommandOrigin::mcp, "").error.code ==
+          "command.needs_approval");
+    f.s->registry().cancel_pending();
+}
+
 TEST_CASE("no rule or mode makes a viewer write or covers what binds to content or runs Python") {
     Fixture f("modes-ceilings");
     REQUIRE(f.s->set_agent_mode(AgentPrincipal::chat, AgentMode::allow_all).ok());

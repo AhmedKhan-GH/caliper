@@ -6,7 +6,7 @@
 // 1, the time of its push, a kind and the kind's own fields. The kinds:
 //   pick      a click on an item of a scene, in a scene panel or a live view
 //   select    a selection made or cleared in the same places
-//   control   a control of the spec changed its value
+//   control   the person finished an edit of a control of the spec
 //   run       the attached script changed: its state, a parameter it applied,
 //             the end of an action, its attachment
 //   spec      a command changed the open spec (from the journal)
@@ -106,6 +106,9 @@ public:
     bool wait(std::uint64_t cursor, const EventFilter& filter, std::chrono::steady_clock::time_point deadline) const;
     // The seq of the newest event; 0 before the first.
     std::uint64_t latest() const;
+    // The callers that wait() holds now, such as a long poll of events.wait;
+    // with a kind, only those whose filter takes that kind.
+    std::size_t waiting(std::optional<EventKind> kind = std::nullopt) const;
     // Wakes every waiter; later pushes are dropped.
     void close();
 
@@ -124,9 +127,27 @@ CommandOutput events_wait_command(const CommandContext& context, EventRing& ring
 // through it.
 CommandResult wait_for_events(CommandQueue& queue, EventRing& ring, CommandInvocation invocation);
 
+// Holds EventRing::close(), and thus Session::close(), until it goes, as a
+// caller inside wait_for_events() does. A caller that hands events.wait to a
+// thread of its own takes one before the thread starts and lets it go after
+// wait_for_events() returns, so that the session cannot close between the
+// two. Take it only while the ring is open.
+class EventWaitHold {
+public:
+    explicit EventWaitHold(const EventRing& ring);
+    ~EventWaitHold();
+    EventWaitHold(const EventWaitHold&) = delete;
+    EventWaitHold& operator=(const EventWaitHold&) = delete;
+
+private:
+    const EventRing* ring_;
+};
+
 // The feed from the journal: a do, undo or redo of a command that edits the
 // open spec becomes a spec event, and a decided approval an approval event.
-// The session calls it from the journal's on_append, on the appending thread.
-void note_journal_event(EventSink& sink, const JournalEvent& event);
+// The session calls it from the journal's on_append, on the appending thread,
+// with the applet id of the spec open after the command ("" for none), which a
+// spec event carries as `applet`.
+void note_journal_event(EventSink& sink, const JournalEvent& event, const std::string& applet = {});
 
 }  // namespace caliper_builder
