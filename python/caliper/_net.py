@@ -4,7 +4,7 @@
 training process, on its own thread with its own asyncio loop. Viewers (the
 browser page this server also serves, the notebook widget, the native app)
 connect to ``ws://127.0.0.1:<port>/v3/stream?token=<token>`` and speak the
-protocol of include/caliper/live_net.h and docs/references/wire-protocol.md,
+protocol of include/caliper/live_net.h and docs/reference/wire-protocol.md,
 through the codec caliper/_wire.py.
 
 The pieces, from the training loop outwards:
@@ -124,7 +124,7 @@ def redact(text: str, token: str | None = None) -> str:
 
 
 def origin_ok(origin: str | None) -> bool:
-    """The protocol's Origin rule (docs/references/wire-protocol.md)."""
+    """The protocol's Origin rule (docs/reference/wire-protocol.md)."""
     if origin is None:
         return True
     return (origin == "null" or bool(_ORIGIN_LOOPBACK.match(origin))

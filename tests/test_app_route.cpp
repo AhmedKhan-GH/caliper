@@ -1,5 +1,5 @@
 // The whole route of an outside agent against the real app (the hidden-app
-// pattern of docs/explanations/testing.md): `caliper --hidden --api
+// pattern of docs/development/testing.md): `caliper --hidden --api
 // --api-port 0 --workspace <dir>` runs as a child with an app-data folder of
 // its own, and the test drives it through Caliper API's command endpoints
 // alone, as a program or an agent does. It imports a Parquet file and a

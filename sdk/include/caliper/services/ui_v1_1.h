@@ -1,6 +1,6 @@
 #pragma once
-/* caliper.ui.v1_1 — additive revision of caliper.ui.v1 (docs/references/
- * service-ui-v1-1.md). The table opens with a byte-identical copy of
+/* caliper.ui.v1_1 — additive revision of caliper.ui.v1 (docs/applets/services/
+ * caliper-ui-v1-1.md). The table opens with a byte-identical copy of
  * CaliperUiV1 and appends one entry, dock_hint(), which tells the host where a
  * window belongs in its docked layout. The host keeps serving caliper.ui.v1
  * unchanged; an applet that wants hints probes this id at run time and goes on

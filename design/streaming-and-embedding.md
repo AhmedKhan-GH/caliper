@@ -36,7 +36,7 @@ No computation runs in the browser. libtorch does not run there, and the plan ad
 
 ## Limits in the browser
 
-The limits of the browser views as they are, such as the bounded heap, the second copy into the GPU process and the browsers that are untested, are listed under Known limits in `docs/explanations/network-streaming.md`. Every later step works within them, and three more bound the work ahead:
+The limits of the browser views as they are, such as the bounded heap, the second copy into the GPU process and the browsers that are untested, are listed under Known limits in `docs/python/network-streaming.md`. Every later step works within them, and three more bound the work ahead:
 
 - **The WebGPU binding moves with Emscripten.** The core of `webgpu.h` is stable, but Emscripten's `emdawnwebgpu` port and its Emscripten-specific parts change, and each Emscripten release pins its own Dawn package, so an Emscripten update can need changes in the renderer.
 - **Headless tests depend on flags.** Headless Chromium presents a WebGPU canvas on SwiftShader only with `--use-angle=swiftshader`, and a Chromium update can change which flags work.
@@ -55,7 +55,7 @@ Every applet splits into a computation and an interface. This is a design decisi
 
 The spec applets of Phase 3 ([Applet builder](applet-builder.md)) are designed to run in the browser unchanged, and they satisfy the split by construction. Their primitives are the live view types, and they bind only to sources that have a wire form.
 
-Built, as a first slice: a saved spec applet opens in a browser tab from the running app, at the link the app prints with `--api`. The page is an entry of the web package, `web/src/spec/`, served by Caliper API at `/v0/spec` from a copy built into the executable. It lays the panels out with a port of the native runtime's layout rectangles and draws them in the app's look on a canvas, from the data that the read-only command `panel.data` sends: the app resolves each panel, transforms and queries included, and bounds it as the native runtime does, so the browser computes nothing but the drawing. The page polls once a second with the version it has, and the app answers "unchanged" until a panel's sources, the spec or the catalog change. Its link carries a viewer token that opens only the page and its three read-only commands, from the viewer origin, which the command layer lets run reads only. [Spec format](spec-format.md#what-is-built-of-the-browser-viewer) records the decisions and limits, and the Caliper API reference (`docs/references/api.md`) the endpoint.
+Built, as a first slice: a saved spec applet opens in a browser tab from the running app, at the link the app prints with `--api`. The page is an entry of the web package, `web/src/spec/`, served by Caliper API at `/v0/spec` from a copy built into the executable. It lays the panels out with a port of the native runtime's layout rectangles and draws them in the app's look on a canvas, from the data that the read-only command `panel.data` sends: the app resolves each panel, transforms and queries included, and bounds it as the native runtime does, so the browser computes nothing but the drawing. The page polls once a second with the version it has, and the app answers "unchanged" until a panel's sources, the spec or the catalog change. Its link carries a viewer token that opens only the page and its three read-only commands, from the viewer origin, which the command layer lets run reads only. [Spec format](spec-format.md#what-is-built-of-the-browser-viewer) records the decisions and limits, and the Caliper API reference (`docs/agents/http-api.md`) the endpoint.
 
 What remains: the same page fed by a hub or by `caliper.serve()`, live sources over the stream rather than polls, and the three tensor transforms in the page for producers that send raw snapshots.
 
@@ -65,11 +65,11 @@ Metal and Vulkan stay the fast paths. The WebGPU renderer that draws the browser
 
 ## The embedding package
 
-The minimal embedding package is built (see `docs/references/embedding.md`). The rest comes when C++ embedding comes up in the order of surfaces: several views in one app, rendering a frame to an image file, HiDPI work and a Qt widget.
+The minimal embedding package is built (see `docs/web/embedding-api.md`). The rest comes when C++ embedding comes up in the order of surfaces: several views in one app, rendering a frame to an image file, HiDPI work and a Qt widget.
 
 ## Security
 
-Network streaming stays on the local machine, on the loopback interface and with the session token (see `docs/explanations/network-streaming.md`), until a dedicated security review, which comes before any session leaves the machine. The confidentiality of streamed data then rests on the transport and on the security of whoever hosts it: the session token, encryption and that review. The streaming socket never carries the command layer.
+Network streaming stays on the local machine, on the loopback interface and with the session token (see `docs/python/network-streaming.md`), until a dedicated security review, which comes before any session leaves the machine. The confidentiality of streamed data then rests on the transport and on the security of whoever hosts it: the session token, encryption and that review. The streaming socket never carries the command layer.
 
 ## Platforms
 

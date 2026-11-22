@@ -4,7 +4,7 @@ The network route asks one *engine* three things about a view, and nothing
 else about data views:
 
 * ``offer(call)``: what the view offers, ``{"sources": [...], "default": {...}}``,
-  the members of its entry in a VIEWS message (docs/references/wire-protocol.md,
+  the members of its entry in a VIEWS message (docs/reference/wire-protocol.md,
   "What a view offers"). Called on the training thread whenever
   ``signature(call)`` changes, and at most once a second otherwise.
 * ``resolve(view, request)``: the resolved data view for a SUBSCRIBE or

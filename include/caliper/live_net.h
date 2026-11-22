@@ -2,7 +2,7 @@
  * caliper/live_net.h: wire protocol v3, live data streaming over a WebSocket.
  *
  * This header defines the constants and the frame header of protocol v3. The
- * reference page docs/references/wire-protocol.md specifies every message and
+ * reference page docs/reference/wire-protocol.md specifies every message and
  * embeds this file verbatim; tests/fixtures/wire_v3 holds the golden frames
  * that every implementation (python/caliper/_wire.py, the native NetSource,
  * the hub, the TypeScript viewer) decodes in its tests. Plain C99 and C++, no

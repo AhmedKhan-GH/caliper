@@ -22,7 +22,7 @@
 // selection carries its item space and items, and the producer's SELECTION is
 // drawn in the view whose axis carries the space (event caliper-selection);
 // with details, the selection's item details show under the view it was made
-// in. docs/references/browser-elements.md has the whole interface.
+// in. docs/web/browser-elements.md has the whole interface.
 
 import { acquire, release } from './client/socket.js';
 import type { StreamClient, StreamListener } from './client/stream.js';

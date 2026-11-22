@@ -1,7 +1,7 @@
 #pragma once
 // ============================================================================
 // command_gateway.h: how Caliper API reaches the command layer
-// (docs/references/api.md, "The command layer"). The server (api_server.h)
+// (docs/agents/http-api.md, "The command layer"). The server (api_server.h)
 // serves GET /v0/commands, POST /v0/commands/{name} and GET /v0/approvals/{id}
 // only while a CommandGateway is set on it; without one they answer 404, which
 // tells caliper-mcp that the app has no command layer.

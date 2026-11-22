@@ -107,7 +107,7 @@ TEST_CASE("applet id validation") {
     CHECK(is_valid_applet_id(std::string(128, 'a')));
 }
 
-// The versioning keys (docs/explanations/compatibility.md): [compat].torch,
+// The versioning keys (docs/development/compatibility-and-epochs.md): [compat].torch,
 // [build].sdk, [build].ui_stack and [data].schema, all optional.
 static const char* kMinimal =
     "[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=2\n";
@@ -167,7 +167,7 @@ TEST_CASE("manifest: [build].sdk is a record, never an error") {
 }
 
 // ---- spec applets (kind = "spec") --------------------------------------------
-// docs/references/manifest.md, "Spec applets": a manifest and a spec, no
+// docs/applets/manifest.md, "Spec applets": a manifest and a spec, no
 // library; the manifest needs no [compat] and refuses what only a library can
 // honour.
 static const char* kSpecManifest =

@@ -1,7 +1,7 @@
 #pragma once
 // ============================================================================
 // Docking by role on the applet page (caliper.ui.v1_1 dock_hint, see
-// docs/references/service-ui-v1-1.md). The host never names an applet window:
+// docs/applets/services/caliper-ui-v1-1.md). The host never names an applet window:
 // an applet declares the role of each window beside its Begin(), and this
 // unit places each window, once, the first time it appears, in the node for
 // its role:

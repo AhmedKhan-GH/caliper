@@ -1,5 +1,5 @@
 // ============================================================================
-// MLScope — the ML exemplar (docs/tutorials/first-ml-applet.md). Shows the idioms of ML on the platform:
+// MLScope — the ML exemplar (docs/applets/first-ml-applet.md). Shows the idioms of ML on the platform:
 //   ML-EXEMPLAR 1 — never train on the frame thread: submit to caliper.jobs.v1
 //     and poll cancelled() in the batch loop (cooperative cancel).
 //   ML-EXEMPLAR 2 — the host picks the device (caliper.device.v1); the applet

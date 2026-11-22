@@ -4,7 +4,7 @@
 
 namespace caliper_host {
 
-// Best-effort containment, not a sandbox (docs/explanations/trust-model.md): after a fault the
+// Best-effort containment, not a sandbox (docs/applets/trust-model.md): after a fault the
 // process memory is suspect; callers must quarantine the applet, not retry it.
 // Contained: SIGSEGV/SIGBUS/SIGFPE/SIGILL (SEH on Windows), including a stack
 // overflow (the handler runs on a per-thread alternate stack), and any C++

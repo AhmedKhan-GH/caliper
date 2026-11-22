@@ -1,6 +1,6 @@
 #pragma once
 // The API file of Caliper API: where caliper-mcp learns the port and the
-// session token of the running app (docs/references/api.md, "Starting it").
+// session token of the running app (docs/agents/http-api.md, "Starting it").
 //
 // The app writes `api.json` in its app-data folder while it serves the API and
 // removes it when it exits. default_api_file_path() finds that file as the app

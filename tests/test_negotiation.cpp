@@ -55,7 +55,7 @@ TEST_CASE("semver_cmp is numeric, not lexical") {
     CHECK(semver_cmp("0.6.1",  "0.6.0")  >  0);
 }
 
-// The versioning checks (docs/explanations/compatibility.md) and their order:
+// The versioning checks (docs/development/compatibility-and-epochs.md) and their order:
 // epoch, min_host, UI stack, libtorch, services, data schema.
 static HostCaps torch_host() {
     HostCaps c = host();

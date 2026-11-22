@@ -11,9 +11,9 @@ cmake --build --preset release
 ctest --test-dir cmake-build-release --output-on-failure
 ```
 
-The GPU suites skip when the machine has no usable device, and ctest reports them as skipped. Set `CALIPER_REQUIRE_GPU=1` to turn those skips into failures. [Testing](docs/explanations/testing.md) describes the test layers, and [Verify on Windows hardware](docs/guides/verify-on-windows.md) describes the checks for the Vulkan and CUDA paths.
+The GPU suites skip when the machine has no usable device, and ctest reports them as skipped. Set `CALIPER_REQUIRE_GPU=1` to turn those skips into failures. [Testing](docs/development/testing.md) describes the test layers, and [Verify on Windows hardware](docs/development/windows-verification.md) describes the checks for the Vulkan and CUDA paths.
 
-Every pull request is built and tested on macOS and Windows. [Continuous integration](docs/guides/ci.md) describes what runs, what is cached, and how to handle a failed run.
+Every pull request is built and tested on macOS and Windows. [Continuous integration](docs/development/ci.md) describes what runs, what is cached, and how to handle a failed run.
 
 To check the documentation, build it the way the Docs workflow does, from the repository root and with the same versions. The second command checks the design pages, which are built apart from the docs site and are not published.
 

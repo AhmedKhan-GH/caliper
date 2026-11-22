@@ -5,14 +5,14 @@ three live views in the notebook while it trains: the loss as a series, the
 attention weights as a heatmap with a choice of layer, sequence and head, and
 the model's 3-D embedding as points coloured by class. The link that
 `caliper.serve()` prints opens the same views in a browser tab.
-[Watch a training run in a notebook](../../docs/tutorials/watch-a-training-run-in-a-notebook.md)
+[Watch a training run in a notebook](../../docs/python/notebook-training-runs.md)
 walks through it cell by cell.
 
 ## Run it
 
 The notebook needs an Apple Silicon Mac, Python 3.12 and PyTorch with MPS. On
 a machine without MPS it trains on the CPU, more slowly. Build the wheel as
-[Watch a PyTorch training run live](../../docs/tutorials/live-pytorch.md#build-and-install-the-wheel)
+[Watch a PyTorch training run live](../../docs/introduction/python-quickstart.md#build-and-install-the-wheel)
 describes, then install it with the extra `caliper[notebook]` and a notebook
 front end, build the native sender once, and open the notebook, from the
 repository root:

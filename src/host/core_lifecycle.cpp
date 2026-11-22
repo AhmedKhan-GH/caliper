@@ -10,7 +10,7 @@
 namespace caliper_host {
 
 std::unique_ptr<HostRenderer> core_select_renderer() {
-    // Renderer seam (docs/explanations/rendering.md): backend hints run before the window
+    // Renderer seam (docs/applets/rendering.md): backend hints run before the window
     // exists; init() runs after. On Apple the default is Metal (device-resident
     // tensors, zero CPU staging). CALIPER_RENDERER=gl selects the frozen GL
     // fallback; off Apple, GL is the only backend besides Vulkan on Win32.

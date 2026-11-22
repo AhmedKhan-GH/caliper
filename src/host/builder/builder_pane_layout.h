@@ -2,7 +2,7 @@
 // ============================================================================
 // builder_pane_layout.h: the builder pane's regions and the canvas's drop
 // targets as plain rectangles, computed without ImGui so that tests check
-// them at any window size (docs/explanations/ui-principles.md, Checking a
+// them at any window size (docs/development/ui-principles.md, Checking a
 // layout; design/builder-pane.md).
 //
 // The regions of a page in build mode, inside the work area the host's

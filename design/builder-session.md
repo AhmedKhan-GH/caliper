@@ -158,7 +158,7 @@ The app holds an `AppSession` (`src/host/builder/app_session.h`), and so do `cal
 
 ### The workspace
 
-The workspace is the folder of `--workspace <dir>`, else of `CALIPER_WORKSPACE` when it is set and not empty, else `workspace/` under the app-data folder, which `CALIPER_DATA_DIR` moves with the rest (`workspace_choice()` in `src/host/host_cli.h`, `caliper::default_workspace_dir()` in `src/app_paths.h`). For `caliper shot` without `CALIPER_DATA_DIR` the default is under its temporary data folder, so a shot still writes nothing in the app-data folder. The reference pages Caliper CLI (`docs/references/cli.md`, "The workspace") and Folders and environment variables (`docs/references/environment.md`) describe them.
+The workspace is the folder of `--workspace <dir>`, else of `CALIPER_WORKSPACE` when it is set and not empty, else `workspace/` under the app-data folder, which `CALIPER_DATA_DIR` moves with the rest (`workspace_choice()` in `src/host/host_cli.h`, `caliper::default_workspace_dir()` in `src/app_paths.h`). For `caliper shot` without `CALIPER_DATA_DIR` the default is under its temporary data folder, so a shot still writes nothing in the app-data folder. The reference pages Caliper CLI (`docs/reference/cli.md`, "The workspace") and Folders and environment variables (`docs/reference/folders-and-environment.md`) describe them.
 
 ### Opening
 

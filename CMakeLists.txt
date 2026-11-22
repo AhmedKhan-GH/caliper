@@ -23,7 +23,7 @@ if(NOT N EQUAL 0)
 endif()
 
 # ============================================================================
-# Git commit stamp (caliper.export.v1 sidecar — docs/references/service-export-v1.md). Regenerated
+# Git commit stamp (caliper.export.v1 sidecar — docs/applets/services/caliper-export-v1.md). Regenerated
 # at BUILD time (cmake/git_commit_stamp.cmake writes a generated header, only
 # on change) so exported sidecars track the bytes being built, not the last
 # configure — the export-branch final review caught configure-time stamps
@@ -42,7 +42,7 @@ add_custom_target(caliper_git_stamp
 # Build Options (PyTorch-style)
 # ============================================================================
 
-# Dynamic CRT so host + applet DLLs share one heap (docs/explanations/compatibility.md). DuckDB
+# Dynamic CRT so host + applet DLLs share one heap (docs/development/compatibility-and-epochs.md). DuckDB
 # under /MD is unverified until the first Windows session — CALIPER_STATIC_CRT
 # is the escape hatch if it breaks.
 option(CALIPER_STATIC_CRT "Use static MSVC runtime (/MT) — pre-D7 behavior" OFF)

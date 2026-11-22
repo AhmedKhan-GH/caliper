@@ -22,7 +22,7 @@
   <a href="https://ahmedkhan-gh.github.io/caliper/"><b>Website</b></a> ·
   <a href="https://ahmedkhan-gh.github.io/caliper/docs/">Documentation</a> ·
   <a href="design/roadmap.md">Roadmap</a> ·
-  <a href="docs/references/applets.md">Applets</a>
+  <a href="docs/applets/in-tree-applets.md">Applets</a>
 </p>
 
 <br>
@@ -62,8 +62,8 @@ cmake --build --preset release
 
 The core build compiles no applets. Applets build against the installed SDK
 (`cmake --install cmake-build-release --prefix <prefix> --component sdk`), each in
-its own folder; [Your first applet](docs/tutorials/first-applet.md) walks through
-it, and [SDK package](docs/references/sdk-package.md) describes the package.
+its own folder; [Your first applet](docs/applets/first-applet.md) walks through
+it, and [SDK package](docs/applets/sdk-package.md) describes the package.
 
 `--preset release-notorch` builds the host without LibTorch, into
 `cmake-build-notorch/`. The presets need CMake 3.25 or later.
@@ -145,7 +145,7 @@ At run time LibTorch chooses the device. The same archive runs on the CPU when n
 
 ## Python package
 
-Caliper LIB, the `python/caliper` package, opens a live Caliper session from a training script, so that `caliper.show` and the other view calls draw into the viewer. See [`docs/references/python-api.md`](docs/references/python-api.md). It is built with `CALIPER_BUILD_PYTHON=ON` or as a wheel through `pyproject.toml`.
+Caliper LIB, the `python/caliper` package, opens a live Caliper session from a training script, so that `caliper.show` and the other view calls draw into the viewer. See [`docs/python/caliper-lib-api.md`](docs/python/caliper-lib-api.md). It is built with `CALIPER_BUILD_PYTHON=ON` or as a wheel through `pyproject.toml`.
 
 ## Project structure
 

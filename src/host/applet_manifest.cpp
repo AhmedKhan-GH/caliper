@@ -65,7 +65,7 @@ std::vector<std::string> read_array(const toml::table& t, const char* key) {
     return out;
 }
 // The rest of a spec applet's manifest, after [applet]'s id, name, version,
-// summary and tag (docs/references/manifest.md, "Spec applets"): applet.spec
+// summary and tag (docs/applets/manifest.md, "Spec applets"): applet.spec
 // is required and is a plain file name; [compat].min_host keeps its meaning;
 // the keys that only a library can honour are errors rather than ignored, so
 // that a manifest meant for a library is never taken for a spec applet.

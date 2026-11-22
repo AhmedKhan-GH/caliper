@@ -231,7 +231,7 @@ TEST_CASE("caliper-mcp drives the real app end to end") {
     CHECK(fs::exists(data / "workspace" / "journal"));
     MESSAGE(command->name << ": " << cmd["result"]["structuredContent"].dump().substr(0, 200));
 
-    const json page = request(*server, &out_log, &buf, 5, "resources/read", {{"uri", "caliper://docs/references/manifest.md"}});
+    const json page = request(*server, &out_log, &buf, 5, "resources/read", {{"uri", "caliper://docs/applets/manifest.md"}});
     CHECK(page["result"]["contents"][0]["text"].get<std::string>().rfind("# Manifest", 0) == 0);
 
     // caliper-mcp stops when its input ends, and never showed the token.

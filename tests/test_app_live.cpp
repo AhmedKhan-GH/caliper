@@ -1,5 +1,5 @@
 // The acceptance case "plot attention entropy per layer while it trains" in
-// the hidden app (the hidden-app pattern of docs/explanations/testing.md).
+// the hidden app (the hidden-app pattern of docs/development/testing.md).
 // caliper_attention_producer (tests/live_attention_producer.cpp) stands in for
 // a training script: a hub of its own and a producer that streams a model's
 // attention as it sharpens. The app attaches to it with --url, and the test,

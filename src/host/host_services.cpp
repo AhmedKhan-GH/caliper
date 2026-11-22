@@ -105,7 +105,7 @@ void ui_allocators(CaliperImGuiAllocFn* out_alloc, CaliperImGuiFreeFn* out_free,
 const CaliperUiV1 kUi = {sizeof(CaliperUiV1), &ui_imgui, &ui_implot,
                          &ui_implot3d, &ui_allocators};
 
-// --- caliper.ui.v1_1: v1 plus dock_hint (docs/references/service-ui-v1-1.md) ---
+// --- caliper.ui.v1_1: v1 plus dock_hint (docs/applets/services/caliper-ui-v1-1.md) ---
 // The hint goes to the page that owns the docked layout (the caliper exe's
 // applet page installs the sink). Without a sink, as in the embed core, a
 // hint changes nothing. Read and written on the UI thread only.
@@ -444,7 +444,7 @@ const CaliperGeometryV1_3 kGeom13 = {sizeof(CaliperGeometryV1_3),
     &geo_caps, &geo_create_view, &geo_release_view, &geo_draw_points,
     &geo_create_view_ex, &geo_draw_primitives_v13, nullptr};
 
-// --- caliper.export.v1: the terminal sink (docs/references/service-export-v1.md) ---------
+// --- caliper.export.v1: the terminal sink (docs/applets/services/caliper-export-v1.md) ---------
 // A veneer by composition: temp geom_create_view_ex(DEPTH) → the EXISTING
 // draw_primitives host path (every gate, every byte-exact behavior reused) →
 // debug_readback_rgba8 (renderer-side) → stb PNG + JSON sidecar → destroy the
@@ -580,7 +580,7 @@ uint32_t ex_view_png(const char* path, uint32_t w, uint32_t h,
     // The pixels are in hand; a refusal above left the disk exactly as it was.
     // Refusal purity extends to the filesystem: 0 must mean the disk is
     // exactly as it was, and a PNG without its sidecar is a screenshot, not a
-    // figure (docs/references/service-export-v1.md). The pair commit stages both files and
+    // figure (docs/applets/services/caliper-export-v1.md). The pair commit stages both files and
     // sets a previous PNG aside rather than deleting it — the E1-review fix
     // "rolled back" with fs::remove(path), which destroyed the previous good
     // export when the new one's sidecar failed.

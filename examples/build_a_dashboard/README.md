@@ -53,7 +53,7 @@ outside agents use.
 
 The training script needs a Python with PyTorch, which uses the GPU through MPS, and Caliper LIB, the `caliper`
 package. Build and install the package's wheel into that Python as
-[Watch a PyTorch training run live](../../docs/tutorials/live-pytorch.md#build-and-install-the-wheel) describes. From
+[Watch a PyTorch training run live](../../docs/introduction/python-quickstart.md#build-and-install-the-wheel) describes. From
 a checkout, `PYTHONPATH=python` instead of the wheel is enough for this script, since it only streams with
 `caliper.serve()`.
 
@@ -179,7 +179,7 @@ dashboard, open another one or close the window while a dashboard has unsaved ch
 
 Open the widget agent's settings with ⌘, (or **⌘, Agent** on the landing screen). Choose the **Ollama** preset, choose
 **List** and then `qwen3.8:27b` under **Model**, and choose **Probe**: Tool calling and Vision say Yes, and Context
-length says 16,384 tokens, from the preset. [Set up the widget agent](../../docs/guides/set-up-the-widget-agent.md)
+length says 16,384 tokens, from the preset. [Set up the widget agent](../../docs/agents/widget-agent-setup.md)
 explains each setting. A change of these settings applies at once.
 
 Press ⌘B to leave build mode. Click the series panel to focus it; its frame turns bronze. Press ⌘K: a one-line prompt
@@ -229,7 +229,7 @@ call that fails, such as asking for the open spec before there is one, and then 
 An agent outside the app works on the same workspace through `caliper-mcp`, an MCP server on standard input and
 output that reads the app's API file, whose token runs commands that you review. With the app running with Caliper
 API and the dashboard of step 2 open, add `caliper-mcp` to your agent's MCP configuration
-([MCP server](../../docs/references/mcp-server.md) gives the entries), or try it with the example client, which needs
+([MCP server](../../docs/agents/mcp-server.md) gives the entries), or try it with the example client, which needs
 only Python:
 
 ```sh

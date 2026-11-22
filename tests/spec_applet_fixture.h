@@ -1,7 +1,7 @@
 #pragma once
 // Spec applets on disk for the loader and command-line tests: a folder with a
 // manifest of kind "spec" and its spec file, and no library
-// (docs/references/manifest.md, "Spec applets").
+// (docs/applets/manifest.md, "Spec applets").
 #include <filesystem>
 #include <fstream>
 #include <string>

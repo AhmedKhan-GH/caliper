@@ -1,6 +1,6 @@
 #pragma once
 // caliper_host::ArtifactStore — the content-addressed blob store behind
-// caliper.artifacts.v1 (docs/references/service-artifacts-v1.md): checkpoints keyed by sha256,
+// caliper.artifacts.v1 (docs/applets/services/caliper-artifacts-v1.md): checkpoints keyed by sha256,
 // deduplicated on disk, lineage-linked to the metrics run that produced them.
 //
 // Layout: blobs live as files at <root>/artifacts/<64-hex-digest>; the index

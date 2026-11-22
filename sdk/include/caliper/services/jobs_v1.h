@@ -1,6 +1,6 @@
 #pragma once
-/* caliper.jobs.v1 — background compute with progress + cancel (docs/references/
- * service-jobs-v1.md). IMMUTABLE once published: new capability = jobs_v2, alongside.
+/* caliper.jobs.v1 — background compute with progress + cancel (docs/applets/services/
+ * caliper-jobs-v1.md). IMMUTABLE once published: new capability = jobs_v2, alongside.
  *
  * THREADING HONESTY (§15): job functions run on HOST WORKER THREADS as
  * trusted code. The Caliper host runs them under its crash guard — the same

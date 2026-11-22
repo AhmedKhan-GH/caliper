@@ -23,7 +23,7 @@ Built on this branch, in `src/builder/mcp/` with headers in `src/builder/include
 - the command layer's endpoints in the app's Caliper API, so every tool acts on the running app: the walk-through's
   example client, `examples/build_a_dashboard/outside_agent.py`, lists the tools, reads the catalog and the open spec
   and adds a panel, which waits on an approval card ("MCP agent") until the person approves it. The reference page is
-  `docs/references/mcp-server.md`.
+  `docs/agents/mcp-server.md`.
 
 Planned:
 
@@ -77,7 +77,7 @@ folder, and `CALIPER_DATA_DIR` (or `--api-file`) when it does not. It never need
 configuration: it reads a token from the API file at run time. The token in `api.json` is not the person's session
 token: it runs commands as the origin `mcp`, so every spec edit an outside agent makes through `caliper-mcp` waits for
 the person's review in the app, and every destructive command for their approval
-(Caliper API, `docs/references/api.md`, under Who sends a command).
+(Caliper API, `docs/agents/http-api.md`, under Who sends a command).
 
 The configuration below follows the public documentation of each agent as it was on 15 November 2026. Neither agent
 was run for this page.
@@ -103,7 +103,7 @@ An entry without a `type` is a stdio server. The same server can be added from a
 the default scope, `local`, keeps it in the user's own configuration instead. Claude Code's default time limit for a
 tool call is far longer than 130 seconds, so no setting is needed for approvals; a `timeout` field in milliseconds on
 the entry sets one for this server only. A resource is referred to in a prompt as
-`@caliper:caliper://docs/references/cli.md`.
+`@caliper:caliper://docs/reference/cli.md`.
 
 Claude Code asks a stdio server for revision 2026-07-28 first and falls back to the `initialize` handshake when the
 server does not support it; `caliper-mcp` supports both.
@@ -397,7 +397,7 @@ The app writes `api.json` in its app-data folder while it serves the API, with m
 exits. Its `token` is the token of outside agents, with the origin `mcp`; the person's own token, which runs commands
 unreviewed, is printed on the app's start line and is in no file. `caliper-mcp` finds it as the app does: `--api-file` when given, otherwise `$CALIPER_DATA_DIR/api.json` when
 the variable is set and not empty, otherwise `api.json` in the app-data folder of the OS
-(Folders and environment variables (`docs/references/environment.md`)). It reads the file strictly: at most 64 KiB,
+(Folders and environment variables (`docs/reference/folders-and-environment.md`)). It reads the file strictly: at most 64 KiB,
 `version` 1, `port` 1 to 65535, `url` exactly `http://127.0.0.1:<port>/v0`, and `token` 16 to 256 characters of
 `A-Z a-z 0-9 _ -`, so that it cannot carry anything into a header. Unknown keys are ignored. A file that does not
 parse is read once more after 100 ms, in case the app was writing it. `pid` and `stream_url` are optional: the

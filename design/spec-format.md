@@ -401,7 +401,7 @@ The web viewer reads the canonical JSON and draws a spec with the same primitive
 
 ### What is built of the browser viewer
 
-The first slice opens a saved spec applet in a browser tab from the running app. Caliper API (`docs/references/api.md`, GET /v0/spec) and Caliper CLI (`docs/references/cli.md`, The spec page) are its reference.
+The first slice opens a saved spec applet in a browser tab from the running app. Caliper API (`docs/agents/http-api.md`, GET /v0/spec) and Caliper CLI (`docs/reference/cli.md`, The spec page) are its reference.
 
 - **The app resolves, the browser draws.** The page computes no transform: it asks the app for each panel's data through the read-only command `panel.data`, which resolves the panel as the native runtime does (`Session::resolve()` over the store and the served sources, transforms included, so a `sql` source runs where the data lives, the first route above) and sends it compact and bounded with the native runtime's own bounds (`src/builder/include/caliper_builder/session/panel_data.h`): a line of more than 8,192 points as the min/max envelope of 2,048 buckets, a grid or image sampled at a stride to at most 2,048 on a side, at most 100,000 points, a histogram's bin counts with the runtime's range and bin rule rather than its values, at most 1,000 rows of a table with a text cell cut at 256 characters, and a text panel's one value. One implementation of the transforms and of the bounds is kept, and a browser never receives more than a panel shows.
 - **The encoding.** JSON for tables, cells and counts; arrays of numbers as `{"dtype": "f32" | "f64", "shape", "base64"}`, the little-endian bytes in base64 (f64 for a series' points, f32 for grids, images and clouds, as the runtime keeps them). A binary body would be smaller, but every command answers one JSON envelope; the bounds keep a heatmap's answer under 23 MB, and the largest answer is a full RGBA image of 2,048 by 2,048, about 89 MB, for which bytes rather than f32 values are the next step.
@@ -435,7 +435,7 @@ Recorded limits of this slice: the runtime resolves on the frame thread, so a sl
 
 ## The manifest of a spec applet
 
-A saved spec applet is a folder in the workspace, `applets/<id>/`, with two files: the manifest `<id>.caliper.toml` and the spec `<id>.spec.toml`. It has no library. The manifest follows Manifest (`docs/references/manifest.md`) with these differences:
+A saved spec applet is a folder in the workspace, `applets/<id>/`, with two files: the manifest `<id>.caliper.toml` and the spec `<id>.spec.toml`. It has no library. The manifest follows Manifest (`docs/applets/manifest.md`) with these differences:
 
 ```toml
 [applet]
@@ -459,7 +459,7 @@ spec = "attention-entropy.spec.toml"
 
 ### The spec applet in the loader
 
-Built in `src/host/applet_manifest.*`, `src/host/applet_loader.*` and `src/host/applet_spec.*`, with Manifest, Refusal messages and Caliper CLI (`docs/references/manifest.md`, `docs/references/refusals.md`, `docs/references/cli.md`) as the reference:
+Built in `src/host/applet_manifest.*`, `src/host/applet_loader.*` and `src/host/applet_spec.*`, with Manifest, Refusal messages and Caliper CLI (`docs/applets/manifest.md`, `docs/reference/refusal-messages.md`, `docs/reference/cli.md`) as the reference:
 
 - The manifest parser reads `kind` and builds without the builder. The loader lists a spec applet with the statuses of a compiled one and chooses one copy per manifest id by the same rule, whatever the kind. It never maps or calls anything for it, and gives it no data folder.
 - A spec applet is found in the folders of the search order, as a manifest directly in a searched folder or one folder down (`<folder>/<name>/<stem>.caliper.toml`, as a workspace keeps them), and in the open workspace's `applets/` folder, which the loader is told with `AppletLoader::set_workspace` and which `applet_search_dirs` places after the development folders and before the user applets folder. The workspace's folder holds spec applets only: a compiled applet's manifest there is refused and its library never opened.

@@ -1,7 +1,7 @@
 """Wire protocol v3: frames and messages, encoded and decoded in pure Python.
 
 The protocol is defined by ``include/caliper/live_net.h`` and
-``docs/references/wire-protocol.md``; this module follows them and mirrors
+``docs/reference/wire-protocol.md``; this module follows them and mirrors
 their constants (``python/tests/test_wire.py`` checks that the three agree).
 It has no sockets and imports no torch: :func:`encode` turns a message object
 into the bytes of one WebSocket message, :func:`decode` turns those bytes back

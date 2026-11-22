@@ -135,7 +135,7 @@ public:
         }
         if (hidden_) caliper_host::use_background_activation_policy();
 
-        // Renderer seam (docs/explanations/rendering.md): backend selection (env
+        // Renderer seam (docs/applets/rendering.md): backend selection (env
         // CALIPER_RENDERER + platform default, GL fallback) now lives in
         // libcaliper's core_lifecycle so every embedder gets the same policy.
         // The host still owns the window and drives init()/the fallback below.

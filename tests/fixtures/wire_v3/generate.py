@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the golden frames of wire protocol v3 (docs/references/wire-protocol.md).
+"""Generate the golden frames of wire protocol v3 (docs/reference/wire-protocol.md).
 
 Every implementation of the protocol decodes these files in its tests: the
 Python codec (python/tests/test_wire.py also checks that this script reproduces
