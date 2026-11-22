@@ -522,6 +522,14 @@ Verdict check_provenance(const spec::Provenance& provenance, std::string_view ta
 
 // ---- 3. source
 
+GraphicsProgram graphics_program(const spec::Program& program) {
+    GraphicsProgram g;
+    g.id = program.id;
+    for (const auto& entry : program.params) g.params.push_back(entry.first);
+    g.graphics = program.graphics;
+    return g;
+}
+
 Verdict check_source(std::string_view wgsl, std::size_t max_bytes) {
     if (wgsl.size() > max_bytes)
         return fail(kProgramTooLarge,
