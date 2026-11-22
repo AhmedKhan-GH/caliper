@@ -213,4 +213,4 @@ Release still waits for the queue to go idle.
 **The handoff itself.** Eliding the adapter's drain through stream ordering changed training steps per second by about
 zero on this hardware, within laptop thermal variance of 15 to 20 percent, because the training loop's own per-step
 `loss.item()` already synchronizes. The verified gain is that the frame thread stops stalling, and that ordering is
-correct, as [Zero-copy tensor visualization](../python/zero-copy-tensors.md#what-the-stream-ordered-rung-buys) explains.
+correct, as [Zero-copy tensor visualization](../python/zero-copy-tensors.md#stream-ordered-rung-benefits) explains.

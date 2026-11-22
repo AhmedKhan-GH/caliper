@@ -12,7 +12,7 @@ walks through it cell by cell.
 
 The notebook needs an Apple Silicon Mac, Python 3.12 and PyTorch with MPS. On
 a machine without MPS it trains on the CPU, more slowly. Build the wheel as
-[Watch a PyTorch training run live](../../docs/introduction/python-quickstart.md#build-and-install-the-wheel)
+[Watch a PyTorch training run live](../../docs/introduction/python-quickstart.md#wheel-installation)
 describes, then install it with the extra `caliper[notebook]` and a notebook
 front end, build the native sender once, and open the notebook, from the
 repository root:

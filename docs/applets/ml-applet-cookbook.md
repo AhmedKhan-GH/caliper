@@ -52,7 +52,7 @@ void on_frame(State* st) {
   *operations* stay on the worker; the frame thread may hold and pass tensor
   handles but never launches kernels.
 - The frame thread does no I/O at all: no file, network, SQL or store call
-  ([The frame loop](../introduction/architecture.md#the-frame-loop)). `data.v1` work runs on
+  ([The frame loop](../introduction/architecture.md#frame-loop)). `data.v1` work runs on
   a thread the applet owns (§10).
 - Generation counters make every downstream stage cheap: nothing re-uploads,
   re-splits, or re-queries unless its `gen` moved.
@@ -296,7 +296,7 @@ if (p) { st->load_path = p;
 A live table is rebuilt from the latest snapshot several times a second. That is
 I/O-class work, so it follows two rules: the table is a **`TEMP` table**, and the
 rebuild runs on a **worker thread the applet owns**, never on the frame thread
-([The frame loop](../introduction/architecture.md#the-frame-loop)). EmbedScope first rebuilt
+([The frame loop](../introduction/architecture.md#frame-loop)). EmbedScope first rebuilt
 an ordinary table on the frame thread; each rebuild appended to the store's
 write-ahead log, grew from 80 ms to 500 ms over a session on Windows, and held the
 window at about 2 fps. A `TEMP` table lives in memory, so a rebuild does not

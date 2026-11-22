@@ -53,7 +53,7 @@ outside agents use.
 
 The training script needs a Python with PyTorch, which uses the GPU through MPS, and Caliper LIB, the `caliper`
 package. Build and install the package's wheel into that Python as
-[Watch a PyTorch training run live](../../docs/introduction/python-quickstart.md#build-and-install-the-wheel) describes. From
+[Watch a PyTorch training run live](../../docs/introduction/python-quickstart.md#wheel-installation) describes. From
 a checkout, `PYTHONPATH=python` instead of the wheel is enough for this script, since it only streams with
 `caliper.serve()`.
 

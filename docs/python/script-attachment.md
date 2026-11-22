@@ -10,7 +10,7 @@ is in [Live streaming](live-streaming.md).
 
 Everything here is macOS / Metal, local, same user.
 
-## Find the session
+## Session Discovery
 
 Each session is a file `<data_root>/live/<pid>.json`, written when the session
 opens and removed when it closes. `data_root` is `$CALIPER_DATA_DIR` when set,
@@ -39,14 +39,14 @@ for s in live.list_sessions():
 Each entry also has `alive`, `protocol`, `compatible`, `start_unix_ms` and
 `path`. Listing reclaims stale sessions as a side effect (see below).
 
-## Attach from the Caliper app
+## Caliper App Attachment
 
 On the landing screen, press F4 or click `F4 Attach to process` in the Projects
 pane. Projects lists the sessions, newest first, relisted every second, with
 the script, PID, start time (clock time and how long ago), state and view
 names of each. The list also holds the streams of `caliper.serve()` on this
 machine, with the state `stream` (see
-[Attach to a stream by its link](#attach-to-a-stream-by-its-link)). The states
+[Attach to a stream by its link](#stream-link-attachment)). The states
 and which ones attach are those of the table below; a row that cannot attach
 is faint, and the `⏎ Attach` button under the table is disabled with the reason
 beside it. Select a row with ↑ / ↓ and press Enter, double-click it, or click
@@ -58,8 +58,8 @@ The session's live page opens:
 | Part | Shows |
 |---|---|
 | Bar | `esc Home`, `⌘D Detach`, the script's name, and its state: a filled, breathing diamond and `live` while it runs, `waiting for the session to start`, or an outlined diamond and `SESSION ENDED` once it has gone |
-| Run bar | For a stream only, under the bar: the script's run state, Pause or Resume, Step, its parameters and its actions (see [Control the run and share a selection](#control-the-run-and-share-a-selection)) |
-| Views | One window per view on a grid that fills the page and lays itself out again when the page narrows, each with a header of its name, a summary, its tools and a status dot (see [What you see](../introduction/python-quickstart.md#what-you-see)); a window you move, resize or dock keeps its place, and that layout is kept in `imgui.ini` |
+| Run bar | For a stream only, under the bar: the script's run state, Pause or Resume, Step, its parameters and its actions (see [Control the run and share a selection](#control-and-selection-sharing)) |
+| Views | One window per view on a grid that fills the page and lays itself out again when the page narrows, each with a header of its name, a summary, its tools and a status dot (see [What you see](../introduction/python-quickstart.md#visible-views)); a window you move, resize or dock keeps its place, and that layout is kept in `imgui.ini` |
 | Status bar | The backend and GPU, then the script's pid, the number of views, and the frame rate and step-to-screen latency over the last second |
 
 The window title reads `Caliper - <script> (pid <pid>)`, with
@@ -75,7 +75,7 @@ other pages keep it too, so that its views stay in the catalog as `live:`
 sources. The landing's command bar then shows the live diamond, the script's
 name and `F5 Live page`, which returns to the live page, as F5 does. Only
 `⌘D Detach` on the live page, attaching another session or stream, or quitting
-the app ends the attachment (see [Detach](#detach)).
+the app ends the attachment (see [Detach](#detachment)).
 
 For automation, `CALIPER_AUTOATTACH=<pid>` attaches to that process's session
 as soon as the landing lists it, and `CALIPER_HOME_AFTER=<seconds>` goes Home
@@ -85,7 +85,7 @@ that long after the page opened:
 CALIPER_AUTOATTACH=41222 CALIPER_WINDOW_SIZE=1440x900 cmake-build-release/caliper
 ```
 
-## Attach with caliper-viewer
+## `caliper-viewer` Attachment
 
 `caliper-viewer` ships in the wheel as `caliper/bin/caliper-viewer`
 (`live.viewer_executable()` prints the path; `$CALIPER_VIEWER` overrides it for
@@ -129,7 +129,7 @@ the script's terminal does not close it and it outlives the script.
 | Flag | Effect |
 |---|---|
 | `--session <token>` | Attach to this session at once |
-| `--url <link>` | Attach to a network stream by its link (see [Attach to a stream by its link](#attach-to-a-stream-by-its-link)) |
+| `--url <link>` | Attach to a network stream by its link (see [Attach to a stream by its link](#stream-link-attachment)) |
 | `--data-dir <root>` | Session-file root (default `$CALIPER_DATA_DIR`, else the app-data folder) |
 | `--exit-after <s>` | Close the window after `s` seconds |
 | `--size <w>x<h>` | Window size in points (default 1280x800) |
@@ -138,7 +138,7 @@ the script's terminal does not close it and it outlives the script.
 | `--headless` | No window, an offscreen canvas (CI, tests). Needs `--session` or `--url`, and prints one `received` line per view when it exits |
 | `--dump-dir <dir>` | With `--headless`: write each view's pixels or values to `<dir>` whenever its sequence number changes |
 
-## Attach to a stream by its link
+## Stream Link Attachment
 
 A script that streams with `caliper.serve()` sends its views over a WebSocket on
 127.0.0.1 ([wire protocol v3](../reference/wire-protocol.md)) instead of shared
@@ -214,7 +214,7 @@ the views keep their last pixels, the status says the session ended, and the
 viewer reconnects; a series continues from the values the producer retained.
 When the script ends, the views keep their last pixels.
 
-## Choose what a view shows
+## View Sources
 
 A view of a stream may offer more than it draws by default: several sources,
 such as the layers of a model, and dimensions beyond the ones its kind
@@ -232,7 +232,7 @@ on its device and only the result travels. The menus then show the data view
 the script resolved, so a choice it refused or clamped returns to what it
 shows. A shared-memory session offers no choices.
 
-## Control the run and share a selection
+## Control and Selection Sharing
 
 A script on protocol 3.1 can take controls from its viewers: it calls a
 checkpoint once per training step (`caliper.step()`), and it may register
@@ -303,11 +303,11 @@ example `[live] run paused at step 165`, `[live] param lr = 0.02`,
 `[live] save: saved at step 165` or `[live] controls off: the server does not
 let this viewer control (a hub needs --allow-control)`.
 
-## What caliper-viewer shows
+## `caliper-viewer` Display
 
 The window title reads `caliper: <script> (<pid>)` while attached, with
 ` - starting` or ` - session ended` appended when that applies. One window per
-view shows the live data (see [What you see](../introduction/python-quickstart.md#what-you-see)),
+view shows the live data (see [What you see](../introduction/python-quickstart.md#visible-views)),
 and a status window in the bottom-right corner shows:
 
 | Line | Content |
@@ -318,14 +318,14 @@ and a status window in the bottom-right corner shows:
 | Counters | Updates applied, snapshots skipped (a newer one arrived first), refused updates |
 | Latency | Step-to-screen median and p95 over the recent samples |
 | Per view | Name, kind, last sequence number, latency, `dropped@client` (snapshots the script dropped for want of a free slot), and an error if the last update was refused |
-| Controls | For a stream: the run bar and the selection's details (see [Control the run and share a selection](#control-the-run-and-share-a-selection)) |
+| Controls | For a stream: the run bar and the selection's details (see [Control the run and share a selection](#control-and-selection-sharing)) |
 | Buttons | **Detach** and **Pause** / **Resume** |
 
 Pause here freezes the display only; snapshots keep arriving and are dropped,
 so training is not slowed. To hold the training loop itself, use Pause in the
 run bar.
 
-## Detach
+## Detachment
 
 In the Caliper app, `⌘D Detach` in the live page's bar (⌘D) drops the views,
 releases the claims on the shared slots and clears the heartbeat, or closes
@@ -342,7 +342,7 @@ keeps its values in the session while nobody is attached, so after a re-attach
 the loss curve shows the values from before the detach, followed by the new
 ones; values offered while no viewer was attached are not recorded.
 
-## When the script ends
+## Script Exit
 
 A clean exit, `caliper.close()` or interpreter shutdown closes the session:
 the session file is removed and the shared memory unlinked, without waiting for
@@ -362,7 +362,7 @@ trainer was SIGKILLed. The session file and shared memory are left behind until
 the next listing reclaims them, which on the app's landing is at most a second
 after you return to it.
 
-## When the viewer dies
+## Viewer Failure
 
 The script's `attached()` check is "a viewer heartbeat younger than 1 s". When
 the viewer exits or crashes, the heartbeat stops and within a second
@@ -370,7 +370,7 @@ the viewer exits or crashes, the heartbeat stops and within a second
 another viewer can attach once the old viewer's process is gone or its
 heartbeat is stale.
 
-## Cost to the script when nobody is attached
+## Unattached Cost
 
 With no viewer, a call returns after one atomic load and a clock read: no
 snapshot, no slot, no GPU work. Measured (torch 2.14.1,
@@ -387,7 +387,7 @@ In a training loop (MPS, 1024x1024 weight shown every step, 10 s after a 1 s
 warm-up), the unattached script ran at 100.1 % and 103.1 % of the no-Caliper
 baseline in two repeats.
 
-## One viewer per session
+## Single Viewer Rule
 
 The viewer's claims on the shared slots are single-reader words, so a session
 takes one viewer at a time. A second attach is refused with "session is being
@@ -395,7 +395,7 @@ viewed by pid `<pid>` (one viewer per session)", and the session list shows the
 row as "viewed by `<pid>`" with **Attach** disabled. Detach the first viewer, or
 let it exit, to attach from another.
 
-## Stale session cleanup
+## Stale Session Cleanup
 
 Every listing checks each session file's pid and start time. A file whose
 process is gone, or whose pid now belongs to a different process, is stale: the
@@ -406,7 +406,7 @@ Caliper app's landing (every second while it shows), the viewer's session list
 `caliper_live_list_sessions`. A killed script therefore leaks nothing past the
 next listing.
 
-## From an embed host
+## Embed Host Attachment
 
 The Caliper app's "Attach to process" drives the same live core as
 `caliper-viewer`. The app owns its window and renderer, so it attaches through

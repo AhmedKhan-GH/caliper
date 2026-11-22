@@ -154,4 +154,4 @@ Metal therefore keeps no per-texture sync objects, no back-pressure wait and no 
 is in use. The remaining CPU waits are in readbacks, the offscreen canvas, the geometry rigidity check and a rare fallback, not in the update path.
 
 The larger stall was never in the renderer. Draining the whole device at the handoff was the dominant cost, and that
-is what the stream-ordered handoff removes; [Zero-copy tensor visualization](../python/zero-copy-tensors.md#the-sync-ladder) covers it.
+is what the stream-ordered handoff removes; [Zero-copy tensor visualization](../python/zero-copy-tensors.md#sync-ladder) covers it.

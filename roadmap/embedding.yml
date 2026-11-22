@@ -35,7 +35,7 @@ features:
     status: shipped
     summary: Caliper's own view layer, compiled to WebAssembly and drawn through WebGPU, draws every live view kind in the browser behind the caliper-view element.
     depends_on: [EMB-05]
-    docs: docs/python/network-streaming.md#one-set-of-calls-three-transports
+    docs: docs/python/network-streaming.md#calls-and-transports
     design: design/streaming-and-embedding.md#the-web-viewer
     issue: null
 

@@ -25,9 +25,9 @@ that this page uses.
 attention, embedding, predictions) in JupyterLab after the loss has dropped,
 with a selection in the embedding, taken headless. Place the image here. -->
 
-## Install
+## Installation
 
-Build the wheel as [Build and install the wheel](../introduction/python-quickstart.md#build-and-install-the-wheel)
+Build the wheel as [Build and install the wheel](../introduction/python-quickstart.md#wheel-installation)
 describes. Then install it with the extra `caliper[notebook]`, which adds
 anywidget for the widgets, together with a notebook front end. From the
 repository root:
@@ -42,7 +42,7 @@ The second command builds the native sender of `caliper.serve()`,
 `caliper._netio`, in a few seconds and copies it into the installed package.
 Run it once, and again after you reinstall the wheel. Without it, the server
 uses a slower sender written in Python and says so once when it starts; the
-[cost of streaming](network-streaming.md#cost-of-streaming)
+[cost of streaming](network-streaming.md#streaming-cost)
 compares the two.
 
 The widgets draw with Caliper's own views compiled to WebAssembly. They are
@@ -63,7 +63,7 @@ The notebook reads one setting from the environment: `CALIPER_NOTEBOOK_STEPS`
 sets the number of training steps, 8000 by default. A small value, such as
 200, makes a run of a few seconds for a quick check.
 
-## Serve
+## Stream Server
 
 The first cell imports the packages and starts a server:
 
@@ -88,7 +88,7 @@ view's snapshots to each viewer that subscribes to it. `server.url`,
 shows the connected viewers and their subscriptions, and `server.close()` stops
 the server.
 
-## The model and the data
+## Model and Data
 
 Each example is a sequence of 24 random tokens. One position holds a marker
 token, and the token right after the marker decides the class, one of six. The
@@ -118,7 +118,7 @@ def forward(self, x):
 Because the embedding layer is 3-D, the point cloud is the model's own
 embedding, not a projection of it.
 
-## Controls and the evaluation set
+## Controls and Evaluation Set
 
 The next cell registers what a viewer can change or run while the model
 trains, and a fixed evaluation set that two views show:
@@ -150,7 +150,7 @@ sequence two details, its class and the position of its marker, which a viewer
 shows for the selected sequences. [Control a running script](script-control.md)
 explains each call.
 
-## The widgets
+## Widgets
 
 The widget cell creates one widget for each view and a panel of controls, and
 lays them out with ipywidgets:
@@ -179,7 +179,7 @@ Each widget reads the server's WebSocket stream directly. The snapshots do not
 pass through the notebook's own message channel, so the widgets keep updating
 while the training cell runs, and the kernel does no drawing work for them.
 
-## The training loop
+## Training Loop
 
 The loop is the body of a function, `train(steps)`, so that the notebook can
 train again later. Each step starts with `caliper.step()`, the checkpoint of
@@ -248,7 +248,7 @@ The producer applies the index first, then the reduction, then the budget,
 which pools a heatmap or samples points that would exceed the viewer's limit.
 The [Caliper LIB](caliper-lib-api.md#data-views) reference lists every field.
 
-## What you see
+## Visible Views
 
 The loss stays on a plateau above 1 for the first one to a few thousand steps
 and then falls to almost zero within a few hundred steps, once the model has
@@ -315,7 +315,7 @@ Besides a widget's traits, `server.on_event(fn)` calls `fn` with every event of
 every viewer, on a thread of its own, also while a cell runs, and
 `server.events()` returns the events received since its last call.
 
-## Pause, step and change the learning rate
+## Pause, Step and Learning Rate
 
 The controls act on the training cell while it runs. Pause, in the panel or in
 the header of any widget, stops the loop at its next `caliper.step()`: the
@@ -329,7 +329,7 @@ on the training thread, and the panel shows what it returned. While the loop
 is paused, the learning rate changes and the action runs at once, in the step
 where the loop waits.
 
-## Open the stream in a browser tab
+## Browser Tab Stream
 
 The link that `serve()` printed opens the viewer page: every view of the
 notebook in a grid, with the same pan, zoom, hover and data view picker as the
@@ -341,7 +341,7 @@ The server listens only on 127.0.0.1, so the browser that shows the tab or the
 notebook must run on the same machine as the kernel. A notebook on a remote
 Jupyter server cannot show the widgets.
 
-## Open the views in the Caliper app
+## Caliper App Views
 
 To watch the same views in the Caliper app as well, open a live session in the
 notebook before training:
@@ -353,7 +353,7 @@ caliper.session(script_name="live_training")
 Every open route receives each view call, so the app, the widgets and the tab
 update together. Start the Caliper app and attach to the notebook's kernel with
 `F4 Attach to process` on its landing screen, as
-[Attach from Caliper](../introduction/python-quickstart.md#attach-from-caliper) describes. Without
+[Attach from Caliper](../introduction/python-quickstart.md#caliper-app-attachment) describes. Without
 `script_name`, the session list shows the kernel's launcher script instead of a
 useful name.
 
@@ -362,7 +362,7 @@ useful name.
 The view calls behave the same in a notebook as in a script. A call that the
 rate limit skips returns after a clock check, and a call that takes a snapshot
 queues a few operations on the device and returns at once
-([Cost of a call](caliper-lib-api.md#cost-of-a-call)). Each view takes
+([Cost of a call](caliper-lib-api.md#call-cost)). Each view takes
 at most 60 snapshots per second by default. A widget draws the newest snapshot
 it has, so most training steps are skipped by design, while the series receives
 every value, sent as deltas.
@@ -382,7 +382,7 @@ the four views served and watched, as a percentage of the same loop without
 Caliper calls, on MPS, with the machine and torch version. Place the number
 here. -->
 
-## Close
+## Shutdown
 
 ```python
 server.close()
@@ -391,7 +391,7 @@ server.close()
 `server.close()` stops the server and ends the stream to every widget and
 browser tab.
 
-## Next
+## Next Steps
 
 - [Caliper LIB](caliper-lib-api.md#serve) documents `serve`, `widget`
   and the data view arguments, and its [Controls](caliper-lib-api.md#controls)

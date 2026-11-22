@@ -25,7 +25,7 @@ features:
     status: shipped
     summary: The OpenGL fallback draws where neither Metal nor Vulkan is available and stages tensors through the CPU, so it is the slow path and says so.
     depends_on: []
-    docs: docs/python/zero-copy-tensors.md#the-opengl-fallback
+    docs: docs/python/zero-copy-tensors.md#opengl-fallback
     issue: null
 
   - id: REN-04
@@ -65,7 +65,7 @@ features:
     status: shipped
     summary: "A PyTorch tensor on MPS or CUDA reaches the screen without a host copy: the renderer reads or imports its device memory, and a ladder of synchronization modes orders the work."
     depends_on: [REN-01, REN-02]
-    docs: docs/python/zero-copy-tensors.md#how-a-tensor-reaches-a-texture
+    docs: docs/python/zero-copy-tensors.md#tensor-texture-paths
     issue: null
 
   - id: REN-09

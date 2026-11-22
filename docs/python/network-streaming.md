@@ -16,7 +16,7 @@ protocol.
     macOS, on the loopback interface only, with a session token. The wire
     protocol is version 3, defined by `include/caliper/live_net.h`.
 
-## One set of calls, three transports
+## Calls and Transports
 
 A script calls `show()`, `points()`, `series()` and `histogram()` the same way
 whichever viewer watches it. Each call is offered to every open route, and each
@@ -67,7 +67,7 @@ views select, pick and hover with the same gestures and send the producer the
 same events, in source indices, so a widget's `selection` and the server's
 `events()` do not depend on which views drew the view.
 
-## Snapshots reduced on the device
+## Device-Side Reduction
 
 A tensor in training can be far larger than anything a viewer can show. A 4096
 by 4096 float32 weight is 64 MiB, so at the default 60 snapshots per second it
@@ -83,7 +83,7 @@ torch's queue, which stalls training ([Live streaming](live-streaming.md)
 measured that wait). The viewer, in turn, never needs the whole tensor, so no
 computation runs in the browser, and torch stays native in the producer.
 
-## Data views
+## Data Views
 
 A **data view** decides which data travels; a **live view** decides how the
 viewer draws it. A data view is a slice, selection, projection or aggregation
@@ -122,7 +122,7 @@ Data views and sampling divide the work. Sampling in time, by the rate limit,
 decides how often a view travels. Data views and the budget decide how much of
 it travels each time.
 
-## Latest wins, and series as deltas
+## Latest-Wins Delivery
 
 A snapshot carries the newest state of one view, with a sequence number, and
 the latest snapshot wins. The producer hands one data message at a time to a
@@ -146,7 +146,7 @@ values, a producer does no work for a view that no viewer subscribes to. A
 notebook widget that shows one view costs the producer that one view and no
 other.
 
-## Training is never blocked
+## Non-Blocking Training
 
 A view call queues its snapshot on the device and returns, as it does for the
 local transports. Encoding and sending happen outside the training loop, and the
@@ -156,7 +156,7 @@ subscriptions, and neither changes how fast the script trains. The calls never
 read a value back to the host, so the advice of the other pages holds unchanged:
 pass `loss.detach()`, not `loss.item()`.
 
-## Cost of streaming
+## Streaming Cost
 
 Streaming costs a training loop the work it adds to the thread that makes the
 view calls, and the time other threads of the same process hold Python's global
@@ -195,7 +195,7 @@ Python, which encodes and sends on an asyncio thread that holds the GIL, and it
 says so once. `python scripts/build_netio.py` builds the native sender in a few
 seconds from `python/src/_netio.cpp` and `src/host/net`.
 
-### What it costs
+### Cost Figures
 
 The table gives throughput as a percentage of a reference, for the workload of
 `python/bench/bench_net.py` on MPS: a small CNN at about 2,000 steps per second
@@ -240,7 +240,7 @@ take half the snapshots, but their ticks are then the only commits, 31 a second
 against the control's 60, and this workload runs slower with fewer commits. The
 default rate of the points therefore stays the session's 60 a second.
 
-### Where the time goes
+### Time Breakdown
 
 Timed part by part on the training thread with one viewer, the ticks aligned,
 per tick (60 times a second), with the events recorded against the control's.
@@ -308,7 +308,7 @@ Until then the server cannot listen on another interface, and the stream is not
 encrypted, which is acceptable only because it never leaves the loopback
 interface.
 
-## Known limits
+## Known Limits
 
 - **Same machine only.** The browser that shows a widget or a tab must run on
   the machine of the producer. A notebook on a remote Jupyter server cannot

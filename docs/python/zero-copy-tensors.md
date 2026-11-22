@@ -5,7 +5,7 @@ covers where the bytes live, when it is safe to read them, how many times they a
 fallback costs. The renderer seam it relies on is described in [Rendering](../applets/rendering.md), and the Windows
 interop machinery in [Vulkan and CUDA on Windows](../development/vulkan-and-cuda.md).
 
-## What the words mean
+## Terms
 
 Two phrases are used, and they are kept apart, because the host claims zero-copy only when the zero-copy path drew
 ([Platform rules](../introduction/architecture.md#platform-rules)).
@@ -18,7 +18,7 @@ Two phrases are used, and they are kept apart, because the host claims zero-copy
 Status lines in applets and in the host's log use the same words. An applet claims "zero-copy" only when the zero-copy
 path actually ran that frame.
 
-## How a tensor reaches a texture
+## Tensor Texture Paths
 
 An applet never talks to a graphics API. It fills a `CaliperTensor`, a plain C struct whose `device` field says where
 the bytes live, and hands it to the [`tensor_bridge.v1`](../applets/services/caliper-tensor-bridge-v1.md) service. The
@@ -41,7 +41,7 @@ handoff is a pointer cast plus the rules that make the cast safe:
    data, a blit for u8.
 5. The frame thread draws the texture with `ImGui::Image`, and the pixels appear that frame.
 
-### Windows with an NVIDIA GPU
+### Windows NVIDIA Path
 
 A discrete GPU has no unified memory. VRAM and system RAM are separate and joined by PCIe, so zero-copy here means
 keeping the data in VRAM and letting the compute API and the graphics API reach the same memory instead of bouncing
@@ -57,7 +57,7 @@ of paths, the synchronization with semaphores and the measured costs are in
 The host stays free of the CUDA toolkit. It loads the CUDA driver API from `nvcuda.dll` at run time, and the Vulkan
 loader comes from the GPU driver.
 
-### The OpenGL fallback
+### OpenGL Fallback
 
 On the OpenGL backend, or for any CPU tensor, the bridge stages through host memory. It colormaps on the CPU into an
 RGBA scratch buffer and uploads once with `glTexSubImage2D`. The ABI, the textures and the tests are the same, and
@@ -65,7 +65,7 @@ only the copy that the other paths avoid is there. Windows also falls back to th
 interop fails at run time. The applet code and the on-screen result are identical, and the cost is the copy. The worst
 case is a working slow path, never a broken one.
 
-## Data crossings per path
+## Data Crossings per Path
 
 | Path | Host copies | Copies inside the GPU | What does the work |
 |---|---|---|---|
@@ -82,7 +82,7 @@ case is a working slow path, never a broken one.
 texture's memory in place. On Metal it returns a CPU vector in unified memory: that is zero-copy for CPU writers,
 while a device writer goes through the normal update path.
 
-## The sync ladder
+## Sync Ladder
 
 The data path says where the bytes live. The sync ladder says when it is safe to read them. There are two rungs,
 negotiated at run time. The applet asks the bridge what the host honors, and the adapter does the right thing:
@@ -120,7 +120,7 @@ Three findings shape the adapter:
    and the drain stays elided. A test that wants to prove the stream channel is live has to pin a non-default pool
    stream.
 
-### Geometry stays on the drain rung
+### Drain Rung Geometry
 
 The `geometry.v1` calls (`draw_points`, `draw_primitives`) address device memory as an allocation id and a byte
 offset. The ABI has no `CaliperTensor` and so no `stream` field, so a stream-ordered handoff is impossible there. It is
@@ -139,7 +139,7 @@ would let the worker overwrite a slot while it is being read. Together they make
 stream-ordered gate that the texture path uses. The rule is part of the contract in the
 [geometry reference](../applets/services/caliper-geometry-v1.md), so a new worker-to-frame publish path inherits it.
 
-### What the stream-ordered rung buys
+### Stream-Ordered Rung Benefits
 
 Eliding the drain did not change training speed. On an RTX 500 Ada, embed_scope's steps per second differed by about
 zero between the drained and the stream-ordered handoff, because the training loop's own per-step `loss.item()` call
@@ -147,11 +147,11 @@ already synchronizes. The gain is that the frame thread stops stalling on the tr
 correct by construction.
 
 The biggest frame-thread stall that was measured had nothing to do with tensors. A database table rebuilt on the UI
-thread froze the frame, which is why the host [forbids I/O there](../introduction/architecture.md#the-frame-loop).
+thread froze the frame, which is why the host [forbids I/O there](../introduction/architecture.md#frame-loop).
 Two habits keep texture work cheap: create a texture once and call `update_texture` afterwards, because a create costs
 about a millisecond where an update costs a fraction of one.
 
-## Imported allocations
+## Imported Allocations
 
 A texture update normally reads a tensor wherever it lies. Imported allocations go one step further: the applet
 exports a block of device memory once, the host imports it once, and from then on both the texture path and the
@@ -181,7 +181,7 @@ compare each readback byte for byte with the CPU reference; [Verify on Windows h
 lists them. The import memory-stability contract applies: the bytes must not be rewritten until
 the next update of the same texture.
 
-## Derived graphics
+## Derived Graphics
 
 The texture route is the narrowest use of this pipeline. An applet can compute anything from the live training state,
 on the GPU, mid-training, and turn the result into the graphic that carries the insight. Image-like results (heatmaps,

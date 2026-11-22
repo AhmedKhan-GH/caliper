@@ -21,7 +21,7 @@ every call is in the [Caliper LIB](caliper-lib-api.md) reference.
     one machine (M5 Max, 18 cores, 64 GB, torch 2.14.1); the benchmark scripts
     are in `python/bench/`.
 
-## One view layer, two transports
+## View Layer and Transports
 
 Every call (`show()` and its siblings for points, series and histograms)
 produces a **snapshot**. It reaches Caliper Embed by one of two transports,
@@ -166,7 +166,7 @@ periodic commit lets the GPU start early. A plain "no show" baseline therefore
 flatters `show()`, so the benchmarks compare against a **commit-matched
 control**, the same loop recording an Event at 60 Hz and taking no snapshot.
 
-## Two modes
+## Attach and Window Modes
 
 | | Attach to app | Own window (`caliper.window()`) |
 |---|---|---|
@@ -201,7 +201,7 @@ survives the script. The in-process window is the second mode, with the limits
 above. The tensor view is implemented inside Caliper Embed behind the
 [embed ABI](../web/embedding-api.md), not as an applet.
 
-## Torch-free Caliper Embed
+## Torch-Free Caliper Embed
 
 The core, the Metal renderer and the embed C ABI never include a torch header,
 which is what lets Caliper Embed share a process with the torch the script
@@ -220,7 +220,7 @@ The torch-free binaries also link no `libtorch`, `libc10` or `libomp`
 ([Embedding Caliper](../web/embedding-api.md#the-torch-free-build) has the
 full check and the build options).
 
-## Known limits
+## Known Limits
 
 - **One viewer per session.** The claim words are single-reader, so a session
   has one viewer. A second viewer would need per-reader claims.
@@ -245,11 +245,11 @@ full check and the build options).
   `signal.signal`, and Ctrl-C is delivered between bytecodes.
 - **macOS and Metal only.** Live streaming has no Windows or Linux path.
 
-## Measured numbers
+## Measurements
 
 These are the prototype measurements the decision rests on. The final code's
 numbers (98.3 to 99.5 % of the control in the own window, 98.1 to 99.4 % in
-attach mode, at 60 Hz) are in [Cost of a call](caliper-lib-api.md#cost-of-a-call).
+attach mode, at 60 Hz) are in [Cost of a call](caliper-lib-api.md#call-cost).
 
 The TinyCNN of `train_show.py` plus a synthetic SxS f32 weight rewritten in
 place and shown every step; 10 s after a 1 s warm-up; two repeats (run 1 /

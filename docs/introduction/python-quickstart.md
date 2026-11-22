@@ -15,7 +15,7 @@ Prereqs: Apple Silicon, macOS 14 (Sonoma) or later, Python 3.12, PyTorch with MP
 CMake plus Ninja on `PATH`. [Live streaming](../python/live-streaming.md)
 explains the design; this page only uses it.
 
-## Build and install the wheel
+## Wheel Installation
 
 The package is built from this tree; there is no published wheel and the sdist
 is not usable. From the repo root, in a Python 3.12 virtual environment that
@@ -47,7 +47,7 @@ few seconds and prints throughput and per-call costs:
 .venv/bin/python examples/python/train_show.py --mode none --seconds 5
 ```
 
-## The calls in the training loop
+## Training Loop Calls
 
 The model and optimiser are plain PyTorch. Two forward hooks keep the latest
 outputs of `conv1` and `fc1`, and a fixed random projection turns the 64-wide
@@ -106,7 +106,7 @@ handle = caliper.watch(model, gradients=True, include=["conv*", "fc1"])
 handle.remove()          # takes the hooks off again
 ```
 
-## Attach from Caliper
+## Caliper App Attachment
 
 With no other setup, the script's first call opens a **live session**: shared
 memory plus a session file under
@@ -137,7 +137,7 @@ training carries on, so you can attach again. When the script ends, the page
 keeps the last frames and says `SESSION ENDED`. In your own script nothing extra is needed: run it, then
 attach from Caliper.
 
-## Attach with caliper-viewer
+## `caliper-viewer` Attachment
 
 The wheel's `caliper-viewer` is the same viewer without the rest of the app.
 Start it from another terminal while the script runs:
@@ -167,7 +167,7 @@ loop does, it keeps the last frames when the script exits, and closing it does
 not stop training. [Attach to a running script](../python/script-attachment.md)
 covers listing, detaching and what happens when either side goes away.
 
-## The own window
+## In-Process Window
 
 `caliper.window()` opens a Caliper window inside the training process instead.
 A render thread repaints it at 60 Hz whatever the loop does, but macOS delivers
@@ -191,7 +191,7 @@ default) runs this way.
 When `caliper.window()` is opened before the first call, no session is opened;
 call `caliper.session()` as well to have both.
 
-## What you see
+## Visible Views
 
 Each view gets its own window on a grid that fills the page, in the order
 the views appear. The grid lays itself out again when the page changes size
@@ -241,7 +241,7 @@ In attach mode the viewer also has a status window: the script, PID and session
 token, "running" or "SESSION ENDED", frame rate, updates, skipped snapshots,
 the step-to-screen median and p95, one line per view, and **Detach**.
 
-## Next
+## Next Steps
 
 - [Caliper LIB](../python/caliper-lib-api.md) lists every call, argument and
   accepted layout.

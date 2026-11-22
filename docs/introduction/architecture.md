@@ -36,7 +36,7 @@ Caliper has four layers, with a single dependency rule: arrows point down only. 
 
 The applets still live in this repository, but the core build compiles none of them, and the `caliper` target depends on none. Each applet builds against the installed SDK package with `find_package(caliper-sdk)` and `caliper_add_applet()`, as an applet outside the repository would ([SDK package](../applets/sdk-package.md)). `CALIPER_BUILD_APPLETS=ON` also builds the `applets/` folders inside the core build, and `examples/hello` and `examples/sine_scope` build with the tests, because the tests load them. Moving the applets to their own repositories is planned.
 
-## Platform rules
+## Platform Rules
 
 These rules hold across the host, the SDK and every applet.
 
@@ -45,7 +45,7 @@ These rules hold across the host, the SDK and every applet.
 - **Data flows one way, from tensors to pixels.** Tensors become textures and geometry, ImGui shows them, and nothing flows back. There is no render-to-tensor readback, and applets cannot supply shaders: appearance comes from a fixed menu of shading modes. Showing the state of a model is the purpose of the instrument, shaders from applets would break the boundary between applet and host and weaken its security, and a fixed menu keeps every image reproducible against the CPU reference. [Rendering](../applets/rendering.md#data-flows-one-way) lists what this rules out and what it does not.
 - **A missing capability falls back to a slower path that works, and says so.** The host never draws a wrong image and never prints a status line that is not true, and it claims zero-copy only when the zero-copy path drew. Applets then run on every machine, and users can trust what the instrument reports. The cost is a second, tested path for every capability.
 
-## The frame loop
+## Frame Loop
 
 The host owns the GLFW window, the rendering backend, the ImGui, ImPlot and ImPlot3D contexts, and the frame clock. Per frame:
 

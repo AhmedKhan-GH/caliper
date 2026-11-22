@@ -47,7 +47,7 @@ Name, colormap and range arguments are checked on every call. Checks on the
 tensor itself (shape, label count, bins) run when a snapshot is built, so a bad
 shape raises only once something is attached.
 
-## Cost of a call
+## Call Cost
 
 With nothing attached a call is one atomic load and a clock read, with no
 snapshot, no slot and no GPU work (100,000 calls per row, each timed
@@ -78,7 +78,7 @@ snapshots; [the commit effect](live-streaming.md#sync) explains
 why. `torch.mps.current_allocated_memory()` changed by 0.0 MB in every row. A
 CPU 256x256 snapshot cost 80.0 µs (window) and 66.1 µs (attach) median.
 
-## Rate limit
+## Rate Limit
 
 Each view has a rate limit per route, set by the `rate` argument of the call:
 
@@ -99,9 +99,9 @@ route), and the view is republished at most `rate` times per second, one
 pending snapshot at a time. `watch(every=N)` drops N-1 of N hook calls before
 the rate limit applies.
 
-## View calls
+## View Calls
 
-### show
+### `show`
 
 ```python
 caliper.show(t, name="tensor", cmap="viridis", vmin=None, vmax=None, rate=None, *,
@@ -139,7 +139,7 @@ become float32 (uint8 for an image), complex tensors their magnitude. With
 autoscale, a non-finite range keeps the last finite one and a flat range widens
 by ±0.5. NaN values draw as colormap index 0.
 
-### points
+### `points`
 
 ```python
 caliper.points(z, labels=None, name="points", classes=None, cmap="viridis",
@@ -162,7 +162,7 @@ count other than N, labels on a device other than `z`'s or the CPU,
 or `data_view`, `z` is a source of data views and `labels` follows its kept
 dimension; see [Data views](#data-views).
 
-### series
+### `series`
 
 ```python
 caliper.series(value, name="series", rate=None)
@@ -177,7 +177,7 @@ host-to-device copy of its history. The x axis is the append index. Values
 offered while nothing is attached are not recorded. An empty tensor raises
 `ValueError`.
 
-### histogram
+### `histogram`
 
 ```python
 caliper.histogram(t, name="histogram", bins=64, rate=None, *, dims=None, data_view=None)
@@ -192,7 +192,7 @@ the queue measured at 15 to 53 ms. On the CPU it is `torch.histc`. With `dims`
 or `data_view`, the histogram bins the data view of `t`; see
 [Data views](#data-views).
 
-### watch
+### `watch`
 
 ```python
 handle = caliper.watch(model, activations=True, gradients=False, every=1,
@@ -239,7 +239,7 @@ shape and returns. A view has at most 64 sources, so a group keeps the first
 64, and sources whose names are longer than 63 bytes are left out, each with a
 `RuntimeWarning`.
 
-## No host copy for MPS
+## MPS Zero-Copy
 
 A snapshot is a few torch operations queued on the tensor's own stream, writing
 into a slot that the route allocated as CPU-readable shared memory (a shared-
@@ -253,7 +253,7 @@ A CPU tensor is copied once into the slot. Tensors on any other device (CUDA)
 have no zero-copy path on macOS and are moved to the CPU first, one host copy.
 Labels for `points` may move host to device, never device to host.
 
-## Routes and lifetime
+## Routes and Lifetime
 
 | Call | Returns | Behaviour |
 |---|---|---|
@@ -301,7 +301,7 @@ renders a frame (at most 60 per second), so `view_info`, `view_readback` and
 `caliper.render()` returns the composited frame as an `(H, W, 4)` uint8 array
 to display.
 
-## Network streaming
+## Network Streaming
 
 `caliper.serve()` serves the script's live views over a WebSocket on the
 loopback interface, `caliper.widget()` shows one of them in a notebook cell,
@@ -331,7 +331,7 @@ draws with the views written in TypeScript, and `serve()` says so once on
 stderr, naming those two commands. `CALIPER_WEB_DIR` points the package at
 another folder of these files.
 
-### serve
+### `serve`
 
 ```python
 server = caliper.serve(port=0, *, control=True)
@@ -413,7 +413,7 @@ nothing in them runs as a command.
 `close()` may be called more than once. It also runs at `caliper.close()` and at
 interpreter exit, and the server works as a context manager that closes it.
 
-### connect
+### `connect`
 
 ```python
 hub = caliper.connect(url=None)
@@ -453,7 +453,7 @@ hub file, or when the native sender is not built.
 
 `caliper.close()` ends the connection as well.
 
-### widget
+### `widget`
 
 ```python
 w = caliper.widget(name, kind=None, *, height=320)
@@ -498,7 +498,7 @@ when the cell ends, and a `data_view` set from Python reaches the widget at
 once. A data view chosen in the widget's own picker goes to the producer over
 the stream and takes effect during the cell.
 
-### Data views
+### Data Views
 
 A data view decides which data of a tensor travels: a slice, selection,
 projection or aggregation that the producer computes on the tensor's device.
@@ -626,7 +626,7 @@ values, `step()` returns at once, and an action can be called from Python.
 | `items(space, details=None)` | `ItemSpace` | An item space for linked selection, with optional details |
 | `controls(*, height=160)` | widget | The notebook panel of run controls, parameters and actions |
 
-### step
+### `step`
 
 ```python
 caliper.step(step=None)
@@ -655,7 +655,7 @@ Before the script's first `step()`, viewers can change parameters, which then
 take effect at once, but cannot pause the run, and actions wait for the first
 checkpoint.
 
-### pause
+### `pause`
 
 ```python
 caliper.pause()
@@ -667,7 +667,7 @@ When no stream server runs, no viewer could resume the run, so it returns
 `False` with a `RuntimeWarning` and does nothing. When a server runs but no
 connection may control it, it warns that the run resumes after 10 seconds.
 
-### param
+### `param`
 
 ```python
 lr = caliper.param("lr", 1e-3, min=1e-5, max=1e-1, log=True, help="learning rate")
@@ -708,7 +708,7 @@ the last one wins. A script has at most 64 parameters. `param()` returns a
 | `remove()` | Take the parameter away from the viewers; `value` keeps its last value |
 | `name`, `type`, `min`, `max`, `log`, `choices`, `help` | The registration |
 
-### action
+### `action`
 
 ```python
 @caliper.action("save checkpoint", help="saves the model's weights")
@@ -731,7 +731,7 @@ registering a name again replaces the action.
 `action()` returns a `caliper.Action`. Calling it runs `fn` at once on the
 caller's thread, and `remove()` takes it away from the viewers.
 
-### items
+### `items`
 
 ```python
 caliper.items("eval", details={"class": eval_labels})
@@ -775,7 +775,7 @@ event as before, through `server.on_event`, `server.events()`,
 `widget.selection` and `on_select`, and its `detail` now has `space` and
 `items` too.
 
-### controls
+### `controls`
 
 ```python
 caliper.controls(*, height=160)
@@ -790,7 +790,7 @@ and the Pause, Resume and Step buttons. A build whose browser assets lack the
 panel's module, `caliper-controls-widget.js`, warns and shows a note in its
 place.
 
-## Inspection and test helpers
+## Inspection and Test Helpers
 
 These read the in-process core and raise `RuntimeError` without a `window()` or
 `offscreen()`, except where noted. Arrays are numpy.
@@ -822,7 +822,7 @@ Ring counters: `taken`, `published`, `skipped` (rate limit), `ring_full`,
 (snapshot to first frame drawn with it), `tick_ms` and `frame_gap_ms`;
 `Window.stats(reset=True)` clears them.
 
-## caliper.live
+## `caliper.live`
 
 `from caliper import live` (not imported by `import caliper`).
 
@@ -848,7 +848,7 @@ Ring counters: `taken`, `published`, `skipped` (rate limit), `ring_full`,
 | `stats()` | Session, file, script, attached, viewer pid and heartbeat age, and per view the publish and claim counters |
 | `close()` | Remove the session file and unlink the shared memory, never waiting for the viewer |
 
-## Constants and types
+## Constants and Types
 
 | Name | Value |
 |---|---|
@@ -862,7 +862,7 @@ View names in a session are 1 to 63 bytes, and a session holds at most 64
 views. Reusing a name with another kind rebuilds the view; a change of shape,
 dtype or device reallocates its slots.
 
-## Environment variables
+## Environment Variables
 
 | Variable | Effect |
 |---|---|

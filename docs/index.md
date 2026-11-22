@@ -6,7 +6,7 @@ Tensors reach the screen without a trip through the CPU on the Metal and Vulkan 
 
 Caliper is built from source. This version of the repository is host 0.6.0, SDK 0.1.0 and ABI epoch 2.
 
-## Where to start
+## Starting Points
 
 - [Development basics](development/development-basics.md) explains the host, the applet and the build.
 - [Your first applet](applets/first-applet.md) builds the smallest UI applet.
@@ -24,7 +24,7 @@ Caliper is built from source. This version of the repository is host 0.6.0, SDK 
 
 [Rendering](applets/rendering.md) explains how the host chooses a backend, and [`caliper.tensor_bridge.v1`](applets/services/caliper-tensor-bridge-v1.md) lists what each backend accepts.
 
-## The documentation
+## Documentation Areas
 
 The documentation is arranged in areas, one per tab: [Introduction](introduction/index.md), [Python](python/index.md), [Applets](applets/index.md), [Builder](builder/index.md), [Agents](agents/index.md), [Web and Embedding](web/index.md), [Reference](reference/index.md), [Development](development/index.md) and [Roadmap](roadmap/index.md).
 

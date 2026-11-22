@@ -2,7 +2,7 @@
 
 The hub is a separate process, `caliper serve`, that holds the live sessions of several training scripts at once. Each script connects out to it as a producer, and viewers connect to it, list the sessions and attach to one. This page covers starting the hub, connecting scripts and viewers to it, what it keeps after a script ends, and its limits. The protocol it speaks is [wire protocol v3](../reference/wire-protocol.md), and every option is in [Caliper CLI](../reference/cli.md#caliper-serve).
 
-## When to use a hub
+## Hub Use Cases
 
 `caliper.serve()` serves the views of one script from inside that script, and its viewers lose the stream when the script ends. Use the hub instead when:
 
@@ -12,7 +12,7 @@ The hub is a separate process, `caliper serve`, that holds the live sessions of 
 
 A viewer written for `caliper.serve()` works against the hub unchanged: when the hub holds exactly one live session, it attaches a new viewer to it.
 
-## Start the hub
+## Hub Startup
 
 ```sh
 caliper serve
@@ -42,7 +42,7 @@ caliper serve --assets "$(python -c 'import caliper, os; print(os.path.join(os.p
 
 Without `--assets`, the link opens a short note that says where the page is. The stream itself works either way.
 
-## Connect a script
+## Script Connection
 
 A script connects to `ws://127.0.0.1:<port>/v3/stream?token=<token>` as a producer, as [The producer connection to a hub](../reference/wire-protocol.md#the-producer-connection-to-a-hub) describes. It sends HELLO with the role `producer` and its session identity: an id, the script's name, its pid and the time it started streaming. The hub answers WELCOME with the id it chose. It keeps the proposed id unless a live session of another process holds it, in which case it appends `-2`, `-3` and so on. The script then sends its list of views, and from then on the hub is its one viewer: it subscribes to the views that viewers ask for, at the rate they ask for, and forwards their events.
 
@@ -60,19 +60,19 @@ It takes the hub's address and token from its argument, either the stream URL `w
 
 A script that loses its connection and connects again with the same id, pid and start time **resumes** its session. The hub closes the old connection, if it is still open, with BYE `replaced`, keeps the session's viewers attached and subscribes again to every view they watch.
 
-## Open a viewer
+## Viewer Connection
 
 Any viewer of protocol v3 connects to the hub with the viewer link or the stream link that `caliper serve` prints:
 
 - **A browser tab** opens the viewer link, `http://127.0.0.1:<port>/?token=<token>`, when the hub serves the page (`--assets`).
 - **A notebook widget or a `<caliper-view>` element** takes the stream link, `ws://127.0.0.1:<port>/v3/stream?token=<token>`, as its source.
-- **The Caliper app and caliper-viewer** take either link, as [Attach to a stream by its link](script-attachment.md#attach-to-a-stream-by-its-link) describes. With several sessions, add `&session=<session id>` to choose one:
+- **The Caliper app and caliper-viewer** take either link, as [Attach to a stream by its link](script-attachment.md#stream-link-attachment) describes. With several sessions, add `&session=<session id>` to choose one:
 
 ```sh
 caliper-viewer --headless --url "http://127.0.0.1:7340/?token=$TOKEN&session=clp-41222-9f03ab" --exit-after 5 --stats
 ```
 
-## Choose a session
+## Session Choice
 
 Right after a viewer connects, the hub sends it the list of sessions, and sends the list again whenever it changes. Each entry has the session's id, script, pid, start time, number of views and state, `live` or `ended`.
 
@@ -80,13 +80,13 @@ A viewer that has not chosen a session follows the hub's default: whenever it is
 
 A new script that proposes the id of an ended session of another process takes that id over: the ended session is forgotten, and its viewers move to the new session. This is what happens when a notebook kernel restarts and the notebook streams under the same id.
 
-## When a script ends
+## Script Exit
 
 When a script disconnects, its session stays in the list with the state `ended`. Viewers that are attached keep it, and a viewer can still attach to it later and subscribe. A subscription to a data view that a viewer watched while the script ran receives its last snapshot at once, and a subscription to a series view receives the values the hub retained. A data view that nobody watched cannot be computed any more, since only the script could compute it, so the hub answers with the data view of that view that was watched last, and the reply names it. A view that nobody watched at all is answered with the error `unknown_view`.
 
 An ended session is kept for 24 hours, and at most 32 ended sessions are kept, the oldest going first. When either limit forgets a session, its viewers are detached, or attached to the one live session if there is one.
 
-## What the hub keeps
+## Hub State
 
 The hub keeps data so that a viewer that arrives late sees something at once, and so that a session can be looked at after its script ended. It keeps:
 
@@ -99,7 +99,7 @@ All of this together is bounded by a budget of 1 GiB. Over it, the hub forgets t
 
 Sending takes memory too, but little. On each viewer connection the hub hands one data message at a time to the socket, and keeps at most one pending snapshot per subscription, which is the stored snapshot itself rather than a copy. A connection whose send queue passes 160 MiB, which only a viewer that stopped reading while the hub sent it a great many control messages could reach, is closed with code 1008.
 
-## How the hub forwards
+## Hub Forwarding
 
 The hub applies the protocol's [flow control](../reference/wire-protocol.md#flow-control) on every viewer connection, so one slow viewer slows only itself:
 
@@ -112,7 +112,7 @@ The hub applies the protocol's [flow control](../reference/wire-protocol.md#flow
 
 On an Apple silicon Mac, a 512 × 512 heatmap at 60 Hz reaches four viewers through the hub with a median latency of about 1.4 ms and a 99th percentile under 3 ms, from the script's send to the viewer's receive, at 240 MiB/s in total. The hub's tests measure it with `caliper_tests -tc="net/hub: relay*" --no-skip`.
 
-## Controls and selections
+## Controls and Selections
 
 From [protocol 3.1](../reference/wire-protocol.md#controls-through-a-hub), a viewer can pause, resume and step a script's training loop, change the parameters the script registered and run its actions, and a selection in one view highlights the same items in the session's other views. The hub announces both capabilities, `controls` and `selection`, to viewers and to scripts.
 
@@ -128,7 +128,7 @@ Then the hub forwards a viewer's CONTROL only to the script of the session that 
 
 An ended session keeps its last controls and selections, which a viewer shows with the controls disabled, and the hub answers its controls `unsupported`.
 
-## Limits
+## Resource Limits
 
 | Limit | Value | Beyond it |
 |---|---|---|
@@ -140,7 +140,7 @@ An ended session keeps its last controls and selections, which a viewer shows wi
 | Ended sessions | 32, for 24 hours each | The oldest is forgotten |
 | Idle data views per session | 64 | The least recently used is forgotten |
 | Series values per series view | 1,048,576 | The oldest values go |
-| Stored snapshots, series values, controls and selections | 1 GiB | See [What the hub keeps](#what-the-hub-keeps) |
+| Stored snapshots, series values, controls and selections | 1 GiB | See [What the hub keeps](#hub-state) |
 | Item spaces whose selection is kept, per session | 16 | A new space's SELECTION is dropped |
 | Controls waiting for a script, per viewer connection | 64 | CONTROL_REPLY with the error `limit` |
 | Controls waiting for a script, per session | 1,024 | CONTROL_REPLY with the error `limit` |
@@ -154,6 +154,6 @@ The hub follows the protocol's [security](../reference/wire-protocol.md#security
 
 The hub forwards data, viewer events and, only when it was started with `--allow-control`, controls that name a parameter or an action the script registered, to the script of the viewer's own session. It never runs anything a message names, and the stream never carries host commands. Whoever holds the session token of a hub started with `--allow-control` can pause the scripts connected to it, change their registered parameters and run their registered actions, so give that option only to a hub whose token you keep to yourself. The token appears in the viewer link, so it can reach a browser's history; the hub file that holds it can be read by its owner only.
 
-## Stop the hub
+## Hub Shutdown
 
 Press Ctrl-C, or send SIGTERM. The hub sends BYE `shutdown` on every connection, closes them with code 1001, removes the hub file and exits with 0. Scripts connected to it keep training; they lose only the connection.

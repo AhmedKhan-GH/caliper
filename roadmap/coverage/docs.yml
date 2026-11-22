@@ -288,7 +288,7 @@ entries:
   - STR-01
   - STR-04
   - STR-05
-- page: docs/python/caliper-lib-api.md#cost-of-a-call
+- page: docs/python/caliper-lib-api.md#call-cost
   item: The measured cost of a view call per device and route.
   ids:
   - STR-01
@@ -316,7 +316,7 @@ entries:
   item: watch hooks a torch module so that its activations and gradients are shown as views.
   ids:
   - STR-45
-- page: docs/python/caliper-lib-api.md#no-host-copy-for-mps
+- page: docs/python/caliper-lib-api.md#mps-zero-copy
   item: A tensor on MPS reaches the viewer with no host copy.
   ids:
   - REN-08
@@ -1065,42 +1065,42 @@ entries:
   - STR-07
   - STR-05
   - STR-03
-- page: docs/python/script-attachment.md#find-the-session
+- page: docs/python/script-attachment.md#session-discovery
   item: Find the session file of a running script.
   ids:
   - STR-04
-- page: docs/python/script-attachment.md#attach-from-the-caliper-app
+- page: docs/python/script-attachment.md#caliper-app-attachment
   item: Attach from the Caliper app with F4.
   ids:
   - STR-04
   - STR-43
-- page: docs/python/script-attachment.md#attach-with-caliper-viewer
+- page: docs/python/script-attachment.md#caliper-viewer-attachment
   item: caliper-viewer ships in the wheel and attaches by token or from a session list.
   ids:
   - STR-04
   - STR-44
-- page: docs/python/script-attachment.md#attach-to-a-stream-by-its-link
+- page: docs/python/script-attachment.md#stream-link-attachment
   item: Attach to a stream by its link or the stream file.
   ids:
   - STR-05
   - STR-43
-- page: docs/python/script-attachment.md#choose-what-a-view-shows
+- page: docs/python/script-attachment.md#view-sources
   item: Choose what a view shows with data views.
   ids:
   - STR-08
-- page: docs/python/script-attachment.md#control-the-run-and-share-a-selection
+- page: docs/python/script-attachment.md#control-and-selection-sharing
   item: Control the run and share a selection from the viewer.
   ids:
   - STR-03
-- page: docs/python/script-attachment.md#one-viewer-per-session
+- page: docs/python/script-attachment.md#single-viewer-rule
   item: One viewer per session today.
   ids:
   - STR-18
-- page: docs/python/script-attachment.md#from-an-embed-host
+- page: docs/python/script-attachment.md#embed-host-attachment
   item: Attach from an embed host.
   ids:
   - EMB-07
-- page: docs/python/script-attachment.md#cost-to-the-script-when-nobody-is-attached
+- page: docs/python/script-attachment.md#unattached-cost
   item: Cost to the script when nobody is attached.
   ids:
   - STR-04
@@ -1178,7 +1178,7 @@ entries:
   ids:
   - COR-01
   - COR-03
-- page: docs/introduction/architecture.md#the-frame-loop
+- page: docs/introduction/architecture.md#frame-loop
   item: The frame loop never blocks on I/O.
   ids:
   - COR-01
@@ -1288,14 +1288,14 @@ entries:
   ids:
   - PLT-02
   - REN-02
-- page: docs/python/zero-copy-tensors.md#how-a-tensor-reaches-a-texture
+- page: docs/python/zero-copy-tensors.md#tensor-texture-paths
   item: How a tensor reaches a texture on Apple silicon, on Windows with an NVIDIA GPU and on the OpenGL
     fallback.
   ids:
   - REN-08
   - REN-01
   - REN-02
-- page: docs/python/zero-copy-tensors.md#the-sync-ladder
+- page: docs/python/zero-copy-tensors.md#sync-ladder
   item: The sync ladder of synchronization modes.
   ids:
   - REN-08

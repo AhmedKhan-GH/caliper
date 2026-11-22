@@ -116,7 +116,7 @@ On a host that vends `caliper.tensor_bridge.v1_1`, the `caps()` query says what 
 stream-ordered handoff, and Vulkan honors it when the device exports timeline semaphores. Where it is honored the adapter skips the drain
 and puts the producer's stream in `CaliperTensor.stream`. Otherwise v1's drain applies. The adapter side and the
 reasons are in [Adapters](../adapters.md) and
-[Zero-copy tensor visualization](../../python/zero-copy-tensors.md#the-sync-ladder).
+[Zero-copy tensor visualization](../../python/zero-copy-tensors.md#sync-ladder).
 
 ## Additive revisions: v1_1 and v1_2
 

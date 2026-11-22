@@ -80,7 +80,7 @@ for data that should outlive the session.
 Run the rebuild on a thread the applet owns, never on the frame thread. A query
 is file and catalog work whose cost differs by platform, and a slow one on the
 frame thread stalls every window. See
-[The frame loop](../../introduction/architecture.md#the-frame-loop).
+[The frame loop](../../introduction/architecture.md#frame-loop).
 
 ### Resource limits
 
