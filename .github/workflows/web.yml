@@ -86,9 +86,11 @@ jobs:
           npm ci
           npx playwright-core install chromium-headless-shell
           mkdir -p "$RUNNER_TEMP/shots"
-          node check.mjs --build ../build --out "$RUNNER_TEMP/shots/views.png" --adapter swiftshader
-          node check.mjs --build ../build --out "$RUNNER_TEMP/shots/edges.png" --view edges --kind heatmap
-          node check.mjs --build ../build --out "$RUNNER_TEMP/shots/points.png" --view embedding --kind points --dims 2
+          # A hosted runner draws the demo page on SwiftShader at well under one frame a second, so the
+          # checks wait for 20 frames here, not the 300 of a local run.
+          node check.mjs --build ../build --out "$RUNNER_TEMP/shots/views.png" --adapter swiftshader --frames 20
+          node check.mjs --build ../build --out "$RUNNER_TEMP/shots/edges.png" --view edges --kind heatmap --frames 20
+          node check.mjs --build ../build --out "$RUNNER_TEMP/shots/points.png" --view embedding --kind points --dims 2 --frames 20
           node multi.mjs --build ../build --out "$RUNNER_TEMP/shots/multi.png" --destroy 1
           node cross_origin.mjs --build ../build --out "$RUNNER_TEMP/shots/cross-origin.png"
       # The colormap's boundary cases from the C++ (tests/shaders/colormap_cases_tool.cpp),

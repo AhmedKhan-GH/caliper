@@ -3,6 +3,8 @@
 #include "scene/scene.h"
 #include "scene_fixtures.h"
 
+#include <ostream>  // doctest prints a std::string_view operand, which needs the complete stream type on MSVC
+
 #include <doctest/doctest.h>
 
 #include <string>
