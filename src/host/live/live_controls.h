@@ -31,6 +31,7 @@
 // app draws them in its house style and caliper-viewer in ImGui's own.
 #pragma once
 
+#include "live/live_attach.h"   // RunLink
 #include "live/live_source.h"
 
 #include <imgui.h>
@@ -180,8 +181,8 @@ void draw_run_bar(RunControls& rc, const ControlsLook& look, float width);
 
 // The run state as the bar writes it: "no checkpoint yet", "running",
 // "pausing", "paused at step N" or "stepping, N left". The step in CONTROLS
-// is the one at which the state last changed, so only a paused run, which
-// stands at it, names it.
+// is the one of the latest checkpoint, reported at most once a second while
+// the run runs, so only a paused run, which stands at it, names it.
 std::string run_state_text(const Controls& c);
 
 // The selection's details as a table, one row per item with the script's
@@ -240,5 +241,25 @@ const std::map<std::string, WidgetRect>& bar_widgets();
 // The run state the bar wrote in the last frame ("no controls" before any
 // CONTROLS; empty before the bar was first drawn). A UI test reads it.
 const std::string& bar_state_text();
+
+// The RunLink of an Attachment (live_attach.h): its script, and the requests
+// and results of its RunControls, which poll() updates. Holds the attachment
+// by reference; the owner keeps the attachment alive while a session uses the
+// link. Frame thread.
+class Attachment;
+class AttachmentRunLink final : public RunLink {
+public:
+    explicit AttachmentRunLink(const Attachment& attachment) : att_(attachment) {}
+    bool attached() const override;
+    std::string script() const override;
+    const Controls* controls() const override;
+    ControlAccess access() const override;
+    std::string send(const std::string& op, const std::string& name, const caliper_net::Json& value,
+                     uint32_t count) override;
+    ActionResult action_result(const std::string& name) const override;
+
+private:
+    const Attachment& att_;
+};
 
 }  // namespace caliper_live

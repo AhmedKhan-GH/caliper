@@ -90,7 +90,7 @@ TEST_CASE("spec applets: listed Ready with their kind, and nothing is opened or 
     CHECK(a.dylib_path.empty());
     CHECK(a.data_dir.empty());
     CHECK(L.find("local.demo") == 0);
-    CHECK(spec_format_version() == 0);
+    CHECK(spec_format_version() == 1);
 
     std::vector<SpecDiagnostic> found;
     CHECK(L.check_spec(0, &found));
@@ -314,7 +314,7 @@ TEST_CASE("spec applets: the format version line") {
     TempDir t("version");
     const fs::path dir = t.path / "a";
     write_spec_applet(dir / "later", "later", "local.later", "0.1.0",
-                      "caliper_spec = 1\n[applet]\nid = \"later\"\n");
+                      "caliper_spec = 2\n[applet]\nid = \"later\"\n");
     write_spec_applet(dir / "older", "older", "local.older", "0.1.0",
                       "caliper_spec = -1\n[applet]\nid = \"older\"\n");
     write_spec_applet(dir / "text", "text", "local.text", "0.1.0",
@@ -331,10 +331,10 @@ TEST_CASE("spec applets: the format version line") {
     };
     CHECK(entry("later").status == AppletStatus::Refused);
     CHECK(entry("later").status_text ==
-          "Written in spec format 1; this host reads spec format 0 — update Caliper to open it.");
-    CHECK(entry("later").status_text == spec_version_reason(1, 0));
+          "Written in spec format 2; this host reads spec format 1 — update Caliper to open it.");
+    CHECK(entry("later").status_text == spec_version_reason(2, 1));
     CHECK(entry("older").status == AppletStatus::Refused);
-    CHECK(entry("older").status_text == "Written in spec format -1; this host reads spec format 0.");
+    CHECK(entry("older").status_text == "Written in spec format -1; this host reads spec format 1.");
     CHECK(entry("text").status == AppletStatus::Failed);
     CHECK(entry("text").status_text ==
           "spec file text.spec.toml has a caliper_spec that is not a decimal integer");

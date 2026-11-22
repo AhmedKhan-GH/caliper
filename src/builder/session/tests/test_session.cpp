@@ -338,7 +338,7 @@ TEST_CASE("the open spec is edited with dry runs, diffs, warnings and exact undo
     CHECK(f.s->open_spec()->spec.find_panel("q")->options.colormap == std::nullopt);
 
     // spec.set_text replaces the whole spec and refuses an invalid one.
-    CHECK(err(*f.s, "spec.set_text", {{"text", "caliper_spec = 1\n[applet]\nid = \"x\"\n"}}) == "spec.unsupported_version");
+    CHECK(err(*f.s, "spec.set_text", {{"text", "caliper_spec = 2\n[applet]\nid = \"x\"\n"}}) == "spec.unsupported_version");
     const json replaced = ok(*f.s, "spec.set_text", {{"text", read_text(fixture_path("minimal.spec.toml"))}});
     CHECK(replaced["id"] == "empty");
     ok(*f.s, "history.undo");

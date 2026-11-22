@@ -467,6 +467,29 @@ def test_step_from_running_pauses_after_that_many_checkpoints(ctl, fast):
         assert 3 <= loop.count - before <= 5             # the loop was between checkpoints
 
 
+def test_a_running_run_reports_the_step_of_its_latest_checkpoint(ctl, fast, monkeypatch):
+    # The run.step of an app attached to a watched script stayed at 1 while the script
+    # was past step 50: CONTROLS went out only when the run state changed.
+    monkeypatch.setattr(C, "RUN_REPORT_S", 0.2, raising=False)
+    t = Fake()
+    r = ctl.attach(t)
+    for _ in range(50):
+        caliper.step()
+    assert t.controls()[0]["run"] == {"state": "running", "step": 1}
+    assert len(t.controls()) <= 2                        # no CONTROLS per step
+    end = time.monotonic() + 5
+    while t.controls()[-1]["run"]["step"] == 1 and time.monotonic() < end:
+        caliper.step()
+        time.sleep(0.01)
+    assert t.controls()[-1]["run"] == {"state": "running", "step": ctl.n}
+    assert ctl.n > 50 and not ctl.busy
+    with Loop() as loop:                                 # a paused run stands at its step
+        control(r, "pause")
+        wait_for(lambda: ctl.state == "paused")
+        assert loop.still(seconds=2 * C.RUN_REPORT_S)
+        assert t.controls()[-1]["run"] == {"state": "paused", "step": ctl.n}
+
+
 def test_values_and_actions_reach_a_paused_run(ctl, fast):
     t = Fake()
     r = ctl.attach(t)

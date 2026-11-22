@@ -54,6 +54,7 @@ const char* command_effect_name(CommandEffect effect) {
     switch (effect) {
         case CommandEffect::read: return "read";
         case CommandEffect::edit: return "edit";
+        case CommandEffect::run: return "run";
         case CommandEffect::change:
         case CommandEffect::unset: return "change";
     }
@@ -64,6 +65,7 @@ std::optional<CommandEffect> command_effect_from_name(std::string_view name) {
     if (name == "read") return CommandEffect::read;
     if (name == "edit") return CommandEffect::edit;
     if (name == "change") return CommandEffect::change;
+    if (name == "run") return CommandEffect::run;
     return std::nullopt;
 }
 

@@ -81,8 +81,20 @@
 #include <string>
 #include <vector>
 
+#if CALIPER_WITH_BUILDER
+#include <caliper_builder/session/events.h>
+#include <caliper_builder/session/run_control.h>
+
+#include <map>
+#endif
+
 namespace caliper_builder {
 class Session;
+class RunControl;
+}
+
+namespace caliper_live {
+class RunLink;   // live/live_attach.h
 }
 
 namespace caliper_api {
@@ -92,6 +104,56 @@ class CommandGateway;   // api/command_gateway.h
 namespace caliper_host {
 
 class PanelRenderSeam;   // panel_renderer.h
+
+#if CALIPER_WITH_BUILDER
+// The app's run control (caliper_builder::RunControl, design/instruments.md,
+// Run Control in App): run.state, run.set_param, run.action and run.pause act
+// on the attached script through a caliper_live::RunLink, which in the app is
+// the attachment's RunControls (live_controls.h). Each request goes out as a
+// protocol 3.1 CONTROL message through the app's own viewer connection, as
+// the run bar sends it; the agent never talks to the script. A request fails
+// with run.not_attached without a script, run.control_not_allowed when the
+// connection takes no control, run.no_step for a pause, a step or an action
+// before the first step, and run.refused for anything else RunControls
+// refuses, with its reason.
+//
+// feed() runs once per frame and turns what the script's CONTROLS and its
+// CONTROL_REPLYs changed into run events (events.h): `attach` when a script is
+// attached or detached, `state` when the run state changes, `param` when the
+// script applies a value (the value after its clamp, and the step), and
+// `action` when an action ends with ok or error. The origin of each is
+// "script". The first CONTROLS after an attach is the baseline: its values
+// are registrations, not changes. Frame thread.
+class AppRunControl final : public caliper_builder::RunControl {
+public:
+    explicit AppRunControl(caliper_live::RunLink* link = nullptr) : link_(link) {}
+    // The link to act through; null detaches. Frame thread.
+    void set_link(caliper_live::RunLink* link) { link_ = link; }
+    caliper_live::RunLink* link() const { return link_; }
+
+    caliper_builder::RunState state() override;
+    caliper_builder::Error set_param(const std::string& name, const nlohmann::json& value) override;
+    caliper_builder::Error run_action(const std::string& name) override;
+    caliper_builder::Error pause(caliper_builder::RunPauseOp op, std::int64_t count) override;
+
+    // Pushes the run events of the changes since the last call into `sink`.
+    void feed(caliper_builder::EventSink& sink);
+
+private:
+    caliper_builder::Error send(const std::string& op, const std::string& name, const nlohmann::json& value,
+                                std::int64_t count);
+
+    caliper_live::RunLink* link_ = nullptr;
+    // What feed() saw last.
+    bool attached_ = false;
+    std::string script_;
+    bool have_ = false;                          // a CONTROLS since the attach
+    std::uint64_t version_ = 0;                  // its version
+    std::string run_state_ = "none";
+    std::map<std::string, std::pair<nlohmann::json, nlohmann::json>> params_;   // name: value, pending
+    std::map<std::string, std::uint64_t> results_;                              // action: at_ns of its last result
+};
+#endif
 
 // What the app's navigation answers a launch by manifest id, for POST
 // /v0/applets/{id}/launch and app.launch: status 200 with the body of
@@ -182,6 +244,17 @@ public:
 
     // The spec runtime's seam for panel.render; null unbinds it.
     void set_panel_renderer(std::shared_ptr<PanelRenderSeam> renderer);
+
+    // The attached script's run (live/live_attach.h): the app gives its
+    // attachment's link once, and null before the attachment goes. The
+    // session's run control (run_control()) acts through it, and frame() feeds
+    // the run events of what changed into the session's event ring. Frame
+    // thread.
+    void set_run_link(caliper_live::RunLink* link);
+    // The app's run control, which the session holds from its adoption until
+    // close(): what the spec runtime's controls act through
+    // (SpecInstrumentHost::run). Null without the builder.
+    caliper_builder::RunControl* run_control();
 
     // Counters the spec page (spec_page.h) reads on the frame thread to know
     // when to look at the session again, without asking it every frame. Any

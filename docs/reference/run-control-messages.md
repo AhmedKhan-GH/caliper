@@ -111,7 +111,7 @@ The producer sends CONTROLS right after the VIEWS that confirms an attachment. I
 | `run` key | Type | Meaning |
 |---|---|---|
 | `state` | string | `none`, `running`, `pausing`, `paused` or `stepping`, as [Pause, Resume and Step](#pause-resume-and-step) describes |
-| `step` | integer, optional | The step number of the script at the checkpoint where the state last changed |
+| `step` | integer, optional | The step number of the script at its latest checkpoint. While the run runs, the producer sends CONTROLS again at most one time each second, so this number can be up to one second old. A paused run reports the step where it paused |
 | `steps_left` | integer, optional | While `stepping`, the steps the loop still runs before it pauses |
 
 | Parameter key | Type | Meaning |

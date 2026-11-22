@@ -6,6 +6,7 @@
 #include <doctest/doctest.h>
 
 #include <cmath>
+#include <limits>
 
 #include "helpers.h"
 
@@ -376,7 +377,7 @@ TEST_CASE("hostile input is refused within bounded work") {
 }
 
 TEST_CASE("a later or invalid version is refused with one error") {
-    auto later = parse("caliper_spec = 1\n[applet]\nid = \"a\"\nfuture_key = 1\n[[gadget]]\n");
+    auto later = parse("caliper_spec = 2\n[applet]\nid = \"a\"\nfuture_key = 1\n[[gadget]]\n");
     REQUIRE(later.diagnostics.size() == 1);
     CHECK(later.diagnostics[0].code == "spec.unsupported_version");
     CHECK(later.diagnostics[0].message.find("newer Caliper") != std::string::npos);
@@ -433,4 +434,175 @@ TEST_CASE("a spec built in code round trips through both forms") {
     REQUIRE(from_json.ok());
     CHECK(from_json.spec == s);
     CHECK(cs::validate(s).ok());
+}
+
+// ---- spec version 1 (design/instruments.md) ---------------------------------
+
+TEST_CASE("a version 1 spec with a scene panel and controls parses into the expected spec") {
+    auto r = parse(fixture("instruments.spec.toml"));
+    REQUIRE_MESSAGE(r.ok(), dump(r.diagnostics));
+    const cs::Spec& s = r.spec;
+    CHECK(s.version == 1);
+    REQUIRE(s.panels.size() == 1);
+    const cs::Panel& world = s.panels[0];
+    CHECK(world.primitive == cs::Primitive::scene);
+    CHECK(world.bind.at("scene").bindings == std::vector<std::string>{"live:model"});
+    CHECK(cs::live_scene_name(world.bind.at("scene").bindings[0]) == std::optional<std::string>("model"));
+    CHECK(world.options.scene.up == std::optional<std::string>("+z"));
+    CHECK(world.options.scene.axes == std::optional<bool>(true));
+    CHECK_FALSE(world.options.scene.labels.has_value());
+    CHECK(world.options.scene.view_camera.at("target") == json::array({0, 1, 0}));
+    CHECK(world.options.set_names() == std::vector<std::string>{"axes", "up", "view_camera"});
+    REQUIRE(s.controls.size() == 2);
+    CHECK(s.controls[0].id == "lr");
+    CHECK(s.controls[0].kind == cs::ControlKind::slider);
+    CHECK(s.controls[0].title == std::optional<std::string>("Learning rate"));
+    CHECK(s.controls[0].bind == "param:lr");
+    CHECK(s.controls[0].options.log == std::optional<bool>(true));
+    CHECK(s.controls[0].options.min == std::optional<double>(0.00001));
+    CHECK(s.controls[1].kind == cs::ControlKind::button);
+    CHECK(s.controls[1].bind == "run:pause");
+    CHECK(s.controls[1].options.empty());
+    CHECK(cs::required_version(s) == 1);
+}
+
+TEST_CASE("a version 1 spec round trips through canonical TOML and canonical JSON") {
+    auto first = parse(fixture("instruments.spec.toml"));
+    REQUIRE(first.ok());
+    const std::string toml = cs::to_toml(first.spec);
+    CHECK(toml.find("caliper_spec = 1\n") == 0);
+    CHECK(toml.find("\n[[control]]\nid = \"lr\"\n") != std::string::npos);
+    CHECK(toml.find("[[control]]") < toml.find("[layout]"));
+    auto second = parse(toml);
+    REQUIRE_MESSAGE(second.ok(), dump(second.diagnostics));
+    CHECK(second.spec == first.spec);
+    CHECK(cs::to_toml(second.spec) == toml);
+
+    const std::string text = cs::to_json_text(first.spec);
+    auto back = cs::from_json_text(text);
+    REQUIRE_MESSAGE(back.ok(), dump(back.diagnostics));
+    CHECK(back.spec == first.spec);
+    CHECK(cs::to_json_text(back.spec) == text);
+    const json j = json::parse(text);
+    CHECK(j.at("control").size() == 2);
+    CHECK(j.at("control")[1] == json::parse(R"({"id": "pause", "kind": "button", "bind": "run:pause"})"));
+}
+
+TEST_CASE("the version 0 fixtures read and write as version 0") {
+    for (const std::string& name : valid_fixtures()) {
+        CAPTURE(name);
+        auto r = parse(fixture(name));
+        REQUIRE(r.ok());
+        CHECK(r.spec.version == 0);
+        CHECK(r.spec.controls.empty());
+        CHECK(cs::required_version(r.spec) == 0);
+        CHECK(cs::to_toml(r.spec).find("caliper_spec = 0\n") == 0);
+        // The migration changes only the number.
+        cs::Spec raised = r.spec;
+        raised.version = 1;
+        auto again = parse(cs::to_toml(raised));
+        REQUIRE_MESSAGE(again.ok(), dump(again.diagnostics));
+        CHECK(again.spec == raised);
+    }
+}
+
+TEST_CASE("a version 0 document that uses a key of version 1 gets the errors of version 0") {
+    const std::string head = "caliper_spec = 0\n[applet]\nid = \"a\"\n";
+    auto control = parse(head + "[[control]]\nid = \"lr\"\nkind = \"slider\"\nbind = \"param:lr\"\n");
+    CHECK(has(control.diagnostics, "spec.unknown_key", "control"));
+    auto scene = parse(head + "[[panel]]\nid = \"w\"\nprimitive = \"scene\"\nbind = { scene = \"live:model\" }\n");
+    CHECK(has(scene.diagnostics, "spec.unknown_primitive", "panel[0].primitive"));
+    CHECK(find(scene.diagnostics, "spec.unknown_primitive")->message.find("scene") != std::string::npos);
+    // The same document as version 1 parses.
+    CHECK(parse("caliper_spec = 1\n[applet]\nid = \"a\"\n[[panel]]\nid = \"w\"\nprimitive = \"scene\"\n"
+                "bind = { scene = \"live:model\" }\n")
+              .ok());
+}
+
+TEST_CASE("the parser checks the types and keys of controls and scene options") {
+    const std::string head = "caliper_spec = 1\n[applet]\nid = \"a\"\n";
+    auto control = [&](const std::string& body) { return parse(head + "[[control]]\n" + body).diagnostics; };
+    CHECK(has(control("id = \"k\"\nkind = \"knob\"\nbind = \"value\"\n"), "spec.unknown_control_kind",
+              "control[0].kind"));
+    CHECK(has(control("id = \"k\"\nbind = \"value\"\n"), "spec.missing_key", "control[0].kind"));
+    CHECK(has(control("id = \"k\"\nkind = \"slider\"\n"), "spec.missing_key", "control[0].bind"));
+    CHECK(has(control("kind = \"slider\"\nbind = \"value\"\n"), "spec.missing_key", "control[0].id"));
+    CHECK(has(control("id = \"k\"\nkind = \"slider\"\nbind = \"value\"\nlabel = \"x\"\n"), "spec.unknown_key",
+              "control[0].label"));
+    CHECK(has(control("id = \"k\"\nkind = \"slider\"\nbind = \"value\"\noptions = { colormap = \"magma\" }\n"),
+              "spec.unknown_option", "control[0].options.colormap"));
+    CHECK(has(control("id = \"k\"\nkind = \"slider\"\nbind = \"value\"\noptions = { min = \"0\" }\n"),
+              "spec.wrong_type", "control[0].options.min"));
+    CHECK(has(parse("caliper_spec = 1\ncontrol = 3\n[applet]\nid = \"a\"\n").diagnostics, "spec.wrong_type", "control"));
+
+    auto scene = [&](const std::string& options) {
+        return parse(head + "[[panel]]\nid = \"w\"\nprimitive = \"scene\"\nbind = { scene = \"live:model\" }\n"
+                            "options = { " +
+                     options + " }\n")
+            .diagnostics;
+    };
+    CHECK(has(scene("up = \"+w\""), "spec.bad_value", "panel[0].options.up"));
+    CHECK(has(scene("include = []"), "spec.bad_value", "panel[0].options.include"));
+    CHECK(has(scene("exclude = [1]"), "spec.wrong_type", "panel[0].options.exclude[0]"));
+    CHECK(has(scene("view_camera = 3"), "spec.wrong_type", "panel[0].options.view_camera"));
+    CHECK(has(scene("view_camera = { target = [1, 2] }"), "spec.wrong_type", "panel[0].options.view_camera.target"));
+    CHECK(has(scene("view_camera = { zoom = 2 }"), "spec.unknown_key", "panel[0].options.view_camera.zoom"));
+    CHECK(has(scene("colormap = \"magma\""), "spec.unknown_option", "panel[0].options.colormap"));
+    CHECK(has(scene("labels = 1"), "spec.wrong_type", "panel[0].options.labels"));
+    CHECK(parse(head + "[[panel]]\nid = \"w\"\nprimitive = \"scene\"\nbind = { scene = \"live:model\" }\n"
+                       "options = { view_camera = \"cameras/main\", include = [\"modules/**\"], labels = false, "
+                       "scale_bar = true }\n")
+              .ok());
+}
+
+TEST_CASE("the item decoders take the keys of version 1") {
+    auto c = cs::control_from_json(json::parse(R"({"id": "lr", "kind": "slider", "bind": "param:lr",
+                                                   "options": {"min": 0.001, "max": 1, "log": true}})"),
+                                   "control[0]");
+    REQUIRE_MESSAGE(c.ok(), dump(c.diagnostics));
+    CHECK(c.value.options.max == std::optional<double>(1));
+    CHECK(cs::to_json(c.value) == json::parse(R"({"id": "lr", "kind": "slider", "bind": "param:lr",
+                                                  "options": {"min": 0.001, "max": 1.0, "log": true}})"));
+    auto bad = cs::control_from_json(json::parse(R"({"id": "k", "kind": "dial", "bind": "value"})"), "control[3]");
+    CHECK(has(bad.diagnostics, "spec.unknown_control_kind", "control[3].kind"));
+    // A value built in code can hold infinity or NaN, which JSON text cannot; check_values refuses both.
+    json huge = json::parse(R"({"id": "k", "kind": "slider", "bind": "value", "options": {}})");
+    huge["options"]["max"] = std::numeric_limits<double>::infinity();
+    CHECK(has(cs::control_from_json(huge, "control[0]").diagnostics, "spec.out_of_range", "control[0].options.max"));
+    json nan_min = json::parse(R"({"id": "k", "kind": "slider", "bind": "value", "options": {}})");
+    nan_min["options"]["min"] = std::numeric_limits<double>::quiet_NaN();
+    CHECK(has(cs::control_from_json(nan_min, "control[0]").diagnostics, "spec.out_of_range", "control[0].options.min"));
+
+    auto p = cs::panel_from_json(json::parse(R"({"id": "w", "primitive": "scene", "bind": {"scene": "live:model"},
+                                                 "options": {"axes": false}})"));
+    REQUIRE_MESSAGE(p.ok(), dump(p.diagnostics));
+    CHECK(p.value.primitive == cs::Primitive::scene);
+    CHECK(cs::to_json(p.value).at("options") == json::parse(R"({"axes": false})"));
+}
+
+TEST_CASE("the bind grammar of a control") {
+    using K = cs::ControlTarget::Kind;
+    CHECK(cs::parse_control_target("param:lr") == cs::ControlTarget{K::param, "lr"});
+    CHECK(cs::parse_control_target("action:save checkpoint") == cs::ControlTarget{K::action, "save checkpoint"});
+    CHECK(cs::parse_control_target("run:pause") == cs::ControlTarget{K::run_pause, ""});
+    CHECK(cs::parse_control_target("value") == cs::ControlTarget{K::value, ""});
+    CHECK(cs::parse_control_target("param:" + std::string(63, 'a')).has_value());
+    for (const std::string& bad : std::vector<std::string>{"param:", "param:" + std::string(64, 'a'), "param:a\nb",
+                                                           "action:", "run:step", "intervene:layer.0", "values", "",
+                                                           "lr"}) {
+        CAPTURE(bad);
+        CHECK_FALSE(cs::parse_control_target(bad).has_value());
+    }
+    for (const std::string& text : std::vector<std::string>{"param:lr", "action:save", "run:pause", "value"})
+        CHECK(cs::control_target_string(*cs::parse_control_target(text)) == text);
+    CHECK(cs::control_takes_target(cs::ControlKind::slider, {K::param, "lr"}));
+    CHECK(cs::control_takes_target(cs::ControlKind::slider, {K::value, ""}));
+    CHECK_FALSE(cs::control_takes_target(cs::ControlKind::slider, {K::action, "save"}));
+    CHECK(cs::control_takes_target(cs::ControlKind::button, {K::run_pause, ""}));
+    CHECK_FALSE(cs::control_takes_target(cs::ControlKind::button, {K::param, "lr"}));
+    CHECK_FALSE(cs::control_takes_target(cs::ControlKind::toggle, {K::param, "lr"}));
+    CHECK(cs::live_scene_name("live:model") == std::optional<std::string>("model"));
+    CHECK_FALSE(cs::live_scene_name("live:").has_value());
+    CHECK_FALSE(cs::live_scene_name("model").has_value());
+    CHECK_FALSE(cs::live_scene_name("tensor:model").has_value());
 }

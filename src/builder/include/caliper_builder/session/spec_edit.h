@@ -88,6 +88,14 @@ struct SpecEdit {
 SpecEdit apply_spec_edit(const spec::Spec& spec, std::string_view name, const nlohmann::json& args,
                          const spec::SourceResolver& resolver = {});
 
+// The edits of the spec's controls, which apply_spec_edit() hands over:
+// control.create, control.patch and control.remove (design/instruments.md,
+// Control Commands). They follow the rules of the panel edits: control.exists,
+// control.not_found, the validator's codes, the result fields of the command
+// table. Defined in control_edit.cpp, which holds the control edits.
+SpecEdit apply_control_edit(const spec::Spec& spec, std::string_view name, const nlohmann::json& args,
+                            const spec::SourceResolver& resolver);
+
 // The empty spec of spec.new: {"id", "title", "description"}.
 spec::Spec new_spec_from_args(const nlohmann::json& args);
 

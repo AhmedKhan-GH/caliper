@@ -1,0 +1,30 @@
+[package]
+name = "caliper-wgsl"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Caliper's runtime WGSL compiler: validates WGSL and translates it to MSL and SPIR-V with Naga, behind the C interface of include/caliper/wgsl.h."
+
+[lib]
+name = "caliper_wgsl"
+path = "src/lib.rs"
+crate-type = ["staticlib"]
+
+[features]
+# Adds caliper_wgsl_test_panic, the hook for the C test of the panic guard; the shipped library omits it.
+test-hooks = []
+
+[dependencies]
+# The same pin as the developer-time driver (tools/shaders/naga-driver), so that an agent's
+# program and a built-in shader go through one translator. Cargo.lock is the driver's lock
+# with this package's name; change both crates together.
+naga = { version = "=30.0.2", default-features = false, features = ["wgsl-in", "msl-out", "spv-out"] }
+
+[profile.release]
+debug = false
+# The C interface catches every panic, which needs unwinding.
+panic = "unwind"
+lto = true
+codegen-units = 1
+strip = "debuginfo"

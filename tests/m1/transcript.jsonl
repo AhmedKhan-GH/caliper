@@ -1,0 +1,9 @@
+{"step": "spec", "tool": "spec_new", "arguments": {"id": "m1", "title": "M1 Check"}}
+{"step": "scene", "tool": "panel_create", "arguments": {"id": "world", "primitive": "scene", "title": "Model", "bind": {"scene": "live:model"}, "options": {"axes": true}}}
+{"step": "slider", "tool": "control_create", "arguments": {"id": "rate", "kind": "slider", "title": "Learning Rate", "bind": "param:lr"}}
+{"step": "state", "tool": "run_state", "arguments": {}, "expect": {"attached": true, "control": true}}
+{"step": "set", "tool": "run_set_param", "arguments": {"name": "lr", "value": 0.005}, "approve": "run.set_param", "expect": {"pending": true}}
+{"step": "param", "tool": "events_wait", "arguments": {"cursor": 0, "kinds": ["run"], "timeout_s": 30}, "until": {"kind": "run", "change": "param", "name": "lr"}}
+{"step": "script", "script_prints": {"lr": 0.005}}
+{"step": "capture", "capture": "m1_scene_panel"}
+{"step": "pick", "tool": "events_wait", "arguments": {"kinds": ["pick"], "timeout_s": 30}, "until": {"kind": "pick", "panel": "world", "entity": "modules"}}

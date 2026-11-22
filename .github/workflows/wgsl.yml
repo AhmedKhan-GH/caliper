@@ -1,0 +1,120 @@
+# .github/workflows/wgsl.yml
+name: WGSL Library
+on:
+  push:
+    branches: [main]
+    paths: ['tools/shaders/caliper-wgsl/**', 'cmake/CaliperWgsl.cmake', 'tests/wgsl/**',
+            'src/host/gfx/shaders/generated/**', '.github/workflows/wgsl.yml']
+  pull_request:
+    paths: ['tools/shaders/caliper-wgsl/**', 'cmake/CaliperWgsl.cmake', 'tests/wgsl/**',
+            'src/host/gfx/shaders/generated/**', '.github/workflows/wgsl.yml']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the archives as the release caliper-wgsl-<version>
+        type: boolean
+        default: false
+permissions:
+  contents: read
+# A newer run on the same ref cancels an older one. A publish run has its own group, thus
+# nothing cancels it and it cancels no other run.
+concurrency:
+  group: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish) && format('wgsl-publish-{0}', github.run_id) || format('wgsl-{0}', github.ref) }}
+  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && inputs.publish) }}
+
+jobs:
+  # The runtime WGSL compiler (tools/shaders/caliper-wgsl) is a Rust static library that Caliper's
+  # build takes prebuilt, so that it needs no Rust (cmake/CaliperWgsl.cmake). This job builds the
+  # library on each platform with build_library.py, runs its C test (tests/wgsl) through the
+  # tree's CMake with CALIPER_WGSL_LIBRARY, and uploads the archive with its SHA-256. Linux is
+  # left out because Caliper does not build there yet.
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            platform: macos-arm64
+          - os: windows-latest
+            platform: windows-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            wgsl-out/cargo-target
+          key: caliper-wgsl-${{ matrix.platform }}-${{ hashFiles('tools/shaders/caliper-wgsl/Cargo.lock', 'tools/shaders/caliper-wgsl/Cargo.toml', 'tools/shaders/caliper-wgsl/src/**') }}
+      - name: Build the library
+        run: python tools/shaders/caliper-wgsl/build_library.py --out wgsl-out --archive
+      - name: Run the Rust unit tests
+        run: cargo test --locked --manifest-path tools/shaders/caliper-wgsl/Cargo.toml --target-dir wgsl-out/cargo-target
+      - name: System libraries of the static link
+        run: |
+          cargo rustc --release --locked --manifest-path tools/shaders/caliper-wgsl/Cargo.toml \
+            --target-dir wgsl-out/cargo-target -- --print native-static-libs 2>&1 | grep native-static-libs || true
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - if: runner.os == 'Windows'
+        run: choco install ninja -y --no-progress
+      - if: runner.os == 'macOS'
+        run: brew install ninja
+      - run: ./init-submodules.sh
+      - name: Configure with the library
+        run: >-
+          cmake --preset release-notorch -DCALIPER_WITH_BUILDER=OFF
+          -DCALIPER_WGSL_LIBRARY="$PWD/wgsl-out/lib/${{ runner.os == 'Windows' && 'caliper_wgsl.lib' || 'libcaliper_wgsl.a' }}"
+      - name: Build and run the C test
+        run: |
+          cmake --build cmake-build-notorch --target caliper_wgsl_tests --parallel
+          ctest --test-dir cmake-build-notorch -L wgsl --output-on-failure --no-tests=error
+      - name: Record the hash
+        run: |
+          cat wgsl-out/*.sha256
+          echo "${{ matrix.platform }}: \`$(cut -d' ' -f1 wgsl-out/*.sha256)\`" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: caliper-wgsl-${{ matrix.platform }}
+          path: |
+            wgsl-out/*.tar.gz
+            wgsl-out/*.sha256
+          if-no-files-found: error
+
+  # On a manual run from main with publish set, the archives become the assets of the release
+  # caliper-wgsl-<version>, with their hashes, which go into tools/shaders/caliper-wgsl/prebuilt.cmake.
+  # A run from another ref builds and tests but publishes nothing.
+  publish:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('tools/shaders/caliper-wgsl/Cargo.toml', 'rb'))['package']['version'])")
+          tag="caliper-wgsl-$version"
+          cat dist/*.sha256 > dist/SHA256SUMS
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "Release $tag exists; a published version is never replaced. Raise the crate version." >&2
+            exit 1
+          fi
+          gh release create "$tag" dist/*.tar.gz dist/SHA256SUMS --target "$GITHUB_SHA" \
+            --title "caliper_wgsl $version" --notes "Prebuilt caliper_wgsl $version (Naga 30.0.2). SHA-256 in SHA256SUMS."
+          { echo "Release $tag"; echo '```'; cat dist/SHA256SUMS; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

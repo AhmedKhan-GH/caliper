@@ -176,7 +176,9 @@ TEST_CASE("the table refuses what the spec refuses where the schema subset can s
     check_refused("panel.create", panel_args({{"rows", "q.step"}}, nullptr, "table"), "args.bind.rows");
     check_refused("panel.create", panel_args({{"x", std::string(321, 'a')}, {"y", "m.loss"}}, nullptr), "args.bind.x");
     check_refused("panel.create", panel_args({{"wheel", "m.loss"}}, nullptr), "args.bind.wheel");
-    check_refused("panel.create", panel_args({{"values", "h"}}, nullptr, "scene"), "args.primitive");
+    // scene is a primitive of spec version 1 (design/instruments.md); a name outside the eight is refused.
+    check_refused("panel.create", panel_args({{"values", "h"}}, nullptr, "pie"), "args.primitive");
+    check_refused("panel.create", panel_args({{"scene", "model"}}, nullptr, "scene"), "args.bind.scene");
     json titled = panel_args({{"y", "m.loss"}}, nullptr);
     titled["title"] = "";
     check_refused("panel.create", titled, "args.title");

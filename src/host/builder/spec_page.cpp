@@ -431,6 +431,10 @@ struct SpecPage::Impl {
         this->app = &app;
         if (workspace.empty()) workspace = folder_name(app.workspace());
         cb::Session* s = app.session();
+        // The instruments of spec version 1 (spec_instruments.h): the
+        // session's event ring and the app's run control, which acts on the
+        // attached script.
+        runtime->set_instruments(s ? &s->events() : nullptr, app.run_control());
         if (s == bound) return;
         if (widget) {
             // Its session has gone or changed: the surface forgets its
@@ -679,6 +683,11 @@ struct SpecPage::Impl {
             it = it->first == "menu:remove" ? std::next(it) : items.erase(it);
         if (open) {
             const SpecLook look = house_spec_look();
+            // Instruments (design/instruments.md): the session's event ring and
+            // the app's run control, which the app sets and takes back while
+            // a script is attached, so they are read at each frame.
+            if (cb::Session* ses = app ? app->session() : nullptr) runtime->set_instruments(&ses->events(), ses->run_control());
+            else runtime->set_instruments(nullptr, nullptr);
             // The page routes ⌘K and Escape (spec_key_action); the surface
             // takes Enter on its card and polls its agent.
             if (widget) widget->frame(look, focused, /*keys=*/false);
@@ -990,6 +999,12 @@ void SpecPage::set_dim_names(std::function<std::vector<std::string>(const std::s
     impl_->dim_names = std::move(names);
 }
 
+void SpecPage::set_live_core(std::function<CaliperCore*()> core) { impl_->runtime->set_live_core(std::move(core)); }
+
+bool SpecPage::pick_scene(const std::string& panel_id, float u, float v) {
+    return impl_->runtime->pick_scene(panel_id, u, v);
+}
+
 std::string SpecPage::browser_note() const { return impl_->browser_note(); }
 
 bool SpecPage::item_rect(const std::string& name, float rect[4]) const {
@@ -1180,6 +1195,8 @@ void SpecPage::set_agent_settings(AgentSettings*) {}
 bool SpecPage::widget_action(const std::string&) { return false; }
 void SpecPage::set_open_in_browser(std::function<std::string(const std::string&)>) {}
 void SpecPage::set_dim_names(std::function<std::vector<std::string>(const std::string&)>) {}
+void SpecPage::set_live_core(std::function<CaliperCore*()>) {}
+bool SpecPage::pick_scene(const std::string&, float, float) { return false; }
 bool SpecPage::item_rect(const std::string&, float*) const { return false; }
 bool SpecPage::panel_rect(const std::string&, float*) const { return false; }
 std::string SpecPage::widget_state() const { return "idle"; }

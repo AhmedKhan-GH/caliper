@@ -381,8 +381,8 @@ TEST_CASE("resources are listed in pages and read by URI") {
         REQUIRE(pages < 10);
     }
     CHECK(pages == 3);
-    // 451 pages, the schema compiled in, and the command table.
-    CHECK(seen.size() == 453);
+    // 451 pages, the two spec schemas compiled in, and the command table.
+    CHECK(seen.size() == 454);
     CHECK(seen.count(kCommandTableUri) == 1);
     CHECK(seen.count(kSpecSchemaUri) == 1);
     CHECK(seen.count("caliper://docs/index.md") == 1);
@@ -409,6 +409,11 @@ TEST_CASE("resources are listed in pages and read by URI") {
     const json schema = h.request("read-3", "resources/read", modern({{"uri", kSpecSchemaUri}}));
     const json parsed = json::parse(schema["result"]["contents"][0]["text"].get<std::string>(), nullptr, false);
     CHECK(parsed.is_object());
+    // Both spec schemas change only with caliper-mcp itself, so they keep for an hour.
+    const json v1 = h.request("read-3b", "resources/read", modern({{"uri", kSpecSchemaV1Uri}}));
+    CHECK(v1["result"]["contents"][0]["uri"] == kSpecSchemaV1Uri);
+    CHECK(v1["result"]["ttlMs"] == schema["result"]["ttlMs"]);
+    CHECK(schema["result"]["ttlMs"] == 3600000);
 
     const json missing = h.request("read-4", "resources/read", modern({{"uri", "caliper://docs/../index.md"}}));
     const json id4 = "read-4";

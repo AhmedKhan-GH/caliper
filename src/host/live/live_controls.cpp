@@ -951,4 +951,45 @@ void RunControls::link_views(CaliperCore* core, const std::function<uint64_t(con
     }
 }
 
+// ---- the run link of an attachment ------------------------------------------------------
+
+bool AttachmentRunLink::attached() const { return att_.attached(); }
+
+std::string AttachmentRunLink::script() const { return att_.status().script; }
+
+const Controls* AttachmentRunLink::controls() const {
+    const RunControls* rc = att_.controls();
+    return rc && rc->have() ? &rc->state() : nullptr;
+}
+
+ControlAccess AttachmentRunLink::access() const {
+    const RunControls* rc = att_.controls();
+    if (!rc) return ControlAccess{false, att_.attached() ? "the attached session is not a network stream"
+                                                         : "not attached to a session"};
+    return rc->access();
+}
+
+std::string AttachmentRunLink::send(const std::string& op, const std::string& name, const Json& value,
+                                    uint32_t count) {
+    RunControls* rc = att_.controls();
+    if (!rc) return access().why;
+    bool sent = false;
+    if (op == CALIPER_NET_OP_PAUSE) sent = rc->pause();
+    else if (op == CALIPER_NET_OP_RESUME) sent = rc->resume();
+    else if (op == CALIPER_NET_OP_STEP) sent = rc->step(count);
+    else if (op == CALIPER_NET_OP_SET) sent = rc->set(name, value);
+    else if (op == CALIPER_NET_OP_RUN) sent = rc->run(name);
+    else return "unknown request " + op;
+    if (sent) return "";
+    const std::string& why = rc->notice().text;
+    return why.empty() ? "not sent" : why;
+}
+
+RunLink::ActionResult AttachmentRunLink::action_result(const std::string& name) const {
+    const RunControls* rc = att_.controls();
+    const RunControls::Result* r = rc ? rc->action_result(name) : nullptr;
+    if (!r) return {};
+    return ActionResult{r->text, r->error, r->at_ns};
+}
+
 }  // namespace caliper_live

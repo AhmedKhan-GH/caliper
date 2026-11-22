@@ -241,6 +241,24 @@ void CommandRegistry::set_approval_notes(ApprovalNotes notes) {
     notes_ = std::move(notes);
 }
 
+void CommandRegistry::set_approval_observer(ApprovalObserver observer) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    observer_ = std::move(observer);
+}
+
+void CommandRegistry::observe(const Parked& parked, std::string_view state) {
+    if (!observer_) return;
+    const auto it = commands_.find(parked.invocation.name);
+    try {
+        observer_(PendingApproval{parked.approval, parked.invocation,
+                                  it != commands_.end() ? it->second.descriptor.summary : std::string(),
+                                  parked.requested_at, parked.review},
+                  state);
+    } catch (...) {
+        // An observer that throws loses its own news only.
+    }
+}
+
 void CommandRegistry::set_journal(CommandJournal* journal) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     journal_ = journal;
@@ -377,11 +395,14 @@ CommandResult CommandRegistry::invoke(CommandInvocation inv) {
         err.code = "command.invalid_args";
         return CommandResult::failure(inv.id, err);
     }
-    // The browser's spec page reads; a command that changes the workspace is
+    // The browser's spec page reads; a command that changes the workspace or
+    // acts on the running script (the effect run, which does not mutate) is
     // refused before any policy sees it, so it is never journaled.
-    if (inv.origin == CommandOrigin::viewer && entry.descriptor.mutates)
+    if (inv.origin == CommandOrigin::viewer && (entry.descriptor.mutates || entry.descriptor.effect == CommandEffect::run))
         return CommandResult::failure(
-            inv.id, Error("command.not_allowed", inv.name + " changes the workspace, and the viewer origin only reads.",
+            inv.id, Error("command.not_allowed",
+                          inv.name + (entry.descriptor.mutates ? " changes the workspace" : " acts on the running script") +
+                              ", and the viewer origin only reads.",
                           "origin"));
     // The person's own commands (history.undo and history.redo) are refused
     // to agents before any policy or history work, so they are never journaled.
@@ -443,6 +464,7 @@ CommandResult CommandRegistry::park(const CommandInvocation& inv, const Entry& e
               "once they approve it.";
     CommandResult r = CommandResult::failure(inv.id, Error("command.needs_approval", inv.name + why, ""));
     r.approval = parked.approval;
+    observe(parked, "pending");
     pending_.push_back(std::move(parked));
     return r;
 }
@@ -474,6 +496,7 @@ CommandResult CommandRegistry::approve(const std::string& approval_id, bool reis
                                             it->invocation.name + " runs only on the app's frame thread.", "name"));
     Parked parked = std::move(*it);
     pending_.erase(it);
+    observe(parked, "approved");
     bool holds = true;
     if (check_) {
         try {
@@ -513,6 +536,7 @@ CommandResult CommandRegistry::decide(const std::string& approval_id, const std:
             "", Error("command.unknown_approval", "No invocation waits for approval under this id.", approval_id));
     Parked parked = std::move(*it);
     pending_.erase(it);
+    observe(parked, code == "command.denied" ? "denied" : "expired");
     const std::string message = code == "command.denied"
                                     ? "The person denied " + parked.invocation.name + "."
                                     : "Nobody approved " + parked.invocation.name + " in time, so it was withdrawn.";

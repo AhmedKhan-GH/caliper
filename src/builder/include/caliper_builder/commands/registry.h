@@ -104,6 +104,14 @@ struct RegistryOptions {
 // The descriptors of history.undo, history.redo and history.list.
 std::vector<CommandDescriptor> history_command_descriptors();
 
+// What the registry tells about each approval as it goes: "pending" when it
+// parks an invocation, "approved" when the person approves it (before the
+// approval check), "denied" when the person denies it and "expired" when its
+// wait ran out. It runs on the thread of the call, under the registry's lock,
+// so it must not call the registry. An approval that is cancelled unanswered
+// gives nothing.
+using ApprovalObserver = std::function<void(const PendingApproval&, std::string_view state)>;
+
 class CommandRegistry {
 public:
     explicit CommandRegistry(RegistryOptions options = {});
@@ -126,6 +134,7 @@ public:
     void set_approval_review(ApprovalReview review);  // empty: no review is kept
     void set_approval_check(ApprovalCheck check);     // empty: an approval always holds
     void set_approval_notes(ApprovalNotes notes);     // empty: no notes
+    void set_approval_observer(ApprovalObserver observer);   // empty: nobody hears
     void set_journal(CommandJournal* journal);        // not owned; may be null
     void set_frame_thread(std::optional<std::thread::id> id);
 
@@ -194,6 +203,7 @@ private:
                                  std::string message);
     CommandResult decide(const std::string& approval_id, const std::string& code);
     CommandResult park(const CommandInvocation& inv, const Entry& entry, std::vector<std::uint64_t> steps);
+    void observe(const Parked& parked, std::string_view state);
 
     RegistryOptions options_;
     mutable std::recursive_mutex mutex_;
@@ -206,6 +216,7 @@ private:
     ApprovalReview review_;
     ApprovalCheck check_;
     ApprovalNotes notes_;
+    ApprovalObserver observer_;
     std::optional<std::thread::id> frame_thread_;
     std::uint64_t next_invocation_ = 1;
     std::uint64_t next_approval_ = 1;

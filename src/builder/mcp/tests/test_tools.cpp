@@ -79,7 +79,7 @@ TEST_CASE("every command of the table that agents may run becomes one valid tool
         CHECK(tool["inputSchema"]["type"] == "object");
         // Annotations follow the flags; app.launch changes what the app shows.
         const json& ann = tool["annotations"];
-        CHECK(ann["readOnlyHint"] == (!d.mutates && d.name != "app.launch"));
+        CHECK(ann["readOnlyHint"] == (!d.mutates && d.name != "app.launch" && d.effect != caliper_builder::CommandEffect::run));
         CHECK(ann["destructiveHint"] == d.destructive);
         CHECK(ann["openWorldHint"] == false);
         // The output schema is the result schema, without a PNG's bytes.

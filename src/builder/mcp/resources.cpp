@@ -10,6 +10,12 @@
 namespace caliper_builder::mcp {
 
 namespace fs = std::filesystem;
+
+namespace detail {
+// The schema of spec version 1, compiled in (spec_schema_v1_embed.cpp, which
+// src/builder/mcp/CMakeLists.txt generates).
+extern const char* const kSpecSchemaV1Text;
+}  // namespace detail
 using nlohmann::json;
 
 namespace {
@@ -105,6 +111,11 @@ std::string checked_resource_path(std::string_view encoded) {
 
 Error ResourceStore::open(const ResourceOptions& options) {
     options_ = options;
+    if (options_.spec_schema_text.empty()) {
+        options_.spec_schema_v1_text.clear();
+    } else if (options_.spec_schema_v1_text.empty() && detail::kSpecSchemaV1Text) {
+        options_.spec_schema_v1_text = detail::kSpecSchemaV1Text;
+    }
     docs_root_.clear();
     sdk_root_.clear();
     Error error;
@@ -174,6 +185,17 @@ std::vector<ResourceEntry> ResourceStore::list(bool* truncated) const {
         r.size = options_.spec_schema_text.size();
         out.push_back(std::move(r));
     }
+    if (!options_.spec_schema_v1_text.empty()) {
+        ResourceEntry r;
+        r.uri = kSpecSchemaV1Uri;
+        r.name = "caliper-spec-v1.schema.json";
+        r.title = "Spec format v1 JSON Schema";
+        r.description = "The JSON Schema of the canonical JSON form of a spec, format version 1: version 0 with the "
+                        "scene primitive and the control table.";
+        r.mime_type = "application/schema+json";
+        r.size = options_.spec_schema_v1_text.size();
+        out.push_back(std::move(r));
+    }
     std::sort(out.begin(), out.end(), [](const ResourceEntry& a, const ResourceEntry& b) { return a.uri < b.uri; });
     return out;
 }
@@ -231,6 +253,11 @@ ResourceContent ResourceStore::read(const std::string& uri) const {
         return read_file(sdk_root_, uri, std::string_view(uri).substr(sdk.size()), kSdkExtensions);
     ResourceContent out;
     out.uri = uri;
+    if (uri == kSpecSchemaV1Uri && !options_.spec_schema_v1_text.empty()) {
+        out.mime_type = "application/schema+json";
+        out.text = options_.spec_schema_v1_text;
+        return out;
+    }
     if (uri == kSpecSchemaUri && !options_.spec_schema_text.empty()) {
         out.mime_type = "application/schema+json";
         out.text = options_.spec_schema_text;

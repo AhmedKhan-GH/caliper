@@ -1,0 +1,30 @@
+# Spec version 1: a scene panel bound to a live scene and two controls, as
+# design/instruments.md describes them.
+caliper_spec = 1
+
+[applet]
+id = "playground"
+title = "Playground"
+
+[[panel]]
+id = "world"
+primitive = "scene"
+title = "Model"
+bind = { scene = "live:model" }
+options = { axes = true, up = "+z", view_camera = { azimuth = 30, distance = 4, elevation = 20, target = [0, 1, 0] } }
+
+[[control]]
+id = "lr"
+kind = "slider"
+title = "Learning rate"
+bind = "param:lr"
+options = { log = true, max = 0.1, min = 0.00001 }
+
+[[control]]
+id = "pause"
+kind = "button"
+bind = "run:pause"
+
+[layout]
+split = "vertical"
+children = ["world", { split = "horizontal", children = ["lr", "pause"] }]

@@ -2,6 +2,7 @@
 // diagnostic helpers.
 #include <caliper_builder/spec/spec.h>
 
+#include <algorithm>
 #include <cmath>
 
 namespace caliper_builder::spec {
@@ -17,7 +18,7 @@ constexpr Name kPrimitives[] = {
     {"series", static_cast<int>(Primitive::series)},       {"heatmap", static_cast<int>(Primitive::heatmap)},
     {"points", static_cast<int>(Primitive::points)},       {"histogram", static_cast<int>(Primitive::histogram)},
     {"table", static_cast<int>(Primitive::table)},         {"image", static_cast<int>(Primitive::image)},
-    {"text", static_cast<int>(Primitive::text)},
+    {"text", static_cast<int>(Primitive::text)},         {"scene", static_cast<int>(Primitive::scene)},
 };
 constexpr Name kOps[] = {
     {"slice", static_cast<int>(TransformOp::slice)},
@@ -103,6 +104,15 @@ std::vector<std::string> Options::set_names() const {
     if (y_log) names.emplace_back("y_log");
     if (y_range) names.emplace_back("y_range");
     if (z_label) names.emplace_back("z_label");
+    // The scene options, merged into byte order with the others.
+    if (scene.axes) names.emplace_back("axes");
+    if (!scene.exclude.empty()) names.emplace_back("exclude");
+    if (!scene.include.empty()) names.emplace_back("include");
+    if (scene.labels) names.emplace_back("labels");
+    if (scene.scale_bar) names.emplace_back("scale_bar");
+    if (scene.up) names.emplace_back("up");
+    if (!scene.view_camera.is_null()) names.emplace_back("view_camera");
+    std::sort(names.begin(), names.end());
     return names;
 }
 
@@ -125,6 +135,12 @@ const Panel* Spec::find_panel(std::string_view id) const {
     return nullptr;
 }
 
+const Control* Spec::find_control(std::string_view id) const {
+    for (const Control& c : controls)
+        if (c.id == id) return &c;
+    return nullptr;
+}
+
 bool operator==(const Transform& a, const Transform& b) {
     return a.op == b.op && a.axis == b.axis && a.axis_list == b.axis_list && a.index == b.index &&
            a.start == b.start && a.stop == b.stop && a.step == b.step && a.fn == b.fn && a.keepdims == b.keepdims &&
@@ -141,7 +157,7 @@ bool operator==(const SlotValue& a, const SlotValue& b) { return a.bindings == b
 bool operator==(const Options& a, const Options& b) {
     return a.x_label == b.x_label && a.y_label == b.y_label && a.z_label == b.z_label && same(a.x_range, b.x_range) &&
            same(a.y_range, b.y_range) && same(a.range, b.range) && a.x_log == b.x_log && a.y_log == b.y_log &&
-           a.colormap == b.colormap && a.bins == b.bins && a.columns == b.columns && a.text == b.text && a.x == b.x;
+           a.colormap == b.colormap && a.bins == b.bins && a.columns == b.columns && a.text == b.text && a.scene == b.scene && a.x == b.x;
 }
 
 bool operator==(const Panel& a, const Panel& b) {
@@ -160,7 +176,15 @@ bool operator==(const Applet& a, const Applet& b) {
 
 bool operator==(const Spec& a, const Spec& b) {
     return a.version == b.version && a.applet == b.applet && a.sources == b.sources && a.panels == b.panels &&
-           a.layout == b.layout && a.x == b.x;
+           a.layout == b.layout && a.controls == b.controls && a.x == b.x;
+}
+
+std::int64_t primitive_version(Primitive p) { return p == Primitive::scene ? kInstrumentVersion : 0; }
+
+std::int64_t required_version(const Spec& spec) {
+    std::int64_t v = spec.controls.empty() ? 0 : kInstrumentVersion;
+    for (const Panel& p : spec.panels) v = std::max(v, primitive_version(p.primitive));
+    return v;
 }
 
 Error Diagnostic::to_error() const {

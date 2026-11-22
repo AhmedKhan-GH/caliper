@@ -28,11 +28,17 @@
 #include <nlohmann/json.hpp>
 
 #include <caliper_builder/error.h>
+#include <caliper_builder/spec/instrument.h>
 
 namespace caliper_builder::spec {
 
-// The format version this library reads and writes (`caliper_spec`).
+// The format version of a new Spec (`caliper_spec`). The writers write the
+// version a Spec holds and never raise it.
 inline constexpr std::int64_t kFormatVersion = 0;
+// The newest format version this library reads and writes: version 1 adds
+// the scene primitive and the control table (instrument.h). The reader knows
+// the versions kFormatVersion to kLatestFormatVersion.
+inline constexpr std::int64_t kLatestFormatVersion = kInstrumentVersion;
 
 // The limits of version 0. Each one has the error code the design page lists.
 namespace limits {
@@ -62,7 +68,8 @@ inline constexpr std::int64_t kMaxBins = 65536;
 inline constexpr std::size_t kDiagnostics = 256;  // one report keeps at most this many
 }  // namespace limits
 
-enum class Primitive { series, heatmap, points, histogram, table, image, text };
+// The primitives of a panel. `scene` is part of version 1 only.
+enum class Primitive { series, heatmap, points, histogram, table, image, text, scene };
 enum class TransformOp { slice, reduce, normalise };
 enum class SplitDirection { horizontal, vertical };
 
@@ -119,6 +126,7 @@ struct Options {
     std::optional<std::int64_t> bins;
     std::optional<std::vector<std::string>> columns;
     std::optional<std::string> text;
+    SceneOptions scene;                      // scene: up, view_camera, include, exclude, labels, axes, scale_bar
     nlohmann::json x;
 
     bool empty() const;
@@ -135,7 +143,9 @@ struct Panel {
     nlohmann::json x;
 };
 
-// A layout node: a panel id, a split or tabs.
+// A layout node: a panel id, a split or tabs. From spec version 1 a leaf's
+// `panel` may also name a control (instrument.h), since panels and controls
+// share one set of ids.
 struct LayoutNode {
     enum class Kind { panel, split, tabs };
     Kind kind = Kind::panel;
@@ -162,12 +172,21 @@ struct Spec {
     std::vector<Source> sources;
     std::vector<Panel> panels;
     std::optional<LayoutNode> layout;
+    std::vector<Control> controls;   // `control`, spec version 1 (instrument.h); empty in version 0
     nlohmann::json x;
 
-    // The first source or panel with this id, or null.
+    // The first source, panel or control with this id, or null.
     const Source* find_source(std::string_view id) const;
     const Panel* find_panel(std::string_view id) const;
+    const Control* find_control(std::string_view id) const;
 };
+
+// The lowest format version that holds `spec`: 1 when it has a scene panel or
+// a control, else 0. An edit that adds either to a version 0 spec raises the
+// version to this one in the same step.
+std::int64_t required_version(const Spec& spec);
+// The first version whose documents may use the primitive.
+std::int64_t primitive_version(Primitive p);
 
 bool operator==(const Transform& a, const Transform& b);
 bool operator==(const Source& a, const Source& b);

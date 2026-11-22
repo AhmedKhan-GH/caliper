@@ -92,7 +92,7 @@ TEST_CASE("the store lists the served files and nothing else") {
     CHECK_FALSE(truncated);
     std::set<std::string> want = {"caliper://docs/index.md", "caliper://docs/references/api.md",
                                   "caliper://docs/plans/deep/page.md", "caliper://sdk/include/caliper/sdk.h",
-                                  "caliper://sdk/include/caliper/detail.hpp", kSpecSchemaUri};
+                                  "caliper://sdk/include/caliper/detail.hpp", kSpecSchemaUri, kSpecSchemaV1Uri};
 #ifndef _WIN32
     want.insert("caliper://docs/alias.md");   // a link that stays inside
 #endif
@@ -148,7 +148,7 @@ TEST_CASE("the store without folders serves the schema only, and a bad folder is
     ResourceOptions o;
     o.spec_schema_text = "{}";
     REQUIRE(store.open(o).ok());
-    CHECK(store.list().size() == 1);
+    CHECK(store.list().size() == 2);   // the schemas of version 0 and version 1
     CHECK(store.templates().empty());
     CHECK(store.read("caliper://docs/index.md").error.code == "mcp.resource_not_found");
 
@@ -183,4 +183,34 @@ TEST_CASE("listing stops at its bounds") {
     const auto all = store.list(&truncated);
     CHECK_FALSE(truncated);
     CHECK(all.size() == 30);   // deep.md is below the depth bound
+}
+
+TEST_CASE("the schema of spec version 1 is a second resource beside version 0's") {
+    ResourceStore store;
+    ResourceOptions o;
+    o.spec_schema_text = "{}";
+    REQUIRE(store.open(o).ok());
+    const auto entries = store.list();
+    REQUIRE(entries.size() == 2);
+    CHECK(entries[0].uri == kSpecSchemaUri);
+    CHECK(entries[1].uri == kSpecSchemaV1Uri);
+    CHECK(entries[1].mime_type == "application/schema+json");
+    const ResourceContent v1 = store.read(kSpecSchemaV1Uri);
+    REQUIRE(v1.error.ok());
+    CHECK(entries[1].size == v1.text.size());
+    const nlohmann::json schema = nlohmann::json::parse(v1.text, nullptr, false);
+    REQUIRE(schema.is_object());
+    CHECK(schema.at("$id") == "urn:caliper:schema:spec:v1");
+    CHECK(schema.at("properties").at("caliper_spec").at("const") == 1);
+    CHECK(schema.at("$defs").contains("panel_scene"));
+    CHECK(schema.at("$defs").contains("control"));
+
+    // A text of its own replaces the compiled-in one; without version 0's schema there is none.
+    o.spec_schema_v1_text = "{\"v\": 1}";
+    REQUIRE(store.open(o).ok());
+    CHECK(store.read(kSpecSchemaV1Uri).text == "{\"v\": 1}");
+    ResourceStore none;
+    REQUIRE(none.open(ResourceOptions{}).ok());
+    CHECK(none.list().empty());
+    CHECK(none.read(kSpecSchemaV1Uri).error.code == "mcp.resource_not_found");
 }

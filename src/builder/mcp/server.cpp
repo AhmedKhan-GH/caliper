@@ -387,7 +387,7 @@ struct Server::Impl {
                                 json{{"uri", shown}, {"reason", rc.error.message}});
         if (rc.error) return Reply::error(kInternalError, rc.error.message, json{{"uri", shown}});
         json c = {{"uri", u}, {"mimeType", rc.mime_type}, {"text", std::move(rc.text)}};
-        return Reply::ok({{"contents", json::array({std::move(c)})}}, u == kSpecSchemaUri ? kTtlStatic : kTtlFiles);
+        return Reply::ok({{"contents", json::array({std::move(c)})}}, u == kSpecSchemaUri || u == kSpecSchemaV1Uri ? kTtlStatic : kTtlFiles);
     }
 
     Reply templates_list(const json& params) {

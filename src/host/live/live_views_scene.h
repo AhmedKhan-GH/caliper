@@ -11,6 +11,7 @@
 #include "gfx/gfx.h"
 #include "live/live_views_state.h"
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <vector>
@@ -81,5 +82,53 @@ const SceneView* scene_view(const View& v);
 
 // live_views_draw.cpp: the window of a scene view.
 void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v);
+
+// ---- A scene drawn into a rectangle (a scene panel of a spec, design/instruments.md) -------------
+
+// The options of a scene drawn into a rectangle: those of a spec's scene panel that the scene view
+// takes. An empty `up` keeps the scene's own.
+struct SceneRectOptions {
+    std::string up;          // "+x", "-x", "+y", "-y", "+z" or "-z"; empty: the scene's own
+    bool labels = true;      // the entities' labels over the picture
+    bool scale_bar = false;  // a scale bar in the scene's units
+};
+
+// What a scene drawn into a rectangle keeps between frames: the gesture in progress, a click's
+// pick in flight and a pick that a test seam asked for. The caller keeps one per rectangle.
+struct SceneRectState {
+    bool down = false;       // a button is held on the picture
+    bool moved = false;      // the pointer moved past the drag threshold since the press
+    bool selecting = false;  // the press was a shift-press: a rectangle selection
+    int button = 0;          // the button held: 0 left, 1 right, 2 middle
+    float x0 = 0, y0 = 0;    // where the press was, in screen pixels
+    float lx = 0, ly = 0;    // the pointer at the last frame
+    bool click = false;      // a click's pick is in flight, so its result is a pick event
+    float seam_u = -1.0f;    // a pick asked for by pick_scene_rect(), in 0..1 of the rectangle; -1: none
+    float seam_v = -1.0f;
+    bool seam_asked = false; // the request in flight is the seam pick's
+    std::string up_applied;  // the option `up` that was applied, so that it is applied once
+};
+
+// Asks for a pick at (u, v), each from 0 to 1 across the rectangle, at the next draw, as if the
+// person clicked there. Its result leaves through the sink as a pick event. The app's test seam
+// uses it.
+void pick_scene_rect(SceneRectState& state, float u, float v);
+
+// What a pick or a selection made in the rectangle sends: `type` is "pick" or "select", `detail`
+// the JSON text the scene view gives (live_scene.h: pick_detail(), select_polygon(); "{}" for a
+// cleared selection).
+using SceneRectSink = std::function<void(const char* type, const std::string& detail)>;
+
+enum class SceneRectResult { drawn, missing, too_small };
+
+// Draws the scene view `name` of the core into the rectangle at `p0` of `size` in the current
+// ImGui window, which the caller clips. A drag orbits (pans with the right or middle button, or
+// with alt or ctrl), the wheel zooms, a double click fits, a click picks, a shift-drag selects the
+// items inside a rectangle and a shift-click clears the selection. Picks and selections leave
+// through `sink`; hovers do not. Returns `missing` when the core has no scene view of that name,
+// and draws nothing then. Frame thread only.
+SceneRectResult draw_scene_in_rect(CaliperCore* core, const std::string& name, const char* imgui_id, ImVec2 p0,
+                                   ImVec2 size, const SceneRectOptions& options, SceneRectState& state,
+                                   const SceneRectSink& sink);
 
 }  // namespace caliper_live_views

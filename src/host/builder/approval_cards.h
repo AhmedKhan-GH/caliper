@@ -156,6 +156,11 @@ std::string approval_what(const caliper_builder::CommandInvocation& invocation, 
 // undone"; "" for a command that loses nothing.
 std::string approval_loss(const caliper_builder::CommandInvocation& invocation,
                           const caliper_builder::spec::Spec* open = nullptr);
+// The card text of a run command (design/instruments.md, Approval Card): the
+// change in one line and the running script it acts on, such as "Set
+// parameter lr to 0.001 in train.py. The change applies at the next step.";
+// "the attached script" when `script` is empty. "" for any other command.
+std::string approval_run_text(const caliper_builder::CommandInvocation& invocation, const std::string& script);
 
 enum class ApprovalState { waiting, deciding, approved, denied, timed_out, conflict, failed, withdrawn };
 const char* approval_state_tag(ApprovalState state);   // "APPROVED", ...; "" while waiting
@@ -176,6 +181,7 @@ struct ApprovalCard {
     // allow <command> (Session::approval_offers_rules()).
     bool rules = false;
     caliper_builder::CommandInvocation invocation;   // the parked call, whose command a rule names
+    std::string rule;                     // its rule key (permission_rule_key()): "run.set_param:lr"
     std::string error;                    // conflict, failed: the command's error code
     double decided_at = 0.0;              // when the card learnt its outcome
 };
@@ -274,7 +280,7 @@ struct ApprovalCardShape {
     bool warnings = false;
     bool decided = false;     // an outcome line and no buttons
     bool rules = false;       // a row of the two rule answers above the buttons
-    std::string what_command; // the command a rule names, for the Always allow label
+    std::string what_command; // the rule key a rule names, for the rule labels (permission_rule_key())
 };
 
 struct ApprovalLayoutInput {
@@ -319,10 +325,15 @@ ApprovalStripLayout layout_approval_strip(const ApprovalLayoutInput& in, const A
                                           const WidgetMeasure& measure);
 
 // The labels of a card's answers: "Approve" or, with rules, "Allow once";
-// "Allow always for this session"; "Always allow <command>".
+// "Allow always for this session"; "Always allow <command>". A rule key with
+// a target names it (design/instruments.md, Approval Card): for
+// "run.set_param:lr", "Allow changes of lr for this session" and "Always
+// allow changes of lr"; for "run.action:save", "Allow action save for this
+// session" and "Always allow action save".
 const char* approval_approve_label(bool rules);
 const char* approval_session_label();
-std::string approval_always_label(const std::string& command);
+std::string approval_session_label(const std::string& rule);
+std::string approval_always_label(const std::string& rule);
 
 // The layout input of the cards for a window.
 ApprovalLayoutInput approval_layout_input(const ApprovalCards& cards, float width, float window_h);

@@ -158,6 +158,11 @@ struct PreparedPanel {
     PreparedHistogram histogram;
     PreparedTable table;
     PreparedText text;
+    // A scene panel (spec version 1): the live scene it draws, as catalog.list
+    // names it ("model" for live:model), and its options. The runtime draws
+    // the scene itself; nothing is prepared from data.
+    std::string scene;
+    caliper_builder::spec::SceneOptions scene_options;
 
     std::vector<std::string> bounds;  // the bounds that applied, in plain words
 };

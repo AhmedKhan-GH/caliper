@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=schema.json
+title: Producer runtime plan page
+kind: page
+source: design/producer-runtime.md
+summary: The plan page design/producer-runtime.md, the design of the producer runtime,
+  with the measurements of its design spike, read heading by heading.
+not_features:
+- Measurements
+- Method
+- Results
+- Documented and Undocumented Behavior
+- Risks
+- Decisions
+- Open Decisions
+entries:
+- heading: Producer Runtime
+  item: The graphics layer without a window as a native module in the training process, with WGSL
+    compute that reads training tensors in place.
+  ids:
+  - SPC-14
+  - REN-08
+- heading: Design
+  item: Section heading for the design of the producer runtime.
+  ids:
+  - SPC-14
+- heading: Components
+  item: The native module caliper._producer, the torch adapter and the Python facade of caliper.watch.
+  ids:
+  - SPC-14
+- heading: Device and Queue
+  item: The backend on the bound tensor's MTLDevice with its own command queue, and memory shared with
+    torch's allocator.
+  ids:
+  - REN-08
+- heading: Framework Adapter Interface
+  item: The adapter's export, sync, hook, probe and state functions and the native module's interface.
+  ids:
+  - SPC-14
+  - REN-08
+- heading: Threads
+  item: The runtime runs on the training thread and adds no thread.
+  ids:
+  - SPC-14
+- heading: Sync Points
+  item: Framework work complete, Caliper's pass, and Caliper's work complete before the next write of a
+    bound tensor.
+  ids:
+  - REN-08
+- heading: Read-Only Rule
+  item: Naga validation, the binder rule and a read-only import in the layer refuse a write to a
+    training tensor.
+  ids:
+  - SPC-14
+  - REN-10
+- heading: Budget per Step
+  item: At most 4 % of the step time, with an adaptive rate and a skip over the time limit.
+  ids:
+  - SPC-14
+- heading: Output Path
+  item: Compute outputs as scene batches in process, through the shared-memory slot and over the
+    network, through the existing publish calls.
+  ids:
+  - SPC-14
+  - REN-31
+- heading: On-Demand Load
+  item: caliper._producer loads only when a spec first binds agent code to a tensor of the script.
+  ids:
+  - SPC-14
+- heading: Failure Behavior
+  item: Refusals on old torch versions, refused imports and programs, over-budget programs and a lost
+    device.
+  ids:
+  - SPC-14
+- heading: Platforms Without Measurements
+  item: Vulkan with CUDA is expected to follow the same design and is untested.
+  ids:
+  - REN-08
+- heading: Work Items
+  item: The work items of the producer runtime with their sizes.
+  ids:
+  - SPC-14

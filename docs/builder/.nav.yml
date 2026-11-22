@@ -3,3 +3,4 @@ nav:
   - Reference:
       - builder-pane.md
       - workspace.md
+      - spec-version-1.md

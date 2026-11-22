@@ -8,6 +8,10 @@
 //   caliper://schema/caliper-spec-v0.schema.json
 //                              the JSON Schema of a spec's canonical JSON,
 //                              compiled into caliper-mcp
+//   caliper://schema/caliper-spec-v1.schema.json
+//                              the same for spec version 1, with the scene
+//                              primitive and the control table
+//                              (design/instruments.md), served beside it
 //   caliper://commands/command_table.json
 //                              the command table the tools come from; the
 //                              server adds it, since it depends on the app
@@ -39,6 +43,7 @@ namespace caliper_builder::mcp {
 constexpr const char* kDocsUriPrefix = "caliper://docs/";
 constexpr const char* kSdkUriPrefix = "caliper://sdk/";
 constexpr const char* kSpecSchemaUri = "caliper://schema/caliper-spec-v0.schema.json";
+constexpr const char* kSpecSchemaV1Uri = "caliper://schema/caliper-spec-v1.schema.json";
 constexpr const char* kCommandTableUri = "caliper://commands/command_table.json";
 
 struct ResourceEntry {
@@ -63,6 +68,9 @@ struct ResourceOptions {
     std::string docs_dir;           // empty: no docs resources
     std::string sdk_dir;            // empty: no SDK resources
     std::string spec_schema_text;   // empty: no schema resource
+    // The schema of spec version 1. Empty: the one compiled in, whenever the
+    // version 0 schema is served; with no version 0 schema, none.
+    std::string spec_schema_v1_text;
     std::size_t max_files = 5000;   // per folder
     int max_depth = 16;
     std::size_t max_file_bytes = 4u << 20;

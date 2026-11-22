@@ -43,4 +43,6 @@ Both fail with a configuration error when run from inside `design/` or with an a
 | [Renderer Core](renderer-core.md) | The rest of the renderer core's migration: the texture path on the graphics layer, a scene service for applets, one version of each graphics service, the final renderer seam and the Vulkan backend |
 | [Scenes](scenes.md) | What remains of scenes: the scene model's additions, the text log and the bar chart, stamps, scenes through shared memory with their data views, and the scene service for applets |
 | [Wire Protocol 3.2 Draft](wire-protocol-3-2.md) | What producers, the hub and servers still do with timelines, text logs, bar charts and recordings, and the numbers of 3.2 to confirm |
+| [Instruments](instruments.md) | The interfaces of the first instrument slice: spec version 1 with scene panels and controls, the run commands, the event ring of `events.wait` and `caliper.watch(model, optimizer)` |
 | [Web Geometry](web-geometry.md) | What remains of scenes in the browser: pipelines, encoded frames, budgets and lost devices, parity rows, and the fallback without WebGPU |
+| [Producer Runtime](producer-runtime.md) | The graphics layer without a window in the training process: the framework adapter, the sync points, the read-only rule, the budget per step and the measurements of its design spike |

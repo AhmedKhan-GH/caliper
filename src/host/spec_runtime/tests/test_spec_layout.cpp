@@ -266,3 +266,80 @@ TEST_CASE("layout: the splits and their dividers, for the builder's drags") {
     CHECK(row.divider.x == l.find("curves")->rect.right());
     CHECK(row.divider.right() == l.find("attention")->rect.x);
 }
+
+// ---- spec version 1: control leaves -------------------------------------------
+
+namespace {
+
+spec::Spec instruments() {
+    spec::Spec s = fixture("instruments.spec.toml");
+    REQUIRE(s.controls.size() == 2);
+    return s;
+}
+
+}  // namespace
+
+TEST_CASE("layout: a row of controls takes one control row under the panels") {
+    const spec::Spec s = instruments();
+    SpecLayoutMetrics m = SpecLayoutMetrics::for_text_scale(1.0f);
+    const SpecLayout l = lay(s, 1200, 800);
+    REQUIRE(l.panels.size() == 3);
+    const SpecLayoutPanel* world = l.find("world");
+    const SpecLayoutPanel* lr = l.find("lr");
+    const SpecLayoutPanel* pause = l.find("pause");
+    REQUIRE(world);
+    REQUIRE(lr);
+    REQUIRE(pause);
+    CHECK_FALSE(world->control);
+    CHECK(lr->control);
+    CHECK(pause->control);
+    CHECK(lr->rect.h == m.control_row_h);
+    CHECK(pause->rect.h == m.control_row_h);
+    CHECK(lr->rect.y == pause->rect.y);
+    CHECK(lr->rect.w + pause->rect.w + m.gap == 1200);
+    // The scene panel takes the rest of the height.
+    CHECK(world->rect.h + m.gap + lr->rect.h == 800);
+    CHECK(lr->rect.bottom() == 800);
+    check_tiling(l, 1200, 800);
+
+    // A control height of the runtime's own replaces the default row.
+    m.control_height = [](const spec::Control& c) { return c.kind == spec::ControlKind::slider ? 50.0f : 40.0f; };
+    const auto root = caliper_builder::effective_layout(s);
+    const SpecLayout l2 = compute_spec_layout(*root, s, {0, 0, 1200, 800}, m);
+    CHECK(l2.find("lr")->rect.h == 50);
+    CHECK(l2.find("world")->rect.h == 800 - 50 - m.gap);
+    CHECK(spec_layout_fixed_height(*root, s, m) == std::nullopt);
+    CHECK(spec_layout_fixed_height(root->children[1], s, m) == std::optional<float>(50.0f));
+}
+
+TEST_CASE("layout: the default layout of a spec with controls and its minimums") {
+    spec::Spec s = instruments();
+    s.layout.reset();
+    const SpecLayoutMetrics m = SpecLayoutMetrics::for_text_scale(1.0f);
+    const SpecLayout l = lay(s, 900, 600);
+    REQUIRE(l.panels.size() == 3);
+    CHECK(l.find("lr")->rect.h == m.control_row_h);
+    CHECK(l.find("world")->rect.y == 0);
+    const auto root = caliper_builder::effective_layout(s);
+    const SpecRect min = spec_layout_min_size(*root, m, &s);
+    CHECK(min.h == m.min_panel_h + m.gap + m.control_row_h);
+    CHECK(min.w == std::max(m.min_panel_w, 2 * m.min_control_w + m.gap));
+    // Without the spec, every leaf counts as a panel, as before.
+    CHECK(spec_layout_min_size(*root, m).h == 2 * m.min_panel_h + m.gap);
+    // Only controls: the rows stack from the top and the rest stays empty.
+    spec::Spec only = s;
+    only.panels.clear();
+    only.layout.reset();
+    const SpecLayout lc = lay(only, 900, 600);
+    REQUIRE(lc.panels.size() == 2);
+    CHECK(lc.panels[0].rect.h == m.control_row_h);
+    CHECK(lc.panels[0].rect.y == 0);
+}
+
+TEST_CASE("layout: a scene panel's default title is its scene") {
+    const spec::Spec s = instruments();
+    spec::Panel p = s.panels[0];
+    CHECK(spec_panel_title(s, p) == "Model");
+    p.title.reset();
+    CHECK(spec_panel_title(s, p) == "model");
+}

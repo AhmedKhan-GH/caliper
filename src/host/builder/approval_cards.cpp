@@ -10,8 +10,10 @@
 #include "ui/sternbild_theme.h"
 #include "ui/work_area.h"   // JobsTrayPresence
 
+#include <caliper_builder/commands/permissions.h>
 #include <caliper_builder/commands/queue.h>
 #include <caliper_builder/commands/registry.h>
+#include <caliper_builder/session/run_control.h>
 #include <caliper_builder/session/session.h>
 #include <caliper_builder/session/spec_edit.h>
 #include <caliper_builder/spec/format.h>
@@ -85,6 +87,7 @@ std::string approval_who(const cb::CommandInvocation& inv) {
         case cb::CommandOrigin::api: return "API";
         case cb::CommandOrigin::builder: return "Builder";
         case cb::CommandOrigin::ui: return "App";
+        case cb::CommandOrigin::viewer: return "Viewer";
     }
     return "Agent";
 }
@@ -117,8 +120,36 @@ std::string approval_what(const cb::CommandInvocation& inv, const spec::Spec* op
         }
     } else if (n == "history.undo" || n == "history.redo") {
         target = steps_text(steps_arg(a));
+    } else if (n == "run.set_param" || n == "run.action") {
+        target = str_arg(a, "name");
+    } else if (n == "run.pause") {
+        target = str_arg(a, "op");
     }
     return target.empty() ? n : n + " \xC2\xB7 " + target;   // ·
+}
+
+std::string approval_run_text(const cb::CommandInvocation& inv, const std::string& script) {
+    const std::string& n = inv.name;
+    const json& a = inv.args;
+    const std::string in = script.empty() ? std::string("the attached script") : script;
+    if (n == "run.set_param") {
+        const auto v = a.find("value");
+        const std::string value = v == a.end() ? std::string("?") : v->is_string() ? v->get<std::string>() : v->dump();
+        return "Set parameter " + str_arg(a, "name") + " to " + value + " in " + in +
+               ". The change applies at the next step.";
+    }
+    if (n == "run.action") return "Run action " + str_arg(a, "name") + " in " + in + " at the next step.";
+    if (n == "run.pause") {
+        const std::string op = str_arg(a, "op");
+        if (op == "resume") return "Resume " + in + ".";
+        if (op == "step") {
+            const auto c = a.find("count");
+            const long long count = c != a.end() && c->is_number_integer() ? c->get<long long>() : 1;
+            return "Run " + std::to_string(count) + (count == 1 ? " step" : " steps") + " of " + in + ", then pause.";
+        }
+        return "Pause " + in + " at the next step.";
+    }
+    return "";
 }
 
 std::string approval_loss(const cb::CommandInvocation& inv, const spec::Spec* open) {
@@ -301,7 +332,12 @@ ApprovalCard ApprovalCards::make_card(cb::Session& s, const cb::PendingApproval&
     const spec::Spec* before = open ? &open->spec : nullptr;
     c.what = approval_what(inv, before);
     c.loss = approval_loss(inv, before);
+    if (inv.name.rfind("run.", 0) == 0) {
+        cb::RunControl* run = s.run_control();
+        c.loss = approval_run_text(inv, run ? run->state().script : std::string());
+    }
     c.invocation = inv;
+    c.rule = cb::permission_rule_key(inv);
     c.rules = s.approval_offers_rules(inv);
     if (!p.review.is_object()) return c;
     c.review = true;
@@ -640,7 +676,8 @@ ApprovalStripLayout layout_approval_strip(const ApprovalLayoutInput& in, const A
             // then always; they share the row when both do not fit.
             if (c.rules) {
                 const float ry = by - m.gap - m.button;
-                float sw = button_w(kAllowSession), lw = button_w(approval_always_label(c.what_command).c_str());
+                float sw = button_w(approval_session_label(c.what_command).c_str()),
+                      lw = button_w(approval_always_label(c.what_command).c_str());
                 if (sw + m.gap + lw > iw) sw = lw = std::floor((iw - m.gap) * 0.5f);
                 cl.session = {ix, ry, sw, m.button};
                 cl.always = {cl.session.right() + m.gap, ry, lw, m.button};
@@ -654,7 +691,31 @@ ApprovalStripLayout layout_approval_strip(const ApprovalLayoutInput& in, const A
 
 const char* approval_approve_label(bool rules) { return rules ? kAllowOnce : kApprove; }
 const char* approval_session_label() { return kAllowSession; }
-std::string approval_always_label(const std::string& command) { return "Always allow " + command; }
+
+namespace {
+
+// The target of a rule key, as a noun phrase: "changes of lr", "action save";
+// "" for a key without one.
+std::string rule_target_words(const std::string& rule) {
+    const std::size_t colon = rule.find(':');
+    if (colon == std::string::npos) return "";
+    const std::string command = rule.substr(0, colon), target = rule.substr(colon + 1);
+    if (command == "run.set_param") return "changes of " + target;
+    if (command == "run.action") return "action " + target;
+    return "";
+}
+
+}  // namespace
+
+std::string approval_session_label(const std::string& rule) {
+    const std::string words = rule_target_words(rule);
+    return words.empty() ? std::string(kAllowSession) : "Allow " + words + " for this session";
+}
+
+std::string approval_always_label(const std::string& rule) {
+    const std::string words = rule_target_words(rule);
+    return "Always allow " + (words.empty() ? rule : words);
+}
 
 ApprovalLayoutInput approval_layout_input(const ApprovalCards& cards, float width, float window_h) {
     ApprovalLayoutInput in;
@@ -669,7 +730,7 @@ ApprovalLayoutInput approval_layout_input(const ApprovalCards& cards, float widt
         s.warnings = !c.warnings.empty();
         s.decided = c.state != ApprovalState::waiting && c.state != ApprovalState::deciding;
         s.rules = c.rules && !s.decided;
-        s.what_command = c.name;
+        s.what_command = c.rule.empty() ? c.name : c.rule;
         in.cards.push_back(std::move(s));
     }
     return in;
@@ -876,10 +937,12 @@ void ApprovalTray::Impl::draw_card(const SpecLook& L, ImDrawList* dl, ImVec2 o, 
         ImGui::PushID(c.id.c_str());
         if (card_button(L, dl, rr(cl.approve, o), c.rules ? kAllowOnce : kApprove, true, enabled)) cards.approve(c.id);
         if (card_button(L, dl, rr(cl.deny, o), kDeny, false, enabled)) cards.deny(c.id);
-        if (!cl.session.empty() && card_button(L, dl, rr(cl.session, o), kAllowSession, false, enabled))
+        const std::string rule = c.rule.empty() ? c.name : c.rule;
+        if (!cl.session.empty() &&
+            card_button(L, dl, rr(cl.session, o), approval_session_label(rule).c_str(), false, enabled))
             cards.allow_always(c.id, false);
         if (!cl.always.empty() &&
-            card_button(L, dl, rr(cl.always, o), approval_always_label(c.name).c_str(), false, enabled))
+            card_button(L, dl, rr(cl.always, o), approval_always_label(rule).c_str(), false, enabled))
             cards.allow_always(c.id, true);
         if (!cl.diff.empty() && card_button(L, dl, rr(cl.diff, o), kDiff, false, true, diff_open == c.id)) {
             diff_open = diff_open == c.id ? std::string() : c.id;

@@ -58,7 +58,8 @@ struct Placer {
         if (depth > 64) return;   // the format allows 8; a guard, not a rule
         switch (n.kind) {
             case spec::LayoutNode::Kind::panel:
-                out.panels.push_back({n.panel, path, r, tab_child});
+                out.panels.push_back(
+                    {n.panel, path, r, tab_child, !spec.find_panel(n.panel) && spec.find_control(n.panel)});
                 return;
             case spec::LayoutNode::Kind::tabs: {
                 if (n.children.empty()) return;
@@ -84,10 +85,37 @@ struct Placer {
                 const float length = std::max(0.0f, total - gaps);
                 std::vector<float> mins;
                 for (const auto& c : n.children) {
-                    const SpecRect ms = spec_layout_min_size(c, m);
+                    const SpecRect ms = spec_layout_min_size(c, m, &spec);
                     mins.push_back(across ? ms.w : ms.h);
                 }
-                const std::vector<float> shares = spec_layout_shares(length, mins, n.ratio.value_or(0.5));
+                std::vector<float> shares;
+                // In a vertical split, a row of controls takes its own height
+                // and the other children share the rest.
+                std::vector<std::optional<float>> fixed(k);
+                size_t n_fixed = 0;
+                if (!across)
+                    for (size_t i = 0; i < k; ++i)
+                        if ((fixed[i] = spec_layout_fixed_height(n.children[i], spec, m))) ++n_fixed;
+                if (n_fixed == 0) {
+                    shares = spec_layout_shares(length, mins, n.ratio.value_or(0.5));
+                } else {
+                    float left = length;
+                    shares.assign(k, 0.0f);
+                    for (size_t i = 0; i < k; ++i)
+                        if (fixed[i]) {
+                            shares[i] = std::min(std::round(*fixed[i]), left);
+                            left -= shares[i];
+                        }
+                    std::vector<float> flex_mins;
+                    for (size_t i = 0; i < k; ++i)
+                        if (!fixed[i]) flex_mins.push_back(mins[i]);
+                    if (!flex_mins.empty()) {
+                        const std::vector<float> flex =
+                            spec_layout_shares(left, flex_mins, flex_mins.size() == 2 ? n.ratio.value_or(0.5) : 0.5);
+                        for (size_t i = 0, j = 0; i < k; ++i)
+                            if (!fixed[i]) shares[i] = flex[j++];
+                    }
+                }
                 // With no room for the gaps, the children overlap rather than
                 // leave the area.
                 const float gap = total >= gaps ? m.gap : 0.0f;
@@ -125,6 +153,8 @@ SpecLayoutMetrics SpecLayoutMetrics::for_text_scale(float text_scale) {
     m.min_panel_h = std::round(8.0f * line);
     m.tab_bar_h = std::round(line + 9.0f * s);
     m.gap = 1.0f;
+    m.min_control_w = std::round(8.0f * line);
+    m.control_row_h = std::round(2.0f * line);
     return m;
 }
 
@@ -195,20 +225,65 @@ std::string spec_panel_title(const spec::Spec& s, const spec::Panel& panel) {
         case spec::Primitive::text:
             if (bound("value")) return name("value");
             return "Text";
+        case spec::Primitive::scene:
+            // The live scene's name, as catalog.list names it.
+            if (bound(spec::kSceneSlot))
+                if (auto scene = spec::live_scene_name(bound(spec::kSceneSlot)->bindings.front())) return *scene;
+            break;
     }
     std::string t = spec::to_string(panel.primitive);
     if (!t.empty()) t[0] = (char)(t[0] - 'a' + 'A');
     return t;
 }
 
+namespace {
+
+float control_height(const spec::Control& c, const SpecLayoutMetrics& m) {
+    return m.control_height ? std::max(1.0f, m.control_height(c)) : m.control_row_h;
+}
+
+}  // namespace
+
+std::optional<float> spec_layout_fixed_height(const spec::LayoutNode& n, const spec::Spec& spec,
+                                              const SpecLayoutMetrics& m) {
+    switch (n.kind) {
+        case spec::LayoutNode::Kind::panel: {
+            const spec::Control* c = spec.find_panel(n.panel) ? nullptr : spec.find_control(n.panel);
+            if (!c) return std::nullopt;
+            return control_height(*c, m);
+        }
+        case spec::LayoutNode::Kind::tabs: return std::nullopt;
+        case spec::LayoutNode::Kind::split: {
+            if (n.children.empty()) return std::nullopt;
+            const bool across = n.split == spec::SplitDirection::horizontal;
+            float h = 0.0f;
+            for (const auto& c : n.children) {
+                const std::optional<float> ch = spec_layout_fixed_height(c, spec, m);
+                if (!ch) return std::nullopt;
+                h = across ? std::max(h, *ch) : h + *ch;
+            }
+            if (!across) h += m.gap * (float)(n.children.size() - 1);
+            return h;
+        }
+    }
+    return std::nullopt;
+}
+
 SpecRect spec_layout_min_size(const spec::LayoutNode& n, const SpecLayoutMetrics& m) {
+    return spec_layout_min_size(n, m, nullptr);
+}
+
+SpecRect spec_layout_min_size(const spec::LayoutNode& n, const SpecLayoutMetrics& m, const spec::Spec* spec) {
     switch (n.kind) {
         case spec::LayoutNode::Kind::panel:
+            if (spec && !spec->find_panel(n.panel))
+                if (const spec::Control* c = spec->find_control(n.panel))
+                    return {0, 0, m.min_control_w, control_height(*c, m)};
             return {0, 0, m.min_panel_w, m.min_panel_h};
         case spec::LayoutNode::Kind::tabs: {
             float w = 0, h = 0;
             for (const auto& c : n.children) {
-                const SpecRect r = spec_layout_min_size(c, m);
+                const SpecRect r = spec_layout_min_size(c, m, spec);
                 w = std::max(w, r.w);
                 h = std::max(h, r.h);
             }
@@ -218,7 +293,7 @@ SpecRect spec_layout_min_size(const spec::LayoutNode& n, const SpecLayoutMetrics
             const bool across = n.split == spec::SplitDirection::horizontal;
             float along = 0, cross = 0;
             for (const auto& c : n.children) {
-                const SpecRect r = spec_layout_min_size(c, m);
+                const SpecRect r = spec_layout_min_size(c, m, spec);
                 along += across ? r.w : r.h;
                 cross = std::max(cross, across ? r.h : r.w);
             }
@@ -283,7 +358,10 @@ std::vector<float> spec_layout_shares(float length, const std::vector<float>& mi
 SpecLayout compute_spec_layout(const spec::LayoutNode& root, const spec::Spec& spec, const SpecRect& area,
                                const SpecLayoutMetrics& m, const SpecTabChoice& tabs) {
     Placer p{spec, m, tabs, {}};
-    p.place(root, snap(area), "", 0);
+    SpecRect r = snap(area);
+    // A layout of controls only keeps their rows at the top of the area.
+    if (const std::optional<float> h = spec_layout_fixed_height(root, spec, m)) r.h = std::min(r.h, std::round(*h));
+    p.place(root, r, "", 0);
     return std::move(p.out);
 }
 

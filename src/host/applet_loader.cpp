@@ -571,7 +571,7 @@ void AppletLoader::spec_listing_checks(AppletEntry& a) const {
     } else if (!spec_runtime_available()) {
         a.status = AppletStatus::Refused;
         a.status_text = no_spec_runtime_reason();
-    } else if (version != spec_format_version()) {
+    } else if (version < 0 || version > spec_format_version()) {
         a.status = AppletStatus::Refused;
         a.status_text = spec_version_reason(version, spec_format_version());
     } else {

@@ -141,8 +141,8 @@ inline constexpr std::uintmax_t kMaxSpecFileBytes = 512 * 1024;
 // True when this build validates spec applets (it was built with the
 // builder's spec library); false when every spec applet is Refused.
 bool spec_runtime_available();
-// The spec format version this build reads (caliper_spec); -1 without the
-// spec runtime.
+// The newest spec format version this build reads (caliper_spec), which
+// reads every version from 0 to this one; -1 without the spec runtime.
 int64_t spec_format_version();
 
 // Refusal and failure texts of spec applets (docs/reference/refusal-messages.md).

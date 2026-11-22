@@ -667,6 +667,11 @@ class Scene:
         s = self._s
         return f"<caliper.Scene {s.name!r} {s.space} up={s.up} units={s.units!r}>"
 
+    def _watched(self) -> bool:
+        """Whether a viewer of a network route watches the scene now (lists the scene first)."""
+        _live(self._s)
+        return bool(_watching(self._s))
+
     # -- primitives ------------------------------------------------------------
     def points(self, path, positions, *, colors=None, values=None, cmap="viridis", vmin=None,
                vmax=None, class_ids=None, radii=None, labels=None, items=None, blend="normal",

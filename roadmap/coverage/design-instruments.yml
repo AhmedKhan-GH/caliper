@@ -1,0 +1,121 @@
+# yaml-language-server: $schema=schema.json
+title: Instruments plan page
+kind: page
+source: design/instruments.md
+summary: The plan page design/instruments.md, read heading by heading; each plan heading has an entry
+  or is listed as holding no feature.
+not_features:
+- Open Points
+entries:
+- heading: Spec Version 1
+  item: Version 1 of the spec format adds scenes and controls to the spec.
+  ids:
+  - SPC-11
+  - SPC-12
+- heading: Version Rules
+  item: The rules say how a spec states its version and how older specs stay valid.
+  ids:
+  - SPC-11
+- heading: Scene Primitive
+  item: The scene primitive places a scene in a panel and binds it to a live source.
+  ids:
+  - SPC-11
+- heading: Control Table
+  item: The table lists the control kinds and the targets that each control sets.
+  ids:
+  - SPC-12
+- heading: Control Layout
+  item: The layout rules place controls in a panel of a spec.
+  ids:
+  - SPC-12
+- heading: Validator Codes
+  item: The validator reports the new spec problems with fixed codes.
+  ids:
+  - SPC-11
+  - SPC-12
+- heading: Commands
+  item: Eight new commands join the command layer and the MCP tool table.
+  ids:
+  - SPC-05
+  - AGT-02
+- heading: Control Commands
+  item: The commands control.create, control.patch and control.remove edit the controls of a spec.
+  ids:
+  - SPC-05
+  - SPC-12
+- heading: Run Commands
+  item: The run commands set parameters and drive the run of a script that streams to the app.
+  ids:
+  - SPC-05
+  - AGT-02
+  - STR-03
+- heading: Run Effect Class
+  item: The effect class run marks the commands that change a running script.
+  ids:
+  - AGT-06
+- heading: Approval Card
+  item: A run command shows an approval card to the person before it takes effect.
+  ids:
+  - AGT-17
+  - AGT-06
+- heading: Run Command Errors
+  item: The run commands answer with fixed error codes, such as command.not_implemented.
+  ids:
+  - SPC-05
+- heading: Run Control in App
+  item: The app implements the run control that the run commands call.
+  ids:
+  - STR-03
+  - SPC-12
+- heading: Events
+  item: Events carry picks, selections and control changes from the app to an agent.
+  ids:
+  - REN-46
+  - AGT-21
+- heading: Event Ring
+  item: The session keeps the events in a ring, so that the app and a headless session act the same way.
+  ids:
+  - AGT-21
+- heading: Long Poll
+  item: The command events.wait holds a call until new events arrive.
+  ids:
+  - AGT-21
+  - AGT-02
+- heading: Event Format
+  item: Each event has a fixed format with a sequence number.
+  ids:
+  - AGT-21
+- heading: Event Kinds
+  item: The kinds of event include scene selection and control change.
+  ids:
+  - REN-46
+  - STR-03
+- heading: Event Feeds
+  item: The ring feeds the journal and the MCP agents.
+  ids:
+  - AGT-21
+  - AGT-02
+- heading: Watch Hook
+  item: The call caliper.watch(model, optimizer) is the one Caliper line of the training script.
+  ids:
+  - STR-45
+- heading: Current Watch
+  item: Today caliper.watch hooks modules and publishes tensor views, but no series, scene or parameter.
+  ids:
+  - STR-45
+- heading: Watch Extension
+  item: With an optimizer, caliper.watch starts the server, adds a step pre-hook and registers lr, loss and the scene.
+  ids:
+  - STR-45
+  - STR-03
+- heading: Published Names
+  item: The hook publishes the series loss and lr, the parameter lr and the scene model.
+  ids:
+  - STR-45
+  - SPC-11
+- heading: Acceptance Test
+  item: A test drives caliper-mcp against a hidden app and a script that calls caliper.watch.
+  ids:
+  - AGT-02
+  - STR-45
+  - REN-46

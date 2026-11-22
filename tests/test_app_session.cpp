@@ -16,6 +16,7 @@
 #include "builder/app_session.h"
 #include "builder/panel_renderer.h"
 #include "builder/spec_page.h"
+#include "live/live_attach.h"
 #include "job_system.h"
 #include "test_temp.h"
 #ifndef _WIN32
@@ -881,4 +882,295 @@ TEST_CASE("app session: the command script runs only in the hidden app or calipe
     AppSession::Options none;
     caliper_host::gate_command_script(&none, false, &refused);
     CHECK(refused.empty());
+}
+
+// ---- the app's run control (design/instruments.md, Run Control in App) ----------------
+
+namespace {
+
+// The attached script's run, faked: its CONTROLS, its access, what each
+// request answers, and what was sent. The frame thread and the test's thread
+// both read it, so it has a lock.
+struct FakeLink final : caliper_live::RunLink {
+    mutable std::mutex m;
+    bool is_attached = true;
+    std::string name = "train.py";
+    caliper_live::ControlAccess acc{true, ""};
+    bool have = true;
+    caliper_live::Controls ctl;
+    std::string refuse;   // what a request answers; "" sends it
+    struct Sent {
+        std::string op, name, value;
+        uint32_t count = 0;
+    };
+    std::vector<Sent> sent;
+    std::map<std::string, ActionResult> results;
+
+    FakeLink() {
+        ctl.run_state = "running";
+        ctl.has_step = true;
+        ctl.step = 12;
+        ctl.version = 1;
+        caliper_live::ControlParam lr;
+        lr.name = "lr";
+        lr.type = "number";
+        lr.value = caliper_net::Json(0.01);
+        lr.has_min = lr.has_max = true;
+        lr.min = 1e-5;
+        lr.max = 0.1;
+        lr.log = true;
+        lr.help = "learning rate";
+        caliper_live::ControlParam batch;
+        batch.name = "batch";
+        batch.type = "integer";
+        batch.value = caliper_net::Json(int64_t(32));
+        batch.pending = caliper_net::Json(int64_t(64));
+        caliper_live::ControlParam opt;
+        opt.name = "optimizer";
+        opt.type = "choice";
+        opt.value = caliper_net::Json("adam");
+        opt.choices = {"adam", "sgd"};
+        ctl.params = {lr, batch, opt};
+        caliper_live::ControlAction save;
+        save.name = "save";
+        save.help = "writes a checkpoint";
+        ctl.actions = {save};
+    }
+    bool attached() const override {
+        std::lock_guard<std::mutex> lock(m);
+        return is_attached;
+    }
+    std::string script() const override {
+        std::lock_guard<std::mutex> lock(m);
+        return name;
+    }
+    const caliper_live::Controls* controls() const override {
+        std::lock_guard<std::mutex> lock(m);
+        return have ? &ctl : nullptr;
+    }
+    caliper_live::ControlAccess access() const override {
+        std::lock_guard<std::mutex> lock(m);
+        return acc;
+    }
+    std::string send(const std::string& op, const std::string& n, const caliper_net::Json& value,
+                     uint32_t count) override {
+        std::lock_guard<std::mutex> lock(m);
+        if (!refuse.empty()) return refuse;
+        sent.push_back({op, n, value.dump(), count});
+        return "";
+    }
+    ActionResult action_result(const std::string& n) const override {
+        std::lock_guard<std::mutex> lock(m);
+        const auto it = results.find(n);
+        return it == results.end() ? ActionResult{} : it->second;
+    }
+};
+
+struct Recorder final : cb::EventSink {
+    std::vector<cb::Event> events;
+    std::uint64_t push(cb::Event e) override {
+        e.seq = events.size() + 1;
+        events.push_back(std::move(e));
+        return events.back().seq;
+    }
+    std::vector<json> fields() const {
+        std::vector<json> out;
+        for (const auto& e : events) out.push_back(e.fields);
+        return out;
+    }
+};
+
+}  // namespace
+
+TEST_CASE("app session: the run control reads the attached script's CONTROLS as run.state") {
+    caliper_host::AppRunControl rc;
+    CHECK_FALSE(rc.state().attached);
+    FakeLink link;
+    rc.set_link(&link);
+    cb::RunState st = rc.state();
+    CHECK(st.attached);
+    CHECK(st.script == "train.py");
+    CHECK(st.control);
+    CHECK(st.why_not.empty());
+    CHECK(st.state == "running");
+    CHECK(st.step == std::optional<std::int64_t>(12));
+    CHECK_FALSE(st.steps_left);
+    REQUIRE(st.params.size() == 3);
+    CHECK(st.params[0].value == 0.01);
+    CHECK(st.params[0].pending.is_null());
+    CHECK(st.params[0].min == std::optional<double>(1e-5));
+    CHECK(st.params[0].log);
+    CHECK(st.params[0].help == "learning rate");
+    CHECK(st.params[1].value == 32);
+    CHECK(st.params[1].value.is_number_integer());
+    CHECK(st.params[1].pending == 64);
+    CHECK_FALSE(st.params[1].min);
+    CHECK(st.params[2].value == "adam");
+    CHECK(st.params[2].choices == std::vector<std::string>{"adam", "sgd"});
+    REQUIRE(st.actions.size() == 1);
+    CHECK(st.actions[0].name == "save");
+    CHECK(cb::run_state_json(st)["params"][0]["max"] == 0.1);
+
+    link.ctl.run_state = "stepping";
+    link.ctl.steps_left = 3;
+    CHECK(rc.state().steps_left == std::optional<std::int64_t>(3));
+    // A connection that takes no control says why, as a sentence.
+    link.acc = {false, "the server did not grant control"};
+    st = rc.state();
+    CHECK_FALSE(st.control);
+    CHECK(st.why_not == "The server did not grant control.");
+    link.acc = {true, ""};
+    link.have = false;
+    st = rc.state();
+    CHECK_FALSE(st.control);
+    CHECK(st.why_not == "The script has sent no controls yet.");
+    CHECK(st.params.empty());
+    link.is_attached = false;
+    CHECK_FALSE(rc.state().attached);
+}
+
+TEST_CASE("app session: the run control sends CONTROL requests and maps the refusals to run errors") {
+    caliper_host::AppRunControl rc;
+    CHECK(rc.set_param("lr", 0.02).code == cb::kRunNotAttached);
+    FakeLink link;
+    rc.set_link(&link);
+    CHECK(rc.set_param("lr", 0.02).ok());
+    CHECK(rc.set_param("batch", 128).ok());
+    CHECK(rc.set_param("optimizer", "sgd").ok());
+    CHECK(rc.run_action("save").ok());
+    CHECK(rc.pause(cb::RunPauseOp::pause, 0).ok());
+    CHECK(rc.pause(cb::RunPauseOp::resume, 0).ok());
+    CHECK(rc.pause(cb::RunPauseOp::step, 5).ok());
+    REQUIRE(link.sent.size() == 7);
+    CHECK(link.sent[0].op == "set");
+    CHECK(link.sent[0].name == "lr");
+    CHECK(link.sent[0].value == "0.02");
+    CHECK(link.sent[1].value == "128");
+    CHECK(link.sent[2].value == "\"sgd\"");
+    CHECK(link.sent[3].op == "run");
+    CHECK(link.sent[3].name == "save");
+    CHECK(link.sent[4].op == "pause");
+    CHECK(link.sent[5].op == "resume");
+    CHECK(link.sent[6].op == "step");
+    CHECK(link.sent[6].count == 5);
+
+    link.refuse = "set lr: the hub refused it";
+    cb::Error e = rc.set_param("lr", 0.03);
+    CHECK(e.code == cb::kRunRefused);
+    CHECK(e.message == "Set lr: the hub refused it.");
+    // Before the first step, RunControls takes no pause, step or action.
+    link.ctl.run_state = "none";
+    link.refuse = "pause: the script has called no checkpoint yet";
+    CHECK(rc.pause(cb::RunPauseOp::pause, 0).code == cb::kRunNoStep);
+    CHECK(rc.run_action("save").code == cb::kRunNoStep);
+    link.acc = {false, "the stream takes no control"};
+    e = rc.pause(cb::RunPauseOp::resume, 0);
+    CHECK(e.code == cb::kRunControlNotAllowed);
+    CHECK(e.message == "The stream takes no control.");
+}
+
+TEST_CASE("app session: the run control turns CONTROLS and action results into run events") {
+    caliper_host::AppRunControl rc;
+    FakeLink link;
+    Recorder rec;
+    rc.feed(rec);
+    CHECK(rec.events.empty());   // no link: nothing attached, nothing changed
+
+    // The attach, then the first CONTROLS as the baseline: the run state is
+    // news, the registered values are not.
+    rc.set_link(&link);
+    rc.feed(rec);
+    REQUIRE(rec.events.size() == 2);
+    CHECK(rec.events[0].kind == cb::EventKind::run);
+    CHECK(rec.events[0].origin == "script");
+    CHECK(rec.events[0].panel.empty());
+    CHECK(rec.fields()[0] == json{{"change", "attach"}, {"attached", true}, {"script", "train.py"}});
+    CHECK(rec.fields()[1] == json{{"change", "state"}, {"state", "running"}, {"step", 12}});
+    rc.feed(rec);
+    CHECK(rec.events.size() == 2);   // nothing new
+
+    // The script applies a pending value and a new one, and pauses.
+    link.ctl.version = 2;
+    link.ctl.step = 13;
+    link.ctl.params[0].value = caliper_net::Json(0.05);   // lr, clamped by the script
+    link.ctl.params[1].value = caliper_net::Json(int64_t(64));
+    link.ctl.params[1].pending = caliper_net::Json();
+    link.ctl.run_state = "paused";
+    rc.feed(rec);
+    REQUIRE(rec.events.size() == 5);
+    CHECK(rec.fields()[2] == json{{"change", "state"}, {"state", "paused"}, {"step", 13}});
+    CHECK(rec.fields()[3] == json{{"change", "param"}, {"name", "lr"}, {"value", 0.05}, {"step", 13}});
+    CHECK(rec.fields()[4] == json{{"change", "param"}, {"name", "batch"}, {"value", 64}, {"step", 13}});
+
+    // A value the script holds as pending is not applied yet.
+    link.ctl.version = 3;
+    link.ctl.params[0].pending = caliper_net::Json(0.001);
+    rc.feed(rec);
+    CHECK(rec.events.size() == 5);
+    link.ctl.version = 4;
+    link.ctl.params[0].pending = caliper_net::Json();
+    link.ctl.params[0].value = caliper_net::Json(0.001);
+    rc.feed(rec);
+    REQUIRE(rec.events.size() == 6);
+    CHECK(rec.fields()[5]["value"] == 0.001);
+
+    // An action's end, once.
+    link.results["save"] = {"saved at step 13", false, 100};
+    rc.feed(rec);
+    rc.feed(rec);
+    REQUIRE(rec.events.size() == 7);
+    CHECK(rec.fields()[6] == json{{"change", "action"}, {"name", "save"}, {"status", "ok"}, {"text", "saved at step 13"}});
+    link.results["save"] = {"disk full", true, 200};
+    rc.feed(rec);
+    REQUIRE(rec.events.size() == 8);
+    CHECK(rec.fields()[7]["status"] == "error");
+
+    // The detach names the script that went.
+    link.is_attached = false;
+    rc.feed(rec);
+    REQUIRE(rec.events.size() == 9);
+    CHECK(rec.fields()[8] == json{{"change", "attach"}, {"attached", false}, {"script", "train.py"}});
+}
+
+TEST_CASE("app session: the session holds the app's run control, and the run commands act through it") {
+    TempDir t("run");
+    FakeLink link;   // outlives the frame loop, which reads it until it stops
+    FrameLoop loop;
+    loop.session.set_run_link(&link);   // before the frame thread starts
+    loop.run(options(t.str("ws")));
+    cb::Session& s = loop.open();
+    CHECK(s.run_control() == loop.session.run_control());
+
+    cb::CommandResult r = call(s, inv("run.state"));
+    REQUIRE(r.ok);
+    CHECK(r.result["script"] == "train.py");
+    CHECK(r.result["params"].size() == 3);
+    r = call(s, inv("run.set_param", {{"name", "lr"}, {"value", 0.02}}));
+    REQUIRE(r.ok);
+    CHECK(r.result["pending"] == true);
+    r = call(s, inv("run.action", {{"name", "evaluate"}}));
+    CHECK(r.error.code == cb::kRunUnknownAction);
+
+    // An mcp client's request waits for the person's card, then runs.
+    auto held = s.queue().submit(inv("run.set_param", {{"name", "lr"}, {"value", 0.03}}, cb::CommandOrigin::mcp));
+    std::string id;
+    const auto until = std::chrono::steady_clock::now() + 10s;
+    while (id.empty() && std::chrono::steady_clock::now() < until) {
+        for (const auto& p : s.registry().pending_approvals())
+            if (p.invocation.name == "run.set_param") id = p.approval;
+        std::this_thread::sleep_for(2ms);
+    }
+    REQUIRE_FALSE(id.empty());
+    CHECK(held.wait_for(50ms) == std::future_status::timeout);
+    {
+        std::lock_guard<std::mutex> lock(link.m);
+        REQUIRE(link.sent.size() == 1);
+        CHECK(link.sent[0].value == "0.02");
+    }
+    REQUIRE(s.queue().approve(id).get().ok);
+    REQUIRE(held.wait_for(10s) == std::future_status::ready);
+    CHECK(held.get().ok);
+    std::lock_guard<std::mutex> lock(link.m);
+    REQUIRE(link.sent.size() == 2);
+    CHECK(link.sent[1].value == "0.03");
 }

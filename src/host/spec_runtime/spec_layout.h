@@ -17,7 +17,9 @@
 // edge is a whole pixel. Header-only parts need nothing but the spec library.
 #include <caliper_builder/spec/spec.h>
 
+#include <functional>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -34,6 +36,14 @@ struct SpecLayoutMetrics {
     float min_panel_h = 120.0f;   // and height
     float tab_bar_h = 24.0f;      // the strip of tab labels
     float gap = 1.0f;             // between the children of a split
+    // Controls (spec version 1, design/instruments.md): a control leaf's
+    // minimum width, and its height, one control row, which it takes in a
+    // vertical split while the other children share the rest. The height is
+    // `control_height` of the control when set (the runtime sets it to
+    // spec_control_height()), else control_row_h.
+    float min_control_w = 120.0f;
+    float control_row_h = 30.0f;
+    std::function<float(const caliper_builder::spec::Control&)> control_height;
 
     // The metrics at a text scale: the minimums and the tab strip grow with
     // it, from 12 by 8 lines of the 15 px UI face at scale 1; the gap stays
@@ -48,6 +58,7 @@ struct SpecLayoutPanel {
     std::string path;
     SpecRect rect;
     bool tab = false;   // a tab of a tabs node, whose label carries its title
+    bool control = false;   // the leaf names a control of the spec, not a panel
 };
 
 // A tabs node: its strip, its labels in order and the tab shown.
@@ -84,8 +95,17 @@ struct SpecLayout {
 // or whose index is out of range, shows its first tab.
 using SpecTabChoice = std::map<std::string, int>;
 
-// The minimum size of a node.
+// The minimum size of a node. With the spec, a leaf that names a control
+// has the minimum of a control: min_control_w by its height.
 SpecRect spec_layout_min_size(const caliper_builder::spec::LayoutNode& node, const SpecLayoutMetrics& m);
+SpecRect spec_layout_min_size(const caliper_builder::spec::LayoutNode& node, const SpecLayoutMetrics& m,
+                              const caliper_builder::spec::Spec* spec);
+// The height a node takes in a vertical split when everything in it is a
+// control: a control leaf's height, the tallest child of a horizontal split
+// of such nodes, the children of a vertical one with their gaps. Empty when
+// the node holds a panel or tabs, which share the rest of the height.
+std::optional<float> spec_layout_fixed_height(const caliper_builder::spec::LayoutNode& node,
+                                              const caliper_builder::spec::Spec& spec, const SpecLayoutMetrics& m);
 
 // The rectangles of the layout `root` in `area`. A tab's label is its
 // panel's title (spec_panel_title), or a nested node's title, else the title

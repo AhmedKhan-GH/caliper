@@ -25,7 +25,14 @@ const std::vector<std::string>& reduce_fns();
 const std::vector<std::string>& normalise_modes();
 const std::vector<std::string>& colormaps();
 const std::vector<std::string>& catalog_kinds();
-const std::vector<std::string>& all_primitive_names();
+const std::vector<std::string>& all_primitive_names();   // of the newest version
+// The primitives that a document of this format version may use.
+const std::vector<std::string>& primitive_names(std::int64_t version);
+const std::vector<std::string>& control_kind_names();
+// The keys of a control's options, `x` excluded.
+const std::vector<std::string>& control_option_names();
+// The values of a scene panel's option `up`.
+const std::vector<std::string>& scene_up_axes();
 bool contains(const std::vector<std::string>& list, std::string_view s);
 std::string join(const std::vector<std::string>& list);  // "a, b and c"
 
@@ -78,6 +85,7 @@ bool check_values(const json& v, const std::string& path, int depth, std::size_t
 // The decoders of format.cpp, shared with patch.cpp.
 Source decode_source(const json& item, const std::string& path, Sink& sink);
 Panel decode_panel(const json& item, const std::string& path, Sink& sink);
+Control decode_control(const json& item, const std::string& path, Sink& sink);
 LayoutNode decode_layout(const json& item, const std::string& path, Sink& sink);
 
 }  // namespace caliper_builder::spec::detail
