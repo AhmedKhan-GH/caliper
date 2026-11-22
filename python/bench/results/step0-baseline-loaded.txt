@@ -1,0 +1,111 @@
+# Renderer core, step 0: the baseline TAKEN UNDER LOAD (2026-11-15), superseded by step0-baseline.txt
+
+This run's files carry "-step0-loaded" in their names. The quiet rerun replaced it.
+
+NOT A QUIET MEASUREMENT. Repeat every timing below on a quiet machine before step 5's comparison.
+The rules for a timing measurement were followed: each benchmark waited for a heavy-job slot with every
+other slot free and the 1-minute load average below 8. Five builders shared the machine; it was never
+quiet in 40 minutes of waiting (22:30 to 23:11), so the benchmarks then ran with the load stated beside
+every row (1-minute load 2.7 to 32.9 over the run). The spread of steps per second between repeats (6 to
+48 points of the control) is far above the 2-point threshold, so these numbers record the shape of the
+baseline, not a reference for the thresholds. The copy counters do not depend on load.
+
+Machine: an Apple Silicon Mac (M-series Max, 18 cores, 64 GB), macOS 27, on mains power.
+Build: Release, preset release-notorch (CALIPER_WITH_TORCH=OFF), Python 3.13, torch 2.15.0 (MPS).
+Commits: after = 3717239 (step 0: counters, Metal statistics, points row); before = bae8c25 (its parent
+on sprint4-build, for the interleaved 1024 comparison only). Viewer: caliper-viewer --headless --stats
+(an offscreen canvas that polls and draws about 50 times a second; no window may open on this machine).
+Files: S-table-mps1024-step0-loaded-r1..r3.txt (after) and S-table-mps1024-step0-loaded-before-r1..r3.txt (before),
+run interleaved before r1, after r1, before r2, ...; S-table-mps256-step0-loaded.txt, S-table-mps2048-step0-loaded.txt,
+S-table-points-mps100000/1000000/4000000-step0-loaded.txt (3 interleaved repeats each);
+P-window-mps-1024-step0-loaded.txt and P-attach-mps-1024-step0-loaded.txt (bench_show.py, one run each).
+
+## bench_live.py table, medians over the repeats
+
+Steps per second are the shown row against its commit-matched control (sampler: record60, nosampler:
+record). Frame time and GPU time are the medians over the 2 s viewer windows inside each measured row.
+The parent commit has no frame statistics or copy counters ("-").
+heatmap 1024², step-0 head (after), interleaved with the parent commit
+| mode | repeats | steps/s % of control (spread) | show µs | latency ms med / p95 | viewer fps | frame ms p50 / p99 | GPU ms update (draw) p50 | GPU ms frame p50 | copies per frame | load (1 min) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| sampler | 3 | 98.7 % (24.0) | 60.2 | 20.54 / 32.40 | 50.9 | 20.27 / 20.72 | 0.0152 | 0.0254 | 0.00 | 4.1 to 11.7 |
+| nosampler | 3 | 85.1 % (18.0) | 33.4 | 6.36 / 11.84 | 52.4 | 19.38 / 20.43 | 0.0136 | 0.0232 | 0.00 | 4.1 to 11.7 |
+
+heatmap 1024², parent commit (before), interleaved
+| mode | repeats | steps/s % of control (spread) | show µs | latency ms med / p95 | viewer fps | frame ms p50 / p99 | GPU ms update (draw) p50 | GPU ms frame p50 | copies per frame | load (1 min) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| sampler | 3 | 96.4 % (16.0) | 65.2 | 20.02 / 31.44 | 51.6 | - / - | - | - | - | 2.8 to 12.2 |
+| nosampler | 3 | 86.2 % (47.6) | 36.5 | 6.63 / 12.62 | 51.7 | - / - | - | - | - | 2.8 to 12.2 |
+
+heatmap 256², step-0 head
+| mode | repeats | steps/s % of control (spread) | show µs | latency ms med / p95 | viewer fps | frame ms p50 / p99 | GPU ms update (draw) p50 | GPU ms frame p50 | copies per frame | load (1 min) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| sampler | 3 | 99.0 % (30.9) | 53.4 | 20.86 / 32.18 | 51.4 | 20.21 / 20.72 | 0.0037 | 0.0221 | 0.00 | 3.9 to 20.1 |
+| nosampler | 3 | 93.5 % (24.7) | 27.3 | 6.41 / 10.73 | 51.9 | 20.12 / 20.36 | 0.0039 | 0.0223 | 0.00 | 3.9 to 20.1 |
+
+heatmap 2048², step-0 head
+| mode | repeats | steps/s % of control (spread) | show µs | latency ms med / p95 | viewer fps | frame ms p50 / p99 | GPU ms update (draw) p50 | GPU ms frame p50 | copies per frame | load (1 min) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| sampler | 3 | 102.9 % (33.3) | 72.6 | 21.15 / 32.94 | 46.3 | 21.43 / 24.78 | 0.0689 | 0.0388 | 0.00 | 3.3 to 5.5 |
+| nosampler | 3 | 87.7 % (32.5) | 34.2 | 8.17 / 16.35 | 47.7 | 20.53 / 24.41 | 0.0666 | 0.0323 | 0.00 | 3.3 to 5.5 |
+
+points 100,000, step-0 head
+| mode | repeats | steps/s % of control (spread) | show µs | latency ms med / p95 | viewer fps | frame ms p50 / p99 | GPU ms update (draw) p50 | GPU ms frame p50 | copies per frame | load (1 min) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| sampler | 3 | 96.7 % (6.7) | 56.2 | 21.16 / 31.98 | 46.5 | 22.07 / 24.77 | draw 0.0527 | 0.0478 | 0.00 | 2.7 to 4.1 |
+| nosampler | 3 | 87.7 % (20.5) | 36.6 | 6.83 / 13.71 | 46.7 | 21.50 / 24.35 | draw 0.0551 | 0.0524 | 0.00 | 2.7 to 4.1 |
+
+points 1,000,000, step-0 head
+| mode | repeats | steps/s % of control (spread) | show µs | latency ms med / p95 | viewer fps | frame ms p50 / p99 | GPU ms update (draw) p50 | GPU ms frame p50 | copies per frame | load (1 min) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| sampler | 3 | 97.7 % (7.2) | 68.1 | 21.93 / 32.70 | 44.7 | 22.86 / 25.48 | draw 0.6128 | 0.4835 | 0.00 | 3.0 to 5.4 |
+| nosampler | 3 | 87.5 % (11.3) | 26.8 | 9.35 / 16.32 | 46.1 | 22.14 / 24.94 | draw 0.4874 | 0.3861 | 0.00 | 3.0 to 5.4 |
+
+points 4,000,000, step-0 head
+| mode | repeats | steps/s % of control (spread) | show µs | latency ms med / p95 | viewer fps | frame ms p50 / p99 | GPU ms update (draw) p50 | GPU ms frame p50 | copies per frame | load (1 min) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| sampler | 3 | 92.9 % (16.8) | 72.4 | 30.25 / 45.70 | 41.7 | 25.03 / 27.99 | draw 5.6460 | 4.7671 | 0.00 | 5.6 to 32.9 |
+| nosampler | 3 | 81.8 % (21.0) | 49.1 | 21.38 / 37.36 | 41.1 | 25.28 / 28.56 | draw 5.7060 | 4.9968 | 0.00 | 5.6 to 32.9 |
+
+## bench_show.py --device mps --size 1024 (after)
+
+| mode | row | steps/s % of control | show µs median | latency ms median / p95 | frame ms p50 / p99 | GPU ms update p50 / p99 | copies per frame | load (1 min) |
+|---|---|---|---|---|---|---|---|---|
+| window (offscreen) | sampler-60Hz | 101.7 % | 41.6 | 24.84 / 32.65 | 16.57 / 20.81 | 0.0137 / 0.0682 | 0 | 5.4 to 3.1 |
+| window (offscreen) | sampler-off | 100.5 % | 28.2 | 16.08 / 19.48 | 16.60 / 21.03 | 0.0134 / 0.0664 | 0 | 5.4 to 3.1 |
+| attach (headless) | sampler-60Hz | 99.5 % | 45.8 | 25.15 / 32.71 | 19.54 / 20.37 | 0.0140 / 0.0622 | 0 | 3.1 to 2.8 |
+| attach (headless) | sampler-off | 91.9 % | 34.9 | 9.64 / 19.75 | 19.83 / 20.37 | 0.0140 / 0.0664 | 0 | 3.1 to 2.8 |
+
+## Graphics suite timing row: gfx/metal geometry: timing — draws by count (load 12.3)
+
+1000 points in 1 draw [primitives-imported]: call 14.5304 us, done 241.498 us (max 922.042), gpu 38.3083 us, 100 frames
+100000 points in 1 draw [primitives-imported]: call 11.7258 us, done 266.8 us (max 828.667), gpu 104.451 us, 100 frames
+1000000 points in 1 draw [primitives-imported]: call 20.4603 us, done 1042.5 us (max 4261.54), gpu 765.673 us, 20 frames
+4000000 points in 1 draw [primitives-imported]: call 22.3437 us, done 2048.1 us (max 4614.79), gpu 1688.33 us, 20 frames
+1 draws of 1000 points [primitives-imported]: call 11.4796 us, done 163.341 us (max 312), gpu 10.2592 us, 100 frames
+16 draws of 1000 points [primitives-imported]: call 15.5004 us, done 162.973 us (max 267.541), gpu 16.3317 us, 100 frames
+256 draws of 1000 points [primitives-imported]: call 76.4141 us, done 324.58 us (max 405.75), gpu 115.289 us, 100 frames
+
+## Copy counters per route
+
+From caliper_live_views_tests, caliper_live_tests and caliper_tests (all pass), and from the headless
+viewer's --stats line with every kind shown through the shared-memory session (100,000 points):
+
+| Route | Copies per update | Bytes per update |
+|---|---|---|
+| MPS heatmap through the session (heat_mps, compute-imported) | 0 | 0 |
+| CPU heatmap through the session (heat_cpu, compute-imported: the producer's snapshot is the copy) | 0 | 0 |
+| MPS and CPU RGBA8 image through the session (blit-imported) | 0 | 0 |
+| MPS and CPU points through the session (points-imported), also while redrawn every frame | 0 | 0 |
+| MTLBuffer heatmap, image and points applied in process (tests) | 0 | 0 |
+| CPU heatmap or image applied directly (caliper_core_view_tensor, live apply) | 1 | W x H x 4 |
+| CPU points applied directly (Metal staging) | 1 per buffer | N x 12 + N x 4 |
+| Browser host import of points (stand-in renderer, headless) | 1 per buffer | N x 12 + N x 4 |
+| Browser heatmap host colormap (bridge, stub renderer) | 1 | W x H x 4 |
+| Network snapshot, heatmap, image and points (caliper_core_live_attach_url) | 1 | the payload and values |
+| Series and histogram (any route; a network one adds its received values) | 1 (2 over the network) | the values |
+| Geometry draws of imported points, 1,000 to 4,000,000 (gfx timing row) | 0 | 0 |
+
+In the session run above, the viewer counted 0 copies in every window for the six texture and points
+views, and its whole-run line read: copies 500 (276872 bytes), all of them series and histogram values
+(loss 219 copies, hist 281 copies).

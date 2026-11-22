@@ -1,10 +1,12 @@
-// Every live view on every render path, against known data pushed through
+// Every live view of the element's own, against known data pushed through
 // the hand-driven StaticSource: what is drawn, hover, zoom and pan,
-// selections, toggles and the data view picker.
+// selections, toggles and the data view picker. A stream given through the
+// source property is always drawn by the element's own views, which draw with
+// Canvas 2D in every project, WebGPU's included.
 
 import type { Page } from '@playwright/test';
 import { colormapLut, lutIndex, PALETTE } from '../src/render/colormap.js';
-import { bodyPixels, expect, gpuPath, shotPath, test } from './util.js';
+import { bodyPixels, expect, shotPath, test } from './util.js';
 
 type Dbg = Record<string, unknown> & {
   renderer: string; window: { x0: number; x1: number; y0: number; y1: number }; area: { x: number; y: number; w: number; h: number };
@@ -104,7 +106,7 @@ test.describe('heatmap', () => {
     await mount(page, 'h', 'heatmap');
     await push(page, 'h', { data: values(1), shape: [R, Cn], vmin: 0, vmax: 31, colormap: 0 });
     const d = await dbg(page, 'h');
-    expect(d.renderer).toBe(gpuPath(info));
+    expect(d.renderer).toBe('canvas2d');
     expect(d.status).toBe('connected');
     const lut = colormapLut('viridis');
     const check = async (k: number) => {
@@ -194,7 +196,7 @@ test('image draws RGBA pixels as they are', async ({ harness: page }, info) => {
   const colors = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [240, 233, 219], [12, 34, 56], [179, 139, 89]];
   await push(page, 'img', { data: colors.flatMap((c) => [...c, 255]), shape: [2, 3, 4], u8: true });
   const d = await dbg(page, 'img');
-  expect([d.kind, d.renderer]).toEqual(['image', gpuPath(info)]);
+  expect([d.kind, d.renderer]).toEqual(['image', 'canvas2d']);
   const { px } = await bodyPixels(page, '#img');
   for (let i = 0; i < 6; i++) {
     const p = toPage(d, { x: 0, y: 0 }, (i % 3) + 0.5, Math.floor(i / 3) + 0.5, true);
@@ -313,7 +315,7 @@ test.describe('points', () => {
     await mount(page, 'p', 'points');
     await push(page, 'p', corners);
     const d = await dbg(page, 'p');
-    expect([d.renderer, d.n, d.dims]).toEqual([gpuPath(info), 4, 2]);
+    expect([d.renderer, d.n, d.dims]).toEqual(['canvas2d', 4, 2]);
     const { px } = await bodyPixels(page, '#p');
     for (let i = 0; i < 4; i++) {
       const p = toPage(d, { x: 0, y: 0 }, corners.data[2 * i], corners.data[2 * i + 1], false);
@@ -363,7 +365,7 @@ test.describe('points', () => {
     }
     await push(page, 'p3', { data, aux, shape: [n, 3], points_dims: 3, label_count: 0, colormap: 1, vmin: 0, vmax: 1 });
     const d = await dbg(page, 'p3');
-    expect([d.renderer, d.dims]).toEqual([gpuPath(info), 3]);
+    expect([d.renderer, d.dims]).toEqual(['canvas2d', 3]);
     const before = await bodyPixels(page, '#p3');
     // Colours come from magma: some drawn pixel is magma's bright end.
     const lut = colormapLut('magma');

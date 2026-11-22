@@ -4,6 +4,9 @@
 // CALIPER_WASM_DIR, else from python/caliper/_web, where scripts/build_wasm.py
 // and scripts/fetch_wasm.py put them; without them these tests are skipped,
 // and fallback.spec.ts checks the element without them.
+//
+// CALIPER_VIEWS_COMPAT=1 asks every mount for a compatibility-mode WebGPU
+// device (the loader's default, set before the page loads).
 
 import { test as base, type Page } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -11,11 +14,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { colormapLut, lutIndex } from '../src/render/colormap.js';
-import { decodePng, drawn, expect, REPO, roundTrip, shotPath, WEB, wireModule } from './util.js';
+import { readColormapCases } from './colormap_cases.js';
+import { decodePng, drawn, expect, REPO, roundTrip, serve, shotPath, WEB, wireModule } from './util.js';
 
 const PYTHON = process.env.CALIPER_PYTHON ?? path.join(REPO, '.venv', 'bin', 'python');
 const WASM = process.env.CALIPER_WASM_DIR ?? path.join(REPO, 'python', 'caliper', '_web');
 const FILES = ['caliper-views-loader.js', 'caliper-views.js', 'caliper-views.wasm'];
+const COMPAT = process.env.CALIPER_VIEWS_COMPAT === '1';
 
 /** A producer; events holds every EVENT a viewer sent it, as mock_server.py prints them. */
 interface Server { url: string; ws: string; proc: ChildProcess; events: ProducerEvent[] }
@@ -39,6 +44,10 @@ async function startProducer(args: string[] = []): Promise<Server> {
 }
 
 const test = base.extend<{ producer: Server }>({
+  page: async ({ page }, use) => {
+    if (COMPAT) await page.addInitScript(() => Object.assign(window, { caliperViewsCompat: true }));
+    await use(page);
+  },
   producer: async ({}, use) => {
     const p = await startProducer();
     await use(p);
@@ -123,6 +132,11 @@ test('auto draws each view with the WebAssembly views when they list its kind, a
     expect([imageBad, imageMax]).toEqual([0, 0]);
     const [, , heatBad, heatMax] = (await moduleCheck(page, 'weights', /^weights:1:\d+:\d+$/)).split(':').map(Number);
     expect([heatBad, heatMax]).toEqual([0, 0]);
+    // The graphics layer drew, on the device asked for, and WebGPU reported no error to it.
+    const st = (await state(page, 'weights')).wasmStats as { gfxReady?: number; featureLevel?: string; gfxErrors?: string };
+    expect(st.gfxReady).toBe(1);
+    expect(st.featureLevel).toBe(COMPAT ? 'compatibility' : 'core');
+    expect(st.gfxErrors).toBe('');
     // The histogram holds the producer's bins, once its module has published them.
     const histInfo = async () => String(((await state(page, 'weight_hist')).wasmStats as { viewInfo?: string } | null)?.viewInfo ?? '');
     await expect.poll(histInfo, { timeout: 30_000, message: 'weight_hist: the module\'s view info' })
@@ -211,6 +225,192 @@ test('100,000 points orbit at an interactive rate on the GPU', async ({ page }, 
     await page.locator('caliper-view[view="embedding"]').screenshot({ path: shotPath(info, 'wasm-points-100k') });
   } finally {
     big.proc.kill();
+  }
+});
+
+// --- the graphics layer -------------------------------------------------------------
+
+test('the graphics layer draws an indexed quad and instanced draws, dispatches and copies, and reads every target back exactly', async ({ page }, info) => {
+  test.skip(info.project.name === 'canvas2d', 'the WebAssembly views need a WebGPU adapter');
+  // The module alone on a blank page: no stream, only the self-test (web/wasm/src/gfx_selftest.cpp).
+  const site = await serve(WEB, (name) => (FILES.includes(name.slice(1)) ? path.join(WASM, name.slice(1)) : null));
+  const consoleErrors: string[] = [];
+  page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') consoleErrors.push(m.text()); });
+  try {
+    await page.goto(`${site.origin}/test/blank.html`);
+    for (const compat of [false, true]) {
+      const got = await page.evaluate(async ({ base, compat }) => {
+        type M = { caliperStats?: Record<string, string>; caliperGfxImages?: Record<string, { w: number; h: number; data: Uint8Array }>;
+                   _caliper_views_gfx_selftest(): number; _caliper_views_destroy(): void };
+        const { preloadCaliperViews } = await import(base + 'caliper-views-loader.js');
+        const { factory, wasm } = await preloadCaliperViews(base);
+        const canvas = document.createElement('canvas');
+        canvas.style.width = '64px';
+        canvas.style.height = '64px';
+        document.body.append(canvas);
+        const m: M = await factory({
+          canvas, caliperConfig: { src: '', compat: compat ? 'true' : 'false' },
+          instantiateWasm: (imports: WebAssembly.Imports, receive: (i: WebAssembly.Instance, m: WebAssembly.Module) => void) => {
+            WebAssembly.instantiate(wasm as WebAssembly.Module, imports).then((i) => receive(i, wasm));
+            return {};
+          },
+          print: () => {}, printErr: () => {},
+        });
+        const until = async (f: () => boolean) => {
+          for (let i = 0; i < 400 && !f(); i++) await new Promise((ok) => setTimeout(ok, 25));
+          return f();
+        };
+        if (!(await until(() => Number(m.caliperStats?.gfxReady) === 1))) return { report: `no layer: ${JSON.stringify(m.caliperStats ?? {})}`, level: '', images: {} };
+        m._caliper_views_gfx_selftest();
+        if (!(await until(() => !!m.caliperStats?.gfxSelftest))) {
+          const report = `the self-test did not finish in 10 s: ${JSON.stringify(m.caliperStats ?? {})}`;
+          m._caliper_views_destroy();
+          canvas.remove();
+          return { report, level: '', images: {} };
+        }
+        // Each picture as a PNG, four times its size, nearest.
+        const images: Record<string, string> = {};
+        for (const [name, im] of Object.entries(m.caliperGfxImages ?? {})) {
+          const c = document.createElement('canvas');
+          c.width = im.w * 4;
+          c.height = im.h * 4;
+          const small = document.createElement('canvas');
+          small.width = im.w;
+          small.height = im.h;
+          small.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(im.data), im.w, im.h), 0, 0);
+          const g = c.getContext('2d')!;
+          g.imageSmoothingEnabled = false;
+          g.drawImage(small, 0, 0, c.width, c.height);
+          images[name] = c.toDataURL('image/png');
+        }
+        const out = { report: m.caliperStats!.gfxSelftest, level: m.caliperStats!.featureLevel, images };
+        m._caliper_views_destroy();
+        canvas.remove();
+        return out;
+      }, { base: `${site.origin}/`, compat });
+      console.log(`${info.project.name} graphics layer self-test (${compat ? 'compatibility' : 'core'} device): ${got.report}`);
+      if (!got.report.startsWith('ok')) console.log(consoleErrors.join('\n'));
+      for (const [name, url] of Object.entries(got.images))
+        fs.writeFileSync(shotPath(info, `${name}-${compat ? 'compat' : 'core'}`), Buffer.from(url.split(',')[1], 'base64'));
+      // uniforms=same: the scene core's fixture (src/host/scene/uniform_check.h) compiles here to the
+      // arena bytes it compiles to natively, so the browser draws from the same f32 matrices as Metal.
+      expect(got.report).toBe('ok color=0 id=0 depth=0 fill=0 copy=0 import=copied-from-host:24 own-target=refused '
+                              + `submit-error=reported level=${compat ? 'compatibility' : 'core'} uniforms=same`);
+      expect(Object.keys(got.images).sort()).toEqual(['layer-compute', 'layer-copy', 'layer-draws', 'layer-ids']);
+    }
+  } finally {
+    site.close();
+  }
+});
+
+// The colormap's keys as the module derives them at run time, from the WebAssembly build of the CPU
+// reference, against the case file that the native tool writes (CALIPER_COLORMAP_CASES), from
+// which the browser rows take their keys and expected colours: the module's scene views use the
+// former, so both builds of the reference must agree on every key of every boundary range.
+test('the WebAssembly views derive the same colormap keys as the native case file', async ({ page }, info) => {
+  test.skip(info.project.name === 'canvas2d', 'the WebAssembly views need a WebGPU adapter');
+  const CASES = process.env.CALIPER_COLORMAP_CASES;
+  test.skip(!CASES, 'needs CALIPER_COLORMAP_CASES, the file that caliper_colormap_cases writes');
+  const cases = readColormapCases(CASES!);
+  const site = await serve(WEB, (name) => (FILES.includes(name.slice(1)) ? path.join(WASM, name.slice(1)) : null));
+  try {
+    await page.goto(`${site.origin}/test/blank.html`);
+    // Each range as the bits of its two ends, so that every float reaches the module exactly.
+    const ends = cases.map((c) => [c.block.readUInt32LE(0), c.block.readUInt32LE(4)]);
+    const derived: number[][] = await page.evaluate(async ({ base, ends }) => {
+      type M = { caliperColormapKeys?: Uint32Array; _caliper_views_colormap_keys(vmin: number, vmax: number): number;
+                 _caliper_views_destroy(): void };
+      const { preloadCaliperViews } = await import(base + 'caliper-views-loader.js');
+      const { factory, wasm } = await preloadCaliperViews(base);
+      const canvas = document.createElement('canvas');
+      document.body.append(canvas);
+      const m: M = await factory({
+        canvas, caliperConfig: { src: '' },
+        instantiateWasm: (imports: WebAssembly.Imports, receive: (i: WebAssembly.Instance, m: WebAssembly.Module) => void) => {
+          WebAssembly.instantiate(wasm as WebAssembly.Module, imports).then((i) => receive(i, wasm));
+          return {};
+        },
+        print: () => {}, printErr: () => {},
+      });
+      const f = new Float32Array(2), u = new Uint32Array(f.buffer);
+      const out = ends.map(([a, b]) => {
+        u[0] = a;
+        u[1] = b;
+        m._caliper_views_colormap_keys(f[0], f[1]);
+        return Array.from(m.caliperColormapKeys!);
+      });
+      m._caliper_views_destroy();
+      canvas.remove();
+      return out;
+    }, { base: `${site.origin}/`, ends });
+    const bad: string[] = [];
+    let compared = 0;
+    for (const [i, c] of cases.entries()) {
+      const want = [c.block.readUInt32LE(8)];                                   // the flip
+      for (let k = 0; k < 256; k++) want.push(c.block.readUInt32LE(16 + 16 * k));
+      want.push(c.block.readUInt32LE(16 + 16 * 255 + 4));                      // key[256], the end
+      const got = derived[i];
+      for (let k = 0; k < want.length; k++) {
+        compared++;
+        if (got[k] !== want[k] && bad.length < 8)
+          bad.push(`${c.name}: ${k === 0 ? 'flip' : `key ${k - 1}`} is 0x${got[k]?.toString(16)} here, 0x${want[k].toString(16)} in the case file`);
+      }
+    }
+    console.log(`${info.project.name} colormap keys: ${compared} values over ${cases.length} ranges compared with the native case file, ${bad.length} differ`);
+    expect(bad).toEqual([]);
+  } finally {
+    site.close();
+  }
+});
+
+// The fixed views' pictures. Each run saves them (fixed-<view>-<project>.png under the shots
+// folder); with CALIPER_VIEWS_REFERENCE naming a folder of the same files, saved from an earlier
+// build, every byte of each view's data area (the heatmap's cells, the points' render target, as
+// the module reports the area) must equal it. The whole canvas is compared too and its count
+// printed: the dimension names "row" and "col" are drawn at unrounded positions, and their edges
+// move by a level or two between runs of the same build. The migration steps of the renderer core
+// use this to show that a view's pixels did not move.
+test('the fixed heatmaps and points draw the same pixels as the reference set', async ({ page }, info) => {
+  test.skip(info.project.name === 'canvas2d', 'the WebAssembly views need a WebGPU adapter');
+  const srv = await fixedPage(page);
+  try {
+    for (const v of ['h', 'ha', 'p'])
+      await expect.poll(async () => String((await wasmStats(page, v)).checks ?? ''), { timeout: 20_000 }).toMatch(new RegExp(`^${v}:\\d+:0:\\d+$`));
+    await page.mouse.move(1, 1);
+    // Every view draws 30 more frames once the pointer has left it, so no hover is left in the
+    // pictures; a wait on frames, not on time, holds on a slow runner too.
+    const views = ['h', 'ha', 'p'];
+    const frames = async (v: string) => Number((await wasmStats(page, v)).frames ?? 0);
+    const f0 = await Promise.all(views.map(frames));
+    for (const [i, v] of views.entries())
+      await expect.poll(() => frames(v), { timeout: 20_000 }).toBeGreaterThanOrEqual(f0[i] + 30);
+    const ref = process.env.CALIPER_VIEWS_REFERENCE;
+    for (const v of ['h', 'ha', 'p']) {
+      const shot = await page.locator(`caliper-view[view="${v}"] .body .wasm canvas`).screenshot();
+      const file = shotPath(info, `fixed-${v}`);
+      fs.writeFileSync(file, shot);
+      if (!ref) continue;
+      const a = decodePng(fs.readFileSync(path.join(ref, path.basename(file)))), b = decodePng(shot);
+      expect([b.width, b.height], `view ${v}`).toEqual([a.width, a.height]);
+      const [ax, ay, aw, ah] = (await geometry(page, v)).geo.area;
+      let all = 0, inside = 0, compared = 0;
+      for (let y = 0; y < a.height; y++)
+        for (let x = 0; x < a.width; x++) {
+          const i = (y * a.width + x) * 4;
+          const d = (a.data[i] !== b.data[i] ? 1 : 0) + (a.data[i + 1] !== b.data[i + 1] ? 1 : 0) +
+            (a.data[i + 2] !== b.data[i + 2] ? 1 : 0) + (a.data[i + 3] !== b.data[i + 3] ? 1 : 0);
+          all += d;
+          if (x >= Math.ceil(ax) && x < Math.floor(ax + aw) && y >= Math.ceil(ay) && y < Math.floor(ay + ah)) {
+            inside += d;
+            compared += 4;
+          }
+        }
+      console.log(`${info.project.name} ${v}: ${inside} of ${compared} bytes of the data area and ${all} of ${a.data.length} of the canvas differ from the reference`);
+      expect(compared, `view ${v}`).toBeGreaterThan(100_000);
+      expect(inside, `view ${v}`).toBe(0);
+    }
+  } finally {
+    srv.proc.kill();
   }
 });
 
@@ -564,4 +764,52 @@ test('data view changes and resizes do not grow what the module holds', async ({
   expect(after.allocations).toBeLessThanOrEqual(before.allocations + 4);
   expect(after.retired).toBe(0);
   expect(after.heap - before.heap).toBeLessThan(256 * 1024);
+});
+
+// A scene's entity transform reaches the scene view intact through the stream (protocol 3.2):
+// mock_server.py --scene3 puts five points under the entity "moved" and moves that entity by
+// (10, 2, 0), and then sends the points four more times. The module decodes SCENE_TRANSFORMS on the
+// socket's callback and applies it at the next frame, after it decoded the frames that follow, so its
+// matrices must live in a copy of their frame, as an update's sections do. The view's fit must then
+// frame the moved points' bounds, (9, 1, 0) to (11, 3, 0.5), at a finite distance, with a scale bar.
+test('a scene\'s entity transform arrives intact through the stream, and the fit frames the moved points with a scale bar', async ({ page }, info) => {
+  test.skip(info.project.name === 'canvas2d', 'the WebAssembly views need a WebGPU adapter');
+  const p = await producerWith(['--scene3']);
+  try {
+    await page.goto(p.url);
+    await plates(page, 7);
+    expect((await state(page, 'world')).drawer).toBe('wasm');
+    const geo = async () => JSON.parse(String((await wasmStats(page, 'world')).geometry ?? '{}')).world ?? null;
+    const fit = async () => {
+      const g = await geo();
+      const o = g?.orbit;
+      if (!Array.isArray(o)) return `orbit ${JSON.stringify(o ?? null)}`;
+      const [x, y, z, d] = o as number[];
+      const near = Math.abs(x - 10) < 1e-3 && Math.abs(y - 2) < 1e-3 && Math.abs(z - 0.25) < 1e-3;
+      return near && Number.isFinite(d) && d > 0.5 && d < 50 ? 'framed' : `orbit ${JSON.stringify(o)}`;
+    };
+    await expect.poll(fit, { timeout: 30_000 }).toBe('framed');
+    // Whatever makes a fit fail, a camera or a scale bar that is not finite or not above zero fails here.
+    const g = await geo();
+    const [x, y, z, d] = g.orbit as number[];
+    for (const v of [x, y, z, d]) expect(Number.isFinite(v), `orbit ${JSON.stringify(g.orbit)}`).toBe(true);
+    expect(d, 'the orbit\'s distance').toBeGreaterThan(0);
+    const band = g.scaleBar as number[] | null;
+    expect(band, 'the scale bar is drawn').not.toBeNull();
+    for (const v of band!) expect(Number.isFinite(v), `band ${JSON.stringify(band)}`).toBe(true);
+    expect(band![2] - band![0]).toBeGreaterThan(0);
+    expect(band![3] - band![1]).toBeGreaterThan(0);
+    // The bar's length, in metres and in logical pixels, finite and above zero, and its scale the
+    // orbit's at the target: 2 · distance · tan(fovy / 2) per picture height, fovy 45 degrees.
+    expect(Array.isArray(g.scaleBarLength), `scale bar length ${JSON.stringify(g.scaleBarLength)}`).toBe(true);
+    const [metres, pixels] = g.scaleBarLength as number[];
+    expect(Number.isFinite(metres) && Number.isFinite(pixels)).toBe(true);
+    expect(metres).toBeGreaterThan(0);
+    expect(pixels).toBeGreaterThan(0);
+    const perPixel = (2 * d * Math.tan(Math.PI / 8)) / g.area[3];
+    expect(Math.abs(metres / pixels - perPixel) / perPixel).toBeLessThan(1e-6);
+    expect(metres, 'a bar of the moved points\' scale').toBeLessThan(10);
+  } finally {
+    p.proc.kill();
+  }
 });

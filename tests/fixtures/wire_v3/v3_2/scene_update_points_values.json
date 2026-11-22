@@ -1,0 +1,117 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 424,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 341,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 3,
+    "type": 112
+  },
+  "meta": {
+    "colormap": 1,
+    "flags": 3,
+    "part": "points",
+    "path": "markers",
+    "sections": [
+      {
+        "dtype": 0,
+        "name": "positions",
+        "shape": [
+          2,
+          3
+        ]
+      },
+      {
+        "dtype": 0,
+        "name": "values",
+        "shape": [
+          2
+        ]
+      },
+      {
+        "dtype": 0,
+        "name": "radii",
+        "shape": [
+          2
+        ]
+      }
+    ],
+    "seq": 7,
+    "stamp_ns": 81234567893223,
+    "static": true,
+    "stats": [
+      0.125,
+      0.75,
+      -0.75,
+      0.25,
+      -0.5,
+      0.5,
+      -0.5,
+      0.0
+    ],
+    "sub": 2,
+    "view": "landscape",
+    "vmax": 1.0,
+    "vmin": 0.0
+  },
+  "meta_offset": 36,
+  "name": "v3_2/scene_update_points_values",
+  "section_lengths": [
+    24,
+    8,
+    8
+  ],
+  "sections": [
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 24,
+      "name": "positions",
+      "offset": 384,
+      "shape": [
+        2,
+        3
+      ],
+      "values": [
+        0.25,
+        -0.5,
+        0.0,
+        -0.75,
+        0.5,
+        -0.5
+      ]
+    },
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 8,
+      "name": "values",
+      "offset": 408,
+      "shape": [
+        2
+      ],
+      "values": [
+        0.125,
+        0.75
+      ]
+    },
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 8,
+      "name": "radii",
+      "offset": 416,
+      "shape": [
+        2
+      ],
+      "values": [
+        0.05000000074505806,
+        0.10000000149011612
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}

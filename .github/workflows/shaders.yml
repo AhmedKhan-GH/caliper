@@ -1,0 +1,49 @@
+# .github/workflows/shaders.yml
+name: Shaders
+on:
+  push:
+    branches: [main]
+    paths: ['src/host/gfx/shaders/**', 'src/host/gfx/gfx.h', 'tools/shaders/**', '.github/workflows/shaders.yml']
+  pull_request:
+    paths: ['src/host/gfx/shaders/**', 'src/host/gfx/gfx.h', 'tools/shaders/**', '.github/workflows/shaders.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: shaders-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The shaders are written once in WGSL and translated by the pinned Naga at developer time;
+  # the outputs under src/host/gfx/shaders/generated/ are committed, so the Build workflow
+  # needs no Rust and no shader tool. This job regenerates every output with the pinned Naga
+  # (tools/shaders/naga-driver, Cargo.lock) and fails when one differs from the committed
+  # file or when a WGSL source does not compile, then validates the SPIR-V for Vulkan 1.1.
+  regenerate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      # The driver and the crates it was built from, keyed on the lock file and its source.
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            tools/shaders/naga-driver/target
+          key: naga-driver-${{ runner.os }}-${{ hashFiles('tools/shaders/naga-driver/Cargo.lock', 'tools/shaders/naga-driver/Cargo.toml', 'tools/shaders/naga-driver/src/**') }}
+      - name: Build the pinned Naga driver
+        run: cargo build --release --locked --manifest-path tools/shaders/naga-driver/Cargo.toml
+      - name: Regenerate and compare with the committed outputs
+        run: python3 tools/shaders/generate.py --check --driver tools/shaders/naga-driver/target/release/caliper-naga-driver
+      - name: Test the generator
+        run: python3 tools/shaders/test_generate.py --driver tools/shaders/naga-driver/target/release/caliper-naga-driver
+      - name: Validate the SPIR-V
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y spirv-tools
+          python3 tools/shaders/validate_spirv.py
+      - name: Compile the generated headers as C++17
+        run: |
+          printf '#include "gfx/shaders/generated/programs_metal.h"\n#include "gfx/shaders/generated/programs_vulkan.h"\n#include "gfx/shaders/generated/programs_webgpu.h"\nint main() { return 0; }\n' > "$RUNNER_TEMP/shaders.cpp"
+          g++ -std=c++17 -Wall -Wextra -fsyntax-only -Isrc/host -Isdk/include -Iinclude "$RUNNER_TEMP/shaders.cpp"

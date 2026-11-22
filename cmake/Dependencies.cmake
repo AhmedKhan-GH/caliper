@@ -16,9 +16,10 @@ message(STATUS "Configuring Caliper dependencies...")
 # Two link lists come out of this file:
 #   CALIPER_DEPENDENCY_LIBS — everything the caliper exe / gfx + export tests
 #                             link (UI chrome widgets, DuckDB, ...).
-#   CALIPER_CORE_LIBS       — ONLY what libcaliper's own sources + the GL/Metal
-#                             backends need (GL, the Apple frameworks, GLEW,
-#                             GLFW). libcaliper PRIVATE-links this, so an
+#   CALIPER_CORE_LIBS       — ONLY what libcaliper's own sources + the Metal and
+#                             Vulkan backends need (the Apple frameworks, GLFW
+#                             and ImGui's GLFW backend). libcaliper
+#                             PRIVATE-links this, so an
 #                             embedder that links just libcaliper (embed_host,
 #                             the Python extension) never pulls in the chrome
 #                             widgets, llama.cpp/ggml or slang. DuckDB reaches
@@ -82,16 +83,6 @@ endif()
 
 message(STATUS "Finding system libraries...")
 
-# OpenGL (required for rendering)
-find_package(OpenGL REQUIRED)
-if(OpenGL_FOUND)
-    message(STATUS "  ✓ OpenGL found")
-    list(APPEND CALIPER_DEPENDENCY_LIBS OpenGL::GL)
-    list(APPEND CALIPER_CORE_LIBS OpenGL::GL)
-else()
-    message(FATAL_ERROR "OpenGL not found")
-endif()
-
 # Platform-specific frameworks (macOS)
 if(APPLE)
     message(STATUS "  ✓ Adding macOS frameworks")
@@ -120,74 +111,6 @@ message(STATUS "  ✓ GLM configured")
 
 message(STATUS "Configuring CMake-based dependencies...")
 
-# --- GLEW (OpenGL Extension Wrangler) ---
-message(STATUS "  Configuring GLEW...")
-
-if(WIN32)
-    # Windows: Download pre-built GLEW binaries
-    set(GLEW_VERSION "2.3.1")
-    set(GLEW_PREBUILT_DIR "${THIRD_PARTY_DIR}/glew-prebuilt")
-
-    # Download and extract if not already present
-    if(NOT EXISTS "${GLEW_PREBUILT_DIR}")
-        message(STATUS "    Downloading pre-built GLEW ${GLEW_VERSION} for Windows...")
-
-        file(DOWNLOAD
-            "https://github.com/nigels-com/glew/releases/download/glew-${GLEW_VERSION}/glew-${GLEW_VERSION}-win32.zip"
-            "${CMAKE_BINARY_DIR}/glew-win32.zip"
-            SHOW_PROGRESS
-            STATUS DOWNLOAD_STATUS
-        )
-
-        list(GET DOWNLOAD_STATUS 0 DOWNLOAD_ERROR)
-        if(DOWNLOAD_ERROR)
-            list(GET DOWNLOAD_STATUS 1 DOWNLOAD_ERROR_MSG)
-            message(FATAL_ERROR "Failed to download GLEW: ${DOWNLOAD_ERROR_MSG}")
-        endif()
-
-        message(STATUS "    Extracting GLEW to ${THIRD_PARTY_DIR}...")
-        execute_process(
-            COMMAND ${CMAKE_COMMAND} -E tar xzf "${CMAKE_BINARY_DIR}/glew-win32.zip"
-            WORKING_DIRECTORY ${THIRD_PARTY_DIR}
-        )
-
-        # Rename to glew-prebuilt for consistency
-        file(RENAME "${THIRD_PARTY_DIR}/glew-${GLEW_VERSION}" "${GLEW_PREBUILT_DIR}")
-
-        # Clean up zip file
-        file(REMOVE "${CMAKE_BINARY_DIR}/glew-win32.zip")
-        message(STATUS "    ✓ GLEW extracted successfully")
-    else()
-        message(STATUS "    ✓ GLEW already downloaded")
-    endif()
-
-    # Create imported target for GLEW
-    add_library(libglew_static STATIC IMPORTED)
-
-    # Determine architecture-specific paths
-    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-        set(GLEW_LIB_DIR "${GLEW_PREBUILT_DIR}/lib/Release/x64")
-    else()
-        set(GLEW_LIB_DIR "${GLEW_PREBUILT_DIR}/lib/Release/Win32")
-    endif()
-
-    set_target_properties(libglew_static PROPERTIES
-        IMPORTED_LOCATION "${GLEW_LIB_DIR}/glew32s.lib"
-        INTERFACE_INCLUDE_DIRECTORIES "${GLEW_PREBUILT_DIR}/include"
-        INTERFACE_COMPILE_DEFINITIONS "GLEW_STATIC"
-    )
-
-else()
-    # macOS/Linux: Build from source via our out-of-tree wrapper so the
-    # submodule stays pristine (no CMakeLists gets copied inside it).
-    set(GLEW_SRC_DIR "${THIRD_PARTY_DIR}/glew")
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/glew EXCLUDE_FROM_ALL)
-endif()
-
-list(APPEND CALIPER_DEPENDENCY_LIBS libglew_static)
-list(APPEND CALIPER_CORE_LIBS libglew_static)
-message(STATUS "    ✓ GLEW configured")
-
 # --- GLFW (Window management) ---
 message(STATUS "  Configuring GLFW...")
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
@@ -204,7 +127,8 @@ message(STATUS "  Configuring ImGui...")
 set(IMGUI_SRC_DIR "${THIRD_PARTY_DIR}/imgui")
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/imgui EXCLUDE_FROM_ALL)
 # imgui is the core library (part of caliper::ui_stack); imgui_backends holds the
-# GLFW and OpenGL 3 backends, which only the host links.
+# GLFW platform backend, which only the host links. The renderer backends
+# (imgui_impl_metal, imgui_impl_vulkan) compile with the Metal and Vulkan backends.
 list(APPEND CALIPER_DEPENDENCY_LIBS imgui imgui_backends)
 list(APPEND CALIPER_CORE_LIBS imgui_backends)
 message(STATUS "    ✓ ImGui configured")

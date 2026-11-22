@@ -2,11 +2,11 @@
 // (name, data view picker, status dot) and a drawing area. Elements with the
 // same src share one socket; the `source` property takes any StreamClient.
 //
-// What draws the area is decided per view once its kind is known: with
-// renderer="auto" (the default), Caliper's own views compiled to WebAssembly
-// (wasm.ts) draw the kinds their loader lists in CALIPER_VIEWS_KINDS when
-// WebGPU gives an adapter, and this element's TypeScript views draw the rest,
-// so one page can mix both. The header is the element's in both cases: with
+// What draws the area is decided per view once its kind is known, by decide()
+// below, the one place that states the rule: Caliper's own views compiled to
+// WebAssembly (wasm.ts), which are the page's only WebGPU drawing, or this
+// element's TypeScript views, which draw with Canvas 2D; one page can mix
+// both. The header is the element's in both cases: with
 // the WebAssembly views the shared socket carries only the metadata (VIEWS,
 // no subscription), the module streams the view on its own connection, the
 // picker sends its choice through the module's setDataView, and the module's
@@ -30,7 +30,6 @@ import {
   CAP, KIND_IDS, kindName, LIMITS, type ControlReplyMsg, type DataView, type Kind, type SelectionMsg, type SeriesMsg,
   type SnapshotMsg, type ViewEntry,
 } from './protocol/messages.js';
-import { adapterInfo, gpuDevice, onDeviceLost } from './render/gpu.js';
 import type { LinkAxis, LiveView, ViewHost } from './views/base.js';
 import { HeatmapView } from './views/heatmap.js';
 import { HistogramView } from './views/histogram.js';
@@ -93,7 +92,8 @@ select:focus-visible, input:focus-visible, button:focus-visible { outline: 1px s
 .details .more { color: ${C.faint}; font: 11px ${FONT_TEXT}; padding-top: 2px; }
 `;
 
-const NEEDS_GPU: ReadonlySet<Kind> = new Set(['heatmap', 'image', 'points']);
+/** What a scene's plate says where the WebAssembly views cannot draw it. */
+const SCENE_NOTICE = 'A scene needs WebGPU and Caliper\'s WebAssembly views, which this browser or server does not have';
 const HOVER_MS = 1000 / 30;
 
 export class CaliperView extends HTMLElement {
@@ -109,7 +109,6 @@ export class CaliperView extends HTMLElement {
   private subs: number[] = [];
   private live: LiveView | null = null;
   private liveKind: Kind | null = null;
-  private creating: Kind | null = null;
   private pending: SnapshotMsg | null = null;
   private current: SnapshotMsg | null = null;
   private resolved: DataView | null = null;
@@ -117,13 +116,11 @@ export class CaliperView extends HTMLElement {
   private gotData = false;
   private dirtyData = false;
   private raf = 0;
-  private device: GPUDevice | null = null;
   private lastHover = 0;
   private msgTimer: ReturnType<typeof setTimeout> | null = null;
   private generation = 0;
   private built = false;
   private ro: ResizeObserver | null = null;
-  private offLost: (() => void) | null = null;
   private wasm: WasmHandle | null = null;
   private wasmReady = false;
   /** The header toggles of a view the WebAssembly views draw, by name. */
@@ -185,7 +182,7 @@ export class CaliperView extends HTMLElement {
 
   /**
    * What draws the view: 'wasm' (Caliper's own view layer compiled to
-   * WebAssembly), or the element's own views with 'webgpu' or 'canvas2d'.
+   * WebAssembly), or 'canvas2d' (the element's own views).
    */
   get renderer(): string | null {
     if (this.wasm) return 'wasm';
@@ -197,7 +194,7 @@ export class CaliperView extends HTMLElement {
     return {
       view: this.names.join(','), renderer: this.renderer, drawer: this.drawer, wasmReady: this.wasmReady,
       subs: [...this.subs], status: this.parts.dot.dataset.state, dataView: this.dataView,
-      adapter: this.device ? adapterInfo() : null, wasmStats: this.wasm?.stats ?? null, info: this.parts.info.textContent,
+      adapter: this.wasm?.stats?.adapter ?? null, wasmStats: this.wasm?.stats ?? null, info: this.parts.info.textContent,
       linked: this.linked, details: this.parts.details.hidden ? null : this.parts.details.textContent,
       run: this.runBar.el.hidden ? null : this.runBar.el.querySelector('.badge')?.textContent ?? null,
       ...(this.wasm ? this.wasmDebug() : {}), ...(this.live?.debug() ?? {}),
@@ -400,10 +397,9 @@ export class CaliperView extends HTMLElement {
     this.dispatchEvent(new CustomEvent('caliper-reply', { detail: r, bubbles: true, composed: true }));
   }
 
-  /** Resolves once pending drawing is done, including the GPU's work. */
+  /** Resolves once pending drawing is done. */
   async settled(): Promise<void> {
-    while (this.raf || this.creating) await new Promise((r) => requestAnimationFrame(() => r(null)));
-    if (this.device) await this.device.queue.onSubmittedWorkDone();
+    while (this.raf) await new Promise((r) => requestAnimationFrame(() => r(null)));
   }
 
   // --- lifecycle --------------------------------------------------------------
@@ -412,16 +408,11 @@ export class CaliperView extends HTMLElement {
     if (!this.built) this.build();
     this.applyHeight();
     this.reattach();
-    this.offLost = onDeviceLost(() => {
-      if (this.liveKind && NEEDS_GPU.has(this.liveKind)) this.recreate();
-    });
   }
 
   disconnectedCallback(): void {
     this.detach();
     this.destroyLive();
-    this.offLost?.();
-    this.offLost = null;
   }
 
   attributeChangedCallback(name: string, old: string | null, value: string | null): void {
@@ -486,12 +477,14 @@ export class CaliperView extends HTMLElement {
   }
 
   /**
-   * Decides, once the view's kind is known, what draws it: renderer="auto"
-   * (the default) uses the WebAssembly views for the kinds their loader lists
-   * when WebGPU gives an adapter; "wasm" uses them for those kinds whatever
-   * the adapter; "ts" uses this element's own views. The element's own views
-   * also draw a stream given through the source property, several series in
-   * one plate, and anything the WebAssembly views fail to mount.
+   * Decides, once the view's kind is known, what draws it. This is the one
+   * statement of the rule, which docs/web/browser-elements.md ("Renderer
+   * Selection") describes: renderer="auto" (the default) uses the
+   * WebAssembly views for the kinds their loader lists when WebGPU gives an
+   * adapter; "wasm" uses them for those kinds whatever the adapter; "ts" uses
+   * this element's own views. The element's own views, which draw with
+   * Canvas 2D, also draw a stream given through the source property, several
+   * series in one plate, and anything the WebAssembly views fail to mount.
    */
   private async decide(gen: number): Promise<void> {
     const kind = this.kind();
@@ -516,7 +509,9 @@ export class CaliperView extends HTMLElement {
       return;
     }
     this.drawer = 'ts';
-    this.subscribe();
+    // A scene is drawn only by the WebAssembly views on WebGPU (protocol 3.2 draft): the element's
+    // own views do not draw scenes, so it subscribes to nothing and shows a notice in its place.
+    if (kind !== 'scene') this.subscribe();
     this.views(this.client?.views ?? []);
   }
 
@@ -706,6 +701,10 @@ export class CaliperView extends HTMLElement {
     if (this.resolved) this.picker.show(this.resolved);
     if (!this.drawer) this.decide(this.generation);
     const k = this.kind();
+    if (k === 'scene' && this.drawer === 'ts') {
+      this.message(SCENE_NOTICE);
+      return;
+    }
     if (k && this.drawer === 'ts') this.ensureLive(k);
     if (this.gotData || this.wasmReady) return;
     const missing = !e && this.client?.state === 'open';
@@ -765,38 +764,17 @@ export class CaliperView extends HTMLElement {
   // --- the live view ------------------------------------------------------------
 
   private ensureLive(kind: Kind): void {
-    if (this.liveKind === kind || this.creating === kind) return;
+    if (kind === 'scene') {
+      this.message(SCENE_NOTICE);
+      return;
+    }
+    if (this.liveKind === kind) return;
     this.destroyLive();
-    const wantGpu = NEEDS_GPU.has(kind);
-    if (!wantGpu) {
-      this.makeLive(kind, null);
-      return;
-    }
-    this.creating = kind;
-    const gen = this.generation;
-    gpuDevice().then((device) => {
-      if (gen !== this.generation || this.creating !== kind) return;
-      this.creating = null;
-      this.makeLive(kind, device);
-    });
-  }
-
-  private makeLive(kind: Kind, device: GPUDevice | null): void {
-    this.device = device;
     const host = this.host();
-    let live: LiveView;
-    try {
-      live = kind === 'series' ? new SeriesView(host, this.names)
-        : kind === 'histogram' ? new HistogramView(host)
-          : kind === 'points' ? new PointsView(host)
-            : new HeatmapView(host, kind === 'image');
-    } catch (e) {
-      if (!device) throw e;
-      console.warn('caliper-view: WebGPU setup failed; drawing with Canvas 2D', e);
-      this.makeLive(kind, null);
-      return;
-    }
-    this.live = live;
+    this.live = kind === 'series' ? new SeriesView(host, this.names)
+      : kind === 'histogram' ? new HistogramView(host)
+        : kind === 'points' ? new PointsView(host)
+          : new HeatmapView(host, kind === 'image');
     this.liveKind = kind;
     this.applyLink();
     if (this.current && !this.pending) this.pending = this.current;
@@ -804,7 +782,6 @@ export class CaliperView extends HTMLElement {
   }
 
   private destroyLive(): void {
-    this.creating = null;
     if (!this.live) return;
     this.live.destroy();
     this.live = null;
@@ -815,7 +792,7 @@ export class CaliperView extends HTMLElement {
   }
 
   private recreate(): void {
-    const k = this.liveKind ?? this.creating;
+    const k = this.liveKind;
     this.destroyLive();
     const kind = this.kind() ?? k;
     if (kind) this.ensureLive(kind);
@@ -828,7 +805,6 @@ export class CaliperView extends HTMLElement {
       body: p.body,
       overlay: p.overlay,
       tools: p.tools,
-      device: this.device,
       size: () => {
         const r = p.body.getBoundingClientRect();
         return { w: Math.max(1, r.width), h: Math.max(1, r.height), dpr: window.devicePixelRatio || 1 };

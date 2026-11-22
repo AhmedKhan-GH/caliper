@@ -21,7 +21,7 @@ flowchart LR
 
 ## Backends
 
-On the Metal and Vulkan paths, tensors reach the screen without a trip through the CPU. On macOS the default is Metal with MPS, and Metal processes accepted MPS buffers without host staging. On Windows the default is Vulkan with CUDA, and a CUDA kernel writes a tensor update straight into the Vulkan image. OpenGL 3.3 is the fallback on every platform. The host stages tensor uploads through the CPU on that path.
+On the Metal and Vulkan paths, tensors reach the screen without a trip through the CPU. On macOS the default is Metal with MPS, and Metal processes accepted MPS buffers without host staging. On Windows the default is Vulkan with CUDA, and a CUDA kernel writes a tensor update straight into the Vulkan image. There is no fallback renderer yet: where neither Metal nor Vulkan starts, Caliper refuses with a message that says why ([No Fallback Renderer](applets/rendering.md#no-fallback-renderer)).
 
 The host reports the path that drew each image and claims zero-copy only when that path ran. [Rendering](applets/rendering.md) explains how the host chooses a backend.
 

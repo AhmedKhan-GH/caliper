@@ -5,10 +5,10 @@
 // skip code so ctest shows "Skipped", not "Passed" (gpu_skip.h). With
 // CALIPER_REQUIRE_GPU=1 those skips are failures.
 //
-// This runs the SAME §16 matrix on BOTH backends: the GL run and (on Apple, when
-// a Metal device is available) the Metal run. Both compare the GPU readback
-// byte-for-byte against the shared CPU reference (map_f32_to_rgba8 /
-// expand_u8_to_rgba8) — the single source of truth the staging path also uses.
+// This runs the SAME §16 matrix on the platform's backend: Metal on Apple
+// (when a Metal device is available) and Vulkan on Windows. Each compares the
+// GPU readback byte-for-byte against the shared CPU reference (map_f32_to_rgba8
+// / expand_u8_to_rgba8) — the single source of truth the staging path also uses.
 //
 // Metal additionally exercises the DEVICE paths that nothing had ever run: a
 // METAL-device CaliperTensor is built from a raw MTLBuffer allocated *in the
@@ -20,11 +20,9 @@
 #include <doctest/doctest.h>
 #include "../gpu_skip.h"
 
-#include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include "../glfw_background.h"
 #include <imgui.h>
-#include <backends/imgui_impl_opengl3.h>
 
 #include "tensor_bridge.h"
 #include "renderer/host_renderer.h"
@@ -74,58 +72,7 @@ struct GlfwGuard {
 };
 GlfwGuard& glfw_guard() { static GlfwGuard g; return g; }
 
-// ---- GL backend env: hidden GL window + GLRenderer + TensorBridge ----------
-struct GlEnv {
-    bool ok = false;
-    GLFWwindow* window = nullptr;
-    ImGuiContext* imgui_ctx = nullptr;
-    std::unique_ptr<HostRenderer> renderer;
-    std::unique_ptr<TensorBridge> bridge;
-
-    GlEnv() {
-        if (!glfw_guard().ok) return;             // headless -> ok stays false
-        renderer = make_renderer("gl");
-        glfwDefaultWindowHints();                 // clear any prior backend hints
-        renderer->window_hints();
-        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-        window = glfwCreateWindow(64, 64, "caliper_gfx_tests(gl)", nullptr, nullptr);
-        if (!window) return;
-        imgui_ctx = ImGui::CreateContext();
-        ImGui::SetCurrentContext(imgui_ctx);
-        if (!renderer->init(window)) {
-            ImGui::DestroyContext(imgui_ctx);
-            glfwDestroyWindow(window);
-            return;
-        }
-        bridge = std::make_unique<TensorBridge>(*renderer);
-        ok = true;
-    }
-    ~GlEnv() {
-        if (!ok) return;
-        ImGui::SetCurrentContext(imgui_ctx);
-        bridge.reset();
-        renderer->shutdown();
-        ImGui::DestroyContext(imgui_ctx);
-        glfwDestroyWindow(window);
-    }
-};
-
-GlEnv& gl_env() { static GlEnv e; return e; }
-
-// Read an RGBA8 texture back off the GL GPU. Post-fix, the bridge id's VALUE is
-// the renderer's ImGui handle — for GL that is the GL texture name — so it is
-// bound directly here, the same value ImGui_ImplOpenGL3 binds (§5.4).
-std::vector<uint8_t> gl_readback(HostRenderer& /*r*/, CaliperTextureId id, int w, int h) {
-    GLuint name = (GLuint)id;
-    std::vector<uint8_t> px((size_t)w * h * 4, 0xAB);
-    glBindTexture(GL_TEXTURE_2D, name);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-    glBindTexture(GL_TEXTURE_2D, 0);
-    return px;
-}
-
-// ---- CPU-tensor builders (shared by both backends) -------------------------
+// ---- CPU-tensor builders (shared by every backend) -------------------------
 CaliperTensor f32_2d(const float* d, int64_t h, int64_t w) {
     CaliperTensor t{};
     t.struct_size = sizeof(t); t.data = (void*)d; t.dtype = CALIPER_DT_F32;
@@ -146,17 +93,6 @@ struct Backend {
     HostRenderer* renderer = nullptr;
     std::function<std::vector<uint8_t>(CaliperTextureId, int, int)> readback;
 };
-
-Backend gl_backend() {
-    Backend b;
-    b.bridge = gl_env().bridge.get();
-    b.renderer = gl_env().renderer.get();
-    HostRenderer* r = b.renderer;
-    b.readback = [r](CaliperTextureId id, int w, int h) {
-        return gl_readback(*r, id, w, h);
-    };
-    return b;
-}
 
 // ===========================================================================
 // Shared §16 CPU-tensor matrix — identical assertions on every backend.
@@ -266,104 +202,7 @@ void mat_alloc_shared(Backend& bk) {
     bk.bridge->free_shared(tex);
 }
 
-#define REQUIRE_GL() do { \
-    if (!gl_env().ok) CALIPER_SKIP_NO_GPU("no GUI/GL context"); \
-} while (0)
-
 }  // namespace
-
-// ---------------------------------------------------------------------------
-// The suite's hidden windows give the test process no Dock icon or menu bar:
-// after GLFW is up and a window exists, the activation policy is still the
-// background one (on macOS; elsewhere there is nothing to show).
-// ---------------------------------------------------------------------------
-TEST_CASE("gfx: the test process has no Dock icon or menu bar") {
-    REQUIRE_GL();
-    CHECK(caliper_host::background_activation_policy_active());
-}
-
-// ---------------------------------------------------------------------------
-// GL run of the §16 matrix.
-// ---------------------------------------------------------------------------
-TEST_CASE("gfx/GL: 4x4 f32 ramp mapped through viridis is pixel-exact") {
-    REQUIRE_GL(); Backend bk = gl_backend(); mat_f32_viridis(bk);
-}
-TEST_CASE("gfx/GL: f32 mapped through magma and RdBu is pixel-exact") {
-    REQUIRE_GL(); Backend bk = gl_backend(); mat_f32_magma_rdbu(bk);
-}
-TEST_CASE("gfx/GL: 2x3 u8 direct (C=1,3,4) expands pixel-exact") {
-    REQUIRE_GL(); Backend bk = gl_backend(); mat_u8_direct(bk);
-}
-TEST_CASE("gfx/GL: update_texture changes the pixels on the GPU") {
-    REQUIRE_GL(); Backend bk = gl_backend(); mat_update(bk);
-}
-TEST_CASE("gfx/GL: invalid tensors return id 0") {
-    REQUIRE_GL(); Backend bk = gl_backend(); mat_invalid(bk);
-}
-TEST_CASE("gfx/GL: alloc_shared roundtrip — write buffer, update, readback") {
-    REQUIRE_GL(); Backend bk = gl_backend(); mat_alloc_shared(bk);
-}
-TEST_CASE("gfx/GL: last_device_path is the frozen CPU-staged fallback") {
-    REQUIRE_GL();
-    // GL never reads device memory; the interface default reports cpu-staged.
-    CHECK(std::string(gl_env().renderer->last_device_path()) == "cpu-staged");
-}
-
-// Regression test for the user SIGSEGV (integer table ids crashed ImGui on the
-// first Image bind). Two guarantees: (a) the PUBLIC bridge id's VALUE is exactly
-// the renderer's ImGui handle for that texture — for GL, a live GL name; and (b)
-// binding it via ImGui::Image and running the REAL ImGui_ImplOpenGL3 draw path
-// (RenderDrawData -> glBindTexture on the id) executes cleanly offscreen. This
-// is the exact path that faulted on Metal; here it is proven on GL.
-TEST_CASE("gfx/GL: bridge id is the ImGui handle and survives the real ImGui draw path") {
-    REQUIRE_GL();
-    Backend bk = gl_backend();
-
-    uint8_t rgba[2 * 2 * 4]; for (int i = 0; i < 16; ++i) rgba[i] = (uint8_t)(i * 15 + 8);
-    CaliperTensor t = u8_3d(rgba, 2, 2, 4);
-    CaliperTextureId id = bk.bridge->texture_from_tensor(&t, 0);
-    REQUIRE(id != 0);
-    // (a) the id's VALUE is the renderer's ImGui handle: a live GL texture name.
-    CHECK(glIsTexture((GLuint)id) == GL_TRUE);
-
-    // (b) offscreen FBO to draw into deterministically (hidden window).
-    const int W = 32, H = 32;
-    GLuint color = 0, fbo = 0;
-    glGenTextures(1, &color);
-    glBindTexture(GL_TEXTURE_2D, color);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glGenFramebuffers(1, &fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color, 0);
-    REQUIRE(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
-
-    ImGui::SetCurrentContext(gl_env().imgui_ctx);
-    ImGuiIO& io = ImGui::GetIO();
-    io.DisplaySize = ImVec2((float)W, (float)H);
-    io.DeltaTime = 1.0f / 60.0f;
-    ImGui_ImplOpenGL3_NewFrame();
-    ImGui::NewFrame();
-    ImGui::GetBackgroundDrawList()->AddImage(
-        (ImTextureID)id, ImVec2(0, 0), ImVec2((float)W, (float)H));
-    ImGui::Render();
-
-    glViewport(0, 0, W, H);
-    glClearColor(0, 0, 0, 1); glClear(GL_COLOR_BUFFER_BIT);
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());   // <- exact path that crashed
-    glFinish();
-
-    std::vector<uint8_t> px((size_t)W * H * 4, 0);
-    glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glDeleteFramebuffers(1, &fbo);
-    glDeleteTextures(1, &color);
-
-    bool drew = false;   // the bridge texture actually rasterized (non-bg texel)
-    for (size_t i = 0; i < px.size(); ++i) if ((i % 4) != 3 && px[i]) { drew = true; break; }
-    CHECK(drew);
-    bk.bridge->release_texture(id);
-}
 
 // ===========================================================================
 // caliper.geometry.v1_3 shared CPU reference (spec §8) — backend-agnostic, at
@@ -499,7 +338,7 @@ struct MetalEnv {
         device = MTLCreateSystemDefaultDevice();
         if (device == nil) return;                 // no Metal GPU -> skip
         renderer = make_metal_renderer();
-        glfwDefaultWindowHints();                  // clear prior GL hints
+        glfwDefaultWindowHints();                  // clear prior hints
         renderer->window_hints();                  // GLFW_NO_API
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
         window = glfwCreateWindow(64, 64, "caliper_gfx_tests(metal)", nullptr, nullptr);
@@ -570,6 +409,12 @@ id<MTLBuffer> device_buffer_private(const void* src, size_t bytes) {
 }
 
 }  // namespace
+
+// The Metal environment's renderer for the graphics layer's rows (gfx_layer.cpp), or nullptr
+// without a Metal device.
+caliper_host::HostRenderer* gfx_metal_renderer() {
+    return metal_env().ok ? metal_env().renderer.get() : nullptr;
+}
 
 TEST_CASE("gfx/Metal: 4x4 f32 ramp mapped through viridis is pixel-exact (staged)") {
     if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
@@ -3072,6 +2917,102 @@ TEST_CASE("gfx/metal geometry.v1_3: instance-gate refusals leave the view untouc
     bk.bridge->release_allocation(nrm_alloc);
     bk.bridge->release_allocation(attr_alloc);
     bk.bridge->release_allocation(inst_alloc);
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(view);
+}
+
+// Geometry draw cost by count (docs/development/testing.md, the timing rows): one
+// draw_primitives frame of N additive, colormapped points pulled in place from
+// imported buffers, by N, then frames of K draw records of 1,000 points each, by
+// K. "call" is the frame-thread time inside draw_primitives (gates, encode,
+// commit), "done" adds the wait for the GPU, and "gpu" is the command buffer's
+// GPU time (GPUEndTime - GPUStartTime); each is the mean over the iterations,
+// with the worst "done" beside it. Prints numbers only, like the Vulkan+CUDA
+// timing rows, and checks that no draw counted a copy (the copy counters,
+// HostRenderer::note_copy). Bounded: at most 64 MiB of buffers and a few
+// hundred draws.
+TEST_CASE("gfx/metal geometry: timing — draws by count") {
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
+    using clk = std::chrono::steady_clock;
+    const auto us = [](clk::time_point a, clk::time_point b) {
+        return std::chrono::duration<double, std::micro>(b - a).count();
+    };
+    const uint64_t kMaxN = 4000000;
+    std::vector<float> pos((size_t)kMaxN * 3), attr((size_t)kMaxN);
+    uint32_t seed = 12345u;
+    for (size_t i = 0; i < (size_t)kMaxN; ++i) {
+        for (int k = 0; k < 3; ++k) {
+            seed = seed * 1664525u + 1013904223u;
+            pos[i * 3 + k] = (float)(seed >> 8) / 8388608.0f - 1.0f;   // [-1, 1)
+        }
+        attr[i] = (float)(i % 1000) / 999.0f;
+    }
+    id<MTLBuffer> pos_buf = device_buffer(pos.data(), pos.size() * sizeof(float));
+    id<MTLBuffer> attr_buf = device_buffer(attr.data(), attr.size() * sizeof(float));
+    REQUIRE((pos_buf != nil)); REQUIRE((attr_buf != nil));
+    CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        (__bridge void*)pos_buf, pos.size() * sizeof(float), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId attr_alloc = bk.bridge->import_allocation(
+        (__bridge void*)attr_buf, attr.size() * sizeof(float), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pos_alloc != 0); REQUIRE(attr_alloc != 0);
+    const int W = 512, H = 512;
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+    const CaliperGeomCamera cam = identity_cam();
+    const auto draw_of = [&](uint64_t first, uint64_t n) {
+        CaliperGeomDraw d{};
+        d.pos_alloc = pos_alloc; d.pos_offset = first * 12u; d.vertex_count = n;
+        d.attr_alloc = attr_alloc; d.attr_offset = first * 4u;
+        d.topology = CALIPER_GEOM_TOPO_POINTS;
+        d.color_mode = CALIPER_GEOM_COLOR_COLORMAP;
+        d.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+        d.blend_mode = CALIPER_GEOM_BLEND_ADDITIVE;
+        d.colormap = CALIPER_CMAP_VIRIDIS;
+        d.vmin = 0.0f; d.vmax = 1.0f; d.size_px = 1.0f;
+        for (int i = 0; i < 4; ++i) d.model[i * 4 + i] = 1.0f;
+        return d;
+    };
+    const uint64_t copies0 = bk.renderer->copy_count().copies;
+    // One timed series: `iters` frames of the given draw records.
+    const auto run = [&](const std::vector<CaliperGeomDraw>& draws, int iters, const std::string& label) {
+        REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, draws.data(), (uint32_t)draws.size(),
+                                                sizeof(CaliperGeomDraw), 0xFF000000u));   // warm-up
+        bk.renderer->device_update_release(bk.renderer->geom_draw_retain_last());
+        double call = 0, done = 0, done_max = 0, gpu = 0;
+        int gpu_n = 0;
+        for (int i = 0; i < iters; ++i) {
+            const auto t0 = clk::now();
+            REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, draws.data(), (uint32_t)draws.size(),
+                                                    sizeof(CaliperGeomDraw), 0xFF000000u));
+            const auto t1 = clk::now();
+            id<MTLCommandBuffer> cb = (__bridge_transfer id<MTLCommandBuffer>)bk.renderer->geom_draw_retain_last();
+            REQUIRE((cb != nil));
+            [cb waitUntilCompleted];
+            const auto t2 = clk::now();
+            call += us(t0, t1);
+            done += us(t0, t2);
+            done_max = std::max(done_max, us(t0, t2));
+            const double g = (cb.GPUEndTime - cb.GPUStartTime) * 1e6;
+            if (g > 0) { gpu += g; ++gpu_n; }
+        }
+        MESSAGE(label << " [" << std::string(bk.renderer->last_device_path()) << "]: call "
+                << call / iters << " us, done " << done / iters << " us (max " << done_max
+                << "), gpu " << (gpu_n ? gpu / gpu_n : 0.0) << " us, " << iters << " frames");
+    };
+    for (uint64_t n : {1000ull, 100000ull, 1000000ull, 4000000ull}) {
+        const int iters = n >= 1000000 ? 20 : 100;
+        run({draw_of(0, n)}, iters, std::to_string(n) + " points in 1 draw");
+    }
+    for (int k : {1, 16, 256}) {
+        std::vector<CaliperGeomDraw> draws;
+        for (int i = 0; i < k; ++i) draws.push_back(draw_of((uint64_t)i * 1000u, 1000));
+        run(draws, 100, std::to_string(k) + " draws of 1000 points");
+    }
+    CHECK(bk.renderer->copy_count().copies == copies0);   // every draw read the imports in place
+
+    bk.bridge->release_allocation(attr_alloc);
     bk.bridge->release_allocation(pos_alloc);
     bk.bridge->geom_release_view(view);
 }
@@ -6328,5 +6269,22 @@ TEST_CASE("gfx/geometry.v1_3: instance-gate refusals leave the view untouched") 
 
 #endif  // _WIN32
 #endif  // CALIPER_HAVE_VULKAN
+
+// ---------------------------------------------------------------------------
+// The suite's hidden windows give the test process no Dock icon or menu bar:
+// after GLFW is up and the platform renderer's hidden window exists, the
+// activation policy is still the background one (on macOS; elsewhere there is
+// nothing to show).
+// ---------------------------------------------------------------------------
+TEST_CASE("gfx: the test process has no Dock icon or menu bar") {
+#if defined(CALIPER_HAVE_METAL)
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
+#elif defined(CALIPER_HAVE_VULKAN)
+    if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
+#else
+    CALIPER_SKIP_NOT_APPLICABLE("no renderer on this platform");
+#endif
+    CHECK(caliper_host::background_activation_policy_active());
+}
 
 CALIPER_GPU_TEST_MAIN()

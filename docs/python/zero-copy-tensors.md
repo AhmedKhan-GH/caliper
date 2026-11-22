@@ -42,9 +42,9 @@ Torch's caching allocator does not produce exportable allocations, so Vulkan can
 
 The host does not need the CUDA toolkit. It loads the CUDA driver API from `nvcuda.dll` at run time, and the Vulkan loader comes from the GPU driver.
 
-### OpenGL Fallback
+### CPU Tensors
 
-On the OpenGL backend, or for any CPU tensor, the bridge stages through host memory. It applies the colormap on the CPU into an RGBA scratch buffer and uploads once with `glTexSubImage2D`. The ABI, the textures and the on-screen result are the same as on the other paths. Only the copy that the other paths avoid is added. Windows also uses this path when Vulkan initialization or interop fails at run time. Thus the worst case is a slow path that works.
+For any CPU tensor, the bridge stages through host memory. It applies the colormap on the CPU into an RGBA scratch buffer and uploads it once. The ABI, the textures and the on-screen result are the same as on the other paths. Only the copy that the other paths avoid is added. Windows also uses this path when Vulkan starts but CUDA interop does not pair. Thus the worst case is a slow path that works. Where Metal or Vulkan cannot start at all, there is no fallback renderer, and Caliper refuses with a message that says why ([No Fallback Renderer](../applets/rendering.md#no-fallback-renderer)).
 
 ## Data Crossings per Path
 
@@ -57,7 +57,7 @@ On the OpenGL backend, or for any CPU tensor, the bridge stages through host mem
 | Vulkan with CUDA, `alloc_shared` | 0 | 0 | The applet's kernels write the texture's own buffer, and a Vulkan pass converts it |
 | Vulkan with CUDA, tensor in an exportable pool | 0 | 0 | The bridge imports the pool block once, and the pass reads it at a byte offset |
 | Metal and Vulkan with CUDA, imported geometry (`geometry.v1` to `v1_3`) | 0 | 0 | Indexed triangles, lines and points are vertex-pulled in place from imported buffers |
-| OpenGL, or any CPU tensor | 1 (staging) | 0 | The bridge converts on the CPU and uploads |
+| Any CPU tensor | 1 (staging) | 0 | The bridge converts on the CPU and uploads |
 
 `alloc_shared` differs by platform. On Vulkan it returns a device-backed tensor, so a CUDA kernel can write the texture's memory in place. On Metal it returns a CPU vector in unified memory. That is zero-copy for CPU writers, but a device writer goes through the normal update path.
 
@@ -73,7 +73,7 @@ auto ct = caliper::adapters::stream_to_tensor(t, caps);
 - **Drain** (`stream == NULL`). The adapter synchronizes the whole producer device before the handoff, with `torch::mps::synchronize()` or `torch::cuda::synchronize()`. The renderer can then read the tensor immediately. This is always correct and costs a full-device barrier. `synced_to_tensor` does this, and `stream_to_tensor` falls back to it when capability bit 0 is absent.
 - **Stream-ordered** (capability bit 0, `CALIPER_BRIDGE_CAP_STREAM_ORDERED`). There is no drain. The adapter puts the producer's queue or stream in `CaliperTensor.stream` (an `MTLCommandQueue*` on MPS, a `CUstream` on CUDA). The renderer orders its work on the GPU after the producer's queued work. Metal uses a per-texture `MTLSharedEvent`, and Vulkan with CUDA uses a shared timeline semaphore on the producer's stream. The CPU never waits on the hot path.
 
-Metal always grants the stream-ordered rung. Vulkan grants it when the device exports timeline semaphores. If it does not, the handoff stays synchronous and adapters keep draining. OpenGL does not grant it.
+Metal always grants the stream-ordered rung. Vulkan grants it when the device exports timeline semaphores. If it does not, the handoff stays synchronous and adapters keep draining.
 
 Torch's public MPS stream calls are not serialized, and a handoff during kernel encoding can corrupt command-buffer state. Thus both adapter rungs run their MPS work as one block on torch's own stream dispatch queue, and any new adapter code that touches MPS must do the same. CUDA needs no such serialization, because driver calls are thread-safe by API contract.
 

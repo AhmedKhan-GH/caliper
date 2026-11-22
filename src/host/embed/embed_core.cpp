@@ -56,6 +56,7 @@ using namespace caliper_host;
 // The CaliperCore struct and the v1.2 TensorView record live in embed_core.h
 // so the live-streaming module (src/host/live) shares them.
 #include "embed_core.h"
+#include "render_stats.h"
 
 namespace {
 
@@ -182,13 +183,14 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
         }
     }
 
-    // STEP 2 (mirrors main.cpp:49 / renderer factory selection). DEFAULT honors
-    // CALIPER_RENDERER + the platform default (Metal/Vulkan, GL fallback). An
-    // explicit backend that this OS can't build refuses cleanly. GL is never an
-    // embed target — a GL-resolved renderer refuses later at attach_canvas.
+    // STEP 2 (mirrors main.cpp / renderer selection). DEFAULT is the platform's
+    // renderer (Metal/Vulkan), refused for CALIPER_RENDERER=gl; there is no
+    // fallback renderer. An explicit backend that this OS can't build refuses
+    // cleanly. A renderer that cannot start refuses at attach_canvas.
+    std::string refusal = "requested renderer not available on this platform";
     switch (desc->renderer) {
         case CALIPER_RENDERER_DEFAULT:
-            core->renderer = core_select_renderer();
+            core->renderer = core_select_renderer(&refusal);
             break;
         case CALIPER_RENDERER_METAL:
 #ifdef __APPLE__
@@ -211,12 +213,11 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
         ImGui::GetIO().IniFilename = nullptr;   // nothing to persist; write no file
         core_destroy_ui_context();
         // slot_guard releases the one-core slot on this return.
+        const std::string line = "caliper_core_create: " + refusal;
         if (desc->log_fn)
-            desc->log_fn(desc->userdata, 2,
-                         "caliper_core_create: requested renderer not available "
-                         "on this platform");
+            desc->log_fn(desc->userdata, 2, line.c_str());
         else
-            std::fprintf(stderr, "[embed] create: renderer unavailable\n");
+            std::fprintf(stderr, "[embed] %s\n", line.c_str());
         return nullptr;
     }
 
@@ -334,16 +335,12 @@ int caliper_core_attach_canvas(CaliperCore* core, void* native_view,
         core->fail("attach_canvas: canvas size must be positive");
         return 0;
     }
-    if (!core->renderer->canvas_supported()) {
-        core->fail("attach_canvas: embed requires Metal or Vulkan (the "
-                   "GL fallback is not an embed target)");
-        return 0;
-    }
     HostRenderer::CanvasMode mode = (desc->mode == CALIPER_CANVAS_OFFSCREEN)
                                         ? HostRenderer::CANVAS_OFFSCREEN
                                         : HostRenderer::CANVAS_WINDOW;
     if (!core->renderer->canvas_init(native_view, mode, desc->width, desc->height)) {
-        core->fail("attach_canvas: backend canvas_init failed");
+        core->fail("attach_canvas: " + renderer_start_refusal(core->renderer->name(),
+                                                              core->renderer->start_error()));
         return 0;
     }
     core->canvas_ready = true;
@@ -419,6 +416,7 @@ void caliper_core_frame(CaliperCore* core) {
     // reference bridge textures; releasing them before the pass consumes the
     // draw list is a use-after-free (main.cpp:370). Deferred teardown follows.
     core->renderer->canvas_render();
+    caliper_stats::end_frame(core);   // copies per frame (embed/render_stats.h)
 
     if (!alive) {
         // Applet faulted mid-frame and was quarantined by the loader's crash

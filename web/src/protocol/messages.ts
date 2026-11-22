@@ -30,11 +30,21 @@ export const MSG = {
   control: 0x0051,
   control_reply: 0x0052,
   selection: 0x0060,
+  scene_update: 0x0070, // 3.2 draft
+  scene_transforms: 0x0071, // 3.2 draft
+  scene_clear: 0x0072, // 3.2 draft
+  scene_classes: 0x0073, // 3.2 draft
+  text: 0x0074, // 3.2 draft
+  recordings: 0x0078, // 3.2 draft
+  recording_open: 0x0079, // 3.2 draft
+  cursor: 0x007a, // 3.2 draft
+  time_state: 0x007b, // 3.2 draft
 } as const;
 export type MessageType = keyof typeof MSG;
 
-export type Kind = 'heatmap' | 'image' | 'points' | 'series' | 'histogram';
-export const KIND_IDS: Record<Kind, number> = { heatmap: 1, image: 2, points: 3, series: 4, histogram: 5 };
+/** The live view kinds; scene (6) is the protocol 3.2 draft's (KIND_SCENE below). */
+export type Kind = 'heatmap' | 'image' | 'points' | 'series' | 'histogram' | 'scene' | 'text' | 'bars';
+export const KIND_IDS: Record<Kind, number> = { heatmap: 1, image: 2, points: 3, series: 4, histogram: 5, scene: 6, text: 7, bars: 8 };
 export function kindName(id: number): Kind | null {
   for (const k in KIND_IDS) if (KIND_IDS[k as Kind] === id) return k as Kind;
   return null;
@@ -43,8 +53,8 @@ export function kindName(id: number): Kind | null {
 export type ColormapName = 'viridis' | 'magma' | 'rdbu';
 export const COLORMAPS: readonly ColormapName[] = ['viridis', 'magma', 'rdbu'];
 
-export const DTYPE = { f32: 0, f16: 1, bf16: 2, i64: 3, i32: 4, u8: 5 } as const;
-export const DTYPE_SIZE: Record<number, number> = { 0: 4, 1: 2, 2: 2, 3: 8, 4: 4, 5: 1 };
+export const DTYPE = { f32: 0, f16: 1, bf16: 2, i64: 3, i32: 4, u8: 5, u16: 6 } as const;
+export const DTYPE_SIZE: Record<number, number> = { 0: 4, 1: 2, 2: 2, 3: 8, 4: 4, 5: 1, 6: 2 };
 
 /** Snapshot flags: take vmin from stats[0], vmax from stats[1], draw 1:1. */
 export const SNAP_AUTO_VMIN = 0x1;
@@ -133,6 +143,8 @@ export interface SessionIdentity {
   views?: number;
   /** The producer's capabilities, in a session list. */
   capabilities?: string[];
+  /** 3.2 draft, a session opened from a recording. */
+  recording?: { id: string; seekable: boolean; complete: boolean } | null;
 }
 
 /** One axis of a snapshot's payload (payload_layout in _wire.py). */
@@ -171,7 +183,14 @@ export interface PingMsg { type: 'ping'; nonce: number }
 export interface PongMsg { type: 'pong'; nonce: number }
 export interface SessionsMsg { type: 'sessions'; sessions: SessionIdentity[] }
 export interface AttachMsg { type: 'attach'; session: string | null }
-export interface ViewsMsg { type: 'views'; views: ViewEntry[]; session?: string | null }
+export interface ViewsMsg {
+  type: 'views';
+  views: ViewEntry[];
+  session?: string | null;
+  /** 3.2 draft: 2 to 8 timelines, step and time first. */
+  timelines?: TimelineInfo[];
+}
+export interface TimelineInfo { name: string; kind: 'sequence' | 'time'; epoch?: boolean }
 export interface SubscribeMsg {
   type: 'subscribe';
   sub: number;
@@ -200,7 +219,7 @@ export interface SnapshotMsg {
   stamp_ns: number;
   kind: number;
   data_view: DataView;
-  /** heatmap (H, W) f32, image (H, W, 4) u8, points (N, D) f32, histogram (B,) f32. */
+  /** heatmap (H, W) f32, image (H, W, 4) u8, points (N, D) f32, histogram or bars (B,) f32; empty (length 0) when `empty`. */
   data: Float32Array | Uint8Array;
   shape: number[];
   /** points: (N,) f32 labels or values. */
@@ -215,6 +234,17 @@ export interface SnapshotMsg {
   tile?: { dim: string; rows: number; cols: number } | null;
   points_dims?: 2 | 3;
   label_count?: number;
+  /** 3.2 draft: a bar chart's (B, 4) u8 colours, B labels and direction. */
+  colors?: Uint8Array;
+  labels?: string[];
+  horizontal?: boolean;
+  /** A static snapshot carries no stamp. */
+  static?: boolean;
+  /** The i64 (T,) stamp section. */
+  stamp?: BigInt64Array;
+  cursor?: number;
+  /** A recorded view with nothing at the cursor: no section. */
+  empty?: boolean;
 }
 
 /** Series values start .. start + values.length; total appended so far. */
@@ -226,6 +256,14 @@ export interface SeriesMsg {
   total: number;
   stamp_ns: number;
   values: Float32Array;
+  /** 3.2 draft: one i64 (T,) stamp for the values, or `stamps` (M, T), `stamps_t` is T. */
+  stamp?: BigInt64Array;
+  stamps?: BigInt64Array;
+  stamps_t?: number;
+  /** A decimated recorded series: the absolute index of each value, and the bucket size. */
+  indices?: BigInt64Array;
+  decimated?: number;
+  cursor?: number;
 }
 
 /** What a viewer reports to Python: data to read, never a command. */
@@ -266,7 +304,7 @@ export interface ParamInfo {
 export interface ActionInfo { name: string; running: boolean; queued: boolean; help?: string }
 
 /** Producer to viewer: the run state, the parameters and the actions, whole. */
-export interface ControlsMsg { type: 'controls'; run: RunInfo; params: ParamInfo[]; actions: ActionInfo[] }
+export interface ControlsMsg { type: 'controls'; run: RunInfo; params: ParamInfo[]; actions: ActionInfo[]; /** 3.2 draft */ stamp?: BigInt64Array }
 /** Viewer to producer: pause, resume, step, set a parameter, run an action. */
 export interface ControlMsg {
   type: 'control';
@@ -307,7 +345,9 @@ export interface UnknownMsg { type: 'unknown'; id: number; meta: Record<string, 
 export type Message =
   | HelloMsg | WelcomeMsg | ByeMsg | ErrorMsg | PingMsg | PongMsg | SessionsMsg | AttachMsg
   | ViewsMsg | SubscribeMsg | UnsubscribeMsg | ViewRequestMsg | ViewReplyMsg | SnapshotMsg
-  | SeriesMsg | EventMsg | ControlsMsg | ControlMsg | ControlReplyMsg | SelectionMsg;
+  | SeriesMsg | EventMsg | ControlsMsg | ControlMsg | ControlReplyMsg | SelectionMsg
+  | SceneUpdateMsg | SceneTransformsMsg | SceneClearMsg | SceneClassesMsg
+  | TextMsg | RecordingsMsg | RecordingOpenMsg | CursorMsg | TimeStateMsg;
 
 /** Effective colour range of a snapshot: AUTO flags read stats[0] and stats[1]. */
 export function snapshotRange(s: SnapshotMsg): [number, number] {
@@ -316,3 +356,326 @@ export function snapshotRange(s: SnapshotMsg): [number, number] {
   if (s.flags & SNAP_AUTO_VMAX && s.stats.length > 1) hi = s.stats[1];
   return [lo, hi];
 }
+
+// --- protocol 3.2 draft: the scenes subset (proposals: minor 2, capability "scenes", kind 6, 0x0070 to 0x0073, dtype u16; see the 3.2 block of include/caliper/live_net.h) ---
+
+export const PROTOCOL_MINOR_3_2 = 2;
+export const KIND_SCENE = 6;
+export const CAP_SCENES = 'scenes';
+
+export const PART_POINTS = 'points';
+export const PART_LINES = 'lines';
+export const PART_ARROWS = 'arrows';
+export const PART_BOXES = 'boxes';
+export const PART_MESH = 'mesh';
+export const PART_IMAGE = 'image';
+export const PART_CAMERA = 'camera';
+export const PART_TRANSFORM = 'transform';
+export type ScenePart = 'points' | 'lines' | 'arrows' | 'boxes' | 'mesh' | 'image' | 'camera';
+export const SCENE_PARTS: readonly ScenePart[] = [PART_POINTS, PART_LINES, PART_ARROWS, PART_BOXES, PART_MESH, PART_IMAGE, PART_CAMERA];
+/** The parts a SCENE_CLEAR may name: the scene parts and the entity transform. */
+export const CLEAR_PARTS: readonly string[] = [...SCENE_PARTS, PART_TRANSFORM];
+export const LINES_SEGMENTS = 'segments';
+export const LINES_STRIPS = 'strips';
+export const LINES_EDGES = 'edges';
+export const COLOR_PER_VERTEX = 'vertex';
+export const COLOR_PER_STRIP = 'strip';
+export const COLOR_PER_EDGE = 'edge';
+export const FORM_COLOR = 'color';
+export const FORM_DEPTH = 'depth';
+export const FORM_SEGMENTATION = 'segmentation';
+export const FORM_ENCODED = 'encoded';
+export const FORMAT_JPEG = 'jpeg';
+export const FORMAT_PNG = 'png';
+export const CONVENTION_RDF = 'rdf';
+export const CONVENTION_RUB = 'rub';
+export const SPACE_3D = '3d';
+export const SPACE_2D = '2d';
+export const UP_AXES_3D: readonly string[] = ['+x', '-x', '+y', '-y', '+z', '-z'];
+export const UP_AXES_2D: readonly string[] = ['-y', '+y'];
+
+export const MAX_LABELS = 4096;
+export const MAX_CLASSES = 4096;
+export const MAX_CLASS_ID = 65535;
+export const MAX_IMAGE_SIDE = 8192;
+export const MAX_ENCODED_BYTES = 16777216;
+export const MAX_TRANSFORMS = 1024;
+export const MAX_TIMELINES = 8;
+/** A stamp value: absent on that timeline. */
+export const STAMP_ABSENT = -(1n << 63n);
+
+export const LIMITS_32 = {
+  pathMax: 255,
+  pathSegmentsMax: 16,
+  unitsMax: 15,
+  maxEntities: 1024,
+  maxBatches: 2048,
+  maxBatchPoints: 4194304,
+  maxBatchItems: 1048576,
+  maxLabels: MAX_LABELS,
+  maxClasses: MAX_CLASSES,
+  maxClassId: MAX_CLASS_ID,
+  maxImageSide: MAX_IMAGE_SIDE,
+  maxEncodedBytes: MAX_ENCODED_BYTES,
+  maxTransforms: MAX_TRANSFORMS,
+  maxTimelines: MAX_TIMELINES,
+} as const;
+
+/** The sections of each part, in the order a sender writes them; the section "stamp" follows them. */
+export const PART_SECTIONS: Record<ScenePart, readonly string[]> = {
+  points: ['positions', 'colors', 'values', 'class_ids', 'radii'],
+  lines: ['positions', 'strip_lengths', 'indices', 'colors', 'values'],
+  arrows: ['origins', 'vectors', 'colors', 'values'],
+  boxes: ['centers', 'half_sizes', 'rotations', 'colors', 'class_ids'],
+  mesh: ['positions', 'indices', 'normals', 'colors', 'values', 'uvs', 'texture'],
+  image: ['pixels'],
+  camera: [],
+};
+/** The keys of each part, beside the common ones, in the order their types are checked. */
+export const PART_KEYS: Record<ScenePart, readonly string[]> = {
+  points: ['color', 'radius', 'labels', 'colormap', 'flags', 'vmin', 'vmax', 'stats'],
+  lines: ['mode', 'color_per', 'color', 'width', 'colormap', 'flags', 'vmin', 'vmax', 'stats'],
+  arrows: ['color', 'width', 'colormap', 'flags', 'vmin', 'vmax', 'stats'],
+  boxes: ['color', 'labels', 'fill', 'width', 'stats'],
+  mesh: ['color', 'colormap', 'flags', 'vmin', 'vmax', 'stats'],
+  image: ['form', 'opacity', 'scale', 'cloud', 'colormap', 'flags', 'vmin', 'vmax', 'format', 'stats'],
+  camera: ['fx', 'fy', 'cx', 'cy', 'width', 'height', 'convention', 'plane_distance'],
+};
+/** The keys a camera part must carry. */
+export const CAMERA_REQUIRED: readonly string[] = ['fx', 'fy', 'cx', 'cy', 'width', 'height', 'convention'];
+
+/** The resolved default scene data view (SCENE_DATA_VIEW of _wire.py). */
+export const SCENE_DATA_VIEW = {
+  entities: { include: ['**'], exclude: [] as string[] },
+  budget: { max_points: 100000, max_items: 100000, max_vertices: 1000000, max_extent: 1024 },
+};
+
+/** One section of a scene part; dtype 0 f32, 4 i32, 5 u8, 6 u16. A piece of a split update may hold any dtype: those with no typed array here (f16, bf16, i64) arrive as their raw bytes in a Uint8Array. */
+export interface SceneArray { dtype: number; shape: number[]; data: Float32Array | Int32Array | Uint8Array | Uint16Array }
+
+/** One part of one entity of a scene. */
+export interface SceneUpdateMsg {
+  type: 'scene_update';
+  sub: number;
+  view: string;
+  seq: number;
+  stamp_ns: number;
+  path: string;
+  part: ScenePart;
+  /** Only the part's known sections, e.g. positions, colors, values, class_ids, radii, indices, pixels. */
+  arrays: Record<string, SceneArray>;
+  params: {
+    mode?: 'segments' | 'strips' | 'edges';
+    color_per?: 'vertex' | 'strip' | 'edge';
+    color?: number[];
+    radius?: number;
+    labels?: string[];
+    width?: number;
+    fill?: boolean;
+    colormap?: number;
+    flags?: number;
+    vmin?: number;
+    vmax?: number;
+    form?: 'color' | 'depth' | 'segmentation' | 'encoded';
+    opacity?: number;
+    scale?: number;
+    cloud?: boolean;
+    format?: 'jpeg' | 'png';
+    fx?: number;
+    fy?: number;
+    cx?: number;
+    cy?: number;
+    /** An integer for a camera. */
+    height?: number;
+    convention?: 'rdf' | 'rub';
+    plane_distance?: number;
+    /** NaN where the producer sent null. */
+    stats?: number[];
+  };
+  static?: boolean;
+  state?: boolean;
+  /** The generation of the TIME_STATE a recorded message answers. */
+  cursor?: number;
+  axes?: PayloadAxis[];
+  items?: string;
+  /** The key of a piece of a split update; its `arrays` then hold the piece's rows, and `params` the part's keys in piece 0 only. */
+  split?: SplitKey;
+  /** The i64 (T,) stamp section. */
+  stamp?: BigInt64Array;
+}
+
+export interface SplitKey {
+  update: number;
+  pieces: number;
+  piece: number;
+  first: Record<string, number>;
+  rows?: Record<string, number>;
+}
+
+/** The entity transforms of up to 1024 entities: 4 x 4 matrices, column-major, row k of `matrices` for paths[k]. */
+export interface SceneTransformsMsg {
+  type: 'scene_transforms';
+  sub: number;
+  view: string;
+  seq: number;
+  stamp_ns: number;
+  paths: string[];
+  /** (K, 16) f32, K * 16 values. */
+  matrices: Float32Array;
+  static?: boolean;
+  state?: boolean;
+  /** One i64 (T,) stamp for all the transforms. */
+  stamp?: BigInt64Array;
+  /** i64 (K, T), K * T values, one stamp each; `stamps_t` is T (decoded: always set). */
+  stamps?: BigInt64Array;
+  stamps_t?: number;
+  cursor?: number;
+}
+
+/** Clears an entity, its subtree, some of its parts, or with reset the whole scene. */
+export interface SceneClearMsg {
+  type: 'scene_clear';
+  sub: number;
+  view: string;
+  seq: number;
+  stamp_ns: number;
+  path: string;
+  recursive?: boolean;
+  parts?: string[];
+  reset?: boolean;
+  static?: boolean;
+  state?: boolean;
+  stamp?: BigInt64Array;
+  cursor?: number;
+}
+
+export interface SceneClass { id: number; label: string; color: number[] }
+
+/** A scene's class table, which replaces the previous one whole. */
+export interface SceneClassesMsg {
+  type: 'scene_classes';
+  sub: number;
+  view: string;
+  seq: number;
+  stamp_ns: number;
+  classes: SceneClass[];
+  static?: boolean;
+  state?: boolean;
+  stamp?: BigInt64Array;
+  cursor?: number;
+}
+
+/** 3.2 draft: new lines of a text log, appended as a series' values are. Line i is bytes offsets[i] to offsets[i + 1] of `text` (UTF-8), at level levels[i]. */
+export interface TextMsg {
+  type: 'text';
+  sub: number;
+  view: string;
+  start: number;
+  total: number;
+  stamp_ns: number;
+  text: Uint8Array;
+  offsets: Int32Array;
+  levels: Uint8Array;
+  dropped?: number;
+  stamp?: BigInt64Array;
+  stamps?: BigInt64Array;
+  stamps_t?: number;
+  cursor?: number;
+}
+
+export interface RecordingEntry {
+  id: string;
+  title: string;
+  script: string;
+  bytes: number;
+  items: number;
+  complete: boolean;
+  created_unix_ms?: number | null;
+  ended_unix_ms?: number | null;
+  timelines: { name: string; kind: 'sequence' | 'time'; epoch?: boolean; min: string; max: string }[];
+}
+export interface RecordingsMsg { type: 'recordings'; recordings: RecordingEntry[] }
+export interface RecordingOpenMsg { type: 'recording_open'; request_id: number; recording: string }
+/** Viewer to server: move this viewer's cursor; only the fields of the op are kept. */
+export interface CursorMsg {
+  type: 'cursor';
+  request_id: number;
+  op: 'seek' | 'play' | 'pause' | 'step' | 'follow';
+  timeline?: string;
+  value?: string;
+  count?: number;
+  speed?: number;
+  pace?: 'recorded' | 'even';
+  loop?: [string, string];
+}
+/** Server to viewer: the state of the viewer's cursor; `cursor` is stamp text, null while following. */
+export interface TimeStateMsg {
+  type: 'time_state';
+  request_id?: number;
+  session: string;
+  generation: number;
+  state: 'following' | 'paused' | 'playing';
+  timeline: string;
+  cursor: string | null;
+  ranges: Record<string, [string, string]>;
+  live: boolean;
+  speed?: number;
+  pace?: 'recorded' | 'even';
+  loop?: [string, string];
+}
+
+/** The orbit camera a scene view opens on; null-valued keys are dropped. */
+export interface ViewCameraOrbit { target?: number[]; distance?: number; azimuth?: number; elevation?: number }
+
+/** The key "scene" of a VIEWS entry of kind 6, with its defaults filled in. */
+export interface SceneViewInfo {
+  space: '3d' | '2d';
+  up: string;
+  units: string;
+  /** The orbit keys or the entity path of a camera; undefined when absent, unreadable, or for a 2-D scene. */
+  view_camera: ViewCameraOrbit | string | undefined;
+}
+
+// --- 3.2 draft: timelines, text, bars, recordings, split updates ---
+
+export const CAP_TIMELINES = 'timelines';
+export const CAP_TEXT = 'text';
+export const CAP_BARS = 'bars';
+export const CAP_RECORDINGS = 'recordings';
+export const ERR_UNKNOWN_RECORDING = 'unknown_recording';
+export const ERR_BAD_RECORDING = 'bad_recording';
+export const ERR_NOT_SEEKABLE = 'not_seekable';
+export const ERR_BAD_CURSOR = 'bad_cursor';
+export const TIMELINE_SEQUENCE = 'sequence';
+export const TIMELINE_TIME = 'time';
+export const LEVEL_DEBUG = 0;
+export const LEVEL_INFO = 1;
+export const LEVEL_WARNING = 2;
+export const LEVEL_ERROR = 3;
+export const CURSOR_SEEK = 'seek';
+export const CURSOR_PLAY = 'play';
+export const CURSOR_PAUSE = 'pause';
+export const CURSOR_STEP = 'step';
+export const CURSOR_FOLLOW = 'follow';
+export const CURSOR_OPS: readonly string[] = [CURSOR_SEEK, CURSOR_PLAY, CURSOR_PAUSE, CURSOR_STEP, CURSOR_FOLLOW];
+export const PACE_RECORDED = 'recorded';
+export const PACE_EVEN = 'even';
+export const TIME_FOLLOWING = 'following';
+export const TIME_PAUSED = 'paused';
+export const TIME_PLAYING = 'playing';
+export const STAMP_TEXT_MAX = 20;
+export const MAX_PIECES = 16;
+export const MAX_UPDATE_BYTES = 536870912;
+export const MAX_INCOMPLETE_UPDATES = 2;
+export const TEXT_LINE_MAX = 4096;
+export const TEXT_MAX_LINES = 65536;
+export const TEXT_RETAIN_MIN = 4096;
+export const MAX_BARS = 4096;
+export const MAX_RECORDINGS = 1024;
+export const MAX_RECORDED = 64;
+export const MAX_CURSOR_STEP = 1000;
+export const CURSOR_RATE_HZ = 30;
+export const TIME_STATE_RATE_HZ = 30;
+export const MIN_SPEED = 0.0625;
+export const MAX_SPEED = 64;
+export const RECORDING_LINGER_MS = 600000;

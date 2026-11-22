@@ -1,0 +1,138 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 408,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 310,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 4,
+    "type": 112
+  },
+  "meta": {
+    "fill": true,
+    "labels": [
+      "car"
+    ],
+    "part": "boxes",
+    "path": "rig/left/cars",
+    "sections": [
+      {
+        "dtype": 0,
+        "name": "centers",
+        "shape": [
+          2,
+          2
+        ]
+      },
+      {
+        "dtype": 0,
+        "name": "half_sizes",
+        "shape": [
+          2,
+          2
+        ]
+      },
+      {
+        "dtype": 5,
+        "name": "colors",
+        "shape": [
+          2,
+          4
+        ]
+      },
+      {
+        "dtype": 3,
+        "name": "stamp",
+        "shape": [
+          2
+        ]
+      }
+    ],
+    "seq": 4,
+    "stamp_ns": 81234567893603,
+    "sub": 3,
+    "view": "overlay"
+  },
+  "meta_offset": 40,
+  "name": "v3_2/scene_update_boxes_2d",
+  "section_lengths": [
+    16,
+    16,
+    8,
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 16,
+      "name": "centers",
+      "offset": 352,
+      "shape": [
+        2,
+        2
+      ],
+      "values": [
+        10.0,
+        20.0,
+        40.5,
+        8.0
+      ]
+    },
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 16,
+      "name": "half_sizes",
+      "offset": 368,
+      "shape": [
+        2,
+        2
+      ],
+      "values": [
+        4.0,
+        3.0,
+        2.5,
+        2.0
+      ]
+    },
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 8,
+      "name": "colors",
+      "offset": 384,
+      "shape": [
+        2,
+        4
+      ],
+      "values": [
+        0,
+        255,
+        0,
+        255,
+        0,
+        0,
+        255,
+        255
+      ]
+    },
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 16,
+      "name": "stamp",
+      "offset": 392,
+      "shape": [
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}

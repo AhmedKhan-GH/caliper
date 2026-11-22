@@ -6,6 +6,7 @@
 
 #include "live/live_net_source.h"
 #include "live/live_series_ring.h"
+#include "live/scene_queue.h"
 
 #include "host_version.h"
 #include "live/live_shm.h"   // now_ns
@@ -73,6 +74,7 @@ struct SlotMeta {
     uint64_t stats_offset = 0;
     uint64_t seq = 0;        // the local publish counter
     uint64_t stamp_ns = 0;
+    uint64_t copied = 0;     // bytes received into the slot (Snapshot::copied_bytes)
 };
 
 struct Slot {
@@ -161,7 +163,7 @@ Controls parse_controls(const wire::Controls& c) {
 // What the frame thread asks the network thread to send (the network thread
 // owns the socket and the subscriptions, and fills in what only it knows).
 struct Outgoing {
-    enum class Kind { Control, Event, ViewRequest } kind = Kind::Control;
+    enum class Kind { Control, Event, ViewRequest, Unsubscribe } kind = Kind::Control;
     wire::Control control;
     uint64_t key = 0;          // Event, ViewRequest: the view
     std::string type;          // Event
@@ -183,6 +185,7 @@ struct NetView {
     // Network thread only.
     uint32_t sub = 0;
     bool     subscribed = false;
+    bool     stopped = false;      // a scene view the frame thread refused for good: never subscribed again
     uint64_t last_producer_seq = 0;
     Json     shown_data_view;      // the data view of the newest snapshot (events name it)
     Json     shown_axes = Json::array(), shown_tile;   // and its payload axes (select events)
@@ -199,6 +202,8 @@ struct NetView {
     std::deque<SeriesDelta> pending;
     uint64_t pending_end = 0;   // the largest end among the queued deltas
     uint64_t series_stamp = 0;  // stamp_ns of the newest SERIES message
+    SceneQueue scene;              // a scene view's messages, for take_scene (scene_queue.h)
+    caliper_net::wire::SplitUpdates splits;   // a scene view's split updates being put together (network thread)
 
     // Frame thread only (series).
     id<MTLBuffer> ring = nil;
@@ -394,6 +399,33 @@ public:
         return true;
     }
 
+    bool take_scene(uint64_t key, std::vector<SceneItem>* out) override {
+        NetView* v = find(key);
+        if (!v || v->kind != CALIPER_NET_KIND_SCENE) return false;
+        std::deque<SceneItem> got;
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            if (v->scene.items.empty()) return false;
+            got.swap(v->scene.items);
+        }
+        for (auto& it : got) out->push_back(std::move(it));
+        return true;
+    }
+
+    void stop_scene(uint64_t key) override {
+        NetView* v = find(key);
+        if (!v || v->kind != CALIPER_NET_KIND_SCENE) return;
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            v->scene.items.clear();
+            v->scene.stopped = true;
+        }
+        Outgoing o;
+        o.kind = Outgoing::Kind::Unsubscribe;
+        o.key = key;
+        enqueue(std::move(o));
+    }
+
     // ---- NetSource ------------------------------------------------------------------------
     Ready wait_ready(int timeout_ms, std::string* err) override {
         std::unique_lock<std::mutex> g(mu_);
@@ -481,6 +513,7 @@ private:
         out->seq = m.seq;
         out->stamp_ns = m.stamp_ns;
         out->map = s.map.axes.empty() ? nullptr : &s.map;
+        out->copied_bytes = m.copied;
     }
 
     // Applies the queued deltas to the view's ring (frame thread only) and hands
@@ -505,8 +538,12 @@ private:
         }
         float* ring = (float*)[v.ring contents];
         // Gaps read as NaN, overlaps replace values (live_series_ring.h).
-        for (const SeriesDelta& d : deltas)
+        uint64_t copied = 0;
+        for (const SeriesDelta& d : deltas) {
             series_ring_apply(ring, M, &v.ring_total, d.start, d.values.data(), d.values.size());
+            copied += d.values.size() * sizeof(float);
+        }
+        out->copied_bytes = copied;
         out->mtl_buffer = (__bridge void*)v.ring;
         out->host_base = ring;
         out->byte_offset = 0;
@@ -584,10 +621,11 @@ private:
                 switch (e.type) {
                     case caliper_net::Event::Type::Open: {
                         open = true;
-                        // 3.1: it shows controls and draws linked selections.
+                        // 3.1: it shows controls and draws linked selections; 3.2 draft:
+                        // it draws scenes.
                         wire::Hello h;
                         h.role = CALIPER_NET_ROLE_VIEWER;
-                        h.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION};
+                        h.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_SCENES};
                         Json sw = Json::object();
                         sw.set("name", "caliper-app");
                         sw.set("version", caliper_host::kHostVersionStr);
@@ -604,7 +642,7 @@ private:
                             client_->close(CALIPER_NET_CLOSE_UNSUPPORTED_DATA, "a text message");
                             break;
                         }
-                        on_frame(e.data);
+                        on_frame(std::make_shared<const Bytes>(std::move(e.data)));
                         break;
                     case caliper_net::Event::Type::Closed: {
                         const bool attached = session_seen_on_connection_;
@@ -700,7 +738,8 @@ private:
         return views_;
     }
 
-    void on_frame(const Bytes& data) {
+    void on_frame(std::shared_ptr<const Bytes> keep) {
+        const Bytes& data = *keep;
         wire::Message m;
         const wire::DecodeResult r = wire::decode(data.data(), data.size(), &m);
         if (r.status == wire::DecodeResult::Status::BadFrame) {
@@ -714,6 +753,9 @@ private:
             e.message = r.message;
             e.in_reply_to = r.type;
             send(e);
+            // A scene message this viewer does not build is ignored, and its view says so.
+            if (r.type == CALIPER_NET_MSG_SCENE_UPDATE && r.error_code == CALIPER_NET_ERR_UNSUPPORTED)
+                scene_note(r.frame.meta, "ignored: " + r.message);
             return;
         }
         const uint16_t type = wire::message_type(m);
@@ -737,7 +779,114 @@ private:
         else if (auto* c = std::get_if<wire::Controls>(&m)) on_controls(*c);
         else if (auto* cr = std::get_if<wire::ControlReply>(&m)) on_control_reply(*cr);
         else if (auto* sel = std::get_if<wire::Selection>(&m)) on_selection(*sel);
+        else if (auto* su = std::get_if<wire::SceneUpdate>(&m)) {
+            if (!su->split.is_null()) {
+                on_piece(r.frame.meta, r.type, *su);
+            } else {
+                const std::string why = scene_not_drawn(*su);
+                if (why.empty()) on_scene(keep, r.frame.sections, std::move(*su));
+                else refuse_scene(r.frame.meta, su->sub, su->view, r.type, why);
+            }
+        }
+        else if (auto* sc = std::get_if<wire::SceneClear>(&m)) on_scene(keep, r.frame.sections, std::move(*sc));
+        else if (auto* st = std::get_if<wire::SceneTransforms>(&m)) on_scene(keep, r.frame.sections, std::move(*st));
+        else if (auto* sk = std::get_if<wire::SceneClasses>(&m)) on_scene(keep, r.frame.sections, std::move(*sk));
         else protocol_error(std::string("'") + wire::type_name(type) + "' sent to a viewer");
+    }
+
+    // ---- 3.2 draft: scenes -------------------------------------------------------------
+    // A scene message goes to its view's queue as it arrived, with the frame its sections
+    // point into; the frame thread applies it (take_scene).
+    void on_scene(const std::shared_ptr<const void>& keep, const std::vector<wire::Section>& sections,
+                  std::variant<wire::SceneUpdate, wire::SceneClear, wire::SceneTransforms, wire::SceneClasses> msg) {
+        const uint32_t sub = std::visit([](const auto& x) { return x.sub; }, msg);
+        const auto it = by_sub_.find(sub);
+        if (it == by_sub_.end() || it->second->kind != CALIPER_NET_KIND_SCENE) return;
+        NetView& v = *it->second;
+        std::string ignored;   // what this view does not use of an update (a stamp, class ids, normals, ...)
+        if (const auto* u = std::get_if<wire::SceneUpdate>(&msg)) ignored = scene_ignored(*u, sections);
+        bool again = false;
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            if (!ignored.empty()) again = scene_queue_push(v.scene, SceneItem{nullptr, ignored});
+            SceneItem item;
+            item.keep = keep;
+            std::visit([&](auto& x) { item.msg = std::move(x); }, msg);
+            again = scene_queue_push(v.scene, std::move(item)) || again;
+            ++v.seq;
+        }
+        if (again) resubscribe(v);
+    }
+
+    // The scene's queue passed its bound while the display was paused and was emptied: a
+    // SUBSCRIBE on the same sub replaces the subscription, and the sender answers with the
+    // scene's state, whose reset the queue waits for.
+    void resubscribe(const NetView& v) {
+        wire::Subscribe s;
+        s.sub = v.sub;
+        s.view = v.name;
+        s.request_id = next_request_++;
+        send(s);
+    }
+
+    // A piece of a split update: the view's SplitUpdates keeps it until the update is whole, which is
+    // then queued as any update; a piece that contradicts its update is answered ERROR bad_request.
+    void on_piece(const Json& meta, uint16_t type, const wire::SceneUpdate& piece) {
+        const auto it = by_sub_.find(piece.sub);
+        if (it == by_sub_.end() || it->second->kind != CALIPER_NET_KIND_SCENE) return;
+        wire::WholeUpdate whole;
+        std::string err;
+        switch (it->second->splits.add(piece, &whole, &err)) {
+            case wire::SplitUpdates::Result::Pending: return;
+            case wire::SplitUpdates::Result::Dropped:
+                scene_note(meta, "ignored: a piece of a split update whose first piece is not held");
+                return;
+            case wire::SplitUpdates::Result::Refused: {
+                wire::Error e;
+                e.code = CALIPER_NET_ERR_BAD_REQUEST;
+                e.message = err;
+                e.in_reply_to = type;
+                e.sub = piece.sub;
+                e.view = piece.view;
+                send(e);
+                scene_note(meta, "ignored: " + err);
+                return;
+            }
+            case wire::SplitUpdates::Result::Whole: break;
+        }
+        const std::string why = scene_not_drawn(whole.update);
+        if (!why.empty()) {
+            refuse_scene(meta, piece.sub, piece.view, type, why);
+            return;
+        }
+        const std::vector<wire::Section> arrays = whole.update.arrays;
+        on_scene(whole.keep, arrays, std::move(whole.update));
+    }
+
+    // A scene update of a part this view does not draw yet: answered ERROR unsupported, not queued, and noted.
+    void refuse_scene(const Json& meta, uint32_t sub, const std::string& view, uint16_t type, const std::string& why) {
+        wire::Error e;
+        e.code = CALIPER_NET_ERR_UNSUPPORTED;
+        e.message = why;
+        e.in_reply_to = type;
+        e.sub = sub;
+        e.view = view;
+        send(e);
+        scene_note(meta, "ignored: " + why);
+    }
+
+    void scene_note(const Json& meta, const std::string& text) {
+        const Json* sub = meta.find("sub");
+        uint64_t s = 0;
+        if (!sub || !sub->get_u64(&s)) return;
+        const auto it = by_sub_.find((uint32_t)s);
+        if (it == by_sub_.end() || it->second->kind != CALIPER_NET_KIND_SCENE) return;
+        bool again = false;
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            again = scene_queue_push(it->second->scene, SceneItem{nullptr, text});
+        }
+        if (again) resubscribe(*it->second);
     }
 
     void on_welcome(const wire::Welcome& w) {
@@ -832,6 +981,19 @@ private:
                     if (v->last_producer_seq) e.seq = v->last_producer_seq;
                     if (v->shown_data_view.is_object()) e.data_view = v->shown_data_view;
                     send(e);
+                    break;
+                }
+                case Outgoing::Kind::Unsubscribe: {   // a scene view refused for good
+                    std::shared_ptr<NetView> v = view_by_key(o.key);
+                    if (!v) break;
+                    v->stopped = true;
+                    if (!v->subscribed) break;
+                    by_sub_.erase(v->sub);   // what is in flight for it is dropped
+                    if (ready) {
+                        wire::Unsubscribe u;
+                        u.sub = v->sub;
+                        send(u);
+                    }
                     break;
                 }
                 case Outgoing::Kind::ViewRequest: {
@@ -1045,7 +1207,9 @@ private:
         views_session_ = session_id_;
         std::vector<std::shared_ptr<NetView>> next;
         for (const wire::ViewInfo& vi : v.list) {
-            if (vi.kind < CALIPER_LIVE_KIND_HEATMAP || vi.kind > CALIPER_LIVE_KIND_HISTOGRAM) continue;
+            if ((vi.kind < CALIPER_LIVE_KIND_HEATMAP || vi.kind > CALIPER_LIVE_KIND_HISTOGRAM) &&
+                vi.kind != CALIPER_NET_KIND_SCENE)
+                continue;
             std::shared_ptr<NetView> keep;
             if (same_session)
                 for (const auto& o : old)
@@ -1090,7 +1254,7 @@ private:
             cv_.notify_all();
         }
         for (const auto& view : next) {
-            if (view->subscribed) continue;
+            if (view->subscribed || view->stopped) continue;
             view->sub = next_sub_++;
             view->subscribed = true;
             view->last_producer_seq = 0;
@@ -1230,6 +1394,7 @@ private:
         if (v.last_producer_seq && s.seq > v.last_producer_seq + 1) v.dropped += s.seq - v.last_producer_seq - 1;
         v.last_producer_seq = s.seq;
         m.seq = ++v.seq;
+        m.copied = payload + aux_bytes;   // received into the slot: one copy
         slot.meta = m;
         v.published = idx;
     }

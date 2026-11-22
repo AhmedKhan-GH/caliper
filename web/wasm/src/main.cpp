@@ -8,7 +8,8 @@
 //
 // One module instance draws on one canvas (Module.canvas) and shows one view,
 // or every view of the session when no view is named. The instance reads its
-// settings from Module.caliperConfig: {src, view, kind, header}.
+// settings from Module.caliperConfig: {src, view, kind, header, compat};
+// compat "true" asks for a WebGPU device in compatibility mode.
 //
 // What a person does in a view (a selection, a pick, a hover) comes out of
 // the view layer's event sink: it goes to the producer as an EVENT through
@@ -22,6 +23,9 @@
 // the device, and the device callback builds everything, connects and starts
 // the frame loop. No Asyncify is needed.
 #include "fonts.h"
+#include "gfx_selftest.h"
+#include "scene_selftest.h"
+#include "gfx/shaders/generated/programs_webgpu.h"
 #include "net_source.h"
 #include "net/json.h"
 #include "page_style.h"
@@ -32,7 +36,11 @@
 #include "caliper/live_net.h"   // CALIPER_NET_BYE_NORMAL
 #include "caliper/live_views.h"
 #include "embed/embed_core.h"
-#include "live/live_views_state.h"   // the points check reads the view's camera and payload
+#include "gfx/colormap_keys.h"   // derive_keys, for the test of the keys this build derives
+#include "live/live_scene.h"         // a scene view's facts
+#include "live/live_views_scene.h"
+#include "live/live_points.h"        // the points check reads the view's scene, camera and payload
+#include "live/live_views_state.h"
 #include "host_services.h"
 #include "renderer/webgpu_renderer.h"
 #include "tensor_bridge.h"   // colormap_lut, map_f32_to_rgba8 (the CPU reference)
@@ -68,6 +76,7 @@ struct Config {
     std::string view;   // "" = every view
     int32_t kind = 0;   // 0 = any
     bool header = true; // false: the page draws the view's header (no title bars)
+    bool compat = false;// a compatibility-mode device
 };
 
 struct Page {
@@ -107,6 +116,9 @@ struct Page {
     uint64_t check_next = 10;             // the frame of the next check
     double last_publish = 0.0;            // when the counters were last published (ms)
 
+    std::string selftest;                 // the graphics layer's self-test: "" or its report
+    std::string scene_selftest;           // the last scene row: "" or its report
+
     bool ready = false;                   // the first snapshot was applied
     bool destroyed = false;
 
@@ -143,6 +155,7 @@ int32_t kind_of(const std::string& k) {
     if (k == "points") return CALIPER_LIVE_KIND_POINTS;
     if (k == "series") return CALIPER_LIVE_KIND_SERIES;
     if (k == "histogram") return CALIPER_LIVE_KIND_HISTOGRAM;
+    if (k == "scene") return caliper_live_views::kKindScene;   // the protocol 3.2 draft
     return 0;
 }
 
@@ -173,6 +186,19 @@ void publish() {
     put("retiredViews", g.renderer ? (double)g.renderer->retired_view_count() : 0.0);
     put("dispatches", g.renderer ? (double)g.renderer->colormap_dispatches() : 0.0);
     put("rendererPath", g.renderer ? g.renderer->last_device_path() : "");
+    // The graphics layer: the device's feature level, what the backend holds
+    // and the errors WebGPU reported to it.
+    caliper_gfx::WebGpuBackend* gb = g.renderer ? g.renderer->gfx() : nullptr;
+    put("gfxReady", gb ? 1.0 : 0.0);
+    put("featureLevel", !gb ? "" : gb->compatibility() ? "compatibility" : "core");
+    put("gfxBuffers", gb ? (double)gb->live_buffer_count() : 0.0);
+    put("gfxSpare", gb ? (double)gb->spare_buffer_count() : 0.0);
+    std::string gerr;
+    if (gb)
+        for (const auto& m : gb->device_errors()) gerr += (gerr.empty() ? "" : " | ") + m;
+    put("gfxErrors", gerr.c_str());
+    put("gfxSelftest", g.selftest.c_str());
+    put("sceneSelftest", g.scene_selftest.c_str());
     put("state", g.net ? g.net->state_text().c_str() : "starting");
     put("messages", g.net ? (double)g.net->messages() : 0.0);
     put("bytes", g.net ? (double)g.net->bytes() : 0.0);
@@ -200,7 +226,9 @@ void publish() {
     // window there), what it has selected and hovers, whether a plot follows
     // its data, and how many events went out: for tests, as JSON {"view":
     // {"area": [x, y, w, h], "window": [x0, x1, y0, y1], "yDown": bool,
-    // "selected": n, "hover": item, "cols": n, "follow": bool, "log": bool}}.
+    // "selected": n, "hover": item, "cols": n, "follow": bool, "log": bool}},
+    // and for a scene view "scaleBar": [x0, y0, x1, y1], the band the scale
+    // bar drew over its picture in the same CSS pixels, or null without one.
     std::string geo = "{";
     double selected = 0.0;
     if (g.core && g.core->live_views)
@@ -226,13 +254,53 @@ void publish() {
             // A points view: its camera, the rotate toggle, the depth cues and
             // the box's tick labels (digits, signs, dots, e, = and separators).
             if (v->kind == CALIPER_LIVE_KIND_POINTS) {
+                // The scene core's orbit in 3-D (az, el, distance, the fitted radius); zero angles and
+                // distance in 2-D, whose camera is a pan and zoom.
+                double cam[4] = {0.0, 0.0, 0.0, 0.0};
+                if (const caliper_live_views::PointsScene* sc = v->points ? v->points->scene.get() : nullptr) {
+                    if (const caliper_scene::Orbit* o = std::get_if<caliper_scene::Orbit>(&sc->camera())) {
+                        cam[0] = o->azimuth;
+                        cam[1] = o->elevation;
+                        cam[2] = o->distance;
+                    }
+                    cam[3] = sc->radius();
+                }
                 std::snprintf(b, sizeof b,
                               ",\"dims\":%d,\"camera\":[%.9g,%.9g,%.9g,%.9g],\"rotate\":%s,\"cues\":%s,\"box\":\"",
-                              v->dims, v->cam.az, v->cam.el, v->cam.dist, v->cam.radius,
+                              v->dims, cam[0], cam[1], cam[2], cam[3],
                               v->auto_rotate ? "true" : "false", v->depth_cues ? "true" : "false");
                 geo += b;
                 if (v->dims == 3) geo += v->box_labels;
                 geo += "\"";
+            }
+            if (v->kind == caliper_live_views::kKindScene) {
+                const float* bar = v->geo_bar;
+                if (bar[2] > bar[0] && bar[3] > bar[1])
+                    std::snprintf(b, sizeof b, ",\"scaleBar\":[%.9g,%.9g,%.9g,%.9g]", bar[0], bar[1], bar[2], bar[3]);
+                else
+                    std::snprintf(b, sizeof b, ",\"scaleBar\":null");
+                geo += b;
+                // The orbit the view draws with, [target x, y, z, distance], null for a pan and zoom or a
+                // pinhole: a test checks that the fit framed the scene's bounds with finite numbers.
+                const caliper_live_views::SceneView* sv = caliper_live_views::scene_view(*v);
+                const caliper_scene::Orbit* o = sv ? std::get_if<caliper_scene::Orbit>(&sv->camera()) : nullptr;
+                const bool finite = o && std::isfinite(o->target[0]) && std::isfinite(o->target[1]) &&
+                                    std::isfinite(o->target[2]) && std::isfinite(o->distance);
+                if (o && sv->fitted() && finite)
+                    std::snprintf(b, sizeof b, ",\"orbit\":[%.17g,%.17g,%.17g,%.17g]", o->target[0], o->target[1],
+                                  o->target[2], o->distance);
+                else if (o && sv->fitted())
+                    std::snprintf(b, sizeof b, ",\"orbit\":\"not finite\"");
+                else
+                    std::snprintf(b, sizeof b, ",\"orbit\":null");
+                geo += b;
+                // The scale bar the view measures for its picture: [length in scene units, logical pixels].
+                const caliper_scene::ScaleBar sb = sv ? sv->scale_bar(v->geo_area[2], v->geo_area[3]) : caliper_scene::ScaleBar{};
+                if (sb.visible && std::isfinite(sb.length) && std::isfinite(sb.pixels))
+                    std::snprintf(b, sizeof b, ",\"scaleBarLength\":[%.17g,%.17g]", sb.length, sb.pixels);
+                else
+                    std::snprintf(b, sizeof b, sb.visible ? ",\"scaleBarLength\":\"not finite\"" : ",\"scaleBarLength\":null");
+                geo += b;
             }
             geo += "}";
         }
@@ -276,8 +344,8 @@ void publish() {
         if (tv.tex && unchecked(tv.name)) all = false;
     if (g.core && g.core->live_views)
         for (const auto& v : g.core->live_views->views)
-            if (v->kind == CALIPER_LIVE_KIND_POINTS && v->label_count > 0 && v->view_rid &&
-                unchecked(v->name))
+            if (v->kind == CALIPER_LIVE_KIND_POINTS && v->label_count > 0 && v->points && v->points->scene &&
+                v->points->scene->has_target() && unchecked(v->name))
                 all = false;
     put("checkState", all ? 2 : g.checks.empty() && !g.check_pending ? 0 : 1);
     put("checkMismatch", g.checks.empty() ? -1.0 : (double)mism);
@@ -308,17 +376,12 @@ void finish_check(Page::Check c) {
 // Records mismatches and, in maxdiff, how many points were compared. False when
 // there is nothing to check yet.
 bool start_points_check(caliper_live_views::View& v) {
-    if (!v.have_cur || !v.cur.pos_cpu || !v.cur.aux_cpu || !v.view_rid || v.dirty) return false;
-    const int W = v.tex_w, H = v.tex_h;
+    caliper_live_views::PointsScene* sc = v.points ? v.points->scene.get() : nullptr;
+    if (!v.have_cur || !v.cur.pos_cpu || !v.cur.aux_cpu || !sc || !sc->has_target() || v.dirty) return false;
+    const int W = (int)sc->width(), H = (int)sc->height();
     const uint64_t n = v.cur.n;
-    float V[16], P[16], M[16];
-    caliper_live_views::camera_matrices(v, (float)W / (float)H, V, P);
-    for (int c = 0; c < 4; ++c)
-        for (int r = 0; r < 4; ++r) {
-            float acc = 0.0f;
-            for (int k = 0; k < 4; ++k) acc += P[k * 4 + r] * V[c * 4 + k];
-            M[c * 4 + r] = acc;
-        }
+    float M[16];   // the scene core's clip-from-world matrix, as the draw gets it
+    if (!caliper_live_views::points_mvp(v, M)) return false;
     struct Proj { float x, y, z, w; bool ok; };
     std::vector<Proj> pr(n);
     const float* pos = (const float*)v.cur.pos_cpu;
@@ -332,10 +395,12 @@ bool start_points_check(caliper_live_views::View& v) {
     }
     // Half the side a point is drawn with, plus a pixel: with the depth cues
     // its size follows its distance, as the renderer draws it.
-    const bool cues = v.dims == 3 && v.depth_cues;
+    float att_ref = 0.0f, fade_w0 = 0.0f, fade_w1 = 0.0f;   // the scene's cues, zero when off
+    sc->cue_values(&att_ref, &fade_w0, &fade_w1);
+    const bool cues = att_ref > 0.0f;
     const float side = caliper_live_views::point_size_px(n, g.core->scale);
     auto half_of = [&](const Proj& p) {
-        const float k = cues ? std::clamp(v.cam.dist / p.w, caliper_host::kPointAttenMin, caliper_host::kPointAttenMax) : 1.0f;
+        const float k = cues ? std::clamp(att_ref / p.w, caliper_scene::kPointAttenMin, caliper_scene::kPointAttenMax) : 1.0f;
         return 0.5f * side * k + 1.0f;
     };
     struct Want { int px, py; uint32_t rgba; };
@@ -347,7 +412,7 @@ bool start_points_check(caliper_live_views::View& v) {
     for (uint64_t i = 0; i < n && wants->size() < 256; i += stride) {
         const Proj& a = pr[i];
         if (!a.ok || a.x < 1 || a.y < 1 || a.x >= W - 1 || a.y >= H - 1 || a.z < 0 || a.z > 1) continue;
-        if (cues && a.w > v.cam.dist) continue;   // dimmed by the fade
+        if (fade_w1 > fade_w0 && a.w > fade_w0) continue;   // dimmed by the fade
         bool covered = false;
         for (uint64_t j = 0; j < n && !covered; ++j) {
             if (j == i || !pr[j].ok) continue;
@@ -362,7 +427,7 @@ bool start_points_check(caliper_live_views::View& v) {
     if (wants->empty()) return false;
     g.check_pending = true;
     const std::string name = v.name;
-    g.renderer->readback_async(v.view_rid, [wants, name, W, H](std::vector<uint8_t> got) {
+    g.renderer->readback_async(sc->color(), (uint32_t)W, (uint32_t)H, [wants, name, W, H](std::vector<uint8_t> got) {
         Page::Check c;
         c.view = name;
         c.kind = CALIPER_LIVE_KIND_POINTS;
@@ -508,6 +573,16 @@ std::string facts(const caliper_live_views::View& v) {
                           v.values.size(), num(v.lo).c_str(), num(v.hi).c_str(), num(total).c_str());
             return b;
         }
+        case caliper_live_views::kKindScene: {
+            const caliper_live_views::SceneView* sv = caliper_live_views::scene_view(v);
+            if (!sv) return v.scene ? "{\"kind\":\"scene\",\"notice\":" + caliper_net::Json(v.scene->notice).dump() + "}"
+                                    : std::string();
+            const caliper_live_views::SceneCounts c = sv->counts();
+            std::snprintf(b, sizeof b, "{\"kind\":\"scene\",\"entities\":%u,\"items\":%llu,\"copied\":%llu,\"gpu_ms\":%s}",
+                          c.entities, (unsigned long long)c.items, (unsigned long long)c.bytes_last,
+                          num(sv->cost().gpu_ms).c_str());
+            return b;
+        }
         default:
             return {};
     }
@@ -574,8 +649,29 @@ void on_event(const caliper_live_views::LiveEvent& e) {
     if (std::strcmp(e.type, "hover") != 0) g.publish_soon = true;
 }
 
+// The self-test's pictures, for the browser tests' captures:
+// Module.caliperGfxImages = {name: {w, h, data: Uint8Array}}.
+void publish_selftest_images() {
+    for (const auto& im : caliper_web::gfx_selftest_images())
+        EM_ASM({
+            var m = Module["caliperGfxImages"] = Module["caliperGfxImages"] || {};
+            m[UTF8ToString($0)] = ({"w": $1, "h": $2, "data": HEAPU8.slice($3, $3 + $4)});
+        }, im.name.c_str(), im.w, im.h, im.rgba.data(), (int)im.rgba.size());
+}
+
 void frame() {
     const double t0 = emscripten_get_now();
+    if (caliper_web::gfx_selftest_running() && g.renderer && g.renderer->gfx() &&
+        caliper_web::gfx_selftest_poll(*g.renderer->gfx(), &g.selftest)) {
+        publish_selftest_images();
+        publish();
+    }
+    if (caliper_web::scene_selftest_running() && g.renderer && g.renderer->gfx() &&
+        caliper_web::scene_selftest_poll(*g.renderer->gfx(), &g.scene_selftest)) {
+        const std::vector<uint8_t>& px = caliper_web::scene_selftest_pixels();
+        EM_ASM({ Module["caliperScenePixels"] = HEAPU8.slice($0, $0 + $1); }, px.data(), (int)px.size());
+        publish();
+    }
 
     if (g.net && caliper_web::poll_source(g.core, *g.net, g.poll) > 0 && !g.ready) {
         g.ready = true;   // the first snapshot is drawn this frame
@@ -774,6 +870,61 @@ EMSCRIPTEN_KEEPALIVE int caliper_views_set_link(const char* axis, const char* it
     return n > 0 ? 1 : 0;
 }
 
+// Starts the graphics layer's self-test (gfx_selftest.h); its report comes in
+// caliperStats.gfxSelftest. 1 when it started.
+EMSCRIPTEN_KEEPALIVE int caliper_views_gfx_selftest() {
+    if (!g.renderer || !g.renderer->gfx()) {
+        g.selftest = "fail not started: the renderer is not up";
+        publish();
+        return 0;
+    }
+    std::string why;
+    if (!caliper_web::gfx_selftest_start(*g.renderer->gfx(), &why)) {
+        g.selftest = "fail not started: " + why;
+        publish();
+        return 0;
+    }
+    g.selftest.clear();
+    publish();
+    return 1;
+}
+
+// Starts the scene row of fixture `name` (scene_selftest.h); its report comes in
+// caliperStats.sceneSelftest and its picture in Module.caliperScenePixels (256 x 256 RGBA8).
+// caliperStats.sceneFixtures names the fixtures. 1 when it started.
+EMSCRIPTEN_KEEPALIVE int caliper_views_scene_selftest(const char* name) {
+    put("sceneFixtures", caliper_web::scene_selftest_names().c_str());
+    if (!g.renderer || !g.renderer->gfx()) {
+        g.scene_selftest = "fail not started: the renderer is not up";
+        publish();
+        return 0;
+    }
+    std::string why;
+    if (!caliper_web::scene_selftest_start(*g.renderer->gfx(), caliper_gfx::shaders::kWebgpuPrograms,
+                                           name ? name : "", &why)) {
+        g.scene_selftest = "fail not started: " + why;
+        publish();
+        return 0;
+    }
+    g.scene_selftest.clear();
+    publish();
+    return 1;
+}
+
+// The colormap keys that this build derives at run time for the range (vmin, vmax), from its own
+// CPU reference (src/host/gfx/colormap_keys.h), as the scene views derive them: the browser test
+// compares them with the case file that the native tool writes. Module.caliperColormapKeys =
+// Uint32Array [flip, key[0], ..., key[256]]. Returns 1.
+EMSCRIPTEN_KEEPALIVE int caliper_views_colormap_keys(float vmin, float vmax) {
+    const caliper_gfx::cmap::Keys k = caliper_gfx::cmap::derive_keys(vmin, vmax);
+    uint32_t out[1 + caliper_gfx::cmap::kKeyCount];
+    out[0] = k.flip;
+    std::memcpy(out + 1, k.key, sizeof k.key);
+    EM_ASM({ Module["caliperColormapKeys"] = new Uint32Array(HEAPU8.slice($0, $0 + 4 * $1).buffer); }, out,
+           (int)(1 + caliper_gfx::cmap::kKeyCount));
+    return 1;
+}
+
 // Ends this instance: BYE to the producer, no more frames, every view, GPU
 // resource and context released, the input listeners removed. The page drops
 // the canvas and the module afterwards; an instance is not reused.
@@ -789,6 +940,7 @@ EMSCRIPTEN_KEEPALIVE void caliper_views_destroy() {
         g.core = nullptr;
     }
     caliper_host::services_set_renderer(nullptr);   // drops the bridge before its renderer
+    caliper_web::scene_selftest_stop();             // its scene view, before the backend
     delete g.renderer;                              // shutdown(): textures, ImGui backend, surface
     g.renderer = nullptr;
     g.net.reset();
@@ -815,6 +967,7 @@ int main() {
     g.cfg.view = config_string("view");
     g.cfg.kind = kind_of(config_string("kind"));
     g.cfg.header = config_string("header") != "false";
+    g.cfg.compat = config_string("compat") == "true";
 
     g.instance = wgpuCreateInstance(nullptr);
     if (!g.instance) {
@@ -822,6 +975,9 @@ int main() {
         return 0;
     }
     WGPURequestAdapterOptions opts = WGPU_REQUEST_ADAPTER_OPTIONS_INIT;
+    // A compatibility-mode adapter gives a compatibility-mode device as long as
+    // the device does not ask for core-features-and-limits, which it does not.
+    if (g.cfg.compat) opts.featureLevel = WGPUFeatureLevel_Compatibility;
     WGPURequestAdapterCallbackInfo cb = WGPU_REQUEST_ADAPTER_CALLBACK_INFO_INIT;
     cb.mode = WGPUCallbackMode_AllowSpontaneous;
     cb.callback = on_adapter;

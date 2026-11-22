@@ -1,0 +1,15 @@
+[package]
+name = "caliper-naga-driver"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Translates one assembled WGSL program to MSL and SPIR-V with Naga, with Caliper's Metal binding map, and describes its bindings."
+
+[dependencies]
+# Pinned exactly; Cargo.lock pins the rest. Changing the version changes every generated
+# output, so regenerate them in the same commit (tools/shaders/generate.py).
+naga = { version = "=30.0.2", default-features = false, features = ["wgsl-in", "msl-out", "spv-out"] }
+
+[profile.release]
+debug = false

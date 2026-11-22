@@ -417,7 +417,7 @@ TEST_CASE("sugar: Bridge wrapper routes through the service table") {
     bridge.free_shared(300);
     CHECK(g_bridge.last_freed == 300);
 
-    // Opaque id -> ImTextureID convenience cast (never a raw GL/Metal handle).
+    // Opaque id -> ImTextureID convenience cast (never a raw Metal or Vulkan handle).
     CHECK(caliper::Bridge::imtex(42) == (ImTextureID)42);
 }
 

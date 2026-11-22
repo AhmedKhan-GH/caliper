@@ -1,0 +1,88 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 336,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 177,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 113
+  },
+  "meta": {
+    "paths": [
+      "rig/left",
+      "rig/right"
+    ],
+    "sections": [
+      {
+        "dtype": 0,
+        "name": "matrices",
+        "shape": [
+          2,
+          16
+        ]
+      }
+    ],
+    "seq": 33,
+    "stamp_ns": 81234567893873,
+    "state": true,
+    "static": true,
+    "sub": 2,
+    "view": "world"
+  },
+  "meta_offset": 28,
+  "name": "v3_2/scene_transforms_static",
+  "section_lengths": [
+    128
+  ],
+  "sections": [
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 128,
+      "name": "matrices",
+      "offset": 208,
+      "shape": [
+        2,
+        16
+      ],
+      "values": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        -0.0625,
+        -2.5,
+        1.25,
+        1.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0625,
+        -2.5,
+        1.25,
+        1.0
+      ]
+    }
+  ],
+  "type_name": "scene_transforms"
+}

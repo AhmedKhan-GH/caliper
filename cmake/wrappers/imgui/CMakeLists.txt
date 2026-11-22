@@ -27,16 +27,14 @@ set_target_properties(imgui PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 
-# imgui_backends: the GLFW platform backend and the OpenGL 3 renderer backend.
-# Only the host links them; applets never see a window or a graphics API.
+# imgui_backends: the GLFW platform backend. Only the host links it; applets
+# never see a window or a graphics API. The renderer backends (imgui_impl_metal,
+# imgui_impl_vulkan) compile with the host's Metal and Vulkan backends.
 add_library(imgui_backends STATIC
     ${IMGUI_SRC_DIR}/backends/imgui_impl_glfw.cpp
-    ${IMGUI_SRC_DIR}/backends/imgui_impl_opengl3.cpp
 )
-target_compile_definitions(imgui_backends PUBLIC IMGUI_IMPL_OPENGL_LOADER_GLEW)
 target_include_directories(imgui_backends PUBLIC ${IMGUI_SRC_DIR}/backends)
-find_package(OpenGL REQUIRED)
-target_link_libraries(imgui_backends PUBLIC imgui libglew_static glfw OpenGL::GL)
+target_link_libraries(imgui_backends PUBLIC imgui glfw)
 set_target_properties(imgui_backends PROPERTIES
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED ON

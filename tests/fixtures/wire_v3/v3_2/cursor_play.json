@@ -1,0 +1,29 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 119,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 95,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 122
+  },
+  "meta": {
+    "loop": [
+      "1000",
+      "5000"
+    ],
+    "op": "play",
+    "pace": "even",
+    "request_id": 3,
+    "speed": 2.0,
+    "timeline": "step"
+  },
+  "meta_offset": 24,
+  "name": "v3_2/cursor_play",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "cursor"
+}

@@ -1,18 +1,19 @@
-// Metal backend for the HostRenderer seam (docs/applets/rendering.md). Sibling to
-// gl_renderer.cpp; make_metal_renderer() (declared in host_renderer.h)
-// constructs it and main.cpp selects via CALIPER_RENDERER=metal, falling back
-// to the GL backend if init() fails. Apple-only translation unit.
+// Metal backend for the HostRenderer seam (docs/applets/rendering.md).
+// make_metal_renderer() (declared in host_renderer.h) constructs it and
+// core_select_renderer() chooses it on macOS. There is no fallback: if its
+// start fails, the app, caliper shot and the embedding core refuse with
+// start_error(). Apple-only translation unit.
 //
 // Frame ordering matches the C1 contract: the CLEAR happens in new_frame()
 // (the Metal render pass is opened there with loadAction=Clear), the applet
 // draws its ImGui frame, then render() flushes RenderDrawData and presents.
-// This mirrors the GL backend's top-of-frame clear exactly.
 //
 // Compiled with ARC (-fobjc-arc, set in CMakeLists): ObjC strong references
 // live as members / in an internal id table; the uint64 texture ids handed to
 // callers are sequential handles, never raw retained pointers (§5.4).
 #include "host_renderer.h"
-#include "host/tensor_bridge.h"   // colormap_thresholds: the reference's exact indices
+#include "gfx/gfx.h"
+#include "gfx/metal_backend.h"
 #include <caliper/services/tensor_bridge_v1_2.h>   // CALIPER_ALLOC_HANDLE_MTLBUFFER
 #include <caliper/services/geometry_v1_1.h>
 #include <caliper/services/geometry_v1_2.h>
@@ -30,12 +31,16 @@
 #include <backends/imgui_impl_metal.h>
 
 #include <algorithm>
-#include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
+#include <mutex>
+#include <string>
 #include <unordered_map>
 
 namespace caliper_host {
@@ -185,13 +190,9 @@ struct PrimParams {
     uint inst_base;           // 168 — instance_offset / 4
     uint use_instance_attr;   // 172 — 0/1
     uint inst_attr_base;      // 176 — instance_attr_offset / 4
-    float att_ref;            // 180 — the live points view's depth cues
-    float fade_w0;            // 184   (HostGeomDraw; zero for every
-    float fade_w1;            // 188   service draw)
-    uint cmap_mode;           // 192 — exact colormap (HostGeomDraw::exact_colormap):
-    uint pad3;                //       0 the service's rule, 1 or 2 the thresholds
-    uint pad4;                //       of an increasing or decreasing range, 3 a
-    uint pad5;                //       range that maps every value to index 0 (208)
+    uint pad0;                // 180
+    uint pad1;                // 184
+    uint pad2;                // 188  (192)
 };
 
 /* Metal validates [[point_size]] against the pipeline's topology class: a
@@ -329,8 +330,7 @@ vertex VOutPoint geom_vs_point(uint vid [[vertex_id]],
                                constant PrimParams& p    [[buffer(5)]],
                                device const float* uv    [[buffer(6)]],
                                device const float* im    [[buffer(7)]],
-                               device const uint*  iattr [[buffer(8)]],
-                               constant float*     th    [[buffer(9)]])
+                               device const uint*  iattr [[buffer(8)]])
 {
     VOut b = geom_compute(vid, iid, pos, idx, nrm, attr, uv, im, iattr, lut, p);
     VOutPoint o;
@@ -338,36 +338,6 @@ vertex VOutPoint geom_vs_point(uint vid [[vertex_id]],
     o.size  = p.size_px;
     o.color = b.color;
     o.uv    = b.uv;
-    // The live points view's exact colormap: the value's index is the number
-    // of thresholds it has passed (colormap_thresholds), compared exactly, so
-    // it is map_f32_to_rgba8's whatever the shader's division would round; NaN,
-    // tested on its bits, is index 0.
-    if (p.cmap_mode != 0u && p.color_mode == 1u && !(p.use_instance != 0u && p.use_instance_attr != 0u)) {
-        const uint vi = p.use_index != 0u ? min(idx[p.idx_base + vid], p.vertex_count - 1u) : vid;
-        const uint vb = attr[p.attr_base + vi];
-        const bool nan = (vb & 0x7f800000u) == 0x7f800000u && (vb & 0x007fffffu) != 0u;
-        uint k = 0u;
-        if (!nan && p.cmap_mode != 3u) {
-            const float v = as_type<float>(vb);
-            uint lo = 1u, hi = 256u;
-            while (lo < hi) {
-                const uint mid = (lo + hi) / 2u;
-                const bool passed = p.cmap_mode == 1u ? th[mid] <= v : v <= th[mid];
-                if (passed) lo = mid + 1u; else hi = mid;
-            }
-            k = lo - 1u;
-        }
-        o.color = unpack_rgba(lut[k]);
-    }
-    // The depth cues of the live points view (HostGeomDraw, kPointAtten* and
-    // kPointFadeFloor): nearer points larger within a clamp, farther points
-    // dimmer with their hue kept. Both off (zero) for every service draw.
-    if (p.att_ref > 0.0f)
-        o.size = min(p.size_px * clamp(p.att_ref / max(b.pos.w, 1e-6f), 0.5f, 2.0f), 511.0f);
-    if (p.fade_w1 > p.fade_w0) {
-        float f = clamp((b.pos.w - p.fade_w0) / (p.fade_w1 - p.fade_w0), 0.0f, 1.0f);
-        o.color = float4(o.color.rgb * (1.0f - 0.5f * f), o.color.a);
-    }
     return o;
 }
 
@@ -397,11 +367,9 @@ struct PrimParams {
     uint32_t flat_rgba;
     float    vmin, vmax, size_px;
     uint32_t uv_base, use_instance, inst_base, use_instance_attr;   // v1.3 tail
-    uint32_t inst_attr_base;
-    float    att_ref, fade_w0, fade_w1;   // the live points view's depth cues
-    uint32_t cmap_mode, pad3, pad4, pad5; // its exact colormap (0 off, 1 inc, 2 dec, 3 all index 0)
+    uint32_t inst_attr_base, pad0, pad1, pad2;
 };
-static_assert(sizeof(PrimParams) == 208, "MSL primitive params layout");
+static_assert(sizeof(PrimParams) == 192, "MSL primitive params layout");
 
 void mat4_mul_cm(const float* a, const float* b, float* out) {
     for (int c = 0; c < 4; ++c)
@@ -508,7 +476,7 @@ public:
 
     // Metal owns no GL context: the window must be created with NO_API so GLFW
     // does not attach an OpenGL context we would fight over. Runs before
-    // glfwCreateWindow (sibling to the GL backend's profile hints).
+    // glfwCreateWindow.
     void window_hints() override {
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     }
@@ -521,27 +489,30 @@ public:
     // The ImGui *render* backend (imgui_impl_metal) is wired here; the *platform*
     // half is NOT (the embedder feeds io via caliper_core_event). Only ONE of
     // init() / canvas_init() is ever called on a given instance.
-    bool canvas_supported() const override { return true; }
-
     bool canvas_init(void* native_view, CanvasMode mode, int w, int h) override {
-        if (w <= 0 || h <= 0) return false;
+        if (forced_start_failure()) return false;
+        if (w <= 0 || h <= 0) return start_failed("the canvas size is not positive");
         device_ = MTLCreateSystemDefaultDevice();
-        if (device_ == nil) return false;
+        if (device_ == nil) return start_failed("no Metal device");
         queue_ = [device_ newCommandQueue];
-        if (queue_ == nil) { device_ = nil; return false; }
+        if (queue_ == nil) { device_ = nil; return start_failed("no Metal command queue"); }
 
         canvas_mode_ = mode;
         canvas_w_ = w;
         canvas_h_ = h;
 
         if (mode == CANVAS_OFFSCREEN) {
-            if (!make_canvas_target(w, h)) { queue_ = nil; device_ = nil; return false; }
+            if (!make_canvas_target(w, h)) {
+                queue_ = nil; device_ = nil;
+                return start_failed("no " + std::to_string(w) + "x" + std::to_string(h) +
+                                    " offscreen target");
+            }
         } else {
             // Window mode: attach a CAMetalLayer to the host's native NSView —
             // the embed analog of init()'s glfwGetCocoaWindow path, but from a
             // view the EMBEDDER owns (no GLFW). BGRA8 to match a display layer.
             NSView* view = (__bridge NSView*)native_view;
-            if (view == nil) { queue_ = nil; device_ = nil; return false; }
+            if (view == nil) { queue_ = nil; device_ = nil; return start_failed("no view to draw into"); }
             canvas_layer_ = [CAMetalLayer layer];
             canvas_layer_.device = device_;
             canvas_layer_.pixelFormat = MTLPixelFormatBGRA8Unorm;
@@ -569,12 +540,13 @@ public:
         // wire ONLY the Metal render backend. No ImGui_ImplGlfw here.
         if (!ImGui_ImplMetal_Init(device_)) {
             canvas_layer_ = nil; canvas_tex_ = nil; queue_ = nil; device_ = nil;
-            return false;
+            return start_failed("ImGui's Metal backend did not start");
         }
 
         textures_ = [NSMutableDictionary dictionary];
         events_ = [NSMutableDictionary dictionary];
         pass_desc_ = [MTLRenderPassDescriptor new];
+        gfx_ = caliper_gfx::make_metal_backend((__bridge void*)device_, (__bridge void*)queue_);
         canvas_ready_ = true;
         return true;
     }
@@ -629,6 +601,7 @@ public:
                 [canvas_enc_ endEncoding];
                 if (canvas_mode_ == CANVAS_WINDOW && canvas_drawable_ != nil)
                     [canvas_cmd_ presentDrawable:canvas_drawable_];
+                stats_gpu_time(canvas_cmd_, kGpuFrame);
                 [canvas_cmd_ commit];
                 // Offscreen readback must observe THIS frame, so drain it (no
                 // swapchain to pace us). Window mode presents and rides on.
@@ -640,6 +613,7 @@ public:
             canvas_enc_ = nil;
             canvas_cmd_ = nil;
             canvas_drawable_ = nil;
+            stats_frame();
         }
     }
 
@@ -676,6 +650,8 @@ public:
 
     void canvas_shutdown() override {
         if (!canvas_ready_) return;
+        stats_print();
+        gfx_.reset();   // waits for its last submit; nothing of it may outlive the queue
         ImGui_ImplMetal_Shutdown();
         [events_ removeAllObjects]; events_ = nil; event_values_.clear();
         depth_textures_.clear();
@@ -701,14 +677,15 @@ public:
     }
 
     bool init(GLFWwindow* window) override {
+        if (forced_start_failure()) return false;
         window_ = window;
         device_ = MTLCreateSystemDefaultDevice();
-        if (device_ == nil) return false;
+        if (device_ == nil) return start_failed("no Metal device");
         queue_ = [device_ newCommandQueue];
-        if (queue_ == nil) return false;
+        if (queue_ == nil) return start_failed("no Metal command queue");
 
         NSWindow* nswin = glfwGetCocoaWindow(window);
-        if (nswin == nil) return false;
+        if (nswin == nil) return start_failed("the window has no Cocoa window");
         layer_ = [CAMetalLayer layer];
         layer_.device = device_;
         layer_.pixelFormat = MTLPixelFormatBGRA8Unorm;
@@ -718,15 +695,17 @@ public:
 
         // ImGui core/ImPlot contexts are host-owned and already created; only
         // the GLFW + Metal *backends* belong to this renderer.
-        if (!ImGui_ImplGlfw_InitForOther(window, true)) return false;
+        if (!ImGui_ImplGlfw_InitForOther(window, true))
+            return start_failed("ImGui's GLFW backend did not start");
         if (!ImGui_ImplMetal_Init(device_)) {
-            ImGui_ImplGlfw_Shutdown();   // undo the GLFW backend for a clean fallback
-            return false;
+            ImGui_ImplGlfw_Shutdown();   // undo the GLFW backend before the refusal
+            return start_failed("ImGui's Metal backend did not start");
         }
 
         textures_ = [NSMutableDictionary dictionary];
         events_ = [NSMutableDictionary dictionary];
         pass_desc_ = [MTLRenderPassDescriptor new];
+        gfx_ = caliper_gfx::make_metal_backend((__bridge void*)device_, (__bridge void*)queue_);
         return true;
     }
 
@@ -771,6 +750,7 @@ public:
                 [frame_enc_ endEncoding];
                 copy_for_capture();                // before present, in the same command buffer
                 [frame_cmd_ presentDrawable:drawable_];
+                stats_gpu_time(frame_cmd_, kGpuFrame);
                 [frame_cmd_ commit];
             } else if (frame_cmd_) {
                 [frame_cmd_ commit];               // nothing to draw; flush
@@ -778,6 +758,7 @@ public:
             frame_enc_ = nil;
             frame_cmd_ = nil;
             drawable_ = nil;
+            stats_frame();
         }
     }
 
@@ -859,6 +840,8 @@ public:
     }
 
     void shutdown() override {
+        stats_print();
+        gfx_.reset();   // waits for its last submit; nothing of it may outlive the queue
         cap_buf_ = nil;
         cap_state_->store(kCapNone);
         ImGui_ImplMetal_Shutdown();
@@ -908,6 +891,7 @@ public:
              mipmapLevel:0
                withBytes:data
              bytesPerRow:(NSUInteger)w * 4];
+        stats_update("cpu-staged");   // the copy is counted by the caller that staged it
         return true;
     }
 
@@ -987,6 +971,8 @@ public:
         if (h != nullptr) { id<MTLCommandBuffer> cb = (__bridge_transfer id<MTLCommandBuffer>)h; (void)cb; }
     }
     void* native_device() const override { return (__bridge void*)device_; }
+    void* native_queue() const override { return (__bridge void*)queue_; }
+    caliper_gfx::Backend* gfx() override { return gfx_.get(); }
     // Typed live views: +1 handle on the last geometry draw's command buffer
     // (polled with device_update_is_done, dropped with device_update_release).
     void* geom_draw_retain_last() override {
@@ -1183,10 +1169,12 @@ public:
                         vertexStart:0 vertexCount:(NSUInteger)count];
             }
             [enc endEncoding];
+            stats_gpu_time(cb, kGpuDraw);
             [cb commit];   // no CPU wait: same-queue_ commit order covers the frame's
                            // sampling; producer (MPS) writes are already CPU-drained
                            // before publish (the geometry.v1 sync contract).
             last_device_path_ = "points-imported";
+            stats_update(last_device_path_);
             last_geom_cb_ = cb;   // geom_draw_retain_last() target (never waited)
             return true;
         }
@@ -1222,7 +1210,6 @@ public:
                 id<MTLRenderPipelineState> pipeline = nil;
                 id<MTLDepthStencilState> depth_state = nil;
                 PrimParams params{};
-                std::array<float, 256> th{};   // the exact colormap's thresholds (buffer 9)
             };
             std::vector<EncodedDraw> encs;
             encs.reserve(count);
@@ -1435,15 +1422,6 @@ public:
                 e.params.inst_base = (uint32_t)(d.instance_offset / 4u);
                 e.params.use_instance_attr = use_instance_attr ? 1u : 0u;
                 e.params.inst_attr_base = (uint32_t)(d.instance_attr_offset / 4u);
-                if (d.topology == CALIPER_GEOM_TOPO_POINTS) {
-                    e.params.att_ref = d.att_ref;
-                    e.params.fade_w0 = d.fade_w0;
-                    e.params.fade_w1 = d.fade_w1;
-                    if (d.exact_colormap && d.color_mode == CALIPER_GEOM_COLOR_COLORMAP) {
-                        const uint32_t mode = thresholds(d.vmin, d.vmax, e.th.data());
-                        e.params.cmap_mode = mode ? mode : 3u;
-                    }
-                }
                 encs.push_back(e);
             }
 
@@ -1502,12 +1480,14 @@ public:
                     }
                     id<MTLCommandBuffer> cb = [queue_ commandBuffer];
                     id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
-                    for (const RigidRead& r : priv_reads)
+                    for (const RigidRead& r : priv_reads) {
                         [blit copyFromBuffer:r.inst
                                 sourceOffset:r.src_off
                                     toBuffer:geom_prim_inst_staging_
                            destinationOffset:r.dst_off
                                         size:r.n * 64u];
+                        note_copy(r.n * 64u);   // a readback of the payload's instance matrices
+                    }
                     [blit endEncoding];
                     [cb commit];
                     [cb waitUntilCompleted];
@@ -1559,15 +1539,15 @@ public:
                 // the read harmless), mirroring the idx/nrm/attr trick above.
                 [re setVertexBuffer:(e.inst  != nil ? e.inst  : e.pos) offset:0 atIndex:7];
                 [re setVertexBuffer:(e.iattr != nil ? e.iattr : e.pos) offset:0 atIndex:8];
-                if (e.prim == MTLPrimitiveTypePoint)
-                    [re setVertexBytes:e.th.data() length:sizeof(float) * 256 atIndex:9];
                 if (e.texture != nil) [re setFragmentTexture:e.texture atIndex:0];
                 [re drawPrimitives:e.prim vertexStart:0 vertexCount:e.consumed
                      instanceCount:(e.use_instance ? e.n_inst : 1)];
             }
             [re endEncoding];
+            stats_gpu_time(cb, kGpuDraw);
             [cb commit];
             last_device_path_ = "primitives-imported";
+            stats_update(last_device_path_);
             last_geom_cb_ = cb;   // geom_draw_retain_last() target (never waited)
             return true;
         }
@@ -1613,7 +1593,138 @@ public:
         }
     }
 
+    // CALIPER_METAL_STATS: the window's frame times, GPU times and updates by
+    // path (HostRenderer::FrameStats). false while the variable is unset.
+    bool frame_stats(FrameStats* out, bool reset_window) override {
+        if (!stats_on_ || out == nullptr) return false;
+        StatSamples gpu;
+        {
+            std::lock_guard<std::mutex> lk(gpu_times_->mu);
+            gpu = gpu_times_->window;
+            if (reset_window) gpu_times_->window = StatSamples{};
+        }
+        *out = FrameStats{};
+        out->frames = stats_window_.frames;
+        stats_fill(stats_window_.frame_ms, &out->frame_ms_p50, &out->frame_ms_p99, &out->frame_ms_max);
+        out->update_gpu_n = stats_fill(gpu.update_gpu_ms, &out->update_gpu_ms_p50, &out->update_gpu_ms_p99,
+                                       &out->update_gpu_ms_max);
+        out->draw_gpu_n = stats_fill(gpu.draw_gpu_ms, &out->draw_gpu_ms_p50, &out->draw_gpu_ms_p99,
+                                     &out->draw_gpu_ms_max);
+        out->frame_gpu_n = stats_fill(gpu.frame_gpu_ms, &out->frame_gpu_ms_p50, &out->frame_gpu_ms_p99,
+                                      &out->frame_gpu_ms_max);
+        for (const auto& kv : stats_window_.updates) out->updates.emplace_back(kv.first, kv.second);
+        if (reset_window) stats_window_ = StatSamples{};
+        return true;
+    }
+
+    void note_draw_gpu_ms(double ms, uint32_t submits) override {
+        if (!stats_on_ || !(ms > 0.0) || submits == 0) return;
+        const float each = (float)(ms / (double)submits);
+        std::lock_guard<std::mutex> lk(gpu_times_->mu);
+        for (uint32_t k = 0; k < submits; ++k) {
+            gpu_times_->window.draw_gpu_ms.push_back(each);
+            if (gpu_times_->run.draw_gpu_ms.size() < kStatsRunCap) gpu_times_->run.draw_gpu_ms.push_back(each);
+        }
+    }
+
 private:
+    // ---- CALIPER_METAL_STATS (docs/applets/rendering.md, "Copy Counters
+    // and Frame Statistics"): frame times, GPU times from the command buffers'
+    // GPUStartTime and GPUEndTime, and updates by path, over a window that
+    // frame_stats() resets and over the whole run, which shutdown prints in one
+    // line beside the renderer's copy count. Read once at construction; while
+    // unset nothing is recorded and no completion handler is added. ----
+    struct StatSamples {
+        std::vector<float> frame_ms, update_gpu_ms, draw_gpu_ms, frame_gpu_ms;
+        std::map<std::string, uint64_t> updates;
+        uint64_t frames = 0;
+    };
+    // GPU times arrive on Metal's completion threads: guarded, and shared with
+    // the handlers so that a late one never touches a destroyed renderer.
+    struct GpuTimes {
+        std::mutex mu;
+        StatSamples window, run;   // only the *_gpu_ms vectors are used
+    };
+    enum GpuKind { kGpuUpdate, kGpuDraw, kGpuFrame };
+    static constexpr size_t kStatsRunCap = size_t(1) << 20;   // samples kept per series for the run
+
+    static std::vector<float>& gpu_series(StatSamples& s, GpuKind kind) {
+        return kind == kGpuUpdate ? s.update_gpu_ms : kind == kGpuDraw ? s.draw_gpu_ms : s.frame_gpu_ms;
+    }
+    // Before the command buffer is committed.
+    void stats_gpu_time(id<MTLCommandBuffer> cb, GpuKind kind) {
+        if (!stats_on_ || cb == nil) return;
+        std::shared_ptr<GpuTimes> g = gpu_times_;
+        [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
+            const double ms = (done.GPUEndTime - done.GPUStartTime) * 1000.0;
+            if (!(ms > 0.0)) return;   // unknown (0) or failed
+            std::lock_guard<std::mutex> lk(g->mu);
+            gpu_series(g->window, kind).push_back((float)ms);
+            std::vector<float>& run = gpu_series(g->run, kind);
+            if (run.size() < kStatsRunCap) run.push_back((float)ms);
+        }];
+    }
+    void stats_update(const char* path) {
+        if (!stats_on_ || path == nullptr) return;
+        ++stats_window_.updates[path];
+        ++stats_run_.updates[path];
+    }
+    // At the end of every frame (render, canvas_render).
+    void stats_frame() {
+        if (!stats_on_) return;
+        const auto now = std::chrono::steady_clock::now();
+        if (stats_last_frame_ != std::chrono::steady_clock::time_point{}) {
+            const float ms = std::chrono::duration<float, std::milli>(now - stats_last_frame_).count();
+            stats_window_.frame_ms.push_back(ms);
+            if (stats_run_.frame_ms.size() < kStatsRunCap) stats_run_.frame_ms.push_back(ms);
+        }
+        stats_last_frame_ = now;
+        ++stats_window_.frames;
+        ++stats_run_.frames;
+    }
+    // Nearest-rank p50, p99 and maximum of v (as CALIPER_VULKAN_STATS); the count.
+    static uint64_t stats_fill(std::vector<float> v, double* p50, double* p99, double* mx) {
+        if (v.empty()) { *p50 = *p99 = *mx = 0.0; return 0; }
+        std::sort(v.begin(), v.end());
+        const auto at = [&](double q) { return (double)v[(size_t)(q * (double)(v.size() - 1))]; };
+        *p50 = at(0.5);
+        *p99 = at(0.99);
+        *mx = v.back();
+        return v.size();
+    }
+    // The run's summary, once, at shutdown.
+    void stats_print() {
+        if (!stats_on_ || stats_printed_) return;
+        stats_printed_ = true;
+        StatSamples gpu;
+        {
+            std::lock_guard<std::mutex> lk(gpu_times_->mu);
+            gpu = gpu_times_->run;
+        }
+        double f50, f99, fmx, u50, u99, umx, d50, d99, dmx, g50, g99, gmx;
+        stats_fill(stats_run_.frame_ms, &f50, &f99, &fmx);
+        const uint64_t un = stats_fill(gpu.update_gpu_ms, &u50, &u99, &umx);
+        const uint64_t dn = stats_fill(gpu.draw_gpu_ms, &d50, &d99, &dmx);
+        const uint64_t gn = stats_fill(gpu.frame_gpu_ms, &g50, &g99, &gmx);
+        std::string upd;
+        for (const auto& kv : stats_run_.updates)
+            upd += " " + kv.first + " " + std::to_string(kv.second);
+        const CopyCount c = copy_count();
+        std::fprintf(stderr,
+                     "[metal] stats: %llu frames, ms p50 %.2f p99 %.2f max %.2f; updates%s; "
+                     "gpu ms update p50 %.3f p99 %.3f max %.3f (%llu), view draw p50 %.3f p99 %.3f "
+                     "max %.3f (%llu), frame p50 %.3f p99 %.3f max %.3f (%llu); copies %llu (%llu bytes)\n",
+                     (unsigned long long)stats_run_.frames, f50, f99, fmx, upd.empty() ? " none" : upd.c_str(),
+                     u50, u99, umx, (unsigned long long)un, d50, d99, dmx, (unsigned long long)dn, g50, g99,
+                     gmx, (unsigned long long)gn, (unsigned long long)c.copies, (unsigned long long)c.bytes);
+    }
+
+    const bool stats_on_ = std::getenv("CALIPER_METAL_STATS") != nullptr;
+    bool stats_printed_ = false;
+    StatSamples stats_window_, stats_run_;   // frame thread: frame times, updates, frames
+    std::shared_ptr<GpuTimes> gpu_times_ = std::make_shared<GpuTimes>();
+    std::chrono::steady_clock::time_point stats_last_frame_{};
+
     // Offscreen canvas target: renderable AND host-readable (unified memory).
     // RGBA8 so canvas_read_pixels hands back RGBA with no swizzle. Rebuilt on
     // resize; the old texture is ARC-released.
@@ -1840,10 +1951,12 @@ private:
         // retains src, lutbuf, and dst until the GPU retires it (default,
         // non-`unretained` encoding), so lifetime is free too. Test readbacks
         // retire the queue themselves (debug_readback_rgba8).
+        stats_gpu_time(cb, kGpuUpdate);
         [cb commit];
         last_update_cb_ = cb;   // device_update_wait() target (never waited here)
 
         last_device_path_ = imported ? "compute-imported" : "compute";
+        stats_update(last_device_path_);
         return true;
     }
 
@@ -1874,14 +1987,17 @@ private:
             destinationLevel:0
            destinationOrigin:MTLOriginMake(0, 0, 0)];
         [blit endEncoding];
+        stats_gpu_time(cb, kGpuUpdate);
         [cb commit];   // no CPU wait (M1): same-queue commit order + retention
         last_update_cb_ = cb;   // device_update_wait() target (never waited here)
 
         last_device_path_ = imported ? "blit-imported" : "blit";
+        stats_update(last_device_path_);
         return true;
     }
 
     GLFWwindow*                 window_ = nullptr;
+    std::unique_ptr<caliper_gfx::Backend> gfx_;   // the graphics layer on device_ and queue_
     id<MTLDevice>               device_ = nil;
     id<MTLCommandQueue>         queue_  = nil;
     CAMetalLayer*               layer_  = nil;
@@ -1948,29 +2064,6 @@ private:
     // command buffer: what geom_draw_retain_last() hands out. Strong (ARC);
     // replaced by every draw, cleared on shutdown. Never waited on.
     id<MTLCommandBuffer> last_geom_cb_ = nil;
-    // The exact colormap's thresholds of the last few ranges (deriving them
-    // takes some 8,000 evaluations of the reference; a points view draws the
-    // same range frame after frame).
-    struct ThCache { uint32_t vmin_bits = 0, vmax_bits = 0, mode = 0; bool valid = false; std::array<float, 256> T{}; };
-    std::array<ThCache, 4> th_cache_{};
-    size_t th_next_ = 0;
-    uint32_t thresholds(float vmin, float vmax, float* T) {
-        uint32_t a, b;
-        std::memcpy(&a, &vmin, 4);
-        std::memcpy(&b, &vmax, 4);
-        for (const ThCache& c : th_cache_)
-            if (c.valid && c.vmin_bits == a && c.vmax_bits == b) {
-                std::memcpy(T, c.T.data(), sizeof(float) * 256);
-                return c.mode;
-            }
-        ThCache& c = th_cache_[th_next_++ % th_cache_.size()];
-        c.mode = caliper_host::colormap_thresholds(vmin, vmax, c.T.data());
-        c.vmin_bits = a;
-        c.vmax_bits = b;
-        c.valid = true;
-        std::memcpy(T, c.T.data(), sizeof(float) * 256);
-        return c.mode;
-    }
 };
 
 }  // namespace

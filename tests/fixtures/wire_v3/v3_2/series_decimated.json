@@ -1,0 +1,105 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 360,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 236,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 3,
+    "type": 49
+  },
+  "meta": {
+    "cursor": 2,
+    "decimated": 1024,
+    "sections": [
+      {
+        "dtype": 0,
+        "name": "values",
+        "shape": [
+          3
+        ]
+      },
+      {
+        "dtype": 3,
+        "name": "stamps",
+        "shape": [
+          3,
+          2
+        ]
+      },
+      {
+        "dtype": 3,
+        "name": "indices",
+        "shape": [
+          3
+        ]
+      }
+    ],
+    "stamp_ns": 81234567891123,
+    "start": 0,
+    "sub": 3,
+    "total": 4096,
+    "view": "loss"
+  },
+  "meta_offset": 36,
+  "name": "v3_2/series_decimated",
+  "section_lengths": [
+    12,
+    48,
+    24
+  ],
+  "sections": [
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 12,
+      "name": "values",
+      "offset": 272,
+      "shape": [
+        3
+      ],
+      "values": [
+        3.0,
+        2.0,
+        1.0
+      ]
+    },
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 48,
+      "name": "stamps",
+      "offset": 288,
+      "shape": [
+        3,
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789,
+        1201,
+        1763200000128456789,
+        1202,
+        1763200000133456789
+      ]
+    },
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 24,
+      "name": "indices",
+      "offset": 336,
+      "shape": [
+        3
+      ],
+      "values": [
+        0,
+        2048,
+        4095
+      ]
+    }
+  ],
+  "type_name": "series"
+}

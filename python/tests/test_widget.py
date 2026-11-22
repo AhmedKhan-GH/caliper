@@ -253,10 +253,10 @@ def test_widget_draws_in_jupyterlab(tmp_path, mode):
     """The widget draws a real view of caliper.serve() inside its cell, keeps
     updating, takes the data view chosen in its picker or set from Python, and
     reports selections and data views back to Python. "metal" draws with the
-    WebAssembly views on WebGPU, or with the element's own views on WebGPU when
-    the package has no WebAssembly views (scripts/build_wasm.py and
+    WebAssembly views on WebGPU, or with the element's own views when the
+    package has no WebAssembly views (scripts/build_wasm.py and
     scripts/fetch_wasm.py put them there); "canvas2d" with the element's own
-    views."""
+    views. The element's own views draw with Canvas 2D in both modes."""
     for mod in ("jupyterlab", "ipykernel", "websockets", "PIL", "torch", "playwright"):
         pytest.importorskip(mod)
     if str(REPO) not in sys.path:
@@ -280,8 +280,8 @@ def test_widget_draws_in_jupyterlab(tmp_path, mode):
         views = not _assets.missing_views()
         if mode == "metal" and not views:
             print(f"the WebAssembly views are not in {_assets.asset_dir()}: the metal mode checks "
-                  "the TypeScript views on WebGPU")
-        want = "canvas2d" if mode == "canvas2d" else "wasm" if views else "webgpu"
+                  "the TypeScript views, which draw with Canvas 2D")
+        want = "wasm" if mode == "metal" and views else "canvas2d"
         assert state["renderer"] == want, state
         view = nb.page.locator(".jp-OutputArea-output caliper-view")
         area = view.locator("canvas:visible").first

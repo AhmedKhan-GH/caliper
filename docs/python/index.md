@@ -6,7 +6,7 @@ This area is for people who train models in PyTorch and want to see them while t
 
 A script makes views with a few calls. `show` draws a heatmap or an image, `points` draws a point cloud, `series` draws a curve and `histogram` draws a distribution. `watch` hooks a whole model. Each call makes a snapshot of a tensor and offers it to every open route. With nothing attached, a call costs one atomic load and a clock read.
 
-The script does not wait for the display, the viewer or the GPU. A rate limit of 60 snapshots per second applies to each view by default. Tensors stay on the device, and the render path does not copy them through the CPU. [Caliper LIB API](caliper-lib-api.md) lists every call.
+The script does not wait for the display, the viewer or the GPU. A rate limit of 60 snapshots per second applies to each view by default. Tensors stay on the device, and the render path does not copy them through the CPU. [Caliper LIB API](caliper-lib-api.md) lists every call, and [Scene Calls](scene-calls.md) lists the calls that send scenes of 3-D and 2-D geometry.
 
 ## Viewing Routes
 
@@ -31,4 +31,4 @@ Data views let a viewer choose which slice or reduction of a tensor travels. The
 
 ## Usual Workflow
 
-A reader starts with [Notebook Training Runs](notebook-training-runs.md) or the [Python Quickstart](../introduction/python-quickstart.md). Then the reader attaches a viewer to a running script, as [Script Attachment](script-attachment.md) describes. [Live Streaming](live-streaming.md) and [Network Streaming](network-streaming.md) explain why the script keeps its speed.
+A reader starts with [Notebook Training Runs](notebook-training-runs.md) or the [Python Quickstart](../introduction/python-quickstart.md). [Loss Landscape](loss-landscape.md) is a second notebook, which streams the loss surface around the weights of a model as a 3-D scene. Then the reader attaches a viewer to a running script, as [Script Attachment](script-attachment.md) describes. [Live Streaming](live-streaming.md) and [Network Streaming](network-streaming.md) explain why the script keeps its speed.

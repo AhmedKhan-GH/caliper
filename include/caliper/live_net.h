@@ -363,6 +363,7 @@ static inline uint32_t caliper_net_dtype_size(int32_t dtype) {
         case CALIPER_NET_DTYPE_I64:  return 8u;
         case CALIPER_NET_DTYPE_I32:  return 4u;
         case CALIPER_NET_DTYPE_U8:   return 1u;
+        case 6:                      return 2u;   /* CALIPER_NET_DTYPE_U16, the 3.2 block */
         default:                     return 0u;
     }
 }
@@ -371,6 +372,138 @@ static inline uint32_t caliper_net_dtype_size(int32_t dtype) {
 static inline uint32_t caliper_net_align(uint32_t n) {
     return (n + (CALIPER_NET_SECTION_ALIGN - 1u)) & ~(CALIPER_NET_SECTION_ALIGN - 1u);
 }
+
+/* ===========================================================================
+ * PROTOCOL 3.2 DRAFT: THE SCENES SUBSET
+ *
+ * Provisional proposals: the minor version 2, the
+ * capabilities, the kinds scene (6), text (7) and bars (8), the messages
+ * 0x0070 to 0x0074 and 0x0078 to 0x007B, the dtype u16 (6), the error codes
+ * and the limits below. Each is one line here, so
+ * a renumbering changes one line (the dtype also has one line in
+ * caliper_net_dtype_size above). docs/reference/wire-protocol-3-2.md states
+ * what is built of them: the codecs build the whole draft (every part of
+ * SCENE_UPDATE, split updates, SCENE_TRANSFORMS, SCENE_CLEAR, SCENE_CLASSES,
+ * stamps, TEXT, bar charts and the recording messages); producers, the hub
+ * and viewers build the scenes. Senders keep writing
+ * CALIPER_NET_PROTOCOL_MINOR in their frames until 3.2 is confirmed; the 3.2
+ * golden frames (tests/fixtures/wire_v3/v3_2) carry CALIPER_NET_MINOR_3_2. A
+ * peer decides by the capability, never the minor. Every 3.1 message keeps
+ * its meaning and encoding. CaliperDType (sdk/include/caliper/tensor.h) has
+ * no CALIPER_DT_U16 yet: the SDK owns it, so the draft depends on a later SDK addition.
+ * ===========================================================================*/
+#define CALIPER_NET_MINOR_3_2            2u
+#define CALIPER_NET_CAP_SCENES           "scenes"     /* kind scene and its messages      */
+#define CALIPER_NET_KIND_SCENE           6            /* the scene messages                */
+#define CALIPER_NET_MSG_SCENE_UPDATE     0x0070u      /* P -> V/H, H -> V   one part of one entity */
+#define CALIPER_NET_MSG_SCENE_TRANSFORMS 0x0071u      /* P -> V/H, H -> V   entity transforms    */
+#define CALIPER_NET_MSG_SCENE_CLEAR      0x0072u      /* P -> V/H, H -> V   clear an entity or reset */
+#define CALIPER_NET_MSG_SCENE_CLASSES    0x0073u      /* P -> V/H, H -> V   the class table      */
+#define CALIPER_NET_DTYPE_U16            6            /* 2 bytes: depth and segmentation images */
+
+/* SCENE_UPDATE "part" */
+#define CALIPER_NET_PART_POINTS          "points"
+#define CALIPER_NET_PART_LINES           "lines"
+#define CALIPER_NET_PART_ARROWS          "arrows"
+#define CALIPER_NET_PART_BOXES           "boxes"
+#define CALIPER_NET_PART_MESH            "mesh"
+#define CALIPER_NET_PART_IMAGE           "image"
+#define CALIPER_NET_PART_CAMERA          "camera"
+/* lines "mode" and "color_per" */
+#define CALIPER_NET_LINES_SEGMENTS       "segments"   /* vertices 2k and 2k + 1: segment k  */
+#define CALIPER_NET_LINES_STRIPS         "strips"     /* section strip_lengths i32 (S,)     */
+#define CALIPER_NET_LINES_EDGES          "edges"      /* section indices i32 (E, 2)         */
+#define CALIPER_NET_COLOR_PER_VERTEX     "vertex"
+#define CALIPER_NET_COLOR_PER_STRIP      "strip"
+#define CALIPER_NET_COLOR_PER_EDGE       "edge"
+/* image "form" and "format" */
+#define CALIPER_NET_FORM_COLOR           "color"        /* pixels u8 (H, W, 4) or (H, W)  */
+#define CALIPER_NET_FORM_DEPTH           "depth"        /* pixels f32 or u16 (H, W)       */
+#define CALIPER_NET_FORM_SEGMENTATION    "segmentation" /* pixels u16 or u8 (H, W)        */
+#define CALIPER_NET_FORM_ENCODED         "encoded"      /* pixels u8 (B,): one JPEG or PNG */
+#define CALIPER_NET_FORMAT_JPEG          "jpeg"
+#define CALIPER_NET_FORMAT_PNG           "png"
+/* camera "convention" */
+#define CALIPER_NET_CONVENTION_RDF       "rdf"        /* x right, y down, z forward         */
+#define CALIPER_NET_CONVENTION_RUB       "rub"        /* x right, y up, looking along -z    */
+/* SCENE_CLEAR "parts" also takes "transform" */
+#define CALIPER_NET_PART_TRANSFORM       "transform"
+/* VIEWS "scene" {"space", "up", "units", "view_camera"} */
+#define CALIPER_NET_SPACE_3D             "3d"
+#define CALIPER_NET_SPACE_2D             "2d"
+
+#define CALIPER_NET_PATH_MAX             255u         /* bytes of an entity path            */
+#define CALIPER_NET_PATH_SEGMENTS_MAX    16u          /* segments of an entity path         */
+#define CALIPER_NET_UNITS_MAX            15u          /* bytes of a scene's unit note       */
+#define CALIPER_NET_MAX_ENTITIES         1024u        /* entities of a scene                */
+#define CALIPER_NET_MAX_BATCHES          2048u        /* batches of a scene                 */
+#define CALIPER_NET_MAX_BATCH_POINTS     4194304u     /* points, line or mesh vertices, edges, triangles */
+#define CALIPER_NET_MAX_BATCH_ITEMS      1048576u     /* boxes, arrows or line strips of a batch */
+#define CALIPER_NET_MAX_LABELS           4096u        /* labels of a batch, of NAME_MAX bytes */
+#define CALIPER_NET_MAX_CLASSES          4096u        /* entries of a class table           */
+#define CALIPER_NET_MAX_CLASS_ID         65535u       /* the largest class id               */
+#define CALIPER_NET_MAX_IMAGE_SIDE       8192u        /* pixels on a side of an image or texture */
+#define CALIPER_NET_MAX_ENCODED_BYTES    16777216u    /* bytes of an encoded frame          */
+#define CALIPER_NET_MAX_TRANSFORMS       1024u        /* entity transforms in one SCENE_TRANSFORMS */
+#define CALIPER_NET_MAX_TIMELINES        8u           /* timelines of a session: values of a stamp */
+#define CALIPER_NET_STAMP_ABSENT         (-0x7fffffffffffffffLL - 1)   /* a stamp value: absent on that timeline */
+/* the scene data view's budget: default and largest value of each key
+ * (max_points shares CALIPER_NET_DEFAULT_MAX_POINTS and _LIMIT_MAX_POINTS) */
+#define CALIPER_NET_SCENE_DEFAULT_MAX_ITEMS    100000u
+#define CALIPER_NET_SCENE_LIMIT_MAX_ITEMS      1048576u
+#define CALIPER_NET_SCENE_DEFAULT_MAX_VERTICES 1000000u
+#define CALIPER_NET_SCENE_LIMIT_MAX_VERTICES   4194304u
+#define CALIPER_NET_SCENE_DEFAULT_MAX_EXTENT   1024u
+#define CALIPER_NET_SCENE_LIMIT_MAX_EXTENT     8192u
+
+/* --- timelines, text logs, bar charts, split updates and recordings -------- */
+#define CALIPER_NET_CAP_TIMELINES        "timelines"  /* VIEWS "timelines", stamps, "static"  */
+#define CALIPER_NET_CAP_TEXT             "text"       /* kind text and TEXT                 */
+#define CALIPER_NET_CAP_BARS             "bars"       /* kind bars, a SNAPSHOT of kind 8    */
+#define CALIPER_NET_CAP_RECORDINGS       "recordings" /* the recording messages and keys    */
+#define CALIPER_NET_KIND_TEXT            7            /* TEXT messages only                 */
+#define CALIPER_NET_KIND_BARS            8            /* data (B,) f32, colors (B, 4) u8    */
+#define CALIPER_NET_MSG_TEXT             0x0074u      /* P -> V/H, H -> V   new lines of a text log */
+#define CALIPER_NET_MSG_RECORDINGS       0x0078u      /* S -> V   the recordings a server can open */
+#define CALIPER_NET_MSG_RECORDING_OPEN   0x0079u      /* V -> S   open one; answered by VIEWS or ERROR */
+#define CALIPER_NET_MSG_CURSOR           0x007Au      /* V -> S   move the viewer's cursor      */
+#define CALIPER_NET_MSG_TIME_STATE       0x007Bu      /* S -> V   the state of the cursor       */
+#define CALIPER_NET_ERR_UNKNOWN_RECORDING "unknown_recording"
+#define CALIPER_NET_ERR_BAD_RECORDING    "bad_recording"
+#define CALIPER_NET_ERR_NOT_SEEKABLE     "not_seekable"
+#define CALIPER_NET_ERR_BAD_CURSOR       "bad_cursor"
+#define CALIPER_NET_TIMELINE_SEQUENCE    "sequence"
+#define CALIPER_NET_TIMELINE_TIME        "time"
+#define CALIPER_NET_LEVEL_DEBUG          0            /* TEXT "levels"                      */
+#define CALIPER_NET_LEVEL_INFO           1
+#define CALIPER_NET_LEVEL_WARNING        2
+#define CALIPER_NET_LEVEL_ERROR          3
+#define CALIPER_NET_CURSOR_SEEK          "seek"       /* CURSOR "op"                        */
+#define CALIPER_NET_CURSOR_PLAY          "play"
+#define CALIPER_NET_CURSOR_PAUSE         "pause"
+#define CALIPER_NET_CURSOR_STEP          "step"
+#define CALIPER_NET_CURSOR_FOLLOW        "follow"
+#define CALIPER_NET_PACE_RECORDED        "recorded"
+#define CALIPER_NET_PACE_EVEN            "even"
+#define CALIPER_NET_TIME_FOLLOWING       "following"  /* TIME_STATE "state"                 */
+#define CALIPER_NET_TIME_PAUSED          "paused"
+#define CALIPER_NET_TIME_PLAYING         "playing"
+#define CALIPER_NET_STAMP_TEXT_MAX       20u          /* characters of stamp text           */
+#define CALIPER_NET_MAX_PIECES           16u          /* pieces of a split update           */
+#define CALIPER_NET_MAX_UPDATE_BYTES     536870912u   /* bytes of a whole split update      */
+#define CALIPER_NET_MAX_INCOMPLETE_UPDATES 2u         /* split updates a receiver holds per subscription */
+#define CALIPER_NET_TEXT_LINE_MAX        4096u        /* bytes of a text line               */
+#define CALIPER_NET_TEXT_MAX_LINES       65536u       /* lines in one TEXT                  */
+#define CALIPER_NET_TEXT_RETAIN_MIN      4096u        /* lines a producer retains per text log */
+#define CALIPER_NET_MAX_BARS             4096u        /* bars of a snapshot                 */
+#define CALIPER_NET_MAX_RECORDINGS       1024u        /* recordings in RECORDINGS           */
+#define CALIPER_NET_MAX_RECORDED         64u          /* VIEWS "recorded": data views of a view */
+#define CALIPER_NET_MAX_CURSOR_STEP      1000u        /* CURSOR "count", either way         */
+#define CALIPER_NET_CURSOR_RATE_HZ       30u          /* CURSOR messages a viewer sends a second */
+#define CALIPER_NET_TIME_STATE_RATE_HZ   30u          /* TIME_STATE a server sends a second while playing */
+#define CALIPER_NET_MIN_SPEED            0.0625       /* playback speed, 1/16                */
+#define CALIPER_NET_MAX_SPEED            64u
+#define CALIPER_NET_RECORDING_LINGER_MS  600000u      /* an opened recording without viewers stays listed */
 
 #ifdef __cplusplus
 }  /* extern "C" */

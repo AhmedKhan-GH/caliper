@@ -40,6 +40,7 @@ import threading
 import time
 import warnings
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from ._convert import (CMAPS, SERIES_CAPACITY, check_range, cmap_index, plan_histogram,
                        plan_points, plan_series, plan_show)
@@ -47,6 +48,10 @@ from . import _dataview
 from ._dataview import DataViewError
 from ._ring import (DEFAULT_RATE_HZ, KIND_HEATMAP, KIND_HISTOGRAM, KIND_IMAGE, KIND_POINTS,
                     KIND_SERIES, LOCK, Publisher, SnapshotRing, rate_interval)
+
+if TYPE_CHECKING:
+    # Scene is imported on first use (__getattr__ below); this names it for type checkers and the API reference.
+    from ._scene import Scene
 
 __all__ = [
     "show", "points", "series", "histogram", "watch", "window", "offscreen", "session", "run",
@@ -73,6 +78,9 @@ def _load_native():
 
 
 def __getattr__(name):
+    if name == "Scene":                          # scenes: imported on first use
+        from ._scene import Scene
+        return Scene
     if name in ("HAVE_VIEWS", "HAVE_LIVE_VIEWS", "VIEW_FLAG_RAW", "VIEW_FLAG_WAIT_GPU",
                 "EMBED_API_VERSION", "HEATMAP_IMAGE_VIA_LIVE_APPLY"):
         return getattr(_load_native(), name)
@@ -978,7 +986,16 @@ def flush(timeout: float = 5.0) -> int:
         int: How many snapshots are still pending after `timeout`.
     """
     with LOCK:
-        return sum(r.ring.flush(timeout=timeout) for r in _routes if r.transport.attached())
+        return sum(r.ring.flush(timeout=timeout) for r in _routes if _has_viewer(r.transport))
+
+
+def _has_viewer(transport) -> bool:
+    """A viewer is attached to the route. The network transport's attached()
+    also says whether its next tick is due, which a flush must not wait for:
+    right after a step's view calls it is not, and the step's gathered series
+    values would wait for the next call."""
+    n = getattr(transport, "n_attached", None)
+    return n > 0 if n is not None else transport.attached()
 
 
 def spin(seconds: float | None = None) -> None:
@@ -1041,6 +1058,9 @@ def remove(name: str) -> bool:
     """
     found = False
     _dataview.REGISTRY.remove(name)
+    sc = sys.modules.get(__name__ + "._scene")     # scenes, when a script made one
+    if sc is not None:
+        sc.forget(name)
     _CTL.forget_view(name)
     with LOCK:
         for r in _routes:
@@ -1328,8 +1348,8 @@ def widget(name: str, kind: str | None = None, *, height: int = 320):
 
     Args:
         name (str): The view to show. The widget may be created before the first call of the view.
-        kind (str | None): `"series"`, `"heatmap"`, `"image"`, `"points"` or `"histogram"`. `None`
-            takes the kind from the stream.
+        kind (str | None): `"series"`, `"heatmap"`, `"image"`, `"points"`, `"histogram"` or
+            `"scene"`. `None` takes the kind from the stream.
         height (int): Height of the whole widget, header included, in CSS pixels.
 
     Returns:
@@ -1655,3 +1675,63 @@ def controls(*, height: int = 160):
     """
     from ._widget import controls as _controls_widget
     return _controls_widget(height=height)
+
+
+# ---------------------------------------------------------------------------
+# scenes (the scenes subset of wire protocol 3.2, draft; caliper._scene)
+# ---------------------------------------------------------------------------
+__all__ += ["scene", "Scene"]
+
+
+def scene(name: str = "scene", *, space: str = "3d", up=None, units: str = "m", rate=None,
+          data_view=None, view_camera=None) -> "Scene":
+    """Make or fetch the scene `name`, a tree of entities that every viewer of the network route draws.
+
+    A scene holds entities, named by entity paths such as `"world/cloud"`. Each entity holds
+    batches of points, lines, arrows, boxes, a mesh or an image, or a pinhole camera, and an entity
+    transform places it. The space is 3-D or 2-D, fixed when the scene is made. Log to the returned
+    [`Scene`][caliper.Scene] with its `points`, `lines`, `arrows`, `boxes`, `mesh`, `image`,
+    `depth`, `segmentation`, `camera`, `transform`, `classes` and `clear` methods
+    ([Scene Calls](scene-calls.md)).
+
+    Scenes travel over [`serve`][caliper.serve]: the notebook widget with `kind="scene"`, the
+    browser page and a hub. With only the shared-memory session or the in-process window open, a
+    scene call warns once and does nothing there. The scene module is imported on first use, so
+    importing caliper stays light.
+
+    A second call with the same `name` returns the same scene and updates `up`, `units`, `rate` and
+    `view_camera`. `up`, `units` and `rate` are set from the arguments of that call, so an omitted
+    one returns to its default. `view_camera=None` leaves the starting camera as it is, and
+    `view_camera={}` returns it to the fit.
+
+    Args:
+        name (str): The scene id: 1 to 63 bytes, with no `##`.
+        space (str): `"3d"` or `"2d"`. Positions are `(N, 3)` in a 3-D scene and `(N, 2)` in a 2-D
+            one. A scene keeps its space.
+        up (str | None): In 3-D, the axis a view keeps upright when it opens, from `"+x"` to
+            `"-z"`. In 2-D, the direction of y on screen, `"-y"` or `"+y"`. `None` is `"+y"` in 3-D
+            and `"-y"` in 2-D.
+        units (str): A note of at most 15 bytes shown with the view. Nothing is converted.
+        rate (float | None): The default rate limit of each batch, in snapshots per second. `None`
+            is 60 per second, and 0 means every call ([Rate Limits](scene-calls.md#rate-limits)).
+        data_view (dict | None): Not built yet.
+        view_camera (dict | str | None): The camera a 3-D view opens on: a dict with any of `target`
+            (3 numbers), `distance` (above 0), `azimuth` and `elevation` (degrees, from -89 to 89),
+            or the entity path of a camera to look through. Keys left out are filled from the fit.
+
+    Returns:
+        Scene: The scene.
+
+    Raises:
+        ValueError: When `name`, `space`, `up` or `units` is invalid, `rate` is negative or not
+            finite, `view_camera` has an unknown key, a number that is not finite, a distance not
+            above 0, an elevation outside -89 to 89 or a path outside the entity path grammar, or
+            `view_camera` is given in a 2-D scene, or `space` differs from the space of the
+            existing scene.
+        TypeError: When `rate` is not a number, or `view_camera` is neither a dict nor a string,
+            or one of its values has the wrong type.
+        NotImplementedError: When `data_view` is given.
+    """
+    from . import _scene
+    return _scene.scene(name, space=space, up=up, units=units, rate=rate, data_view=data_view,
+                        view_camera=view_camera)

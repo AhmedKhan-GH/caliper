@@ -15,6 +15,8 @@ The GPU suites skip when the machine has no usable device, and ctest reports the
 
 Every pull request is built and tested on macOS and Windows. [Continuous integration](docs/development/ci.md) describes what runs, what is cached, and how to handle a failed run.
 
+The shaders of the graphics layer are written once in WGSL under `src/host/gfx/shaders/`, and their MSL and SPIR-V are generated and committed. After changing one, run `python3 tools/shaders/generate.py` (it needs a Rust toolchain) and commit the generated files with it; [Shader Authoring](docs/applets/shader-authoring.md) describes the generator and its checks.
+
 To check the documentation, build it the way the Docs workflow does, from the repository root and with the same versions. The first command builds the docs site. Its API reference comes from the code: mkdocstrings renders the Python calls from the docstrings of Caliper LIB, and the hook `docs-theme/hooks/c_reference.py` renders the C tables from the `/** */` comments of the headers. `python3 scripts/check_api_reference.py` fails when a public symbol has no docstring or comment, or no page. The second command checks the design pages, which are built apart from the docs site and are not published.
 
 ```sh
@@ -49,7 +51,7 @@ Third-party code is vendored as git submodules under `third_party/`. Initialize 
 
 ## Documentation rules
 
-- **One home per kind of document.** The docs site lives under `docs/`, in one folder per kind: `tutorials/`, `guides/`, `references/` and `explanations/`. A page covers one topic, has a lowercase hyphenated file name, and sits directly in its folder, with no deeper folders. Each folder's `index.md` introduces the section and lists its pages. The site navigation follows the folders; a `.nav.yml` file in a folder sets its order. A design decision is not a document of its own: the rule goes, with its reason, in the explanation or reference page it shapes, and an open question goes in the design pages.
+- **One home per kind of document.** The docs site lives under `docs/`, in one folder per area: `introduction/`, `python/`, `applets/`, `builder/`, `agents/`, `web/`, `reference/`, `development/` and `roadmap/`, whose feature pages are generated from the roadmap registry. A page covers one topic, has a lowercase hyphenated file name, and sits in its area's folder; only `applets/services/` goes deeper. Each folder's `index.md` introduces the section and lists its pages. The site navigation follows the folders; a `.nav.yml` file in a folder sets its order. A design decision is not a document of its own: the rule goes, with its reason, in the page it shapes, and an open question goes in the design pages.
 - **Nothing new at the root.** The repository root holds only `README.md`, `CONTRIBUTING.md` and `LICENSE` among documents. Proposals go in `design/`, and every other document in `docs/`.
 - **Code and docs change together.** A change to a header, a service or a behaviour updates its doc comment or docstring, and its page, in the same commit. Reference pages render headers and docstrings and embed examples with snippets, so a moved or renamed file fails `mkdocs build --strict`.
 - **Living pages say what is true now.** Tutorials, guides, references and explanations describe the current code. They hold no status tables, schedules or history.

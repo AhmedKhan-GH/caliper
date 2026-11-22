@@ -2,6 +2,7 @@
 // (spec_prepare.h).
 #include "spec_runtime/spec_prepare.h"
 
+#include "scene/scene.h"                 // kPalette
 #include "spec_runtime/spec_layout.h"   // spec_panel_title, spec_binding_name
 #include "tensor_bridge.h"   // colormap_lut, map_f32_to_rgba8: the live views' colours
 
@@ -15,9 +16,9 @@
 #include <cstring>
 #include <limits>
 
-// The live views' categorical palette (live_views_draw.cpp).
+// The live views' categorical palette, which is the scene core's (scene/scene.h).
 namespace caliper_live_views {
-extern const uint32_t kPalette[16];
+using caliper_scene::kPalette;
 }  // namespace caliper_live_views
 
 namespace caliper_host {

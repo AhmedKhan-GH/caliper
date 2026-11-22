@@ -11,7 +11,8 @@ encoding and the sends, all without the GIL. Python keeps three jobs:
   memory (caliper/_net_ring.py, unchanged);
 * the pump thread ("caliper.net") waits in ``Server.control()`` with the GIL
   released; it wakes for a control message, a wake from the training thread,
-  or every ``POLL_MS`` while snapshots are in flight, polls their MPS events
+  every ``POLL_MS`` while snapshots are in flight, or when a scene frame that
+  waits for its rate is due (``wait_ms``), polls their MPS events
   (``torch.mps.Event.query`` needs the GIL), and hands each completed one to
   the native side with one ``publish()`` call, which copies the bytes with the
   GIL released before it returns: from then on the native side owns them, so
@@ -27,6 +28,7 @@ from __future__ import annotations
 
 import collections
 import json
+import math
 import os
 import threading
 import time
@@ -111,12 +113,31 @@ class _NativeProducer(_Producer):
 
     # -- the pump ---------------------------------------------------------------------
     def busy(self) -> bool:
+        """Work the pump polls for every POLL_MS: copies or chunks in flight, a held
+        CONTROLS, series values to hand over, or a scene frame waiting for room in its
+        link (pump_native's wait of 4 ms). A scene frame that waits for its rate is not
+        busy work: the pump sleeps until it is due (wait_ms)."""
         if self.ring.pending or (self.controls is not None and self.controls.holding()):
+            return True
+        sc = self.ring.__dict__.get("scenes")                       # 3.2 draft
+        if sc is not None and (sc.pending or (sc.native_wait is not None and
+                                              sc.native_wait * 1000.0 <= POLL_MS)):
             return True
         for st in list(self.ring.series.values()):
             if st.q:
                 return True
         return False
+
+    def wait_ms(self) -> int:
+        """How long the pump waits for a control message or a wake: POLL_MS while
+        busy, else until the next rate-limited scene frame is due, at most IDLE_MS."""
+        if self.busy():
+            return POLL_MS
+        sc = self.ring.__dict__.get("scenes")
+        due = sc.native_wait if sc is not None else None
+        if due is None:
+            return IDLE_MS
+        return max(POLL_MS, min(IDLE_MS, math.ceil(due * 1000.0)))
 
     def pump_once(self) -> bool:
         ring = self.ring
@@ -146,6 +167,11 @@ class _NativeProducer(_Producer):
             busy = len(ring.pending) > 0
         for p in ready:
             self.deliver(p)
+        sc = ring.__dict__.get("scenes")                            # 3.2 draft: scene messages
+        if sc is not None:
+            if sc.pump():
+                busy = True
+            sc.native_wait = sc.pump_native(list(self.links), time.monotonic())
         for st in list(ring.series.values()):
             q = st.q
             floats, stamp = [], 0
@@ -284,14 +310,14 @@ class NativeServer(NetServer):
         p.pump_once()                                 # the view list before any viewer
         while not self.closed:
             try:
-                busy = p.busy()
-                self._idle = not busy
-                if not busy and p.busy():
+                wait = p.wait_ms()
+                self._idle = wait > POLL_MS               # a training thread's wake ends the wait
+                if self._idle and p.busy():
                     # queued between the check and the flag, by a call whose wake
-                    # saw the pump busy: poll instead of waiting IDLE_MS
+                    # saw the pump busy: poll instead of waiting
                     self._idle = False
-                    busy = True
-                msgs = nio.control(POLL_MS if busy else IDLE_MS)
+                    wait = POLL_MS
+                msgs = nio.control(wait)
                 self._idle = False
                 for kind, conn, frame in msgs:
                     self._on_control(kind, conn, frame)
@@ -308,8 +334,8 @@ class NativeServer(NetServer):
             link = _NativeLink(p, conn)
             if frame:                                 # what the peer announced (3.1)
                 info = json.loads(frame)
-                link.caps = frozenset(c for c in (_wire.CAP_CONTROLS, _wire.CAP_SELECTION)
-                                      if info.get(c))
+                link.caps = frozenset(c for c in (_wire.CAP_CONTROLS, _wire.CAP_SELECTION,
+                                                  _wire.CAP_SCENES) if info.get(c))
                 link.may_control = bool(info.get("control"))
             p.by_conn[conn] = link
             p.links.add(link)

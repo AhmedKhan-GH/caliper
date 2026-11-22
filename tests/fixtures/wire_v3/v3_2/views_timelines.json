@@ -1,0 +1,74 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 440,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 416,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 32
+  },
+  "meta": {
+    "session": "clp-4242-a1b2c3",
+    "timelines": [
+      {
+        "kind": "sequence",
+        "name": "step"
+      },
+      {
+        "epoch": true,
+        "kind": "time",
+        "name": "time"
+      },
+      {
+        "kind": "sequence",
+        "name": "episode"
+      }
+    ],
+    "views": [
+      {
+        "id": 3,
+        "kind": 4,
+        "name": "loss",
+        "recorded": [
+          {
+            "budget": {
+              "max_backfill": 4096
+            }
+          }
+        ],
+        "sources": []
+      },
+      {
+        "id": 9,
+        "kind": 7,
+        "name": "log",
+        "sources": []
+      },
+      {
+        "id": 10,
+        "kind": 8,
+        "name": "scores",
+        "sources": [
+          {
+            "dims": [
+              {
+                "name": "class",
+                "size": 3
+              }
+            ],
+            "dtype": "f32",
+            "name": "scores"
+          }
+        ]
+      }
+    ]
+  },
+  "meta_offset": 24,
+  "name": "v3_2/views_timelines",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "views"
+}

@@ -1,0 +1,141 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 504,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 366,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 4,
+    "type": 112
+  },
+  "meta": {
+    "color_per": "edge",
+    "colormap": 1,
+    "flags": 0,
+    "mode": "edges",
+    "part": "lines",
+    "path": "graph/edges",
+    "sections": [
+      {
+        "dtype": 0,
+        "name": "positions",
+        "shape": [
+          3,
+          3
+        ]
+      },
+      {
+        "dtype": 4,
+        "name": "indices",
+        "shape": [
+          3,
+          2
+        ]
+      },
+      {
+        "dtype": 0,
+        "name": "values",
+        "shape": [
+          3
+        ]
+      },
+      {
+        "dtype": 3,
+        "name": "stamp",
+        "shape": [
+          2
+        ]
+      }
+    ],
+    "seq": 21,
+    "stamp_ns": 81234567893573,
+    "sub": 2,
+    "view": "world",
+    "vmax": 1.0,
+    "vmin": 0.0,
+    "width": 1.5
+  },
+  "meta_offset": 40,
+  "name": "v3_2/scene_update_lines_edges",
+  "section_lengths": [
+    36,
+    24,
+    12,
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 36,
+      "name": "positions",
+      "offset": 408,
+      "shape": [
+        3,
+        3
+      ],
+      "values": [
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.5,
+        0.0,
+        2.0,
+        0.25
+      ]
+    },
+    {
+      "dtype": 4,
+      "encoding": 0,
+      "length": 24,
+      "name": "indices",
+      "offset": 448,
+      "shape": [
+        3,
+        2
+      ],
+      "values": [
+        0,
+        1,
+        1,
+        2,
+        2,
+        0
+      ]
+    },
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 12,
+      "name": "values",
+      "offset": 472,
+      "shape": [
+        3
+      ],
+      "values": [
+        0.25,
+        0.5,
+        1.0
+      ]
+    },
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 16,
+      "name": "stamp",
+      "offset": 488,
+      "shape": [
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}

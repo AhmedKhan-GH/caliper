@@ -2,6 +2,7 @@
 #include "live/live_controls.h"
 
 #include "caliper/live_net.h"
+#include "live/live_views_scene.h"   // scene views: links per batch
 #include "live/live_views_state.h"   // the views' payload maps and set_link (linked selections)
 
 #include <imgui_internal.h>   // SeparatorEx
@@ -908,6 +909,25 @@ void RunControls::link_views(CaliperCore* core, const std::function<uint64_t(con
     if (!core || !core->live_views) return;
     for (const auto& vp : core->live_views->views) {
         const caliper_live_views::View& v = *vp;
+        // A scene maps item spaces per batch (SCENE_UPDATE's `items`), not per axis of its VIEWS entry:
+        // it takes the newest selection of every space, and highlights the batches that map one.
+        if (v.kind == caliper_live_views::kKindScene) {
+            std::map<std::string, const LinkedSelection*> newest;
+            for (const LinkedSelection& s : selections_)
+                if (!newest[s.space] || s.seq > newest[s.space]->seq) newest[s.space] = &s;
+            std::string sig = "scene";
+            std::map<std::string, std::vector<int64_t>> by_space;
+            for (const auto& kv : newest) {
+                sig += "|" + kv.first + ":" + std::to_string(kv.second->seq);
+                if (!kv.second->items.empty())
+                    by_space[kv.first].assign(kv.second->items.begin(), kv.second->items.end());
+            }
+            auto it = linked_.find(v.name);
+            if (it != linked_.end() && it->second == sig) continue;
+            caliper_live_views::scene_link(core, v.name, by_space);
+            linked_[v.name] = sig;
+            continue;
+        }
         const std::string source = v.kind == CALIPER_LIVE_KIND_SERIES ? std::string() : shown_source(src_, key_of(v.name));
         // The newest selection of a space that one of the view's axes carries.
         const LinkedSelection* best = nullptr;

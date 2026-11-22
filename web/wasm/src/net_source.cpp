@@ -2,6 +2,7 @@
 #include "net_source.h"
 
 #include "live/live_series_ring.h"
+#include "live/scene_queue.h"
 
 #include "caliper/live.h"       // CALIPER_LIVE_KIND_*, CALIPER_LIVE_SNAP_*
 #include "caliper/live_net.h"
@@ -148,6 +149,7 @@ void NetSource::close(const char* reason) {
 void NetSource::on_open() {
     wire::Hello h;
     h.role = CALIPER_NET_ROLE_VIEWER;
+    h.capabilities = {CALIPER_NET_CAP_SCENES};   // the 3.2 draft: this viewer draws scenes
     Json sw = Json::object();
     sw.set("name", "caliper-views");
     sw.set("version", "0.1");
@@ -188,6 +190,19 @@ void NetSource::subscribe(View& v) {
     send_msg(s);
 }
 
+// The scene's queue passed its bound while the display was paused and was emptied: a SUBSCRIBE
+// on the same sub replaces the subscription, and the sender answers with the scene's state,
+// whose reset the queue waits for (live/scene_queue.h).
+void NetSource::resubscribe(View& v) {
+    v.request_id = next_request_++;
+    wire::Subscribe s;
+    s.sub = v.sub;
+    s.view = v.name;
+    s.request_id = v.request_id;
+    s.max_rate = opt_.max_rate;
+    send_msg(s);
+}
+
 void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
     last_rx_ms_ = now_ms();
     ++messages_;
@@ -197,6 +212,17 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
         closed_ = true;
         set_state("closed: the server sent a text message");
         return;
+    }
+    // A scene message is kept for the frame's poll, so it is decoded from a copy of its
+    // frame that lives as long as the message (the callback's bytes do not): the sections
+    // of an update and the matrices of entity transforms point into it.
+    std::shared_ptr<std::vector<uint8_t>> keep;
+    uint16_t type = 0;
+    if (n >= 10) std::memcpy(&type, data + 8, 2);
+    if (type == CALIPER_NET_MSG_SCENE_UPDATE || type == CALIPER_NET_MSG_SCENE_CLEAR ||
+        type == CALIPER_NET_MSG_SCENE_TRANSFORMS || type == CALIPER_NET_MSG_SCENE_CLASSES) {
+        keep = std::make_shared<std::vector<uint8_t>>(data, data + n);
+        data = keep->data();
     }
     wire::Message msg;
     const wire::DecodeResult r = wire::decode(data, n, &msg);
@@ -212,6 +238,14 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
         e.message = r.message;
         e.in_reply_to = r.type;
         send_msg(e);
+        // A scene message this viewer does not build is ignored, and its view says so.
+        if (r.type == CALIPER_NET_MSG_SCENE_UPDATE && r.error_code == CALIPER_NET_ERR_UNSUPPORTED) {
+            uint64_t sub = 0;
+            const Json* s = r.frame.meta.find("sub");
+            if (View* v = s && s->get_u64(&sub) ? by_sub((uint32_t)sub) : nullptr)
+                if (caliper_live::scene_queue_push(v->scene, caliper_live::SceneItem{nullptr, "ignored: " + r.message}))
+                    resubscribe(*v);
+        }
         return;
     }
 
@@ -253,6 +287,8 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
                 v.id = vi.id;
                 v.name = vi.name;
                 v.kind = (int32_t)vi.kind;
+                for (size_t i = 0; i < m.list.size() && i < m.views.size(); ++i)
+                    if (m.list[i].name == vi.name) v.offer = m.views.at(i);
                 if (opt_.kind && v.kind != opt_.kind) {
                     v.error = "the view's kind is " + std::to_string(v.kind) + ", not " +
                               std::to_string(opt_.kind);
@@ -335,6 +371,62 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
                                             (const float*)m.values.data, (uint64_t)m.values.count());
             v->series_stamp = m.stamp_ns;
             ++v->series_seq;
+        } else if constexpr (std::is_same_v<T, wire::SceneUpdate> || std::is_same_v<T, wire::SceneClear> ||
+                             std::is_same_v<T, wire::SceneTransforms> || std::is_same_v<T, wire::SceneClasses>) {
+            View* v = by_sub(m.sub);
+            if (!v || v->kind != CALIPER_NET_KIND_SCENE) return;
+            std::shared_ptr<const void> hold = keep;
+            std::vector<wire::Section> sections = r.frame.sections;
+            if constexpr (std::is_same_v<T, wire::SceneUpdate>) {
+                // A piece of a split update is kept until the update is whole, then queued as any update.
+                if (!m.split.is_null()) {
+                    wire::WholeUpdate whole;
+                    std::string err;
+                    const auto res = v->splits.add(m, &whole, &err);
+                    if (res == wire::SplitUpdates::Result::Pending) return;
+                    if (res != wire::SplitUpdates::Result::Whole) {
+                        if (res == wire::SplitUpdates::Result::Refused) {
+                            wire::Error e;
+                            e.code = CALIPER_NET_ERR_BAD_REQUEST;
+                            e.message = err;
+                            e.in_reply_to = r.type;
+                            e.sub = m.sub;
+                            e.view = m.view;
+                            send_msg(e);
+                        }
+                        const std::string note = res == wire::SplitUpdates::Result::Refused
+                                                     ? "ignored: " + err
+                                                     : std::string("ignored: a piece of a split update whose first piece is not held");
+                        if (caliper_live::scene_queue_push(v->scene, caliper_live::SceneItem{nullptr, note})) resubscribe(*v);
+                        return;
+                    }
+                    m = std::move(whole.update);
+                    hold = whole.keep;
+                    sections = m.arrays;
+                }
+                // A form the scene view does not draw yet (an encoded image) is answered ERROR
+                // unsupported and noted, not queued; a section it does not use (a stamp) is noted.
+                const std::string why = caliper_live::scene_not_drawn(m);
+                if (!why.empty()) {
+                    wire::Error e;
+                    e.code = CALIPER_NET_ERR_UNSUPPORTED;
+                    e.message = why;
+                    e.in_reply_to = r.type;
+                    e.sub = m.sub;
+                    e.view = m.view;
+                    send_msg(e);
+                    if (caliper_live::scene_queue_push(v->scene, caliper_live::SceneItem{nullptr, "ignored: " + why}))
+                        resubscribe(*v);
+                    return;
+                }
+                const std::string ignored = caliper_live::scene_ignored(m, sections);
+                if (!ignored.empty() && caliper_live::scene_queue_push(v->scene, caliper_live::SceneItem{nullptr, ignored}))
+                    resubscribe(*v);
+            }
+            caliper_live::SceneItem item;
+            item.keep = hold;
+            item.msg = std::move(m);
+            if (caliper_live::scene_queue_push(v->scene, std::move(item))) resubscribe(*v);
         } else if constexpr (std::is_same_v<T, wire::Ping>) {
             wire::Pong pong;
             pong.nonce = m.nonce;
@@ -470,6 +562,34 @@ bool NetSource::take(uint64_t key, uint64_t after_seq, caliper_live::Snapshot* o
     *out = s;
     out->stamp_ns = clock_.to_viewer(s.stamp_ns);
     return true;
+}
+
+bool NetSource::data_view_of(uint64_t key, Json* resolved, Json* offer) {
+    View* v = by_id(key);
+    if (!v) return false;
+    if (resolved && !v->data_view.empty()) Json::parse(v->data_view.data(), v->data_view.size(), resolved, nullptr);
+    if (offer) *offer = v->offer;
+    return true;
+}
+
+bool NetSource::take_scene(uint64_t key, std::vector<caliper_live::SceneItem>* out) {
+    View* v = by_id(key);
+    if (!v || v->kind != CALIPER_NET_KIND_SCENE || v->scene.items.empty()) return false;
+    for (auto& it : v->scene.items) out->push_back(std::move(it));
+    v->scene.items.clear();
+    return true;
+}
+
+void NetSource::stop_scene(uint64_t key) {
+    View* v = by_id(key);
+    if (!v || v->kind != CALIPER_NET_KIND_SCENE || v->scene.stopped) return;
+    v->scene.items.clear();
+    v->scene.stopped = true;   // what is still in flight is dropped
+    if (v->sub) {
+        wire::Unsubscribe u;
+        u.sub = v->sub;
+        send_msg(u);
+    }
 }
 
 const caliper_live::Snapshot* NetSource::shown(const std::string& name) const {

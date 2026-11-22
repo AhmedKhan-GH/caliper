@@ -180,7 +180,9 @@ void map_f32_to_rgba8(const float* src, int w, int h, const uint32_t* lut,
             idx = 0;   // NaN -> index 0, never a misinterpreted texel
         } else {
             float t = (denom != 0.0f) ? (v - vmin) / denom : 0.0f;
-            if (t < 0.0f) t = 0.0f;
+            // A NaN t (an infinite end or span: inf / inf, or inf - inf) is index 0 too;
+            // converting it to int below would be undefined.
+            if (!(t >= 0.0f)) t = 0.0f;
             else if (t > 1.0f) t = 1.0f;
             idx = (int)(t * 255.0f + 0.5f);
             if (idx < 0) idx = 0;
@@ -323,7 +325,7 @@ CaliperTextureId TensorBridge::texture_from_tensor(const CaliperTensor* t, uint3
     const uint64_t tex = renderer_.tex_create_rgba8(w, h);
     if (tex == 0)                               { bridge_log("tex_create failed"); return 0; }
     // The PUBLIC CaliperTextureId is the renderer's ImGui-compatible handle
-    // (§5.4): the value imgui_impl_{metal,opengl3} bind directly as ImTextureID.
+    // (§5.4): the value imgui_impl_metal or imgui_impl_vulkan binds as ImTextureID.
     // The internal renderer id (`tex`) stays in Entry for upload/release.
     const CaliperTextureId id = renderer_.tex_imtexture_id(tex);
     if (id == 0) { renderer_.tex_release(tex); bridge_log("direct: null imtexture id"); return 0; }
@@ -990,10 +992,14 @@ bool TensorBridge::upload_into(Entry& e, const CaliperTensor* t) {
     // A backend that colormaps host memory on its GPU (the browser's WebGPU
     // renderer, web/wasm) takes the f32 bytes as they are; every other backend
     // returns false and keeps the CPU staging below.
+    // Either way the host bytes are copied once into GPU memory, an upload the
+    // renderer's copy counters count (HostRenderer::note_copy): the f32 values
+    // here, the converted RGBA8 texels below. The device path above makes none.
     if (e.mapped &&
         renderer_.tex_update_mapped_from_host(e.tex, (const float*)t->data, e.w, e.h,
                                               colormap_lut(e.colormap), e.vmin, e.vmax)) {
         last_upload_path_ = renderer_.last_device_path();
+        renderer_.note_copy((uint64_t)e.w * (uint64_t)e.h * sizeof(float));
         return true;
     }
     last_upload_path_ = "cpu-staged";
@@ -1003,7 +1009,9 @@ bool TensorBridge::upload_into(Entry& e, const CaliperTensor* t) {
                          colormap_lut(e.colormap), e.vmin, e.vmax, staging.data());
     else
         expand_u8_to_rgba8((const uint8_t*)t->data, e.w, e.h, e.channels, staging.data());
-    return renderer_.tex_upload_rgba8(e.tex, staging.data(), e.w, e.h);
+    if (!renderer_.tex_upload_rgba8(e.tex, staging.data(), e.w, e.h)) return false;
+    renderer_.note_copy(staging.size());
+    return true;
 }
 
 }  // namespace caliper_host

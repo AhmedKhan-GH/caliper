@@ -18,7 +18,7 @@ Each revision is additive. The earlier struct prefix stays frozen, and a revisio
 !!! info "Platform support"
     Points (`v1`) run on Metal and Vulkan. Primitives, textures, and instanced transforms run on Metal and Vulkan with CUDA.
     Both backends match one shared CPU reference byte for byte.
-    If a backend lacks a path, the matching caps bit is unset and every entry point is inert.
+    If a backend lacks a path, or the host has no renderer bound, the matching caps bit is unset and every entry point is inert.
     Ship a CPU fallback for that case, as in the worked example below. An absent capability never gives a wrong image.
 
 ## Non-Goals

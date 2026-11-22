@@ -14,7 +14,8 @@
 <script type="module">
   // Loads the module beside this page onto the canvas. The page's own URL
   // names the stream: ?token=T connects to /v3/stream on this page's host,
-  // or ?src=ws://... names another one; ?view= and ?kind= pick one view.
+  // or ?src=ws://... names another one; ?view= and ?kind= pick one view;
+  // ?compat=1 asks for a compatibility-mode WebGPU device.
   // The module publishes its counters as module.caliperStats.
   import createCaliperViews from './caliper-views.js';
   const q = new URLSearchParams(location.search);
@@ -23,7 +24,8 @@
   globalThis.caliperDataViews = [];
   globalThis.caliperViews = await createCaliperViews({
     canvas: document.getElementById('views'),
-    caliperConfig: { src, view: q.get('view') || '', kind: q.get('kind') || '' },
+    caliperConfig: { src, view: q.get('view') || '', kind: q.get('kind') || '',
+                     compat: q.get('compat') ? 'true' : 'false' },
     onDataView: (view, dataView) => globalThis.caliperDataViews.push({ view, dataView }),
     print: (t) => console.log(t),
     printErr: (t) => console.error(t),

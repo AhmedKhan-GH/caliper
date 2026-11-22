@@ -26,6 +26,17 @@ export interface ViewFacts {
   n?: number; dims?: number; classes?: number; values?: boolean;
   end?: number; last?: number | null;
   bins?: number; total?: number | null;
+  entities?: number; items?: number; copied?: number; gpu_ms?: number | null; notice?: string;
+}
+
+/** A scene's line, as the native scene view's header writes it (src/host/live/live_scene.cpp). */
+export function sceneInfo(entities: number, items: number, copied: number, gpuMs: number | null): string {
+  const n = (v: number) => v.toLocaleString('en-US');
+  const bytes = (b: number) => (b < 1024 ? `${b} B` : b < 1024 * 1024 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`);
+  let s = `${n(entities)} ${entities === 1 ? 'entity' : 'entities'}  ${n(items)} items`;
+  if (copied > 0) s += `  copied ${bytes(copied)}`;
+  if (typeof gpuMs === 'number' && gpuMs >= 0) s += `  gpu ${gpuMs.toFixed(2)} ms`;
+  return s;
 }
 
 /** The header line for a view's facts, or null for facts of an unknown kind. */
@@ -37,6 +48,7 @@ export function factsInfo(f: ViewFacts): string | null {
     case 'points': return pointsInfo(num(f.n), num(f.dims), f.classes ?? 0, !!f.values);
     case 'series': return seriesInfo(num(f.end), num(f.last));
     case 'histogram': return histogramInfo(num(f.bins), num(f.lo), num(f.hi), num(f.total));
+    case 'scene': return f.notice ?? sceneInfo(num(f.entities), num(f.items), num(f.copied), f.gpu_ms ?? null);
     default: return null;
   }
 }

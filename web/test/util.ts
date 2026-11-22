@@ -38,11 +38,6 @@ export async function serve(root: string, extra?: (url: string) => string | null
   return { origin: `http://127.0.0.1:${port}`, close: () => srv.close() };
 }
 
-/** The render path a project expects for heatmaps, images and points. */
-export function gpuPath(info: TestInfo): 'webgpu' | 'canvas2d' {
-  return info.project.name === 'canvas2d' ? 'canvas2d' : 'webgpu';
-}
-
 export const test = base.extend<{ harness: Page }, { server: string }>({
   server: [async ({}, use) => {
     const s = await serve(WEB, (name) => (name === '/caliper-views-loader.js' ? path.join(WEB, 'test', 'stub-loader.js') : null));
@@ -210,7 +205,7 @@ type ViewEl = HTMLElement & { debugState(): Record<string, unknown>; settled(): 
 /**
  * Waits until the views matching selector have drawn what they hold. A
  * TypeScript view draws on demand: settled() resolves once no frame is
- * pending and the GPU has finished, and while data keeps arriving faster than
+ * pending, and while data keeps arriving faster than
  * a slow machine draws, a frame drawn after this call is enough (its frames
  * count grows). A WebAssembly view's module draws on every
  * animation frame and publishes its frame count at the end of a frame: the

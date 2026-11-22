@@ -38,7 +38,8 @@ const uint32_t* colormap_lut(int32_t colormap);
 // Colormap a row-major (h,w) f32 buffer through lut256 into a tightly-packed
 // RGBA8 dst (w*h*4 bytes). Index rule, byte-identical to the Metal shader:
 //   idx = clamp((v - vmin)/(vmax - vmin), 0, 1) * 255 + 0.5   (truncated)
-// with vmax==vmin -> t=0, and NaN -> index 0 (never a misinterpreted texel).
+// with vmax==vmin -> t=0, and NaN -> index 0 (never a misinterpreted texel);
+// a NaN t, from an infinite end or span, is index 0 as well.
 void map_f32_to_rgba8(const float* src, int w, int h,
                       const uint32_t* lut256, float vmin, float vmax,
                       uint8_t* dst);
@@ -51,7 +52,6 @@ void map_f32_to_rgba8(const float* src, int w, int h,
 // number of thresholds it has passed. Mode 0 is a range whose width is zero,
 // infinite or NaN, where the reference gives every value index 0. NaN is
 // index 0 in every mode. Writes T[0..255] (T[0] unused) and returns the mode.
-// web/src/render/colormap.ts (colormapThresholds) derives the same.
 uint32_t colormap_thresholds(float vmin, float vmax, float* T);
 
 // Expand a row-major (h,w,c) u8 buffer (c in 1..4) into tightly-packed RGBA8:
@@ -162,8 +162,8 @@ private:
     // second bool was the reviewed defect, do not reintroduce it.
     enum class GeomRev : uint32_t { V1_1, V1_2, V1_3 };
     // Per-texture bookkeeping. The public CaliperTextureId handed to callers is
-    // the renderer's ImGui handle (tex_imtexture_id — what imgui_impl_{metal,
-    // opengl3} bind as ImTextureID; §5.4), and this table is keyed by it. The
+    // the renderer's ImGui handle (tex_imtexture_id — what imgui_impl_metal or
+    // imgui_impl_vulkan binds as ImTextureID; §5.4), and this table is keyed by it. The
     // internal renderer id (`tex` below) drives upload/release and never leaves
     // the host. Entry adds the shape/dtype/colormap needed to re-upload on
     // update_texture.

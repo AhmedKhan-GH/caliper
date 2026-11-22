@@ -2,6 +2,7 @@ nav:
   - index.md
   - Tutorials:
       - notebook-training-runs.md
+      - loss-landscape.md
   - Guides:
       - script-attachment.md
       - stream-links.md
@@ -19,4 +20,5 @@ nav:
       - network-streaming-calls.md
       - data-view-calls.md
       - run-control-calls.md
+      - scene-calls.md
       - viewer.md

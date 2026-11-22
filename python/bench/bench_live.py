@@ -9,6 +9,7 @@ loss.item() every 100 steps (identical in every row) stands in for logging.
 
   bench_live.py row --mode {baseline,sampler,nosampler,unattached,...} --size S [--device mps|cpu]
   bench_live.py table [--size 1024] [--repeat 2]   -> results/S-table-<dev><S>.txt
+  bench_live.py table --kind points --size N       -> results/S-table-points-<dev><N>.txt
   bench_live.py noviewer [--size 1024]             -> results/S-noviewer.txt  (near-free show)
   bench_live.py mem [--size 2048] [--n 200]        -> results/S-mem-<S>.txt
   bench_live.py liveness                           -> results/S-liveness.txt + PNGs
@@ -23,10 +24,25 @@ runs in a fresh process: 1 s warm-up (plus however long the viewer takes to
 attach), then a 10 s measured window ending with a device sync. Latency comes
 from the viewer's --latency-log (step-to-screen per update, viewer
 CLOCK_UPTIME_RAW at encode minus the show() stamp), restricted to the measured
-window. Session files go to a private $CALIPER_DATA_DIR (a temp dir).
+window. Session files go to a private $CALIPER_DATA_DIR (a temp dir), and so do the
+viewer's log and latency samples of each row unless CALIPER_BENCH_KEEP_RAW is set,
+which writes them to results/S-raw-<tag>-*.txt as before.
 
 The public path (caliper/__init__.py routing, caliper/_ring.py SnapshotRing,
 caliper/live.py SessionTransport) is what every row measures.
+
+--kind points (the points row): the shown tensor is P, an (N, 3) f32 cloud on
+the same device moved in place every step (P.add_(0.001)) and shown with
+caliper.points(P); --size is N (100,000, 1,000,000 and 4,000,000 in the
+baseline). The modes and controls are the same.
+
+The viewer runs headless (--headless: an offscreen canvas, no window) unless
+--window is given, and always with --stats, which turns on its frame
+statistics. Each viewer row then also reports, over the 2 s stats windows that
+lie inside the measured window: the frame time p50, p99 and maximum, the GPU
+time of an update and of a view draw (p50 and p99, from the command buffers'
+start and end times), and the copies per frame and bytes copied of the viewer
+(docs/applets/rendering.md, "Copy Counters and Frame Statistics").
 """
 from __future__ import annotations
 
@@ -172,8 +188,42 @@ def view_stats(tr, name):
 # ---------------------------------------------------------------------------
 # one row
 # ---------------------------------------------------------------------------
+def window_stats(stats_lines: list[dict], t_start: int, t_end: int, view: str) -> dict:
+    """Frame and GPU times, and copies, over the viewer's 2 s stats windows that
+    lie inside [t_start, t_end] (CLOCK_UPTIME_RAW ns, the stamp of each line)."""
+    inside = [d for d in stats_lines
+              if "now_ns" in d and "frame_ms_p50" in d
+              and d["now_ns"] - 2.2e9 >= t_start and d["now_ns"] <= t_end]
+    if not inside:
+        return {"stats_windows": 0}
+    med = lambda k: statistics.median(d[k] for d in inside)
+    upd = [d for d in inside if d.get("gpu_update_n", 0) > 0]
+    drw = [d for d in inside if d.get("gpu_draw_n", 0) > 0]
+    frames = sum(d.get("copy_frames", 0) for d in inside)
+    copies = sum(d.get("copies", 0) for d in inside)
+    nbytes = sum(d.get("copy_bytes", 0) for d in inside)
+    pv = [d.get("per_view", {}).get(view, {}) for d in (inside[0], inside[-1])]
+    v_copies = int(pv[1].get("copies", 0)) - int(pv[0].get("copies", 0)) if all(pv) else None
+    return {
+        "stats_windows": len(inside),
+        "frame_ms_p50": med("frame_ms_p50"), "frame_ms_p99": med("frame_ms_p99"),
+        "frame_ms_max": max(d["frame_ms_max"] for d in inside),
+        "gpu_update_ms_p50": statistics.median(d["gpu_update_ms_p50"] for d in upd) if upd else None,
+        "gpu_update_ms_p99": statistics.median(d["gpu_update_ms_p99"] for d in upd) if upd else None,
+        "gpu_draw_ms_p50": statistics.median(d["gpu_draw_ms_p50"] for d in drw) if drw else None,
+        "gpu_draw_ms_p99": statistics.median(d["gpu_draw_ms_p99"] for d in drw) if drw else None,
+        "gpu_frame_ms_p50": med("gpu_frame_ms_p50"), "gpu_frame_ms_p99": med("gpu_frame_ms_p99"),
+        "copy_frames": frames, "copies": copies, "copy_bytes": nbytes,
+        "copies_per_frame": copies / frames if frames else None,
+        "copy_bytes_per_frame": nbytes / frames if frames else None,
+        # the shown view's copies between the first and the last window kept (that
+        # first window's own copies are not in the difference)
+        "view_copies": v_copies,
+    }
+
+
 def run_row(mode: str, size: int, device: str, seconds: float, warmup: float, tag: str,
-            sync_every: int = 100) -> dict:
+            sync_every: int = 100, kind: str = "heatmap", headless: bool = True) -> dict:
     import torch
     import torch.nn.functional as F
     ts = load_train_show()
@@ -182,7 +232,8 @@ def run_row(mode: str, size: int, device: str, seconds: float, warmup: float, ta
     torch.manual_seed(0)
     model = ts.TinyCNN().to(dev)
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
-    W = torch.randn(size, size, device=dev)
+    points = kind == "points"
+    W = torch.randn(size, 3, device=dev) if points else torch.randn(size, size, device=dev)
     use_show = mode not in ("baseline", "record", "record60", "idleviewer", "record60viewer", "recordviewer")
     use_viewer = mode not in ("baseline", "record", "record60", "unattached")
     rate = None if mode in ("sampler", "spike2", "unattached") else 0.0
@@ -190,14 +241,18 @@ def run_row(mode: str, size: int, device: str, seconds: float, warmup: float, ta
     if mode == "spike2":   # the spike's train_show.py views: fc1.weight + conv1 activation mosaic
         model.conv1.register_forward_hook(lambda m, i, o: acts.__setitem__("conv1", o.detach()))
     RESULTS.mkdir(exist_ok=True)
-    vlog = RESULTS / f"S-raw-{tag}-viewer.txt"
-    llog = RESULTS / f"S-raw-{tag}-latency.txt"
+    # The viewer's log and latency samples are read back below. They go to the
+    # private data folder unless CALIPER_BENCH_KEEP_RAW is set: a row's tag can
+    # repeat a committed file's name in results/.
+    raw = RESULTS if os.environ.get("CALIPER_BENCH_KEEP_RAW") else Path(os.environ["CALIPER_DATA_DIR"])
+    vlog = raw / f"S-raw-{tag}-viewer.txt"
+    llog = raw / f"S-raw-{tag}-latency.txt"
     tr = None
     if use_viewer:
         for p in (vlog, llog):
             p.unlink(missing_ok=True)
-        tr = open_session(("--stats", "--latency-log", str(llog), "--exit-after", str(int(warmup + seconds + 60))),
-                          str(vlog))
+        vargs = ("--stats", "--latency-log", str(llog), "--exit-after", str(int(warmup + seconds + 60)))
+        tr = open_session((("--headless",) if headless else ()) + vargs, str(vlog))
     elif mode == "unattached":
         tr = open_session(launch=False)
 
@@ -236,6 +291,8 @@ def run_row(mode: str, size: int, device: str, seconds: float, warmup: float, ta
                 if mode == "spike2":
                     r = caliper.show(model.fc1.weight, name="fc1.weight", cmap="rdbu", rate=rate)
                     caliper.show(acts["conv1"], name="act", rate=rate)
+                elif points:
+                    r = caliper.points(W, name="W", rate=rate)
                 else:
                     r = caliper.show(W, name="W", cmap="rdbu", rate=rate)
                 b = time.perf_counter()
@@ -253,7 +310,8 @@ def run_row(mode: str, size: int, device: str, seconds: float, warmup: float, ta
         loop(0.5, False)
     if use_show and use_viewer:
         src0 = (lambda: model.fc1.weight) if mode == "spike2" else (lambda: W)
-        attach_s = wait_viewer_attached(tr, step=lambda: (step(), caliper.show(src0(), name=vname, rate=rate)))
+        show0 = caliper.points if points else caliper.show
+        attach_s = wait_viewer_attached(tr, step=lambda: (step(), show0(src0(), name=vname, rate=rate)))
         loop(0.5, False)
     alloc0 = torch.mps.current_allocated_memory() if dev.type == "mps" else 0
     rss0 = mem_of(os.getpid())
@@ -265,7 +323,8 @@ def run_row(mode: str, size: int, device: str, seconds: float, warmup: float, ta
     load1 = os.getloadavg()[0]
     alloc1 = torch.mps.current_allocated_memory() if dev.type == "mps" else 0
     rss1 = mem_of(os.getpid())
-    res = {"tag": tag, "mode": mode, "sync_every": sync_every, "size": size, "device": device, "seconds": round(el, 3),
+    res = {"tag": tag, "mode": mode, "kind": kind, "viewer": "headless" if headless else "window",
+           "sync_every": sync_every, "size": size, "device": device, "seconds": round(el, 3),
            "steps": steps, "steps_per_s": steps / el, "torch": torch.__version__,
            "mps_alloc_delta_mb": (alloc1 - alloc0) / 2**20, "rss_delta_mb": rss1[0] - rss0[0],
            "loadavg_1m_start_end": [round(load0, 2), round(load1, 2)]}
@@ -317,6 +376,7 @@ def run_row(mode: str, size: int, device: str, seconds: float, warmup: float, ta
             "viewer_rss_mb_first_last": [vrss[0], vrss[-1]] if vrss else None,
             "viewer_footprint_mb_first_last": [vfp[0], vfp[-1]] if vfp else None,
         })
+        res.update(window_stats(stats_lines, t_start, t_end, vname))
     if mode in ("idleviewer", "record60viewer", "recordviewer"):
         res["viewer_attach_s"] = attach_s
         close_session(tr)
@@ -340,46 +400,66 @@ TABLE_MODES = ("baseline", "unattached", "record60", "sampler", "record", "nosam
 MATCHED = {"sampler": "record60", "nosampler": "record", "spike2": "record60"}
 
 
+def _f(v, spec):
+    return "-" if v is None else format(v, spec)
+
+
 def fmt_row(r, base, ctl):
     """base: plain baseline steps/s; ctl: steps/s of the commit-cadence-matched control."""
     pb = 100.0 * r["steps_per_s"] / base if base else float("nan")
     pc = 100.0 * r["steps_per_s"] / ctl if ctl else float("nan")
-    head = f"| {r['device']} | {r['size']}² | {r['mode']} | {r['steps_per_s']:.1f} | {pb:.1f} % "
+    size = f"{r['size']:,} pts" if r.get("kind") == "points" else f"{r['size']}²"
+    head = f"| {r['device']} | {size} | {r['mode']} | {r['steps_per_s']:.1f} | {pb:.1f} % "
     if r["mode"] == "unattached":
         return head + (f"| - | - | {r['show_unattached_us_median']:.2f} (unattached) | - | - "
-                       f"| {r['snapshots_in_window']} / - | no viewer |")
+                       f"| {r['snapshots_in_window']} / - | no viewer | - | - | - | - |")
     if "show_snapshot_us_median" not in r:
-        return head + "| - | - | - | - | - | - | - |"
+        return head + "| - | - | - | - | - | - | - | - | - | - | - |"
+    if r.get("stats_windows"):
+        gpu = (f"{_f(r.get('gpu_update_ms_p50'), '.3f')} / {_f(r.get('gpu_update_ms_p99'), '.3f')}"
+               if r.get("gpu_update_ms_p50") is not None else
+               f"draw {_f(r.get('gpu_draw_ms_p50'), '.3f')} / {_f(r.get('gpu_draw_ms_p99'), '.3f')}")
+        extra = (f"| {r['frame_ms_p50']:.2f} / {r['frame_ms_p99']:.2f} | {gpu} "
+                 f"| {_f(r.get('gpu_frame_ms_p50'), '.3f')} | {_f(r.get('copies_per_frame'), '.2f')} "
+                 f"({_f(r.get('copy_bytes_per_frame'), '.0f')} B) |")
+    else:
+        extra = "| - | - | - | - |"
     return (head + f"| {pc:.1f} % | {r['show_snapshot_us_median']:.1f} | {r['show_skipped_us_median']:.1f} "
             f"| {r['latency_ms_median']:.2f} / {r['latency_ms_p95']:.2f} (n={r['latency_n']}) "
             f"| {r['viewer_fps_median']:.1f} | {r['snapshots_in_window']} / {r['busy_dropped_total']} "
-            f"| {','.join(r['viewer_paths'])} |")
+            f"| {','.join(r['viewer_paths'])} " + extra)
 
 
 def load_tag(r):
     return f" load {r['loadavg_1m_start_end'][0]:.1f}->{r['loadavg_1m_start_end'][1]:.1f}"
 
 
-def run_table(device, size, modes, repeat, seconds, warmup, out_name):
+def run_table(device, size, modes, repeat, seconds, warmup, out_name, kind="heatmap", headless=True,
+              note=""):
     """One size per invocation (keeps a run under ~2 min); modes interleaved per repeat."""
     RESULTS.mkdir(exist_ok=True)
     rows = []
     for rep in range(1, repeat + 1):
         for m in modes:
-            tag = f"{device}{size}-{m}-r{rep}"
+            tag = f"{'points-' if kind == 'points' else ''}{device}{size}-{m}-r{rep}"
             print(f"[table] {tag} ...", flush=True)
             r = run_child(["row", "--mode", m, "--size", str(size), "--device", device,
-                           "--seconds", str(seconds), "--warmup", str(warmup), "--tag", tag])
+                           "--seconds", str(seconds), "--warmup", str(warmup), "--tag", tag,
+                           "--kind", kind] + ([] if headless else ["--window"]))
             r["repeat"] = rep
             rows.append(r)
-            print(f"    {r['steps_per_s']:.1f} steps/s", flush=True)
+            print(f"    {r['steps_per_s']:.1f} steps/s{load_tag(r)}", flush=True)
     hdr = ("| device | W | mode | steps/s | % of baseline | % of commit-matched control "
            "| show µs snapshot (median) | show µs skipped (median) | step-to-screen ms median / p95 "
-           "| viewer fps | snapshots / busy-dropped | viewer path |\n"
-           "|---|---|---|---|---|---|---|---|---|---|---|---|")
-    lines = [f"# caliper.show -> live session (S) {device} {size}², {time.strftime('%Y-%m-%d %H:%M:%S')}, "
+           "| viewer fps | snapshots / busy-dropped | viewer path | frame ms p50 / p99 "
+           "| GPU ms update p50 / p99 | GPU ms frame p50 | viewer copies per frame (bytes) |\n"
+           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    what = f"caliper.points -> live session (S) {device} {size:,} points" if kind == "points" else \
+        f"caliper.show -> live session (S) {device} {size}²"
+    lines = [f"# {what}, {time.strftime('%Y-%m-%d %H:%M:%S')}, "
              f"{seconds:.0f} s measured after {warmup:.0f} s warm-up, {repeat} repeat(s); "
-             f"matched control: record60 for sampler/spike2, record for nosampler", hdr]
+             f"matched control: record60 for sampler/spike2, record for nosampler; viewer "
+             f"{'headless (offscreen canvas)' if headless else 'windowed'}{note}", hdr]
     for rep in range(1, repeat + 1):
         by = {r["mode"]: r["steps_per_s"] for r in rows if r["repeat"] == rep}
         for r in rows:
@@ -721,7 +801,13 @@ def main():
     r.add_argument("--warmup", type=float, default=1.0)
     r.add_argument("--tag", default="row")
     r.add_argument("--sync-every", type=int, default=100, help="loss.item() every N steps")
+    r.add_argument("--kind", choices=["heatmap", "points"], default="heatmap")
+    r.add_argument("--window", action="store_true", help="a windowed viewer instead of a headless one")
     t = sub.add_parser("table")
+    t.add_argument("--kind", choices=["heatmap", "points"], default="heatmap",
+                   help="points: caliper.points of an (N, 3) cloud, --size N")
+    t.add_argument("--window", action="store_true", help="a windowed viewer instead of a headless one")
+    t.add_argument("--note", default="", help="appended to the table's title line (machine, build)")
     t.add_argument("--size", type=int, default=1024)
     t.add_argument("--device", default="mps")
     t.add_argument("--modes", nargs="+", default=list(TABLE_MODES))
@@ -748,11 +834,13 @@ def main():
     nv.add_argument("--n", type=int, default=100_000)
     a = ap.parse_args()
     if a.cmd == "row":
-        res = run_row(a.mode, a.size, a.device, a.seconds, a.warmup, a.tag, a.sync_every)
+        res = run_row(a.mode, a.size, a.device, a.seconds, a.warmup, a.tag, a.sync_every, a.kind,
+                      headless=not a.window)
         print("RESULT " + json.dumps(res), flush=True)
     elif a.cmd == "table":
         run_table(a.device, a.size, a.modes, a.repeat, a.seconds, a.warmup,
-                  a.out or f"S-table-{a.device}{a.size}.txt")
+                  a.out or f"S-table-{'points-' if a.kind == 'points' else ''}{a.device}{a.size}.txt",
+                  kind=a.kind, headless=not a.window, note=a.note)
     elif a.cmd == "diag":
         if a.matched:
             run_diag(a.size, a.repeat, a.seconds, a.warmup, DIAG2_MODES, "diag-matched")

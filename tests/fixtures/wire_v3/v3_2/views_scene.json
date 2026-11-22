@@ -1,0 +1,40 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 209,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 185,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 32
+  },
+  "meta": {
+    "session": "clp-4242-a1b2c3",
+    "views": [
+      {
+        "id": 5,
+        "kind": 6,
+        "name": "landscape",
+        "scene": {
+          "space": "3d",
+          "units": "",
+          "up": "+z"
+        },
+        "sources": []
+      },
+      {
+        "id": 6,
+        "kind": 4,
+        "name": "plane share",
+        "sources": []
+      }
+    ]
+  },
+  "meta_offset": 24,
+  "name": "v3_2/views_scene",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "views"
+}

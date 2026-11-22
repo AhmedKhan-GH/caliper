@@ -74,7 +74,6 @@ it, and [SDK package](docs/applets/sdk-package.md) describes the package.
 - **Git** (for submodule management)
 - **CMake 3.25 or later** and **Ninja** (the presets use the Ninja generator; configuring without a preset needs CMake 3.18)
 - **A C++20 compiler** for the host and the applets
-- **OpenGL**, which the host uses as its fallback renderer and which the build still requires
 
 ### Windows
 - **Visual Studio 2022** (MSVC v143)
@@ -173,8 +172,7 @@ caliper/
 ## Dependencies
 
 **System:**
-- OpenGL (fallback renderer)
-- Metal on macOS; the Vulkan loader on Windows (loaded at run time)
+- Metal on macOS; the Vulkan loader on Windows (loaded at run time). There is no fallback renderer yet: where neither starts, Caliper refuses with a message that says why
 
 **Submodules (built from source):**
 - [GLFW](https://github.com/glfw/glfw) - Window management
@@ -186,7 +184,6 @@ caliper/
 - [ImGuiColorTextEdit](https://github.com/BalazsJako/ImGuiColorTextEdit) - Text editor widget
 - [ImTerm](https://github.com/Organic-Code/ImTerm) - Terminal widget
 - [ImGuiFileDialog](https://github.com/aiekick/ImGuiFileDialog) - File dialog
-- [GLEW](https://github.com/nigels-com/glew) - OpenGL loader (downloaded and extracted on Windows)
 - [DuckDB](https://github.com/duckdb/duckdb) - The host's query engine
 - [llama.cpp](https://github.com/ggerganov/llama.cpp) - GGUF inference, used by the archived opengllama applet
 - [slang](https://github.com/MikePopoloski/slang) - SystemVerilog front end
@@ -224,7 +221,7 @@ Everything is handled by git submodules and CMake. Run `git submodule update --i
 |-------|----------|
 | **CUDA not available** | Check the configure output for the `CUDA support` line. `USE_CUDA` turns itself OFF when CMake finds no CUDA toolkit. Check that the CUDA DLLs sit next to the executable in `cmake-build-release/`. |
 | **Submodules missing** | Run `git submodule update --init --recursive` |
-| **OpenGL not found** | Update graphics drivers |
+| **The Metal renderer could not start** or **the Vulkan renderer could not start** | The message gives the reason. Caliper needs a working Metal device on macOS or a Vulkan driver on Windows, and has no fallback renderer until the WebGPU fallback through Dawn lands. On Windows, update the graphics driver; a remote desktop session may have no Vulkan |
 | **LibTorch download fails** | Check internet; manually download the archive from the PyTorch website and extract it to the folder named in the LibTorch section |
 | **Wrong LibTorch variant** | Delete the LibTorch folder and configure again; see the LibTorch section |
 | **MPS not available** | Ensure Apple Silicon Mac, Metal compiler available (`xcrun --find metal`) |
@@ -270,7 +267,6 @@ Caliper uses the following open-source libraries. Their license texts can be fou
 | [ImGuiColorTextEdit](https://github.com/BalazsJako/ImGuiColorTextEdit) | MIT | 2017 BalazsJako | Use, modify, and distribute freely provided the license notice is included. |
 | [ImTerm](https://github.com/Organic-Code/ImTerm) | MIT | 2018 Lucas Lazare | Use, modify, and distribute freely provided the license notice is included. |
 | [ImGuiFileDialog](https://github.com/aiekick/ImGuiFileDialog) | MIT | 2018-2025 Stephane Cuillerdier (Aiekick) | Use, modify, and distribute freely provided the license notice is included. |
-| [GLEW](https://github.com/nigels-com/glew) | BSD 3-Clause / MIT | 2002-2007 Milan Ikits, Marcelo E. Magallon, Lev Povalahev | Use, modify, and distribute freely provided the license notice is included and the project name is not used for endorsement. |
 | [DuckDB](https://github.com/duckdb/duckdb) | MIT | 2018-2026 Stichting DuckDB Foundation | Use, modify, and distribute freely provided the license notice is included. |
 | [LibTorch](https://pytorch.org) | BSD 3-Clause | 2016 Facebook Inc. | Use, modify, and distribute freely provided the license notice is included and the project name is not used for endorsement. |
 | [llama.cpp](https://github.com/ggerganov/llama.cpp) | MIT | The ggml authors | Use, modify, and distribute freely provided the license notice is included. |
@@ -285,9 +281,12 @@ Caliper uses the following open-source libraries. Their license texts can be fou
 | [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers) | Apache 2.0 or MIT | The Khronos Group | Use, modify, and distribute freely provided the license notice is included. |
 | [volk](https://github.com/zeux/volk) | MIT | Arseny Kapoulkine | Use, modify, and distribute freely provided the license notice is included. |
 | [glslang](https://github.com/KhronosGroup/glslang) | BSD 3-Clause (with other permissive licenses for some files) | The Khronos Group and contributors | Use, modify, and distribute freely provided the license notices are included. |
+| [Naga](https://github.com/gfx-rs/wgpu) | MIT or Apache 2.0 | 2025 The gfx-rs developers | Use, modify, and distribute freely provided the license notice is included. |
 | [IBM Plex Sans Condensed](https://github.com/IBM/plex) | SIL OFL 1.1 | 2017 IBM Corp. | Use, embed, and redistribute freely; the font may not be sold on its own. |
 | [Source Code Pro](https://github.com/adobe-fonts/source-code-pro) | SIL OFL 1.1 | 2010, 2012 Adobe Systems Incorporated | Use, embed, and redistribute freely; the font may not be sold on its own. |
 | [elkjs](https://github.com/kieler/elkjs) | EPL 2.0 (dual-licensed EPL 2.0 or GPL 3.0 or later; used under EPL 2.0) | 2017-2021 Kiel University and others | Use, modify, and distribute provided the license text is included and changes to the files are published under the same license. |
+
+Naga, the shader translator, runs only at developer time and in CI's check of its output, through the driver in `tools/shaders/naga-driver/`, which pins Naga 30.0.2 and which cargo builds with Naga's own license files from crates.io. Only its generated output is committed (the MSL and SPIR-V under `src/host/gfx/shaders/generated/`), so building Caliper needs no Rust and no shader tool.
 
 ## Acknowledgments
 

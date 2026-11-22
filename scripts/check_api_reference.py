@@ -17,7 +17,8 @@ statically (no import of caliper, no MkDocs build) and fails when:
 
 A constant's docstring is the string literal right after its assignment, as
 mkdocstrings reads it. A name that __init__.py imports from a private module
-is looked up in that module.
+is looked up in that module, also when the import sits under
+`if TYPE_CHECKING:` because the package imports the name on first use.
 
 Usage: check_api_reference.py [--root <repository root>] [--list]
   --list prints every symbol checked and the page that renders it.
@@ -102,7 +103,19 @@ def docstrings(tree):
         elif isinstance(node, ast.ImportFrom) and node.level == 1 and node.module:
             for alias in node.names:
                 found.setdefault(alias.asname or alias.name, ("import", node.module, alias.name))
+        elif isinstance(node, ast.If) and is_type_checking(node.test):
+            # A name imported on first use (a module __getattr__) is named here for the docs and type checkers.
+            for sub in node.body:
+                if isinstance(sub, ast.ImportFrom) and sub.level == 1 and sub.module:
+                    for alias in sub.names:
+                        found.setdefault(alias.asname or alias.name, ("import", sub.module, alias.name))
     return found
+
+
+def is_type_checking(test):
+    """True for the condition `TYPE_CHECKING` or `typing.TYPE_CHECKING`."""
+    return ((isinstance(test, ast.Name) and test.id == "TYPE_CHECKING")
+            or (isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"))
 
 
 def python_symbols(root):

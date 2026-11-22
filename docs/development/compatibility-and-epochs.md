@@ -56,7 +56,7 @@ Every type that crosses the boundary follows the same rules:
 | `duckdb::*` | The same reason. | SQL strings in, Arrow C streams out. See [Arrow](../applets/tensor-and-arrow-headers.md#arrow-header). |
 | `std::string`, `std::vector` | The libstdc++, libc++ and MSVC layouts differ. | `const char*`, or a pointer and a length. |
 | Exceptions | They are undefined across runtimes. | A `bool` or error-code return, plus `caliper.log.v1`. |
-| ImGui, Metal, Vulkan, OpenGL handles | They would fix the renderer. | `CaliperTextureId`, an opaque 64-bit handle. |
+| ImGui, Metal and Vulkan handles | They would fix the renderer. | `CaliperTextureId`, an opaque 64-bit handle. |
 
 The UI contexts do cross, because applets write raw ImGui. `caliper.ui.v1` hands over the ImGui, ImPlot and ImPlot3D contexts together with the host's allocator pair. The `caliper::ui::connect(host)` call in the sugar installs both. On Windows, an applet DLL would otherwise free ImGui memory on its own heap.
 

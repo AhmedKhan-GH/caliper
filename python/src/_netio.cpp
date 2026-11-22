@@ -23,6 +23,12 @@
 //                             (control()), which answers with send() and
 //                             sub_open()/sub_close().
 //
+// SCENES (wire protocol 3.2 draft, capability "scenes"). WELCOME and the HELLO
+// to a hub announce "scenes"; Python (caliper/_net_scene.py) makes every scene
+// message and hands it over with send(), one link at a time while queued()
+// is low, and the views of kind scene leave the VIEWS of a peer that did not
+// announce "scenes".
+//
 // CONTROLS (wire protocol 3.1). After enable_controls(), WELCOME, SESSIONS and
 // the HELLO to a hub announce "controls" and "selection" (caliper._controls
 // in Python implements them), WELCOME tells a viewer that announced "controls"
@@ -104,6 +110,13 @@ constexpr size_t kMaxControlPerConn = 256;   // messages for Python waiting per 
 // 1008, as the hub closes a connection whose send queue overflows.
 constexpr size_t kMaxControlFrames = 65536;
 constexpr size_t kMaxControlBytes = 16u << 20;
+// 3.2 draft: scene frames travel in the same queue, in order with the control
+// frames, but they are the producer's data and not answers a peer provoked: Python
+// hands a connection at most NATIVE_BACKLOG (2) of them waiting, each at most a
+// frame of CALIPER_NET_MAX_FRAME_BYTES. They are counted apart, against this bound,
+// so that a scene frame the protocol allows never closes the connection.
+constexpr size_t kSceneBacklog = 2;
+constexpr size_t kMaxSceneBytes = kSceneBacklog * size_t(CALIPER_NET_MAX_FRAME_BYTES);
 constexpr uint16_t kCloseOverflow = 1008;
 constexpr int kMaxPollMs = 50;
 
@@ -199,9 +212,11 @@ struct Link {
     bool views_pending = false;
     bool cap_controls = false;                // 3.1: the peer announced "controls"
     bool cap_selection = false;               // 3.1: the peer announced "selection"
+    bool cap_scenes = false;                  // 3.2 draft: the peer announced "scenes"
     bool may_control = false;                 // 3.1: a CONTROL from it is accepted
     std::deque<SharedBytes> after_views;      // 3.1: frames that follow the next VIEWS
-    size_t control_bytes = 0;                 // the bytes in control and after_views
+    size_t control_bytes = 0;                 // the bytes in control and after_views, scene frames aside
+    size_t scene_bytes = 0;                   // 3.2 draft: the bytes of the scene frames among them
     bool overflow = false;                    // past kMaxControlFrames/Bytes: closed with 1008
     bool pong_pending = false;                // one PONG at most, to the latest PING
     uint32_t pong_nonce = 0;
@@ -389,6 +404,8 @@ public:
         std::lock_guard<std::mutex> g(mu_);
         views_ = std::move(v);
         views_sel_ = std::move(sv);
+        views_plain_ = without_scenes(views_);           // 3.2 draft: for peers without "scenes"
+        views_sel_plain_ = views_sel_.is_array() ? without_scenes(views_sel_) : Json();
         for (auto& [id, l] : links_)
             if (l.attached) l.views_pending = true;
         wake_all();
@@ -414,6 +431,24 @@ public:
                                      l.views_pending);
         wake_all();
         return ok;
+    }
+
+    // 3.2 draft: the frames a connection still has waiting before its data (Python
+    // hands it the next scene message only while this is low).
+    size_t queued(ConnId c) {
+        std::lock_guard<std::mutex> g(mu_);
+        auto it = links_.find(c);
+        return it == links_.end() ? 0 : it->second.control.size() + it->second.after_views.size();
+    }
+
+    static Json without_scenes(const Json& views) {
+        Json out = Json::array();
+        for (const Json& e : views.items()) {
+            const Json* k = e.find("kind");
+            int64_t kind = 0;
+            if (!(k && k->get_i64(&kind) && kind == CALIPER_NET_KIND_SCENE)) out.push(e);
+        }
+        return out;
     }
 
     // 3.1: whether a connection still has a snapshot or series values to send
@@ -808,22 +843,32 @@ private:
         if (SharedBytes b = encode(m)) push_control(l, std::move(b));
     }
 
-    // Queue a control frame (under mu_). Past kMaxControlFrames or
-    // kMaxControlBytes the queue is dropped and the connection marked, and the
-    // thread that owns its socket closes it with 1008 at its next pump.
+    // A SCENE_UPDATE or SCENE_CLEAR frame (the type at offset 8 of the header).
+    static bool scene_frame(const caliper_net::Bytes& b) {
+        if (b.size() < 10) return false;
+        const uint16_t type = uint16_t(b[8] | (b[9] << 8));
+        return type == CALIPER_NET_MSG_SCENE_UPDATE || type == CALIPER_NET_MSG_SCENE_CLEAR;
+    }
+
+    // Queue a control frame (under mu_). Past kMaxControlFrames, kMaxControlBytes
+    // or, for scene frames, kMaxSceneBytes the queue is dropped and the connection
+    // marked, and the thread that owns its socket closes it with 1008 at its next pump.
     bool push_control(Link& l, SharedBytes b, bool after_views = false) {
         if (l.overflow || l.closing) return false;
+        const bool scene = scene_frame(*b);
+        size_t& bytes = scene ? l.scene_bytes : l.control_bytes;
         if (l.control.size() + l.after_views.size() >= kMaxControlFrames ||
-            l.control_bytes + b->size() > kMaxControlBytes) {
+            bytes + b->size() > (scene ? kMaxSceneBytes : kMaxControlBytes)) {
             l.overflow = true;
             ++overflow_closed_;
             l.control.clear();
             l.after_views.clear();
             l.control_bytes = 0;
+            l.scene_bytes = 0;
             wake_all();
             return false;
         }
-        l.control_bytes += b->size();
+        bytes += b->size();
         (after_views ? l.after_views : l.control).push_back(std::move(b));
         return true;
     }
@@ -831,8 +876,9 @@ private:
     // 3.1 (under mu_): the server's capabilities, and what a peer announced as
     // the JSON of its "opened" message for Python.
     std::vector<std::string> capabilities() const {
-        if (!controls_) return {CALIPER_NET_CAP_EVENTS};
-        return {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_SELECTION};
+        if (!controls_) return {CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_SCENES};
+        return {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_SCENES,
+                CALIPER_NET_CAP_SELECTION};
     }
     static bool announces(const std::vector<std::string>& caps, const char* cap) {
         return std::find(caps.begin(), caps.end(), cap) != caps.end();
@@ -841,6 +887,7 @@ private:
         Json o = Json::object();
         o.set("controls", l.cap_controls);
         o.set("selection", l.cap_selection);
+        o.set("scenes", l.cap_scenes);
         o.set("control", l.may_control);
         o.set("upstream", l.upstream);
         const std::string t = o.dump();
@@ -1001,6 +1048,7 @@ private:
             l.helloed = true;
             l.cap_controls = controls_ && announces(h->capabilities, CALIPER_NET_CAP_CONTROLS);
             l.cap_selection = controls_ && announces(h->capabilities, CALIPER_NET_CAP_SELECTION);
+            l.cap_scenes = announces(h->capabilities, CALIPER_NET_CAP_SCENES);
             l.may_control = l.cap_controls && allow_control_;
             wire::Welcome w;
             w.role = CALIPER_NET_ROLE_PRODUCER;
@@ -1165,7 +1213,8 @@ private:
                 wire::Views v;
                 if (l.attached) {
                     v.session = l.upstream && !up_session_.empty() ? up_session_ : ident_.id;
-                    v.views = l.cap_selection && views_sel_.is_array() ? views_sel_ : views_;
+                    if (l.cap_scenes) v.views = l.cap_selection && views_sel_.is_array() ? views_sel_ : views_;
+                    else v.views = l.cap_selection && views_sel_.is_array() ? views_sel_plain_ : views_plain_;
                 }
                 f = encode(v);
                 l.views_pending = false;
@@ -1173,7 +1222,8 @@ private:
             } else if (!l.control.empty()) {
                 f = l.control.front();
                 l.control.pop_front();
-                l.control_bytes -= std::min(l.control_bytes, f->size());
+                size_t& bytes = scene_frame(*f) ? l.scene_bytes : l.control_bytes;
+                bytes -= std::min(bytes, f->size());
             } else {
                 f = next_data(l, now, final);
             }
@@ -1305,6 +1355,7 @@ private:
                         l.opened_ms = caliper_net::monotonic_ms();
                         l.cap_controls = controls_ && announces(w->capabilities, CALIPER_NET_CAP_CONTROLS);
                         l.cap_selection = controls_ && announces(w->capabilities, CALIPER_NET_CAP_SELECTION);
+                        l.cap_scenes = announces(w->capabilities, CALIPER_NET_CAP_SCENES);
                         l.may_control = l.cap_controls && w->control.value_or(false);
                         std::vector<uint8_t> info = link_info(l);
                         links_[cid] = std::move(l);
@@ -1404,6 +1455,8 @@ private:
     std::map<std::string, History> histories_;
     Json views_ = Json::array();
     Json views_sel_;                          // 3.1: views_ with item spaces (an array), or null
+    Json views_plain_ = Json::array();        // 3.2 draft: views_ without the scenes
+    Json views_sel_plain_;                    // 3.2 draft: views_sel_ without the scenes, or null
     bool controls_ = false;                   // 3.1: announce "controls" and "selection"
     bool allow_control_ = false;              // 3.1: viewers may control
     std::vector<float> scratch_;
@@ -1423,6 +1476,7 @@ NB_MODULE(_netio, m) {
     m.attr("MAX_CONTROL_PER_CONNECTION") = kMaxControlPerConn;
     m.attr("MAX_CONTROL_FRAMES") = kMaxControlFrames;
     m.attr("MAX_CONTROL_BYTES") = kMaxControlBytes;
+    m.attr("MAX_SCENE_BYTES") = kMaxSceneBytes;
     using R = nb::call_guard<nb::gil_scoped_release>;
     nb::class_<NetIO>(m, "Server")
         .def(nb::init<int, std::string, std::string, std::string,
@@ -1483,6 +1537,7 @@ NB_MODULE(_netio, m) {
              })
         .def("enable_controls", &NetIO::enable_controls, nb::arg("allow"), R())
         .def("data_pending", &NetIO::data_pending, R())
+        .def("queued", &NetIO::queued, R())
         .def("sub_open", &NetIO::sub_open, nb::arg("conn"), nb::arg("sub"), nb::arg("view"), nb::arg("kind"),
              nb::arg("group"), nb::arg("data_view"), nb::arg("max_rate"), nb::arg("backfill"), R())
         .def("sub_close", &NetIO::sub_close, R())

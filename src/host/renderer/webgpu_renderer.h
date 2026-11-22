@@ -2,20 +2,20 @@
 // views in the browser (web/wasm). It runs on the browser's own WebGPU through
 // Emscripten's emdawnwebgpu port (webgpu.h).
 //
-// What the live views call is implemented: the swapchain path
-// (init/new_frame/render/shutdown) drawing ImGui through imgui_impl_wgpu,
-// RGBA8 textures, the WGSL compute colormap behind
-// tex_update_mapped_from_host, and the points of the geometry path: host
-// allocations (import_host_allocation), render targets with depth
-// (geom_create_view_ex) and point draws (geom_draw_primitives with the points
-// topology), each point an instanced quad because WebGPU points are one pixel.
-// Everything else keeps the interface's default, which is an honest refusal:
-// no device tensors, no imported OS allocations, no lines, triangles,
-// textured or instanced geometry, no embed canvas. Each such path is marked
-// "not in the browser renderer" below.
+// The renderer itself keeps the surface, the frame loop and ImGui, drawn
+// through imgui_impl_wgpu. Every resource and draw of the live views goes
+// through the graphics layer's WebGPU backend (webgpu_backend.h, design/
+// renderer-core.md, Migration, step 4), made on the renderer's device and
+// queue: RGBA8 textures and the compute colormap behind
+// tex_update_mapped_from_host, whose program is in webgpu_programs.h. The
+// points and scene views draw through the scene core on the same backend
+// (gfx()). Everything else keeps the interface's default, which is an honest
+// refusal: no device tensors, no imported OS allocations, no geometry service,
+// no embed canvas. Each such path is marked "not in the browser renderer" below.
 #pragma once
 
 #include "renderer/host_renderer.h"
+#include "renderer/webgpu_backend.h"
 
 #include <webgpu/webgpu.h>
 
@@ -60,23 +60,12 @@ public:
                                      float vmax) override;
     const char* last_device_path() const override { return last_path_; }
 
-    // ---- the geometry path, points only ---------------------------------------
-    uint64_t import_host_allocation(const void* data, uint64_t bytes) override;
-    void release_external_allocation(uint64_t id) override;
-    bool supports_geometry() const override { return true; }
-    bool supports_geometry_primitives() const override { return true; }
-    uint64_t geom_create_view(int w, int h) override { return geom_create_view_ex(w, h, 0); }
-    uint64_t geom_create_view_ex(int w, int h, uint32_t flags) override;
-    // Not in the browser renderer: lines, triangles, indices, normals, UVs,
-    // textures and instance matrices (the live views draw points only). A
-    // draw of another topology is refused and the target left untouched.
-    bool geom_draw_primitives(uint64_t view_tex, const float* view16, const float* proj16,
-                              const HostGeomDraw* draws, uint32_t count,
-                              uint32_t clear_rgba) override;
-
     // No GLFW in the browser: init() takes no window (the canvas is named by
     // the selector), and there are no window hints.
     void window_hints() override {}
+
+    // The graphics layer's backend, from init() until shutdown().
+    caliper_gfx::WebGpuBackend* gfx() override { return gfx_.get(); }
 
     // ---- instrumentation (not part of HostRenderer) ------------------------
     // Copy texture `tex` (renderer id or ImTextureID) back to tightly packed
@@ -84,65 +73,50 @@ public:
     // browser cannot block on a buffer map). `done` gets an empty vector on
     // failure.
     void readback_async(uint64_t tex, std::function<void(std::vector<uint8_t>)> done);
+    // The same for a texture of the graphics layer made on this renderer's backend (a view's
+    // render target), w x h from its top-left corner.
+    void readback_async(caliper_gfx::Texture tex, uint32_t w, uint32_t h,
+                        std::function<void(std::vector<uint8_t>)> done);
     // Mean milliseconds from queue submit to "work done" over the frames
     // rendered so far, and how many frames that covers.
     double gpu_ms_mean() const { return gpu_n_ ? gpu_ms_sum_ / (double)gpu_n_ : 0.0; }
     uint64_t gpu_frames() const { return gpu_n_; }
     uint64_t colormap_dispatches() const { return dispatches_; }
     // What the renderer holds now (a long session must not grow these): live
-    // textures, imported or staged buffers, spare buffers, and released
-    // texture views waiting for the end of the frame.
+    // textures, the layer's spare buffers, and released texture views waiting
+    // for the end of the frame.
     size_t texture_count() const { return tex_.size(); }
-    size_t allocation_count() const { return allocs_.size() + spare_allocs_.size(); }
-    size_t retired_view_count() const { return retired_views_.size(); }
-    // Releases the texture views released since the last frame was recorded.
-    // render() calls it; a host that skips a frame (a hidden canvas) calls it
-    // instead, outside any ImGui frame.
+    size_t allocation_count() const { return gfx_ ? gfx_->spare_buffer_count() : 0; }
+    size_t retired_view_count() const { return gfx_ ? gfx_->retired_view_count() : 0; }
+    // Hands finished readbacks to their callbacks and releases the texture
+    // views released since the last frame was recorded. render() calls it; a
+    // host that skips a frame (a hidden canvas) calls it instead, outside any
+    // ImGui frame.
     void release_retired();
     WGPUTextureFormat surface_format() const { return surface_format_; }
 
 private:
     struct Tex {
-        WGPUTexture     texture = nullptr;
-        WGPUTextureView view = nullptr;
-        int             w = 0, h = 0;
-        // WGSL colormap inputs, created on the first mapped update.
-        WGPUBuffer      src = nullptr;      // (h,w) f32
-        WGPUBuffer      lut = nullptr;      // 256 x u32
-        WGPUBuffer      params = nullptr;   // CmapParams uniform
-        WGPUBindGroup   bind = nullptr;
-        uint32_t        lut_cache[256] = {};
-        bool            lut_valid = false;
+        caliper_gfx::Texture color;
+        int w = 0, h = 0;
+        // The colormap's inputs, made on the first mapped update.
+        caliper_gfx::Buffer src, lut, th;
+        caliper_gfx::BindGroup cmap;
+        uint32_t lut_cache[256] = {};
+        bool lut_valid = false;
         // The colormap's index thresholds for the range they were made for.
-        WGPUBuffer      thresholds = nullptr;
-        float           th_vmin = 0.0f, th_vmax = 0.0f;
-        uint32_t        th_mode = 0;
-        bool            th_valid = false;
-        // A geometry render target (geom_create_view_ex): its depth buffer.
-        WGPUTexture     depth = nullptr;
-        WGPUTextureView depth_view = nullptr;
-    };
-    struct Alloc {
-        WGPUBuffer buffer = nullptr;
-        uint64_t   bytes = 0;
-    };
-    // Per draw of a geom_draw_primitives call: its parameters and LUT
-    // (reused across calls; queue writes are ordered after earlier submits).
-    struct DrawSlot {
-        WGPUBuffer params = nullptr;
-        WGPUBuffer lut = nullptr;
-        // The colour thresholds of [th_vmin, th_vmax] (colormap_thresholds).
-        WGPUBuffer th = nullptr;
-        bool th_valid = false;
         float th_vmin = 0.0f, th_vmax = 0.0f;
         uint32_t th_mode = 0;
+        bool th_valid = false;
+    };
+    struct Pending {
+        caliper_gfx::Readback rb;
+        std::function<void(std::vector<uint8_t>)> done;
     };
 
     Tex* find(uint64_t id);
-    bool ensure_colormap_pipeline();
-    bool ensure_points_pipelines();
-    WGPURenderPipeline points_pipeline(bool depth_target, uint32_t depth_flags);
     void free_tex(Tex& t);
+    bool init_layer();
     void configure_surface(int w, int h);
     void on_work_done(double submitted_ms);
 
@@ -156,22 +130,13 @@ private:
     int surf_w_ = 0, surf_h_ = 0;
     bool imgui_ready_ = false;
 
-    WGPUComputePipeline cmap_pipeline_ = nullptr;
-    WGPUBindGroupLayout cmap_layout_ = nullptr;
-
-    WGPUShaderModule points_module_ = nullptr;
-    WGPUBindGroupLayout points_layout_ = nullptr;
-    WGPUPipelineLayout points_pipeline_layout_ = nullptr;
-    WGPURenderPipeline points_pipelines_[5] = {};   // [0] no depth target; [1 + flags] with one
-    std::unordered_map<uint64_t, Alloc> allocs_;
-    std::vector<DrawSlot> slots_;
-    std::vector<WGPUTextureView> retired_views_;   // tex_release(): released after this frame's render
-    // Released host allocations, kept for reuse: a points view gets a payload
-    // of the same size every snapshot, and creating and destroying a GPU
-    // buffer per snapshot is far slower than writing into one again.
-    std::vector<Alloc> spare_allocs_;
+    std::unique_ptr<caliper_gfx::WebGpuBackend> gfx_;
+    caliper_gfx::Program cmap_prog_;
+    caliper_gfx::Pipeline cmap_pipe_;
+    caliper_gfx::BindGroup cmap_frame_group_;
 
     std::unordered_map<uint64_t, Tex> tex_;
+    std::vector<Pending> readbacks_;
     uint64_t next_id_ = 1;
     const char* last_path_ = "cpu-staged";
     uint64_t dispatches_ = 0;

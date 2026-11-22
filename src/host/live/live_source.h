@@ -14,10 +14,12 @@
 
 #include "caliper/live.h"   // CALIPER_LIVE_PROTOCOL_VERSION
 #include "net/json.h"       // the JSON values of wire protocol 3.1 controls
+#include "net/wire.h"       // the scene messages of wire protocol 3.2
 
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace caliper_live {
@@ -59,12 +61,29 @@ struct Snapshot {
     uint64_t seq = 0;               // producer's publish counter for this view
     uint64_t stamp_ns = 0;          // producer CLOCK_UPTIME_RAW at show()
     const PayloadMap* map = nullptr; // borrowed until the next take() of the view; null = identity
+    // Bytes the source copied to make this payload: a network snapshot
+    // received into its slot, or series values appended to the ring; 0 when
+    // the producer wrote the slot in place (the shared-memory session). The
+    // viewer counts it as one copy (embed/render_stats.h).
+    uint64_t copied_bytes = 0;
 };
 
 struct SourceView {
     uint64_t    key = 0;            // stable for the view's lifetime
     std::string name;
     uint32_t    kind = 0;
+};
+
+// ---- wire protocol 3.2 draft: scenes ------------------------------------------------
+// A scene view (kind 6) has no snapshots: its source hands over decoded messages,
+// in their order, to the scene view (live_views_scene.h). A message's sections
+// point into `keep`, the received frame, which lives as long as the item. A note
+// is something the source ignored for the view, as the versioning rules of 3.2
+// say (a part, a form or a section this viewer does not build).
+struct SceneItem {
+    std::shared_ptr<const void> keep;
+    std::variant<caliper_net::wire::SceneUpdate, caliper_net::wire::SceneClear, std::string,
+                 caliper_net::wire::SceneTransforms, caliper_net::wire::SceneClasses> msg;
 };
 
 // ---- wire protocol 3.1: controls and linked selection --------------------------
@@ -229,6 +248,20 @@ public:
         (void)key; (void)resolved; (void)offer;
         return false;
     }
+
+    // ---- wire protocol 3.2 draft: scenes (frame thread) -------------------------
+    // The scene messages of view `key` (kind 6) that arrived since the last call,
+    // oldest first, appended to *out; false when there are none. A source that
+    // holds messages the frame thread has not taken keeps only what still
+    // matters: a reset drops what came before it, and a newer update of an
+    // entity part replaces an older one queued after the last clear of it.
+    virtual bool take_scene(uint64_t key, std::vector<SceneItem>* out) {
+        (void)key; (void)out;
+        return false;
+    }
+    // The frame thread will never show scene view `key` (the core refused it for good):
+    // the source ends its subscription and drops what still arrives for it.
+    virtual void stop_scene(uint64_t key) { (void)key; }
 };
 
 // Why open_shm_source returned NULL.

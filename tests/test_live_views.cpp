@@ -19,8 +19,13 @@
 #include <caliper/live_views.h>
 
 #include "live/live_clock.h"         // StampClock (network stamps into the viewer's clock)
+#include "live/live_points.h"        // the points view's scene and its orbit camera (white-box)
 #include "live/live_views_state.h"   // kPalette (white-box: the exact categorical colours)
+#include "live/live_scene.h"         // the scene view (up-axis switch, scale bar)
+#include "live/live_views_scene.h"   // scene_open, scene_apply
+#include "net/wire.h"                // decoded scene messages
 #include "tensor_bridge.h"           // map_f32_to_rgba8 / colormap_lut (CPU reference)
+#include "embed/render_stats.h"      // copy counters (white-box)
 
 #include <imgui.h>
 #include <imgui_internal.h>          // ImGui::FindWindowByName: where a view's window is
@@ -44,6 +49,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <thread>
@@ -556,6 +562,15 @@ TEST_CASE("live_views/points: 3-D continuous colormap and CPU-staged payloads dr
     CHECK(caliper_core_live_view_read_done(c.core, "cloud") == 1);
 }
 
+// The orbit camera of a 3-D points view, which the scene core keeps (live_points.h).
+static const caliper_scene::Orbit& orbit_of(caliper_live_views::View* pv) {
+    REQUIRE(pv->points);
+    REQUIRE(pv->points->scene);
+    const caliper_scene::Orbit* o = std::get_if<caliper_scene::Orbit>(&pv->points->scene->camera());
+    REQUIRE(o != nullptr);
+    return *o;
+}
+
 TEST_CASE("live_views/points: 3-D points draw a box with ticks, nearer points larger and farther ones "
           "dimmer with their hue kept, and turn with the rotate toggle until a drag") {
     Core c(640, 480);
@@ -585,8 +600,8 @@ TEST_CASE("live_views/points: 3-D points draw a box with ticks, nearer points la
     caliper_live_views::View* pv = caliper_live_views::find(c.core, "box3");
     REQUIRE(pv != nullptr);
     // The default three-quarter camera, as every renderer's.
-    CHECK(pv->cam.az == doctest::Approx(caliper_live_views::kCamAz));
-    CHECK(pv->cam.el == doctest::Approx(caliper_live_views::kCamEl));
+    CHECK(orbit_of(pv).azimuth == doctest::Approx(caliper_live_views::kCamAz));
+    CHECK(orbit_of(pv).elevation == doctest::Approx(caliper_live_views::kCamEl));
     // The box: tick labels on x, y and z.
     MESSAGE("box labels: " << pv->box_labels);
     CHECK(pv->box_labels.find("x=") != std::string::npos);
@@ -634,12 +649,12 @@ TEST_CASE("live_views/points: 3-D points draw a box with ticks, nearer points la
 
     // The rotate toggle turns the view until a drag in it.
     REQUIRE(caliper_live_views::set_toggle(c.core, "box3", "rotate", true));
-    const float az0 = pv->cam.az;
+    const double az0 = orbit_of(pv).azimuth;
     for (int i = 0; i < 6; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         c.frames(1);
     }
-    CHECK(pv->cam.az > az0);
+    CHECK(orbit_of(pv).azimuth > az0);
     auto send = [&](CaliperEventType type, float x, float y, int down) {
         CaliperInputEvent e{};
         e.struct_size = sizeof e;
@@ -660,9 +675,9 @@ TEST_CASE("live_views/points: 3-D points draw a box with ticks, nearer points la
     send(CALIPER_EVENT_MOUSE_BUTTON, cx + 30.0f, cy, 0);
     c.frames(2);
     CHECK_FALSE(pv->auto_rotate);
-    const float az1 = pv->cam.az;
+    const double az1 = orbit_of(pv).azimuth;
     c.frames(4);
-    CHECK(pv->cam.az == az1);
+    CHECK(orbit_of(pv).azimuth == az1);
 }
 
 TEST_CASE("live_views/points: screenshots of a 3-D cluster scene from three angles (CALIPER_TEST_SHOTS)") {
@@ -685,8 +700,7 @@ TEST_CASE("live_views/points: screenshots of a 3-D cluster scene from three angl
     REQUIRE(pv != nullptr);
     const struct { const char* name; float daz, del; } angles[] = {{"a", 0.0f, 0.0f}, {"b", 1.6f, 0.0f}, {"c", -0.9f, 0.55f}};
     for (const auto& a : angles) {
-        pv->cam.az = caliper_live_views::kCamAz + a.daz;
-        pv->cam.el = caliper_live_views::kCamEl + a.del;
+        pv->points->scene->set_angles(caliper_live_views::kCamAz + a.daz, caliper_live_views::kCamEl + a.del);
         pv->dirty = true;
         c.frames(3);
         std::vector<uint8_t> canvas(900 * 640 * 4);
@@ -747,14 +761,15 @@ TEST_CASE("live_views/points: value-coloured points have map_f32_to_rgba8's colo
         CaliperLiveViewInfo vi = info(c.core, "edge_points");
         std::vector<uint8_t> px = readback(c.core, "edge_points", vi.width, vi.height);
         REQUIRE(px.size() == (size_t)vi.width * vi.height * 4);
-        float V[16], P[16];
-        caliper_live_views::camera_matrices(*pv, (float)vi.width / (float)vi.height, V, P);
+        float M[16];   // the clip-from-world matrix the draw gets (2-D: an orthographic pan and zoom)
+        REQUIRE(caliper_live_views::points_mvp(*pv, M));
         int wrong = 0, compared = 0;
         std::string first;
         for (int i = 0; i < N; ++i) {
             // The point's centre on the render target (2-D: the view matrix is the identity).
             const float x = pos[3 * i], y = pos[3 * i + 1];
-            const float cx = P[0] * x + P[12], cy = P[5] * y + P[13];
+            const float cw = M[3] * x + M[7] * y + M[15];
+            const float cx = (M[0] * x + M[4] * y + M[12]) / cw, cy = (M[1] * x + M[5] * y + M[13]) / cw;
             const int sx = (int)((cx * 0.5f + 0.5f) * vi.width), sy = (int)((0.5f - cy * 0.5f) * vi.height);
             if (sx < 0 || sy < 0 || sx >= vi.width || sy >= vi.height) continue;
             uint8_t want[4];
@@ -1270,11 +1285,11 @@ TEST_CASE("live_views/gates: every refusal is specific; nothing is created") {
         cuda.device = CALIPER_DEV_CUDA;
         refuse(snap("g", CALIPER_LIVE_KIND_HEATMAP, &cuda), "device must be CPU or METAL");
     }
-    // METAL window beyond the buffer (points and series check it up front)
+    // METAL window beyond the buffer (the layer's import refuses it for points; series check it up front)
     {
         std::vector<float> big(300);
         CaliperTensor tbig = tensor(ptr(mb), CALIPER_DT_F32, {100, 3}, CALIPER_DEV_METAL);
-        refuse(snap("g", CALIPER_LIVE_KIND_POINTS, &tbig), "exceeds the MTLBuffer length");
+        refuse(snap("g", CALIPER_LIVE_KIND_POINTS, &tbig), "the MTLBuffer is shorter than the size claimed");
         CaliperTensor sbig = tensor(ptr(mb), CALIPER_DT_F32, {1000}, CALIPER_DEV_METAL);
         CaliperLiveSnapshot x = snap("g", CALIPER_LIVE_KIND_SERIES, &sbig);
         x.series_total = 5;
@@ -1428,6 +1443,203 @@ TEST_CASE("live_views/hover: a CPU payload is copied at apply, so hover reads va
     CHECK(std::memcmp(vi->tex_cpu, ref.data(), ref.size()) == 0);
 }
 
+// ---------------------------------------------------------------------------
+// Copy counters (embed/render_stats.h; docs/applets/rendering.md, "Copy
+// Counters and Frame Statistics"): each route reads its known copies. A METAL
+// payload is read in place (0, also while a points view redraws it every
+// frame); a CPU heatmap or image is uploaded once per update; CPU points are
+// staged once per buffer; series and histogram values are copied at apply.
+namespace {
+caliper_stats::ViewCopies copies_of(CaliperCore* core, const char* name) {
+    caliper_stats::ViewCopies v{};
+    caliper_stats::view_copies(core, name, &v);
+    return v;
+}
+}  // namespace
+
+TEST_CASE("live_views/copies: each route counts its known copies; METAL payloads read 0") {
+    const int W = 32, H = 16;
+    Core c(320, 240);
+    if (!c.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU: " << c.err());
+    id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
+    caliper_stats::FrameCopies fc{};
+    caliper_stats::frame_copies(c.core, &fc, true);   // a fresh window
+
+    // METAL heatmap (what an MPS tensor is): in place, twice, with frames.
+    std::vector<float> r = ramp(W, H);
+    id<MTLBuffer> hb = shared_buffer(dev, 0, r.data(), r.size() * 4);
+    CaliperTensor th = tensor(ptr(hb), CALIPER_DT_F32, {H, W}, CALIPER_DEV_METAL);
+    CaliperLiveSnapshot sh = snap("hm_gpu", CALIPER_LIVE_KIND_HEATMAP, &th);
+    for (int i = 0; i < 2; ++i) {
+        REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &sh) == 1, c.err());
+        CHECK(wait_read_done(c, "hm_gpu"));
+    }
+    CHECK(std::string(info(c.core, "hm_gpu").path) == "compute-imported");
+    CHECK(copies_of(c.core, "hm_gpu").total.copies == 0);
+    CHECK(copies_of(c.core, "hm_gpu").total.bytes == 0);
+
+    // METAL RGBA8 image: the blit into the view's texture is the update itself.
+    std::vector<uint8_t> rgba((size_t)W * H * 4, 0x7F);
+    id<MTLBuffer> ib = shared_buffer(dev, 0, rgba.data(), rgba.size());
+    CaliperTensor ti = tensor(ptr(ib), CALIPER_DT_U8, {H, W, 4}, CALIPER_DEV_METAL);
+    CaliperLiveSnapshot si = snap("img_gpu", CALIPER_LIVE_KIND_IMAGE, &ti);
+    REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &si) == 1, c.err());
+    CHECK(std::string(info(c.core, "img_gpu").path) == "blit-imported");
+    CHECK(copies_of(c.core, "img_gpu").total.copies == 0);
+
+    // METAL points with a per-point value: imported in place, redrawn each frame.
+    const int N = 200;
+    std::vector<float> pos(N * 3), val(N);
+    for (int i = 0; i < N; ++i) {
+        pos[3 * i + 0] = (float)i / N - 0.5f;
+        pos[3 * i + 1] = 0.25f;
+        pos[3 * i + 2] = 0.0f;
+        val[i] = (float)i;
+    }
+    id<MTLBuffer> pb = shared_buffer(dev, 0, pos.data(), pos.size() * 4);
+    id<MTLBuffer> vb = shared_buffer(dev, 0, val.data(), val.size() * 4);
+    CaliperTensor tp = tensor(ptr(pb), CALIPER_DT_F32, {N, 3}, CALIPER_DEV_METAL);
+    CaliperTensor tv = tensor(ptr(vb), CALIPER_DT_F32, {N}, CALIPER_DEV_METAL);
+    CaliperLiveSnapshot sp = snap("pts_gpu", CALIPER_LIVE_KIND_POINTS, &tp);
+    sp.aux = &tv;
+    sp.vmin = 0.0f;
+    sp.vmax = (float)(N - 1);
+    REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &sp) == 1, c.err());
+    c.frames(3);
+    CHECK(std::string(info(c.core, "pts_gpu").path) == "points-imported");
+    CHECK(copies_of(c.core, "pts_gpu").total.copies == 0);
+
+    // Every view so far is zero-copy, and so is every frame that drew them.
+    c.frames(2);
+    REQUIRE(caliper_stats::frame_copies(c.core, &fc, true));
+    CHECK(fc.window_frames >= 5);
+    CHECK(fc.window.copies == 0);
+    CHECK(fc.window.bytes == 0);
+    CHECK(fc.last_frame.copies == 0);
+    CHECK(caliper_stats::renderer_total(c.core).copies == 0);
+
+    // CPU heatmap: one upload of the RGBA8 texels per update.
+    CaliperTensor tc = tensor(r.data(), CALIPER_DT_F32, {H, W}, CALIPER_DEV_CPU);
+    CaliperLiveSnapshot sc = snap("hm_cpu", CALIPER_LIVE_KIND_HEATMAP, &tc);
+    REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &sc) == 1, c.err());
+    CHECK(copies_of(c.core, "hm_cpu").last.copies == 1);
+    CHECK(copies_of(c.core, "hm_cpu").last.bytes == (uint64_t)W * H * 4);
+    REQUIRE(caliper_core_live_apply(c.core, &sc) == 1);
+    CHECK(copies_of(c.core, "hm_cpu").last.copies == 1);
+    CHECK(copies_of(c.core, "hm_cpu").total.copies == 2);
+    CHECK(copies_of(c.core, "hm_cpu").total.bytes == 2ull * W * H * 4);
+    c.frames(1);
+    REQUIRE(caliper_stats::frame_copies(c.core, &fc, true));
+    CHECK(fc.window_frames == 1);
+    CHECK(fc.window.copies == 2);   // both updates land in the frame that follows them
+    CHECK(fc.last_frame.copies == 2);
+    c.frames(1);
+    REQUIRE(caliper_stats::frame_copies(c.core, &fc, true));
+    CHECK(fc.window.copies == 0);   // a frame with no update copies nothing
+    CHECK(fc.last_frame.copies == 0);
+
+    // CPU image: one upload.
+    CaliperTensor tci = tensor(rgba.data(), CALIPER_DT_U8, {H, W, 4}, CALIPER_DEV_CPU);
+    CaliperLiveSnapshot sci = snap("img_cpu", CALIPER_LIVE_KIND_IMAGE, &tci);
+    REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &sci) == 1, c.err());
+    CHECK(copies_of(c.core, "img_cpu").total.copies == 1);
+    CHECK(copies_of(c.core, "img_cpu").total.bytes == (uint64_t)W * H * 4);
+
+    // CPU points: positions and values are each staged once; drawing copies nothing more.
+    CaliperTensor tpc = tensor(pos.data(), CALIPER_DT_F32, {N, 3}, CALIPER_DEV_CPU);
+    CaliperTensor tvc = tensor(val.data(), CALIPER_DT_F32, {N}, CALIPER_DEV_CPU);
+    CaliperLiveSnapshot spc = snap("pts_cpu", CALIPER_LIVE_KIND_POINTS, &tpc);
+    spc.aux = &tvc;
+    spc.vmin = 0.0f;
+    spc.vmax = (float)(N - 1);
+    REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &spc) == 1, c.err());
+    c.frames(3);
+    CHECK(std::string(info(c.core, "pts_cpu").path) == "points-cpu-staged");
+    CHECK(copies_of(c.core, "pts_cpu").total.copies == 2);
+    CHECK(copies_of(c.core, "pts_cpu").total.bytes == (uint64_t)N * 12 + (uint64_t)N * 4);
+
+    // Series and histogram: the values are copied into the view at apply.
+    const int M = 16;
+    std::vector<float> ring(M, 1.0f);
+    CaliperTensor ts = tensor(ring.data(), CALIPER_DT_F32, {M}, CALIPER_DEV_CPU);
+    CaliperLiveSnapshot ss = snap("loss", CALIPER_LIVE_KIND_SERIES, &ts);
+    ss.series_total = 10;
+    REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &ss) == 1, c.err());
+    CHECK(copies_of(c.core, "loss").total.copies == 1);
+    CHECK(copies_of(c.core, "loss").total.bytes == 10u * 4u);
+    CaliperLiveSnapshot sg = snap("grad", CALIPER_LIVE_KIND_HISTOGRAM, &ts);
+    REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &sg) == 1, c.err());
+    CHECK(copies_of(c.core, "grad").total.copies == 1);
+    CHECK(copies_of(c.core, "grad").total.bytes == (uint64_t)M * 4);
+
+    // The zero-copy views still read 0, and the renderer's total is the sum.
+    CHECK(copies_of(c.core, "hm_gpu").total.copies == 0);
+    CHECK(copies_of(c.core, "pts_gpu").total.copies == 0);
+    CHECK(caliper_stats::renderer_total(c.core).copies == 2 + 1 + 2 + 1 + 1);
+}
+
+// Frame statistics (CALIPER_METAL_STATS, read when the renderer is made): frame
+// times, the GPU time of each update and of each view draw, and the updates by
+// path, over a window that a read resets. Without the variable nothing is kept.
+TEST_CASE("live_views/frame stats: CALIPER_METAL_STATS records frame and GPU times by path") {
+    {
+        Core off(64, 48);
+        if (!off.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU: " << off.err());
+        caliper_host::HostRenderer::FrameStats fs;
+        CHECK_FALSE(caliper_stats::frame_stats(off.core, &fs, false));   // off by default
+    }
+    setenv("CALIPER_METAL_STATS", "1", 1);
+    {
+        Core c(320, 240);
+        REQUIRE(c.gpu);
+        id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
+        const int W = 64, H = 32, N = 300;
+        std::vector<float> r = ramp(W, H);
+        id<MTLBuffer> hb = shared_buffer(dev, 0, r.data(), r.size() * 4);
+        CaliperTensor th = tensor(ptr(hb), CALIPER_DT_F32, {H, W}, CALIPER_DEV_METAL);
+        CaliperLiveSnapshot sh = snap("hm", CALIPER_LIVE_KIND_HEATMAP, &th);
+        std::vector<float> pos(N * 3, 0.1f);
+        for (int i = 0; i < N; ++i) pos[3 * i] = (float)i / N - 0.5f;
+        id<MTLBuffer> pb = shared_buffer(dev, 0, pos.data(), pos.size() * 4);
+        CaliperTensor tp = tensor(ptr(pb), CALIPER_DT_F32, {N, 3}, CALIPER_DEV_METAL);
+        CaliperLiveSnapshot sp = snap("pts", CALIPER_LIVE_KIND_POINTS, &tp);
+        caliper_host::HostRenderer::FrameStats fs;
+        REQUIRE(caliper_stats::frame_stats(c.core, &fs, true));   // a fresh window
+        for (int i = 0; i < 5; ++i) {
+            REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &sh) == 1, c.err());
+            REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &sp) == 1, c.err());
+            c.frames(1);
+        }
+        CHECK(wait_read_done(c, "hm"));
+        // GPU times arrive on Metal's completion threads: wait for the counts they publish, for
+        // up to 10 s, which only a failure reaches.
+        for (int i = 0; i < 2000; ++i) {
+            REQUIRE(caliper_stats::frame_stats(c.core, &fs, false));
+            if (fs.update_gpu_n >= 5 && fs.draw_gpu_n >= 1 && fs.frame_gpu_n >= 4) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        REQUIRE(caliper_stats::frame_stats(c.core, &fs, true));
+        CHECK(fs.frames >= 5);
+        CHECK(fs.frame_ms_p50 > 0.0);
+        CHECK(fs.frame_ms_p99 >= fs.frame_ms_p50);
+        CHECK(fs.frame_ms_max >= fs.frame_ms_p99);
+        CHECK(fs.update_gpu_n >= 5);
+        CHECK(fs.update_gpu_ms_p50 > 0.0);
+        CHECK(fs.draw_gpu_n >= 1);
+        CHECK(fs.frame_gpu_n >= 4);
+        std::map<std::string, uint64_t> upd(fs.updates.begin(), fs.updates.end());
+        CHECK(upd["compute-imported"] >= 5);
+        // The points draw through the graphics layer, not as a renderer update: their GPU time
+        // reaches the view-draw series above (HostRenderer::note_draw_gpu_ms), and no update by path.
+        CHECK(upd.count("primitives-imported") == 0);
+        // The read reset the window.
+        REQUIRE(caliper_stats::frame_stats(c.core, &fs, false));
+        CHECK(fs.frames == 0);
+        CHECK(fs.updates.empty());
+    }
+    unsetenv("CALIPER_METAL_STATS");
+}
+
 TEST_CASE("live_clock: producer stamps map into the viewer's clock from the fastest message") {
     caliper_live::StampClock clk;
     CHECK_FALSE(clk.ready());
@@ -1447,6 +1659,205 @@ TEST_CASE("live_clock: producer stamps map into the viewer's clock from the fast
     const uint64_t later = base + (uint64_t)(caliper_live::StampClock::kWindow + 2) * 1000000000ull;
     clk.observe(later + skew, later + 4 * ms);
     CHECK(clk.offset_ns() == (int64_t)(skew - 4 * ms));
+}
+
+// ---- the scene view: the up-axis switch and the scale bar --------------------
+// design/scenes.md, "The up-axis switch" and "The scale bar": the mode the person chose and the
+// scale bar option are kept by the view's name when the view closes and given back when it opens
+// again, where a remembered mode wins over the scene's up; a reset returns to the scene's up. The
+// key U steps through the header's segments, and the bar is drawn over the picture, 12 pixels in
+// from its bottom-right corner, in the header's text colour. CALIPER_TEST_SHOTS=<folder> keeps the
+// whole canvas in both modes as scene-y-up.png and scene-z-up.png.
+
+namespace {
+
+namespace wire = caliper_net::wire;
+namespace cs = caliper_scene;
+
+// A scene of a point at the origin and one unit along +z and -z from it, opened as "world".
+caliper_live_views::SceneView* open_scene(CaliperCore* core, const char* up) {
+    std::string why;
+    REQUIRE_MESSAGE(caliper_live_views::scene_open(core, "world", wire::SceneView{CALIPER_NET_SPACE_3D, up, "m"}, &why),
+                    why);
+    caliper_live_views::SceneView* sv = caliper_live_views::scene_view(core, "world");
+    REQUIRE(sv != nullptr);
+    wire::SceneClear reset;
+    reset.sub = 1;
+    reset.view = "world";
+    reset.seq = 1;
+    reset.reset = true;
+    reset.state = true;
+    REQUIRE_MESSAGE(caliper_live_views::scene_apply(core, "world", reset, &why), why);
+    static const float pts[3][3] = {{0, 0, 0}, {0, 0, 1}, {0, 0, -1}};
+    const char* paths[3] = {"target", "above", "below"};
+    const int colours[3][4] = {{255, 0, 0, 255}, {0, 255, 0, 255}, {0, 0, 255, 255}};
+    for (int i = 0; i < 3; ++i) {
+        wire::SceneUpdate u;
+        u.sub = 1;
+        u.view = "world";
+        u.seq = uint64_t(2 + i);
+        u.path = paths[i];
+        u.part = CALIPER_NET_PART_POINTS;
+        caliper_net::Json c = caliper_net::Json::array();
+        for (int k = 0; k < 4; ++k) c.push(caliper_net::Json(colours[i][k]));
+        u.params.set("color", c);
+        u.arrays.push_back(wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {1, 3}, pts[i], 12));
+        REQUIRE_MESSAGE(caliper_live_views::scene_apply(core, "world", u, &why), why);
+    }
+    return sv;
+}
+
+}  // namespace
+
+TEST_CASE("live_views/scene: the up mode and the scale bar option survive a close and a reopen; a reset returns "
+          "to the scene's up") {
+    Core c(640, 480);
+    if (!c.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU: " << c.err());
+    caliper_live_views::SceneView* sv = open_scene(c.core, "+y");
+    c.frames(3);
+    CHECK(sv->up_mode() == cs::Axis::PosY);
+    CHECK(sv->scale_bar_on());
+    REQUIRE(sv->switch_up(cs::Axis::PosZ));
+    sv->set_scale_bar(false);
+    c.frames(2);
+    REQUIRE(caliper_core_live_view_remove(c.core, "world") == 1);
+    CHECK(caliper_live_views::scene_view(c.core, "world") == nullptr);
+    // Opened again, now with the scene's up at -y: the remembered mode wins, and the option stays off.
+    sv = open_scene(c.core, "-y");
+    c.frames(3);
+    CHECK(sv->up_mode() == cs::Axis::PosZ);
+    CHECK(sv->up_chosen());
+    CHECK_FALSE(sv->scale_bar_on());
+    CHECK(std::get<cs::Orbit>(sv->camera()).up == cs::Axis::PosZ);
+    CHECK(sv->up_choices() == std::vector<cs::Axis>{cs::Axis::PosY, cs::Axis::PosZ, cs::Axis::NegY});
+    // A reset returns to the scene's up and its default angles; the option is a display option and stays.
+    sv->reset();
+    c.frames(2);
+    CHECK(sv->up_mode() == cs::Axis::NegY);
+    CHECK_FALSE(sv->up_chosen());
+    CHECK(std::get<cs::Orbit>(sv->camera()).up == cs::Axis::NegY);
+    CHECK_FALSE(sv->scale_bar_on());
+    // Closed after the reset, it opens about the scene's up again.
+    REQUIRE(caliper_core_live_view_remove(c.core, "world") == 1);
+    sv = open_scene(c.core, "+z");
+    c.frames(2);
+    CHECK(sv->up_mode() == cs::Axis::PosZ);
+    CHECK_FALSE(sv->up_chosen());
+}
+
+TEST_CASE("live_views/scene: the key U switches the mode, and the scale bar is drawn in the picture's corner") {
+    Core c(900, 640);
+    if (!c.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU: " << c.err());
+    caliper_live_views::SceneView* sv = open_scene(c.core, "+y");
+    c.frames(4);
+    caliper_live_views::View* v = caliper_live_views::find(c.core, "world");
+    REQUIRE(v != nullptr);
+    REQUIRE(v->geo_valid);
+    const float x = v->geo_area[0], y = v->geo_area[1], w = v->geo_area[2], h = v->geo_area[3];
+    const cs::ScaleBar bar = sv->scale_bar(w, h);
+    REQUIRE(bar.visible);
+    MESSAGE("the picture is ", w, " x ", h, "; the bar says ", bar.label, " over ", bar.pixels, " px");
+
+    auto canvas = [&] {
+        std::vector<uint8_t> px(900 * 640 * 4);
+        REQUIRE(caliper_core_read_pixels(c.core, px.data(), 900 * 4) == 1);
+        return px;
+    };
+    auto shot = [&](const char* name, const std::vector<uint8_t>& px) {
+        const char* dir = std::getenv("CALIPER_TEST_SHOTS");
+        if (!dir || !*dir) return;
+        const std::string file = std::string(dir) + "/" + name;
+        CHECK(stbi_write_png(file.c_str(), 900, 640, 4, px.data(), 900 * 4) != 0);
+        MESSAGE("capture written: ", file);
+    };
+    // The bar's middle row: the header's text colour from 3 px in from each end, 12 px in from the
+    // picture's right and bottom edges.
+    auto bar_row = [&](const std::vector<uint8_t>& px) {
+        const int x1 = (int)std::floor(x + w - 12.0f), y1 = (int)std::floor(y + h - 12.0f);
+        const int x0 = (int)std::lround(x1 - bar.pixels);
+        int ink = 0, span = 0;
+        for (int px_x = x0 + 3; px_x < x1 - 3; ++px_x, ++span) {
+            const uint8_t* p = &px[((size_t)(y1 - 1) * 900 + (size_t)px_x) * 4];
+            ink += p[0] == 230 && p[1] == 230 && p[2] == 235;
+        }
+        return std::make_pair(ink, span);
+    };
+    const std::vector<uint8_t> y_up = canvas();
+    shot("scene-y-up.png", y_up);
+    const auto [ink, span] = bar_row(y_up);
+    CHECK(span > 10);
+    CHECK(ink == span);
+
+    // U over the picture: Y up to Z up, through ImGui's own input.
+    auto event = [&](CaliperEventType type, int key, int down, float ex = 0, float ey = 0) {
+        CaliperInputEvent e{};
+        e.struct_size = sizeof e;
+        e.type = type;
+        e.key = key;
+        e.down = down;
+        e.x = ex;
+        e.y = ey;
+        caliper_core_event(c.core, &e);
+    };
+    event(CALIPER_EVENT_MOUSE_MOVE, 0, 0, x + w * 0.5f, y + h * 0.5f);
+    c.frames(2);
+    event(CALIPER_EVENT_KEY, ImGuiKey_U, 1);
+    c.frames(1);
+    event(CALIPER_EVENT_KEY, ImGuiKey_U, 0);
+    c.frames(3);
+    CHECK(sv->up_mode() == cs::Axis::PosZ);
+    CHECK(sv->up_chosen());
+    const std::vector<uint8_t> z_up = canvas();
+    shot("scene-z-up.png", z_up);
+    // The switch keeps the bar.
+    const cs::ScaleBar bar_z = sv->scale_bar(w, h);
+    CHECK(bar_z.label == bar.label);
+    CHECK(bar_row(z_up).first == span);
+    // U again steps back to Y up; with the option off no bar is drawn.
+    event(CALIPER_EVENT_KEY, ImGuiKey_U, 1);
+    c.frames(1);
+    event(CALIPER_EVENT_KEY, ImGuiKey_U, 0);
+    c.frames(2);
+    CHECK(sv->up_mode() == cs::Axis::PosY);
+    sv->set_scale_bar(false);
+    c.frames(2);
+    CHECK(bar_row(canvas()).first == 0);
+}
+
+TEST_CASE("live_views/scene: a 2-D scene has no up-axis segments and an exact scale bar without \"at target\"") {
+    Core c(900, 640);
+    if (!c.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU: " << c.err());
+    std::string why;
+    REQUIRE_MESSAGE(caliper_live_views::scene_open(c.core, "image", wire::SceneView{CALIPER_NET_SPACE_2D, "-y", "px"}, &why),
+                    why);
+    caliper_live_views::SceneView* sv = caliper_live_views::scene_view(c.core, "image");
+    REQUIRE(sv != nullptr);
+    static const float xy[3][2] = {{0, 0}, {640, 480}, {320, 240}};
+    wire::SceneUpdate u;
+    u.sub = 1;
+    u.view = "image";
+    u.seq = 2;
+    u.path = "corners";
+    u.part = CALIPER_NET_PART_POINTS;
+    u.arrays.push_back(wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {3, 2}, xy, sizeof xy));
+    REQUIRE_MESSAGE(caliper_live_views::scene_apply(c.core, "image", u, &why), why);
+    c.frames(4);
+    CHECK(sv->up_choices().empty());
+    caliper_live_views::View* v = caliper_live_views::find(c.core, "image");
+    REQUIRE(v != nullptr);
+    const cs::ScaleBar bar = sv->scale_bar(v->geo_area[2], v->geo_area[3]);
+    REQUIRE(bar.visible);
+    MESSAGE("2-D: the bar says ", bar.label, " over ", bar.pixels, " px");
+    CHECK(bar.label.find("at target") == std::string::npos);
+    const double upp = 2.0 * std::get<cs::PanZoom>(sv->camera()).half_height / v->geo_area[3];
+    CHECK(std::fabs(bar.pixels - bar.length / upp) <= 0.5);
+    if (const char* dir = std::getenv("CALIPER_TEST_SHOTS"); dir && *dir) {
+        std::vector<uint8_t> px(900 * 640 * 4);
+        REQUIRE(caliper_core_read_pixels(c.core, px.data(), 900 * 4) == 1);
+        const std::string file = std::string(dir) + "/scene-2d.png";
+        CHECK(stbi_write_png(file.c_str(), 900, 640, 4, px.data(), 900 * 4) != 0);
+        MESSAGE("capture written: ", file);
+    }
 }
 
 CALIPER_GPU_TEST_MAIN()

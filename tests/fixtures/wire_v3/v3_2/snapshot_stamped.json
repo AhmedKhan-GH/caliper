@@ -1,0 +1,89 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 328,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 263,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 2,
+    "type": 48
+  },
+  "meta": {
+    "axes": [],
+    "colormap": 0,
+    "data_view": {
+      "source": "layer0"
+    },
+    "flags": 0,
+    "kind": 1,
+    "sections": [
+      {
+        "dtype": 0,
+        "name": "data",
+        "shape": [
+          2,
+          2
+        ]
+      },
+      {
+        "dtype": 3,
+        "name": "stamp",
+        "shape": [
+          2
+        ]
+      }
+    ],
+    "seq": 5,
+    "stamp_ns": 81234567894123,
+    "stats": [
+      0.0,
+      3.0
+    ],
+    "sub": 1,
+    "view": "attn",
+    "vmax": 1.0,
+    "vmin": 0.0
+  },
+  "meta_offset": 32,
+  "name": "v3_2/snapshot_stamped",
+  "section_lengths": [
+    16,
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 16,
+      "name": "data",
+      "offset": 296,
+      "shape": [
+        2,
+        2
+      ],
+      "values": [
+        0.0,
+        1.0,
+        2.0,
+        3.0
+      ]
+    },
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 16,
+      "name": "stamp",
+      "offset": 312,
+      "shape": [
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789
+      ]
+    }
+  ],
+  "type_name": "snapshot"
+}

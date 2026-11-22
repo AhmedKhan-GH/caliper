@@ -9,31 +9,49 @@
 
 namespace caliper_host {
 
-std::unique_ptr<HostRenderer> core_select_renderer() {
-    // Renderer seam (docs/applets/rendering.md): backend hints run before the window
-    // exists; init() runs after. On Apple the default is Metal (device-resident
-    // tensors, zero CPU staging). CALIPER_RENDERER=gl selects the frozen GL
-    // fallback; off Apple, GL is the only backend besides Vulkan on Win32.
+namespace {
+
+// What a refusal calls each renderer.
+const char* display_name(const char* name) {
+    if (std::strcmp(name, "metal") == 0) return "Metal";
+    if (std::strcmp(name, "vulkan") == 0) return "Vulkan";
+    return name;
+}
+
+}  // namespace
+
+std::unique_ptr<HostRenderer> core_select_renderer(std::string* why) {
+    // Renderer seam (docs/applets/rendering.md): backend hints run before
+    // the window exists; init() runs after. Metal on Apple and Vulkan on
+    // Windows (device-resident CUDA tensors through external-memory interop).
     const char* want = std::getenv("CALIPER_RENDERER");
-    bool want_gl = want && std::strcmp(want, "gl") == 0;
-    std::unique_ptr<HostRenderer> renderer;
+    if (want && std::strcmp(want, "gl") == 0) {
+        if (why)
+            *why = "CALIPER_RENDERER=gl asks for the OpenGL renderer, which was removed; "
+                   "unset it, and Caliper draws with Metal on macOS and Vulkan on Windows";
+        return nullptr;
+    }
 #ifdef __APPLE__
-    if (!want_gl) renderer = make_metal_renderer();
+    return make_metal_renderer();
 #elif defined(_WIN32)
-    // Windows default is Vulkan (Phase 4: device-resident CUDA tensors via
-    // external-memory interop). Same fallback contract as Metal: if init()
-    // fails (no Vulkan driver, RDP, ...) GL takes over in the host.
-    if (!want_gl) renderer = make_vulkan_renderer();
+    return make_vulkan_renderer();
 #else
-    (void)want_gl;
+    if (why)
+        *why = "this platform has no renderer: Caliper draws with Metal on macOS and "
+               "Vulkan on Windows";
+    return nullptr;
 #endif
-    if (!renderer) renderer = make_renderer("gl");
-    return renderer;
+}
+
+std::string renderer_start_refusal(const char* name, const std::string& why) {
+    return std::string("the ") + display_name(name) + " renderer could not start (" +
+           (why.empty() ? std::string("no reason given") : why) +
+           "), and there is no fallback renderer until the WebGPU fallback through Dawn lands";
 }
 
 void core_create_ui_context() {
     // Host-owned ImGui/ImPlot contexts must exist before the renderer
-    // initializes its ImGui backends. None of these touch GL/Metal.
+    // initializes its ImGui backends. None of these touch the GPU.
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImPlot::CreateContext();

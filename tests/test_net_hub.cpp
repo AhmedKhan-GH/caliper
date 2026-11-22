@@ -1342,6 +1342,8 @@ TEST_CASE("net/hub: the token and the hub file") {
 // Protocol 3.1 through the hub: controls and linked selection.
 namespace {
 const std::vector<std::string> kCaps31 = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION};
+// What the hub announces: 3.1 and the scenes of the 3.2 draft (tests/test_net_hub_32.cpp).
+const std::vector<std::string> kHubCaps = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_SELECTION};
 const std::vector<std::string> kProducer31 = {CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_CONTROLS,
                                               CALIPER_NET_CAP_SELECTION};
 
@@ -1363,7 +1365,7 @@ TEST_CASE("net/hub 3.1: a late viewer gets the controls and selections right aft
     auto p = producer(w, h, "clp-31", 1, 1763200000000ull, kProducer31, true);
     // The hub announces both capabilities, and tells the producer it forwards no control.
     REQUIRE(p->welcome);
-    CHECK(p->welcome->capabilities == kCaps31);
+    CHECK(p->welcome->capabilities == kHubCaps);
     CHECK(p->welcome->control == false);
     p->send_selection("samples", {1, 5}, "heat");
     p->send_selection("step", {});   // an empty selection is kept, not sent to a late viewer
@@ -1373,7 +1375,7 @@ TEST_CASE("net/hub 3.1: a late viewer gets the controls and selections right aft
     auto v31 = viewer(w, h, kCaps31);
     REQUIRE(w.until([&] { return v31->views() && v31->views()->session && v31->last<wire::Selection>(); }));
     const wire::Welcome* wel = v31->last<wire::Welcome>();
-    CHECK(wel->capabilities == kCaps31);
+    CHECK(wel->capabilities == kHubCaps);
     CHECK(wel->control == false);
     // VIEWS (with the item spaces), then CONTROLS, then the one non-empty SELECTION.
     const int iv = v31->first_index(CALIPER_NET_MSG_VIEWS), ic = v31->first_index(CALIPER_NET_MSG_CONTROLS),

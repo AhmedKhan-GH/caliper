@@ -121,7 +121,7 @@ A further measurement of the same attach mode uses the `TinyCNN` of `train_show.
 
 ## Python Calls
 
-With no viewer attached, 100,000 calls per row give these costs. A `caliper.show` call takes 0.167 µs at the median, with a p99 of 0.291 to 0.292 µs. A `caliper.series(1.0)` call takes 0.125 µs at the median, with a p99 of 0.209 µs. A `caliper.step()` call with no command in the queue only counts the step, and it takes about 22 ns on Apple silicon.
+With no viewer attached, 100,000 calls per row give these costs. A `caliper.show` call takes 0.167 µs at the median, with a p99 of 0.291 to 0.292 µs. A `caliper.series(1.0)` call takes 0.125 µs at the median, with a p99 of 0.209 µs. A `caliper.step()` call with no command in the queue only counts the step, and it takes about 22 ns on Apple silicon. A scene call also runs its argument checks, which read host metadata only. With no viewer of the scene, `scene.mesh` (1,681 vertices, 3,200 triangles, values), `scene.lines` (a strip of 200) and `scene.points` (one point) take 2.33 to 2.83 µs at the median, with a p99 of 3.08 to 3.63 µs. These rows come from `python/bench/bench_call_cost.py` with MPS tensors and a server without a viewer, at a load average of 1.1, where the existing calls measured as in the rows above.
 
 The `histogram` call bins with `index_add_` and not with `torch.histc`, because `torch.histc` on MPS drains the queue. The measured drain was 15 to 53 ms.
 

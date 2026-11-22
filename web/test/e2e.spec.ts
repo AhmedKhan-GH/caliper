@@ -8,7 +8,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
-import { drawn, expect, gpuPath, REPO, roundTrip, serve, shotPath, WEB, wireModule } from './util.js';
+import { drawn, expect, REPO, roundTrip, serve, shotPath, WEB, wireModule } from './util.js';
 
 const PYTHON = process.env.CALIPER_PYTHON ?? path.join(REPO, '.venv', 'bin', 'python');
 
@@ -53,14 +53,14 @@ test('the viewer page shows every view of the stream', async ({ page, producer }
   await expect(page.locator('.wordmark')).toHaveText('Caliper');
   await roundTrip(page.locator('#script')).toHaveText('train_mock.py');
   await roundTrip(page.locator('#state .text')).toHaveText('connected');
-  const gpu = gpuPath(info);
+  // No WebAssembly views are served here, so the element's own views draw every view, with Canvas 2D.
   const got = await page.evaluate(() => [...document.querySelectorAll('caliper-view')].map((e) => {
     const s = (e as HTMLElement & { debugState(): Record<string, unknown> }).debugState();
     return [s.view, s.kind, s.renderer];
   }));
   expect(got).toEqual([
-    ['loss', 'series', 'canvas2d'], ['weights', 'heatmap', gpu], ['attention', 'heatmap', gpu],
-    ['embedding', 'points', gpu], ['weight_hist', 'histogram', 'canvas2d'], ['input', 'image', gpu],
+    ['loss', 'series', 'canvas2d'], ['weights', 'heatmap', 'canvas2d'], ['attention', 'heatmap', 'canvas2d'],
+    ['embedding', 'points', 'canvas2d'], ['weight_hist', 'histogram', 'canvas2d'], ['input', 'image', 'canvas2d'],
   ]);
   // Data keeps arriving: the newest snapshot of a view advances.
   const seq0 = (await state(page, 'weights')).seq as number;

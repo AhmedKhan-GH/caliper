@@ -1,6 +1,6 @@
 # CI
 
-Caliper builds and tests on GitHub Actions. Four workflows run, two lanes build the code, and two kinds of cache speed up the runs.
+Caliper builds and tests on GitHub Actions. Five workflows run, two lanes build the code, and two kinds of cache speed up the runs.
 
 ## Workflows
 
@@ -8,6 +8,7 @@ Caliper builds and tests on GitHub Actions. Four workflows run, two lanes build 
 |---|---|---|---|
 | Build | `.github/workflows/build.yml` | pushes to `main` and every pull request, except changes only to `site/`, `docs/`, `design/`, `mkdocs.yml` or Markdown files; also manually | builds Caliper and runs the test suite on macOS and Windows |
 | Browser views | `.github/workflows/web.yml` | pull requests and pushes to `main` that change a source of the WebAssembly views, the `web/` package, the Python package's browser files or the scripts that handle them; also manually | builds the WebAssembly views at the pinned Emscripten, checks them and the `<caliper-view>` element in headless Chromium (see [The Browser views tests](#browser-views-tests)), and uploads them as the artifact `caliper-views`. For `main` and on request, it also builds the wheel with them |
+| Shaders | `.github/workflows/shaders.yml` | pull requests and pushes to `main` that change the shader sources, their generated outputs, the header of the graphics layer or `tools/shaders/`; also manually | builds the pinned Naga driver (cached), regenerates every shader output and fails on a difference from the committed files or on a source that does not compile, tests the generator, validates the SPIR-V with `spirv-val` and compiles the generated headers as C++17 ([Shader Authoring](../applets/shader-authoring.md)) |
 | Docs | `.github/workflows/docs.yml` | pull requests that touch `docs/`, `design/`, `docs-theme/`, `mkdocs.yml`, the files the docs embed, or the docstrings and headers of the API reference; also manually | builds the docs site and the design pages with `--strict`, so a broken link fails the pull request, checks that the API reference covers every public symbol, and publishes nothing |
 | Deploy Pages | `.github/workflows/pages.yml` | pushes to `main` that touch `site/`, `docs/`, `design/`, `mkdocs.yml` or the files the docs embed | builds the docs with MkDocs and publishes them with the landing page, and checks that the design pages build, without publishing them |
 
@@ -18,7 +19,7 @@ A newer push to the same branch cancels a Build run still in progress.
 | Lane | Runner | libtorch | Graphics and GPU | Builder |
 |---|---|---|---|---|
 | macOS | `macos-15` (Apple Silicon) | arm64 archive | Metal backend and MPS test cases run here | built, and its `builder_*` tests run |
-| Windows | `windows-latest` with MSVC | CPU archive | GLEW prebuilt zip, Vulkan through volk with no SDK, and glslang fetched and built in the tree. `USE_CUDA` falls back when no CUDA toolkit is found | `CALIPER_WITH_BUILDER` is OFF by default, because the builder has not been compiled with MSVC yet |
+| Windows | `windows-latest` with MSVC | CPU archive | Vulkan through volk with no SDK, and glslang fetched and built in the tree. `USE_CUDA` falls back when no CUDA toolkit is found | `CALIPER_WITH_BUILDER` is OFF by default, because the builder has not been compiled with MSVC yet |
 
 The macOS builder lives under `src/builder/`. `scripts/check_macos_min.py` fails the macOS lane unless the `caliper` executable, the viewer, the embed library and everything built against the installed packages say macOS 14.0 as their minimum. The Browser views workflow checks the wheel's platform tag and the extensions in it the same way.
 
@@ -31,6 +32,7 @@ Each lane runs these steps:
 4. **Build** with `cmake --build cmake-build-release --parallel`. The core build compiles no applets.
 5. **Test** with `ctest --test-dir cmake-build-release --output-on-failure --timeout 600`.
    - The GPU suites (gfx, export, embed, torch) skip when the runner has no usable device, and ctest reports them as skipped.
+   - The Windows runner has no GPU, and Caliper has no fallback renderer until the WebGPU fallback through Dawn lands, so every test there that needs a renderer skips and says why. These are `caliper_gfx_tests` (`no Vulkan ICD`), the drawing cases of `caliper_export_tests` and `caliper_embed_tests`, `caliper_cli_shot_temp` and `caliper_cli_shot_data_dir` (`run skipped: no GPU`), and the offscreen run of `caliper_embed_install` (`headless run skipped: no GPU`). The refusal tests (`caliper_cli_app_no_renderer`, `caliper_cli_shot_no_renderer`, `caliper_cli_app_renderer_gl`, `caliper_cli_shot_renderer_gl` and the `embed/refusal` cases) need no GPU and run on both lanes.
    - Set `CALIPER_REQUIRE_GPU=1` in a lane that must have a GPU, to turn those skips into failures.
 6. **On failure,** upload `Testing/Temporary/LastTest.log` as an artifact.
 7. **Build the applets against the installed SDK** with `scripts/build_applets_against_sdk.sh`. The script installs the SDK from the core build. Then it builds `examples/hello`, `examples/sine_scope` and every scope in its own build folder, with only `-DCMAKE_PREFIX_PATH` pointing at the SDK, as a developer outside the repository would. The Windows lane skips `embed_scope` and `gpt_scope`, because they need curl and zlib, which Windows provides only inside the core build.
@@ -51,7 +53,7 @@ The second step runs the `canvas2d` project, with WebGPU off, on two workers and
 
 ## Caches
 
-**libtorch and GLEW.** The `actions/cache` action stores them. The key includes `LIBTORCH_VERSION`, set at the top of `build.yml`. That version must match `PYTORCH_VERSION` in `cmake/Dependencies.cmake`. If one changes without the other, the cache misses and the run does not reuse a stale archive.
+**libtorch.** The `actions/cache` action stores it. The key includes `LIBTORCH_VERSION`, set at the top of `build.yml`. That version must match `PYTORCH_VERSION` in `cmake/Dependencies.cmake`. If one changes without the other, the cache misses and the run does not reuse a stale archive.
 
 **Compiled objects.** Every compile runs through [sccache](https://github.com/mozilla/sccache), which stores each object in the GitHub Actions cache (`SCCACHE_GHA_ENABLED`). A run recompiles only the translation units whose preprocessed source, flags or compiler changed.
 

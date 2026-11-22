@@ -1,0 +1,21 @@
+# bench_show.py --mode attach --device mps --size 1024 --seconds 5  (2026-11-16 00:06:16)
+torch 2.15.0, W 1024x1024 f32 (4.0 MB), show(W) every step, autoscaled, 5 s per row after 1 s warm-up, load average 2.8 2.6 3.6 (18 cores); headless viewer
+RESULT {"row": "baseline-A", "steps": 9513, "seconds": 9.595, "steps_per_s": 991.4}
+RESULT {"row": "control-record60", "steps": 10168, "seconds": 5.017, "steps_per_s": 2026.9}
+RESULT {"row": "sampler-60Hz", "steps": 9962, "seconds": 5.016, "steps_per_s": 1985.9, "shows": 9962, "snapshots": 295, "snap_us_med": 44.9, "snap_us_p95": 69.9, "skip_us_med": 1.96, "skip_us_p95": 2.54, "ring": {"taken": 295, "published": 295, "ring_full": 26, "superseded": 0, "skipped": 9641}, "d_mps_MB": 0.0, "d_rss_MB": 0.3, "t_ns": [13670369060916, 13675385536375]}
+RESULT {"row": "sampler-off", "steps": 9741, "seconds": 5.01, "steps_per_s": 1944.3, "shows": 9741, "snapshots": 660, "snap_us_med": 28.3, "snap_us_p95": 46.7, "skip_us_med": 7.83, "skip_us_p95": 11.96, "ring": {"taken": 660, "published": 659, "ring_full": 9081, "superseded": 1, "skipped": 0}, "d_mps_MB": 0.0, "d_rss_MB": 0.09, "t_ns": [13676639011166, 13681649020291]}
+VIEWER {"row": "sampler-60Hz", "lat_ms_med": 24.89, "lat_ms_p95": 32.92, "lat_n": 259}
+VIEWER {"row": "sampler-off", "lat_ms_med": 16.89, "lat_ms_p95": 20.12, "lat_n": 262}
+RESULT {"row": "baseline-B", "steps": 9701, "seconds": 9.708, "steps_per_s": 999.2}
+load average at the end 3.0 2.7 3.6
+
+attach mps 1024x1024: baseline mean 995.3 steps/s (A 991.4, B 999.2), commit control 2026.9
+| row | steps/s | % baseline | % control | snapshot us med (p95) | skip us med | snapshots | ring full | latency ms med (p95) [n] | d MPS MB | d RSS MB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| baseline-A | 991.4 | 99.6 | 48.9 | - | - | - | - | - | - | - |
+| control-record60 | 2026.9 | 203.6 | 100.0 | - | - | - | - | - | - | - |
+| sampler-60Hz | 1985.9 | 199.5 | 98.0 | 44.9 (69.9) | 1.96 | 295 | 26 | 24.89 (32.92) [259] | 0.0 | 0.3 |
+| sampler-off | 1944.3 | 195.3 | 95.9 | 28.3 (46.7) | 7.83 | 660 | 9081 | 16.89 (20.12) [262] | 0.0 | 0.09 |
+| baseline-B | 999.2 | 100.4 | 49.3 | - | - | - | - | - | - | - |
+  sampler-60Hz: frame ms p50 20.03 p99 20.39, GPU ms update p50 0.0149 p99 0.0572, frame p50 0.02215, copies per frame 0.0
+  sampler-off: frame ms p50 19.81 p99 20.40, GPU ms update p50 0.0146 p99 0.0715, frame p50 0.0225, copies per frame 0.0

@@ -135,11 +135,18 @@ public:
         }
         if (hidden_) caliper_host::use_background_activation_policy();
 
-        // Renderer seam (docs/applets/rendering.md): backend selection (env
-        // CALIPER_RENDERER + platform default, GL fallback) now lives in
-        // libcaliper's core_lifecycle so every embedder gets the same policy.
-        // The host still owns the window and drives init()/the fallback below.
-        renderer_ = caliper_host::core_select_renderer();
+        // Renderer seam (docs/applets/rendering.md): the choice of the
+        // platform's renderer lives in libcaliper's core_lifecycle so every
+        // embedder gets the same policy. The host owns the window and starts
+        // the renderer below. There is no fallback renderer: where none is
+        // chosen or it cannot start, the app refuses with one message.
+        std::string refusal;
+        renderer_ = caliper_host::core_select_renderer(&refusal);
+        if (!renderer_) {
+            std::cerr << "caliper: " << refusal << std::endl;
+            glfwTerminate();
+            return false;
+        }
 
         // Display asleep / headless-ish states can return NULL here — fall
         // back to a sane default window instead of crashing at startup.
@@ -194,22 +201,14 @@ public:
         sternbild::load_fonts();
         sternbild::apply_style();
 
-        // Backends whose window hints differ (Metal = NO_API, GL = a GL
-        // context) cannot share a window, so a failed backend init recreates
-        // the window for the fallback. GL is the guaranteed fallback.
         if (!create_window_and_init(ww, wh)) {
-            if (std::string(renderer_->name()) != "gl") {
-                std::cerr << "[renderer] " << renderer_->name()
-                          << " init failed; falling back to gl" << std::endl;
-                renderer_ = caliper_host::make_renderer("gl");
-                if (!create_window_and_init(ww, wh)) {
-                    glfwTerminate();
-                    return false;
-                }
-            } else {
-                glfwTerminate();
-                return false;
-            }
+            std::cerr << "caliper: "
+                      << caliper_host::renderer_start_refusal(
+                             renderer_->name(), window_ ? renderer_->start_error()
+                                                        : std::string("GLFW could not create a window"))
+                      << std::endl;
+            glfwTerminate();
+            return false;
         }
         std::cerr << "[renderer] " << renderer_->name() << std::endl;
         landing_.log("renderer", renderer_->name());
@@ -1818,11 +1817,9 @@ private:
         return "~" + path.substr(h.size());
     }
 
-    // (Re)create the GLFW window for the current renderer and init the backend.
-    // glfwDefaultWindowHints() clears sticky hints from a prior attempt (e.g.
-    // Metal's GLFW_NO_API) so the fallback backend gets a clean slate.
+    // Creates the GLFW window with the renderer's hints and starts the
+    // renderer on it; false when either fails (window_ says which).
     bool create_window_and_init(int ww, int wh) {
-        if (window_) { glfwDestroyWindow(window_); window_ = nullptr; }
         glfwDefaultWindowHints();
         renderer_->window_hints();
         if (hidden_) {
@@ -2008,10 +2005,8 @@ int main(int argc, char** argv) {
         caliper::app_data_guard(cl.hidden ? "the hidden app (--hidden)" : "the hidden app (CALIPER_HIDDEN=1)");
     CaliperApp app(cl.applet_dirs, hidden);
     app.set_workspace(caliper_host::app_session_options(cl).workspace);
-    if (!app.initialize()) {
-        std::cerr << "Initialization failed" << std::endl;
-        return 1;
-    }
+    // initialize() prints its own refusal, such as the renderer's.
+    if (!app.initialize()) return 1;
     app.start_session(cl);
     if (caliper_host::api_wanted(cl)) app.start_api(cl);
     if (!cl.url.empty()) app.attach_at_start(cl.url);

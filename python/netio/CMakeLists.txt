@@ -66,7 +66,7 @@ if(NETIO_ASAN AND EXISTS ${REPO}/tests/test_net_wire.cpp)
         GIT_TAG v2.4.11 GIT_SHALLOW TRUE)
     FetchContent_MakeAvailable(doctest)
     add_executable(netio_net_tests ${REPO}/tests/test_main.cpp ${REPO}/tests/test_net_wire.cpp
-                   ${REPO}/tests/test_net_ws.cpp)
+                   ${REPO}/tests/test_net_ws.cpp ${REPO}/tests/test_net_wire_32.cpp)
     target_compile_definitions(netio_net_tests PRIVATE CALIPER_TEST_SOURCE_ROOT="${REPO}")
     target_link_libraries(netio_net_tests PRIVATE netio_net doctest::doctest)
 endif()

@@ -2,16 +2,30 @@
 // webgpu_renderer.h). Browser-only: it targets Emscripten's emdawnwebgpu port,
 // so the surface is a canvas, presentation happens when the frame callback
 // returns to the browser, and every completion is a callback, never a wait.
+//
+// The surface, the frame and ImGui are drawn here directly; every resource and
+// draw of the live views goes through the graphics layer (webgpu_backend.h):
+//   RGBA8 textures     create_texture (sampled, storage, copy source and
+//                      destination); an upload is write_texture; the
+//                      ImTextureID is imgui_texture_id.
+//   The colormap       per texture a source buffer, the colour table and the
+//                      thresholds as layer buffers with one bind group; each
+//                      update writes the bytes that changed and submits a Frame
+//                      of one dispatch whose parameters are a uniform in the
+//                      frame's arena.
+//   Readback           read_texture, handed over once the layer has it
+//                      (release_retired).
+// The points and scene views draw through the scene core on the same backend
+// (src/host/live/live_points.h, live_scene.h).
 #include "webgpu_renderer.h"
+#include "webgpu_programs.h"
 
 #include <imgui.h>
 #include <imgui_impl_wgpu.h>
 
 #include <emscripten/emscripten.h>
 
-#include "tensor_bridge.h"   // map_f32_to_rgba8: the colormap's reference
-
-#include <caliper/services/geometry_v1_1.h>   // CALIPER_GEOM_*
+#include "tensor_bridge.h"   // colormap_thresholds, from the colormap's reference
 
 #include <cmath>
 #include <cstdio>
@@ -19,88 +33,37 @@
 
 namespace caliper_host {
 
+namespace gfx = caliper_gfx;
+namespace prog = webgpu_programs;
+
 namespace {
 
-// The heatmap colormap, written in WGSL by hand. It gives exactly the bytes of
-// the CPU reference map_f32_to_rgba8 (tensor_bridge.cpp), on every adapter:
-// WGSL allows a division 2.5 ULP of error and lets an implementation assume
-// no NaN or infinity, so recomputing idx = clamp((v - vmin)/(vmax - vmin), 0,
-// 1) * 255 + 0.5 on the GPU differed from the reference by one level for a
-// few texels on Metal. Instead the CPU finds, for each index k in 1..255, the
-// threshold T[k]: the first float at which the reference gives index k or
-// more (the last one, for a decreasing range). The reference is monotone in
-// v, because every IEEE operation in it is, so the index of v is the number
-// of thresholds it has passed, which the shader finds with a binary search of
-// exact float comparisons. mode 0 is a range whose width vmax - vmin is zero,
-// infinite or NaN, where the reference maps every value to index 0 (t is 0 or
-// NaN), 1 an increasing and 2 a decreasing one; NaN takes index 0, tested on
-// the bits. The points shader colours by value the same way.
-// Push constants do not exist in WebGPU, so the parameters are a uniform.
-const char* kColormapWgsl = R"wgsl(
-struct CmapParams {
-    w: u32, h: u32, sx: u32, sy: u32,
-    vmin: f32, vmax: f32, mode: u32, pad1: u32,
-};
-@group(0) @binding(0) var<storage, read> src: array<f32>;
-@group(0) @binding(1) var<storage, read> lut: array<u32>;
-@group(0) @binding(2) var<uniform> p: CmapParams;
-@group(0) @binding(3) var dst: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(4) var<storage, read> th: array<f32>;   // T[1..255]
-
-fn is_nan_bits(v: f32) -> bool {
-    let b = bitcast<u32>(v);
-    return (b & 0x7f800000u) == 0x7f800000u && (b & 0x007fffffu) != 0u;
-}
-
-fn index_of(v: f32) -> u32 {
-    if (is_nan_bits(v) || p.mode == 0u) { return 0u; }
-    // The first k in 1..255 whose threshold v has not passed; the index is k - 1.
-    var lo = 1u;
-    var hi = 256u;
-    loop {
-        if (lo >= hi) { break; }
-        let mid = (lo + hi) / 2u;
-        let passed = select(v <= th[mid], th[mid] <= v, p.mode == 1u);
-        if (passed) { lo = mid + 1u; } else { hi = mid; }
-    }
-    return lo - 1u;
-}
-
-@compute @workgroup_size(16, 16)
-fn cmap_f32(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= p.w || gid.y >= p.h) { return; }
-    let c = lut[index_of(src[gid.y * p.sy + gid.x * p.sx])];
-    let rgba = vec4<f32>(f32(c & 0xffu), f32((c >> 8u) & 0xffu),
-                         f32((c >> 16u) & 0xffu), f32((c >> 24u) & 0xffu)) / 255.0;
-    textureStore(dst, vec2<i32>(gid.xy), rgba);
-}
-)wgsl";
-
-struct CmapParams {   // matches the WGSL struct (32 bytes)
-    uint32_t w, h, sx, sy;
-    float vmin, vmax;
-    uint32_t mode, pad1;
-};
-static_assert(sizeof(CmapParams) == 32, "WGSL uniform layout");
+// The colormap's thresholds (webgpu_programs.h, kColormap). The
+// shaders give exactly the bytes of the CPU reference map_f32_to_rgba8
+// (tensor_bridge.cpp) on every adapter: WGSL allows a division 2.5 ULP of
+// error and lets an implementation assume no NaN or infinity, so recomputing
+// idx = clamp((v - vmin)/(vmax - vmin), 0, 1) * 255 + 0.5 on the GPU differed
+// from the reference by one level for a few texels on Metal. Instead the CPU
+// finds, for each index k in 1..255, the threshold T[k]: the first float at
+// which the reference gives index k or more (the last one, for a decreasing
+// range), with colormap_thresholds (tensor_bridge.h). The reference is
+// monotone in v, because every IEEE operation in it
+// is, so the index of v is the number of thresholds it has passed, which the
+// shader finds with a binary search of exact float comparisons. mode 0 is a
+// range whose width vmax - vmin is zero, infinite or NaN, where the reference
+// maps every value to index 0 (t is 0 or NaN), 1 an increasing and 2 a
+// decreasing one; NaN takes index 0, tested on the bits.
 
 WGPUStringView sv(const char* s) { return WGPUStringView{s, WGPU_STRLEN}; }
 
-template <class T>
-void release(T*& h, void (*fn)(T*)) {
-    if (h) fn(h);
-    h = nullptr;
+void report(gfx::Backend& b, const char* what) {
+    std::fprintf(stderr, "[webgpu] %s: %s\n", what, b.last_error().c_str());
 }
 
-void release_tex(WGPUTexture& t) { if (t) { wgpuTextureDestroy(t); wgpuTextureRelease(t); } t = nullptr; }
-void release_view(WGPUTextureView& v) { if (v) wgpuTextureViewRelease(v); v = nullptr; }
-void release_buf(WGPUBuffer& b) { if (b) { wgpuBufferDestroy(b); wgpuBufferRelease(b); } b = nullptr; }
-void release_bg(WGPUBindGroup& g) { if (g) wgpuBindGroupRelease(g); g = nullptr; }
-
-WGPUBuffer make_buffer(WGPUDevice d, uint64_t size, WGPUBufferUsage usage) {
-    WGPUBufferDescriptor bd = WGPU_BUFFER_DESCRIPTOR_INIT;
-    bd.size = (size + 3) & ~uint64_t(3);
-    bd.usage = usage;
-    return wgpuDeviceCreateBuffer(d, &bd);
+// Releases a handle that is set; a null one would only leave an error behind.
+template <class H> void drop(gfx::Backend& b, H& h) {
+    if (h) b.release(h);
+    h = H{};
 }
 
 }  // namespace
@@ -145,7 +108,7 @@ bool WebGpuRenderer::init(GLFWwindow*) {
     ii.DepthStencilFormat = WGPUTextureFormat_Undefined;
     if (!ImGui_ImplWGPU_Init(&ii)) return false;
     imgui_ready_ = true;
-    return ensure_colormap_pipeline();
+    return init_layer();
 }
 
 void WebGpuRenderer::configure_surface(int w, int h) {
@@ -167,8 +130,23 @@ void WebGpuRenderer::new_frame() {
 }
 
 void WebGpuRenderer::release_retired() {
-    for (auto& v : retired_views_) release_view(v);
-    retired_views_.clear();
+    if (!gfx_) return;
+    // The readbacks the layer has finished.
+    for (size_t i = 0; i < readbacks_.size();) {
+        std::vector<uint8_t> out;
+        if (!gfx_->alive(readbacks_[i].rb)) {   // refused or cancelled
+            auto done = std::move(readbacks_[i].done);
+            readbacks_.erase(readbacks_.begin() + (std::ptrdiff_t)i);
+            done({});
+        } else if (gfx_->take_readback(readbacks_[i].rb, &out)) {
+            auto done = std::move(readbacks_[i].done);
+            readbacks_.erase(readbacks_.begin() + (std::ptrdiff_t)i);
+            done(std::move(out));
+        } else {
+            ++i;
+        }
+    }
+    gfx_->release_retired();
 }
 
 void WebGpuRenderer::render(int fb_w, int fb_h) {
@@ -231,40 +209,23 @@ void WebGpuRenderer::on_work_done(double submitted_ms) {
     ++gpu_n_;
 }
 
-void WebGpuRenderer::free_tex(Tex& t) {
-    release_bg(t.bind);
-    release_buf(t.src);
-    release_buf(t.lut);
-    release_buf(t.params);
-    release_buf(t.thresholds);
-    release_view(t.view);
-    release_tex(t.texture);
-    release_view(t.depth_view);
-    release_tex(t.depth);
-}
-
 void WebGpuRenderer::shutdown() {
-    for (auto& kv : tex_) free_tex(kv.second);
-    tex_.clear();
-    release_retired();
-    for (auto& kv : allocs_) release_buf(kv.second.buffer);
-    allocs_.clear();
-    for (auto& a : spare_allocs_) release_buf(a.buffer);
-    spare_allocs_.clear();
-    for (auto& s : slots_) {
-        release_buf(s.params);
-        release_buf(s.lut);
-        release_buf(s.th);
+    if (gfx_) {
+        for (auto& kv : tex_) free_tex(kv.second);
+        for (auto& r : readbacks_) {
+            drop(*gfx_, r.rb);
+            r.done({});
+        }
+        drop(*gfx_, cmap_frame_group_);
+        drop(*gfx_, cmap_pipe_);
+        drop(*gfx_, cmap_prog_);
+        gfx_->release_retired();
+        gfx_.reset();
     }
-    slots_.clear();
-    for (auto& p : points_pipelines_) release(p, wgpuRenderPipelineRelease);
-    release(points_pipeline_layout_, wgpuPipelineLayoutRelease);
-    release(points_layout_, wgpuBindGroupLayoutRelease);
-    release(points_module_, wgpuShaderModuleRelease);
+    tex_.clear();
+    readbacks_.clear();
     if (imgui_ready_) ImGui_ImplWGPU_Shutdown();
     imgui_ready_ = false;
-    release(cmap_layout_, wgpuBindGroupLayoutRelease);
-    release(cmap_pipeline_, wgpuComputePipelineRelease);
     if (surface_) {
         wgpuSurfaceUnconfigure(surface_);
         wgpuSurfaceRelease(surface_);
@@ -272,27 +233,69 @@ void WebGpuRenderer::shutdown() {
     }
 }
 
-// ---- textures ----------------------------------------------------------------
+// The graphics layer's backend on this renderer's device and queue, and what the textures' colormap
+// needs of it: its program, its pipeline and the bind group of its uniform arena.
+bool WebGpuRenderer::init_layer() {
+    std::string adapter;
+    WGPUAdapterInfo info = WGPU_ADAPTER_INFO_INIT;
+    if (adapter_ && wgpuAdapterGetInfo(adapter_, &info) == WGPUStatus_Success) {
+        if (info.description.data)
+            adapter.assign(info.description.data, info.description.length == WGPU_STRLEN
+                                                      ? std::strlen(info.description.data)
+                                                      : info.description.length);
+        wgpuAdapterInfoFreeMembers(info);
+    }
+    gfx_ = gfx::WebGpuBackend::create(device_, queue_, adapter.c_str());
+    if (!gfx_) {
+        std::fprintf(stderr, "[webgpu] the graphics layer's backend could not be made\n");
+        return false;
+    }
+    cmap_prog_ = gfx_->create_program(prog::kColormap);
+    gfx::ComputePipelineDesc cd;
+    cd.program = cmap_prog_;
+    cd.entry = "cmap_f32";
+    cd.label = "caliper.cmap_f32";
+    cmap_pipe_ = gfx_->create_compute_pipeline(cd);
+    // The dynamic uniform is the arena of the pass it is used in: one bind group serves every
+    // dispatch.
+    gfx::BindGroupDesc g;
+    g.group = 0;
+    g.entry_count = 1;
+    g.entries[0].binding = 0;
+    g.entries[0].buffer = gfx::kArena;
+    g.program = cmap_prog_;
+    cmap_frame_group_ = gfx_->create_bind_group(g);
+    if (!cmap_prog_ || !cmap_pipe_ || !cmap_frame_group_) {
+        report(*gfx_, "graphics layer set-up");
+        return false;
+    }
+    return true;
+}
+
 WebGpuRenderer::Tex* WebGpuRenderer::find(uint64_t id) {
     auto it = tex_.find(id);
     if (it != tex_.end()) return &it->second;
     for (auto& kv : tex_)   // an ImTextureID (the view pointer) works too
-        if ((uint64_t)(uintptr_t)kv.second.view == id) return &kv.second;
+        if (gfx_->imgui_texture_id(kv.second.color) == id) return &kv.second;
     return nullptr;
 }
 
+// ---- textures ------------------------------------------------------------------------------------
+
 uint64_t WebGpuRenderer::tex_create_rgba8(int w, int h) {
-    if (w <= 0 || h <= 0) return 0;
-    WGPUTextureDescriptor d = WGPU_TEXTURE_DESCRIPTOR_INIT;
-    d.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst |
-              WGPUTextureUsage_CopySrc | WGPUTextureUsage_StorageBinding;
-    d.dimension = WGPUTextureDimension_2D;
-    d.size = WGPUExtent3D{(uint32_t)w, (uint32_t)h, 1};
-    d.format = WGPUTextureFormat_RGBA8Unorm;
+    if (!gfx_ || w <= 0 || h <= 0) return 0;
+    gfx::TextureDesc d;
+    d.width = (uint32_t)w;
+    d.height = (uint32_t)h;
+    d.format = gfx::Format::RGBA8Unorm;
+    d.usage = gfx::kSampled | gfx::kStorageTex | gfx::kCopySrcTex | gfx::kCopyDstTex;
+    d.label = "caliper.texture";
     Tex t;
-    t.texture = wgpuDeviceCreateTexture(device_, &d);
-    if (!t.texture) return 0;
-    t.view = wgpuTextureCreateView(t.texture, nullptr);
+    t.color = gfx_->create_texture(d);
+    if (!t.color) {
+        report(*gfx_, "tex_create_rgba8");
+        return 0;
+    }
     t.w = w;
     t.h = h;
     const uint64_t id = next_id_++;
@@ -301,562 +304,151 @@ uint64_t WebGpuRenderer::tex_create_rgba8(int w, int h) {
 }
 
 bool WebGpuRenderer::tex_upload_rgba8(uint64_t id, const void* data, int w, int h) {
+    if (!gfx_) return false;
     Tex* t = find(id);
     if (!t || !data || w != t->w || h != t->h) return false;
-    WGPUTexelCopyTextureInfo dst = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
-    dst.texture = t->texture;
-    WGPUTexelCopyBufferLayout layout = WGPU_TEXEL_COPY_BUFFER_LAYOUT_INIT;
-    layout.bytesPerRow = (uint32_t)w * 4;
-    layout.rowsPerImage = (uint32_t)h;
-    const WGPUExtent3D size{(uint32_t)w, (uint32_t)h, 1};
-    wgpuQueueWriteTexture(queue_, &dst, data, (size_t)w * (size_t)h * 4, &layout, &size);
+    if (!gfx_->write_texture(t->color, data, (uint32_t)w * 4)) {
+        report(*gfx_, "tex_upload_rgba8");
+        return false;
+    }
     last_path_ = "cpu-staged";
     return true;
 }
 
-// A released texture is destroyed at once (its memory goes back), and its view
-// is released after this frame's render. The ImGui backend makes one bind
-// group per texture view while it records a frame, keyed by the view's
-// address, and releases all of them at the end of that frame, so no bind
-// group outlives the frame and a later view at the same address gets its own.
-// Holding the view to the end of the frame keeps an image drawn earlier in
-// this frame valid until the frame is recorded. So nothing released survives
-// the frame, however often textures are recreated.
+// The layer destroys a released texture once the last submit that used it completed, at once
+// when none is pending, and keeps its view to the end of the frame (WebGpuBackend::
+// release_retired). The ImGui backend makes one bind group per texture view while it records a
+// frame, keyed by the view's address, and releases all of them at the end of that frame, so no
+// bind group outlives the frame and a later view at the same address gets its own.
 void WebGpuRenderer::tex_release(uint64_t id) {
+    if (!gfx_) return;
     auto it = tex_.find(id);
     if (it == tex_.end()) return;
-    Tex& t = it->second;
-    retired_views_.push_back(t.view);
-    t.view = nullptr;
-    free_tex(t);
+    free_tex(it->second);
     tex_.erase(it);
 }
 
 uint64_t WebGpuRenderer::tex_imtexture_id(uint64_t id) {
-    Tex* t = find(id);
-    return t ? (uint64_t)(uintptr_t)t->view : 0;
+    Tex* t = gfx_ ? find(id) : nullptr;
+    return t ? gfx_->imgui_texture_id(t->color) : 0;
 }
 
-// ---- the WGSL colormap -------------------------------------------------------
-bool WebGpuRenderer::ensure_colormap_pipeline() {
-    if (cmap_pipeline_) return true;
-    WGPUShaderSourceWGSL src = WGPU_SHADER_SOURCE_WGSL_INIT;
-    src.code = sv(kColormapWgsl);
-    WGPUShaderModuleDescriptor md = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
-    md.nextInChain = &src.chain;
-    md.label = sv("caliper.cmap_f32");
-    WGPUShaderModule mod = wgpuDeviceCreateShaderModule(device_, &md);
-    if (!mod) return false;
-    WGPUComputePipelineDescriptor pd = WGPU_COMPUTE_PIPELINE_DESCRIPTOR_INIT;
-    pd.label = sv("caliper.cmap_f32");
-    pd.compute.module = mod;
-    pd.compute.entryPoint = sv("cmap_f32");
-    cmap_pipeline_ = wgpuDeviceCreateComputePipeline(device_, &pd);
-    wgpuShaderModuleRelease(mod);
-    if (!cmap_pipeline_) return false;
-    cmap_layout_ = wgpuComputePipelineGetBindGroupLayout(cmap_pipeline_, 0);
-    return cmap_layout_ != nullptr;
+void WebGpuRenderer::free_tex(Tex& t) {
+    drop(*gfx_, t.cmap);
+    drop(*gfx_, t.src);
+    drop(*gfx_, t.lut);
+    drop(*gfx_, t.th);
+    drop(*gfx_, t.color);
 }
 
 bool WebGpuRenderer::tex_update_mapped_from_host(uint64_t id, const float* data, int w, int h,
-                                                 const uint32_t* lut256, float vmin,
-                                                 float vmax) {
+                                                 const uint32_t* lut256, float vmin, float vmax) {
+    if (!gfx_) return false;
     Tex* t = find(id);
     if (!t || !data || !lut256 || w != t->w || h != t->h) return false;
-    if (!ensure_colormap_pipeline()) return false;
     const uint64_t bytes = (uint64_t)w * (uint64_t)h * 4;
     if (!t->src) {
-        t->src = make_buffer(device_, bytes, WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
-        t->lut = make_buffer(device_, 1024, WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
-        t->params = make_buffer(device_, sizeof(CmapParams),
-                                WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst);
-        t->thresholds = make_buffer(device_, 1024, WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
-        WGPUBindGroupEntry e[5];
-        for (auto& x : e) x = WGPU_BIND_GROUP_ENTRY_INIT;
-        e[0].binding = 0; e[0].buffer = t->src;    e[0].size = bytes;
-        e[1].binding = 1; e[1].buffer = t->lut;    e[1].size = 1024;
-        e[2].binding = 2; e[2].buffer = t->params; e[2].size = sizeof(CmapParams);
-        e[3].binding = 3; e[3].textureView = t->view;
-        e[4].binding = 4; e[4].buffer = t->thresholds; e[4].size = 1024;
-        WGPUBindGroupDescriptor bd = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
-        bd.layout = cmap_layout_;
-        bd.entryCount = 5;
-        bd.entries = e;
-        t->bind = wgpuDeviceCreateBindGroup(device_, &bd);
+        gfx::BufferDesc bd;
+        bd.usage = gfx::kStorage | gfx::kCopyDst;
+        bd.size = bytes;
+        bd.label = "caliper.cmap.src";
+        t->src = gfx_->create_buffer(bd);
+        bd.size = 1024;
+        bd.label = "caliper.cmap.lut";
+        t->lut = gfx_->create_buffer(bd);
+        bd.label = "caliper.cmap.thresholds";
+        t->th = gfx_->create_buffer(bd);
+        gfx::BindGroupDesc g;
+        g.program = cmap_prog_;
+        g.group = 1;
+        g.entry_count = 4;
+        g.entries[0].binding = 0;
+        g.entries[0].buffer = t->src;
+        g.entries[0].size = bytes;
+        g.entries[1].binding = 1;
+        g.entries[1].buffer = t->lut;
+        g.entries[1].size = 1024;
+        g.entries[2].binding = 2;
+        g.entries[2].buffer = t->th;
+        g.entries[2].size = 1024;
+        g.entries[3].binding = 3;
+        g.entries[3].texture = t->color;
+        g.label = "caliper.cmap";
+        if (t->src && t->lut && t->th) t->cmap = gfx_->create_bind_group(g);
+        if (!t->cmap) {
+            report(*gfx_, "colormap set-up");
+            drop(*gfx_, t->src);
+            drop(*gfx_, t->lut);
+            drop(*gfx_, t->th);
+            t->src = t->lut = t->th = {};
+            return false;
+        }
         t->lut_valid = false;
+        t->th_valid = false;
     }
-    wgpuQueueWriteBuffer(queue_, t->src, 0, data, (size_t)bytes);
+    gfx_->write_buffer(t->src, 0, data, bytes);
     if (!t->lut_valid || std::memcmp(t->lut_cache, lut256, 1024) != 0) {
         std::memcpy(t->lut_cache, lut256, 1024);
         t->lut_valid = true;
-        wgpuQueueWriteBuffer(queue_, t->lut, 0, lut256, 1024);
+        gfx_->write_buffer(t->lut, 0, lut256, 1024);
     }
-    // The thresholds change with the range only (an AUTO range changes with
-    // most snapshots; computing them takes some 8,000 reference evaluations).
+    // The thresholds change with the range only (an AUTO range changes with most snapshots;
+    // computing them takes some 8,000 reference evaluations).
     if (!t->th_valid || t->th_vmin != vmin || t->th_vmax != vmax) {
         float T[256];
         t->th_mode = colormap_thresholds(vmin, vmax, T);
-        if (t->th_mode) wgpuQueueWriteBuffer(queue_, t->thresholds, 0, T, sizeof T);
+        if (t->th_mode) gfx_->write_buffer(t->th, 0, T, sizeof T);
         t->th_vmin = vmin;
         t->th_vmax = vmax;
         t->th_valid = true;
     }
-    const CmapParams p{(uint32_t)w, (uint32_t)h, 1u, (uint32_t)w, vmin, vmax, t->th_mode, 0u};
-    wgpuQueueWriteBuffer(queue_, t->params, 0, &p, sizeof p);
-
-    WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(device_, nullptr);
-    WGPUComputePassEncoder cp = wgpuCommandEncoderBeginComputePass(enc, nullptr);
-    wgpuComputePassEncoderSetPipeline(cp, cmap_pipeline_);
-    wgpuComputePassEncoderSetBindGroup(cp, 0, t->bind, 0, nullptr);
-    wgpuComputePassEncoderDispatchWorkgroups(cp, ((uint32_t)w + 15) / 16, ((uint32_t)h + 15) / 16, 1);
-    wgpuComputePassEncoderEnd(cp);
-    WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(enc, nullptr);
-    wgpuQueueSubmit(queue_, 1, &cmd);
-    wgpuCommandBufferRelease(cmd);
-    wgpuComputePassEncoderRelease(cp);
-    wgpuCommandEncoderRelease(enc);
+    const prog::CmapParams p{(uint32_t)w, (uint32_t)h, 1u, (uint32_t)w, vmin, vmax, t->th_mode, 0u};
+    gfx::Frame f;
+    const uint32_t off = f.uniform(&p, sizeof p);
+    const gfx::BindGroup groups[2] = {cmap_frame_group_, t->cmap};
+    const uint32_t offsets[1] = {off};
+    const gfx::Texture writes[1] = {t->color};
+    const uint32_t n = prog::kColormapGroup;
+    f.dispatch(cmap_pipe_, groups, offsets, ((uint32_t)w + n - 1) / n, ((uint32_t)h + n - 1) / n, 1, writes);
+    if (!gfx_->submit(std::move(f))) {
+        report(*gfx_, "colormap submit");
+        return false;
+    }
     ++dispatches_;
     last_path_ = "webgpu-compute";
     return true;
 }
 
-// ---- the geometry path: points as instanced quads ------------------------------
-namespace {
+// ---- readback ------------------------------------------------------------------------------------
 
-// WebGPU has only one-pixel points, so each point is two triangles of
-// size_px x size_px pixels around its projected centre (the vertex index picks
-// the corner, the instance index the point), the same squares Metal and
-// Vulkan draw with point_size. The colour rule is the native one: an attr
-// value maps through the LUT with idx = clamp((v - vmin)/(vmax - vmin), 0, 1)
-// * 255 + 0.5, NaN and a degenerate range taking index 0 (categorical labels
-// arrive as values 0..255 with vmin 0 and vmax 255, so idx is the label).
-const char* kPointsWgsl = R"wgsl(
-struct Params {
-    mvp: mat4x4<f32>,
-    pos_base: u32, attr_base: u32, color_mode: u32, flat_rgba: u32,
-    vmin: f32, vmax: f32, size_px: f32, att_ref: f32,
-    viewport: vec2<f32>, fade_w: vec2<f32>,
-    cmap_mode: u32,   // the colour thresholds' mode (colormap_thresholds)
-};
-@group(0) @binding(0) var<uniform> p: Params;
-@group(0) @binding(1) var<storage, read> pos: array<f32>;
-@group(0) @binding(2) var<storage, read> attr: array<f32>;
-@group(0) @binding(3) var<storage, read> lut: array<u32>;
-@group(0) @binding(4) var<storage, read> th: array<f32>;   // T[1..255]
-
-struct VOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0) color: vec4<f32>,
-};
-
-fn unpack(c: u32) -> vec4<f32> {
-    return vec4<f32>(f32(c & 0xffu), f32((c >> 8u) & 0xffu), f32((c >> 16u) & 0xffu),
-                     f32((c >> 24u) & 0xffu)) / 255.0;
-}
-
-fn is_nan_bits(v: f32) -> bool {
-    let b = bitcast<u32>(v);
-    return (b & 0x7f800000u) == 0x7f800000u && (b & 0x007fffffu) != 0u;
-}
-
-// A value's colour index exactly as the reference's, as the heatmap's
-// colormap finds it: the thresholds it has passed, NaN at index 0.
-fn index_of(v: f32) -> u32 {
-    if (is_nan_bits(v) || p.cmap_mode == 0u) { return 0u; }
-    var lo = 1u;
-    var hi = 256u;
-    loop {
-        if (lo >= hi) { break; }
-        let mid = (lo + hi) / 2u;
-        let passed = select(v <= th[mid], th[mid] <= v, p.cmap_mode == 1u);
-        if (passed) { lo = mid + 1u; } else { hi = mid; }
+void WebGpuRenderer::readback_async(gfx::Texture tex, uint32_t w, uint32_t h,
+                                    std::function<void(std::vector<uint8_t>)> done) {
+    if (!gfx_ || !gfx_->alive(tex)) {
+        done({});
+        return;
     }
-    return lo - 1u;
-}
-
-@vertex
-fn vs(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> VOut {
-    var corners = array<vec2<f32>, 6>(vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, 1.0),
-                                      vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0));
-    let b = p.pos_base + 3u * iid;
-    var c = p.mvp * vec4<f32>(pos[b], pos[b + 1u], pos[b + 2u], 1.0);
-    // The depth cues (HostGeomDraw, kPointAtten*): nearer points larger, within a clamp.
-    var size = p.size_px;
-    if (p.att_ref > 0.0) { size = size * clamp(p.att_ref / max(c.w, 1e-6), 0.5, 2.0); }
-    // Half the size in NDC is (size_px / 2) / (viewport / 2); times w in clip space.
-    let k = corners[vid] * (size / p.viewport) * c.w;
-    c = vec4<f32>(c.x + k.x, c.y + k.y, c.z, c.w);
-    var col = unpack(p.flat_rgba);
-    if (p.color_mode == 1u) { col = unpack(lut[index_of(attr[p.attr_base + iid])]); }
-    // Farther points dimmer with their hue kept (kPointFadeFloor): the colour
-    // scaled from 1 at w = fade_w.x to 0.5 at w = fade_w.y.
-    if (p.fade_w.y > p.fade_w.x) {
-        let f = clamp((c.w - p.fade_w.x) / (p.fade_w.y - p.fade_w.x), 0.0, 1.0);
-        col = vec4<f32>(col.rgb * (1.0 - 0.5 * f), col.a);
+    const gfx::Readback rb = gfx_->read_texture(tex, 0, 0, w, h);
+    if (!rb) {
+        report(*gfx_, "readback");
+        done({});
+        return;
     }
-    return VOut(c, col);
+    readbacks_.push_back({rb, std::move(done)});
 }
 
-@fragment
-fn fs(i: VOut) -> @location(0) vec4<f32> { return i.color; }
-)wgsl";
-
-struct PointParams {   // matches the WGSL struct (128 bytes)
-    float mvp[16];
-    uint32_t pos_base, attr_base, color_mode, flat_rgba;
-    float vmin, vmax, size_px;
-    float att_ref;
-    float viewport[2];
-    float fade_w[2];
-    uint32_t cmap_mode, pad[3];
-};
-static_assert(sizeof(PointParams) == 128, "WGSL uniform layout");
-
-void mul4(const float* a, const float* b, float* out) {   // out = a * b, column-major
-    for (int c = 0; c < 4; ++c)
-        for (int r = 0; r < 4; ++r) {
-            float acc = 0.0f;
-            for (int k = 0; k < 4; ++k) acc += a[k * 4 + r] * b[c * 4 + k];
-            out[c * 4 + r] = acc;
-        }
-}
-
-bool geom_fail(const char* why) {
-    std::fprintf(stderr, "[webgpu] geometry refused: %s\n", why);
-    return false;
-}
-
-WGPUColor unpack_clear(uint32_t c) {
-    return WGPUColor{(double)(c & 0xffu) / 255.0, (double)((c >> 8) & 0xffu) / 255.0,
-                     (double)((c >> 16) & 0xffu) / 255.0, (double)((c >> 24) & 0xffu) / 255.0};
-}
-
-}  // namespace
-
-uint64_t WebGpuRenderer::import_host_allocation(const void* data, uint64_t bytes) {
-    if (!data || bytes == 0 || bytes > (1ull << 31)) return 0;
-    Alloc a;
-    a.bytes = bytes;
-    const uint64_t cap = (bytes + 3) & ~uint64_t(3);
-    for (size_t i = 0; i < spare_allocs_.size(); ++i) {
-        if (((spare_allocs_[i].bytes + 3) & ~uint64_t(3)) == cap) {
-            a.buffer = spare_allocs_[i].buffer;
-            spare_allocs_.erase(spare_allocs_.begin() + (std::ptrdiff_t)i);
-            break;
-        }
-    }
-    if (!a.buffer) a.buffer = make_buffer(device_, bytes, WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
-    if (!a.buffer) return 0;
-    if (bytes % 4 == 0) {
-        wgpuQueueWriteBuffer(queue_, a.buffer, 0, data, (size_t)bytes);
-    } else {   // writeBuffer takes multiples of 4
-        std::vector<uint8_t> padded((bytes + 3) & ~uint64_t(3), 0);
-        std::memcpy(padded.data(), data, (size_t)bytes);
-        wgpuQueueWriteBuffer(queue_, a.buffer, 0, padded.data(), padded.size());
-    }
-    const uint64_t id = next_id_++;
-    allocs_.emplace(id, a);
-    return id;
-}
-
-void WebGpuRenderer::release_external_allocation(uint64_t id) {
-    auto it = allocs_.find(id);
-    if (it == allocs_.end()) return;
-    // Up to four spare buffers are kept; queue writes into a reused one are
-    // ordered after the draws already submitted that read it.
-    spare_allocs_.push_back(it->second);
-    if (spare_allocs_.size() > 4) {
-        release_buf(spare_allocs_.front().buffer);
-        spare_allocs_.erase(spare_allocs_.begin());
-    }
-    allocs_.erase(it);
-}
-
-uint64_t WebGpuRenderer::geom_create_view_ex(int w, int h, uint32_t flags) {
-    if ((flags & ~CALIPER_GEOM_VIEW_DEPTH) != 0u || w <= 0 || h <= 0) return 0;
-    WGPUTextureDescriptor d = WGPU_TEXTURE_DESCRIPTOR_INIT;
-    d.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc;
-    d.dimension = WGPUTextureDimension_2D;
-    d.size = WGPUExtent3D{(uint32_t)w, (uint32_t)h, 1};
-    d.format = WGPUTextureFormat_RGBA8Unorm;
-    Tex t;
-    t.texture = wgpuDeviceCreateTexture(device_, &d);
-    if (!t.texture) return 0;
-    t.view = wgpuTextureCreateView(t.texture, nullptr);
-    t.w = w;
-    t.h = h;
-    if (flags & CALIPER_GEOM_VIEW_DEPTH) {
-        WGPUTextureDescriptor dd = d;
-        dd.usage = WGPUTextureUsage_RenderAttachment;
-        dd.format = WGPUTextureFormat_Depth32Float;
-        t.depth = wgpuDeviceCreateTexture(device_, &dd);
-        if (!t.depth) {
-            free_tex(t);
-            return 0;
-        }
-        t.depth_view = wgpuTextureCreateView(t.depth, nullptr);
-    }
-    const uint64_t id = next_id_++;
-    tex_.emplace(id, t);
-    // Black until the first draw, as the native targets start.
-    const float I[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-    geom_draw_primitives(id, I, I, nullptr, 0, 0xff000000u);
-    return id;
-}
-
-bool WebGpuRenderer::ensure_points_pipelines() {
-    if (points_layout_) return true;
-    WGPUShaderSourceWGSL src = WGPU_SHADER_SOURCE_WGSL_INIT;
-    src.code = sv(kPointsWgsl);
-    WGPUShaderModuleDescriptor md = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
-    md.nextInChain = &src.chain;
-    md.label = sv("caliper.points");
-    points_module_ = wgpuDeviceCreateShaderModule(device_, &md);
-    if (!points_module_) return false;
-    WGPUBindGroupLayoutEntry e[5];
-    for (auto& x : e) x = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
-    for (int i = 0; i < 5; ++i) {
-        e[i].binding = (uint32_t)i;
-        e[i].visibility = WGPUShaderStage_Vertex;
-    }
-    e[0].buffer.type = WGPUBufferBindingType_Uniform;
-    e[1].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-    e[2].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-    e[3].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-    e[4].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
-    WGPUBindGroupLayoutDescriptor bl = WGPU_BIND_GROUP_LAYOUT_DESCRIPTOR_INIT;
-    bl.entryCount = 5;
-    bl.entries = e;
-    points_layout_ = wgpuDeviceCreateBindGroupLayout(device_, &bl);
-    WGPUPipelineLayoutDescriptor pl = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
-    pl.bindGroupLayoutCount = 1;
-    pl.bindGroupLayouts = &points_layout_;
-    points_pipeline_layout_ = wgpuDeviceCreatePipelineLayout(device_, &pl);
-    return points_layout_ && points_pipeline_layout_;
-}
-
-// [0]: a target without depth; [1 + flags]: with a depth buffer, test and
-// write as the draw's depth flags say (less-equal when testing, as Metal).
-WGPURenderPipeline WebGpuRenderer::points_pipeline(bool depth_target, uint32_t depth_flags) {
-    const uint32_t f = depth_flags & (CALIPER_GEOM_DEPTH_TEST | CALIPER_GEOM_DEPTH_WRITE);
-    const int slot = depth_target ? 1 + (int)f : 0;
-    if (points_pipelines_[slot]) return points_pipelines_[slot];
-    if (!ensure_points_pipelines()) return nullptr;
-    WGPUColorTargetState ct = WGPU_COLOR_TARGET_STATE_INIT;
-    ct.format = WGPUTextureFormat_RGBA8Unorm;
-    ct.writeMask = WGPUColorWriteMask_All;
-    WGPUFragmentState fs = WGPU_FRAGMENT_STATE_INIT;
-    fs.module = points_module_;
-    fs.entryPoint = sv("fs");
-    fs.targetCount = 1;
-    fs.targets = &ct;
-    WGPUDepthStencilState ds = WGPU_DEPTH_STENCIL_STATE_INIT;
-    ds.format = WGPUTextureFormat_Depth32Float;
-    ds.depthWriteEnabled = (f & CALIPER_GEOM_DEPTH_WRITE) ? WGPUOptionalBool_True : WGPUOptionalBool_False;
-    ds.depthCompare = (f & CALIPER_GEOM_DEPTH_TEST) ? WGPUCompareFunction_LessEqual : WGPUCompareFunction_Always;
-    WGPURenderPipelineDescriptor rp = WGPU_RENDER_PIPELINE_DESCRIPTOR_INIT;
-    rp.label = sv("caliper.points");
-    rp.layout = points_pipeline_layout_;
-    rp.vertex.module = points_module_;
-    rp.vertex.entryPoint = sv("vs");
-    rp.primitive.topology = WGPUPrimitiveTopology_TriangleList;
-    rp.primitive.cullMode = WGPUCullMode_None;
-    rp.depthStencil = depth_target ? &ds : nullptr;
-    rp.fragment = &fs;
-    points_pipelines_[slot] = wgpuDeviceCreateRenderPipeline(device_, &rp);
-    return points_pipelines_[slot];
-}
-
-bool WebGpuRenderer::geom_draw_primitives(uint64_t view_tex, const float* view16, const float* proj16,
-                                          const HostGeomDraw* draws, uint32_t count,
-                                          uint32_t clear_rgba) {
-    auto it = tex_.find(view_tex);
-    if (it == tex_.end()) return geom_fail("unknown render target");
-    Tex& t = it->second;
-    if (!view16 || !proj16) return geom_fail("null camera matrices");
-    if (count > 0 && !draws) return geom_fail("null draw array");
-    if (count > 0 && !ensure_points_pipelines()) return geom_fail("pipeline creation failed");
-
-    // Validate and bind every draw before encoding anything, so a refusal
-    // leaves the target's pixels as they were.
-    struct Enc {
-        WGPURenderPipeline pipeline = nullptr;
-        WGPUBindGroup bind = nullptr;
-        uint32_t n = 0;
-    };
-    std::vector<Enc> encs;
-    encs.reserve(count);
-    if (slots_.size() < count) slots_.resize(count);
-    float mvp[16];
-    mul4(proj16, view16, mvp);
-    auto drop = [&]() {
-        for (auto& e : encs) release_bg(e.bind);
-    };
-    for (uint32_t i = 0; i < count; ++i) {
-        const HostGeomDraw& d = draws[i];
-        if (d.topology != CALIPER_GEOM_TOPO_POINTS) { drop(); return geom_fail("only points are drawn in the browser"); }
-        if (d.index_alloc || d.normal_alloc || d.uv_alloc || d.texture || d.instance_alloc) {
-            drop();
-            return geom_fail("indices, normals, UVs, textures and instances are not drawn in the browser");
-        }
-        auto pa = allocs_.find(d.pos_alloc);
-        if (pa == allocs_.end()) { drop(); return geom_fail("unknown position allocation"); }
-        if (d.vertex_count == 0 || d.vertex_count > UINT32_MAX || d.pos_offset % 4 ||
-            d.pos_offset + d.vertex_count * 12 > pa->second.bytes) {
-            drop();
-            return geom_fail("positions out of the allocation's bounds");
-        }
-        WGPUBuffer attr = pa->second.buffer;
-        uint64_t attr_bytes = pa->second.bytes;
-        const bool cmap = d.color_mode == CALIPER_GEOM_COLOR_COLORMAP;
-        if (cmap) {
-            auto aa = allocs_.find(d.attr_alloc);
-            if (aa == allocs_.end() || !d.lut256) { drop(); return geom_fail("colormap draw without attr or LUT"); }
-            if (d.attr_offset % 4 || d.attr_offset + d.vertex_count * 4 > aa->second.bytes) {
-                drop();
-                return geom_fail("attr out of the allocation's bounds");
-            }
-            attr = aa->second.buffer;
-            attr_bytes = aa->second.bytes;
-        } else if (d.color_mode != CALIPER_GEOM_COLOR_FLAT) {
-            drop();
-            return geom_fail("color mode other than flat or colormap");
-        }
-        DrawSlot& sl = slots_[i];
-        if (!sl.params) sl.params = make_buffer(device_, sizeof(PointParams), WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst);
-        if (!sl.lut) sl.lut = make_buffer(device_, 1024, WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
-        if (!sl.th) sl.th = make_buffer(device_, 1024, WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
-        // The colour thresholds change with the range only.
-        if (cmap && (!sl.th_valid || sl.th_vmin != d.vmin || sl.th_vmax != d.vmax)) {
-            float T[256];
-            sl.th_mode = colormap_thresholds(d.vmin, d.vmax, T);
-            if (sl.th_mode) wgpuQueueWriteBuffer(queue_, sl.th, 0, T, sizeof T);
-            sl.th_vmin = d.vmin;
-            sl.th_vmax = d.vmax;
-            sl.th_valid = true;
-        }
-        PointParams pp{};
-        std::memcpy(pp.mvp, mvp, sizeof mvp);
-        pp.pos_base = (uint32_t)(d.pos_offset / 4);
-        pp.attr_base = cmap ? (uint32_t)(d.attr_offset / 4) : 0u;
-        pp.color_mode = cmap ? 1u : 0u;
-        pp.flat_rgba = d.flat_rgba;
-        pp.vmin = d.vmin;
-        pp.vmax = d.vmax;
-        pp.size_px = d.size_px > 0.0f ? d.size_px : 1.0f;
-        pp.viewport[0] = (float)t.w;
-        pp.viewport[1] = (float)t.h;
-        pp.att_ref = d.att_ref;
-        pp.fade_w[0] = d.fade_w0;
-        pp.fade_w[1] = d.fade_w1;
-        pp.cmap_mode = cmap ? sl.th_mode : 0u;
-        wgpuQueueWriteBuffer(queue_, sl.params, 0, &pp, sizeof pp);
-        static const uint32_t kZeroLut[256] = {};
-        wgpuQueueWriteBuffer(queue_, sl.lut, 0, cmap ? d.lut256 : kZeroLut, 1024);
-        WGPUBindGroupEntry be[5];
-        for (auto& x : be) x = WGPU_BIND_GROUP_ENTRY_INIT;
-        be[0].binding = 0; be[0].buffer = sl.params; be[0].size = sizeof(PointParams);
-        be[1].binding = 1; be[1].buffer = pa->second.buffer; be[1].size = (pa->second.bytes + 3) & ~uint64_t(3);
-        be[2].binding = 2; be[2].buffer = attr; be[2].size = (attr_bytes + 3) & ~uint64_t(3);
-        be[3].binding = 3; be[3].buffer = sl.lut; be[3].size = 1024;
-        be[4].binding = 4; be[4].buffer = sl.th; be[4].size = 1024;
-        WGPUBindGroupDescriptor bd = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
-        bd.layout = points_layout_;
-        bd.entryCount = 5;
-        bd.entries = be;
-        Enc e;
-        e.pipeline = points_pipeline(t.depth != nullptr, d.depth_flags);
-        e.bind = wgpuDeviceCreateBindGroup(device_, &bd);
-        e.n = (uint32_t)d.vertex_count;
-        if (!e.pipeline || !e.bind) {
-            release_bg(e.bind);
-            drop();
-            return geom_fail("pipeline or bind group creation failed");
-        }
-        encs.push_back(e);
-    }
-
-    WGPURenderPassColorAttachment ca = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
-    ca.view = t.view;
-    ca.loadOp = WGPULoadOp_Clear;
-    ca.storeOp = WGPUStoreOp_Store;
-    ca.clearValue = unpack_clear(clear_rgba);
-    WGPURenderPassDepthStencilAttachment da = WGPU_RENDER_PASS_DEPTH_STENCIL_ATTACHMENT_INIT;
-    da.view = t.depth_view;
-    da.depthLoadOp = WGPULoadOp_Clear;
-    da.depthStoreOp = WGPUStoreOp_Discard;
-    da.depthClearValue = 1.0f;
-    WGPURenderPassDescriptor rp = WGPU_RENDER_PASS_DESCRIPTOR_INIT;
-    rp.colorAttachmentCount = 1;
-    rp.colorAttachments = &ca;
-    rp.depthStencilAttachment = t.depth_view ? &da : nullptr;
-    WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(device_, nullptr);
-    WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(enc, &rp);
-    for (const Enc& e : encs) {
-        wgpuRenderPassEncoderSetPipeline(pass, e.pipeline);
-        wgpuRenderPassEncoderSetBindGroup(pass, 0, e.bind, 0, nullptr);
-        wgpuRenderPassEncoderDraw(pass, 6, e.n, 0, 0);
-    }
-    wgpuRenderPassEncoderEnd(pass);
-    WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(enc, nullptr);
-    wgpuQueueSubmit(queue_, 1, &cmd);
-    wgpuCommandBufferRelease(cmd);
-    wgpuRenderPassEncoderRelease(pass);
-    wgpuCommandEncoderRelease(enc);
-    for (auto& e : encs) release_bg(e.bind);
-    return true;
-}
-
-// ---- instrumentation -----------------------------------------------------------
 void WebGpuRenderer::readback_async(uint64_t id, std::function<void(std::vector<uint8_t>)> done) {
-    Tex* t = find(id);
-    if (!t) { done({}); return; }
-    const uint32_t w = (uint32_t)t->w, h = (uint32_t)t->h;
-    const uint32_t bpr = (w * 4 + 255) & ~255u;   // copies need 256-byte rows
-    WGPUBuffer buf = make_buffer(device_, (uint64_t)bpr * h,
-                                 WGPUBufferUsage_MapRead | WGPUBufferUsage_CopyDst);
-    WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(device_, nullptr);
-    WGPUTexelCopyTextureInfo src = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
-    src.texture = t->texture;
-    WGPUTexelCopyBufferInfo dst = WGPU_TEXEL_COPY_BUFFER_INFO_INIT;
-    dst.buffer = buf;
-    dst.layout.bytesPerRow = bpr;
-    dst.layout.rowsPerImage = h;
-    const WGPUExtent3D size{w, h, 1};
-    wgpuCommandEncoderCopyTextureToBuffer(enc, &src, &dst, &size);
-    WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(enc, nullptr);
-    wgpuQueueSubmit(queue_, 1, &cmd);
-    wgpuCommandBufferRelease(cmd);
-    wgpuCommandEncoderRelease(enc);
-
-    struct Pending {
-        WGPUBuffer buf;
-        uint32_t w, h, bpr;
-        std::function<void(std::vector<uint8_t>)> done;
-    };
-    WGPUBufferMapCallbackInfo cb = WGPU_BUFFER_MAP_CALLBACK_INFO_INIT;
-    cb.mode = WGPUCallbackMode_AllowSpontaneous;
-    cb.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* u1, void*) {
-        Pending* p = static_cast<Pending*>(u1);
-        std::vector<uint8_t> out;
-        if (status == WGPUMapAsyncStatus_Success) {
-            const uint8_t* m = static_cast<const uint8_t*>(
-                wgpuBufferGetConstMappedRange(p->buf, 0, (size_t)p->bpr * p->h));
-            if (m) {
-                out.resize((size_t)p->w * p->h * 4);
-                for (uint32_t y = 0; y < p->h; ++y)
-                    std::memcpy(out.data() + (size_t)y * p->w * 4, m + (size_t)y * p->bpr,
-                                (size_t)p->w * 4);
-            }
-            wgpuBufferUnmap(p->buf);
-        }
-        wgpuBufferDestroy(p->buf);
-        wgpuBufferRelease(p->buf);
-        p->done(std::move(out));
-        delete p;
-    };
-    cb.userdata1 = new Pending{buf, w, h, bpr, std::move(done)};
-    wgpuBufferMapAsync(buf, WGPUMapMode_Read, 0, (size_t)bpr * h, cb);
+    Tex* t = gfx_ ? find(id) : nullptr;
+    if (!t) {
+        done({});
+        return;
+    }
+    const gfx::Readback rb = gfx_->read_texture(t->color, 0, 0, (uint32_t)t->w, (uint32_t)t->h);
+    if (!rb) {
+        report(*gfx_, "readback");
+        done({});
+        return;
+    }
+    readbacks_.push_back({rb, std::move(done)});
 }
 
 }  // namespace caliper_host

@@ -1,0 +1,24 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 81,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 57,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 122
+  },
+  "meta": {
+    "count": -5,
+    "op": "step",
+    "request_id": 4,
+    "timeline": "time"
+  },
+  "meta_offset": 24,
+  "name": "v3_2/cursor_step",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "cursor"
+}

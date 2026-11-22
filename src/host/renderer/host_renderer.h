@@ -1,9 +1,17 @@
 #pragma once
 #include <caliper/tensor.h>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
+#include <string>
+#include <utility>
 #include <vector>
 struct GLFWwindow;
+
+namespace caliper_gfx {
+class Backend;
+}
 
 namespace caliper_host {
 
@@ -47,31 +55,7 @@ struct HostGeomDraw {
     uint64_t instance_count = 0;       // N; 0 -> non-instanced
     uint64_t instance_attr_alloc = 0;  // resolved (N,) f32 tint alloc; 0 -> none
     uint64_t instance_attr_offset = 0;
-    // The depth cues of the 3-D live points view (host-internal: no service
-    // draw sets them). With att_ref > 0 a point is size_px * clamp(att_ref / w,
-    // kPointAttenMin, kPointAttenMax) wide, w being its clip-space w, the
-    // distance along the view; nearer points are larger. With fade_w1 > fade_w0
-    // its colour is scaled by 1 up to w = fade_w0, falling linearly to
-    // kPointFadeFloor at w = fade_w1 and beyond, so farther points are dimmer
-    // and keep their hue. Zero: neither, the draw exactly as without them. The
-    // Metal and WebGPU backends draw them; the Vulkan and GL backends ignore
-    // them (constant size, no fade).
-    float att_ref = 0.0f;
-    float fade_w0 = 0.0f;
-    float fade_w1 = 0.0f;
-    // Host-internal, set by the live points view: colour a COLORMAP points
-    // draw by exactly the index map_f32_to_rgba8 gives each value (through
-    // colormap_thresholds, tensor_bridge.h), as the browser views do, instead
-    // of the geometry service's own rule. The WebGPU backend always does; the
-    // Metal backend does when this is set; Vulkan and GL keep the service's.
-    bool exact_colormap = false;
 };
-
-// The constants of the depth cues above, written out in each backend's shader
-// and in the TypeScript points view (web/src/render/points-gpu.ts).
-constexpr float kPointAttenMin = 0.5f;
-constexpr float kPointAttenMax = 2.0f;
-constexpr float kPointFadeFloor = 0.5f;
 
 // Host-internal renderer seam (docs/applets/rendering.md). The ABI never sees this;
 // backends are swappable forever because applets only see ImGui + bridge ids.
@@ -82,7 +66,13 @@ public:
     virtual void new_frame() = 0;                   // frame CLEAR + backend NewFrame
     virtual void render(int fb_w, int fb_h) = 0;    // RenderDrawData + present
     virtual void shutdown() = 0;
-    virtual const char* name() const = 0;           // "gl" / "metal"
+    virtual const char* name() const = 0;           // "metal" / "vulkan" / "webgpu"
+
+    // Why the last init() or canvas_init() returned false, in a few words; empty
+    // while neither has failed. There is no fallback renderer, so the app,
+    // caliper shot and the embedding core refuse with this reason
+    // (renderer_start_refusal in core_lifecycle.h).
+    const std::string& start_error() const { return start_error_; }
 
     // Texture ops the bridge builds on. data is tightly-packed RGBA8.
     virtual uint64_t tex_create_rgba8(int w, int h) = 0;            // 0 on fail
@@ -93,7 +83,7 @@ public:
 
     // Device-resident update: src is a CaliperTensor whose data lives on this
     // backend's device (METAL buffer for metal). Returns false -> caller
-    // falls back to CPU staging. GL always returns false (frozen fallback).
+    // falls back to CPU staging.
     virtual bool tex_update_from_device(uint64_t tex, const CaliperTensor& t,
                                         const uint32_t* lut256 /*nullable*/,
                                         float vmin, float vmax) = 0;
@@ -113,7 +103,7 @@ public:
 
     // Diagnostic: which path the last device update took ("compute"/"blit" on
     // Metal). Lifted onto the interface (C2 review) so the bridge and gfx tests
-    // read it without dynamic_cast; GL and other CPU-staged backends default.
+    // read it without dynamic_cast; CPU-staged backends keep the default.
     virtual const char* last_device_path() const { return "cpu-staged"; }
 
     // Block the CALLING thread until the most recent device texture update
@@ -148,6 +138,15 @@ public:
     // MTLBuffers on it, because import_external_allocation refuses a buffer
     // whose device differs.
     virtual void* native_device() const { return nullptr; }
+    // The backend's command queue (id<MTLCommandQueue> on Metal) beside native_device, or
+    // NULL. The graphics layer's Metal backend (src/host/gfx) runs on both, so its work is
+    // ordered with the renderer's by commit order and no second device exists.
+    virtual void* native_queue() const { return nullptr; }
+    // The graphics layer's backend (src/host/gfx) that this renderer owns, on its device and queue,
+    // from the start of its window or canvas until shutdown; null where the layer has no backend
+    // here (the Vulkan renderer until Windows parity). The tensor bridge's textures and imports,
+    // and so the embed views and the heatmap and image live views, live in it.
+    virtual caliper_gfx::Backend* gfx() { return nullptr; }
 
     // Which device kind this backend imports on its zero-copy path (spec §3.4).
     // The bridge maps this to active_device_ instead of matching on name(),
@@ -175,13 +174,6 @@ public:
                                                 uint64_t /*size_bytes*/,
                                                 uint32_t /*handle_type*/) { return 0; }
     virtual void release_external_allocation(uint64_t /*id*/) {}
-    // The browser's views (web/wasm), additive: copy `bytes` of HOST memory
-    // into a renderer allocation that the geometry draws read like an
-    // imported one (same id table, released by release_external_allocation).
-    // A browser has no device memory to import, so a points payload, which
-    // arrives as bytes, takes this path. Default 0: unsupported; the live
-    // views then stage a CPU payload into a shared MTLBuffer as before.
-    virtual uint64_t import_host_allocation(const void* /*data*/, uint64_t /*bytes*/) { return 0; }
     virtual bool tex_update_from_imported(uint64_t /*tex*/, uint64_t /*alloc*/,
                                           uint64_t /*offset_bytes*/,
                                           const CaliperTensor& /*desc*/,
@@ -226,7 +218,7 @@ public:
         return false;
     }
 
-    // GLFW pre-window hint setup for this backend (GL profile vs NO_API).
+    // GLFW pre-window hint setup for this backend (NO_API: no GL context).
     virtual void window_hints() = 0;
 
     // ---- Embed canvas seam (libcaliper R4 L2a) ----------------------------
@@ -240,14 +232,14 @@ public:
     // These run PARALLEL to init()/new_frame()/render(): a renderer instance is
     // EITHER the exe's swapchain path OR an embed canvas, never both, so the
     // swapchain path (and its byte-exact geometry rows) is untouched. Default =
-    // unsupported: GL refuses (embed requires Metal or Vulkan — GL's context is
-    // GLFW-coupled chrome). The frame-order contract matches the swapchain
-    // path: canvas_new_frame CLEARS (opens the pass), canvas_render composites.
+    // unsupported: canvas_init refuses. The frame-order contract matches the
+    // swapchain path: canvas_new_frame CLEARS (opens the pass), canvas_render
+    // composites.
     enum CanvasMode { CANVAS_WINDOW = 0, CANVAS_OFFSCREEN = 1 };
-    virtual bool canvas_supported() const { return false; }
     // native_view: NSView*/HWND for CANVAS_WINDOW; NULL/ignored for OFFSCREEN.
     // Inits the ImGui RENDER backend on this device + the canvas target. false
-    // = honest refusal (nothing allocated, no state touched).
+    // = honest refusal (nothing allocated, no state touched), with the reason
+    // in start_error().
     virtual bool canvas_init(void* /*native_view*/, CanvasMode /*mode*/,
                              int /*w*/, int /*h*/) { return false; }
     virtual void canvas_resize(int /*w*/, int /*h*/) {}
@@ -268,7 +260,7 @@ public:
     // over: tightly packed opaque RGBA8 at the framebuffer's size, top row
     // first. A frame without a drawable leaves the request armed for the next
     // one. Default: unsupported (request returns false). Metal implements it;
-    // the GL and Vulkan backends keep the default.
+    // the Vulkan backend keeps the default.
     enum class WindowCapture { None, Pending, Ready, Failed };
     virtual bool window_capture_supported() const { return false; }
     virtual bool window_capture_request() { return false; }
@@ -278,9 +270,9 @@ public:
     }
 
     // Test-only: copy a texture's pixels back to host RGBA8 (w*h*4 bytes), or
-    // empty on failure. GL/Metal read back their handle directly in the gfx
-    // harness; Vulkan's CaliperTextureId is an opaque descriptor set, so the
-    // backend must do the copy. Not used on any hot path.
+    // empty on failure. Metal and Vulkan do the copy on their own queue (a
+    // Vulkan CaliperTextureId is an opaque descriptor set). Not used on any hot
+    // path.
     virtual std::vector<uint8_t> debug_readback_rgba8(uint64_t /*id*/,
                                                       int /*w*/, int /*h*/) {
         return {};
@@ -296,23 +288,85 @@ public:
     // bit 0. Default false: a backend that ignores stream must never let an
     // adapter skip its drain.
     virtual bool honors_stream_ordered_handoff() const { return false; }
+
+    // ---- Measurement (docs/applets/rendering.md, "Copy Counters and
+    // Frame Statistics") ------------------------------------------------------
+    // Every copy the host makes of tensor or geometry data on the way to
+    // pixels is counted here, by whoever makes it: an upload of host bytes (a
+    // CPU tensor's staged upload, the browser's host import and host
+    // colormap), a host copy into a staging buffer, a copy inside the GPU, a
+    // network snapshot received into its slot, and a readback of a payload.
+    // The pass that turns a payload into a view's pixels (a colormap dispatch,
+    // the blit of an RGBA8 image into the view's texture, a draw) is the
+    // update itself, not a copy, so a zero-copy route counts 0. Always on: two
+    // additions per copy and none on a zero-copy route. Frame thread only.
+    struct CopyCount {
+        uint64_t copies = 0;
+        uint64_t bytes = 0;
+    };
+    void note_copy(uint64_t bytes) {
+        ++copy_count_.copies;
+        copy_count_.bytes += bytes;
+    }
+    CopyCount copy_count() const { return copy_count_; }
+
+    // Frame-time and GPU-time statistics, recorded only when switched on
+    // (CALIPER_METAL_STATS on Metal; the Vulkan backend prints its own
+    // CALIPER_VULKAN_STATS line). Over the window since the last reset:
+    // frame time is the interval between the ends of consecutive frames; GPU
+    // times come from the command buffers' GPU start and end times, for
+    // device texture updates, for view draws (geometry render targets) and
+    // for the frame's own pass. Percentiles are nearest-rank. false: this
+    // backend records none, or they are off.
+    struct FrameStats {
+        uint64_t frames = 0;
+        double   frame_ms_p50 = 0.0, frame_ms_p99 = 0.0, frame_ms_max = 0.0;
+        uint64_t update_gpu_n = 0;
+        double   update_gpu_ms_p50 = 0.0, update_gpu_ms_p99 = 0.0, update_gpu_ms_max = 0.0;
+        uint64_t draw_gpu_n = 0;
+        double   draw_gpu_ms_p50 = 0.0, draw_gpu_ms_p99 = 0.0, draw_gpu_ms_max = 0.0;
+        uint64_t frame_gpu_n = 0;
+        double   frame_gpu_ms_p50 = 0.0, frame_gpu_ms_p99 = 0.0, frame_gpu_ms_max = 0.0;
+        std::vector<std::pair<std::string, uint64_t>> updates;   // updates by path, sorted by path
+    };
+    virtual bool frame_stats(FrameStats* /*out*/, bool /*reset_window*/) { return false; }
+    // The GPU time of view draws made through the graphics layer (src/host/gfx), whose command
+    // buffers the renderer never sees: `ms` summed over `submits` completed submits, as the
+    // layer's Stats reports them. Recorded in the view-draw series of the frame statistics while
+    // they are on (each submit as ms / submits); a no-op otherwise.
+    virtual void note_draw_gpu_ms(double /*ms*/, uint32_t /*submits*/) {}
+
+protected:
+    // A backend's init() and canvas_init() fail through this, which records the
+    // reason for start_error(): `return start_failed("no Metal device");`.
+    bool start_failed(std::string why) {
+        start_error_ = std::move(why);
+        return false;
+    }
+    // The test variable CALIPER_TEST_RENDERER_FAIL=1 makes init() and
+    // canvas_init() fail before they touch a device, so that the refusals can
+    // be tested on a machine whose GPU works (docs/reference/folders-and-environment.md).
+    // Each begins with `if (forced_start_failure()) return false;`.
+    bool forced_start_failure() {
+        const char* v = std::getenv("CALIPER_TEST_RENDERER_FAIL");
+        if (!v || std::strcmp(v, "1") != 0) return false;
+        return !start_failed("CALIPER_TEST_RENDERER_FAIL=1 made its start fail");
+    }
+
+private:
+    CopyCount copy_count_;
+    std::string start_error_;
 };
 
-// GL factory (gl_renderer.cpp, C1). Any name -> GL; GL is the default backend
-// until the 2D migration. The Metal backend is a SEPARATE factory below rather
-// than a branch inside make_renderer(), because make_renderer() lives in the
-// frozen (do-not-touch) gl_renderer.cpp and GLRenderer is file-local there;
-// main.cpp does the env-driven selection between the two factories (C2).
-std::unique_ptr<HostRenderer> make_renderer(const char* name); // "gl"|"metal"|nullptr->default
-
 // Metal factory (metal_renderer.mm, C2; Apple-only translation unit). Returns
-// the Metal backend, still un-init'd — caller runs window_hints()/init() and
-// falls back to make_renderer("gl") if init() fails. Not defined on non-Apple.
+// the Metal backend, still un-init'd — the caller runs window_hints()/init(),
+// or canvas_init(), and refuses with start_error() if that fails. Not defined
+// on non-Apple.
 std::unique_ptr<HostRenderer> make_metal_renderer();
 
 // Vulkan factory (vulkan_renderer.cpp, Phase 4; Windows-only translation unit
-// today). Same contract as the Metal factory: un-init'd, caller falls back to
-// GL if init() fails. Device-resident CUDA tensors via VK_KHR_external_memory
+// today). Same contract as the Metal factory: un-init'd, and the caller refuses
+// if its start fails. Device-resident CUDA tensors via VK_KHR_external_memory
 // + the runtime-loaded CUDA driver API (docs/python/zero-copy-tensors.md). Not defined elsewhere.
 std::unique_ptr<HostRenderer> make_vulkan_renderer();
 }

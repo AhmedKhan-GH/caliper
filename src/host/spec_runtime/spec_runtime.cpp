@@ -2,6 +2,7 @@
 // textures, the drawing of each primitive and the runtime that lays a spec
 // out and keeps its panels' data.
 #include "spec_runtime/spec_runtime.h"
+#include "scene/scene.h"   // kPalette
 
 #include "ui/sternbild_fonts.h"
 #include "ui/sternbild_theme.h"
@@ -22,10 +23,10 @@
 #include <cstring>
 #include <limits>
 
-// The live views' categorical palette and point sizes (live_views_draw.cpp),
-// so a spec panel and a live view share them.
+// The live views' categorical palette (the scene core's, scene/scene.h) and
+// point sizes (live_views_draw.cpp), so a spec panel and a live view share them.
 namespace caliper_live_views {
-extern const uint32_t kPalette[16];
+using caliper_scene::kPalette;
 float point_size_px(uint64_t n, float scale);
 }  // namespace caliper_live_views
 

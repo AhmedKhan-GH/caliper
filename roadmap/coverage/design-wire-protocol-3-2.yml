@@ -4,7 +4,10 @@ kind: page
 source: design/wire-protocol-3-2.md
 ref: sprint4
 summary: The plan page design/wire-protocol-3-2.md, which only the sprint4 branch holds, in its newest
-  version there, read heading by heading.
+  version there, read heading by heading. The trimmed page on the playground branch keeps only the
+  sections that are not built, under Title Case headings; the entries of those sections name the
+  headings as the trimmed page writes them, and the other entries name the headings of the sprint4
+  version.
 entries:
 - heading: What is built and what is planned
   item: Nothing of 3.2 is built according to this page; it rests on 3.1 as the sprint 2 branch builds
@@ -22,7 +25,7 @@ entries:
     all nineteen sprint 2 branches and are free.
   ids:
   - STR-09
-- heading: Timelines and stamps
+- heading: Timelines and Stamps
   item: Timelines and stamps on the wire.
   ids:
   - STR-09
@@ -42,11 +45,11 @@ entries:
   item: The dtype u16 (6) carries depth and segmentation.
   ids:
   - STR-09
-- heading: New kinds in VIEWS
+- heading: New Kinds in VIEWS
   item: Kinds scene (6), text (7) and bars (8) in VIEWS with their keys.
   ids:
   - STR-09
-- heading: Message types
+- heading: Message Types
   item: Message types 0x0070 to 0x0074 for scenes and text and 0x0078 to 0x007B for recordings.
   ids:
   - STR-09
@@ -86,7 +89,7 @@ entries:
   item: A bar chart is a SNAPSHOT of kind 8 with labels and colours.
   ids:
   - STR-09
-- heading: Events on the new kinds
+- heading: Events on the New Kinds
   item: Events on scenes and bars carry picks and selections.
   ids:
   - REN-46
@@ -106,13 +109,13 @@ entries:
   item: TIME_STATE reports a viewer's cursor and playback state.
   ids:
   - STR-09
-- heading: Flow control
+- heading: Flow Control
   item: 'Flow control: scene updates coalesce per entity part, clears keep their order, split pieces go
     together, text lines never drop silently, and playback obeys max_rate.'
   ids:
   - STR-09
   - STR-06
-- heading: Through a hub
+- heading: Hub Forwarding
   item: A 3.2 hub filters additions for older viewers, keeps scene state and text for late viewers, answers
     CURSOR and records or serves recordings.
   ids:
@@ -129,12 +132,12 @@ entries:
   item: New error codes for the 3.2 messages.
   ids:
   - STR-09
-- heading: Versioning and compatibility
+- heading: Versioning and Compatibility
   item: 3.2 is additive; senders use each capability only with a peer that announced it, and a recorded
     session is an ended session to a 3.1 viewer.
   ids:
   - STR-09
-- heading: Worked example
+- heading: Worked Example
   item: A worked example of a scene with entity transforms over timelines.
   ids:
   - STR-09
@@ -143,7 +146,7 @@ entries:
     for byte.
   ids:
   - STR-09
-- heading: What sprint 2 must confirm
+- heading: Numbers to Confirm
   item: Sprint 2 must confirm minor version 2, kinds 6 to 8, message types, the u16 dtype, the capabilities,
     the hub's new duties and the caliper.step(n) form.
   ids:
@@ -156,7 +159,7 @@ entries:
   ids:
   - STR-09
   - STR-23
-- heading: Open decisions
+- heading: Open Decisions
   item: 'Open decisions: the timeline declaration as a VIEWS key, server-side playback, time windows as
     a later key window, the text log''s levels, and scene state at the hub.'
   ids:

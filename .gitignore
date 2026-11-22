@@ -35,16 +35,13 @@ third_party/libtorch-*/
 
 # Ignore generated files in submodules
 third_party/*/.dummy
-third_party/OpenGL-Registry/extensions/
 
 # But allow custom integration CMakeLists
-!third_party/glew/CMakeLists.txt
 !third_party/imgui/CMakeLists.txt
 !third_party/implot/CMakeLists.txt
 
 # Pre-built third-party libraries (legacy)
 old_builds/
-third_party/glew-prebuilt/
 
 # macOS
 .DS_Store
@@ -101,3 +98,6 @@ python/bench/results/*.png
 python/caliper/_web/caliper-views-loader.js
 python/caliper/_web/caliper-views.js
 python/caliper/_web/caliper-views.wasm
+
+# The shader generator's Naga driver, built by tools/shaders/generate.py
+tools/shaders/naga-driver/target/

@@ -1,0 +1,132 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 420,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 327,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 4,
+    "type": 112
+  },
+  "meta": {
+    "labels": [
+      "link"
+    ],
+    "part": "boxes",
+    "path": "arm/link0",
+    "sections": [
+      {
+        "dtype": 0,
+        "name": "centers",
+        "shape": [
+          1,
+          3
+        ]
+      },
+      {
+        "dtype": 0,
+        "name": "half_sizes",
+        "shape": [
+          1,
+          3
+        ]
+      },
+      {
+        "dtype": 0,
+        "name": "rotations",
+        "shape": [
+          1,
+          4
+        ]
+      },
+      {
+        "dtype": 4,
+        "name": "class_ids",
+        "shape": [
+          1
+        ]
+      }
+    ],
+    "seq": 23,
+    "stamp_ns": 81234567893593,
+    "static": true,
+    "sub": 2,
+    "view": "world",
+    "width": 2.0
+  },
+  "meta_offset": 40,
+  "name": "v3_2/scene_update_boxes",
+  "section_lengths": [
+    12,
+    12,
+    16,
+    4
+  ],
+  "sections": [
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 12,
+      "name": "centers",
+      "offset": 368,
+      "shape": [
+        1,
+        3
+      ],
+      "values": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 12,
+      "name": "half_sizes",
+      "offset": 384,
+      "shape": [
+        1,
+        3
+      ],
+      "values": [
+        0.0625,
+        0.0625,
+        0.25
+      ]
+    },
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 16,
+      "name": "rotations",
+      "offset": 400,
+      "shape": [
+        1,
+        4
+      ],
+      "values": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "dtype": 4,
+      "encoding": 0,
+      "length": 4,
+      "name": "class_ids",
+      "offset": 416,
+      "shape": [
+        1
+      ],
+      "values": [
+        1
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}

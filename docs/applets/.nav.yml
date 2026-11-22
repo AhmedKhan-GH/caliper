@@ -5,8 +5,11 @@ nav:
       - first-ml-applet.md
   - Guides:
       - applet-debugging.md
+      - shader-authoring.md
   - Concepts:
       - rendering.md
+      - graphics-layer.md
+      - scene-rendering.md
       - trust-model.md
   - Reference:
       - applet-contract.md

@@ -39,12 +39,12 @@ typedef struct CaliperCore CaliperCore;
 /**
  * The HostRenderer backend that the core embeds.
  *
- * OpenGL is not an embed target, because its context ownership is tied to GLFW. A core whose
- * resolved backend cannot embed refuses at `caliper_core_attach_canvas` with "embed requires Metal
- * or Vulkan".
+ * There is no fallback renderer. `caliper_core_create` refuses when `CALIPER_RENDERER=gl` asks for
+ * the removed OpenGL renderer, and `caliper_core_attach_canvas` refuses when the backend cannot
+ * start, with a last error that names the renderer and why it could not start.
  */
 typedef enum CaliperRenderer {
-    /** The platform backend, Metal on Apple and Vulkan on Windows, honoring `CALIPER_RENDERER`. */
+    /** The platform backend, Metal on Apple and Vulkan on Windows. */
     CALIPER_RENDERER_DEFAULT = 0,
     /** The Metal backend. */
     CALIPER_RENDERER_METAL   = 1,
@@ -199,7 +199,7 @@ typedef struct CaliperInputEvent {
 /**
  * Create the core, which holds the ImGui context, the renderer, the service registry and the loader.
  * Return `NULL` and log the reason for a second live core, a renderer that this system does not
- * support or a renderer that fails to start.
+ * support or `CALIPER_RENDERER=gl`. The renderer starts at `caliper_core_attach_canvas`.
  */
 CaliperCore* caliper_core_create(const CaliperCoreDesc* desc);
 
@@ -213,8 +213,10 @@ void caliper_core_shutdown(CaliperCore* core);
 /**
  * Attach the one canvas of the core. `native_view` is an `NSView*` or an `HWND` for
  * `CALIPER_CANVAS_WINDOW`, and `NULL` for `CALIPER_CANVAS_OFFSCREEN`. Return 1 on success, or 0 when
- * the core refuses because the backend cannot embed, a canvas is attached already or the size is
- * invalid. A refusal leaves the core usable and sets the last error.
+ * the core refuses because the renderer could not start, a canvas is attached already or the size
+ * is invalid. A refusal leaves the core usable and sets the last error. When the renderer could not
+ * start, the last error is "attach_canvas: the Metal renderer could not start (<why>), and there is
+ * no fallback renderer until the WebGPU fallback through Dawn lands", with Vulkan on Windows.
  */
 int  caliper_core_attach_canvas(CaliperCore* core, void* native_view,
                                 const CaliperCanvasDesc* desc);

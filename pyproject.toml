@@ -55,4 +55,4 @@ CMAKE_OSX_DEPLOYMENT_TARGET = "14.0"
 CALIPER_WITH_BUILDER = "OFF"
 
 [tool.pytest.ini_options]
-testpaths = ["python/tests"]
+testpaths = ["python/tests", "tests/demos"]

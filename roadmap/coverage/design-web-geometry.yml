@@ -3,8 +3,11 @@ title: Web geometry plan page
 kind: page
 source: design/web-geometry.md
 ref: sprint4
-summary: The plan page design/web-geometry.md, which only the sprint4 branch holds, in its newest version
-  there, read heading by heading.
+summary: The plan page design/web-geometry.md, which only the sprint4 branch holds, in its newest
+  version there, read heading by heading. The trimmed page on the playground branch keeps only the
+  sections that are not built, under Title Case headings; the entries of those sections name the
+  headings as the trimmed page writes them, and the other entries name the headings of the sprint4
+  version.
 entries:
 - heading: What is built and what is planned
   item: Nothing on the page is built; the built pieces on the sprint2 branch are the web viewer module,
@@ -33,7 +36,7 @@ entries:
     buffers) that shape the draws.
   ids:
   - EMB-08
-- heading: The design
+- heading: Design
   item: Section heading for the WebGPU draw design.
   ids:
   - EMB-08
@@ -46,7 +49,7 @@ entries:
   item: Three bind groups, a 192-byte parameter block in 256-byte slots and a class table texture.
   ids:
   - EMB-08
-- heading: Pipelines and their cache
+- heading: Pipelines and Their Cache
   item: Pipelines cached by descriptor and created asynchronously.
   ids:
   - EMB-08
@@ -79,6 +82,11 @@ entries:
   - EMB-08
   - REN-38
   - REN-39
+- heading: Encoded Frames
+  item: Encoded JPEG and PNG frames decoded by the browser with createImageBitmap and copied into a
+    texture, kept from Images and camera frustums when the built image draws moved to the docs.
+  ids:
+  - REN-38
 - heading: Colour
   item: Colour by integer keys and class table lookup in WebGPU.
   ids:
@@ -99,12 +107,12 @@ entries:
   ids:
   - REN-15
   - EMB-08
-- heading: Uploads and reuse
+- heading: Uploads and Reuse
   item: Per-batch buffers with power-of-two capacity, writeBuffer reuse and a spare pool; heap copies
     kept for hover and rebuilding.
   ids:
   - EMB-08
-- heading: Budgets and level of detail
+- heading: Budgets and Level of Detail
   item: Browser budgets, 256 MiB of scene bytes and 4,096 draws a frame; level of detail only at the producer.
   ids:
   - EMB-18
@@ -163,12 +171,12 @@ entries:
     for lit pixels.
   ids:
   - EMB-08
-- heading: Parity with the native renderers
+- heading: Parity with the Native Renderers
   item: Parity tests in headless Chromium on SwiftShader and the Mac's GPU, with the compatibility device
     in CI; 4 builder days.
   ids:
   - EMB-08
-- heading: The fallback without WebGPU
+- heading: Fallback Without WebGPU
   item: Where WebGPU is absent the element draws only a scene's points in Canvas 2D with a notice naming
     what is not drawn; the text log is plain DOM and the bar chart Canvas 2D; 2 builder days.
   ids:
@@ -200,7 +208,7 @@ entries:
   ids:
   - REN-15
   - EMB-08
-- heading: Work items
+- heading: Work Items
   item: Budgets, the refusal line and rebuilding after a lost device; 2 days, moved to sprint 5.
   ids:
   - EMB-18
@@ -208,11 +216,11 @@ entries:
   item: Parity tests in headless Chromium; 4 days.
   ids:
   - EMB-08
-- heading: Work items
+- heading: Work Items
   item: The scene fallback in TypeScript, points only with a notice; 2 days, moved to sprint 5.
   ids:
   - EMB-17
-- heading: Work items
+- heading: Work Items
   item: The text log in DOM and the bar chart in Canvas 2D; 3 days, moved to sprint 5; the total is 24
     builder days with 7 in sprint 5.
   ids:
@@ -236,7 +244,7 @@ entries:
   item: 'Decision: the scale bar as overlay lines and text drawn by the view layer.'
   ids:
   - REN-44
-- heading: Open decisions
+- heading: Open Decisions
   item: 'Open decisions: antialiased point edges, arrow heads in 3-D, the text log with WebGPU present,
     decimation while the camera moves, the heap cap and requesting higher limits.'
   ids:

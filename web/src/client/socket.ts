@@ -3,7 +3,7 @@
 
 import { decode, encode, MessageError, WireError } from '../protocol/codec.js';
 import {
-  CAP, CLOSE, LIMITS, LIMITS_31, type ControlReplyMsg, type ControlsMsg, type DataView, type Message, type SelectionMsg,
+  CAP, CAP_SCENES, CLOSE, LIMITS, LIMITS_31, type ControlReplyMsg, type ControlsMsg, type DataView, type Message, type SelectionMsg,
   type SessionIdentity, type ViewEntry, type ViewerEvent,
 } from '../protocol/messages.js';
 import {
@@ -216,7 +216,8 @@ export class SocketClient implements StreamClient {
       this.retries = 0;
       this.lastInput = performance.now();
       // 3.1: this viewer shows controls and draws linked selections.
-      this.send({ type: 'hello', role: 'viewer', capabilities: [CAP.controls, CAP.selection], software: { name: 'caliper-view', version: VERSION } });
+      // 3.2 draft: scenes, so that the producer lists its scene views; the WebAssembly views draw them.
+      this.send({ type: 'hello', role: 'viewer', capabilities: [CAP.controls, CAP.selection, CAP_SCENES], software: { name: 'caliper-view', version: VERSION } });
       this.startTimers();
     };
     ws.onmessage = (ev) => {

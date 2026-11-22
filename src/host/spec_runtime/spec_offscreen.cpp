@@ -74,17 +74,19 @@ std::unique_ptr<SpecOffscreen> SpecOffscreen::create(int width, int height, floa
     sternbild::apply_style();
     c->look_ = house_spec_look(text_scale);
 
-    c->renderer_ = core_select_renderer();
-    if (!c->renderer_ || !c->renderer_->canvas_supported()) {
-        if (why)
-            *why = std::string("the ") + (c->renderer_ ? c->renderer_->name() : "selected") +
-                   " renderer has no offscreen canvas (Metal or Vulkan is needed)";
+    // The renderer's offscreen canvas: Metal on macOS, Vulkan on Windows. There
+    // is no fallback renderer, so a renderer that is not there or cannot start
+    // is refused with its reason, as in `caliper shot`.
+    std::string refusal;
+    c->renderer_ = core_select_renderer(&refusal);
+    if (!c->renderer_) {
+        if (why) *why = refusal;
         return nullptr;
     }
     if (!c->renderer_->canvas_init(nullptr, HostRenderer::CANVAS_OFFSCREEN, width, height)) {
         if (why)
-            *why = std::string("the ") + c->renderer_->name() + " renderer could not make a " + std::to_string(width) +
-                   "x" + std::to_string(height) + " canvas (no GPU?)";
+            *why = renderer_start_refusal(c->renderer_->name(), c->renderer_->start_error()) + " (a " +
+                   std::to_string(width) + "x" + std::to_string(height) + " canvas)";
         return nullptr;
     }
     c->canvas_ = true;

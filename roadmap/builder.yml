@@ -109,7 +109,7 @@ features:
     status: planned
     scope: core
     summary: Spec version 1 adds a scene primitive, so that a panel can show a scene and, later, a recording bound to a cursor.
-    depends_on: [REN-12, SPC-10]
+    depends_on: [REN-12, SPC-05]
     sprint: 5
     issue: null
 

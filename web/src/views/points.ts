@@ -1,7 +1,7 @@
 // The points live view: an (N, 2) or (N, 3) float32 cloud coloured by class
 // label (the fixed 16-colour palette) or by value (a colormap), with pan and
 // zoom in 2-D, an orbit camera in 3-D, hover of the nearest point and a lasso
-// or rectangle selection.
+// or rectangle selection, drawn with Canvas 2D.
 //
 // In 3-D, as the native points view: a box around the data with ticks and a
 // floor grid (box3d.ts), depth cues on the points (nearer points larger,
@@ -10,7 +10,6 @@
 // turns the view slowly until any drag.
 
 import { colormapLut, lutIndex, paletteLut } from '../render/colormap.js';
-import { PointsGpu, type DepthCues } from '../render/points-gpu.js';
 import { COLORMAPS, LIMITS, snapshotRange, type SnapshotMsg } from '../protocol/messages.js';
 import { linkedIn, toggle, type LinkAxis, type LiveView, type ViewHost } from './base.js';
 import { BoxFrame } from './box3d.js';
@@ -42,10 +41,20 @@ function isFullStrength(c: number): boolean {
   return (LITTLE ? c >>> 24 : c & 255) === 0;
 }
 
+/**
+ * The depth cues of 3-D points, as the native renderers draw them
+ * (src/host/renderer/host_renderer.h, HostGeomDraw): a point is
+ * radius * clamp(attRef / w, 0.5, 2) wide, w being its clip w, so nearer
+ * points are larger; its colour is scaled from 1 at w = fadeW0 to 0.5 at
+ * w = fadeW1, so farther points are dimmer with their hue kept. A selected
+ * point keeps its full colour.
+ */
+interface DepthCues { attRef: number; fadeW0: number; fadeW1: number }
+
 /** Per point, in 3-D with the depth cues: the size factor and the colour factor. */
 interface Cues2D { scale: Float32Array; fade: Float32Array }
 
-/** The Canvas 2D fallback: round sprites per colour and size, far points first in 3-D. */
+/** Round sprites per colour and size, far points first in 3-D. */
 class Points2D {
   readonly canvas = document.createElement('canvas');
   private readonly ctx: CanvasRenderingContext2D;
@@ -123,9 +132,7 @@ class Points2D {
 export class PointsView implements LiveView {
   private readonly plot = new Plot2D();
   private readonly orbit = new Orbit();
-  private readonly r: PointsGpu | Points2D;
-  /** Under the WebGPU canvas: the plate, and in 3-D the box's back layer. */
-  private readonly under: HTMLCanvasElement | null = null;
+  private readonly r = new Points2D();
   private readonly octx: CanvasRenderingContext2D;
   /** 3-D: the rotate toggle in the header, whether the view turns, and when it last turned. */
   private rotateBtn: { el: HTMLElement; set(v: boolean): void } | null = null;
@@ -133,7 +140,7 @@ export class PointsView implements LiveView {
   private rotT = 0;
   /** The box's tick labels last drawn, as "x=...;y=...;z=..." (tests). */
   private boxLabels = '';
-  /** Clip w of each projected point (3-D), for the depth cues on the Canvas 2D path. */
+  /** Clip w of each projected point (3-D), for the depth cues. */
   private wclip = new Float32Array(0);
   private readonly detach: () => void;
   private snap: SnapshotMsg | null = null;
@@ -162,14 +169,8 @@ export class PointsView implements LiveView {
   private lastDrawMs = 0;
 
   constructor(private readonly host: ViewHost) {
-    this.r = host.device ? new PointsGpu(host.device) : new Points2D();
     this.r.canvas.className = 'data';
     host.body.prepend(this.r.canvas);
-    if (this.r instanceof PointsGpu) {
-      this.under = document.createElement('canvas');
-      this.under.className = 'data';
-      host.body.prepend(this.under);
-    }
     const octx = host.overlay.getContext('2d');
     if (!octx) throw new Error('no 2d context');
     this.octx = octx;
@@ -242,7 +243,6 @@ export class PointsView implements LiveView {
     this.colorize(s);
     this.projKey = '';
     if (!this.fitted) this.fit();
-    if (this.r instanceof PointsGpu) this.r.upload(this.pos, this.colors, n);
     this.host.info(pointsInfo(n, dims, this.classes, !!s.aux));
     if (this.hoverPx) this.onHover(this.hoverPx.x, this.hoverPx.y);
   }
@@ -286,7 +286,6 @@ export class PointsView implements LiveView {
       this.selCount = 0;
     } else return;
     this.applySelection();
-    if (this.r instanceof PointsGpu) this.r.recolor(this.colors);
     this.host.request('data');
   }
 
@@ -490,7 +489,6 @@ export class PointsView implements LiveView {
         this.selectPolygon(poly);
       }
       this.applySelection();
-      if (this.r instanceof PointsGpu) this.r.recolor(this.colors);
       this.host.request('data');
     }
     this.host.request('overlay');
@@ -539,38 +537,32 @@ export class PointsView implements LiveView {
       data = true;
       this.host.request('data');
     }
-    let resized = fitCanvas(this.r.canvas, w, h, dpr);
-    if (this.under) resized = fitCanvas(this.under, w, h, dpr) || resized;
+    const resized = fitCanvas(this.r.canvas, w, h, dpr);
     if (data || resized) {
       const t0 = performance.now();
       const a = this.plot.area;
       const vp = { x: a.x * dpr, y: a.y * dpr, w: a.w * dpr, h: a.h * dpr };
       const box = this.boxFrame();
-      if (this.r instanceof PointsGpu) {
-        this.drawUnder(dpr, box);
-        this.r.draw(this.matrix(), vp, this.radius() * dpr, this.dims === 3, this.cues());
-      } else {
-        this.project();
-        const n = this.n;
-        const xy = new Float32Array(2 * n);
-        for (let i = 0; i < 2 * n; i++) xy[i] = this.proj[i] * dpr;
-        let order: Uint32Array | null = null;
-        let cues2d: Cues2D | null = null;
-        if (this.dims === 3) {
-          order = new Uint32Array(n);
-          for (let i = 0; i < n; i++) order[i] = i;
-          const z = this.depth;
-          order.sort((p, q) => z[q] - z[p]);
-          const c = this.cues()!;
-          cues2d = { scale: new Float32Array(n), fade: new Float32Array(n) };
-          for (let i = 0; i < n; i++) {
-            const wi = this.wclip[i];
-            cues2d.scale[i] = Math.max(0.5, Math.min(2, c.attRef / Math.max(wi, 1e-6)));
-            cues2d.fade[i] = 1 - 0.5 * Math.max(0, Math.min(1, (wi - c.fadeW0) / (c.fadeW1 - c.fadeW0)));
-          }
+      this.project();
+      const n = this.n;
+      const xy = new Float32Array(2 * n);
+      for (let i = 0; i < 2 * n; i++) xy[i] = this.proj[i] * dpr;
+      let order: Uint32Array | null = null;
+      let cues2d: Cues2D | null = null;
+      if (this.dims === 3) {
+        order = new Uint32Array(n);
+        for (let i = 0; i < n; i++) order[i] = i;
+        const z = this.depth;
+        order.sort((p, q) => z[q] - z[p]);
+        const c = this.cues()!;
+        cues2d = { scale: new Float32Array(n), fade: new Float32Array(n) };
+        for (let i = 0; i < n; i++) {
+          const wi = this.wclip[i];
+          cues2d.scale[i] = Math.max(0.5, Math.min(2, c.attRef / Math.max(wi, 1e-6)));
+          cues2d.fade[i] = 1 - 0.5 * Math.max(0, Math.min(1, (wi - c.fadeW0) / (c.fadeW1 - c.fadeW0)));
         }
-        this.r.draw(xy, this.colors, order, n, this.radius() * dpr, vp, cues2d, box ? (ctx) => box.drawBack(ctx) : null, dpr);
       }
+      this.r.draw(xy, this.colors, order, n, this.radius() * dpr, vp, cues2d, box ? (ctx) => box.drawBack(ctx) : null, dpr);
       this.lastDrawMs = performance.now() - t0;
       this.frames++;
     }
@@ -581,24 +573,6 @@ export class PointsView implements LiveView {
   private boxFrame(): BoxFrame | null {
     if (this.dims !== 3 || !this.snap || !this.n) return null;
     return new BoxFrame(this.bbox, this.orbit.eye(), this.matrix(), this.plot.area);
-  }
-
-  /** The canvas under the WebGPU points: the plate, and the box's back layer. */
-  private drawUnder(dpr: number, box: BoxFrame | null): void {
-    const ctx = this.under!.getContext('2d', { alpha: false });
-    if (!ctx) return;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = C.plate;
-    ctx.fillRect(0, 0, this.under!.width, this.under!.height);
-    if (!box) return;
-    const a = this.plot.area;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(a.x, a.y, a.w, a.h);
-    ctx.clip();
-    box.drawBack(ctx);
-    ctx.restore();
   }
 
   private drawOverlay(w: number, h: number, dpr: number): void {
@@ -664,13 +638,12 @@ export class PointsView implements LiveView {
     this.detach();
     this.r.destroy();
     this.r.canvas.remove();
-    this.under?.remove();
     this.rotateBtn?.el.remove();
   }
 
   debug(): Record<string, unknown> {
     return {
-      kind: 'points', renderer: this.r instanceof PointsGpu ? 'webgpu' : 'canvas2d', n: this.n, dims: this.dims, seq: this.snap?.seq ?? null,
+      kind: 'points', renderer: 'canvas2d', n: this.n, dims: this.dims, seq: this.snap?.seq ?? null,
       window: { x0: this.plot.x.lo, x1: this.plot.x.hi, y0: this.plot.y.lo, y1: this.plot.y.hi },
       camera: { az: this.orbit.az, el: this.orbit.el, dist: this.orbit.dist, target: [...this.orbit.target] },
       area: { ...this.plot.area }, hover: this.hover, selected: this.selCount, frames: this.frames, lastDrawMs: this.lastDrawMs,

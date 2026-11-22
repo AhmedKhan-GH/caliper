@@ -142,7 +142,7 @@ TEST_CASE("export sidecar golden (fixed-injection, mirrors the C2 report pattern
 
 TEST_CASE("export sidecar: null state -> literal null; empty colormaps -> []") {
     ExportProvenance p;
-    p.version = "0.6.0"; p.git_commit = "x"; p.backend = "gl"; p.platform = "linux";
+    p.version = "0.6.0"; p.git_commit = "x"; p.backend = "vulkan"; p.platform = "windows";
     p.timestamp_utc = "t"; p.width = 1; p.height = 1; p.clear_rgba = 0; p.draw_count = 0;
     p.state_json = nullptr;   // -> null
     const std::string s = export_build_sidecar_json(p);

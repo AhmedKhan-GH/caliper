@@ -7,6 +7,7 @@ The calls of the `caliper` package and of `caliper.live` are on these pages:
 - [View Calls](view-calls.md): `show`, `points`, `series`, `histogram` and `watch`, with the rate limit.
 - [Routes and Inspection](routes-and-inspection.md): routing, `session`, `window`, `offscreen`, `run`, `spin`, `flush`, `close`, `remove`, the inspection helpers and `caliper.live`.
 - [Network Streaming Calls](network-streaming-calls.md): `serve`, `connect` and `widget`.
+- [Scene Calls](scene-calls.md): `scene` and its calls for points, lines, arrows, boxes, meshes, images, depth, segmentation, cameras, entity transforms, the class table and clears.
 - [Data View Calls](data-view-calls.md): `dims`, `data_view`, `set_data_view`, `offer` and `update`.
 - [Run Control Calls](run-control-calls.md): `step`, `pause`, `param`, `action`, `items` and `controls`.
 

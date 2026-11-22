@@ -5,20 +5,20 @@ on:
     branches: [main]
     # The module's sources (scripts/wasm_views.py INPUTS, which fetch_wasm.py
     # relies on), the web package, the Python package's assets and the scripts
-    # and packaging that handle them.
+    # and packaging that handle them, and the colormap's C++ cases.
     paths: ['web/**', 'src/**', 'include/**', 'sdk/include/**', 'assets/fonts/**',
             'third_party/imgui', 'third_party/implot',
             'python/caliper/**', 'python/check_web_views.cmake',
             'python/tests/test_assets.py', 'python/tests/test_wasm_scripts.py',
             'scripts/build_wasm.py', 'scripts/fetch_wasm.py', 'scripts/wasm_views.py',
-            'scripts/build_web.py', 'pyproject.toml', '.github/workflows/web.yml']
+            'scripts/build_web.py', 'pyproject.toml', 'tests/shaders/**', '.github/workflows/web.yml']
   pull_request:
     paths: ['web/**', 'src/**', 'include/**', 'sdk/include/**', 'assets/fonts/**',
             'third_party/imgui', 'third_party/implot',
             'python/caliper/**', 'python/check_web_views.cmake',
             'python/tests/test_assets.py', 'python/tests/test_wasm_scripts.py',
             'scripts/build_wasm.py', 'scripts/fetch_wasm.py', 'scripts/wasm_views.py',
-            'scripts/build_web.py', 'pyproject.toml', '.github/workflows/web.yml']
+            'scripts/build_web.py', 'pyproject.toml', 'tests/shaders/**', '.github/workflows/web.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -86,11 +86,21 @@ jobs:
           npm ci
           npx playwright-core install chromium-headless-shell
           mkdir -p "$RUNNER_TEMP/shots"
-          node check.mjs --build ../build --out "$RUNNER_TEMP/shots/views.png" --adapter swiftshader
-          node check.mjs --build ../build --out "$RUNNER_TEMP/shots/edges.png" --view edges --kind heatmap
-          node check.mjs --build ../build --out "$RUNNER_TEMP/shots/points.png" --view embedding --kind points --dims 2
+          # A hosted runner draws the demo page on SwiftShader at well under one frame a second, so the
+          # checks wait for 20 frames here, not the 300 of a local run.
+          node check.mjs --build ../build --out "$RUNNER_TEMP/shots/views.png" --adapter swiftshader --frames 20
+          node check.mjs --build ../build --out "$RUNNER_TEMP/shots/edges.png" --view edges --kind heatmap --frames 20
+          node check.mjs --build ../build --out "$RUNNER_TEMP/shots/points.png" --view embedding --kind points --dims 2 --frames 20
           node multi.mjs --build ../build --out "$RUNNER_TEMP/shots/multi.png" --destroy 1
           node cross_origin.mjs --build ../build --out "$RUNNER_TEMP/shots/cross-origin.png"
+      # The colormap's boundary cases from the C++ (tests/shaders/colormap_cases_tool.cpp),
+      # which the browser rows of the colormap by keys and the Canvas 2D colormap compare with.
+      - name: Write the colormap's cases
+        run: |
+          c++ -std=c++17 -O2 -Isrc/host -Isdk/include -Itests tests/shaders/colormap_cases_tool.cpp \
+              src/host/tensor_bridge.cpp -o "$RUNNER_TEMP/caliper_colormap_cases"
+          "$RUNNER_TEMP/caliper_colormap_cases" "$RUNNER_TEMP/colormap_cases.bin"
+          echo "CALIPER_COLORMAP_CASES=$RUNNER_TEMP/colormap_cases.bin" >> "$GITHUB_ENV"
       # The element with the fresh module from python/caliper/_web/, and without it
       # (fallback.spec.ts). The webgpu project needs a GPU and is left out. The
       # swiftshader project runs first and on its own, one test at a time, and

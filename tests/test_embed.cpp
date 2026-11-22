@@ -833,6 +833,68 @@ TEST_CASE("embed/log: a live applet's log.v1 line routes to the embedder sink, "
 }
 
 // ===========================================================================
+// No fallback renderer (renderer core, step 5). Where the platform's renderer
+// cannot start, attach_canvas refuses with one message that names it and why;
+// CALIPER_RENDERER=gl, which asks for the removed OpenGL renderer, is refused
+// at create. CALIPER_TEST_RENDERER_FAIL=1 makes the renderer's start fail, so
+// both run headless on any machine, with or without a GPU.
+// ===========================================================================
+namespace {
+#ifdef __APPLE__
+const char* const kPlatformRenderer = "Metal";
+#else
+const char* const kPlatformRenderer = "Vulkan";
+#endif
+
+// Sets an environment variable for one scope.
+struct ScopedEnv {
+    const char* name;
+    ScopedEnv(const char* n, const char* v) : name(n) { setenv(n, v, 1); }
+    ~ScopedEnv() { unsetenv(name); }
+};
+}  // namespace
+
+TEST_CASE("embed/refusal: a renderer that cannot start refuses attach_canvas with its reason") {
+    ScopedEnv fail("CALIPER_TEST_RENDERER_FAIL", "1");
+    CaliperCoreDesc d = base_desc();
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+
+    CaliperCanvasDesc c = offscreen_desc(64, 64);
+    CHECK(caliper_core_attach_canvas(core, nullptr, &c) == 0);
+    CHECK(std::string(caliper_core_last_error(core)) ==
+          std::string("attach_canvas: the ") + kPlatformRenderer +
+              " renderer could not start (CALIPER_TEST_RENDERER_FAIL=1 made its start fail), "
+              "and there is no fallback renderer until the WebGPU fallback through Dawn lands");
+
+    // The core stays usable after the refusal: a frame refuses for want of a canvas.
+    caliper_core_frame(core);
+    CHECK(std::string(caliper_core_last_error(core)).find("no canvas attached") !=
+          std::string::npos);
+    caliper_core_shutdown(core);
+}
+
+TEST_CASE("embed/refusal: CALIPER_RENDERER=gl is refused at create, and the log says OpenGL was removed") {
+    reset_log_capture();
+    {
+        ScopedEnv gl("CALIPER_RENDERER", "gl");
+        CaliperCoreDesc d = base_desc();
+        d.log_fn = &capture_log_fn;
+        CHECK(caliper_core_create(&d) == nullptr);
+    }
+    CHECK(drain_log_capture().find(
+              "caliper_core_create: CALIPER_RENDERER=gl asks for the OpenGL renderer, which was "
+              "removed; unset it, and Caliper draws with Metal on macOS and Vulkan on Windows\n") !=
+          std::string::npos);
+
+    // The refusal released the one-core slot: the next create succeeds.
+    CaliperCoreDesc d = base_desc();
+    CaliperCore* core = caliper_core_create(&d);
+    REQUIRE(core != nullptr);
+    caliper_core_shutdown(core);
+}
+
+// ===========================================================================
 // v1.2 — built-in tensor views (caliper_core_view_*). The Python entry point's
 // caliper.show: the core draws a host tensor itself. Byte-exact against the
 // SAME CPU reference the bridge/gfx rows use (map_f32_to_rgba8 + colormap_lut),

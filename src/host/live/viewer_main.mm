@@ -45,7 +45,13 @@
 // --stats prints one line to stderr every 2 s: fps, per-view updates,
 // step-to-screen latency median/p95/max over that window, skipped / client-
 // dropped counters, each view's renderer path, and this process's RSS and
-// physical footprint (for the no-host-copy evidence).
+// physical footprint (for the no-host-copy evidence). It also turns on the
+// renderer's frame statistics (CALIPER_METAL_STATS) and adds the copy counters
+// (docs/applets/rendering.md, "Copy Counters and Frame Statistics"): the
+// copies and bytes copied in the window, the frames they spread over, the
+// frame-time and GPU-time percentiles and the updates by path of the window,
+// and each view's copies and bytes since it appeared; the renderer prints its
+// own summary line for the whole run at exit.
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 
@@ -53,6 +59,7 @@
 #include <caliper/live.h>
 #include <caliper/live_views.h>
 
+#include "embed/render_stats.h"   // copy counters and frame statistics (host-internal)
 #include "live/live_activity.h"
 
 #include <mach/mach.h>
@@ -60,6 +67,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <cerrno>
+#include <time.h>
 #include <unistd.h>
 
 #include <cstdio>
@@ -161,12 +169,45 @@ static void print_stats(double t) {
         std::string path = "-";
         int imported = 0;
         if (vs.apply && vs.apply[0]) view_path(vs.name, &path, &imported);   // applied at least once
-        char buf[512];
-        std::snprintf(buf, sizeof buf, " %s:upd=%llu,seq=%llu,skipped=%llu,dropped=%llu,path=%s,imported=%d%s%s",
+        caliper_stats::ViewCopies vc{};
+        caliper_stats::view_copies(g_core, vs.name, &vc);
+        char buf[640];
+        std::snprintf(buf, sizeof buf,
+                      " %s:upd=%llu,seq=%llu,skipped=%llu,dropped=%llu,path=%s,imported=%d,copies=%llu,"
+                      "copy_bytes=%llu%s%s",
                       vs.name, (unsigned long long)vs.window_updates, (unsigned long long)vs.seq,
                       (unsigned long long)vs.skipped, (unsigned long long)vs.client_dropped, path.c_str(),
-                      imported, vs.error[0] ? ",error=" : "", vs.error);
+                      imported, (unsigned long long)vc.total.copies, (unsigned long long)vc.total.bytes,
+                      vs.error[0] ? ",error=" : "", vs.error);
         per += buf;
+    }
+    // The core's copies per frame and the renderer's frame statistics over the
+    // same window (both reset here, like the status window below).
+    std::string render;
+    caliper_stats::FrameCopies fc{};
+    if (caliper_stats::frame_copies(g_core, &fc, true)) {
+        char buf[160];
+        std::snprintf(buf, sizeof buf, " copies=%llu copy_bytes=%llu copy_frames=%llu",
+                      (unsigned long long)fc.window.copies, (unsigned long long)fc.window.bytes,
+                      (unsigned long long)fc.window_frames);
+        render += buf;
+    }
+    // When the window ended, in the clock a producer stamps with
+    // (CLOCK_UPTIME_RAW), so a benchmark can keep the windows it measured.
+    render += " now_ns=" + std::to_string(clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
+    caliper_host::HostRenderer::FrameStats fs;
+    if (caliper_stats::frame_stats(g_core, &fs, true)) {
+        char buf[640];
+        std::snprintf(buf, sizeof buf,
+                      " frame_ms_p50=%.3f frame_ms_p99=%.3f frame_ms_max=%.3f gpu_update_ms_p50=%.4f "
+                      "gpu_update_ms_p99=%.4f gpu_update_n=%llu gpu_draw_ms_p50=%.4f gpu_draw_ms_p99=%.4f "
+                      "gpu_draw_n=%llu gpu_frame_ms_p50=%.4f gpu_frame_ms_p99=%.4f gpu_frame_n=%llu",
+                      fs.frame_ms_p50, fs.frame_ms_p99, fs.frame_ms_max, fs.update_gpu_ms_p50,
+                      fs.update_gpu_ms_p99, (unsigned long long)fs.update_gpu_n, fs.draw_gpu_ms_p50,
+                      fs.draw_gpu_ms_p99, (unsigned long long)fs.draw_gpu_n, fs.frame_gpu_ms_p50,
+                      fs.frame_gpu_ms_p99, (unsigned long long)fs.frame_gpu_n);
+        render += buf;
+        for (const auto& kv : fs.updates) render += " upd_" + kv.first + "=" + std::to_string(kv.second);
     }
     if (!g_opt.latency_log.empty()) {
         const size_t n = caliper_core_live_window_latencies(g_core, nullptr, nullptr, 0);
@@ -184,12 +225,13 @@ static void print_stats(double t) {
     std::fprintf(stderr,
                  "[caliper-viewer] stats t=%.1f fps=%.1f frames=%llu updates=%llu lat_ms_median=%.3f "
                  "lat_ms_p95=%.3f lat_ms_max=%.3f lat_n=%llu skipped=%llu client_dropped=%llu "
-                 "errors=%llu client=%s rss_mb=%.1f footprint_mb=%.1f input_events=%llu views=%d pending=%d%s\n",
+                 "errors=%llu client=%s rss_mb=%.1f footprint_mb=%.1f input_events=%llu views=%d pending=%d%s%s\n",
                  t, st.fps, (unsigned long long)st.window_frames, (unsigned long long)st.window_updates,
                  st.latency_ms_median, st.latency_ms_p95, st.latency_ms_max,
                  (unsigned long long)st.latency_samples, (unsigned long long)st.skipped,
                  (unsigned long long)st.client_dropped, (unsigned long long)st.errors,
-                 st.client_alive ? "alive" : "exited", rss, fp, g_input_events, st.views, st.pending, per.c_str());
+                 st.client_alive ? "alive" : "exited", rss, fp, g_input_events, st.views, st.pending,
+                 render.c_str(), per.c_str());
 }
 
 // --dump-dir: write each view whose seq changed since the last dump.
@@ -709,6 +751,8 @@ int main(int argc, const char* argv[]) {
         std::fprintf(stderr, "caliper-viewer: give --session or --url, not both\n");
         return 64;
     }
+    // --stats turns on the renderer's frame statistics before the core exists.
+    if (g_opt.stats) setenv("CALIPER_METAL_STATS", "1", 0);
     if (g_opt.headless && g_opt.session.empty() && g_opt.url.empty()) {
         std::fprintf(stderr, "caliper-viewer: --headless needs --session or --url\n");
         return 64;

@@ -1,0 +1,302 @@
+{
+  "arrows_vectors_missing.bin": {
+    "error": "bad_request"
+  },
+  "arrows_vectors_rows.bin": {
+    "error": "bad_request"
+  },
+  "bars_colors_rows.bin": {
+    "error": "bad_request"
+  },
+  "bars_labels_count.bin": {
+    "error": "bad_request"
+  },
+  "bars_rank_2.bin": {
+    "error": "bad_request"
+  },
+  "bars_too_many.bin": {
+    "error": "bad_request"
+  },
+  "boxes_half_sizes_dims.bin": {
+    "error": "bad_request"
+  },
+  "boxes_rotations_2d.bin": {
+    "error": "bad_request"
+  },
+  "camera_convention_missing.bin": {
+    "error": "bad_request"
+  },
+  "camera_fx_missing.bin": {
+    "error": "bad_request"
+  },
+  "camera_height_zero.bin": {
+    "error": "bad_request"
+  },
+  "camera_width_fraction.bin": {
+    "error": "bad_request"
+  },
+  "class_ids_rows.bin": {
+    "error": "bad_request"
+  },
+  "classes_color_missing.bin": {
+    "error": "bad_request"
+  },
+  "classes_id_range.bin": {
+    "error": "bad_request"
+  },
+  "classes_order.bin": {
+    "error": "bad_request"
+  },
+  "clear_reset_path.bin": {
+    "error": "bad_request"
+  },
+  "clear_stamp_static.bin": {
+    "error": "bad_request"
+  },
+  "colors_and_values.bin": {
+    "error": "bad_request"
+  },
+  "colors_rgb.bin": {
+    "error": "bad_request"
+  },
+  "controls_stamp_f32.bin": {
+    "error": "bad_request"
+  },
+  "cursor_loop_order.bin": {
+    "error": "bad_cursor"
+  },
+  "cursor_op.bin": {
+    "error": "bad_request"
+  },
+  "cursor_request_id.bin": {
+    "error": "bad_request"
+  },
+  "cursor_seek_range.bin": {
+    "error": "bad_cursor"
+  },
+  "cursor_seek_text.bin": {
+    "error": "bad_cursor"
+  },
+  "cursor_seek_timeline.bin": {
+    "error": "bad_cursor"
+  },
+  "cursor_speed.bin": {
+    "error": "bad_cursor"
+  },
+  "cursor_step_zero.bin": {
+    "error": "bad_cursor"
+  },
+  "edge_values_rows.bin": {
+    "error": "bad_request"
+  },
+  "edges_2e.bin": {
+    "error": "bad_request"
+  },
+  "edges_color_per_strip.bin": {
+    "error": "bad_request"
+  },
+  "edges_indices_missing.bin": {
+    "error": "bad_request"
+  },
+  "edges_strip_lengths.bin": {
+    "error": "bad_request"
+  },
+  "image_color_rgb.bin": {
+    "error": "bad_request"
+  },
+  "image_depth_u8.bin": {
+    "error": "bad_request"
+  },
+  "image_encoded_format_missing.bin": {
+    "error": "bad_request"
+  },
+  "image_form_missing.bin": {
+    "error": "bad_request"
+  },
+  "image_form_unknown.bin": {
+    "error": "bad_request"
+  },
+  "image_opacity_range.bin": {
+    "error": "bad_request"
+  },
+  "image_pixels_missing.bin": {
+    "error": "bad_request"
+  },
+  "image_side.bin": {
+    "error": "bad_request"
+  },
+  "indices_i64.bin": {
+    "error": "bad_request"
+  },
+  "labels_count.bin": {
+    "error": "bad_request"
+  },
+  "labels_long.bin": {
+    "error": "bad_request"
+  },
+  "mesh_normals_2d.bin": {
+    "error": "bad_request"
+  },
+  "mesh_texture_rgb.bin": {
+    "error": "bad_request"
+  },
+  "mesh_uvs_and_colors.bin": {
+    "error": "bad_request"
+  },
+  "mesh_uvs_without_texture.bin": {
+    "error": "bad_request"
+  },
+  "mode_missing.bin": {
+    "error": "bad_request"
+  },
+  "part_unknown.bin": {
+    "error": "bad_request"
+  },
+  "path_dotdot.bin": {
+    "error": "bad_request"
+  },
+  "path_too_deep.bin": {
+    "error": "bad_request"
+  },
+  "positions_4d.bin": {
+    "error": "bad_request"
+  },
+  "positions_length_mismatch.bin": {
+    "close_code": 4000,
+    "reason": "malformed"
+  },
+  "positions_missing.bin": {
+    "error": "bad_request"
+  },
+  "recording_open_id.bin": {
+    "error": "bad_request"
+  },
+  "recordings_id.bin": {
+    "error": "bad_request"
+  },
+  "segments_odd.bin": {
+    "error": "bad_request"
+  },
+  "series_decimated_zero.bin": {
+    "error": "bad_request"
+  },
+  "series_indices_alone.bin": {
+    "error": "bad_request"
+  },
+  "series_stamps_rows.bin": {
+    "error": "bad_request"
+  },
+  "snapshot_empty_with_data.bin": {
+    "error": "bad_request"
+  },
+  "snapshot_stamp_static.bin": {
+    "error": "bad_request"
+  },
+  "split_first_max.bin": {
+    "error": "bad_request"
+  },
+  "split_first_names.bin": {
+    "error": "bad_request"
+  },
+  "split_first_rows.bin": {
+    "error": "bad_request"
+  },
+  "split_first_wraps.bin": {
+    "error": "bad_request"
+  },
+  "split_one_piece.bin": {
+    "error": "bad_request"
+  },
+  "split_piece.bin": {
+    "error": "bad_request"
+  },
+  "split_rows_later.bin": {
+    "error": "bad_request"
+  },
+  "split_rows_missing.bin": {
+    "error": "bad_request"
+  },
+  "split_rows_pass.bin": {
+    "error": "bad_request"
+  },
+  "stamp_f32.bin": {
+    "error": "bad_request"
+  },
+  "stamp_rank_2.bin": {
+    "error": "bad_request"
+  },
+  "stamp_static.bin": {
+    "error": "bad_request"
+  },
+  "stamp_too_long.bin": {
+    "error": "bad_request"
+  },
+  "strip_lengths_f32.bin": {
+    "error": "bad_request"
+  },
+  "strip_lengths_sum.bin": {
+    "error": "bad_request"
+  },
+  "text_level.bin": {
+    "error": "bad_request"
+  },
+  "text_levels_missing.bin": {
+    "error": "bad_request"
+  },
+  "text_line_long.bin": {
+    "error": "bad_request"
+  },
+  "text_offsets_decrease.bin": {
+    "error": "bad_request"
+  },
+  "text_offsets_end.bin": {
+    "error": "bad_request"
+  },
+  "text_total.bin": {
+    "error": "bad_request"
+  },
+  "text_utf8.bin": {
+    "error": "bad_request"
+  },
+  "time_state_cursor_following.bin": {
+    "error": "bad_request"
+  },
+  "time_state_ranges.bin": {
+    "error": "bad_request"
+  },
+  "transforms_matrices_missing.bin": {
+    "error": "bad_request"
+  },
+  "transforms_repeat.bin": {
+    "error": "bad_request"
+  },
+  "transforms_root.bin": {
+    "error": "bad_request"
+  },
+  "transforms_rows.bin": {
+    "error": "bad_request"
+  },
+  "transforms_stamp_and_stamps.bin": {
+    "error": "bad_request"
+  },
+  "transforms_stamps_rows.bin": {
+    "error": "bad_request"
+  },
+  "truncated_mesh.bin": {
+    "close_code": 4000,
+    "reason": "truncated"
+  },
+  "u16_length_mismatch.bin": {
+    "close_code": 4000,
+    "reason": "malformed"
+  },
+  "views_recorded_many.bin": {
+    "error": "bad_request"
+  },
+  "views_timelines_order.bin": {
+    "error": "bad_request"
+  },
+  "views_timelines_repeat.bin": {
+    "error": "bad_request"
+  }
+}

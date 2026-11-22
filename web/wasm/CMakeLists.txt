@@ -26,7 +26,8 @@ option(CALIPER_WEB_CLOSURE "Run the Closure compiler over the JavaScript glue (R
 # The live views, the embed v1.2 views and the hosted core (embed_views.cpp,
 # split out of embed_core.cpp so the applet loader, the service registry, the
 # job system and the app paths stay out), the tensor bridge, the WebGPU
-# renderer, Dear ImGui and ImPlot. live_unsupported.cpp is the existing
+# renderer with the graphics layer's core and WebGPU backend, Dear ImGui and
+# ImPlot. live_unsupported.cpp is the existing
 # stand-in for the shared-memory attach, which a browser does not have.
 add_library(caliper_view_layer STATIC
     ${CALIPER_ROOT}/src/host/live/live_views.cpp
@@ -35,6 +36,9 @@ add_library(caliper_view_layer STATIC
     ${CALIPER_ROOT}/src/host/embed/embed_views.cpp
     ${CALIPER_ROOT}/src/host/tensor_bridge.cpp
     ${CALIPER_ROOT}/src/host/renderer/webgpu_renderer.cpp
+    ${CALIPER_ROOT}/src/host/renderer/webgpu_backend.cpp
+    ${CALIPER_ROOT}/src/host/gfx/core.cpp
+    ${CALIPER_ROOT}/src/host/gfx/ops.cpp
     ${CALIPER_ROOT}/src/host/ui/sternbild_fonts.cpp
     ${CALIPER_ROOT}/src/host/ui/sternbild_theme.cpp
     ${TP}/imgui/imgui.cpp
@@ -53,7 +57,27 @@ target_include_directories(caliper_view_layer PUBLIC
     ${TP}/imgui
     ${TP}/imgui/backends
     ${TP}/implot)
+# The scene view and the points view of the live views (src/host/live/live_scene.h, live_points.h)
+# and what they draw through: the scene core over the graphics layer's WebGPU backend, which the
+# renderer owns.
+target_sources(caliper_view_layer PRIVATE
+    ${CALIPER_ROOT}/src/host/live/live_views_scene.cpp
+    ${CALIPER_ROOT}/src/host/live/live_scene.cpp
+    ${CALIPER_ROOT}/src/host/live/live_points.cpp
+    ${CALIPER_ROOT}/src/host/scene/path.cpp
+    ${CALIPER_ROOT}/src/host/scene/scene_tree.cpp
+    ${CALIPER_ROOT}/src/host/scene/camera.cpp
+    ${CALIPER_ROOT}/src/host/scene/compile.cpp
+    ${CALIPER_ROOT}/src/host/scene/pick.cpp
+    ${CALIPER_ROOT}/src/host/scene/scale_bar.cpp
+    ${CALIPER_ROOT}/src/host/scene/backend_resources.cpp)
 target_compile_definitions(caliper_view_layer PUBLIC IMGUI_IMPL_WEBGPU_BACKEND_DAWN)
+# The scene core's arithmetic without contraction, as natively (the root CMakeLists.txt's caliper_scene),
+# so that both compute the same uniform bytes; WebAssembly has no fused multiply-add, so this only
+# states it.
+set_source_files_properties(${CALIPER_ROOT}/src/host/scene/scene_tree.cpp ${CALIPER_ROOT}/src/host/scene/camera.cpp
+    ${CALIPER_ROOT}/src/host/scene/compile.cpp ${CALIPER_ROOT}/src/host/scene/pick.cpp
+    ${CALIPER_ROOT}/src/host/scene/backend_resources.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 # The WebGPU port must be named when compiling too: it provides webgpu.h.
 target_compile_options(caliper_view_layer PUBLIC --use-port=emdawnwebgpu)
 
@@ -72,6 +96,8 @@ add_executable(caliper-views
     src/web_input.cpp
     src/page_style.cpp
     src/fonts.cpp
+    src/gfx_selftest.cpp
+    src/scene_selftest.cpp
 )
 # fonts.cpp embeds the native app's faces from assets/fonts (C23 #embed).
 set_source_files_properties(src/fonts.cpp PROPERTIES
@@ -95,7 +121,7 @@ target_link_options(caliper-views PRIVATE
     -sMAXIMUM_MEMORY=512MB
     -sERROR_ON_UNDEFINED_SYMBOLS=1
     "-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$UTF8ToString,$stringToNewUTF8,$stringToUTF8OnStack,$stackSave,$stackRestore,$specialHTMLTargets"
-    "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view,_caliper_views_set_toggle,_caliper_views_set_link,_caliper_views_destroy"
+    "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view,_caliper_views_set_toggle,_caliper_views_set_link,_caliper_views_gfx_selftest,_caliper_views_scene_selftest,_caliper_views_colormap_keys,_caliper_views_destroy"
     "-sEXPORTED_RUNTIME_METHODS=ccall,UTF8ToString,stringToNewUTF8"
 )
 if(CALIPER_WEB_CLOSURE AND CMAKE_BUILD_TYPE STREQUAL "Release")

@@ -1,9 +1,10 @@
 // 3-D points in both browser renderers, the element's own TypeScript view
-// (renderer="ts": WebGPU, or Canvas 2D without an adapter) and Caliper's views
-// compiled to WebAssembly (renderer="wasm"), fed the same fixed scene by
-// mock_server.py --scene: the box with its ticks, the default camera, the
-// depth cues and the rotate toggle. web/wasm/README.md and
-// web/src/views/box3d.ts describe them.
+// (renderer="ts", which draws with Canvas 2D in every project) and Caliper's
+// views compiled to WebAssembly (renderer="wasm", on WebGPU, in the projects
+// that have an adapter), fed the same fixed scene by mock_server.py --scene:
+// the box with its ticks, the default camera, the depth cues and the rotate
+// toggle, so the WebAssembly views are compared with the Canvas 2D view.
+// web/wasm/README.md and web/src/views/box3d.ts describe them.
 
 import { test, type Page } from '@playwright/test';
 import fs from 'node:fs';
@@ -20,7 +21,7 @@ const HAVE_WASM = ['caliper-views-loader.js', 'caliper-views.js', 'caliper-views
 type El = HTMLElement & { debugState(): Record<string, unknown> };
 type Renderer = 'ts' | 'wasm';
 
-/** The renderers this project can show: the TypeScript view always, the WebAssembly views with an adapter. */
+/** The renderers this project can show: the Canvas 2D view always, the WebAssembly views with an adapter. */
 function renderers(project: string): Renderer[] {
   return project === 'canvas2d' || !HAVE_WASM ? ['ts'] : ['ts', 'wasm'];
 }

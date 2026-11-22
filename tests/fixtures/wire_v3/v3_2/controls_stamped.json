@@ -1,0 +1,53 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 184,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 134,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 80
+  },
+  "meta": {
+    "actions": [],
+    "params": [],
+    "run": {
+      "state": "running",
+      "step": 1200,
+      "steps_left": null
+    },
+    "sections": [
+      {
+        "dtype": 3,
+        "name": "stamp",
+        "shape": [
+          2
+        ]
+      }
+    ]
+  },
+  "meta_offset": 28,
+  "name": "v3_2/controls_stamped",
+  "section_lengths": [
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 16,
+      "name": "stamp",
+      "offset": 168,
+      "shape": [
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789
+      ]
+    }
+  ],
+  "type_name": "controls"
+}

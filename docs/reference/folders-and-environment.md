@@ -49,7 +49,7 @@ The `caliper` executable reads these. The first six are development hooks.
 | `CALIPER_HOME_AFTER=<seconds>` | Returns to the landing screen once for each kind of page, that many seconds after the first applet page, live page or spec page opens. From the live page the session stays attached, as with `esc Home`. |
 | `CALIPER_WINDOW_SIZE=<W>x<H>` | Sets the window size in screen coordinates, for example `1440x900`. The host ignores a malformed value. The default is 95% of the work area, or 1280 by 800 with `CALIPER_HIDDEN`. |
 | `CALIPER_VIEWS_DEBUG=1` | Shows diagnostics on a line under the header of each view: size, data type, device and renderer path, sequence number, latency, update count and drops. It is off by default. |
-| `CALIPER_TEST_UI=<steps>` | A testing aid, read only with `--hidden` or `CALIPER_HIDDEN=1`. It plays mouse and key input into the live page, so a test clicks the real widgets with nothing on screen. Steps are separated by `;`. |
+| `CALIPER_TEST_UI=<steps>` | A testing aid, read only with `--hidden` or `CALIPER_HIDDEN=1`. It plays mouse and key input into the live page, so a test clicks the real widgets with nothing on screen. Steps are separated by `;`. Two steps read the page back: `where <view>` logs the view's data area and its own geometry text, and `bar [<text>]` waits until the run bar's state starts with the text and logs what it shows. |
 | `CALIPER_TEST_SPEC_UI=<steps>` | A testing aid, read only with `--hidden`. It plays mouse and key input into the landing screen, the spec page and the live page, and it reads named frames back. Steps are separated by `;`. |
 | `CALIPER_TEST_APPROVALS=<file>` | A testing aid, read only with `--hidden`. It holds the decisions on the approval cards, one line each, such as `approve panel.create mcp` or `deny panel.create mcp`. The app reads lines as they are appended. |
 | `CALIPER_HIDDEN=1` | A testing aid, the same as `--hidden`. It runs the real app with its window never shown, no Dock icon and no menu bar. It reads and writes no `imgui.ini`, and it closes the window normally on SIGINT and SIGTERM. See [The hidden window](cli.md#hidden-window). |
@@ -77,9 +77,10 @@ On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shor
 
 | Variable | What it does |
 |---|---|
-| `CALIPER_RENDERER=gl` | Selects the OpenGL fallback instead of Metal or Vulkan. Any other value leaves the platform default. An embedding host that asks for the default renderer honors it too. |
+| `CALIPER_RENDERER=gl` | Refused: the OpenGL renderer it chose was removed. The app and `caliper shot` exit with 1, and an embedding host that asks for the default renderer gets no core ([No Fallback Renderer](../applets/rendering.md#no-fallback-renderer)). Any other value leaves the platform's renderer, Metal on macOS and Vulkan on Windows. |
 | `CALIPER_VULKAN_NO_DIRECT` | Set to any value, it turns off the [direct path](../development/vulkan-and-cuda.md#direct-image-path), where a CUDA kernel writes the Vulkan image, so updates use the buffer path. |
 | `CALIPER_VULKAN_STATS` | Set to any value, the Vulkan renderer prints one summary line at shutdown with frame times and the count of direct and buffer updates. |
+| `CALIPER_METAL_STATS` | Set to any value, the Metal renderer records frame times, the GPU time of each update, view draw and frame, and the updates by path, and prints one summary line at shutdown with its copy count ([Copy Counters and Frame Statistics](../applets/rendering.md#copy-counters-and-frame-statistics)). `caliper-viewer --stats` sets it. |
 
 ## Applet and Example Variables
 
@@ -100,7 +101,30 @@ On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shor
 |---|---|
 | `CALIPER_REQUIRE_GPU=1` | A skip for want of a GPU becomes a failure. |
 | `CALIPER_TEST_FORCE_NO_GPU=1` | The device suites behave as if there were no GPU. |
+| `CALIPER_TEST_RENDERER_FAIL=1` | The Metal or Vulkan renderer's start fails before it touches a device, with the reason `CALIPER_TEST_RENDERER_FAIL=1 made its start fail`, so the refusals of the app, `caliper shot` and Caliper Embed can be tested on a machine whose GPU works. |
 | `CALIPER_TEST_APPLET_DIR=<folder>` | Runs the headless acceptance case of `caliper_tests` on the applets in that folder. Without it the case is skipped. |
+| `CALIPER_GFX_CAPTURE_DIR=<folder>` | `caliper_gfx_tests` writes PNG captures of the graphics layer's rows, the colormap rows, the scene core's rows and the scene view's rows to that folder, and `caliper_gfx_views_tests` each points view case's readback as `points-view-<case>.png`. Without it nothing is written. |
+| `CALIPER_GFX_RECORD=<file>` | `caliper_gfx_views_tests` records each case's line of the graphics suite's reference mode (its readback's hash, path label, copies and header) into that file instead of comparing. |
+| `CALIPER_GFX_REFERENCES=<file>` | `caliper_gfx_views_tests` compares with the references in that file instead of the committed `tests/gfx/references/points_view.txt`. |
+| `CALIPER_GFX_REFERENCE_IMAGES=<folder>` | `caliper_gfx_views_tests` compares each case's readback pixel by pixel with its image in that folder, written by an earlier build with `CALIPER_GFX_CAPTURE_DIR`, and lists the differing pixels. Without it that row returns at once. |
+| `CALIPER_GFX_POINTS_CASES=<text>` | `caliper_gfx_views_tests` runs only the points view's cases whose names contain the text. |
+| `CALIPER_GFX_POINTS_BENCH=1` | `caliper_gfx_views_tests` runs the points view's timing row: the CPU time to compile and submit a redraw and the GPU time of the draw at 100,000, 1,000,000 and 4,000,000 points, with the load average. Without it the row returns at once. |
+| `CALIPER_TEST_SHOTS=<folder>` | `caliper_live_views_tests` writes PNG screenshots of its offscreen canvas to that folder: a 3-D points scene from three angles and the scene view with its header and scale bar in Y up, in Z up and in 2-D. Without it nothing is written. |
+| `CALIPER_GFX_LAYER_BENCH=1` | `caliper_gfx_tests` runs the graphics layer's timing row: the CPU time to build and submit 1,000 draws a frame on the recording backend and on Metal, printed with the load average. Without it the row returns at once. |
+| `CALIPER_GFX_SCENE_BENCH=1` | `caliper_gfx_tests` runs the scene core's timing row: the compile time and the layer's submit time of the surface scene and of a scene of 1,000 entities. Without it the row returns at once. |
+| `CALIPER_GFX_SCENE_VIEW_BENCH=1` | `caliper_gfx_tests` runs the scene view's timing row: the view's compile, submit and GPU times for the demo scene at 512 x 512 and the time to apply one mesh update. Without it the row returns at once. |
+| `CALIPER_GFX_CMAP_BENCH=1` | `caliper_gfx_tests` runs the colormap's timing row: the GPU time of the generated `colormap_texture` against the Metal renderer's float pass on 1,024 by 1,024 and 2,048 by 2,048 heatmaps, with the load average. `CALIPER_GFX_CMAP_BENCH_SAMPLES=<n>` sets the samples of each pass, 40 by default. Without it the row returns at once. |
+| `CALIPER_CMAP_BENCH=1` | `caliper_tests` runs the timing row of the colormap keys: the time to derive one range's keys and to find a block in the cache. Without it the row returns at once. |
+| `CALIPER_SLOW_TESTS=1` | Runs the tests under the ctest label `slow`, `caliper_colormap_exhaustive` and `caliper_colormap_gpu_exhaustive`, which compare the colormap by keys with `map_f32_to_rgba8` for all 2<sup>32</sup> inputs. Without it they report themselves skipped. |
+| `CALIPER_TEST_THREADS=<n>` | The CPU threads of the two exhaustive colormap tests, 6 by default and at most 6. |
+| `CALIPER_EXHAUSTIVE_RANGES=<n>`, `CALIPER_GPU_EXHAUSTIVE_CHUNKS=<n>` | Limit `caliper_colormap_exhaustive` to its first n ranges and `caliper_colormap_gpu_exhaustive` to its first n of 256 chunks, the small cases whose peak memory is measured before a full run. A limited run fails, so it never passes as a full one. |
+| `CALIPER_METAL_STATS` | The renderer variable above. `caliper_live_views_tests` sets it to check the frame statistics, and `python/bench/bench_show.py` sets it for its window-mode rows on the offscreen canvas. |
+| `CALIPER_SCENE_CAPTURE_DIR=<folder>` | `python/tests/test_scene_app.py` saves the two frames the app draws there, as `scene-view-app.png` and `scene-view-update.png`. Without it nothing is written. |
+| `CALIPER_BENCH_KEEP_RAW` | Set to any value, `python/bench/bench_live.py` writes the viewer's log and latency samples of each row to `python/bench/results/S-raw-<tag>-*.txt`. Without it they go to the private data folder of the run. |
+| `CARGO_TARGET_DIR` | The folder in which `tools/shaders/generate.py` builds the shader translator's driver, in place of `tools/shaders/naga-driver/target/`. |
+| `CALIPER_VIEWS_REFERENCE=<folder>` | The web package's `web/test/wasm.spec.ts` compares each fixed view's picture with the file of the same name in that folder, saved from an earlier build, and fails on any differing byte of a view's data area. Without it the pictures are only saved. |
+| `CALIPER_VIEWS_COMPAT=1` | `web/test/wasm.spec.ts` asks every mount of the WebAssembly views for a compatibility-mode WebGPU device. |
+| `CALIPER_COLORMAP_CASES=<file>` | `web/test/shaders.spec.ts` and `web/test/colormap.spec.ts` take the colormap's cases from the file that `caliper_colormap_cases <file>` wrote from the C++: each range's block, inputs and reference colours. Without it their colormap tests are skipped. |
 
 ctest runs every test binary that opens the stores, and every command-line test, with `CALIPER_DATA_DIR` on a folder in the build tree. See [Development basics](../development/development-basics.md) for how the GPU skip variables behave.
 
@@ -122,8 +146,8 @@ The `caliper` executable writes these to stderr and, for the renderer, to the Ac
 
 | Line | Meaning |
 |---|---|
-| `[renderer] metal`, `[renderer] vulkan` or `[renderer] gl` | The backend that initialized. |
-| `[renderer] <name> init failed; falling back to gl` | The default backend failed to initialize, for example when there is no Vulkan driver. The host recreated its window for OpenGL. |
+| `[renderer] metal` or `[renderer] vulkan` | The backend that initialized. |
+| `caliper: the Vulkan renderer could not start (<reason>), and there is no fallback renderer until the WebGPU fallback through Dawn lands` | The platform's backend failed to start, for example when there is no Vulkan driver, and the app exits with 1 (Metal on macOS). [No Fallback Renderer](../applets/rendering.md#no-fallback-renderer) gives the other refusals. |
 | `[autolaunch] <id>` | `CALIPER_AUTOLAUNCH` matched an applet and launched it. |
 
 On Windows the Vulkan renderer reports how each tensor update travelled. Each distinct message prints once, as `[vulkan] device path: <message>`:

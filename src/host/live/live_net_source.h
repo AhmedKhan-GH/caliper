@@ -28,6 +28,14 @@
 // whose axis indexes an item space gets the event's `space` and `items` here,
 // from the view's offer and the payload axes of the snapshot it shows.
 //
+// PROTOCOL 3.2 DRAFT: SCENES. HELLO also announces `scenes`, so the producer
+// lists its scene views (kind 6) and sends their SCENE_UPDATE and SCENE_CLEAR
+// messages. The network thread queues each one decoded, with the frame its
+// sections point into, keeping only what still matters (live/scene_queue.h),
+// and the frame thread takes them with take_scene() and applies them to the
+// scene view in order. A part, mode or section this viewer does not build is
+// answered as the versioning rules say and becomes a note in the view.
+//
 // THE HAND-OVER (the claim rules of live_source.h). Every method of Source is
 // called on the frame thread. Each view of a texture or points kind owns
 // kSlots shared-storage MTLBuffers on the renderer's device. The network thread

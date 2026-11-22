@@ -1,5 +1,6 @@
 // What a live view (heatmap, image, points, series, histogram) gets from the
-// element that hosts it, and what it must provide.
+// element that hosts it, and what it must provide. The views draw with
+// Canvas 2D; the element's WebGPU drawing is the WebAssembly views' (wasm.ts).
 
 import type { SeriesMsg, SnapshotMsg } from '../protocol/messages.js';
 
@@ -12,8 +13,6 @@ export interface ViewHost {
   readonly overlay: HTMLCanvasElement;
   /** Header slot for the view's own toggles. */
   readonly tools: HTMLElement;
-  /** WebGPU device, or null to draw with Canvas 2D. */
-  readonly device: GPUDevice | null;
   /** CSS size of the body and the device pixel ratio. */
   size(): { w: number; h: number; dpr: number };
   /** Schedules a frame: 'data' redraws the data layer too, 'overlay' only the overlay. */

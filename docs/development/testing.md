@@ -29,15 +29,118 @@ The same executable covers applet-side logic that needs neither torch nor a wind
 
 `caliper_gfx_tests` (`tests/gfx/gfx_main.cpp`) checks the path from a tensor to a texture and the geometry path. It opens a hidden window, so it needs a graphical session. Every case reads the texture back from the GPU and compares it byte for byte with a CPU reference.
 
-The suite runs once for each backend that the platform offers:
+The suite runs on the backend that the platform offers:
 
-- OpenGL runs everywhere, as the fallback.
 - Metal runs on macOS when a Metal device is present. It also covers the device paths, built from raw `MTLBuffer` allocations: the compute path for `f32` with a lookup table, the blit path for `u8`, stream-ordered updates, imported allocations and their gates, and the geometry service.
 - Vulkan runs on Windows with the CPU-staged path. Cases that need CUDA hardware run only when a CUDA device is present.
 
-`caliper_export_tests` does the same for `caliper.export.v1`. It drives the service as an embedder would and decodes the PNG that the service wrote. Its sidecar, atomic-write and sugar cases need no GPU.
+### Renderer Core Rows
 
-Both suites open their windows hidden and never show or focus them. On macOS the test process also shows no Dock icon and no menu bar. The suites start GLFW through `tests/glfw_background.h`, which sets `GLFW_COCOA_MENUBAR` to false and sets the activation policy to `NSApplicationActivationPolicyProhibited` around `glfwInit()` (`src/host/background_process.h`). One case in each suite checks that the policy still holds.
+The Metal run of the suite also holds the rows of the renderer core.
+
+- The `gfx/Metal layer` rows draw through the graphics layer (`src/host/gfx/`) on the renderer's own device and compare each readback byte for byte with a CPU reference.
+- The `gfx/Metal colormap` rows run every boundary range of the colormap by keys through the layer, with the generated `colormap_texture` as a dispatch into an `rgba8unorm` texture and with the vertex stage of `scene_points` drawing one point a pixel wide on each pixel centre. Each runs from a layer buffer and from an imported `MTLBuffer` reported in place with zero bytes copied, and every texel and pixel is compared byte for byte with `map_f32_to_rgba8`.
+- The `gfx/Metal scene` rows draw scenes that the scene core (`src/host/scene/`) compiles, through the layer's Metal backend and the generated programs. The one-entity row, square points on pixel centres, is byte-exact. The surface row is a 3-D scene at 512 x 512 with a colormapped height field of flat-shaded faces, a line strip, a disc marker and a box of segments. It is compared with a CPU rasterisation of the same compiled draws under three rules, because the GPU lights a flat face from the screen-space derivatives of its position and rounds the interpolation in its own way:
+    - Away from edges, where the pixel and its eight neighbours show the same face, line or point in the reference, a flat color and the clear color are exact.
+    - A pixel next to an edge, the edges between a mesh's faces included, may take the color that any primitive beside it gives at that pixel.
+    - A lit face may differ by 2 levels in each channel.
+
+The scene view's primitive rows (`gfx/Metal scene view: every primitive ...`) draw one fixture per primitive of a scene from protocol 3.2 messages, at 256 x 256, and compare each with the CPU reference of `tests/scene/draw_reference.h`. The fixtures are in `tests/scene/primitive_fixtures.h`:
+
+- arrows;
+- boxes by class, a filled box and a chain of entity transforms;
+- index-pair edges with per-edge values and a clamped index, and per-vertex colors;
+- a lit and a textured mesh;
+- two posed cameras, with a color image on one image plane and a u16 depth image with its cloud;
+- the same rigs looked through one camera, letterboxed, with its pixel space over the picture;
+- a 2-D scene of color, grey, depth and segmentation images with boxes and arrows.
+
+The reference rasterises the draws that the scene core compiled, reading their parameter blocks from the draw list's arena and their arrays from the messages themselves, so the scene view's conversions are checked too. It repeats each vertex stage of the generated programs in f32, covers pixel centres by the top-left rule, tests depth and blends as the layer does, and shades colormapped values through `map_f32_to_rgba8`, class ids through the class table over the palette, and images by nearest or bilinear lookups. The rules are those above, widened as the parity rules of web geometry widen them:
+
+- A color from a lookup is exact away from edges. This covers a flat or per-item color, a colormapped value, a class color and a texel by nearest, whose texel boundaries count as edges.
+- A blended pixel, a bilinear sample and a color interpolated between a line's two ends may differ by 1 level.
+- A lit or flat-shaded face may differ by 2 levels.
+- An edge counts under a translucent layer too.
+
+Each row prints one sentence that says how many pixels differ from the reference and why, and none may be outside the rules. `web/test/scenes.spec.ts` runs the same fixtures through the scene self-test of the WebAssembly views (`web/wasm/src/scene_selftest.cpp`). The self-test compares the module's own WebGPU readback with the same reference compiled into the module, on a default and a compatibility-mode device.
+
+A pick row draws the pick pass of the same scene and checks the entity, the primitive and the item that the picker decodes from the ID window. `caliper_scene_tests` (`tests/scene/`), which is not in the `gfx` label, checks the scene core headless and submits its draw lists to the layer's recording backend. [Rendering](../applets/rendering.md) and [Scene Rendering](../applets/scene-rendering.md) describe both suites.
+
+### Timing Rows
+
+The suite also has timing rows, which print numbers and prove nothing by themselves.
+
+- On Vulkan with CUDA, the update cost by size and the cost of a create and release cycle against an update.
+- On Metal, `gfx/metal geometry: timing — draws by count` prints the call, completion and GPU microseconds of one `draw_primitives` frame of 1,000 to 4,000,000 imported points and of 1 to 256 draw records. It also checks that no draw counted a copy.
+
+Run them with `-s` to see their messages. The timing rows of the layer and the scene core run only when asked, with `CALIPER_GFX_LAYER_BENCH=1` and `CALIPER_GFX_SCENE_BENCH=1` ([Graphics Layer](../applets/graphics-layer.md)). The migration of the renderer core compares them before and after each step, with the benchmarks in `python/bench/`.
+
+### Shader Tests
+
+`caliper_shader_tests` (`tests/shaders/`), also under the `gfx` label, checks the shader programs of the graphics layer on Metal without a window:
+
+- Every generated MSL program compiles on the default device.
+- Every compute entry and checked pair of entries becomes a pipeline state.
+- The colormap decided by integer keys matches `map_f32_to_rgba8` byte for byte on its boundary cases, with the compiler's fast math on and off.
+
+`web/test/shaders.spec.ts` checks the WGSL of the same programs in headless Chromium on a default and a compatibility-mode device. [Shader Authoring](../applets/shader-authoring.md) describes the programs and their checks.
+
+### Colormap Proof
+
+The colormap by keys ([Colormap by Keys](../applets/graphics-layer.md#colormap-by-keys)) is proved at three levels, on one set of boundary cases. `tests/shaders/colormap_cases.h` holds fourteen ranges, and for each its keys and their neighbours, special values and 65,536 random bit patterns.
+
+- On the CPU, `caliper_tests --test-case="colormap keys*"` compares the C++ decision of `src/host/gfx/colormap_keys.h` with `map_f32_to_rgba8` on those cases. `caliper_colormap_exhaustive` does so for all 2<sup>32</sup> inputs of each range.
+- On Metal, `caliper_colormap_gpu_exhaustive` runs the generated `colormap_texture` through the layer, compiled as the layer compiles it, on the same 2<sup>32</sup> inputs of each range. It works in 256 chunks of 4,096 x 4,096 texels that it reads back and compares with the reference in up to 6 CPU threads.
+- On the GPU, the `gfx/Metal colormap` rows above and the browser rows of `web/test/shaders.spec.ts` run the same cases through the generated programs.
+
+Each exhaustive test makes 60 billion comparisons. The first takes about 16 seconds and the second about 30 seconds on an M-series Max, in under 10 MB and under 500 MB of resident memory. They are heavy jobs, so their ctest entries carry the label `slow` and skip unless `CALIPER_SLOW_TESTS=1`:
+
+```sh
+CALIPER_SLOW_TESTS=1 ctest -L slow --output-on-failure
+```
+
+`CALIPER_EXHAUSTIVE_RANGES=<n>` and `CALIPER_GPU_EXHAUSTIVE_CHUNKS=<n>` run only the first n ranges or chunks and then fail, so that a small case can show the peak memory of a test before a full run.
+
+The browser rows, and `web/test/colormap.spec.ts`, which checks the TypeScript colormap of the Canvas 2D fallback, compare with vectors that the C++ generates. `caliper_colormap_cases <file>` writes the block, inputs and reference colors of each range, and `CALIPER_COLORMAP_CASES=<file>` passes them to Playwright, which skips those tests without it. The web workflow builds the tool with one compiler command and runs them.
+
+### Views Suite
+
+`caliper_gfx_views_tests` (`tests/gfx/gfx_points_view.mm`), also under the `gfx` label, holds the rows of the live views that an offscreen core draws, and the reference mode of the suite (`tests/gfx/gfx_reference.h`).
+
+A migration step of the renderer core that promises unchanged pixels records, at its first commit and before any code moves, what the old path draws for every case. The record holds the hash of each readback, the path label, the copies of the update and the header text of the view, one line per case in a committed file under `tests/gfx/references/`. The commits that replace the path must reproduce it, and the run writes each readback as a PNG for a later run to compare pixel by pixel.
+
+The 36 cases of the points view cover 2-D lattices of every point size class at four sub-pixel phases, every colormap with fixed and automatic ranges and NaN values, the categorical palette with labels outside 0 to 255, selections, single points, 3-D clouds of up to 4,000,000 points with the depth cues of the view, and the CPU, shared-storage and private-storage routes. Its rows are:
+
+- The record: the path label, copies and header of each case, and on lattices each point's centre pixel against the CPU reference color. The readback's hash equals the record's in every 2-D case and for the single 3-D point. In a 3-D cloud, whose old record came from hardware point sprites, the readback must instead be the CPU reference rasterisation.
+- The CPU reference rasterisation: every case, byte for byte, against a CPU repetition of the draws that the scene core compiled, read from the draw list's arena, with the size and fade of the depth cues and with the vertices snapped to 1/256 of a pixel as the rasteriser does.
+- The images of the old path, with `CALIPER_GFX_REFERENCE_IMAGES` naming a folder of them from a build of the first commit of the step. The row counts and lists the differing pixels of each case in one sentence. Every 2-D case and the single 3-D point must be identical. In a 3-D cloud every differing pixel must lie within 1/32 of a pixel, plus the 1/256 snap, of an edge of one of the CPU reference's squares drawn at or in front of it, and the row fails on any other. The same cases rasterised on the CPU with the float camera of the old view differ from the old images in exactly the same pixels, which shows that the arithmetic of the camera is not the cause.
+- The point sprites: a sprite of every whole and half size from 1.5 to 14 is the exact square on the Metal device. A sprite of a fractional size differs from it only within that bound of its edge, which is what the old path drew with the depth cues.
+- The uniform bytes: the fixture of the scene core (`src/host/scene/uniform_check.h`) hashes the same on the recording and Metal backends.
+- The timing row, with `CALIPER_GFX_POINTS_BENCH=1`: the CPU time of the view to compile and submit a redraw and the GPU time of the draw, at 100,000, 1,000,000 and 4,000,000 points.
+
+### WebAssembly Views
+
+The WebAssembly views of the browser draw through the WebGPU backend of the graphics layer. `web/test/wasm.spec.ts` checks it in headless Chromium on SwiftShader and on the machine's GPU, on a default and a compatibility-mode device.
+
+- A frame of compute dispatches, a buffer-to-texture copy, an indexed quad and instanced draws with an ID target, depth and blending goes through the layer with its draw program already released. Every target read back through its asynchronous readback equals the CPU's expectation byte for byte.
+- Two more frames check the refusals. The core refuses a draw that samples its own target, and a dispatch that WebGPU refuses is reported through the error scope of its submit.
+- The same self-test compiles the uniform fixture of the scene core and reports `uniforms=same` when its arena hashes as it does natively.
+- The same spec compares the fixed heatmaps and points, byte for byte, with a set of pictures saved from an earlier build, and the module itself compares every heatmap texture with `map_f32_to_rgba8`.
+
+`web/wasm/README.md` describes these checks.
+
+The Playwright tests of the web package run in three projects of headless Chromium: `webgpu` on the machine's GPU, `swiftshader` on the SwiftShader software adapter and `canvas2d` with WebGPU off. The WebAssembly views draw in the two WebGPU projects. The own views of the `<caliper-view>` element, written in TypeScript, draw with Canvas 2D in all three, because they have no WebGPU path ([Renderer Selection](../web/browser-elements.md#renderer-selection)).
+
+- `web/test/views.spec.ts` checks every kind of the element's own views against known data, the color of every cell, pixel and point included.
+- `web/test/edges.spec.ts` checks the color of every colormap edge case in both renderers.
+- `web/test/points3d.spec.ts` checks that the WebAssembly views and the Canvas 2D view draw the same 3-D box, default camera, depth cues and rotate toggle.
+- `web/test/renderer.spec.ts` and `web/test/fallback.spec.ts` check which renderer draws a view, with a stub of the loader of the WebAssembly views and without the loader.
+
+### Export and Hidden Windows
+
+`caliper_export_tests` checks `caliper.export.v1` in the same way. It drives the service as an embedder would and decodes the PNG that the service wrote. Its sidecar, atomic-write and sugar cases need no GPU.
+
+`caliper_gfx_tests` and `caliper_export_tests` open their windows hidden and never show or focus them. On macOS the test process also shows no Dock icon and no menu bar. The suites start GLFW through `tests/glfw_background.h`, which sets `GLFW_COCOA_MENUBAR` to false and sets the activation policy to `NSApplicationActivationPolicyProhibited` around `glfwInit()` (`src/host/background_process.h`). One case in each suite checks that the policy still holds.
 
 The app uses the same mechanism with `--hidden` or `CALIPER_HIDDEN=1` ([The hidden window](../reference/cli.md#hidden-window)). The ctest entry `caliper_cli_app_hidden` (`tests/test_api.cpp`) starts the real app this way with `--api`. It uses every endpoint of [Caliper API](../agents/http-api.md) and checks that a capture is a PNG of the hidden framebuffer. It then closes the app with SIGTERM and checks that no process, file or socket remains. Without a Metal device the entry is skipped.
 
@@ -45,19 +148,33 @@ The app uses the same mechanism with `--hidden` or `CALIPER_HIDDEN=1` ([The hidd
 
 `caliper_embed_tests` drives `libcaliper` as a third-party embedder would. It creates an offscreen core, loads the `hello` applet, pumps frames, reads pixels back, shuts down and checks the refusal gates.
 
-`caliper_live_tests` and `caliper_live_views_tests` cover live streaming on macOS only, in one process over an offscreen core. See [Live streaming](../python/live-streaming.md). They check the controls of wire protocol 3.1 at three levels:
+`caliper_live_tests` and `caliper_live_views_tests` cover live streaming on macOS only, in one process over an offscreen core. See [Live streaming](../python/live-streaming.md). Both check the copy counters of [Rendering](../applets/rendering.md#copy-counters-and-frame-statistics) on every route:
+
+- An MPS-style heatmap through the shared-memory session, and `MTLBuffer` payloads of every kind, count no copy in their frames.
+- A CPU heatmap, image and points payload count their uploads.
+- A network snapshot counts its copy into the slot, and series and histogram values count their copy at apply.
+- The host import of the browser counts one copy per buffer on a stand-in renderer with no GPU.
+
+`caliper_live_views_tests` also checks that `CALIPER_METAL_STATS` records frame times, GPU times and updates by path, and `caliper_tests` checks the counts of the tensor bridge with its stub renderer. The live tests check the controls of wire protocol 3.1 at three levels:
 
 - The state of the live page on a scripted source: who may control, the rate of `set`, pending values, actions and selections.
 - The native stream against a fake script.
 - The run bar, drawn on an offscreen canvas and clicked through the ImGui input queue (`src/host/live/live_ui_driver.h`).
 
-The ctest entry `caliper_app_live_controls` (`tests/test_net_hub.cpp`) starts the real app hidden with `--url` on a hub in the test process. With `CALIPER_TEST_UI` it clicks Pause, types a parameter value, runs an action and shift-drags across a heatmap. It checks the run bar and what the script received, once with the hub's `--allow-control` and once without.
+The ctest entry `caliper_app_live_controls` (`tests/test_net_hub.cpp`) starts the real app hidden with `--url` on a hub in the test process. It checks the run bar while the fake script runs past the step of its last change of state. With `CALIPER_TEST_UI` it clicks Pause, types a parameter value, runs an action and shift-drags across a heatmap. It checks the run bar and what the script received, once with the hub's `--allow-control` and once without.
 
 ## Command Line
 
 The entries named `caliper_cli_*` (label `cli`) run the `caliper` executable as a user runs it, through `tests/cli_run.cmake`. Each entry checks the exit code and the output. The entries run with `CALIPER_APPLET_PATH` unset and with `CALIPER_DATA_DIR` on a folder that must not exist after the run. This proves that the read-only subcommands create nothing in the app-data folder. `caliper_cli_new_builds` (labels `cli` and `sdk`) configures, builds and tests the project that `caliper new` writes, against the SDK that this build installs.
 
 `caliper_cli_shot_temp` and `caliper_cli_shot_data_dir` (labels `cli` and `shot`) run [`caliper shot`](../reference/shot-and-serve-commands.md#caliper-shot) on the `hello` fixture through `tests/shot_run.cmake`. `caliper_png_check` checks that the image has the requested size and is not one flat color. The first entry runs without `CALIPER_DATA_DIR` and checks that the temporary data folder is gone and that nothing exists under `HOME`. The second entry runs with it and checks that the applet's data folder exists and that no `imgui.ini` was written. Without a GPU both entries are skipped, unless `CALIPER_REQUIRE_GPU=1` makes the skip a failure.
+
+Caliper has no fallback renderer ([No Fallback Renderer](../applets/rendering.md#no-fallback-renderer)). Four entries check the refusals where the renderer cannot start, on any machine and with no GPU:
+
+- `caliper_cli_app_no_renderer` and `caliper_cli_shot_no_renderer` run the hidden app and `caliper shot` with the test variable `CALIPER_TEST_RENDERER_FAIL=1`, which makes the start of the Metal or Vulkan renderer fail.
+- `caliper_cli_app_renderer_gl` and `caliper_cli_shot_renderer_gl` run them with `CALIPER_RENDERER=gl`.
+
+Each checks the exact message and exit code 1, and that the run left at most the empty data folder. The `embed/refusal` cases of `caliper_embed_tests` check the same for Caliper Embed. `caliper_core_attach_canvas` returns 0 with the message in `caliper_core_last_error`, and `caliper_core_create` refuses `CALIPER_RENDERER=gl` with the message in the log of the embedder.
 
 ## Test Data Location
 
@@ -125,7 +242,7 @@ ctest --test-dir cmake-build-release --output-on-failure
 
 A ctest label selects a group:
 
-- `gfx`: `caliper_gfx_tests`.
+- `gfx`: `caliper_gfx_tests`, `caliper_gfx_views_tests` and `caliper_shader_tests`.
 - `export`: `caliper_export_tests`.
 - `torch`: `caliper_torch_tests`.
 - `cli`: the command-line tests.

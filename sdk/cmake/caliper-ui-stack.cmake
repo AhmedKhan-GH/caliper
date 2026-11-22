@@ -11,7 +11,7 @@
 # still names exactly what was compiled. The cost is a few seconds of compile
 # time per applet build folder.
 #
-# No GLFW, GLEW or ImGui backend is part of it: an applet draws into the
+# No GLFW or ImGui backend is part of it: an applet draws into the
 # host's ImGui context and never talks to a window or a graphics API.
 if(NOT TARGET caliper_sdk_ui_stack)
     get_filename_component(_caliper_ui_root

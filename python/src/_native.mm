@@ -66,6 +66,7 @@
 #include <imgui.h>   // ImGuiKey values only (CaliperInputEvent.key == ImGuiKey)
 
 #include "dlpack.h"
+#include "embed/render_stats.h"   // copy counters and frame statistics (host-internal, in-tree)
 
 #include <pthread.h>
 #include <signal.h>
@@ -742,10 +743,12 @@ public:
         CaliperViewInfo info{};
         info.struct_size = sizeof info;
         std::string path, err;
+        caliper_stats::ViewCopies copies{};
         const int ok = on_render_thread([&] {
             const int r = caliper_core_view_info(core_, name.c_str(), &info);
             if (r) path = info.path ? info.path : "";   // valid until the next core call
             else err = core_error("view_info", name);
+            if (r) caliper_stats::view_copies(core_, name.c_str(), &copies);
             return r;
         });
         if (!ok) throw std::runtime_error(err);
@@ -760,6 +763,7 @@ public:
         d["last_update_ms"] = info.last_update_ms;
         d["imported"] = info.imported != 0;
         d["creates"] = info.creates;
+        put_copies(d, copies);
         return d;
     }
 
@@ -922,10 +926,12 @@ public:
         CaliperLiveViewInfo info{};
         info.struct_size = sizeof info;
         std::string path, err;
+        caliper_stats::ViewCopies copies{};
         const int ok = on_render_thread([&] {
             const int r = caliper_core_live_view_info(core_, name.c_str(), &info);
             if (r) path = info.path ? info.path : "";
             else err = core_error("live_view_info", name);
+            if (r) caliper_stats::view_copies(core_, name.c_str(), &copies);
             return r;
         });
         if (!ok) throw std::runtime_error(err);
@@ -944,6 +950,56 @@ public:
         d["imported"] = info.imported != 0;
         d["read_done"] = info.read_done != 0;
         d["count"] = info.count;
+        put_copies(d, copies);
+        return d;
+    }
+
+    // The copy counters of a view (embed/render_stats.h): since it appeared,
+    // and in its last update.
+    static void put_copies(nb::dict& d, const caliper_stats::ViewCopies& c) {
+        d["copies"] = c.total.copies;
+        d["copy_bytes"] = c.total.bytes;
+        d["last_copies"] = c.last.copies;
+        d["last_copy_bytes"] = c.last.bytes;
+    }
+
+    // The core's copies per frame and the renderer's frame statistics
+    // (CALIPER_METAL_STATS) over the window since the last reset.
+    nb::dict frame_stats(bool reset) {
+        check_live();
+        caliper_stats::FrameCopies fc{};
+        caliper_host::HostRenderer::FrameStats fs;
+        bool have_fs = false;
+        on_render_thread([&] {
+            caliper_stats::frame_copies(core_, &fc, reset);
+            have_fs = caliper_stats::frame_stats(core_, &fs, reset);
+            return 1;
+        });
+        nb::dict d;
+        d["frames"] = fc.frames;
+        d["last_frame_copies"] = fc.last_frame.copies;
+        d["last_frame_copy_bytes"] = fc.last_frame.bytes;
+        d["window_frames"] = fc.window_frames;
+        d["copies"] = fc.window.copies;
+        d["copy_bytes"] = fc.window.bytes;
+        d["recorded"] = have_fs;
+        if (have_fs) {
+            d["frame_ms_p50"] = fs.frame_ms_p50;
+            d["frame_ms_p99"] = fs.frame_ms_p99;
+            d["frame_ms_max"] = fs.frame_ms_max;
+            d["gpu_update_ms_p50"] = fs.update_gpu_ms_p50;
+            d["gpu_update_ms_p99"] = fs.update_gpu_ms_p99;
+            d["gpu_update_n"] = fs.update_gpu_n;
+            d["gpu_draw_ms_p50"] = fs.draw_gpu_ms_p50;
+            d["gpu_draw_ms_p99"] = fs.draw_gpu_ms_p99;
+            d["gpu_draw_n"] = fs.draw_gpu_n;
+            d["gpu_frame_ms_p50"] = fs.frame_gpu_ms_p50;
+            d["gpu_frame_ms_p99"] = fs.frame_gpu_ms_p99;
+            d["gpu_frame_n"] = fs.frame_gpu_n;
+            nb::dict upd;
+            for (const auto& kv : fs.updates) upd[kv.first.c_str()] = kv.second;
+            d["updates"] = upd;
+        }
         return d;
     }
 
@@ -1869,6 +1925,7 @@ NB_MODULE(_native, m) {
              "heartbeat"_a = false)
         .def("stop_render_thread", &Core::stop_render_thread)
         .def("render_stats", &Core::render_stats, "reset"_a = false)
+        .def("frame_stats", &Core::frame_stats, "reset"_a = false)
         .def("post_probe", &Core::post_probe, "kind"_a)
         .def("probe_results", &Core::probe_results, "reset"_a = false)
         .def("set_window_pos", &Core::set_window_pos, "x"_a, "y"_a)

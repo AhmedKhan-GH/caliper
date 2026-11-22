@@ -1,0 +1,172 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 408,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 243,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 4,
+    "type": 116
+  },
+  "meta": {
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "text",
+        "shape": [
+          48
+        ]
+      },
+      {
+        "dtype": 4,
+        "name": "offsets",
+        "shape": [
+          4
+        ]
+      },
+      {
+        "dtype": 5,
+        "name": "levels",
+        "shape": [
+          3
+        ]
+      },
+      {
+        "dtype": 3,
+        "name": "stamps",
+        "shape": [
+          3,
+          2
+        ]
+      }
+    ],
+    "stamp_ns": 81234567894523,
+    "start": 0,
+    "sub": 5,
+    "total": 3,
+    "view": "log"
+  },
+  "meta_offset": 40,
+  "name": "v3_2/text",
+  "section_lengths": [
+    48,
+    16,
+    3,
+    48
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 48,
+      "name": "text",
+      "offset": 288,
+      "shape": [
+        48
+      ],
+      "values": [
+        101,
+        112,
+        111,
+        99,
+        104,
+        32,
+        49,
+        32,
+        115,
+        116,
+        97,
+        114,
+        116,
+        115,
+        108,
+        111,
+        115,
+        115,
+        32,
+        114,
+        111,
+        115,
+        101,
+        10,
+        116,
+        111,
+        32,
+        50,
+        46,
+        53,
+        112,
+        97,
+        115,
+        32,
+        100,
+        101,
+        32,
+        100,
+        111,
+        110,
+        110,
+        195,
+        169,
+        101,
+        115,
+        32,
+        195,
+        169
+      ]
+    },
+    {
+      "dtype": 4,
+      "encoding": 0,
+      "length": 16,
+      "name": "offsets",
+      "offset": 336,
+      "shape": [
+        4
+      ],
+      "values": [
+        0,
+        14,
+        30,
+        48
+      ]
+    },
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 3,
+      "name": "levels",
+      "offset": 352,
+      "shape": [
+        3
+      ],
+      "values": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 48,
+      "name": "stamps",
+      "offset": 360,
+      "shape": [
+        3,
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789,
+        1201,
+        1763200000128456789,
+        1202,
+        1763200000133456789
+      ]
+    }
+  ],
+  "type_name": "text"
+}

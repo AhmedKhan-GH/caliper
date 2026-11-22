@@ -11,9 +11,6 @@ export const C = {
   bronze: '#b38b59',
 } as const;
 
-/** The plate colour as linear 0..1 RGBA, for GPU clears. */
-export const PLATE_RGBA = [0x27 / 255, 0x26 / 255, 0x22 / 255, 1] as const;
-
 export const FONT_TEXT = '"Plex Condensed", "IBM Plex Sans Condensed", -apple-system, "Helvetica Neue", sans-serif';
 export const FONT_MONO = '"Source Code Pro", ui-monospace, Menlo, monospace';
 

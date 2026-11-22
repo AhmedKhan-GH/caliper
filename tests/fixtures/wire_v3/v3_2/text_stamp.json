@@ -1,0 +1,119 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 360,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 265,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 4,
+    "type": 116
+  },
+  "meta": {
+    "cursor": 1,
+    "dropped": 10,
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "text",
+        "shape": [
+          1
+        ]
+      },
+      {
+        "dtype": 4,
+        "name": "offsets",
+        "shape": [
+          3
+        ]
+      },
+      {
+        "dtype": 5,
+        "name": "levels",
+        "shape": [
+          2
+        ]
+      },
+      {
+        "dtype": 3,
+        "name": "stamp",
+        "shape": [
+          2
+        ]
+      }
+    ],
+    "stamp_ns": 81234567894623,
+    "start": 10,
+    "sub": 5,
+    "total": 12,
+    "view": "log"
+  },
+  "meta_offset": 40,
+  "name": "v3_2/text_stamp",
+  "section_lengths": [
+    1,
+    12,
+    2,
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 1,
+      "name": "text",
+      "offset": 312,
+      "shape": [
+        1
+      ],
+      "values": [
+        97
+      ]
+    },
+    {
+      "dtype": 4,
+      "encoding": 0,
+      "length": 12,
+      "name": "offsets",
+      "offset": 320,
+      "shape": [
+        3
+      ],
+      "values": [
+        0,
+        1,
+        1
+      ]
+    },
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 2,
+      "name": "levels",
+      "offset": 336,
+      "shape": [
+        2
+      ],
+      "values": [
+        0,
+        1
+      ]
+    },
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 16,
+      "name": "stamp",
+      "offset": 344,
+      "shape": [
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789
+      ]
+    }
+  ],
+  "type_name": "text"
+}

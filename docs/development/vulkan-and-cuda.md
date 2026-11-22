@@ -48,11 +48,11 @@ The paths are reported as `compute` and `blit`. CUDA never touches an optimally 
 
 ### CPU Staging
 
-When no device path applies, the bridge converts on the CPU and uploads, as on OpenGL. CPU tensors also take this path.
+When no device path applies, the bridge converts on the CPU and uploads. CPU tensors also take this path.
 
 ### `alloc_shared` and Imported Allocations
 
-`alloc_shared` on Vulkan returns a device-backed tensor. `HostRenderer::alloc_device_shared` makes the texture's shared buffer the tensor's memory and returns its CUDA pointer. The applet's kernels write the texture's memory directly, and the update runs the buffer-to-image pass with no copy. An optimally tiled image cannot alias linear buffer memory the way a unified-memory buffer can back a Metal texture. Thus zero-copy here means zero copies of the data, not zero GPU work. Without interop (OpenGL, or CUDA unpaired), `alloc_shared` falls back to a CPU vector.
+`alloc_shared` on Vulkan returns a device-backed tensor. `HostRenderer::alloc_device_shared` makes the texture's shared buffer the tensor's memory and returns its CUDA pointer. The applet's kernels write the texture's memory directly, and the update runs the buffer-to-image pass with no copy. An optimally tiled image cannot alias linear buffer memory the way a unified-memory buffer can back a Metal texture. Thus zero-copy here means zero copies of the data, not zero GPU work. Without interop (CUDA unpaired), `alloc_shared` falls back to a CPU vector.
 
 An [imported allocation](../python/zero-copy-tensors.md#imported-allocations) is a block that the applet exports with `cuMemCreate` and a shareable handle. `import_allocation` duplicates the handle and imports the block into Vulkan with `VkImportMemoryWin32HandleInfoKHR`. On failure it unwinds fully. `update_texture_from_alloc` then reads the block at a byte offset with no copy. It uses a descriptor offset for the f32 compute pass and a `bufferOffset` for the u8 blit, and reports `compute-imported` and `blit-imported`. The f32 offset must be a multiple of the device's `minStorageBufferOffsetAlignment`, and the u8 offset must be a multiple of four. Torch sub-allocations are 512-byte aligned, so real offsets pass. Geometry draws from the same imports.
 
@@ -105,7 +105,7 @@ Two environment variables change the backend's behavior:
 - `CALIPER_VULKAN_NO_DIRECT` (any value) disables the direct path, so every update takes the buffer path in the same binary.
 - `CALIPER_VULKAN_STATS` (any value) records frame times and update stalls and prints a summary at exit, in the form `[vulkan] stats: N frames, ms p50 .. p99 .. max ..; updates direct .. buffer ..; kernel waits on a frame ..; retire blocks .. (.. ms total)`.
 
-`CALIPER_RENDERER=gl` selects the OpenGL backend. [Verify on Windows hardware](windows-verification.md) gives the full procedure.
+There is no fallback renderer: when Vulkan cannot start, the app refuses with a message that names the reason ([No Fallback Renderer](../applets/rendering.md#no-fallback-renderer)). [Verify on Windows hardware](windows-verification.md) gives the full procedure.
 
 ## Renderer Caches
 

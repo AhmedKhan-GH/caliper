@@ -19,6 +19,9 @@ def test_rgba_u8_roundtrip(device):
     # Changed: a CPU image is copied once into a shared MTLBuffer slot that the core
     # blits in place, so CPU reports "blit-imported" like MPS (was "cpu-staged").
     assert info["path"].startswith("blit") and info["imported"] is True, info
+    # The copy counters: the core reads the slot in place, so it copies nothing
+    # (the one copy of a CPU image is the snapshot into the slot).
+    assert (info["copies"], info["copy_bytes"], info["last_copies"]) == (0, 0, 0), info
     assert st.path == info["path"]
     assert (info["width"], info["height"]) == (W, H)
     assert np.array_equal(caliper.view_readback("rgba"), img.numpy())

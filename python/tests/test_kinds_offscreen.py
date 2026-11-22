@@ -42,6 +42,7 @@ def test_heatmap_byte_exact_with_storage_offset(device):
     assert np.array_equal(caliper.view_readback("hm_auto"), ref)
     info = caliper.live_view_info("hm_auto")
     assert info["kind"] == 1 and info["imported"] and info["updates"] == 1
+    assert info["copies"] == 0 and info["copy_bytes"] == 0      # read in place
 
 
 @pytest.mark.parametrize("device", DEVICES)

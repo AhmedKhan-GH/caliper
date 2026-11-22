@@ -1,0 +1,100 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 384,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 259,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 2,
+    "type": 112
+  },
+  "meta": {
+    "part": "points",
+    "path": "world/split",
+    "sections": [
+      {
+        "dtype": 0,
+        "name": "positions",
+        "shape": [
+          6,
+          3
+        ]
+      },
+      {
+        "dtype": 3,
+        "name": "stamp",
+        "shape": [
+          2
+        ]
+      }
+    ],
+    "seq": 37,
+    "split": {
+      "first": {
+        "positions": 6
+      },
+      "piece": 1,
+      "pieces": 5,
+      "update": 4
+    },
+    "stamp_ns": 81234567894023,
+    "sub": 2,
+    "view": "world"
+  },
+  "meta_offset": 32,
+  "name": "v3_2/scene_update_split_1",
+  "section_lengths": [
+    72,
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 72,
+      "name": "positions",
+      "offset": 296,
+      "shape": [
+        6,
+        3
+      ],
+      "values": [
+        2.25,
+        2.375,
+        2.5,
+        2.625,
+        2.75,
+        2.875,
+        3.0,
+        3.125,
+        3.25,
+        3.375,
+        3.5,
+        3.625,
+        3.75,
+        3.875,
+        4.0,
+        4.125,
+        4.25,
+        4.375
+      ]
+    },
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 16,
+      "name": "stamp",
+      "offset": 368,
+      "shape": [
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}

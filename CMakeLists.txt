@@ -255,7 +255,7 @@ install(FILES
     "${CMAKE_BINARY_DIR}/caliper-sdk-config-version.cmake"
     DESTINATION lib/cmake/caliper-sdk COMPONENT sdk)
 
-# Host library: loader/negotiation logic, unit-testable without OpenGL.
+# Host library: loader/negotiation logic, unit-testable without a renderer.
 FetchContent_Declare(tomlplusplus
     GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
     GIT_TAG v3.4.0 GIT_SHALLOW TRUE)
@@ -359,6 +359,56 @@ target_link_libraries(caliper_api PUBLIC caliper_net)
 set_target_properties(caliper_api PROPERTIES
     CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
 
+# The graphics layer of the renderer core (src/host/gfx, gfx.h): its backend-neutral core
+# (validation, handles, the uniform arena, frames, serials, readback) and the recording
+# backend that the headless tests use. Portable C++17 with no graphics API and nothing
+# Emscripten cannot compile, so the native backends, the tests and the WebAssembly views
+# share it. On Apple the Metal backend of the layer is added below. The live views' scene view
+# draws through the layer, and so do the browser views, through the layer's WebGPU backend
+# (web/wasm, its own Emscripten project); the native renderers keep their own paths for now.
+add_library(caliper_gfx STATIC
+    src/host/gfx/core.cpp
+    src/host/gfx/ops.cpp
+    src/host/gfx/recording_backend.cpp
+)
+target_include_directories(caliper_gfx PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
+target_link_libraries(caliper_gfx PUBLIC caliper::sdk)
+set_target_properties(caliper_gfx PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+if(APPLE)
+    # The layer's Metal backend, Objective-C++ with ARC, on the renderer's device and queue.
+    target_sources(caliper_gfx PRIVATE src/host/gfx/metal_backend.mm)
+    set_source_files_properties(src/host/gfx/metal_backend.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set_target_properties(caliper_gfx PROPERTIES OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
+    target_link_libraries(caliper_gfx PUBLIC "-framework Metal" "-framework Foundation")
+endif()
+
+# The scene core of the renderer core (design/renderer-core.md, "The scene core"): the scene
+# store, world matrices, cameras, bounds and fitting, compiling scenes into draw lists of the
+# graphics layer (src/host/gfx/gfx.h), picking, and BackendResources, its handles over a backend
+# of the layer. Plain C++17 that never calls a GPU itself; the live views' scene view
+# (src/host/live/live_scene.h) draws through it, the graphics suite's scene rows draw it on Metal,
+# and caliper_scene_tests (tests/scene) checks it headless.
+add_library(caliper_scene STATIC
+    src/host/scene/path.cpp
+    src/host/scene/scene_tree.cpp
+    src/host/scene/camera.cpp
+    src/host/scene/compile.cpp
+    src/host/scene/pick.cpp
+    src/host/scene/scale_bar.cpp
+    src/host/scene/backend_resources.cpp
+)
+target_include_directories(caliper_scene PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
+target_link_libraries(caliper_scene PUBLIC caliper_gfx caliper::sdk)
+set_target_properties(caliper_scene PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+# No floating-point contraction: the scene core composes cameras and normal matrices in double, and
+# without fused multiply-adds its arithmetic is the same IEEE sequence natively as in WebAssembly,
+# which has none, so every backend draws from the same uniform bytes (src/host/scene/uniform_check.h).
+if(NOT MSVC)
+    target_compile_options(caliper_scene PRIVATE -ffp-contract=off)
+endif()
+
 # The browser viewer of spec applets that GET /v0/spec answers
 # (src/host/api/spec_page.h): the checked-in build of the web package's spec
 # page, python/caliper/_web/spec.html, embedded as bytes, so the C++ build
@@ -400,7 +450,7 @@ if(APPLE)
         PUBLIC caliper::sdk
                "-framework Metal" "-framework QuartzCore"
                "-framework Foundation" "-framework Cocoa"
-        PRIVATE caliper::ui_stack imgui_backends glfw)
+        PRIVATE caliper::ui_stack imgui_backends glfw caliper_gfx)
     set_source_files_properties(
         src/host/renderer/metal_renderer.mm
         src/host/background_process_mac.mm
@@ -488,10 +538,9 @@ endif()
 # The successor of caliper_host_lib for embedders: it aggregates the inner
 # headless layer (caliper_host_lib) with the renderer/bridge/service-vending
 # layer that used to be pinned in the caliper exe — host_services (service
-# registry + vending), tensor_bridge (bridge v1–v1.2 + geometry v1–v1_3), the
-# frozen GL fallback renderer — plus the ordered core lifecycle (core_lifecycle:
-# renderer selection + applet-canvas ImGui context). The caliper exe is now its
-# first embedder.
+# registry + vending), tensor_bridge (bridge v1–v1.2 + geometry v1–v1_3) — plus
+# the ordered core lifecycle (core_lifecycle: renderer selection + applet-canvas
+# ImGui context). The caliper exe is now its first embedder.
 #
 # caliper_host_lib stays a renderer-free INNER target so caliper_tests remains
 # headless (l1-survey do-not-touch): the renderer/bridge join the graph only at
@@ -514,7 +563,6 @@ add_library(libcaliper STATIC
     src/host/host_services.cpp
     src/host/export_service.cpp
     src/host/tensor_bridge.cpp
-    src/host/renderer/gl_renderer.cpp
     src/host/core_lifecycle.cpp
     src/host/embed/embed_core.cpp
     src/host/embed/embed_views.cpp
@@ -548,12 +596,14 @@ target_include_directories(libcaliper PUBLIC
 # through this target (its own comment: "link this TARGET instead of compiling
 # src/app_paths.cpp by path"). PUBLIC so the caliper exe gets it transitively —
 # the exe no longer compiles app_paths.cpp by path (below).
-# PRIVATE = CALIPER_CORE_LIBS (GL/frameworks/GLEW/GLFW only), NOT the exe's full
+# PRIVATE = CALIPER_CORE_LIBS (frameworks/GLFW/ImGui GLFW backend only), NOT the exe's full
 # CALIPER_DEPENDENCY_LIBS: a static lib's private deps still propagate as
 # link-only, so the full list would drag the chrome widgets (node editor, text
 # editor, ImTerm) into every embedder, including the Python extension.
+# caliper_scene (with caliper_gfx): the scene view of the live views draws scenes through the
+# scene core and the graphics layer (src/host/live/live_scene.h).
 target_link_libraries(libcaliper
-    PUBLIC caliper_host_lib caliper::sdk caliper::ui_stack caliper_app_paths caliper_net
+    PUBLIC caliper_host_lib caliper::sdk caliper::ui_stack caliper_app_paths caliper_net caliper_scene
     PRIVATE ${CALIPER_CORE_LIBS})
 if(APPLE)
     target_link_libraries(libcaliper PUBLIC caliper_metal_backend)
@@ -610,8 +660,7 @@ set_target_properties(caliper_sternbild_ui PROPERTIES CXX_STANDARD 17 CXX_STANDA
 
 add_executable(caliper
     src/main.cpp
-    # The landing screen that replaced the GL-only IntroScreen for every
-    # renderer backend.
+    # The landing screen, drawn with ImGui on every renderer backend.
     src/host/ui/landing_screen.cpp
     # The applet page (page bar, status bar, dock space, docking by role, the
     # applet's frame, the jobs tray), drawn by the app and by `caliper shot`,

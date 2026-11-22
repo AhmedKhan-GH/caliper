@@ -1,0 +1,24 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 85,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 61,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 122
+  },
+  "meta": {
+    "op": "seek",
+    "request_id": 2,
+    "timeline": "step",
+    "value": "5000"
+  },
+  "meta_offset": 24,
+  "name": "v3_2/cursor_seek",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "cursor"
+}

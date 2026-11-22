@@ -15,6 +15,7 @@ them byte for byte), the native NetSource, the hub and the TypeScript viewer.
                        them well formed; their new types are unknown to it.
   invalid/<name>.bin   a frame every decoder must reject
   invalid/expect.json  per invalid file: the reason and the close code
+  v3_2/...             the protocol 3.2 draft's scenes subset (gen_v3_2.py)
 
 Run it from anywhere: ``python tests/fixtures/wire_v3/generate.py`` rewrites
 the files, ``--check`` only compares them. It needs numpy and no torch.
@@ -28,10 +29,13 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[2] / "python"))
+sys.path.insert(0, str(HERE))
 
 import numpy as np  # noqa: E402
 
 from caliper import _wire as w  # noqa: E402
+
+import gen_v3_2  # noqa: E402
 
 SESSION = {"id": "clp-4242-a1b2c3", "script": "train.py", "pid": 4242,
            "start_unix_ms": 1763200000000}
@@ -273,7 +277,8 @@ def render() -> dict[str, bytes]:
     """Every file of the fixture folder, by path relative to it."""
     files = {}
     valid = valid_vectors()
-    for name, buf in [*valid.items(), *valid_vectors_31().items()]:
+    valid_32 = gen_v3_2.valid_vectors()
+    for name, buf in [*valid.items(), *valid_vectors_31().items(), *valid_32.items()]:
         files[f"{name}.bin"] = buf
         files[f"{name}.json"] = _json(describe(name, buf))
     expect = {}
@@ -281,6 +286,11 @@ def render() -> dict[str, bytes]:
         files[f"invalid/{name}.bin"] = buf
         expect[f"{name}.bin"] = {"reason": reason, "close_code": code}
     files["invalid/expect.json"] = _json(expect)
+    expect_32 = {}
+    for name, (buf, want) in gen_v3_2.invalid_vectors(valid_32).items():
+        files[f"v3_2/invalid/{name}.bin"] = buf
+        expect_32[f"{name}.bin"] = want
+    files["v3_2/invalid/expect.json"] = _json(expect_32)
     return files
 
 

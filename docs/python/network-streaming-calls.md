@@ -43,7 +43,7 @@ Every request must name the server in its `Host` header, `127.0.0.1:<port>` or `
 
 The server keeps the last 1,048,576 values of each series whether or not a viewer watches it. It sends them first to a viewer that subscribes late.
 
-The server limits the replies and other control messages that wait to be sent on one connection to 65,536 messages and 16 MiB. It keeps one PONG waiting, for the latest PING. Only a viewer that keeps sending requests while it reads nothing reaches the limit. The server then closes its connection with code 1008, as the hub does with a send queue that overflows. The training loop is not affected. These are limits of the server of Caliper LIB, not rules of the protocol.
+The server limits the replies and other control messages that wait to be sent on one connection to 65,536 messages and 16 MiB. It keeps one PONG waiting, for the latest PING. Only a viewer that keeps sending requests while it reads nothing reaches the limit. The server then closes its connection with code 1008, as the hub does with a send queue that overflows. The training loop is not affected. Scene messages travel in the same queue, in order with the replies, but the server counts them apart. It hands a connection at most two of them at a time, each at most a frame of 64 MiB, so they are bounded by 128 MiB and never close a connection that the protocol allows. These are limits of the server of Caliper LIB, not rules of the protocol.
 
 [](){#caliper.connect}
 ### `connect`

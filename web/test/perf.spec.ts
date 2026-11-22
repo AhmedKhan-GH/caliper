@@ -1,7 +1,7 @@
-// Frame rate of the points view while orbiting: 100,000 points in 3-D on
-// every path, and 20,000 on Canvas 2D, the size its fallback is meant for.
-// Under the SwiftShader flags every path, Canvas 2D included, is rasterised
-// in software, so that project measures the software case.
+// Frame rate of the element's own points view while orbiting: 100,000 points
+// in 3-D, the points data view's default budget, and 20,000. The view draws
+// with Canvas 2D in every project, so it is measured once, in the canvas2d
+// project; the WebAssembly views' frame rate on the GPU is wasm.spec.ts's.
 // The numbers are printed and written to perf-<project>.json beside the
 // screenshots; the assertions only guard against a broken path.
 
@@ -47,7 +47,7 @@ async function measure(page: import('@playwright/test').Page, n: number) {
     await el.settled();
     const paced = ((el.debugState().frames as number) - f0) / ((performance.now() - t0) / 1000);
     // The frame's own cost: from the animation frame that drew it until the
-    // GPU finished it, so without the wait for the next frame.
+    // view settled, so without the wait for the next frame.
     const times: number[] = [], cpu: number[] = [];
     for (let i = 0; i < 40; i++) {
       x += 2;
@@ -66,14 +66,9 @@ async function measure(page: import('@playwright/test').Page, n: number) {
 }
 
 test('points: frame rate while orbiting', async ({ harness: page }, info) => {
-  // Not on swiftshader in CI (playwright.config.ts): a hosted runner without a
-  // GPU and with few cores draws 100,000 points in SwiftShader at well under one
-  // frame a second (1.6 s a frame on a 18-core Mac), so the measurement says
-  // nothing and outlasts any timeout. It runs there locally, and the webgpu
-  // project measures the GPU.
+  test.skip(info.project.name !== 'canvas2d', 'the element\'s own views draw with Canvas 2D in every project: measured once, in canvas2d');
   test.setTimeout(120_000);
-  const runs = [await measure(page, 100_000)];
-  if (info.project.name === 'canvas2d') runs.push(await measure(page, 20_000));
+  const runs = [await measure(page, 100_000), await measure(page, 20_000)];
   console.log(info.project.name, JSON.stringify(runs));
   fs.mkdirSync(SHOTS, { recursive: true });
   fs.writeFileSync(path.join(SHOTS, `perf-${info.project.name}.json`), JSON.stringify(runs, null, 2));

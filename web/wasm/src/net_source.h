@@ -2,12 +2,15 @@
 // (caliper/live_net.h, docs/reference/wire-protocol.md).
 //
 // A viewer connection on the browser's own WebSocket (Emscripten's websocket
-// API): HELLO, WELCOME, SESSIONS (the server's default attach), VIEWS,
+// API): HELLO (with the capability scenes of the protocol 3.2 draft), WELCOME,
+// SESSIONS (the server's default attach), VIEWS,
 // SUBSCRIBE / VIEW_REPLY for the views this instance shows, SNAPSHOT (the
 // latest wins), SERIES deltas with their backfill, VIEW_REQUEST for a new
 // data view, EVENT for what a person did in a view, PING / PONG both ways and
-// BYE. Frames go through the shared C++
-// codec (src/host/net/wire.h).
+// BYE, and the SCENE_UPDATE and SCENE_CLEAR messages of a scene view, which
+// are kept in order for the scene view with a copy of their frame
+// (live/scene_queue.h). Frames go through the shared C++ codec
+// (src/host/net/wire.h).
 //
 // Everything runs on the browser's main thread: the socket callbacks run
 // between frames, and the frame loop polls the Source exactly as live_core.cpp
@@ -22,9 +25,11 @@
 
 #include "live/live_clock.h"
 #include "live/live_source.h"
+#include "live/scene_queue.h"
 #include "net/json.h"
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <string>
 #include <vector>
@@ -91,6 +96,10 @@ public:
     // EVENT with the subscription, seq and data view of what the view shows.
     bool send_event(uint64_t key, const std::string& type, const std::string& detail_json) override;
     bool request_data_view(uint64_t key, const std::string& data_view_json, std::string* err) override;
+    // The view's VIEWS entry (a scene's description); the resolved data view is not kept here.
+    bool data_view_of(uint64_t key, caliper_net::Json* resolved, caliper_net::Json* offer) override;
+    bool take_scene(uint64_t key, std::vector<caliper_live::SceneItem>* out) override;
+    void stop_scene(uint64_t key) override;
 
     // Socket callbacks (public for the C trampolines in net_source.cpp).
     void on_open();
@@ -124,6 +133,10 @@ private:
         uint64_t series_taken = 0;
         uint64_t series_stamp = 0;
         float no_stats[1] = {0.0f};
+        // scene (kind 6)
+        caliper_net::Json offer;      // its VIEWS entry
+        caliper_live::SceneQueue scene;
+        caliper_net::wire::SplitUpdates splits;   // split scene updates being put together
     };
 
     View* by_sub(uint32_t sub);
@@ -131,6 +144,7 @@ private:
     void send(const std::vector<uint8_t>& frame);
     template <class M> void send_msg(const M& m);
     void subscribe(View& v);
+    void resubscribe(View& v);
     void set_state(const std::string& s);
 
     Options opt_;

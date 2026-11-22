@@ -15,8 +15,8 @@
 //
 // The star is an ImPlot3D scatter of ~2000 test-set embeddings, one series per
 // digit class (10 colors), updating live: a gray blob splits into ten lobes as
-// the learned 3-D bottleneck sharpens. ImPlot3D (not raw GL) => renderer-
-// agnostic (§6c): Metal by default, GL on CALIPER_RENDERER=gl.
+// the learned 3-D bottleneck sharpens. ImPlot3D (no graphics API calls) =>
+// renderer-agnostic (§6c): Metal on macOS, Vulkan on Windows.
 //
 // Threading discipline (docs/applets/ml-applet-cookbook.md is the full
 // treatment): the worker publishes under a mutex with generation counters —
@@ -455,7 +455,7 @@ void train_job(void* user, const CaliperJobControl* ctl) {
                 auto wc = model->conv1->weight.detach();      // (8,1,3,3)
                 auto we = model->fc_embed->weight.detach();   // (3,64)
                 if (st->disp_force_cpu.load(std::memory_order_relaxed)) {
-                    wc = wc.to(torch::kCPU);   // GL fallback: bridge is CPU-only
+                    wc = wc.to(torch::kCPU);   // no device path: the bridge is CPU-only
                     we = we.to(torch::kCPU);
                 }
                 // Normalize HERE (on the producer device) so the colormap
@@ -1040,7 +1040,7 @@ void EmbedScopeApplet::draw_ui() {
                 update_or_create(st->conv_tex[k], disp_conv[k],
                                  CALIPER_CMAP_MAGMA);
             update_or_create(st->embw_tex, disp_embw, CALIPER_CMAP_RDBU);
-            // GL fallback can't take device tensors — ask the worker to hand
+            // A bridge without the device path can't take device tensors — ask the worker to hand
             // over CPU display tensors from the next step onward.
             if (device_rejected && disp_embw.device().type() != torch::kCPU)
                 st->disp_force_cpu.store(true, std::memory_order_relaxed);

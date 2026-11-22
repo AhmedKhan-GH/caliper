@@ -1,0 +1,122 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 408,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 291,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 3,
+    "type": 112
+  },
+  "meta": {
+    "color_per": "strip",
+    "mode": "strips",
+    "part": "lines",
+    "path": "world/tracks",
+    "sections": [
+      {
+        "dtype": 0,
+        "name": "positions",
+        "shape": [
+          5,
+          3
+        ]
+      },
+      {
+        "dtype": 4,
+        "name": "strip_lengths",
+        "shape": [
+          2
+        ]
+      },
+      {
+        "dtype": 5,
+        "name": "colors",
+        "shape": [
+          2,
+          4
+        ]
+      }
+    ],
+    "seq": 14,
+    "stamp_ns": 81234567893523,
+    "sub": 2,
+    "view": "world",
+    "width": 3.0
+  },
+  "meta_offset": 36,
+  "name": "v3_2/scene_update_lines_strips",
+  "section_lengths": [
+    60,
+    8,
+    8
+  ],
+  "sections": [
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 60,
+      "name": "positions",
+      "offset": 328,
+      "shape": [
+        5,
+        3
+      ],
+      "values": [
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "dtype": 4,
+      "encoding": 0,
+      "length": 8,
+      "name": "strip_lengths",
+      "offset": 392,
+      "shape": [
+        2
+      ],
+      "values": [
+        3,
+        2
+      ]
+    },
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 8,
+      "name": "colors",
+      "offset": 400,
+      "shape": [
+        2,
+        4
+      ],
+      "values": [
+        255,
+        160,
+        0,
+        255,
+        0,
+        160,
+        255,
+        255
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}

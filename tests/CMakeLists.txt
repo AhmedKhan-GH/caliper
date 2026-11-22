@@ -52,8 +52,10 @@ target_link_libraries(caliper_tests PRIVATE doctest::doctest caliper::sdk calipe
 # own server on 127.0.0.1 and the hub (src/host/net/hub.h) in-process with fake
 # producers and viewers, not on Windows yet (caliper_net_tests below).
 target_sources(caliper_tests PRIVATE test_net_wire.cpp)
+target_sources(caliper_tests PRIVATE test_net_wire_32.cpp)
 if(NOT WIN32)
     target_sources(caliper_tests PRIVATE test_net_ws.cpp test_net_hub.cpp)
+    target_sources(caliper_tests PRIVATE test_net_hub_32.cpp)   # the scenes of the 3.2 draft
 endif()
 target_link_libraries(caliper_tests PRIVATE caliper_net)
 # mnist_idx.h now lives with EmbedScope (the sole exemplar is self-contained).
@@ -69,6 +71,12 @@ target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/pul
 target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/common)
 set_target_properties(caliper_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
+# The graphics layer's core on its recording backend, with no GPU (src/host/gfx).
+target_sources(caliper_tests PRIVATE test_gfx_layer.cpp)
+target_link_libraries(caliper_tests PRIVATE caliper_gfx)
+# The colormap by keys on the CPU (src/host/gfx/colormap_keys.h) on the boundary sets of
+# tests/shaders/colormap_cases.h, against the reference compiled into this binary.
+target_sources(caliper_tests PRIVATE test_colormap_keys.cpp)
 target_sources(caliper_tests PRIVATE test_loader.cpp)
 # UI recovery after an applet fault (src/host/ui/ui_recovery.h, header-only):
 # headless ImGui/ImPlot/ImPlot3D contexts handed to the throwing fixture.
@@ -168,6 +176,60 @@ add_test(NAME caliper_tests COMMAND caliper_tests)
 set_tests_properties(caliper_tests PROPERTIES ENVIRONMENT
     "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_tests")
 
+# The scene core (src/host/scene): the store, matrices, cameras, fits, compiled draw lists
+# and picks, headless and with no GPU, and the fixture draw lists through the graphics
+# layer's validation on its recording backend (caliper_gfx, which caliper_scene links).
+add_executable(caliper_scene_tests
+    scene/scene_main.cpp
+    scene/test_scene_store.cpp
+    scene/test_scene_matrices.cpp
+    scene/test_scene_cameras.cpp
+    scene/test_scene_compile.cpp
+    scene/test_scene_pick.cpp
+    scene/test_scene_row.cpp
+    scene/test_scene_layer.cpp
+    scene/test_scene_scale_bar.cpp
+)
+target_link_libraries(caliper_scene_tests PRIVATE doctest::doctest caliper_scene)
+set_target_properties(caliper_scene_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+add_test(NAME caliper_scene_tests COMMAND caliper_scene_tests)
+
+# The colormap by keys against map_f32_to_rgba8 for all 2^32 inputs on each boundary range,
+# label slow: it exits 77 (skipped) unless CALIPER_SLOW_TESTS=1, so the default run passes over
+# it. Run it as a heavy job: CALIPER_SLOW_TESTS=1 ctest -L slow (6 threads at most).
+find_package(Threads REQUIRED)
+add_executable(caliper_colormap_exhaustive
+    test_colormap_exhaustive.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp)
+target_include_directories(caliper_colormap_exhaustive PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
+target_link_libraries(caliper_colormap_exhaustive PRIVATE caliper::sdk Threads::Threads)
+set_target_properties(caliper_colormap_exhaustive PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+add_test(NAME caliper_colormap_exhaustive COMMAND caliper_colormap_exhaustive)
+set_tests_properties(caliper_colormap_exhaustive PROPERTIES LABELS "slow" SKIP_RETURN_CODE 77 TIMEOUT 1800)
+# The generated colormap_texture on Metal, through the layer as it compiles it, against the
+# reference for all 2^32 inputs on the same ranges, also under the label slow (Apple only).
+if(APPLE)
+    add_executable(caliper_colormap_gpu_exhaustive
+        test_colormap_gpu_exhaustive.mm
+        ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp)
+    set_source_files_properties(test_colormap_gpu_exhaustive.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_link_libraries(caliper_colormap_gpu_exhaustive PRIVATE caliper_gfx caliper::sdk Threads::Threads
+        "-framework Metal" "-framework Foundation")
+    set_target_properties(caliper_colormap_gpu_exhaustive PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+        OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
+    add_test(NAME caliper_colormap_gpu_exhaustive COMMAND caliper_colormap_gpu_exhaustive)
+    set_tests_properties(caliper_colormap_gpu_exhaustive PROPERTIES LABELS "slow" SKIP_RETURN_CODE 77 TIMEOUT 3600)
+endif()
+
+# caliper_colormap_cases <file> writes the colormap's boundary cases, with the C++ reference's
+# RGBA for each input, for the browser rows (web/test/shaders.spec.ts, colormap.spec.ts).
+add_executable(caliper_colormap_cases
+    shaders/colormap_cases_tool.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp)
+target_include_directories(caliper_colormap_cases PRIVATE ${CMAKE_SOURCE_DIR}/src/host ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(caliper_colormap_cases PRIVATE caliper::sdk)
+set_target_properties(caliper_colormap_cases PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+
 # ---------------------------------------------------------------------------
 # The caliper executable's subcommands, run as a user runs them. Each runs and
 # exits without a window (host_cli.h); `caliper dev` and plain `caliper` start
@@ -182,12 +244,15 @@ set_tests_properties(caliper_tests PROPERTIES ENVIRONMENT
 if(TARGET caliper)
     set(_cli_work "${CMAKE_CURRENT_BINARY_DIR}/cli-work")
     function(caliper_cli_test name)
-        cmake_parse_arguments(PARSE_ARGV 1 t "DEFAULT_USER_APPLETS"
-            "ARGS;EXIT;MATCH;ERROR;CLEAN;STAGE;ALLOW" "")
+        cmake_parse_arguments(PARSE_ARGV 1 t "DEFAULT_USER_APPLETS;EMPTY_DATA_DIR"
+            "ARGS;EXIT;MATCH;ERROR;CLEAN;STAGE;ALLOW;ENV" "")
         set(data "${_cli_work}/app-data-${name}")
         set(env "--unset=CALIPER_APPLET_PATH|CALIPER_DATA_DIR=${data}")
         if(NOT t_DEFAULT_USER_APPLETS)
             string(APPEND env "|CALIPER_USER_APPLETS_DIR=${_cli_work}/user-applets")
+        endif()
+        if(DEFINED t_ENV)   # more of the run's environment, "|"-separated
+            string(APPEND env "|${t_ENV}")
         endif()
         set(defs -DEXE=$<TARGET_FILE:caliper> "-DARGS=${t_ARGS}" -DEXIT=${t_EXIT}
                  "-DENV=${env}" "-DDATA_DIR=${data}")
@@ -196,6 +261,9 @@ if(TARGET caliper)
                 list(APPEND defs "-D${opt}=${t_${opt}}")
             endif()
         endforeach()
+        if(t_EMPTY_DATA_DIR)
+            list(APPEND defs "-DEMPTY_DATA_DIR=1")
+        endif()
         add_test(NAME caliper_cli_${name}
                  COMMAND ${CMAKE_COMMAND} ${defs} -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_run.cmake)
         set_tests_properties(caliper_cli_${name} PROPERTIES LABELS cli)
@@ -281,6 +349,33 @@ if(TARGET caliper)
     caliper_cli_test(shot_unknown_applet
         ARGS "shot|--applets|${CMAKE_BINARY_DIR}/applets|--launch|dev.example.nowhere|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
         EXIT 1 ERROR "no applet with the id dev\\.example\\.nowhere")
+
+    # No fallback renderer (renderer core, step 5). Where the platform's
+    # renderer cannot start, the app and shot refuse with one message that
+    # names it and why, and exit with 1. The test variable
+    # CALIPER_TEST_RENDERER_FAIL=1 makes the renderer's start fail, so these run
+    # on any machine, with or without a GPU. CALIPER_RENDERER=gl, which asks for
+    # the removed OpenGL renderer, is refused before any renderer is made.
+    # CALIPER_EXIT_AFTER ends an app that starts after all, which then fails on
+    # its exit code instead of running until the timeout. A refused run leaves
+    # at most the empty data folder, which the app and shot resolve their paths
+    # under before the renderer starts.
+    set(_no_renderer "the (Metal|Vulkan) renderer could not start \\(CALIPER_TEST_RENDERER_FAIL=1 made its start fail\\), and there is no fallback renderer until the WebGPU fallback through Dawn lands")
+    # (The pattern's "removed." stands for "removed;": a ";" would split the argument.)
+    set(_gl_removed "CALIPER_RENDERER=gl asks for the OpenGL renderer, which was removed. unset it, and Caliper draws with Metal on macOS and Vulkan on Windows")
+    caliper_cli_test(app_no_renderer ARGS "--hidden" EXIT 1 EMPTY_DATA_DIR
+        ENV "--unset=CALIPER_RENDERER|CALIPER_TEST_RENDERER_FAIL=1|CALIPER_EXIT_AFTER=2"
+        ERROR "caliper: ${_no_renderer}")
+    caliper_cli_test(app_renderer_gl ARGS "--hidden" EXIT 1 EMPTY_DATA_DIR
+        ENV "CALIPER_RENDERER=gl|CALIPER_EXIT_AFTER=2" ERROR "caliper: ${_gl_removed}")
+    caliper_cli_test(shot_no_renderer
+        ARGS "shot|--applets|${CMAKE_BINARY_DIR}/applets|--launch|dev.caliper.hello|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
+        EXIT 1 EMPTY_DATA_DIR ENV "--unset=CALIPER_RENDERER|CALIPER_TEST_RENDERER_FAIL=1"
+        ERROR "caliper: shot cannot draw offscreen: ${_no_renderer}")
+    caliper_cli_test(shot_renderer_gl
+        ARGS "shot|--applets|${CMAKE_BINARY_DIR}/applets|--launch|dev.caliper.hello|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
+        EXIT 1 EMPTY_DATA_DIR ENV "CALIPER_RENDERER=gl"
+        ERROR "caliper: shot cannot draw offscreen: ${_gl_removed}")
 
     # Then real shots of the hello fixture: the image has the requested size
     # and is not one flat colour (caliper_png_check), and the run leaves
@@ -410,17 +505,17 @@ endif()
 
 # ---------------------------------------------------------------------------
 # caliper_gfx_tests — windowed, pixel-exact tensor->texture proof (§16).
-# Separate binary because it pulls in the GL renderer (NOT caliper_host_lib):
-# it links the renderer + bridge sources directly into the exe/gfx-test scope.
-# Registered under the "gfx" label so `ctest -L gfx` selects it. Without a
-# GUI/GL context every case skips (gpu_skip.h): counted, and the binary exits
-# 77, which SKIP_RETURN_CODE turns into ctest "Skipped" rather than "Passed".
+# Separate binary because it pulls in the platform's renderer (NOT
+# caliper_host_lib): it links the renderer + bridge sources directly into the
+# exe/gfx-test scope. Registered under the "gfx" label so `ctest -L gfx` selects
+# it. Without a GUI session or a device every case skips (gpu_skip.h): counted,
+# and the binary exits 77, which SKIP_RETURN_CODE turns into ctest "Skipped"
+# rather than "Passed".
 # CALIPER_REQUIRE_GPU=1 makes those skips failures on a lane that must have a
 # GPU.
 add_executable(caliper_gfx_tests
     gfx/gfx_main.cpp
     ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp
-    ${CMAKE_SOURCE_DIR}/src/host/renderer/gl_renderer.cpp
 )
 target_include_directories(caliper_gfx_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_gfx_tests PRIVATE
@@ -428,7 +523,7 @@ target_link_libraries(caliper_gfx_tests PRIVATE
 set_target_properties(caliper_gfx_tests PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
-# On Apple, the same §16 matrix runs on the Metal backend too (C5). Link the
+# On Apple, the §16 matrix runs on the Metal backend (C5). Link the
 # Metal HostRenderer backend and compile the harness itself as Objective-C++
 # with ARC so it can allocate the raw MTLBuffers the device paths consume and
 # blit textures back for verification.
@@ -437,9 +532,33 @@ if(APPLE)
     target_compile_definitions(caliper_gfx_tests PRIVATE CALIPER_HAVE_METAL=1)
     set_source_files_properties(gfx/gfx_main.cpp PROPERTIES
         COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
+    # The graphics layer's rows on Metal (src/host/gfx), on the same renderer's device.
+    target_sources(caliper_gfx_tests PRIVATE gfx/gfx_layer.cpp)
+    target_link_libraries(caliper_gfx_tests PRIVATE caliper_gfx)
+    target_include_directories(caliper_gfx_tests PRIVATE ${CMAKE_SOURCE_DIR}/third_party/stb)
+    set_source_files_properties(gfx/gfx_layer.cpp PROPERTIES
+        COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
+    # The scene core's rows: scenes compiled by caliper_scene and drawn through the layer on Metal.
+    target_sources(caliper_gfx_tests PRIVATE gfx/gfx_scene.cpp)
+    target_link_libraries(caliper_gfx_tests PRIVATE caliper_scene)
+    set_source_files_properties(gfx/gfx_scene.cpp PROPERTIES
+        COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
+    # The scene view's rows: scenes from wire protocol 3.2 messages, applied to the live views'
+    # scene view (src/host/live/live_scene.cpp, compiled in here as libcaliper compiles it).
+    target_sources(caliper_gfx_tests PRIVATE gfx/gfx_scene_view.cpp
+        ${CMAKE_SOURCE_DIR}/src/host/live/live_scene.cpp)
+    target_link_libraries(caliper_gfx_tests PRIVATE caliper_net)
+    target_compile_definitions(caliper_gfx_tests PRIVATE CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+    set_source_files_properties(gfx/gfx_scene_view.cpp PROPERTIES
+        COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
+    # The colormap by keys through the layer: the texture path's compute form and the points'
+    # vertex stage, from layer and imported buffers, against map_f32_to_rgba8.
+    target_sources(caliper_gfx_tests PRIVATE gfx/gfx_colormap.cpp)
+    set_source_files_properties(gfx/gfx_colormap.cpp PROPERTIES
+        COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
 endif()
 
-# On Windows the same §16 matrix runs on the Vulkan backend (CPU-staged path),
+# On Windows the §16 matrix runs on the Vulkan backend (CPU-staged path),
 # plus hardware-gated CUDA device-path + alloc_shared byte-exact tests. Link the
 # Vulkan HostRenderer backend and compile cuda_driver.cpp in (the backend refs
 # it, and the CUDA tests build device tensors through it).
@@ -451,6 +570,42 @@ endif()
 
 add_test(NAME caliper_gfx_tests COMMAND caliper_gfx_tests)
 set_tests_properties(caliper_gfx_tests PROPERTIES LABELS "gfx" SKIP_RETURN_CODE 77)
+
+# caliper_shader_tests: the generated shader programs (src/host/gfx/shaders/generated) on
+# Metal, headless. Every MSL program compiles and every entry and checked pair becomes a
+# pipeline, and the colormap by keys matches map_f32_to_rgba8 byte for byte on its boundary
+# cases. Skips (77) without a Metal device, as the gfx suite does.
+if(APPLE)
+    add_executable(caliper_shader_tests
+        shaders/shaders_metal.mm
+        ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp)
+    target_include_directories(caliper_shader_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
+    target_link_libraries(caliper_shader_tests PRIVATE doctest::doctest caliper::sdk
+        "-framework Metal" "-framework Foundation")
+    set_source_files_properties(shaders/shaders_metal.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set_target_properties(caliper_shader_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+        OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
+    add_test(NAME caliper_shader_tests COMMAND caliper_shader_tests)
+    set_tests_properties(caliper_shader_tests PROPERTIES LABELS "gfx" SKIP_RETURN_CODE 77)
+endif()
+
+# caliper_gfx_texture_tests: the texture path's rows of the graphics suite (tests/gfx/
+# gfx_texture_path.mm). Each case puts a tensor into a texture through the tensor bridge, an embed
+# view or a heatmap or image live view of an offscreen core and reads it back, against the
+# committed record of tests/gfx/references/texture_path.txt and the CPU reference. Labelled gfx
+# with caliper_gfx_tests; skips (77) without a Metal device.
+if(APPLE)
+    add_executable(caliper_gfx_texture_tests gfx/gfx_texture_path.mm)
+    target_link_libraries(caliper_gfx_texture_tests PRIVATE doctest::doctest libcaliper caliper::sdk)
+    target_include_directories(caliper_gfx_texture_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host
+        ${CMAKE_SOURCE_DIR}/third_party/stb)
+    target_compile_definitions(caliper_gfx_texture_tests PRIVATE CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+    set_target_properties(caliper_gfx_texture_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    set_source_files_properties(gfx/gfx_texture_path.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    add_test(NAME caliper_gfx_texture_tests COMMAND caliper_gfx_texture_tests)
+    set_tests_properties(caliper_gfx_texture_tests PROPERTIES LABELS "gfx" SKIP_RETURN_CODE 77 ENVIRONMENT
+        "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_gfx_texture_tests")
+endif()
 
 # ---------------------------------------------------------------------------
 # caliper_export_tests — caliper.export.v1 battery (Rung E1). Links libcaliper
@@ -646,6 +801,20 @@ add_test(NAME caliper_live_views_tests COMMAND caliper_live_views_tests)
 set_tests_properties(caliper_live_views_tests PROPERTIES ENVIRONMENT
     "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_live_views_tests")
 set_tests_properties(caliper_live_views_tests PROPERTIES SKIP_RETURN_CODE 77)
+
+# caliper_gfx_views_tests — the graphics suite's rows of the live views drawn by an offscreen core
+# (tests/gfx/gfx_points_view.mm), with the suite's reference mode (tests/gfx/gfx_reference.h) and
+# its committed references (tests/gfx/references/). Labelled gfx with caliper_gfx_tests.
+add_executable(caliper_gfx_views_tests gfx/gfx_points_view.mm)
+target_link_libraries(caliper_gfx_views_tests PRIVATE doctest::doctest libcaliper caliper::sdk)
+target_include_directories(caliper_gfx_views_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host
+    ${CMAKE_SOURCE_DIR}/third_party/stb)
+target_compile_definitions(caliper_gfx_views_tests PRIVATE CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+set_target_properties(caliper_gfx_views_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+set_source_files_properties(gfx/gfx_points_view.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+add_test(NAME caliper_gfx_views_tests COMMAND caliper_gfx_views_tests)
+set_tests_properties(caliper_gfx_views_tests PROPERTIES LABELS "gfx" SKIP_RETURN_CODE 77 ENVIRONMENT
+    "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_gfx_views_tests")
 endif()  # APPLE (live tests)
 
 # ---------------------------------------------------------------------------

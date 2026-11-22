@@ -26,6 +26,7 @@ HEADER_H = ROOT / "include" / "caliper" / "live_net.h"
 PAGES = [ROOT / "docs" / "reference" / name for name in (
     "wire-protocol.md", "wire-frames.md", "session-messages.md", "data-messages.md",
     "data-view-messages.md", "run-control-messages.md", "linked-selection-messages.md")]
+PAGE_32 = ROOT / "docs" / "reference" / "wire-protocol-3-2.md"   # the 3.2 draft's built subset
 
 
 def _pages():
@@ -54,6 +55,8 @@ GEN = _generator()
 VALID_30 = sorted(p.stem for p in FIXTURES.glob("*.bin"))
 VALID_31 = sorted(f"v3_1/{p.stem}" for p in (FIXTURES / "v3_1").glob("*.bin"))
 VALID = VALID_30 + VALID_31
+VALID_32 = sorted(f"v3_2/{p.stem}" for p in (FIXTURES / "v3_2").glob("*.bin"))   # test_wire_32.py
+TYPES_32 = {0x70, 0x71, 0x72, 0x73, 0x74, 0x78, 0x79, 0x7A, 0x7B}
 LATER_MINOR = ("ping_future", "unknown_type")
 TYPES_30 = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x10, 0x11, 0x20, 0x21, 0x22, 0x23, 0x24, 0x30,
             0x31, 0x40}
@@ -85,7 +88,7 @@ def test_generator_reproduces_every_file():
 
 
 def test_one_golden_frame_per_message_type():
-    covered = {w.decode_frame((FIXTURES / f"{n}.bin").read_bytes()).type for n in VALID}
+    covered = {w.decode_frame((FIXTURES / f"{n}.bin").read_bytes()).type for n in VALID + VALID_32}
     assert {int(t) for t in w.MsgType} <= covered
 
 
@@ -107,7 +110,7 @@ def test_golden_frames_keep_their_minor():
 def test_31_frames_are_well_formed_for_30():
     """A 3.0 receiver accepts every 3.1 frame: the frame rules did not change,
     the new types are new ids, and the 3.0 types only gained optional keys."""
-    new = {int(t) for t in w.MsgType} - TYPES_30
+    new = {int(t) for t in w.MsgType} - TYPES_30 - TYPES_32
     assert new == {0x50, 0x51, 0x52, 0x60}
     for n in VALID_31:
         f = w.decode_frame((FIXTURES / f"{n}.bin").read_bytes())
@@ -597,10 +600,10 @@ def _c_value(text: str):
     text = text.strip()
     if text.startswith('"'):
         return json.loads(text)
-    text = re.sub(r"(?<=[0-9a-fA-F])u\b", "", text)
-    if not re.fullmatch(r"[0-9a-fA-Fx()<< ]+", text):
+    text = re.sub(r"(?<=[0-9a-fA-F])(u|LL)\b", "", text)
+    if not re.fullmatch(r"[0-9a-fA-Fx()<< +.-]+", text):
         raise ValueError(text)
-    return eval(text, {"__builtins__": {}})   # digits, parentheses and shifts only
+    return eval(text, {"__builtins__": {}})   # digits, parentheses, shifts and signs only
 
 
 def _header_constants() -> dict:
@@ -642,19 +645,22 @@ def test_header_matches_codec():
 
 def test_page_tables_match_header():
     page = _pages()
+    both = page + PAGE_32.read_text()
     consts = _header_constants()
-    rows = re.findall(r"^\| `0x([0-9a-f]{4})` \| `(\w+)` \|", page, re.M)
+    rows = re.findall(r"^\| `0x([0-9a-f]{4})` \| `(\w+)` \|", both, re.M)
     assert {int(i, 16): n for i, n in rows} == {int(t): t.name.lower() for t in w.MsgType}
     codes = dict(re.findall(r"^\| (\d{4}) \| `(CALIPER_NET_CLOSE_\w+)` \|", page, re.M))
     assert codes and all(consts[n] == int(c) for c, n in codes.items())
     assert set(codes.values()) == {n for n in consts if n.startswith("CALIPER_NET_CLOSE_")}
-    limits = re.findall(r"^\| `(CALIPER_NET_\w+)` \| ([\d,]+)", page, re.M)
+    limits = re.findall(r"^\| `(CALIPER_NET_\w+)` \| ([\d,]+)", both, re.M)
     assert len(limits) >= 25
     for n, v in limits:
         assert consts[n] == int(v.replace(",", "")), n
     errs = set(re.findall(r"^\| `([a-z_]+)` \| ", _section(page, "Error codes"), re.M))
+    p32 = PAGE_32.read_text()                       # the 3.2 draft's codes, in its own section
+    errs |= set(re.findall(r"^\| `([a-z_]+)` \| ", _section(p32, "Error codes and check order"), re.M))
     assert errs == {v for n, v in consts.items() if n.startswith("CALIPER_NET_ERR_")}
-    dtypes = re.findall(r"^\| (\d) \| `(\w+)` \| (\d) \|", page, re.M)
+    dtypes = re.findall(r"^\| (\d) \| `(\w+)` \| (\d) \|", both, re.M)   # u16: the 3.2 page
     assert {int(i): int(s) for i, _, s in dtypes} == {int(k): v for k, v in w.DTYPE_SIZE.items()}
     assert {int(i): n.upper() for i, n, _ in dtypes} == {int(d): d.name for d in w.DType}
 
