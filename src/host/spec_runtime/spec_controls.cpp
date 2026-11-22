@@ -1,7 +1,7 @@
 // The controls of a spec (spec_instruments.h, design/instruments.md, Control
 // Table).
 //
-// A control is one row: its title on the left, its widget on the right. M1
+// A control is one row: its title on the left, its widget on the right. This file
 // draws two kinds:
 //   slider  bound to param:<name>, it shows the script's parameter on the
 //           parameter's own range and scale, narrowed by the options, and
@@ -320,7 +320,7 @@ std::string spec_button_label(const caliper_builder::spec::Control& control, con
 }
 
 float spec_control_height(const caliper_builder::spec::Control& control, const SpecLook& look) {
-    (void)control;   // both kinds of M1 take one row
+    (void)control;   // a slider and a button each take one row
     return std::round(look.ui_size * look.text_scale * 2.0f);
 }
 
