@@ -4,7 +4,7 @@
 {"step": "listed", "tool": "run_list", "arguments": {}, "expect_runs": {"train-1": {"state": "running", "managed": true}}}
 {"step": "grows", "steps_grow": {"run": "train-1"}}
 {"step": "pids", "record_pids": "train.py"}
-{"step": "fork", "tool": "run_fork", "arguments": {"run": "train-1", "params": [{"name": "lr", "value": 0.002}]}, "expect_run": {"parent": "train-1"}}
+{"step": "fork", "tool": "run_fork", "arguments": {"run": "train-1", "params": [{"name": "lr", "value": 0.0002}]}, "expect_run": {"parent": "train-1"}}
 {"step": "forked", "wait_state": {"run": "{child}", "states": ["running"]}}
 {"step": "pair", "tool": "run_list", "arguments": {}, "expect_runs": {"train-1": {"state": "running"}, "{child}": {"state": "running", "parent": "train-1"}}}
 {"step": "pids2", "record_pids": "train.py"}
@@ -12,6 +12,8 @@
 {"step": "source_b", "tool": "source_add", "arguments": {"id": "loss_b", "catalog": "run:train-1/loss"}}
 {"step": "panel", "tool": "panel_create", "arguments": {"id": "losses", "primitive": "series", "title": "Loss of Both Runs", "bind": {"y": ["loss_a", "loss_b"]}}}
 {"step": "data", "panel_has_lines": {"panel": "losses", "lines": 2}}
+{"step": "long_fork", "steps_factor": {"run": "{child}", "factor": 3}}
+{"step": "gap", "loss_gap": {"panel": "losses", "fork": "loss_a", "parent": "loss_b", "margin": 1.5}}
 {"step": "capture", "capture": "m4_two_runs"}
 {"step": "logs", "tool": "run_logs", "arguments": {"run": "train-1", "lines": 20}, "expect_lines": true}
 {"step": "stop_child", "tool": "run_stop", "arguments": {"run": "{child}"}}
