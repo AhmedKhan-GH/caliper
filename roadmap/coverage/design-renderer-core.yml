@@ -3,8 +3,11 @@ title: Renderer core plan page
 kind: page
 source: design/renderer-core.md
 ref: sprint4
-summary: The plan page design/renderer-core.md, which only the sprint4 branch holds, in its newest version
-  there, read heading by heading.
+summary: The plan page design/renderer-core.md, which only the sprint4 branch holds, in its newest
+  version there, read heading by heading. The trimmed page on the playground branch keeps only the
+  sections that are not built, under Title Case headings; the entries of those sections name the
+  headings as the trimmed page writes them, and the other entries name the headings of the sprint4
+  version.
 entries:
 - heading: What is built and what is planned
   item: 'The page states that nothing on it is built and lists built pieces: the renderer seam and its
@@ -170,7 +173,7 @@ entries:
     memory, one upload or copy in the browser and on Dawn.'
   ids:
   - REN-09
-- heading: Keeping the fast path as fast
+- heading: Fast Path Thresholds
   item: Before and after benchmarks and acceptance thresholds that every migration step must pass.
   ids:
   - REN-08
@@ -185,7 +188,7 @@ entries:
     compatibility.'
   ids:
   - REN-09
-- heading: The rule of every step
+- heading: Rule of Every Step
   item: Every step lands as its own series, deletes the old code, is measured before and after, and has
     offscreen captures.
   ids:
@@ -230,7 +233,7 @@ entries:
   item: Step 7, points live view on the scene core as a one-entity scene; 3 days.
   ids:
   - REN-32
-- heading: The steps
+- heading: Remaining Steps
   item: Step 8, texture path on Metal and the Vulkan renderer reduced; 4 days.
   ids:
   - REN-33
@@ -238,28 +241,28 @@ entries:
   item: Step 9, TypeScript WebGPU views removed, Canvas 2D kept; 1.5 days.
   ids:
   - EMB-16
-- heading: The steps
+- heading: Remaining Steps
   item: 'Step 10, scene model additions: additive blending, instanced meshes and a line depth offset;
     3 days.'
   ids:
   - REN-34
-- heading: The steps
+- heading: Remaining Steps
   item: Step 11, the scene service and the particle applets field_scope, flow_scope and sculpt_scope on
     it; 12.5 days.
   ids:
   - REN-16
   - REN-35
-- heading: The steps
+- heading: Remaining Steps
   item: Step 12, embed_scope, gpt_scope and instance_scope on the scene service; 4 days.
   ids:
   - REN-16
-- heading: The steps
+- heading: Remaining Steps
   item: Step 13, mesh_scope and twin_scope on the scene service, export of scenes, geometry service deleted,
     one version of each graphics service and the epoch bump; 11 days.
   ids:
   - REN-16
   - COR-25
-- heading: The steps
+- heading: Remaining Steps
   item: Step 14, HostRenderer at its final shape of 16 methods, with docs updated; 1.5 days.
   ids:
   - REN-36
@@ -268,40 +271,46 @@ entries:
   ids:
   - REN-25
   - PLT-11
-- heading: The steps
+- heading: Remaining Steps
   item: Step 16, one applet outside the repository ported onto the scene service, moved out of the sprint;
     3 days.
   ids:
   - REN-35
-- heading: The steps
+- heading: Remaining Steps
   item: Step 17, the Vulkan backend of the layer with Windows parity; 8 days.
   ids:
   - REN-53
-- heading: The order of the steps
+- heading: Order of the Remaining Steps
   item: 'Order of steps: cut first, OpenGL next, colormap before clients, points before textures, additions
     before the service, particle applets first.'
   ids:
   - REN-09
-- heading: One version of each graphics service
+- heading: One Version of Each Graphics Service
   item: Each graphics service keeps one version under plain v1 ids, with one ABI epoch bump from 2 to
     3 in step 13 and a simplified epoch check.
   ids:
   - COR-25
-- heading: The applets on the scene service
+- heading: Applets on the Scene Service
   item: 'Eight applets in the repository move onto the scene service: field_scope, flow_scope, sculpt_scope,
     embed_scope, gpt_scope, instance_scope, mesh_scope and twin_scope.'
   ids:
   - REN-16
-- heading: The renderer seam at its final shape
+- heading: Renderer Seam at Its Final Shape
   item: HostRenderer ends with 16 methods for window, frame, canvas, window capture, gfx() and frame_stats.
   ids:
   - REN-36
-- heading: The Vulkan renderer until Windows parity
+- heading: Vulkan Renderer Until Windows Parity
   item: From step 8 the Vulkan renderer keeps only window, ImGui and canvas; Windows refuses bridge textures,
     geometry views and scenes until the Vulkan backend of the layer lands.
   ids:
   - PLT-02
   - PLT-05
+  - REN-53
+- heading: Vulkan Backend of the Graphics Layer
+  item: The Vulkan backend's mapping of the layer's concepts, its private CUDA paths, its import of
+    exportable CUDA memory and its routes, kept from the graphics layer and zero-copy sections when their
+    built parts moved to the docs.
+  ids:
   - REN-53
 - heading: No fallback renderer until Dawn
   item: 'From step 5 until step 15 there is no fallback renderer: the app, caliper shot and the embedding
@@ -325,7 +334,7 @@ entries:
   ids:
   - REN-08
   - REN-17
-- heading: Changes to the shared contracts
+- heading: Changes to the Shared Contracts
   item: 'Contract changes: every line is an expanded quad, CUDA import covers exportable memory only,
     and the scene model gains additive blending and instanced meshes.'
   ids:
@@ -364,12 +373,12 @@ entries:
   item: One applet outside the repository ported as the last step, later moved out of sprint 4.
   ids:
   - REN-35
-- heading: Open decisions
+- heading: Open Decisions
   item: 'Open decision: how a graphics service changes after this sprint, appending within an epoch or
     revision ids.'
   ids:
   - COR-25
-- heading: Open decisions
+- heading: Open Decisions
   item: 'Open decision: applets and embedding hosts outside the repository, updated at step 13 or left
     until next worked on.'
   ids:

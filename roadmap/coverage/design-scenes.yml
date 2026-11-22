@@ -3,8 +3,10 @@ title: Scenes plan page
 kind: page
 source: design/scenes.md
 ref: sprint4
-summary: The plan page design/scenes.md, which only the sprint4 branch holds, in its newest version there,
-  read heading by heading.
+summary: The plan page design/scenes.md, which only the sprint4 branch holds, in its newest version
+  there, read heading by heading. The trimmed page on the playground branch keeps only the sections
+  that are not built, under Title Case headings; the entries of those sections name the headings as
+  the trimmed page writes them, and the other entries name the headings of the sprint4 version.
 entries:
 - heading: What is built and what is planned
   item: The page states that nothing on it is built; it rests on built pieces and on the planned renderer
@@ -39,7 +41,7 @@ entries:
   ids:
   - REN-09
   - REN-11
-- heading: The scene model
+- heading: Scene Model
   item: 'Section heading for the scene model: spaces, entities, transforms, cameras, the class table,
     primitives, clearing and limits.'
   ids:
@@ -54,7 +56,7 @@ entries:
   item: Up to 64 scenes in a session, named 1 to 63 bytes.
   ids:
   - REN-12
-- heading: The up-axis switch
+- heading: Up-Axis Switch
   item: A Y up and Z up control in the header of every 3-D view, key U, remembered per view, changing
     only the camera basis and never the data.
   ids:
@@ -146,12 +148,12 @@ entries:
     4,096 labels, 4,096 classes, 8,192-pixel images.'
   ids:
   - REN-12
-- heading: The text log
+- heading: Text Log
   item: A text log live view (kind 7 proposed) of lines with levels, retained last 4,096 lines, filtering
     and search, with click to move the recording cursor.
   ids:
   - REN-51
-- heading: The bar chart
+- heading: Bar Chart
   item: A bar chart live view (kind 8 proposed) of up to 4,096 labelled values, with data views, picks
     and range selects.
   ids:
@@ -165,12 +167,12 @@ entries:
     and caliper.widget(kind="scene") work with it.
   ids:
   - STR-10
-- heading: The starting camera
+- heading: Starting Camera
   item: The view_camera argument sets the camera on which a 3-D view opens, as an orbit dict or a camera
     entity path, sized about 2 builder days.
   ids:
   - REN-45
-- heading: The starting camera
+- heading: Starting Camera
   item: Preset views, orthographic projection, following an entity, saved viewpoints, linked cameras and
     a fly mode are not in this sprint.
   ids:
@@ -209,7 +211,7 @@ entries:
   ids:
   - REN-51
   - REN-52
-- heading: Stamps on the timelines
+- heading: Stamps on the Timelines
   item: Every scene, text and bars call is stamped on the step, time and script timelines; static calls
     have no stamp.
   ids:
@@ -218,22 +220,22 @@ entries:
   item: A robot simulation example with a static cloud, a stereo rig and an arm of three links.
   ids:
   - STR-10
-- heading: Keeping scene data on the device
+- heading: Scene Data on the Device
   item: Section heading on keeping scene data on the device.
   ids:
   - STR-10
-- heading: What each route copies
+- heading: Copies per Route
   item: A scene snapshot is one device-side copy per route (in-process window, shared-memory session,
     network) and drawn in place from the slot; applet routes are zero-copy.
   ids:
   - STR-10
-- heading: Growing the shared-memory session
+- heading: Shared-Memory Session Growth
   item: 'The shared-memory scene layout: kind 6 control row, a directory segment of entity, batch and
     class tables and arena segments of per-batch slots; protocol stays at version 2 with kinds 6 to 8
     and a features word.'
   ids:
   - STR-24
-- heading: Data views of a scene
+- heading: Scene Data Views
   item: A scene data view with entity include and exclude filters and budgets max_points, max_items, max_vertices
     and max_extent.
   ids:
@@ -281,40 +283,40 @@ entries:
   item: Pick, hover and select events carry entity, primitive, index and row_id over protocol 3.1.
   ids:
   - REN-46
-- heading: Picking, hover and selection
+- heading: Picking, Hover and Selection
   item: 'Linked selection: a batch logged with items maps its row ids to an item space and selections
     highlight matching items in other views.'
   ids:
   - REN-46
-- heading: Interaction with the script
+- heading: Interaction with the Script
   item: Controls of protocol 3.1 work with scenes, and scene events reach Python through on_event, events()
     and the widget's selection.
   ids:
   - REN-46
-- heading: The scene service for applets
+- heading: Scene Service for Applets
   item: The scene service caliper.scene.v1 offers the scene model to applets and replaces the geometry
     service, with four differences.
   ids:
   - REN-35
-- heading: The service and its version
+- heading: Service and Version
   item: Service id caliper.scene.v1 declared in sdk/include/caliper/services/scene_v1.h, one table.
   ids:
   - REN-35
-- heading: Naming an array
+- heading: Array Names
   item: CaliperSceneArray names an imported allocation, a tensor or no array, so applets draw their own
     memory in place.
   ids:
   - REN-35
-- heading: The table
+- heading: Service Table
   item: The CaliperSceneV1 table with create, per-primitive calls, transform, camera, classes, clear,
     view_camera, retired, view, poll_event and last_error, and two capability bits.
   ids:
   - REN-35
-- heading: Frames, atomicity and memory stability
+- heading: Frames, Atomicity and Memory Stability
   item: Updates only on the frame thread, per-part refusal, tokens that retire when bytes may be rewritten.
   ids:
   - REN-35
-- heading: The view in the applet's window
+- heading: View in the Applet Window
   item: view() draws the scene view as one ImGui item in the applet's window, owned by the host with camera,
     switch, picking and overlays.
   ids:
@@ -323,11 +325,11 @@ entries:
   item: poll_event returns hover, pick and select events to the applet.
   ids:
   - REN-35
-- heading: Capabilities and refusals
+- heading: Capabilities and Refusals
   item: Two capability bits, CAP_DRAW and CAP_IN_PLACE, and refusals read from host metadata.
   ids:
   - REN-35
-- heading: What an applet's scene gains
+- heading: Applet Scene Features
   item: An applet gains the shared camera, the up-axis switch, picking, depth, scale bar, labels, export
     and recordings from the host.
   ids:
@@ -337,12 +339,12 @@ entries:
     records.
   ids:
   - REN-16
-- heading: Wire-capable scenes
+- heading: Wire-Capable Scenes
   item: An applet's scene is wire-capable when every array is host-readable and fits the wire, so it can
     be sent like a script's scene.
   ids:
   - STR-31
-- heading: The C++ sugar
+- heading: C++ Sugar
   item: caliper::Scene and caliper::SceneArray in caliper.hpp wrap the scene service table with builders.
   ids:
   - REN-35
@@ -351,18 +353,18 @@ entries:
     on Metal.
   ids:
   - REN-35
-- heading: From the geometry service
+- heading: Mapping from the Geometry Service
   item: Each geometry service capability is covered, added to the scene model, or dropped (triangle strips,
     unlit triangles, per-draw state, applet cameras, the rigidity gate).
   ids:
   - REN-16
   - REN-35
-- heading: From the geometry service
+- heading: Mapping from the Geometry Service
   item: 'The change of contract: rows follow the parity rules instead of byte-exact pixels against one
     CPU reference.'
   ids:
   - REN-16
-- heading: Changes to the shared contracts
+- heading: Changes to the Shared Contracts
   item: 'Contract changes: 2-D up axis, camera entities hold no primitive, 2-D transforms, depth scale,
     additive arrays, additive blending and instanced meshes.'
   ids:
@@ -415,25 +417,25 @@ entries:
     additions and drops, a texture as an image array.'
   ids:
   - REN-35
-- heading: Left to sprint 5
+- heading: Later Scene Work
   item: 'More shapes: ellipsoids, capsules, cylinders and planes drawn from their parameters.'
   ids:
   - REN-21
-- heading: Left to sprint 5
+- heading: Later Scene Work
   item: Mesh files through sprint 3's loaders and a URDF helper in Caliper LIB.
   ids:
   - REN-18
   - REN-19
-- heading: Left to sprint 5
+- heading: Later Scene Work
   item: Events from the app back to the script over shared memory through an event ring in the scene's
     directory segment.
   ids:
   - STR-32
-- heading: Left to sprint 5
+- heading: Later Scene Work
   item: Named frames through the import of robot recordings, translated into the entity tree.
   ids:
   - STR-22
-- heading: Left to sprint 5
+- heading: Later Scene Work
   item: 'The viewport features: preset views, orthographic projection, following an entity, saved viewpoints
     and linked cameras.'
   ids:
@@ -441,20 +443,20 @@ entries:
   - RUN-07
   - REN-50
   - REN-47
-- heading: Left to sprint 5
+- heading: Later Scene Work
   item: Trails over a time window, slice planes and isosurfaces of 3-D fields, and comparing runs.
   ids:
   - REN-20
   - REN-26
   - REN-27
-- heading: Left to sprint 5
+- heading: Later Scene Work
   item: Drawing of the text log and bar chart natively, in DOM and in Canvas 2D, and applet scenes in
     recordings and through the hub.
   ids:
   - REN-51
   - REN-52
   - STR-31
-- heading: Left to sprint 5
+- heading: Later Scene Work
   item: Compressed video stays out entirely; only single JPEG and PNG frames travel.
   ids:
   - REN-38
