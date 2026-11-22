@@ -23,7 +23,7 @@ struct KindName {
 };
 constexpr KindName kKinds[] = {
     {CatalogKind::table, "table"}, {CatalogKind::tensor, "tensor"}, {CatalogKind::live, "live"},
-    {CatalogKind::feed, "feed"},   {CatalogKind::metric, "metric"},
+    {CatalogKind::feed, "feed"},   {CatalogKind::metric, "metric"}, {CatalogKind::run, "run"},
 };
 
 struct DtypeInfo {
@@ -204,7 +204,7 @@ CatalogIdParse parse_catalog_id(std::string_view id) {
     const auto kind = catalog_kind_from_name(id.substr(0, colon));
     if (!kind) {
         out.error = Error("catalog.invalid_id",
-                          "The kind of a source id is one of table, tensor, live, feed and metric.", "id");
+                          "The kind of a source id is one of table, tensor, live, feed, metric and run.", "id");
         return out;
     }
     const std::string_view name = id.substr(colon + 1);
@@ -253,7 +253,7 @@ bool is_utc_timestamp(std::string_view t) {
 
 Error validate_catalog_entry(const CatalogEntry& e) {
     const char* kind = catalog_kind_name(e.kind);
-    if (!kind) return invalid("The kind is not one of the five kinds.", "kind");
+    if (!kind) return invalid("The kind is not one of the six kinds.", "kind");
     if (const std::string fault = name_fault(e.name); !fault.empty())
         return invalid("The name " + fault + ".", "name");
     if (e.id != make_catalog_id(e.kind, e.name))
@@ -375,7 +375,7 @@ CatalogEntryParse catalog_entry_from_json(const json& v) {
     const json& kind = v["kind"];
     if (!kind.is_string()) return fail("The kind is a string.", "kind");
     const auto k = catalog_kind_from_name(kind.get_ref<const std::string&>());
-    if (!k) return fail("The kind is one of table, tensor, live, feed and metric.", "kind");
+    if (!k) return fail("The kind is one of table, tensor, live, feed, metric and run.", "kind");
     e.kind = *k;
     if (!v["name"].is_string()) return fail("The name is a string.", "name");
     e.name = v["name"].get<std::string>();

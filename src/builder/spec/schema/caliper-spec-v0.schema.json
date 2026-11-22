@@ -30,7 +30,7 @@
     "catalog_id": {
       "type": "string",
       "maxLength": 256,
-      "pattern": "^(table|tensor|live|feed|metric):.+$"
+      "pattern": "^(table|tensor|live|feed|metric|run):.+$"
     },
     "extension": {
       "type": "object",

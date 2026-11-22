@@ -79,6 +79,7 @@ OFF_ON_WINDOWS = (
     "src/host/builder/",
     "src/host/spec_runtime/",
     "src/host/catalog_providers/",
+    "src/host/runner/",   # the model runner (design/hosted-runs.md); its Windows process code is untested
     "src/host/api/session_gateway.cpp",
     "tests/live_attention_producer.cpp",
     "tests/test_api_commands.cpp",

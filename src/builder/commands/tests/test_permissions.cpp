@@ -77,6 +77,10 @@ TEST_CASE("every command of the table says what it does, and the classes agree w
     // The run commands of design/instruments.md act on the running script.
     for (const char* name : {"run.set_param", "run.action", "run.pause"}) CHECK(cmd(name).effect == CommandEffect::run);
     CHECK(cmd("run.state").effect == CommandEffect::read);
+    // The model runner's commands of design/hosted-runs.md: a start, a fork and
+    // a stop act on runs; the list and the logs read.
+    for (const char* name : {"run.start", "run.fork", "run.stop"}) CHECK(cmd(name).effect == CommandEffect::run);
+    for (const char* name : {"run.list", "run.logs"}) CHECK(cmd(name).effect == CommandEffect::read);
     CHECK(cmd("events.wait").effect == CommandEffect::read);
     CHECK(command_effect_from_name("run") == CommandEffect::run);
     // Replacing the open spec is not a plain edit.

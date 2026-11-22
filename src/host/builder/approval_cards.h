@@ -159,7 +159,11 @@ std::string approval_loss(const caliper_builder::CommandInvocation& invocation,
 // The card text of a run command (design/instruments.md, Approval Card): the
 // change in one line and the running script it acts on, such as "Set
 // parameter lr to 0.001 in train.py. The change applies at the next step.";
-// "the attached script" when `script` is empty. "" for any other command.
+// "the attached script" when `script` is empty. For the model runner's
+// run.start, run.fork and run.stop (design/hosted-runs.md, Review Card): the
+// script, its arguments and its parameters; the parent and the parameters of
+// a fork, with `script` the parent's; the run and the limit of a stop. "" for
+// any other command.
 std::string approval_run_text(const caliper_builder::CommandInvocation& invocation, const std::string& script);
 
 enum class ApprovalState { waiting, deciding, approved, denied, timed_out, conflict, failed, withdrawn };
