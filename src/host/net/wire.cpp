@@ -475,7 +475,7 @@ bool one_of(const Json& v, std::initializer_list<const char*> words) {
 }
 bool is_op(const Json& v) {
     return one_of(v, {CALIPER_NET_OP_PAUSE, CALIPER_NET_OP_RESUME, CALIPER_NET_OP_STEP, CALIPER_NET_OP_SET,
-                      CALIPER_NET_OP_RUN});
+                      CALIPER_NET_OP_RUN, CALIPER_NET_OP_INTERVENE});
 }
 bool is_set_value(const Json& v) { return is_finite(v) || v.is_bool() || is_name(v); }
 bool present(const Json* v) { return v && !v->is_null(); }
@@ -555,6 +555,75 @@ bool run_obj(const Json& r) {
            (!present(step) || is_uint(*step)) && (!present(left) || is_uint(*left));
 }
 
+// ---- 3.2 draft: interventions (CONTROLS "interventions", CONTROL op "intervene") ----------------
+// A JSON integer within [lo, hi], never a float. Both bounds are below 2^63, so no arithmetic is needed.
+bool int_in(const Json& v, uint64_t lo, uint64_t hi) {
+    uint64_t u = 0;
+    return v.get_u64(&u) && u >= lo && u <= hi;
+}
+// An unsigned integer every codec holds exactly: 0 to 2^53 - 1.
+constexpr uint64_t kSafeInt = (uint64_t(1) << 53) - 1;
+bool is_safe_uint(const Json& v) { return int_in(v, 0, kSafeInt); }
+bool opt_step(const Json* v) { return !present(v) || is_safe_uint(*v); }
+bool is_nonneg(const Json& v) { return is_finite(v) && v.as_double() >= 0; }
+// 1 to `limit` bytes of text.
+bool bounded_text(const Json* v, size_t limit) {
+    return v && v->is_string() && !v->as_string().empty() && v->as_string().size() <= limit;
+}
+bool point_ok(const Json* v) { return bounded_text(v, CALIPER_NET_POINT_MAX); }
+bool name_ok(const Json* v) { return v && is_name(*v); }
+
+bool intervene_request(const Json& v) {
+    if (!v.is_object()) return false;
+    const Json* set = v.find("set");
+    const Json* clear = v.find("clear");
+    const Json* all = v.find("clear_all");
+    if (int(present(set)) + int(present(clear)) + int(present(all)) != 1) return false;
+    if (present(set)) {
+        return set->is_object() && point_ok(set->find("point")) && name_ok(set->find("op")) &&
+               opt_step(set->find("from_step")) && opt_step(set->find("until_step"));
+    }
+    if (present(clear)) return point_ok(clear);
+    return all->is_bool() && all->as_bool();
+}
+
+bool point_entry(const Json& v) {
+    if (!v.is_object() || !point_ok(v.find("point")) || !point_ok(v.find("module"))) return false;
+    const Json* kind = v.find("kind");
+    if (!(kind && one_of(*kind, {"module", "head"}))) return false;
+    const Json* head = v.find("head");
+    if (present(head) && !is_u32(*head)) return false;
+    const Json* type = v.find("type");
+    if (present(type) && !is_name(*type)) return false;
+    const Json* shape = v.find("shape");
+    if (!present(shape)) return true;
+    if (!shape->is_array() || shape->size() > CALIPER_NET_MAX_DIMS) return false;
+    for (const Json& d : shape->items())
+        if (!is_safe_uint(d)) return false;
+    return true;
+}
+
+bool active_entry(const Json& v) {
+    if (!v.is_object() || !point_ok(v.find("point")) || !name_ok(v.find("op"))) return false;
+    if (!opt_step(v.find("from_step")) || !opt_step(v.find("until_step")) || !opt_step(v.find("since_step")))
+        return false;
+    const Json* st = v.find("state");
+    return st && one_of(*st, {"pending", "active", "ended"});
+}
+
+bool interventions_ok(const Json& v) {
+    if (!v.is_object()) return false;
+    const Json* points = v.find("points");
+    const Json* active = v.find("active");
+    if (!(points && points->is_array() && points->size() <= CALIPER_NET_MAX_POINTS_LISTED)) return false;
+    if (!(active && active->is_array() && active->size() <= CALIPER_NET_MAX_INTERVENTIONS)) return false;
+    for (const Json& p : points->items())
+        if (!point_entry(p)) return false;
+    for (const Json& a : active->items())
+        if (!active_entry(a)) return false;
+    return true;
+}
+
 Controls controls(const Frame& f) {
     const Json& m = f.meta;
     Controls c;
@@ -572,6 +641,8 @@ Controls controls(const Frame& f) {
         return unique_names(v);
     }, "at most 64 actions with unique names");
     scene_stamp(f, false, -1, &c.stamp);   // 3.2 draft
+    if (const Json* v = opt(m, "interventions", interventions_ok, "{points, active} of intervention points and interventions"))
+        c.interventions = *v;
     return c;
 }
 
@@ -579,7 +650,7 @@ Control control(const Frame& f) {
     const Json& m = f.meta;
     Control c;
     c.request_id = u32(req(m, "request_id", is_u32, "a uint32"));
-    c.op = req(m, "op", is_op, "pause, resume, step, set or run").as_string();
+    c.op = req(m, "op", is_op, "pause, resume, step, set, run or intervene").as_string();
     const Json* name = opt(m, "name", is_name, "a parameter or action name");
     const bool named = c.op == CALIPER_NET_OP_SET || c.op == CALIPER_NET_OP_RUN;
     if (named && !name) bad("'" + c.op + "' needs 'name'");
@@ -588,6 +659,9 @@ Control control(const Frame& f) {
         if (const Json* n = opt(m, "count", [](const Json& v) { return is_u32(v) && u64(v) >= 1; },
                                 "a positive uint32"))
             c.count = u32(*n);
+    if (c.op == CALIPER_NET_OP_INTERVENE)   // 3.2 draft
+        c.intervene = req(m, "intervene", intervene_request,
+                          "exactly one of {set: {point, op, from_step, until_step}}, {clear: point} and {clear_all: true}");
     if (named) c.name = name->as_string();
     return c;
 }
@@ -1687,6 +1761,182 @@ TimeState time_state(const Frame& f) {
     return t;
 }
 
+// ---- 3.2 draft: GPU programs (the block "GPU programs and interventions" of _wire.py) ----------
+
+constexpr const char* kOutputGeometry = "geometry";
+constexpr const char* kOutputPixels = "pixels";
+
+bool program_id_ok(const Json* v) {
+    if (!v || !v->is_string()) return false;
+    const std::string& s = v->as_string();
+    if (s.empty() || s.size() > CALIPER_NET_PROGRAM_ID_MAX || s[0] < 'a' || s[0] > 'z') return false;
+    for (char c : s)
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) return false;
+    return true;
+}
+bool sha256_hex_ok(const Json* v) {
+    if (!v || !v->is_string() || v->as_string().size() != 64) return false;
+    for (char c : v->as_string())
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    return true;
+}
+// The optional key `key` of `o` (absent or null passes) when `check` holds for it.
+template <typename Check>
+bool opt_ok(const Json& o, const char* key, Check check) {
+    const Json* v = o.find(key);
+    return !present(v) || check(*v);
+}
+bool arrays_ok(const Json& v) {
+    static const char* const kArrays[] = {"positions", "colors", "values", "radii"};
+    if (!v.is_array() || v.size() < 1 || v.size() > 4) return false;
+    std::set<std::string> seen;
+    for (const Json& x : v.items()) {
+        if (!x.is_string()) return false;
+        bool known = false;
+        for (const char* a : kArrays) known = known || x.as_string() == a;
+        if (!known || !seen.insert(x.as_string()).second) return false;
+    }
+    return seen.count("positions") == 1;
+}
+bool input_entry(const Json& v) {
+    return v.is_object() && name_ok(v.find("var")) && bounded_text(v.find("source"), CALIPER_NET_TENSOR_NAME_MAX);
+}
+
+// _check_declaration: output, then inputs, limits, workgroups and entry.
+void check_declaration(const Json& d) {
+    const Json& out = req(d, "output", is_obj, "an object");
+    const std::string kind = req(out, "kind", [](const Json& v) {
+        return one_of(v, {kOutputGeometry, kOutputPixels});
+    }, "geometry or pixels").as_string();
+    if (kind == kOutputGeometry) {
+        req(out, "part", [](const Json& v) { return one_of(v, {CALIPER_NET_PART_POINTS, CALIPER_NET_PART_LINES}); },
+            "points or lines");
+        req(out, "max_count", [](const Json& v) { return int_in(v, 1, CALIPER_NET_PROGRAM_MAX_COUNT); },
+            "an integer from 1 to 1000000");
+        req(out, "arrays", arrays_ok,
+            "unique names of positions, colors, values and radii, with positions");
+        opt(out, "entity", [](const Json& v) { return v.is_string() && entity_path_ok(v.as_string()); },
+            "an entity path");
+    } else {
+        auto side = [](const Json& v) { return int_in(v, 1, CALIPER_NET_PROGRAM_SIDE_MAX); };
+        req(out, "width", side, "an integer from 1 to 2048");
+        req(out, "height", side, "an integer from 1 to 2048");
+        opt(out, "format", [](const Json& v) { return one_of(v, {"rgba8unorm"}); }, "rgba8unorm");
+    }
+    opt(d, "inputs", [](const Json& v) {
+        if (!v.is_array() || v.size() > CALIPER_NET_PROGRAM_MAX_INPUTS) return false;
+        for (const Json& e : v.items())
+            if (!input_entry(e)) return false;
+        return true;
+    }, "at most 8 inputs {var, source}");
+    if (const Json* lim = opt(d, "limits", is_obj, "an object")) {
+        opt(*lim, "time_ms", [](const Json& v) {
+            return is_finite(v) && v.as_double() > 0 && v.as_double() <= CALIPER_NET_PROGRAM_TIME_MS_MAX;
+        }, "a number above 0 and at most 50");
+        opt(*lim, "memory_mb", [](const Json& v) { return int_in(v, 1, CALIPER_NET_PROGRAM_MEMORY_MB_MAX); },
+            "an integer from 1 to 512");
+        opt(*lim, "every", [](const Json& v) { return int_in(v, 1, CALIPER_NET_PROGRAM_EVERY_MAX); },
+            "an integer from 1 to 10000");
+    }
+    opt(d, "workgroups", [](const Json& v) {
+        if (!v.is_array() || v.size() != 3) return false;
+        for (const Json& e : v.items())
+            if (!int_in(e, 1, CALIPER_NET_PROGRAM_WORKGROUPS_MAX)) return false;
+        return true;
+    }, "three integers from 1 to 65535");
+    opt(d, "entry", is_name, "an entry point name");
+}
+
+Program program(const Frame& f) {
+    const Json& m = f.meta;
+    Program p;
+    p.request_id = u32(req(m, "request_id", is_u32, "a uint32"));
+    p.op = req(m, "op", [](const Json& v) { return one_of(v, {CALIPER_NET_PROGRAM_SET, CALIPER_NET_PROGRAM_REMOVE}); },
+               "set or remove").as_string();
+    p.id = req(m, "id", [](const Json& v) { return program_id_ok(&v); },
+               "a program id of at most 55 bytes").as_string();
+    if (p.op == CALIPER_NET_PROGRAM_REMOVE) return p;
+    const Json& d = req(m, "declaration", is_obj, "an object");
+    check_declaration(d);
+    const bool geometry = d.find("output")->find("kind")->as_string() == kOutputGeometry;
+    const Json* scene = geometry ? &req(m, "scene", is_name, "a scene name") : opt(m, "scene", is_name, "a scene name");
+    const Json& sha = req(m, "sha256", [](const Json& v) { return sha256_hex_ok(&v); }, "64 lowercase hex digits");
+    const Section* w = f.section(CALIPER_NET_SECTION_WGSL);
+    if (!w || !w->is(CALIPER_NET_DTYPE_U8, 1)) bad("a program set needs a (B,) u8 'wgsl' section");
+    if (w->shape[0] < 1 || w->shape[0] > (int64_t)CALIPER_NET_PROGRAM_SOURCE_MAX)
+        bad("'wgsl' holds 1 to " + std::to_string(CALIPER_NET_PROGRAM_SOURCE_MAX) + " bytes, got " +
+            std::to_string(w->shape[0]));
+    if (!utf8_ok(w->data, (size_t)w->shape[0])) bad("'wgsl' is not UTF-8");
+    p.declaration = d;
+    p.wgsl = std::string(reinterpret_cast<const char*>(w->data), (size_t)w->shape[0]);
+    p.sha256 = sha.as_string();
+    if (scene) p.scene = scene->as_string();
+    return p;
+}
+
+bool program_error_ok(const Json& v) {
+    if (!v.is_object() || !name_ok(v.find("code"))) return false;
+    const Json* msg = v.find("message");
+    if (!(msg && is_text(*msg))) return false;
+    return opt_ok(v, "line", is_u32) && opt_ok(v, "column", is_u32);
+}
+
+bool status_item(const Json& v) {
+    if (!v.is_object() || !program_id_ok(v.find("id"))) return false;
+    const Json* kind = v.find("kind");
+    const Json* state = v.find("state");
+    if (!(kind && one_of(*kind, {kOutputGeometry, kOutputPixels}))) return false;
+    if (!(state && one_of(*state, {"waiting", "review", "compiled", "running", "refused", "stopped"}))) return false;
+    auto every = [](const Json& x) { return int_in(x, 1, CALIPER_NET_PROGRAM_EVERY_MAX); };
+    if (!opt_ok(v, "every", every) || !opt_ok(v, "every_min", every) || !opt_ok(v, "last_pass_ms", is_nonneg) ||
+        !opt_ok(v, "last_cost_ms", is_nonneg) || !opt_ok(v, "step_ms", is_nonneg) ||
+        !opt_ok(v, "last_step", is_safe_uint) || !opt_ok(v, "runs", is_safe_uint) ||
+        !opt_ok(v, "memory_bytes", is_safe_uint) || !opt_ok(v, "memory_limit_bytes", is_safe_uint) ||
+        !opt_ok(v, "error", program_error_ok))
+        return false;
+    const Json* sha = v.find("sha256");
+    return !present(sha) || (sha->is_string() && sha->as_string().empty()) || sha256_hex_ok(sha);
+}
+
+bool status_items(const Json& v) {
+    if (!v.is_array() || v.size() > CALIPER_NET_MAX_PROGRAMS) return false;
+    std::set<std::string> ids;
+    for (const Json& x : v.items()) {
+        if (!status_item(x)) return false;
+        ids.insert(x.find("id")->as_string());
+    }
+    return ids.size() == v.size();
+}
+
+ProgramState program_state(const Frame& f) {
+    const Json& m = f.meta;
+    ProgramState s;
+    if (const Json* v = opt(m, "request_id", is_u32, "a uint32")) s.request_id = u32(*v);
+    if (const Json* v = opt(m, "step", is_safe_uint, "an unsigned integer")) s.step = u64(*v);
+    if (const Json* v = opt(m, "step_ms", is_nonneg, "a number of at least 0")) s.step_ms = v->as_double();
+    s.programs = req(m, "programs", status_items, "at most 16 status items with unique program ids");
+    return s;
+}
+
+void program_to_meta(const Program& p, Json& m, std::vector<Section>& sections) {
+    m.set("request_id", p.request_id);
+    m.set("op", p.op);
+    m.set("id", p.id);
+    if (!p.declaration.is_null()) m.set("declaration", p.declaration);
+    if (p.scene) m.set("scene", *p.scene);
+    if (p.sha256) m.set("sha256", *p.sha256);
+    if (p.wgsl)
+        sections.push_back(Section::make(CALIPER_NET_SECTION_WGSL, CALIPER_NET_DTYPE_U8, {(int64_t)p.wgsl->size()},
+                                         p.wgsl->data(), p.wgsl->size()));
+}
+
+void program_state_to_meta(const ProgramState& s, Json& m) {
+    if (s.request_id) m.set("request_id", *s.request_id);
+    if (s.step) m.set("step", *s.step);
+    if (s.step_ms) m.set("step_ms", *s.step_ms);
+    m.set("programs", s.programs);
+}
+
 void text_to_meta(const Text& x, Json& m, std::vector<Section>& sections) {
     m.set("sub", x.sub);
     m.set("view", x.view);
@@ -1841,12 +2091,14 @@ Encoded to_meta(const Message& msg) {
         m.set("params", c->params);
         m.set("actions", c->actions);
         if (c->stamp) e.sections.push_back(named(*c->stamp, "stamp"));   // 3.2 draft
+        if (!c->interventions.is_null()) m.set("interventions", c->interventions);
     } else if (const auto* c = std::get_if<Control>(&msg)) {
         m.set("request_id", c->request_id);
         m.set("op", c->op);
         if (c->name) m.set("name", *c->name);
         if (!c->value.is_null()) m.set("value", c->value);
         if (c->count) m.set("count", *c->count);
+        if (!c->intervene.is_null()) m.set("intervene", c->intervene);
     } else if (const auto* r = std::get_if<ControlReply>(&msg)) {
         m.set("request_id", r->request_id);
         m.set("op", r->op);
@@ -1881,6 +2133,10 @@ Encoded to_meta(const Message& msg) {
         cursor_to_meta(*cu, m);
     } else if (const auto* ts = std::get_if<TimeState>(&msg)) {
         time_state_to_meta(*ts, m);
+    } else if (const auto* pg = std::get_if<Program>(&msg)) {
+        program_to_meta(*pg, m, e.sections);
+    } else if (const auto* ps = std::get_if<ProgramState>(&msg)) {
+        program_state_to_meta(*ps, m);
     } else if (const auto* u = std::get_if<Unknown>(&msg)) {
         m = u->meta.is_object() ? u->meta : Json::object();
         m.erase("sections");
@@ -2193,6 +2449,8 @@ DecodeResult decode(const uint8_t* buf, size_t n, Message* out) {
             case CALIPER_NET_MSG_RECORDING_OPEN: *out = recording_open(f); break;
             case CALIPER_NET_MSG_CURSOR: *out = cursor(f); break;
             case CALIPER_NET_MSG_TIME_STATE: *out = time_state(f); break;
+            case CALIPER_NET_MSG_PROGRAM: *out = program(f); break;
+            case CALIPER_NET_MSG_PROGRAM_STATE: *out = program_state(f); break;
             default: *out = Unknown{f.type, f.meta, f.sections}; break;
         }
     } catch (const MsgError& e) {
@@ -2252,6 +2510,8 @@ const char* type_name(uint16_t type) {
         case CALIPER_NET_MSG_RECORDING_OPEN: return "recording_open";
         case CALIPER_NET_MSG_CURSOR: return "cursor";
         case CALIPER_NET_MSG_TIME_STATE: return "time_state";
+        case CALIPER_NET_MSG_PROGRAM: return "program";
+        case CALIPER_NET_MSG_PROGRAM_STATE: return "program_state";
         default: return "?";
     }
 }
