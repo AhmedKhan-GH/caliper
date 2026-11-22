@@ -199,15 +199,24 @@ class CheckTest(unittest.TestCase):
         errors, _, _ = check.run_checks(root)
         self.assertError(errors, "extra.yaml", ".yml")
 
-    def test_pillar_missing_from_the_graph_page_list(self):
+    def test_pillar_missing_from_the_section_navigation(self):
         root = make_repo(self.tmp)
         (root / "docs" / "roadmap").mkdir()
-        (root / "docs" / "roadmap" / "index.md").write_text("# Roadmap\n\n- [Core](core.md)\n")
+        (root / "docs" / "roadmap" / "index.md").write_text("# Roadmap\n")
+        (root / "docs" / "roadmap" / ".nav.yml").write_text("nav:\n  - index.md\n  - core.md\n")
+        errors, _, _ = check.run_checks(root)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertError(errors, "rendering.yml", ".nav.yml", "rendering.md")
+
+    def test_graph_page_needs_no_pillar_list(self):
+        # The graph's rail links every pillar, so the page itself lists none.
+        root = make_repo(self.tmp)
+        (root / "docs" / "roadmap").mkdir()
+        (root / "docs" / "roadmap" / "index.md").write_text("# Roadmap\n")
         (root / "docs" / "roadmap" / ".nav.yml").write_text(
             "nav:\n  - index.md\n  - core.md\n  - rendering.md\n")
         errors, _, _ = check.run_checks(root)
-        self.assertEqual(len(errors), 1, errors)
-        self.assertError(errors, "rendering.yml", "index.md", "rendering.md")
+        self.assertEqual(errors, [])
 
     def test_missing_docs_page(self):
         errors, _, _ = self.run_check(edit={"core": ("docs: docs/guide.md\n",

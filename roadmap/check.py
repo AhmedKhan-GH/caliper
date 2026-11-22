@@ -332,20 +332,16 @@ def run_checks(root):
         if _article(data["title"]):
             errors.append("%s: -: the pillar title starts with an article" % name)
 
-    # The graph page's pillar list, which narrow screens show instead of the graph, and the
-    # section's navigation are written by hand; each must name every pillar page.
-    for rel in ("docs/roadmap/index.md", "docs/roadmap/.nav.yml"):
-        path = root / rel
-        if not path.is_file():
-            continue
+    # The section's navigation is written by hand and must name every pillar page. The graph
+    # page needs no list of its own: its rail links every pillar from the registry, and narrow
+    # screens show that rail instead of the graph.
+    rel = "docs/roadmap/.nav.yml"
+    path = root / rel
+    if path.is_file():
         text = path.read_text(encoding="utf-8")
         for name, _ in valid:
             page = Path(name).stem + ".md"
-            if rel.endswith(".md"):
-                found = "](%s)" % page in text
-            else:
-                found = re.search(r"^\s*-\s*%s\s*$" % re.escape(page), text, re.M)
-            if not found:
+            if not re.search(r"^\s*-\s*%s\s*$" % re.escape(page), text, re.M):
                 errors.append("%s: -: %s does not list the pillar page %s" % (name, rel, page))
 
     features = {}
