@@ -105,7 +105,7 @@ import warnings
 from typing import Any, Callable
 
 __all__ = ["CONTROLS", "Controls", "Param", "Action", "ItemSpace", "Route", "attach",
-           "CAPABILITIES"]
+           "CAPABILITIES", "Interventions"]
 
 # The strings and limits of wire protocol 3.1 (caliper/live_net.h), mirrored so
 # that importing this module loads neither caliper._wire nor numpy.
@@ -137,6 +137,20 @@ STEPS_REPORT_S = 0.1                   # while stepping, steps_left goes out at 
                                        # this often
 RUN_REPORT_S = 1.0                     # while running, the step goes out at most this
                                        # often, at the first checkpoint after it
+
+# The interventions (design/gpu-programs.md, Interventions): CONTROL op "intervene" and the
+# CONTROLS key "interventions" of capability "interventions" (3.2 draft).
+OP_INTERVENE = "intervene"
+INTERVENE_OPS = ("ablate",)
+INTERVENE_RESERVED = ("scale", "steer", "patch")
+MAX_POINTS_LISTED = 4096               # CALIPER_NET_MAX_POINTS_LISTED
+MAX_INTERVENTIONS = 64                 # CALIPER_NET_MAX_INTERVENTIONS
+POINT_MAX = 255                        # CALIPER_NET_POINT_MAX
+ERR_UNKNOWN_POINT = "intervene.unknown_point"
+ERR_OP_RESERVED = "intervene.op_reserved"
+ERR_BAD_RANGE = "intervene.bad_range"
+ERR_NOT_SUPPORTED = "intervene.not_supported"
+IV_PENDING, IV_ACTIVE, IV_ENDED = "pending", "active", "ended"
 
 _ITEM_KINDS = ("heatmap", "image", "points", "series")
 _INT_EXACT = 1 << 53
@@ -660,6 +674,55 @@ class _DetailsWorker:
 # ===========================================================================
 # the seam
 # ===========================================================================
+# ===========================================================================
+# interventions
+# ===========================================================================
+class _Intervention:
+    """One intervention of the watched model, keyed by its point and its op."""
+
+    __slots__ = ("point", "op", "from_step", "until_step", "since_step", "state", "hook",
+                 "clear", "error")
+
+    def __init__(self, point: str, op: str, from_step, until_step):
+        self.point, self.op = point, op
+        self.from_step, self.until_step = from_step, until_step
+        self.since_step = None
+        self.state = IV_PENDING
+        self.hook = None                  # the adapter's remover while the hook is on the model
+        self.clear = False                # intervene.clear asked for it; gone at the next step
+        self.error = None                 # why the script ended it, or None
+
+    def entry(self) -> dict:
+        return {"point": self.point, "op": self.op, "from_step": self.from_step,
+                "until_step": self.until_step, "since_step": self.since_step,
+                "state": self.state}
+
+
+class Interventions:
+    """The interventions of the model of ``caliper.watch(model, optimizer)``, as
+    :meth:`Controls.interventions_on` starts them.
+
+    ``remove()`` takes every hook of the interventions off the model and stops announcing them,
+    as a torch hook handle does, so a ``WatchHandle`` can hold it among its hooks.
+    """
+
+    def __init__(self, ctl: "Controls", model, adapter):
+        self._ctl = ctl
+        self.model = model
+        self.adapter = adapter
+        self.points: list = []            # the CONTROLS items, at most MAX_POINTS_LISTED
+        self.names: frozenset = frozenset()
+        self._shapes_off = None           # removes the shape hooks at the next step
+
+    def remove(self) -> None:
+        self._ctl._interventions_off(self)
+
+
+def _step_ok(v) -> bool:
+    return v is None or (isinstance(v, numbers.Integral) and not isinstance(v, bool)
+                         and 0 <= v < _INT_EXACT)
+
+
 class Route:
     """A transport attached to the controls; see the module docstring."""
 
@@ -744,6 +807,9 @@ class Controls:
         self._timers = _Timers()
         self._details_worker = _DetailsWorker()
         self.counters = collections.Counter()
+        self._iv_model: Interventions | None = None   # the watched model of the interventions
+        self._ivs: dict = {}                     # (point, op) -> _Intervention, oldest first
+        self._iv_due = False                     # the next checkpoint has intervention work
 
     # -- the checkpoint (the training thread) ----------------------------------
     def step(self, step=None) -> None:
@@ -785,7 +851,8 @@ class Controls:
 
     def _update_busy(self) -> None:
         self.busy = (self.state in (RUN_NONE, RUN_PAUSING, RUN_STEPPING)
-                     or self._npending > 0 or bool(self.queue) or self._report_due)
+                     or self._npending > 0 or bool(self.queue) or self._report_due
+                     or self._iv_due)
 
     def _arm_report(self) -> None:
         """While the run runs, have the first checkpoint after RUN_REPORT_S send
@@ -813,9 +880,10 @@ class Controls:
         return True
 
     def _service(self) -> None:
-        """Set pending values, then run the queued actions in order."""
+        """Set pending values and interventions, then run the queued actions in order."""
         with self.lock:
             changed = self._apply_pending()
+            changed = self._apply_interventions() or changed
         if changed:
             self._publish()
         while True:
@@ -1175,6 +1243,10 @@ class Controls:
                     timer = (a, a.run_id)
                 a.waiters.append((route, conn, rid))
                 reply = w.ControlReply(rid, op, w.STATUS_QUEUED, name).to_meta()
+            elif op == OP_INTERVENE:
+                refused = self._intervene(getattr(msg, "intervene", None))
+                if refused is not None:
+                    return error(*refused)
             self._update_busy()
             self.cond.notify_all()
         if timer is not None:
@@ -1264,6 +1336,190 @@ class Controls:
                                 f"{DETAILS_TIMEOUT_S:g} s"
         self._publish_selection(sp)
 
+    # -- interventions (design/gpu-programs.md, Interventions) -----------------------
+    def interventions_on(self, model, handle=None, adapter=None) -> Interventions:
+        """Take interventions on ``model`` from now on (the training thread).
+
+        ``caliper.watch(model, optimizer)`` calls this. CONTROLS then holds the key
+        ``interventions`` with the points of ``model`` and its interventions, and a CONTROL of op
+        ``intervene`` sets or clears one, applied at the next checkpoint through the hooks of
+        ``adapter`` (``caliper._adapter.TORCH`` by default). A later call replaces the model and
+        takes every hook of the earlier one off. The output shapes of the points are recorded at
+        the next forward pass.
+
+        Args:
+            model (torch.nn.Module): The watched model.
+            handle (WatchHandle | None): When given, its ``remove()`` also stops the
+                interventions.
+            adapter: The framework adapter, with ``points(model)`` and ``ablate(model, point)``.
+
+        Returns:
+            Interventions: Its ``remove()`` takes every hook off and stops the interventions.
+        """
+        if adapter is None:
+            from ._adapter import TORCH as adapter
+        from . import _ablate
+        m = Interventions(self, model, adapter)
+        pts = list(adapter.points(model))
+        m.points = pts[:MAX_POINTS_LISTED]
+        m.names = frozenset(p["point"] for p in pts)
+        old = self._iv_model
+        if old is not None:
+            self._interventions_off(old)
+        try:
+            m._shapes_off = _ablate.record_shapes(model)
+        except Exception:
+            _log.debug("the shape hooks failed", exc_info=True)
+        with self.lock:
+            self._iv_model = m
+            self._iv_due = m._shapes_off is not None
+            self._update_busy()
+        if handle is not None and hasattr(handle, "_handles"):
+            handle._handles.append(m)
+        self._publish()
+        return m
+
+    def _interventions_off(self, m: Interventions) -> None:
+        """Take every hook of ``m`` off its model and forget its interventions."""
+        with self.lock:
+            if self._iv_model is not m:
+                return
+            self._iv_model = None
+            ivs, self._ivs = list(self._ivs.values()), {}
+            shapes_off, m._shapes_off = m._shapes_off, None
+            self._iv_due = False
+            self._update_busy()
+        for iv in ivs:
+            self._unhook(iv)
+        if shapes_off is not None:
+            shapes_off()
+        self._publish()
+
+    @staticmethod
+    def _unhook(iv: _Intervention) -> None:
+        hook, iv.hook = iv.hook, None
+        if hook is not None:
+            try:
+                hook()
+            except Exception:                     # a hook handle's remove() does not fail
+                _log.debug("removing the hook of %s failed", iv.point, exc_info=True)
+
+    def _intervene(self, req):
+        """Take the ``intervene`` key of a CONTROL (lock held). Returns ``(code, text)`` of a
+        refusal, or None."""
+        m = self._iv_model
+        if m is None:
+            return (ERR_NOT_SUPPORTED, "the script takes no interventions: it watches no model "
+                                       "with caliper.watch(model, optimizer)")
+        if not isinstance(req, dict):
+            return (_w().ERR_BAD_REQUEST, "intervene holds set, clear or clear_all")
+        nxt = self._next_step()
+        if req.get("set") is not None:
+            st = req["set"]
+            point, op = st.get("point"), st.get("op")
+            frm, until = st.get("from_step"), st.get("until_step")
+            if op in INTERVENE_RESERVED or op not in INTERVENE_OPS:
+                return (ERR_OP_RESERVED, f"the op {op!r} is not built; ablate is the only op")
+            if point not in m.names:
+                return (ERR_UNKNOWN_POINT, f"the model has no point {point!r}")
+            if not (_step_ok(frm) and _step_ok(until)):
+                return (ERR_BAD_RANGE, "from_step and until_step are steps")
+            if until is not None and frm is not None and until <= frm:
+                return (ERR_BAD_RANGE, f"until_step {until} is not above from_step {frm}")
+            if until is not None and until <= nxt:
+                return (ERR_BAD_RANGE, f"until_step {until} is in the past: the next step is {nxt}")
+            key = (point, op)
+            iv = self._ivs.get(key)
+            if iv is None:
+                live = sum(1 for x in self._ivs.values() if x.state != IV_ENDED)
+                if live >= MAX_INTERVENTIONS:
+                    return (_w().ERR_LIMIT, f"the script holds {MAX_INTERVENTIONS} interventions")
+                while len(self._ivs) >= MAX_INTERVENTIONS:      # the oldest ended one goes
+                    old = next(k for k, x in self._ivs.items() if x.state == IV_ENDED)
+                    del self._ivs[old]
+                self._ivs[key] = _Intervention(point, op, frm, until)
+            else:
+                iv.from_step, iv.until_step = frm, until
+                iv.clear, iv.error = False, None
+                if iv.state == IV_ENDED:
+                    iv.state, iv.since_step = IV_PENDING, None
+        elif req.get("clear") is not None:
+            point = req["clear"]
+            if point not in m.names:
+                return (ERR_UNKNOWN_POINT, f"the model has no point {point!r}")
+            for iv in self._ivs.values():
+                if iv.point == point:
+                    iv.clear = True
+        elif req.get("clear_all") is True:
+            for iv in self._ivs.values():
+                iv.clear = True
+        else:
+            return (_w().ERR_BAD_REQUEST, "intervene holds set, clear or clear_all")
+        self._iv_due = True
+        self.counters["interventions_in"] += 1
+        return None
+
+    def _next_step(self) -> int:
+        """The step that the next forward pass belongs to: one past the latest checkpoint."""
+        n = self.n
+        return int(n) + 1 if isinstance(n, numbers.Integral) and not isinstance(n, bool) else 1
+
+    def _apply_interventions(self) -> bool:
+        """At a checkpoint (the training thread, lock held): put on or take off the hooks so that
+        each intervention acts from its first step until the step it ends before, and end one
+        whose hook failed. True if a state changed."""
+        if not self._iv_due:
+            return False
+        m = self._iv_model
+        if m is None:
+            self._iv_due = False
+            return False
+        changed = False
+        if m._shapes_off is not None and self.state != RUN_NONE:
+            shapes_off, m._shapes_off = m._shapes_off, None
+            try:
+                shapes_off()
+                m.points = list(m.adapter.points(m.model))[:MAX_POINTS_LISTED]
+            except Exception:
+                _log.debug("the shapes of the points failed", exc_info=True)
+            changed = True
+        s = self._next_step()
+        for key in list(self._ivs):
+            iv = self._ivs[key]
+            if iv.clear:
+                self._unhook(iv)
+                del self._ivs[key]
+                changed = True
+                continue
+            if iv.state == IV_ENDED:
+                continue
+            failed = iv.hook is not None and getattr(iv.hook, "errors", 0)
+            if failed:
+                iv.error = getattr(iv.hook, "error", None) or "the hook failed"
+            ended = failed or (iv.until_step is not None and iv.until_step <= s)
+            on = not ended and (iv.from_step is None or iv.from_step <= s)
+            if on and iv.hook is None:
+                try:
+                    iv.hook = m.adapter.ablate(m.model, iv.point)
+                except Exception as e:
+                    iv.error = f"{type(e).__name__}: {e}"[:TEXT_MAX]
+                    ended, on = True, False
+                    warnings.warn(f"caliper: the ablation of {iv.point!r} failed: {iv.error}",
+                                  RuntimeWarning, stacklevel=2)
+            if not on:
+                self._unhook(iv)
+            state = IV_ACTIVE if on else IV_ENDED if ended else IV_PENDING
+            if state != iv.state:
+                iv.state = state
+                iv.since_step = s if on else iv.since_step if ended else None
+                changed = True
+                if failed:
+                    warnings.warn(f"caliper: the ablation of {iv.point!r} failed and ended: "
+                                  f"{iv.error}", RuntimeWarning, stacklevel=2)
+        self._iv_due = m._shapes_off is not None or any(
+            iv.clear or iv.state != IV_ENDED for iv in self._ivs.values())
+        return changed
+
     # -- messages ------------------------------------------------------------------
     def _run_obj(self) -> dict:
         r = {"state": self.state}
@@ -1281,8 +1537,15 @@ class Controls:
 
     def _controls_meta(self) -> dict:
         w = _w()
+        extra = {}
+        if self._iv_model is not None:   # only under caliper.watch(model, optimizer)
+            extra["interventions"] = self._interventions_obj()
         return w.Controls(self._run_obj(), [p.entry() for p in self.params.values()],
-                          [a.entry() for a in self.actions.values()]).to_meta()
+                          [a.entry() for a in self.actions.values()], **extra).to_meta()
+
+    def _interventions_obj(self) -> dict:
+        return {"points": list(self._iv_model.points),
+                "active": [iv.entry() for iv in self._ivs.values()][:MAX_INTERVENTIONS]}
 
     def _selection_meta(self, sp: ItemSpace) -> dict:
         w = _w()
@@ -1348,6 +1611,8 @@ class Controls:
                                 if p._pending is not _NO},
                     "actions": {n: a.entry() for n, a in self.actions.items()},
                     "selections": {n: list(s._selection) for n, s in self.spaces.items()},
+                    "interventions": [dict(iv.entry(), error=iv.error)
+                                      for iv in self._ivs.values()],
                     "routes": len(self.routes), **dict(self.counters)}
 
 
