@@ -1141,6 +1141,7 @@ struct ProgramHost {
     std::int64_t last_step = -1;
     std::uint64_t moves = 0;
     std::function<std::string()> workspace;                 // the app's workspace folder, for its pieces
+    std::map<std::string, std::string> seen_picks;          // each panel's last pick that the programs took
 };
 
 // One status item for each program that the scene panels draw: half "draw" and its draw object.
@@ -1245,6 +1246,27 @@ void note_program_pick(const std::string& panel, const caliper_builder::Event& e
     for (const auto& [id, s] : p.picked)
         if (all.size() < caliper_builder::programs::kMaxSelected) all.push_back(s);
     p.host.set_selection(std::move(all));
+}
+
+// A pick that a command made, as selection.set does, reaches the programs as a click does: the
+// panel's last pick in the value store, once each time it changes.
+void sync_program_pick(const std::string& panel, const caliper_builder::ValueStore* values) {
+    if (!values) return;
+    const std::optional<caliper_builder::PickFields> f = values->last_pick(panel);
+    const nlohmann::json fields = f ? caliper_builder::pick_fields_json(*f) : nlohmann::json();
+    std::string& seen = program_host().seen_picks[panel];
+    const std::string key = fields.is_null() ? std::string() : fields.dump();
+    if (key == seen) return;
+    seen = key;
+    caliper_builder::Event ev;
+    if (f) {
+        ev.kind = caliper_builder::EventKind::pick;
+        ev.fields = fields;
+    } else {
+        ev.kind = caliper_builder::EventKind::select;
+        ev.fields = {{"entities", nlohmann::json::array()}};
+    }
+    note_program_pick(panel, ev);
 }
 
 bool same_starting(const caliper_scene::StartingCamera& a, const caliper_scene::StartingCamera& b) {
@@ -1440,6 +1462,7 @@ void SpecRuntime::bind_scene(Entry& e) {
         CaliperCore* core = core_ ? core_() : nullptr;
         if (!core || scene.empty()) return false;
         give_program_cursor(history_);
+        sync_program_pick(panel, values_);
         const std::string id = "##spec.scene." + panel;
         // The panel's stages (spec_stage_host.h), and the line of a refused or stopped one.
         caliper_live_views::SceneRectOptions so = o;
@@ -1471,6 +1494,7 @@ void SpecRuntime::bind_entity_scene(Entry& e) {
     o.draw_feed = program_host().host.feed(panel);
     e.view.scene = [this, panel, o](const ImRect& content) {
         give_program_cursor(history_);
+        sync_program_pick(panel, values_);
         caliper_live_views::SceneView* view = entity_view(panel);
         EntityPanel& ep = scenes_->entity(panel);
         if (!view) return false;   // no backend here: the panel shows its source as offline
