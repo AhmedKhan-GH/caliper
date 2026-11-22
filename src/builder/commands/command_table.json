@@ -14751,9 +14751,10 @@
                       ]
                     },
                     "state": {
-                      "description": "The draw half's state in the viewer.",
+                      "description": "The draw half's state in the viewer: review in a foreign spec without a review of the piece's hash.",
                       "enum": [
                         "waiting",
+                        "review",
                         "compiled",
                         "running",
                         "refused",
@@ -15050,9 +15051,10 @@
                       ]
                     },
                     "state": {
-                      "description": "The draw half's state in the viewer.",
+                      "description": "The draw half's state in the viewer: review in a foreign spec without a review of the piece's hash.",
                       "enum": [
                         "waiting",
+                        "review",
                         "compiled",
                         "running",
                         "refused",
