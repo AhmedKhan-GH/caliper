@@ -305,13 +305,12 @@ features:
 
   - id: REN-33
     title: Texture Path on the Graphics Layer
-    status: built
+    status: planned
     scope: core
     summary: Heatmaps, images, the tensor bridge's textures and the embed views update their textures through the graphics layer with the colormap decided by keys, and the Vulkan renderer is reduced to the window, the canvas and ImGui.
     depends_on: [REN-14, REN-31]
     sprint: 4
     branches: [sprint4-tex]
-    in_progress: true
     issue: null
 
   - id: REN-34
@@ -429,6 +428,7 @@ features:
     depends_on: [REN-12, STR-10]
     sprint: 4
     branches: [sprint4-integ3, sprint4-draws]
+    in_progress: true
     issue: null
 
   - id: REN-46
