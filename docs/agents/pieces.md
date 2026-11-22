@@ -184,13 +184,19 @@ A program pins its piece by name, version, hash and source. The pin is `piece = 
 
 When the source of a pin lacks the piece, the state of the program is `refused` with `piece.missing`. When the piece has another hash than the pin, the state is `refused` with `piece.hash_mismatch`. In both cases the spec still opens, and the app never pins another version on its own. The person or the agent restores the folder, or pins an existing version with `program.patch`. A script and a browser viewer compute the hash again from what they receive. A hash that differs from the pin refuses the program.
 
+### Foreign Specs
+
+A spec that came from outside the workspace has a table `provenance` with `foreign = true`. A program of such a spec runs only when `provenance.reviewed` holds the hash of its source. For an instance of a piece, the target is `program:<id>` and the hash is the 64 hex digits of the piece hash. Until then, the state of the program is `review`, and nothing runs, neither the derive half nor the draw half. The `draw` object of the status shows `review` too. No command writes `provenance`, and the app has no review card for pieces yet. Thus a person adds the entry to the spec file. A spec of the person's own workspace has no `provenance`, and its pieces run at once.
+
 ## Piece Sources
 
 A program names the source of its piece with `from`.
 
-- `library` is the default. It is the built-in library of the build, which is read-only. It holds the lib modules, and its pieces live in `pieces/<name>/<version>/` in the format of a piece folder.
+- `library` is the default. It is the built-in library of the build, which is read-only. It holds the four lib modules and the piece `points@1`, and its pieces live in `pieces/<name>/<version>/` in the format of a piece folder.
 - `workspace` is the folder `<workspace>/pieces/`, which the piece commands write.
 - `inline` is the array `piece` of the open spec.
+
+The piece `points@1` draws a cloud of round or square points of a size in pixels. It colors them by one color, by a value through a colormap, or by a packed RGBA value. Its derive half reads a tensor of positions with rank 2 and an optional tensor of values with rank 1. With the same points, camera and options, it draws the same pixels as the built-in `points` primitive, within the tolerances of the scene tests, and a pick returns the same item.
 
 A workspace piece with the name of a library piece replaces it only in a program that says `from = "workspace"`. `caliper-mcp` serves each file of the library as a read-only resource under `caliper://library/`. Thus an agent can read a piece before it pins, copies or imitates it.
 
@@ -299,7 +305,7 @@ Each command is one MCP tool, with the first dot of its name replaced by `_`. Th
 
 ## Program Status and Events
 
-`program.status` gives an instance the kind `piece` and its pin. The derive half reports as for any program, with `host`, `state`, `every`, `memory_bytes` and `error`. An instance that draws also has a `draw` object with `state` (`waiting`, `compiled`, `running`, `refused` or `stopped`), `frame_ms`, `frame_limit_ms`, `memory_bytes`, `memory_limit_bytes`, `resource_step` and `error`. The `error.where` of the draw half names the pass, such as `draw.passes[1]`.
+`program.status` gives an instance the kind `piece` and its pin. The derive half reports as for any program, with `host`, `state`, `every`, `memory_bytes` and `error`. An instance that draws also has a `draw` object with `state` (`waiting`, `review`, `compiled`, `running`, `refused` or `stopped`), `frame_ms`, `frame_limit_ms`, `memory_bytes`, `memory_limit_bytes`, `resource_step` and `error`. The `error.where` of the draw half names the pass, such as `draw.passes[1]`.
 
 The event `program` carries the keys `half` (`derive` or `draw`) and `pass`, the index of the pass or null. An agent waits for the event `compiled` of both halves of an instance before it reads. The changes `stopped` and `refused` carry the codes of this page. The event `pick` carries the keys of the next section. [Run Control and Events](run-control-and-events.md) lists all events.
 
@@ -343,7 +349,7 @@ The scene view reads the anchors of the version that the frame shows and project
 
 ## Camera
 
-The host owns the camera. A piece selects `orbit` for the 3-D orbit camera of the panel, `pan_zoom` for its 2-D camera, or `none`. The camera `none` gives identity matrices, for a piece that draws in clip space. The programs of one panel must agree. The first program of the panel sets the camera, and a program that selects another one is refused with `program.camera_conflict`. The saved views of the panel and the commands `camera.get`, `camera.set` and `camera.save` work as they do for entities.
+The host owns the camera. A piece selects `orbit` for the 3-D orbit camera of the panel, `pan_zoom` for its 2-D camera, or `none`. The camera `none` gives identity matrices, for a piece that draws in clip space. The programs of one panel must agree. The first program of the panel sets the camera. `program.create` and `program.patch` refuse a program that selects another one with `program.camera_conflict`, and `spec.validate` names each later program of a spec that holds such a panel. The viewer also refuses the later program with the same code. The saved views of the panel and the commands `camera.get`, `camera.set` and `camera.save` work as they do for entities.
 
 ## Draw Budget and Removal
 
@@ -388,10 +394,11 @@ The editor, the script and the viewer refuse a piece with a stable code before a
 | `program.target_cycle` | A pass reads its own target, or a target before a pass writes it |
 | `program.bad_pick` | The item map names no field, or the piece has no pass with `pick` |
 | `program.bad_text` | The anchors lack their fields, or the strings break their limits |
-| `program.camera_conflict` | Two programs of a panel select two cameras |
+| `program.camera_conflict` | Two programs of a panel select two cameras. The editor, `spec.validate` and the viewer give it. |
 | `program.binding_not_allowed` | A file declares a binding, or a pass writes a tensor input |
 | `program.reserved_name` | A file declares a name of the host or a name with a double underscore |
 | `program.entry_stage` | An entry point of the wrong stage, none, or the name `main` |
+| `program.interface_mismatch` | A fragment entry reads a location that the vertex entry does not write, or with another type or interpolation, or a vertex entry reads a vertex attribute |
 | `program.over_web_limits` | A pass goes over a default limit of WebGPU |
 | `program.resources_unavailable` | The attached script takes no pieces |
 | `program.browser_refused` | WebGPU refused a module or a pipeline of the browser viewer |
@@ -404,6 +411,37 @@ The browser module runs the same draw half from the same WGSL and the same decla
 
 The browser has no compiler of its own, because WebGPU keeps each draw inside its bindings. The browser module keeps no step history and draws the newest version of each resource. Without timestamps, the frame time is the time from the submit until the work is done.
 
+## Builder Pane
+
+The palette of the builder pane has a group Pieces. It lists one row for each entry of `piece.list`, named `<name>@<version>`, with the source of the piece and its description. The pane refreshes the list when a piece command changes the workspace.
+
+A person drags a piece row onto the middle of a scene panel, or focuses a scene panel and uses Add. The pane then sends `program.create` with the pin of the piece and that panel. The pane binds no input. A piece with inputs is refused with `piece.bad_binding`, and the message says that the program must be written in the spec text or by the agent. A drop that would make a new panel is refused with `program.bad_target`, because a piece makes no panel. A piece that only publishes needs no panel.
+
+## Attention Arc Tower
+
+The Attention Arc Tower answers one question. When and where does the model learn to copy, and is that what drops the loss? An agent builds it through `caliper-mcp` alone, on a managed run whose script has one Caliper line, `caliper.watch(model, optimizer)`. No built-in primitive is in its frames. The scene panels `tower` and `pattern` hold programs only, and the loss curves are series panels.
+
+The script `examples/python/arc_tower_train.py` trains an attention-only transformer with two layers of four heads, a width of 64 and a vocabulary of 64 words. Each sequence holds 32 random tokens, and a segment of 12 of them repeats. The loss stays near ln 64 until heads of layer 1 learn to copy, and then it drops at a bump, which comes between step 600 and step 1,000 on an Apple GPU. Row 0 of every batch is a fixed sentence that the loss leaves out. Thus the attention that a viewer shows is always that of the same sentence.
+
+The watch publishes the attention weights of each layer as `live:blocks.<i>.attn.weights.act`, as rows of batch, head and query token against the key tokens. It publishes `live:token_loss.act`, the loss of each token, and one intervention point `blocks.<i>.attn#<h>` for each head. The in-context loss is the mean of the loss of row 0 over the second copy, which only a copy from the first occurrence predicts.
+
+The pieces are in `demos/arc_tower/`. The piece `attention_arcs` scores each head for induction in its derive half and publishes `heads`, one score for each head. It also publishes the arcs, one for each attention weight above the threshold, with `from_token`, `to_token`, `layer`, `head`, `weight` and `score`. Its draw half draws the arcs instanced and additive with an ID for each arc, a glow target and a bloom pass, and it labels the tokens. Its item map holds the six fields of an arc. The piece `attention_field` is the second graphic. It is fragment-only, has the camera `none`, and draws the pattern of one head with contour lines. Its parameters follow the state `head` and the layer of the last pick in `tower`.
+
+The agent starts the run, writes both pieces with `piece_check` and `piece_update`, and places them with `program_create`. It adds the loss series, the in-context loss, and a toggle bound to `intervene:blocks.1.attn#0`. After the bump, `program_read` shows the head scores rise from below 0.2 at the first kept version to above 0.4. A pick of an arc with `selection_set` gives its layer, head and token pair, and the pattern panel follows the head. The toggle raises the in-context loss at once. A fork from the first kept step with the same head ablated through `run_fork` never forms that head.
+
+## Limits
+
+These parts are not built, and the pieces do not depend on them.
+
+- Custom blend factors, targets wider than eight bits, indirect draws, storage textures, multisampling and node materials.
+- A derive half that reads the output of another derive half.
+- Kept versions in the browser viewer.
+- Resources as catalog sources, and recordings of resources.
+- The derive half on a platform other than Metal.
+- A preview of a piece from its sample.
+
+Three points need care when a piece is written. In a fork, another head may form induction arcs in place of the ablated one. Without multisampling, an arc of one pixel aliases, thus a width of at least one pixel times the pixel ratio keeps it visible. The timestamp query is optional in WebGPU, thus the frame time in a browser can be the slower upper bound.
+
 ## Tests
 
-[Testing](../development/testing.md) lists the tests of pieces. The test `tests/piece_path/driver.py` follows one piece from its command to a pick. The test `tests/draw_parity/` compares the draw of the app and of the browser module on one recorded frame. Each refusal of this page has a test in `src/builder/programs/tests/test_pieces.cpp` or in the suite of the host that gives it.
+[Testing](../development/testing.md) lists the tests of pieces. The test `tests/piece_path/driver.py` follows one piece from its command to a pick. The test `tests/draw_parity/` compares the draw of the app and of the browser module on one recorded frame. The test `caliper_programmable_graphics_acceptance` builds the Attention Arc Tower through `caliper-mcp`, and `python3 examples/python/arc_tower_check.py` runs the same steps and prints each check. Each refusal of this page has a test in `src/builder/programs/tests/test_pieces.cpp` or in the suite of the host that gives it.

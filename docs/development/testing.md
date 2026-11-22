@@ -262,7 +262,7 @@ The check `python3 examples/python/gpu_program_check.py` runs the same flow with
 
 ## Programmable Graphics Tests
 
-Pieces have tests at four levels. Each refusal that [Pieces](../agents/pieces.md#refusals) lists has a case at the level of the host that gives it.
+Pieces have tests at several levels. Each refusal that [Pieces](../agents/pieces.md#refusals) lists has a case at the level of the host that gives it.
 
 | Level | Entry | What it checks |
 |---|---|---|
@@ -270,6 +270,7 @@ Pieces have tests at four levels. Each refusal that [Pieces](../agents/pieces.md
 | Draw runtime | `caliper_gfx_draw_tests` | The draw half on the recording backend of the graphics layer: install, the order of the passes, a skipped pass, the checks before anything is made, a pass that does not compile, the layout of a version, the reset rules of the draw buffers, the stop after 30 slow frames, the timeout of 1 s, the draw memory, the decode of PROGRAM with the hash, and the draw host with its camera conflict (`src/host/draw/tests/test_draw_runtime.cpp`) |
 | Metal rows | `caliper_gfx_tests` | The cases named `gfx/Metal pieces` (`tests/gfx/gfx_pieces.cpp`). The field draws as the CPU reference of its fragment, the arcs draw instanced and additive with an ID for each arc and the bloom of their glow, a slow pass stops its program while the other goes on, a compute pass of the draw half feeds an instanced draw with state, reset and depth, and the scene view draws its programs after its scene |
 | Derive half | `caliper_producer_tests` | The derive half in the producer runtime on Metal: passes in order with the contents kept, clears and counters, read-only tensors, bounds, sizes, the watchdog and the timeout without a wait, a rebind and a texture |
+| Library piece | `caliper_points_match` | The piece `points@1` against the built-in points primitive on Metal, offscreen: the interior pixels equal, the edge pixels on either side, and 16 chosen picks that return the same items (`tests/points_match/`) |
 | Host | `caliper_spec_runtime` | The `programs` cases: the item map gives the fields and the index of an item and refuses an item past the count, the text table gives a label at each valid anchor, and a piece in a scene panel is picked at its pixel, writes a select state and places its labels |
 | Python | `python/tests/test_programs_pieces.py` | The facade of the script: an instance installs, the derive half runs and publishes RESOURCE, a draw half relays to a viewer, and the backlog of RESOURCE frames stays bounded |
 
@@ -287,6 +288,26 @@ The driver waits for the event `compiled` of both halves and checks each step by
 - `selection_set` with `program` and `item` gives the fields of row 5 and a `pick` event. The linked selection then marks the bar, which adds magenta pixels.
 
 The driver writes three captures, `empty`, `drawn` and `picked`, into `piece-path-captures` of the build folder. The entry has the labels `pieces` and `acceptance`, a timeout of 300 seconds, and the conditions and the exit code 77 of the GPU programs test.
+
+### Programmable Graphics Acceptance
+
+The ctest entry `caliper_programmable_graphics_acceptance` (`tests/programmable_graphics/driver.py`) is the acceptance test of programmable graphics. It starts the hidden app with no script and `caliper-mcp` as a child, and the model runner starts `examples/python/arc_tower_train.py` as a managed run. The driver sends the tool calls of an agent that has only the MCP tools, builds the Attention Arc Tower from the pieces of `demos/arc_tower`, and writes the calls it sent as `transcript.jsonl` into its work folder. The step `check` in this list names what the driver asserts.
+
+1. It hashes the app, `caliper-mcp` and the Python package.
+2. It opens a spec file of a foreign colleague with an inline piece. The program of that piece has the state `review`.
+3. It starts the run and pauses it while the agent builds. `piece_list` of the library holds `points@1` and the four lib modules, and `piece_show` of `points` has a draw file.
+4. `piece_check` accepts both pieces and `piece_update` writes them as version 1.
+5. The agent creates the scene panels `tower` and `pattern`, the programs, the loss curves and a toggle. The spec holds no entity. After the run resumes, both halves of both programs give the event `compiled`.
+6. `program_read` of the arcs gives elements with tokens below 32 and `from_token` below `to_token`. A capture of `tower` differs from the empty capture in at least 2,000 pixels.
+7. At the bump, the newest `heads` version holds a score above 0.4, and the first kept version holds no score of 0.2 or more. The loss falls, and the in-context loss falls below 1.5.
+8. `selection_set` on the brightest arc of the best head gives the event `pick` with `layer`, `head`, `from_token` and `to_token`. The state `head` equals the picked head, and the capture of `pattern` changes.
+9. The ablation of that head with `intervene_set` raises the in-context loss to more than twice its settled value.
+10. `run_fork` from the first kept step with the head ablated gives a child whose score of that head stays below 0.2 while another head of layer 1 passes 0.4. The tower of the child differs from the tower of the parent.
+11. A copy of `attention_arcs` whose bloom loops is written as a piece and placed in a panel of its own. The event `stopped` names the program, `program.draw_over_time` and a draw pass. The program `tower_arcs` still draws, and the step of the run still rises.
+12. The `overhead_share` of both derive halves is at most 0.02.
+13. After both runs stop, no process that the test started is alive, and the SHA-256 of the files has not changed.
+
+The driver waits on events and published state, never for a fixed time. The entry has the labels `programmable_graphics` and `acceptance` and a timeout of 900 seconds. It exits with code 77, which ctest reports as skipped, with the reason printed, when the app, Metal, torch, the native sender or the producer module is missing. The captures go to `tests/programmable_graphics-captures` in the build folder. The check `python3 examples/python/arc_tower_check.py` runs the same steps as one command with defaults. It prints each step as it passes and then the measured results, and it runs `caliper_points_match_tests`, the match of `points@1` with the built-in points on Metal, when the build folder holds it.
 
 ### Draw Parity
 
