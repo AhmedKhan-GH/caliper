@@ -390,11 +390,16 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
     if (options.labels && sc->width() && sc->height()) {
         // The item labels and the annotations' labels (scene_overlays.h).
         const std::vector<caliper_scene::LabelAnchor> labels = sc->labels();
-        std::vector<bool> annotations(labels.size(), false);
-        for (std::size_t i = 0; i < labels.size(); ++i)
-            annotations[i] = sc->tree().path(labels[i].entity).rfind("spec-overlay/", 0) == 0;
+        std::vector<bool> annotations(labels.size(), false), rings(labels.size(), false);
+        for (std::size_t i = 0; i < labels.size(); ++i) {
+            const std::string& path = sc->tree().path(labels[i].entity);
+            annotations[i] = path.rfind("spec-overlay/", 0) == 0;
+            rings[i] = path.rfind("spec-overlay/marker/", 0) == 0;
+        }
         SceneOverlayInput in;
         in.annotations = &annotations;
+        in.rings = &rings;
+        in.accent = IM_COL32(176, 141, 87, 255);
         in.draw = dl;
         in.origin = p0;
         in.scale_x = size.x / float(sc->width());

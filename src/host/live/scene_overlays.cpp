@@ -36,21 +36,27 @@ bool same(const LabelBox& a, const LabelBox& b) {
 struct Placement {
     std::vector<LabelBox> boxes;
     LabelRect panel;
+    std::vector<LabelRect> obstacles;
     std::vector<PlacedLabel> placed;
 };
 
-const std::vector<PlacedLabel>& placed_for(const std::vector<LabelBox>& boxes, const LabelRect& panel) {
+bool same_rect(const LabelRect& a, const LabelRect& b) {
+    return a.x0 == b.x0 && a.y0 == b.y0 && a.x1 == b.x1 && a.y1 == b.y1;
+}
+
+const std::vector<PlacedLabel>& placed_for(const std::vector<LabelBox>& boxes, const LabelRect& panel,
+                                           const std::vector<LabelRect>& obstacles) {
     static std::deque<Placement> kept;
     for (const Placement& p : kept) {
-        if (p.boxes.size() != boxes.size() || p.panel.x0 != panel.x0 || p.panel.y0 != panel.y0 ||
-            p.panel.x1 != panel.x1 || p.panel.y1 != panel.y1)
+        if (p.boxes.size() != boxes.size() || !same_rect(p.panel, panel) || p.obstacles.size() != obstacles.size())
             continue;
         bool equal = true;
         for (std::size_t i = 0; i < boxes.size() && equal; ++i) equal = same(boxes[i], p.boxes[i]);
+        for (std::size_t i = 0; i < obstacles.size() && equal; ++i) equal = same_rect(obstacles[i], p.obstacles[i]);
         if (equal) return p.placed;
     }
     if (kept.size() >= 8) kept.pop_back();
-    kept.push_front({boxes, panel, caliper_host::place_labels(boxes, panel, {})});
+    kept.push_front({boxes, panel, obstacles, caliper_host::place_labels(boxes, panel, obstacles)});
     return kept.front().placed;
 }
 
@@ -76,7 +82,20 @@ void draw_scene_overlays(const SceneOverlayInput& in) {
         b.priority = (first ? 0 : 1000) + (int)i;
         boxes.push_back(b);
     }
-    const std::vector<PlacedLabel>& placed = placed_for(boxes, panel);
+    // The markers' rings: drawn at their anchors over the picture, and kept free of labels.
+    const float ring = std::max(5.0f, std::round(0.45f * ImGui::GetFontSize()));
+    std::vector<LabelRect> rings;
+    for (std::size_t i = 0; i < boxes.size(); ++i)
+        if (in.rings && i < in.rings->size() && (*in.rings)[i])
+            rings.push_back({boxes[i].anchor_x - ring - 1, boxes[i].anchor_y - ring - 1, boxes[i].anchor_x + ring + 1,
+                             boxes[i].anchor_y + ring + 1});
+    const std::vector<PlacedLabel>& placed = placed_for(boxes, panel, rings);
+    const ImU32 accent = in.accent ? in.accent : in.ink;
+    for (const LabelRect& r : rings) {
+        const ImVec2 c((r.x0 + r.x1) * 0.5f, (r.y0 + r.y1) * 0.5f);
+        in.draw->AddCircle(c, ring + 1.0f, in.shade, 0, 4.0f);
+        in.draw->AddCircle(c, ring, accent, 0, 2.0f);
+    }
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     const ImU32 dot = (in.ink & 0x00FFFFFFu) | (IM_COL32_A_MASK & IM_COL32(0, 0, 0, 200));
     const ImU32 leader = (in.ink & 0x00FFFFFFu) | (IM_COL32_A_MASK & IM_COL32(0, 0, 0, 120));

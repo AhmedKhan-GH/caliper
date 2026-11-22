@@ -676,8 +676,8 @@ void apply_annotation_marks(caliper_live_views::SceneView& view, const EntitySce
     const EntityBox& box = scene.box;
     const SpecLook look = house_spec_look();
     std::vector<std::string> now;
-    auto color_of = [&](bool muted, bool hole = false) {
-        const ImU32 c = hole ? look.ground : muted ? look.secondary : look.accent;
+    auto color_of = [&](bool muted) {
+        const ImU32 c = muted ? look.secondary : look.accent;
         caliper_net::Json out = caliper_net::Json::array();
         for (int k = 0; k < 4; ++k) out.push(int64_t((c >> (8 * k)) & 0xffu));
         return out;
@@ -692,16 +692,14 @@ void apply_annotation_marks(caliper_live_views::SceneView& view, const EntitySce
         }
         return stats;
     };
-    // One point with its label; `size_px` tells a marker from a label's dot, and a hole is the
-    // dark centre that makes a marker's disc a ring.
-    auto point = [&](const std::string& path, const float p[3], const std::string& text, bool muted, float size_px,
-                     bool hole = false) {
+    // One point with its label; `size_px` tells a marker's anchor from a label's dot.
+    auto point = [&](const std::string& path, const float p[3], const std::string& text, bool muted, float size_px) {
         const std::vector<float> positions(p, p + 3);
         wire::SceneUpdate u;
         u.path = path;
         u.part = CALIPER_NET_PART_POINTS;
         u.params = caliper_net::Json::object();
-        u.params.set("color", color_of(muted, hole));
+        u.params.set("color", color_of(muted));
         u.params.set("stats", stats_of());
         if (!text.empty()) {
             caliper_net::Json labels = caliper_net::Json::array();
@@ -712,14 +710,18 @@ void apply_annotation_marks(caliper_live_views::SceneView& view, const EntitySce
         std::string why;
         if (!view.apply(u, &why)) return;
         caliper_live_views::SceneView::BatchStyle style;
-        style.depth_offset = hole ? 5 : 4;   // in front of the surface it marks
+        style.depth_offset = 4;   // in front of the surface it marks
         style.size_px = size_px;
         style.point_shape = caliper_scene::PointShape::Disc;
         view.set_style(path, style);
         now.push_back(path);
     };
     for (const SceneAnnotationMark& m : marks) {
-        const std::string path = "spec-overlay/" + m.id;
+        // The kind in the path: the scene's overlay draws a marker's ring at its anchor (scene_overlays.h).
+        const char* kind = m.kind == spec::AnnotationKind::marker  ? "marker/"
+                           : m.kind == spec::AnnotationKind::label ? "label/"
+                                                                   : "plane/";
+        const std::string path = std::string("spec-overlay/") + kind + m.id;
         if (m.kind == spec::AnnotationKind::label || m.kind == spec::AnnotationKind::marker) {
             float p[3] = {0, 0, 0};
             if (!m.entity.empty()) {
@@ -731,12 +733,10 @@ void apply_annotation_marks(caliper_live_views::SceneView& view, const EntitySce
             } else {
                 for (int a = 0; a < 3; ++a) p[a] = float(box.to_box(a, m.at[a]));
             }
-            if (m.kind == spec::AnnotationKind::marker) {
-                point(path, p, m.text, m.muted, 16.0f);
-                point(path + "/hole", p, std::string(), m.muted, 8.0f, true);
-            } else {
-                point(path, p, m.text, m.muted, 6.0f);
-            }
+            // A marker's point is only the anchor of its ring and its text, which the overlay
+            // draws on top; a label's point is its dot.
+            point(path, p, m.kind == spec::AnnotationKind::marker && m.text.empty() ? std::string(" ") : m.text,
+                  m.muted, m.kind == spec::AnnotationKind::marker ? 3.0f : 6.0f);
             continue;
         }
         // A threshold's plane, or a band's two planes, as outlines across the box.

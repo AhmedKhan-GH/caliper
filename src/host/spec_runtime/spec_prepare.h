@@ -277,9 +277,10 @@ struct SceneAnnotationMark {
     bool muted = false;
 };
 
-// Writes a scene panel's annotations into its scene view, under "spec-overlay/<id>": a marker
-// as a large disc and a label as a small one, each with its text as the item's label, and a
-// threshold or a band as the outline of its plane or its two planes across the data box. Each
+// Writes a scene panel's annotations into its scene view, under "spec-overlay/<kind>/<id>": a
+// marker as the anchor of a ring that the scene's overlay draws on top (scene_overlays.h) and a
+// label as a small dot, each with its text as the item's label, and a threshold or a band as the
+// outline of its plane or its two planes across the data box. Each
 // point maps through the scene's data box; a mark whose entity item does not exist is left out.
 // `drawn` holds the paths written by the last call, and the paths it no longer writes are
 // cleared. The scene's labels place these texts before the items' own (scene_overlays.h).

@@ -105,34 +105,35 @@ std::map<std::string, json> spec_bound_text_values(const spec::BoundText& text, 
 }
 
 // The text of a bound text at the cursor, with `extra` fields such as a
-// text panel's bound `value`; empty when its format does not parse. The text
-// is formatted again at most ten times a second for one format.
+// text panel's bound `value`; empty when its format does not parse. The
+// format is parsed once, and the text is formatted again only when a value
+// changed, so that a new value shows in the same frame.
 std::string spec_bound_text_string(const spec::BoundText& text, const SpecInstrumentHost& host,
                                    const std::map<std::string, json>& extra) {
     struct Kept {
         caliper_builder::text::ParsedText parsed;
         bool ok = false;
+        bool parsed_once = false;
+        std::map<std::string, json> values;
         std::string out;
-        std::chrono::steady_clock::time_point at;
-        bool fresh = false;
     };
     static std::map<std::pair<const spec::BoundText*, std::string>, Kept> cache;
     if (cache.size() > 256) cache.clear();
     Kept& k = cache[{&text, text.format}];
-    const auto now = std::chrono::steady_clock::now();
-    if (k.fresh && now - k.at < std::chrono::milliseconds(100)) return k.out;
-    if (!k.fresh) {
+    if (!k.parsed_once) {
         std::vector<std::string> names;
         for (const auto& [name, field] : text.fields) names.push_back(name);
         for (const auto& [name, value] : extra) names.push_back(name);
         k.ok = !caliper_builder::text::parse_bound_text(text.format, names, &k.parsed);
+        k.parsed_once = true;
     }
     std::map<std::string, json> values = spec_bound_text_values(text, host);
     for (const auto& [name, value] : extra) values[name] = value;
-    k.out = k.ok ? caliper_builder::text::format_bound_text(k.parsed, values) : std::string();
-    k.at = now;
-    k.fresh = true;
-    return k.out;
+    if (k.ok && (k.out.empty() || values != k.values)) {
+        k.out = caliper_builder::text::format_bound_text(k.parsed, values);
+        k.values = std::move(values);
+    }
+    return k.ok ? k.out : std::string();
 }
 
 namespace {

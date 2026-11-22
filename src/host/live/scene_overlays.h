@@ -23,7 +23,12 @@ struct SceneOverlayInput {
     // One flag for each label: true for an annotation's text, which places
     // before the items' labels; null when none is an annotation.
     const std::vector<bool>* annotations = nullptr;
+    // One flag for each label: true for a marker, whose ring is drawn at its
+    // anchor over the picture, never hidden by the scene, and which no label
+    // covers; null when there is none.
+    const std::vector<bool>* rings = nullptr;
     ImU32 ink = 0, shade = 0;
+    ImU32 accent = 0;   // the rings' colour; the ink when 0
 };
 
 void draw_scene_overlays(const SceneOverlayInput& input);
