@@ -9,7 +9,7 @@ features:
     status: shipped
     summary: The web viewer shows live views from a Caliper stream in a browser, as the viewer page that caliper.serve() serves and as the notebook widget.
     depends_on: [EMB-05, STR-05]
-    docs: docs/references/browser-elements.md#the-viewer-page-and-the-widgets
+    docs: docs/web/browser-elements.md#the-viewer-page-and-the-widgets
     design: design/streaming-and-embedding.md#the-web-viewer
     issue: null
 
@@ -27,7 +27,7 @@ features:
     status: shipped
     summary: Views written in TypeScript draw every live view kind in the browser, with Canvas 2D where needed, when WebGPU gives no adapter.
     depends_on: [EMB-05]
-    docs: docs/references/browser-elements.md#caliper-view
+    docs: docs/web/browser-elements.md#caliper-view
     issue: null
 
   - id: EMB-04
@@ -44,7 +44,7 @@ features:
     status: shipped
     summary: The web package defines the custom elements caliper-view and caliper-controls, which read a wire protocol v3 stream and share one WebSocket per source.
     depends_on: [STR-02]
-    docs: docs/references/browser-elements.md
+    docs: docs/web/browser-elements.md
     issue: null
 
   - id: EMB-06
@@ -61,7 +61,7 @@ features:
     status: shipped
     summary: Caliper Embed 1.4.0 is the framework core behind a small C ABI, installed as one shared library with headers and a CMake package, with a version call and typed live views.
     depends_on: [COR-01]
-    docs: docs/references/embedding.md#versions
+    docs: docs/web/embedding-api.md#versions
     design: design/streaming-and-embedding.md#the-embedding-package
     issue: null
 
@@ -201,7 +201,7 @@ features:
     status: shipped
     summary: A host program hands the embedded core a CaliperTensor and the core draws it as a texture in a window named after the view, over a device path with no silent fallback.
     depends_on: [COR-49, EMB-07]
-    docs: docs/references/embedding.md#built-in-tensor-views
+    docs: docs/web/embedding-api.md#built-in-tensor-views
     issue: null
 
   - id: EMB-26
@@ -209,7 +209,7 @@ features:
     status: shipped
     summary: The caliper-embed package builds and runs without libtorch, so that a host program that embeds it links no torch.
     depends_on: [EMB-07]
-    docs: docs/references/embedding.md#the-torch-free-build
+    docs: docs/web/embedding-api.md#the-torch-free-build
     issue: null
 
   - id: EMB-27

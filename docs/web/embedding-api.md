@@ -1,4 +1,4 @@
-# Embedding Caliper
+# Embedding API
 
 Caliper Embed is the framework core: the applet loader, the service registry,
 the host-neutral services, `HostRenderer` (Metal or Vulkan), the tensor bridge
@@ -13,7 +13,7 @@ they share (`embed_host.h`), which this page mirrors. A program outside this
 repository builds against the installed [`caliper-embed`
 package](#the-caliper-embed-package), as `embed_host` does in the
 `caliper_embed_install` test; the guide
-[Embed Caliper in a program](../guides/embed-caliper.md) walks through it.
+[Embed Caliper in a program](program-embedding.md) walks through it.
 
 This page describes the embedder-facing contract. It is not the applet-facing
 ABI: applets link `caliper::sdk` and use [`caliper/abi.h`](../applets/applet-contract.md) and the
@@ -125,7 +125,7 @@ those canvases and never paints applet pixels.
   A canvas-info query and several canvases per core are not provided.
 - **`CaliperCoreDesc.data_dir` moves the app-data folder.** A non-`NULL`
   directory (created if missing) takes the place of the
-  [app-data folder](environment.md#the-app-data-folder) for that core: the
+  [app-data folder](../references/environment.md#the-app-data-folder) for that core: the
   metrics, data and artifacts stores, the applets' data folders `data/<id>/`,
   and the user applets folder `applets/` that the core searches, unless
   `CALIPER_USER_APPLETS_DIR` names another one. The window layout is kept at
@@ -145,7 +145,7 @@ those canvases and never paints applet pixels.
   system's folder (`src/host/live/live_shm.h`).
 - **`CaliperCoreDesc.applets_dir` is searched first.** It takes the place of the
   `caliper` executable's `--applets` folders in the
-  [search order](cli.md#the-search-order), and like them a folder that holds no
+  [search order](../references/cli.md#the-search-order), and like them a folder that holds no
   manifest but has an `applets/` subfolder that does stands for that subfolder,
   so a build folder can be passed as it is.
 - **Applet log lines reach `log_fn`.** When the embedder sets `log_fn`, the

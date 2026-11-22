@@ -4,9 +4,7 @@ nav:
       - cli.md
       - refusals.md
   - Hosts and clients:
-      - embedding.md
       - wire-protocol.md
-      - browser-elements.md
   - Applets and environment:
       - environment.md
       - glossary.md

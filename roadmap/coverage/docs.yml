@@ -495,60 +495,60 @@ entries:
   item: Examples of calls.
   ids:
   - AGT-01
-- page: docs/references/embedding.md#the-core-calls
+- page: docs/web/embedding-api.md#the-core-calls
   item: The core calls of embed.h create, attach a canvas, load an applet, run a frame and shut down.
   ids:
   - EMB-07
-- page: docs/references/embedding.md#every-function-in-embedh
+- page: docs/web/embedding-api.md#every-function-in-embedh
   item: Every function in embed.h.
   ids:
   - EMB-07
-- page: docs/references/embedding.md#ownership
+- page: docs/web/embedding-api.md#ownership
   item: Ownership rules for what the core returns.
   ids:
   - EMB-07
-- page: docs/references/embedding.md#per-core-settings-and-limits
+- page: docs/web/embedding-api.md#per-core-settings-and-limits
   item: One core per process, and a second canvas is refused.
   ids:
   - EMB-07
   - EMB-12
-- page: docs/references/embedding.md#versions
+- page: docs/web/embedding-api.md#versions
   item: Caliper Embed versions in major, minor and patch, now 1.4.0.
   ids:
   - EMB-07
-- page: docs/references/embedding.md#reaching-services-from-a-host
+- page: docs/web/embedding-api.md#reaching-services-from-a-host
   item: A host reaches the core services through caliper_core_get_service.
   ids:
   - EMB-07
-- page: docs/references/embedding.md#built-in-tensor-views
+- page: docs/web/embedding-api.md#built-in-tensor-views
   item: The core draws a CaliperTensor a host hands it as a texture in a window titled with the view name.
   ids:
   - EMB-25
-- page: docs/references/embedding.md#accepted-layouts
+- page: docs/web/embedding-api.md#accepted-layouts
   item: Tensor layouts the built-in views accept.
   ids:
   - EMB-25
-- page: docs/references/embedding.md#two-device-paths-no-silent-fallback
+- page: docs/web/embedding-api.md#two-device-paths-no-silent-fallback
   item: Two device paths with no silent fallback.
   ids:
   - EMB-25
-- page: docs/references/embedding.md#typed-live-views
+- page: docs/web/embedding-api.md#typed-live-views
   item: Typed live views apply a heatmap, image, points, series or histogram snapshot to a named view.
   ids:
   - EMB-07
-- page: docs/references/embedding.md#the-caliper-embed-package
+- page: docs/web/embedding-api.md#the-caliper-embed-package
   item: The caliper-embed package installs one shared library, headers and a CMake package.
   ids:
   - EMB-07
-- page: docs/references/embedding.md#the-offscreen-mode-of-embed_host
+- page: docs/web/embedding-api.md#the-offscreen-mode-of-embed_host
   item: embed_host has an offscreen mode that opens no window.
   ids:
   - EMB-07
-- page: docs/references/embedding.md#the-torch-free-build
+- page: docs/web/embedding-api.md#the-torch-free-build
   item: Caliper Embed builds and runs with no libtorch, with a release-notorch preset.
   ids:
   - EMB-26
-- page: docs/references/embedding.md#the-header-verbatim
+- page: docs/web/embedding-api.md#the-header-verbatim
   item: The embed.h header embedded verbatim.
   ids:
   - EMB-07
@@ -628,31 +628,31 @@ entries:
   item: The protocol header verbatim.
   ids:
   - STR-02
-- page: docs/references/browser-elements.md#caliper-view
+- page: docs/web/browser-elements.md#caliper-view
   item: The caliper-view element draws one live view of a stream, with a renderer attribute of auto, wasm
     or ts.
   ids:
   - EMB-05
   - EMB-03
   - EMB-04
-- page: docs/references/browser-elements.md#attributes
+- page: docs/web/browser-elements.md#attributes
   item: The attributes of caliper-view.
   ids:
   - EMB-05
-- page: docs/references/browser-elements.md#properties-and-methods
+- page: docs/web/browser-elements.md#properties-and-methods
   item: The properties and methods of caliper-view.
   ids:
   - EMB-05
-- page: docs/references/browser-elements.md#events
+- page: docs/web/browser-elements.md#events
   item: The events of caliper-view.
   ids:
   - EMB-05
-- page: docs/references/browser-elements.md#caliper-controls
+- page: docs/web/browser-elements.md#caliper-controls
   item: The caliper-controls element shows the run state and the controls of a stream.
   ids:
   - EMB-05
   - STR-03
-- page: docs/references/browser-elements.md#the-viewer-page-and-the-widgets
+- page: docs/web/browser-elements.md#the-viewer-page-and-the-widgets
   item: The viewer page that caliper.serve serves and the notebook widgets are built from the elements.
   ids:
   - EMB-01
@@ -1125,7 +1125,7 @@ entries:
   item: Find what stalls the frame with the frame watchdog.
   ids:
   - COR-53
-- page: docs/guides/embed-caliper.md
+- page: docs/web/program-embedding.md
   item: 'Embed Caliper in a program: install the package, link it from CMake and drive the core.'
   ids:
   - EMB-07

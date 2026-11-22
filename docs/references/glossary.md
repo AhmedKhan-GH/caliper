@@ -8,7 +8,7 @@ The terms below are used across these pages with one meaning each.
 
 **Core.** The host's own code, as opposed to the applets. The core is the loader, the service implementations, the renderer, the crash guard and the frame watchdog. It is built as the `libcaliper` library and the `caliper` executable.
 
-**Caliper Embed.** The host core as a library behind a small C interface, so that another program can run the applet canvas inside a view it owns. It owns the applet canvas, the renderer and the one libtorch of the process. Its code is the static library `libcaliper`, and the `caliper-embed` package installs it as the shared library `caliper_embed`. See [Embedding Caliper](embedding.md).
+**Caliper Embed.** The host core as a library behind a small C interface, so that another program can run the applet canvas inside a view it owns. It owns the applet canvas, the renderer and the one libtorch of the process. Its code is the static library `libcaliper`, and the `caliper-embed` package installs it as the shared library `caliper_embed`. See [Embedding Caliper](../web/embedding-api.md).
 
 **Caliper SDK.** The C++ applet SDK, the `caliper-sdk` package that applets build against: the headers in `sdk/include/caliper` (the C ABI, the service tables, the interchange types, the C++ sugar and the adapters), the pinned UI-stack sources, the fixture host and `caliper_add_applet()`. See [SDK package](../applets/sdk-package.md) and the [ABI](../applets/applet-contract.md).
 

@@ -40,10 +40,10 @@ The [service catalog](../applets/services/service-catalog.md) lists every servic
 
 | Page | Contents |
 |---|---|
-| [Embedding Caliper](embedding.md) | `caliper/embed.h`, the C interface for hosting the core in another program |
+| [Embedding Caliper](../web/embedding-api.md) | `caliper/embed.h`, the C interface for hosting the core in another program |
 | [Caliper LIB](../python/caliper-lib-api.md) | The `caliper` Python package |
 | [Wire protocol v3](wire-protocol.md) | `caliper/live_net.h`, the WebSocket protocol between producers, viewers and the hub |
-| [Browser elements](browser-elements.md) | `<caliper-view>` and `<caliper-controls>`: their attributes, methods and events, and the widgets built on them |
+| [Browser elements](../web/browser-elements.md) | `<caliper-view>` and `<caliper-controls>`: their attributes, methods and events, and the widgets built on them |
 | [Caliper API](../agents/http-api.md) | The HTTP interface to the running app: its endpoints, its session token and its limits |
 | [MCP server](../agents/mcp-server.md) | `caliper-mcp`: what an outside agent needs running, its command line, the configuration of an MCP client, its tools and resources |
 | [Widget agent](../agents/widget-agent.md) | `caliper-agent` in its widget role: opening a widget session, its tool scope, its prompts and its answers |

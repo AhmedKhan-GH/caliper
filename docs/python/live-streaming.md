@@ -199,7 +199,7 @@ modes sit behind one view layer in Caliper Embed. The separate-process viewer
 window and its input alive whatever the training loop does, and it also
 survives the script. The in-process window is the second mode, with the limits
 above. The tensor view is implemented inside Caliper Embed behind the
-[embed ABI](../references/embedding.md), not as an applet.
+[embed ABI](../web/embedding-api.md), not as an applet.
 
 ## Torch-free Caliper Embed
 
@@ -217,7 +217,7 @@ nm <binary> | c++filt | grep -cE '[ (<,](at|c10|torch)::|_ZN3c10|_ZN2at|_ZN5torc
 ```
 
 The torch-free binaries also link no `libtorch`, `libc10` or `libomp`
-([Embedding Caliper](../references/embedding.md#the-torch-free-build) has the
+([Embedding Caliper](../web/embedding-api.md#the-torch-free-build) has the
 full check and the build options).
 
 ## Known limits

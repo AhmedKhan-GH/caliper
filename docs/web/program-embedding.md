@@ -1,11 +1,11 @@
-# Embed Caliper in a program
+# Program Embedding
 
 A program that owns its own window can run Caliper applets inside a view of
 that window. It links the `caliper-embed` package, a shared library with a C
 interface, and drives the core with five calls from its own event loop. This
 guide builds such a program outside this repository, from the package to a
 first run that opens no window. The contract behind each step is in
-[Embedding Caliper](../references/embedding.md), and `examples/embed_host` is a
+[Embedding Caliper](embedding-api.md), and `examples/embed_host` is a
 complete program that follows this guide.
 
 Everything here has been run on macOS with Metal. Windows uses the same
@@ -68,7 +68,7 @@ if ((lib >> 16) != CALIPER_EMBED_VERSION_MAJOR ||
     return 1;
 ```
 
-The encoding and the rule are in [Versions](../references/embedding.md#versions).
+The encoding and the rule are in [Versions](embedding-api.md#versions).
 
 ## Drive the core
 

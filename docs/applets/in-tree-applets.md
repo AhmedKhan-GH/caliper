@@ -243,8 +243,8 @@ executable, and it builds outside the repository against the installed
 `caliper-embed` package with only `find_package(caliper-embed)`; inside the core
 build it links the in-tree target. `CALIPER_EMBED_OFFSCREEN=1` runs it in an
 offscreen mode that opens no window, and `CALIPER_EMBED_EXIT_AFTER=<seconds>`
-closes it automatically. There is no Linux host. See [Embedding](../references/embedding.md)
-and [Embed Caliper in a program](../guides/embed-caliper.md).
+closes it automatically. There is no Linux host. See [Embedding](../web/embedding-api.md)
+and [Embed Caliper in a program](../web/program-embedding.md).
 
 ## Archived applets
 

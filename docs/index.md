@@ -11,7 +11,7 @@ Caliper is built from source. This version of the repository is host 0.6.0, SDK 
 - [Development basics](tutorials/development-basics.md) explains the host, the applet and the build.
 - [Your first applet](applets/first-applet.md) builds the smallest UI applet.
 - [Your first ML applet](applets/first-ml-applet.md) adds jobs, metrics, device selection and tensor views.
-- [Embedding Caliper](references/embedding.md) describes the embeddable host interface.
+- [Embedding Caliper](web/embedding-api.md) describes the embeddable host interface.
 - [The ABI](applets/applet-contract.md) is the contract between host and applets.
 
 ## Backends

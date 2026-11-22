@@ -1,6 +1,5 @@
 nav:
   - index.md
-  - embed-caliper.md
   - verify-on-windows.md
   - ci.md
   - glob: "*"

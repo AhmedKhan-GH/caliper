@@ -63,7 +63,7 @@ runs are read back through `caliper.metrics.v1_1.query` or from SQL tools.
 ## caliper.metrics.v1_1
 
 `caliper.metrics.v1` is write-only across the ABI and immutable, so a consumer
-such as an embedding host ([Embedding Caliper](../../references/embedding.md#reaching-services-from-a-host))
+such as an embedding host ([Embedding Caliper](../../web/embedding-api.md#reaching-services-from-a-host))
 cannot list runs or read scalars through it. `caliper.metrics.v1_1` is the
 additive read revision.
 Its table starts with the byte-identical v1 writer prefix, and appends two
