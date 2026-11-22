@@ -98,6 +98,6 @@ The server cannot listen on another interface, and the stream is not encrypted. 
 
 - [Live Streaming](live-streaming.md)
 - [Data Views](data-views.md)
-- [Caliper LIB API](caliper-lib-api.md#serve)
+- [Caliper LIB API](network-streaming-calls.md#serve)
 - [Wire Protocol](../reference/wire-protocol.md)
 - [Notebook Training Runs](notebook-training-runs.md)

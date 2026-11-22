@@ -14,4 +14,9 @@ nav:
       - zero-copy-tensors.md
   - Reference:
       - caliper-lib-api.md
+      - view-calls.md
+      - routes-and-inspection.md
+      - network-streaming-calls.md
+      - data-view-calls.md
+      - run-control-calls.md
       - viewer.md

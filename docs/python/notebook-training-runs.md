@@ -159,13 +159,13 @@ for step in range(steps):
 
 The attention tensor has the shape `(2, 8, 4, 24, 24)`, the embedding has 512 points of 3 values, and the predictions have the shape `(6, 512)`. The argument `items="eval"` makes the points sequences of the item space `eval`. The argument `items={"sequence": "eval"}` makes the `sequence` dimension of the predictions index the same sequences.
 
-None of these calls reads a value back to the CPU. The call `series` gets the loss tensor and not `loss.item()`, thus the loop does not wait for the GPU. The names in `dims` let a viewer choose a data view of the attention tensor, and `data_view` sets the default: layer 1, sequence 0 and head 0, a 24x24 heatmap. [Caliper LIB](caliper-lib-api.md#data-views) lists the fields of a data view.
+None of these calls reads a value back to the CPU. The call `series` gets the loss tensor and not `loss.item()`, thus the loop does not wait for the GPU. The names in `dims` let a viewer choose a data view of the attention tensor, and `data_view` sets the default: layer 1, sequence 0 and head 0, a 24x24 heatmap. [Caliper LIB](data-view-calls.md#data-views) lists the fields of a data view.
 
 ### Selection and Data View
 
 Each widget pans, zooms and shows the value under the pointer. The heatmap also has a picker for its data view, built from the names in `dims` and their sizes. A choice in the picker takes effect at the next snapshot, while the cell operates.
 
-A Shift drag in the embedding widget selects points. The predictions widget marks the same sequences, and a table under the embedding shows their class and marker position. The selection works while the cell operates, and `evaluation.selection` holds it at once. The `selection` trait holds the latest event, which [Caliper LIB](caliper-lib-api.md#widget) describes.
+A Shift drag in the embedding widget selects points. The predictions widget marks the same sequences, and a table under the embedding shows their class and marker position. The selection works while the cell operates, and `evaluation.selection` holds it at once. The `selection` trait holds the latest event, which [Caliper LIB](network-streaming-calls.md#widget) describes.
 
 ```python
 print("selection:", embedding_widget.selection)

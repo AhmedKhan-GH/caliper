@@ -281,104 +281,104 @@ entries:
   item: Archived applets under applets/legacy are skipped by the default build.
   ids:
   - COR-13
-- page: docs/python/caliper-lib-api.md#routing
+- page: docs/python/routes-and-inspection.md#routing
   item: 'A view call is offered to every open route: the live session, the in-process core and the network
     server.'
   ids:
   - STR-01
   - STR-04
   - STR-05
-- page: docs/python/caliper-lib-api.md#call-cost
+- page: docs/python/view-calls.md#call-cost
   item: The measured cost of a view call per device and route.
   ids:
   - STR-01
-- page: docs/python/caliper-lib-api.md#rate-limit
+- page: docs/python/view-calls.md#rate-limit
   item: The rate limit of snapshots per route, 60 a second by default.
   ids:
   - STR-01
-- page: docs/python/caliper-lib-api.md#show
+- page: docs/python/view-calls.md#show
   item: show sends a tensor as a heatmap or an image view.
   ids:
   - STR-01
-- page: docs/python/caliper-lib-api.md#points
+- page: docs/python/view-calls.md#points
   item: points sends a 2-D or 3-D point cloud as a view.
   ids:
   - STR-01
-- page: docs/python/caliper-lib-api.md#series
+- page: docs/python/view-calls.md#series
   item: series appends scalar values to a line view.
   ids:
   - STR-01
-- page: docs/python/caliper-lib-api.md#histogram
+- page: docs/python/view-calls.md#histogram
   item: histogram sends a histogram view of a tensor.
   ids:
   - STR-01
-- page: docs/python/caliper-lib-api.md#watch
+- page: docs/python/view-calls.md#watch
   item: watch hooks a torch module so that its activations and gradients are shown as views.
   ids:
   - STR-45
-- page: docs/python/caliper-lib-api.md#mps-zero-copy
+- page: docs/python/view-calls.md#mps-zero-copy
   item: A tensor on MPS reaches the viewer with no host copy.
   ids:
   - REN-08
   - STR-04
-- page: docs/python/caliper-lib-api.md#routes-and-lifetime
+- page: docs/python/routes-and-inspection.md#routes-and-lifetime
   item: session, window, offscreen, run, spin, flush, close and remove manage the routes and their lifetime.
   ids:
   - STR-04
   - STR-46
-- page: docs/python/caliper-lib-api.md#network-streaming
+- page: docs/python/network-streaming-calls.md#network-streaming
   item: The Python calls that stream over a WebSocket.
   ids:
   - STR-05
-- page: docs/python/caliper-lib-api.md#serve
+- page: docs/python/network-streaming-calls.md#serve
   item: serve starts the server in the producer script and prints the viewer link.
   ids:
   - STR-05
-- page: docs/python/caliper-lib-api.md#connect
+- page: docs/python/network-streaming-calls.md#connect
   item: connect streams the script to a hub instead of listening itself.
   ids:
   - STR-06
-- page: docs/python/caliper-lib-api.md#widget
+- page: docs/python/network-streaming-calls.md#widget
   item: widget returns the notebook widget that shows a view or the controls.
   ids:
   - STR-07
-- page: docs/python/caliper-lib-api.md#data-views
+- page: docs/python/data-view-calls.md#data-views
   item: Python data views tell the producer which slice, reduction or downsample of a tensor to send.
   ids:
   - STR-08
-- page: docs/python/caliper-lib-api.md#controls
+- page: docs/python/run-control-calls.md#controls
   item: 'The Python controls layer: step, pause, param, action, items and controls.'
   ids:
   - STR-03
-- page: docs/python/caliper-lib-api.md#step
+- page: docs/python/run-control-calls.md#step
   item: step is the checkpoint in a training loop where a viewer can pause and step.
   ids:
   - STR-03
   - INT-04
-- page: docs/python/caliper-lib-api.md#pause
+- page: docs/python/run-control-calls.md#pause
   item: pause stops a run at its next checkpoint.
   ids:
   - STR-03
-- page: docs/python/caliper-lib-api.md#param
+- page: docs/python/run-control-calls.md#param
   item: param registers a parameter that a viewer can change while the script runs.
   ids:
   - STR-03
   - INT-04
-- page: docs/python/caliper-lib-api.md#action
+- page: docs/python/run-control-calls.md#action
   item: action registers a function a viewer can run.
   ids:
   - STR-03
   - INT-04
-- page: docs/python/caliper-lib-api.md#items
+- page: docs/python/run-control-calls.md#items
   item: items registers item ids and details for linked selection.
   ids:
   - STR-03
-- page: docs/python/caliper-lib-api.md#inspection-and-test-helpers
+- page: docs/python/routes-and-inspection.md#inspection-and-test-helpers
   item: stats, frame, render, read_pixels and view readback helpers for the in-process core.
   ids:
   - STR-01
   - STR-46
-- page: docs/python/caliper-lib-api.md#caliperlive
+- page: docs/python/routes-and-inspection.md#caliperlive
   item: caliper.live lists live sessions on this machine and finds the viewer executable.
   ids:
   - STR-04
@@ -552,7 +552,7 @@ entries:
   item: The embed.h header embedded verbatim.
   ids:
   - EMB-07
-- page: docs/python/caliper-lib-api.md#controls_1
+- page: docs/python/run-control-calls.md#controls_1
   item: controls returns the notebook widget with the run state and the Pause, Resume and Step buttons.
   ids:
   - STR-07

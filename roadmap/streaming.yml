@@ -361,7 +361,7 @@ features:
     status: shipped
     summary: caliper.watch hooks a torch module so that the outputs and, if asked, the gradients of chosen modules show as live views at a chosen interval.
     depends_on: [STR-01]
-    docs: docs/python/caliper-lib-api.md#watch
+    docs: docs/python/view-calls.md#watch
     issue: null
 
   - id: STR-46
@@ -369,7 +369,7 @@ features:
     status: shipped
     summary: caliper.window and caliper.offscreen open a window in the script's own process or a synchronous offscreen canvas as a route for the view calls.
     depends_on: [STR-01]
-    docs: docs/python/caliper-lib-api.md#routes-and-lifetime
+    docs: docs/python/routes-and-inspection.md#routes-and-lifetime
     issue: null
 
   - id: STR-47

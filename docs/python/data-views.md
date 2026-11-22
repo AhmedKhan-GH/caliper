@@ -55,5 +55,5 @@ Data views and sampling divide the work. Sampling in time, with the rate limit, 
 ## Related Pages
 
 - [Network Streaming](network-streaming.md)
-- [Caliper LIB API](caliper-lib-api.md#data-views)
+- [Caliper LIB API](data-view-calls.md#data-views)
 - [Wire Protocol](../reference/wire-protocol.md#data-views)

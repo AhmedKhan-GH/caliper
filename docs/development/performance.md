@@ -22,7 +22,7 @@ The tests measured two prototypes. Prototype A is the in-process prototype, and 
 
 ### Final Code
 
-At 60 Hz, the last version of the code operates at 98.3 to 99.5 % of the control in the own window. In attach mode, it operates at 98.1 to 99.4 %. [Caliper LIB API](../python/caliper-lib-api.md#call-cost) gives its cost for each call. The sections that follow give the prototype measurements that the design uses.
+At 60 Hz, the last version of the code operates at 98.3 to 99.5 % of the control in the own window. In attach mode, it operates at 98.1 to 99.4 %. [Caliper LIB API](../python/view-calls.md#call-cost) gives its cost for each call. The sections that follow give the prototype measurements that the design uses.
 
 ### Throughput
 
@@ -118,6 +118,22 @@ A benchmark loop with no sync queued 228k kernels of 16 MB each second. The enco
 ### Example Script
 
 A further measurement of the same attach mode uses the `TinyCNN` of `train_show.py` plus a 1024x1024 weight. The script shows that weight at each step, on MPS. In 8 s, 468 of 9,460 calls took a snapshot. Training ran at 98.1 % of the commit-matched control, which [Commit Effect](#commit-effect) explains. The median step to screen was 23.53 ms. A call that took a snapshot cost 35.5 µs at the median, and a skipped call cost 2.0 µs.
+
+## Python Calls
+
+With no viewer attached, 100,000 calls per row give these costs. A `caliper.show` call takes 0.167 µs at the median, with a p99 of 0.291 to 0.292 µs. A `caliper.series(1.0)` call takes 0.125 µs at the median, with a p99 of 0.209 µs. A `caliper.step()` call with no command in the queue only counts the step, and it takes about 22 ns on Apple silicon.
+
+The `histogram` call bins with `index_add_` and not with `torch.histc`, because `torch.histc` on MPS drains the queue. The measured drain was 15 to 53 ms.
+
+## Hub Relay
+
+On an Apple silicon Mac, the hub sends a 512 × 512 heatmap at 60 Hz to four viewers. The median latency from script send to viewer receive is about 1.4 ms, and the 99th percentile is less than 3 ms. The total rate is 240 MiB/s. The test `caliper_tests -tc="net/hub: relay*" --no-skip` makes this measurement.
+
+## Tensor Handoff
+
+On an RTX 500 Ada, `embed_scope` gave approximately the same steps per second with the drained handoff and with the stream-ordered handoff. The cause is the `loss.item()` call at each step, which already synchronizes. The stream-ordered handoff stops the stalls of the frame thread on the training queue. A texture create costs about 1 ms, and an update costs a fraction of that.
+
+A stress test in `tests/test_torch_adapter.cpp` makes 500 CUDA handoffs on a pool stream while a second thread trains. The largest measured stall of the frame thread came from a database table that the UI thread rebuilt, not from tensors.
 
 ## Related Pages
 

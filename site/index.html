@@ -1710,11 +1710,11 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
         <div class="xp-k">Available</div>
         <dl class="xp-api">
           <dt><a href="docs/python/caliper-lib-api/#view-calls">show, points, series, histogram</a></dt><dd>Send a tensor to a heatmap, a scatter, a curve or a histogram. The call returns at once; the copy runs on the tensor&#x27;s own GPU stream.</dd>
-          <dt><a href="docs/python/caliper-lib-api/#watch">watch(model)</a></dt><dd>Shows each module&#x27;s activations, and optionally its gradients, through forward and gradient hooks.</dd>
-          <dt><a href="docs/python/caliper-lib-api/#routes-and-lifetime">session()</a></dt><dd>Opens the shared-memory session the Caliper app attaches to with F4, Attach to process.</dd>
-          <dt><a href="docs/python/caliper-lib-api/#routes-and-lifetime">window(), run(train)</a></dt><dd>Opens a Caliper window inside the script&#x27;s own process; run trains on a worker thread so the window stays responsive.</dd>
-          <dt><a href="docs/python/caliper-lib-api/#inspection-and-test-helpers">offscreen()</a></dt><dd>Renders without a window and reads back pixels, values and counters, so tests can check what a view shows.</dd>
-          <dt><a href="docs/python/caliper-lib-api/#caliperlive">caliper.live</a></dt><dd>Lists the running sessions and starts a viewer for one, for tools that attach on their own.</dd>
+          <dt><a href="docs/python/view-calls/#watch">watch(model)</a></dt><dd>Shows each module&#x27;s activations, and optionally its gradients, through forward and gradient hooks.</dd>
+          <dt><a href="docs/python/routes-and-inspection/#routes-and-lifetime">session()</a></dt><dd>Opens the shared-memory session the Caliper app attaches to with F4, Attach to process.</dd>
+          <dt><a href="docs/python/routes-and-inspection/#routes-and-lifetime">window(), run(train)</a></dt><dd>Opens a Caliper window inside the script&#x27;s own process; run trains on a worker thread so the window stays responsive.</dd>
+          <dt><a href="docs/python/routes-and-inspection/#inspection-and-test-helpers">offscreen()</a></dt><dd>Renders without a window and reads back pixels, values and counters, so tests can check what a view shows.</dd>
+          <dt><a href="docs/python/routes-and-inspection/#caliperlive">caliper.live</a></dt><dd>Lists the running sessions and starts a viewer for one, for tools that attach on their own.</dd>
         </dl>
         <a class="link xp-more" href="docs/introduction/python-quickstart/">Watch PyTorch training live →</a>
       </div>
