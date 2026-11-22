@@ -30,11 +30,13 @@ theme:
     - content.code.copy
     - search.suggest
 extra:
-  homepage: /caliper/
+  # The header logo opens the full docs tree (docs/contents.md, filled by docs-theme/hooks/contents.py).
+  homepage: /caliper/docs/contents/
 # The navigation follows the folders under docs/; a .nav.yml in a folder sets its order.
 # Generates the roadmap's pages and data files from the registry in roadmap/.
 hooks:
   - roadmap/build.py
+  - docs-theme/hooks/contents.py
 # A local `mkdocs serve` rebuilds when the registry changes.
 watch:
   - roadmap
