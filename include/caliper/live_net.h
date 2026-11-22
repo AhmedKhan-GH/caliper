@@ -558,6 +558,23 @@ static inline uint32_t caliper_net_align(uint32_t n) {
 #define CALIPER_NET_PROGRAM_MEMORY_MB_MAX 512u        /* "limits" "memory_mb"               */
 #define CALIPER_NET_PROGRAM_EVERY_MAX    10000u       /* "limits" "every", and the cadence N */
 #define CALIPER_NET_PROGRAM_WORKGROUPS_MAX 65535u     /* each of the three "workgroups"     */
+/* 3.2 draft, programmable graphics (design/programmable-graphics.md, Wire).
+ * "resources": a producer under caliper.watch(model, optimizer) announces it
+ * beside "programs". A PROGRAM of the graphics form carries the sections
+ * "derive", "draw" and "common" in place of "wgsl". After a derive pass, the
+ * producer sends each published resource that the pass wrote as one RESOURCE
+ * message, type 0x0082, with the section "resource", to each viewer or hub
+ * that announced "resources", and it sends the draw half of each installed
+ * program to such a viewer as PROGRAM with the sections "draw" and "common".
+ * The type 0x0082 is reserved here and defined with its codecs; until then
+ * every codec refuses the sections and the type. */
+#define CALIPER_NET_CAP_RESOURCES        "resources"  /* RESOURCE, and PROGRAM of the graphics form */
+#define CALIPER_NET_SECTION_DERIVE       "derive"     /* u8 (B,): the derive half's WGSL    */
+#define CALIPER_NET_SECTION_DRAW         "draw"       /* u8 (B,): the draw half's WGSL      */
+#define CALIPER_NET_SECTION_COMMON       "common"     /* u8 (B,): the WGSL of both halves   */
+#define CALIPER_NET_SECTION_RESOURCE     "resource"   /* u8 (B,): the valid bytes of one resource */
+#define CALIPER_NET_MAX_RESOURCES        8u           /* resources of one program           */
+#define CALIPER_NET_RESOURCE_MAX_BYTES   67108864u    /* bytes of the section "resource"    */
 #define CALIPER_NET_TENSOR_NAME_MAX      255u         /* bytes of an input's "source"       */
 
 #ifdef __cplusplus

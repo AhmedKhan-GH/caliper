@@ -729,6 +729,20 @@ export const PROGRAM_MEMORY_MB_MAX = 512;
 export const PROGRAM_EVERY_MAX = 10000;
 /** Most of each of the three "workgroups". */
 export const PROGRAM_WORKGROUPS_MAX = 65535;
+
+// --- 3.2 draft: programmable graphics (include/caliper/live_net.h, capability "resources"; the message RESOURCE, 0x0082, comes with its codec) ---
+
+/** Capability: RESOURCE, and PROGRAM of the graphics form with the sections "derive", "draw" and "common". */
+export const CAP_RESOURCES = 'resources';
+/** PROGRAM sections of the graphics form, and the section of RESOURCE. */
+export const SECTION_DERIVE = 'derive';
+export const SECTION_DRAW = 'draw';
+export const SECTION_COMMON = 'common';
+export const SECTION_RESOURCE = 'resource';
+/** Resources of one program. */
+export const MAX_RESOURCES = 8;
+/** Bytes of the section "resource". */
+export const RESOURCE_MAX_BYTES = 67108864;
 /** Bytes of an input's "source" tensor name. */
 export const TENSOR_NAME_MAX = 255;
 /** A declaration's output kinds. */

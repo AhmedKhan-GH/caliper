@@ -2973,6 +2973,13 @@ PROGRAM_PARAM_NAME_MAX = 63
 PROGRAM_BUILTIN_MAX = 32
 TENSOR_AXES_MAX = 4
 TENSOR_ELEMENTS_MAX = 1000000
+# 3.2 draft, programmable graphics (design/programmable-graphics.md, Wire):
+# the constants of the capability "resources"; the message RESOURCE (0x0082)
+# comes with its codec.
+CAP_RESOURCES = "resources"
+SECTION_DERIVE, SECTION_DRAW, SECTION_COMMON, SECTION_RESOURCE = "derive", "draw", "common", "resource"
+MAX_RESOURCES = 8
+RESOURCE_MAX_BYTES = 67108864
 OUTPUT_GEOMETRY, OUTPUT_PIXELS, OUTPUT_TENSOR = "geometry", "pixels", "tensor"
 STATUS_OPERATOR = "operator"
 PROGRAM_STATES = ("waiting", "review", "compiled", "running", "refused", "stopped")
