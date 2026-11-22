@@ -610,8 +610,11 @@ def watch(model, optimizer=None, *, activations: bool = True, gradients: bool = 
         ValueError: When `every` is below 1.
     """
     from ._watch import watch as _w
-    return _w(model, optimizer, activations=activations, gradients=gradients, every=every,
-              include=include, rate=rate, groups=groups, scene=scene)
+    h = _w(model, optimizer, activations=activations, gradients=gradients, every=every,
+           include=include, rate=rate, groups=groups, scene=scene)
+    if optimizer is not None:                     # GPU programs read this model's tensors
+        _programs.attach(model, optimizer, h)
+    return h
 
 
 # ---------------------------------------------------------------------------
@@ -1509,6 +1512,7 @@ def connect(url: str | None = None):
 __all__ += ["step", "pause", "param", "action", "items", "controls", "Param", "Action",
             "ItemSpace"]
 from . import _controls                                        # noqa: E402
+from . import _programs                                        # noqa: E402
 from ._controls import Action, ItemSpace, Param                # noqa: E402
 _CTL = _controls.CONTROLS
 
@@ -1552,6 +1556,8 @@ def step(step=None) -> None:
         c.n = step
     if c.busy:
         c.checkpoint()
+    if _programs.ACTIVE:                                       # GPU programs (caliper._programs)
+        _programs.at_step(c.n)
 
 
 def pause() -> bool:
