@@ -732,9 +732,9 @@ export const PROGRAM_WORKGROUPS_MAX = 65535;
 
 // --- 3.2 draft: programmable graphics (include/caliper/live_net.h, capability "resources"; the message RESOURCE, 0x0082, comes with its codec) ---
 
-/** Capability: RESOURCE, and PROGRAM of the graphics form with the sections "derive", "draw" and "common". */
+/** Capability: RESOURCE, and PROGRAM of an instance of a piece with the sections "derive", "draw" and "common". */
 export const CAP_RESOURCES = 'resources';
-/** PROGRAM sections of the graphics form, and the section of RESOURCE. */
+/** PROGRAM sections of an instance of a piece, and the section of RESOURCE. */
 export const SECTION_DERIVE = 'derive';
 export const SECTION_DRAW = 'draw';
 export const SECTION_COMMON = 'common';
