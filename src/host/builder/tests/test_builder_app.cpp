@@ -415,6 +415,46 @@ TEST_CASE("builder app: a panel from a metric of a run opened in Sources" * doct
     CHECK(panel);
 }
 
+// Pieces in Sources: two pieces in the workspace's pieces folder, a new
+// dashboard in build mode, and the row of one selected in the group Pieces.
+// CALIPER_TEST_WINDOW sets the window size (1440x900) and CALIPER_TEST_SHOTS
+// a folder for the capture, pieces-<W>x<H>.png.
+TEST_CASE("builder app: the workspace's pieces in Sources" * doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    const std::string root = app_root(exe, "builder-app-pieces");
+    if (root.empty()) return;
+    std::string window = "1440x900", shots = root + "/shots";
+    if (const char* w = std::getenv("CALIPER_TEST_WINDOW"); w && *w) window = w;
+    if (const char* d = std::getenv("CALIPER_TEST_SHOTS"); d && *d) shots = d;
+    auto piece = [&](const std::string& name, const std::string& manifest, const std::string& draw) {
+        const std::string dir = root + "/ws/pieces/" + name + "/1";
+        std::filesystem::create_directories(dir);
+        std::ofstream(dir + "/piece.toml") << manifest;
+        std::ofstream(dir + "/draw.wgsl") << draw;
+    };
+    piece("glow",
+          "name = \"glow\"\nversion = 1\ndescription = \"A soft glow over the panel\"\n\n"
+          "[draw]\ncamera = \"none\"\npasses = [{ kind = \"render\", fragment = \"shade\" }]\n",
+          "@fragment fn shade() -> @location(0) vec4<f32> { return vec4<f32>(0.2, 0.6, 1.0, 1.0); }\n");
+    piece("rings",
+          "name = \"rings\"\nversion = 1\ndescription = \"Rings around the selected item\"\n\n"
+          "[draw]\ncamera = \"orbit\"\npasses = [{ kind = \"render\", fragment = \"ring\" }]\n",
+          "@fragment fn ring() -> @location(0) vec4<f32> { return vec4<f32>(1.0, 0.8, 0.2, 1.0); }\n");
+    const std::string key = "piece:workspace/glow@1";
+    const std::string script = "wait 60; page landing; key f3; page spec; pane source " + key + "; click source:" +
+                               key + " 0.3 0.5; wait 10; leave; wait 5; shot pieces-" + window + "; quit";
+    const auto result = run_app(exe, root, script, {{"CALIPER_WINDOW_SIZE", window}, {"CALIPER_TEST_SPEC_UI_SHOTS", shots}});
+    INFO("stderr tail: " << result.err.substr(result.err.size() > 4000 ? result.err.size() - 4000 : 0));
+    REQUIRE(result.error.ok());
+    if (result.err.find("[renderer] metal") == std::string::npos) {
+        std::printf("caliper_builder_app skipped: no Metal device\n");
+        return;
+    }
+    CHECK(result.status.success());
+    CHECK(result.err.find("[ui] done") != std::string::npos);
+    CHECK(std::filesystem::is_regular_file(shots + "/pieces-" + window + ".png"));
+}
+
 // Removing a panel from the dashboard page, outside build mode: the × on its
 // strip, Remove panel in its menu and ⌫ on the focused panel, each a
 // panel.remove from the ui origin that ⌘Z takes back. The dashboard has a
