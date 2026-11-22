@@ -266,9 +266,9 @@ void check_no_token(const McpChild& child, const FakeApi& api) {
 
 fs::path docs_dir(const fs::path& under) {
     const fs::path d = under / "docs";
-    fs::create_directories(d / "references");
+    fs::create_directories(d / "agents");
     std::ofstream(d / "index.md") << "# Caliper\n";
-    std::ofstream(d / "references" / "api.md") << "# Caliper API\n";
+    std::ofstream(d / "agents" / "http-api.md") << "# Caliper API\n";
     return d;
 }
 
