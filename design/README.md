@@ -40,7 +40,7 @@ Both fail with a configuration error when run from inside `design/` or with an a
 | [Data and Cloud](data-and-cloud.md) | Run history, run comparison and session recording in the desktop app's local database, and Caliper Cloud and Caliper Web, which offer them online |
 | [Windows parity](windows-parity.md) | The steps that bring Windows level with macOS: the applet platform, Caliper LIB, streaming and Caliper API, the web viewer, Caliper Embed, the renderer fallbacks and distribution |
 | [Streaming and embedding](streaming-and-embedding.md) | What remains of using Caliper from other programs: the rest of the web viewer, applets in a browser, WebTransport, the security review and the rest of C++ embedding |
-| [Renderer core](renderer-core.md) | One graphics layer that each backend implements once, one shader source, a shared scene core, and zero-copy as an import capability |
-| [Scenes](scenes.md) | 3-D and 2-D scenes of entities with entity transforms, primitives and cameras, logged from Caliper LIB, with a text log and a bar chart |
-| [Wire protocol 3.2 draft](wire-protocol-3-2.md) | An additive minor version of the wire protocol for timelines, scenes, text logs, bar charts and recordings |
-| [Web geometry](web-geometry.md) | Scenes in the browser on the WebGPU backend of the renderer core, and the fallback without WebGPU |
+| [Renderer Core](renderer-core.md) | The rest of the renderer core's migration: the texture path on the graphics layer, a scene service for applets, one version of each graphics service, the final renderer seam and the Vulkan backend |
+| [Scenes](scenes.md) | What remains of scenes: the scene model's additions, the text log and the bar chart, stamps, scenes through shared memory with their data views, and the scene service for applets |
+| [Wire Protocol 3.2 Draft](wire-protocol-3-2.md) | What producers, the hub and servers still do with timelines, text logs, bar charts and recordings, and the numbers of 3.2 to confirm |
+| [Web Geometry](web-geometry.md) | What remains of scenes in the browser: pipelines, encoded frames, budgets and lost devices, parity rows, and the fallback without WebGPU |
