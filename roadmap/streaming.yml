@@ -425,3 +425,43 @@ features:
     summary: The wire protocol could gain a clock exchange, so that a viewer can show a stream's absolute latency.
     depends_on: [STR-02]
     issue: null
+
+  - id: STR-48
+    title: Framework Adapter Interface
+    status: planned
+    scope: supporting
+    summary: One small adapter per tensor framework supplies stream synchronization and module hooks, while memory crosses through DLPack and derivations run as Caliper's own GPU compute, so PyTorch becomes the first adapter rather than a dependency of the core.
+    depends_on: [STR-01]
+    issue: null
+
+  - id: STR-49
+    title: MLX Adapter
+    status: planned
+    scope: supporting
+    summary: Caliper LIB takes MLX arrays through DLPack on Metal, with MLX's stream synchronization and module hooks, so a script written in MLX streams views and scenes as a PyTorch script does.
+    depends_on: [STR-48]
+    issue: null
+
+  - id: STR-50
+    title: JAX Adapter
+    status: planned
+    scope: supporting
+    summary: Caliper LIB takes JAX arrays through DLPack on CUDA and on the CPU, with JAX's synchronization, so a script written in JAX streams views and scenes as a PyTorch script does.
+    depends_on: [STR-48]
+    issue: null
+
+  - id: STR-51
+    title: CuPy and NumPy Arrays
+    status: planned
+    scope: supporting
+    summary: Caliper LIB takes any array that implements DLPack, such as a CuPy array on CUDA or a NumPy array on the CPU, through the same adapter interface.
+    depends_on: [STR-48]
+    issue: null
+
+  - id: STR-52
+    title: TensorFlow Adapter
+    status: idea
+    scope: peripheral
+    summary: Caliper LIB could take TensorFlow tensors through DLPack, with TensorFlow's synchronization, through the same adapter interface.
+    depends_on: [STR-48]
+    issue: null
