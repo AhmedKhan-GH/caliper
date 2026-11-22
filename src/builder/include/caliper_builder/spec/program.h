@@ -23,10 +23,13 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include <caliper_builder/spec/reference.h>
 
 namespace caliper_builder::spec {
 
@@ -60,8 +63,10 @@ inline constexpr const char* kPixelsVar = "pixels";      // pixels: var<storage,
 inline constexpr const char* kFrameVar = "caliper";      // optional: var<uniform> caliper: CaliperFrame
 inline constexpr const char* kLiveInputPrefix = "live:"; // an input's `source`
 
-// The output kinds of a program.
-enum class OutputKind { geometry, pixels };
+// The output kinds of a program. `tensor` publishes the first elements of
+// `out` as the live view "program.<id>" (design/instrument-interface.md,
+// Tensor Output); operators use it, and agents' programs may.
+enum class OutputKind { geometry, pixels, tensor };
 // The scene parts a geometry output draws. `mesh` is reserved.
 enum class GeometryPart { points, lines };
 // The arrays of a geometry output, by their WGSL names (Geometry Output):
@@ -76,10 +81,13 @@ enum class PixelFormat { rgba8unorm };
 // a geometry output.
 enum class StageKind { material, vertex };
 
-inline const char* output_kind_name(OutputKind k) { return k == OutputKind::pixels ? "pixels" : "geometry"; }
+inline const char* output_kind_name(OutputKind k) {
+    return k == OutputKind::pixels ? "pixels" : k == OutputKind::tensor ? "tensor" : "geometry";
+}
 inline std::optional<OutputKind> output_kind_from_name(std::string_view n) {
     if (n == "geometry") return OutputKind::geometry;
     if (n == "pixels") return OutputKind::pixels;
+    if (n == "tensor") return OutputKind::tensor;
     return std::nullopt;
 }
 inline const char* geometry_part_name(GeometryPart p) { return p == GeometryPart::lines ? "lines" : "points"; }
@@ -149,12 +157,21 @@ struct ProgramOutput {
     std::uint32_t width = 0;               // 1 to kPixelsSide
     std::uint32_t height = 0;
     PixelFormat format = PixelFormat::rgba8unorm;
+    // tensor: 1 to 4 axes, at most 1,000,000 elements
+    std::vector<std::int64_t> shape;
 };
 inline bool operator==(const ProgramOutput& a, const ProgramOutput& b) {
     return a.kind == b.kind && a.panel == b.panel && a.entity == b.entity && a.part == b.part &&
            a.max_count == b.max_count && a.arrays == b.arrays && a.style == b.style && a.width == b.width &&
-           a.height == b.height && a.format == b.format;
+           a.height == b.height && a.format == b.format && a.shape == b.shape;
 }
+
+// The named numbers of a program or a stage (`params`): at most kParams
+// names, each a number or a reference. The WGSL reads them in the uniform
+// struct `Params` (design/instrument-interface.md, Program Parameters).
+using Params = std::map<std::string, ValueOr<double>>;
+inline constexpr std::size_t kParams = 16;
+inline constexpr const char* kParamsVar = "params";
 
 // The limits of a program. An absent limit takes its default.
 struct ProgramLimits {
@@ -182,11 +199,16 @@ struct Program {
     ProgramOutput output;
     ProgramLimits limits;
     std::optional<std::array<std::uint32_t, 3>> workgroups;  // derived from the output when absent
+    Params params;                                        // version 1: `params`
+    // The operator's name and version on a program that the app generates
+    // for an operator ("surface@1"); never read from or written to a spec.
+    std::optional<std::string> builtin;
     nlohmann::json x;                                     // the extension table, null when absent
 };
 inline bool operator==(const Program& a, const Program& b) {
     return a.id == b.id && a.title == b.title && a.wgsl == b.wgsl && a.entry == b.entry && a.inputs == b.inputs &&
-           a.output == b.output && a.limits == b.limits && a.workgroups == b.workgroups && a.x == b.x;
+           a.output == b.output && a.limits == b.limits && a.workgroups == b.workgroups && a.params == b.params &&
+           a.builtin == b.builtin && a.x == b.x;
 }
 inline bool operator!=(const Program& a, const Program& b) { return !(a == b); }
 
@@ -196,10 +218,12 @@ struct Stage {
     std::string entity;                 // an entity path of the panel's scene
     StageKind kind = StageKind::material;
     std::string wgsl;                   // at most kStageSourceBytes: functions and constants only
+    Params params;                      // version 1: `params`, in the stage's uniform
     nlohmann::json x;                   // the extension table, null when absent
 };
 inline bool operator==(const Stage& a, const Stage& b) {
-    return a.panel == b.panel && a.entity == b.entity && a.kind == b.kind && a.wgsl == b.wgsl && a.x == b.x;
+    return a.panel == b.panel && a.entity == b.entity && a.kind == b.kind && a.wgsl == b.wgsl && a.params == b.params &&
+           a.x == b.x;
 }
 inline bool operator!=(const Stage& a, const Stage& b) { return !(a == b); }
 

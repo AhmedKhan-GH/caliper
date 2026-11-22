@@ -33,7 +33,12 @@ const char* const kV0[] = {
     "spec.validate",   "source.add",      "source.patch",   "source.remove", "panel.create",     "panel.patch",
     "panel.remove",    "panel.render",    "panel.data",     "layout.place",  "layout.set",       "preview.begin",
     "preview.diff",    "preview.commit",  "preview.discard", "applet.save",  "applet.open",      "applet.list",
-    "review.status",   "capture.frame",   "control.create", "control.patch", "control.remove",   "run.state",
+    "review.status",   "capture.frame",   "control.create", "control.patch", "control.remove",
+    // The eighteen commands of design/instrument-interface.md, Commands.
+    "state.create",    "state.patch",     "state.remove",   "state.set",     "state.get",        "control.set",
+    "selection.set",   "selection.get",   "entity.set",     "entity.remove", "annotation.set",   "annotation.remove",
+    "cursor.get",      "cursor.set",      "cursor.step",    "camera.get",    "camera.set",       "camera.save",
+    "run.state",
     "run.set_param",   "run.action",      "run.pause",      "run.list",      "run.start",        "run.fork",
     "run.stop",        "run.logs",        "events.wait",    "stage.set",     "stage.remove",     "stage.check",
     "program.create",  "program.patch",   "program.remove", "program.status", "intervene.points", "intervene.set",
@@ -121,6 +126,8 @@ TEST_CASE("no command takes or returns a value named like a secret") {
     }
     for (const auto& n : names) {
         CAPTURE(n);
+        // The event key `key` and the control option `keys` name keyboard shortcuts, not secrets.
+        if (n == "key" || n == "keys") continue;
         for (const char* bad : {"token", "secret", "password", "api_key", "apikey", "authorization", "key"})
             CHECK(n.find(bad) == std::string::npos);
     }
@@ -135,14 +142,19 @@ TEST_CASE("the flags follow the design page") {
                                 "source.remove", "panel.create", "panel.patch", "panel.remove", "layout.place",
                                 "layout.set", "preview.commit", "applet.save", "applet.open", "control.create",
                                 "control.patch", "control.remove", "stage.set", "stage.remove", "program.create",
-                                "program.patch", "program.remove", "history.undo", "history.redo"});
+                                "program.patch", "program.remove", "history.undo", "history.redo", "state.create",
+                                "state.patch", "state.remove", "entity.set", "entity.remove", "annotation.set",
+                                "annotation.remove", "camera.save"});
     CHECK(names_where([](const CommandDescriptor& d) { return d.frame_thread; }) ==
           std::set<std::string>{"app.applets", "app.launch", "spec.new", "spec.open", "spec.get", "spec.set_text",
                                 "spec.validate", "source.add", "source.patch", "source.remove", "panel.create",
                                 "panel.patch", "panel.remove", "panel.render", "panel.data", "layout.place", "layout.set",
                                 "preview.begin", "preview.diff", "preview.commit", "preview.discard",
                                 "applet.save", "applet.open", "capture.frame", "control.create", "control.patch",
-                                "control.remove", "run.state", "run.set_param", "run.action", "run.pause",
+                                "control.remove", "state.create", "state.patch", "state.remove", "state.set",
+                                "state.get", "control.set", "selection.set", "selection.get", "entity.set",
+                                "entity.remove", "annotation.set", "annotation.remove", "cursor.get", "cursor.set",
+                                "cursor.step", "camera.get", "camera.set", "camera.save", "run.state", "run.set_param", "run.action", "run.pause",
                                 "run.list", "run.start", "run.fork", "run.stop", "run.logs", "stage.set",
                                 "stage.remove", "program.create", "program.patch", "program.remove", "program.status",
                                 "intervene.points", "intervene.set", "intervene.clear", "intervene.list",

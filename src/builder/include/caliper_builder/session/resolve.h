@@ -46,6 +46,7 @@
 #include <caliper_builder/loaders/query.h>
 #include <caliper_builder/loaders/store.h>
 #include <caliper_builder/loaders/tensor.h>
+#include <caliper_builder/session/chain_hooks.h>
 #include <caliper_builder/spec/spec.h>
 
 #include <nlohmann/json.hpp>
@@ -83,15 +84,30 @@ struct SlotData {
     nlohmann::json values = nlohmann::json::array();  // Kind::column: the cells; Kind::table: rows of cells
     bool truncated = false;             // the rows were cut at a limit
     std::uint64_t generation = 0;       // of the served source it was read from; 0 for a loader output
+    // After a `window` step: the step of each row of `tensor` (W); empty otherwise.
+    TensorData steps;
+    // After an operator (`surface`, `path`): its named geometry arrays;
+    // empty otherwise (design/instrument-interface.md, Operators).
+    GeometryArrays geometry;
 };
 
 const char* slot_kind_name(SlotData::Kind kind);
+
+// The resolved arrays of one entity of a scene panel
+// (design/instrument-interface.md, Array Resolution).
+struct EntityData {
+    std::string path;
+    Error error;                    // entity.shape, entity.length or a resolve error
+    std::vector<SlotData> slots;    // one per bound slot; a source id gives its geometry arrays
+    std::uint64_t generation = 0;
+};
 
 struct PanelData {
     Error error;
     std::string panel;
     spec::Primitive primitive = spec::Primitive::series;
     std::vector<SlotData> slots;  // in slot name order, list slots in their order
+    std::vector<EntityData> entities;  // scene panels: one per entity, in spec order
     // The generations of the served roots the panel binds, mixed in binding
     // order; 0 when it binds none. Equal to panel_generation() for as long as
     // none of those sources changes.
@@ -191,8 +207,12 @@ private:
 
 // `sources` may be null, and then every served root answers
 // resolve.unavailable.
+// `chain` gives the references their values and the cursor its kept steps
+// (chain_hooks.h); null resolves every reference to its default and reads
+// the newest values.
 PanelData resolve_panel(const spec::Spec& spec, std::string_view panel_id, LoaderStore& store,
-                        const ResolveLimits& limits = {}, DataSources* sources = nullptr);
+                        const ResolveLimits& limits = {}, DataSources* sources = nullptr,
+                        const ChainContext* chain = nullptr);
 
 // The generation that resolve_panel() would give panel `panel_id` now, from
 // the sources' generation() alone: a few map lookups and one cheap call per

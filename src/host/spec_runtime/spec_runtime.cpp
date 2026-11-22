@@ -2,7 +2,10 @@
 // textures, the drawing of each primitive and the runtime that lays a spec
 // out and keeps its panels' data.
 #include "spec_runtime/spec_runtime.h"
+#include "spec_runtime/spec_annotations.h"
 #include "spec_runtime/spec_instruments.h"
+#include "spec_runtime/spec_shortcuts.h"
+#include "spec_runtime/spec_transport.h"
 #include "spec_runtime/spec_stage_host.h"
 #include "live/live_views_scene.h"   // a scene drawn into a scene panel's rectangle
 #include "scene/scene.h"   // kPalette
@@ -359,6 +362,10 @@ void draw_series(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
             if (!tip.empty()) ImGui::SetTooltip("%s", tip.c_str());
         }
         selection_gesture(v, L, false);
+        if (v.spec_panel && v.instruments) {   // spec_transport.h, spec_annotations.h
+            draw_cursor_line(*v.spec_panel, *v.instruments);
+            draw_plot_annotations(*v.spec_panel, *v.instruments);
+        }
         ImPlot::EndPlot();
     }
     pop_plot_style();
@@ -1076,6 +1083,21 @@ void SpecRuntime::set_instruments(caliper_builder::EventSink* events, caliper_bu
     if (events) app_stage_host_impl()->set_events(events);   // the stages' program events
 }
 
+void SpecRuntime::set_instrument_state(caliper_builder::ValueStore* values, caliper_builder::StepHistory* history) {
+    values_ = values;
+    history_ = history;
+}
+
+SpecInstrumentHost SpecRuntime::instrument_host(const spec::Spec* shown) const {
+    SpecInstrumentHost h;
+    h.events = events_;
+    h.run = run_;
+    h.values = values_;
+    h.history = history_;
+    h.spec = shown;
+    return h;
+}
+
 bool SpecRuntime::pick_scene(const std::string& panel_id, float u, float v) {
     if (!spec_) return false;
     const spec::Panel* p = spec_->find_panel(panel_id);
@@ -1108,7 +1130,14 @@ void SpecRuntime::bind_scene(Entry& e) {
         so.stage_message = app_stage_host_impl()->message(panel);
         auto sink = [this, &panel, &scene](const char* type, const std::string& detail) {
             caliper_builder::Event ev;
-            if (events_ && spec_scene_event(type, panel, scene, detail, &ev)) events_->push(std::move(ev));
+            if (!events_ || !spec_scene_event(type, panel, scene, detail, &ev)) return;
+            const bool pick = ev.kind == caliper_builder::EventKind::pick;
+            caliper_builder::Event kept = pick ? ev : caliper_builder::Event{};
+            events_->push(std::move(ev));
+            if (pick) {   // the panel's last pick and its `select` write (spec_instruments.h)
+                SpecInstrumentHost host = instrument_host(spec_ ? &*spec_ : nullptr);
+                record_spec_pick(panel, kept, host);
+            }
         };
         return caliper_live_views::draw_scene_in_rect(core, scene, id.c_str(), content.Min, content.GetSize(), so,
                                                       scenes_->by_panel[panel],
@@ -1127,7 +1156,7 @@ void SpecRuntime::draw_control(const spec::Control& control, const ImRect& r, co
                               ImGuiWindowFlags_NoBackground)) {
         ImGui::PopStyleVar(2);
         ImGui::GetWindowDrawList()->AddRectFilled(r.Min, r.Max, L.ground);
-        SpecInstrumentHost host{events_, run_};
+            SpecInstrumentHost host = instrument_host(spec_ ? &*spec_ : nullptr);
         draw_spec_control(control, r, L, host);
         // An item at the corner, so the child's bounds come from an item.
         ImGui::SetCursorScreenPos(r.Min);
@@ -1383,6 +1412,12 @@ void SpecRuntime::draw(const ImRect& area, const SpecLook& L) {
     if (!spec_) return;
     // The spec shown: the open one, or a preview of the whole spec.
     const spec::Spec& shown = spec_preview_ ? *spec_preview_ : *spec_;
+    // The instruments' keys and the transport's play, once a frame
+    // (spec_shortcuts.h, spec_transport.h).
+    SpecInstrumentHost instruments = instrument_host(&shown);
+    handle_instrument_keys(shown, instruments);
+    handle_transport_keys(shown, instruments);
+    tick_transport(instruments, ImGui::GetIO().DeltaTime);
     const std::optional<spec::LayoutNode> root = caliper_builder::effective_layout(shown);
     if (!root) {
         dl->AddRectFilled(area.Min, area.Max, L.ground);
@@ -1466,7 +1501,10 @@ void SpecRuntime::draw(const ImRect& area, const SpecLook& L) {
                               ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
                                   ImGuiWindowFlags_NoBackground)) {
             ImGui::PopStyleVar(2);
+            e.view.spec_panel = shown.find_panel(lp.id);
+            e.view.instruments = &instruments;
             SpecPanelFrame f = draw_spec_panel(e.view, r, L, textures_, band);
+            if (e.view.spec_panel) draw_panel_overlays(*e.view.spec_panel, f.content, L, instruments);   // spec_annotations.h
             if (e.view.added) {
                 // A panel the preview adds: a dashed bronze frame inside its rectangle.
                 ImDrawList* pdl = ImGui::GetWindowDrawList();

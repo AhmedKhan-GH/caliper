@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:caliper:schema:spec:v1",
   "title": "Caliper spec, version 1, canonical JSON form",
-  "description": "The structure, types, keys, enumerations, ranges, slots and options of a spec. References, cycles, layout placement, shapes and columns are checked by the spec library's validator, not by this schema. Version 1 is version 0 with the primitive scene, the control table, the GPU programs and stages, and the provenance table; a version 0 document with caliper_spec set to 1 is a valid version 1 document. See design/spec-format.md, design/instruments.md and design/gpu-programs.md.",
+  "description": "The structure, types, keys, enumerations, ranges, slots and options of a spec. References, cycles, layout placement, shapes and columns are checked by the spec library's validator, not by this schema. Version 1 is version 0 with the primitive scene, the control table, the GPU programs and stages, the provenance table, and the interface layer of design/instrument-interface.md (state, references, history, entities, operators, annotations, shares); a version 0 document with caliper_spec set to 1 is a valid version 1 document. See design/spec-format.md, design/instruments.md and design/gpu-programs.md.",
   "type": "object",
   "additionalProperties": false,
   "required": ["caliper_spec", "applet"],
@@ -13,6 +13,7 @@
     "panel": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/panel" } },
     "layout": { "$ref": "#/$defs/layout_node" },
     "control": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/control" } },
+    "state": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/state_var" } },
     "program": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/program" } },
     "stage": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/stage" } },
     "provenance": { "$ref": "#/$defs/provenance" },
@@ -25,21 +26,70 @@
     "safe_integer": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
     "axis": { "type": "integer", "minimum": -8, "maximum": 7 },
     "range": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number" } },
-    "colormap": { "enum": ["viridis", "magma", "rdbu", "greys"] },
-    "binding": {
-      "type": "string",
-      "maxLength": 320,
-      "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$"
+    "colormap": {
+      "enum": [
+        "viridis",
+        "magma",
+        "rdbu",
+        "greys",
+        "cividis",
+        "inferno",
+        "plasma",
+        "turbo",
+        "twilight",
+        "coolwarm",
+        "batlow",
+        "vik",
+        "roma",
+        "oslo",
+        "lajolla",
+        "berlin"
+      ]
     },
-    "catalog_id": {
-      "type": "string",
-      "maxLength": 256,
-      "pattern": "^(table|tensor|live|feed|metric|run):.+$"
-    },
-    "extension": {
+    "reference": {
       "type": "object",
-      "additionalProperties": { "$ref": "#/$defs/extension_value" }
+      "additionalProperties": false,
+      "properties": {
+        "control": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "selection": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "state": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "field": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "entity": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "default": true
+      },
+      "oneOf": [ { "required": ["control"] }, { "required": ["selection"] }, { "required": ["state"] } ]
     },
+    "number_or_reference": { "anyOf": [ { "type": "number" }, { "$ref": "#/$defs/reference" } ] },
+    "integer_or_reference": { "anyOf": [ { "$ref": "#/$defs/safe_integer" }, { "$ref": "#/$defs/reference" } ] },
+    "steps_or_reference": {
+      "anyOf": [ { "type": "integer", "minimum": 1, "maximum": 65536 }, { "$ref": "#/$defs/reference" } ]
+    },
+    "boolean_or_reference": { "anyOf": [ { "type": "boolean" }, { "$ref": "#/$defs/reference" } ] },
+    "range_or_reference": { "anyOf": [ { "$ref": "#/$defs/range" }, { "$ref": "#/$defs/reference" } ] },
+    "colormap_or_reference": { "anyOf": [ { "$ref": "#/$defs/colormap" }, { "$ref": "#/$defs/reference" } ] },
+    "binding_or_reference": { "anyOf": [ { "$ref": "#/$defs/binding" }, { "$ref": "#/$defs/reference" } ] },
+    "bound_fields": {
+      "type": "object",
+      "maxProperties": 16,
+      "additionalProperties": { "anyOf": [ { "$ref": "#/$defs/binding" }, { "$ref": "#/$defs/reference" } ] }
+    },
+    "bound_format": { "type": "string", "minLength": 1, "maxLength": 1024 },
+    "legend": { "anyOf": [ { "const": "auto" }, { "type": "boolean" } ] },
+    "select": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "field"],
+      "properties": {
+        "state": { "$ref": "#/$defs/id" },
+        "field": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "entity": { "$ref": "#/$defs/spec_entity_path" }
+      }
+    },
+    "spec_entity_path": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[a-z0-9_-]+(/[a-z0-9_-]+){0,7}$" },
+    "vec3": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } },
+    "binding": { "type": "string", "maxLength": 320, "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$" },
+    "catalog_id": { "type": "string", "maxLength": 256, "pattern": "^(table|tensor|live|feed|metric|run):.+$" },
+    "extension": { "type": "object", "additionalProperties": { "$ref": "#/$defs/extension_value" } },
     "extension_value": {
       "anyOf": [
         { "type": "string", "maxLength": 65536 },
@@ -49,7 +99,26 @@
         { "$ref": "#/$defs/extension" }
       ]
     },
-
+    "state_var": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": { "$ref": "#/$defs/title" },
+        "type": { "enum": ["number", "integer", "boolean", "text", "range", "list"] },
+        "default": true,
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "choices": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1024,
+          "items": { "anyOf": [ { "type": "string", "maxLength": 1024 }, { "type": "number" } ] }
+        },
+        "x": { "$ref": "#/$defs/extension" }
+      }
+    },
     "applet": {
       "type": "object",
       "additionalProperties": false,
@@ -61,7 +130,6 @@
         "x": { "$ref": "#/$defs/extension" }
       }
     },
-
     "source": {
       "type": "object",
       "additionalProperties": false,
@@ -72,20 +140,19 @@
         "sql": { "type": "string", "minLength": 1, "maxLength": 65536 },
         "from": { "$ref": "#/$defs/id" },
         "transform": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/transform" } },
+        "history": { "type": "integer", "minimum": 0, "maximum": 65536 },
         "x": { "$ref": "#/$defs/extension" }
       },
-      "oneOf": [
-        { "required": ["catalog"] },
-        { "required": ["sql"] },
-        { "required": ["from"] }
-      ]
+      "oneOf": [ { "required": ["catalog"] }, { "required": ["sql"] }, { "required": ["from"] } ]
     },
-
     "transform": {
       "oneOf": [
         { "$ref": "#/$defs/transform_slice" },
         { "$ref": "#/$defs/transform_reduce" },
-        { "$ref": "#/$defs/transform_normalise" }
+        { "$ref": "#/$defs/transform_normalise" },
+        { "$ref": "#/$defs/transform_window" },
+        { "$ref": "#/$defs/transform_surface" },
+        { "$ref": "#/$defs/transform_path" }
       ]
     },
     "transform_slice": {
@@ -95,14 +162,57 @@
       "properties": {
         "op": { "const": "slice" },
         "axis": { "$ref": "#/$defs/axis" },
-        "index": { "$ref": "#/$defs/safe_integer" },
-        "start": { "$ref": "#/$defs/safe_integer" },
-        "stop": { "$ref": "#/$defs/safe_integer" },
-        "step": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "index": { "$ref": "#/$defs/integer_or_reference" },
+        "start": { "$ref": "#/$defs/integer_or_reference" },
+        "stop": { "$ref": "#/$defs/integer_or_reference" },
+        "step": {
+          "anyOf": [ { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }, { "$ref": "#/$defs/reference" } ]
+        },
         "x": { "$ref": "#/$defs/extension" }
       },
       "if": { "required": ["index"] },
       "then": { "properties": { "start": false, "stop": false, "step": false } }
+    },
+    "transform_window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op"],
+      "properties": {
+        "op": { "const": "window" },
+        "start": { "$ref": "#/$defs/integer_or_reference" },
+        "stop": { "$ref": "#/$defs/integer_or_reference" },
+        "steps": { "$ref": "#/$defs/steps_or_reference" },
+        "x": { "$ref": "#/$defs/extension" }
+      },
+      "if": { "required": ["steps"] },
+      "then": { "properties": { "start": false, "stop": false } }
+    },
+    "transform_path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op"],
+      "properties": {
+        "op": { "const": "path" },
+        "columns": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3,
+          "items": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+        },
+        "max_points": { "type": "integer", "minimum": 2, "maximum": 1048576 },
+        "x": { "$ref": "#/$defs/extension" }
+      }
+    },
+    "transform_surface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op"],
+      "properties": {
+        "op": { "const": "surface" },
+        "max_cells": { "type": "integer", "minimum": 1, "maximum": 262144 },
+        "pool": { "enum": ["mean", "max", "min"] },
+        "x": { "$ref": "#/$defs/extension" }
+      }
     },
     "transform_reduce": {
       "type": "object",
@@ -121,11 +231,7 @@
         "x": { "$ref": "#/$defs/extension" }
       },
       "if": { "properties": { "fn": { "enum": ["argmax", "argmin"] } } },
-      "then": {
-        "properties": {
-          "axis": { "anyOf": [ { "type": "integer" }, { "type": "array", "maxItems": 1 } ] }
-        }
-      }
+      "then": { "properties": { "axis": { "anyOf": [ { "type": "integer" }, { "type": "array", "maxItems": 1 } ] } } }
     },
     "transform_normalise": {
       "type": "object",
@@ -138,7 +244,6 @@
         "x": { "$ref": "#/$defs/extension" }
       }
     },
-
     "panel": {
       "oneOf": [
         { "$ref": "#/$defs/panel_series" },
@@ -164,10 +269,10 @@
           "additionalProperties": false,
           "required": ["y"],
           "properties": {
-            "x": { "$ref": "#/$defs/binding" },
+            "x": { "$ref": "#/$defs/binding_or_reference" },
             "y": {
               "anyOf": [
-                { "$ref": "#/$defs/binding" },
+                { "$ref": "#/$defs/binding_or_reference" },
                 { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/binding" } }
               ]
             }
@@ -179,13 +284,15 @@
           "properties": {
             "x_label": { "$ref": "#/$defs/label" },
             "y_label": { "$ref": "#/$defs/label" },
-            "x_range": { "$ref": "#/$defs/range" },
-            "y_range": { "$ref": "#/$defs/range" },
+            "x_range": { "$ref": "#/$defs/range_or_reference" },
+            "y_range": { "$ref": "#/$defs/range_or_reference" },
             "x_log": { "type": "boolean" },
             "y_log": { "type": "boolean" },
+            "legend": { "$ref": "#/$defs/legend" },
             "x": { "$ref": "#/$defs/extension" }
           }
         },
+        "annotation": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/annotation" } },
         "x": { "$ref": "#/$defs/extension" }
       }
     },
@@ -201,7 +308,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["values"],
-          "properties": { "values": { "$ref": "#/$defs/binding" } }
+          "properties": { "values": { "$ref": "#/$defs/binding_or_reference" } }
         },
         "options": {
           "type": "object",
@@ -209,11 +316,14 @@
           "properties": {
             "x_label": { "$ref": "#/$defs/label" },
             "y_label": { "$ref": "#/$defs/label" },
-            "colormap": { "$ref": "#/$defs/colormap" },
-            "range": { "$ref": "#/$defs/range" },
+            "colormap": { "$ref": "#/$defs/colormap_or_reference" },
+            "range": { "$ref": "#/$defs/range_or_reference" },
+            "legend": { "$ref": "#/$defs/legend" },
+            "select": { "$ref": "#/$defs/select" },
             "x": { "$ref": "#/$defs/extension" }
           }
         },
+        "annotation": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/annotation" } },
         "x": { "$ref": "#/$defs/extension" }
       }
     },
@@ -229,12 +339,12 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "x": { "$ref": "#/$defs/binding" },
-            "y": { "$ref": "#/$defs/binding" },
-            "z": { "$ref": "#/$defs/binding" },
-            "positions": { "$ref": "#/$defs/binding" },
-            "color": { "$ref": "#/$defs/binding" },
-            "size": { "$ref": "#/$defs/binding" }
+            "x": { "$ref": "#/$defs/binding_or_reference" },
+            "y": { "$ref": "#/$defs/binding_or_reference" },
+            "z": { "$ref": "#/$defs/binding_or_reference" },
+            "positions": { "$ref": "#/$defs/binding_or_reference" },
+            "color": { "$ref": "#/$defs/binding_or_reference" },
+            "size": { "$ref": "#/$defs/binding_or_reference" }
           },
           "oneOf": [
             { "required": ["x", "y"], "properties": { "positions": false } },
@@ -248,10 +358,14 @@
             "x_label": { "$ref": "#/$defs/label" },
             "y_label": { "$ref": "#/$defs/label" },
             "z_label": { "$ref": "#/$defs/label" },
-            "colormap": { "$ref": "#/$defs/colormap" },
+            "colormap": { "$ref": "#/$defs/colormap_or_reference" },
+            "legend": { "$ref": "#/$defs/legend" },
+            "select": { "$ref": "#/$defs/select" },
+            "scale_bar": { "type": "boolean" },
             "x": { "$ref": "#/$defs/extension" }
           }
         },
+        "annotation": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/annotation" } },
         "x": { "$ref": "#/$defs/extension" }
       }
     },
@@ -267,7 +381,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["values"],
-          "properties": { "values": { "$ref": "#/$defs/binding" } }
+          "properties": { "values": { "$ref": "#/$defs/binding_or_reference" } }
         },
         "options": {
           "type": "object",
@@ -276,11 +390,13 @@
             "x_label": { "$ref": "#/$defs/label" },
             "y_label": { "$ref": "#/$defs/label" },
             "bins": { "type": "integer", "minimum": 1, "maximum": 65536 },
-            "range": { "$ref": "#/$defs/range" },
+            "range": { "$ref": "#/$defs/range_or_reference" },
             "y_log": { "type": "boolean" },
+            "legend": { "$ref": "#/$defs/legend" },
             "x": { "$ref": "#/$defs/extension" }
           }
         },
+        "annotation": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/annotation" } },
         "x": { "$ref": "#/$defs/extension" }
       }
     },
@@ -296,7 +412,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["rows"],
-          "properties": { "rows": { "$ref": "#/$defs/id" } }
+          "properties": { "rows": { "anyOf": [ { "$ref": "#/$defs/id" }, { "$ref": "#/$defs/reference" } ] } }
         },
         "options": {
           "type": "object",
@@ -309,9 +425,11 @@
               "uniqueItems": true,
               "items": { "type": "string", "minLength": 1, "maxLength": 255 }
             },
+            "select": { "$ref": "#/$defs/select" },
             "x": { "$ref": "#/$defs/extension" }
           }
         },
+        "annotation": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/annotation" } },
         "x": { "$ref": "#/$defs/extension" }
       }
     },
@@ -327,17 +445,21 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["values"],
-          "properties": { "values": { "$ref": "#/$defs/binding" } }
+          "properties": { "values": { "$ref": "#/$defs/binding_or_reference" } }
         },
         "options": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "colormap": { "$ref": "#/$defs/colormap" },
-            "range": { "$ref": "#/$defs/range" },
+            "colormap": { "$ref": "#/$defs/colormap_or_reference" },
+            "range": { "$ref": "#/$defs/range_or_reference" },
+            "legend": { "$ref": "#/$defs/legend" },
+            "select": { "$ref": "#/$defs/select" },
+            "scale_bar": { "type": "boolean" },
             "x": { "$ref": "#/$defs/extension" }
           }
         },
+        "annotation": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/annotation" } },
         "x": { "$ref": "#/$defs/extension" }
       }
     },
@@ -352,33 +474,32 @@
         "bind": {
           "type": "object",
           "additionalProperties": false,
-          "properties": { "value": { "$ref": "#/$defs/binding" } }
+          "properties": { "value": { "$ref": "#/$defs/binding_or_reference" } }
         },
         "options": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
             "text": { "type": "string", "maxLength": 16384 },
+            "format": { "$ref": "#/$defs/bound_format" },
+            "fields": { "$ref": "#/$defs/bound_fields" },
             "x": { "$ref": "#/$defs/extension" }
           }
         },
+        "annotation": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/annotation" } },
         "x": { "$ref": "#/$defs/extension" }
       },
       "anyOf": [
         { "required": ["bind"], "properties": { "bind": { "required": ["value"] } } },
-        { "required": ["options"], "properties": { "options": { "required": ["text"] } } }
+        { "required": ["options"], "properties": { "options": { "required": ["text"] } } },
+        { "required": ["options"], "properties": { "options": { "required": ["format"] } } }
       ]
     },
-
-    "live_scene": {
-      "type": "string",
-      "maxLength": 256,
-      "pattern": "^live:.+$"
-    },
+    "live_scene": { "type": "string", "maxLength": 256, "pattern": "^live:.+$" },
     "panel_scene": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "primitive", "bind"],
+      "required": ["id", "primitive"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "primitive": { "const": "scene" },
@@ -387,7 +508,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["scene"],
-          "properties": { "scene": { "$ref": "#/$defs/live_scene" } }
+          "properties": { "scene": { "anyOf": [ { "$ref": "#/$defs/live_scene" }, { "$ref": "#/$defs/reference" } ] } }
         },
         "options": {
           "type": "object",
@@ -409,64 +530,172 @@
                 }
               ]
             },
-            "include": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 255 } },
-            "exclude": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 255 } },
+            "include": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "items": { "type": "string", "minLength": 1, "maxLength": 255 }
+            },
+            "exclude": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "items": { "type": "string", "minLength": 1, "maxLength": 255 }
+            },
             "labels": { "type": "boolean" },
             "axes": { "type": "boolean" },
             "scale_bar": { "type": "boolean" },
+            "legend": { "$ref": "#/$defs/legend" },
+            "select": { "$ref": "#/$defs/select" },
+            "box": {
+              "anyOf": [
+                { "const": "auto" },
+                { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number", "exclusiveMinimum": 0 } }
+              ]
+            },
+            "views": {
+              "type": "array",
+              "maxItems": 16,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name"],
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 255 },
+                  "target": { "$ref": "#/$defs/vec3" },
+                  "distance": { "type": "number", "minimum": 0 },
+                  "azimuth": { "type": "number" },
+                  "elevation": { "type": "number", "minimum": -89, "maximum": 89 }
+                }
+              }
+            },
             "x": { "$ref": "#/$defs/extension" }
           }
         },
+        "entity": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/entity" } },
+        "annotation": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/annotation" } },
         "x": { "$ref": "#/$defs/extension" }
-      }
+      },
+      "anyOf": [ { "required": ["bind"], "properties": { "bind": { "required": ["scene"] } } }, { "required": ["entity"] } ]
     },
     "control": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "kind", "bind"],
+      "required": ["id", "kind"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "kind": { "enum": ["slider", "button", "range", "toggle", "picker", "text"] },
+        "kind": { "enum": ["slider", "button", "range", "toggle", "picker", "text", "segmented", "readout", "transport"] },
         "title": { "$ref": "#/$defs/title" },
         "bind": {
           "type": "string",
           "maxLength": 320,
-          "pattern": "^(param:[^\\u0000-\\u001f]{1,63}|action:[^\\u0000-\\u001f]{1,63}|run:pause|value|intervene:[^\\u0000-\\u001f]{1,255})$"
+          "pattern": "^(param:[^\\u0000-\\u001f]{1,63}|action:[^\\u0000-\\u001f]{1,63}|run:pause|value|intervene:[^\\u0000-\\u001f]{1,255}|state:[a-z][a-z0-9_-]{0,63}|cursor)$"
         },
         "options": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "min": { "type": "number" },
-            "max": { "type": "number" },
+            "min": { "$ref": "#/$defs/number_or_reference" },
+            "max": { "$ref": "#/$defs/number_or_reference" },
             "step": { "type": "number", "minimum": 0 },
             "log": { "type": "boolean" },
-            "value": { "type": "number" },
+            "value": true,
+            "choices": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1024,
+              "items": {
+                "anyOf": [
+                  { "type": "string", "maxLength": 1024 },
+                  { "type": "number" },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["value"],
+                    "properties": {
+                      "value": { "anyOf": [ { "type": "string", "maxLength": 1024 }, { "type": "number" } ] },
+                      "label": { "$ref": "#/$defs/label" },
+                      "key": { "type": "string", "pattern": "^(shift[+])?[a-z0-9]$" }
+                    }
+                  }
+                ]
+              }
+            },
+            "choices_from": { "$ref": "#/$defs/binding" },
+            "multiple": { "type": "boolean" },
+            "placeholder": { "type": "string", "maxLength": 256 },
+            "max_length": { "type": "integer", "minimum": 1, "maximum": 65536 },
+            "min_span": { "type": "number", "minimum": 0 },
+            "follow": { "type": "boolean" },
+            "speed": { "type": "number", "minimum": 0.1, "maximum": 1000 },
+            "keys": { "type": "boolean" },
+            "format": { "$ref": "#/$defs/bound_format" },
+            "fields": { "$ref": "#/$defs/bound_fields" },
             "x": { "$ref": "#/$defs/extension" }
           }
         },
         "x": { "$ref": "#/$defs/extension" }
       },
-      "if": { "properties": { "kind": { "const": "button" } } },
-      "then": {
-        "properties": {
-          "bind": { "pattern": "^(action:.+|run:pause)$" },
-          "options": { "properties": { "min": false, "max": false, "step": false, "log": false, "value": false } }
-        }
-      },
-      "else": {
-        "if": { "properties": { "kind": { "const": "slider" } } },
-        "then": { "properties": { "bind": { "pattern": "^(param:.+|value)$" } } },
-        "else": {
-          "if": { "properties": { "kind": { "const": "toggle" } } },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "button" } }, "required": ["kind"] },
           "then": {
             "properties": {
-              "bind": { "pattern": "^(intervene:.+|param:.+)$" },
-              "options": { "properties": { "min": false, "max": false, "step": false, "log": false, "value": false } }
-            }
+              "bind": { "pattern": "^(action:.+|run:pause)$" },
+              "options": {
+                "properties": {
+                  "min": false,
+                  "max": false,
+                  "step": false,
+                  "log": false,
+                  "value": false,
+                  "choices": false,
+                  "choices_from": false
+                }
+              }
+            },
+            "required": ["bind"]
           }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "slider" } }, "required": ["kind"] },
+          "then": { "properties": { "bind": { "pattern": "^(param:.+|value|state:.+)$" } }, "required": ["bind"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "toggle" } }, "required": ["kind"] },
+          "then": {
+            "properties": {
+              "bind": { "pattern": "^(intervene:.+|param:.+|value|state:.+)$" },
+              "options": { "properties": { "min": false, "max": false, "step": false, "log": false } }
+            },
+            "required": ["bind"]
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "range" } }, "required": ["kind"] },
+          "then": { "properties": { "bind": { "pattern": "^(value|state:.+)$" } }, "required": ["bind"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "picker" } }, "required": ["kind"] },
+          "then": { "properties": { "bind": { "pattern": "^(value|state:.+)$" } }, "required": ["bind"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "text" } }, "required": ["kind"] },
+          "then": { "properties": { "bind": { "pattern": "^(value|state:.+)$" } }, "required": ["bind"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "segmented" } }, "required": ["kind"] },
+          "then": { "properties": { "bind": { "pattern": "^(value|state:.+)$" } }, "required": ["bind"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "readout" } }, "required": ["kind"] },
+          "then": { "properties": { "bind": false } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "transport" } }, "required": ["kind"] },
+          "then": { "properties": { "bind": { "pattern": "^cursor$" } }, "required": ["bind"] }
         }
-      }
+      ]
     },
     "entity_path": {
       "type": "string",
@@ -488,7 +717,7 @@
       "additionalProperties": false,
       "required": ["kind"],
       "properties": {
-        "kind": { "enum": ["geometry", "pixels"] },
+        "kind": { "enum": ["geometry", "pixels", "tensor"] },
         "panel": { "$ref": "#/$defs/id" },
         "entity": { "$ref": "#/$defs/entity_path" },
         "part": { "enum": ["points", "lines"] },
@@ -511,17 +740,55 @@
         },
         "width": { "type": "integer", "minimum": 1, "maximum": 2048 },
         "height": { "type": "integer", "minimum": 1, "maximum": 2048 },
-        "format": { "enum": ["rgba8unorm"] }
+        "format": { "enum": ["rgba8unorm"] },
+        "shape": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": { "type": "integer", "minimum": 1, "maximum": 1000000 }
+        }
       },
-      "if": { "properties": { "kind": { "const": "geometry" } } },
-      "then": {
-        "required": ["panel", "max_count", "arrays"],
-        "properties": { "width": false, "height": false, "format": false }
-      },
-      "else": {
-        "required": ["width", "height"],
-        "properties": { "panel": false, "entity": false, "part": false, "max_count": false, "arrays": false, "style": false }
-      }
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "geometry" } }, "required": ["kind"] },
+          "then": {
+            "required": ["panel", "max_count", "arrays"],
+            "properties": { "width": false, "height": false, "format": false, "shape": false }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "pixels" } }, "required": ["kind"] },
+          "then": {
+            "required": ["width", "height"],
+            "properties": {
+              "panel": false,
+              "entity": false,
+              "part": false,
+              "max_count": false,
+              "arrays": false,
+              "style": false,
+              "shape": false
+            }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "tensor" } }, "required": ["kind"] },
+          "then": {
+            "required": ["shape"],
+            "properties": {
+              "panel": false,
+              "entity": false,
+              "part": false,
+              "max_count": false,
+              "arrays": false,
+              "style": false,
+              "width": false,
+              "height": false,
+              "format": false
+            }
+          }
+        }
+      ]
     },
     "program_limits": {
       "type": "object",
@@ -550,6 +817,7 @@
           "maxItems": 3,
           "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
         },
+        "params": { "$ref": "#/$defs/params" },
         "x": { "$ref": "#/$defs/extension" }
       }
     },
@@ -562,6 +830,7 @@
         "entity": { "$ref": "#/$defs/entity_path" },
         "kind": { "enum": ["material", "vertex"] },
         "wgsl": { "type": "string", "minLength": 1, "maxLength": 16384 },
+        "params": { "$ref": "#/$defs/params" },
         "x": { "$ref": "#/$defs/extension" }
       }
     },
@@ -580,7 +849,10 @@
             "additionalProperties": false,
             "required": ["target", "sha256"],
             "properties": {
-              "target": { "type": "string", "pattern": "^(program:[a-z][a-z0-9_-]{0,63}|stage:[^\\u0000-\\u001f]+/(material|vertex))$" },
+              "target": {
+                "type": "string",
+                "pattern": "^(program:[a-z][a-z0-9_-]{0,63}|stage:[^\\u0000-\\u001f]+/(material|vertex))$"
+              },
               "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
             }
           }
@@ -591,9 +863,24 @@
     "layout_node": {
       "oneOf": [
         { "$ref": "#/$defs/id" },
+        { "$ref": "#/$defs/layout_leaf" },
         { "$ref": "#/$defs/layout_split" },
         { "$ref": "#/$defs/layout_tabs" }
       ]
+    },
+    "layout_leaf": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["panel"],
+      "properties": {
+        "panel": { "$ref": "#/$defs/id" },
+        "min": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "type": "integer", "minimum": 4, "maximum": 400 }
+        }
+      }
     },
     "layout_split": {
       "type": "object",
@@ -602,12 +889,14 @@
       "properties": {
         "split": { "enum": ["horizontal", "vertical"] },
         "ratio": { "type": "number", "minimum": 0.05, "maximum": 0.95 },
+        "shares": { "type": "array", "minItems": 2, "maxItems": 64, "items": { "type": "number", "exclusiveMinimum": 0 } },
         "title": { "$ref": "#/$defs/title" },
         "children": { "type": "array", "minItems": 2, "maxItems": 64, "items": { "$ref": "#/$defs/layout_node" } },
         "x": { "$ref": "#/$defs/extension" }
       },
-      "if": { "required": ["ratio"] },
-      "then": { "properties": { "children": { "maxItems": 2 } } }
+      "allOf": [
+        { "if": { "required": ["ratio"] }, "then": { "properties": { "children": { "maxItems": 2 }, "shares": false } } }
+      ]
     },
     "layout_tabs": {
       "type": "object",
@@ -618,6 +907,138 @@
         "title": { "$ref": "#/$defs/title" },
         "x": { "$ref": "#/$defs/extension" }
       }
+    },
+    "annotation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["label", "threshold", "band", "marker"] },
+        "axis": { "enum": ["x", "y", "z"] },
+        "value": { "$ref": "#/$defs/number_or_reference" },
+        "range": {
+          "anyOf": [
+            { "type": "array", "minItems": 2, "maxItems": 2, "items": { "$ref": "#/$defs/number_or_reference" } },
+            { "$ref": "#/$defs/reference" }
+          ]
+        },
+        "at": {
+          "anyOf": [
+            { "type": "array", "minItems": 2, "maxItems": 3, "items": { "$ref": "#/$defs/number_or_reference" } },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["entity", "index"],
+              "properties": {
+                "entity": { "$ref": "#/$defs/spec_entity_path" },
+                "index": { "$ref": "#/$defs/integer_or_reference" }
+              }
+            },
+            { "$ref": "#/$defs/reference" }
+          ]
+        },
+        "text": { "$ref": "#/$defs/bound_format" },
+        "fields": { "$ref": "#/$defs/bound_fields" },
+        "leader": { "type": "boolean" },
+        "emphasis": { "enum": ["accent", "muted"] },
+        "x": { "$ref": "#/$defs/extension" }
+      }
+    },
+    "entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "draw", "bind"],
+      "properties": {
+        "path": { "$ref": "#/$defs/spec_entity_path" },
+        "draw": { "enum": ["points", "lines", "surface"] },
+        "title": { "$ref": "#/$defs/title" },
+        "bind": {
+          "anyOf": [
+            { "$ref": "#/$defs/id" },
+            { "type": "object", "additionalProperties": { "$ref": "#/$defs/binding_or_reference" } }
+          ]
+        },
+        "options": { "$ref": "#/$defs/entity_options" },
+        "pose": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "position": { "$ref": "#/$defs/vec3" },
+            "rotation": { "type": "array", "minItems": 4, "maxItems": 4, "items": { "type": "number" } },
+            "scale": { "$ref": "#/$defs/vec3" }
+          }
+        },
+        "x": { "$ref": "#/$defs/extension" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "draw": { "const": "surface" } }, "required": ["draw"] },
+          "then": {
+            "properties": {
+              "options": {
+                "properties": {
+                  "size_px": false,
+                  "shape": false,
+                  "width_px": false,
+                  "mode": false,
+                  "x": false,
+                  "y": false,
+                  "z": false,
+                  "own": false
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "draw": { "const": "lines" } }, "required": ["draw"] },
+          "then": { "properties": { "options": { "properties": { "size_px": false, "shape": false } } } }
+        },
+        {
+          "if": { "properties": { "draw": { "const": "points" } }, "required": ["draw"] },
+          "then": { "properties": { "options": { "properties": { "mode": false, "width_px": false } } } }
+        }
+      ]
+    },
+    "entity_options": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "colormap": { "$ref": "#/$defs/colormap_or_reference" },
+        "vmin": { "$ref": "#/$defs/number_or_reference" },
+        "vmax": { "$ref": "#/$defs/number_or_reference" },
+        "size_px": { "type": "number", "exclusiveMinimum": 0 },
+        "shape": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "width_px": { "type": "number", "exclusiveMinimum": 0 },
+        "mode": { "enum": ["strip", "segments"] },
+        "x": { "anyOf": [ { "type": "number" }, { "enum": ["min", "max"] } ] },
+        "y": { "anyOf": [ { "type": "number" }, { "enum": ["min", "max"] } ] },
+        "z": { "anyOf": [ { "type": "number" }, { "enum": ["min", "max"] } ] },
+        "own": { "type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": { "enum": ["x", "y", "z"] } },
+        "depth_offset": { "type": "integer", "minimum": -8, "maximum": 8 },
+        "highlight": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "control": { "type": "string" },
+            "selection": { "type": "string" },
+            "state": { "type": "string" },
+            "field": { "type": "string" },
+            "entity": { "type": "string" },
+            "default": true,
+            "along": { "enum": ["row", "column", "index"] }
+          },
+          "oneOf": [ { "required": ["control"] }, { "required": ["selection"] }, { "required": ["state"] } ]
+        },
+        "visible": { "$ref": "#/$defs/boolean_or_reference" }
+      }
+    },
+    "params": {
+      "type": "object",
+      "maxProperties": 16,
+      "propertyNames": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$" },
+      "additionalProperties": { "$ref": "#/$defs/number_or_reference" }
     }
   }
 }

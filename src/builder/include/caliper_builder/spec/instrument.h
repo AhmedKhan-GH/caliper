@@ -18,10 +18,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include <caliper_builder/spec/annotation.h>
+#include <caliper_builder/spec/reference.h>
 
 namespace caliper_builder::spec {
 
@@ -58,10 +62,12 @@ std::optional<std::string> live_scene_name(std::string_view binding);
 
 // The kinds of a control. Caliper builds slider, button and toggle; the others are part of
 // the format and refused by the validator with spec.unsupported_control until
-// they are built.
-enum class ControlKind { slider, button, range, toggle, picker, text };
+// they are built. `segmented`, `readout` and `transport` join with
+// design/instrument-interface.md.
+enum class ControlKind { slider, button, range, toggle, picker, text, segmented, readout, transport };
 
-// "slider", "button", "range", "toggle", "picker", "text".
+// "slider", "button", "range", "toggle", "picker", "text", "segmented",
+// "readout", "transport".
 const char* control_kind_name(ControlKind kind);
 std::optional<ControlKind> control_kind_from_name(std::string_view name);
 // Whether this Caliper draws the kind (slider, button and toggle).
@@ -74,12 +80,14 @@ bool control_kind_built(ControlKind kind);
 //   value          a value the spec holds, which references read later
 //   intervene:<point>  an intervention point of the attached model, which a
 //                  toggle ablates while it is on (design/gpu-programs.md)
+//   state:<id>     a state variable of the spec (state.h)
+//   cursor         the time cursor, which only a transport binds
 // A name has 1 to 63 bytes of UTF-8 and no control characters; a point's
 // name has up to 255 bytes.
 struct ControlTarget {
-    enum class Kind { param, action, run_pause, value, intervene };
+    enum class Kind { param, action, run_pause, value, intervene, state, cursor };
     Kind kind = Kind::value;
-    std::string name;   // param, action and intervene only
+    std::string name;   // param, action, intervene and state only
 };
 bool operator==(const ControlTarget& a, const ControlTarget& b);
 
@@ -93,16 +101,46 @@ std::string control_target_string(const ControlTarget& target);
 // param: (the validator's spec.control_mismatch). The reserved kinds bind nothing.
 bool control_takes_target(ControlKind kind, const ControlTarget& target);
 
+// One choice of a picker or a segmented group: a value, or the table
+// { value, label, key }. `key` is a shortcut: a letter or a digit with an
+// optional "shift+".
+struct Choice {
+    nlohmann::json value;
+    std::optional<std::string> label;
+    std::optional<std::string> key;
+    bool table = false;            // written as a table
+};
+bool operator==(const Choice& a, const Choice& b);
+
 // The options of a control. An option that is not set is empty.
 struct ControlOptions {
-    std::optional<double> min;     // slider: the range's low end
-    std::optional<double> max;     // slider: the range's high end, above min
-    std::optional<double> step;    // slider: the step, above 0
+    std::optional<double> min;     // slider and range: the low end
+    std::optional<double> max;     // slider and range: the high end, above min
+    std::optional<double> step;    // slider and range: the step, above 0
     std::optional<bool> log;       // slider: a log scale, with min above 0
     std::optional<double> value;   // slider bound to value: the start value
+    // Version 1 (design/instrument-interface.md):
+    nlohmann::json value_other;    // the start value when it is not one number: [lo, hi], a boolean, a text or a list
+    std::vector<Choice> choices;   // picker and segmented
+    std::optional<std::string> choices_from;  // picker: "<source>.<column>"
+    std::optional<bool> multiple;  // segmented
+    std::optional<std::string> placeholder;   // text
+    std::optional<std::int64_t> max_length;   // text
+    std::optional<double> min_span;           // range
+    std::optional<bool> follow;    // range: moves with its upper bound
+    std::optional<double> speed;   // transport: steps per second at open, 0.1 to 1,000
+    std::optional<bool> keys;      // transport: Space, the arrows, Home and End
+    std::optional<BoundText> bound_text;      // readout: the options `format` and `fields`
+    // The references at the value places, by key: `min` and `max` of a
+    // slider or a range. The literal field is then empty.
+    std::map<std::string, Reference> references;
     nlohmann::json x;              // the extension table, null when absent
 
-    bool empty() const { return !min && !max && !step && !log && !value && x.is_null(); }
+    bool empty() const {
+        return !min && !max && !step && !log && !value && value_other.is_null() && choices.empty() && !choices_from &&
+               !multiple && !placeholder && !max_length && !min_span && !follow && !speed && !keys && !bound_text &&
+               references.empty() && x.is_null();
+    }
 };
 bool operator==(const ControlOptions& a, const ControlOptions& b);
 inline bool operator!=(const ControlOptions& a, const ControlOptions& b) { return !(a == b); }

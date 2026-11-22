@@ -11,6 +11,7 @@
 #include <set>
 
 #include "internal.h"
+#include "validate_additions.h"
 
 namespace caliper_builder::spec {
 
@@ -138,10 +139,27 @@ public:
         provenance();
         layout();
         usage();
+        additions();
         extension(spec_.x, "x");
     }
 
 private:
+    // The checks of design/instrument-interface.md, each in its own file
+    // (validate_additions.h). A version 0 spec holds none of their keys.
+    void additions() {
+        if (spec_.version < kInstrumentVersion) return;
+        const AdditionsCheck c{spec_, resolver_, report_, sink_};
+        validate_states(c);
+        validate_references(c);
+        validate_controls(c);
+        validate_history(c);
+        validate_operators(c);
+        validate_entities(c);
+        validate_annotations(c);
+        validate_bound_text(c);
+        validate_layout(c);
+    }
+
     // ---- small checks ----------------------------------------------------------
 
     void text(const std::string& s, const std::string& path, std::size_t limit, TextKind kind, bool allow_empty) {
@@ -209,6 +227,7 @@ private:
         }
         using Table = std::pair<const char*, bool>;
         const Table tables[] = {{"control", !spec_.controls.empty()},
+                                {"state", !spec_.states.empty()},
                                 {"program", !spec_.programs.empty()},
                                 {"stage", !spec_.stages.empty()},
                                 {"provenance", !spec_.provenance.empty()}};
@@ -459,6 +478,7 @@ private:
                             sp);
                 continue;
             }
+            if (value.reference) continue;   // validate_references.cpp
             if (value.bindings.empty()) {
                 sink_.error("spec.missing_slot", sp + " holds no binding.", sp);
                 continue;
@@ -494,7 +514,8 @@ private:
                                   " now, so the panel shows that its source is offline until it does.",
                               sp);
         }
-        if (!p.bind.count(kSceneSlot))
+        // A scene panel with entities draws them and needs no live scene.
+        if (!p.bind.count(kSceneSlot) && p.entities.empty())
             sink_.error("spec.missing_slot", "A scene panel needs the slot \"scene\".", path + ".bind.scene");
     }
 
@@ -668,6 +689,10 @@ private:
                 } else if (!t.axis.empty()) {
                     axis_range(t.axis[0], ap);
                 }
+                break;
+            case TransformOp::window:    // validate_history.cpp
+            case TransformOp::surface:   // validate_operators.cpp
+            case TransformOp::path:
                 break;
         }
         extension(t.x, path + ".x");
@@ -875,6 +900,9 @@ private:
                 info.dtype = float_dtype();
                 return true;
             }
+            case TransformOp::window: return apply_window_shape(t, info, path, sink_);
+            case TransformOp::surface:
+            case TransformOp::path: return apply_operator_shape(t, info, path, sink_);
         }
         return true;
     }
@@ -1011,6 +1039,7 @@ private:
                 continue;
             }
             const bool list_ok = p.primitive == Primitive::series && slot == "y";
+            if (value.reference) continue;   // validate_references.cpp
             if (value.bindings.empty()) {
                 sink_.error("spec.missing_slot", sp + " holds no binding.", sp);
                 continue;

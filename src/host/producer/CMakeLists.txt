@@ -34,7 +34,7 @@ if(NOT MSVC)
 endif()
 
 if(BUILD_TESTS AND TARGET doctest::doctest)
-    add_executable(caliper_producer_tests tests/test_producer.cpp)
+    add_executable(caliper_producer_tests tests/test_producer.cpp tests/test_producer_operators.cpp)
     target_link_libraries(caliper_producer_tests PRIVATE caliper_producer doctest::doctest)
     set_target_properties(caliper_producer_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
     if(APPLE)

@@ -1,4 +1,5 @@
 #include <caliper_builder/session/spec_edit.h>
+#include <caliper_builder/session/instrument_commands.h>
 #include <caliper_builder/session/program_commands.h>
 
 #include <caliper_builder/spec/format.h>
@@ -617,7 +618,9 @@ bool is_spec_edit_command(std::string_view name) {
            name == "panel.create" || name == "panel.patch" || name == "panel.remove" || name == "layout.place" ||
            name == "layout.set" || name == "control.create" || name == "control.patch" || name == "control.remove" ||
            name == "stage.set" || name == "stage.remove" || name == "program.create" || name == "program.patch" ||
-           name == "program.remove";
+           name == "program.remove" || name == "state.create" || name == "state.patch" || name == "state.remove" ||
+           name == "entity.set" || name == "entity.remove" || name == "annotation.set" ||
+           name == "annotation.remove" || name == "camera.save";
 }
 
 SpecEdit apply_spec_edit(const spec::Spec& s, std::string_view name, const json& raw_args,
@@ -638,6 +641,13 @@ SpecEdit apply_spec_edit(const spec::Spec& s, std::string_view name, const json&
         if (name == "stage.set" || name == "stage.remove" || name == "program.create" || name == "program.patch" ||
             name == "program.remove")
             return apply_program_edit(s, name, args, resolver);
+        // design/instrument-interface.md (instrument_commands.h)
+        if (name == "state.create" || name == "state.patch" || name == "state.remove")
+            return apply_state_edit(s, name, args, resolver);
+        if (name == "entity.set" || name == "entity.remove") return apply_entity_edit(s, name, args, resolver);
+        if (name == "annotation.set" || name == "annotation.remove")
+            return apply_annotation_edit(s, name, args, resolver);
+        if (name == "camera.save") return apply_camera_edit(s, name, args, resolver);
         return refuse(fail("command.unknown", "This is not a command that edits the open spec.", std::string(name)));
     } catch (const std::exception& e) {
         return refuse(fail("spec.internal", std::string("The edit failed unexpectedly: ") + e.what()));

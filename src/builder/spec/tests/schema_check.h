@@ -44,7 +44,8 @@ private:
             "$schema", "$id",       "$defs",      "title",    "description", "$comment", "$ref",
             "type",    "const",     "enum",       "properties", "additionalProperties", "required",
             "items",   "minItems",  "maxItems",   "uniqueItems", "minLength", "maxLength", "pattern",
-            "minimum", "maximum",   "anyOf",      "oneOf",    "if",          "then",     "else"};
+            "minimum", "maximum",   "anyOf",      "oneOf",    "if",          "then",     "else",
+            "allOf",   "exclusiveMinimum", "maxProperties", "propertyNames"};
         return k;
     }
 
@@ -60,9 +61,10 @@ private:
             const json& v = it.value();
             if (k == "$defs" || k == "properties") {
                 for (auto d = v.begin(); d != v.end(); ++d) supported(d.value(), where + "/" + k + "/" + d.key());
-            } else if (k == "anyOf" || k == "oneOf") {
+            } else if (k == "anyOf" || k == "oneOf" || k == "allOf") {
                 for (std::size_t i = 0; i < v.size(); ++i) supported(v[i], where + "/" + k + "/" + std::to_string(i));
-            } else if (k == "items" || k == "additionalProperties" || k == "if" || k == "then" || k == "else") {
+            } else if (k == "items" || k == "additionalProperties" || k == "if" || k == "then" || k == "else" ||
+                       k == "propertyNames") {
                 supported(v, where + "/" + k);
             } else if (k == "$ref") {
                 const std::string ref = v.get<std::string>();
@@ -131,6 +133,11 @@ private:
                 for (const json& k : *req)
                     if (!inst.contains(k.get<std::string>()))
                         ok = fail(out, path, "lacks the required key " + k.get<std::string>());
+            if (auto mx = s.find("maxProperties"); mx != s.end() && inst.size() > mx->get<std::size_t>())
+                ok = fail(out, path, "has more than " + mx->dump() + " keys");
+            if (auto names = s.find("propertyNames"); names != s.end())
+                for (auto it = inst.begin(); it != inst.end(); ++it)
+                    ok = check(*names, json(it.key()), path + "/" + it.key(), out, depth + 1) && ok;
             for (auto it = inst.begin(); it != inst.end(); ++it) {
                 const std::string child = path + "/" + it.key();
                 if (props && props->contains(it.key())) {
@@ -170,7 +177,11 @@ private:
                 ok = fail(out, path, "is below " + mn->dump());
             if (auto mx = s.find("maximum"); mx != s.end() && v > mx->get<double>())
                 ok = fail(out, path, "is above " + mx->dump());
+            if (auto ex = s.find("exclusiveMinimum"); ex != s.end() && v <= ex->get<double>())
+                ok = fail(out, path, "is not above " + ex->dump());
         }
+        if (auto all = s.find("allOf"); all != s.end())
+            for (const json& sub : *all) ok = check(sub, inst, path, out, depth + 1) && ok;
         if (auto any = s.find("anyOf"); any != s.end()) {
             bool one = false;
             for (const json& sub : *any) one = one || check(sub, inst, path, nullptr, depth + 1);

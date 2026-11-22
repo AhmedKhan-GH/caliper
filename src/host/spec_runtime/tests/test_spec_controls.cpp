@@ -5,8 +5,20 @@
 // pushes one control event when they let go; a button queues its action or
 // pauses the run; a widget without a script or without control sends nothing.
 // The suite "gpu" draws a slider row and a button row on the offscreen canvas.
+//
+// The kinds of design/instrument-interface.md: a range drags its grabs and
+// keeps its value in the session's values, a segmented group chooses on a
+// click and on its key while no text field holds the keyboard, a text field
+// applies on Return, a picker sets a choice from its menu, a toggle bound to a
+// state holds a boolean, a pick writes its state, and the app's single keys
+// are reserved shortcuts. The suite "gpu" draws one row of each new kind.
 #include "spec_runtime/spec_instruments.h"
 #include "spec_runtime/spec_offscreen.h"
+#include "spec_runtime/spec_shortcuts.h"
+
+#include <caliper_builder/session/history.h>
+#include <caliper_builder/session/values.h>
+#include <caliper_builder/spec/validate.h>
 
 #include "export_service.h"
 
@@ -410,3 +422,334 @@ TEST_CASE("spec controls: a toggle bound to a boolean parameter sets it") {
     ui.click(390, 15, [&] { return caliper_host::draw_spec_control(lr, kRow, look, host); });
     CHECK(run.sent.size() == 1);
 }
+
+// ---- the kinds that hold a value (design/instrument-interface.md, Controls) ----------------
+
+namespace {
+
+// A spec with the states measure (text), span (a range) and flag (a boolean)
+// and the given controls, as the session's values read it.
+spec::Spec instrument_spec(std::vector<spec::Control> controls) {
+    spec::Spec s;
+    s.version = 1;
+    s.applet.id = "bench";
+    spec::StateVar measure;
+    measure.id = "measure";
+    measure.type = spec::StateType::text;
+    measure.choices = {"norm", "mean"};
+    spec::StateVar span;
+    span.id = "span";
+    span.type = spec::StateType::range;
+    span.min = 0.0;
+    span.max = 100.0;
+    span.default_value = json::array({20.0, 60.0});
+    spec::StateVar flag;
+    flag.id = "flag";
+    flag.type = spec::StateType::boolean;
+    spec::StateVar token;
+    token.id = "token";
+    token.type = spec::StateType::integer;
+    token.min = 0.0;
+    token.max = 63.0;
+    s.states = {measure, span, flag, token};
+    s.controls = std::move(controls);
+    return s;
+}
+
+spec::Choice choice(const std::string& value, const std::string& label, const std::string& key = {}) {
+    spec::Choice c;
+    c.value = value;
+    c.label = label;
+    if (!key.empty()) c.key = key;
+    c.table = true;
+    return c;
+}
+
+// A drag from (x0, y) to (x1, y): the press, two moves and the release.
+void drag(Ui& ui, float x0, float x1, float y, const std::function<bool()>& draw) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(x0, y);
+    ui.frame([&] { draw(); });
+    io.AddMouseButtonEvent(0, true);
+    ui.frame([&] { draw(); });
+    io.AddMousePosEvent((x0 + x1) * 0.5f, y);
+    ui.frame([&] { draw(); });
+    io.AddMousePosEvent(x1, y);
+    ui.frame([&] { draw(); });
+    io.AddMouseButtonEvent(0, false);
+    ui.frame([&] { draw(); });
+    ui.frame([&] { draw(); });
+}
+
+// A key pressed and released, with the frame of each drawing `draw`.
+void press(Ui& ui, ImGuiKey key, const std::function<void()>& draw) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddKeyEvent(key, true);
+    ui.frame(draw);
+    io.AddKeyEvent(key, false);
+    ui.frame(draw);
+}
+
+std::vector<cb::Event> of_kind(const Recorder& rec, cb::EventKind kind) {
+    std::vector<cb::Event> out;
+    for (const auto& e : rec.events)
+        if (e.kind == kind) out.push_back(e);
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("spec controls: a range drags its nearer grab, keeps the session's value and pushes one event") {
+    Ui ui;
+    Recorder rec;
+    spec::Control win = make("win", spec::ControlKind::range, "value");
+    win.options.min = 0.0;
+    win.options.max = 100.0;
+    win.options.step = 1.0;
+    win.options.value_other = json::array({20.0, 60.0});
+    spec::Control span = make("span", spec::ControlKind::range, "state:span");
+    const spec::Spec sp = instrument_spec({win, span});
+    cb::ValueStore values;
+    values.reset(sp);
+    SpecInstrumentHost host{&rec, nullptr, &values, nullptr, &sp};
+    const SpecLook look;
+    // The high grab is nearer the right end of the track; a drag there takes it to the top.
+    drag(ui, 380, 399, 15, [&] { return caliper_host::draw_spec_control(win, kRow, look, host); });
+    const json v = values.control_value("win");
+    REQUIRE(v.is_array());
+    CHECK(v[0].get<double>() == 20.0);
+    CHECK(v[1].get<double>() >= 95.0);
+    REQUIRE(rec.events.size() == 1);
+    CHECK(rec.events[0].kind == cb::EventKind::control);
+    CHECK(rec.events[0].fields["value"] == v);
+
+    // Bound to a state: one control event and one state event, whose previous
+    // value is the value before the drag.
+    rec.events.clear();
+    drag(ui, 380, 399, 15, [&] { return caliper_host::draw_spec_control(span, kRow, look, host); });
+    const auto states = of_kind(rec, cb::EventKind::state);
+    REQUIRE(states.size() == 1);
+    CHECK(states[0].fields["previous"] == json::array({20.0, 60.0}));
+    CHECK(states[0].fields["writer"] == "span");
+    CHECK(of_kind(rec, cb::EventKind::control).size() == 1);
+}
+
+TEST_CASE("spec controls: a segmented group chooses on a click, and on its key while no text field holds the keyboard") {
+    Ui ui;
+    Recorder rec;
+    spec::Control group = make("measure", spec::ControlKind::segmented, "state:measure");
+    group.options.choices = {choice("norm", "Norm", "n"), choice("mean", "Mean", "m")};
+    spec::Control note = make("note", spec::ControlKind::text, "value");
+    const spec::Spec sp = instrument_spec({group, note});
+    cb::ValueStore values;
+    values.reset(sp);
+    SpecInstrumentHost host{&rec, nullptr, &values, nullptr, &sp};
+    const SpecLook look;
+    const ImRect second(0, 40, 400, 70);
+    auto draw = [&] {
+        caliper_host::handle_instrument_keys(sp, host);
+        caliper_host::draw_spec_control(group, kRow, look, host);
+        return caliper_host::draw_spec_control(note, second, look, host);
+    };
+    // A click on the right button chooses Mean.
+    ui.click(390, 15, [&] { draw(); return false; });
+    CHECK(values.control_value("measure") == "mean");
+    REQUIRE(of_kind(rec, cb::EventKind::state).size() == 1);
+    CHECK(of_kind(rec, cb::EventKind::state)[0].fields["writer"] == "measure");
+    // The key n chooses Norm; its control event carries the key.
+    rec.events.clear();
+    press(ui, ImGuiKey_N, [&] { draw(); });
+    CHECK(values.control_value("measure") == "norm");
+    const auto controls = of_kind(rec, cb::EventKind::control);
+    REQUIRE(controls.size() == 1);
+    CHECK(controls[0].fields["key"] == "n");
+    // While the text field holds the keyboard, m types into it and leaves the group.
+    ui.click(300, 55, [&] { draw(); return false; });
+    REQUIRE(ImGui::GetIO().WantTextInput);
+    press(ui, ImGuiKey_M, [&] { draw(); });
+    CHECK(values.control_value("measure") == "norm");
+}
+
+TEST_CASE("spec controls: a group with multiple turns each choice on and off") {
+    Ui ui;
+    Recorder rec;
+    spec::Control layers = make("layers", spec::ControlKind::segmented, "value");
+    layers.options.multiple = true;
+    layers.options.choices = {choice("a", "A"), choice("b", "B"), choice("c", "C")};
+    const spec::Spec sp = instrument_spec({layers});
+    cb::ValueStore values;
+    values.reset(sp);
+    SpecInstrumentHost host{&rec, nullptr, &values, nullptr, &sp};
+    const SpecLook look;
+    auto draw = [&] { return caliper_host::draw_spec_control(layers, kRow, look, host); };
+    CHECK(values.control_value("layers") == json::array());
+    ui.click(385, 15, draw);   // C
+    ui.click(100, 15, draw);   // A, the first third of the widget
+    const json v = values.control_value("layers");
+    INFO(v.dump() << " after " << rec.events.size() << " events");
+    REQUIRE(v.is_array());
+    CHECK(v.size() == 2);
+    CHECK(v.back() == "c");   // in the order of the choices
+    ui.click(385, 15, draw);   // C off
+    CHECK(values.control_value("layers").size() == 1);
+    CHECK(of_kind(rec, cb::EventKind::control).size() == 3);
+}
+
+TEST_CASE("spec controls: a text field applies its text on Return, cut at max_length") {
+    Ui ui;
+    Recorder rec;
+    spec::Control note = make("note", spec::ControlKind::text, "value");
+    note.options.max_length = 5;
+    note.options.placeholder = "Label";
+    const spec::Spec sp = instrument_spec({note});
+    cb::ValueStore values;
+    values.reset(sp);
+    SpecInstrumentHost host{&rec, nullptr, &values, nullptr, &sp};
+    const SpecLook look;
+    auto draw = [&] { return caliper_host::draw_spec_control(note, kRow, look, host); };
+    ui.click(300, 15, draw);
+    ImGui::GetIO().AddInputCharactersUTF8("layer seven");
+    ui.frame([&] { draw(); });
+    CHECK(values.control_value("note") == "");   // nothing applies while the person types
+    press(ui, ImGuiKey_Enter, [&] { draw(); });
+    CHECK(values.control_value("note") == "layer");
+    REQUIRE(rec.events.size() == 1);
+    CHECK(rec.events[0].fields["value"] == "layer");
+}
+
+TEST_CASE("spec controls: a picker sets a choice from its menu, and a toggle bound to a state holds a boolean") {
+    Ui ui;
+    Recorder rec;
+    spec::Control pick = make("pick", spec::ControlKind::picker, "state:measure");
+    pick.options.choices = {choice("norm", "Norm"), choice("mean", "Mean")};
+    spec::Control flag = make("flag", spec::ControlKind::toggle, "state:flag");
+    const spec::Spec sp = instrument_spec({pick, flag});
+    cb::ValueStore values;
+    values.reset(sp);
+    SpecInstrumentHost host{&rec, nullptr, &values, nullptr, &sp};
+    const SpecLook look;
+    auto draw = [&] { return caliper_host::draw_spec_control(pick, kRow, look, host); };
+    ui.click(300, 15, draw);   // opens the menu below the row
+    ui.click(300, 57, draw);   // the second item
+    CHECK(values.control_value("pick") == "mean");
+    CHECK(of_kind(rec, cb::EventKind::state).size() == 1);
+    // The toggle: a click turns the boolean state on.
+    rec.events.clear();
+    ui.click(200, 15, [&] { return caliper_host::draw_spec_control(flag, kRow, look, host); });
+    CHECK(values.control_value("flag") == true);
+    CHECK(of_kind(rec, cb::EventKind::state).size() == 1);
+}
+
+TEST_CASE("spec controls: a pick records its fields in the session and writes the panel's state") {
+    spec::Spec sp = instrument_spec({});
+    spec::Panel world;
+    world.id = "world";
+    world.primitive = spec::Primitive::scene;
+    world.options.select = spec::StateWrite{"token", "column", std::string("terrain")};
+    sp.panels.push_back(world);
+    cb::ValueStore values;
+    values.reset(sp);
+    Recorder rec;
+    SpecInstrumentHost host{&rec, nullptr, &values, nullptr, &sp};
+    cb::Event pick;
+    pick.kind = cb::EventKind::pick;
+    pick.panel = "world";
+    pick.fields = json{{"entity", "terrain"}, {"fields", {{"entity", "terrain"}, {"row", 3}, {"column", 7}}}};
+    caliper_host::record_spec_pick("world", pick, host);
+    spec::Reference token;
+    token.target = "token";
+    CHECK(values.value(token) == 7);
+    REQUIRE(values.last_pick("world"));
+    CHECK(values.last_pick("world")->row == std::optional<std::int64_t>(3));
+    REQUIRE(rec.events.size() == 1);
+    CHECK(rec.events[0].kind == cb::EventKind::state);
+    // A pick on another entity writes nothing.
+    pick.fields = json{{"entity", "loss"}, {"index", 2}};
+    caliper_host::record_spec_pick("world", pick, host);
+    CHECK(values.value(token) == 7);
+}
+
+TEST_CASE("spec controls: the single keys of the app's views are reserved shortcuts") {
+    // The live views use F (fit the camera) and U (turn the up axis) without a
+    // modifier (src/host/live/live_views_draw.cpp); the transport takes Space,
+    // the arrows, Home and End, which the grammar of a shortcut never reaches.
+    const std::string head = "caliper_spec = 1\n[applet]\nid = \"a\"\n[[state]]\nid = \"m\"\ntype = \"text\"\n"
+                             "choices = [\"x\", \"y\"]\n[[control]]\nid = \"g\"\nkind = \"segmented\"\n"
+                             "bind = \"state:m\"\noptions = { choices = [{ value = \"x\", key = \"";
+    for (const char* key : {"f", "u", "shift+f", "shift+u"}) {
+        CAPTURE(key);
+        const auto report = cb::spec::check_toml(head + key + "\" }, { value = \"y\", key = \"y\" }] }\n");
+        bool reserved = false;
+        for (const auto& d : report.diagnostics) reserved = reserved || d.code == "spec.reserved_shortcut";
+        CHECK(reserved);
+    }
+    const auto free = cb::spec::check_toml(head + "n\" }, { value = \"y\", key = \"m\" }] }\n");
+    for (const auto& d : free.diagnostics) CHECK(d.code != "spec.reserved_shortcut");
+}
+
+TEST_SUITE("gpu") {
+TEST_CASE("spec controls: a range, a picker, a text field, a segmented group and a readout in the house look") {
+    caliper_host::SpecOffscreen* c = spec_test::canvas();
+    if (!c) return;
+    Recorder rec;
+    spec::Control win = make("window", spec::ControlKind::range, "value");
+    win.title = "Steps";
+    win.options.min = 0.0;
+    win.options.max = 3000.0;
+    win.options.value_other = json::array({952.0, 3000.0});
+    spec::Control cmap = make("cmap", spec::ControlKind::picker, "value");
+    cmap.title = "Colormap";
+    cmap.options.choices = {choice("viridis", "Viridis"), choice("magma", "Magma")};
+    spec::Control note = make("note", spec::ControlKind::text, "value");
+    note.title = "Note";
+    note.options.placeholder = "A label for this run";
+    spec::Control measure = make("measure", spec::ControlKind::segmented, "state:measure");
+    measure.title = "Measure";
+    measure.options.choices = {choice("norm", "Norm", "n"), choice("mean", "Mean", "m")};
+    spec::Control now = make("now", spec::ControlKind::readout, "");
+    now.title = "Now";
+    spec::BoundText text;
+    text.format = "Step {step:,d}  Token {token:d}";
+    spec::Reference step;
+    step.target = "cursor";
+    step.field = "step";
+    spec::Reference token;
+    token.target = "token";
+    text.fields = {{"step", step}, {"token", token}};
+    now.options.bound_text = text;
+    const spec::Spec sp = instrument_spec({win, cmap, note, measure, now});
+    cb::ValueStore values;
+    values.reset(sp);
+    SpecInstrumentHost host{&rec, nullptr, &values, nullptr, &sp};
+    const SpecLook look = c->look();
+    const float row = caliper_host::spec_control_height(win, look);
+    const std::vector<const spec::Control*> rows = {&win, &cmap, &note, &measure, &now};
+    const int w = 560, h = (int)(row * rows.size());
+    const spec_test::Image img = spec_test::render(w, h, [&](const ImRect& area) {
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            const float y = area.Min.y + row * (float)i;
+            caliper_host::draw_spec_control(*rows[i], ImRect(ImVec2(area.Min.x, y), ImVec2(area.Max.x, y + row)), look,
+                                            host);
+        }
+    });
+    REQUIRE(img.w == w);
+    if (const char* dir = std::getenv("CALIPER_SPEC_TEST_DUMP"); dir && *dir)
+        caliper_host::export_write_png_atomic(std::string(dir) + "/controls-instrument.png", img.px.data(),
+                                              (uint32_t)w, (uint32_t)h);
+    const int r = (int)row;
+    // The range's span [952, 3000] fills the right two thirds of its track in the accent colour.
+    const auto span = img.count(spec_test::near(look.accent, 8), 0, 0, w, r);
+    REQUIRE(span.n > 0);
+    CHECK(span.cx > 0.55 * w);
+    // The segmented group's first button (Norm, on) is filled with the accent colour, the second is not.
+    const auto on = img.count(spec_test::near(look.accent, 8), 0, 3 * r, w, 4 * r);
+    REQUIRE(on.n > 0);
+    CHECK(on.cx < 0.75 * w);
+    // Each row draws its title in bright text.
+    for (int i = 0; i < (int)rows.size(); ++i) {
+        CAPTURE(i);
+        CHECK(img.count(spec_test::bright, 0, i * r, w / 3, (i + 1) * r).n > 0);
+    }
+    CHECK(rec.events.empty());   // drawing alone sends nothing
+}
+}  // TEST_SUITE("gpu")

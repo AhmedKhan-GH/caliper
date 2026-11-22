@@ -3,6 +3,7 @@
 // writing a Spec back as JSON.
 #include <caliper_builder/spec/format.h>
 
+#include <algorithm>
 #include <cmath>
 #include <set>
 #include <stdexcept>
@@ -48,6 +49,14 @@ bool as_integer(const json& v, std::int64_t& out) {
         return true;
     }
     return false;
+}
+
+// Whether `name` is an option that format version 1 adds to `p`: a document of
+// version 0 reads it as an unknown option.
+bool version_one_option(Primitive p, const std::string& name) {
+    for (const char* n : {"legend", "box", "views", "select", "format", "fields"})
+        if (name == n) return true;
+    return name == "scale_bar" && p != Primitive::scene;
 }
 
 class Decoder {
@@ -154,6 +163,141 @@ public:
         return *it;
     }
 
+    // ---- binding references (spec version 1, reference.h) -----------------------
+
+    enum class Ref { none, read, bad };
+
+    // Reads the table `v` at `path` as a reference when the version allows one
+    // and the table has the form of one. A table of that form that is not a
+    // reference that parse_reference() reads, or that holds a key outside the
+    // form or a nested reference, is spec.bad_reference.
+    Ref reference(const json& v, const std::string& path, Reference& out) {
+        if (version_ < kInstrumentVersion || !looks_like_reference(v)) return Ref::none;
+        bool ok = false;
+        if (auto r = parse_reference(v)) {
+            ok = !looks_like_reference(r->fallback);
+            for (auto it = v.begin(); ok && it != v.end(); ++it) {
+                bool known = false;
+                for (const char* k : kReferenceInputKeys) known = known || it.key() == k;
+                for (const char* k : kReferenceOtherKeys) known = known || it.key() == k;
+                ok = known;
+            }
+            if (ok) out = std::move(*r);
+        }
+        if (!ok) {
+            sink_.error("spec.bad_reference",
+                        (path.empty() ? std::string("A reference") : path) +
+                            " is not a binding reference; it needs one of control, selection and state with a text "
+                            "value, and may add field, entity and default.",
+                        path);
+            return Ref::bad;
+        }
+        return Ref::read;
+    }
+
+    // The value of `key` read by `literal`, or a reference that goes to `refs`
+    // in its place, which leaves the literal empty.
+    template <class F>
+    auto or_reference(const json& o, const char* key, const std::string& path, std::map<std::string, Reference>& refs,
+                      F literal) -> decltype(literal()) {
+        using R = decltype(literal());
+        auto it = o.find(key);
+        if (it == o.end()) return R{};
+        Reference r;
+        switch (reference(*it, key_path(path, key), r)) {
+            case Ref::read: refs[key] = std::move(r); return R{};
+            case Ref::bad: return R{};
+            case Ref::none: break;
+        }
+        return literal();
+    }
+
+    // The keys `<format_key>` and `fields` of `o` as one bound text, or empty
+    // when neither is there. A field is a source id or a reference.
+    std::optional<BoundText> bound_text(const json& o, const char* format_key, const std::string& path,
+                                        const std::string& owner) {
+        const bool has_format = o.find(format_key) != o.end();
+        const bool has_fields = o.find("fields") != o.end();
+        if (!has_format && !has_fields) return std::nullopt;
+        BoundText t;
+        bool ok = true;
+        if (has_format) {
+            if (auto f = string(o, format_key, path)) {
+                t.format = *f;
+            } else {
+                ok = false;
+            }
+        } else {
+            missing(path, format_key, owner);
+            ok = false;
+        }
+        if (has_fields) {
+            const json& fields = o.at("fields");
+            const std::string fp = key_path(path, "fields");
+            if (!fields.is_object()) {
+                wrong(fp, fields, "a table of fields");
+                ok = false;
+            } else {
+                for (auto it = fields.begin(); it != fields.end(); ++it) {
+                    const std::string ep = key_path(fp, it.key());
+                    Reference r;
+                    if (it->is_string()) {
+                        t.fields[it.key()] = it->get<std::string>();
+                    } else {
+                        switch (reference(*it, ep, r)) {
+                            case Ref::read: t.fields[it.key()] = std::move(r); break;
+                            case Ref::bad: ok = false; break;
+                            case Ref::none:
+                                wrong(ep, *it, "a source id or a reference");
+                                ok = false;
+                                break;
+                        }
+                    }
+                }
+            }
+        }
+        if (!ok) return std::nullopt;
+        return t;
+    }
+
+    // The names and numbers of a `params` table: a number or a reference each.
+    Params params(const json& o, const std::string& path) {
+        Params out;
+        auto it = o.find("params");
+        if (it == o.end()) return out;
+        const std::string pp = key_path(path, "params");
+        if (!table(*it, pp, pp)) return out;
+        for (auto e = it->begin(); e != it->end(); ++e) {
+            const std::string ep = key_path(pp, e.key());
+            Reference r;
+            if (e->is_number()) {
+                out[e.key()] = e->get<double>();
+            } else {
+                switch (reference(*e, ep, r)) {
+                    case Ref::read: out[e.key()] = std::move(r); break;
+                    case Ref::bad: break;
+                    case Ref::none: wrong(ep, *e, "a number or a reference"); break;
+                }
+            }
+        }
+        return out;
+    }
+
+    // A list of numbers of fixed length: a pose's vectors and a view's target.
+    template <std::size_t N>
+    void numbers(const json& o, const char* key, const std::string& path, std::array<double, N>& out) {
+        auto it = o.find(key);
+        if (it == o.end()) return;
+        const std::string kp = key_path(path, key);
+        bool ok = it->is_array() && it->size() == N;
+        for (std::size_t i = 0; ok && i < N; ++i) ok = (*it)[i].is_number();
+        if (!ok) {
+            sink_.error("spec.wrong_type", kp + " must be a list of " + std::to_string(N) + " numbers.", kp);
+            return;
+        }
+        for (std::size_t i = 0; i < N; ++i) out[i] = (*it)[i].get<double>();
+    }
+
     Spec spec(const json& root) {
         Spec s;
         if (!root.is_object()) {
@@ -182,7 +326,8 @@ public:
         version_ = s.version;
         if (version_ >= kInstrumentVersion) {
             keys(root, "",
-                 {"caliper_spec", "applet", "source", "panel", "control", "program", "stage", "provenance", "layout"},
+                 {"caliper_spec", "applet", "source", "panel", "control", "state", "program", "stage", "provenance",
+                  "layout"},
                  "a spec");
         } else {
             keys(root, "", {"caliper_spec", "applet", "source", "panel", "layout"}, "a spec");
@@ -232,6 +377,15 @@ public:
             }
         }
         if (version_ >= kInstrumentVersion) {
+            if (auto it = root.find("state"); it != root.end()) {
+                if (!it->is_array()) {
+                    sink_.error("spec.wrong_type", "state must be an array of tables; write each one as [[state]].",
+                                "state");
+                } else {
+                    for (std::size_t i = 0; i < it->size(); ++i)
+                        s.states.push_back(state((*it)[i], index_path("state", i)));
+                }
+            }
             if (auto it = root.find("program"); it != root.end()) {
                 if (!it->is_array()) {
                     sink_.error("spec.wrong_type",
@@ -294,7 +448,8 @@ public:
     Program program(const json& o, const std::string& path) {
         Program p;
         if (!table(o, path, path)) return p;
-        keys(o, path, {"id", "title", "wgsl", "entry", "inputs", "output", "limits", "workgroups"}, "a program");
+        keys(o, path, {"id", "title", "wgsl", "entry", "inputs", "output", "limits", "workgroups", "params"},
+             "a program");
         p.id = required_string(o, "id", path, "A program");
         p.title = string(o, "title", path);
         p.wgsl = required_string(o, "wgsl", path, "A program");
@@ -345,6 +500,7 @@ public:
                 sink_.error("spec.wrong_type", wp + " must be [x, y, z], three workgroup counts.", wp);
             }
         }
+        p.params = params(o, path);
         p.x = extension(o, path);
         return p;
     }
@@ -359,7 +515,7 @@ public:
         }
         auto k = output_kind_from_name(*kind);
         if (!k) {
-            sink_.error("spec.bad_value", quote(*kind) + " is not a kind of output; the kinds are geometry and pixels.",
+            sink_.error("spec.bad_value", quote(*kind) + " is not a kind of output; the kinds are geometry, pixels and tensor.",
                         key_path(path, "kind"));
             return out;
         }
@@ -409,6 +565,22 @@ public:
                     out.style.vmax = number(*it, "vmax", sp);
                 }
             }
+        } else if (out.kind == OutputKind::tensor) {
+            strict_keys(o, path, {"kind", "shape"}, "a tensor output");
+            if (auto it = o.find("shape"); it == o.end()) {
+                missing(path, "shape", "A tensor output");
+            } else if (!it->is_array()) {
+                wrong(key_path(path, "shape"), *it, "a list of axis lengths");
+            } else {
+                for (std::size_t i = 0; i < it->size(); ++i) {
+                    std::int64_t n = 0;
+                    if (as_integer((*it)[i], n)) {
+                        out.shape.push_back(n);
+                    } else {
+                        wrong(index_path(key_path(path, "shape"), i), (*it)[i], "an integer");
+                    }
+                }
+            }
         } else {
             strict_keys(o, path, {"kind", "width", "height", "format"}, "a pixels output");
             for (const char* side : {"width", "height"}) {
@@ -434,7 +606,7 @@ public:
     Stage stage(const json& o, const std::string& path) {
         Stage st;
         if (!table(o, path, path)) return st;
-        keys(o, path, {"panel", "entity", "kind", "wgsl"}, "a stage");
+        keys(o, path, {"panel", "entity", "kind", "wgsl", "params"}, "a stage");
         st.panel = required_string(o, "panel", path, "A stage");
         st.entity = required_string(o, "entity", path, "A stage");
         if (auto kind = string(o, "kind", path)) {
@@ -448,6 +620,7 @@ public:
             missing(path, "kind", "A stage");
         }
         st.wgsl = required_string(o, "wgsl", path, "A stage");
+        st.params = params(o, path);
         st.x = extension(o, path);
         return st;
     }
@@ -496,9 +669,11 @@ public:
         } else if (o.find("id") == o.end()) {
             missing(path, "id", "A control");
         }
+        bool kind_known = false;
         if (auto kind = string(o, "kind", path)) {
             if (auto k = control_kind_from_name(*kind)) {
                 c.kind = *k;
+                kind_known = true;
             } else {
                 sink_.error("spec.unknown_control_kind",
                             quote(*kind) + " is not a kind of control; the kinds are " + join(control_kind_names()) +
@@ -511,13 +686,14 @@ public:
         c.title = string(o, "title", path);
         if (auto bind = string(o, "bind", path)) {
             c.bind = *bind;
-        } else if (o.find("bind") == o.end()) {
-            missing(path, "bind", "A control");
+        } else if (o.find("bind") == o.end() && !(kind_known && c.kind == ControlKind::readout)) {
+            missing(path, "bind", "A control");  // a readout binds nothing
         }
         if (auto it = o.find("options"); it != o.end()) {
             const std::string op = key_path(path, "options");
             if (table(*it, op, op)) {
                 const json& opts = *it;
+                ControlOptions& out = c.options;
                 for (auto k = opts.begin(); k != opts.end(); ++k) {
                     if (k.key() == "x" || contains(control_option_names(), k.key())) continue;
                     sink_.error("spec.unknown_option",
@@ -525,16 +701,66 @@ public:
                                     join(control_option_names()) + ".",
                                 key_path(op, k.key()));
                 }
-                c.options.min = number(opts, "min", op);
-                c.options.max = number(opts, "max", op);
-                c.options.step = number(opts, "step", op);
-                c.options.log = boolean(opts, "log", op);
-                c.options.value = number(opts, "value", op);
-                c.options.x = extension(opts, op);
+                out.min = or_reference(opts, "min", op, out.references, [&] { return number(opts, "min", op); });
+                out.max = or_reference(opts, "max", op, out.references, [&] { return number(opts, "max", op); });
+                out.step = number(opts, "step", op);
+                out.log = boolean(opts, "log", op);
+                // A number is the start value of a slider; any other value is a
+                // range, a boolean, a text or a list, kept as written.
+                if (auto v = opts.find("value"); v != opts.end()) {
+                    if (v->is_number()) {
+                        out.value = v->get<double>();
+                    } else {
+                        out.value_other = *v;
+                    }
+                }
+                if (auto ch = opts.find("choices"); ch != opts.end()) out.choices = choices(*ch, key_path(op, "choices"));
+                out.choices_from = string(opts, "choices_from", op);
+                out.multiple = boolean(opts, "multiple", op);
+                out.placeholder = string(opts, "placeholder", op);
+                out.max_length = integer(opts, "max_length", op);
+                out.min_span = number(opts, "min_span", op);
+                out.follow = boolean(opts, "follow", op);
+                out.speed = number(opts, "speed", op);
+                out.keys = boolean(opts, "keys", op);
+                out.bound_text = bound_text(opts, "format", op, "The options of a readout");
+                out.x = extension(opts, op);
             }
         }
         c.x = extension(o, path);
         return c;
+    }
+
+    // The choices of a picker or a segmented group: values, or tables
+    // { value, label, key }. The count and the keys are the validator's.
+    std::vector<Choice> choices(const json& list, const std::string& path) {
+        std::vector<Choice> out;
+        if (!list.is_array()) {
+            wrong(path, list, "a list of choices");
+            return out;
+        }
+        for (std::size_t i = 0; i < list.size(); ++i) {
+            const json& item = list[i];
+            const std::string ip = index_path(path, i);
+            Choice c;
+            if (item.is_object()) {
+                c.table = true;
+                strict_keys(item, ip, {"value", "label", "key"}, "a choice");
+                if (auto v = item.find("value"); v != item.end()) {
+                    c.value = *v;
+                } else {
+                    missing(ip, "value", "A choice");
+                }
+                c.label = string(item, "label", ip);
+                c.key = string(item, "key", ip);
+            } else {
+                c.value = item;
+            }
+            out.push_back(std::move(c));
+        }
+        if (list.empty())
+            sink_.error("spec.bad_value", path + " lists no choice; leave it out to give the control none.", path);
+        return out;
     }
 
     // A list of 1 to 64 entity path patterns; the count and the lengths are
@@ -588,7 +814,11 @@ public:
     Source source(const json& o, const std::string& path) {
         Source s;
         if (!table(o, path, path)) return s;
-        keys(o, path, {"id", "catalog", "sql", "from", "transform"}, "a source");
+        if (version_ >= kInstrumentVersion) {
+            keys(o, path, {"id", "catalog", "sql", "from", "transform", "history"}, "a source");
+        } else {
+            keys(o, path, {"id", "catalog", "sql", "from", "transform"}, "a source");
+        }
         if (auto id = string(o, "id", path)) {
             s.id = *id;
         } else if (o.find("id") == o.end()) {
@@ -597,6 +827,7 @@ public:
         s.catalog = string(o, "catalog", path);
         s.sql = string(o, "sql", path);
         s.from = string(o, "from", path);
+        if (version_ >= kInstrumentVersion) s.history = integer(o, "history", path);
         if (auto it = o.find("transform"); it != o.end()) {
             const std::string tp = key_path(path, "transform");
             if (!it->is_array()) {
@@ -619,9 +850,13 @@ public:
             if (o.find("op") == o.end()) missing(path, "op", "A transform");
             return t;
         }
-        if (!transform_op_from_string(*op, t.op)) {
+        const bool v1_op = transform_op_from_string(*op, t.op) &&
+                           (t.op == TransformOp::window || t.op == TransformOp::surface || t.op == TransformOp::path);
+        if (!transform_op_from_string(*op, t.op) || (v1_op && version_ < kInstrumentVersion)) {
             sink_.error("spec.unknown_transform",
-                        quote(*op) + " is not a transform; the transforms are slice, reduce and normalise.",
+                        quote(*op) + " is not a transform; the transforms are " +
+                            (version_ >= kInstrumentVersion ? "slice, reduce, normalise, window, surface and path."
+                                                            : "slice, reduce and normalise."),
                         key_path(path, "op"));
             return t;
         }
@@ -647,14 +882,46 @@ public:
             } else {
                 wrong(ap, *it, t.op == TransformOp::reduce ? "an integer or a list of integers" : "an integer");
             }
-        } else if (t.op != TransformOp::normalise) {
+        } else if (t.op == TransformOp::slice || t.op == TransformOp::reduce) {
             missing(path, "axis", std::string("A ") + to_string(t.op) + " transform");
         }
+        auto integer_step = [&](const char* key) {
+            return or_reference(o, key, path, t.references, [&] { return integer(o, key, path); });
+        };
         if (t.op == TransformOp::slice) {
-            t.index = integer(o, "index", path);
-            t.start = integer(o, "start", path);
-            t.stop = integer(o, "stop", path);
-            t.step = integer(o, "step", path);
+            t.index = integer_step("index");
+            t.start = integer_step("start");
+            t.stop = integer_step("stop");
+            t.step = integer_step("step");
+        }
+        if (t.op == TransformOp::window) {
+            t.start = integer_step("start");
+            t.stop = integer_step("stop");
+            t.steps = integer_step("steps");
+        }
+        if (t.op == TransformOp::surface) {
+            t.max_cells = integer(o, "max_cells", path);
+            t.pool = enumerated(o, "pool", path, pool_modes(), "a pooling");
+        }
+        if (t.op == TransformOp::path) {
+            t.max_points = integer(o, "max_points", path);
+            if (auto it = o.find("columns"); it != o.end()) {
+                const std::string cp = key_path(path, "columns");
+                if (!it->is_array()) {
+                    wrong(cp, *it, "a list of column indices");
+                } else {
+                    for (std::size_t i = 0; i < it->size(); ++i) {
+                        std::int64_t n = 0;
+                        if (as_integer((*it)[i], n)) {
+                            t.columns.push_back(n);
+                        } else {
+                            wrong(index_path(cp, i), (*it)[i], "an integer");
+                        }
+                    }
+                    if (it->empty())
+                        sink_.error("spec.bad_value", cp + " lists no column; leave it out to take the default.", cp);
+                }
+            }
         }
         if (t.op == TransformOp::reduce) {
             t.fn = enumerated(o, "fn", path, reduce_fns(), "a reduction");
@@ -672,7 +939,11 @@ public:
     Panel panel(const json& o, const std::string& path) {
         Panel p;
         if (!table(o, path, path)) return p;
-        keys(o, path, {"id", "primitive", "title", "bind", "options"}, "a panel");
+        if (version_ >= kInstrumentVersion) {
+            keys(o, path, {"id", "primitive", "title", "bind", "options", "entity", "annotation"}, "a panel");
+        } else {
+            keys(o, path, {"id", "primitive", "title", "bind", "options"}, "a panel");
+        }
         if (auto id = string(o, "id", path)) {
             p.id = *id;
         } else if (o.find("id") == o.end()) {
@@ -722,8 +993,14 @@ public:
                             }
                         }
                     } else {
-                        wrong(sp, *s, "a binding string or a list of them");
-                        continue;
+                        Reference r;
+                        switch (reference(*s, sp, r)) {
+                            case Ref::read: value.reference = std::move(r); break;
+                            case Ref::bad: continue;
+                            case Ref::none:
+                                wrong(sp, *s, "a binding string or a list of them");
+                                continue;
+                        }
                     }
                     p.bind[s.key()] = std::move(value);
                 }
@@ -734,7 +1011,11 @@ public:
             const std::string op = key_path(path, "options");
             if (table(*it, op, op)) {
                 const json& opts = *it;
-                const auto& allowed = options_of(p.primitive);
+                std::vector<std::string> allowed = options_of(p.primitive);
+                if (version_ < kInstrumentVersion)
+                    allowed.erase(std::remove_if(allowed.begin(), allowed.end(),
+                                                 [&](const std::string& n) { return version_one_option(p.primitive, n); }),
+                                  allowed.end());
                 for (auto k = opts.begin(); k != opts.end(); ++k) {
                     if (k.key() == "x" || contains(allowed, k.key())) continue;
                     sink_.error("spec.unknown_option",
@@ -747,12 +1028,18 @@ public:
                 if (has("x_label")) out.x_label = string(opts, "x_label", op);
                 if (has("y_label")) out.y_label = string(opts, "y_label", op);
                 if (has("z_label")) out.z_label = string(opts, "z_label", op);
-                if (has("x_range")) out.x_range = range(opts, "x_range", op);
-                if (has("y_range")) out.y_range = range(opts, "y_range", op);
-                if (has("range")) out.range = range(opts, "range", op);
+                for (const char* key : {"x_range", "y_range", "range"}) {
+                    if (!has(key)) continue;
+                    auto value = or_reference(opts, key, op, out.references, [&] { return range(opts, key, op); });
+                    const std::string name = key;
+                    (name == "x_range" ? out.x_range : name == "y_range" ? out.y_range : out.range) = value;
+                }
                 if (has("x_log")) out.x_log = boolean(opts, "x_log", op);
                 if (has("y_log")) out.y_log = boolean(opts, "y_log", op);
-                if (has("colormap")) out.colormap = enumerated(opts, "colormap", op, colormaps(), "a colormap");
+                if (has("colormap"))
+                    out.colormap = or_reference(opts, "colormap", op, out.references, [&] {
+                        return enumerated(opts, "colormap", op, colormaps(), "a colormap");
+                    });
                 if (has("bins")) out.bins = integer(opts, "bins", op);
                 if (has("text")) out.text = string(opts, "text", op);
                 if (has("up")) out.scene.up = enumerated(opts, "up", op, scene_up_axes(), "an axis");
@@ -762,6 +1049,33 @@ public:
                 if (has("labels")) out.scene.labels = boolean(opts, "labels", op);
                 if (has("axes")) out.scene.axes = boolean(opts, "axes", op);
                 if (has("scale_bar")) out.scene.scale_bar = boolean(opts, "scale_bar", op);
+                if (has("legend")) {
+                    const json& l = opts["legend"];
+                    const std::string lp = key_path(op, "legend");
+                    if (l.is_boolean() || (l.is_string() && l.get<std::string>() == "auto")) {
+                        out.legend = l;
+                    } else if (l.is_string()) {
+                        sink_.error("spec.bad_value", lp + " must be \"auto\", true or false.", lp);
+                    } else {
+                        wrong(lp, l, "\"auto\", true or false");
+                    }
+                }
+                if (has("box")) {
+                    const json& b = opts["box"];
+                    const std::string bp = key_path(op, "box");
+                    bool numbers_ok = b.is_array() && b.size() == 3;
+                    for (std::size_t i = 0; numbers_ok && i < 3; ++i) numbers_ok = b[i].is_number();
+                    if (numbers_ok || (b.is_string() && b.get<std::string>() == "auto")) {
+                        out.box = b;
+                    } else if (b.is_string()) {
+                        sink_.error("spec.bad_value", bp + " must be \"auto\" or [x, y, z], three numbers.", bp);
+                    } else {
+                        wrong(bp, b, "\"auto\" or [x, y, z], three numbers");
+                    }
+                }
+                if (has("views")) out.views = views(opts["views"], key_path(op, "views"));
+                if (has("select")) out.select = select(opts["select"], key_path(op, "select"));
+                if (has("format") || has("fields")) out.bound_text = bound_text(opts, "format", op, "The options of a text panel");
                 if (has("columns")) {
                     const json& c = opts["columns"];
                     const std::string cp = key_path(op, "columns");
@@ -782,7 +1096,194 @@ public:
                 out.x = extension(opts, op);
             }
         }
+        if (version_ >= kInstrumentVersion) {
+            if (auto it = o.find("entity"); it != o.end()) {
+                const std::string ep = key_path(path, "entity");
+                if (!it->is_array()) {
+                    sink_.error("spec.wrong_type",
+                                ep + " must be an array of tables; write each one as [[panel.entity]].", ep);
+                } else {
+                    for (std::size_t i = 0; i < it->size(); ++i)
+                        p.entities.push_back(entity((*it)[i], index_path(ep, i)));
+                }
+            }
+            if (auto it = o.find("annotation"); it != o.end()) {
+                const std::string ap = key_path(path, "annotation");
+                if (!it->is_array()) {
+                    sink_.error("spec.wrong_type",
+                                ap + " must be an array of tables; write each one as [[panel.annotation]].", ap);
+                } else {
+                    for (std::size_t i = 0; i < it->size(); ++i)
+                        p.annotations.push_back(annotation((*it)[i], index_path(ap, i)));
+                }
+            }
+        }
         return p;
+    }
+
+    // The option `views`: at most 16 saved camera views, each with all five keys.
+    std::vector<SavedView> views(const json& list, const std::string& path) {
+        std::vector<SavedView> out;
+        if (!list.is_array()) {
+            wrong(path, list, "a list of saved views");
+            return out;
+        }
+        for (std::size_t i = 0; i < list.size(); ++i) {
+            const std::string ip = index_path(path, i);
+            const json& item = list[i];
+            SavedView v;
+            if (table(item, ip, ip)) {
+                strict_keys(item, ip, {"name", "target", "distance", "azimuth", "elevation"}, "a saved view");
+                v.name = required_string(item, "name", ip, "A saved view");
+                for (const char* key : {"target", "distance", "azimuth", "elevation"})
+                    if (item.find(key) == item.end()) missing(ip, key, "A saved view");
+                numbers(item, "target", ip, v.target);
+                if (auto d = number(item, "distance", ip)) v.distance = *d;
+                if (auto a = number(item, "azimuth", ip)) v.azimuth = *a;
+                if (auto e = number(item, "elevation", ip)) v.elevation = *e;
+            }
+            out.push_back(std::move(v));
+        }
+        if (list.empty())
+            sink_.error("spec.bad_value", path + " lists no view; leave it out to save none.", path);
+        return out;
+    }
+
+    // The option `select`: a state variable and the pick field that it takes.
+    std::optional<StateWrite> select(const json& v, const std::string& path) {
+        if (!table(v, path, path)) return std::nullopt;
+        strict_keys(v, path, {"state", "field", "entity"}, "the option select");
+        StateWrite w;
+        w.state = required_string(v, "state", path, "The option select");
+        w.field = required_string(v, "field", path, "The option select");
+        w.entity = string(v, "entity", path);
+        return w;
+    }
+
+    // ---- state variables, entities and annotations (spec version 1) --------------
+    // The types, the keys, the required keys and the enumerations are checked
+    // here; the values, the bounds and the references are the validator's.
+
+    StateVar state(const json& o, const std::string& path) {
+        StateVar s;
+        if (!table(o, path, path)) return s;
+        keys(o, path, {"id", "title", "type", "default", "min", "max", "choices"}, "a state variable");
+        s.id = required_string(o, "id", path, "A state variable");
+        s.title = string(o, "title", path);
+        if (auto type = string(o, "type", path)) {
+            if (auto t = state_type_from_name(*type)) {
+                s.type = *t;
+            } else {
+                sink_.error("spec.bad_value",
+                            quote(*type) + " is not a type of state variable; the types are number, integer, "
+                                           "boolean, text, range and list.",
+                            key_path(path, "type"));
+            }
+        } else if (o.find("type") == o.end()) {
+            missing(path, "type", "A state variable");
+        }
+        if (auto it = o.find("default"); it != o.end()) s.default_value = *it;
+        s.min = number(o, "min", path);
+        s.max = number(o, "max", path);
+        if (auto it = o.find("choices"); it != o.end()) {
+            const std::string cp = key_path(path, "choices");
+            if (!it->is_array()) {
+                wrong(cp, *it, "a list of values");
+            } else {
+                for (const json& v : *it) s.choices.push_back(v);
+                if (it->empty())
+                    sink_.error("spec.bad_value", cp + " lists no value; leave it out to allow any.", cp);
+            }
+        }
+        s.x = extension(o, path);
+        return s;
+    }
+
+    Entity entity(const json& o, const std::string& path) {
+        Entity e;
+        if (!table(o, path, path)) return e;
+        keys(o, path, {"path", "draw", "title", "bind", "options", "pose"}, "an entity");
+        e.path = required_string(o, "path", path, "An entity");
+        if (auto draw = string(o, "draw", path)) {
+            if (auto d = draw_kind_from_name(*draw)) {
+                e.draw = *d;
+            } else {
+                sink_.error("spec.bad_value",
+                            quote(*draw) + " is not a draw kind; the kinds are points, lines and surface.",
+                            key_path(path, "draw"));
+            }
+        } else if (o.find("draw") == o.end()) {
+            missing(path, "draw", "An entity");
+        }
+        e.title = string(o, "title", path);
+        if (auto it = o.find("bind"); it == o.end()) {
+            missing(path, "bind", "An entity");
+        } else if (it->is_string()) {
+            e.source = it->get<std::string>();
+        } else if (it->is_object() && !looks_like_reference(*it)) {
+            const std::string bp = key_path(path, "bind");
+            for (auto slot = it->begin(); slot != it->end(); ++slot) {
+                const std::string sp = key_path(bp, slot.key());
+                Reference r;
+                if (slot->is_string()) {
+                    e.slots[slot.key()] = slot->get<std::string>();
+                } else {
+                    switch (reference(*slot, sp, r)) {
+                        case Ref::read: e.slots[slot.key()] = std::move(r); break;
+                        case Ref::bad: break;
+                        case Ref::none: wrong(sp, *slot, "a binding string or a reference"); break;
+                    }
+                }
+            }
+        } else {
+            wrong(key_path(path, "bind"), *it, "a source id or a table of slots");
+        }
+        if (auto it = o.find("options"); it != o.end()) {
+            const std::string op = key_path(path, "options");
+            if (table(*it, op, op) && !it->empty()) e.options = *it;
+        }
+        if (auto it = o.find("pose"); it != o.end()) {
+            const std::string pp = key_path(path, "pose");
+            if (table(*it, pp, pp)) {
+                strict_keys(*it, pp, {"position", "rotation", "scale"}, "a pose");
+                Pose pose;
+                numbers(*it, "position", pp, pose.position);
+                numbers(*it, "rotation", pp, pose.rotation);
+                numbers(*it, "scale", pp, pose.scale);
+                e.pose = pose;
+            }
+        }
+        e.x = extension(o, path);
+        return e;
+    }
+
+    Annotation annotation(const json& o, const std::string& path) {
+        Annotation a;
+        if (!table(o, path, path)) return a;
+        keys(o, path, {"id", "kind", "axis", "value", "range", "at", "text", "fields", "leader", "emphasis"},
+             "an annotation");
+        a.id = required_string(o, "id", path, "An annotation");
+        if (auto kind = string(o, "kind", path)) {
+            if (auto k = annotation_kind_from_name(*kind)) {
+                a.kind = *k;
+            } else {
+                sink_.error("spec.bad_value",
+                            quote(*kind) + " is not a kind of annotation; the kinds are label, threshold, band and "
+                                           "marker.",
+                            key_path(path, "kind"));
+            }
+        } else if (o.find("kind") == o.end()) {
+            missing(path, "kind", "An annotation");
+        }
+        a.axis = string(o, "axis", path);
+        if (auto it = o.find("value"); it != o.end()) a.value = *it;
+        if (auto it = o.find("range"); it != o.end()) a.range = *it;
+        if (auto it = o.find("at"); it != o.end()) a.at = *it;
+        a.text = bound_text(o, "text", path, "An annotation");
+        a.leader = boolean(o, "leader", path);
+        a.emphasis = string(o, "emphasis", path);
+        a.x = extension(o, path);
+        return a;
     }
 
     LayoutNode layout(const json& v, const std::string& path) {
@@ -799,6 +1300,29 @@ public:
         }
         const bool has_split = v.find("split") != v.end();
         const bool has_tabs = v.find("tabs") != v.end();
+        if (version_ >= kInstrumentVersion && v.find("panel") != v.end()) {
+            // A leaf table { panel, min } (spec version 1).
+            if (has_split || has_tabs) {
+                sink_.error("spec.bad_layout", path + " has panel together with split or tabs; a layout table has one.",
+                            path);
+                return n;
+            }
+            keys(v, path, {"panel", "min"}, "a layout leaf");
+            n.kind = LayoutNode::Kind::panel;
+            if (auto id = string(v, "panel", path)) n.panel = *id;
+            if (auto it = v.find("min"); it != v.end()) {
+                const std::string mp = key_path(path, "min");
+                std::int64_t columns = 0, lines = 0;
+                if (it->is_array() && it->size() == 2 && as_integer((*it)[0], columns) &&
+                    as_integer((*it)[1], lines)) {
+                    n.min = std::array<std::int64_t, 2>{columns, lines};
+                } else {
+                    sink_.error("spec.wrong_type", mp + " must be [columns, lines], two integers.", mp);
+                }
+            }
+            n.x = extension(v, path);
+            return n;
+        }
         if (has_split == has_tabs) {
             sink_.error("spec.bad_layout",
                         has_split ? path + " has both split and tabs; a layout table has one of them."
@@ -810,11 +1334,31 @@ public:
         n.x = extension(v, path);
         if (has_split) {
             n.kind = LayoutNode::Kind::split;
-            keys(v, path, {"split", "ratio", "title", "children"}, "a split");
+            if (version_ >= kInstrumentVersion) {
+                keys(v, path, {"split", "ratio", "shares", "title", "children"}, "a split");
+            } else {
+                keys(v, path, {"split", "ratio", "title", "children"}, "a split");
+            }
             static const std::vector<std::string> directions = {"horizontal", "vertical"};
             if (auto d = enumerated(v, "split", path, directions, "a split direction"))
                 split_from_string(*d, n.split);
             n.ratio = number(v, "ratio", path);
+            if (auto sh = v.find("shares"); sh != v.end() && version_ >= kInstrumentVersion) {
+                const std::string sp = key_path(path, "shares");
+                if (!sh->is_array()) {
+                    wrong(sp, *sh, "a list of numbers");
+                } else {
+                    for (std::size_t i = 0; i < sh->size(); ++i) {
+                        if ((*sh)[i].is_number()) {
+                            n.shares.push_back((*sh)[i].get<double>());
+                        } else {
+                            wrong(index_path(sp, i), (*sh)[i], "a number");
+                        }
+                    }
+                    if (sh->empty())
+                        sink_.error("spec.bad_value", sp + " lists no share; leave it out to split by ratio.", sp);
+                }
+            }
             auto it = v.find("children");
             if (it == v.end()) {
                 missing(path, "children", "A split");
@@ -863,6 +1407,18 @@ Program decode_program(const json& item, const std::string& path, Sink& sink) {
 }
 
 Stage decode_stage(const json& item, const std::string& path, Sink& sink) { return Decoder(sink).stage(item, path); }
+
+StateVar decode_state(const json& item, const std::string& path, Sink& sink) {
+    return Decoder(sink).state(item, path);
+}
+
+Entity decode_entity(const json& item, const std::string& path, Sink& sink) {
+    return Decoder(sink).entity(item, path);
+}
+
+Annotation decode_annotation(const json& item, const std::string& path, Sink& sink) {
+    return Decoder(sink).annotation(item, path);
+}
 
 }  // namespace detail
 
@@ -1007,9 +1563,53 @@ Decoded<Stage> stage_from_json(const json& item, const std::string& path) {
     return decode_item<Stage>(item, path, 2, detail::decode_stage);
 }
 
+Decoded<StateVar> state_from_json(const json& item, const std::string& path) {
+    return decode_item<StateVar>(item, path, 2, detail::decode_state);
+}
+
+Decoded<Entity> entity_from_json(const json& item, const std::string& path) {
+    return decode_item<Entity>(item, path, 3, detail::decode_entity);
+}
+
+Decoded<Annotation> annotation_from_json(const json& item, const std::string& path) {
+    return decode_item<Annotation>(item, path, 3, detail::decode_annotation);
+}
+
 // ---- writing ----------------------------------------------------------------
 
 namespace {
+
+// The table of `fields`: a source id, or the table of a reference.
+json fields_json(const BoundText& t) {
+    json j = json::object();
+    for (const auto& [name, field] : t.fields) {
+        if (const auto* source = std::get_if<std::string>(&field)) {
+            j[name] = *source;
+        } else {
+            j[name] = reference_json(std::get<Reference>(field));
+        }
+    }
+    return j;
+}
+
+// The keys of a bound text: its format under `format_key`, and `fields`
+// when there are any.
+void write_bound_text(json& j, const char* format_key, const BoundText& t) {
+    j[format_key] = t.format;
+    if (!t.fields.empty()) j["fields"] = fields_json(t);
+}
+
+json params_json(const Params& params) {
+    json j = json::object();
+    for (const auto& [name, value] : params) {
+        if (const auto* number = std::get_if<double>(&value)) {
+            j[name] = *number;
+        } else {
+            j[name] = reference_json(std::get<Reference>(value));
+        }
+    }
+    return j;
+}
 
 json transform_json(const Transform& t) {
     json j = json::object();
@@ -1028,6 +1628,12 @@ json transform_json(const Transform& t) {
     if (t.fn) j["fn"] = *t.fn;
     if (t.keepdims) j["keepdims"] = *t.keepdims;
     if (t.mode) j["mode"] = *t.mode;
+    if (t.steps) j["steps"] = *t.steps;
+    if (t.max_cells) j["max_cells"] = *t.max_cells;
+    if (t.pool) j["pool"] = *t.pool;
+    if (!t.columns.empty()) j["columns"] = t.columns;
+    if (t.max_points) j["max_points"] = *t.max_points;
+    for (const auto& [key, ref] : t.references) j[key] = reference_json(ref);
     if (!t.x.is_null()) j["x"] = t.x;
     return j;
 }
@@ -1055,6 +1661,25 @@ json options_json(const Options& o) {
     if (sc.labels) j["labels"] = *sc.labels;
     if (sc.axes) j["axes"] = *sc.axes;
     if (sc.scale_bar) j["scale_bar"] = *sc.scale_bar;
+    if (!o.legend.is_null()) j["legend"] = o.legend;
+    if (!o.box.is_null()) j["box"] = o.box;
+    if (!o.views.empty()) {
+        json list = json::array();
+        for (const SavedView& v : o.views)
+            list.push_back(json{{"name", v.name},
+                                {"target", json::array({v.target[0], v.target[1], v.target[2]})},
+                                {"distance", v.distance},
+                                {"azimuth", v.azimuth},
+                                {"elevation", v.elevation}});
+        j["views"] = std::move(list);
+    }
+    if (o.select) {
+        json select = json{{"state", o.select->state}, {"field", o.select->field}};
+        if (o.select->entity) select["entity"] = *o.select->entity;
+        j["select"] = std::move(select);
+    }
+    if (o.bound_text) write_bound_text(j, "format", *o.bound_text);
+    for (const auto& [key, ref] : o.references) j[key] = reference_json(ref);
     if (!o.x.is_null()) j["x"] = o.x;
     return j;
 }
@@ -1065,7 +1690,35 @@ json control_options_json(const ControlOptions& o) {
     if (o.max) j["max"] = *o.max;
     if (o.step) j["step"] = *o.step;
     if (o.log) j["log"] = *o.log;
-    if (o.value) j["value"] = *o.value;
+    if (o.value) {
+        j["value"] = *o.value;
+    } else if (!o.value_other.is_null()) {
+        j["value"] = o.value_other;
+    }
+    if (!o.choices.empty()) {
+        json list = json::array();
+        for (const Choice& c : o.choices) {
+            if (!c.table) {
+                list.push_back(c.value);
+                continue;
+            }
+            json item = json{{"value", c.value}};
+            if (c.label) item["label"] = *c.label;
+            if (c.key) item["key"] = *c.key;
+            list.push_back(std::move(item));
+        }
+        j["choices"] = std::move(list);
+    }
+    if (o.choices_from) j["choices_from"] = *o.choices_from;
+    if (o.multiple) j["multiple"] = *o.multiple;
+    if (o.placeholder) j["placeholder"] = *o.placeholder;
+    if (o.max_length) j["max_length"] = *o.max_length;
+    if (o.min_span) j["min_span"] = *o.min_span;
+    if (o.follow) j["follow"] = *o.follow;
+    if (o.speed) j["speed"] = *o.speed;
+    if (o.keys) j["keys"] = *o.keys;
+    if (o.bound_text) write_bound_text(j, "format", *o.bound_text);
+    for (const auto& [key, ref] : o.references) j[key] = reference_json(ref);
     if (!o.x.is_null()) j["x"] = o.x;
     return j;
 }
@@ -1078,6 +1731,7 @@ json to_json(const Source& s) {
     if (s.catalog) j["catalog"] = *s.catalog;
     if (s.sql) j["sql"] = *s.sql;
     if (s.from) j["from"] = *s.from;
+    if (s.history) j["history"] = *s.history;
     if (!s.transforms.empty()) {
         json list = json::array();
         for (const Transform& t : s.transforms) list.push_back(transform_json(t));
@@ -1095,7 +1749,9 @@ json to_json(const Panel& p) {
     if (!p.bind.empty()) {
         json bind = json::object();
         for (const auto& [slot, value] : p.bind) {
-            if (!value.list && value.bindings.size() == 1) {
+            if (value.reference) {
+                bind[slot] = reference_json(*value.reference);
+            } else if (!value.list && value.bindings.size() == 1) {
                 bind[slot] = value.bindings[0];
             } else {
                 bind[slot] = value.bindings;
@@ -1104,7 +1760,74 @@ json to_json(const Panel& p) {
         j["bind"] = std::move(bind);
     }
     if (!p.options.empty()) j["options"] = options_json(p.options);
+    if (!p.entities.empty()) {
+        json list = json::array();
+        for (const Entity& e : p.entities) list.push_back(to_json(e));
+        j["entity"] = std::move(list);
+    }
+    if (!p.annotations.empty()) {
+        json list = json::array();
+        for (const Annotation& a : p.annotations) list.push_back(to_json(a));
+        j["annotation"] = std::move(list);
+    }
     if (!p.x.is_null()) j["x"] = p.x;
+    return j;
+}
+
+json to_json(const StateVar& s) {
+    json j = json::object();
+    j["id"] = s.id;
+    if (s.title) j["title"] = *s.title;
+    j["type"] = state_type_name(s.type);
+    if (!s.default_value.is_null()) j["default"] = s.default_value;
+    if (s.min) j["min"] = *s.min;
+    if (s.max) j["max"] = *s.max;
+    if (!s.choices.empty()) j["choices"] = s.choices;
+    if (!s.x.is_null()) j["x"] = s.x;
+    return j;
+}
+
+json to_json(const Entity& e) {
+    json j = json::object();
+    j["path"] = e.path;
+    j["draw"] = draw_kind_name(e.draw);
+    if (e.title) j["title"] = *e.title;
+    if (e.source) {
+        j["bind"] = *e.source;
+    } else {
+        json bind = json::object();
+        for (const auto& [slot, value] : e.slots) {
+            if (const auto* source = std::get_if<std::string>(&value)) {
+                bind[slot] = *source;
+            } else {
+                bind[slot] = reference_json(std::get<Reference>(value));
+            }
+        }
+        j["bind"] = std::move(bind);
+    }
+    if (!e.options.is_null()) j["options"] = e.options;
+    if (e.pose) {
+        j["pose"] = json{{"position", json::array({e.pose->position[0], e.pose->position[1], e.pose->position[2]})},
+                         {"rotation", json::array({e.pose->rotation[0], e.pose->rotation[1], e.pose->rotation[2],
+                                                   e.pose->rotation[3]})},
+                         {"scale", json::array({e.pose->scale[0], e.pose->scale[1], e.pose->scale[2]})}};
+    }
+    if (!e.x.is_null()) j["x"] = e.x;
+    return j;
+}
+
+json to_json(const Annotation& a) {
+    json j = json::object();
+    j["id"] = a.id;
+    j["kind"] = annotation_kind_name(a.kind);
+    if (a.axis) j["axis"] = *a.axis;
+    if (!a.value.is_null()) j["value"] = a.value;
+    if (!a.range.is_null()) j["range"] = a.range;
+    if (!a.at.is_null()) j["at"] = a.at;
+    if (a.text) write_bound_text(j, "text", *a.text);
+    if (a.leader) j["leader"] = *a.leader;
+    if (a.emphasis) j["emphasis"] = *a.emphasis;
+    if (!a.x.is_null()) j["x"] = a.x;
     return j;
 }
 
@@ -1113,7 +1836,7 @@ json to_json(const Control& c) {
     j["id"] = c.id;
     j["kind"] = control_kind_name(c.kind);
     if (c.title) j["title"] = *c.title;
-    j["bind"] = c.bind;
+    if (!c.bind.empty() || c.kind != ControlKind::readout) j["bind"] = c.bind;  // a readout binds nothing
     if (!c.options.empty()) j["options"] = control_options_json(c.options);
     if (!c.x.is_null()) j["x"] = c.x;
     return j;
@@ -1144,6 +1867,8 @@ json to_json(const Program& p) {
         if (o.style.vmin) style["vmin"] = *o.style.vmin;
         if (o.style.vmax) style["vmax"] = *o.style.vmax;
         if (!style.empty()) out["style"] = std::move(style);
+    } else if (o.kind == OutputKind::tensor) {
+        out["shape"] = o.shape;
     } else {
         out["width"] = o.width;
         out["height"] = o.height;
@@ -1156,6 +1881,7 @@ json to_json(const Program& p) {
     if (p.limits.every) limits["every"] = *p.limits.every;
     if (!limits.empty()) j["limits"] = std::move(limits);
     if (p.workgroups) j["workgroups"] = json::array({(*p.workgroups)[0], (*p.workgroups)[1], (*p.workgroups)[2]});
+    if (!p.params.empty()) j["params"] = params_json(p.params);
     if (!p.x.is_null()) j["x"] = p.x;
     return j;
 }
@@ -1166,6 +1892,7 @@ json to_json(const Stage& s) {
     j["entity"] = s.entity;
     j["kind"] = stage_kind_name(s.kind);
     j["wgsl"] = s.wgsl;
+    if (!s.params.empty()) j["params"] = params_json(s.params);
     if (!s.x.is_null()) j["x"] = s.x;
     return j;
 }
@@ -1184,13 +1911,21 @@ json to_json(const Provenance& p) {
 }
 
 json to_json(const LayoutNode& n) {
-    if (n.kind == LayoutNode::Kind::panel) return n.panel;
+    if (n.kind == LayoutNode::Kind::panel) {
+        if (!n.min && n.x.is_null()) return n.panel;
+        json leaf = json::object();  // the table { panel, min } of version 1
+        leaf["panel"] = n.panel;
+        if (n.min) leaf["min"] = json::array({(*n.min)[0], (*n.min)[1]});
+        if (!n.x.is_null()) leaf["x"] = n.x;
+        return leaf;
+    }
     json j = json::object();
     json children = json::array();
     for (const LayoutNode& c : n.children) children.push_back(to_json(c));
     if (n.kind == LayoutNode::Kind::split) {
         j["split"] = to_string(n.split);
         if (n.ratio) j["ratio"] = *n.ratio;
+        if (!n.shares.empty()) j["shares"] = n.shares;
         j["children"] = std::move(children);
     } else {
         j["tabs"] = std::move(children);
@@ -1223,6 +1958,11 @@ json to_json(const Spec& spec) {
         json list = json::array();
         for (const Control& c : spec.controls) list.push_back(to_json(c));
         j["control"] = std::move(list);
+    }
+    if (!spec.states.empty()) {
+        json list = json::array();
+        for (const StateVar& s : spec.states) list.push_back(to_json(s));
+        j["state"] = std::move(list);
     }
     if (!spec.programs.empty()) {
         json list = json::array();

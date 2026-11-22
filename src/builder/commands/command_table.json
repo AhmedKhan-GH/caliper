@@ -2759,6 +2759,14 @@
       "args": {
         "additionalProperties": false,
         "properties": {
+          "annotation": {
+            "description": "The annotations of the panel, as a list of annotation tables.",
+            "items": {
+              "description": "An annotation table, a JSON object."
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
           "bind": {
             "additionalProperties": false,
             "description": "The bindings by slot: a spec source id, or <source>.<column> for one column of a tabular source.",
@@ -2853,6 +2861,14 @@
             "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
             "type": "boolean"
           },
+          "entity": {
+            "description": "scene: the entities of the panel's scene, as a list of entity tables.",
+            "items": {
+              "description": "An entity table, a JSON object."
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
           "id": {
             "description": "The new panel's id.",
             "maxLength": 64,
@@ -2880,7 +2896,19 @@
                   "viridis",
                   "magma",
                   "rdbu",
-                  "greys"
+                  "greys",
+                  "cividis",
+                  "inferno",
+                  "plasma",
+                  "turbo",
+                  "twilight",
+                  "coolwarm",
+                  "batlow",
+                  "vik",
+                  "roma",
+                  "oslo",
+                  "lajolla",
+                  "berlin"
                 ],
                 "type": "string"
               },
@@ -3189,6 +3217,17 @@
             "additionalProperties": false,
             "description": "The keys to change; null removes one.",
             "properties": {
+              "annotation": {
+                "description": "The annotations of the panel; the list replaces the panel's own, and null removes them.",
+                "items": {
+                  "description": "An annotation table, a JSON object."
+                },
+                "maxItems": 256,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
               "bind": {
                 "additionalProperties": false,
                 "description": "Slots to bind, or null to unbind one.",
@@ -3306,6 +3345,17 @@
                 "required": [],
                 "type": "object"
               },
+              "entity": {
+                "description": "scene: the entities of the scene; the list replaces the panel's own, and null removes them.",
+                "items": {
+                  "description": "An entity table, a JSON object."
+                },
+                "maxItems": 256,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
               "options": {
                 "additionalProperties": false,
                 "description": "Options to set, or null to clear one.",
@@ -3333,6 +3383,18 @@
                       "magma",
                       "rdbu",
                       "greys",
+                      "cividis",
+                      "inferno",
+                      "plasma",
+                      "turbo",
+                      "twilight",
+                      "coolwarm",
+                      "batlow",
+                      "vik",
+                      "roma",
+                      "oslo",
+                      "lajolla",
+                      "berlin",
                       null
                     ],
                     "type": [
@@ -3730,7 +3792,19 @@
                       "viridis",
                       "magma",
                       "rdbu",
-                      "greys"
+                      "greys",
+                      "cividis",
+                      "inferno",
+                      "plasma",
+                      "turbo",
+                      "twilight",
+                      "coolwarm",
+                      "batlow",
+                      "vik",
+                      "roma",
+                      "oslo",
+                      "lajolla",
+                      "berlin"
                     ],
                     "type": "string"
                   },
@@ -5285,10 +5359,10 @@
         "additionalProperties": false,
         "properties": {
           "bind": {
-            "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, value for a value the spec holds, or intervene:<point> for an intervention point that intervene.points lists. A slider binds param: or value; a button binds action: or run:pause; a toggle binds intervene:<point> or param:<name>. run.state lists the names of parameters and actions.",
+            "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, value for a value the spec holds, state:<id> for a state variable of the spec, cursor for the time cursor, or intervene:<point> for an intervention point that intervene.points lists. A slider binds param:, value or state:; a range, a picker, a text and a segmented group bind value or state:; a button binds action: or run:pause; a toggle binds intervene:<point>, param:<name>, value or state:; a transport binds cursor. run.state lists the names of parameters and actions.",
             "maxLength": 320,
             "minLength": 5,
-            "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|intervene:.{1,255})$",
+            "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|state:[a-z][a-z0-9_-]{0,63}|cursor|intervene:.{1,255})$",
             "type": "string"
           },
           "dry_run": {
@@ -5304,14 +5378,17 @@
             "type": "string"
           },
           "kind": {
-            "description": "slider sets a number in a range; button acts once when pressed; toggle is on or off, and ablates intervene:<point> or sets a boolean param:<name>. range, picker and text are reserved and refused with spec.unsupported_control until they are built.",
+            "description": "slider sets a number in a range; button acts once when pressed; toggle is on or off, and ablates intervene:<point> or sets a boolean param:<name>. range sets [lo, hi]; picker chooses one value from choices or choices_from; text sets a text; segmented is a row of 2 to 16 buttons, one on or, with multiple, any number; readout shows bound text and binds nothing; transport binds cursor and draws the step controls.",
             "enum": [
               "slider",
               "button",
               "range",
               "toggle",
               "picker",
-              "text"
+              "text",
+              "segmented",
+              "readout",
+              "transport"
             ],
             "type": "string"
           },
@@ -5319,26 +5396,82 @@
             "additionalProperties": false,
             "description": "The control's options.",
             "properties": {
+              "choices": {
+                "description": "picker and segmented: the choices, from 1 to 1024 for a picker and 2 to 16 for a segmented group.",
+                "items": {
+                  "description": "A value, or a table with value, label and key."
+                },
+                "maxItems": 1024,
+                "minItems": 1,
+                "type": "array"
+              },
+              "choices_from": {
+                "description": "picker: <source>.<column>, the column whose distinct values are the choices, at most 1024.",
+                "maxLength": 320,
+                "minLength": 3,
+                "type": "string"
+              },
+              "fields": {
+                "description": "readout: a JSON object that gives each name of the format a reference."
+              },
+              "follow": {
+                "description": "range: whether the range moves with its upper bound while its upper end equals it; false when absent.",
+                "type": "boolean"
+              },
+              "format": {
+                "description": "readout: the text to show, written in the format language with {name} places.",
+                "maxLength": 1024,
+                "type": "string"
+              },
+              "keys": {
+                "description": "transport: whether Space, the arrow keys, Home and End control the cursor; true when absent.",
+                "type": "boolean"
+              },
               "log": {
                 "description": "slider: a log scale, which needs min above 0; with param:, the parameter's own scale when absent.",
                 "type": "boolean"
               },
               "max": {
-                "description": "slider: the high end of the range, above min; with param:, the parameter's own maximum when absent.",
+                "description": "slider and range: the high end of the range, above min; with param:, the parameter's own maximum when absent.",
                 "type": "number"
               },
+              "max_length": {
+                "description": "text: the most bytes of the value, at most 1024.",
+                "maximum": 1024,
+                "minimum": 1,
+                "type": "integer"
+              },
               "min": {
-                "description": "slider: the low end of the range; with param:, the parameter's own minimum when absent.",
+                "description": "slider and range: the low end of the range; with param:, the parameter's own minimum when absent.",
+                "type": "number"
+              },
+              "min_span": {
+                "description": "range: the least distance between lo and hi.",
+                "minimum": 0,
+                "type": "number"
+              },
+              "multiple": {
+                "description": "segmented: whether any number of buttons are on and the value is a list; false when absent.",
+                "type": "boolean"
+              },
+              "placeholder": {
+                "description": "text: the hint that shows while the field is empty.",
+                "maxLength": 256,
+                "type": "string"
+              },
+              "speed": {
+                "description": "transport: the play speed at open, in steps per second; 10 when absent.",
+                "maximum": 1000,
+                "minimum": 0.1,
                 "type": "number"
               },
               "step": {
-                "description": "slider: the step between values, above 0; continuous when absent.",
+                "description": "slider and range: the step between values, above 0; continuous when absent.",
                 "minimum": 0,
                 "type": "number"
               },
               "value": {
-                "description": "slider bound to value: the value it starts with; min when absent.",
-                "type": "number"
+                "description": "slider bound to value: the number it starts with, min when absent; range: [lo, hi]; toggle: a boolean; picker, text and segmented: the value or the list of values it starts with."
               }
             },
             "required": [],
@@ -5388,8 +5521,7 @@
         },
         "required": [
           "id",
-          "kind",
-          "bind"
+          "kind"
         ],
         "type": "object"
       },
@@ -5489,10 +5621,10 @@
             "description": "The keys to change; null removes one.",
             "properties": {
               "bind": {
-                "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, value for a value the spec holds, or intervene:<point> for an intervention point that intervene.points lists. A slider binds param: or value; a button binds action: or run:pause; a toggle binds intervene:<point> or param:<name>. run.state lists the names of parameters and actions.",
+                "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, value for a value the spec holds, state:<id> for a state variable of the spec, cursor for the time cursor, or intervene:<point> for an intervention point that intervene.points lists. A slider binds param:, value or state:; a range, a picker, a text and a segmented group bind value or state:; a button binds action: or run:pause; a toggle binds intervene:<point>, param:<name>, value or state:; a transport binds cursor. run.state lists the names of parameters and actions.",
                 "maxLength": 320,
                 "minLength": 5,
-                "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|intervene:.{1,255})$",
+                "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|state:[a-z][a-z0-9_-]{0,63}|cursor|intervene:.{1,255})$",
                 "type": "string"
               },
               "kind": {
@@ -5503,7 +5635,10 @@
                   "range",
                   "toggle",
                   "picker",
-                  "text"
+                  "text",
+                  "segmented",
+                  "readout",
+                  "transport"
                 ],
                 "type": "string"
               },
@@ -5511,6 +5646,52 @@
                 "additionalProperties": false,
                 "description": "Options to set, or null to clear one.",
                 "properties": {
+                  "choices": {
+                    "description": "picker and segmented: the choices, from 1 to 1024 for a picker and 2 to 16 for a segmented group.",
+                    "items": {
+                      "description": "A value, or a table with value, label and key."
+                    },
+                    "maxItems": 1024,
+                    "minItems": 1,
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "choices_from": {
+                    "description": "picker: <source>.<column>, the column whose distinct values are the choices, at most 1024.",
+                    "maxLength": 320,
+                    "minLength": 3,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "fields": {
+                    "description": "readout: a JSON object that gives each name of the format a reference."
+                  },
+                  "follow": {
+                    "description": "range: whether the range moves with its upper bound while its upper end equals it; false when absent.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "format": {
+                    "description": "readout: the text to show, written in the format language with {name} places.",
+                    "maxLength": 1024,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "keys": {
+                    "description": "transport: whether Space, the arrow keys, Home and End control the cursor; true when absent.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
                   "log": {
                     "description": "slider: a log scale, which needs min above 0; with param:, the parameter's own scale when absent.",
                     "type": [
@@ -5519,21 +5700,62 @@
                     ]
                   },
                   "max": {
-                    "description": "slider: the high end of the range, above min; with param:, the parameter's own maximum when absent.",
+                    "description": "slider and range: the high end of the range, above min; with param:, the parameter's own maximum when absent.",
                     "type": [
                       "number",
                       "null"
                     ]
                   },
+                  "max_length": {
+                    "description": "text: the most bytes of the value, at most 1024.",
+                    "maximum": 1024,
+                    "minimum": 1,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
                   "min": {
-                    "description": "slider: the low end of the range; with param:, the parameter's own minimum when absent.",
+                    "description": "slider and range: the low end of the range; with param:, the parameter's own minimum when absent.",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "min_span": {
+                    "description": "range: the least distance between lo and hi.",
+                    "minimum": 0,
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "multiple": {
+                    "description": "segmented: whether any number of buttons are on and the value is a list; false when absent.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "placeholder": {
+                    "description": "text: the hint that shows while the field is empty.",
+                    "maxLength": 256,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "speed": {
+                    "description": "transport: the play speed at open, in steps per second; 10 when absent.",
+                    "maximum": 1000,
+                    "minimum": 0.1,
                     "type": [
                       "number",
                       "null"
                     ]
                   },
                   "step": {
-                    "description": "slider: the step between values, above 0; continuous when absent.",
+                    "description": "slider and range: the step between values, above 0; continuous when absent.",
                     "minimum": 0,
                     "type": [
                       "number",
@@ -5541,11 +5763,7 @@
                     ]
                   },
                   "value": {
-                    "description": "slider bound to value: the value it starts with; min when absent.",
-                    "type": [
-                      "number",
-                      "null"
-                    ]
+                    "description": "slider bound to value: the number it starts with, min when absent; range: [lo, hi]; toggle: a boolean; picker, text and segmented: the value or the list of values it starts with."
                   }
                 },
                 "required": [],
@@ -5618,7 +5836,10 @@
                   "range",
                   "toggle",
                   "picker",
-                  "text"
+                  "text",
+                  "segmented",
+                  "readout",
+                  "transport"
                 ],
                 "type": "string"
               },
@@ -5626,26 +5847,82 @@
                 "additionalProperties": false,
                 "description": "The control's options.",
                 "properties": {
+                  "choices": {
+                    "description": "picker and segmented: the choices, from 1 to 1024 for a picker and 2 to 16 for a segmented group.",
+                    "items": {
+                      "description": "A value, or a table with value, label and key."
+                    },
+                    "maxItems": 1024,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "choices_from": {
+                    "description": "picker: <source>.<column>, the column whose distinct values are the choices, at most 1024.",
+                    "maxLength": 320,
+                    "minLength": 3,
+                    "type": "string"
+                  },
+                  "fields": {
+                    "description": "readout: a JSON object that gives each name of the format a reference."
+                  },
+                  "follow": {
+                    "description": "range: whether the range moves with its upper bound while its upper end equals it; false when absent.",
+                    "type": "boolean"
+                  },
+                  "format": {
+                    "description": "readout: the text to show, written in the format language with {name} places.",
+                    "maxLength": 1024,
+                    "type": "string"
+                  },
+                  "keys": {
+                    "description": "transport: whether Space, the arrow keys, Home and End control the cursor; true when absent.",
+                    "type": "boolean"
+                  },
                   "log": {
                     "description": "slider: a log scale, which needs min above 0; with param:, the parameter's own scale when absent.",
                     "type": "boolean"
                   },
                   "max": {
-                    "description": "slider: the high end of the range, above min; with param:, the parameter's own maximum when absent.",
+                    "description": "slider and range: the high end of the range, above min; with param:, the parameter's own maximum when absent.",
                     "type": "number"
                   },
+                  "max_length": {
+                    "description": "text: the most bytes of the value, at most 1024.",
+                    "maximum": 1024,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
                   "min": {
-                    "description": "slider: the low end of the range; with param:, the parameter's own minimum when absent.",
+                    "description": "slider and range: the low end of the range; with param:, the parameter's own minimum when absent.",
+                    "type": "number"
+                  },
+                  "min_span": {
+                    "description": "range: the least distance between lo and hi.",
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "multiple": {
+                    "description": "segmented: whether any number of buttons are on and the value is a list; false when absent.",
+                    "type": "boolean"
+                  },
+                  "placeholder": {
+                    "description": "text: the hint that shows while the field is empty.",
+                    "maxLength": 256,
+                    "type": "string"
+                  },
+                  "speed": {
+                    "description": "transport: the play speed at open, in steps per second; 10 when absent.",
+                    "maximum": 1000,
+                    "minimum": 0.1,
                     "type": "number"
                   },
                   "step": {
-                    "description": "slider: the step between values, above 0; continuous when absent.",
+                    "description": "slider and range: the step between values, above 0; continuous when absent.",
                     "minimum": 0,
                     "type": "number"
                   },
                   "value": {
-                    "description": "slider bound to value: the value it starts with; min when absent.",
-                    "type": "number"
+                    "description": "slider bound to value: the number it starts with, min when absent; range: [lo, hi]; toggle: a boolean; picker, text and segmented: the value or the list of values it starts with."
                   }
                 },
                 "required": [],
@@ -5795,6 +6072,1604 @@
         "type": "object"
       },
       "summary": "Removes a control from the open spec and from its layout. The id comes from spec.get. Undo restores it in its place. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "choices": {
+            "description": "The allowed values of a text or an integer, or the allowed items of a list, from 1 to 1024.",
+            "items": {
+              "description": "One allowed value."
+            },
+            "maxItems": 1024,
+            "minItems": 1,
+            "type": "array"
+          },
+          "default": {
+            "description": "The starting value, a JSON value of the type; 0, false, the first choice, an empty text, [min, max] or an empty list when absent."
+          },
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The new state variable's id; cursor is reserved.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "max": {
+            "description": "The high bound of a number, an integer or a range.",
+            "type": "number"
+          },
+          "min": {
+            "description": "The low bound of a number, an integer or a range.",
+            "type": "number"
+          },
+          "title": {
+            "description": "The label that a control or a legend shows; the id when absent.",
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": {
+            "description": "The type of the value. A list holds texts.",
+            "enum": [
+              "number",
+              "integer",
+              "boolean",
+              "text",
+              "range",
+              "list"
+            ],
+            "type": "string"
+          },
+          "x": {
+            "description": "An extension table, a JSON object."
+          }
+        },
+        "required": [
+          "id",
+          "type"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "edit",
+      "examples": [
+        {
+          "default": 0,
+          "id": "token",
+          "max": 63,
+          "min": 0,
+          "title": "Token",
+          "type": "integer"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "state.create",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The new state variable's id.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "warnings",
+          "diff",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "summary": "Adds a state variable to the open spec: a named value that controls and picks write and that panels read through references. type is number, integer, boolean, text, range or list. default, min, max and choices limit the value, and x holds extension keys. The id cursor is reserved. Undo removes it. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The state variable's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "set": {
+            "description": "The keys to change, a JSON object with keys of a state variable such as title, default, min, max and choices."
+          }
+        },
+        "required": [
+          "id",
+          "set"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "edit",
+      "examples": [
+        {
+          "id": "token",
+          "set": {
+            "max": 127
+          }
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "state.patch",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The state variable's id.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "warnings",
+          "diff",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "summary": "Changes a state variable of the open spec with the keys of set: the keys given replace the variable's own. The id cannot change. state.get lists the ids. Undo restores the variable. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The state variable's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "edit",
+      "examples": [
+        {
+          "id": "token"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "state.remove",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The removed state variable's id.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "warnings",
+          "diff",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "summary": "Removes a state variable from the open spec. A reference, a control or a pick that reads or writes the variable keeps it in use, and the command then fails with state.in_use. state.get lists the ids. Undo restores the variable. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The state variable's id.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "value": {
+            "description": "The new value, a JSON value of the variable's type."
+          }
+        },
+        "required": [
+          "id",
+          "value"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "change",
+      "examples": [
+        {
+          "id": "token",
+          "value": 5
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "state.set",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "previous": {
+            "description": "The value that the variable held before."
+          },
+          "value": {
+            "description": "The value that the variable holds now."
+          }
+        },
+        "required": [
+          "value",
+          "previous"
+        ],
+        "type": "object"
+      },
+      "summary": "Sets the current value of a state variable, as a person's edit of a control does, and returns the value and the one before it. The value must fit the type, the bounds and the choices, or the command fails with state.bad_value. It adds a state event with the origin of the caller. It changes the session and not the workspace, so it has no undo step."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "description": "Only these state variables; every variable when absent.",
+            "items": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "read",
+      "examples": [
+        {
+          "ids": [
+            "token"
+          ]
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "state.get",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "states": {
+            "description": "The state variables.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "default": {
+                  "description": "The default value."
+                },
+                "id": {
+                  "description": "The state variable's id.",
+                  "type": "string"
+                },
+                "readers": {
+                  "description": "What reads the variable, such as a panel option or an annotation.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "description": "The type of the value: number, integer, boolean, text, range or list.",
+                  "type": "string"
+                },
+                "value": {
+                  "description": "The current value."
+                },
+                "writers": {
+                  "description": "What writes the variable, such as a control or a pick.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "id",
+                "type",
+                "value",
+                "default",
+                "writers",
+                "readers"
+              ],
+              "type": "object"
+            },
+            "maxItems": 256,
+            "type": "array"
+          }
+        },
+        "required": [
+          "states"
+        ],
+        "type": "object"
+      },
+      "summary": "Returns the state variables of the open spec: each one's id, type, current value, default, the writers that set it and the readers that use it. ids limits the answer to some variables. It changes nothing."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The control's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "value": {
+            "description": "The new value, a JSON value of the control's kind: a number, a boolean, a text, [lo, hi] for a range or a list for a group with multiple."
+          }
+        },
+        "required": [
+          "id",
+          "value"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "change",
+      "examples": [
+        {
+          "id": "measure",
+          "value": "mean"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "control.set",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "value": {
+            "description": "The value that the control holds now."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
+      "summary": "Sets the value of a control that binds value or a state, as a person's edit does, and returns the value. It adds a control event with the origin of the caller. A control that binds a parameter takes run.set_param, and this command refuses it with control.not_settable. It changes the session and not the workspace, so it has no undo step."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "clear": {
+            "description": "Whether to clear the selection of the panel; false when absent.",
+            "type": "boolean"
+          },
+          "entity": {
+            "description": "The entity of the item to pick.",
+            "maxLength": 255,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]{1,63}(/[A-Za-z0-9_.-]{1,63}){0,15}$",
+            "type": "string"
+          },
+          "index": {
+            "description": "The item's index in the entity.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "panel": {
+            "description": "The panel's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "panel"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "change",
+      "examples": [
+        {
+          "entity": "terrain",
+          "index": 3,
+          "panel": "world"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "selection.set",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "description": "The pick fields as an object, or null when the panel has no selection."
+          }
+        },
+        "required": [
+          "fields"
+        ],
+        "type": "object"
+      },
+      "summary": "Makes a pick in a panel: the entity and the item at index, or clear to remove the selection. It makes the same pick event, field values and state writes as a person's pick, with the origin of the caller. It returns the pick fields. It changes the session and not the workspace, so it has no undo step."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "panel": {
+            "description": "The panel's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "panel"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "read",
+      "examples": [
+        {
+          "panel": "world"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "selection.get",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "description": "The pick fields as an object, or null when the panel has no selection."
+          }
+        },
+        "required": [
+          "fields"
+        ],
+        "type": "object"
+      },
+      "summary": "Returns the pick fields of the last pick in a panel, or null when the panel has no selection. It changes nothing."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
+          "entity": {
+            "description": "The entity table, a JSON object with a path and the other keys of an entity."
+          },
+          "panel": {
+            "description": "The scene panel's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "panel",
+          "entity"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "edit",
+      "examples": [
+        {
+          "entity": {
+            "draw": "points",
+            "path": "markers/origin"
+          },
+          "panel": "world"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "entity.set",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
+          "panel": {
+            "description": "The panel's id.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "panel",
+          "warnings",
+          "diff",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "summary": "Adds an entity to the scene of a scene panel, or replaces the entity with the same path. The entity is a JSON object with the keys of an entity table. The panel must be a scene panel. Undo restores the scene. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
+          "panel": {
+            "description": "The scene panel's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "path": {
+            "description": "The entity's path.",
+            "maxLength": 255,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]{1,63}(/[A-Za-z0-9_.-]{1,63}){0,15}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "panel",
+          "path"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "edit",
+      "examples": [
+        {
+          "panel": "world",
+          "path": "markers/origin"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "entity.remove",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
+          "panel": {
+            "description": "The panel's id.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "panel",
+          "warnings",
+          "diff",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "summary": "Removes the entity with a path from the scene of a scene panel. The panel must be a scene panel, and it must have the entity. Undo restores it. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "annotation": {
+            "description": "The annotation table, a JSON object with an id, a kind and the keys of that kind."
+          },
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
+          "panel": {
+            "description": "The panel's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "panel",
+          "annotation"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "edit",
+      "examples": [
+        {
+          "annotation": {
+            "axis": "y",
+            "id": "floor",
+            "kind": "threshold",
+            "text": "Floor",
+            "value": 0.1
+          },
+          "panel": "loss"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "annotation.set",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
+          "panel": {
+            "description": "The panel's id.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "panel",
+          "warnings",
+          "diff",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "summary": "Adds an annotation to a panel, or replaces the annotation with the same id. The annotation is a JSON object with an id, a kind (label, threshold, band or marker) and the keys of its kind. Undo restores the panel. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The annotation's id in the panel.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "panel": {
+            "description": "The panel's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "panel",
+          "id"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "edit",
+      "examples": [
+        {
+          "id": "floor",
+          "panel": "loss"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "annotation.remove",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
+          "panel": {
+            "description": "The panel's id.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "panel",
+          "warnings",
+          "diff",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "summary": "Removes the annotation with an id from a panel. The panel must have the annotation, or the command fails with annotation.not_found. Undo restores it. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "read",
+      "examples": [
+        {}
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "cursor.get",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "additionalProperties": false,
+            "description": "The cursor.",
+            "properties": {
+              "first": {
+                "description": "The first step that a source keeps.",
+                "type": "integer"
+              },
+              "latest": {
+                "description": "The newest step that a source keeps.",
+                "type": "integer"
+              },
+              "live": {
+                "description": "Whether the cursor follows the newest step.",
+                "type": "boolean"
+              },
+              "playing": {
+                "description": "Whether the cursor plays forward.",
+                "type": "boolean"
+              },
+              "speed": {
+                "description": "The play speed in steps per second.",
+                "type": "number"
+              },
+              "step": {
+                "description": "The step that the panels show.",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "step",
+              "first",
+              "latest",
+              "live",
+              "playing",
+              "speed"
+            ],
+            "type": "object"
+          },
+          "sources": {
+            "description": "The sources that keep steps.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "bytes": {
+                  "description": "The size of the kept steps in bytes.",
+                  "type": "integer"
+                },
+                "first": {
+                  "description": "The first step that the source keeps.",
+                  "type": "integer"
+                },
+                "id": {
+                  "description": "The source's id.",
+                  "type": "string"
+                },
+                "last": {
+                  "description": "The last step that the source keeps.",
+                  "type": "integer"
+                },
+                "requested": {
+                  "description": "How many steps the spec asks the source to keep.",
+                  "type": "integer"
+                },
+                "steps": {
+                  "description": "How many steps the source keeps.",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "first",
+                "last",
+                "steps",
+                "requested",
+                "bytes"
+              ],
+              "type": "object"
+            },
+            "maxItems": 256,
+            "type": "array"
+          }
+        },
+        "required": [
+          "cursor",
+          "sources"
+        ],
+        "type": "object"
+      },
+      "summary": "Returns the cursor, which chooses the step that the panels show, and each source's first and last kept step, the number of kept steps, the number of requested steps and the bytes. It changes nothing."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "live": {
+            "description": "Whether the cursor follows the newest step.",
+            "type": "boolean"
+          },
+          "playing": {
+            "description": "Whether the cursor plays forward.",
+            "type": "boolean"
+          },
+          "speed": {
+            "description": "The play speed in steps per second, from 0.1 to 1000.",
+            "maximum": 1000,
+            "minimum": 0.1,
+            "type": "number"
+          },
+          "step": {
+            "description": "The step to show.",
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "change",
+      "examples": [
+        {
+          "live": false,
+          "step": 120
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "cursor.set",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "additionalProperties": false,
+            "description": "The cursor after the move.",
+            "properties": {
+              "first": {
+                "description": "The first step that a source keeps.",
+                "type": "integer"
+              },
+              "latest": {
+                "description": "The newest step that a source keeps.",
+                "type": "integer"
+              },
+              "live": {
+                "description": "Whether the cursor follows the newest step.",
+                "type": "boolean"
+              },
+              "playing": {
+                "description": "Whether the cursor plays forward.",
+                "type": "boolean"
+              },
+              "speed": {
+                "description": "The play speed in steps per second.",
+                "type": "number"
+              },
+              "step": {
+                "description": "The step that the panels show.",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "step",
+              "first",
+              "latest",
+              "live",
+              "playing",
+              "speed"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "cursor"
+        ],
+        "type": "object"
+      },
+      "summary": "Moves the cursor, sets whether it follows the newest step (live), whether it plays and how fast. A step outside the kept steps goes to the nearest kept step, and the result gives the cursor as it is. When no source keeps steps, the command fails with cursor.no_history. It changes the session and not the workspace, so it has no undo step."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "description": "How many kept steps to move, from -1000 to 1000 and not 0.",
+            "maximum": 1000,
+            "minimum": -1000,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "change",
+      "examples": [
+        {
+          "count": -1
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "cursor.step",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "additionalProperties": false,
+            "description": "The cursor after the move.",
+            "properties": {
+              "first": {
+                "description": "The first step that a source keeps.",
+                "type": "integer"
+              },
+              "latest": {
+                "description": "The newest step that a source keeps.",
+                "type": "integer"
+              },
+              "live": {
+                "description": "Whether the cursor follows the newest step.",
+                "type": "boolean"
+              },
+              "playing": {
+                "description": "Whether the cursor plays forward.",
+                "type": "boolean"
+              },
+              "speed": {
+                "description": "The play speed in steps per second.",
+                "type": "number"
+              },
+              "step": {
+                "description": "The step that the panels show.",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "step",
+              "first",
+              "latest",
+              "live",
+              "playing",
+              "speed"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "cursor"
+        ],
+        "type": "object"
+      },
+      "summary": "Moves the cursor by count kept steps, forward when count is above 0 and back when it is below 0. A count of 0 is refused. The cursor stops at the nearest kept step, and the result gives the cursor as it is. It changes the session and not the workspace, so it has no undo step."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "panel": {
+            "description": "The scene panel's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "panel"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "read",
+      "examples": [
+        {
+          "panel": "world"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "camera.get",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "orbit": {
+            "additionalProperties": false,
+            "description": "The camera now.",
+            "properties": {
+              "azimuth": {
+                "description": "The orbit's azimuth in degrees, read against up.",
+                "type": "number"
+              },
+              "distance": {
+                "description": "The distance from the target, above 0.",
+                "minimum": 0,
+                "type": "number"
+              },
+              "elevation": {
+                "description": "The orbit's elevation in degrees, from -89 to 89.",
+                "maximum": 89,
+                "minimum": -89,
+                "type": "number"
+              },
+              "target": {
+                "description": "The point the orbit looks at.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              }
+            },
+            "required": [
+              "target",
+              "distance",
+              "azimuth",
+              "elevation"
+            ],
+            "type": "object"
+          },
+          "views": {
+            "description": "The saved views, at most 16.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "azimuth": {
+                  "description": "The view's azimuth in degrees, read against up.",
+                  "type": "number"
+                },
+                "distance": {
+                  "description": "The distance from the target, above 0.",
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "elevation": {
+                  "description": "The view's elevation in degrees, from -89 to 89.",
+                  "maximum": 89,
+                  "minimum": -89,
+                  "type": "number"
+                },
+                "name": {
+                  "description": "The saved view's name, unique in the panel.",
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "target": {
+                  "description": "The point the view looks at.",
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "name",
+                "target",
+                "distance",
+                "azimuth",
+                "elevation"
+              ],
+              "type": "object"
+            },
+            "maxItems": 16,
+            "type": "array"
+          }
+        },
+        "required": [
+          "orbit",
+          "views"
+        ],
+        "type": "object"
+      },
+      "summary": "Returns the orbit camera of a scene panel and the views that the panel saved. The panel must be a scene panel. It changes nothing."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "orbit": {
+            "additionalProperties": false,
+            "description": "The orbit to move to; not with view.",
+            "properties": {
+              "azimuth": {
+                "description": "The orbit's azimuth in degrees, read against up.",
+                "type": "number"
+              },
+              "distance": {
+                "description": "The distance from the target, above 0.",
+                "minimum": 0,
+                "type": "number"
+              },
+              "elevation": {
+                "description": "The orbit's elevation in degrees, from -89 to 89.",
+                "maximum": 89,
+                "minimum": -89,
+                "type": "number"
+              },
+              "target": {
+                "description": "The point the orbit looks at.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              }
+            },
+            "required": [
+              "target",
+              "distance",
+              "azimuth",
+              "elevation"
+            ],
+            "type": "object"
+          },
+          "panel": {
+            "description": "The scene panel's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "view": {
+            "description": "The name of a saved view; not with orbit.",
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "panel"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "change",
+      "examples": [
+        {
+          "panel": "world",
+          "view": "overview"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "camera.set",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "orbit": {
+            "additionalProperties": false,
+            "description": "The camera after the move.",
+            "properties": {
+              "azimuth": {
+                "description": "The orbit's azimuth in degrees, read against up.",
+                "type": "number"
+              },
+              "distance": {
+                "description": "The distance from the target, above 0.",
+                "minimum": 0,
+                "type": "number"
+              },
+              "elevation": {
+                "description": "The orbit's elevation in degrees, from -89 to 89.",
+                "maximum": 89,
+                "minimum": -89,
+                "type": "number"
+              },
+              "target": {
+                "description": "The point the orbit looks at.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              }
+            },
+            "required": [
+              "target",
+              "distance",
+              "azimuth",
+              "elevation"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "orbit"
+        ],
+        "type": "object"
+      },
+      "summary": "Moves the orbit camera of a scene panel to a saved view by name, or to the orbit that you give, and returns the orbit. A name that the panel did not save fails with camera.unknown_view. It changes the session and not the workspace, so it has no undo step."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The view's name.",
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "panel": {
+            "description": "The scene panel's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "panel",
+          "name"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "edit",
+      "examples": [
+        {
+          "name": "overview",
+          "panel": "world"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "camera.save",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
+          "panel": {
+            "description": "The panel's id.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "panel",
+          "warnings",
+          "diff",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "summary": "Saves the current camera of a scene panel as a view with a name, in the option views of the panel, and replaces the view with the same name. A panel holds at most 16 views. Undo restores the views. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
       "agents": true,
@@ -6989,11 +8864,13 @@
                 "run",
                 "spec",
                 "approval",
-                "program"
+                "program",
+                "state",
+                "cursor"
               ],
               "type": "string"
             },
-            "maxItems": 7,
+            "maxItems": 9,
             "minItems": 1,
             "type": "array"
           },
@@ -7057,6 +8934,10 @@
             "items": {
               "additionalProperties": false,
               "properties": {
+                "annotation": {
+                  "description": "pick: the id of the annotation that was picked.",
+                  "type": "string"
+                },
                 "applet": {
                   "description": "spec: the open spec's applet id.",
                   "type": "string"
@@ -7074,7 +8955,7 @@
                   "type": "string"
                 },
                 "change": {
-                  "description": "run: what changed: the run's state, a parameter applied at a step, the end of an action, the attachment of a script, the state of a managed run (runner), or an intervention applied at a step (intervene); program: compiled, refused by a check, or stopped by a limit.",
+                  "description": "cursor: what changed: live, held, playing, moved (by a command, a step or a key) or clamped (to the nearest kept step); run: what changed: the run's state, a parameter applied at a step, the end of an action, the attachment of a script, the state of a managed run (runner), or an intervention applied at a step (intervene); program: compiled, refused by a check, or stopped by a limit.",
                   "enum": [
                     "state",
                     "param",
@@ -7084,7 +8965,12 @@
                     "intervene",
                     "compiled",
                     "refused",
-                    "stopped"
+                    "stopped",
+                    "live",
+                    "held",
+                    "playing",
+                    "moved",
+                    "clamped"
                   ],
                   "type": "string"
                 },
@@ -7174,6 +9060,13 @@
                     "null"
                   ]
                 },
+                "fields": {
+                  "description": "pick: the pick fields as a JSON object."
+                },
+                "first": {
+                  "description": "cursor: the first kept step.",
+                  "type": "integer"
+                },
                 "host": {
                   "description": "program: where it compiled, was refused or stopped.",
                   "enum": [
@@ -7187,6 +9080,10 @@
                   "minimum": 0,
                   "type": "integer"
                 },
+                "key": {
+                  "description": "control: the shortcut key that made the change, when a key did.",
+                  "type": "string"
+                },
                 "kind": {
                   "description": "What happened.",
                   "enum": [
@@ -7196,9 +9093,15 @@
                     "run",
                     "spec",
                     "approval",
-                    "program"
+                    "program",
+                    "state",
+                    "cursor"
                   ],
                   "type": "string"
+                },
+                "latest": {
+                  "description": "cursor: the newest kept step.",
+                  "type": "integer"
                 },
                 "line": {
                   "description": "program with change refused: the line in the source, or 0.",
@@ -7255,6 +9158,10 @@
                   "minItems": 2,
                   "type": "array"
                 },
+                "playing": {
+                  "description": "cursor: whether the cursor plays.",
+                  "type": "boolean"
+                },
                 "point": {
                   "description": "run with change intervene: the intervention point.",
                   "type": "string"
@@ -7270,6 +9177,9 @@
                     "array",
                     "null"
                   ]
+                },
+                "previous": {
+                  "description": "state: the value before the change."
                 },
                 "primitive": {
                   "description": "pick: the scene part of the item, such as points or boxes.",
@@ -7299,8 +9209,12 @@
                   "minimum": 1,
                   "type": "integer"
                 },
+                "speed": {
+                  "description": "cursor: the play speed in steps per second.",
+                  "type": "number"
+                },
                 "state": {
-                  "description": "run with change state: the run's new state; approval: pending, approved, denied or expired.",
+                  "description": "state: the state variable's id; run with change state: the run's new state; approval: pending, approved, denied or expired.",
                   "type": "string"
                 },
                 "status": {
@@ -7312,7 +9226,7 @@
                   "type": "string"
                 },
                 "step": {
-                  "description": "run: the script's step when it changed, or null before the first step.",
+                  "description": "run: the script's step when it changed, or null before the first step; cursor: the step that the cursor shows.",
                   "type": [
                     "integer",
                     "null"
@@ -7335,14 +9249,7 @@
                   "type": "boolean"
                 },
                 "value": {
-                  "description": "control: the control's new value; run with change param: the value the script applied.",
-                  "type": [
-                    "number",
-                    "integer",
-                    "boolean",
-                    "string",
-                    "null"
-                  ]
+                  "description": "control: the control's new value, which is a list for a range or a group with multiple; state: the state variable's new value; run with change param: the value the script applied."
                 },
                 "view": {
                   "description": "pick and select: the live view, such as the scene's name; null otherwise.",
@@ -7350,6 +9257,10 @@
                     "string",
                     "null"
                   ]
+                },
+                "writer": {
+                  "description": "state: what wrote the value, such as a control id, a panel id or a command.",
+                  "type": "string"
                 }
               },
               "required": [
@@ -7383,7 +9294,7 @@
         ],
         "type": "object"
       },
-      "summary": "Returns the events that came after a cursor: picks and selections in the app's views and scene panels, changes of controls, changes of the running script (state, parameters, actions, attachment), edits of the open spec, approvals, and the compile, refusal and stop of GPU programs and stages. It answers at once when events wait, and otherwise holds the call until one comes or timeout_s ends. Pass the cursor of each result to the next call. The app keeps the last 1024 events; lost counts those that were dropped before you read them. Hovers are not events. It changes nothing."
+      "summary": "Returns the events that came after a cursor: picks and selections in the app's views and scene panels, changes of controls, changes of the running script (state, parameters, actions, attachment), edits of the open spec, approvals, the compile, refusal and stop of GPU programs and stages, writes of state variables and moves of the cursor. It answers at once when events wait, and otherwise holds the call until one comes or timeout_s ends. Pass the cursor of each result to the next call. The app keeps the last 1024 events; lost counts those that were dropped before you read them. Hovers are not events. It changes nothing."
     },
     {
       "agents": true,
@@ -8013,7 +9924,19 @@
                       "viridis",
                       "magma",
                       "rdbu",
-                      "greys"
+                      "greys",
+                      "cividis",
+                      "inferno",
+                      "plasma",
+                      "turbo",
+                      "twilight",
+                      "coolwarm",
+                      "batlow",
+                      "vik",
+                      "roma",
+                      "oslo",
+                      "lajolla",
+                      "berlin"
                     ],
                     "type": "string"
                   },
@@ -8403,6 +10326,18 @@
                           "magma",
                           "rdbu",
                           "greys",
+                          "cividis",
+                          "inferno",
+                          "plasma",
+                          "turbo",
+                          "twilight",
+                          "coolwarm",
+                          "batlow",
+                          "vik",
+                          "roma",
+                          "oslo",
+                          "lajolla",
+                          "berlin",
                           null
                         ],
                         "type": [
@@ -8709,7 +10644,19 @@
                           "viridis",
                           "magma",
                           "rdbu",
-                          "greys"
+                          "greys",
+                          "cividis",
+                          "inferno",
+                          "plasma",
+                          "turbo",
+                          "twilight",
+                          "coolwarm",
+                          "batlow",
+                          "vik",
+                          "roma",
+                          "oslo",
+                          "lajolla",
+                          "berlin"
                         ],
                         "type": "string"
                       },

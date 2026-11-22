@@ -7,6 +7,7 @@
 #include <caliper_builder/loaders/inference.h>
 #include <caliper_builder/loaders/loader.h>
 #include <caliper_builder/loaders/paths.h>
+#include <caliper_builder/session/instrument_commands.h>
 #include <caliper_builder/session/intervene_commands.h>
 #include <caliper_builder/session/line_diff.h>
 #include <caliper_builder/session/panel_data.h>
@@ -105,7 +106,7 @@ std::pair<fs::path, bool> fixed_part(const fs::path& pattern) {
 
 const std::vector<std::string>& session_host_commands() {
     static const std::vector<std::string> names = {"app.info", "app.applets", "app.launch", "panel.render",
-                                                   "capture.frame"};
+                                                   "capture.frame", "camera.get", "camera.set"};
     return names;
 }
 
@@ -164,6 +165,14 @@ struct Session::Impl {
     std::shared_ptr<SessionHost> host;
     std::unique_ptr<CommandRegistry> registry;
     std::unique_ptr<CommandQueue> queue;
+    // The session state of instruments (design/instrument-interface.md):
+    // the values that references read, the readers of each input and the
+    // kept steps. reconcile_hosts() resets them when the open spec changes.
+    ValueStore values;
+    StepHistory history;
+    DependencyIndex deps;
+    std::mutex instrument_mutex;
+    std::optional<spec::Spec> instrumented;   // the spec they were last reset for, under instrument_mutex
 
     mutable std::mutex doc_mutex;
     std::optional<Document> doc;
@@ -906,8 +915,19 @@ struct Session::Impl {
     // the redo stack stays, no undo step is filed and the journal is not
     // written.
     CommandOutput spec_edit(const CommandContext& ctx) {
+        // camera.save saves the app's current orbit (instrument_commands.h):
+        // the session asks the app for it before the edit, without the lock.
+        json camera_args;
+        if (ctx.invocation.name == "camera.save" && !ctx.invocation.args.contains("orbit")) {
+            std::shared_ptr<SessionHost> h = current_host();
+            if (!h) return fail("command.not_bound", "camera.save needs the app.");
+            CommandOutput got = h->camera_command("camera.get", {{"panel", str_arg(ctx.invocation.args, "panel")}});
+            if (got.error) return got;
+            camera_args = ctx.invocation.args;
+            camera_args["orbit"] = got.result.value("orbit", json());
+        }
         std::lock_guard<std::mutex> lock(doc_mutex);
-        const json& args = ctx.invocation.args;
+        const json& args = camera_args.is_null() ? ctx.invocation.args : camera_args;
         const bool dry = bool_arg(args, "dry_run", false);
         if (!ctx.invocation.preview.empty()) return preview_edit(ctx, dry);
         auto refused = [dry](CommandOutput out) {
@@ -1475,7 +1495,9 @@ struct Session::Impl {
         const std::uint64_t revision = catalog->revision();
         const std::string version = panel_data_version(s, id, revision, panel_generation(s, id, sources));
         if (str_arg(args, "known") == version) return CommandOutput::ok(panel_data_unchanged(s, id, version));
-        return CommandOutput::ok(panel_data_result(s, resolve_panel(s, id, *store, options.resolve, &sources), revision));
+        const ChainContext chain = chain_context();
+        return CommandOutput::ok(
+            panel_data_result(s, resolve_panel(s, id, *store, options.resolve, &sources, &chain), revision));
     }
 
     // ---- the app's commands ------------------------------------------------
@@ -1502,7 +1524,8 @@ struct Session::Impl {
                         "args.id");
         // A resolve error goes to the host with the data, which draws it as the
         // panel's state ("Source offline", "Missing column"), as the app shows it.
-        PanelData data = resolve_panel(s, id, *store, options.resolve, &sources);
+        const ChainContext chain = chain_context();
+        PanelData data = resolve_panel(s, id, *store, options.resolve, &sources, &chain);
         return h->render_panel(s, data, static_cast<int>(int_arg(ctx.invocation.args, "width", 800)),
                                static_cast<int>(int_arg(ctx.invocation.args, "height", 500)));
     }
@@ -1528,6 +1551,48 @@ struct Session::Impl {
         }
         return program_command(ctx, open, program_host.load(), stage_host.load());
     }
+    // The commands of design/instrument-interface.md that change or read
+    // session state (instrument_commands.h). They run on a copy of the open
+    // spec, without the document's lock.
+    CommandOutput instrument_cmd(const CommandContext& ctx) {
+        spec::Spec open;
+        bool is_open = false;
+        {
+            std::lock_guard<std::mutex> lock(doc_mutex);
+            if (doc) {
+                open = doc->spec;
+                is_open = true;
+            }
+        }
+        InstrumentContext ic{open, is_open, values, history, events.get(), store.get(), &sources, options.resolve};
+        const std::string& n = ctx.invocation.name;
+        if (n == "state.set" || n == "state.get" || n == "control.set") return state_command(ctx, ic);
+        if (n == "selection.set" || n == "selection.get") return selection_command(ctx, ic);
+        return cursor_command(ctx, ic);
+    }
+
+    // What references and kept steps read when a panel resolves.
+    ChainContext chain_context() const {
+        const CursorState c = history.cursor();
+        return ChainContext{&values, &history, c.step, c.live};
+    }
+
+    // Resets the instruments' session state when the open spec differs from
+    // the one it was last reset for.
+    void reset_instruments() {
+        spec::Spec now;
+        {
+            std::lock_guard<std::mutex> doc_lock(doc_mutex);
+            if (doc) now = doc->spec;
+        }
+        std::lock_guard<std::mutex> lock(instrument_mutex);
+        if (instrumented && *instrumented == now) return;
+        instrumented = now;
+        values.reset(now);
+        deps.rebuild(now);
+        history.configure(now);
+    }
+
     // The intervention commands (design/gpu-programs.md).
     CommandOutput intervene_cmd(const CommandContext& ctx) { return intervene_command(ctx, run_control.load()); }
 
@@ -1563,6 +1628,7 @@ struct Session::Impl {
     // last, or when a host was set since; with no spec open, an empty one.
     // It runs on the thread that ran the command, the frame thread in the app.
     void reconcile_hosts() {
+        reset_instruments();
         ProgramHost* programs = program_host.load();
         StageHost* stages = stage_host.load();
         std::lock_guard<std::mutex> lock(reconcile_mutex);
@@ -1618,8 +1684,13 @@ struct Session::Impl {
         for (const char* name : {"spec.set_text", "source.add", "source.patch", "source.remove", "panel.create",
                                  "panel.patch", "panel.remove", "layout.place", "layout.set", "control.create",
                                  "control.patch", "control.remove", "stage.set", "stage.remove", "program.create",
-                                 "program.patch", "program.remove"})
+                                 "program.patch", "program.remove", "state.create", "state.patch", "state.remove",
+                                 "entity.set", "entity.remove", "annotation.set", "annotation.remove", "camera.save"})
             bind(name, &Impl::spec_edit);
+        // The session state of instruments (design/instrument-interface.md).
+        for (const char* name : {"state.set", "state.get", "control.set", "selection.set", "selection.get",
+                                 "cursor.get", "cursor.set", "cursor.step"})
+            bind(name, &Impl::instrument_cmd);
         // The stages, programs and interventions (design/gpu-programs.md).
         for (const char* name : {"stage.check", "program.status"}) bind(name, &Impl::program_cmd);
         for (const char* name : {"intervene.points", "intervene.set", "intervene.clear", "intervene.list"})
@@ -1906,6 +1977,8 @@ void Session::set_stage_host(StageHost* host) { impl_->stage_host.store(host); }
 StageHost* Session::stage_host() const { return impl_->stage_host.load(); }
 RunControl* Session::run_control() const { return impl_->run_control.load(); }
 EventRing& Session::events() { return *impl_->events; }
+ValueStore& Session::values() { return impl_->values; }
+StepHistory& Session::history() { return impl_->history; }
 
 void Session::set_host(std::shared_ptr<SessionHost> host) {
     Impl& im = *impl_;
@@ -1918,6 +1991,12 @@ void Session::set_host(std::shared_ptr<SessionHost> host) {
         return;
     }
     Impl* raw = &im;
+    for (const char* name : {"camera.get", "camera.set"})
+        im.registry->bind(name, [raw](const CommandContext& ctx) {
+            auto h = raw->current_host();
+            return h ? h->camera_command(ctx.invocation.name, ctx.invocation.args)
+                     : fail("command.not_bound", ctx.invocation.name + " needs the app.");
+        });
     im.registry->bind("app.info", [raw](const CommandContext&) {
         auto h = raw->current_host();
         return h ? h->app_info() : fail("command.not_bound", "app.info needs the app.");
@@ -2072,7 +2151,8 @@ PanelData Session::resolve(std::string_view panel_id, std::string_view preview) 
             s = p->shadow;
         }
     }
-    return resolve_panel(s, panel_id, *impl_->store, impl_->options.resolve, &impl_->sources);
+    const ChainContext chain = impl_->chain_context();
+    return resolve_panel(s, panel_id, *impl_->store, impl_->options.resolve, &impl_->sources, &chain);
 }
 
 PreviewState Session::preview(std::string_view id) const {
