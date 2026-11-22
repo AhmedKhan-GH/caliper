@@ -181,23 +181,16 @@ The functional checks passed on torch 2.14.1 and 2.15.0:
 
 ### Runtime Results
 
-The built runtime ran the spike's two models with one program under the facade at its own cadence. The program computes the norm of each row of the bound weight and writes one point for each row. Each loop calls `caliper.step()` at the checkpoint of `caliper.watch(model, optimizer)`, before `optimizer.step()`, and the outputs go to a stand-in of `caliper.scene`, thus the publish path is not part of the numbers. Each number is the median of five runs, one process per run, with the two modes in alternating order. The runs held one heavy slot while the other slots were free. The peak memory footprint was 0.47 GB for the small model and 0.60 GB for the medium model.
+The built runtime ran the spike's two models under `caliper.watch(model, optimizer)` with its defaults, as a managed run's script does, without an explicit `caliper.step()`. One geometry program was installed through `caliper._programs.install`, and its outputs went through the real publish path of `caliper.scene`. The program computes the norm of each row of the bound weight and writes one point for each row. Each number is the median of five runs, one process per run of 6 s to 9 s, with the two modes in alternating order. The runs held all three heavy slots in a quiet window. The peak memory footprint was 0.49 GB for the small model.
 
-| Model | Base Steps per Second | With the Program | Share of Base | Cadence N | Measured `T` | Measured `C` | GPU Time of a Pass | 1-Minute Load |
-|---|---|---|---|---|---|---|---|---|
-| Small | 1,337.9 | 1,286.4 | 96.1 % | 18 to 41 | 0.75 ms | 1.20 ms | 0.07 ms | 2.67 to 3.43 |
-| Medium | 85.11 | 81.34 | 95.6 % | 3 to 4 | 11.9 ms | 1.00 ms | 0.39 ms | 2.61 to 3.56 |
+| Model | Loop | Base Steps per Second | With the Program | Share of Base | Cadence N | `D` | `b` | Measured Share | Passes per Second | 1-Minute Load |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Small | Plain | 2,400.0 | 2,302.1 | 95.9 % | 64 to 102 | 1.20 ms | 0.417 ms | 3.70 % | 32.7 | 1.30 to 2.49 |
+| Medium | Plain | 87.63 | 84.80 | 96.8 % | 3 to 5 | 1.25 ms | 11.39 ms | 3.54 % | 26.9 | 1.21 to 2.65 |
+| Small | `loss.item()` | 996.6 | 971.0 | 97.4 % | 5 to 10 | 0.29 ms | 0.937 ms | 3.68 % | 112.3 | 1.28 to 2.53 |
+| Medium | `loss.item()` | 82.80 | 81.71 | 98.7 % | 3 | 0.64 ms | 12.04 ms | 1.78 % | 27.2 | 1.33 to 2.37 |
 
-The measured `T` agrees with the spike's step times of 0.75 ms and 12.2 ms. The medium model lost 4.4 % of its throughput, a little above the runtime's share of 4 %, thus `C` slightly underestimates the cost of a pass step there. Both models stay above the 95 % of check 5.
-
-A second measurement ran the joined code as a managed run's script does: `caliper.watch(model, optimizer)` with its defaults and no explicit `caliper.step()`, one geometry program installed through `caliper._programs.install`, and the real publish path of `caliper.scene`. The base then ran faster, because no call waited for torch's queue, and the program cost more:
-
-| Model | Base Steps per Second | With the Program | Share of Base | Cadence N | 1-Minute Load |
-|---|---|---|---|---|---|
-| Small | 2,335.25 | 1,336.38 | 57.2 % | 39 to 40 | 1.91 to 2.76 |
-| Medium | 87.46 | 83.00 | 94.9 % | 2 to 3 | 1.69 to 2.62 |
-
-The publish took 0.05 ms for each pass, and an installed program without passes cost nothing. A wait for torch's queue every 40 steps without any program gave 1,420 steps per second on the small model, thus the first sync point causes the loss. The loss of one wait grew with the steps between two waits, up to about 20 ms: a wait every 10, 40, 160 and 640 steps gave 1,179, 1,424, 1,812 and 2,156 steps per second. After a wait, the MPS queue does not keep the GPU busy until the training thread has queued many steps again. Thus `C` as defined above, which counts at most the median time to queue a step of the wait, is too small on MPS. A variant that counts the whole wait in `C` and at most doubles N at a pass gave 96.1 % and 99.4 %, but N then grew to 7,000 to 10,000, because a larger N lets torch queue more steps, which makes the next wait longer. The GPU-side sync of Open Decisions removes the wait. The cost model of a CPU wait on MPS is an open point of `design/gpu-programs.md`.
+The cadence before the step marks kept 57.2 % on the small model and 94.9 % on the medium model in the same setup. On the small model, the loss is larger than the measured share, because the marks themselves cost about 1 % to 3 %: a program that ran no pass after its warm-up gave 2,326 steps per second against 2,392 to 2,396 without it. The base runs of the small model with `loss.item()` spread from 893 to 1,066 steps per second, thus that row has a larger error than the others. Under a 1-minute load of 4 to 7, with other builds on the machine, the small model kept 93.6 % to 94.4 % in the same measurement.
 
 The counters of the runtime showed the in-place route in each run: one import in place, no import refused, 0 bytes copied, and each output given as a DLPack capsule over the runtime's own buffer with 0 bytes copied. The publish path then makes the copy of its route, which the table of Output Path states.
 
