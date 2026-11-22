@@ -4,133 +4,115 @@ kind: concept
 
 # Live Streaming
 
-A PyTorch script trains at full speed while Caliper shows its tensors live, and `show()` never waits for the GPU, the display or the viewer.
+A PyTorch training script keeps full speed while Caliper shows its tensors live, because `show()` does not wait for the GPU, display or viewer.
 
 ```mermaid
 flowchart TB
-    subgraph train[Training Process]
-        show(["show(t)"]) -->|tensor| ring[Snapshot Ring]
-        ring -->|snapshot| sess[Session Transport]
-        ring -->|snapshot| win[Window Transport]
-        win -->|completed snapshot| render[Render Thread]
-        render -->|draw| embedT[Caliper Embed]
-    end
+    show(["show(t)"]) -->|tensor| ring[Snapshot Ring]
+    ring -->|attach to app| sess[Session Transport]
+    ring -->|own window| win[Window Transport]
     sess -->|slot copy| shm[("Shared Memory")]
-    subgraph viewer[Viewer Process]
-        reader[Session Reader] -->|snapshot| embedV[Caliper Embed]
-    end
-    shm -->|reads| viewer
+    win -->|completed snapshot| render[Render Thread]
+    shm -->|reads| viewer[Viewer Process]
     viewer -.->|heartbeat| shm
+    viewer -->|apply| embed[Caliper Embed]
+    render -->|apply| embed
 ```
 
-Path of a snapshot from `show()` through either transport to Caliper Embed, which draws it in the training process or in the viewer process.
+A snapshot goes from `show()` to Caliper Embed through shared memory and a viewer process, or through a render thread in the training process.
 
 ## Components
 
-Every `show()` call, and each of its siblings for points, series and histograms, produces a snapshot. Both modes sit behind one view layer in Caliper Embed, so the drawing code never knows which transport carried a snapshot.
+Each `show()` call makes a snapshot, as do the calls for points, series and histograms. A snapshot goes to Caliper Embed through one of two transports. One snapshot ring in the training process selects the slots, uses the rate limit and polls the events for the two transports. A transport only allocates slots and receives completed snapshots.
 
-| Component | Process | Role |
-|---|---|---|
-| `show(t)` | Training | Takes a tensor from the script and produces a snapshot. |
-| Snapshot Ring | Training | Owns slot choice, the rate limit and event polling for both transports. |
-| Session Transport | Training | Allocates slots in shared memory and receives completed snapshots, for attach to app. |
-| Window Transport | Training | Allocates slots and receives completed snapshots, for the own window. |
-| Render Thread | Training | Repaints the own window. |
-| Shared Memory | Mapped by Both | Holds the session's slots and the viewer's heartbeat. |
-| Session Reader | Viewer | Reads the shared-memory session for the viewer. |
-| Caliper Embed | Both | Draws each snapshot through one apply call: in the training process for the own window, and in the viewer process for attach to app. |
+The two modes use one view layer in Caliper Embed and go to the same apply call. As a result, the code that draws a view does not know which transport sent a snapshot.
 
-Attach to app draws in a separate viewer: the Caliper app, through F4 Attach to process on its landing screen, or the standalone `caliper-viewer`. The Caliper app runs the viewer side inside its own window, where a hosted Caliper Embed borrows the app's renderer.
+In attach to app, a second process, the viewer, reads the session's shared memory and draws snapshots. This viewer is the Caliper app, through F4 Attach to process on its landing screen, or the standalone `caliper-viewer`. The Caliper app operates the same viewer side in its window. There, a hosted Caliper Embed uses the app's renderer, and thus the views draw in the app's frame.
 
-The own window draws inside the training process. Caliper's core, Metal renderer and embed C ABI include no torch header, so Caliper Embed shares that process with the torch the script imported ([Embedding API](../web/embedding-api.md#torch-free-build)).
+In the own window, a render thread in the training process repaints the window. Caliper Embed then shares that process with the torch that the script imported. This is possible because Caliper's core, Metal renderer and embed C ABI do not include a torch header ([Embedding API](../web/embedding-api.md#torch-free-build)).
 
 ## Session
 
-The training process is the client. Its first call opens a local live session: POSIX shared memory plus a session file in the `live/` folder of the data folder ([Folders and Environment](../reference/folders-and-environment.md)). The file is written at open and on every view change, and removed at close.
-
-[Live Session Layout](../development/live-session-layout.md) describes the file, the segments and the slots.
+The training process is the client. Its first call opens a local live session with POSIX shared memory and a session file in the `live/` folder of the data folder ([Folders and Environment](../reference/folders-and-environment.md)). The client writes the file when the session opens and when a view changes, and removes it when the session closes. [Live Session Layout](../development/live-session-layout.md) gives the file, the segments and the slots.
 
 ### Viewer Attachment
 
-A viewer lists the sessions, attaches to one and writes a heartbeat on every poll. The client's "is anyone watching" check is one atomic load and a clock read: a heartbeat younger than 1 s. With no viewer, `show()` returns after that check, with no snapshot and no GPU work.
+A viewer lists the sessions, attaches to one of them and writes a heartbeat each time it polls. The client uses one atomic load and a clock read to find if a viewer monitors the session. A heartbeat from less than 1 s before the check shows a viewer. When no viewer is attached, `show()` returns after that check, with no snapshot and no GPU work.
 
 ### Session End
 
-Neither side ever waits for the other.
+The two sides do not wait for each other. When a viewer detaches or crashes, the heartbeat is cleared, or no new heartbeat comes in 1 s. Then the snapshots stop, the training continues, and a different viewer can attach.
 
-| Event | Outcome |
-|---|---|
-| Viewer Detach or Crash | The heartbeat is cleared, or ages past 1 s, and snapshots stop. Training is untouched, and another viewer can attach. |
-| Script Close | The session is marked closed, its names are unlinked and its session file is removed, without waiting for a viewer. |
-| Script Kill | The viewer keeps drawing the last frames and shows "session ended". The next session listing sees the dead pid, unlinks that session's names and removes the file. |
+When the script closes the session, it records that the session is closed, unlinks its names and removes the session file. It does not wait for a viewer. If the script is killed with SIGKILL, it cannot unlink its segments, and the viewer continues to draw the last frames and shows "session ended". The names stay until the next viewer lists the sessions. That viewer finds the stopped script's pid, unlinks the names of that session and removes its file.
 
 ## Snapshot
 
-A snapshot is one GPU-to-GPU copy on torch's own stream into CPU-readable shared memory. The transport hands torch each slot through DLPack (for MPS, a `kDLMetal` capsule over the segment's `MTLBuffer` at the slot's offset), and the snapshot is a queued `slot.copy_(src)`.
+A snapshot is one GPU-to-GPU copy into shared memory that the CPU can read, on the same stream that torch uses. The transport gives each slot to torch through DLPack. On MPS, the slot is a `kDLMetal` capsule for the segment's `MTLBuffer`, at the slot's offset. The snapshot is a queued `slot.copy_(src)`.
 
-Each process maps a segment as one shared-storage `MTLBuffer`, so the trainer's tensor and the viewer's draw source are the same physical pages.
+Each process maps a segment as one shared-storage `MTLBuffer`. Thus the tensor in the trainer and the draw source in the viewer are the same physical pages.
 
-| Part | Behaviour |
-|---|---|
-| Autoscale Ranges | `torch.aminmax(src, out=...)` computes them on the GPU into the slot's stats. Points add a bounding box, and histograms are binned on the device. |
-| Readback | None: no `.item()`, no `.cpu()`, no `synchronize()`. The viewer reads the stats from the CPU side of the same pages. |
-| MPS Tensor | No host copy anywhere. |
-| CPU Tensor | Copied once into the shared pages. |
-| Other Devices | Moved to the CPU first. |
+The GPU calculates the autoscale ranges with `torch.aminmax(src, out=...)` into the slot's stats. A points view also adds a bounding box, and the device bins histogram values. Caliper reads no value back with `.item()`, `.cpu()` or `synchronize()`. The viewer reads the stats from the CPU side of the same pages.
+
+An MPS tensor has no host copy at any point. Caliper copies a CPU tensor one time into the shared pages, and it moves a tensor on a different device to the CPU first.
 
 ### Slot Ring
 
-| Rule | Detail |
-|---|---|
-| Slots | A view has 3 slots, or 1 for a series. |
-| Slot Choice | The client writes a slot that is not the last published one, not claimed by the viewer and not pending. |
-| Full Ring | With no free slot, the new snapshot is dropped and counted, which guarantees that the oldest pending snapshot completes and publishes. |
-| Completion | After queueing a snapshot, the ring records a `torch.mps.Event` and returns. |
-| Publication | Completed snapshots are published oldest first by polling `Event.query()`, from later calls and from a publisher thread that polls every 2 ms while snapshots are pending, so a snapshot taken before a long step still arrives. |
-| Viewer Reads | The viewer's GPU reads are never waited on either. How long the viewer holds a slot depends on the view kind, as [Live Session Layout](../development/live-session-layout.md#slot-claims) lists. |
+A view has 3 slots, or 1 for a series. The client writes a new snapshot only to an available slot. A slot is available when these three conditions are true:
+
+- It is not the last published slot.
+- The viewer does not claim it.
+- No snapshot in it waits for the GPU.
+
+When no slot is available, the client discards the new snapshot and counts it. This makes sure that the first snapshot in the queue completes and that the ring publishes it.
+
+After the ring queues a snapshot, it records a `torch.mps.Event` and returns. The ring publishes completed snapshots, first in first out, when it polls `Event.query()`. It polls from the calls that come after, and from a publisher thread that polls each 2 ms while snapshots wait. As a result, a snapshot from before a long step gets to the viewer.
+
+Caliper also does not wait for the viewer's GPU reads. The time that the viewer holds a slot changes with the view kind, as [Live Session Layout](../development/live-session-layout.md#slot-claims) shows.
 
 ## Sampling
 
-| Rule | Detail |
-|---|---|
-| Rate Limit | Each view has one, 60 Hz by default. A call inside the interval returns after a clock check. |
-| Viewer Draw | The viewer draws the newest completed snapshot of each view at up to 60 fps. Older ones that completed in between are superseded. |
-| Skipped Steps | Skipping is by design: a display shows no more than its frame rate, and every snapshot costs GPU work. |
-| Back-Pressure | None. `show()` never waits for a slot, the GPU or the viewer. |
-| Loop without a Sync | Torch runs ahead, and a snapshot completes only when the GPU reaches it, so latency grows with the run-ahead until the loop hits a sync (`loss.item()`, logging). |
+Each view has a rate limit, 60 Hz by default. A call in the interval returns after a clock check. The viewer draws the newest completed snapshot of each view at up to 60 fps. It does not draw previous snapshots that completed between two frames. The viewer does not show all steps by design. A display cannot show more frames than its frame rate, and each snapshot uses GPU time.
+
+`show()` has no back-pressure and does not wait for a slot, the GPU or the viewer. In a GPU loop with no sync point, torch queues more work than the GPU completed. A snapshot then completes only when the GPU gets to it. Thus the latency increases with the run-ahead until the loop gets to a sync, such as `loss.item()` or a call that writes a log.
 
 ## Display Modes
 
-| Property | Attach to App | Own Window |
-|---|---|---|
-| Window Owner | A separate viewer process | The training process, where a render thread repaints it |
-| Long Step | Repaints and takes input | Repaints; input waits for the main thread unless `run(train)` is used |
-| Script End or Crash | The viewer keeps the last frames | The window goes with it |
-| Window Crash or Hang | Training continues | The script crashes or hangs with it |
-| Limit | One viewer per session | One window per process |
+Attach to app is the primary mode. Its second process keeps the window and its input in operation, because the training loop cannot stop that process. The viewer process also continues after the script stops. As a result, the window repaints and gets input during a long step, and it keeps the last frames when the script stops or crashes. If the window crashes or hangs, the training continues. This mode does not freeze, and the Caliper app's landing screen attaches to it.
 
-Attach to app is the primary mode, because only a separate process keeps the window and its input alive whatever the training loop does. It survives the script, never freezes, and is what the Caliper app's landing screen attaches to.
+You open the own window with `caliper.window()`. This mode does not use a second process. Thus the window stops when the script stops or crashes, and the script crashes or hangs when the window does. During a long step the window repaints, but AppKit sends input only to the main thread, which is the training thread. Input then waits, unless you use `run(train)`.
 
-The own window, opened with `caliper.window()`, needs no second process, but AppKit delivers input only to the main thread, which is the training thread. `run(train)` runs training on a worker thread and gives the main thread to Caliper, which fixes input but changes how the script is run.
+`run(train)` runs the training on a worker thread and gives the main thread to Caliper. This gives input to the window, but it changes how you run the script. A process can have only one own window.
 
 ## Limits
 
-| Limit | Detail |
+Live streaming operates only on the local computer and has no Windows or Linux path.
+
+| Limit | Value |
 |---|---|
-| Platform | macOS and Metal on Apple silicon only, and local only. Live streaming has no Windows or Linux path. |
-| One Viewer per Session | Attach refuses a session whose viewer is still attached. The viewer's slot claims are single-reader, so a second viewer would need per-reader claims. |
-| Names of a Killed Script | A script killed with SIGKILL cannot unlink its segments. The next session listing sees the dead pid and removes the names and the session file, so in practice they last until a viewer lists sessions. |
-| Points View Slots | A points view keeps its current slot claimed while it is drawn, and a view has 3 slots, so the ring is full more often. The view still updates about 50 times a second. |
-| Foreign `MTLBuffer` through DLPack | `torch.from_dlpack` over a `kDLMetal` buffer that torch did not allocate is not documented torch behaviour; it was verified on torch 2.14.1. Whether torch's command buffers retain that buffer is not known, so `remove` and `close` wait for the view's events before they release it. |
-| Viewer Repaint | The viewer repaints on a 60 Hz timer. A display link at the screen's refresh rate would cut the pickup delay. |
-| Smoothness under Load | Viewer smoothness while a model saturates the GPU has not been measured. |
-| Late Argument Errors | Shape and argument errors appear when a snapshot is built, so a bad shape goes unnoticed until something attaches. |
-| In-Process Mode under `run()` | The worker thread cannot call `signal.signal`, and Ctrl-C is delivered between bytecodes. |
-| Throughput Cost | At the default 60 Hz rate limit, training keeps 98.3 to 99.5 % of the throughput of a commit-matched control in the own window and 98.1 to 99.4 % in attach mode, measured on one machine. [Performance](../development/performance.md#live-streaming) has the machine and the method. |
+| Platform | macOS with Metal on Apple silicon |
+| Viewers per Session | 1 |
+| Slots per View | 3, or 1 for a series |
+| Default Rate Limit | 60 Hz |
+| Verified Torch Version | 2.14.1 |
+| Throughput Kept | 98.3 to 99.5 % in the own window, 98.1 to 99.4 % in attach to app |
+
+The throughput values compare live streaming at 60 Hz with a commit-matched control on one computer, which [Performance](../development/performance.md#live-streaming) gives.
+
+A session has one viewer, because the viewer's slot claims have one reader only. Thus attach does not accept a session when its viewer is attached, and a second viewer makes per-reader claims necessary.
+
+A points view keeps a claim on the slot that it shows while the viewer draws it. Because a view has 3 slots, a points view's ring is full more frequently than for other kinds. The view continues to update approximately 50 times each second.
+
+The torch documentation does not include `torch.from_dlpack` for a `kDLMetal` buffer that torch did not allocate. This path was examined on torch 2.14.1, where it operates correctly. It is not known if torch's command buffers keep that buffer. For this reason, `remove` and `close` wait for the view's events before they release the buffer.
+
+The viewer repaints on a 60 Hz timer. A display link at the screen's refresh rate can decrease the pickup delay. It is not known if the viewer stays smooth when a model uses the full GPU.
+
+Shape errors and argument errors show only when Caliper makes a snapshot. A bad shape is then not found until something attaches.
+
+In the in-process mode with `run()`, the worker thread cannot call `signal.signal`, and Ctrl-C arrives between bytecodes.
 
 ## Security
 
-Only the same user can attach: the shared-memory names and the session file are mode 0600, and a live session has no network path.
+Only the same user can attach, because the shared-memory names and the session file have mode 0600. A live session has no network path.
 
 ## Related Pages
 

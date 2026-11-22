@@ -6,35 +6,27 @@ figure: none
 
 # Performance
 
-Caliper's measured costs, with the machine, the scripts and the method behind each number.
+Each Caliper measurement here has its computer, its scripts and its method.
 
 ## Live Streaming
 
 ### Method
 
-| Item | Detail |
-|---|---|
-| Machine | M5 Max, 18 cores, 64 GB, torch 2.14.1; otherwise idle |
-| Scripts | `python/bench/` |
-| Model | The TinyCNN of `train_show.py` plus a synthetic SxS f32 weight rewritten in place and shown every step |
-| Duration | 10 s after a 1 s warm-up |
-| Repeats | Two (run 1 / run 2) |
-| Prototype A | The in-process prototype |
-| Prototype B | The separate-process prototype |
-| Off | No rate limit |
-| Control | Commit-matched: the same loop recording an Event at 60 Hz and taking no snapshot |
+The tests operated on an M5 Max with 18 cores and 64 GB of memory, with torch 2.14.1 and no other load. The scripts are in `python/bench/`. The model is the TinyCNN of `train_show.py` plus a synthetic SxS f32 weight. The script changes this weight in place and shows it at each step. Each test operated for 10 s after a 1 s warm-up, and the tests operated each configuration two times. Thus the tables give run 1 and run 2 where the two runs have values.
+
+The tests measured two prototypes. Prototype A is the in-process prototype, and prototype B is the prototype with a second process. In the tables, "off" is the value for no rate limit on `show()`. Each percentage compares with a commit-matched control, which is the same loop when it records an Event at 60 Hz and makes no snapshot.
 
 ### Commit Effect
 
-`torch.mps.Event.record()` commits torch's command buffer. On the benchmark's small model that alone raises throughput by 40 to 75 %: torch's adaptive commit holds many small kernels until a sync, and a periodic commit lets the GPU start early. A plain "no show" baseline therefore flatters `show()`, which is why every comparison uses the commit-matched control.
+`torch.mps.Event.record()` commits the command buffer of torch. On the small model of the benchmark, this commit increases throughput by 40 to 75 % without a snapshot. The adaptive commit of torch keeps many small kernels until a sync, and a commit at regular intervals lets the GPU start before the sync. Thus a "no show" baseline without an Event gives `show()` a result that is too good. For this reason, the tests compare each result with the commit-matched control.
 
 ### Final Code
 
-The final code runs at 98.3 to 99.5 % of the control in the own window and 98.1 to 99.4 % in attach mode, at 60 Hz. Its per-call figures are in [Caliper LIB API](../python/caliper-lib-api.md#call-cost). The sections below hold the prototype measurements the design rests on.
+At 60 Hz, the last version of the code operates at 98.3 to 99.5 % of the control in the own window. In attach mode, it operates at 98.1 to 99.4 %. [Caliper LIB API](../python/caliper-lib-api.md#call-cost) gives its cost for each call. The sections that follow give the prototype measurements that the design uses.
 
 ### Throughput
 
-MPS throughput as a percentage of the commit-matched control, with run 1 and run 2 where both were recorded.
+The table gives MPS throughput as a percentage of the commit-matched control. Where the two runs have values, the table gives run 1 and run 2.
 
 | Prototype and Rate | 256² | 1024² | 2048² |
 |---|---|---|---|
@@ -53,7 +45,7 @@ MPS throughput as a percentage of the commit-matched control, with run 1 and run
 
 ### Call Cost
 
-Median cost per call, and the viewer's frame rate during training.
+The table gives the median cost of each call and the frame rate of the viewer during the training.
 
 | Measure | A | B |
 |---|---|---|
@@ -64,18 +56,18 @@ Median cost per call, and the viewer's frame rate during training.
 
 ### Latency
 
-Step-to-screen latency, from a training step to the frame that shows it.
+The table gives the latency from a training step to the frame that shows it.
 
 | Rate | A | B |
 |---|---|---|
 | 60 Hz, median / p95 | 28 to 40 / 31 to 47 ms | 19 / 29 ms |
 | Off | 2 to 22 ms | 4.3 to 5.7 / 7 to 8 ms |
 
-Latency is mostly the snapshot waiting behind torch's queued work, then the wait for the next 60 Hz tick. B measured 13 of its 19 ms in the queue. With a sync every step it drops to 9.9 ms.
+The largest part of the latency is the time that the snapshot waits behind the queued work of torch. The remaining time is the time until the next 60 Hz tick. Prototype B had 13 of its 19 ms in the queue. With a sync at each step, its latency decreases to 9.9 ms.
 
 ### Memory
 
-There is no host copy in either prototype, so snapshot cost is flat with size. Over 200 snapshots at every size, the changes were these:
+The two prototypes make no host copy, and thus the cost of a snapshot does not change with its size. The table gives the changes for 200 snapshots at each size.
 
 | Quantity | Change |
 |---|---|
@@ -83,11 +75,11 @@ There is no host copy in either prototype, so snapshot cost is flat with size. O
 | Trainer RSS | At most +0.45 MB (A), +0.12 MB (B) |
 | Viewer RSS | At most +0.66 MB |
 
-Every MPS view reports `compute-imported` with `imported = 1` (`blit-imported` for RGBA).
+Each MPS view shows `compute-imported` with `imported = 1`, and an RGBA view shows `blit-imported`.
 
 ### Window Liveness
 
-The training loop sleeps for 5 s with `time.sleep`. The first column is the in-process `show` without a snapshot ring, the baseline the snapshot ring replaced.
+In this test, the training loop stops for 5 s in `time.sleep`. The first column is the in-process `show` without a snapshot ring, which is the baseline that the snapshot ring replaced.
 
 | Observation | In-Process Baseline | Own Window | Own Window with `run(train)` | Attach to App |
 |---|---|---|---|---|
@@ -97,24 +89,22 @@ The training loop sleeps for 5 s with `time.sleep`. The first column is the in-p
 
 ### Session End
 
-After a SIGKILL of the script, the viewer kept drawing at 60 fps.
+After a SIGKILL stopped the script, the viewer continued to draw at 60 fps.
 
 ### Tearing Detector
+
+The detector operated in the in-process prototype, and it counted the bad frames for two rings.
 
 | Ring | Bad frames |
 |---|---|
 | The real ring | 0 in about 450 |
 | A deliberately unsafe control | 18 in 441 |
 
-The detector ran in the in-process prototype.
-
 ### Probe
 
-`python/bench/probe_foreign_mtlbuffer.py` established that the snapshot path works on torch 2.14.1:
+`python/bench/probe_foreign_mtlbuffer.py` showed that the snapshot path operates on torch 2.14.1. `torch.from_dlpack` accepts a `kDLMetal` capsule for an `MTLBuffer` that torch did not allocate (`newBufferWithBytesNoCopy` on a page-aligned `MAP_SHARED` mmap). Then `copy_` and `aminmax(out=)` write into this buffer on the stream of torch. Because `torch.mps.Event.record()` commits the command buffer of torch, `Event.query()` becomes true with no `synchronize()`.
 
-- `torch.from_dlpack` accepts a `kDLMetal` capsule whose `MTLBuffer` torch did not allocate (`newBufferWithBytesNoCopy` over a page-aligned `MAP_SHARED` mmap).
-- `copy_` and `aminmax(out=)` write into it on torch's stream.
-- `torch.mps.Event.record()` commits torch's command buffer, so `Event.query()` turns true with no `synchronize()`.
+The table compares the CPU cost of the snapshot path with the cost of the synchronous drain that it replaces.
 
 | Path | CPU cost |
 |---|---|
@@ -123,7 +113,7 @@ The detector ran in the in-process prototype.
 
 ### Unsynchronized Loop
 
-A benchmark loop without any sync queued 228k 16 MB kernels per second. Torch's own encoded-command queue grew RSS at 85 MB/s with Caliper and 250 MB/s without it.
+A benchmark loop with no sync queued 228k kernels of 16 MB each second. The encoded-command queue of torch itself increased RSS at 85 MB/s with Caliper and at 250 MB/s without Caliper.
 
 ## Related Pages
 
