@@ -158,7 +158,6 @@ class _Cadence:
         self.over = 0               # updates in a row that wanted more than the ceiling
         self.last_pass = None       # the step of the last pass
         self.prev_pass = None       # the pass before it, for unpass()
-        self.began: dict = {}       # pass step -> the clock of the last look before its work
         self.view_cost: dict = {}   # pass step -> the training thread's time in its view calls
 
     def restart(self) -> None:
@@ -168,7 +167,6 @@ class _Cadence:
         self.done = {}
         self.passes = set()
         self.k = None
-        self.began = {}
         self.view_cost = {}
 
     def step_s(self):
@@ -240,7 +238,6 @@ class _Cadence:
         self.k = step
         self.done = {s: v for s, v in done.items() if s >= step - 1}
         self.passes = {s for s in self.passes if s >= step - 1}
-        self.began = {s: v for s, v in self.began.items() if s >= step}
         self.view_cost = {s: v for s, v in self.view_cost.items() if s >= step}
 
 
@@ -838,8 +835,6 @@ def _at_step(step: int) -> None:
         for p in live:
             if p.warm > 0:
                 p.warm -= 1
-        if is_pass:
-            _CAD.began.setdefault(step, now)         # a program pass begins here
         done = _mark(marks, step, now, is_pass)
         if ring is not None:
             ring.step_tick(step, now)
@@ -992,12 +987,10 @@ def look(step: int) -> None:
     of them keeps the completion times of the marks exact while the pass works, as the wait of a
     program pass does after the checkpoint."""
     with _LOCK:
-        now = _clock()
-        _CAD.began.setdefault(step, now)
         marks = _marks()
         if marks is None or not _STATE["dense"]:
             return
-        for k, _lo, hi in marks.poll(now):
+        for k, _lo, hi in marks.poll(_clock()):
             _CAD.completed(k, hi)
 
 
