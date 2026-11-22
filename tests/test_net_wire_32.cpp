@@ -1349,10 +1349,18 @@ TEST_CASE("net/hub 3.2: draw halves and resources reach the viewers that announc
     w.settle(late_none);
     CHECK(late_none.all<Resource>().empty());
 
+    // The same piece relayed again (the script's next attachment) keeps the newest version for a late viewer.
+    p.send(golden("program_set_piece_draw"));
+    REQUIRE(w.until([&] { return a.all<Program>().size() == 2; }));
+    Peer& again = w.add(h, caps, false);
+    REQUIRE(w.until([&] { return !again.all<Resource>().empty(); }));
+    CHECK(again.all<Resource>()[0]->step == 1210);
+    CHECK(again.all<Program>().size() == 1);
+
     // A removal reaches the viewers and drops what the hub keeps of the program.
     Program rm = std::get<Program>(golden("program_remove_piece"));
     p.send(rm);
-    REQUIRE(w.until([&] { return a.all<Program>().size() == 2 && late.all<Program>().size() == 2; }));
+    REQUIRE(w.until([&] { return a.all<Program>().size() == 3 && late.all<Program>().size() == 3; }));
     CHECK(a.all<Program>().back()->op == CALIPER_NET_PROGRAM_REMOVE);
     Peer& after = w.add(h, caps, false);
     w.settle(after);
@@ -1361,7 +1369,7 @@ TEST_CASE("net/hub 3.2: draw halves and resources reach the viewers that announc
     // The hub publishes its counters at most every 20 ms: wait for them.
     CHECK(w.until([&] {
         const caliper_net::HubStats st = h.hub->stats();
-        return st.resources_in == 2 && st.program_relays_in == 2 && st.retained_resource_bytes == 0;
+        return st.resources_in == 2 && st.program_relays_in == 3 && st.retained_resource_bytes == 0;
     }));
 }
 

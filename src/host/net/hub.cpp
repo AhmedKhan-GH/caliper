@@ -337,7 +337,11 @@ struct Session {
     // program as the producer relayed it (a PROGRAM set of an instance), and the newest RESOURCE of
     // each "<program>/<resource>", both kept for a viewer with "resources" that attaches later.
     bool resources_cap = false;
-    std::map<std::string, SharedBytes> draw_halves;
+    struct DrawHalf {
+        std::string hash;            // the piece's hash, from the pin
+        SharedBytes frame;
+    };
+    std::map<std::string, DrawHalf> draw_halves;
     std::map<std::string, SharedBytes> kept_resources;
 };
 
@@ -794,7 +798,7 @@ struct Hub::Impl {
                 if (!kv.second.empty) offer_selection(p, kv.first, kv.second.frame);
         if (p.cap_resources) {   // 3.2 draft: the draw halves first, then their resources as data
             for (const auto& kv : s.draw_halves) {
-                if (!server.send(p.conn, kv.second)) {
+                if (!server.send(p.conn, kv.second.frame)) {
                     overflow(p.conn);
                     return;
                 }
@@ -826,7 +830,7 @@ struct Hub::Impl {
     // program's earlier install.
     void forget_program(Session& s, const std::string& id) {
         if (auto it = s.draw_halves.find(id); it != s.draw_halves.end()) {
-            meta_bytes -= it->second->size();
+            meta_bytes -= it->second.frame->size();
             s.draw_halves.erase(it);
         }
         const std::string prefix = id + "/";
@@ -854,15 +858,25 @@ struct Hub::Impl {
 
     // The producer's relay of a draw half (a PROGRAM set of an instance of a piece) or of a removal.
     // The hub keeps the last draw half of each program, at most CALIPER_NET_MAX_PROGRAMS, and sends
-    // the relay to every attached viewer that announced "resources". A producer without the
-    // capability, and any other PROGRAM from a producer, are ignored.
+    // the relay to every attached viewer that announced "resources". A removal, or the draw half of
+    // another piece, also drops the program's kept resources; the same piece relayed again (after an
+    // attachment) keeps them, so that a static resource, which the script publishes once, stays. A
+    // producer without the capability, and any other PROGRAM from a producer, are ignored.
     void producer_program(Session& s, const wire::Program& m, SharedBytes buf) {
         const bool set = m.op == CALIPER_NET_PROGRAM_SET && !m.piece.is_null();
         if (!s.resources_cap || !(set || m.op == CALIPER_NET_PROGRAM_REMOVE)) return;
         ++c.program_relays_in;
-        forget_program(s, m.id);
+        const Json* h = set ? m.piece.find("hash") : nullptr;
+        const std::string hash = h && h->is_string() ? h->as_string() : std::string();
+        auto old = s.draw_halves.find(m.id);
+        if (!set || (old != s.draw_halves.end() && old->second.hash != hash)) {
+            forget_program(s, m.id);
+        } else if (old != s.draw_halves.end()) {
+            meta_bytes -= old->second.frame->size();
+            s.draw_halves.erase(old);
+        }
         if (set && s.draw_halves.size() < CALIPER_NET_MAX_PROGRAMS) {
-            s.draw_halves[m.id] = buf;
+            s.draw_halves[m.id] = Session::DrawHalf{hash, buf};
             meta_bytes += buf->size();
         }
         for (ConnId v : s.viewers) {
