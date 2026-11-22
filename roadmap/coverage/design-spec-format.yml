@@ -179,6 +179,13 @@ entries:
     older documents in their JSON form.
   ids:
   - SPC-01
+- heading: Programs, Stages and Provenance
+  item: Version 1 holds the program and stage arrays and the provenance table, in their canonical order, with
+    the sandbox's declaration checks, and builds the toggle control.
+  ids:
+  - SPC-14
+  - SPC-23
+  - SPC-12
 - heading: Validation
   item: Checking a spec has two stages, parsing (with line and column for TOML) and validation, which
     reports errors and warnings with stable codes and document paths.
