@@ -50,7 +50,12 @@
   {% include "partials/comments.html" %}
 {% endblock %}
 
+{#- Mermaid is loaded from the vendored copy, and only on pages that have a diagram. Material fetches an unpinned build
+    from a CDN unless a global "mermaid" already exists, so the local script goes before Material's own. -#}
 {% block scripts %}
+  {% if 'class="mermaid"' in page.content %}
+    <script src="{{ 'assets/vendor/mermaid-11.17.2/mermaid.min.js' | url }}"></script>
+  {% endif %}
   {{ super() }}
   <script src="{{ 'assets/toc.js' | url }}"></script>
   {% if page.meta and page.meta.candidates_filter %}

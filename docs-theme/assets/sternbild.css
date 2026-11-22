@@ -204,3 +204,37 @@ body { background: var(--ground); -webkit-font-smoothing: antialiased; }
   .md-typeset .sb-toc__bar { visibility: visible; opacity: 1; }
 }
 @media print { .md-typeset :is(.sb-toc, .sb-toc-inline) { display: none; } }
+
+/* Mermaid diagrams, drawn from the palette so authors write no colours. Material defines these variables on ":root > *",
+   which outranks a bare "body", so ":root > body" is used. The ones Material derives from others are set too, so none
+   keeps a default that clashes with the dark slate scheme. */
+:root > body {
+  --md-mermaid-font-family: "Plex Condensed", sans-serif;
+  --md-mermaid-node-bg-color: var(--plate);
+  --md-mermaid-node-fg-color: var(--faint);
+  --md-mermaid-edge-color: var(--secondary);
+  --md-mermaid-label-bg-color: var(--ground);
+  --md-mermaid-label-fg-color: var(--parchment);
+  --md-mermaid-sequence-actor-bg-color: var(--plate);
+  --md-mermaid-sequence-actor-border-color: var(--rule);
+  --md-mermaid-sequence-actor-fg-color: var(--parchment);
+  --md-mermaid-sequence-actor-line-color: var(--rule);
+  --md-mermaid-sequence-actorman-bg-color: var(--plate);
+  --md-mermaid-sequence-actorman-line-color: var(--rule);
+  --md-mermaid-sequence-box-bg-color: var(--plate);
+  --md-mermaid-sequence-box-fg-color: var(--secondary);
+  --md-mermaid-sequence-label-bg-color: var(--plate);
+  --md-mermaid-sequence-label-fg-color: var(--parchment);
+  --md-mermaid-sequence-loop-bg-color: var(--plate);
+  --md-mermaid-sequence-loop-border-color: var(--rule);
+  --md-mermaid-sequence-loop-fg-color: var(--secondary);
+  --md-mermaid-sequence-message-fg-color: var(--secondary);
+  --md-mermaid-sequence-message-line-color: var(--secondary);
+  --md-mermaid-sequence-note-bg-color: var(--plate);
+  --md-mermaid-sequence-note-border-color: var(--rule);
+  --md-mermaid-sequence-note-fg-color: var(--parchment);
+  --md-mermaid-sequence-number-bg-color: var(--bronze);
+  --md-mermaid-sequence-number-fg-color: var(--deep);
+}
+/* Subgraph and divider fills come from Material's general grey, which is too bright on the dark ground. */
+.md-typeset .mermaid { --md-default-fg-color--lightest: var(--rule-faint); }
