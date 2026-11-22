@@ -6,6 +6,8 @@
 #include <caliper_builder/commands/command_table.h>
 #include <caliper_builder/commands/schema.h>
 
+#include <algorithm>
+
 namespace caliper_builder::mcp {
 
 using nlohmann::json;
@@ -244,6 +246,16 @@ json AppClient::call(const CommandDescriptor& d, const json& sent, const std::at
         req.headers.push_back({"Content-Type", "application/json"});
         req.headers.push_back({"X-Caliper-Origin", options_.origin});
         limits.read_timeout_ms = limits.total_timeout_ms = options_.command_timeout_ms;
+        if (d.name == "events.wait") {
+            // A long poll (design/instruments.md, Long Poll): the app holds
+            // the call up to timeout_s, 10 when absent and 60 at most, and
+            // the client waits that long plus the margin of an API v0 call,
+            // whatever the command timeout says.
+            const auto t = args.find("timeout_s");
+            const double wait_s = t != args.end() && t->is_number() ? std::clamp(t->get<double>(), 0.0, 60.0) : 10.0;
+            limits.read_timeout_ms = limits.total_timeout_ms =
+                static_cast<int>(wait_s * 1000.0) + std::max(options_.app_timeout_ms, 0);
+        }
     }
 
     Sent s = send(req, limits, cancel);
