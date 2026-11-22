@@ -1579,6 +1579,12 @@ void DrawRuntime::request_stop(const char* code, const std::string& message) {
     m.measure_message = message.empty() ? std::string("stopped by its panel") : message;
 }
 
+std::int64_t DrawRuntime::resource_step(const std::string& resource) const {
+    for (const Impl::Slot& s : impl_->slots)
+        if (s.id == resource) return s.has_version ? s.step : -1;
+    return -1;
+}
+
 caliper_builder::spec::CameraMode DrawRuntime::camera() const {
     return impl_->piece.draw ? impl_->piece.draw->camera : cs::CameraMode::none;
 }

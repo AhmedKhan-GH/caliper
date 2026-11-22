@@ -8,13 +8,14 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include "draw/draw_host.h"
 #include "draw/draw_runtime.h"
 #include "draw/draw_runtime_impl.h"
 #include "gfx/recording_backend.h"
 
 #include <caliper_builder/programs/sandbox.h>
 
-#include "../../../../tests/gfx/example_pieces.h"
+#include "../../../../tests/gfx/example_draw.h"
 
 #include <cstring>
 
@@ -26,20 +27,7 @@ namespace gfx = caliper_gfx;
 
 namespace {
 
-// The checks of pieces, with the stand-ins of example_pieces.h where this tree's answer
-// program.not_built.
-cd::DrawChecks checks() {
-    cd::DrawChecks c = cd::DrawChecks::pieces();
-    const cs::Piece p = ex::attention_arcs();
-    if (cp::check_piece_manifest(p).code == cp::kProgramNotBuilt) c.manifest = [](const cs::Piece&) { return cp::Verdict{}; };
-    if (cp::check_piece_source("", 1).code == cp::kProgramNotBuilt)
-        c.source = [](std::string_view, std::size_t) { return cp::Verdict{}; };
-    if (cp::resolve_imports(p).verdict.code == cp::kProgramNotBuilt) c.resolve = ex::resolve;
-    cp::ElementLayout e;
-    if (cp::element_layout(ex::element("f32"), &e).code == cp::kProgramNotBuilt) c.layout = ex::layout;
-    if (cp::piece_hash(p).empty()) c.hash = ex::hash;
-    return c;
-}
+cd::DrawChecks checks() { return ex::draw_checks(); }
 
 // The modes to test: the WGSL as it is (the browser's path), and the translation to MSL with
 // caliper-wgsl where the build has it.
@@ -553,4 +541,133 @@ TEST_CASE("remove releases the program and returns to waiting") {
     CHECK(rt.internals().passes.empty());
     CHECK(!rt.pick(0));
     CHECK(rt.labels().empty());
+}
+
+// ---- the app's host of draw halves ----------------------------------------------------------------
+
+namespace {
+
+struct Sink final : caliper_builder::EventSink {
+    std::vector<caliper_builder::Event> events;
+    std::uint64_t push(caliper_builder::Event e) override {
+        events.push_back(std::move(e));
+        return events.size();
+    }
+};
+
+cs::Program instance_of(const char* id, const char* piece, const char* panel) {
+    cs::Program p;
+    p.id = id;
+    cs::PieceRef ref;
+    ref.name = piece;
+    ref.version = 1;
+    ref.from = cs::PieceFrom::workspace;
+    p.piece = ref;
+    p.panel = std::string(panel);
+    return p;
+}
+
+}  // namespace
+
+TEST_CASE("the draw host gives each panel its programs, packs params and refuses a camera conflict") {
+    cs::Spec spec;
+    cs::Program field = instance_of("head_pattern", "attention_field", "pattern");
+    field.params["gain"] = 2.0;
+    cs::Reference layer;
+    layer.kind = cs::Reference::Kind::state;
+    layer.target = "layer";
+    field.params["layer"] = layer;
+    field.params["head"] = 9.0;   // above its max of 3: clamped
+    spec.programs = {field, instance_of("tower_arcs", "attention_arcs", "tower"),
+                     instance_of("tower_field", "attention_field", "tower")};
+    cd::DrawHost host;
+    Sink sink;
+    host.set_events(&sink);
+    host.set_resolver([](const cs::Spec&, const cs::Program& p, cs::Piece* out) {
+        *out = p.piece->name == "attention_arcs" ? ex::attention_arcs() : ex::attention_field();
+        return cp::Verdict{};
+    });
+    host.set_evaluate([](const cs::Reference& r) { return r.target == "layer" ? nlohmann::json(1) : nlohmann::json(); });
+    host.reconcile(spec);
+
+    const std::vector<cd::PanelProgram> pattern = host.feed("pattern")->programs();
+    REQUIRE(pattern.size() == 1);
+    CHECK(pattern[0].instance.program == "head_pattern");
+    CHECK(pattern[0].pick_id >= (1u << 24));
+    const std::vector<cd::PanelProgram> tower = host.feed("tower")->programs();
+    REQUIRE(tower.size() == 2);
+    CHECK(tower[0].refused.ok());
+    CHECK(tower[1].refused.code == cp::kProgramCameraConflict);
+    CHECK(pattern[0].pick_id != tower[0].pick_id);
+    REQUIRE(sink.events.size() == 1);
+    CHECK(sink.events[0].fields["program"] == "tower_field");
+    CHECK(sink.events[0].fields["change"] == "refused");
+    CHECK(sink.events[0].fields["half"] == "draw");
+    CHECK(sink.events[0].fields["code"] == cp::kProgramCameraConflict);
+    CHECK(host.status().at("tower_field").state == cd::DrawState::refused);
+
+    // The feed gives the runtime its resource at the cursor and the params in the manifest's order.
+    const std::vector<float> values = ex::field_pattern();
+    int asked = 0;
+    host.set_resources([&](const std::string& program, const std::string& resource, std::int64_t cursor,
+                           cd::ResourceVersion* out, std::uint64_t* epoch) {
+        ++asked;
+        CHECK(program == "head_pattern");
+        CHECK(resource == "pattern");
+        CHECK(cursor == 70);
+        *out = version("pattern", values, 64);
+        *epoch = 3;
+        return true;
+    });
+    cd::DrawHost::Cursor cursor;
+    cursor.step = 70;
+    cursor.latest = 90;
+    cursor.live = false;
+    host.set_cursor(cursor);
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    REQUIRE(rt.install(pattern[0].piece, pattern[0].instance, pattern[0].pick_id).ok());
+    cd::FrameInputs in;
+    host.feed("pattern")->frame(rt, &in);
+    CHECK(asked == 1);
+    CHECK(rt.internals().slots[0].step == 64);
+    CHECK(in.epoch == 3);
+    CHECK(in.cursor_step == 70);
+    CHECK(in.latest_step == 90);
+    CHECK(!in.live);
+    REQUIRE(in.params.size() == 12);
+    std::int32_t l = 0, hd = 0;
+    float gain = 0;
+    std::memcpy(&l, in.params.data(), 4);
+    std::memcpy(&hd, in.params.data() + 4, 4);
+    std::memcpy(&gain, in.params.data() + 8, 4);
+    CHECK(l == 1);
+    CHECK(hd == 3);
+    CHECK(gain == doctest::Approx(2.0));
+
+    // Its states reach the events: compiled once, then stopped with the pass and the entry.
+    host.feed("pattern")->status(rt);
+    host.feed("pattern")->status(rt);
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_pending(1500);
+    host.feed("pattern")->status(rt);
+    REQUIRE(sink.events.size() == 3);
+    CHECK(sink.events[1].fields["change"] == "compiled");
+    CHECK(sink.events[2].fields["change"] == "stopped");
+    CHECK(sink.events[2].fields["code"] == cp::kProgramDrawTimeout);
+    CHECK(sink.events[2].panel == "pattern");
+    const nlohmann::json j = cd::draw_status_json(host.status().at("head_pattern"));
+    CHECK(j["state"] == "stopped");
+    CHECK(j["error"]["code"] == cp::kProgramDrawTimeout);
+    CHECK(j["frame_limit_ms"] == 4.0);
+
+    // A program that leaves the spec leaves its panel; a changed piece gets a new revision.
+    const std::uint64_t before = host.feed("pattern")->programs()[0].revision;
+    spec.programs[0].bind["attn0"] = "live:other";
+    host.reconcile(spec);
+    CHECK(host.feed("pattern")->programs()[0].revision != before);
+    spec.programs.erase(spec.programs.begin());
+    host.reconcile(spec);
+    CHECK(host.feed("pattern")->programs().empty());
+    CHECK(host.status().count("head_pattern") == 0);
 }

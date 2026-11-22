@@ -52,6 +52,7 @@
 #include <vector>
 
 namespace caliper_scene { class BackendResources; }
+namespace caliper_draw { class DrawFeed; class DrawRuntime; }
 namespace caliper_gfx { namespace cmap { class KeyBlockCache; } }
 
 namespace caliper_live_views {
@@ -234,6 +235,28 @@ public:
     // The step the stages read: the first stamp of the latest scene update that carried one.
     int64_t stage_step() const { return stamp_step_; }
 
+    // ---- programs of pieces (design/programmable-graphics.md, Render Graph, Draw State and Safety
+    // of Draws) ------------------------------------------------------------------------------------
+    // The draw halves of the programs that the panel shows. The view installs one runtime of the
+    // draw layer (draw/draw_runtime.h) for each program of the feed, on its own backend, and draws
+    // them in every frame: each program in submits of its own after the scene's frame and before
+    // the highlight of a selection, into the view's colour, its ID target (RG32Uint, the program's
+    // pick id and the item, cleared to 0 in each frame) and its depth. A panel of programs alone
+    // frames the box from -1 to 1 on each axis. The view never waits for a program's GPU
+    // work: poll() gives each program the GPU time of its completed submits and the age of its
+    // oldest pending one, which stops a program over its budget, and the programs of the panel
+    // together over 16.7 ms a frame on 30 polls in a row stop the costliest one. Each change of a
+    // program's state goes back to the feed. Null draws no program. Without the draw layer in the
+    // build (CALIPER_HAVE_DRAW), the view draws none.
+    void set_draw_feed(caliper_draw::DrawFeed* feed);
+    // The installed programs, in draw order.
+    std::vector<const caliper_draw::DrawRuntime*> draw_runtimes() const;
+    // The programs' ID target; none while the view draws no program.
+    caliper_gfx::Texture id_target() const { return id_; }
+    // The pointer over the view, in physical pixels from the top left, its buttons as bits, and
+    // whether it is over the view, for the programs' prelude (caliper_view.pointer).
+    void set_pointer(float x, float y, uint32_t buttons, bool over);
+
     // Compiles and submits when something changed since the last frame, into a target of
     // width x height physical pixels. False with *why when the layer refused the frame.
     bool render(uint32_t width, uint32_t height, float pixel_scale, uint32_t clear_rgba, std::string* why);
@@ -359,6 +382,22 @@ private:
     float scale_ = 1.0f;
     uint64_t target_creates_ = 0;
     uint64_t drawn_revision_ = 0, drawn_pose_ = 0;
+
+    // The programs of pieces: their runtimes with their pending submits, the feed's revision drawn,
+    // the ID target, the host's colormaps, the pointer and the polls over the panel's limit.
+    struct ProgramSlot;
+    std::vector<std::unique_ptr<ProgramSlot>> draws_;
+    caliper_draw::DrawFeed* draw_feed_ = nullptr;
+    uint64_t draw_revision_ = ~0ull;
+    caliper_gfx::Texture id_, program_colormaps_;
+    uint32_t id_w_ = 0, id_h_ = 0;
+    float pointer_[4] = {0, 0, 0, 0};
+    uint32_t panel_over_ = 0;
+    std::chrono::steady_clock::time_point last_program_frame_{};
+    void reconcile_programs();
+    bool prepare_program_targets(std::string* why);
+    void draw_programs();
+    void poll_programs();
 
     SceneCounts counts_;
     SceneCost cost_;

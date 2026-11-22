@@ -222,6 +222,9 @@ public:
     // the costliest: the scene view's rule for the programs of one panel
     // together over 16.7 ms a frame. `message` says why.
     void request_stop(const char* code, const std::string& message);
+    // The step of the version of a resource or buffer input that the next frame shows; -1
+    // before its first version.
+    std::int64_t resource_step(const std::string& resource) const;
     // The camera that the piece selects, the instance and the pick id.
     caliper_builder::spec::CameraMode camera() const;
     const Instance& instance() const;
