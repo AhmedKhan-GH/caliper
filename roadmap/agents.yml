@@ -134,7 +134,7 @@ features:
     status: shipped
     summary: caliper-agent probe checks a model's tool calling, vision and context length with two short calls and caches the answer, which the settings run when a person picks a model.
     depends_on: [AGT-15]
-    docs: docs/agents/widget-agent.md#checking-a-model
+    docs: docs/agents/widget-agent.md#model-checks
     issue: null
 
   - id: AGT-17
@@ -142,7 +142,7 @@ features:
     status: shipped
     summary: Each command that waits for the person's approval appears as a card that shows who asks, what changes, its diff and the time left, with Approve and Deny.
     depends_on: [AGT-06]
-    docs: docs/agents/side-chat.md#the-pane
+    docs: docs/agents/side-chat.md#pane
     issue: null
 
   - id: AGT-18
@@ -150,7 +150,7 @@ features:
     status: shipped
     summary: From the widget agent's prompt, Ask in chat sends the request with its context to the side chat as a draft that the person reviews and sends.
     depends_on: [AGT-03, AGT-05]
-    docs: docs/agents/side-chat.md#ask-in-chat
+    docs: docs/agents/side-chat.md#ask-in-chat-action
     issue: null
 
   - id: AGT-19

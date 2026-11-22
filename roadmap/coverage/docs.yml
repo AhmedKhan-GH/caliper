@@ -420,17 +420,17 @@ entries:
   item: The full caliper.hpp source.
   ids:
   - COR-51
-- page: docs/agents/http-api.md#starting-it
+- page: docs/agents/http-api.md#startup
   item: Caliper API starts with --api or CALIPER_API=1, and from the app for Open in browser and the side
     chat.
   ids:
   - AGT-01
-- page: docs/agents/http-api.md#started-by-the-app
+- page: docs/agents/http-api.md#app-startup
   item: The app starts the API on its own for the browser viewer and the side chat.
   ids:
   - AGT-01
   - EMB-06
-- page: docs/agents/http-api.md#the-windowless-mode
+- page: docs/agents/http-api.md#windowless-mode
   item: Caliper API with caliper shot and the hidden app runs without a visible window.
   ids:
   - AGT-01
@@ -439,7 +439,7 @@ entries:
   item: Loopback only, behind tokens that say who sends each command.
   ids:
   - AGT-01
-- page: docs/agents/http-api.md#who-sends-a-command
+- page: docs/agents/http-api.md#command-origin
   item: The session token and the token for outside agents differ in what waits for approval.
   ids:
   - AGT-06
@@ -491,7 +491,7 @@ entries:
   item: The error codes of the API.
   ids:
   - AGT-01
-- page: docs/agents/http-api.md#examples
+- page: docs/agents/http-api.md#worked-examples
   item: Examples of calls.
   ids:
   - AGT-01
@@ -703,7 +703,7 @@ entries:
   item: Each gesture is one undo step and is journaled by the command layer.
   ids:
   - SPC-05
-- page: docs/agents/mcp-server.md#what-you-need-running
+- page: docs/agents/mcp-server.md#requirements
   item: caliper-mcp needs the app running with Caliper API on.
   ids:
   - AGT-02
@@ -711,7 +711,7 @@ entries:
   item: The command line of caliper-mcp.
   ids:
   - AGT-02
-- page: docs/agents/mcp-server.md#configuring-an-agent
+- page: docs/agents/mcp-server.md#agent-configuration
   item: How to configure an outside agent to start caliper-mcp.
   ids:
   - AGT-02
@@ -724,19 +724,19 @@ entries:
   item: Read-only resources beside the tools.
   ids:
   - AGT-02
-- page: docs/agents/side-chat.md#opening-it
+- page: docs/agents/side-chat.md#side-chat-access
   item: The side chat opens on the spec page and the live page.
   ids:
   - AGT-03
-- page: docs/agents/side-chat.md#the-agents
+- page: docs/agents/side-chat.md#agents
   item: 'The agents the side chat runs: Claude Code, Codex, Gemini CLI, opencode or any ACP agent.'
   ids:
   - AGT-03
-- page: docs/agents/side-chat.md#what-caliper-starts
+- page: docs/agents/side-chat.md#agent-startup
   item: What Caliper starts and hands to the agent.
   ids:
   - AGT-03
-- page: docs/agents/side-chat.md#the-pane
+- page: docs/agents/side-chat.md#pane
   item: The side chat pane.
   ids:
   - AGT-03
@@ -748,7 +748,7 @@ entries:
   item: Local models in the side chat warn when a model and a run share the GPU.
   ids:
   - AGT-04
-- page: docs/agents/side-chat.md#ask-in-chat
+- page: docs/agents/side-chat.md#ask-in-chat-action
   item: Ask in chat hands a request from the inline prompt to the side chat.
   ids:
   - AGT-03
@@ -758,7 +758,7 @@ entries:
     a PNG per state.
   ids:
   - AGT-03
-- page: docs/agents/widget-agent.md#starting-the-agent
+- page: docs/agents/widget-agent.md#agent-startup
   item: caliper-agent starts as an ACP child process with provider presets.
   ids:
   - AGT-05
@@ -766,29 +766,29 @@ entries:
   item: The provider presets of caliper-agent.
   ids:
   - AGT-05
-- page: docs/agents/widget-agent.md#checking-a-model
+- page: docs/agents/widget-agent.md#model-checks
   item: caliper-agent probe checks what a model can do and prints a JSON result, which the settings run
     when a model is picked.
   ids:
   - AGT-16
-- page: docs/agents/widget-agent.md#what-the-agent-assumes-of-a-model
+- page: docs/agents/widget-agent.md#model-assumptions
   item: What the agent assumes of a model.
   ids:
   - AGT-05
-- page: docs/agents/widget-agent.md#ollamas-own-chat-api
+- page: docs/agents/widget-agent.md#ollama-chat-api
   item: Ollama is driven through its own chat API.
   ids:
   - AGT-05
   - AGT-07
-- page: docs/agents/widget-agent.md#opening-a-widget-session
+- page: docs/agents/widget-agent.md#widget-session-startup
   item: How a widget session is opened.
   ids:
   - AGT-05
-- page: docs/agents/widget-agent.md#the-tool-scope
+- page: docs/agents/widget-agent.md#tool-scope
   item: The commands a widget session may use.
   ids:
   - AGT-05
-- page: docs/agents/widget-agent.md#the-context-bundle
+- page: docs/agents/widget-agent.md#context-bundle
   item: The context bundle a prompt carries.
   ids:
   - AGT-05
@@ -800,24 +800,24 @@ entries:
   item: What each answer carries, held in a preview for accept.
   ids:
   - AGT-05
-- page: docs/agents/widget-agent.md#in-the-side-chat
+- page: docs/agents/widget-agent.md#side-chat-use
   item: A widget session continues in the side chat.
   ids:
   - AGT-05
   - AGT-03
-- page: docs/agents/widget-agent.md#closing
+- page: docs/agents/widget-agent.md#session-closing
   item: Closing a widget session.
   ids:
   - AGT-05
-- page: docs/agents/widget-agent.md#the-inline-surface
+- page: docs/agents/widget-agent.md#inline-surface
   item: The inline surface opens a one-line prompt with Command K on the focused panel.
   ids:
   - AGT-05
-- page: docs/agents/widget-agent.md#the-settings-in-the-app
+- page: docs/agents/widget-agent.md#app-settings
   item: The widget agent settings popup holds provider, key and model.
   ids:
   - AGT-05
-- page: docs/agents/widget-agent-conformance.md#how-a-task-runs
+- page: docs/agents/widget-agent-conformance.md#task-lifecycle
   item: The conformance suite runs the widget tasks against a provider and a model.
   ids:
   - AGT-14
@@ -825,7 +825,7 @@ entries:
   item: Verdicts checked against each task criterion.
   ids:
   - AGT-14
-- page: docs/agents/widget-agent-conformance.md#running-it
+- page: docs/agents/widget-agent-conformance.md#test-runs
   item: How to run caliper-agent-conformance.
   ids:
   - AGT-14
@@ -833,7 +833,7 @@ entries:
   item: The result files.
   ids:
   - AGT-14
-- page: docs/agents/widget-agent-conformance.md#publishing-results
+- page: docs/agents/widget-agent-conformance.md#result-publishing
   item: Publishing results.
   ids:
   - AGT-14

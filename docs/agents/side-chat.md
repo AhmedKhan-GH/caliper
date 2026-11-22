@@ -13,7 +13,7 @@ explains when to use the side chat and when the widget agent.
     In the spec page's build mode it is the lower part of the builder pane's right column, under Properties
     ([Builder pane](../builder/builder-pane.md)).
 
-## Opening it
+## Side Chat Access
 
 ⌘L Chat in the page bar (Ctrl+L Chat elsewhere), to the left of ⌘K Command, opens and closes the side chat on the spec
 page and on the live page; it is outlined in bronze while the chat is open. The chat is the right column of the window,
@@ -30,7 +30,7 @@ variables](../reference/folders-and-environment.md)): the chosen agent, the cust
 allow" options are offered, the agents you marked as running on a local model (`local_model_agents`, a list of agent
 ids), and whether the chat is open. They never hold a key.
 
-## The agents
+## Agents
 
 Caliper detects four agents by looking for their commands on `PATH`. It runs nothing to find them.
 
@@ -45,7 +45,7 @@ A custom agent is a name and one command line. The line is split into words as a
 quotes, double quotes and backslashes and nothing else (no variables, globbing or redirection), and the program is run
 without a shell. The chosen agent and the custom command belong to the app's own settings, never to a workspace.
 
-`caliper-agent`, the agent behind ⌘K ([Widget agent](widget-agent.md#in-the-side-chat)), can be the custom agent too,
+`caliper-agent`, the agent behind ⌘K ([Widget agent](widget-agent.md#side-chat-use)), can be the custom agent too,
 which runs the chat on a local model with no account. It runs from the repository's source with a Python that has its
 dependencies (`src/builder/agent/pyproject.toml`), and with Ollama serving a model that calls tools the command line
 is:
@@ -64,7 +64,7 @@ The agent uses its own login. When it answers that it needs one, the pane shows 
 names and the command its maker documents; Caliper never asks for a key and runs no login flow. Log in in your own
 terminal and choose Restart.
 
-## What Caliper starts
+## Agent Startup
 
 The agent starts when you send your first message. Caliper starts its command with the workspace folder as the working
 folder, and sends:
@@ -76,7 +76,7 @@ folder, and sends:
   API: when the app was started without `--api`, the side chat starts it then, on 127.0.0.1 at a free port, says so in
   the conversation ("Caliper API started on 127.0.0.1:<port> for this chat"), in Activity and in the status bar, and
   stops it when the agent ends, unless Open in browser has given out a link of it since
-  ([Started by the app](http-api.md#started-by-the-app)). The API file is the
+  ([Started by the app](http-api.md#app-startup)). The API file is the
   session's own, `api-agent-<pid>-<n>.json` in the app-data folder, never `api.json`: its token is the agent's, with the
   origin `agent`, and the app revokes it and removes the file when the agent's session ends. The origin comes from that
   token, not from `--origin`, so every command the agent sends through Caliper API, by `caliper-mcp` or by any other
@@ -86,7 +86,7 @@ folder, and sends:
   agent to change specs through the `caliper` tools and not to ask before calling one, since Caliper asks the person
   itself.
 
-## The pane
+## Pane
 
 The pane is the lower part of the right column, under Selection and Properties. Its header shows CHAT, Caliper's
 mode for the agent (see [Modes](#modes)), the agent's name, Shared GPU when it applies (see
@@ -158,7 +158,7 @@ each with Revoke; they are kept in `agent-permissions.json` in the app-data fold
 That file is no protection against an agent that has its own access to your files, which can change it as it can
 change any of them. The widget agent (⌘K) is not affected: its changes always wait in its preview for Accept.
 
-## Local models
+## Local Models
 
 Your agent may run its model on your own machine, such as opencode with a model served by Ollama. Caliper cannot tell
 where an agent's model runs, so you say so: choose Local model in the agent picker, which marks the chosen agent, or
@@ -168,10 +168,10 @@ behind and choosing the agent again brings it back.
 While a training run streams into Caliper (the app is attached to a live session) and the chosen agent is marked, the
 chat's header shows **Shared GPU** after the agent's name, framed in bronze, as the widget agent's settings and its ⌘K
 prompt do for a model server on this machine. The model and the run then share the same GPU and memory; Set up the
-widget agent ([Share the GPU with a training run](widget-agent-setup.md#share-the-gpu-with-a-training-run))
+widget agent ([Share the GPU with a training run](widget-agent-setup.md#gpu-sharing))
 gives the advice. As the header narrows, the note gives way after the agent's version and before its name.
 
-## Ask in chat
+## Ask in Chat Action
 
 Ask in chat in the widget agent's prompt on the spec page opens the side chat with a draft: your request in the input, and above it one
 chip for each block of context that goes with it (the target's spec fragment, its sources, the panel's render, the
@@ -179,7 +179,7 @@ widget conversation, the preview's diff marked as not applied, and the target's 
 it; Clear drops the context. The blocks are shaped for the agent when you send: as embedded resources when it accepts
 them and as text otherwise. The context of a handoff in the app leaves the panel's render out.
 
-## caliper-chat-shot
+## `caliper-chat-shot`
 
 `caliper-chat-shot` is a development tool, not installed, that draws a dashboard with the spec runtime beside the side
 chat on the offscreen canvas and writes a PNG at each state of a scripted conversation with a stub agent:

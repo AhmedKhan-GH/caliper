@@ -12,10 +12,10 @@ executable to its agent.
     that speaks MCP to it the way an agent does. The configuration of Claude Code and Codex below follows their public
     documentation; neither agent was run for this page.
 
-## What you need running
+## Requirements
 
 1. The app with Caliper API on: `caliper --api`, or the app with its side chat's agent started, which starts the API
-   itself ([Started by the app](http-api.md#started-by-the-app)).
+   itself ([Started by the app](http-api.md#app-startup)).
 2. `caliper-mcp`, which ships beside the `caliper` executable; a development build puts it at `src/builder/mcp/caliper-mcp` in the build folder.
 
 While the API is on, the app writes the **API file**, `api.json` in the app-data folder ([Folders and environment
@@ -23,7 +23,7 @@ variables](../reference/folders-and-environment.md#the-app-data-folder)), for ex
 with mode 0600, and removes it when it exits. The file holds the address and the token of outside agents. That token
 runs commands as the origin `mcp`: each change an outside agent makes to the open spec waits on an approval card in
 the app until you approve or deny it, and so does each command that deletes or overwrites saved data
-([Who sends a command](http-api.md#who-sends-a-command)). Your own session token, which the app prints on its start line
+([Who sends a command](http-api.md#command-origin)). Your own session token, which the app prints on its start line
 and which runs commands without review, is in no file, and `caliper-mcp` never needs it.
 
 `caliper-mcp` reads the API file at every call, so it needs no token or key in its configuration, and it follows an
@@ -31,7 +31,7 @@ app that restarts on another port. It finds the file as the app does: `--api-fil
 `$CALIPER_DATA_DIR/api.json`, otherwise `api.json` in the app-data folder of the OS. An agent configured once
 therefore works with every run of the app that uses the same app-data folder.
 
-## Command line
+## Command Line
 
 ```text
 caliper-mcp [--api-file <path>] [--docs <dir>] [--sdk <dir>] [--origin mcp|agent]
@@ -50,7 +50,7 @@ caliper-mcp --version | --help
 Standard output carries MCP messages only; diagnostics go to standard error, each line starting with `caliper-mcp:`.
 A usage error, or a `--docs` or `--sdk` folder that does not exist, exits with 2.
 
-## Configuring an agent
+## Agent Configuration
 
 Every MCP client needs the same three things for a stdio server: the absolute path of `caliper-mcp`, its arguments,
 and, when the app uses another app-data folder, `CALIPER_DATA_DIR` in its environment.

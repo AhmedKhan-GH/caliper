@@ -1,6 +1,6 @@
 # HTTP API
 
-Caliper API is an HTTP interface to the running app. Version 0 lists the applets, launches one, takes data streams over [wire protocol v3](../reference/wire-protocol.md), returns a capture of the frame the app draws, runs the commands of the command layer, through which specs, loaders and sources are built with undo, a journal and approvals, and serves the browser viewer of spec applets. It listens on 127.0.0.1 only, behind tokens that also say who sends each command, and it is off unless the app starts with `--api`, or the [side chat or Open in browser starts it](#started-by-the-app). The server is in `src/host/api/api_server.h`, and `src/host/api/app_api.h` starts it for the app and for `caliper shot`.
+Caliper API is an HTTP interface to the running app. Version 0 lists the applets, launches one, takes data streams over [wire protocol v3](../reference/wire-protocol.md), returns a capture of the frame the app draws, runs the commands of the command layer, through which specs, loaders and sources are built with undo, a journal and approvals, and serves the browser viewer of spec applets. It listens on 127.0.0.1 only, behind tokens that also say who sends each command, and it is off unless the app starts with `--api`, or the [side chat or Open in browser starts it](#app-startup). The server is in `src/host/api/api_server.h`, and `src/host/api/app_api.h` starts it for the app and for `caliper shot`.
 
 !!! note "Status"
     Version 0, built and tested on macOS. A capture works in the app's window on Metal and in the windowless mode, `caliper shot --api`; on the GL and Vulkan renderers the app in its window answers a capture with 501. The command endpoints serve the command layer of the app's builder session, in the app, `caliper dev` and `caliper shot` built with `CALIPER_WITH_BUILDER` (`src/host/builder/app_session.h`, over `src/host/api/session_gateway.h`); a build without the builder answers 404 on them, and `caliper-mcp` reads that as an app with no command layer. The Windows build refuses `--api` for now, as [Caliper CLI](../reference/cli.md#on-windows) describes.
@@ -18,7 +18,7 @@ Caliper API is an HTTP interface to the running app. Version 0 lists the applets
 | `GET /v0/approvals/{id}` | What became of a command that needed the person's approval |
 | `GET /v0/spec` | The browser viewer of spec applets, a page |
 
-## Starting it
+## Startup
 
 `--api` turns the API on for the app, for `caliper dev` and for `caliper shot`, and so does the environment variable `CALIPER_API=1`. `--api-port <n>` chooses the port, from 0 to 65535, and needs `--api`; without it the API listens on port 7341, and 0 takes any free port. [Caliper CLI](../reference/cli.md#caliper-api) lists the options.
 
@@ -35,9 +35,9 @@ When it listens, the process prints the address and **your session token**, and 
 [api] Spec applets in a browser at http://127.0.0.1:7341/v0/spec?token=<viewer token>&applet=<id>
 ```
 
-The session token on the first line is yours: commands sent with it run as the origin `api`, without review, and on the stream it may control a run when the app allows control. Caliper writes it to no file, so a program you run that should act without review takes it from this line, for example through an environment variable that you set, such as `CALIPER_API_TOKEN` in the [examples](#examples). The second line is the link of the [spec page](#get-v0spec), with the viewer token, which opens that page and nothing else.
+The session token on the first line is yours: commands sent with it run as the origin `api`, without review, and on the stream it may control a run when the app allows control. Caliper writes it to no file, so a program you run that should act without review takes it from this line, for example through an environment variable that you set, such as `CALIPER_API_TOKEN` in the [examples](#worked-examples). The second line is the link of the [spec page](#get-v0spec), with the viewer token, which opens that page and nothing else.
 
-**Commands sent with the API file's token are reviewed.** The API file is what an outside agent reads, through [`caliper-mcp`](mcp-server.md) or otherwise, and its token runs commands as the origin `mcp`: each change to the open spec waits for your review in the app, and each command that deletes or overwrites saved data waits for your approval, whatever the request claims ([Who sends a command](#who-sends-a-command)).
+**Commands sent with the API file's token are reviewed.** The API file is what an outside agent reads, through [`caliper-mcp`](mcp-server.md) or otherwise, and its token runs commands as the origin `mcp`: each change to the open spec waits for your review in the app, and each command that deletes or overwrites saved data waits for your approval, whatever the request claims ([Who sends a command](#command-origin)).
 
 The API file is `api.json` in the app-data folder ([Folders and environment variables](../reference/folders-and-environment.md)). The process writes it with mode 0600, so that only its owner can read it, and removes it when it exits, as `caliper serve` does with its hub file. It holds one JSON object:
 
@@ -55,7 +55,7 @@ Every token is new for each run: your session token, the API file's token, the v
 
 While the API runs, every page's status bar shows its address, such as `api 127.0.0.1:7341`.
 
-### Started by the app
+### App Startup
 
 Two things in the app start the API when the app was started without `--api`: the [side chat](side-chat.md), whose agent drives Caliper through `caliper-mcp`, and ⌘O Open in browser on the spec page ([Builder pane](../builder/builder-pane.md#browser-preview)), which opens a saved dashboard in the browser viewer. Either way the API follows the same rules as with `--api`: it listens on 127.0.0.1 only, at a free port, behind new tokens, and it writes the API file. No setting can make it listen on another address or a chosen port. The start is said in Activity, with the address and never a token, and on standard error, and the status bar shows the address. An API that the person started with `--api` is left alone in both directions: neither starts a second one nor stops it.
 
@@ -75,7 +75,7 @@ The viewer token ends when the API that made it stops. An API started for Open i
 
 A hidden app opens no browser. A test gives it `CALIPER_TEST_OPEN_URL`, a file to which the app appends the link instead ([Host variables](../reference/folders-and-environment.md#host-variables)); without it, the hidden app refuses, says so on standard error and in Activity, and starts no API.
 
-## The windowless mode
+## Windowless Mode
 
 `caliper shot` draws the app's applet page into an offscreen canvas and shows nothing on screen ([caliper shot](../reference/cli.md#caliper-shot)). With `--api`, it serves the API while it draws its frames, so it is the app without a window: `--frames` sets how long it runs, at about 60 frames a second, and SIGINT (Ctrl-C) or SIGTERM ends the frames early. Either way it then writes its image of the applet it shows, as usual, stops the API, removes the API file and exits with 0. The API file goes to the app-data folder also when `shot` keeps its stores in a temporary folder.
 
@@ -94,7 +94,7 @@ The API serves nothing beyond its endpoints: no files and no way to run code. Th
 
 **The viewer token.** The link of the spec page carries the viewer token, never the session token, because a link is easily copied and kept in a browser's history. A request with the viewer token may only `GET /v0/spec` and `POST /v0/commands/{name}` for the three commands the page reads with, `spec.get`, `applet.list` and `panel.data`; everything else, the other endpoints, the other commands and the stream, is refused with 403. Its commands run from the origin `viewer` (an `X-Caliper-Origin` other than `viewer` is refused with 400), and the command layer runs only commands that change nothing from that origin, refusing any other with `command.not_allowed`.
 
-### Who sends a command
+### Command Origin
 
 The origin of a command, which decides what is reviewed, comes from the token that the request carries, never from a header:
 
@@ -111,7 +111,7 @@ The origin of a command, which decides what is reviewed, comes from the token th
 
 ## Endpoints
 
-### GET /v0/info
+### `GET /v0/info`
 
 What `caliper info` prints, as JSON. `sdk`, `libtorch` and `ui_stack` are `null` when they are unknown or absent.
 
@@ -121,7 +121,7 @@ What `caliper info` prints, as JSON. `sdk`, `libtorch` and `ui_stack` are `null`
 
 The list of services is shortened here.
 
-### GET /v0/applets
+### `GET /v0/applets`
 
 What `caliper list` prints for the applets the running app found, in the same order: the search order, then the id, then the highest version first. `status` is the word that `caliper list` prints, such as `READY`, `ACTIVE` for the applet whose page is open, `REFUSED` or `SHADOWED`, `kind` is `library` for a compiled applet or `spec` for a [spec applet](../applets/manifest.md#spec-applets), and `reason` is the text that `caliper list` prints under it, empty for a `READY` applet.
 
@@ -129,7 +129,7 @@ What `caliper list` prints for the applets the running app found, in the same or
 {"applets":[{"folder":"/path/to/build/applets","id":"com.example.my-viewer","kind":"library","reason":"","status":"ACTIVE","version":"0.1.0"}]}
 ```
 
-### POST /v0/applets/{id}/launch
+### `POST /v0/applets/{id}/launch`
 
 Opens the page of the applet with that manifest id, as a click on its row on the landing screen does. For a [spec applet](../applets/manifest.md#spec-applets) it is the spec page ([Caliper CLI](../reference/cli.md#the-spec-page)): the answer comes once the spec has been validated, and the page opens with the session's `applet.open` a frame or two later. That `applet.open` is sent from the origin of the request's token: `api` for your own token, `mcp` for the API file's, `agent` for an agent's, as the session's `app.launch` sends it from its own origin. So when the open spec has unsaved changes, a launch with an agent's token waits on an approval card in the app, and the page opens only once the person approves. The answer says so: it comes at once, with `status` `PENDING_APPROVAL` instead of `ACTIVE`, `already_open` false and a `note` that says the open waits for the person's approval and that `spec.get` names the open spec once it has opened (a denial leaves the open spec as it was). The app decides this from the state when it answers, which is the command layer's own condition: review on for the token's origin and an open spec with unsaved changes. When it cannot read the open spec, because a long command runs on its worker, the status is `PENDING` and the note says the open waits for that command and then, if the spec has unsaved changes by then, for the person. The answer carries no approval id: the card's approval belongs to the `applet.open` that the launch sends a frame or two later, so the launch cannot know it when it answers. Every other launch answers `ACTIVE` as before, as a launch with your own token does, which opens at once (⌘Z in the app brings the unsaved spec back).
 
@@ -148,7 +148,7 @@ Opens the page of the applet with that manifest id, as a click on its row on the
 | 404 | No folder in the search order holds an applet with that id. |
 | 409 | The applet cannot be launched, with the status and reason that `caliper list` shows, or it failed to launch, with the loader's reason. |
 
-### GET /v0/capture.png
+### `GET /v0/capture.png`
 
 The frame the app draws, as an opaque PNG, read back at the end of the next frame without drawing an extra one:
 
@@ -157,7 +157,7 @@ The frame the app draws, as an opaque PNG, read back at the end of the next fram
 
 A capture waits for the app's frames like every call that needs the frame thread, so it is answered with 504 when no frame is drawn within 5 seconds. The PNG is encoded on a thread of its own, so the frame loop does not wait for the encoder either.
 
-### GET /v3/stream
+### `GET /v3/stream`
 
 The WebSocket of [wire protocol v3](../reference/wire-protocol.md), with the app in the hub role. It is the hub of [`caliper serve`](../python/hub-setup.md) on the API's port: producers connect to it and each becomes a session, and viewers list the sessions and attach to one. Everything the protocol states for a hub applies, with its bounds and its flow control. It is served at the protocol's own path, so every client of the protocol attaches to it unchanged: the app's NetSource, `caliper-viewer --url`, the link field of the app's attach pane and the `<caliper-view>` element. The upgrade is checked for its path, `Host`, `Origin` and the `token` parameter in the protocol's order, so a client gives the token in the address. Your session token, the API file's token and an agent's own token open it, and the viewer token does not. A connection opened with the API file's token or an agent's watches: it gets the data and the controls' state, its WELCOME sets `control` false, and a CONTROL from it is answered `forbidden`, so an agent cannot pause, step, change a parameter of or run an action of a training run. It cannot publish either: a producer's HELLO on it is answered with the error `unsupported` and closed with code 4002, as `caliper.serve()` refuses producers. Only a connection opened with your session token may control, and only as the next paragraph says:
 
@@ -167,7 +167,7 @@ ws://127.0.0.1:7341/v3/stream?token=<token>
 
 `GET /v0/stream` is an alias of it, with the same checks, for clients that keep every address under the API's prefix. The stream carries data, viewer events and, from protocol 3.1, controls, never host commands. As for `caliper serve`, the hub forwards no control unless the app was started with `--allow-control` next to `--api`; without it every control is answered `forbidden` ([Controls and selections](../python/hub-setup.md#controls-and-selections)). The app's live page is itself a viewer of protocol 3.1: attached to this stream, or to any other, it shows the session's run bar and selections, and its controls follow the same rule ([Control the run and share a selection](../python/script-attachment.md#control-and-selection-sharing)).
 
-### GET /v0/commands
+### `GET /v0/commands`
 
 The command layer's descriptor table: every command with its summary, the JSON Schema of its arguments and of its result, examples, whether it mutates, is destructive, runs on the frame thread or may be sent by an agent (`agents`), and what it does (`effect`: `read` for a read or a proposal, `edit` for an edit of the open spec, `change` for anything else that changes something), by which an agent's mode decides it. It is the table that `caliper-mcp` and `caliper-agent` turn into tools. Requested with the API file's token or an agent's own, it leaves out the commands with `agents` false, `history.undo` and `history.redo`, which are yours: the command layer refuses them to those tokens with `command.not_allowed`, and an agent reverts a change with an edit that you review.
 
@@ -177,13 +177,13 @@ The command layer's descriptor table: every command with its summary, the JSON S
 
 The list is shortened here.
 
-### POST /v0/commands/{name}
+### `POST /v0/commands/{name}`
 
 Runs the command `{name}`, such as `spec.new` or `panel.patch`. The body is the command's arguments, a JSON object of at most 1 MiB, with `Content-Type: application/json` and a `Content-Length`. Three headers shape the invocation:
 
 | Header | Meaning |
 |---|---|
-| `X-Caliper-Origin` | Ignored: the origin is the token's ([Who sends a command](#who-sends-a-command)). With the viewer token it must be `viewer` when it is given. |
+| `X-Caliper-Origin` | Ignored: the origin is the token's ([Who sends a command](#command-origin)). With the viewer token it must be `viewer` when it is given. |
 | `X-Caliper-Group` | Optional. Commands that share a group undo as one step. |
 | `X-Caliper-Preview` | Optional. The id of a stacked preview, from `preview.begin`: an edit of the open spec applies to the preview instead, and `spec.get` reads it. |
 
@@ -208,7 +208,7 @@ A held request waits without blocking anything else: the stream, the other endpo
 
 The app shows each pending approval to the person as a card, in a strip at the bottom of the window above the jobs tray, on every page: who asks (MCP agent, Side chat, Widget agent or API), the command and its target, the change of a spec edit as its changed keys with the validator's warnings and the full diff on demand, what a destructive command would lose, the time left before a held request times out, and Approve and Deny. A card of the side chat's agent or of the API file's token whose command can become a rule offers Allow once, Allow always for this session and Always allow `<command>` instead of Approve. On the spec page the panel an edit changes is marked REVIEW. The app's Activity lists each request when it starts waiting and when it is decided, times out or is withdrawn. When what a card showed changes while a held request waits, such as the content an overwrite would write, an approval no longer holds: the card is replaced by a new one for the new content, and the request keeps waiting on it. Only the person decides there; a test of the hidden app decides through `CALIPER_TEST_APPROVALS` ([Host variables](../reference/folders-and-environment.md#host-variables)).
 
-### GET /v0/approvals/{id}
+### `GET /v0/approvals/{id}`
 
 What became of the command that waits, or waited, under approval `{id}`. `state` is `pending` while the person has not decided, `decided` with the command's result envelope in `result` once they have (the last 64 decisions are kept), and `unknown` for an id the command layer does not know or no longer keeps. A pending approval also gives what the person is asked about: the command's `name`, the `origin` that sent it, and its `review`, which for an edit of the open spec under review is the unified diff of the spec's canonical text and the validator's warnings, `{"diff", "warnings"}`, and is null for other commands. While a loader runs on the app's worker, the app answers from the pending approvals as they stood before it started, so a lookup never waits for the loader.
 
@@ -220,7 +220,7 @@ What became of the command that waits, or waited, under approval `{id}`. `state`
 
 An id is 1 to 128 characters of `A-Z`, `a-z`, `0-9`, `.`, `_`, `:` and `-`; anything else is refused with 400. Approval ids are not secret: reading one changes nothing, and only the person decides.
 
-### GET /v0/spec
+### `GET /v0/spec`
 
 The browser viewer of spec applets: one HTML page, with its script and its two faces inside it, which draws a saved spec applet of the open workspace with the layout and the look of the app's spec page. It takes the token and the applet's workspace id from its own address, `/v0/spec?token=<token>&applet=<id>`, as the printed link and `spec_url` give it; without `applet` it lists the saved spec applets as links. The page is the web package's (`web/src/spec/`), built into the executable from its checked-in copy, `python/caliper/_web/spec.html`, and answers with `Content-Security-Policy` that lets it reach only its own origin, and `Referrer-Policy: no-referrer`, so the token in its address is never sent elsewhere.
 
@@ -236,7 +236,7 @@ The page reads through the command layer, from the origin `viewer`:
 
 The example is shortened. A panel whose data cannot be read answers with the resolver's `error`, such as `resolve.unavailable` for a live source that is not attached, and one whose data does not fit or holds nothing with a `state`, `mismatch` or `empty`; the page draws the same states as the app.
 
-## Threads and limits
+## Threads and Limits
 
 One thread runs the hub's loop and answers every request; it never waits for the app. A request that reads or changes the app's state, which is the list of applets, a launch, a capture, a command or an approval's state, waits for the app's frame thread, which takes it at the start of a frame, between two frames. A launch runs there, as `CALIPER_AUTOLAUNCH` runs before the first frame. A command is handed to the command layer there, and runs when the frame thread drains the command layer's queue; from then on the request is held, without a thread of its own, until the command layer answers it, which the frame thread and the hub's thread both look for without waiting. The 5-second limit therefore applies to the wait before the frame thread takes a command; once taken, the request waits for its result, and one held for approval waits as [above](#post-v0commandsname).
 
@@ -275,7 +275,7 @@ An error is answered with a JSON object `{"error": "<what went wrong>"}`.
 | 503 | Too many requests wait for the app, 32 commands are held, or the app is closing. |
 | 504 | The app did not take the request within 5 s, or a held command had no result within 600 s. |
 
-## Examples
+## Worked Examples
 
 With your session token in `CALIPER_API_TOKEN`, copied from the line the app printed, so that these calls run as you, without review:
 

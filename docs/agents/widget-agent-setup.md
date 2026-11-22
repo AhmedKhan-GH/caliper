@@ -15,7 +15,7 @@ widget agent, share the GPU with a training run, and remove the key again.
     environment where you ran `pip install ./src/builder/agent` in a checkout of Caliper, and the agent reaches your
     workspace through Caliper API, so start Caliper with `--api`.
 
-## Open the settings
+## Settings Access
 
 The settings open over the page you are on, from any of three places:
 
@@ -26,7 +26,7 @@ The settings open over the page you are on, from any of three places:
 Escape or **esc Close** closes them. What you choose is kept in `widget-agent.json` in Caliper's app-data folder, beside
 the side chat's settings. The file holds the provider, the address, the model and the effort, never a key.
 
-## Choose a provider
+## Provider Choice
 
 Choose one of the presets under **Provider**. Each fills in the address of the model's API.
 
@@ -51,7 +51,7 @@ Under the address, a tag warns you about where your data goes:
 - **Invalid address**: an address Caliper does not take. It must start with `http://` or `https://`, and must not hold a
   user name, a password, a query or a fragment.
 
-## Get a key
+## Key Acquisition
 
 For Claude:
 
@@ -65,7 +65,7 @@ For Claude:
 For OpenAI, Gemini and OpenRouter, create a key on that service's own API keys page in the same way. Keep every key
 to yourself: anyone who has it can make requests that your account pays for.
 
-## Enter the key
+## Key Entry
 
 1. In the settings, choose the preset.
 2. The **Key** row says **Not set**. Paste the key into its field and choose **Save**, or press Return.
@@ -80,7 +80,7 @@ for Claude, `openai`, `gemini`, `openrouter`), and a Custom server's after its a
 to a file, a log, the workspace or the journal. When it starts the agent, it gives the key to the agent in its
 environment, and the agent sends it only to the provider's API.
 
-## Pick a model
+## Model Choice
 
 Type the model's id under **Model**, or choose it from the choices under the field.
 
@@ -101,7 +101,7 @@ Type the model's id under **Model**, or choose it from the choices under the fie
 
 There is no review setting for the widget agent: every change it proposes is a preview that you accept or reject.
 
-## Check what the model can do
+## Model Capabilities
 
 Beside the model, **Capabilities** shows three answers, each with where it came from:
 
@@ -114,7 +114,7 @@ Beside the model, **Capabilities** shows three answers, each with where it came 
 **Probe** checks the model with two short test requests: one asks it to call a tool, and one asks it to name the
 colour of a small picture. For Claude it reads Anthropic's model list instead, and spends no tokens. The context length
 comes from the server where it reports one, else Caliper assumes 8,192 tokens; for Ollama it is the preset's own,
-16,384 tokens (see [Use a local model](#use-a-local-model)). Caliper keeps the answers for 30 days.
+16,384 tokens (see [Use a local model](#local-models)). Caliper keeps the answers for 30 days.
 
 Each row has **Yes**, **No** and **Auto**, and the context length a field: an answer you set wins over the probe's
 until you choose Auto again. A short tag says when the probe could not answer, such as **Server unreachable**,
@@ -125,7 +125,7 @@ say what is still missing: **No provider**, **No key**, **No model** or **Invali
 machine, **Context cache about 18 GB** warns that the model's context length would take that much memory (4 GB or
 more), on top of the model itself.
 
-## Use it
+## Widget Agent Usage
 
 1. Focus a panel and press ⌘K (Ctrl+K on Windows).
 2. Type what you want, for example "Use a linear y axis", and press Return. The prompt row shows the model, as the
@@ -158,7 +158,7 @@ tag, such as DECLINED or NO PROVIDER, and the actions that help:
   so that the change no longer applies, and the prompt shows CONFLICT. Choose Refine to start again from the current
   spec.
 
-## Use a local model
+## Local Models
 
 A local model costs nothing per request and keeps your data on your machine, but it uses your computer's GPU and
 memory, and small models do this work less reliably than large ones. It is also slower: with `qwen3.8:27b` on an Apple
@@ -187,7 +187,7 @@ test tasks, and shows how to run the tasks against your own model. A server on a
 the address of Ollama, LM Studio or Custom, but then your data leaves your machine, and the settings show Remote
 address.
 
-## Share the GPU with a training run
+## GPU Sharing
 
 On a Mac, a local model uses the same GPU and the same memory as a training run that streams into Caliper. Both slow
 down, and if the model and the run do not fit in memory together, the whole machine slows as it starts swapping. While
@@ -208,17 +208,17 @@ On a computer with a separate graphics card, the model's weights take video memo
 same advice holds. The side chat runs your own agent, so Caliper cannot tell where its model runs; it shows the same
 note when you mark the agent as running on a local model, as below.
 
-## Local models in the side chat
+## Side Chat Local Models
 
 The side chat runs your own agent, so it uses whatever model your agent is set up for, local models included.
 `caliper-agent` itself can be that agent: give the side chat the custom command that
-[Side chat](side-chat.md#the-agents) shows, with the Ollama preset and your model, and the chat runs on
+[Side chat](side-chat.md#agents) shows, with the Ollama preset and your model, and the chat runs on
 the local model with no account. ACP integration (`design/acp-integration.md`) sets up opencode with a model served by
 Ollama as another worked example. When your agent runs a model on this machine, choose **Local model** in the chat's
 agent picker; while a training run is attached, the chat's header then shows **Shared GPU**, and the advice above
 applies ([Side chat](side-chat.md#local-models)).
 
-## Remove the key
+## Key Removal
 
 In the settings, choose the preset and then **Remove**. The Key row then says Not set, the agent that was started with
 the key stops at once, and ⌘K offers only Setup and Ask in chat until you enter a key again.

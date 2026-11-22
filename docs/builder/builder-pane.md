@@ -185,7 +185,7 @@ When the app was started without `--api`, the button starts Caliper API as the s
 until the app quits, since the page in the browser keeps reading the dashboard's data. What would refuse the link, a
 build without the browser viewer or an id that cannot be a link, is asked before the API starts, and when the link
 cannot be handed over all the same, an API started for it alone stops again. What the link carries and who
-can use it is in [Caliper API](../agents/http-api.md#started-by-the-app).
+can use it is in [Caliper API](../agents/http-api.md#app-startup).
 
 ## Keys
 

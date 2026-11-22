@@ -10,10 +10,10 @@ session is opened, which commands it may use, what a prompt may hold, and what e
 !!! note "Status"
     The agent and its widget sessions are built and tested in `src/builder/agent/`. The inline surface that opens them
     on a panel, a selection, a dropped file and a property is built in `src/host/builder/` and works on the app's spec
-    page ([The inline surface](#the-inline-surface)). `caliper-agent` is not yet packaged with a Python runtime, so
+    page ([The inline surface](#inline-surface)). `caliper-agent` is not yet packaged with a Python runtime, so
     the app finds it through `CALIPER_AGENT_PYTHON` ([Environment variables](../reference/folders-and-environment.md)).
 
-## Starting the agent
+## Agent Startup
 
 Caliper starts the agent as a child process and speaks ACP version 1 on its standard input and output:
 
@@ -23,7 +23,7 @@ Caliper starts the agent as a child process and speaks ACP version 1 on its stan
 
 | Option | Meaning |
 |---|---|
-| `--api-file <path>` | Caliper API's file, which gives the loopback address and a token; the app gives its sidecar a file of its own, whose token has the origin `agent`. A session that `session/new` hands Caliper's MCP server uses that server's file instead ([In the side chat](#in-the-side-chat)) |
+| `--api-file <path>` | Caliper API's file, which gives the loopback address and a token; the app gives its sidecar a file of its own, whose token has the origin `agent`. A session that `session/new` hands Caliper's MCP server uses that server's file instead ([In the side chat](#side-chat-use)) |
 | `--command-table <path>` | The command table as JSON |
 | `--widget-scopes <path>` | The scope rule below; by default `widget_scopes.json` beside the command table. Without it, widget sessions are refused |
 | `--preset <id>` | A provider preset, which fills the provider and the base URL (below) |
@@ -70,7 +70,7 @@ With `CALIPER_AGENT_OFFLINE=1`, which every test of the repository sets, the age
 loopback: it answers `session/new` and `session/prompt` with an error whose `data.code` is `agent.offline` unless it runs
 a scripted model, a stubbed transport or a server on a loopback address.
 
-## Checking a model
+## Model Checks
 
 `caliper-agent probe` checks what a model can do and prints one JSON object on standard output. Caliper's settings run
 it when the person picks a model:
@@ -88,7 +88,7 @@ metadata's context length is the most the model takes, not what the server runs 
 test requests have loaded the model, the probe reads Ollama's `GET /api/ps`, which states the context in force, and
 otherwise leaves the context length unknown. For the
 Ollama preset the two test requests go to Ollama's own chat API with the preset's context length, as the agent's do
-(see [Ollama's own chat API](#ollamas-own-chat-api)), and that context length is the answer, with the source
+(see [Ollama's own chat API](#ollama-chat-api)), and that context length is the answer, with the source
 `preset`. For Claude it reads the Models API and makes no request that costs tokens. The key comes from the
 environment, as for the agent.
 
@@ -113,7 +113,7 @@ environment, as for the agent.
 The command exits with 0 when it printed its answer and with 2 for bad usage. A base URL must be an http or https
 address without a user name, password, query or fragment.
 
-## What the agent assumes of a model
+## Model Assumptions
 
 At start the agent takes, for each capability, an option on its command line, else the person's override in the cache,
 else a fresh probe answer, else its default: tool calling and vision until the server refuses them, and a context
@@ -130,7 +130,7 @@ gives to `build_context_bundle()` as the context length and whether to send a re
 A model without vision gets no image and no `panel.render`. When the context length is known, a request asks for at
 most half of it as output.
 
-## Ollama's own chat API
+## Ollama Chat API
 
 Ollama's OpenAI-compatible endpoint takes no context length: it ignores `options.num_ctx`, so Ollama loads the model at
 the context length it chooses itself, which for a model of 262,144 tokens of context can take more than 10 GB of
@@ -158,7 +158,7 @@ model's context and that the person can start again or raise the context length.
 the context ends the turn with `max_tokens` too, and none of its tool calls runs.
 For a server whose context length the agent did not choose, nothing is checked.
 
-## Opening a widget session
+## Widget Session Startup
 
 Before it opens the session, Caliper begins a stacked preview of the open spec with `preview.begin`, from the `ui`
 origin and scoped to the target, as the [Caliper API](http-api.md) page describes for `X-Caliper-Preview`. It then sends
@@ -191,7 +191,7 @@ The answer's session id starts with `widget-`, its `_meta.caliper.widget` repeat
 and its config options are `model` and `effort` (on the Claude API), with `claude-haiku-5-5` and `low` as their values.
 There is no review option, because every change is a preview that the person accepts or rejects.
 
-## The tool scope
+## Tool Scope
 
 The commands a widget session may use come from one rule, kept as data in `src/builder/commands/widget_scopes.json`
 beside the command table, which both the agent and Caliper read:
@@ -221,7 +221,7 @@ Every call of a widget session carries `X-Caliper-Preview` with the session's pr
 `dry_run`, so it applies to the preview and never to the open spec. The agent sends no permission request in a widget
 session, and it never begins, commits or discards a preview: only the person commits it, with Accept.
 
-## The context bundle
+## Context Bundle
 
 Before the person's request, Caliper sends what the model needs to know about the target, built from the workspace by
 `build_context_bundle()` (`caliper_builder/session/context_bundle.h`). It returns the content blocks of the prompt, the
@@ -294,7 +294,7 @@ change is not finished: the agent stopped at its limit of 6 model requests after
 Accept applies the edits shown, or Refine lets it finish." Caliper shows the reply in full on the card, under LIMIT and
 the count of edits.
 
-## In the side chat
+## Side Chat Use
 
 `caliper-agent` can be the [side chat](side-chat.md)'s custom agent, in the general role, for example on a local model
 through the Ollama preset, with no account or key. The side chat sends `session/new` with one MCP server, `caliper`:
@@ -310,13 +310,13 @@ Each call of a Caliper command carries the command in `_meta.caliper.command` of
 `{"caliper": {"command": "panel.create"}}`, so that the side chat shows it as that command and folds its approval into
 its row.
 
-## Closing
+## Session Closing
 
 `session/cancel` stops a running prompt, which answers `cancelled`; the preview stays as it is. `session/close`, which
 the agent declares as `sessionCapabilities.close`, cancels a running prompt, waits up to 10 seconds for it to end,
 forgets the session and answers `{}`. A sidecar keeps at most 16 sessions.
 
-## The inline surface
+## Inline Surface
 
 The inline surface is the app's side of a widget session on a panel (`src/host/builder/widget_surface.h`). On the
 spec page, a click on a panel focuses it, and its frame turns bronze. ⌘K (Ctrl+K on Windows), or the page bar's ⌘K
@@ -359,7 +359,7 @@ works, the row shows its latest step: the command it calls, or the last line of 
 
 1. When the first request is submitted, it sends `preview.begin` from the `ui` origin, scoped to the panel, with an id
    that starts with `widget-`.
-2. It builds the [context bundle](#the-context-bundle) on that preview and opens the session with `session/new`,
+2. It builds the [context bundle](#context-bundle) on that preview and opens the session with `session/new`,
    whose `_meta.caliper.widget` holds the target, the preview and the bundle's scope.
 3. It sends the request as `session/prompt`, with the bundle's blocks before the request on the session's first
    prompt only.
@@ -407,7 +407,7 @@ It opens the applet as the workspace's open spec, so give it a copy of a workspa
 files and their states, the panel's rectangle, the undo steps before and after Accept, and whether the open spec
 changed before Accept.
 
-## The settings in the app
+## App Settings
 
 The widget agent's settings are a popup over any page (`src/host/builder/agent_settings.h`). It opens from the
 landing screen's **⌘, Agent**, from the key ⌘, (Ctrl+, on Windows) on any page, and from the inline surface's

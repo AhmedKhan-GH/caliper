@@ -12,7 +12,7 @@ data goes, what each may do, and when the widget agent hands a request to the ch
     test agents, never with a person's agent or key. The designs are in ACP integration (`design/acp-integration.md`),
     Widget agent (`design/widget-agent.md`) and Widget agent sidecar (`design/byok-agent.md`).
 
-## What the two have in common
+## Shared Traits
 
 Both roles speak the same protocol to Caliper, the Agent Client Protocol (ACP), so Caliper shows their messages, their
 reasoning and each tool call in the same way, and a Stop control cancels either one.
@@ -26,7 +26,7 @@ Caliper tells who sends a command by the token it comes with, not by what the re
 token in Caliper API's file, `api.json`, which is what an agent outside the app reads, are reviewed, and so are those
 of the side chat's agent and the widget agent, which get tokens of their own. Only the session token that the app
 prints when its API starts runs commands without review, and Caliper writes it to no file
-([Caliper API](http-api.md#who-sends-a-command)).
+([Caliper API](http-api.md#command-origin)).
 
 You review a waiting change on its card, in a strip that opens at the bottom of the window, above the jobs tray, on
 whatever page you are on. The card says who asks (MCP agent, Side chat, Widget agent or API), the command and what it
@@ -41,7 +41,7 @@ The two roles share one journal and one undo history, and their commands run one
 data (specs and loaders), never code that runs in Caliper's process; the [trust model](../applets/trust-model.md) explains why
 that matters.
 
-## The side chat
+## Side Chat
 
 The side chat is for conversations and for jobs that take more than one step: building a dashboard from nothing,
 writing a loader script, changing your project's code, or explaining what a panel shows. For example, you might ask
@@ -54,7 +54,7 @@ its adapter), Gemini CLI or opencode, which Caliper detects, or any other ACP ag
 uses Caliper's tools through Caliper's MCP server and also its own tools, such as reading and editing files, running
 commands and searching the web, as its settings allow.
 
-## The widget agent
+## Widget Agent
 
 The widget agent is for one small change or question about one target, answered in a few seconds. For example, you
 select a dozen points on a loss curve, press ⌘K (Ctrl+K on Windows) and type "Make a table of these points". A table
@@ -65,7 +65,7 @@ The widget agent is `caliper-agent`, Caliper's own agent, which runs out of Cali
 it needs to know about the target: the target's part of the spec, the schema and a sample of its data, a picture of
 the panel and your selection. It may use only the commands that apply to that target.
 
-## How they differ
+## Role Differences
 
 | | Side chat | Widget agent |
 |---|---|---|
@@ -78,7 +78,7 @@ the panel and your selection. It may use only the commands that apply to that ta
 | How a change lands | As the agent makes it, with approval cards where they apply | As one undo step, when you accept the preview |
 | Where your data goes | To your agent's model provider, or nowhere when its model runs on your machine | To the provider you chose, or nowhere when the model runs on your machine |
 
-## Cost and login
+## Cost and Login
 
 With the side chat you pay for your agent the way you already do, often through a subscription that includes it.
 Caliper adds nothing to that bill, but a long session in Caliper counts against your plan's limits like any other. You
@@ -93,7 +93,7 @@ its environment when Caliper starts it, and never appears in a file, a log, the 
 providers are added, each one that needs a key gets an entry of its own. [Set up the widget
 agent](widget-agent-setup.md) gives the steps.
 
-## Local and free operation
+## Local Operation
 
 Both roles can run on a model on your own machine, which costs nothing per request; your computer does the work
 instead.
@@ -125,7 +125,7 @@ The widget agent reads only what Caliper gives it and what its commands return, 
 provider and to Caliper on your machine. When you point it at a model server on another computer, Caliper warns you
 that your data will leave this one.
 
-## What each may do
+## Role Permissions
 
 The side chat's agent can do more than Caliper's tools: write a loader script, fix a file, look something up. Its
 changes through Caliper's tools are commands, checked, journaled and undoable; each change to the open spec waits for
@@ -138,7 +138,7 @@ they make it. It cannot delete or overwrite saved data, run a loader, change fil
 proposes is a preview until you accept it; accepted, the change is one undo step, and rejected, it leaves nothing
 behind.
 
-## When ⌘K hands off to the chat
+## Chat Handoff
 
 The widget agent hands a request to the side chat when:
 
