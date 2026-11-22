@@ -74,12 +74,16 @@ PINNED_SHARE_200 = 0.953
 # the notebook, run in this process
 # ---------------------------------------------------------------------------
 @pytest.fixture
-def notebook(monkeypatch):
+def notebook(monkeypatch, tmp_path):
     """A function that runs the notebook's code cells, all but the training
     run, the random-directions cell and the close, on the CPU, and returns
-    their namespace; closes the server and removes what it registered."""
+    their namespace; closes the server and removes what it registered. The
+    server keeps its stream file in a data folder of the test's own, as the
+    app-data guard asks of a test run, never in the user's."""
     made = []
     monkeypatch.setenv("CALIPER_SESSION", "0")
+    (tmp_path / "app-data").mkdir()
+    monkeypatch.setenv("CALIPER_DATA_DIR", str(tmp_path / "app-data"))
     ctl = C.Controls()                                  # a fresh run state for each test
     monkeypatch.setattr(C, "CONTROLS", ctl)
     monkeypatch.setattr(caliper, "_CTL", ctl)
