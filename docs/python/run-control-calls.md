@@ -15,39 +15,62 @@ Both travel on the stream as messages of wire protocol 3.1 ([Controls](../refere
 
 [Script Control](script-control.md) uses them in a training loop. Every call also works without a server. Parameters keep their values, `step()` returns at once, and Python code can call an action.
 
-<!-- The empty divs keep the anchors of the former hand-written entries, which the roadmap registry links to. -->
-<div id="step"></div>
+[](){#caliper.step}
+### `step`
 
 ::: caliper.step
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
 
-<div id="pause"></div>
+[](){#caliper.pause}
+### `pause`
 
 ::: caliper.pause
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
 
-<div id="param"></div>
+[](){#caliper.param}
+### `param`
 
 ::: caliper.param
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
 
 ::: caliper.Param
     options:
       members: [value, pending, set, remove]
 
-<div id="action"></div>
+[](){#caliper.action}
+### `action`
 
 ::: caliper.action
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
 
 ::: caliper.Action
     options:
       members: [__call__, remove]
 
-<div id="items"></div>
+[](){#caliper.items}
+### `items`
 
 ::: caliper.items
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
 
 ::: caliper.ItemSpace
     options:
       members: [selection, select, clear]
 
-<div id="controls_1"></div>
+[](){#caliper.controls}
+### `controls`
 
 ::: caliper.controls
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false

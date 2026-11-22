@@ -25,36 +25,45 @@ The interval starts at the last snapshot of the view. A call inside the interval
 
 A `series` is the exception. Every call appends its values on every attached route, and the view is republished at most `rate` times per second, with one pending snapshot at a time. `watch(every=N)` drops N-1 of N hook calls before the rate limit applies.
 
-<!-- The empty divs keep the anchors of the former hand-written entries, which the roadmap registry links to. -->
-<div id="show"></div>
+[](){#caliper.show}
+## `show`
 
 ::: caliper.show
     options:
-      heading_level: 2
+      show_root_heading: false
+      show_root_toc_entry: false
 
-<div id="points"></div>
+[](){#caliper.points}
+## `points`
 
 ::: caliper.points
     options:
-      heading_level: 2
+      show_root_heading: false
+      show_root_toc_entry: false
 
-<div id="series"></div>
+[](){#caliper.series}
+## `series`
 
 ::: caliper.series
     options:
-      heading_level: 2
+      show_root_heading: false
+      show_root_toc_entry: false
 
-<div id="histogram"></div>
+[](){#caliper.histogram}
+## `histogram`
 
 ::: caliper.histogram
     options:
-      heading_level: 2
+      show_root_heading: false
+      show_root_toc_entry: false
 
-<div id="watch"></div>
+[](){#caliper.watch}
+## `watch`
 
 ::: caliper.watch
     options:
-      heading_level: 2
+      show_root_heading: false
+      show_root_toc_entry: false
 
 ::: caliper._watch.WatchHandle
     options:

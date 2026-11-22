@@ -291,3 +291,5 @@ body { background: var(--ground); -webkit-font-smoothing: antialiased; }
 /* The name column of the generated C tables stays on one line. */
 .md-typeset .c-api-name { white-space: nowrap; }
 .md-typeset .c-api-name code { word-break: normal; }
+/* The anchor that gives a hand-written heading the identifier of its object ([](){#caliper.show}) takes no space. */
+.md-typeset p:has(> a[id]:only-child:empty) { margin: 0; }

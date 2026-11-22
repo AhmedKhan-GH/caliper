@@ -165,7 +165,7 @@ None of these calls reads a value back to the CPU. The call `series` gets the lo
 
 Each widget pans, zooms and shows the value under the pointer. The heatmap also has a picker for its data view, built from the names in `dims` and their sizes. A choice in the picker takes effect at the next snapshot, while the cell operates.
 
-A Shift drag in the embedding widget selects points. The predictions widget marks the same sequences, and a table under the embedding shows their class and marker position. The selection works while the cell operates, and `evaluation.selection` holds it at once. The `selection` trait holds the latest event, which [Caliper LIB](network-streaming-calls.md#caliper.widget) describes.
+A Shift drag in the embedding widget selects points. The predictions widget marks the same sequences, and a table under the embedding shows their class and marker position. The selection works while the cell operates, and `evaluation.selection` holds it at once. The `selection` trait holds the latest event, which [Caliper LIB](network-streaming-calls.md#widget) describes.
 
 ```python
 print("selection:", embedding_widget.selection)

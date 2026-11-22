@@ -17,10 +17,13 @@ The sender of the server is native when `caliper._netio` is built. It is a C++ t
 
 The viewer page and the widget modules always come with the package. The WebAssembly build of the Caliper views is optional. A wheel built in CI includes it. In a checkout, `python scripts/build_wasm.py` builds it and `python scripts/fetch_wasm.py` downloads the CI build. Without it, every view draws with the views written in TypeScript. Then `serve()` says so once on stderr and names those two commands. `CALIPER_WEB_DIR` points the package at another folder of these files.
 
-<!-- The empty divs keep the anchors of the former hand-written entries, which the roadmap registry links to. -->
-<div id="serve"></div>
+[](){#caliper.serve}
+### `serve`
 
 ::: caliper.serve
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
 
 ::: caliper._net.NetServer
     options:
@@ -42,17 +45,25 @@ The server keeps the last 1,048,576 values of each series whether or not a viewe
 
 The server limits the replies and other control messages that wait to be sent on one connection to 65,536 messages and 16 MiB. It keeps one PONG waiting, for the latest PING. Only a viewer that keeps sending requests while it reads nothing reaches the limit. The server then closes its connection with code 1008, as the hub does with a send queue that overflows. The training loop is not affected. These are limits of the server of Caliper LIB, not rules of the protocol.
 
-<div id="connect"></div>
+[](){#caliper.connect}
+### `connect`
 
 ::: caliper.connect
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
 
 ::: caliper._net_native.HubConnection
     options:
       members: [state, connected, session, stats, wait_connected, close]
 
-<div id="widget"></div>
+[](){#caliper.widget}
+### `widget`
 
 ::: caliper.widget
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
 
 ::: caliper._widget.CaliperWidget
     options:

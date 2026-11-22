@@ -89,6 +89,9 @@ plugins:
               - docs-theme/griffe/hide_private_parameters.py:HidePrivateParameters
 markdown_extensions:
   - admonition
+  # For the anchors of mkdocs-autorefs, [](){#caliper.show}: a call page that keeps a hand-written heading above a
+  # directive gives the object's identifier to that heading this way.
+  - attr_list
   - toc:
       permalink: true
   - pymdownx.superfences:
