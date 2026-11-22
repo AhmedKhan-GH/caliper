@@ -6,7 +6,7 @@ macOS arm64) and of `caliper.live`. The package needs macOS 14 (Sonoma) or
 later on Apple silicon, and its wheel is tagged `macosx_14_0_arm64`. The source of truth is
 `python/caliper/__init__.py`; the design is in
 [Live streaming](../explanations/live-streaming.md), and
-[Watch a PyTorch training run live](../tutorials/live-pytorch.md) walks through
+[Watch a PyTorch training run live](../introduction/python-quickstart.md) walks through
 a script.
 
 The package is pure Python on top of two nanobind extensions. `caliper._native`

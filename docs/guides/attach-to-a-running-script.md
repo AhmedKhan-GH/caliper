@@ -59,7 +59,7 @@ The session's live page opens:
 |---|---|
 | Bar | `esc Home`, `⌘D Detach`, the script's name, and its state: a filled, breathing diamond and `live` while it runs, `waiting for the session to start`, or an outlined diamond and `SESSION ENDED` once it has gone |
 | Run bar | For a stream only, under the bar: the script's run state, Pause or Resume, Step, its parameters and its actions (see [Control the run and share a selection](#control-the-run-and-share-a-selection)) |
-| Views | One window per view on a grid that fills the page and lays itself out again when the page narrows, each with a header of its name, a summary, its tools and a status dot (see [What you see](../tutorials/live-pytorch.md#what-you-see)); a window you move, resize or dock keeps its place, and that layout is kept in `imgui.ini` |
+| Views | One window per view on a grid that fills the page and lays itself out again when the page narrows, each with a header of its name, a summary, its tools and a status dot (see [What you see](../introduction/python-quickstart.md#what-you-see)); a window you move, resize or dock keeps its place, and that layout is kept in `imgui.ini` |
 | Status bar | The backend and GPU, then the script's pid, the number of views, and the frame rate and step-to-screen latency over the last second |
 
 The window title reads `Caliper - <script> (pid <pid>)`, with
@@ -307,7 +307,7 @@ let this viewer control (a hub needs --allow-control)`.
 
 The window title reads `caliper: <script> (<pid>)` while attached, with
 ` - starting` or ` - session ended` appended when that applies. One window per
-view shows the live data (see [What you see](../tutorials/live-pytorch.md#what-you-see)),
+view shows the live data (see [What you see](../introduction/python-quickstart.md#what-you-see)),
 and a status window in the bottom-right corner shows:
 
 | Line | Content |

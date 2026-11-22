@@ -1051,7 +1051,7 @@ entries:
   - COR-13
   - COR-46
   - REN-64
-- page: docs/tutorials/live-pytorch.md
+- page: docs/introduction/python-quickstart.md
   item: Watch a PyTorch training run live with caliper.show, in the app, in caliper-viewer and in an own
     window.
   ids:
@@ -1169,20 +1169,20 @@ entries:
   ids:
   - AGT-03
   - AGT-05
-- page: docs/explanations/architecture.md#layers
+- page: docs/introduction/architecture.md#layers
   item: The layers of the host, the SDK and the applets.
   ids:
   - COR-01
-- page: docs/explanations/architecture.md#platform-rules
+- page: docs/introduction/architecture.md#platform-rules
   item: The platform rules, including that the host never links torch.
   ids:
   - COR-01
   - COR-03
-- page: docs/explanations/architecture.md#the-frame-loop
+- page: docs/introduction/architecture.md#the-frame-loop
   item: The frame loop never blocks on I/O.
   ids:
   - COR-01
-- page: docs/explanations/architecture.md#embedding
+- page: docs/introduction/architecture.md#embedding
   item: The core as an embeddable library.
   ids:
   - EMB-07

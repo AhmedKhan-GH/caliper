@@ -11,7 +11,7 @@ In a measurement, 3.6 of the 4.1 ms a show-step cost was that drain, taking
 training from 331 to 159 steps/s with two shows per step. Live streaming removes
 the wait: `show()` waits for nothing and the viewer samples at its own pace.
 
-To use it, start with [Watch a PyTorch training run live](../tutorials/live-pytorch.md);
+To use it, start with [Watch a PyTorch training run live](../introduction/python-quickstart.md);
 every call is in the [Caliper LIB](../references/python-api.md) reference.
 
 !!! note "Status"

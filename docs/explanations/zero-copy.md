@@ -8,7 +8,7 @@ interop machinery in [Vulkan and CUDA on Windows](vulkan-cuda.md).
 ## What the words mean
 
 Two phrases are used, and they are kept apart, because the host claims zero-copy only when the zero-copy path drew
-([Platform rules](architecture.md#platform-rules)).
+([Platform rules](../introduction/architecture.md#platform-rules)).
 
 - **Zero-copy** means the tensor's data is copied nowhere: not into host memory and not to a second place in GPU
   memory. A GPU pass may still convert it (a colormap, a buffer-to-texture write), because converting is work on the
@@ -147,7 +147,7 @@ already synchronizes. The gain is that the frame thread stops stalling on the tr
 correct by construction.
 
 The biggest frame-thread stall that was measured had nothing to do with tensors. A database table rebuilt on the UI
-thread froze the frame, which is why the host [forbids I/O there](architecture.md#the-frame-loop).
+thread froze the frame, which is why the host [forbids I/O there](../introduction/architecture.md#the-frame-loop).
 Two habits keep texture work cheap: create a texture once and call `update_texture` afterwards, because a create costs
 about a millisecond where an update costs a fraction of one.
 

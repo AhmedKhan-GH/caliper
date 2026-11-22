@@ -124,7 +124,7 @@ With `TORCH`, `caliper_add_applet()`:
 - links it, and on macOS sets the build rpath to its `lib` folder and links `libobjc`, which the torch adapter needs;
 - copies no libtorch DLL on Windows, because the host executable carries them and an applet never brings a second copy.
 
-A process holds one libtorch, so an applet links the host's version or none (see [Embedding](../explanations/architecture.md#embedding)).
+A process holds one libtorch, so an applet links the host's version or none (see [Embedding](../introduction/architecture.md#embedding)).
 
 ## The UI-stack hash
 

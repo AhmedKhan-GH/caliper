@@ -12,7 +12,7 @@ embedded file moves.
 ## Export is a terminal sink
 
 Export is the one place where pixels leave the one-way data flow described in
-[Platform rules](../explanations/architecture.md#platform-rules). The readback it performs feeds a
+[Platform rules](../introduction/architecture.md#platform-rules). The readback it performs feeds a
 file on disk, and nothing returns to compute: no export call hands pixels, a
 texture or a tensor back to the applet. Caliper exports **pixel-exact view
 images plus a sidecar** and does not compose figures. Axes, captions, typography
@@ -37,7 +37,7 @@ failure rolls the PNG back rather than orphaning it.
 When the geometry primitives capability is absent (headless, or a host without
 the renderer path) the export capability bit is unset and **every entry point is
 inert**: no file is written. This is the
-[fallback rule](../explanations/architecture.md#platform-rules) at work, not a bug.
+[fallback rule](../introduction/architecture.md#platform-rules) at work, not a bug.
 
 ```c
 --8<-- "sdk/include/caliper/services/export_v1.h"

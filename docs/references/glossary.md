@@ -4,7 +4,7 @@ The terms below are used across these pages with one meaning each.
 
 **Applet.** A shared library that the host loads and runs in its own process. It draws into the host's UI and uses the host's services. Each applet has a [manifest](manifest.md) and exports one descriptor.
 
-**Host.** The program that loads applets, owns the window, the renderer and the frame loop, and implements the services. The `caliper` executable is the host. See [Architecture](../explanations/architecture.md).
+**Host.** The program that loads applets, owns the window, the renderer and the frame loop, and implements the services. The `caliper` executable is the host. See [Architecture](../introduction/architecture.md).
 
 **Core.** The host's own code, as opposed to the applets. The core is the loader, the service implementations, the renderer, the crash guard and the frame watchdog. It is built as the `libcaliper` library and the `caliper` executable.
 

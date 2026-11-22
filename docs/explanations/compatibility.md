@@ -16,7 +16,7 @@ struct CaliperHost {
 };
 ```
 
-New capabilities arrive as new service ids, never as changes to the base ABI, so the base ABI stays small and stable while the host grows. The price is that every applet must cope with a service that is missing, which the fallback rule in [Architecture](architecture.md#platform-rules) asks of it anyway.
+New capabilities arrive as new service ids, never as changes to the base ABI, so the base ABI stays small and stable while the host grows. The price is that every applet must cope with a service that is missing, which the fallback rule in [Architecture](../introduction/architecture.md#platform-rules) asks of it anyway.
 
 ## ABI hygiene
 
@@ -72,7 +72,7 @@ The ABI epoch is an integer, 2 today, that versions the frozen contract: the ent
 Within an epoch, each service is versioned by its id. `caliper.geometry.v1` is the first version of a table, `caliper.geometry.v1_1` to `caliper.geometry.v1_3` are revisions that append to it, and a major id such as `caliper.metrics.v2` is reserved for an incompatible change. No service has needed a major id so far.
 
 !!! note "Why epochs, not a rolling ABI"
-    Applets write raw ImGui against the host's headers and share its ImGui context, so the UI-stack pin, which is the exact ImGui, ImPlot, ImPlot3D and ImGuiFileDialog versions and the `imconfig`, is part of the epoch. Changing the pin is therefore an epoch change. The cost is an applet rebuild, not a silent break. The UI-stack hash in [The SDK version](#the-sdk-version) checks the pin itself when an applet loads. See the [Architecture](architecture.md) page.
+    Applets write raw ImGui against the host's headers and share its ImGui context, so the UI-stack pin, which is the exact ImGui, ImPlot, ImPlot3D and ImGuiFileDialog versions and the `imconfig`, is part of the epoch. Changing the pin is therefore an epoch change. The cost is an applet rebuild, not a silent break. The UI-stack hash in [The SDK version](#the-sdk-version) checks the pin itself when an applet loads. See the [Architecture](../introduction/architecture.md) page.
 
 #### Growth rules
 
@@ -106,7 +106,7 @@ An applet's `[applet].version` is strict semver, chosen by its author, and the d
 | Optional services | `[services].optional` | Always. The applet probes these services at run time and falls back when one is missing. |
 | libtorch | `[compat].torch` | The value equals the version of the libtorch that the host provides. Applets that do not link libtorch leave the key out. |
 
-A process loads one libtorch, which the host provides for every applet in it (see [Embedding](architecture.md#embedding)), and the libtorch C++ ABI differs between versions. An applet that links libtorch can therefore run only beside the exact version it was built against. A host that provides no libtorch, such as one built with `CALIPER_WITH_TORCH=OFF`, refuses every applet that sets `[compat].torch`. `caliper_add_applet(... TORCH)` writes the key into the built manifest, with the version of the libtorch that the SDK names.
+A process loads one libtorch, which the host provides for every applet in it (see [Embedding](../introduction/architecture.md#embedding)), and the libtorch C++ ABI differs between versions. An applet that links libtorch can therefore run only beside the exact version it was built against. A host that provides no libtorch, such as one built with `CALIPER_WITH_TORCH=OFF`, refuses every applet that sets `[compat].torch`. `caliper_add_applet(... TORCH)` writes the key into the built manifest, with the version of the libtorch that the SDK names.
 
 #### Several copies of one applet
 

@@ -17,7 +17,7 @@ version.
 
 Prereqs: Apple Silicon, macOS 14 (Sonoma) or later, Python 3.12, PyTorch with MPS, and
 JupyterLab or VS Code with its Jupyter extension. [Watch a PyTorch training run
-live](live-pytorch.md) introduces the view calls in a plain script, and
+live](../introduction/python-quickstart.md) introduces the view calls in a plain script, and
 [Network streaming](../explanations/network-streaming.md) explains the design
 that this page uses.
 
@@ -27,7 +27,7 @@ with a selection in the embedding, taken headless. Place the image here. -->
 
 ## Install
 
-Build the wheel as [Build and install the wheel](live-pytorch.md#build-and-install-the-wheel)
+Build the wheel as [Build and install the wheel](../introduction/python-quickstart.md#build-and-install-the-wheel)
 describes. Then install it with the extra `caliper[notebook]`, which adds
 anywidget for the widgets, together with a notebook front end. From the
 repository root:
@@ -353,7 +353,7 @@ caliper.session(script_name="live_training")
 Every open route receives each view call, so the app, the widgets and the tab
 update together. Start the Caliper app and attach to the notebook's kernel with
 `F4 Attach to process` on its landing screen, as
-[Attach from Caliper](live-pytorch.md#attach-from-caliper) describes. Without
+[Attach from Caliper](../introduction/python-quickstart.md#attach-from-caliper) describes. Without
 `script_name`, the session list shows the kernel's launcher script instead of a
 useful name.
 

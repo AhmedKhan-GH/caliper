@@ -4,4 +4,8 @@ nav:
   - Guides: guides
   - References: references
   - Explanations: explanations
+  - Introduction:
+      - introduction/index.md
+      - introduction/python-quickstart.md
+      - introduction/architecture.md
   - Roadmap: roadmap

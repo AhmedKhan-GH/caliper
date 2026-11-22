@@ -1,4 +1,4 @@
-# Watch a PyTorch training run live
+# Python Quickstart
 
 This tutorial takes an ordinary PyTorch training loop and adds five kinds of
 live view: a weight matrix as a heatmap, a convolution's activations as a
@@ -121,7 +121,7 @@ Caliper to attach (two minutes by default, `--wait` to change it):
 ```
 
 Start the Caliper app (`cmake-build-release/caliper`, see
-[Development basics](development-basics.md)) while the script runs, and on its
+[Development basics](../tutorials/development-basics.md)) while the script runs, and on its
 landing screen press F4 or click `F4 Attach to process` in the Projects pane.
 Projects lists the live sessions on this machine, refreshed every second: one
 row per script with its name, PID, start time, state and view names. Select

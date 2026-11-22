@@ -20,7 +20,7 @@ writes into tensors allocated from an
 that same memory through [`caliper.geometry.v1`](service-geometry-v1.md) without a
 copy. Each of these applets states in its window whether the zero-copy path
 actually drew the current frame, and says which fallback ran when it did not
-([Platform rules](../explanations/architecture.md#platform-rules)).
+([Platform rules](../introduction/architecture.md#platform-rules)).
 
 ## EmbedScope
 

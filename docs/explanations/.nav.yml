@@ -1,6 +1,5 @@
 nav:
   - index.md
-  - architecture.md
   - compatibility.md
   - trust-model.md
   - rendering.md

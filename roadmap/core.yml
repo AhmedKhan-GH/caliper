@@ -9,7 +9,7 @@ features:
     status: shipped
     summary: The host is the native application that loads applets, serves them framework services through a frozen C ABI, draws the interface and names no applet itself.
     depends_on: []
-    docs: docs/explanations/architecture.md#layers
+    docs: docs/introduction/architecture.md#layers
     issue: null
 
   - id: COR-02
