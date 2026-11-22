@@ -355,3 +355,64 @@ TEST_CASE("entities: view_camera and a saved view set the starting camera, and a
     CHECK(o->distance == doctest::Approx(3.2));
     c->with_context([&] { rt.reset(); });
 }
+
+TEST_CASE("entities: a line that lies on the surface wins by its depth offset, and loses when pushed back") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) return;
+    // The ridge of column 8, drawn on the surface itself: x, y and z from the terrain's own data.
+    auto ridge_scene = [](int offset) {
+        std::string text = kSpec;
+        const std::string loss = "[[panel.entity]]\npath = \"loss\"";
+        text = text.substr(0, text.find(loss));
+        text += "[[panel.entity]]\npath = \"ridge\"\ndraw = \"lines\"\nbind = { x = \"loss.step\", y = \"loss.token\", z = "
+                "\"loss.value\" }\noptions = { mode = \"strip\", width_px = 3.0, depth_offset = " +
+                std::to_string(offset) + " }\n";
+        const spec::Spec s = parse(text);
+        PanelData d = world_data();
+        std::vector<double> step, token, z;
+        for (int r = 0; r < kRows; ++r)
+            if (std::isfinite(height_at(r, 8))) {
+                step.push_back(r * 16.0);
+                token.push_back(8.0);
+                z.push_back(height_at(r, 8));
+            }
+        EntityData ridge;
+        ridge.path = "ridge";
+        ridge.generation = 1;
+        ridge.slots = {column("x", "loss.step", step), column("y", "loss.token", token), column("z", "loss.value", z)};
+        d.entities = {d.entities[0], ridge};
+        return caliper_host::build_entity_scene(s.panels[0], d);
+    };
+    auto light = [](uint32_t p) {
+        const int r = p & 0xff, g = (p >> 8) & 0xff, b = (p >> 16) & 0xff;
+        return r > 190 && g > 190 && b > 190;
+    };
+    size_t seen[2] = {0, 0};
+    const int offsets[2] = {1, -8};
+    for (int k = 0; k < 2; ++k) {
+        caliper_host::EntityScene scene = ridge_scene(offsets[k]);
+        scene.walls = false;
+        REQUIRE_FALSE(scene.draws[1].error);
+        CHECK(scene.draws[1].depth_offset == offsets[k]);
+        std::unique_ptr<caliper_gfx::Backend> gfx;
+        caliper_gfx::Backend* backend = nullptr;
+        const caliper_gfx::ProgramDesc* programs = nullptr;
+        std::string why;
+        REQUIRE_MESSAGE(canvas_layer(c)(&gfx, &backend, &programs, &why), why);
+        caliper_live_views::SceneView view(*backend, programs);
+        REQUIRE_MESSAGE(view.init(&why), why);
+        view.set_box_fit(true);
+        std::vector<std::string> drawn_paths;
+        caliper_host::apply_entity_scene(view, scene, &drawn_paths);
+        REQUIRE_MESSAGE(view.render(900, 420, 1.0f, 0xff161616u, &why), why);
+        Image img;
+        img.w = 900;
+        img.h = 420;
+        REQUIRE_MESSAGE(view.read_pixels(&img.px, &why), why);
+        seen[k] = img.count(light).n;
+        if (k == 0) dump(img, "entities-ridge-depth-offset.png");
+    }
+    MESSAGE("ridge pixels with offset 1: " << seen[0] << ", with offset -8: " << seen[1]);
+    CHECK(seen[0] > 400);
+    CHECK(seen[0] > 3 * seen[1]);
+}
