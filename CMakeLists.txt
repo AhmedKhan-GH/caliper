@@ -930,6 +930,21 @@ endif()
 # do not change.
 if(CALIPER_WITH_BUILDER)
     add_subdirectory(src/builder)
+    # The draw half of programs in a viewer (src/host/draw/draw_runtime.h,
+    # design/programmable-graphics.md): the render graph on the graphics
+    # layer, over the composer of the builder's programs library. The browser
+    # module compiles the same source (web/wasm/CMakeLists.txt).
+    add_library(caliper_draw STATIC src/host/draw/draw_runtime.cpp)
+    target_include_directories(caliper_draw PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
+    target_link_libraries(caliper_draw PUBLIC caliper_gfx caliper_builder_programs)
+    set_target_properties(caliper_draw PROPERTIES
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+    if(BUILD_TESTS)
+        add_executable(caliper_gfx_draw_tests src/host/draw/tests/test_draw_runtime.cpp)
+        target_link_libraries(caliper_gfx_draw_tests PRIVATE caliper_draw doctest::doctest)
+        add_test(NAME caliper_gfx_draw_tests COMMAND caliper_gfx_draw_tests)
+        set_tests_properties(caliper_gfx_draw_tests PROPERTIES LABELS "gfx")
+    endif()
     # The spec applet kind in the loader (src/host/applet_spec.h): with the
     # builder, caliper_host_lib validates a spec applet's spec with the spec
     # library and lists it Ready; without it the loader lists every spec
