@@ -15,5 +15,6 @@ nav:
       - run-control-and-events.md
       - managed-runs.md
       - gpu-programs.md
+      - pieces.md
       - instrument-tools.md
       - http-api.md
