@@ -326,6 +326,7 @@ def valid_vectors() -> dict[str, bytes]:
     }
     msgs.update(_timeline_vectors())
     msgs.update(_program_vectors())
+    msgs.update(_resource_vectors())
     out = {f"v3_2/{name}": w.encode(m, minor=M) for name, m in msgs.items()}
     # A split update: 20 coloured points in five pieces of at most 600 bytes, with a stamp.
     for k, piece in enumerate(w.split_update(SPLIT, update=4, max_frame=600)):
@@ -511,6 +512,7 @@ def invalid_vectors(valid: dict[str, bytes]) -> dict[str, tuple[bytes, dict]]:
         "classes_color_missing": (_message(K, classes=[{"id": 1, "label": "x"}]), bad),
         **_timeline_invalid(valid),
         **_program_invalid(),
+        **_resource_invalid(),
     }
 
 
@@ -811,4 +813,151 @@ def _program_invalid() -> dict:
         "controls_interventions_active": (controls(active=[active] * 65), bad),
         "controls_interventions_shape": (controls(points=[dict(point, shape=[1] * 9)]), bad),
         "controls_interventions_state": (controls(active=[dict(active, state="on")]), bad),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Programmable graphics: instances of pieces and their resources
+# ---------------------------------------------------------------------------
+PIECE_COMMON = ("fn colormap__viridis(t: f32) -> vec3<f32> { return vec3<f32>(t, t * t, 1.0 - t); }\n"
+                "fn bar_height(v: f32) -> f32 { return v * params.gain; }\n")
+PIECE_DERIVE = ("@compute @workgroup_size(4) fn mean_heads(@builtin(global_invocation_id) id: vec3<u32>) "
+                "{ heads[id.x] = f32(id.x); }\n")
+PIECE_DRAW = ("@vertex fn bar_vertex(@builtin(vertex_index) v: u32) -> @builtin(position) vec4<f32> "
+              "{ return vec4<f32>(0.0, bar_height(heads[v / 6u]), 0.0, 1.0); }\n"
+              "@fragment fn bar_fragment() -> @location(0) vec4<f32> "
+              "{ return vec4<f32>(colormap__viridis(0.5), 1.0); } // \u00b5\n")
+PIECE_MANIFEST = {
+    "name": "head_bars", "version": 2, "description": "One bar for the mean attention of each head.",
+    "imports": ["colormap@1"],
+    "inputs": [{"name": "attn", "kind": "tensor", "rank_min": 3, "rank_max": 4}],
+    "params": [{"name": "gain", "default": 1.0, "min": 0.0, "max": 4.0}],
+    "resources": [{"id": "heads", "kind": "buffer", "element": "f32", "count": 4}],
+    "derive": {"passes": [{"entry": "mean_heads", "workgroups": [1, 1, 1], "writes": ["heads"]}]},
+    "draw": {"camera": "pan_zoom", "passes": [{"kind": "render", "vertex": "bar_vertex",
+                                              "fragment": "bar_fragment", "instances": "heads",
+                                              "vertices": 6}]},
+}
+PIECE_PIN = {"name": "head_bars", "version": 2, "hash": "sha256:" + _sha("head_bars@2")}
+PIECE_SEGMENTS = [{"part": "lib/colormap@1", "first_line": 1, "lines": 1},
+                  {"part": "common.wgsl", "first_line": 2, "lines": 1}]
+
+
+def _instance(request_id: int, derive: bool) -> "w.Program":
+    return w.Program(request_id, w.PROGRAM_SET, "heads", params={"gain": 2.0}, piece=PIECE_PIN,
+                     manifest=PIECE_MANIFEST, bind={"attn": "live:blocks.0.attn"}, panel="bars",
+                     segments=PIECE_SEGMENTS, common=PIECE_COMMON,
+                     derive=PIECE_DERIVE if derive else None, draw=PIECE_DRAW)
+
+
+def _resource_vectors() -> dict:
+    heads = np.array([0.5, 0.25, 0.125, 0.0625], np.float32)
+    # Two elements of struct Arc { from_token: u32, to_token: u32, layer: u32, head: u32,
+    # weight: f32, score: f32 }, 24 bytes each.
+    arcs = np.zeros(2, dtype=[("from_token", "<u4"), ("to_token", "<u4"), ("layer", "<u4"),
+                              ("head", "<u4"), ("weight", "<f4"), ("score", "<f4")])
+    arcs[0] = (3, 1, 1, 2, 0.75, 1.5)
+    arcs[1] = (5, 2, 1, 2, 0.5, 1.25)
+    # A 2 by 2 rgba8unorm texture, packed as one u32 a texel, in row order.
+    texels = np.array([0xff0000ff, 0xff00ff00, 0xffff0000, 0x80808080], np.uint32)
+    return {
+        "program_set_piece": _instance(31, True),
+        "program_set_piece_draw": _instance(0, False),
+        "program_remove_piece": w.Program(0, w.PROGRAM_REMOVE, "heads"),
+        "program_state_piece": w.ProgramState([{"id": "heads", "kind": "piece", "state": "running",
+                                                "runs": 4, "last_step": 1200}], step=1200),
+        "resource_buffer": w.Resource("heads", "heads", 1200, 4, 4, heads),
+        "resource_struct": w.Resource("arcs", "arcs", 1200, 2, 24, arcs.tobytes()),
+        "resource_texture": w.Resource("arcs", "glow", 1210, 4, 4, texels, width=2, height=2),
+        "resource_empty": w.Resource("arcs", "arcs", 1220, 0, 24, b""),
+    }
+
+
+def _resource_invalid() -> dict:
+    bad = {"error": w.ERR_BAD_REQUEST}
+    PG, RS = w.MsgType.PROGRAM, w.MsgType.RESOURCE
+    u8 = lambda text: np.frombuffer(text.encode("utf-8"), np.uint8)  # noqa: E731
+    halves = {"common": u8(PIECE_COMMON), "derive": u8(PIECE_DERIVE), "draw": u8(PIECE_DRAW)}
+    base = {"request_id": 1, "op": "set", "id": "heads", "piece": PIECE_PIN,
+            "manifest": PIECE_MANIFEST, "bind": {"attn": "live:blocks.0.attn"},
+            "params": {"gain": 2.0}, "panel": "bars", "segments": PIECE_SEGMENTS}
+
+    def inst(sections=None, **change):
+        meta = {k: v for k, v in dict(base, **change).items() if v is not None}
+        return _meta_frame(PG, meta, halves if sections is None else sections)
+
+    def pin(**change):
+        return dict(PIECE_PIN, **change)
+
+    def seg(**change):
+        return [dict(PIECE_SEGMENTS[0], **change)]
+
+    res = {"program": "heads", "resource": "heads", "step": 1200, "count": 4, "stride": 4}
+    data = np.arange(16, dtype=np.uint8)
+
+    def resource(section=None, **change):
+        meta = {k: v for k, v in dict(res, **change).items() if v is not None}
+        return _meta_frame(RS, meta, {"resource": data} if section is None else section)
+
+    texture = {"width": 2, "height": 2}
+    return {
+        "program_piece_declaration": (inst(declaration=GEOMETRY), bad),
+        "program_piece_sha256": (inst(sha256=_sha(WGSL)), bad),
+        "program_piece_wgsl": (inst(sections=dict(halves, wgsl=u8(WGSL))), bad),
+        "program_piece_pin_list": (inst(piece=["head_bars", 2]), bad),
+        "program_piece_name": (inst(piece=pin(name="Head_bars")), bad),
+        "program_piece_name_long": (inst(piece=pin(name="h" * 33)), bad),
+        "program_piece_name_digit": (inst(piece=pin(name="2heads")), bad),
+        "program_piece_version": (inst(piece=pin(version=0)), bad),
+        "program_piece_version_big": (inst(piece=pin(version=1000001)), bad),
+        "program_piece_hash_prefix": (inst(piece=pin(hash=_sha("head_bars@2"))), bad),
+        "program_piece_hash_upper": (inst(piece=pin(hash="sha256:" + _sha("x").upper())), bad),
+        "program_piece_manifest_missing": (inst(manifest=None), bad),
+        "program_piece_manifest_list": (inst(manifest=[PIECE_MANIFEST]), bad),
+        "program_piece_bind_kind": (inst(bind={"attn": "tensor:blocks.0.attn"}), bad),
+        "program_piece_bind_tensor_long": (inst(bind={"attn": "live:" + "t" * 256}), bad),
+        "program_piece_bind_program": (inst(bind={"arcs": "program:arcs"}), bad),
+        "program_piece_bind_resource": (inst(bind={"arcs": "program:arcs/__x"}), bad),
+        "program_piece_bind_name": (inst(bind={"1attn": "live:a"}), bad),
+        "program_piece_bind_many": (inst(bind={f"i{k}": "live:a" for k in range(9)}), bad),
+        "program_piece_params": (inst(params={"gain": "2"}), bad),
+        "program_piece_panel": (inst(panel=""), bad),
+        "program_piece_segments_many": (inst(segments=PIECE_SEGMENTS * 9), bad),
+        "program_piece_segment_line": (inst(segments=seg(first_line=0)), bad),
+        "program_piece_segment_part": (inst(segments=seg(part=7)), bad),
+        "program_piece_halves": (inst(sections={"common": halves["common"]}), bad),
+        "program_piece_draw_empty": (inst(sections={"draw": np.zeros(0, np.uint8)}), bad),
+        "program_piece_draw_big": (inst(sections={"draw": np.full(65537, 0x20, np.uint8)}), bad),
+        "program_piece_derive_utf8": (inst(sections={"derive": np.array([0x66, 0xff], np.uint8)}),
+                                      bad),
+        "program_piece_draw_dtype": (inst(sections={"draw": u8(PIECE_DRAW)[:64].view(np.int32)}),
+                                     bad),
+        "program_piece_common_utf8": (inst(sections={"common": np.array([0xc3], np.uint8),
+                                                     "draw": halves["draw"]}), bad),
+        "resource_program": (resource(program="Heads"), bad),
+        "resource_program_missing": (resource(program=None), bad),
+        "resource_name": (resource(resource="__heads"), bad),
+        "resource_name_digit": (resource(resource="1heads"), bad),
+        "resource_step": (resource(step=-1), bad),
+        "resource_step_float": (resource(step=1.5), bad),
+        "resource_step_big": (resource(step=2**53), bad),
+        "resource_count_missing": (resource(count=None), bad),
+        "resource_count_u32": (resource(count=2**32), bad),
+        "resource_stride_zero": (resource(stride=0), bad),
+        "resource_stride_odd": (resource(stride=6), bad),
+        "resource_stride_big": (resource(stride=260), bad),
+        "resource_width_alone": (resource(width=4), bad),
+        "resource_texture_stride": (resource(count=2, stride=8, **texture), bad),
+        "resource_texture_count": (resource(count=3, **texture,
+                                            section={"resource": data[:12]}), bad),
+        "resource_texture_side": (resource(width=4097, height=1, count=4097,
+                                           section={"resource": np.zeros(16388, np.uint8)}), bad),
+        # count * stride is 2^32 + 256, which wraps to the section's 256 bytes in 32 bits.
+        "resource_count_wrap": (resource(count=16777217, stride=256,
+                                         section={"resource": np.zeros(256, np.uint8)}), bad),
+        "resource_over_max": (resource(count=w.RESOURCE_MAX_BYTES // 4 + 1), bad),
+        "resource_section_missing": (resource(section={}), bad),
+        "resource_section_short": (resource(section={"resource": data[:15]}), bad),
+        "resource_section_dtype": (resource(section={"resource": data.view(np.float32)}), bad),
+        "resource_section_2d": (resource(section={"resource": data.reshape(4, 4)}), bad),
     }

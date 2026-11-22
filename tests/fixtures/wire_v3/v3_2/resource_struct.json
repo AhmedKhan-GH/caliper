@@ -1,0 +1,97 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 208,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 126,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 130
+  },
+  "meta": {
+    "count": 2,
+    "program": "arcs",
+    "resource": "arcs",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "resource",
+        "shape": [
+          48
+        ]
+      }
+    ],
+    "step": 1200,
+    "stride": 24
+  },
+  "meta_offset": 28,
+  "name": "v3_2/resource_struct",
+  "section_lengths": [
+    48
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 48,
+      "name": "resource",
+      "offset": 160,
+      "shape": [
+        48
+      ],
+      "values": [
+        3,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0,
+        64,
+        63,
+        0,
+        0,
+        192,
+        63,
+        5,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        63,
+        0,
+        0,
+        160,
+        63
+      ]
+    }
+  ],
+  "type_name": "resource"
+}

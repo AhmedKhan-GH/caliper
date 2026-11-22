@@ -49,8 +49,9 @@
 extern "C" {
 #endif
 
-/* 2: the tensor output, the uniform `params` and caliper_producer_set_params(). */
-#define CALIPER_PRODUCER_ABI_VERSION 2u
+/* 2: the tensor output, the uniform `params` and caliper_producer_set_params().
+ * 3: the derive half of a piece (caliper_producer_derive.h). */
+#define CALIPER_PRODUCER_ABI_VERSION 3u
 
 typedef struct caliper_producer caliper_producer;
 

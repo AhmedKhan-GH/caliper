@@ -20,9 +20,8 @@
 // Everything here is a plain value with inline helpers and no dependency but
 // the standard library, because the composer (programs/pieces.h), the
 // producer runtime, the app's viewer and the browser module all read these
-// types. The spec codec reads and writes them; until it does, it refuses the
-// top-level key piece and the program keys piece, bind and panel with
-// spec.not_built. Nothing here throws.
+// types. The spec codec reads and writes them (spec.h, format.h), and
+// programs/pieces.h checks them. Nothing here throws.
 
 #include <array>
 #include <cstddef>

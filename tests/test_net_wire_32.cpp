@@ -6,14 +6,25 @@
 // part, stamps, entity transforms and class tables carry their golden values,
 // the limits hold, the scene view helpers follow python/tests/test_wire_32.py,
 // a forwarder can rewrite `sub` and keep the sections, and truncations and bit
-// flips never crash.
+// flips never crash. The instance form of PROGRAM and RESOURCE carry their
+// golden values, and a hub forwards both to the viewers that announced
+// `resources` and keeps the newest of each for a late viewer.
 #include <doctest/doctest.h>
 
 #include "net/json.h"
 #include "net/wire.h"
+#if !defined(_WIN32)   // the hub and the WebSocket layer are not built on Windows yet
+#include "live/live_programs.h"
+#include "net/hub.h"
+#include "net/ws.h"
+#endif
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <deque>
+#include <functional>
+#include <thread>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -142,6 +153,7 @@ TEST_CASE("net/wire 3.2: every golden frame decodes as described and encodes bac
         if (f.type == CALIPER_NET_MSG_SCENE_CLASSES) CHECK(std::holds_alternative<SceneClasses>(m));
         if (f.type == CALIPER_NET_MSG_PROGRAM) CHECK(std::holds_alternative<Program>(m));
         if (f.type == CALIPER_NET_MSG_PROGRAM_STATE) CHECK(std::holds_alternative<ProgramState>(m));
+        if (f.type == CALIPER_NET_MSG_RESOURCE) CHECK(std::holds_alternative<Resource>(m));
 
         std::vector<uint8_t> again;
         std::string err;
@@ -363,6 +375,88 @@ TEST_CASE("net/wire 3.2 program status items of a tensor and of an operator") {
         Message m;
         CHECK(decode_bytes(bytes, &m).ok() == valid);
     }
+}
+
+TEST_CASE("net/wire 3.2: instances of pieces and resources carry their golden values") {
+    std::vector<std::vector<uint8_t>> keep;   // a decoded Section points into its buffer
+    auto load = [&](const char* name) {
+        keep.push_back(read_bytes(v32_dir() / (std::string(name) + ".bin")));
+        Message m;
+        const DecodeResult r = decode_bytes(keep.back(), &m);
+        REQUIRE_MESSAGE(r.ok(), name << ": " << r.error_code << ": " << r.message);
+        return m;
+    };
+    const Program p = std::get<Program>(load("program_set_piece"));
+    CHECK(p.request_id == 31);
+    CHECK(p.id == "heads");
+    CHECK(p.piece.find("name")->as_string() == "head_bars");
+    CHECK(p.piece.find("hash")->as_string().compare(0, 7, "sha256:") == 0);
+    CHECK(p.bind.find("attn")->as_string() == "live:blocks.0.attn");
+    CHECK(p.panel == std::optional<std::string>("bars"));
+    CHECK(p.segments.size() == 2);
+    CHECK(p.declaration.is_null());
+    CHECK_FALSE(p.wgsl);
+    REQUIRE(p.common);
+    REQUIRE(p.derive);
+    REQUIRE(p.draw);
+    CHECK(p.derive->find("mean_heads") != std::string::npos);
+    CHECK(p.draw->find("\xc2\xb5") != std::string::npos);
+    const Program relay = std::get<Program>(load("program_set_piece_draw"));
+    CHECK(relay.request_id == 0);
+    CHECK_FALSE(relay.derive);
+    CHECK(relay.draw == p.draw);
+    const ProgramState st = std::get<ProgramState>(load("program_state_piece"));
+    CHECK(st.programs.at(0).find("kind")->as_string() == "piece");
+
+    const std::vector<uint8_t>* frame = nullptr;
+    const Resource b = std::get<Resource>(load("resource_buffer"));
+    frame = &keep.back();
+    CHECK(b.program == "heads");
+    CHECK(b.step == 1200);
+    CHECK(b.count == 4);
+    CHECK(b.stride == 4);
+    CHECK_FALSE(b.width);
+    REQUIRE(b.data.size == 16);
+    // The section is a view of the frame's bytes, not a copy.
+    CHECK(b.data.data >= frame->data());
+    CHECK(b.data.data + b.data.size <= frame->data() + frame->size());
+    float first = 0;
+    std::memcpy(&first, b.data.data, 4);
+    CHECK(first == 0.5f);
+    const Resource t = std::get<Resource>(load("resource_texture"));
+    CHECK(t.width == std::optional<uint32_t>(2));
+    CHECK(t.height == std::optional<uint32_t>(2));
+    CHECK(t.step == 1210);
+    const Resource e = std::get<Resource>(load("resource_empty"));
+    CHECK(e.count == 0);
+    CHECK(e.stride == 24);
+    CHECK(e.data.size == 0);
+}
+
+TEST_CASE("net/wire 3.2: a resource whose count times stride wraps in 32 bits is refused") {
+    // count * stride = 2^32 + 256: a 32-bit product would equal the section's 256 bytes.
+    const std::vector<uint8_t> zeros(256, 0);
+    Resource r;
+    r.program = "arcs";
+    r.resource = "arcs";
+    r.count = 16777217u;
+    r.stride = 256;
+    r.data = Section::make(CALIPER_NET_SECTION_RESOURCE, CALIPER_NET_DTYPE_U8, {256}, zeros.data(), zeros.size());
+    std::vector<uint8_t> bytes;
+    std::string err;
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    Message m;
+    const DecodeResult res = decode_bytes(bytes, &m);
+    CHECK(res.status == DecodeResult::Status::BadMessage);
+    CHECK(res.error_code == "bad_request");
+    // At the byte limit's count the check passes and only the section's length decides.
+    r.count = CALIPER_NET_RESOURCE_MAX_BYTES / 256;
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    CHECK(decode_bytes(bytes, &m).message.find("count * stride") != std::string::npos);
+    r.count = 1;
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    REQUIRE(decode_bytes(bytes, &m).ok());
+    CHECK(std::get<Resource>(m).data.size == 256);
 }
 
 TEST_CASE("net/wire 3.2: decoded scene messages carry the golden values") {
@@ -1070,3 +1164,366 @@ TEST_CASE("net/wire 3.2: truncations and bit flips of the 3.2 frames never crash
                        << " refused as messages");
     CHECK(ok + bad_frame + bad_msg == (size_t)iterations);
 }
+
+// ---- the hub and the capability "resources" ------------------------------------------------------------
+#if !defined(_WIN32)
+namespace {
+namespace hubres {
+
+const std::string kToken = "hub_resource_token-0123456789abcdef";
+
+struct Runner {
+    std::unique_ptr<caliper_net::Hub> hub;
+    std::thread thread;
+    Runner() {
+        caliper_net::HubOptions o;
+        o.token = kToken;
+        o.allow_control = true;
+        hub = std::make_unique<caliper_net::Hub>(std::move(o));
+        std::string err;
+        REQUIRE_MESSAGE(hub->listen(&err), err);
+        thread = std::thread([this] { hub->run(); });
+    }
+    ~Runner() {
+        hub->stop();
+        thread.join();
+    }
+    std::string url() const { return "ws://127.0.0.1:" + std::to_string(hub->port()) + "/v3/stream?token=" + kToken; }
+};
+
+// A peer that keeps each decoded message with the frame its sections point into.
+struct Peer {
+    caliper_net::Client client;
+    std::vector<std::string> caps;
+    bool producer = false;
+    bool open = false, welcomed = false;
+    std::deque<std::pair<std::shared_ptr<caliper_net::Bytes>, Message>> inbox;
+
+    void send(const Message& m) {
+        std::vector<uint8_t> b;
+        REQUIRE(encode(m, &b, nullptr, CALIPER_NET_MINOR_3_2));
+        client.send(b.data(), b.size());
+    }
+    void poll() {
+        for (auto& e : client.poll(0)) {
+            if (e.type == caliper_net::Event::Type::Open) {
+                open = true;
+                Hello h;
+                h.role = producer ? CALIPER_NET_ROLE_PRODUCER : CALIPER_NET_ROLE_VIEWER;
+                h.capabilities = caps;
+                if (producer) {
+                    Identity id;
+                    id.id = "clp-res";
+                    id.script = "res.py";
+                    id.pid = 9;
+                    id.start_unix_ms = 1763200000000ull;
+                    h.session = id.to_json();
+                }
+                send(h);
+            } else if (e.type == caliper_net::Event::Type::Message) {
+                auto buf = std::make_shared<caliper_net::Bytes>(std::move(e.data));
+                Message m;
+                if (!decode(buf->data(), buf->size(), &m).ok()) continue;
+                if (auto* pi = std::get_if<Ping>(&m)) send(Pong{pi->nonce});
+                if (producer && std::holds_alternative<Welcome>(m)) {
+                    welcomed = true;
+                    send(Views{});
+                }
+                inbox.emplace_back(buf, std::move(m));
+            }
+        }
+    }
+    template <typename T>
+    std::vector<const T*> all() const {
+        std::vector<const T*> v;
+        for (const auto& x : inbox)
+            if (auto* p = std::get_if<T>(&x.second)) v.push_back(p);
+        return v;
+    }
+};
+
+struct World {
+    std::vector<std::unique_ptr<Peer>> peers;
+    bool until(const std::function<bool()>& done, int ms = 5000) {
+        const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+        while (std::chrono::steady_clock::now() < end) {
+            for (auto& p : peers) p->poll();
+            if (done()) return true;
+            std::this_thread::sleep_for(std::chrono::microseconds(500));
+        }
+        return done();
+    }
+    // Polls until the hub has sent everything it holds for each viewer: a PING answered by its PONG
+    // comes after every message queued before it on the same connection.
+    Peer& add(const Runner& h, std::vector<std::string> caps, bool producer) {
+        peers.push_back(std::make_unique<Peer>());
+        Peer& p = *peers.back();
+        p.caps = std::move(caps);
+        p.producer = producer;
+        std::string err;
+        REQUIRE_MESSAGE(p.client.connect(h.url(), &err), err);
+        if (producer) REQUIRE(until([&] { return p.welcomed; }));
+        else REQUIRE(until([&] { return !p.all<Views>().empty() && p.all<Views>().back()->session; }));
+        return p;
+    }
+    void settle(Peer& v) {
+        const uint32_t nonce = 4242 + (uint32_t)v.inbox.size();
+        v.send(Ping{nonce});
+        REQUIRE(until([&] {
+            for (auto* x : v.all<Pong>())
+                if (x->nonce == nonce) return true;
+            return false;
+        }));
+    }
+};
+
+Message golden(const char* name) {
+    static std::vector<std::vector<uint8_t>> keep;
+    keep.push_back(read_bytes(v32_dir() / (std::string(name) + ".bin")));
+    Message m;
+    REQUIRE(decode_bytes(keep.back(), &m).ok());
+    return m;
+}
+
+Resource heads_at(uint64_t step, const std::vector<float>& values) {
+    Resource r = std::get<Resource>(golden("resource_buffer"));
+    static std::deque<std::vector<float>> keep;
+    keep.push_back(values);
+    r.step = step;
+    r.count = (uint32_t)values.size();
+    r.data = Section::make(CALIPER_NET_SECTION_RESOURCE, CALIPER_NET_DTYPE_U8, {(int64_t)(values.size() * 4)},
+                           keep.back().data(), values.size() * 4);
+    return r;
+}
+
+const Error* error_for(const Peer& v, uint32_t request_id) {
+    for (auto* e : v.all<Error>())
+        if (e->in_reply_to && *e->in_reply_to == CALIPER_NET_MSG_PROGRAM && e->request_id && *e->request_id == request_id)
+            return e;
+    return nullptr;
+}
+
+}  // namespace hubres
+}  // namespace
+
+TEST_CASE("net/hub 3.2: draw halves and resources reach the viewers that announced resources, and a late viewer gets the newest") {
+    using namespace hubres;
+    const std::vector<std::string> caps = {CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_RESOURCES};
+    Runner h;
+    World w;
+    Peer& p = w.add(h, caps, true);
+    Peer& a = w.add(h, caps, false);
+    Peer& b = w.add(h, {CALIPER_NET_CAP_PROGRAMS}, false);
+    const auto welcome = a.all<Welcome>();
+    REQUIRE(!welcome.empty());
+    CHECK(std::count(welcome[0]->capabilities.begin(), welcome[0]->capabilities.end(), CALIPER_NET_CAP_RESOURCES) == 1);
+
+    p.send(golden("program_set_piece_draw"));
+    p.send(heads_at(1200, {1, 2, 3, 4}));
+    REQUIRE(w.until([&] { return !a.all<Resource>().empty(); }));
+    p.send(heads_at(1210, {5, 6}));
+    REQUIRE(w.until([&] { return a.all<Resource>().back()->step == 1210; }));
+    const auto relays = a.all<Program>();
+    REQUIRE(relays.size() == 1);
+    CHECK(relays[0]->request_id == 0);
+    CHECK(relays[0]->draw);
+    CHECK_FALSE(relays[0]->derive);
+    const Resource* last = a.all<Resource>().back();
+    CHECK(last->count == 2);
+    REQUIRE(last->data.size == 8);
+    float second = 0;
+    std::memcpy(&second, last->data.data + 4, 4);
+    CHECK(second == 6.0f);
+    w.settle(b);
+    CHECK(b.all<Resource>().empty());
+    CHECK(b.all<Program>().empty());
+
+    // A late viewer with resources gets the draw half and only the newest version; one without, neither.
+    Peer& late = w.add(h, caps, false);
+    Peer& late_none = w.add(h, {}, false);
+    REQUIRE(w.until([&] { return !late.all<Resource>().empty(); }));
+    w.settle(late);
+    REQUIRE(late.all<Program>().size() == 1);
+    REQUIRE(late.all<Resource>().size() == 1);
+    CHECK(late.all<Resource>()[0]->step == 1210);
+    w.settle(late_none);
+    CHECK(late_none.all<Resource>().empty());
+
+    // The same piece relayed again (the script's next attachment) keeps the newest version for a late viewer.
+    p.send(golden("program_set_piece_draw"));
+    REQUIRE(w.until([&] { return a.all<Program>().size() == 2; }));
+    Peer& again = w.add(h, caps, false);
+    REQUIRE(w.until([&] { return !again.all<Resource>().empty(); }));
+    CHECK(again.all<Resource>()[0]->step == 1210);
+    CHECK(again.all<Program>().size() == 1);
+
+    // A removal reaches the viewers and drops what the hub keeps of the program.
+    Program rm = std::get<Program>(golden("program_remove_piece"));
+    p.send(rm);
+    REQUIRE(w.until([&] { return a.all<Program>().size() == 3 && late.all<Program>().size() == 3; }));
+    CHECK(a.all<Program>().back()->op == CALIPER_NET_PROGRAM_REMOVE);
+    Peer& after = w.add(h, caps, false);
+    w.settle(after);
+    CHECK(after.all<Program>().empty());
+    CHECK(after.all<Resource>().empty());
+    // The hub publishes its counters at most every 20 ms: wait for them.
+    CHECK(w.until([&] {
+        const caliper_net::HubStats st = h.hub->stats();
+        return st.resources_in == 2 && st.program_relays_in == 3 && st.retained_resource_bytes == 0;
+    }));
+}
+
+TEST_CASE("net/hub 3.2: a producer without resources has its RESOURCE and relays ignored") {
+    using namespace hubres;
+    const std::vector<std::string> caps = {CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_RESOURCES};
+    Runner h;
+    World w;
+    Peer& p = w.add(h, {CALIPER_NET_CAP_PROGRAMS}, true);
+    Peer& a = w.add(h, caps, false);
+    p.send(golden("program_set_piece_draw"));
+    p.send(heads_at(5, {1}));
+    w.settle(p);   // the hub read both before it answered the producer's PING
+    w.settle(a);
+    CHECK(h.hub->stats().resources_in == 0);
+    CHECK(h.hub->stats().program_relays_in == 0);
+    CHECK(a.all<Resource>().empty());
+    CHECK(a.all<Program>().empty());
+}
+
+TEST_CASE("net/hub 3.2: an instance of a piece goes to a producer with resources, and is refused without") {
+    using namespace hubres;
+    const std::vector<std::string> caps = {CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_RESOURCES};
+    {
+        Runner h;
+        World w;
+        Peer& p = w.add(h, {CALIPER_NET_CAP_PROGRAMS}, true);
+        Peer& v = w.add(h, caps, false);
+        Program inst = std::get<Program>(golden("program_set_piece"));
+        inst.request_id = 41;
+        v.send(inst);
+        REQUIRE(w.until([&] { return error_for(v, 41) != nullptr; }));
+        CHECK(error_for(v, 41)->code == CALIPER_NET_ERR_UNSUPPORTED);
+        CHECK(p.all<Program>().empty());
+    }
+    {
+        Runner h;
+        World w;
+        Peer& p = w.add(h, caps, true);
+        Peer& plain = w.add(h, {CALIPER_NET_CAP_PROGRAMS}, false);
+        Peer& v = w.add(h, caps, false);
+        Program inst = std::get<Program>(golden("program_set_piece"));
+        inst.request_id = 42;
+        plain.send(inst);
+        REQUIRE(w.until([&] { return error_for(plain, 42) != nullptr; }));
+        CHECK(error_for(plain, 42)->code == CALIPER_NET_ERR_UNSUPPORTED);
+        inst.request_id = 43;
+        v.send(inst);
+        REQUIRE(w.until([&] { return !p.all<Program>().empty(); }));
+        const Program* got = p.all<Program>()[0];
+        CHECK(got->request_id != 0);
+        CHECK(got->piece.find("name")->as_string() == "head_bars");
+        CHECK(got->derive);
+        CHECK(got->draw);
+        CHECK(got->common);
+    }
+}
+
+// ---- the app's program sync and instances of pieces --------------------------------------------------------
+namespace {
+namespace syncres {
+
+// A link that records what the sync sends; it takes pieces when told to.
+struct FakeLink final : caliper_live::ProgramLink {
+    bool pieces = false;
+    uint64_t epoch_n = 1;
+    uint32_t next = 1;
+    std::vector<Program> sent;
+    bool ready() override { return true; }
+    uint64_t epoch() override { return epoch_n; }
+    uint32_t send(Program msg) override {
+        msg.request_id = next++;
+        sent.push_back(std::move(msg));
+        return sent.back().request_id;
+    }
+    std::vector<caliper_live::ProgramAnswer> take() override { return {}; }
+    bool takes_pieces() override { return pieces; }
+};
+
+caliper_live::WantedProgram instance(double gain) {
+    const Program golden = std::get<Program>(hubres::golden("program_set_piece"));
+    caliper_live::WantedProgram w;
+    w.id = "heads";
+    w.kind = "piece";
+    w.panel = "bars";
+    w.piece = golden.piece;
+    w.sha256 = golden.piece.find("hash")->as_string().substr(7);
+    w.manifest = golden.manifest;
+    w.bind = golden.bind;
+    w.segments = golden.segments;
+    w.common = *golden.common;
+    w.derive = *golden.derive;
+    w.draw = *golden.draw;
+    w.params = Json::object();
+    w.params.set("gain", gain);
+    return w;
+}
+
+}  // namespace syncres
+}  // namespace
+
+TEST_CASE("live programs: an instance of a piece goes out in the instance form, only to a script that takes pieces") {
+    using namespace syncres;
+    caliper_live::ProgramSync sync;
+    FakeLink link;
+    sync.want({instance(2.0)});
+    sync.poll(link);
+    CHECK(link.sent.empty());
+    REQUIRE(sync.records().size() == 1);
+    CHECK(sync.records()[0].state == "refused");
+    CHECK(sync.records()[0].error_code == "program.resources_unavailable");
+    const auto changes = sync.take_changes();
+    REQUIRE(changes.size() == 1);
+    CHECK(changes[0].change == "refused");
+
+    // Once the script takes pieces, the set goes out once, as the golden frame's instance with its own request id.
+    link.pieces = true;
+    sync.poll(link);
+    sync.poll(link);
+    REQUIRE(link.sent.size() == 1);
+    Program m = link.sent[0];
+    CHECK(m.op == CALIPER_NET_PROGRAM_SET);
+    CHECK(m.declaration.is_null());
+    CHECK_FALSE(m.wgsl);
+    CHECK_FALSE(m.sha256);
+    std::vector<uint8_t> bytes;
+    std::string err;
+    REQUIRE(encode(Message(m), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    Message back;
+    REQUIRE(decode_bytes(bytes, &back).ok());
+    const Program& p = std::get<Program>(back);
+    const Program golden = std::get<Program>(hubres::golden("program_set_piece"));
+    CHECK(p.piece == golden.piece);
+    CHECK(p.manifest == golden.manifest);
+    CHECK(p.bind == golden.bind);
+    CHECK(p.params == golden.params);
+    CHECK(p.panel == golden.panel);
+    CHECK(p.segments == golden.segments);
+    CHECK(p.common == golden.common);
+    CHECK(p.derive == golden.derive);
+    CHECK(p.draw == golden.draw);
+
+    // A new value alone goes out as op params; another binding sends the set again.
+    sync.want({instance(3.0)});
+    sync.poll(link);
+    REQUIRE(link.sent.size() == 2);
+    CHECK(link.sent[1].op == CALIPER_NET_PROGRAM_PARAMS);
+    caliper_live::WantedProgram rebound = instance(3.0);
+    rebound.bind.set("attn", "live:blocks.1.attn");
+    sync.want({rebound});
+    sync.poll(link);
+    REQUIRE(link.sent.size() == 3);
+    CHECK(link.sent[2].op == CALIPER_NET_PROGRAM_SET);
+    CHECK(link.sent[2].bind.find("attn")->as_string() == "live:blocks.1.attn");
+}
+#endif   // !_WIN32
+

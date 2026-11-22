@@ -42,6 +42,9 @@ public:
 
     void set_auto_complete(bool on) { auto_complete_ = on; }
     void finish(Serial s);                  // completes every pending serial up to s
+    // The GPU time that each submit reports on completion (< 0, the default, reports none),
+    // so that a test can drive the time watchdogs of the hosts without a GPU.
+    void set_gpu_ms(double ms) { gpu_ms_ = ms; }
 
     std::vector<uint8_t> buffer_bytes(Buffer b) const;
     std::vector<uint8_t> texture_bytes(Texture t) const;
@@ -82,6 +85,7 @@ private:
     std::vector<Serial> pending_;
     bool keep_frames_ = true;
     bool auto_complete_ = true;
+    double gpu_ms_ = -1;
 };
 
 }  // namespace caliper_gfx

@@ -1,8 +1,9 @@
 # caliper_programs_text_source(<out_var>): writes a C++ source into the
-# current binary folder that defines draw_prelude(), lib_modules() and
-# lib_module() of caliper_builder/programs/pieces.h from draw_prelude.wgsl
-# and the lib modules library/lib/<name>/<version>.wgsl, and sets <out_var>
-# to its path. The builder's programs library and the browser module
+# current binary folder that defines draw_prelude(), lib_modules(),
+# lib_module() and library_files() of caliper_builder/programs/pieces.h from
+# draw_prelude.wgsl, the lib modules library/lib/<name>/<version>.wgsl and
+# the piece.toml and WGSL files of each library piece
+# library/pieces/<name>/<version>/, and sets <out_var> to its path. The builder's programs library and the browser module
 # (web/wasm/CMakeLists.txt) both call it, so that the app, the script and the
 # browser read one copy of each file (design/programmable-graphics.md,
 # Prelude and Imports). A change of a file runs the configure step again.
@@ -12,6 +13,14 @@ function(caliper_programs_text_source out_var)
     set(_dir "${CALIPER_PROGRAMS_TEXT_DIR}")
     file(GLOB _lib CONFIGURE_DEPENDS "${_dir}/library/lib/*/*.wgsl")
     list(SORT _lib)
+    file(GLOB _pieces CONFIGURE_DEPENDS "${_dir}/library/pieces/*/*/piece.toml" "${_dir}/library/pieces/*/*/*.wgsl")
+    list(SORT _pieces)
+    set(_files "")
+    foreach(_file IN LISTS _lib _pieces)
+        file(RELATIVE_PATH _rel "${_dir}/library" "${_file}")
+        file(READ "${_file}" _text)
+        string(APPEND _files "    {\"${_rel}\", R\"caliper_wgsl(${_text})caliper_wgsl\"},\n")
+    endforeach()
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_dir}/draw_prelude.wgsl")
     file(READ "${_dir}/draw_prelude.wgsl" _prelude)
     set(_entries "")
@@ -35,6 +44,9 @@ namespace {
 const std::pair<const char*, const char*> kLib[] = {
 ${_entries}    {nullptr, nullptr},
 };
+const std::pair<const char*, const char*> kFiles[] = {
+${_files}    {nullptr, nullptr},
+};
 }  // namespace
 
 std::string_view draw_prelude() {
@@ -53,6 +65,13 @@ std::string_view lib_module(std::string_view name_at_version) {
     for (const auto& m : kLib)
         if (m.first && name_at_version == m.first) return m.second;
     return std::string_view();
+}
+
+std::vector<LibraryFile> library_files() {
+    std::vector<LibraryFile> out;
+    for (const auto& f : kFiles)
+        if (f.first) out.push_back(LibraryFile{f.first, f.second});
+    return out;
 }
 
 }  // namespace caliper_builder::programs

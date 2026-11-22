@@ -333,7 +333,20 @@ struct Session {
     SharedBytes program_state;
     std::map<uint32_t, ProgramRoute> program_routes;
     uint32_t next_program = 1;
+    // 3.2 draft, capability "resources": whether the producer announced it; the last draw half of each
+    // program as the producer relayed it (a PROGRAM set of an instance), and the newest RESOURCE of
+    // each "<program>/<resource>", both kept for a viewer with "resources" that attaches later.
+    bool resources_cap = false;
+    struct DrawHalf {
+        std::string hash;            // the piece's hash, from the pin
+        SharedBytes frame;
+    };
+    std::map<std::string, DrawHalf> draw_halves;
+    std::map<std::string, SharedBytes> kept_resources;
 };
+
+// The most resources a session keeps, and a viewer has waiting: every resource of every program.
+constexpr size_t kResourcesMax = size_t(CALIPER_NET_MAX_PROGRAMS) * CALIPER_NET_MAX_RESOURCES;
 
 struct VSub {
     uint32_t sub = 0;
@@ -384,6 +397,11 @@ struct Peer {
     bool cap_scenes = false;         // 3.2 draft: the viewer announced "scenes"
     bool cap_programs = false;       // 3.2 draft: the viewer announced "programs"
     bool cap_interventions = false;  // 3.2 draft: the viewer announced "interventions"
+    bool cap_resources = false;      // 3.2 draft: the viewer announced "resources"
+    // RESOURCEs waiting for the send queue: the newest of each "<program>/<resource>", with the order
+    // in which it began to wait, so that a resource with frequent versions holds no other back.
+    std::map<std::string, std::pair<uint64_t, SharedBytes>> pending_resources;
+    uint64_t resource_order = 0;
     SharedBytes pending_controls;
     std::map<std::string, SharedBytes> pending_selections;
     size_t controls_waiting = 0;
@@ -482,7 +500,8 @@ struct Hub::Impl {
     uint64_t snap_bytes = 0, series_bytes = 0;
     uint64_t meta_bytes = 0;         // 3.1: the CONTROLS and SELECTIONs kept per session
     uint64_t scene_bytes = 0;        // 3.2 draft: the scene batches kept for late viewers
-    uint64_t retained() const { return snap_bytes + series_bytes + meta_bytes + scene_bytes; }
+    uint64_t resource_bytes = 0;     // 3.2 draft: the newest RESOURCEs kept for late viewers
+    uint64_t retained() const { return snap_bytes + series_bytes + meta_bytes + scene_bytes + resource_bytes; }
     HubStats c;                      // the counters
     mutable std::mutex stats_mu;
     HubStats published;
@@ -777,6 +796,121 @@ struct Hub::Impl {
         if (p.cap_selection)
             for (const auto& kv : s.selections)
                 if (!kv.second.empty) offer_selection(p, kv.first, kv.second.frame);
+        if (p.cap_resources) {   // 3.2 draft: the draw halves first, then their resources as data
+            for (const auto& kv : s.draw_halves) {
+                if (!server.send(p.conn, kv.second.frame)) {
+                    overflow(p.conn);
+                    return;
+                }
+                ++c.program_relays_out;
+            }
+            for (const auto& kv : s.kept_resources) offer_resource(p, kv.first, kv.second);
+        }
+    }
+
+    // ---- 3.2 draft: resources (capability "resources") ----------------------------------------
+    // One RESOURCE for a viewer: it replaces a waiting version of the same resource and keeps that
+    // version's place; a new resource past kResourcesMax waiting ones is dropped.
+    void offer_resource(Peer& p, const std::string& key, const SharedBytes& buf) {
+        auto it = p.pending_resources.find(key);
+        if (it != p.pending_resources.end()) {
+            ++c.resources_superseded;
+            it->second.second = buf;
+        } else if (p.pending_resources.size() >= kResourcesMax) {
+            ++c.resources_dropped;
+            return;
+        } else {
+            p.pending_resources[key] = {++p.resource_order, buf};
+        }
+        p.dirty = true;
+    }
+
+    // Forgets what the session keeps of one program: its draw half and its resources' newest
+    // versions; and drops the versions of them that wait at each viewer, which belong to the
+    // program's earlier install.
+    void forget_program(Session& s, const std::string& id) {
+        if (auto it = s.draw_halves.find(id); it != s.draw_halves.end()) {
+            meta_bytes -= it->second.frame->size();
+            s.draw_halves.erase(it);
+        }
+        const std::string prefix = id + "/";
+        for (auto it = s.kept_resources.lower_bound(prefix);
+             it != s.kept_resources.end() && it->first.compare(0, prefix.size(), prefix) == 0;) {
+            resource_bytes -= it->second->size();
+            it = s.kept_resources.erase(it);
+        }
+        for (ConnId v : s.viewers) {
+            auto pt = peers.find(v);
+            if (pt == peers.end()) continue;
+            auto& pending = pt->second.pending_resources;
+            for (auto it = pending.lower_bound(prefix);
+                 it != pending.end() && it->first.compare(0, prefix.size(), prefix) == 0;)
+                it = pending.erase(it);
+        }
+    }
+
+    void forget_programs(Session& s) {
+        std::vector<std::string> ids;
+        for (const auto& kv : s.draw_halves) ids.push_back(kv.first);
+        for (const auto& kv : s.kept_resources) ids.push_back(kv.first.substr(0, kv.first.find('/')));
+        for (const std::string& id : ids) forget_program(s, id);
+    }
+
+    // The producer's relay of a draw half (a PROGRAM set of an instance of a piece) or of a removal.
+    // The hub keeps the last draw half of each program, at most CALIPER_NET_MAX_PROGRAMS, and sends
+    // the relay to every attached viewer that announced "resources". A removal, or the draw half of
+    // another piece, also drops the program's kept resources; the same piece relayed again (after an
+    // attachment) keeps them, so that a static resource, which the script publishes once, stays. A
+    // producer without the capability, and any other PROGRAM from a producer, are ignored.
+    void producer_program(Session& s, const wire::Program& m, SharedBytes buf) {
+        const bool set = m.op == CALIPER_NET_PROGRAM_SET && !m.piece.is_null();
+        if (!s.resources_cap || !(set || m.op == CALIPER_NET_PROGRAM_REMOVE)) return;
+        ++c.program_relays_in;
+        const Json* h = set ? m.piece.find("hash") : nullptr;
+        const std::string hash = h && h->is_string() ? h->as_string() : std::string();
+        auto old = s.draw_halves.find(m.id);
+        if (!set || (old != s.draw_halves.end() && old->second.hash != hash)) {
+            forget_program(s, m.id);
+        } else if (old != s.draw_halves.end()) {
+            meta_bytes -= old->second.frame->size();
+            s.draw_halves.erase(old);
+        }
+        if (set && s.draw_halves.size() < CALIPER_NET_MAX_PROGRAMS) {
+            s.draw_halves[m.id] = Session::DrawHalf{hash, buf};
+            meta_bytes += buf->size();
+        }
+        for (ConnId v : s.viewers) {
+            auto pt = peers.find(v);
+            if (pt == peers.end() || pt->second.closing || !pt->second.cap_resources) continue;
+            if (!server.send(pt->second.conn, buf)) {
+                overflow(pt->second.conn);
+                continue;
+            }
+            ++c.program_relays_out;
+        }
+        if (retained() > opt.max_retained_bytes) enforce_budget();
+    }
+
+    // The producer's RESOURCE: offered to every attached viewer that announced "resources", with one
+    // waiting version per resource and viewer, and kept as the newest version for a later viewer
+    // while it fits the budget of retained bytes. A version over the budget is forwarded, not kept.
+    void producer_resource(Session& s, const wire::Resource& m, SharedBytes buf) {
+        if (!s.resources_cap) return;
+        ++c.resources_in;
+        const std::string key = m.program + "/" + m.resource;
+        if (auto it = s.kept_resources.find(key); it != s.kept_resources.end()) {
+            resource_bytes -= it->second->size();
+            s.kept_resources.erase(it);
+        }
+        if (s.kept_resources.size() < kResourcesMax && retained() + buf->size() <= opt.max_retained_bytes) {
+            s.kept_resources[key] = buf;
+            resource_bytes += buf->size();
+        }
+        for (ConnId v : s.viewers) {
+            auto pt = peers.find(v);
+            if (pt == peers.end() || pt->second.closing || !pt->second.cap_resources) continue;
+            offer_resource(pt->second, key, buf);
+        }
     }
 
     size_t live_count() const {
@@ -813,6 +947,7 @@ struct Hub::Impl {
         // The controls and selections of the session it leaves are not sent.
         p.pending_controls.reset();
         p.pending_selections.clear();
+        p.pending_resources.clear();   // 3.2 draft
         drop_held_controls(p);
         auto it = sessions.find(p.attached);
         if (it != sessions.end()) it->second.viewers.erase(p.conn);
@@ -1425,6 +1560,13 @@ struct Hub::Impl {
             refuse(CALIPER_NET_ERR_UNSUPPORTED, "the producer of session " + s->id + " does not take programs");
             return;
         }
+        if (!m.piece.is_null() && !(p.cap_resources && s->resources_cap)) {   // an instance of a piece
+            refuse(CALIPER_NET_ERR_UNSUPPORTED, p.cap_resources ? "the producer of session " + s->id +
+                                                                      " does not take pieces"
+                                                                : std::string("a viewer announces the capability "
+                                                                              "'resources' before it sends a piece"));
+            return;
+        }
         if (s->program_routes.size() >= kMaxRoutes) {
             refuse(CALIPER_NET_ERR_LIMIT, "too many programs wait for the producer's answer");
             return;
@@ -1587,6 +1729,7 @@ struct Hub::Impl {
             s->resubscribe = true;
             s->identity.script = id.script;
             set_producer_caps(*s, h.capabilities);
+            forget_programs(*s);   // 3.2 draft: the producer relays its draw halves again
             p.role = Peer::Role::Producer;
             p.session = s->id;
             welcome_producer(p, *s);
@@ -1648,6 +1791,7 @@ struct Hub::Impl {
         s.events_cap = has_cap(caps, CALIPER_NET_CAP_EVENTS);
         s.programs_cap = has_cap(caps, CALIPER_NET_CAP_PROGRAMS);
         s.interventions_cap = has_cap(caps, CALIPER_NET_CAP_INTERVENTIONS);
+        s.resources_cap = has_cap(caps, CALIPER_NET_CAP_RESOURCES);
     }
 
     // The hub's WELCOME. 3.1: it announces `controls` and `selection`, and to a
@@ -1657,7 +1801,8 @@ struct Hub::Impl {
         wire::Welcome w;
         w.role = CALIPER_NET_ROLE_HUB;
         w.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_SELECTION,
-                          CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS};   // 3.2 draft: forwarded
+                          CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS,
+                          CALIPER_NET_CAP_RESOURCES};   // 3.2 draft: forwarded
         Json sw = Json::object();
         sw.set("name", "caliper-hub");
         sw.set("version", opt.software_version);
@@ -1850,6 +1995,7 @@ struct Hub::Impl {
         s.controls_plain.reset();
         if (s.program_state) meta_bytes -= s.program_state->size();
         s.program_state.reset();
+        forget_programs(s);   // 3.2 draft
         for (auto& kv : s.selections)
             if (kv.second.frame) meta_bytes -= kv.second.frame->size();
         s.selections.clear();
@@ -2445,6 +2591,10 @@ struct Hub::Impl {
             producer_controls(s, *cs, std::move(buf));
         } else if (auto* ps = std::get_if<wire::ProgramState>(&m)) {
             producer_program_state(s, *ps, std::move(buf));   // 3.2 draft
+        } else if (auto* rs = std::get_if<wire::Resource>(&m)) {
+            producer_resource(s, *rs, std::move(buf));        // 3.2 draft
+        } else if (auto* pg = std::get_if<wire::Program>(&m)) {
+            producer_program(s, *pg, std::move(buf));         // 3.2 draft: a relayed draw half
         } else if (auto* sel = std::get_if<wire::Selection>(&m)) {
             producer_selection(s, *sel, std::move(buf));
         } else if (auto* cr = std::get_if<wire::ControlReply>(&m)) {
@@ -2483,6 +2633,7 @@ struct Hub::Impl {
         p.cap_scenes = has_cap(h.capabilities, CALIPER_NET_CAP_SCENES);
         p.cap_programs = has_cap(h.capabilities, CALIPER_NET_CAP_PROGRAMS);
         p.cap_interventions = has_cap(h.capabilities, CALIPER_NET_CAP_INTERVENTIONS);
+        p.cap_resources = has_cap(h.capabilities, CALIPER_NET_CAP_RESOURCES);
         wire::Welcome w = hub_welcome(p.cap_controls);
         if (p.cap_controls && p.watch_only) w.control = false;
         send(p.conn, w);
@@ -2693,6 +2844,21 @@ struct Hub::Impl {
             p.in_flight = true;
             return;
         }
+        // 3.2 draft: resources after series and scenes, before snapshots; the one that waited longest.
+        if (!p.pending_resources.empty() && !(best && best->series)) {
+            auto next = p.pending_resources.begin();
+            for (auto it = p.pending_resources.begin(); it != p.pending_resources.end(); ++it)
+                if (it->second.first < next->second.first) next = it;
+            SharedBytes buf = std::move(next->second.second);
+            p.pending_resources.erase(next);
+            if (!server.send(p.conn, buf)) {
+                overflow(p.conn);
+                return;
+            }
+            ++c.resources_out;
+            p.in_flight = true;
+            return;
+        }
         if (!best) return;
         bool ok;
         if (best->series) ok = send_series(p, *s, *best);
@@ -2834,6 +3000,7 @@ struct Hub::Impl {
         st.retained_series_bytes = series_bytes;
         st.retained_control_bytes = meta_bytes;
         st.retained_scene_bytes = scene_bytes;
+        st.retained_resource_bytes = resource_bytes;
         for (auto& kv : sessions) st.controls_waiting += kv.second.routes.size();
         const DoorStats& d = door->stats();
         st.refused_host = d.refused_host;

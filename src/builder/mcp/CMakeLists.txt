@@ -57,7 +57,9 @@ add_library(caliper_builder_mcp STATIC
     "${CMAKE_CURRENT_BINARY_DIR}/spec_schema_embed.cpp"
     "${CMAKE_CURRENT_BINARY_DIR}/spec_schema_v1_embed.cpp")
 target_include_directories(caliper_builder_mcp PUBLIC "${CALIPER_BUILDER_INCLUDE_ROOT}")
-target_link_libraries(caliper_builder_mcp PUBLIC caliper_builder_commands nlohmann_json::nlohmann_json Threads::Threads)
+# The built-in library of pieces is served as resources (caliper_builder_programs).
+target_link_libraries(caliper_builder_mcp PUBLIC caliper_builder_commands nlohmann_json::nlohmann_json Threads::Threads
+                      PRIVATE caliper_builder_programs)
 target_compile_features(caliper_builder_mcp PUBLIC cxx_std_17)
 target_compile_definitions(caliper_builder_mcp PRIVATE CALIPER_MCP_VERSION="0.1.0")
 

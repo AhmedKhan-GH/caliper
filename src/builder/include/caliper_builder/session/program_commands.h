@@ -28,8 +28,12 @@ SpecEdit apply_program_edit(const spec::Spec& spec, std::string_view name, const
 // stage.check and program.status, by the invocation's name. `spec` is the
 // open spec (program.status lists its programs and stages, with host none
 // for an item that no host reports); `programs` and `stages` are the
-// session's hosts, or null. Defined in program_commands.cpp.
+// session's hosts, or null. An instance of a piece has the kind piece, its
+// pin and, when its piece draws, the object `draw`; one that no host reports
+// is refused with piece.missing or piece.hash_mismatch when its pin does not
+// resolve in `workspace`, the library or the spec. Defined in
+// program_commands.cpp.
 CommandOutput program_command(const CommandContext& context, const spec::Spec& spec, const ProgramHost* programs,
-                              const StageHost* stages);
+                              const StageHost* stages, const std::string& workspace = {});
 
 }  // namespace caliper_builder

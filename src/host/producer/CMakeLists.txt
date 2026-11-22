@@ -18,8 +18,11 @@ if(APPLE)
 else()
     add_library(caliper_producer STATIC producer.cpp)
 endif()
-# The derive half of a piece (caliper_producer_derive.h), on every platform.
-target_sources(caliper_producer PRIVATE derive.cpp)
+# The derive half of a piece (caliper_producer_derive.h): producer.mm on Apple, and
+# derive.cpp, which answers CALIPER_PRODUCER_UNSUPPORTED, elsewhere.
+if(NOT APPLE)
+    target_sources(caliper_producer PRIVATE derive.cpp)
+endif()
 target_include_directories(caliper_producer PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 set_target_properties(caliper_producer PROPERTIES
     CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
@@ -42,8 +45,9 @@ if(BUILD_TESTS AND TARGET doctest::doctest)
     set_target_properties(caliper_producer_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
     if(APPLE)
         # The runtime's cases on the Metal device: imports, programs, passes, outputs and refusals.
-        target_sources(caliper_producer_tests PRIVATE tests/test_producer_metal.mm)
-        set_source_files_properties(tests/test_producer_metal.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+        target_sources(caliper_producer_tests PRIVATE tests/test_producer_metal.mm tests/test_producer_derive_metal.mm)
+        set_source_files_properties(tests/test_producer_metal.mm tests/test_producer_derive_metal.mm
+                                    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
         set_target_properties(caliper_producer_tests PROPERTIES OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
         if(TARGET caliper::wgsl)
             target_compile_definitions(caliper_producer_tests PRIVATE CALIPER_PRODUCER_HAVE_WGSL=1)

@@ -317,6 +317,10 @@ class Link:
     def queue(self, msg) -> None:
         self.push(_wire.encode(msg))
 
+    def backlog(self) -> int:
+        """The bytes of the control frames still queued for this peer."""
+        return self.control_bytes
+
     def push(self, frame) -> bool:
         """Queue an encoded control frame (from any thread). A peer that keeps
         sending while it reads nothing fills the queue: past MAX_CONTROL_FRAMES
@@ -607,7 +611,10 @@ class _Producer:
 
     def capabilities(self) -> list:
         from ._net_controls import capabilities
-        return sorted(capabilities(self.controls is not None) + [_wire.CAP_SCENES, _wire.CAP_TIMELINES])
+        caps = capabilities(self.controls is not None) + [_wire.CAP_SCENES, _wire.CAP_TIMELINES]
+        if _wire.CAP_PROGRAMS in caps:               # pieces: RESOURCE and the relayed draw halves
+            caps.append(_wire.CAP_RESOURCES)
+        return sorted(caps)
 
     def views_msg(self, link: Link | None = None) -> _wire.Views:
         with self.ring.lock:
@@ -1036,6 +1043,10 @@ class _Listener:
                 link.caps = peer_caps(hello.capabilities)
                 if _wire.CAP_CONTROLS in link.caps:
                     control = link.may_control = ctl.allow
+                # 3.2 draft: the resources of pieces and their draw halves go to a viewer that
+                # announced "resources" beside "programs", which watch() turns on.
+                if _wire.CAP_PROGRAMS in link.caps and _wire.CAP_RESOURCES in hello.capabilities:
+                    link.caps = link.caps | {_wire.CAP_RESOURCES}
             if _wire.CAP_SCENES in hello.capabilities:            # 3.2 draft
                 link.caps = link.caps | {_wire.CAP_SCENES}
             if _wire.CAP_TIMELINES in hello.capabilities:

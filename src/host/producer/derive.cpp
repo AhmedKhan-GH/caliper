@@ -1,7 +1,7 @@
-// The derive half of a piece in the producer runtime
-// (caliper_producer_derive.h, design/programmable-graphics.md). Not built
-// yet: each function answers CALIPER_PRODUCER_UNSUPPORTED with the code
-// "program.not_built", on every platform.
+// The derive half of a piece on a platform without the Metal runtime
+// (caliper_producer_derive.h): as producer.cpp, both functions answer
+// CALIPER_PRODUCER_UNSUPPORTED with the code "program.unavailable" until a
+// Vulkan runtime exists. On Apple, producer.mm defines them.
 #include "producer/caliper_producer_derive.h"
 
 #include <cstdlib>
@@ -9,13 +9,13 @@
 
 namespace {
 
-caliper_producer_status not_built(caliper_producer_error* error) {
+caliper_producer_status unavailable(caliper_producer_error* error) {
     if (error) {
         error->status = CALIPER_PRODUCER_UNSUPPORTED;
-        error->code = "program.not_built";
+        error->code = "program.unavailable";
         error->line = 0;
         error->column = 0;
-        static const char kText[] = "The derive half of pieces is not built yet.";
+        static const char kText[] = "The derive half of a piece needs the Metal runtime, which this platform lacks.";
         error->message = static_cast<char*>(std::malloc(sizeof kText));
         if (error->message) std::memcpy(error->message, kText, sizeof kText);
     }
@@ -28,12 +28,12 @@ extern "C" caliper_producer_status caliper_producer_compile_derive(caliper_produ
                                                                    const caliper_producer_derive_desc*,
                                                                    uint32_t* program, caliper_producer_error* error) {
     if (program) *program = 0;
-    return not_built(error);
+    return unavailable(error);
 }
 
 extern "C" caliper_producer_status caliper_producer_read_resource(caliper_producer*, uint32_t, const char*,
                                                                   caliper_producer_output* out,
                                                                   caliper_producer_error* error) {
     if (out) std::memset(out, 0, sizeof *out);
-    return not_built(error);
+    return unavailable(error);
 }
