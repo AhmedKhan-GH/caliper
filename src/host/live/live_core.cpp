@@ -45,6 +45,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -511,6 +512,24 @@ int attach_impl(CaliperCore* core, const std::string& token, const char* root = 
 
 // A wire protocol v3 stream (live_net_source.h). Waits a little for the
 // server's answer so a refusal fails the attach with its reason.
+// The host's taps on the picks and selections of live views outside a spec
+// (caliper_live_set_event_tap), by core; frame thread only. Never destroyed,
+// so that a core shut down at exit can still look.
+std::map<const CaliperCore*, caliper_live_views::EventSink>& event_taps() {
+    static auto* const taps = new std::map<const CaliperCore*, caliper_live_views::EventSink>;
+    return *taps;
+}
+
+// A pick or a selection in a scene view also goes to the host's tap, which
+// gives it to the agent as an event without a panel (design/instruments.md,
+// Event Feeds); a hover never does.
+void tap_scene_event(CaliperCore* core, uint32_t kind, const caliper_live_views::LiveEvent& e) {
+    if (kind != (uint32_t)caliper_live_views::kKindScene) return;
+    if (std::strcmp(e.type, "pick") != 0 && std::strcmp(e.type, "select") != 0) return;
+    const auto it = event_taps().find(core);
+    if (it != event_taps().end() && it->second) it->second(e);
+}
+
 int attach_url_impl(CaliperCore* core, const std::string& url) {
     if (!core->canvas_ready || !core->renderer) {
         core->fail("live_attach_url: attach a canvas first (the renderer's device exists only after attach_canvas)");
@@ -556,6 +575,7 @@ int attach_url_impl(CaliperCore* core, const std::string& url) {
         for (const auto& v : S->views)
             if (v.name == e.view) {
                 S->source->send_event(v.key, e.type, e.detail);
+                tap_scene_event(core, v.kind, e);
                 return;
             }
     });
@@ -1041,8 +1061,22 @@ uint64_t caliper_live_view_key(CaliperCore* core, const char* name) {
     return 0;
 }
 
+// Declared for the host in embed_core.h (a request of the M1 track events):
+// sets the tap that receives each pick and selection a person makes in a
+// scene view of the attached stream, on the frame thread, after the stream
+// has it; an empty tap removes it. It holds across attachments.
+void caliper_live_set_event_tap(CaliperCore* core, caliper_live_views::EventSink tap);
+void caliper_live_set_event_tap(CaliperCore* core, caliper_live_views::EventSink tap) {
+    if (!core) return;
+    if (tap)
+        event_taps()[core] = std::move(tap);
+    else
+        event_taps().erase(core);
+}
+
 // Called by caliper_core_shutdown before the v1.2 views are destroyed (the
 // bridge still has its renderer, so imports release cleanly).
 void caliper_live_shutdown(CaliperCore* core) {
     if (core) destroy_state(core);
+    event_taps().erase(core);
 }
