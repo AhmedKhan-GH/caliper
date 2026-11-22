@@ -132,62 +132,11 @@ std::string approval_what(const cb::CommandInvocation& inv, const spec::Spec* op
     return target.empty() ? n : n + " \xC2\xB7 " + target;   // ·
 }
 
-namespace {
-
-// A text cut to `limit` bytes at a character's start, with "..." when cut.
-std::string cut_text(const std::string& s, std::size_t limit) {
-    if (s.size() <= limit) return s;
-    std::size_t end = limit;
-    while (end > 0 && (static_cast<unsigned char>(s[end]) & 0xC0) == 0x80) --end;
-    return s.substr(0, end) + "...";
-}
-
-// The parameters of a start or a fork: "lr = 0.01, batch = 32", or "".
-std::string params_text(const json& a) {
-    std::string out;
-    const auto it = a.find("params");
-    if (it == a.end() || !it->is_array()) return out;
-    for (const json& p : *it) {
-        if (!p.is_object()) continue;
-        const auto v = p.find("value");
-        const std::string value = v == p.end() ? std::string("?") : v->is_string() ? v->get<std::string>() : v->dump();
-        out += (out.empty() ? "" : ", ") + str_arg(p, "name") + " = " + value;
-    }
-    return cut_text(out, 300);
-}
-
-}  // namespace
-
 std::string approval_run_text(const cb::CommandInvocation& inv, const std::string& script) {
     const std::string& n = inv.name;
     const json& a = inv.args;
     // The model runner's commands (design/hosted-runs.md, Review Card).
-    if (n == "run.start") {
-        std::string args;
-        if (const auto it = a.find("args"); it != a.end() && it->is_array())
-            for (const json& x : *it)
-                if (x.is_string()) args += (args.empty() ? "" : " ") + x.get<std::string>();
-        const std::string id = str_arg(a, "id");
-        const std::string params = params_text(a);
-        return "Start " + str_arg(a, "script") + (id.empty() ? std::string(" as a managed run") : " as the managed run " + id) +
-               ", with " + (args.empty() ? std::string("no arguments") : "the arguments " + cut_text(args, 300)) +
-               " and " + (params.empty() ? std::string("no parameters") : "the parameters " + params) +
-               ". The script runs as Python code on this computer.";
-    }
-    if (n == "run.fork") {
-        const std::string params = params_text(a);
-        return "Fork the run " + str_arg(a, "run") + " at its next checkpoint, with " +
-               (params.empty() ? std::string("its own parameters") : "the parameters " + params) + ". The fork runs " +
-               (script.empty() ? std::string("its script") : script) + " as Python code beside its parent.";
-    }
-    if (n == "run.stop") {
-        const auto k = a.find("kill_after_s");
-        const double after = k != a.end() && k->is_number() ? k->get<double>() : 10.0;
-        std::string secs = json(after).dump();
-        if (secs.size() > 2 && secs.compare(secs.size() - 2, 2, ".0") == 0) secs.resize(secs.size() - 2);
-        return "Stop the run " + str_arg(a, "run") + " at its next checkpoint, and end its process after " + secs +
-               (secs == "1" ? " second." : " seconds.");
-    }
+    if (n == "run.start" || n == "run.fork" || n == "run.stop") return cb::run_card_text(inv, script);
     const std::string in = script.empty() ? std::string("the attached script") : script;
     if (n == "run.set_param") {
         const auto v = a.find("value");

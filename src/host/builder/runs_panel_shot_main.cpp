@@ -104,7 +104,10 @@ int main(int argc, char** argv) {
     if (scenario == "fork-card") {
         panel.begin_fork("train-1");
         panel.set_params("lr=0.02");
-        if (!panel.review()) return fail("the card did not open: " + panel.problem());
+        if (!panel.review()) return fail("the fork was not sent: " + panel.problem());
+        session.queue().drain();   // the session parks the fork on its card
+        panel.frame(&session, &runner);
+        if (panel.card().empty()) return fail("the session's card did not show: " + panel.problem());
     }
 
     std::string why;

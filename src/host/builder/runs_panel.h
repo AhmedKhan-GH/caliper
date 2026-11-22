@@ -17,9 +17,11 @@
 // agent's: the commands run.start and run.fork, with the origin ui, through the
 // session's queue, so that the session checks the script, the id and the
 // parameters and the journal and the Activity pane see them. The session
-// shows no card for the person's own origin (design/hosted-runs.md, Review
-// Card), thus the panel shows the card itself before it sends the command:
-// the card text of the design page, with Approve and Cancel. Stop sends
+// parks a start or a fork on its card for every origin (design/hosted-runs.md,
+// Review Card), and the panel shows that one card, with the session's text
+// (caliper_builder::run_card_text()) and Approve and Cancel, which decide it
+// through the session's queue. The approval tray shows the same card, and
+// either decides it, so that the person confirms a start once. Stop sends
 // run.stop at once, as the person's own click.
 //
 // Three parts, as the other panes: the state (RunsPanel, with an action for
@@ -72,13 +74,7 @@ bool split_run_args(const std::string& text, std::vector<std::string>* args, std
 
 // Parameters as the Parameters field writes them: "lr=0.05 mode=adam", from
 // an object of values by name or from the command table's pairs.
-std::string run_params_text(const nlohmann::json& params);
-
-// The card text of a start and of a fork (design/hosted-runs.md, Review Card).
-// `params` are the command table's pairs.
-std::string run_start_card_text(const std::string& script, const std::string& id,
-                                const std::vector<std::string>& args, const nlohmann::json& params);
-std::string run_fork_card_text(const std::string& run, const std::string& script, const nlohmann::json& params);
+using caliper_builder::run_params_text;
 
 // A free run id for a script, as the model runner chooses one: the file name
 // of the script in a-z, 0-9 and '-' (at most 32 bytes, else "run"), then '-'
@@ -159,9 +155,11 @@ public:
     void read_keys();
 
     // Once per frame, before draw(): the app's session (null until the
-    // workspace is open) and its model runner (null without one). Reads the
-    // runs while the panel is open, and the answer of the command in flight.
-    void frame(caliper_builder::Session* session, caliper_builder::ModelRunner* runner);
+    // workspace is open), its model runner (null without one) and whether a
+    // long command holds the session's registry. Reads the runs while the
+    // panel is open, the session's card of the command in flight while the
+    // registry is free, and the answer of that command.
+    void frame(caliper_builder::Session* session, caliper_builder::ModelRunner* runner, bool busy = false);
     // The popup in the work area (x, y, w, h), while open.
     void draw(float x, float y, float w, float h, const SpecLook& look);
 
@@ -173,12 +171,15 @@ public:
     // Fork on a row: the form becomes the fork of `run`, with its parameters.
     void begin_fork(const std::string& run);
     void cancel_fork();
-    // Start or Fork under the form: checks the fields and opens the card.
-    // False with problem() when a field is wrong.
+    // Start or Fork under the form: checks the fields and sends run.start or
+    // run.fork with the origin ui; the session's card shows at the next
+    // frame() after the queue ran it. False with problem() when a field is
+    // wrong, and false while a command is in flight.
     bool review();
-    // Approve on the card: sends run.start or run.fork with the origin ui.
+    // Approve and Cancel on the card: approve or deny the session's card
+    // through its queue. False when no card waits.
     bool approve();
-    void cancel_review();
+    bool cancel_review();
     // Stop on a row: sends run.stop with the origin ui.
     bool stop(const std::string& run);
 
@@ -190,7 +191,7 @@ public:
     const std::string& params() const { return params_; }
     const std::string& id() const { return id_; }
     const std::string& fork_of() const { return fork_of_; }   // "" for a start
-    const std::string& card() const { return card_; }         // "" while no card is open
+    const std::string& card() const { return card_; }         // "" while no card waits
     const std::string& problem() const { return problem_; }
     bool busy() const { return pending_.valid(); }            // a command in flight
     // The id of the last run the panel started or forked, once its command
@@ -206,6 +207,9 @@ public:
 private:
     void refresh();
     bool send(const char* name, nlohmann::json args);
+    void read_card();
+    void forget_card();
+    bool decide(bool approve);
 
     bool open_ = false;
     bool focus_ = false;
@@ -216,10 +220,12 @@ private:
     std::vector<std::string> scripts_;
     std::string script_, args_, params_, id_;
     std::string fork_of_;
-    std::string card_;
-    // The command the card sends on Approve.
-    std::string card_command_;
-    nlohmann::json card_args_;
+    std::string card_;                 // the text of the session's card of the call in flight
+    std::string card_approval_;        // its approval id
+    std::string decided_approval_;     // approved or denied, waiting for the queue's drain
+    std::string card_script_;          // the parent's script of a fork, for its card
+    std::string sent_id_;              // the invocation id of the call in flight
+    unsigned long sent_count_ = 0;
     std::string problem_;
     std::string last_run_;
     std::future<caliper_builder::CommandResult> pending_;

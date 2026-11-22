@@ -37,6 +37,7 @@
 #include "host/builder/spec_page.h"
 #if CALIPER_WITH_BUILDER
 #include "host/builder/agent_settings.h"
+#include "host/builder/runs_panel.h"
 #include "host/builder/widget_app.h"
 #include "host/runner/model_runner.h"
 #include <caliper_builder/session/session.h>
@@ -494,6 +495,16 @@ public:
                 const ImGuiViewport* vp = ImGui::GetMainViewport();
                 agent_settings_.draw(vp->WorkPos.x, vp->WorkPos.y, vp->WorkSize.x, vp->WorkSize.y,
                                      caliper_host::house_spec_look());
+            }
+            // The managed runs (design/hosted-runs.md), over whatever page is
+            // shown; ⌘⇧R opens them anywhere. A start or a fork shows the
+            // session's card in the panel, the same card as the tray's.
+            runs_panel_.read_keys();
+            runs_panel_.frame(session_.session(), runner_.get(), session_.worker_busy());
+            if (runs_panel_.is_open()) {
+                const ImGuiViewport* vp = ImGui::GetMainViewport();
+                runs_panel_.draw(vp->WorkPos.x, vp->WorkPos.y, vp->WorkSize.x, vp->WorkSize.y,
+                                 caliper_host::house_spec_look());
             }
 #endif
 
@@ -1408,10 +1419,11 @@ private:
     // previous frame on purpose: WantTextInput is computed from last frame's
     // active field, and ImGui closes a popup on Esc inside NewFrame(), before
     // this code can see it open.
-    // The widget agent's settings take Escape while they are open.
+    // The widget agent's settings and the runs panel take Escape while they
+    // are open.
     bool agent_settings_open() const {
 #if CALIPER_WITH_BUILDER
-        return agent_settings_.is_open();
+        return agent_settings_.is_open() || runs_panel_.is_open();
 #else
         return false;
 #endif
@@ -2026,6 +2038,7 @@ private:
     std::unique_ptr<caliper_runner::ModelRunner> runner_;   // the managed runs (design/hosted-runs.md)
     caliper_builder::Session* runner_session_ = nullptr;    // the session that holds its run sources
     caliper_host::AgentSettings agent_settings_;   // the widget agent's settings, a popup over any page
+    caliper_host::RunsPanel runs_panel_;           // the managed runs, a popup over any page
 #endif
     caliper_host::CommandLine cl_;          // for starting Caliper API later, for the chat
     bool api_started_here_ = false;         // the app started the API without --api (api_for())

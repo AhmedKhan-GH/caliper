@@ -70,6 +70,20 @@ nlohmann::json run_entry_json(const RunEntry& entry);
 // Whether `id` is a valid run id: 1 to 40 bytes of a-z, 0-9 and '-'.
 bool valid_run_id(const std::string& id);
 
+// Parameters as name=value pairs separated by spaces, "lr=0.05 opt=adam",
+// from an object of values by name or from the command table's pairs. A
+// string value that reads as a number, true or false, or that holds a space,
+// a tab, a comma or a quote, is in double quotes.
+std::string run_params_text(const nlohmann::json& params);
+
+// The card text of run.start, run.fork and run.stop (design/hosted-runs.md,
+// Review Card), the one source of the agent's card and of the runs panel's:
+// the script, its arguments and its parameters of a start; the run and the
+// parameters of a fork, with `script` the parent's ("" when unknown); the run
+// and the limit of a stop. Long arguments and parameters are cut. "" for any
+// other command.
+std::string run_card_text(const CommandInvocation& invocation, const std::string& script);
+
 // A start of run.start, after the handler checked it.
 struct RunStartRequest {
     std::string script_path;     // absolute and canonical, a file in the workspace

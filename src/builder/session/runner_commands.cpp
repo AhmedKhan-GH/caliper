@@ -9,6 +9,8 @@
 #include <caliper_builder/loaders/paths.h>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <system_error>
@@ -29,6 +31,40 @@ std::string str_arg(const json& args, const char* key) {
     const auto it = args.find(key);
     return it != args.end() && it->is_string() ? it->get<std::string>() : std::string();
 }
+
+// A text cut to `limit` bytes at a character's start, with "..." when cut.
+std::string cut_text(const std::string& s, std::size_t limit) {
+    if (s.size() <= limit) return s;
+    std::size_t end = limit;
+    while (end > 0 && (static_cast<unsigned char>(s[end]) & 0xC0) == 0x80) --end;
+    return s.substr(0, end) + "...";
+}
+
+// Whether a bare word reads as a number, true or false in the Parameters
+// field of the runs panel, so that a string of that form needs quotes.
+bool reads_as_scalar(const std::string& v) {
+    if (v.empty()) return false;
+    if (v == "true" || v == "false") return true;
+    char* end = nullptr;
+    const double d = std::strtod(v.c_str(), &end);
+    return end && *end == '\0' && std::isfinite(d);
+}
+
+std::string value_text(const json& v) {
+    if (v.is_string()) {
+        const std::string s = v.get<std::string>();
+        const bool plain = !s.empty() && s.find_first_of(" \t,\"") == std::string::npos && !reads_as_scalar(s);
+        return plain ? s : "\"" + s + "\"";
+    }
+    if (v.is_boolean()) return v.get<bool>() ? "true" : "false";
+    return v.dump();
+}
+
+std::string arg_text(const std::string& a) {
+    return a.empty() || a.find_first_of(" \t") != std::string::npos ? "\"" + a + "\"" : a;
+}
+
+constexpr std::size_t kCardTextLimit = 300;   // bytes of the arguments, and of the parameters, on a card
 
 // A parameter name as caliper.param takes it: 1 to 63 bytes, no control
 // characters.
@@ -197,6 +233,58 @@ bool valid_run_id(const std::string& id) {
     for (const char ch : id)
         if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-')) return false;
     return true;
+}
+
+std::string run_params_text(const json& params) {
+    std::string out;
+    auto add = [&out](const std::string& name, const json& value) {
+        if (!out.empty()) out += ' ';
+        out += name + "=" + value_text(value);
+    };
+    if (params.is_object()) {
+        for (auto it = params.begin(); it != params.end(); ++it) add(it.key(), it.value());
+    } else if (params.is_array()) {
+        for (const auto& p : params)
+            if (p.is_object() && p.contains("name") && p["name"].is_string() && p.contains("value"))
+                add(p["name"].get<std::string>(), p["value"]);
+    }
+    return out;
+}
+
+std::string run_card_text(const CommandInvocation& inv, const std::string& script) {
+    const json& a = inv.args;
+    const auto params = [&a] {
+        const auto it = a.find("params");
+        return it == a.end() ? std::string() : cut_text(run_params_text(*it), kCardTextLimit);
+    };
+    if (inv.name == "run.start") {
+        std::string args;
+        if (const auto it = a.find("args"); it != a.end() && it->is_array())
+            for (const json& x : *it)
+                if (x.is_string()) args += (args.empty() ? "" : " ") + arg_text(x.get<std::string>());
+        const std::string id = str_arg(a, "id");
+        const std::string p = params();
+        return "Start " + str_arg(a, "script") +
+               (id.empty() ? std::string(" as a new managed run") : " as the managed run " + id) + ", with " +
+               (args.empty() ? std::string("no arguments") : "the arguments " + cut_text(args, kCardTextLimit)) +
+               " and " + (p.empty() ? std::string("no parameters") : "the parameters " + p) +
+               ". The script runs as Python code on this computer.";
+    }
+    if (inv.name == "run.fork") {
+        const std::string p = params();
+        return "Fork the run " + str_arg(a, "run") + " at its next checkpoint, with " +
+               (p.empty() ? std::string("no changed parameters") : "the parameters " + p) + ". The fork runs " +
+               (script.empty() ? std::string("its script") : script) + " as Python code beside its parent.";
+    }
+    if (inv.name == "run.stop") {
+        const auto k = a.find("kill_after_s");
+        const double after = k != a.end() && k->is_number() ? k->get<double>() : 10.0;
+        std::string secs = json(after).dump();
+        if (secs.size() > 2 && secs.compare(secs.size() - 2, 2, ".0") == 0) secs.resize(secs.size() - 2);
+        return "Stop the run " + str_arg(a, "run") + " at its next checkpoint, and end its process after " + secs +
+               (secs == "1" ? " second." : " seconds.");
+    }
+    return {};
 }
 
 json run_entry_json(const RunEntry& e) {

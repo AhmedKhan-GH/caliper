@@ -82,21 +82,6 @@ json value_of(const std::string& v, bool quoted) {
     return v;
 }
 
-std::string value_text(const json& v) {
-    if (v.is_string()) {
-        const std::string s = v.get<std::string>();
-        const bool plain = !s.empty() && s.find_first_of(" \t,\"") == std::string::npos &&
-                           value_of(s, false).is_string();
-        return plain ? s : "\"" + s + "\"";
-    }
-    if (v.is_boolean()) return v.get<bool>() ? "true" : "false";
-    return v.dump();
-}
-
-std::string arg_text(const std::string& a) {
-    return a.empty() || a.find_first_of(" \t") != std::string::npos ? "\"" + a + "\"" : a;
-}
-
 // The base of a run id, as the model runner makes it from a script's name.
 std::string id_base(const std::string& script) {
     std::string stem = fs::u8path(script).stem().u8string();
@@ -222,40 +207,6 @@ bool split_run_args(const std::string& text, std::vector<std::string>* args, std
     }
     for (auto& w : words) args->push_back(std::move(w.text));
     return true;
-}
-
-std::string run_params_text(const json& params) {
-    std::string out;
-    auto add = [&out](const std::string& name, const json& value) {
-        if (!out.empty()) out += ' ';
-        out += name + "=" + value_text(value);
-    };
-    if (params.is_object()) {
-        for (auto it = params.begin(); it != params.end(); ++it) add(it.key(), it.value());
-    } else if (params.is_array()) {
-        for (const auto& p : params)
-            if (p.is_object() && p.contains("name") && p["name"].is_string() && p.contains("value"))
-                add(p["name"].get<std::string>(), p["value"]);
-    }
-    return out;
-}
-
-std::string run_start_card_text(const std::string& script, const std::string& id, const std::vector<std::string>& args,
-                                const json& params) {
-    std::string a;
-    for (const auto& s : args) a += (a.empty() ? "" : " ") + arg_text(s);
-    const std::string p = run_params_text(params);
-    return "Start " + script + (id.empty() ? std::string(" as a new managed run") : " as the managed run " + id) +
-           ", with " + (a.empty() ? std::string("no arguments") : "the arguments " + a) + " and " +
-           (p.empty() ? std::string("no parameters") : "the parameters " + p) +
-           ". The script runs as Python code on this computer.";
-}
-
-std::string run_fork_card_text(const std::string& run, const std::string& script, const json& params) {
-    const std::string p = run_params_text(params);
-    return "Fork the run " + run + " at its next checkpoint, with " +
-           (p.empty() ? std::string("no changed parameters") : "the parameters " + p) + ". The fork runs " + script +
-           " as Python code beside its parent.";
 }
 
 std::string suggest_run_id(const std::string& script, const std::vector<cb::RunEntry>& runs,
@@ -461,13 +412,15 @@ void RunsPanel::refresh() {
         id_ = suggest_run_id(base_script, runs_, workspace_);
 }
 
-void RunsPanel::frame(cb::Session* session, cb::ModelRunner* runner) {
+void RunsPanel::frame(cb::Session* session, cb::ModelRunner* runner, bool busy) {
+    if (session != session_) forget_card();
     session_ = session;
     runner_ = runner;
     bool answered = false;
     if (pending_.valid() && pending_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         const cb::CommandResult r = pending_.get();
         answered = true;
+        forget_card();
         if (!r.ok) {
             problem_ = r.error.message.empty() ? r.error.code : r.error.message;
         } else {
@@ -481,20 +434,39 @@ void RunsPanel::frame(cb::Session* session, cb::ModelRunner* runner) {
             }
         }
         pending_name_.clear();
+    } else if (pending_.valid() && session_ && !busy) {
+        read_card();
     }
     if (open_ || answered) refresh();
 }
 
+void RunsPanel::read_card() {
+    // The session parks a start or a fork on its card for every origin
+    // (design/hosted-runs.md, Review Card); the panel shows that card.
+    card_.clear();
+    card_approval_.clear();
+    for (const cb::PendingApproval& p : session_->registry().pending_approvals()) {
+        if (p.invocation.id != sent_id_ || p.approval == decided_approval_) continue;
+        card_approval_ = p.approval;
+        card_ = cb::run_card_text(p.invocation, card_script_);
+        return;
+    }
+}
+
+void RunsPanel::forget_card() {
+    card_.clear();
+    card_approval_.clear();
+    decided_approval_.clear();
+}
+
 void RunsPanel::set_script(const std::string& script) {
     script_ = script;
-    card_.clear();
     if (!id_edited_) id_ = script.empty() ? std::string() : suggest_run_id(script, runs_, workspace_);
 }
 
 void RunsPanel::set_id(const std::string& id) {
     id_ = id;
     id_edited_ = !id.empty();
-    card_.clear();
 }
 
 void RunsPanel::begin_fork(const std::string& run) {
@@ -504,7 +476,6 @@ void RunsPanel::begin_fork(const std::string& run) {
     params_ = run_params_text(e->params);
     id_edited_ = false;
     id_ = suggest_run_id(e->script, runs_, workspace_);
-    card_.clear();
     problem_.clear();
 }
 
@@ -512,12 +483,11 @@ void RunsPanel::cancel_fork() {
     fork_of_.clear();
     id_edited_ = false;
     id_ = script_.empty() ? std::string() : suggest_run_id(script_, runs_, workspace_);
-    card_.clear();
 }
 
 bool RunsPanel::review() {
     problem_.clear();
-    card_.clear();
+    if (busy()) return false;
     if (!session_) {
         problem_ = "No workspace is open.";
         return false;
@@ -539,35 +509,42 @@ bool RunsPanel::review() {
         }
         std::vector<std::string> args;
         if (!split_run_args(args_, &args, &problem_)) return false;
-        card_args_ = {{"script", script_}};
-        if (!args.empty()) card_args_["args"] = args;
-        if (!pairs.empty()) card_args_["params"] = pairs;
-        if (!id_.empty()) card_args_["id"] = id_;
-        card_command_ = "run.start";
-        card_ = run_start_card_text(script_, id_, args, pairs);
-        return true;
+        json a{{"script", script_}};
+        if (!args.empty()) a["args"] = args;
+        if (!pairs.empty()) a["params"] = pairs;
+        if (!id_.empty()) a["id"] = id_;
+        card_script_.clear();
+        return send("run.start", std::move(a));
     }
     const cb::RunEntry* parent = find_run(runs_, fork_of_);
     if (!parent || !can_fork(*parent)) {
         problem_ = "The run " + fork_of_ + " does not run.";
         return false;
     }
-    card_args_ = {{"run", fork_of_}};
-    if (!pairs.empty()) card_args_["params"] = pairs;
-    if (!id_.empty()) card_args_["id"] = id_;
-    card_command_ = "run.fork";
-    card_ = run_fork_card_text(fork_of_, parent->script, pairs);
+    json a{{"run", fork_of_}};
+    if (!pairs.empty()) a["params"] = pairs;
+    if (!id_.empty()) a["id"] = id_;
+    card_script_ = parent->script;
+    return send("run.fork", std::move(a));
+}
+
+bool RunsPanel::decide(bool approve) {
+    if (!session_ || card_approval_.empty()) return false;
+    // The decision runs at the queue's next drain; the card does not come
+    // back while the approval waits for it.
+    if (approve)
+        session_->queue().approve(card_approval_);
+    else
+        session_->queue().deny(card_approval_);
+    decided_approval_ = card_approval_;
+    card_.clear();
+    card_approval_.clear();
     return true;
 }
 
-bool RunsPanel::approve() {
-    if (card_.empty() || busy()) return false;
-    const bool sent = send(card_command_.c_str(), card_args_);
-    if (sent) card_.clear();
-    return sent;
-}
+bool RunsPanel::approve() { return decide(true); }
 
-void RunsPanel::cancel_review() { card_.clear(); }
+bool RunsPanel::cancel_review() { return decide(false); }
 
 bool RunsPanel::stop(const std::string& run) {
     const cb::RunEntry* e = find_run(runs_, run);
@@ -584,6 +561,9 @@ bool RunsPanel::send(const char* name, json args) {
     inv.name = name;
     inv.args = std::move(args);
     inv.origin = cb::CommandOrigin::ui;
+    inv.id = "runs-panel-" + std::to_string(++sent_count_);   // finds the session's card of this call
+    sent_id_ = inv.id;
+    forget_card();
     pending_ = session_->queue().submit(std::move(inv));
     pending_name_ = name;
     problem_.clear();
@@ -801,10 +781,7 @@ void RunsPanel::draw(float x, float y, float w, float h, const SpecLook& L) {
     }
     label(lay.params_label, "Parameters", L.faint);
     params_edit_ = params_;
-    if (field(L, lay.params, "##runs.params", &params_edit_)) {
-        set_params(params_edit_);
-        card_.clear();
-    }
+    if (field(L, lay.params, "##runs.params", &params_edit_)) set_params(params_edit_);
     label(lay.id_label, "Id", L.faint);
     id_edit_ = id_;
     if (field(L, lay.id, "##runs.id", &id_edit_)) set_id(id_edit_);
@@ -819,7 +796,7 @@ void RunsPanel::draw(float x, float y, float w, float h, const SpecLook& L) {
         for (std::size_t i = 0; i < lay.card_lines.size(); ++i)
             text_at(dl, L.ui, L.ui_size, ImVec2(lay.card.x + m.gap, lay.card.y + m.gap + i * m.line), L.text,
                     lay.card_lines[i]);
-        if (house_button(L, dl, lay.approve, "##runs.approve", "Approve", idle, true)) approve();
+        if (house_button(L, dl, lay.approve, "##runs.approve", "Approve", !card_approval_.empty(), true)) approve();
         if (house_button(L, dl, lay.cancel, "##runs.cancel", "Cancel")) cancel_review();
     }
     if (lay.problem.w > 0.0f)

@@ -86,17 +86,26 @@ TEST_CASE("runs panel: the Parameters and Arguments fields") {
     CHECK_FALSE(caliper_host::split_run_args("\"open", &args, &problem));
 }
 
+// The card of a start or a fork, as the session's card and the panel's show it.
+static std::string card_text(const char* name, json args, const std::string& script = {}) {
+    cb::CommandInvocation inv;
+    inv.name = name;
+    inv.args = std::move(args);
+    return cb::run_card_text(inv, script);
+}
+
 TEST_CASE("runs panel: the card text of a start and a fork") {
     json pairs;
     std::string problem;
     REQUIRE(caliper_host::parse_run_params("lr=0.01", &pairs, &problem));
-    CHECK(caliper_host::run_start_card_text("scripts/train.py", "train-1", {"200", "a b"}, pairs) ==
+    CHECK(card_text("run.start", {{"script", "scripts/train.py"}, {"id", "train-1"}, {"args", {"200", "a b"}},
+                                  {"params", pairs}}) ==
           "Start scripts/train.py as the managed run train-1, with the arguments 200 \"a b\" and the parameters "
           "lr=0.01. The script runs as Python code on this computer.");
-    CHECK(caliper_host::run_start_card_text("train.py", "", {}, json::array()) ==
+    CHECK(card_text("run.start", {{"script", "train.py"}}) ==
           "Start train.py as a new managed run, with no arguments and no parameters. The script runs as Python code "
           "on this computer.");
-    CHECK(caliper_host::run_fork_card_text("train-1", "scripts/train.py", pairs) ==
+    CHECK(card_text("run.fork", {{"run", "train-1"}, {"params", pairs}}, "scripts/train.py") ==
           "Fork the run train-1 at its next checkpoint, with the parameters lr=0.01. The fork runs scripts/train.py "
           "as Python code beside its parent.");
 }
@@ -129,7 +138,8 @@ TEST_CASE("runs panel: the layout at two window sizes") {
         in.area = {0, 40, size.first, size.second - 80};
         in.runs = 4;
         in.scripts = {"scripts/eval.py", "scripts/train.py"};
-        in.card = caliper_host::run_fork_card_text("train-1", "scripts/train.py", json{{"lr", 0.02}});
+        in.card = card_text("run.fork", {{"run", "train-1"}, {"params", {{{"name", "lr"}, {"value", 0.02}}}}},
+                            "scripts/train.py");
         in.problem = true;
         const caliper_host::RunsPanelLayout L = caliper_host::layout_runs_panel(in, m, measure);
         CAPTURE(size.first);
@@ -183,19 +193,32 @@ TEST_CASE("runs panel: start, fork and stop go through run.start, run.fork and r
     CHECK(panel.script() == "scripts/train.py");
     CHECK(panel.id() == "train-1");
 
-    // Start opens the card; nothing is sent before Approve.
+    // Start sends run.start, which the session parks on its one card; the
+    // panel shows that card, and nothing starts before Approve.
     panel.set_args("200");
     panel.set_params("lr=0.05");
     REQUIRE(panel.review());
+    CHECK(panel.busy());
+    CHECK_FALSE(panel.review());           // one command in flight
+    tick(*s, panel, &runner);
+    const std::vector<cb::PendingApproval> waiting = s->registry().pending_approvals();
+    REQUIRE(waiting.size() == 1);
+    CHECK(waiting[0].invocation.name == "run.start");
+    CHECK(waiting[0].invocation.origin == cb::CommandOrigin::ui);
     CHECK(panel.card() ==
           "Start scripts/train.py as the managed run train-1, with the arguments 200 and the parameters lr=0.05. "
           "The script runs as Python code on this computer.");
+    CHECK(panel.card() == cb::run_card_text(waiting[0].invocation, ""));
     tick(*s, panel, &runner);
     CHECK(runner.starts.empty());
     REQUIRE(panel.approve());
     CHECK(panel.card().empty());
+    CHECK_FALSE(panel.approve());          // decided once
     CHECK(panel.busy());
+    panel.frame(s.get(), &runner);         // the decision waits for the drain; the card stays gone
+    CHECK(panel.card().empty());
     tick(*s, panel, &runner);
+    CHECK(s->registry().pending_approvals().empty());
     CHECK_FALSE(panel.busy());
     REQUIRE(runner.starts.size() == 1);
     CHECK(runner.starts[0].script == "scripts/train.py");
@@ -219,8 +242,10 @@ TEST_CASE("runs panel: start, fork and stop go through run.start, run.fork and r
     CHECK(panel.params() == "lr=0.05");
     panel.set_params("lr=0.01");
     REQUIRE(panel.review());
+    tick(*s, panel, &runner);
     CHECK(panel.card() == "Fork the run train-1 at its next checkpoint, with the parameters lr=0.01. The fork runs "
                           "scripts/train.py as Python code beside its parent.");
+    CHECK(runner.forks.empty());
     REQUIRE(panel.approve());
     tick(*s, panel, &runner);
     REQUIRE(runner.forks.size() == 1);
@@ -239,11 +264,25 @@ TEST_CASE("runs panel: start, fork and stop go through run.start, run.fork and r
     CHECK_FALSE(RunsPanel::can_stop(panel.runs()[0]));   // stopping
     CHECK_FALSE(panel.stop("train-1"));
 
+    // Cancel denies the session's card: nothing starts.
+    REQUIRE(panel.review());
+    tick(*s, panel, &runner);
+    REQUIRE_FALSE(panel.card().empty());
+    REQUIRE(panel.cancel_review());
+    tick(*s, panel, &runner);
+    CHECK_FALSE(panel.busy());
+    CHECK(panel.card().empty());
+    CHECK(runner.starts.size() == 1);
+    CHECK_FALSE(panel.problem().empty());
+
     // The session's refusal shows as the problem: an id that exists.
     panel.set_id("train-1");
     REQUIRE(panel.review());
-    REQUIRE(panel.approve());
     tick(*s, panel, &runner);
+    if (!panel.card().empty()) {
+        REQUIRE(panel.approve());
+        tick(*s, panel, &runner);
+    }
     CHECK(runner.starts.size() == 2);
     CHECK(panel.problem() == "A run train-1 exists in this workspace.");
     // A wrong field never reaches the session.
@@ -317,6 +356,7 @@ TEST_CASE("runs panel: a run and its fork over the model runner, from the start 
     REQUIRE(panel.script() == "scripts/stand_in_run.py");
     panel.set_params("lr=0.05");
     REQUIRE(panel.review());
+    tick(*s, panel, &runner);
     REQUIRE(panel.approve());
     tick(*s, panel, &runner);
     REQUIRE_MESSAGE(panel.problem().empty(), panel.problem());
@@ -330,6 +370,7 @@ TEST_CASE("runs panel: a run and its fork over the model runner, from the start 
     CHECK(panel.params() == "lr=0.05");
     panel.set_params("lr=0.01");
     REQUIRE(panel.review());
+    tick(*s, panel, &runner);
     REQUIRE(panel.approve());
     tick(*s, panel, &runner);
     REQUIRE_MESSAGE(panel.problem().empty(), panel.problem());
