@@ -5,7 +5,9 @@
 // control through the runner's connection, a fork from a checkpoint with a
 // lower learning rate whose loss continues from its parent's, a stop of both,
 // a start that writes no link, a stop of a fork that waits for its
-// checkpoint, a fork whose parent exits just after its checkpoint reply, the
+// checkpoint, a script that ends with another code than 0 during a stop
+// (failed) and one that the runner ends after the limit (stopped), a fork
+// whose parent exits just after its checkpoint reply, the
 // end of the child's whole process group, the size limit and the mode of
 // output.log, and no child left at the end. Every wait
 // waits on the runner's state, never on a fixed sleep, and every child is
@@ -441,6 +443,55 @@ TEST_CASE("runner: a stop ends a fork that waits for its checkpoint, and the che
     CHECK_FALSE(fs::exists(t.w.ws + "/runs/" + fork.id + "/output.log"));
     REQUIRE(!runner.stop("base", 30, &stopped));
     REQUIRE(runner.wait_for(state_is("base", "exited"), 60000));
+    CHECK(runner.running_pids().empty());
+}
+
+TEST_CASE("runner: a script that ends with another code than 0 during a stop failed, and one that the runner ends stopped") {
+    if (std::string(CALIPER_RUNNER_TEST_PYTHON).empty()) {
+        MESSAGE("skipped: the build names no Python that imports Caliper LIB");
+        return;
+    }
+    StandIn t("runner_stop_outcomes");
+    // A script that serves without a checkpoint, and ends with 3 when the file quit is in its folder.
+    std::ofstream(t.w.ws + "/scripts/quits.py")
+        << "import os, sys, time\nimport caliper\nserver = caliper.serve()\n"
+           "run_dir = os.environ['CALIPER_RUN_DIR']\n"
+           "with open(os.path.join(run_dir, 'link.tmp'), 'w') as f:\n    f.write(server.url)\n"
+           "os.replace(os.path.join(run_dir, 'link.tmp'), os.environ['CALIPER_RUN_LINK_FILE'])\n"
+           "while not os.path.exists(os.path.join(run_dir, 'quit')):\n    time.sleep(0.02)\n"
+           "sys.exit(3)\n";
+    cr::ModelRunner& runner = t.runner;
+    for (const std::string id : {"quits", "ignores"}) {
+        cb::RunStartRequest r;
+        r.script_path = t.w.ws + "/scripts/quits.py";
+        r.script = "scripts/quits.py";
+        r.id = id;
+        cb::RunEntry e;
+        REQUIRE(!runner.start(r, &e));
+    }
+    REQUIRE(runner.wait_for(state_is("quits", "running"), 60000));
+    REQUIRE(runner.wait_for(state_is("ignores", "running"), 60000));
+    // The stop waits for a checkpoint that never comes, and the script ends on its own with 3.
+    cb::RunEntry stopped;
+    REQUIRE(!runner.stop("quits", 60, &stopped));
+    CHECK(stopped.stopping);
+    std::ofstream(t.w.ws + "/runs/quits/quit") << "now";
+    REQUIRE(runner.wait_for(state_is("quits", "failed"), 60000));
+    // The runner ends a script that reaches no checkpoint after the limit: a stop, not a failure.
+    REQUIRE(!runner.stop("ignores", 1, &stopped));
+    REQUIRE(runner.wait_for(state_is("ignores", "exited"), 60000));
+    const std::vector<cb::RunEntry> runs = runner.list();
+    const cb::RunEntry* quits = find(runs, "quits");
+    const cb::RunEntry* ignores = find(runs, "ignores");
+    REQUIRE(quits);
+    REQUIRE(ignores);
+    REQUIRE(quits->exit_code);
+    CHECK(*quits->exit_code == 3);
+    REQUIRE(quits->error);
+    CHECK(quits->error->find("exit code 3") != std::string::npos);
+    REQUIRE(ignores->exit_code);
+    CHECK(*ignores->exit_code < 0);
+    CHECK_FALSE(ignores->error);
     CHECK(runner.running_pids().empty());
 }
 

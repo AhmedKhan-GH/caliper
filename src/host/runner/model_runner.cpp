@@ -990,7 +990,10 @@ void ModelRunner::loop() {
                     take_checkpoints(r, id);
                     r.conn->close();
                 }
-                const bool clean = (code == 0 || r.entry.stopping) && !r.entry.error;
+                // A stop is clean when the script ended with 0 at its checkpoint, or
+                // when the runner ended it after the limit. A script that ends on its
+                // own with another code during a stop failed, as without a stop.
+                const bool clean = (code == 0 || (r.entry.stopping && r.terminated_at.has_value())) && !r.entry.error;
                 if (!clean && !r.entry.error)
                     r.entry.error = "The script ended with exit code " + std::to_string(code) + "; run.logs shows its output.";
                 set_state(r, clean ? "exited" : "failed");
