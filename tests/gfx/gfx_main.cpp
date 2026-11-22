@@ -371,7 +371,7 @@ Backend metal_backend() {
     b.renderer = metal_env().renderer.get();
     HostRenderer* r = b.renderer;
     b.readback = [r](CaliperTextureId id, int w, int h) {
-        return r->debug_readback_rgba8(id, w, h);   // renderer-queue readback (M1)
+        return r->debug_readback_rgba8(id, w, h);   // renderer-queue readback
     };
     return b;
 }

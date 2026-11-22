@@ -318,7 +318,7 @@ TEST_CASE("runs panel: without a model runner or a workspace, Start says why") {
 TEST_CASE("runs panel: a run and its fork over the model runner, from the start to the stop") {
     const std::string python = CALIPER_RUNS_PANEL_TEST_PYTHON;
     if (python.empty()) {
-        MESSAGE("skipped: no Python that imports Caliper LIB (CALIPER_M1_PYTHON)");
+        MESSAGE("skipped: no Python that imports Caliper LIB (CALIPER_ACCEPTANCE_PYTHON)");
         return;
     }
     const std::string ws = fresh_dir("panel_runner") + "/workspace";

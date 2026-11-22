@@ -35,7 +35,7 @@ endif()
 if(BUILD_TESTS AND TARGET doctest::doctest AND NOT WIN32)
     # A Python that imports Caliper LIB from this checkout, as the model
     # runner's tests take it; without one the run of the stand-in skips.
-    set(_runs_python "${CALIPER_M1_PYTHON}")
+    set(_runs_python "${CALIPER_ACCEPTANCE_PYTHON}")
     if(NOT _runs_python)
         set(_runs_python "${CALIPER_BUILDER_TEST_PYTHON}")
     endif()

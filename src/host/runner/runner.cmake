@@ -24,9 +24,9 @@ endif()
 target_link_libraries(caliper PRIVATE caliper_runner)
 
 if(BUILD_TESTS AND TARGET doctest::doctest AND NOT WIN32)
-    # A Python that imports Caliper LIB from this checkout: the M1 Python, else
+    # A Python that imports Caliper LIB from this checkout: the acceptance Python, else
     # the builder's test Python; without one the runs of the stand-in skip.
-    set(_runner_python "${CALIPER_M1_PYTHON}")
+    set(_runner_python "${CALIPER_ACCEPTANCE_PYTHON}")
     if(NOT _runner_python)
         set(_runner_python "${CALIPER_BUILDER_TEST_PYTHON}")
     endif()

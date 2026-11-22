@@ -1553,7 +1553,7 @@ public:
         }
     }
 
-    // Test-only (spec §3.4 / M1): copy a texture back on the RENDERER's own
+    // Test-only (spec §3.4): copy a texture back on the RENDERER's own
     // queue — commit order retires every previously committed tensor op, so
     // this reads fully-updated texels without the hot path ever waiting. The
     // gfx harness passes the PUBLIC bridge id (the bridged texture pointer),
@@ -1946,7 +1946,7 @@ private:
         MTLSize groups = MTLSizeMake((p.w + 15) / 16, (p.h + 15) / 16, 1);
         [enc dispatchThreadgroups:groups threadsPerThreadgroup:tg];
         [enc endEncoding];
-        // No CPU wait (M1): the frame's command buffer commits AFTER this
+        // No CPU wait: the frame's command buffer commits AFTER this
         // one on the same queue_, so draw ordering is free by commit order; cb
         // retains src, lutbuf, and dst until the GPU retires it (default,
         // non-`unretained` encoding), so lifetime is free too. Test readbacks
@@ -1988,7 +1988,7 @@ private:
            destinationOrigin:MTLOriginMake(0, 0, 0)];
         [blit endEncoding];
         stats_gpu_time(cb, kGpuUpdate);
-        [cb commit];   // no CPU wait (M1): same-queue commit order + retention
+        [cb commit];   // no CPU wait: same-queue commit order + retention
         last_update_cb_ = cb;   // device_update_wait() target (never waited here)
 
         last_device_path_ = imported ? "blit-imported" : "blit";
