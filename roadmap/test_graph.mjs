@@ -1,10 +1,11 @@
 // Acceptance test of the roadmap graph page (the home of the built docs site, /roadmap/).
 //
 // It serves a built site folder on 127.0.0.1, opens /roadmap/ in headless Chromium at
-// 1440 by 900 in dark mode, and runs the eleven acceptance checks of the graph design
+// 1440 by 900 in dark mode, and runs the twelve acceptance checks of the graph design
 // (line overlaps, lines through nodes, node and label boxes, font sizes, first view,
 // registry match, pillar bounds, crossings, links and search, titles, determinism and
-// speed). It relies only on the DOM and the `__roadmap` object of the page contract.
+// speed, and the phone fallback at 390 by 844). It relies only on the DOM and the
+// `__roadmap` object of the page contract.
 // It prints one line per check (PASS or FAIL), lists console and page errors, and
 // exits 1 if anything failed.
 //
@@ -444,12 +445,49 @@ try {
     return bad;
   });
 
+  // 12
+  await check(12, "on a phone the rail's pillar links and the Candidates link take the graph's place", async () => {
+    const bad = [];
+    const phoneCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, colorScheme: "dark" });
+    try {
+      const ph = await phoneCtx.newPage();
+      ph.on("pageerror", (e) => errors.push(`page error (phone): ${e.message}`));
+      await ph.goto(`${base}/roadmap/`, { waitUntil: "load" });
+      await ph.evaluate(`${G}.ready`);
+      const s = await ph.evaluate(() => {
+        const shows = (e) => !!e && getComputedStyle(e).display !== "none" && e.getBoundingClientRect().width > 0;
+        const canvas = document.querySelector("#roadmap-graph .roadmap-canvas");
+        const links = [...document.querySelectorAll("#roadmap-graph .roadmap-pillars a[data-pillar]")];
+        const cand = document.querySelector("#roadmap-graph .roadmap-rail-link");
+        return {
+          canvas: shows(canvas), pillars: links.filter(shows).map((a) => [a.dataset.pillar, new URL(a.href).pathname]),
+          cand: shows(cand) ? new URL(cand.href).pathname : null,
+          wide: document.documentElement.scrollWidth > innerWidth,
+        };
+      });
+      if (s.canvas) bad.push("the canvas shows");
+      const want = graph.pillars.map((p) => [p.prefix, `/roadmap/${p.url}`]);
+      if (JSON.stringify(s.pillars) !== JSON.stringify(want)) bad.push(`pillar links ${JSON.stringify(s.pillars)}`);
+      for (const [, href] of s.pillars) {
+        const r = await fetch(`${base}${href}`);
+        if (r.status !== 200) bad.push(`${href} returns ${r.status}`);
+      }
+      if (s.cand !== "/roadmap/candidates/") bad.push(`Candidates link ${s.cand}`);
+      if (s.wide) bad.push("the page scrolls sideways");
+      await ph.click(`.roadmap-pillars a[data-pillar="${graph.pillars[0].prefix}"]`);
+      await ph.waitForURL(`**/roadmap/${graph.pillars[0].url}`, { timeout: 5000 }).catch(() => bad.push("a tap on a pillar link does not open its page"));
+    } finally {
+      await phoneCtx.close();
+    }
+    return bad;
+  });
+
   // ---------- captures ----------
   if (capDir) {
     try {
       await load();
       for (const p of graph.pillars) {
-        await page.click(`button[data-pillar="${p.prefix}"]`);
+        await page.click(`.roadmap-pillars a[data-pillar="${p.prefix}"]`);
         await page.waitForTimeout(700);
         await shot(page, `pillar-${p.prefix}.png`);
       }
@@ -484,9 +522,7 @@ try {
       const phoneCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, colorScheme: "dark" });
       const ph = await phoneCtx.newPage();
       await ph.goto(`${base}/roadmap/`, { waitUntil: "load" });
-      await ph.waitForTimeout(800);
-      const disp = await ph.evaluate(() => { const g = document.getElementById("roadmap-graph"); return g ? getComputedStyle(g).display : "missing"; });
-      console.log(`INFO phone: #roadmap-graph display is ${disp}${disp === "none" ? " (hidden, as designed)" : " (expected none)"}`);
+      await ph.evaluate(`${G}.ready`);
       await shot(ph, "phone.png", true);
       await phoneCtx.close();
     } catch (e) {

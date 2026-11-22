@@ -290,40 +290,23 @@ def read_candidates(root, features):
     return pillars
 
 
-def _origin_counts(pillar):
-    counts = {origin: 0 for origin, _ in ORIGINS}
-    for item in pillar["candidates"]:
-        counts[item["origin"]] += 1
-    return counts
+def candidates_index():
+    """The Candidates page: the navigator's mount, which navigator.js fills from candidates.json.
 
-
-def candidates_index(pillars):
-    lines = ["# Candidates", "",
-             "Candidates are ideas that are not in the registry. They are kept here to mine as "
-             "Caliper grows, and they appear in no graph or count of the roadmap.", "",
-             "| Pillar | " + " | ".join(title for _, title in ORIGINS) + " | Total |",
-             "| --- |" + " ---: |" * (len(ORIGINS) + 1)]
-    totals = {origin: 0 for origin, _ in ORIGINS}
-    for p in pillars:
-        counts = _origin_counts(p)
-        for origin, n in counts.items():
-            totals[origin] += n
-        lines.append("| [%s](%s.md) | %s | %d |" % (
-            md(p["title"]), p["slug"], " | ".join(str(counts[o]) for o, _ in ORIGINS),
-            len(p["candidates"])))
-    lines.append("| **Total** | %s | **%d** |" % (
-        " | ".join("**%d**" % totals[o] for o, _ in ORIGINS), sum(totals.values())))
-    lines += ["", "## Proposed Pillars", "",
-              "These pillars do not exist in the registry. Each is a group of candidates that "
-              "could become a pillar of its own.", ""]
-    for p in pillars:
-        if not p.get("proposed"):
-            continue
-        lines += ["### [%s](%s.md)" % (md(p["title"]), p["slug"]), "",
-                  md(p.get("description") or ""), ""]
-        if p.get("alternative"):
-            lines += ["Alternative: %s" % md(p["alternative"]), ""]
-    return "\n".join(lines)
+    The rail and the pillar headings carry the counts and the proposed pillars' descriptions, so
+    the page itself holds only its title and a short paragraph under the window.
+    """
+    return "\n".join([
+        "---", "template: roadmap.html", "candidates_navigator: true",
+        "hide:", "  - navigation", "  - toc", "---", "",
+        "# Candidates", "",
+        '<div id="candidate-navigator" class="roadmap-window" '
+        'data-candidates="../candidates.json"></div>', "",
+        "Candidates are ideas that are not in the registry. They are kept here to mine as Caliper "
+        "grows, and they appear in no graph or count of the roadmap. On a wide screen, the "
+        "navigator shows every candidate as a card under its pillar. Hover a card for its "
+        "summary, and click it for its dependencies and links. On a phone, the pillar list links "
+        "to the page of each pillar's candidates.", ""])
 
 
 def candidates_page(pillar, features, by_prefix):
@@ -590,7 +573,7 @@ def generate(root, site=DEFAULT_SITE):
                     feature_page(features[fid], by_prefix, features, root, GITHUB), False))
     cand = read_candidates(root, features)
     if cand:
-        out.append(("roadmap/%s/index.md" % CANDIDATES, candidates_index(cand), True))
+        out.append(("roadmap/%s/index.md" % CANDIDATES, candidates_index(), True))
         for p in cand:
             out.append(("roadmap/%s/%s.md" % (CANDIDATES, p["slug"]),
                         candidates_page(p, features, by_prefix), True))

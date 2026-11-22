@@ -54,10 +54,10 @@
 .roadmap-id { font-family: var(--md-code-font, "Source Code Pro"); font-size: .85em; letter-spacing: .02em; color: var(--rm-accent); white-space: nowrap; }
 
 /* The graph page: full width, a narrow rail beside the canvas. */
-.md-main:has(.roadmap-graph) .md-grid { max-width: none; }
-.md-main:has(.roadmap-graph) .md-content__inner { margin-left: 1rem; margin-right: 1rem; }
+.md-main:has(.roadmap-window) .md-grid { max-width: none; }
+.md-main:has(.roadmap-window) .md-content__inner { margin-left: 1rem; margin-right: 1rem; }
 
-.roadmap-graph {
+.roadmap-window {
   display: grid; grid-template-columns: 14.5rem minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: 70vh; margin: 1rem 0 2rem;
   font-family: var(--text, "Plex Condensed"); color: var(--rm-text);
   border: 1px solid var(--rm-plate-rule); border-radius: 6px; overflow: hidden; background: var(--rm-stage);
@@ -89,18 +89,24 @@
 }
 .roadmap-search input::placeholder { color: var(--rm-faint); }
 .roadmap-search input.is-missing { border-color: var(--rm-decision); }
-.roadmap-search input:focus-visible, .roadmap-pillars button:focus-visible { outline: 2px solid var(--rm-accent); outline-offset: 1px; }
+.roadmap-search input:focus-visible, .roadmap-pillars a:focus-visible, .roadmap-rail-link:focus-visible { outline: 2px solid var(--rm-accent); outline-offset: 1px; }
 .roadmap-pillars { display: flex; flex-direction: column; gap: .15rem; }
-.roadmap-pillars button {
-  display: block; width: 100%; text-align: left; font: inherit; color: var(--rm-text); background: none; cursor: pointer;
-  border: 0; border-radius: 4px; padding: .38rem .45rem;
+.roadmap-pillars a {
+  display: block; width: 100%; box-sizing: border-box; text-align: left; font: inherit; color: var(--rm-text); background: none; cursor: pointer;
+  border: 0; border-radius: 4px; padding: .38rem .45rem; text-decoration: none;
 }
-.roadmap-pillars button:hover { background: color-mix(in srgb, var(--rm-accent) 14%, transparent); }
-.roadmap-candidates {
+.roadmap-pillars a:hover { background: color-mix(in srgb, var(--rm-accent) 14%, transparent); color: var(--rm-text); }
+.roadmap-group {
+  margin-top: .5rem; padding: .6rem .45rem 0; border-top: 1px solid color-mix(in srgb, var(--rm-text-dim) 35%, transparent);
+  font-size: .62rem; letter-spacing: .16em; text-transform: uppercase; color: var(--rm-faint);
+}
+.roadmap-search-status { margin-top: -.6rem; min-height: .9rem; font-size: .62rem; color: var(--rm-text-dim); }
+.roadmap-search-status:empty { display: none; }
+.roadmap-rail-link {
   display: block; margin-top: .6rem; padding: .5rem .45rem .38rem; border-top: 1px solid color-mix(in srgb, var(--rm-text-dim) 35%, transparent);
   border-radius: 0 0 4px 4px; color: var(--rm-text); text-decoration: none;
 }
-.roadmap-candidates:hover { background: color-mix(in srgb, var(--rm-accent) 14%, transparent); color: var(--rm-text); }
+.roadmap-rail-link:hover { background: color-mix(in srgb, var(--rm-accent) 14%, transparent); color: var(--rm-text); }
 .roadmap-pillar-name { display: block; font-size: .74rem; letter-spacing: .02em; }
 .roadmap-pillar-counts { display: block; font-size: .62rem; line-height: 1.35; color: var(--rm-text-dim); margin-top: .1rem; }
 
@@ -144,7 +150,10 @@
 .roadmap-tip-branches, .roadmap-tip-note { margin-top: .45rem; font-size: .7rem; color: var(--rm-faint); }
 .roadmap-error { margin: 0; padding: 1rem; grid-column: 1 / -1; }
 
-/* Narrow screens use the Pillars list below the graph instead. */
+/* Narrow screens: the rail's pillar links take the canvas's place, and the page flows normally. */
 @media (max-width: 44.9375em) {
-  .roadmap-graph { display: none; }
+  .roadmap-window { display: block; height: auto !important; border: 0; background: none; overflow: visible; }
+  .roadmap-rail { background: none; border: 0; padding: 0; overflow: visible; }
+  .roadmap-legend, .roadmap-search, .roadmap-search-status, .roadmap-canvas { display: none; }
+  .roadmap-pillar-name { color: var(--rm-accent); }
 }

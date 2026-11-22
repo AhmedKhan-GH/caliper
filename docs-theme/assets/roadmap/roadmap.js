@@ -32,12 +32,7 @@
     planned: "Planned", idea: "Idea", decision: "Decision to settle" };
   var SVG = "http://www.w3.org/2000/svg";
 
-  function el(tag, cls, text) {
-    var e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text != null) e.textContent = text;
-    return e;
-  }
+  var el = window.RoadmapWindow && RoadmapWindow.el;
   function sv(tag, attrs) {
     var e = document.createElementNS(SVG, tag);
     for (var k in attrs) if (attrs[k] != null) e.setAttribute(k, attrs[k]);
@@ -304,21 +299,12 @@
       item.append(el("i", d[0]), document.createTextNode(d[1]));
       legend.appendChild(item);
     });
-    var search = el("label", "roadmap-search");
-    var input = el("input");
-    input.type = "search";
-    input.placeholder = "Find a feature by id or title";
-    input.setAttribute("aria-label", "Find a feature by id or title, then press Enter");
-    search.appendChild(input);
+    var sb = RoadmapWindow.searchBox("Find a feature by id or title", "Find a feature by id or title, then press Enter");
+    var input = sb.input;
     var pillarList = el("div", "roadmap-pillars");
     /* Candidates: ideas kept outside the registry, on their own pages under candidates/. */
-    var cand = el("a", "roadmap-candidates");
-    cand.href = "candidates/";
-    var candName = el("span", "roadmap-pillar-name"), candNote = el("span", "roadmap-pillar-counts");
-    candName.textContent = "Candidates";
-    candNote.textContent = "Ideas outside the registry, by pillar";
-    cand.append(candName, candNote);
-    rail.append(legend, search, pillarList, cand);
+    var cand = RoadmapWindow.railLink("candidates/", "Candidates", "Ideas outside the registry, by pillar");
+    rail.append(legend, sb.box, sb.status, pillarList, cand);
 
     var canvas = el("div", "roadmap-canvas");
     var svg = sv("svg", { "class": "roadmap-svg", role: "img", "aria-label": "Roadmap graph of every feature by pillar" });
@@ -328,12 +314,7 @@
     mount.textContent = "";
     mount.append(rail, canvas);
 
-    /* The graph fills the window below its top edge, so that the page itself does not scroll while the
-       canvas is used; the rail scrolls inside it when it is taller. */
-    function sizeCanvas() {
-      var top = mount.getBoundingClientRect().top + window.scrollY;
-      mount.style.height = Math.max(420, window.innerHeight - top - 16) + "px";
-    }
+    function sizeCanvas() { RoadmapWindow.fit(mount); }
 
     function apply() {
       els.world.setAttribute("transform", "translate(" + view.x + " " + view.y + ") scale(" + view.k + ")");
@@ -462,14 +443,7 @@
       if (n.branches && n.branches.length) tip.append(el("div", "roadmap-tip-branches", "Branches: " + n.branches.join(", ")));
       if (a.classList.contains("rm-ref")) tip.append(el("div", "roadmap-tip-note", "In another pillar. Click to go to it."));
       tip.classList.add("is-open");
-      var r = a.getBoundingClientRect(), c = canvas.getBoundingClientRect();
-      var tw = tip.offsetWidth, th = tip.offsetHeight;
-      var x = r.right - c.left + 8;
-      if (x + tw > c.width - 8) x = r.left - c.left - tw - 8;
-      x = Math.max(8, Math.min(x, c.width - tw - 8));
-      var y = Math.max(8, Math.min(r.top - c.top, c.height - th - 8));
-      tip.style.left = x + "px";
-      tip.style.top = y + "px";
+      RoadmapWindow.placeTip(tip, a.getBoundingClientRect(), canvas);
     }
     svg.addEventListener("mouseover", function (e) {
       if (drag && dragged) return;
@@ -496,12 +470,8 @@
       .then(function (d) {
         data = d;
         data.pillars.forEach(function (p) {
-          var b = el("button");
-          b.type = "button";
-          b.setAttribute("data-pillar", p.prefix);
-          b.append(el("span", "roadmap-pillar-name", p.title), el("span", "roadmap-pillar-counts", counts(data, p.prefix)));
-          b.addEventListener("click", function () { goPillar(p.prefix); });
-          pillarList.appendChild(b);
+          pillarList.appendChild(RoadmapWindow.pillarLink({ href: p.url, prefix: p.prefix, name: p.title,
+            counts: counts(data, p.prefix), onPick: goPillar }));
         });
         return layoutGraph(data);
       })
@@ -515,16 +485,15 @@
         resolveReady();
       })
       .catch(function (err) {
-        mount.textContent = "";
-        mount.appendChild(el("p", "roadmap-error", "The roadmap graph could not be drawn (" + err.message +
-          "). The pillar list below links every pillar and feature."));
+        canvas.textContent = "";
+        canvas.appendChild(el("p", "roadmap-error", "The roadmap graph could not be drawn (" + err.message + ")."));
         resolveReady();
       });
   }
 
   function init() {
     var mount = document.getElementById("roadmap-graph");
-    if (!mount || typeof ELK === "undefined") return;
+    if (!mount || typeof ELK === "undefined" || typeof RoadmapWindow === "undefined") return;
     start(mount);
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init); else init();
