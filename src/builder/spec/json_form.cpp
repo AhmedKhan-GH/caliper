@@ -460,6 +460,18 @@ public:
     Program program(const json& o, const std::string& path) {
         Program p;
         if (!table(o, path, path)) return p;
+        // The graphics form (design/programmable-graphics.md, Declaration):
+        // its keys are refused until this codec reads them.
+        bool graphics = false;
+        for (const char* k : kGraphicsKeys) {
+            if (o.find(k) == o.end()) continue;
+            graphics = true;
+            sink_.error("spec.not_built", "The program key " + quote(k) + " is not built yet.", key_path(path, k));
+        }
+        if (graphics) {
+            p.id = required_string(o, "id", path, "A program");
+            return p;
+        }
         keys(o, path, {"id", "title", "wgsl", "entry", "inputs", "output", "limits", "workgroups", "params"},
              "a program");
         p.id = required_string(o, "id", path, "A program");

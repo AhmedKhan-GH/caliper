@@ -253,3 +253,21 @@ TEST_CASE("every older fixture reads as before and has no programs") {
     CHECK(v1.spec.programs.empty());
     CHECK(cs::validate(v1.spec).ok());
 }
+
+TEST_CASE("the reader refuses the keys of the graphics form as not built yet") {
+    // design/programmable-graphics.md, Declaration: the codec reads these
+    // keys with the work that builds the form; until then each one is
+    // spec.not_built at its own path, and no key is unknown or missing.
+    const std::string program =
+        "[[program]]\nid = \"arcs\"\n"
+        "common = \"struct Arc { from: u32 }\"\n"
+        "resources = [{ id = \"arcs\", kind = \"buffer\", struct = \"Arc\", fields = [\"from: u32\"], count = 64 }]\n"
+        "derive = { wgsl = \"x\", inputs = [], passes = [{ entry = \"build\" }] }\n"
+        "draw = { panel = \"world\", wgsl = \"x\", passes = [{ kind = \"render\", fragment = \"fs\" }] }\n";
+    const auto r = cs::parse_toml(with_panels(program));
+    CHECK(!r.ok());
+    for (const char* key : {"resources", "common", "derive", "draw"})
+        CHECK(has(r.diagnostics, "spec.not_built", (std::string("program[0].") + key).c_str()));
+    CHECK(!has(r.diagnostics, "spec.unknown_key"));
+    CHECK(!has(r.diagnostics, "spec.missing_key"));
+}

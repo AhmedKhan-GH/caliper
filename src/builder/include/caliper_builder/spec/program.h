@@ -29,6 +29,7 @@
 #include <string_view>
 #include <vector>
 
+#include <caliper_builder/spec/graphics.h>
 #include <caliper_builder/spec/reference.h>
 
 namespace caliper_builder::spec {
@@ -203,13 +204,19 @@ struct Program {
     // The operator's name and version on a program that the app generates
     // for an operator ("surface@1"); never read from or written to a spec.
     std::optional<std::string> builtin;
+    // The graphics form (graphics.h, design/programmable-graphics.md): empty
+    // for a program of the one-pass form. The codec refuses its keys with
+    // spec.not_built until it reads them.
+    Graphics graphics;
     nlohmann::json x;                                     // the extension table, null when absent
 };
 inline bool operator==(const Program& a, const Program& b) {
     return a.id == b.id && a.title == b.title && a.wgsl == b.wgsl && a.entry == b.entry && a.inputs == b.inputs &&
            a.output == b.output && a.limits == b.limits && a.workgroups == b.workgroups && a.params == b.params &&
-           a.builtin == b.builtin && a.x == b.x;
+           a.builtin == b.builtin && a.graphics == b.graphics && a.x == b.x;
 }
+// Whether a program is of the graphics form.
+inline bool is_graphics(const Program& p) { return !p.graphics.empty(); }
 inline bool operator!=(const Program& a, const Program& b) { return !(a == b); }
 
 // One entry of the `stage` array. The triple panel, entity and kind is unique.
