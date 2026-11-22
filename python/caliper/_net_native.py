@@ -43,6 +43,7 @@ __all__ = ["NativeServer"]
 
 POLL_MS = 4             # the pump's event poll while snapshots or chunks are in flight
 IDLE_MS = 250           # otherwise: retained series of unwatched views drain this often
+PUMP_END_S = 2.0        # the longest close() waits for the pump thread to hand over and end
 _DTYPE = {"torch.float32": _wire.DType.F32, "torch.uint8": _wire.DType.U8,
           "float32": _wire.DType.F32, "uint8": _wire.DType.U8}
 
@@ -383,13 +384,20 @@ class NativeServer(NetServer):
     # -- lifetime ------------------------------------------------------------------------
     def close(self) -> None:
         """Deliver what is pending (at most about a second), end every
-        connection with BYE and stop the server. Idempotent."""
+        connection with BYE and stop the server. Idempotent.
+
+        The replies and the run state that the controls stored go out before
+        BYE: the pump thread ends after it hands over what it took, and this
+        thread hands over the rest. ``nio.close()`` then sends what is queued,
+        BYE and the close 1001, and waits at most 2 seconds for each peer's
+        close, so a peer that reads nothing does not keep the process alive."""
         if self.closed:
             return
         if self._stream_file is not None:
             self._stream_file.remove()          # the app stops listing it before it goes
         from ._net import _unroute
-        if threading.current_thread() is not self._thread:
+        pump = threading.current_thread() is self._thread
+        if not pump:
             try:
                 self.ring.flush(timeout=1.0)
                 end = time.monotonic() + 1.0
@@ -401,6 +409,15 @@ class NativeServer(NetServer):
         self.ring.close()
         self.transport.n_attached = 0
         _unroute(self)
+        if not pump:
+            self.nio.wake()
+            self._thread.join(PUMP_END_S)
+        ctl = self.producer.controls
+        if ctl is not None:
+            try:
+                ctl.flush(final=True)
+            except Exception:
+                pass
         self.nio.close()                              # BYE, close 1001, joins the native threads
         if self._thread.is_alive() and threading.current_thread() is not self._thread:
             self._thread.join(5)

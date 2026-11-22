@@ -102,6 +102,7 @@ _NOT_BUILT = (b"<!doctype html><meta charset=utf-8><title>Caliper</title>"
 MAX_CONTROL_FRAMES = 65536
 MAX_CONTROL_BYTES = 16 << 20
 CLOSE_OVERFLOW = 1008                # as the hub closes an overflowing send queue
+FINAL_S = 0.5                        # close(): what the controls held back goes out within this
 
 
 class _Fatal(Exception):
@@ -1410,16 +1411,27 @@ class NetServer:
             q.put(None)
 
     async def _drain(self, timeout: float) -> None:
-        """Publish what completed and let the writers send it."""
+        """Publish what completed, hand over the replies and the run state that the controls
+        stored, and let the writers send it all. A run state that waits for its data goes out
+        when the data went, or at ``timeout`` with FINAL_S more for the writers to send it."""
         end = time.monotonic() + timeout
-        while time.monotonic() < end:
+        ctl = self.producer.controls
+        final = False
+        while True:
             busy = self.producer.pump_once()
+            if ctl is not None:
+                ctl.flush(final=final)
             links = list(self.producer.links)
-            if not busy and not self.ring.pending and all(
+            if not busy and not self.ring.pending and (ctl is None or not ctl.pending()) and all(
                     not ln.control and all(s.snap is None and (s.series is None or s.next >= (
                         self.producer.history(s.series).total)) for s in ln.subs.values())
                     for ln in links):
                 return
+            now = time.monotonic()
+            if now >= end:
+                if final:
+                    return
+                final, end = True, now + FINAL_S
             await asyncio.sleep(0.005)
 
     async def _shutdown(self) -> None:

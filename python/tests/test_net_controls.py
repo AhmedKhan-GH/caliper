@@ -474,6 +474,30 @@ def test_close_releases_a_paused_run(make_server, ctl):
     run(go())
 
 
+def test_close_sends_a_held_run_state_before_bye(make_server, ctl, monkeypatch):
+    """The run state of a pause waits for the data of its step, here data that never goes out.
+    A close in that wait still sends it, before BYE and the close code 1001."""
+    from caliper import _net_controls
+    s = make_server()
+    monkeypatch.setattr(_net_controls.ControlsPort, "_data_pending", lambda self: True)
+
+    async def go():
+        async with Viewer(s) as v:
+            with Loop():
+                await v.state(lambda m: m.run["state"] == "running")
+                await v.control("pause")
+                await until(s.producer.controls.holding)
+                closing = asyncio.get_running_loop().run_in_executor(None, s.close)
+                bye = await v.expect(w.Bye)
+                await closing
+                await v.ws.wait_closed()
+                paused = [m for m in v.seen if isinstance(m, w.Controls)
+                          and m.run["state"] == "paused"]
+                assert paused and v.seen.index(paused[-1]) < v.seen.index(bye)
+                assert v.ws.close_code == w.CLOSE_GOING_AWAY
+    run(go())
+
+
 def test_step_stays_cheap_with_a_viewer(server, ctl):
     caliper.param("lr", 2e-3)
 

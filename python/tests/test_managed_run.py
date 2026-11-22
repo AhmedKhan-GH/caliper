@@ -77,6 +77,23 @@ with torch.no_grad():
 """
 
 
+# Put before a script: the server's thread hands the final replies of actions to the connections
+# LATE_S seconds late, as a slow runner can schedule it, so that the script reaches its exit first.
+LATE = """
+import time
+from caliper import _net_controls
+LATE_S = 1.5
+_flush = _net_controls.ControlsPort.flush
+
+def _late(self, *args, **kwargs):
+    if self._replies:
+        time.sleep(LATE_S)
+    return _flush(self, *args, **kwargs)
+
+_net_controls.ControlsPort.flush = _late
+"""
+
+
 class Run:
     """A script started as a managed run, ended by its pid at the end of the test."""
 
@@ -211,6 +228,46 @@ def test_fork_resumes_with_a_changed_parameter(tmp_path, runs, mode):
         assert done.status == "ok" and done.message.startswith("stopping at step"), done
         assert r.proc.wait(30) == 0, r.output()
         assert "stops at step" in r.output()
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_a_stop_sends_its_replies_before_the_close(tmp_path, runs, mode):
+    """A checkpoint and at once a stop, as a fork followed by a stop of its parent sends them,
+    while the server's thread hands the final replies over late: both final replies arrive, then
+    BYE shutdown and the close code 1001, and the script exits with 0. A second connection that
+    reads nothing after its HELLO does not keep the script alive."""
+    from websockets.asyncio.client import connect
+
+    r = Run(tmp_path, LATE + TRAIN, "late", mode)
+    runs.append(r)
+    stream = _stream(r.link())
+
+    async def go():
+        idle = await connect(stream.stream_url, max_queue=1, ping_interval=None, close_timeout=1)
+        try:
+            await idle.send(w.encode(w.Hello("viewer", [w.CAP_CONTROLS], {"name": "idle",
+                                                                         "version": "0"})))
+            async with Viewer(stream) as v:
+                await v.state(lambda m: m.run["state"] == "running" and {
+                    a["name"] for a in m.actions} >= {M.CHECKPOINT, M.STOP}, timeout=30)
+                ck = await v.control("run", name=M.CHECKPOINT)
+                st = await v.control("run", name=M.STOP)
+                assert ck.status == "queued" and st.status == "queued", (ck, st)
+                got = [await v.expect(w.ControlReply, lambda m, rid=q.request_id:
+                                      m.request_id == rid, timeout=30) for q in (ck, st)]
+                bye = await v.expect(w.Bye, timeout=30)
+                await v.ws.wait_closed()
+                return got, bye, v.ws.close_code, v.seen
+        finally:
+            idle.transport.abort()
+
+    (ck, st), bye, code, seen = run(go(), timeout=90)
+    assert ck.status == "ok" and pathlib.Path(ck.message).is_file(), ck
+    assert st.status == "ok" and st.message.startswith("stopping at step"), st
+    assert bye.reason == w.BYE_SHUTDOWN and code == w.CLOSE_GOING_AWAY, (bye, code)
+    assert seen.index(st) < seen.index(bye)
+    assert r.proc.wait(30) == 0, r.output()
+    assert "stops at step" in r.output()
 
 
 @pytest.mark.parametrize("mode", MODES)
