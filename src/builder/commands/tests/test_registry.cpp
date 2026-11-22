@@ -14,6 +14,7 @@
 using caliper_builder::ApprovalDecision;
 using caliper_builder::CommandContext;
 using caliper_builder::CommandDescriptor;
+using caliper_builder::CommandEffect;
 using caliper_builder::CommandInvocation;
 using caliper_builder::CommandJournal;
 using caliper_builder::CommandOrigin;
@@ -129,6 +130,28 @@ TEST_CASE("every refusal before the handler runs has its own code") {
     CommandInvocation named = inv("toy.get");
     named.id = "mine";
     CHECK(r.invoke(named).id == "mine");
+}
+
+TEST_CASE("the viewer origin only reads: a command that mutates or runs is refused before its handler") {
+    CommandRegistry r;
+    int ran = 0;
+    const auto count = [&ran](const CommandContext&) {
+        ++ran;
+        return CommandOutput::ok({});
+    };
+    CommandDescriptor run = descriptor("toy.run", false);
+    run.effect = CommandEffect::run;
+    REQUIRE(r.add(run, count).ok());
+    REQUIRE(r.add(descriptor("toy.get", false), count).ok());
+
+    const auto refused = r.invoke(inv("toy.run", {}, CommandOrigin::viewer));
+    CHECK(refused.error.code == "command.not_allowed");
+    CHECK(refused.error.where == "origin");
+    CHECK(refused.error.message.find("running script") != std::string::npos);
+    CHECK(ran == 0);
+    CHECK(r.invoke(inv("toy.get", {}, CommandOrigin::viewer)).ok);
+    CHECK(r.invoke(inv("toy.run", {}, CommandOrigin::ui)).ok);
+    CHECK(ran == 2);
 }
 
 TEST_CASE("a frame_thread command runs only on the frame thread once one is named") {

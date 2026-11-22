@@ -395,11 +395,14 @@ CommandResult CommandRegistry::invoke(CommandInvocation inv) {
         err.code = "command.invalid_args";
         return CommandResult::failure(inv.id, err);
     }
-    // The browser's spec page reads; a command that changes the workspace is
+    // The browser's spec page reads; a command that changes the workspace or
+    // acts on the running script (the effect run, which does not mutate) is
     // refused before any policy sees it, so it is never journaled.
-    if (inv.origin == CommandOrigin::viewer && entry.descriptor.mutates)
+    if (inv.origin == CommandOrigin::viewer && (entry.descriptor.mutates || entry.descriptor.effect == CommandEffect::run))
         return CommandResult::failure(
-            inv.id, Error("command.not_allowed", inv.name + " changes the workspace, and the viewer origin only reads.",
+            inv.id, Error("command.not_allowed",
+                          inv.name + (entry.descriptor.mutates ? " changes the workspace" : " acts on the running script") +
+                              ", and the viewer origin only reads.",
                           "origin"));
     // The person's own commands (history.undo and history.redo) are refused
     // to agents before any policy or history work, so they are never journaled.
