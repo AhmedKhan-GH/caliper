@@ -18,6 +18,9 @@
 #include <chrono>
 #include <cstring>
 #include <deque>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <functional>
 #include <map>
 #include <memory>
@@ -43,9 +46,10 @@ uint64_t mono_ns32() {
 struct Runner {
     std::unique_ptr<Hub> hub;
     std::thread thread;
-    explicit Runner(size_t max_retained_bytes = size_t(1) << 30) {
+    explicit Runner(size_t max_retained_bytes = size_t(1) << 30, bool allow_control = false) {
         HubOptions o;
         o.token = kToken32;
+        o.allow_control = allow_control;
         o.max_retained_bytes = max_retained_bytes;
         hub = std::make_unique<Hub>(std::move(o));
         std::string err;
@@ -835,4 +839,205 @@ TEST_CASE("net/hub 3.2: class tables, entity transforms, cameras and split updat
     REQUIRE(w.until([&] { return scene_all(*c, 3).size() == want.size(); }));
     CHECK(scene_all(*c, 3)[3] == "transforms stamped b");
     CHECK(p->scene_subscribes == 1);
+}
+
+// ---- 3.2 draft: PROGRAM, PROGRAM_STATE and interventions --------------------------------------
+
+namespace {
+
+// A golden message of the draft, decoded; the buffers stay alive for the test run.
+wire::Message golden32(const char* name) {
+    static std::deque<std::vector<uint8_t>> keep;
+    const auto path = std::filesystem::path(CALIPER_TEST_SOURCE_ROOT) / "tests" / "fixtures" / "wire_v3" / "v3_2" /
+                      (std::string(name) + ".bin");
+    std::ifstream f(path, std::ios::binary);
+    keep.emplace_back((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    wire::Message m;
+    const wire::DecodeResult r = wire::decode(keep.back().data(), keep.back().size(), &m);
+    REQUIRE_MESSAGE(r.ok(), name << ": " << r.message);
+    return m;
+}
+
+// A producer with the capabilities it is given, that records the PROGRAMs and CONTROLs it gets.
+class CapProducer : public Client {
+public:
+    explicit CapProducer(std::vector<std::string> caps) : caps_(std::move(caps)) {}
+    bool welcomed = false;
+    std::vector<wire::Program> programs;
+    std::vector<wire::Control> controls;
+
+protected:
+    void on_open() override {
+        wire::Hello h;
+        h.role = CALIPER_NET_ROLE_PRODUCER;
+        h.capabilities = caps_;
+        wire::Identity id;
+        id.id = "clp-prog";
+        id.script = "prog.py";
+        id.pid = 8;
+        id.start_unix_ms = 1763200000000ull;
+        h.session = id.to_json();
+        send(h);
+    }
+    void on(In& in) override {
+        if (std::holds_alternative<wire::Welcome>(in.m)) {
+            welcomed = true;
+            send(wire::Views{});
+        } else if (auto* p = std::get_if<wire::Program>(&in.m)) {
+            programs.push_back(*p);
+        } else if (auto* c = std::get_if<wire::Control>(&in.m)) {
+            controls.push_back(*c);
+        }
+    }
+
+private:
+    std::vector<std::string> caps_;
+};
+
+std::unique_ptr<CapProducer> cap_producer(World32& w, const Runner& h, std::vector<std::string> caps) {
+    auto p = std::make_unique<CapProducer>(std::move(caps));
+    REQUIRE(p->connect(h.url()));
+    w.peers.push_back(p.get());
+    REQUIRE(w.until([&] { return p->welcomed; }));
+    return p;
+}
+
+wire::Program program_remove(uint32_t request_id) {
+    wire::Program m = std::get<wire::Program>(golden32("program_remove"));
+    m.request_id = request_id;
+    return m;
+}
+
+wire::ProgramState program_state(std::optional<uint32_t> request_id) {
+    wire::ProgramState m = std::get<wire::ProgramState>(golden32("program_state_waiting"));
+    m.request_id = request_id;
+    return m;
+}
+
+const wire::Error* error_for(const Client& v, uint16_t type, uint32_t request_id) {
+    for (auto* e : v.all<wire::Error>())
+        if (e->in_reply_to && *e->in_reply_to == type && e->request_id && *e->request_id == request_id) return e;
+    return nullptr;
+}
+
+const std::vector<std::string> kProgramCaps = {CALIPER_NET_CAP_PROGRAMS};
+
+}  // namespace
+
+TEST_CASE("net/hub 3.2: PROGRAM and PROGRAM_STATE are forwarded with the viewers' own request ids") {
+    Runner h(size_t(1) << 30, true);
+    World32 w;
+    auto p = cap_producer(w, h, kProgramCaps);
+    auto a = scene_viewer(w, h, kProgramCaps);
+    auto b = scene_viewer(w, h, {});
+    auto a2 = scene_viewer(w, h, kProgramCaps);
+
+    a->send(program_remove(7));
+    a2->send(program_remove(7));   // the same id from another viewer must not collide
+    REQUIRE(w.until([&] { return p->programs.size() == 2; }));
+    CHECK(p->programs[0].op == CALIPER_NET_PROGRAM_REMOVE);
+    CHECK(p->programs[0].request_id != 0);
+    CHECK(p->programs[0].request_id != p->programs[1].request_id);
+    const uint32_t up_a = p->programs[0].request_id, up_a2 = p->programs[1].request_id;
+
+    // The answer goes to the viewer that asked, under its own id, and to no one else.
+    p->send(program_state(up_a2));
+    REQUIRE(w.until([&] { return a2->last<wire::ProgramState>() != nullptr; }));
+    CHECK(a2->last<wire::ProgramState>()->request_id.value_or(0) == 7);
+    p->send(program_state(up_a));
+    REQUIRE(w.until([&] { return a->last<wire::ProgramState>() != nullptr; }));
+    CHECK(a->last<wire::ProgramState>()->request_id.value_or(0) == 7);
+    p->send(program_state(up_a));   // the route is gone: dropped
+    p->send(program_state(std::nullopt));
+    REQUIRE(w.until([&] { return a->all<wire::ProgramState>().size() == 2; }));
+    CHECK(!a->all<wire::ProgramState>()[1]->request_id.has_value());
+    CHECK(a2->all<wire::ProgramState>().size() == 2);
+    CHECK(b->all<wire::ProgramState>().empty());
+    CHECK(h.hub->stats().programs_forwarded == 2);
+
+    // A viewer with programs that attaches later gets the latest unrequested state; one without, none.
+    auto late = scene_viewer(w, h, kProgramCaps);
+    auto late_none = scene_viewer(w, h, {});
+    REQUIRE(w.until([&] { return late->last<wire::ProgramState>() != nullptr; }));
+    CHECK(!late->last<wire::ProgramState>()->request_id.has_value());
+    w.spin(50);
+    CHECK(late_none->all<wire::ProgramState>().empty());
+}
+
+TEST_CASE("net/hub 3.2: a viewer without programs gets ERROR unsupported for PROGRAM") {
+    Runner h(size_t(1) << 30, true);
+    World32 w;
+    auto p = cap_producer(w, h, kProgramCaps);
+    auto v = scene_viewer(w, h, {});
+    v->send(program_remove(5));
+    REQUIRE(w.until([&] { return error_for(*v, CALIPER_NET_MSG_PROGRAM, 5) != nullptr; }));
+    const wire::Error* e = error_for(*v, CALIPER_NET_MSG_PROGRAM, 5);
+    CHECK(e->code == CALIPER_NET_ERR_UNSUPPORTED);
+    CHECK(!e->fatal);
+    w.spin(50);
+    CHECK(p->programs.empty());
+}
+
+TEST_CASE("net/hub 3.2: a producer without programs gives the viewer ERROR unsupported") {
+    Runner h(size_t(1) << 30, true);
+    World32 w;
+    auto p = cap_producer(w, h, {});
+    auto v = scene_viewer(w, h, kProgramCaps);
+    v->send(program_remove(6));
+    REQUIRE(w.until([&] { return error_for(*v, CALIPER_NET_MSG_PROGRAM, 6) != nullptr; }));
+    CHECK(error_for(*v, CALIPER_NET_MSG_PROGRAM, 6)->code == CALIPER_NET_ERR_UNSUPPORTED);
+    w.spin(50);
+    CHECK(p->programs.empty());
+}
+
+TEST_CASE("net/hub 3.2: a hub without allow_control answers PROGRAM forbidden") {
+    Runner h;   // allow_control is off
+    World32 w;
+    auto p = cap_producer(w, h, kProgramCaps);
+    auto v = scene_viewer(w, h, kProgramCaps);
+    v->send(program_remove(8));
+    REQUIRE(w.until([&] { return error_for(*v, CALIPER_NET_MSG_PROGRAM, 8) != nullptr; }));
+    CHECK(error_for(*v, CALIPER_NET_MSG_PROGRAM, 8)->code == CALIPER_NET_ERR_FORBIDDEN);
+    w.spin(50);
+    CHECK(p->programs.empty());
+}
+
+TEST_CASE("net/hub 3.2: CONTROLS loses the key interventions for a viewer that did not announce it") {
+    Runner h;
+    World32 w;
+    auto p = cap_producer(w, h, {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_INTERVENTIONS});
+    const std::vector<std::string> with = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_INTERVENTIONS};
+    auto a = scene_viewer(w, h, with);
+    auto b = scene_viewer(w, h, {CALIPER_NET_CAP_CONTROLS});
+    const wire::Message m = golden32("controls_interventions");
+    p->send(m);
+    REQUIRE(w.until([&] { return a->last<wire::Controls>() && b->last<wire::Controls>(); }));
+    CHECK(a->last<wire::Controls>()->interventions.is_object());
+    CHECK(a->last<wire::Controls>()->interventions.find("points")->size() == 2);
+    CHECK(b->last<wire::Controls>()->interventions.is_null());
+    CHECK(b->last<wire::Controls>()->run.is_object());
+
+    // A late viewer gets the stored CONTROLS the same way.
+    auto c = scene_viewer(w, h, with);
+    auto d = scene_viewer(w, h, {CALIPER_NET_CAP_CONTROLS});
+    REQUIRE(w.until([&] { return c->last<wire::Controls>() && d->last<wire::Controls>(); }));
+    CHECK(c->last<wire::Controls>()->interventions.is_object());
+    CHECK(d->last<wire::Controls>()->interventions.is_null());
+}
+
+TEST_CASE("net/hub 3.2: CONTROL intervene to a producer without interventions gets CONTROL_REPLY unsupported") {
+    Runner h(size_t(1) << 30, true);
+    World32 w;
+    auto p = cap_producer(w, h, {CALIPER_NET_CAP_CONTROLS});
+    auto v = scene_viewer(w, h, {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_INTERVENTIONS});
+    wire::Control c = std::get<wire::Control>(golden32("control_intervene_clear_all"));
+    c.request_id = 21;
+    v->send(c);
+    REQUIRE(w.until([&] { return v->last<wire::ControlReply>() != nullptr; }));
+    const wire::ControlReply* r = v->last<wire::ControlReply>();
+    CHECK(r->request_id == 21);
+    CHECK(r->status == CALIPER_NET_STATUS_ERROR);
+    CHECK(r->error.find("code")->as_string() == CALIPER_NET_ERR_UNSUPPORTED);
+    w.spin(50);
+    CHECK(p->controls.empty());
 }

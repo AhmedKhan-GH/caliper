@@ -286,12 +286,21 @@ struct ControlRoute {
     uint64_t deadline_ms = 0;        // dropped with `timeout` after this
 };
 
+// A PROGRAM forwarded to a producer, waiting for its PROGRAM_STATE (3.2 draft).
+struct ProgramRoute {
+    ConnId viewer = 0;
+    uint32_t request_id = 0;         // the viewer's own
+    uint64_t deadline_ms = 0;        // dropped with `timeout` after this
+};
+
 struct Session {
     std::string id;
     std::string proposed;            // the id the producer asked for
     wire::Identity identity;         // with the id the hub chose
     std::vector<std::string> capabilities;
     bool controls_cap = false, selection_cap = false, events_cap = false;   // the producer's
+    bool programs_cap = false;       // 3.2 draft: the producer announced "programs"
+    bool interventions_cap = false;  // 3.2 draft: the producer announced "interventions"
     ConnId producer = 0;
     bool live = true;
     uint64_t order = 0;
@@ -314,6 +323,16 @@ struct Session {
     std::map<std::string, SelectionState> selections;
     std::map<uint32_t, ControlRoute> routes;
     uint32_t next_control = 1;
+    // 3.2 draft. `controls_plain` is `controls` without the key "interventions",
+    // for viewers that did not announce it; null when `controls` has no such key
+    // (then `controls` goes to every viewer). `program_state` is the latest
+    // unrequested PROGRAM_STATE, kept for a viewer with programs that attaches
+    // later; `program_routes` are the PROGRAMs waiting for the producer's
+    // PROGRAM_STATE, by the hub's own request_id.
+    SharedBytes controls_plain;
+    SharedBytes program_state;
+    std::map<uint32_t, ProgramRoute> program_routes;
+    uint32_t next_program = 1;
 };
 
 struct VSub {
@@ -363,6 +382,8 @@ struct Peer {
     // (latest wins while its send queue is full), and its waiting CONTROLs.
     bool cap_controls = false, cap_selection = false;
     bool cap_scenes = false;         // 3.2 draft: the viewer announced "scenes"
+    bool cap_programs = false;       // 3.2 draft: the viewer announced "programs"
+    bool cap_interventions = false;  // 3.2 draft: the viewer announced "interventions"
     SharedBytes pending_controls;
     std::map<std::string, SharedBytes> pending_selections;
     size_t controls_waiting = 0;
@@ -738,11 +759,21 @@ struct Hub::Impl {
         p.held_since_us = 0;
     }
 
+    // The session's latest CONTROLS as one viewer may see it: without the key
+    // "interventions" unless the viewer announced that capability (3.2 draft).
+    static const SharedBytes& controls_for(const Peer& p, const Session& s) {
+        return (!p.cap_interventions && s.controls_plain) ? s.controls_plain : s.controls;
+    }
+
     // Right after the VIEWS of an attachment: the session's latest CONTROLS and
     // every item space's selection that is not empty. A new attachment has no
     // data pending, so its CONTROLS goes at once, before any SUBSCRIBE.
     void send_state(Peer& p, const Session& s) {
-        if (p.cap_controls && s.controls) deliver_controls(p, s.controls);
+        if (p.cap_controls && s.controls) deliver_controls(p, controls_for(p, s));
+        if (p.cap_programs && s.program_state) {
+            if (!server.send(p.conn, s.program_state)) overflow(p.conn);
+            ++c.program_states_out;
+        }
         if (p.cap_selection)
             for (const auto& kv : s.selections)
                 if (!kv.second.empty) offer_selection(p, kv.first, kv.second.frame);
@@ -1278,6 +1309,12 @@ struct Hub::Impl {
             refuse(CALIPER_NET_ERR_UNSUPPORTED, "the producer of session " + s->id + " does not take controls");
             return;
         }
+        if (ctl.op == "intervene" && !(p.cap_interventions && s->interventions_cap)) {
+            refuse(CALIPER_NET_ERR_UNSUPPORTED, p.cap_interventions
+                       ? "the producer of session " + s->id + " does not take interventions"
+                       : "a viewer announces the capability 'interventions' before it sends intervene");
+            return;
+        }
         if (p.controls_waiting >= kMaxControlsWaiting || s->routes.size() >= kMaxRoutes) {
             refuse(CALIPER_NET_ERR_LIMIT, "too many controls wait for the producer's answer");
             return;
@@ -1327,13 +1364,112 @@ struct Hub::Impl {
     // The producer's CONTROLS: kept (also after the session ends) and passed
     // to every viewer of the session that announced `controls`, after the data
     // the hub received before it (deliver_controls).
-    void producer_controls(Session& s, SharedBytes buf) {
+    // 3.2 draft: a viewer without `interventions` gets the CONTROLS without that key.
+    void producer_controls(Session& s, const wire::Controls& m, SharedBytes buf) {
         if (s.controls) meta_bytes -= s.controls->size();
+        if (s.controls_plain) meta_bytes -= s.controls_plain->size();
         s.controls = buf;
+        s.controls_plain.reset();
+        meta_bytes += buf->size();
+        if (!m.interventions.is_null()) {
+            wire::Controls plain = m;
+            plain.interventions = Json();
+            std::vector<uint8_t> b;
+            if (wire::encode(wire::Message(plain), &b)) {
+                s.controls_plain = std::make_shared<const Bytes>(std::move(b));
+                meta_bytes += s.controls_plain->size();
+            }
+        }
+        for (ConnId v : s.viewers) {
+            auto pt = peers.find(v);
+            if (pt != peers.end() && !pt->second.closing) deliver_controls(pt->second, controls_for(pt->second, s));
+        }
+        if (retained() > opt.max_retained_bytes) enforce_budget();
+    }
+
+    // 3.2 draft: a viewer's PROGRAM, forwarded to the producer of its session
+    // under a request_id of the hub's, when the hub allows control. Every
+    // refusal is a non-fatal ERROR in reply to the PROGRAM.
+    void viewer_program(Peer& p, const wire::Program& m) {
+        auto refuse = [&](const char* code, const std::string& text) {
+            ++c.programs_refused;
+            wire::Error e;
+            e.code = code;
+            e.message = text.substr(0, CALIPER_NET_TEXT_MAX);
+            e.in_reply_to = CALIPER_NET_MSG_PROGRAM;
+            e.request_id = m.request_id;
+            send(p.conn, e);
+        };
+        if (!p.cap_programs) {
+            refuse(CALIPER_NET_ERR_UNSUPPORTED, "a viewer announces the capability 'programs' before it sends PROGRAM");
+            return;
+        }
+        if (!opt.allow_control) {
+            refuse(CALIPER_NET_ERR_FORBIDDEN, "this hub does not allow control; start it with --allow-control");
+            return;
+        }
+        if (p.watch_only) {
+            refuse(CALIPER_NET_ERR_FORBIDDEN, "this connection's token may watch the stream, not control a run");
+            return;
+        }
+        Session* s = session_of(p);
+        if (!s) {
+            refuse(CALIPER_NET_ERR_NOT_ATTACHED, "attach to a session first");
+            return;
+        }
+        if (!s->live || !s->producer) {
+            refuse(CALIPER_NET_ERR_UNSUPPORTED, "session " + s->id + " has ended");
+            return;
+        }
+        if (!s->programs_cap) {
+            refuse(CALIPER_NET_ERR_UNSUPPORTED, "the producer of session " + s->id + " does not take programs");
+            return;
+        }
+        if (s->program_routes.size() >= kMaxRoutes) {
+            refuse(CALIPER_NET_ERR_LIMIT, "too many programs wait for the producer's answer");
+            return;
+        }
+        uint32_t up = 0;
+        do {
+            up = s->next_program++;
+        } while (up == 0 || s->program_routes.count(up));
+        ProgramRoute route;
+        route.viewer = p.conn;
+        route.request_id = m.request_id;
+        route.deadline_ms = monotonic_ms() + kReplyWaitMs;
+        s->program_routes[up] = route;
+        wire::Program fwd = m;
+        fwd.request_id = up;
+        send(s->producer, fwd);
+        ++c.programs_forwarded;
+    }
+
+    // 3.2 draft: the producer's PROGRAM_STATE. With a request_id it goes to the
+    // viewer that asked, under its own id. Without one it goes to every viewer
+    // of the session that announced `programs`, and the latest is kept for a
+    // viewer that attaches later.
+    void producer_program_state(Session& s, const wire::ProgramState& m, SharedBytes buf) {
+        if (m.request_id) {
+            auto it = s.program_routes.find(*m.request_id);
+            if (it == s.program_routes.end()) return;
+            ProgramRoute route = it->second;
+            s.program_routes.erase(it);
+            auto pt = peers.find(route.viewer);
+            if (pt == peers.end() || pt->second.closing || !pt->second.cap_programs) return;
+            wire::ProgramState r = m;
+            r.request_id = route.request_id;
+            send(pt->second.conn, r);
+            ++c.program_states_out;
+            return;
+        }
+        if (s.program_state) meta_bytes -= s.program_state->size();
+        s.program_state = buf;
         meta_bytes += buf->size();
         for (ConnId v : s.viewers) {
             auto pt = peers.find(v);
-            if (pt != peers.end() && !pt->second.closing) deliver_controls(pt->second, buf);
+            if (pt == peers.end() || pt->second.closing || !pt->second.cap_programs) continue;
+            if (!server.send(pt->second.conn, buf)) overflow(pt->second.conn);
+            ++c.program_states_out;
         }
         if (retained() > opt.max_retained_bytes) enforce_budget();
     }
@@ -1388,6 +1524,8 @@ struct Hub::Impl {
             viewer_event(p, r, *e);
         } else if (auto* ctl = std::get_if<wire::Control>(&m)) {
             viewer_control(p, *ctl);
+        } else if (auto* pg = std::get_if<wire::Program>(&m)) {
+            viewer_program(p, *pg);   // 3.2 draft
         } else if (std::holds_alternative<wire::Bye>(m)) {
             close(p.conn, CALIPER_NET_CLOSE_NORMAL, "bye");
         } else if (auto* er = std::get_if<wire::Error>(&m)) {
@@ -1508,6 +1646,8 @@ struct Hub::Impl {
         s.controls_cap = has_cap(caps, CALIPER_NET_CAP_CONTROLS);
         s.selection_cap = has_cap(caps, CALIPER_NET_CAP_SELECTION);
         s.events_cap = has_cap(caps, CALIPER_NET_CAP_EVENTS);
+        s.programs_cap = has_cap(caps, CALIPER_NET_CAP_PROGRAMS);
+        s.interventions_cap = has_cap(caps, CALIPER_NET_CAP_INTERVENTIONS);
     }
 
     // The hub's WELCOME. 3.1: it announces `controls` and `selection`, and to a
@@ -1516,7 +1656,8 @@ struct Hub::Impl {
     wire::Welcome hub_welcome(bool client_has_controls) {
         wire::Welcome w;
         w.role = CALIPER_NET_ROLE_HUB;
-        w.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_SELECTION};
+        w.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_SELECTION,
+                          CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS};   // 3.2 draft: forwarded
         Json sw = Json::object();
         sw.set("name", "caliper-hub");
         sw.set("version", opt.software_version);
@@ -1548,6 +1689,23 @@ struct Hub::Impl {
         for (auto& kv : routes)
             answer_route(kv.second, CALIPER_NET_ERR_UNSUPPORTED,
                          "the session's producer disconnected before it answered");
+        std::map<uint32_t, ProgramRoute> programs;
+        programs.swap(s.program_routes);
+        for (auto& kv : programs)
+            answer_program_route(kv.second, CALIPER_NET_ERR_UNSUPPORTED,
+                                 "the session's producer disconnected before it answered");
+    }
+
+    // A non-fatal ERROR in reply to the PROGRAM of a route (3.2 draft).
+    void answer_program_route(const ProgramRoute& r, const char* code, const std::string& text) {
+        auto pt = peers.find(r.viewer);
+        if (pt == peers.end() || pt->second.closing) return;
+        wire::Error e;
+        e.code = code;
+        e.message = text.substr(0, CALIPER_NET_TEXT_MAX);
+        e.in_reply_to = CALIPER_NET_MSG_PROGRAM;
+        e.request_id = r.request_id;
+        send(pt->second.conn, e);
     }
 
     // A CONTROL_REPLY with an error to the viewer of a route (3.1).
@@ -1640,6 +1798,8 @@ struct Hub::Impl {
         forget_meta(s);
         for (auto& kv : s.routes) answer_route(kv.second, CALIPER_NET_ERR_UNSUPPORTED, "the session is gone");
         s.routes.clear();
+        for (auto& kv : s.program_routes) answer_program_route(kv.second, CALIPER_NET_ERR_UNSUPPORTED, "the session is gone");
+        s.program_routes.clear();
         if (s.producer) {
             auto pt = peers.find(s.producer);
             if (pt != peers.end()) pt->second.role = Peer::Role::Retired;
@@ -1686,6 +1846,10 @@ struct Hub::Impl {
     void forget_meta(Session& s) {
         if (s.controls) meta_bytes -= s.controls->size();
         s.controls.reset();
+        if (s.controls_plain) meta_bytes -= s.controls_plain->size();
+        s.controls_plain.reset();
+        if (s.program_state) meta_bytes -= s.program_state->size();
+        s.program_state.reset();
         for (auto& kv : s.selections)
             if (kv.second.frame) meta_bytes -= kv.second.frame->size();
         s.selections.clear();
@@ -2277,8 +2441,10 @@ struct Hub::Impl {
             producer_scene(s, r, m, std::move(buf));                 // 3.2 draft
         } else if (auto* q = std::get_if<wire::ViewReply>(&m)) {
             producer_reply(s, *q);
-        } else if (std::holds_alternative<wire::Controls>(m)) {
-            producer_controls(s, std::move(buf));
+        } else if (auto* cs = std::get_if<wire::Controls>(&m)) {
+            producer_controls(s, *cs, std::move(buf));
+        } else if (auto* ps = std::get_if<wire::ProgramState>(&m)) {
+            producer_program_state(s, *ps, std::move(buf));   // 3.2 draft
         } else if (auto* sel = std::get_if<wire::Selection>(&m)) {
             producer_selection(s, *sel, std::move(buf));
         } else if (auto* cr = std::get_if<wire::ControlReply>(&m)) {
@@ -2315,6 +2481,8 @@ struct Hub::Impl {
         p.cap_controls = has_cap(h.capabilities, CALIPER_NET_CAP_CONTROLS);
         p.cap_selection = has_cap(h.capabilities, CALIPER_NET_CAP_SELECTION);
         p.cap_scenes = has_cap(h.capabilities, CALIPER_NET_CAP_SCENES);
+        p.cap_programs = has_cap(h.capabilities, CALIPER_NET_CAP_PROGRAMS);
+        p.cap_interventions = has_cap(h.capabilities, CALIPER_NET_CAP_INTERVENTIONS);
         wire::Welcome w = hub_welcome(p.cap_controls);
         if (p.cap_controls && p.watch_only) w.control = false;
         send(p.conn, w);
@@ -2371,6 +2539,9 @@ struct Hub::Impl {
             for (auto& kv : sessions)
                 for (auto it = kv.second.routes.begin(); it != kv.second.routes.end();)
                     it = it->second.viewer == conn ? kv.second.routes.erase(it) : std::next(it);
+            for (auto& kv : sessions)
+                for (auto it = kv.second.program_routes.begin(); it != kv.second.program_routes.end();)
+                    it = it->second.viewer == conn ? kv.second.program_routes.erase(it) : std::next(it);
         } else if (p.role == Peer::Role::Producer) {
             auto it = sessions.find(p.session);
             if (it != sessions.end() && it->second.producer == conn) end_session(it->second);
@@ -2603,6 +2774,15 @@ struct Hub::Impl {
                 }
                 answer_route(it->second, CALIPER_NET_ERR_TIMEOUT, "the producer did not answer in time");
                 it = kv.second.routes.erase(it);
+            }
+        for (auto& kv : sessions)   // 3.2 draft: PROGRAMs whose PROGRAM_STATE never came
+            for (auto it = kv.second.program_routes.begin(); it != kv.second.program_routes.end();) {
+                if (it->second.deadline_ms > ms) {
+                    ++it;
+                    continue;
+                }
+                answer_program_route(it->second, CALIPER_NET_ERR_TIMEOUT, "the producer did not answer in time");
+                it = kv.second.program_routes.erase(it);
             }
         if (ms - last_expire_ms >= 100) {
             last_expire_ms = ms;
