@@ -830,6 +830,14 @@ PreparedPanel prepare_panel(const spec::Spec& s, const spec::Panel& panel, const
         case spec::Primitive::histogram: prepare_histogram(p, panel, d); break;
         case spec::Primitive::table: prepare_table(p, d, lim); break;
         case spec::Primitive::text: prepare_text(p, panel, d, lim); break;
+        case spec::Primitive::scene: {
+            auto it = panel.bind.find(spec::kSceneSlot);
+            if (it != panel.bind.end() && !it->second.bindings.empty())
+                if (auto name = spec::live_scene_name(it->second.bindings.front())) p.scene = *name;
+            p.scene_options = panel.options.scene;
+            p.info = p.scene.empty() ? std::string() : "live:" + p.scene;
+            break;
+        }
     }
     // A state names the source's catalog id rather than the spec's own id.
     if (!p.state.ready() && !p.state.detail.empty()) {

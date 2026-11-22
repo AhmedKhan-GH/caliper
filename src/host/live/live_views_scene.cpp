@@ -17,6 +17,8 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 
 namespace caliper_live_views {
 
@@ -223,5 +225,161 @@ SceneView* scene_view(CaliperCore* core, const char* name) {
 
 SceneView* scene_view(View& v) { return v.scene ? v.scene->view.get() : nullptr; }
 const SceneView* scene_view(const View& v) { return v.scene ? v.scene->view.get() : nullptr; }
+
+// ---- A scene drawn into a rectangle ----------------------------------------------------------------
+
+void pick_scene_rect(SceneRectState& state, float u, float v) {
+    state.seam_u = std::clamp(u, 0.0f, 1.0f);
+    state.seam_v = std::clamp(v, 0.0f, 1.0f);
+}
+
+SceneRectResult draw_scene_in_rect(CaliperCore* core, const std::string& name, const char* imgui_id, ImVec2 p0,
+                                   ImVec2 size, const SceneRectOptions& options, SceneRectState& state,
+                                   const SceneRectSink& sink) {
+    SceneView* sc = scene_view(core, name.c_str());
+    if (!sc) {
+        state = SceneRectState{};
+        return SceneRectResult::missing;
+    }
+    if (size.x < 4.0f || size.y < 4.0f) return SceneRectResult::too_small;
+    constexpr int kMaxTarget = 8192, kHysteresisPx = 8;
+    const float scale = core->scale > 0.0f ? core->scale : 1.0f;
+    int want_w = std::clamp(int(size.x * scale), 1, kMaxTarget);
+    int want_h = std::clamp(int(size.y * scale), 1, kMaxTarget);
+    if (sc->has_target() && std::abs(want_w - int(sc->width())) <= kHysteresisPx &&
+        std::abs(want_h - int(sc->height())) <= kHysteresisPx) {
+        want_w = int(sc->width());
+        want_h = int(sc->height());
+    }
+
+    // The panel's options: the up axis once per value, the scale bar each frame.
+    if (!options.up.empty() && options.up != state.up_applied) {
+        for (caliper_scene::Axis a : {caliper_scene::Axis::PosX, caliper_scene::Axis::NegX, caliper_scene::Axis::PosY,
+                                      caliper_scene::Axis::NegY, caliper_scene::Axis::PosZ, caliper_scene::Axis::NegZ})
+            if (options.up == caliper_scene::axis_name(a)) sc->switch_up(a);
+        state.up_applied = options.up;
+    }
+    sc->set_scale_bar(options.scale_bar);
+
+    // ---- input: an invisible button owns the rectangle, so that a drag never moves the window
+    ImGui::SetCursorScreenPos(p0);
+    ImGui::InvisibleButton(imgui_id, size,
+                           ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight |
+                               ImGuiButtonFlags_MouseButtonMiddle);
+    const bool hovered = ImGui::IsItemHovered();
+    ImGuiIO& io = ImGui::GetIO();
+    const bool valid = ImGui::IsMousePosValid();
+    if (ImGui::IsItemActivated() && valid) {
+        state.down = true;
+        state.moved = false;
+        state.button = ImGui::IsMouseClicked(ImGuiMouseButton_Right)    ? 1
+                       : ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ? 2
+                                                                        : 0;
+        state.selecting = io.KeyShift && state.button == 0;
+        state.x0 = state.lx = io.MousePos.x;
+        state.y0 = state.ly = io.MousePos.y;
+    }
+    bool released = false;
+    if (state.down) {
+        if (valid && (std::fabs(io.MousePos.x - state.x0) > io.MouseDragThreshold ||
+                      std::fabs(io.MousePos.y - state.y0) > io.MouseDragThreshold))
+            state.moved = true;
+        const float dx = valid ? io.MousePos.x - state.lx : 0.0f, dy = valid ? io.MousePos.y - state.ly : 0.0f;
+        if (valid) {
+            state.lx = io.MousePos.x;
+            state.ly = io.MousePos.y;
+        }
+        if (state.moved && !state.selecting && (dx != 0.0f || dy != 0.0f)) {
+            if (state.button != 0 || io.KeyAlt || io.KeyCtrl) sc->pan(dx, dy, size.y);
+            else sc->orbit(dx, dy);
+        }
+        released = !ImGui::IsMouseDown(state.button);
+    }
+    if (hovered && io.MouseWheel != 0.0f) {
+        const float mx = (io.MousePos.x - p0.x) / size.x * 2.0f - 1.0f;
+        const float my = 1.0f - (io.MousePos.y - p0.y) / size.y * 2.0f;
+        sc->zoom(io.MouseWheel, mx, my, size.x, size.y);
+    }
+    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) sc->fit();
+
+    // ---- GPU: the scene core compiles and submits when something changed
+    const uint32_t clear = ImGui::GetColorU32(ImGuiCol_WindowBg) | 0xff000000u;
+    std::string why;
+    if (!sc->render(uint32_t(want_w), uint32_t(want_h), scale, clear, &why) && !why.empty()) sc->note(why);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p1(p0.x + size.x, p0.y + size.y);
+    if (const uint64_t tex = sc->imgui_texture()) dl->AddImage((ImTextureID)tex, p0, p1);
+
+    // ---- picks and selections, in the render target's pixels
+    const float kx = sc->width() ? float(sc->width()) / size.x : 1.0f;
+    const float ky = sc->height() ? float(sc->height()) / size.y : 1.0f;
+    auto target_px = [&](float x, float y) { return ImVec2((x - p0.x) * kx, (y - p0.y) * ky); };
+    if (released) {
+        if (state.selecting && state.moved && valid) {
+            const ImVec2 a = target_px(state.x0, state.y0), b = target_px(io.MousePos.x, io.MousePos.y);
+            const std::vector<float> poly = {a.x, a.y, b.x, a.y, b.x, b.y, a.x, b.y};
+            if (sink) sink("select", sc->select_polygon(poly));
+        } else if (!state.moved && state.button == 0) {
+            if (state.selecting) {
+                if (sc->clear_selection() && sink) sink("select", "{}");
+            } else if (valid) {
+                const ImVec2 t = target_px(io.MousePos.x, io.MousePos.y);
+                std::string pick_why;
+                state.click = sc->request_pick(t.x, t.y, &pick_why) || state.click;
+            }
+        }
+        state.down = false;
+        state.selecting = false;
+    }
+    if (state.seam_u >= 0.0f && sc->width() && sc->height()) {
+        std::string pick_why;
+        if (sc->request_pick(state.seam_u * float(sc->width()), state.seam_v * float(sc->height()), &pick_why))
+            state.click = true;
+        state.seam_u = state.seam_v = -1.0f;
+    }
+    caliper_scene::Hit hit;
+    const caliper_scene::PickPass::Result pr = sc->poll_pick(&hit);
+    if (pr == caliper_scene::PickPass::Result::Hit || pr == caliper_scene::PickPass::Result::Miss ||
+        pr == caliper_scene::PickPass::Result::Dropped) {
+        if (state.click && pr == caliper_scene::PickPass::Result::Hit && sink) sink("pick", sc->pick_detail(hit));
+        state.click = false;
+    }
+
+    // ---- the selection rectangle being drawn, the scale bar and the labels
+    dl->PushClipRect(p0, p1, true);
+    if (state.down && state.selecting && state.moved && valid) {
+        const ImVec2 a(std::min(state.x0, io.MousePos.x), std::min(state.y0, io.MousePos.y));
+        const ImVec2 b(std::max(state.x0, io.MousePos.x), std::max(state.y0, io.MousePos.y));
+        dl->AddRectFilled(a, b, IM_COL32(176, 141, 87, 40));
+        dl->AddRect(a, b, IM_COL32(176, 141, 87, 220), 0.0f, 0, 1.0f);
+    }
+    const ImU32 ink = ImGui::GetColorU32(ImGuiCol_Text), shade = IM_COL32(0, 0, 0, 160);
+    if (options.scale_bar) {
+        if (const caliper_scene::ScaleBar bar = sc->scale_bar(size.x, size.y); bar.visible) {
+            const float len = float(bar.pixels), m = 12.0f;
+            const ImVec2 a(p0.x + m, p1.y - m), b(p0.x + m + len, p1.y - m);
+            dl->AddLine(a, b, ink, 2.0f);
+            dl->AddLine(a, ImVec2(a.x, a.y - 5.0f), ink, 2.0f);
+            dl->AddLine(b, ImVec2(b.x, b.y - 5.0f), ink, 2.0f);
+            dl->AddText(ImVec2(a.x, a.y - 6.0f - ImGui::GetTextLineHeight()), ink, bar.label.c_str());
+        }
+    }
+    if (options.labels && sc->width() && sc->height()) {
+        const float sx = size.x / float(sc->width()), sy = size.y / float(sc->height());
+        for (const caliper_scene::LabelAnchor& a : sc->labels()) {
+            const ImVec2 at(p0.x + a.x * sx + 4.0f, p0.y + a.y * sy - ImGui::GetTextLineHeight() - 2.0f);
+            dl->AddText(ImVec2(at.x + 1.0f, at.y + 1.0f), shade, a.text.c_str());
+            dl->AddText(at, ink, a.text.c_str());
+        }
+    }
+    if (sc->highlighted()) {
+        char t[48];
+        std::snprintf(t, sizeof t, "%llu selected", (unsigned long long)sc->highlighted());
+        const ImVec2 ts = ImGui::CalcTextSize(t);
+        dl->AddText(ImVec2(p1.x - ts.x - 10.0f, p0.y + 8.0f), ink, t);
+    }
+    dl->PopClipRect();
+    return SceneRectResult::drawn;
+}
 
 }  // namespace caliper_live_views

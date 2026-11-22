@@ -221,6 +221,7 @@ const char* pane_primitive_noun(Primitive p) {
         case Primitive::table: return "Table";
         case Primitive::image: return "Image";
         case Primitive::text: return "Text";
+        case Primitive::scene: return "Scene";
     }
     return "";
 }
@@ -233,6 +234,7 @@ const std::vector<PaneSlot>& pane_slots(Primitive p) {
                                                  {"color", false, false},     {"size", false, false}};
     static const std::vector<PaneSlot> table = {{"rows", true, false}};
     static const std::vector<PaneSlot> text = {{"value", false, false}};
+    static const std::vector<PaneSlot> scene = {{"scene", true, false}};
     switch (p) {
         case Primitive::series: return series;
         case Primitive::heatmap:
@@ -241,6 +243,7 @@ const std::vector<PaneSlot>& pane_slots(Primitive p) {
         case Primitive::points: return points;
         case Primitive::table: return table;
         case Primitive::text: return text;
+        case Primitive::scene: return scene;   // a scene panel (spec version 1): its live scene
     }
     return text;
 }
@@ -260,6 +263,7 @@ const std::vector<PaneOption>& pane_options(Primitive p) {
     static const std::vector<PaneOption> table = {{"columns", K::columns, "Columns"}};
     static const std::vector<PaneOption> image = {{"colormap", K::colormap, "Colormap"}, {"range", K::range, "Range"}};
     static const std::vector<PaneOption> text = {{"text", K::longtext, "Text"}};
+    static const std::vector<PaneOption> scene = {};   // a scene panel's options are set through panel.patch
     switch (p) {
         case Primitive::series: return series;
         case Primitive::heatmap: return heatmap;
@@ -268,6 +272,7 @@ const std::vector<PaneOption>& pane_options(Primitive p) {
         case Primitive::table: return table;
         case Primitive::image: return image;
         case Primitive::text: return text;
+        case Primitive::scene: return scene;
     }
     return text;
 }
@@ -364,6 +369,7 @@ std::optional<std::map<std::string, SlotValue>> pane_auto_bind(Primitive p, cons
             }
             case Primitive::heatmap:
             case Primitive::image:
+            case Primitive::scene:   // a scene binds a live scene, not a source
                 return std::nullopt;
         }
         return std::nullopt;
@@ -397,6 +403,7 @@ std::optional<std::map<std::string, SlotValue>> pane_auto_bind(Primitive p, cons
             b["value"] = one(source);
             return b;
         case Primitive::table:
+        case Primitive::scene:
             return std::nullopt;
     }
     return std::nullopt;
@@ -439,7 +446,8 @@ std::string pane_fit_hint(Primitive p, const std::string& source_id, const PaneS
         case Primitive::points: takes = "a tensor [n, 2] or [n, 3], or two numeric columns"; max_rank = 2; break;
         case Primitive::histogram: takes = "a numeric column or a tensor"; break;
         case Primitive::table: takes = "a table"; break;
-        case Primitive::text: return {};
+        case Primitive::text:
+        case Primitive::scene: return {};
     }
     const std::string what = std::string("a") + (p == Primitive::image ? "n " : " ") + spec::to_string(p);
     if (!shape.known) return source_id + "'s data is not known yet, and " + what + " takes " + takes + ".";

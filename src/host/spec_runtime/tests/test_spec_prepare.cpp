@@ -360,3 +360,27 @@ TEST_CASE("prepare: numbers in the headers' four significant digits") {
     CHECK(spec_fmt4(123456.0) == "1.235e5");
     CHECK(spec_fmt4(NAN) == "NaN");
 }
+
+TEST_CASE("prepare: a scene panel names its live scene and keeps its options, with no data") {
+    namespace cs = caliper_builder::spec;
+    cs::Spec s;
+    s.version = 1;
+    s.applet.id = "t";
+    cs::Panel p;
+    p.id = "world";
+    p.primitive = cs::Primitive::scene;
+    p.bind["scene"].bindings = {"live:model"};
+    p.options.scene.up = "+z";
+    p.options.scene.labels = false;
+    s.panels.push_back(p);
+    caliper_builder::PanelData d;
+    d.panel = "world";
+    d.primitive = cs::Primitive::scene;
+    const PreparedPanel prepared = prepare_panel(s, p, d);
+    CHECK(prepared.state.ready());
+    CHECK(prepared.scene == "model");
+    CHECK(prepared.scene_options.up == std::optional<std::string>("+z"));
+    CHECK(prepared.scene_options.labels == std::optional<bool>(false));
+    CHECK(prepared.title == "model");
+    CHECK(prepared.info == "live:model");
+}

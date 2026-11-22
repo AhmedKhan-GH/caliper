@@ -53,8 +53,13 @@
 #include <string_view>
 #include <vector>
 
+struct CaliperCore;   // the app's core, whose live views hold the live scenes
+
 namespace caliper_builder {
 class Session;
+class EventSink;
+class RunControl;
+struct Event;
 }
 
 namespace caliper_host {
@@ -215,6 +220,10 @@ struct SpecPanelView {
     int fit_frames = 2;          // frames that fit the axes to the data
     double x_extent[2] = {0, 0}, y_extent[2] = {0, 0};   // the data's, for log ticks
     uint64_t version = 0;        // grows with each new data
+    // A scene panel: draws the live scene into the content rectangle and
+    // returns true, or returns false when the scene is not there, and the
+    // panel then shows "Source offline". Null: always offline.
+    std::function<bool(const ImRect& content)> scene;
 };
 
 // Draws one prepared panel into `rect` of the current window: the title
@@ -223,6 +232,15 @@ struct SpecPanelView {
 // panel's frame.
 SpecPanelFrame draw_spec_panel(SpecPanelView& view, const ImRect& rect, const SpecLook& look, SpecTextures& textures,
                                float band = 0.0f);
+
+// The event of a pick or a selection (`type` "pick" or "select") in the
+// scene panel `panel_id`, which draws the live scene `scene`, from the scene
+// view's detail (live_scene.h: pick_detail(), select_polygon()): kind pick or
+// select, the panel, the scene as its view, origin "ui" and the detail's keys
+// as its fields; a cleared selection ("{}") has no entities. False when the
+// detail is not a JSON object.
+bool spec_scene_event(const char* type, const std::string& panel_id, const std::string& scene,
+                      const std::string& detail, caliper_builder::Event* out);
 
 class SpecRuntime {
 public:
@@ -284,6 +302,20 @@ public:
     // (the builder's, in build mode), "No panels" over the hint instead.
     void set_empty_hint(std::string hint) { empty_hint_ = std::move(hint); }
 
+    // Instruments (spec version 1, design/instruments.md). The runtime pushes
+    // the picks and selections of its scene panels to `events` with the
+    // panel's id, and hands both to the control leaves (spec_instruments.h).
+    // Either may be null; neither is owned.
+    void set_instruments(caliper_builder::EventSink* events, caliper_builder::RunControl* run);
+    // Where the live scenes of scene panels come from: the core of the
+    // attached script, asked at each draw; null or no getter shows every
+    // scene panel as "Source offline".
+    void set_live_core(std::function<CaliperCore*()> core) { core_ = std::move(core); }
+    // The app's test seam: a pick at (u, v), each from 0 to 1 across the
+    // content of the scene panel `panel_id`, at its next draw, as if the
+    // person clicked there. False when the spec has no such scene panel.
+    bool pick_scene(const std::string& panel_id, float u, float v);
+
     // The layout of the last draw.
     const SpecLayout& layout() const { return layout_; }
     // A panel's prepared data, or null when it has none yet (a panel in a
@@ -300,6 +332,12 @@ private:
     void prepare(Entry& e, const caliper_builder::PanelData& data, const caliper_builder::spec::Spec* spec = nullptr);
     void update_only(const SpecLayout* shown);
     void draw_tabs(const SpecLayoutTabs& t, const SpecLook& look);
+    void draw_control(const caliper_builder::spec::Control& control, const ImRect& rect, const SpecLook& look);
+    // Sets e.view.scene for a scene panel: draws through the live core and
+    // pushes its picks and selections.
+    void bind_scene(Entry& e);
+
+    struct SceneStates;   // the gesture and pick state of each scene panel (live_views_scene.h)
 
     SpecTextures& textures_;
     std::optional<caliper_builder::spec::Spec> spec_;
@@ -318,6 +356,10 @@ private:
     std::string empty_hint_;
     std::function<float(const SpecPanelFrame&)> reserve_;
     std::function<void(const SpecPanelFrame&)> overlay_;
+    caliper_builder::EventSink* events_ = nullptr;
+    caliper_builder::RunControl* run_ = nullptr;
+    std::function<CaliperCore*()> core_;
+    std::unique_ptr<SceneStates> scenes_;
 };
 
 }  // namespace caliper_host
