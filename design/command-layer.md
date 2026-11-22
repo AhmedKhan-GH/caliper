@@ -463,9 +463,10 @@ The `effect` of every command is data in the table (`kEffects` in `command_table
 
 | Effect | Commands |
 |---|---|
-| `read` | `app.info`, `app.applets`, `catalog.*`, `data.query`, `loader.list`, `loader.describe`, `spec.get`, `spec.validate`, `panel.render`, `panel.data`, `applet.list`, `review.status`, `capture.frame`, `history.list`, and the proposals `preview.begin`, `preview.diff`, `preview.discard` |
-| `edit` | `spec.set_text`, `source.add`, `source.patch`, `source.remove`, `panel.create`, `panel.patch`, `panel.remove`, `layout.place`, `layout.set`, `preview.commit` |
+| `read` | `app.info`, `app.applets`, `catalog.*`, `data.query`, `loader.list`, `loader.describe`, `spec.get`, `spec.validate`, `panel.render`, `panel.data`, `applet.list`, `review.status`, `capture.frame`, `history.list`, `run.state`, `events.wait`, and the proposals `preview.begin`, `preview.diff`, `preview.discard` |
+| `edit` | `spec.set_text`, `source.add`, `source.patch`, `source.remove`, `panel.create`, `panel.patch`, `panel.remove`, `layout.place`, `layout.set`, `control.create`, `control.patch`, `control.remove`, `preview.commit` |
 | `change` | `app.launch` (it changes the page and may replace the open spec), `data.import`, `loader.create`, `loader.update`, `loader.run`, `loader.delete`, `spec.new`, `spec.open`, `applet.open` (they replace the open spec), `applet.save`, `history.undo`, `history.redo` |
+| `run` | `run.set_param`, `run.action`, `run.pause`: they act on the running script, change no workspace state and have no undo. The session asks about them for the origins `agent` and `mcp`, and Accept edits does not apply them. The page [Instruments](instruments.md) defines the class. |
 
 ## Threads and the queue
 
