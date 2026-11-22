@@ -38,9 +38,8 @@ QUEUES device work:
   its gathered values only then, so every step's value still arrives, in one
   chunk a pass. Between passes a view call returns after
   NetTransport.attached(). The ring tells the cadence what a pass would take
-  (wants_pass: a subscription's own rate allows a snapshot), the training
-  thread's time of each pass's view calls (gate_cost), and looks at the
-  cadence's marks at each view call of a pass. Without a checkpoint for
+  (wants_pass: a subscription's own rate allows a snapshot) and the training
+  thread's time of each pass's view calls (gate_cost). Without a checkpoint for
   STEP_IDLE_S, the ticks follow the clock again, as for a script that calls
   the views by hand.
 
@@ -476,14 +475,7 @@ class NetRing:
                 return False
         return True
 
-    def _look(self) -> None:
-        """A look at the marks of the shared cadence before a view call's work in a pass."""
-        if self.gate_open and self.gate_step is not None:
-            from . import _programs
-            _programs.look(self.gate_step)
-
     def _open_tick(self, now: float) -> Tick:
-        self._look()
         t = self.tick = Tick(now, threading.get_ident())
         self.next_due = 0.0                 # calls pass while it is open
         return t
@@ -539,8 +531,6 @@ class NetRing:
         v.seen = now
         if not v.groups or self._gated(now):      # outside a pass only the offer is refreshed
             return False
-        if self.tick is not None:
-            self._look()
         with self.lock:
             groups = list(v.groups.values())
         t = self.tick

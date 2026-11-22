@@ -235,6 +235,11 @@ class _Cadence:
                     # never less than the training thread's own time in the pass's view calls
                     self.cost.append(max(d, self.view_cost.pop(k, 0.0)))
                     self._update()
+            if not self.base:
+                # The cycle was too short to time a step without a pass, for example when a long
+                # pass stalls the thread and the marks of the steps after it complete together:
+                # longer cycles until one can be timed.
+                self.n = min(EVERY_MAX, math.ceil((self.n or N_MIN) * GROW))
         self.k = step
         self.done = {s: v for s, v in done.items() if s >= step - 1}
         self.passes = {s for s in self.passes if s >= step - 1}
@@ -835,7 +840,13 @@ def _at_step(step: int) -> None:
         for p in live:
             if p.warm > 0:
                 p.warm -= 1
+        # The view calls of a pass step did their work before this checkpoint, thus this look comes
+        # later than the look of a step without a pass by that work: the marks it finds move back
+        # by it, so that every mark is seen as late as at a step without a pass.
+        work = ring.gate_cost if ring is not None and is_pass and ring.gate_open else 0.0
         done = _mark(marks, step, now, is_pass)
+        if work > 0.0:
+            done = [(k, lo, max(lo, hi - work)) for k, lo, hi in done]
         if ring is not None:
             ring.step_tick(step, now)
         ran = []
@@ -979,19 +990,6 @@ def views(ring) -> None:
                 _STATE["marks"].clear()
         _VIEWS["ring"] = ring
         _set_active()
-
-
-def look(step: int) -> None:
-    """A view call of pass ``step``: read the marks that completed since the last look. The
-    snapshots of a pass run in the step's view calls, before its checkpoint, thus a look at each
-    of them keeps the completion times of the marks exact while the pass works, as the wait of a
-    program pass does after the checkpoint."""
-    with _LOCK:
-        marks = _marks()
-        if marks is None or not _STATE["dense"]:
-            return
-        for k, _lo, hi in marks.poll(_clock()):
-            _CAD.completed(k, hi)
 
 
 def pass_next() -> bool:

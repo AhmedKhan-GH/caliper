@@ -128,9 +128,7 @@ class SimRing:
         """The view calls of one step: snapshots only while the gate is open, after the look at
         the marks that the ring's first call of a pass makes."""
         if self.gate_open and self.sim.t - self.last >= self.interval / 2:
-            for _ in range(self.calls):           # the views' calls, each after a look
-                P.look(step)
-                self.sim.t += self.snap_s / self.calls
+            self.sim.t += self.snap_s
             self.gate_cost += self.snap_s
             self.sim.queued += self.snap_gpu
             self.last = self.sim.t
@@ -160,8 +158,9 @@ def loop(monkeypatch):
     """The cadence over the fake clock of a Sim, with a SimRing and optionally one program."""
     made = {}
 
-    def make(cpu, gpu, snap_s=0.0, snap_gpu=0.0, rate=60.0, program=False, pass_s=0.1e-3):
+    def make(cpu, gpu, snap_s=0.0, snap_gpu=0.0, rate=60.0, program=False, pass_s=0.1e-3, sleep=0.0):
         s = Sim(cpu, gpu, pass_s)
+        s.pause = sleep
         monkeypatch.setattr(P, "_clock", s.clock)
         monkeypatch.setattr(_adapter, "time", type("T", (), {"sleep": staticmethod(s.sleep)}))
         monkeypatch.setitem(P._STATE, "rt", SimRuntime(s))
@@ -187,12 +186,13 @@ def loop(monkeypatch):
 
         def train(steps, first=0):
             for k in range(first, first + steps):
+                if ring is not None:
+                    ring.hooks(k)             # the view calls come at the start of the forward
                 s.t += s.cpu                  # forward and backward of step k, optimizer of k - 1
                 s.queued += s.gpu
-                if ring is not None:
-                    ring.hooks(k)
                 if P.ACTIVE:
                     P.at_step(k)
+                s.t += s.pause                # a loop that also waits on the CPU
         s.train = train
         s.ring = ring
         return s
@@ -225,6 +225,18 @@ def test_costly_snapshots_keep_to_the_budget(loop):
     assert st["share"] <= P.SHARE * 1.05
     # The views still update a few times a second.
     assert st["passes_per_s"] is not None and st["passes_per_s"] >= 3
+
+
+@pytest.mark.parametrize("sleep", [0.0, 10e-3])
+def test_the_pass_is_measured_at_its_own_cost(loop, sleep):
+    # The view calls come at the start of a step, long before its checkpoint: the marks that the
+    # pass's checkpoint finds move back by the pass's own work, so that D is that work and not
+    # also the rest of the step. A loop that sleeps 10 ms a step, as the proof's script does,
+    # keeps the same D.
+    s = loop(cpu=3.0e-3, gpu=1.0e-3, snap_s=2.0e-3, sleep=sleep)
+    s.train(4000)
+    assert P._CAD.cost_s() == pytest.approx(2.0e-3, rel=0.15)
+    assert P._CAD.step_s() == pytest.approx(3.0e-3 + sleep, rel=0.05)
 
 
 def test_cheap_snapshots_follow_their_own_rate(loop):
@@ -277,7 +289,11 @@ def test_costly_views_get_no_floor(loop):
     s.train(20000)
     st = P.views_stats()
     assert st["floor_passes"] == 0 and st["limit"] == "budget"
-    assert P._CAD.cost_s() == pytest.approx(60e-3, rel=0.1)
+    # The stall also empties the GPU's queue, which the step after it fills again.
+    assert 60e-3 <= P._CAD.cost_s() <= 80e-3
+    t0, k0 = s.end(), 20000
+    s.train(20000, first=k0)
+    assert 20000 * 1.0e-3 / (s.end() - t0) >= 0.95
 
 
 def test_a_pass_that_took_nothing_does_not_count(loop):
