@@ -44,8 +44,11 @@ def find(name):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("capture_dir", nargs="?", default="hosted-runs-check", help="the folder that receives the capture")
-    ap.add_argument("--app", default=find("caliper"), help="the caliper executable")
+    app = find("caliper")
+    default_dir = str(Path(app).parent / "hosted-runs-check") if app else "hosted-runs-check"
+    ap.add_argument("capture_dir", nargs="?", default=default_dir,
+                    help="the folder that receives the capture (default: a folder in the build folder)")
+    ap.add_argument("--app", default=app, help="the caliper executable")
     ap.add_argument("--mcp", default=find("caliper-mcp"), help="the caliper-mcp executable")
     ap.add_argument("--python", default=sys.executable, help="a Python with torch")
     a = ap.parse_args()
