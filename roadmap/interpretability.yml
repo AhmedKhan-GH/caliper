@@ -1,0 +1,170 @@
+# yaml-language-server: $schema=schema.json
+prefix: INT
+title: Interpretability and interventions
+order: 7
+summary: This pillar covers the tools for looking inside a model while it runs, GPTScope and the inspector, and the planned interventions that change a model's computation during a run.
+features:
+  - id: INT-01
+    title: GPTScope
+    status: shipped
+    summary: GPTScope is an applet that trains a small character-level language model live and shows what it has learned in seven windows, each answering one question.
+    depends_on: [COR-03]
+    docs: docs/references/applets.md#gptscope
+    issue: null
+
+  - id: INT-02
+    title: ThoughtSpace
+    status: shipped
+    summary: ThoughtSpace draws the model's residual stream as a 3-D constellation, with every token's state at every depth as a point and a trail joining the depths.
+    depends_on: [INT-01]
+    docs: docs/references/applets.md#gptscope
+    issue: null
+
+  - id: INT-03
+    title: The head views
+    status: shipped
+    summary: The head views plot each attention head by mean attended distance and entropy, and draw the attention matrix of a selected head as a texture.
+    depends_on: [INT-01]
+    docs: docs/references/applets.md#gptscope
+    issue: null
+
+  - id: INT-04
+    title: Controls for experiments
+    status: shipped
+    summary: Protocol 3.1 controls let a viewer pause, step and resume a running script, change its registered parameters and run its registered actions, which an interpretability run uses to repeat an experiment.
+    depends_on: [STR-03]
+    docs: docs/guides/control-a-running-script.md
+    issue: null
+
+  - id: INT-05
+    title: The inspector
+    status: built
+    summary: The inspector is an applet that attaches to a running script and shows its model in docked panes for inference, the list of tensors and a single tensor.
+    depends_on: [INT-08]
+    branch: inspector
+    issue: null
+
+  - id: INT-06
+    title: The inspector's tensor view
+    status: built
+    summary: The tensor view draws a tensor at its true shape, zooms down to single cells by sampling the visible region, and lets a person read and edit cells, rows and columns.
+    depends_on: [INT-05]
+    branch: inspector
+    issue: null
+
+  - id: INT-07
+    title: The inspector's 3-D model view
+    status: built
+    summary: The 3-D model view draws every tensor of a model as a panel sized to its shape and textured with its heatmap, grouped and stacked by layer.
+    depends_on: [INT-05]
+    branch: inspector
+    issue: null
+
+  - id: INT-08
+    title: Requests from the app to a script
+    status: built
+    summary: A script serves requests over a socket next to its session, so the app can ask it to run a task, stream events back, cancel it and fetch tensor values in binary chunks.
+    depends_on: [STR-04]
+    branch: inspector
+    issue: null
+
+  - id: INT-09
+    title: Running a language model from the app
+    status: built
+    summary: An example script loads a small language model with MLX and serves the inspector's requests, with generation, a tensor list, sampled views and in-memory weight edits.
+    depends_on: [INT-08]
+    branch: inspector
+    issue: null
+
+  - id: INT-10
+    title: The intervention API
+    status: planned
+    summary: The intervention API changes a model's computation during a run at a chosen place, so that an intact run and an intervened run can be compared, from the app or from an agent.
+    depends_on: [STR-03, INT-08, INT-20]
+    sprint: 6
+    design: design/roadmap.md#streaming-and-embedding
+    issue: null
+    draft: true
+
+  - id: INT-11
+    title: Ablate
+    status: planned
+    summary: Ablate removes a chosen head, layer output or direction from a model's computation during a run.
+    depends_on: [INT-10]
+    sprint: 6
+    design: design/roadmap.md#streaming-and-embedding
+    issue: null
+
+  - id: INT-12
+    title: Scale
+    status: planned
+    summary: Scale multiplies a chosen activation or direction by a factor during a run.
+    depends_on: [INT-10]
+    sprint: 6
+    issue: null
+
+  - id: INT-13
+    title: Steer
+    status: planned
+    summary: Steer adds a chosen direction to the residual stream at selected layers and positions during a run.
+    depends_on: [INT-10]
+    sprint: 6
+    design: design/roadmap.md#streaming-and-embedding
+    issue: null
+
+  - id: INT-14
+    title: Patch
+    status: planned
+    summary: Patch replaces an activation in one run with the matching activation from another run.
+    depends_on: [INT-10]
+    sprint: 6
+    issue: null
+
+  - id: INT-15
+    title: The J-space Trace pane
+    status: planned
+    summary: The Trace pane reads the residual stream through a Jacobian lens at each layer and position as a model generates, and compares an intact run with an intervened one.
+    depends_on: [INT-05, INT-10, INT-20]
+    sprint: 6
+    issue: null
+
+  - id: INT-16
+    title: Induction metrics
+    status: planned
+    summary: Induction metrics score each attention head for induction behaviour and show the scores in GPTScope.
+    depends_on: [INT-03]
+    design: design/roadmap.md#undecided
+    issue: null
+    draft: true
+
+  - id: INT-17
+    title: Activation patching in GPTScope
+    status: planned
+    summary: Activation patching in GPTScope lets a person replace activations of one run with those of another and see the effect on the model's output.
+    depends_on: [INT-01, INT-14]
+    design: design/roadmap.md#undecided
+    issue: null
+    draft: true
+
+  - id: INT-18
+    title: Support for MLX
+    status: planned
+    summary: Support for MLX lets the interpretability tools read activations and apply interventions on models written in MLX.
+    depends_on: [INT-10]
+    issue: null
+    draft: true
+
+  - id: INT-19
+    title: Support for JAX
+    status: planned
+    summary: Support for JAX lets the interpretability tools read activations and apply interventions on models written in JAX.
+    depends_on: [INT-10]
+    issue: null
+    draft: true
+
+  - id: INT-20
+    title: Interventions and the inspector
+    status: decision
+    summary: This decision sets whether interventions wait for sprint 6 or come with the inspector work, and what happens to the inspector branch.
+    depends_on: []
+    issue: null

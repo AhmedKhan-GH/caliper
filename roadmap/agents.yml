@@ -1,0 +1,89 @@
+# yaml-language-server: $schema=schema.json
+prefix: AGT
+title: Agents and automation
+order: 5
+summary: This pillar covers how programs and agents drive the app, through the HTTP interface, an MCP server for outside agents, the side chat for the person's own agent and the widget agent that edits one panel.
+features:
+  - id: AGT-01
+    title: Caliper API v0
+    status: shipped
+    summary: Caliper API v0 is an HTTP interface to the running app, on the loopback address and behind tokens, that lists and launches applets, returns a capture, serves a stream and runs the commands of the command layer.
+    depends_on: [COR-01, SPC-05]
+    docs: docs/references/api.md
+    issue: null
+
+  - id: AGT-02
+    title: The MCP server
+    status: shipped
+    summary: caliper-mcp is a stdio Model Context Protocol server that gives an outside agent one tool per command of the command layer, with read-only resources, and carries each call out through Caliper API.
+    depends_on: [AGT-01]
+    docs: docs/references/mcp-server.md
+    design: design/mcp-server.md
+    issue: null
+
+  - id: AGT-03
+    title: The side chat
+    status: shipped
+    summary: The side chat is a pane where the person's own agent works over the Agent Client Protocol, with caliper-mcp handed to it, so it can read and edit the open spec with each change reviewed.
+    depends_on: [AGT-02]
+    docs: docs/references/side-chat.md
+    design: design/acp-integration.md
+    issue: null
+
+  - id: AGT-04
+    title: Local models in the side chat
+    status: shipped
+    summary: An agent whose model runs on the same machine can be marked as a local model in the side chat, which then warns when the model and a training run share the GPU.
+    depends_on: [AGT-03, AGT-05]
+    docs: docs/references/side-chat.md#local-models
+    design: design/acp-integration.md#local-models-in-the-side-chat
+    issue: null
+
+  - id: AGT-05
+    title: The widget agent
+    status: shipped
+    summary: caliper-agent in its widget role works on one panel, selection, dropped file or property, using the person's own provider key or a local model, and its changes wait in a preview for the person to accept.
+    depends_on: [AGT-01]
+    docs: docs/references/widget-agent.md
+    design: design/widget-agent.md
+    issue: null
+
+  - id: AGT-06
+    title: Permission modes
+    status: shipped
+    summary: The side chat and caliper-mcp clients run in a mode, Ask, Accept edits, Read only or Allow all, that decides which commands wait for the person's approval.
+    depends_on: [AGT-03]
+    docs: docs/references/side-chat.md#modes
+    design: design/acp-integration.md#approvals-and-diffs-for-every-agent
+    issue: null
+
+  - id: AGT-07
+    title: The Ollama preset on first run
+    status: planned
+    summary: The widget agent's settings offer the Ollama preset when Ollama is running on the machine, so a first run can use a local model with no key.
+    depends_on: [AGT-05]
+    issue: null
+
+  - id: AGT-08
+    title: Empty arguments treated as omitted
+    status: planned
+    summary: An empty value that a model sends for an optional tool argument is treated as if the argument were omitted, so the call still runs.
+    depends_on: [AGT-05]
+    issue: null
+    draft: true
+
+  - id: AGT-09
+    title: Cloud agents end to end
+    status: planned
+    summary: This work checks that an agent running on a remote service, rather than on this machine, works through the side chat from start to finish.
+    depends_on: [AGT-03]
+    issue: null
+    draft: true
+
+  - id: AGT-10
+    title: Agents with a bundled Python
+    status: planned
+    summary: caliper-agent is packaged with its own Python runtime and a lock file, so the app finds it without CALIPER_AGENT_PYTHON being set.
+    depends_on: [AGT-05]
+    design: design/byok-agent.md#what-is-built-and-what-waits
+    issue: null

@@ -1,0 +1,88 @@
+# yaml-language-server: $schema=schema.json
+prefix: RUN
+title: Runs and comparison
+order: 6
+summary: This pillar covers how Caliper keeps the history of runs on the machine and compares them, from the metrics and artifacts stores that exist today to a run database, a history browser and side-by-side views of several runs.
+features:
+  - id: RUN-01
+    title: Metrics stores grouped by run
+    status: shipped
+    summary: The metrics service logs scalars, histograms, images and hyperparameters under an experiment, a run, a tag and a step, and stores them so that each run's curves can be read back in order.
+    depends_on: []
+    docs: docs/references/service-metrics-v1.md
+    issue: null
+
+  - id: RUN-02
+    title: Artifacts
+    status: shipped
+    summary: The artifacts service is a content-addressed store of checkpoints and exports, deduplicated on disk by their sha256 digest and linked to the run that produced them.
+    depends_on: []
+    docs: docs/references/service-artifacts-v1.md
+    issue: null
+
+  - id: RUN-03
+    title: The run database
+    status: planned
+    summary: A local database keeps the runs that the metrics and artifacts stores record as a history that outlives each session.
+    depends_on: [RUN-01, RUN-02]
+    sprint: 5
+    issue: null
+
+  - id: RUN-04
+    title: The history browser
+    status: planned
+    summary: A browser in the app lists the stored runs and opens any of them.
+    depends_on: [RUN-03]
+    sprint: 5
+    issue: null
+    draft: true
+
+  - id: RUN-05
+    title: Run comparison
+    status: planned
+    summary: One page holds two or more runs, each live or recorded, and shows their views side by side.
+    depends_on: [RUN-03, STR-13]
+    sprint: 5
+    issue: null
+
+  - id: RUN-06
+    title: A shared cursor across runs
+    status: planned
+    summary: One cursor moves every run on the page together, aligning runs by step or by time and showing the latest earlier item, with its distance, for a run that has none at the cursor.
+    depends_on: [RUN-05]
+    sprint: 5
+    issue: null
+
+  - id: RUN-07
+    title: Linked cameras
+    status: planned
+    summary: Orbiting the scene of one run turns the matching scene of the other runs, and selecting items in one run highlights the items with the same row ids in the others.
+    depends_on: [RUN-05, REN-12]
+    sprint: 5
+    issue: null
+    draft: true
+
+  - id: RUN-08
+    title: Difference views
+    status: planned
+    summary: A difference view shows one run minus another as a heatmap for tensors of the same shape, with loss curves overlaid on one axis and histograms on shared bins.
+    depends_on: [RUN-05]
+    sprint: 5
+    issue: null
+
+  - id: RUN-09
+    title: Error bands
+    status: planned
+    summary: Error bands draw the uncertainty of a series as a shaded range around its line.
+    depends_on: [RUN-05]
+    sprint: 5
+    issue: null
+    draft: true
+
+  - id: RUN-10
+    title: A checkpoint browser
+    status: idea
+    summary: A checkpoint browser would list stored checkpoints with previews and might resume training from one.
+    depends_on: [RUN-02]
+    design: design/roadmap.md#undecided
+    issue: null

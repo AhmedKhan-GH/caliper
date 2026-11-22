@@ -6,7 +6,7 @@ on:
     # (design/mkdocs.yml is under design/), and the sources the docs embed
     # as snippets.
     paths: ['docs/**', 'design/**', 'docs-theme/**', 'mkdocs.yml',
-            'sdk/include/**', 'include/caliper/**', 'examples/**',
+            'sdk/include/**', 'include/caliper/**', 'examples/**', 'roadmap/**',
             '.github/workflows/docs.yml']
   workflow_dispatch:
 permissions:
@@ -29,5 +29,10 @@ jobs:
       # depends on MkDocs accepting design/mkdocs.yml inside its own docs folder
       # when the file is named by a relative path, as here.
       - run: pip install mkdocs==1.6.1 mkdocs-material==9.8.1 mkdocs-awesome-nav==3.3.0 pymdown-extensions==13.1
+      # The roadmap registry check and its tests need jsonschema; the site build does not.
+      - run: pip install jsonschema==4.25.1
+      # Validates the roadmap registry in roadmap/ against its schema and rules.
+      - run: python roadmap/check.py
+      - run: python -m unittest discover -s roadmap -p 'test_*.py' -v
       - run: mkdocs build --strict
       - run: mkdocs build --strict -f design/mkdocs.yml

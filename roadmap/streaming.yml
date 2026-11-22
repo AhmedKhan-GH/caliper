@@ -1,0 +1,184 @@
+# yaml-language-server: $schema=schema.json
+prefix: STR
+title: Live data, streaming and recordings
+order: 3
+summary: This pillar covers how a running script's tensors reach a viewer, over shared memory or a network stream, through the hub and into notebooks. It also covers the wire protocol and how a session will be recorded and replayed.
+features:
+  - id: STR-01
+    title: Caliper LIB
+    status: shipped
+    summary: Caliper LIB is the Python package whose view calls, show, points, series and histogram, send snapshots of a script's tensors to a viewer without making the training loop wait.
+    depends_on: []
+    docs: docs/references/python-api.md
+    issue: null
+
+  - id: STR-02
+    title: Wire protocol v3
+    status: shipped
+    summary: Wire protocol v3 defines the binary frames of a live stream over a WebSocket, including the session handshake, view subscriptions, snapshots, series deltas and data views.
+    depends_on: []
+    docs: docs/references/wire-protocol.md
+    issue: null
+
+  - id: STR-03
+    title: Protocol 3.1 controls
+    status: shipped
+    summary: The controls of protocol 3.1 let a viewer pause, resume and step a training loop, change registered parameters, run registered actions and share a selection between views.
+    depends_on: [STR-02]
+    docs: docs/references/wire-protocol.md#controls
+    issue: null
+
+  - id: STR-04
+    title: Live streaming
+    status: shipped
+    summary: Snapshots of a script's tensors are copied on the device into shared memory, and a viewer process on the same machine samples them at its own pace, so the script never waits for the display.
+    depends_on: [STR-01]
+    docs: docs/explanations/live-streaming.md
+    issue: null
+
+  - id: STR-05
+    title: Network streaming
+    status: shipped
+    summary: caliper.serve sends a script's live views over a WebSocket to a notebook widget or a browser tab, reducing each snapshot on the device and letting the latest snapshot win.
+    depends_on: [STR-02, STR-04]
+    docs: docs/explanations/network-streaming.md
+    issue: null
+
+  - id: STR-06
+    title: The hub
+    status: shipped
+    summary: The hub is a separate process that holds the live sessions of several scripts, lets viewers choose one, keeps an ended session's last data and forwards controls when allowed.
+    depends_on: [STR-05]
+    docs: docs/guides/run-a-hub.md
+    issue: null
+
+  - id: STR-07
+    title: Notebooks
+    status: shipped
+    summary: A notebook widget shows a training run's live views inside Jupyter or VS Code, with a controls panel to pause, step and change parameters while the cell runs.
+    depends_on: [STR-03, STR-05]
+    docs: docs/tutorials/watch-a-training-run-in-a-notebook.md
+    issue: null
+
+  - id: STR-08
+    title: Data views
+    status: shipped
+    summary: A data view tells the producer which part of a large tensor to send, such as a slice, a reduction or a downsample, so the reduction runs on the device and only the result travels.
+    depends_on: [STR-05]
+    docs: docs/explanations/network-streaming.md#data-views
+    issue: null
+
+  - id: STR-09
+    title: Protocol 3.2 for scenes
+    status: built
+    summary: Protocol 3.2 adds the scenes capability, the scene view kind and the scene update and clear messages for points, lines and meshes, with codecs in C++, Python and TypeScript and golden frames.
+    depends_on: [STR-03]
+    sprint: 4
+    branch: sprint4-pr1-main2
+    issue: null
+
+  - id: STR-10
+    title: caliper.scene
+    status: built
+    summary: caliper.scene adds the Caliper LIB calls that build a 3-D scene of meshes, line strips and points, with colours or colormapped values, and stream it over caliper.serve with a state kept for late viewers.
+    depends_on: [STR-05, STR-09]
+    sprint: 4
+    branch: sprint4-pr1-main2
+    issue: null
+
+  - id: STR-11
+    title: Demo 0, the loss landscape
+    status: built
+    summary: Demo 0 is a notebook that streams the loss surface around a model's current weights as a mesh, with the optimizer's path across it, recomputed on the device while the model trains.
+    depends_on: [STR-07, STR-10, REN-12]
+    sprint: 4
+    branch: sprint4-pr1-main2
+    issue: null
+
+  - id: STR-12
+    title: Recordings on MCAP
+    status: planned
+    summary: A recording stores the frames of a session as an MCAP file, placed on named timelines such as step and time, so that it can be opened later without the script.
+    depends_on: [STR-09, SPC-04]
+    sprint: 4
+    issue: null
+
+  - id: STR-13
+    title: The scrubber
+    status: planned
+    summary: The scrubber moves a cursor along the timelines of a recording or a live session, and every view shows its latest item at or before the cursor.
+    depends_on: [STR-12]
+    sprint: 4
+    issue: null
+
+  - id: STR-14
+    title: The Record button
+    status: planned
+    summary: A Record button in the app's session toolbar starts and stops writing the attached session to a recording file kept in the workspace.
+    depends_on: [STR-12]
+    sprint: 4
+    issue: null
+
+  - id: STR-15
+    title: Recordings through the hub
+    status: planned
+    summary: The hub records every session it holds to its own recording file and serves finished recordings to viewers like sessions.
+    depends_on: [STR-06, STR-12]
+    sprint: 5
+    issue: null
+
+  - id: STR-16
+    title: WebTransport
+    status: planned
+    summary: WebTransport becomes a second transport for the stream beside the WebSocket.
+    depends_on: [STR-05]
+    design: design/streaming-and-embedding.md#data-streaming
+    issue: null
+
+  - id: STR-17
+    title: The security review
+    status: planned
+    summary: This step is a dedicated review of the stream's security, which must finish before any session leaves the local machine.
+    depends_on: [STR-05]
+    design: design/streaming-and-embedding.md#security
+    issue: null
+    draft: true
+
+  - id: STR-18
+    title: Several viewers per session
+    status: planned
+    summary: A live session over shared memory is read by one viewer today, and this work lets several viewers read the same session by giving each reader its own claims.
+    depends_on: [STR-04]
+    docs: docs/explanations/live-streaming.md#known-limits
+    issue: null
+
+  - id: STR-19
+    title: f16 and bf16
+    status: planned
+    summary: This work adds zero-copy kernels for half-precision and bfloat16 tensors, so that snapshots of such tensors are taken on the device without a conversion on the host.
+    depends_on: [STR-04, REN-08]
+    issue: null
+    draft: true
+
+  - id: STR-20
+    title: Shared memory on Windows
+    status: planned
+    summary: Named shared memory through CreateFileMapping carries the local live session on Windows, with CUDA tensors copied on the device without blocking training.
+    depends_on: [PLT-07]
+    design: design/windows-parity.md#3-caliper-lib
+    issue: null
+
+  - id: STR-21
+    title: Shared memory on Linux
+    status: planned
+    summary: This work carries the local live session over POSIX shared memory on Linux arm64.
+    depends_on: [PLT-14]
+    issue: null
+
+  - id: STR-22
+    title: ROS 2 import
+    status: planned
+    summary: ROS 2 recordings in MCAP open in Caliper, with transforms, point clouds, images and markers decoded into scene entities and named frames translated into the entity tree.
+    depends_on: [STR-12]
+    sprint: 6
+    issue: null
