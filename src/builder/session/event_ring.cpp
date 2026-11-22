@@ -143,8 +143,10 @@ const std::vector<const char*>& kind_keys(EventKind kind) {
                                                  "point", "op"};
     static const std::vector<const char*> spec = {"command", "event", "applet"};
     static const std::vector<const char*> approval = {"approval", "command", "state", "target"};
-    // design/gpu-programs.md, Program Events.
-    static const std::vector<const char*> program = {"program", "change", "host", "code", "message", "line", "column"};
+    // design/gpu-programs.md, Program Events; an instance of a piece adds
+    // half and pass (design/programmable-graphics.md, Status and Events).
+    static const std::vector<const char*> program = {"program", "change", "host", "half", "pass",
+                                                     "code",    "message", "line", "column"};
     // design/instrument-interface.md, Events.
     static const std::vector<const char*> state = {"state", "value", "previous", "writer"};
     static const std::vector<const char*> cursor = {"change", "step", "first", "latest", "playing", "speed"};

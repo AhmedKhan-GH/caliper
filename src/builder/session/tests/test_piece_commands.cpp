@@ -493,4 +493,9 @@ TEST_CASE("pieces: program.status takes an instance's draw object from the viewe
     CHECK(events.got[0].fields["pass"] == 0);
     CHECK(!events.got[1].fields.contains("half"));
     CHECK(!events.got[1].fields.contains("pass"));
+    // Both keys leave through the events' JSON, which keeps only the keys of the kind.
+    const json out = event_json(events.got[0]);
+    CHECK(out["half"] == "draw");
+    CHECK(out["pass"] == 0);
+    CHECK(out["code"] == "program.draw_over_time");
 }
