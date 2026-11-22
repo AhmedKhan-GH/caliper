@@ -1,0 +1,103 @@
+# yaml-language-server: $schema=schema.json
+prefix: HYG
+title: Codebase Hygiene
+order: 10
+summary: This pillar covers the engineering practices that give Caliper a codebase that a new engineer can read, build, change and release with confidence.
+features:
+  - id: HYG-01
+    title: Style Tooling
+    status: planned
+    scope: supporting
+    summary: The code follows one style in each language, with .clang-format, .clang-tidy, .editorconfig, ruff for Python, and ESLint with a formatter for the web code checked in and run by CI.
+    depends_on: [PLT-03]
+    issue: null
+
+  - id: HYG-02
+    title: Pre-Commit Hooks
+    status: planned
+    scope: supporting
+    summary: A pre-commit configuration runs the style tools on the changed files of each commit, and thus a style error stops the commit before it reaches CI.
+    depends_on: [HYG-01]
+    issue: null
+
+  - id: HYG-03
+    title: Commit Convention
+    status: planned
+    scope: supporting
+    summary: Every commit message has a subject line of at most 72 characters and puts the detail in the body, as RULES.md and the contributing guide state.
+    depends_on: []
+    issue: null
+
+  - id: HYG-04
+    title: Release Tags and Changelog
+    status: planned
+    scope: supporting
+    summary: The tags mark only releases, with the leftover rebase backup tags deleted, version tags for the app, the SDK, Caliper LIB and Caliper Embed, and a CHANGELOG that records each release.
+    depends_on: []
+    issue: null
+
+  - id: HYG-05
+    title: Top-Level Layout Cleanup
+    status: planned
+    scope: supporting
+    summary: The top level of the repository holds only maintained folders, with the tracked dump/shelved/ folder removed, demos/ folded into examples/ and the build folders at the root ignored.
+    depends_on: []
+    issue: null
+
+  - id: HYG-06
+    title: Showcase Applets Repository
+    status: planned
+    scope: supporting
+    summary: The hand-built showcase applets move out of the core repository into the separate applets repository, and the core repository keeps none of them.
+    depends_on: [COR-16]
+    issue: null
+
+  - id: HYG-07
+    title: Generated API Reference
+    status: built
+    scope: supporting
+    summary: The docs generate the Python and C API reference from the docstrings and the header comments, and thus the reference always matches the code.
+    depends_on: []
+    branches: [roadmap/coverage]
+    in_progress: true
+    issue: null
+
+  - id: HYG-08
+    title: Branch Auto-Delete
+    status: planned
+    scope: supporting
+    summary: GitHub deletes the branch of a pull request when the pull request merges, and thus the branch list shows only open work.
+    depends_on: []
+    issue: null
+
+  - id: HYG-09
+    title: Ownership and Security Files
+    status: planned
+    scope: supporting
+    summary: A CODEOWNERS file names the reviewers for each part of the repository, and a SECURITY.md file tells people how to report a vulnerability.
+    depends_on: []
+    issue: null
+
+  - id: HYG-10
+    title: Large File Splits
+    status: planned
+    scope: supporting
+    summary: "Each of the largest sources is split into focused files: src/host/renderer/vulkan_renderer.cpp (4,157 lines), src/host/net/hub.cpp, src/host/builder/side_chat.cpp, src/main.cpp, src/host/builder/builder_pane_draw.cpp and tests/gfx/gfx_main.cpp."
+    depends_on: []
+    issue: null
+
+  - id: HYG-11
+    title: Issue Tracking and Review
+    status: planned
+    scope: supporting
+    summary: Each planned feature has a GitHub issue that the registry links through its issue field, and a person reviews each pull request before it merges.
+    depends_on: []
+    issue: null
+
+  - id: HYG-12
+    title: Docs Page Check
+    status: planned
+    scope: supporting
+    summary: A script with tests checks every docs page against the page template, and the docs workflow runs it before the strict build and fails on any page that breaks a rule.
+    depends_on: []
+    issue: null

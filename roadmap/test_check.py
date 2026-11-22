@@ -915,6 +915,14 @@ entries:
         self.run_build()
         self.assertFalse((self.out / "roadmap" / "candidates.json").exists())
 
+    def test_pillar_page_links_only_an_existing_candidates_page(self):
+        self.write_candidates(core=CAND_CORE)
+        self.run_build()
+        core = (self.out / "roadmap" / "core.md").read_text()
+        rendering = (self.out / "roadmap" / "rendering.md").read_text()
+        self.assertIn("[candidates page](candidates/core.md)", core)
+        self.assertNotIn("candidates", rendering)
+
     def test_registry_json(self):
         self.run_build()
         data = json.loads((self.out / "roadmap.json").read_text())

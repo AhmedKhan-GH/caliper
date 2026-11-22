@@ -370,13 +370,16 @@ def _feature_links(ids, features):
     return "<br>".join("[%s](%s.md) (`%s`)" % (md(features[i]["title"]), i.lower(), i) for i in ids)
 
 
-def pillar_page(pillar):
+def pillar_page(pillar, has_candidates=True):
+    """The pillar's page. It links the pillar's candidates page only when that page exists."""
     lines = ["---", "template: roadmap.html", "---", "", "# " + md(pillar["title"]), "",
              md(pillar["summary"]), "",
              "The [roadmap graph](index.md) shows how these features depend on features in "
-             "other pillars.",
-             "Ideas for this pillar that are not in the registry are on its "
-             "[candidates page](%s/%s.md)." % (CANDIDATES, pillar["slug"]), ""]
+             "other pillars."]
+    if has_candidates:
+        lines.append("Ideas for this pillar that are not in the registry are on its "
+                     "[candidates page](%s/%s.md)." % (CANDIDATES, pillar["slug"]))
+    lines.append("")
     for status in SHOWN_ORDER:
         items = [f for f in pillar["features"] if shown_status(f) == status]
         if not items:
@@ -567,13 +570,15 @@ def generate(root, site=DEFAULT_SITE):
         site += "/"
     pillars, features = load_registry(root)
     by_prefix = {p["prefix"]: p for p in pillars}
+    cand = read_candidates(root, features)
+    with_candidates = {p["slug"] for p in cand}
     out = []
     for p in pillars:
-        out.append(("roadmap/%s.md" % p["slug"], pillar_page(p), True))
+        out.append(("roadmap/%s.md" % p["slug"], pillar_page(p, p["slug"] in with_candidates),
+                    True))
     for fid in sorted(features, key=id_key):
         out.append(("roadmap/%s.md" % fid.lower(),
                     feature_page(features[fid], by_prefix, features, root, GITHUB), False))
-    cand = read_candidates(root, features)
     if cand:
         # The navigator is its own top tab (docs/.nav.yml); its pillar pages stay out of the sidebar.
         out.append(("roadmap/%s/index.md" % CANDIDATES, candidates_index(), True))
