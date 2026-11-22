@@ -882,3 +882,95 @@ TEST_CASE("on a camera's image plane the image is drawn and picked first and its
         CHECK(order(ViewCamera(through), pick) == std::vector<std::string>{"room", "cam/photo", "cam/box"});
     }
 }
+
+namespace {
+
+// The stage program of one entity's points and lines (scene/stages.h).
+struct OneEntityStages final : StageLookup {
+    std::string path;
+    StageProgram program;
+    const StageProgram* find(std::string_view p, Primitive prim) const override {
+        return p == path && (prim == Primitive::Points || prim == Primitive::Lines) ? &program : nullptr;
+    }
+};
+
+}  // namespace
+
+TEST_CASE("stages: an entity's stage program replaces its built-in entries in both passes, the others keep theirs") {
+    SceneTree t;
+    REQUIRE(t.set_batch(t.ensure("hooked"), bounded(points3(10))));
+    REQUIRE(t.set_batch(t.ensure("plain"), bounded(points3(10))));
+    t.update();
+    OneEntityStages stages;
+    stages.path = "hooked";
+    stages.program.program = caliper_gfx::Program{0x4242};
+    stages.program.vs = kStageVertexEntry;
+    stages.program.fs = kStageFragmentEntry;
+    stages.program.fs_pick = kStagePickEntry;
+    stages.program.material = true;
+    const ViewCamera cam = fitted_orbit(t, 400.0 / 300.0);
+    CompileOptions o = options();
+    o.stages = &stages;
+    o.stage_time_s = 1.5f;
+    o.stage_step = 7;
+
+    Compiled c;
+    run(c, t, cam, o);
+    REQUIRE(c.result.ok);
+    CHECK(c.result.staged == 1);
+    REQUIRE(c.list.records().size == 2);
+    // Draws in the byte order of the paths: "hooked", then "plain".
+    const DrawRecord& hooked = c.rec(0);
+    REQUIRE(hooked.pipeline.id == 0x600);
+    REQUIRE(c.res.stage_pipelines.size() == 1);
+    CHECK(c.res.stage_pipelines[0].stage == &stages.program);
+    CHECK(c.res.stage_pipelines[0].builtin == ProgramId::scene_points);
+    CHECK(c.res.stage_pipelines[0].vs == kStageVertexEntry);
+    CHECK(c.res.stage_pipelines[0].fs == kStageFragmentEntry);
+    // The stage program binds the built-in program's groups 0, 1 and 2.
+    REQUIRE(c.res.stage_groups.size() == 3);
+    CHECK(hooked.groups[0].id == 0x680);
+    CHECK(hooked.groups[2].id == 0x682);
+    CHECK(c.pipe(1).vs == "vs_points");
+    // The frame block carries the time and the step.
+    const sh::Frame f = frame_of(c.list, hooked);
+    float time = 0;
+    std::memcpy(&time, &f.pad0, 4);
+    CHECK(time == 1.5f);
+    CHECK(f.pad1 == 7);
+
+    // The pick pass draws the stage program's pick entry, thus a moved item picks where it draws.
+    Compiled p;
+    t.update();
+    p.compiler.prepare(t, p.res, p.frame);
+    p.list.reset(target3d());
+    const int32_t window[4] = {100, 100, 16, 16};
+    p.result = p.compiler.compile_pick(t, cam, o, window, p.res, p.list, &p.map);
+    REQUIRE(p.result.ok);
+    CHECK(p.result.staged == 1);
+    REQUIRE(p.res.stage_pipelines.size() == 1);
+    CHECK(p.res.stage_pipelines[0].fs == kStagePickEntry);
+    CHECK(p.map.find(1)->entity == t.find("hooked"));
+
+    // Without a lookup the pad words stay zero, as before stages; a refused stage pipeline keeps
+    // the built-in program.
+    Compiled n;
+    run(n, t, cam, options());
+    CHECK(n.result.staged == 0);
+    CHECK(frame_of(n.list, n.rec(0)).pad0 == 0);
+    CHECK(frame_of(n.list, n.rec(0)).pad1 == 0);
+    Compiled r;
+    r.res.refuse_stages = true;
+    run(r, t, cam, o);
+    REQUIRE(r.result.ok);
+    CHECK(r.result.staged == 0);
+    CHECK(r.pipe(0).vs == "vs_points");
+    CHECK(r.res.stage_groups.empty());
+}
+
+TEST_CASE("stages: the entry points are given for points and lines only") {
+    CHECK_FALSE(stage_entries(Primitive::Points, true, false).empty());
+    CHECK_FALSE(stage_entries(Primitive::Lines, false, true).empty());
+    for (Primitive p : {Primitive::Arrows, Primitive::Boxes, Primitive::Mesh, Primitive::Image})
+        CHECK(stage_entries(p, true, true).empty());
+}

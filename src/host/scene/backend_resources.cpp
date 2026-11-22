@@ -1,6 +1,8 @@
 // backend_resources.cpp: Resources over a backend of the graphics layer (backend_resources.h).
 #include "scene/backend_resources.h"
 
+#include "scene/stages.h"
+
 #include <algorithm>
 #include <cstring>
 
@@ -42,6 +44,8 @@ BackendResources::BackendResources(Backend& backend, const ProgramDesc* programs
     : backend_(backend), programs_(programs), colormaps_(std::move(colormaps)) {}
 
 BackendResources::~BackendResources() {
+    for (auto& o : stage_groups_) backend_.release(o.second.handle);
+    for (auto& o : stage_pipelines_) backend_.release(o.second.handle);
     for (auto& g : groups_) backend_.release(g.second);
     for (auto& c : compute_) backend_.release(c.second.group);
     for (auto& p : pipelines_) backend_.release(p.second);
@@ -147,8 +151,47 @@ BindGroup BackendResources::bind_group(ProgramId id, uint32_t group, Texture ima
     put(k, group == 2 ? image.id : 0);
     auto it = groups_.find(k);
     if (it != groups_.end()) return it->second;
+    const BindGroup g = make_group(program(id), id, group, image, image_binding);
+    groups_[k] = g;
+    if (group == 2 && image) group_images_[k] = image;
+    return g;
+}
+
+Pipeline BackendResources::stage_pipeline(const StageProgram& stage, ProgramId builtin, const RenderPipelineDesc& desc) {
+    if (!stage.program) return {};
+    std::string k = pipeline_key(builtin, desc);
+    put(k, stage.program.id);
+    auto it = stage_pipelines_.find(k);
+    if (it != stage_pipelines_.end()) return Pipeline{it->second.handle};
+    RenderPipelineDesc d = desc;
+    d.program = stage.program;
+    const Pipeline p = backend_.create_render_pipeline(d);
+    if (!p) {
+        error_ = backend_.last_error();
+        return {};
+    }
+    stage_pipelines_[k] = {stage.program, p.id, {}};
+    return p;
+}
+
+BindGroup BackendResources::stage_bind_group(const StageProgram& stage, ProgramId builtin, uint32_t group,
+                                             Texture image, uint32_t image_binding) {
+    if (!stage.program) return {};
+    std::string k = "s";
+    put(k, stage.program.id);
+    put(k, (uint64_t(group) << 16) | image_binding);
+    put(k, group == 2 ? image.id : 0);
+    auto it = stage_groups_.find(k);
+    if (it != stage_groups_.end()) return BindGroup{it->second.handle};
+    const BindGroup g = make_group(stage.program, builtin, group, image, image_binding);
+    if (!g) return {};
+    stage_groups_[k] = {stage.program, g.id, group == 2 ? image : Texture{}};
+    return g;
+}
+
+BindGroup BackendResources::make_group(Program prog, ProgramId id, uint32_t group, Texture image, uint32_t image_binding) {
     BindGroupDesc d;
-    d.program = program(id);
+    d.program = prog;
     d.group = group;
     const sh::ProgramDescription& pd = sh::kProgramDescriptions[uint32_t(id)];
     for (uint8_t i = 0; i < pd.binding_count && d.entry_count < kMaxBindingsPerGroup; ++i) {
@@ -171,8 +214,6 @@ BindGroup BackendResources::bind_group(ProgramId id, uint32_t group, Texture ima
     }
     const BindGroup g = backend_.create_bind_group(d);
     if (!g) error_ = backend_.last_error();
-    groups_[k] = g;
-    if (group == 2 && image) group_images_[k] = image;
     return g;
 }
 
@@ -220,6 +261,17 @@ Buffer BackendResources::owned_buffer(uint64_t key, uint64_t bytes, uint32_t usa
 }
 
 void BackendResources::retain_owned(View<uint64_t> keys) {
+    // A stage program the view released, or an image a stage group bound that the view released:
+    // its pipelines and groups go back to the layer.
+    for (auto* objects : {&stage_pipelines_, &stage_groups_})
+        for (auto it = objects->begin(); it != objects->end();) {
+            if (backend_.alive(it->second.program) && (!it->second.image || backend_.alive(it->second.image))) {
+                ++it;
+                continue;
+            }
+            backend_.release(it->second.handle);
+            it = objects->erase(it);
+        }
     std::vector<uint64_t> live(keys.begin(), keys.end());
     std::sort(live.begin(), live.end());
     for (auto it = owned_.begin(); it != owned_.end();) {
