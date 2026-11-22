@@ -2,6 +2,8 @@
 // chain of `from`, columns and tables of catalog tables and `sql` sources, the
 // table panel's columns option, the bounds on rows, cells and tensor sizes,
 // and the sources the session cannot read yet.
+#include <caliper_builder/session/history.h>
+#include <caliper_builder/session/panel_data.h>
 #include <caliper_builder/session/resolve.h>
 #include <caliper_builder/session/session.h>
 
@@ -177,4 +179,194 @@ TEST_CASE("resolve_panel follows a spec that the validator would refuse without 
     CHECK(resolve_panel(s, "p", f.s->store()).error.code == "resolve.cycle");
     s.sources[1].from = "zz";
     CHECK(resolve_panel(s, "p", f.s->store()).error.code == "resolve.unknown_source");
+}
+
+// ---- the time cursor (design/instrument-interface.md, Latest at the Cursor
+// and Window Step) -------------------------------------------------------------
+
+namespace {
+
+// A live view that the app serves: its newest value, a new generation on
+// each put.
+class LiveFake : public CatalogDataSource {
+public:
+    std::uint64_t generation(const std::string& id) override { return id == "live:act" ? gen : 0; }
+    ServedData read(const std::string& id, const ServedRequest&) override {
+        ServedData out;
+        if (id != "live:act" || !newest.valid()) {
+            out.error = Error("resolve.unavailable", "No data yet.");
+            return out;
+        }
+        out.generation = gen;
+        out.tensor = newest;
+        return out;
+    }
+    void put(const TensorData& t) {
+        newest = t;
+        ++gen;
+    }
+    TensorData newest;
+    std::uint64_t gen = 0;
+};
+
+TensorData row(float v, std::int64_t n = 2) {
+    TensorResult r = TensorData::allocate(DType::f32, {n});
+    REQUIRE(r.error.ok());
+    for (std::int64_t i = 0; i < n; ++i) reinterpret_cast<float*>(r.tensor.mutable_data())[i] = v + float(i);
+    return r.tensor;
+}
+
+const char* kCursorSpec = R"(caliper_spec = 1
+[applet]
+id = "cursor"
+
+[[source]]
+id = "act"
+catalog = "live:act"
+
+[[source]]
+id = "first"
+from = "act"
+transform = [{ op = "slice", axis = 0, index = 0 }]
+
+[[source]]
+id = "recent"
+from = "act"
+transform = [{ op = "window", steps = 2 }]
+
+[[panel]]
+id = "now"
+primitive = "series"
+bind = { y = "act" }
+
+[[panel]]
+id = "derived"
+primitive = "text"
+bind = { value = "first" }
+
+[[panel]]
+id = "trail"
+primitive = "series"
+bind = { y = "recent" }
+
+[[panel]]
+id = "world"
+primitive = "scene"
+
+[[panel.entity]]
+path = "trail"
+draw = "lines"
+bind = { x = "recent.step", z = "recent.value" }
+
+[[panel.entity]]
+path = "flat"
+draw = "surface"
+bind = "act"
+)";
+
+}  // namespace
+
+TEST_CASE("each panel shows the newest kept value at or before a held cursor") {
+    const std::string ws = fresh_dir("resolve-cursor");
+    StoreOpen opened = LoaderStore::open(ws);
+    REQUIRE(opened.error.ok());
+    LoaderStore& store = *opened.store;
+    spec::ParseResult parsed = spec::parse_toml(kCursorSpec);
+    INFO((parsed.diagnostics.empty() ? std::string() : parsed.diagnostics.front().message));
+    REQUIRE(parsed.ok());
+    const spec::Spec& s = parsed.spec;
+    auto live = std::make_shared<LiveFake>();
+    DataSources sources;
+    sources.set(CatalogKind::live, live);
+    StepHistory history;
+    history.configure(s);
+    for (int step : {10, 20, 30}) {
+        history.append("live:act", step, row(float(step)));
+        live->put(row(float(step)));
+    }
+    live->put(row(99));   // a newest value that no kept step holds yet
+
+    ChainContext at_live{nullptr, &history, 30, true};
+    PanelData d = resolve_panel(s, "now", store, {}, &sources, &at_live);
+    REQUIRE(d.error.ok());
+    CHECK(values_of(d.slots[0].tensor) == std::vector<double>{99, 100});
+    CHECK_FALSE(d.slots[0].step);
+
+    ChainContext held{nullptr, &history, 25, false};
+    d = resolve_panel(s, "now", store, {}, &sources, &held);
+    REQUIRE(d.error.ok());
+    CHECK(values_of(d.slots[0].tensor) == std::vector<double>{20, 21});
+    CHECK(d.slots[0].step == 20);
+    // A source with `from` runs its own steps on the kept value.
+    d = resolve_panel(s, "derived", store, {}, &sources, &held);
+    REQUIRE(d.error.ok());
+    CHECK(values_of(d.slots[0].tensor) == std::vector<double>{20});
+    // panel.data says which step it shows.
+    const json result = panel_data_result(s, resolve_panel(s, "now", store, {}, &sources, &held), 1);
+    CHECK(result["data"]["cursor"]["step"] == 20);
+    CHECK(result["data"]["cursor"]["live_only"] == false);
+
+    // Before every kept step the panel shows its newest value: Live only.
+    ChainContext early{nullptr, &history, 5, false};
+    d = resolve_panel(s, "now", store, {}, &sources, &early);
+    CHECK(values_of(d.slots[0].tensor) == std::vector<double>{99, 100});
+    CHECK(d.slots[0].live_only);
+
+    // The generation follows a held cursor, and panel_generation() agrees.
+    const std::uint64_t g25 = resolve_panel(s, "now", store, {}, &sources, &held).generation;
+    ChainContext held2{nullptr, &history, 10, false};
+    const std::uint64_t g10 = resolve_panel(s, "now", store, {}, &sources, &held2).generation;
+    CHECK(g25 != g10);
+    CHECK(panel_generation(s, "now", sources, &held) == g25);
+    CHECK(panel_generation(s, "now", sources, &at_live) == panel_generation(s, "now", sources));
+}
+
+TEST_CASE("a window stacks the kept steps up to the cursor with the step of each row") {
+    const std::string ws = fresh_dir("resolve-window");
+    StoreOpen opened = LoaderStore::open(ws);
+    REQUIRE(opened.error.ok());
+    spec::ParseResult parsed = spec::parse_toml(kCursorSpec);
+    REQUIRE(parsed.ok());
+    const spec::Spec& s = parsed.spec;
+    auto live = std::make_shared<LiveFake>();
+    DataSources sources;
+    sources.set(CatalogKind::live, live);
+    StepHistory history;
+    history.configure(s);
+    for (int step : {10, 20, 30}) {
+        history.append("live:act", step, row(float(step)));
+        live->put(row(float(step)));
+    }
+    ChainContext at_live{nullptr, &history, 30, true};
+    PanelData d = resolve_panel(s, "trail", *opened.store, {}, &sources, &at_live);
+    REQUIRE(d.error.ok());
+    CHECK(d.slots[0].tensor.shape() == std::vector<std::int64_t>{2, 2});
+    CHECK(values_of(d.slots[0].steps) == std::vector<double>{20, 30});
+
+    ChainContext held{nullptr, &history, 20, false};
+    d = resolve_panel(s, "trail", *opened.store, {}, &sources, &held);
+    REQUIRE(d.error.ok());
+    CHECK(values_of(d.slots[0].steps) == std::vector<double>{10, 20});
+    CHECK(values_of(d.slots[0].tensor) == std::vector<double>{10, 11, 20, 21});
+
+    // The entities of a scene panel bind the window's columns; a tensor
+    // source without an operator gives no geometry.
+    d = resolve_panel(s, "world", *opened.store, {}, &sources, &held);
+    REQUIRE(d.error.ok());
+    REQUIRE(d.entities.size() == 2);
+    CHECK(d.entities[0].path == "trail");
+    CHECK(d.entities[0].error.ok());
+    REQUIRE(d.entities[0].slots.size() == 2);
+    CHECK(d.entities[0].slots[0].slot == "x");
+    CHECK(values_of(d.entities[0].slots[0].tensor) == std::vector<double>{10, 20});
+    CHECK(d.entities[0].slots[1].slot == "z");
+    CHECK(d.entities[0].slots[1].tensor.shape() == std::vector<std::int64_t>{2, 2});
+    CHECK(d.entities[1].error.code == "entity.shape");
+    CHECK(d.generation != 0);
+
+    // A window with no kept step up to the cursor is not available yet.
+    StepHistory empty;
+    empty.configure(s);
+    ChainContext none{nullptr, &empty, 0, true};
+    CHECK(resolve_panel(s, "trail", *opened.store, {}, &sources, &none).error.code == "resolve.unavailable");
 }

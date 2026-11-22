@@ -166,6 +166,7 @@ class SnapData:
     aux: Any                  # numpy or None
     stats: list
     red: Any                  # the Reduced (colormap, flags, range, axes, points fields)
+    stamp_steps: tuple | None = None   # (run step or None, wall ns) for the "timelines" stamp
 
 
 class _History:
@@ -541,7 +542,7 @@ class Link:
             snap, best.snap = best.snap, None
             best.last_sent = now
             try:
-                frame = self._snapshot_frame(best.sub, snap)
+                frame = self._snapshot_frame(best.sub, snap, _wire.CAP_TIMELINES in self.caps)
             except _wire.WireError:              # over the frame limit: counted, not sent
                 self.p.counters["encode_failed"] += 1
                 return self.next_frame(now)
@@ -550,13 +551,19 @@ class Link:
         return None, wait
 
     @staticmethod
-    def _snapshot_frame(sub: int, snap: SnapData):
+    def _snapshot_frame(sub: int, snap: SnapData, stamped: bool = False):
         r = snap.red
+        stamp = None
+        if stamped and snap.stamp_steps is not None:
+            import numpy
+            step, wall = snap.stamp_steps
+            stamp = numpy.array([_wire.STAMP_ABSENT if step is None else step, wall],
+                                dtype=numpy.int64)
         return _wire.encode_parts(_wire.Snapshot(
             sub, snap.view, snap.seq, snap.stamp_ns, snap.kind, snap.resolved, snap.data,
             aux=snap.aux, colormap=r.colormap, flags=r.flags, vmin=r.vmin, vmax=r.vmax,
             stats=snap.stats, axes=r.axes, tile=r.tile, points_dims=r.points_dims,
-            label_count=r.label_count))
+            label_count=r.label_count, stamp=stamp))
 
     def close(self) -> None:
         if self.closed:
@@ -596,7 +603,7 @@ class _Producer:
 
     def capabilities(self) -> list:
         from ._net_controls import capabilities
-        return sorted(capabilities(self.controls is not None) + [_wire.CAP_SCENES])
+        return sorted(capabilities(self.controls is not None) + [_wire.CAP_SCENES, _wire.CAP_TIMELINES])
 
     def views_msg(self, link: Link | None = None) -> _wire.Views:
         with self.ring.lock:
@@ -605,7 +612,11 @@ class _Producer:
             entries = self.controls.annotate(entries)
         if link is None or _wire.CAP_SCENES not in link.caps:          # 3.2 draft
             entries = [e for e in entries if e["kind"] != _wire.Kind.SCENE]
-        return _wire.Views(entries, self.identity["id"])
+        timelines = None
+        if link is not None and _wire.CAP_TIMELINES in link.caps:
+            timelines = [{"name": "step", "kind": "sequence"},
+                         {"name": "time", "kind": "time", "epoch": True}]
+        return _wire.Views(entries, self.identity["id"], timelines=timelines)
 
     def attached_changed(self, delta: int) -> None:
         self.transport.n_attached = max(0, self.transport.n_attached + delta)
@@ -776,7 +787,7 @@ class _Producer:
         stage.busy = False
         self.counters["published"] += 1
         snap = SnapData(p.view, p.view_id, p.seq, p.stamp_ns, p.kind, p.group.resolved,
-                        data, aux, stats, red)
+                        data, aux, stats, red, p.stamp_steps)
         with self.ring.lock:
             subs = list(p.group.subs)
         for link, sub in subs:
@@ -1021,6 +1032,8 @@ class _Listener:
                     control = link.may_control = ctl.allow
             if _wire.CAP_SCENES in hello.capabilities:            # 3.2 draft
                 link.caps = link.caps | {_wire.CAP_SCENES}
+            if _wire.CAP_TIMELINES in hello.capabilities:
+                link.caps = link.caps | {_wire.CAP_TIMELINES}
             await ws.send(_wire.encode(_wire.Welcome(
                 _wire.ROLE_PRODUCER, s.producer.capabilities(), s.software, s.identity,
                 control=control)))
