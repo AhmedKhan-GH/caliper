@@ -146,7 +146,7 @@ owns one and fills it as blocks are created.
 
 `ExportablePool` gives an applet tensors that the bridge can import, so a texture
 or a geometry buffer updates with zero copies of the data. It is applet-side only,
-because the [host links no ML framework](../introduction/architecture.md#platform-rules). Every failure degrades to
+because the [host links no ML framework](../introduction/architecture.md#design-decisions). Every failure degrades to
 "not pool-backed", and the caller falls back to the `stream_to_tensor` and
 `update_texture` path.
 

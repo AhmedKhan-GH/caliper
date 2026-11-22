@@ -253,7 +253,7 @@ test for it at compile time.
 
 Windowed views are drawn in creation order and tiled left to right; the views
 of a live session take the cells of a grid instead (see
-[What you see](../introduction/python-quickstart.md#visible-views)). A small tensor is
+[What you see](../python/script-attachment.md)). A small tensor is
 magnified by a whole-number factor and sampled nearest, so cells stay cells.
 With `CALIPER_VIEWS_DEBUG=1`, or `views_debug` set on a host's core, each
 window carries an info line (`WxH dtype device path updates=N last=ms`). `CALIPER_VIEW_FLAG_RAW` draws the

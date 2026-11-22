@@ -1169,11 +1169,11 @@ entries:
   ids:
   - AGT-03
   - AGT-05
-- page: docs/introduction/architecture.md#layers
+- page: docs/introduction/architecture.md#components
   item: The layers of the host, the SDK and the applets.
   ids:
   - COR-01
-- page: docs/introduction/architecture.md#platform-rules
+- page: docs/introduction/architecture.md#design-decisions
   item: The platform rules, including that the host never links torch.
   ids:
   - COR-01

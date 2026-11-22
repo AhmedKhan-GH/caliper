@@ -79,7 +79,7 @@ Each view has a rate limit, 60 Hz by default. A call in the interval returns aft
 
 Attach to app is the primary mode. Its second process keeps the window and its input in operation, because the training loop cannot stop that process. The viewer process also continues after the script stops. As a result, the window repaints and gets input during a long step, and it keeps the last frames when the script stops or crashes. If the window crashes or hangs, the training continues. This mode does not freeze, and the Caliper app's landing screen attaches to it.
 
-You open the own window with `caliper.window()`. This mode does not use a second process. Thus the window stops when the script stops or crashes, and the script crashes or hangs when the window does. During a long step the window repaints, but AppKit sends input only to the main thread, which is the training thread. Input then waits, unless you use `run(train)`.
+You open the own window with `caliper.window()`. This mode does not use a second process. Thus the window stops when the script stops or crashes, and the script crashes or hangs when the window does. During a long step the render thread repaints the window at 60 Hz. But AppKit sends mouse, keyboard, resize and close events only to the main thread, which is the training thread. Input then waits, unless you use `run(train)`.
 
 `run(train)` runs the training on a worker thread and gives the main thread to Caliper. This gives input to the window, but it changes how you run the script. A process can have only one own window.
 

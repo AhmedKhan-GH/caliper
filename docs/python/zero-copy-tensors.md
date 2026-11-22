@@ -8,7 +8,7 @@ interop machinery in [Vulkan and CUDA on Windows](../development/vulkan-and-cuda
 ## Terms
 
 Two phrases are used, and they are kept apart, because the host claims zero-copy only when the zero-copy path drew
-([Platform rules](../introduction/architecture.md#platform-rules)).
+([Platform rules](../introduction/architecture.md#design-decisions)).
 
 - **Zero-copy** means the tensor's data is copied nowhere: not into host memory and not to a second place in GPU
   memory. A GPU pass may still convert it (a colormap, a buffer-to-texture write), because converting is work on the

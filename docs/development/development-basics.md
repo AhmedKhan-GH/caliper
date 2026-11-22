@@ -33,7 +33,7 @@ toolchains and system prerequisites must still be installed; see the root
 |---|---|---|---|
 | SDK headers (ABI, services, sugar, adapters) | The installed `caliper-sdk` package (`include/caliper/`), from `sdk/include/` in this repo | `caliper::sdk` | Header-only INTERFACE target — nothing compiles into the SDK itself |
 | ImGui (docking) + ImPlot + ImPlot3D + FileDialog | The pinned sources in the SDK package, the same ones the host was built from | `caliper::ui_stack` | Compiled inside your applet's build, with no window or graphics backend. **Never bring your own copy** — the pin is part of the ABI (see [Compatibility and epochs](compatibility-and-epochs.md)): your applet and the host must agree on ImGui's memory layout byte-for-byte |
-| libtorch | The libtorch the core build downloaded, which the SDK names | `caliper_add_applet(... TORCH)` | It links the host's libtorch and no other version, and stamps that version into the manifest. The `caliper` executable and `libcaliper` do not link it ([Platform rules](../introduction/architecture.md#platform-rules)). |
+| libtorch | The libtorch the core build downloaded, which the SDK names | `caliper_add_applet(... TORCH)` | It links the host's libtorch and no other version, and stamps that version into the manifest. The `caliper` executable and `libcaliper` do not link it ([Platform rules](../introduction/architecture.md#design-decisions)). |
 | curl, zlib | macOS system SDK | `CURL::libcurl`, `ZLIB::ZLIB` | Only if you download/decompress data. Data acquisition is applet business — the host has no downloader |
 | DuckDB | host-internal | **you can't** | Deliberately unreachable. You get its powers through services: `metrics.v1`, `artifacts.v1`, `data.v1`. No DuckDB type ever crosses the ABI |
 
@@ -327,7 +327,7 @@ would report the suite as passed.
 
 ## Rules
 
-- **No raw GL/Metal/Vulkan calls in applets** ([Platform rules](../introduction/architecture.md#platform-rules)). Draw through
+- **No raw GL/Metal/Vulkan calls in applets** ([Platform rules](../introduction/architecture.md#design-decisions)). Draw through
   ImGui/ImPlot/ImPlot3D; get tensors on screen through `tensor_bridge.v1`.
   This is what makes your applet run identically on both backends.
 - **Bridge and data.v1 calls: frame thread only.** Torch ops: worker thread

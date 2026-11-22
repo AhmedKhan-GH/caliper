@@ -11,7 +11,7 @@ Service id `caliper.device.v1` — the host's negotiated compute device. This pa
 **The host negotiates; the applet maps.** The host detects one compute device
 and vends it through this service. The applet reads the `kind` and maps it to
 *its own framework's* device — the host stays framework-agnostic. This is a hard
-[architectural rule](../../introduction/architecture.md#platform-rules): **the host never links torch or any other ML
+[architectural rule](../../introduction/architecture.md#design-decisions): **the host never links torch or any other ML
 framework.** On Apple the detection uses the Metal API only. Elsewhere the host
 detects CUDA devices through the CUDA driver API, which it loads at run time
 (`src/host/device_query_cuda.cpp`), so it links no CUDA toolkit. With no NVIDIA

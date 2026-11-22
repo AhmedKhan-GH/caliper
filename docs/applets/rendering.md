@@ -88,11 +88,11 @@ string that `last_device_path()` reports says which one ran.
    tensor.
 
 Each rung keeps the output byte-identical to the CPU reference. When a rung is unavailable the next one runs, and the
-startup log says so, as the [fallback rule](../introduction/architecture.md#platform-rules) requires.
+startup log says so, as the [fallback rule](../introduction/architecture.md#design-decisions) requires.
 
 ## One-Way Data Flow
 
-Data moves from tensors to pixels to ImGui, and no further, as the [platform rules](../introduction/architecture.md#platform-rules)
+Data moves from tensors to pixels to ImGui, and no further, as the [platform rules](../introduction/architecture.md#design-decisions)
 require. There is no render-to-tensor entry point, no readback on any hot path, and no way for an applet to supply its
 own shader. The
 backends' `debug_readback_rgba8` exists for the test harness only. Training consumes the same tensors the renderer

@@ -115,6 +115,10 @@ The table compares the CPU cost of the snapshot path with the cost of the synchr
 
 A benchmark loop with no sync queued 228k kernels of 16 MB each second. The encoded-command queue of torch itself increased RSS at 85 MB/s with Caliper and at 250 MB/s without Caliper.
 
+### Example Script
+
+A further measurement of the same attach mode uses the `TinyCNN` of `train_show.py` plus a 1024x1024 weight. The script shows that weight at each step, on MPS. In 8 s, 468 of 9,460 calls took a snapshot. Training ran at 98.1 % of the commit-matched control, which [Commit Effect](#commit-effect) explains. The median step to screen was 23.53 ms. A call that took a snapshot cost 35.5 µs at the median, and a skipped call cost 2.0 µs.
+
 ## Related Pages
 
 - [Live Streaming](../python/live-streaming.md)

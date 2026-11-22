@@ -16,7 +16,7 @@ struct CaliperHost {
 };
 ```
 
-New capabilities arrive as new service ids, never as changes to the base ABI, so the base ABI stays small and stable while the host grows. The price is that every applet must cope with a service that is missing, which the fallback rule in [Architecture](../introduction/architecture.md#platform-rules) asks of it anyway.
+New capabilities arrive as new service ids, never as changes to the base ABI, so the base ABI stays small and stable while the host grows. The price is that every applet must cope with a service that is missing, which the fallback rule in [Architecture](../introduction/architecture.md#design-decisions) asks of it anyway.
 
 ## ABI Hygiene
 
