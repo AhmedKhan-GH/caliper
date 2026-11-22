@@ -1246,6 +1246,50 @@ TEST_CASE("app session: the run control reports each applied and each stopped in
     CHECK(rec.fields()[2] == json{{"change", "intervene"}, {"point", "head"}, {"op", nullptr}, {"step", 20}});
 }
 
+TEST_CASE("app session: an intervention that the script ended while the link was down is a run event at its return") {
+    caliper_host::AppRunControl rc;
+    FakeLink link;
+    Recorder rec;
+    const auto set = [&](const char* state) {
+        const std::string text = std::string(R"({"points": [], "active": [{"point": "head", "op": "ablate",
+            "from_step": null, "until_step": null, "since_step": 4, "state": ")") + state + R"("}]})";
+        std::string err;
+        REQUIRE(caliper_net::Json::parse(text.data(), text.size(), &link.ctl.interventions, &err));
+        ++link.ctl.version;
+    };
+    set("active");
+    rc.set_link(&link);
+    rc.feed(rec);   // the attach and the baseline: no intervene event
+    const auto intervene = [&]() {
+        std::vector<json> out;
+        for (const json& f : rec.fields())
+            if (f.value("change", "") == "intervene") out.push_back(f);
+        return out;
+    };
+    CHECK(intervene().empty());
+    link.is_attached = false;   // the viewer's link drops; the script ends it after the linger time
+    rc.feed(rec);
+    set("ended");
+    link.ctl.step = 30;
+    link.is_attached = true;
+    rc.feed(rec);
+    REQUIRE(intervene().size() == 1);
+    CHECK(intervene()[0] == json{{"change", "intervene"}, {"point", "head"}, {"op", nullptr}, {"step", 30}});
+
+    // Another script after a drop reports nothing of the first one's.
+    set("active");
+    rc.feed(rec);
+    REQUIRE(intervene().size() == 2);   // applied again, at its step 4
+    CHECK(intervene()[1]["op"] == "ablate");
+    link.is_attached = false;
+    rc.feed(rec);
+    link.name = "other.py";
+    set("ended");
+    link.is_attached = true;
+    rc.feed(rec);
+    CHECK(intervene().size() == 2);
+}
+
 TEST_CASE("app session: the run control refuses interventions from a script that did not announce them") {
     caliper_host::AppRunControl rc;
     cb::Intervention i;

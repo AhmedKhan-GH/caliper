@@ -372,6 +372,12 @@ The commands act through five functions of `RunControl` in `run_control.h`: `int
 | `intervene.clear` | Clear the interventions on `<point>` in `<script>` at the next step. |
 | `intervene.clear` with `all` | Clear every intervention in `<script>` at the next step. |
 
+### Intervention Lifetime
+
+An intervention acts only while a viewer that may control the run can see it and clear it. While an intervention acts or waits, the script counts its connections that may control at most every 0.25 s, at its checkpoints. When none stays connected for `LINGER_S`, the same 5 s after which the script removes its GPU programs, the script takes the hooks off and ends each intervention. The intervention then has the state `ended`, the summary of the controls gives the cause as its `error`, and the script warns once on its standard error. A viewer that reconnects within the 5 s, such as after a page reload, keeps the interventions. When no stream server carries controls, no connection may control, thus the same rule applies.
+
+The app reports the end as a `run` event of change `intervene` with op null. The app keeps the interventions that the script applied when the link dropped. When the same script attaches again, each one that the script no longer applies is a stop at the script's step. A managed run does not outlive its app (`design/hosted-runs.md`), thus its interventions end with its process at the app's exit.
+
 ### Toggle Control
 
 A control of kind `toggle` binds `intervene:<point>`. On, it sets the ablation of the point, and off, it clears it. The person's toggle has the origin `ui` and runs at once. The toggle kind is built in this work, because the acceptance test needs it. It also binds `param:<name>` of a boolean parameter.
@@ -428,6 +434,7 @@ Each decision below has its reason in one line.
 - **Bounds checks.** Every program and stage from a spec compiles with `ReadZeroSkipWrite` on buffers and texel loads, because a store past an output landed in a training tensor on Metal.
 - **No wait after a timeout.** The runtime's backend gives its Metal objects to a reaper, because a wait on the GPU on the training thread froze training while a pass ran.
 - **Timeouts only.** The sandbox has no static loop limit, because literal bounds bound neither the invocation count nor the work of an iteration, and they refuse loops over an input's length.
+- **Interventions linger.** An intervention ends after the same 5 s without a controlling connection as a program, because nobody can see or clear an ablation that stays on.
 - **One submit each.** The runtime submits each due program on its own, because the layer gives the GPU time of a submit, and the watchdog needs each program's time.
 - **Shared cadence.** All programs share the pass steps of one N, because the sync points cost more than a pass, and a shared step pays them once.
 - **Cadence by feedback.** N follows the overhead that a pass adds to the wall clock, because a model of the pass missed the GPU's idle time on MPS.
