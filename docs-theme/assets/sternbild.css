@@ -238,3 +238,32 @@ body { background: var(--ground); -webkit-font-smoothing: antialiased; }
 }
 /* Subgraph and divider fills come from Material's general grey, which is too bright on the dark ground. */
 .md-typeset .mermaid { --md-default-fg-color--lightest: var(--rule-faint); }
+
+/* Contents: the full docs tree that the header logo opens (docs-theme/hooks/contents.py). Each tab and section
+   is a toggle that opens and closes its branch; connector lines show the nesting. */
+.md-typeset .docs-tree { margin-top: .4rem; }
+.md-typeset .docs-tree .dt-actions { display: flex; gap: .5rem; margin: 0 0 1.2rem; }
+.md-typeset .docs-tree .dt-btn {
+  font: inherit; font-size: .72rem; letter-spacing: .04em; padding: .35rem .8rem; cursor: pointer;
+  color: var(--parchment); background: var(--plate); border: 1px solid var(--rule); border-radius: 4px;
+}
+.md-typeset .docs-tree .dt-btn:hover { background: var(--plate-hover); border-color: var(--bronze); }
+.md-typeset .docs-tree ul, .md-typeset .docs-tree li { list-style: none; margin: 0; padding: 0; }
+.md-typeset .docs-tree li { position: relative; }
+.md-typeset .docs-tree li li { margin-left: 1.1rem; }
+.md-typeset .docs-tree ul ul { margin-left: .45rem; border-left: 1px solid var(--rule); }
+.md-typeset .docs-tree ul ul > li::before {
+  content: ""; position: absolute; left: -1.1rem; top: .85rem; width: .8rem; border-top: 1px solid var(--rule);
+}
+.md-typeset .docs-tree .dt-section > ul { display: none; }
+.md-typeset .docs-tree .dt-section.is-open > ul { display: block; }
+.md-typeset .docs-tree .dt-toggle {
+  font: inherit; font-size: .8rem; letter-spacing: .02em; color: var(--parchment); background: none; border: 0;
+  padding: .2rem .3rem .2rem 0; cursor: pointer; text-align: left;
+}
+.md-typeset .docs-tree .dt-toggle::before {
+  content: "\25B8"; display: inline-block; width: 1rem; color: var(--bronze); transition: transform .12s;
+}
+.md-typeset .docs-tree .dt-section.is-open > .dt-toggle::before { transform: rotate(90deg); }
+.md-typeset .docs-tree .dt-root > .dt-section > .dt-toggle { font-size: .86rem; text-transform: uppercase; letter-spacing: .08em; padding-top: .45rem; }
+.md-typeset .docs-tree .dt-page a { display: inline-block; padding: .15rem 0 .15rem .15rem; font-size: .8rem; }
