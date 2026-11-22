@@ -109,6 +109,8 @@ Eight tools came with spec version 1. The tools `control_create`, `control_patch
 
 The instrument tools join them: `entity_set`, `entity_remove`, `camera_get`, `camera_set`, `camera_save`, `state_create`, `state_patch`, `state_remove`, `state_set`, `state_get`, `selection_set`, `selection_get`, `control_set`, `cursor_get`, `cursor_set`, `cursor_step`, `annotation_set` and `annotation_remove`. [Instrument Tools](instrument-tools.md) lists their arguments and answers. The tools `panel_create` and `panel_patch` also take the arrays `entity` and `annotation` and the options `legend`, `box`, `views`, `select`, `format` and `fields`. `source_add` takes the steps `window`, `surface` and `path` and the key `history`, and `layout_set` takes `shares` and `mins` for its nodes. `panel_data` gives the cursor in `data.cursor` and, for a scene, each entity with the shape, the range and the values of its arrays.
 
+The piece tools join them: `piece_check`, `piece_list`, `piece_show`, `piece_save`, `piece_copy`, `piece_update`, `piece_remove` and `program_read`. [Pieces](pieces.md) lists their arguments and answers. The tools `program_create` and `program_patch` also take the keys of an instance of a piece, which are `piece`, `bind`, `panel` and `params`, and `program_create` takes `inline`, a whole piece. The tool `selection_set` also takes `program` and `item`, which pick an element of the item map of a program that draws in the panel. The tool `piece_remove` is destructive and waits on your approval card. The tool `program_status` reports an instance with the kind `piece` and a `draw` object. The tool `events_wait` returns the events `program` with the keys `half` and `pass`, and the event `pick` with the keys `program`, `item`, `step`, `fields` and `index`.
+
 `history.undo` and `history.redo` are yours and are not offered. An agent takes back a change with an edit that you
 review. The list comes from the table of the running app, or from the table built into `caliper-mcp` when no app
 answers. Thus `tools/list` always answers.
@@ -146,6 +148,7 @@ choose or change it. The annotations of a tool stay as the flags of the table sa
 | `caliper://schema/caliper-spec-v0.schema.json` | The JSON Schema of a spec's canonical JSON, version 0 |
 | `caliper://schema/caliper-spec-v1.schema.json` | The JSON Schema of version 1, with the scene primitive and the controls |
 | `caliper://commands/command_table.json` | The command table the tools come from |
+| `caliper://library/<path>` | A file of the built-in library of pieces: a lib module under `lib/`, or a file of a piece under `pieces/<name>/<version>/` |
 
 The folders are confined. A path is a list of plain segments, and the real path of a file, with its links resolved,
 must lie inside the folder.
