@@ -99,7 +99,7 @@ Chain chain_of(const spec::Spec& spec, const std::string& id, const DataSources*
 
 // The text that names a chain of transforms over its root: the root's catalog
 // id and the transforms of every source down the chain, in order.
-std::string chain_key(const Chain& chain) {
+std::string chain_key(const Chain& chain, const ChainContext& ctx) {
     json parts = json::array();
     for (const spec::Source* s : chain.path) {
         json records = spec::to_json(*s).value("transform", json::array());
@@ -107,7 +107,9 @@ std::string chain_key(const Chain& chain) {
             if (r.is_object()) r.erase("x");
         parts.push_back(std::move(records));
     }
-    return *chain.path.front()->catalog + "\n" + parts.dump();
+    // The values that the chain's references read (chain_hooks.h), so that a
+    // chain that no change touched hits the cache.
+    return *chain.path.front()->catalog + "\n" + parts.dump() + references_key(chain.path, ctx);
 }
 
 // One step of the mix of generations (splitmix64), so that the panel's
@@ -121,8 +123,9 @@ std::uint64_t mix_generation(std::uint64_t h, std::uint64_t g) {
 
 class PanelResolver {
 public:
-    PanelResolver(const spec::Spec& s, LoaderStore& store, const ResolveLimits& limits, DataSources* sources)
-        : spec_(s), store_(store), limits_(limits), sources_(sources) {}
+    PanelResolver(const spec::Spec& s, LoaderStore& store, const ResolveLimits& limits, DataSources* sources,
+                  const ChainContext* chain)
+        : spec_(s), store_(store), limits_(limits), sources_(sources), chain_(chain ? *chain : ChainContext{}) {}
 
     PanelData run(std::string_view panel_id) {
         PanelData out;
@@ -258,7 +261,7 @@ private:
         std::shared_ptr<CatalogDataSource> source = sources_->get(chain.catalog_kind);
         if (!source)
             return Error("resolve.unavailable", "No data source is registered for the source " + root.id + ".", root.id);
-        const std::string key = chain_key(chain);
+        const std::string key = chain_key(chain, chain_);
         const std::uint64_t now = source->generation(*root.catalog);
         if (now != 0 && sources_->find_cached(key, now, out)) {
             *generation = now;
@@ -320,9 +323,38 @@ private:
         TensorData& t = *tensor;
         for (const spec::Source* s : chain.path) {
             if (s->transforms.empty()) continue;
-            const json records = spec::to_json(*s).value("transform", json::array());
+            // The references of each step take their values first
+            // (chain_hooks.h); the shipped steps then read literals only.
+            spec::Source literal = *s;
+            for (std::size_t k = 0; k < literal.transforms.size(); ++k) {
+                if (literal.transforms[k].references.empty()) continue;
+                if (Error err = substitute_references(s->transforms[k], chain_, &literal.transforms[k])) {
+                    err.where = "source " + s->id + ", transform[" + std::to_string(k) + "]";
+                    return err;
+                }
+            }
+            const json records = spec::to_json(literal).value("transform", json::array());
             for (std::size_t k = 0; k < records.size(); ++k) {
                 const std::string where = "source " + s->id + ", transform[" + std::to_string(k) + "]";
+                // The steps of design/instrument-interface.md have their own
+                // owners: the window over kept steps and the operators.
+                const spec::TransformOp op = literal.transforms[k].op;
+                if (op == spec::TransformOp::window) {
+                    TensorData steps;
+                    if (Error err = apply_window(literal.transforms[k], *s, chain_, &t, &steps)) {
+                        if (err.where.empty()) err.where = where;
+                        return err;
+                    }
+                    continue;
+                }
+                if (op == spec::TransformOp::surface || op == spec::TransformOp::path) {
+                    GeometryArrays geometry;
+                    if (Error err = apply_operator(literal.transforms[k], t, nullptr, &geometry)) {
+                        if (err.where.empty()) err.where = where;
+                        return err;
+                    }
+                    continue;
+                }
                 json record = records[k];
                 record.erase("x");
                 TensorTransform tt;
@@ -442,6 +474,7 @@ private:
     LoaderStore& store_;
     const ResolveLimits& limits_;
     DataSources* sources_ = nullptr;
+    ChainContext chain_;
     std::map<std::string, std::set<std::string>> needed_;  // by tabular root
     std::set<std::string> whole_;                          // tabular roots read whole
     std::set<std::string> truncated_;                      // cut at max_cells here
@@ -564,9 +597,9 @@ const char* slot_kind_name(SlotData::Kind kind) {
 }
 
 PanelData resolve_panel(const spec::Spec& s, std::string_view panel_id, LoaderStore& store,
-                        const ResolveLimits& limits, DataSources* sources) {
+                        const ResolveLimits& limits, DataSources* sources, const ChainContext* chain) {
     try {
-        PanelResolver r(s, store, limits, sources);
+        PanelResolver r(s, store, limits, sources, chain);
         return r.run(panel_id);
     } catch (const std::exception& e) {
         PanelData out;

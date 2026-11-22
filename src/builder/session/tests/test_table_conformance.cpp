@@ -7,10 +7,13 @@
 #include <caliper_builder/commands/command_table.h>
 #include <caliper_builder/commands/schema.h>
 #include <caliper_builder/session/spec_edit.h>
+#include <caliper_builder/spec/colormaps.h>
 #include <caliper_builder/spec/format.h>
 #include <caliper_builder/spec/validate.h>
 
 #include <doctest/doctest.h>
+
+#include <algorithm>
 
 #include "helpers.h"
 
@@ -219,7 +222,14 @@ TEST_CASE("command_table.json carries the aligned schemas") {
         if (c["name"] == "panel.create") create = &c;
     REQUIRE(create);
     const json& options = (*create)["args"]["properties"]["options"]["properties"];
-    CHECK(options["colormap"]["enum"] == json({"viridis", "magma", "rdbu", "greys"}));
+    // The table names the sixteen colormaps of the format; the library reads
+    // those whose color tables are built (spec/colormaps.h), all of them in the table.
+    CHECK(options["colormap"]["enum"] ==
+          json({"viridis", "magma", "rdbu", "greys", "cividis", "inferno", "plasma", "turbo", "twilight", "coolwarm",
+                "batlow", "vik", "roma", "oslo", "lajolla", "berlin"}));
+    for (const std::string& name : caliper_builder::spec::colormap_names())
+        CHECK(std::find(options["colormap"]["enum"].begin(), options["colormap"]["enum"].end(), json(name)) !=
+              options["colormap"]["enum"].end());
     CHECK(options["bins"]["maximum"] == 65536);
     CHECK(options["text"]["maxLength"] == 16384);
     for (const char* key : {"z_label", "x_range", "y_range", "range", "x_log", "y_log"}) CHECK(options.contains(key));

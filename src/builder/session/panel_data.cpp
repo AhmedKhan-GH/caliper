@@ -534,6 +534,7 @@ json panel_data_result(const spec::Spec& spec, const PanelData& data, std::uint6
                         ? std::nullopt
                         : spec::live_scene_name(it->second.bindings.front());
                 e.data = {{"scene", name ? json(*name) : json(nullptr)}};
+                if (!panel->entities.empty()) encode_scene_entities(*panel, data, limits, &e.data);
                 break;
             }
         }

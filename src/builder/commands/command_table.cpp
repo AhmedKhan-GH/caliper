@@ -185,7 +185,7 @@ const std::pair<const char*, const char*> kFragments[] = {
         "range": {"$use": "range", "description": "heatmap and image: the values at the ends of the colormap; histogram: the binned range; [min, max] with min below max."},
         "x_log": {"type": "boolean", "description": "series: a log scale on the x axis."},
         "y_log": {"type": "boolean", "description": "series: a log scale on the y axis; histogram: on the counts."},
-        "colormap": {"type": "string", "enum": ["viridis", "magma", "rdbu", "greys"], "description": "heatmap, points and image: the colormap; viridis by default, greys for a one-channel image."},
+        "colormap": {"type": "string", "enum": ["viridis", "magma", "rdbu", "greys", "cividis", "inferno", "plasma", "turbo", "twilight", "coolwarm", "batlow", "vik", "roma", "oslo", "lajolla", "berlin"], "description": "heatmap, points and image: the colormap; viridis by default, greys for a one-channel image."},
         "bins": {"type": "integer", "minimum": 1, "maximum": 65536, "description": "histogram: the number of bins, from 1 to 65536; 64 by default."},
         "columns": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"type": "string", "minLength": 1, "maxLength": 255}, "description": "table: the columns to show, in order, each once."},
         "text": {"type": "string", "maxLength": 16384, "description": "text: static text to show."},
@@ -226,23 +226,34 @@ const std::pair<const char*, const char*> kFragments[] = {
                               "children": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$use": "id"}, "description": "Panel ids, control ids (spec version 1) and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once."}}}}}})json"},
 
     // Spec version 1 controls (design/instruments.md, Control Table).
-    {"control_bind", R"json({"type": "string", "minLength": 5, "maxLength": 320, "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|intervene:.{1,255})$",
-      "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, value for a value the spec holds, or intervene:<point> for an intervention point that intervene.points lists. A slider binds param: or value; a button binds action: or run:pause; a toggle binds intervene:<point> or param:<name>. run.state lists the names of parameters and actions."})json"},
+    {"control_bind", R"json({"type": "string", "minLength": 5, "maxLength": 320, "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|state:[a-z][a-z0-9_-]{0,63}|cursor|intervene:.{1,255})$",
+      "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, value for a value the spec holds, state:<id> for a state variable of the spec, cursor for the time cursor, or intervene:<point> for an intervention point that intervene.points lists. A slider binds param:, value or state:; a range, a picker, a text and a segmented group bind value or state:; a button binds action: or run:pause; a toggle binds intervene:<point>, param:<name>, value or state:; a transport binds cursor. run.state lists the names of parameters and actions."})json"},
 
     {"control_options", R"json({
       "type": "object", "additionalProperties": false, "required": [],
       "properties": {
-        "min": {"type": "number", "description": "slider: the low end of the range; with param:, the parameter's own minimum when absent."},
-        "max": {"type": "number", "description": "slider: the high end of the range, above min; with param:, the parameter's own maximum when absent."},
-        "step": {"type": "number", "minimum": 0, "description": "slider: the step between values, above 0; continuous when absent."},
+        "min": {"type": "number", "description": "slider and range: the low end of the range; with param:, the parameter's own minimum when absent."},
+        "max": {"type": "number", "description": "slider and range: the high end of the range, above min; with param:, the parameter's own maximum when absent."},
+        "step": {"type": "number", "minimum": 0, "description": "slider and range: the step between values, above 0; continuous when absent."},
         "log": {"type": "boolean", "description": "slider: a log scale, which needs min above 0; with param:, the parameter's own scale when absent."},
-        "value": {"type": "number", "description": "slider bound to value: the value it starts with; min when absent."}}})json"},
+        "value": {"description": "slider bound to value: the number it starts with, min when absent; range: [lo, hi]; toggle: a boolean; picker, text and segmented: the value or the list of values it starts with."},
+        "choices": {"type": "array", "minItems": 1, "maxItems": 1024, "items": {"description": "A value, or a table with value, label and key."}, "description": "picker and segmented: the choices, from 1 to 1024 for a picker and 2 to 16 for a segmented group."},
+        "choices_from": {"type": "string", "minLength": 3, "maxLength": 320, "description": "picker: <source>.<column>, the column whose distinct values are the choices, at most 1024."},
+        "multiple": {"type": "boolean", "description": "segmented: whether any number of buttons are on and the value is a list; false when absent."},
+        "placeholder": {"type": "string", "maxLength": 256, "description": "text: the hint that shows while the field is empty."},
+        "max_length": {"type": "integer", "minimum": 1, "maximum": 1024, "description": "text: the most bytes of the value, at most 1024."},
+        "min_span": {"type": "number", "minimum": 0, "description": "range: the least distance between lo and hi."},
+        "follow": {"type": "boolean", "description": "range: whether the range moves with its upper bound while its upper end equals it; false when absent."},
+        "speed": {"type": "number", "minimum": 0.1, "maximum": 1000, "description": "transport: the play speed at open, in steps per second; 10 when absent."},
+        "keys": {"type": "boolean", "description": "transport: whether Space, the arrow keys, Home and End control the cursor; true when absent."},
+        "format": {"type": "string", "maxLength": 1024, "description": "readout: the text to show, written in the format language with {name} places."},
+        "fields": {"description": "readout: a JSON object that gives each name of the format a reference."}}})json"},
 
     {"control", R"json({
       "type": "object", "additionalProperties": false, "required": ["id", "kind", "title", "bind", "options"],
       "properties": {
         "id": {"$use": "id", "description": "The control's id."},
-        "kind": {"type": "string", "enum": ["slider", "button", "range", "toggle", "picker", "text"], "description": "What the control is."},
+        "kind": {"type": "string", "enum": ["slider", "button", "range", "toggle", "picker", "text", "segmented", "readout", "transport"], "description": "What the control is."},
         "title": {"type": ["string", "null"], "description": "The control's title, or null when it has none."},
         "bind": {"type": "string", "description": "The control's target, such as param:lr."},
         "options": {"$use": "control_options", "description": "The control's options."}}})json"},
@@ -297,7 +308,7 @@ const std::pair<const char*, const char*> kFragments[] = {
       "properties": {
         "seq": {"type": "integer", "minimum": 1, "description": "The event's number; it grows by one with each event the app records."},
         "time": {"type": "string", "description": "When the app recorded it, in UTC ISO 8601 with milliseconds."},
-        "kind": {"type": "string", "enum": ["pick", "select", "control", "run", "spec", "approval", "program"], "description": "What happened."},
+        "kind": {"type": "string", "enum": ["pick", "select", "control", "run", "spec", "approval", "program", "state", "cursor"], "description": "What happened."},
         "panel": {"type": ["string", "null"], "description": "The spec panel or control it happened in, or null."},
         "view": {"type": ["string", "null"], "description": "pick and select: the live view, such as the scene's name; null otherwise."},
         "origin": {"type": "string", "enum": ["ui", "builder", "agent", "mcp", "api", "script"], "description": "Who caused it: ui for the person in the app, script for the running script, else the origin of the command."},
@@ -315,13 +326,22 @@ const std::pair<const char*, const char*> kFragments[] = {
                                  "indices": {"type": "array", "items": {"type": "integer"}, "description": "The items' indices in the batch."},
                                  "row_ids": {"type": "array", "items": {"type": ["integer", "null"]}, "description": "The items' rows in the source tensor."}}}},
         "truncated": {"type": "boolean", "description": "select: whether the selection held more than 32768 items and was cut."},
+        "fields": {"description": "pick: the pick fields as a JSON object."},
+        "annotation": {"type": "string", "description": "pick: the id of the annotation that was picked."},
+        "key": {"type": "string", "description": "control: the shortcut key that made the change, when a key did."},
         "control": {"type": "string", "description": "control: the control's id."},
         "bind": {"type": "string", "description": "control: the control's target, such as param:lr."},
-        "change": {"type": "string", "enum": ["state", "param", "action", "attach", "runner", "intervene", "compiled", "refused", "stopped"], "description": "run: what changed: the run's state, a parameter applied at a step, the end of an action, the attachment of a script, the state of a managed run (runner), or an intervention applied at a step (intervene); program: compiled, refused by a check, or stopped by a limit."},
-        "state": {"type": "string", "description": "run with change state: the run's new state; approval: pending, approved, denied or expired."},
-        "step": {"type": ["integer", "null"], "description": "run: the script's step when it changed, or null before the first step."},
+        "change": {"type": "string", "enum": ["state", "param", "action", "attach", "runner", "intervene", "compiled", "refused", "stopped", "live", "held", "playing", "moved", "clamped"], "description": "cursor: what changed: live, held, playing, moved (by a command, a step or a key) or clamped (to the nearest kept step); run: what changed: the run's state, a parameter applied at a step, the end of an action, the attachment of a script, the state of a managed run (runner), or an intervention applied at a step (intervene); program: compiled, refused by a check, or stopped by a limit."},
+        "state": {"type": "string", "description": "state: the state variable's id; run with change state: the run's new state; approval: pending, approved, denied or expired."},
+        "step": {"type": ["integer", "null"], "description": "run: the script's step when it changed, or null before the first step; cursor: the step that the cursor shows."},
+        "first": {"type": "integer", "description": "cursor: the first kept step."},
+        "latest": {"type": "integer", "description": "cursor: the newest kept step."},
+        "playing": {"type": "boolean", "description": "cursor: whether the cursor plays."},
+        "speed": {"type": "number", "description": "cursor: the play speed in steps per second."},
+        "previous": {"description": "state: the value before the change."},
+        "writer": {"type": "string", "description": "state: what wrote the value, such as a control id, a panel id or a command."},
         "name": {"type": "string", "description": "run with change param or action: the parameter's or the action's name."},
-        "value": {"type": ["number", "integer", "boolean", "string", "null"], "description": "control: the control's new value; run with change param: the value the script applied."},
+        "value": {"description": "control: the control's new value, which is a list for a range or a group with multiple; state: the state variable's new value; run with change param: the value the script applied."},
         "status": {"type": "string", "enum": ["ok", "error"], "description": "run with change action: how the action ended."},
         "text": {"type": "string", "description": "run with change action: the text the action returned, or its error message."},
         "attached": {"type": "boolean", "description": "run with change attach: whether a script is attached now."},
@@ -375,7 +395,7 @@ const std::pair<const char*, const char*> kFragments[] = {
         "arrays": {"type": "array", "minItems": 1, "maxItems": 4, "items": {"type": "string", "enum": ["positions", "colors", "values", "radii"]}, "description": "geometry: the arrays the program writes, each a var<storage, read_write> of that name: positions array<f32> with 3 for each item (necessary), colors array<u32> (RGBA8 from pack4x8unorm), values array<f32>, radii array<f32> (points only)."},
         "style": {"type": "object", "additionalProperties": false, "required": [], "description": "geometry: how values map to colors.",
                   "properties": {
-                    "colormap": {"type": "string", "enum": ["viridis", "magma", "rdbu", "greys"], "description": "The colormap of values; viridis when absent."},
+                    "colormap": {"type": "string", "enum": ["viridis", "magma", "rdbu", "greys", "cividis", "inferno", "plasma", "turbo", "twilight", "coolwarm", "batlow", "vik", "roma", "oslo", "lajolla", "berlin"], "description": "The colormap of values; viridis when absent."},
                     "vmin": {"type": "number", "description": "The value at the low end; the batch's minimum when absent."},
                     "vmax": {"type": "number", "description": "The value at the high end; the batch's maximum when absent."}}},
         "width": {"type": "integer", "minimum": 1, "maximum": 2048, "description": "pixels: the image's width."},
@@ -445,6 +465,44 @@ const std::pair<const char*, const char*> kFragments[] = {
         "until_step": {"type": ["integer", "null"], "description": "The step it ends before, or null until it is cleared."},
         "since_step": {"type": ["integer", "null"], "description": "The step the script applied it at, or null while it is pending."},
         "state": {"type": "string", "enum": ["pending", "active", "ended"], "description": "pending until the script's next step, active, or ended after until_step."}}})json"},
+
+    // Pieces of the instrument commands (design/instrument-interface.md, Commands).
+    {"orbit", R"json({
+      "type": "object", "additionalProperties": false, "required": ["target", "distance", "azimuth", "elevation"],
+      "properties": {
+        "target": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number"}, "description": "The point the orbit looks at."},
+        "distance": {"type": "number", "minimum": 0, "description": "The distance from the target, above 0."},
+        "azimuth": {"type": "number", "description": "The orbit's azimuth in degrees, read against up."},
+        "elevation": {"type": "number", "minimum": -89, "maximum": 89, "description": "The orbit's elevation in degrees, from -89 to 89."}}})json"},
+
+    {"camera_view", R"json({
+      "type": "object", "additionalProperties": false, "required": ["name", "target", "distance", "azimuth", "elevation"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 64, "description": "The saved view's name, unique in the panel."},
+        "target": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number"}, "description": "The point the view looks at."},
+        "distance": {"type": "number", "minimum": 0, "description": "The distance from the target, above 0."},
+        "azimuth": {"type": "number", "description": "The view's azimuth in degrees, read against up."},
+        "elevation": {"type": "number", "minimum": -89, "maximum": 89, "description": "The view's elevation in degrees, from -89 to 89."}}})json"},
+
+    {"cursor_state", R"json({
+      "type": "object", "additionalProperties": false, "required": ["step", "first", "latest", "live", "playing", "speed"],
+      "properties": {
+        "step": {"type": "integer", "description": "The step that the panels show."},
+        "first": {"type": "integer", "description": "The first step that a source keeps."},
+        "latest": {"type": "integer", "description": "The newest step that a source keeps."},
+        "live": {"type": "boolean", "description": "Whether the cursor follows the newest step."},
+        "playing": {"type": "boolean", "description": "Whether the cursor plays forward."},
+        "speed": {"type": "number", "description": "The play speed in steps per second."}}})json"},
+
+    {"cursor_source", R"json({
+      "type": "object", "additionalProperties": false, "required": ["id", "first", "last", "steps", "requested", "bytes"],
+      "properties": {
+        "id": {"type": "string", "description": "The source's id."},
+        "first": {"type": "integer", "description": "The first step that the source keeps."},
+        "last": {"type": "integer", "description": "The last step that the source keeps."},
+        "steps": {"type": "integer", "description": "How many steps the source keeps."},
+        "requested": {"type": "integer", "description": "How many steps the spec asks the source to keep."},
+        "bytes": {"type": "integer", "description": "The size of the kept steps in bytes."}}})json"},
 
     // What a spec edit returns besides its own fields.
     {"warnings", R"json({"type": "array", "items": {"$use": "diagnostic"}, "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer."})json"},
@@ -848,6 +906,8 @@ const Row kRows[] = {
         "primitive": {"type": "string", "enum": ["series", "heatmap", "points", "histogram", "table", "image", "text", "scene"], "description": "What the panel draws. Required slots: series y; heatmap values; points x and y, or positions; histogram values; table rows; image values; text none; scene scene (spec version 1)."},
         "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The panel's title; the id when absent."},
         "bind": {"$use": "bind", "description": "The bindings by slot: a spec source id, or <source>.<column> for one column of a tabular source."},
+        "entity": {"type": "array", "maxItems": 256, "items": {"description": "An entity table, a JSON object."}, "description": "scene: the entities of the panel's scene, as a list of entity tables."},
+        "annotation": {"type": "array", "maxItems": 256, "items": {"description": "An annotation table, a JSON object."}, "description": "The annotations of the panel, as a list of annotation tables."},
         "options": {"$use": "options", "description": "The primitive's options."},
         "place": {"type": "object", "additionalProperties": false, "required": ["target", "where"],
                   "description": "Where to put the panel, next to another panel of the layout.",
@@ -876,7 +936,9 @@ const Row kRows[] = {
                     "title": {"type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "The panel's title."},
                     "primitive": {"type": "string", "enum": ["series", "heatmap", "points", "histogram", "table", "image", "text", "scene"], "description": "What the panel draws."},
                     "bind": {"$patch": "bind", "description": "Slots to bind, or null to unbind one."},
-                    "options": {"$patch": "options", "description": "Options to set, or null to clear one."}}},
+                    "options": {"$patch": "options", "description": "Options to set, or null to clear one."},
+                    "entity": {"type": ["array", "null"], "maxItems": 256, "items": {"description": "An entity table, a JSON object."}, "description": "scene: the entities of the scene; the list replaces the panel's own, and null removes them."},
+                    "annotation": {"type": ["array", "null"], "maxItems": 256, "items": {"description": "An annotation table, a JSON object."}, "description": "The annotations of the panel; the list replaces the panel's own, and null removes them."}}},
         "dry_run": {"$use": "dry_run"}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["panel", "warnings", "diff", "applied"],
       "properties": {
@@ -1116,10 +1178,10 @@ const Row kRows[] = {
      "A control is a leaf of the layout, like a panel: place puts it next to a panel or control, and without place it "
      "goes under the whole layout. Undo removes it. The result holds the change as a diff; with dry_run true the "
      "change is only checked and not applied.",
-     R"json({"type": "object", "additionalProperties": false, "required": ["id", "kind", "bind"],
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "kind"],
       "properties": {
         "id": {"$use": "id", "description": "The new control's id; panels and controls share one set of ids."},
-        "kind": {"type": "string", "enum": ["slider", "button", "range", "toggle", "picker", "text"], "description": "slider sets a number in a range; button acts once when pressed; toggle is on or off, and ablates intervene:<point> or sets a boolean param:<name>. range, picker and text are reserved and refused with spec.unsupported_control until they are built."},
+        "kind": {"type": "string", "enum": ["slider", "button", "range", "toggle", "picker", "text", "segmented", "readout", "transport"], "description": "slider sets a number in a range; button acts once when pressed; toggle is on or off, and ablates intervene:<point> or sets a boolean param:<name>. range sets [lo, hi]; picker chooses one value from choices or choices_from; text sets a text; segmented is a row of 2 to 16 buttons, one on or, with multiple, any number; readout shows bound text and binds nothing; transport binds cursor and draws the step controls."},
         "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The control's label; the id when absent."},
         "bind": {"$use": "control_bind"},
         "options": {"$use": "control_options", "description": "The control's options."},
@@ -1148,7 +1210,7 @@ const Row kRows[] = {
         "patch": {"type": "object", "additionalProperties": false, "required": [],
                   "description": "The keys to change; null removes one.",
                   "properties": {
-                    "kind": {"type": "string", "enum": ["slider", "button", "range", "toggle", "picker", "text"], "description": "What the control is."},
+                    "kind": {"type": "string", "enum": ["slider", "button", "range", "toggle", "picker", "text", "segmented", "readout", "transport"], "description": "What the control is."},
                     "title": {"type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "The control's label."},
                     "bind": {"$use": "control_bind"},
                     "options": {"$patch": "control_options", "description": "Options to set, or null to clear one."}}},
@@ -1174,6 +1236,270 @@ const Row kRows[] = {
         "diff": {"$use": "diff"},
         "applied": {"$use": "applied"}}})json",
      R"json({"id": "lr"})json"},
+
+    // state, selection, entity, annotation, cursor and camera (design/instrument-interface.md, Commands)
+    {"state.create", true, false, true,
+     "Adds a state variable to the open spec: a named value that controls and picks write and that panels read "
+     "through references. type is number, integer, boolean, text, range or list. default, min, max and choices limit "
+     "the value, and x holds extension keys. The id cursor is reserved. Undo removes it. The result holds the change "
+     "as a diff; with dry_run true the change is only checked and not applied.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "type"],
+      "properties": {
+        "id": {"$use": "id", "description": "The new state variable's id; cursor is reserved."},
+        "type": {"type": "string", "enum": ["number", "integer", "boolean", "text", "range", "list"], "description": "The type of the value. A list holds texts."},
+        "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The label that a control or a legend shows; the id when absent."},
+        "default": {"description": "The starting value, a JSON value of the type; 0, false, the first choice, an empty text, [min, max] or an empty list when absent."},
+        "min": {"type": "number", "description": "The low bound of a number, an integer or a range."},
+        "max": {"type": "number", "description": "The high bound of a number, an integer or a range."},
+        "choices": {"type": "array", "minItems": 1, "maxItems": 1024, "items": {"description": "One allowed value."}, "description": "The allowed values of a text or an integer, or the allowed items of a list, from 1 to 1024."},
+        "x": {"description": "An extension table, a JSON object."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "warnings", "diff", "applied"],
+      "properties": {
+        "id": {"type": "string", "description": "The new state variable's id."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
+     R"json({"id": "token", "type": "integer", "title": "Token", "default": 0, "min": 0, "max": 63})json"},
+    {"state.patch", true, false, true,
+     "Changes a state variable of the open spec with the keys of set: the keys given replace the variable's own. "
+     "The id cannot change. state.get lists the ids. Undo restores the variable. The result holds the change as a "
+     "diff; with dry_run true the change is only checked and not applied.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "set"],
+      "properties": {
+        "id": {"$use": "id", "description": "The state variable's id in the open spec."},
+        "set": {"description": "The keys to change, a JSON object with keys of a state variable such as title, default, min, max and choices."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "warnings", "diff", "applied"],
+      "properties": {
+        "id": {"type": "string", "description": "The state variable's id."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
+     R"json({"id": "token", "set": {"max": 127}})json"},
+    {"state.remove", true, false, true,
+     "Removes a state variable from the open spec. A reference, a control or a pick that reads or writes the "
+     "variable keeps it in use, and the command then fails with state.in_use. state.get lists the ids. Undo restores "
+     "the variable. The result holds the change as a diff; with dry_run true the change is only checked and not applied.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id"],
+      "properties": {
+        "id": {"$use": "id", "description": "The state variable's id in the open spec."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "warnings", "diff", "applied"],
+      "properties": {
+        "id": {"type": "string", "description": "The removed state variable's id."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
+     R"json({"id": "token"})json"},
+    {"state.set", false, false, true,
+     "Sets the current value of a state variable, as a person's edit of a control does, and returns the value and the "
+     "one before it. The value must fit the type, the bounds and the choices, or the command fails with "
+     "state.bad_value. It adds a state event with the origin of the caller. It changes the session and not the "
+     "workspace, so it has no undo step.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "value"],
+      "properties": {
+        "id": {"$use": "id", "description": "The state variable's id."},
+        "value": {"description": "The new value, a JSON value of the variable's type."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["value", "previous"],
+      "properties": {
+        "value": {"description": "The value that the variable holds now."},
+        "previous": {"description": "The value that the variable held before."}}})json",
+     R"json({"id": "token", "value": 5})json"},
+    {"state.get", false, false, true,
+     "Returns the state variables of the open spec: each one's id, type, current value, default, the writers that "
+     "set it and the readers that use it. ids limits the answer to some variables. It changes nothing.",
+     R"json({"type": "object", "additionalProperties": false, "required": [],
+      "properties": {
+        "ids": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"$use": "id"}, "description": "Only these state variables; every variable when absent."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["states"],
+      "properties": {
+        "states": {"type": "array", "maxItems": 256, "description": "The state variables.",
+          "items": {"type": "object", "additionalProperties": false, "required": ["id", "type", "value", "default", "writers", "readers"],
+            "properties": {
+              "id": {"type": "string", "description": "The state variable's id."},
+              "type": {"type": "string", "description": "The type of the value: number, integer, boolean, text, range or list."},
+              "value": {"description": "The current value."},
+              "default": {"description": "The default value."},
+              "writers": {"type": "array", "items": {"type": "string"}, "description": "What writes the variable, such as a control or a pick."},
+              "readers": {"type": "array", "items": {"type": "string"}, "description": "What reads the variable, such as a panel option or an annotation."}}}}}})json",
+     R"json({"ids": ["token"]})json"},
+    {"control.set", false, false, true,
+     "Sets the value of a control that binds value or a state, as a person's edit does, and returns the value. It "
+     "adds a control event with the origin of the caller. A control that binds a parameter takes run.set_param, and "
+     "this command refuses it with control.not_settable. It changes the session and not the workspace, so it has no "
+     "undo step.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "value"],
+      "properties": {
+        "id": {"$use": "id", "description": "The control's id in the open spec."},
+        "value": {"description": "The new value, a JSON value of the control's kind: a number, a boolean, a text, [lo, hi] for a range or a list for a group with multiple."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["value"],
+      "properties": {
+        "value": {"description": "The value that the control holds now."}}})json",
+     R"json({"id": "measure", "value": "mean"})json"},
+    {"selection.set", false, false, true,
+     "Makes a pick in a panel: the entity and the item at index, or clear to remove the selection. It makes the "
+     "same pick event, field values and state writes as a person's pick, with the origin of the caller. It returns "
+     "the pick fields. It changes the session and not the workspace, so it has no undo step.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel"],
+      "properties": {
+        "panel": {"$use": "id", "description": "The panel's id in the open spec."},
+        "entity": {"$use": "entity_path", "description": "The entity of the item to pick."},
+        "index": {"type": "integer", "minimum": 0, "description": "The item's index in the entity."},
+        "clear": {"type": "boolean", "description": "Whether to clear the selection of the panel; false when absent."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["fields"],
+      "properties": {
+        "fields": {"description": "The pick fields as an object, or null when the panel has no selection."}}})json",
+     R"json({"panel": "world", "entity": "terrain", "index": 3})json"},
+    {"selection.get", false, false, true,
+     "Returns the pick fields of the last pick in a panel, or null when the panel has no selection. It changes "
+     "nothing.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel"],
+      "properties": {
+        "panel": {"$use": "id", "description": "The panel's id in the open spec."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["fields"],
+      "properties": {
+        "fields": {"description": "The pick fields as an object, or null when the panel has no selection."}}})json",
+     R"json({"panel": "world"})json"},
+    {"entity.set", true, false, true,
+     "Adds an entity to the scene of a scene panel, or replaces the entity with the same path. The entity is a JSON "
+     "object with the keys of an entity table. The panel must be a scene panel. Undo restores the scene. The result "
+     "holds the change as a diff; with dry_run true the change is only checked and not applied.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "entity"],
+      "properties": {
+        "panel": {"$use": "id", "description": "The scene panel's id in the open spec."},
+        "entity": {"description": "The entity table, a JSON object with a path and the other keys of an entity."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "warnings", "diff", "applied"],
+      "properties": {
+        "panel": {"type": "string", "description": "The panel's id."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
+     R"json({"panel": "world", "entity": {"path": "markers/origin", "draw": "points"}})json"},
+    {"entity.remove", true, false, true,
+     "Removes the entity with a path from the scene of a scene panel. The panel must be a scene panel, and it must "
+     "have the entity. Undo restores it. The result holds the change as a diff; with dry_run true the change is "
+     "only checked and not applied.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "path"],
+      "properties": {
+        "panel": {"$use": "id", "description": "The scene panel's id in the open spec."},
+        "path": {"$use": "entity_path", "description": "The entity's path."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "warnings", "diff", "applied"],
+      "properties": {
+        "panel": {"type": "string", "description": "The panel's id."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
+     R"json({"panel": "world", "path": "markers/origin"})json"},
+    {"annotation.set", true, false, true,
+     "Adds an annotation to a panel, or replaces the annotation with the same id. The annotation is a JSON object "
+     "with an id, a kind (label, threshold, band or marker) and the keys of its kind. Undo restores the panel. The "
+     "result holds the change as a diff; with dry_run true the change is only checked and not applied.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "annotation"],
+      "properties": {
+        "panel": {"$use": "id", "description": "The panel's id in the open spec."},
+        "annotation": {"description": "The annotation table, a JSON object with an id, a kind and the keys of that kind."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "warnings", "diff", "applied"],
+      "properties": {
+        "panel": {"type": "string", "description": "The panel's id."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
+     R"json({"panel": "loss", "annotation": {"id": "floor", "kind": "threshold", "axis": "y", "value": 0.1, "text": "Floor"}})json"},
+    {"annotation.remove", true, false, true,
+     "Removes the annotation with an id from a panel. The panel must have the annotation, or the command fails "
+     "with annotation.not_found. Undo restores it. The result holds the change as a diff; with dry_run true the "
+     "change is only checked and not applied.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "id"],
+      "properties": {
+        "panel": {"$use": "id", "description": "The panel's id in the open spec."},
+        "id": {"$use": "id", "description": "The annotation's id in the panel."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "warnings", "diff", "applied"],
+      "properties": {
+        "panel": {"type": "string", "description": "The panel's id."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
+     R"json({"panel": "loss", "id": "floor"})json"},
+    {"cursor.get", false, false, true,
+     "Returns the cursor, which chooses the step that the panels show, and each source's first and last kept step, "
+     "the number of kept steps, the number of requested steps and the bytes. It changes nothing.",
+     kNoArgs,
+     R"json({"type": "object", "additionalProperties": false, "required": ["cursor", "sources"],
+      "properties": {
+        "cursor": {"$use": "cursor_state", "description": "The cursor."},
+        "sources": {"type": "array", "maxItems": 256, "items": {"$use": "cursor_source"}, "description": "The sources that keep steps."}}})json",
+     "{}"},
+    {"cursor.set", false, false, true,
+     "Moves the cursor, sets whether it follows the newest step (live), whether it plays and how fast. A step "
+     "outside the kept steps goes to the nearest kept step, and the result gives the cursor as it is. When no source "
+     "keeps steps, the command fails with cursor.no_history. It changes the session and not the workspace, so it has "
+     "no undo step.",
+     R"json({"type": "object", "additionalProperties": false, "required": [],
+      "properties": {
+        "step": {"type": "integer", "description": "The step to show."},
+        "live": {"type": "boolean", "description": "Whether the cursor follows the newest step."},
+        "playing": {"type": "boolean", "description": "Whether the cursor plays forward."},
+        "speed": {"type": "number", "minimum": 0.1, "maximum": 1000, "description": "The play speed in steps per second, from 0.1 to 1000."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["cursor"],
+      "properties": {
+        "cursor": {"$use": "cursor_state", "description": "The cursor after the move."}}})json",
+     R"json({"step": 120, "live": false})json"},
+    {"cursor.step", false, false, true,
+     "Moves the cursor by count kept steps, forward when count is above 0 and back when it is below 0. A count of 0 "
+     "is refused. The cursor stops at the nearest kept step, and the result gives the cursor as it is. It changes the "
+     "session and not the workspace, so it has no undo step.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["count"],
+      "properties": {
+        "count": {"type": "integer", "minimum": -1000, "maximum": 1000, "description": "How many kept steps to move, from -1000 to 1000 and not 0."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["cursor"],
+      "properties": {
+        "cursor": {"$use": "cursor_state", "description": "The cursor after the move."}}})json",
+     R"json({"count": -1})json"},
+    {"camera.get", false, false, true,
+     "Returns the orbit camera of a scene panel and the views that the panel saved. The panel must be a scene panel. "
+     "It changes nothing.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel"],
+      "properties": {
+        "panel": {"$use": "id", "description": "The scene panel's id in the open spec."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["orbit", "views"],
+      "properties": {
+        "orbit": {"$use": "orbit", "description": "The camera now."},
+        "views": {"type": "array", "maxItems": 16, "items": {"$use": "camera_view"}, "description": "The saved views, at most 16."}}})json",
+     R"json({"panel": "world"})json"},
+    {"camera.set", false, false, true,
+     "Moves the orbit camera of a scene panel to a saved view by name, or to the orbit that you give, and returns "
+     "the orbit. A name that the panel did not save fails with camera.unknown_view. It changes the session and not the "
+     "workspace, so it has no undo step.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel"],
+      "properties": {
+        "panel": {"$use": "id", "description": "The scene panel's id in the open spec."},
+        "view": {"type": "string", "minLength": 1, "maxLength": 64, "description": "The name of a saved view; not with orbit."},
+        "orbit": {"$use": "orbit", "description": "The orbit to move to; not with view."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["orbit"],
+      "properties": {
+        "orbit": {"$use": "orbit", "description": "The camera after the move."}}})json",
+     R"json({"panel": "world", "view": "overview"})json"},
+    {"camera.save", true, false, true,
+     "Saves the current camera of a scene panel as a view with a name, in the option views of the panel, and replaces "
+     "the view with the same name. A panel holds at most 16 views. Undo restores the views. The result holds the "
+     "change as a diff; with dry_run true the change is only checked and not applied.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "name"],
+      "properties": {
+        "panel": {"$use": "id", "description": "The scene panel's id in the open spec."},
+        "name": {"type": "string", "minLength": 1, "maxLength": 64, "description": "The view's name."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "warnings", "diff", "applied"],
+      "properties": {
+        "panel": {"type": "string", "description": "The panel's id."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
+     R"json({"panel": "world", "name": "overview"})json"},
 
     // run (design/instruments.md)
     {"run.state", false, false, true,
@@ -1308,14 +1634,15 @@ const Row kRows[] = {
     {"events.wait", false, false, false,
      "Returns the events that came after a cursor: picks and selections in the app's views and scene panels, "
      "changes of controls, changes of the running script (state, parameters, actions, attachment), edits of the open "
-     "spec, approvals, and the compile, refusal and stop of GPU programs and stages. It answers at once when events "
+     "spec, approvals, the compile, refusal and stop of GPU programs and stages, writes of state variables and "
+     "moves of the cursor. It answers at once when events "
      "wait, and otherwise holds the call until one comes or "
      "timeout_s ends. Pass the cursor of each result to the next call. The app keeps the last 1024 events; lost "
      "counts those that were dropped before you read them. Hovers are not events. It changes nothing.",
      R"json({"type": "object", "additionalProperties": false, "required": [],
       "properties": {
         "cursor": {"type": "integer", "minimum": 0, "default": 0, "description": "The cursor of the previous result; 0, the default, returns the oldest events the app still keeps."},
-        "kinds": {"type": "array", "minItems": 1, "maxItems": 7, "items": {"type": "string", "enum": ["pick", "select", "control", "run", "spec", "approval", "program"]}, "description": "Only these kinds; every kind when absent."},
+        "kinds": {"type": "array", "minItems": 1, "maxItems": 9, "items": {"type": "string", "enum": ["pick", "select", "control", "run", "spec", "approval", "program", "state", "cursor"]}, "description": "Only these kinds; every kind when absent."},
         "panels": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$use": "id"}, "description": "Only events of these panels or controls; events of every panel and of none when absent."},
         "timeout_s": {"type": "number", "minimum": 0, "maximum": 60, "default": 10, "description": "How long to wait for a first event, in seconds, at most 60; 10 when absent, 0 to answer at once."},
         "limit": {"type": "integer", "minimum": 1, "maximum": 256, "default": 64, "description": "The most events returned; 64 when absent."}}})json",
@@ -1541,6 +1868,11 @@ json patch_of(const json& schema) {
     for (auto& item : out["properties"].items()) {
         json& p = item.value();
         if (p.contains("properties")) p = patch_of(p);
+        // A property of any JSON value (a description and nothing else)
+        // already admits null; any other property without a type is a string.
+        bool any_value = !p.contains("type");
+        for (auto k = p.begin(); any_value && k != p.end(); ++k) any_value = k.key() == "description";
+        if (any_value) continue;
         json type = p.contains("type") ? p["type"] : json("string");
         if (type.is_string()) type = json::array({type});
         if (std::find(type.begin(), type.end(), json("null")) == type.end()) type.push_back("null");
@@ -1632,6 +1964,24 @@ const std::pair<const char*, CommandEffect> kEffects[] = {
     {"control.create", E::edit},
     {"control.patch", E::edit},
     {"control.remove", E::edit},
+    {"state.create", E::edit},
+    {"state.patch", E::edit},
+    {"state.remove", E::edit},
+    {"state.set", E::change},  // session state: no undo step and no journal entry
+    {"state.get", E::read},
+    {"control.set", E::change},
+    {"selection.set", E::change},
+    {"selection.get", E::read},
+    {"entity.set", E::edit},
+    {"entity.remove", E::edit},
+    {"annotation.set", E::edit},
+    {"annotation.remove", E::edit},
+    {"cursor.get", E::read},
+    {"cursor.set", E::change},
+    {"cursor.step", E::change},
+    {"camera.get", E::read},
+    {"camera.set", E::change},
+    {"camera.save", E::edit},
     {"run.state", E::read},
     {"run.set_param", E::run},
     {"run.action", E::run},
