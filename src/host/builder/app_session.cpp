@@ -13,7 +13,6 @@
 
 #include "caliper/live_net.h"   // the ops and run states of wire protocol 3.1
 #include "live/live_attach.h"     // RunLink, Controls
-#include "live/live_controls.h"   // kOpIntervene
 
 #include <nlohmann/json.hpp>
 
@@ -170,6 +169,10 @@ std::string sentence(std::string why) {
     if (why.back() != '.') why += '.';
     return why;
 }
+
+// The CONTROL op of an intervention (caliper_live::kOpIntervene, which this
+// file does not include because live_controls.h needs ImGui).
+constexpr const char* kOpIntervene = "intervene";
 
 // Any JSON value between the wire's Json and the command table's JSON.
 json from_net_json(const caliper_net::Json& v) {
@@ -352,14 +355,14 @@ cb::Error AppRunControl::intervene_set(const cb::Intervention& i) {
     json set{{"point", i.point}, {"op", i.op}};
     set["from_step"] = i.from_step ? json(*i.from_step) : json();
     set["until_step"] = i.until_step ? json(*i.until_step) : json();
-    return send_net(caliper_live::kOpIntervene, "", to_net_json(json{{"set", std::move(set)}}), 0);
+    return send_net(kOpIntervene, "", to_net_json(json{{"set", std::move(set)}}), 0);
 }
 
 cb::Error AppRunControl::intervene_clear(const std::string& point) {
     if (link_ && link_->attached() && !interventions_supported())
         return cb::Error(cb::kInterveneNotSupported, "The script " + link_->script() + " takes no interventions.");
     const json body = point.empty() ? json{{"clear_all", true}} : json{{"clear", point}};
-    return send_net(caliper_live::kOpIntervene, "", to_net_json(body), 0);
+    return send_net(kOpIntervene, "", to_net_json(body), 0);
 }
 
 void AppRunControl::feed_interventions(const json& interventions, const json& step, bool baseline,
