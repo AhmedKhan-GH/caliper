@@ -38,6 +38,11 @@ struct Chain {
     std::vector<const spec::Source*> path;  // the root first, the bound source last
     RootKind kind = RootKind::unavailable;
     CatalogKind catalog_kind = CatalogKind::table;  // of a catalog root
+    // The catalog id that a served root reads: the root's own, or for a live
+    // tensor whose first step is an operator that runs in the script, the
+    // live view of the operator's tensor output (design/instrument-interface.md,
+    // Operator Programs).
+    std::string catalog;
     Error error;
 };
 
@@ -82,6 +87,9 @@ Chain chain_of(const spec::Spec& spec, const std::string& id, const DataSources*
         return c;
     }
     c.catalog_kind = parsed.kind;
+    c.catalog = *root.catalog;
+    if (parsed.kind == CatalogKind::live && operator_runs_in_script(spec, root, 0))
+        c.catalog = "live:program.operator." + root.id + ".0";
     switch (parsed.kind) {
         case CatalogKind::tensor: c.kind = RootKind::tensor; return c;
         case CatalogKind::table: c.kind = RootKind::table; return c;
@@ -112,7 +120,7 @@ std::string chain_key(const Chain& chain, const ChainContext& ctx) {
     }
     // The values that the chain's references read (chain_hooks.h), so that a
     // chain that no change touched hits the cache.
-    return *chain.path.front()->catalog + "\n" + parts.dump() + references_key(chain.path, ctx);
+    return chain.catalog + "\n" + parts.dump() + references_key(chain.path, ctx);
 }
 
 // One step of the mix of generations (splitmix64), so that the panel's
@@ -222,6 +230,54 @@ std::uint64_t mix_cursor(std::uint64_t generation, bool reads_history, const Cha
     return mix_generation(mix_generation(generation, 0xC0A5u), static_cast<std::uint64_t>(ctx->cursor_step));
 }
 
+// The references of an entity's options, read from their tables.
+void option_references(const json& options, std::vector<spec::Reference>* out) {
+    if (!options.is_object()) return;
+    for (auto it = options.begin(); it != options.end(); ++it)
+        if (spec::looks_like_reference(it.value()))
+            if (std::optional<spec::Reference> r = spec::parse_reference(it.value())) out->push_back(*r);
+}
+
+// A number that changes when any reference that the panel reads changes:
+// its slots, its options, its entities' slots and options, and the steps of
+// the chains of `bindings`. 0 without a value store or without references,
+// so that a panel that reads none keeps the generation of its sources.
+std::uint64_t reference_versions(const spec::Spec& s, const spec::Panel& panel,
+                                 const std::vector<std::string>& bindings, const ChainContext* ctx,
+                                 const DataSources* sources) {
+    if (!ctx || !ctx->values) return 0;
+    std::vector<spec::Reference> refs;
+    for (const auto& [slot, value] : panel.bind)
+        if (value.reference) refs.push_back(*value.reference);
+    for (const auto& [key, ref] : panel.options.references) refs.push_back(ref);
+    for (const spec::Entity& e : panel.entities) {
+        for (const auto& [slot, value] : e.slots)
+            if (const spec::Reference* r = std::get_if<spec::Reference>(&value)) refs.push_back(*r);
+        option_references(e.options, &refs);
+    }
+    std::set<std::string> seen;
+    for (const std::string& b : bindings) {
+        const Chain c = chain_of(s, split_binding(b).source, sources);
+        for (const spec::Source* p : c.path)
+            if (seen.insert(p->id).second)
+                for (const spec::Transform& t : p->transforms)
+                    for (const auto& [key, ref] : t.references) refs.push_back(ref);
+    }
+    if (refs.empty()) return 0;
+    std::uint64_t h = 0x5EF5u;
+    for (const spec::Reference& r : refs) h = mix_generation(h, ctx->values->version(r));
+    return h;
+}
+
+// A panel's generation from its served sources' mix, the cursor and the
+// versions of the references it reads; 0 when it reads neither.
+std::uint64_t panel_mix(bool served, std::uint64_t generation, bool history, const ChainContext* ctx,
+                        std::uint64_t references) {
+    if (!served && references == 0) return 0;
+    const std::uint64_t g = served ? mix_cursor(generation, history, ctx) : 0;
+    return references ? mix_generation(g, references) : g;
+}
+
 // The value of a tensor chain: the tensor, the step of each row after a
 // window, the geometry arrays after an operator, and what the cursor chose.
 struct ChainValue {
@@ -295,7 +351,10 @@ public:
             }
             out.slots.push_back(std::move(data));
         }
-        out.generation = served ? mix_cursor(generation, history, ctx) : 0;
+        std::vector<std::string> bindings;
+        for (const BoundSlot& b : bound) bindings.push_back(b.binding);
+        out.generation = panel_mix(served, generation, history, ctx,
+                                   reference_versions(spec_, *panel, bindings, ctx, sources_));
         return out;
     }
 
@@ -389,7 +448,10 @@ private:
             out.entities[i].error = err;
             if (out.entities[i].error.where.empty()) out.entities[i].error.where = panel.entities[i].path;
         }
-        out.generation = served ? mix_cursor(generation, history, ctx) : 0;
+        std::vector<std::string> bindings;
+        for (const auto& [i, b] : bound) bindings.push_back(b.binding);
+        out.generation = panel_mix(served, generation, history, ctx,
+                                   reference_versions(spec_, panel, bindings, ctx, sources_));
     }
 
     Error fill(const spec::Panel& panel, SlotData& data, bool* served) {
@@ -496,7 +558,7 @@ private:
 
     std::uint64_t served_generation(const Chain& chain) const {
         if (!sources_ || chain.kind != RootKind::served_tensor) return 0;
-        return sources_->generation(*chain.path.front()->catalog);
+        return sources_->generation(chain.catalog);
     }
 
     // The tensor of a served root (a live view) through its shipped steps,
@@ -511,7 +573,7 @@ private:
         bool cached_form = true;
         for (const ChainStep& s : steps) cached_form = cached_form && !is_operator(s.op());
         const std::string key = cached_form ? chain_key(chain, chain_) : std::string();
-        const std::uint64_t now = source->generation(*root.catalog);
+        const std::uint64_t now = source->generation(chain.catalog);
         if (cached_form && now != 0 && sources_->find_cached(key, now, &out->tensor)) {
             *generation = now;
             return {};
@@ -520,14 +582,14 @@ private:
         request.max_rows = limits_.max_rows;
         request.max_cells = limits_.max_cells;
         request.max_bytes = limits_.max_tensor_bytes;
-        ServedData data = source->read(*root.catalog, request);
+        ServedData data = source->read(chain.catalog, request);
         if (data.error) {
             Error err = data.error;
             if (err.where.empty()) err.where = root.id;
             return err;
         }
         if (data.tabular || !data.tensor.valid())
-            return Error("resolve.not_a_tensor", "The served source " + *root.catalog + " gave no tensor.", root.id);
+            return Error("resolve.not_a_tensor", "The served source " + chain.catalog + " gave no tensor.", root.id);
         if (data.tensor.nbytes() > limits_.max_tensor_bytes)
             return Error("resolve.too_large",
                          "The source " + *root.catalog + " gave a tensor of " + std::to_string(data.tensor.nbytes()) +
@@ -902,9 +964,40 @@ std::uint64_t panel_generation(const spec::Spec& s, std::string_view panel_id, c
         history = history || reads_kept_steps(s, c);
         if (!is_served(c.kind)) continue;
         served = true;
-        generation = mix_generation(generation, sources.generation(*c.path.front()->catalog));
+        generation = mix_generation(generation, sources.generation(c.catalog));
     }
-    return served ? mix_cursor(generation, history, chain) : 0;
+    return panel_mix(served, generation, history, chain, reference_versions(s, *panel, bindings, chain, &sources));
+}
+
+spec::Panel panel_with_values(const spec::Panel& panel, const ChainContext* chain) {
+    spec::Panel out = panel;
+    auto read = [&](const spec::Reference& r) {
+        json v = chain && chain->values ? chain->values->value(r) : r.fallback;
+        return v.is_null() ? r.fallback : v;
+    };
+    for (const auto& [key, ref] : panel.options.references) {
+        const json v = read(ref);
+        if (key == "colormap") {
+            if (v.is_string()) out.options.colormap = v.get<std::string>();
+            continue;
+        }
+        if (!v.is_array() || v.size() != 2 || !v[0].is_number() || !v[1].is_number()) continue;
+        const std::array<double, 2> pair{v[0].get<double>(), v[1].get<double>()};
+        if (key == "range") out.options.range = pair;
+        else if (key == "x_range") out.options.x_range = pair;
+        else if (key == "y_range") out.options.y_range = pair;
+    }
+    for (spec::Entity& e : out.entities) {
+        if (!e.options.is_object()) continue;
+        for (auto it = e.options.begin(); it != e.options.end(); ++it) {
+            if (!spec::looks_like_reference(it.value())) continue;
+            const std::optional<spec::Reference> r = spec::parse_reference(it.value());
+            if (!r || !chain || !chain->values) continue;
+            const json v = chain->values->value(*r);
+            if (!v.is_null()) it.value()["default"] = v;
+        }
+    }
+    return out;
 }
 
 const char* slot_kind_name(SlotData::Kind kind) {

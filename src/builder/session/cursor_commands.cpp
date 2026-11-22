@@ -26,7 +26,8 @@ json sources_json(const StepHistory& history) {
                        {"last", k.last},
                        {"steps", k.steps},
                        {"requested", k.requested},
-                       {"bytes", k.bytes}});
+                       {"bytes", k.bytes},
+                       {"note", k.note.empty() ? json(nullptr) : json(k.note)}});
     return out;
 }
 

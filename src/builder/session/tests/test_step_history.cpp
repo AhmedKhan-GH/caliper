@@ -9,6 +9,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -123,14 +124,17 @@ TEST_CASE("a change of a source's chain clears its steps, and an unrelated edit 
 
 TEST_CASE("the budget shortens the largest rings first") {
     // 64 KiB values; the views share one buffer, so the test holds little
-    // memory while the history counts every value's bytes.
+    // memory while the history counts every value's bytes. Five rings of
+    // 125 MiB, each under the share of one source, and one of 4 MiB ask for
+    // more than the budget.
     const TensorData value = filled({16384}, 1);
-    const spec::Spec s = parse(std::string(kHead) +
-                               "[[source]]\nid = \"big\"\ncatalog = \"live:a\"\nhistory = 9000\n"
-                               "[[source]]\nid = \"small\"\ncatalog = \"live:b\"\nhistory = 64\n");
+    std::string toml = std::string(kHead) + "[[source]]\nid = \"small\"\ncatalog = \"live:b\"\nhistory = 64\n";
+    for (int i = 1; i <= 5; ++i)
+        toml += "[[source]]\nid = \"big" + std::to_string(i) + "\"\ncatalog = \"live:a\"\nhistory = 2000\n";
+    const spec::Spec s = parse(toml);
     StepHistory h;
     h.configure(s);
-    for (int step = 0; step < 9000; ++step) {
+    for (int step = 0; step < 2000; ++step) {
         h.append("live:a", step, value);
         h.append("live:b", step, value);
     }
@@ -142,9 +146,39 @@ TEST_CASE("the budget shortens the largest rings first") {
     }
     CHECK(total <= kHistoryBudgetBytes);
     CHECK(kept["small"].steps == 64);
-    CHECK(kept["big"].requested == 9000);
-    CHECK(kept["big"].steps == (std::int64_t)((kHistoryBudgetBytes - 64 * 65536) / 65536));
-    CHECK(kept["big"].last == 8999);
+    CHECK(kept["small"].note.empty());
+    CHECK(kept["big1"].requested == 2000);
+    CHECK(kept["big1"].steps == (std::int64_t)((kHistoryBudgetBytes - 64 * 65536) / 5 / 65536));
+    CHECK(kept["big5"].steps == kept["big1"].steps);
+    CHECK(kept["big1"].last == 1999);
+    CHECK(kept["big1"].note.find("big1") != std::string::npos);
+}
+
+TEST_CASE("one raw source keeps at most a quarter of the budget and says which step keeps more") {
+    // A raw activation of 512 by 4096 values, 8 MiB a step, which alone
+    // would fill the whole budget at the default 64 steps. The views share
+    // one buffer; the reduced source makes 16 KiB values.
+    const TensorData value = filled({512, 4096}, 1);
+    const spec::Spec s = parse(std::string(kHead) +
+                               "[[source]]\nid = \"raw\"\ncatalog = \"live:mlp.act\"\n"
+                               "[[source]]\nid = \"mean\"\ncatalog = \"live:mlp.act\"\n"
+                               "[[source.transform]]\nop = \"reduce\"\nfn = \"mean\"\naxis = 0\n");
+    StepHistory h;
+    h.configure(s);
+    for (int step = 1; step <= 64; ++step) h.append("live:mlp.act", step, value);
+    std::map<std::string, KeptSource> kept;
+    for (const KeptSource& k : h.kept()) kept[k.id] = k;
+    REQUIRE(kept.size() == 2);
+    CHECK(kHistorySourceBytes == kHistoryBudgetBytes / 4);
+    CHECK(kept["raw"].requested == kDefaultLiveDepth);
+    CHECK(kept["raw"].steps == (std::int64_t)(kHistorySourceBytes / value.nbytes()));
+    CHECK(kept["raw"].steps == 16);
+    CHECK(kept["raw"].bytes <= kHistorySourceBytes);
+    CHECK(kept["raw"].last == 64);
+    CHECK(kept["raw"].note.find("The source raw keeps 16 of its 64 steps") == 0);
+    CHECK(kept["raw"].note.find("reduce step") != std::string::npos);
+    CHECK(kept["mean"].steps == 64);
+    CHECK(kept["mean"].note.empty());
 }
 
 TEST_CASE("the cursor is live, holds at the nearest kept step, steps, plays and clamps") {
@@ -216,4 +250,24 @@ TEST_CASE("history memory of the default depth" * doctest::skip(std::getenv("CAL
     const KeptSource k = h.kept().front();
     MESSAGE("history " << size << ": " << k.steps << " steps, " << k.bytes << " bytes");
     CHECK(k.steps == kDefaultLiveDepth);
+}
+
+TEST_CASE("a live series keeps its newest value at each step only for a source that states history") {
+    const spec::Spec s = parse(std::string(kHead) +
+                               "[[source]]\nid = \"loss\"\ncatalog = \"live:loss\"\nhistory = 2048\n"
+                               "[[source]]\nid = \"plain\"\ncatalog = \"live:loss\"\n");
+    StepHistory h;
+    h.configure(s);
+    for (int step = 1; step <= 5; ++step) h.append_series("live:loss", step * 10, 1.0 / step);
+    std::map<std::string, KeptSource> kept;
+    for (const KeptSource& k : h.kept()) kept[k.id] = k;
+    CHECK(kept["loss"].steps == 5);
+    CHECK(kept["loss"].first == 10);
+    CHECK(kept["loss"].last == 50);
+    CHECK(kept["plain"].steps == 0);
+    const auto at = h.at("loss", 35);
+    REQUIRE(at);
+    CHECK(at->first == 30);
+    CHECK(at->second.rank() == 0);
+    CHECK(at->second.element(0) == doctest::Approx(1.0 / 3));
 }

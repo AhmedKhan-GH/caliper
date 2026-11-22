@@ -4,9 +4,10 @@
 //
 // Each source that keeps steps has a ring: a map from step to the value
 // after the source's history point, at most `depth` values, oldest first.
-// The budget shares kHistoryBudgetBytes among the rings by bytes: the
-// largest rings shorten first (water filling), and a ring whose value size
-// is not known yet counts as empty.
+// The budget shares kHistoryBudgetBytes among the rings by bytes: no ring
+// keeps more than kHistorySourceBytes, then the largest rings shorten first
+// (water filling), and a ring whose value size is not known yet counts as
+// empty.
 #include <caliper_builder/session/history.h>
 
 #include <caliper_builder/loaders/tensor_ops.h>
@@ -15,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -60,6 +62,7 @@ struct RingPlan {
     std::int64_t requested = 0;   // the depth before the budget
     std::size_t point = 0;        // the chain steps applied to the kept value
     json prefix = json::array();  // their records, which name the chain for a reset
+    bool declared = false;        // the source states `history`, so it keeps the steps of a series too
 };
 
 std::optional<RingPlan> plan_of(const spec::Spec& s, const spec::Source& source) {
@@ -69,6 +72,7 @@ std::optional<RingPlan> plan_of(const spec::Spec& s, const spec::Source& source)
     plan.catalog = *path.front()->catalog;
     plan.point = history_point(s, source);
     plan.requested = history_depth(s, source);
+    plan.declared = source.history.has_value();
     if (plan.requested <= 0) return std::nullopt;
     std::size_t k = 0;
     for (const spec::Source* p : path) {
@@ -112,6 +116,20 @@ std::vector<std::int64_t> budget_depths(const std::vector<std::int64_t>& request
         depth[i] = (std::int64_t)std::floor(cap / (long double)step_bytes[i]);
     }
     return depth;
+}
+
+// Why a ring keeps `depth` of its `requested` steps: the source, the size of
+// one step, the share of one source and of all, and the step that helps.
+std::string budget_note(const std::string& id, std::int64_t depth, std::int64_t requested, std::uint64_t step_bytes) {
+    auto mib = [](std::uint64_t b) {
+        char text[32];
+        std::snprintf(text, sizeof text, "%.1f MiB", double(b) / double(1 << 20));
+        return std::string(text);
+    };
+    return "The source " + id + " keeps " + std::to_string(depth) + " of its " + std::to_string(requested) +
+           " steps, because one step holds " + mib(step_bytes) + ", one source keeps at most " +
+           mib(kHistorySourceBytes) + " and all sources share " + mib(kHistoryBudgetBytes) +
+           ". A reduce step in the source before its kept value, such as a mean over an axis, keeps more steps.";
 }
 
 // The live registry of the catalog ids each history keeps, so that the live
@@ -178,6 +196,7 @@ struct StepHistory::Impl {
         std::map<std::int64_t, TensorData> values;
         std::uint64_t bytes = 0;
         std::uint64_t step_bytes = 0;         // of one value, once one arrived
+        std::string note;                     // why the budget shortened it
         std::vector<std::int64_t> shape;
         DType dtype = DType::f32;
     };
@@ -207,13 +226,19 @@ struct StepHistory::Impl {
         std::vector<std::int64_t> requested;
         std::vector<std::uint64_t> step_bytes;
         for (const auto& [id, r] : rings) {
-            requested.push_back(r.plan.requested);
+            // One source keeps at most its share, so that one raw activation
+            // never takes the whole budget from the others.
+            std::int64_t want = r.plan.requested;
+            if (r.step_bytes > 0)
+                want = std::min<std::int64_t>(want, std::int64_t(kHistorySourceBytes / r.step_bytes));
+            requested.push_back(want);
             step_bytes.push_back(r.step_bytes);
         }
         const std::vector<std::int64_t> depth = budget_depths(requested, step_bytes, kHistoryBudgetBytes);
         std::size_t i = 0;
         for (auto& [id, r] : rings) {
             r.depth = depth[i++];
+            r.note = r.depth < r.plan.requested ? budget_note(id, r.depth, r.plan.requested, r.step_bytes) : "";
             trim(r);
         }
     }
@@ -313,12 +338,24 @@ void StepHistory::clear() {
 }
 
 void StepHistory::append(const std::string& catalog_id, std::int64_t step, const TensorData& value) {
+    append_to(catalog_id, step, value, false);
+}
+
+void StepHistory::append_series(const std::string& catalog_id, std::int64_t step, double value) {
+    TensorResult one = TensorData::allocate(DType::f32, {});
+    if (one.error) return;
+    *reinterpret_cast<float*>(one.tensor.mutable_data()) = static_cast<float>(value);
+    append_to(catalog_id, step, one.tensor, true);
+}
+
+void StepHistory::append_to(const std::string& catalog_id, std::int64_t step, const TensorData& value,
+                            bool declared_only) {
     if (!value.valid()) return;
     std::lock_guard<std::mutex> lock(impl_->mutex);
     bool wanted = false;
     bool resized = false;
     for (auto& [id, r] : impl_->rings) {
-        if (r.plan.catalog != catalog_id) continue;
+        if (r.plan.catalog != catalog_id || (declared_only && !r.plan.declared)) continue;
         wanted = true;
         TensorData kept = value;
         if (!r.steps.empty()) {
@@ -385,6 +422,7 @@ std::vector<KeptSource> StepHistory::kept() const {
         k.steps = (std::int64_t)r.values.size();
         k.requested = r.plan.requested;
         k.bytes = r.bytes;
+        k.note = r.note;
         out.push_back(std::move(k));
     }
     return out;

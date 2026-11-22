@@ -962,8 +962,12 @@ struct Session::Impl {
         result["applied"] = !dry;
         if (dry || e.spec == doc->spec) return CommandOutput::unchanged(std::move(result));
         const std::size_t bytes = 2 * (before_text.size() + after_text.size()) + 512;
-        return CommandOutput::ok(std::move(result),
-                                 change_spec(std::move(e.spec), !ctx.invocation.merge_key.empty(), bytes));
+        CommandOutput out =
+            CommandOutput::ok(std::move(result), change_spec(std::move(e.spec), !ctx.invocation.merge_key.empty(), bytes));
+        // camera.save journals the orbit it saved, so that a replay of the
+        // journal and a redo need no app.
+        out.recorded_args = camera_args;
+        return out;
     }
 
     // ---- review of spec edits ---------------------------------------------------
@@ -1493,9 +1497,11 @@ struct Session::Impl {
         const std::string id = str_arg(args, "panel");
         if (!s.find_panel(id)) return fail("panel.not_found", "The spec has no panel " + id + "; spec.get lists them.", "args.panel");
         const std::uint64_t revision = catalog->revision();
-        const std::string version = panel_data_version(s, id, revision, panel_generation(s, id, sources));
-        if (str_arg(args, "known") == version) return CommandOutput::ok(panel_data_unchanged(s, id, version));
+        // The cursor goes into the version, so that a move of a held cursor
+        // gives new data.
         const ChainContext chain = chain_context();
+        const std::string version = panel_data_version(s, id, revision, panel_generation(s, id, sources, &chain));
+        if (str_arg(args, "known") == version) return CommandOutput::ok(panel_data_unchanged(s, id, version));
         return CommandOutput::ok(
             panel_data_result(s, resolve_panel(s, id, *store, options.resolve, &sources, &chain), revision));
     }
@@ -1526,6 +1532,9 @@ struct Session::Impl {
         // panel's state ("Source offline", "Missing column"), as the app shows it.
         const ChainContext chain = chain_context();
         PanelData data = resolve_panel(s, id, *store, options.resolve, &sources, &chain);
+        // The panel as it draws now: its option references applied.
+        for (spec::Panel& p : s.panels)
+            if (p.id == id) p = panel_with_values(p, &chain);
         return h->render_panel(s, data, static_cast<int>(int_arg(ctx.invocation.args, "width", 800)),
                                static_cast<int>(int_arg(ctx.invocation.args, "height", 500)));
     }

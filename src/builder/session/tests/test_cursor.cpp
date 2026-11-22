@@ -83,7 +83,7 @@ TEST_CASE("cursor.get gives the cursor and each source's kept steps") {
     CHECK(r.result["cursor"]["first"] == 5);
     REQUIRE(r.result["sources"].size() == 1);
     CHECK(r.result["sources"][0] == json{{"id", "act"}, {"first", 5}, {"last", 7}, {"steps", 3},
-                                         {"requested", 64}, {"bytes", 12}});
+                                         {"requested", 64}, {"bytes", 12}, {"note", nullptr}});
 }
 
 TEST_CASE("cursor.set and cursor.step move the cursor and add one cursor event each") {

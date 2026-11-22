@@ -2125,6 +2125,12 @@
             "pattern": "^[a-z][a-z0-9_-]{0,63}$",
             "type": "string"
           },
+          "history": {
+            "description": "The steps the app keeps for a source whose root is a live tensor, from 0 to 65536; 64 when absent for such a source without from.",
+            "maximum": 65536,
+            "minimum": 0,
+            "type": "integer"
+          },
           "id": {
             "description": "The source's id in this spec, which panels bind.",
             "maxLength": 64,
@@ -2159,6 +2165,16 @@
                     "array"
                   ]
                 },
+                "columns": {
+                  "description": "path: the two or three column indices that give the coordinates; the first three columns when absent.",
+                  "items": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxItems": 3,
+                  "minItems": 2,
+                  "type": "array"
+                },
                 "fn": {
                   "description": "reduce: the function; entropy treats the axis as a probability distribution, in nats; argmax and argmin take one axis.",
                   "enum": [
@@ -2176,14 +2192,62 @@
                   "type": "string"
                 },
                 "index": {
-                  "description": "slice: the one index to keep, negative counting from the end; it drops the axis. Not with start, stop or step.",
+                  "additionalProperties": false,
+                  "description": "slice: the one index to keep, negative counting from the end; it drops the axis. Not with start, stop or step. A number or a reference.",
                   "maximum": 9007199254740991,
                   "minimum": -9007199254740991,
-                  "type": "integer"
+                  "properties": {
+                    "control": {
+                      "description": "The id of a control whose current value the place takes.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "default": {
+                      "description": "The literal the place takes while the input has no value."
+                    },
+                    "entity": {
+                      "description": "selection: the entity path; only a pick on that entity counts.",
+                      "type": "string"
+                    },
+                    "field": {
+                      "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                      "type": "string"
+                    },
+                    "selection": {
+                      "description": "The id of a panel whose last pick the place reads.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "state": {
+                      "description": "The id of a state variable whose current value the place takes.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [],
+                  "type": [
+                    "integer",
+                    "object"
+                  ]
                 },
                 "keepdims": {
                   "description": "reduce: keep the reduced axes with size 1; false by default.",
                   "type": "boolean"
+                },
+                "max_cells": {
+                  "description": "surface: the most cells of the height field, from 1 to 262144; 32768 when absent.",
+                  "maximum": 262144,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "max_points": {
+                  "description": "path: the most points of the polyline, from 2 to 1048576; 65536 when absent.",
+                  "maximum": 1048576,
+                  "minimum": 2,
+                  "type": "integer"
                 },
                 "mode": {
                   "description": "normalise: the rescaling.",
@@ -2196,19 +2260,67 @@
                   "type": "string"
                 },
                 "op": {
-                  "description": "slice selects along one axis; reduce reduces over axes; normalise rescales values.",
+                  "description": "slice selects along one axis; reduce reduces over axes; normalise rescales values; window keeps a range of the source's recent steps as a new leading axis; surface turns a tensor of rank 2 into a height field of geometry; path turns a tensor of rows into a polyline of geometry.",
                   "enum": [
                     "slice",
                     "reduce",
-                    "normalise"
+                    "normalise",
+                    "window",
+                    "surface",
+                    "path"
+                  ],
+                  "type": "string"
+                },
+                "pool": {
+                  "description": "surface: how the cells merge when the tensor has more than max_cells; mean when absent.",
+                  "enum": [
+                    "mean",
+                    "max",
+                    "min"
                   ],
                   "type": "string"
                 },
                 "start": {
-                  "description": "slice: the first index, Python style, negative allowed.",
+                  "additionalProperties": false,
+                  "description": "slice: the first index, Python style, negative allowed; window: the first step number, included. A number or a reference.",
                   "maximum": 9007199254740991,
                   "minimum": -9007199254740991,
-                  "type": "integer"
+                  "properties": {
+                    "control": {
+                      "description": "The id of a control whose current value the place takes.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "default": {
+                      "description": "The literal the place takes while the input has no value."
+                    },
+                    "entity": {
+                      "description": "selection: the entity path; only a pick on that entity counts.",
+                      "type": "string"
+                    },
+                    "field": {
+                      "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                      "type": "string"
+                    },
+                    "selection": {
+                      "description": "The id of a panel whose last pick the place reads.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "state": {
+                      "description": "The id of a state variable whose current value the place takes.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [],
+                  "type": [
+                    "integer",
+                    "object"
+                  ]
                 },
                 "step": {
                   "description": "slice: the step, at least 1.",
@@ -2216,11 +2328,89 @@
                   "minimum": 1,
                   "type": "integer"
                 },
+                "steps": {
+                  "additionalProperties": false,
+                  "description": "window: the last N kept steps up to the cursor; not with start or stop. A number or a reference.",
+                  "maximum": 65536,
+                  "minimum": 1,
+                  "properties": {
+                    "control": {
+                      "description": "The id of a control whose current value the place takes.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "default": {
+                      "description": "The literal the place takes while the input has no value."
+                    },
+                    "entity": {
+                      "description": "selection: the entity path; only a pick on that entity counts.",
+                      "type": "string"
+                    },
+                    "field": {
+                      "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                      "type": "string"
+                    },
+                    "selection": {
+                      "description": "The id of a panel whose last pick the place reads.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "state": {
+                      "description": "The id of a state variable whose current value the place takes.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [],
+                  "type": [
+                    "integer",
+                    "object"
+                  ]
+                },
                 "stop": {
-                  "description": "slice: the index to stop before, Python style.",
+                  "additionalProperties": false,
+                  "description": "slice: the index to stop before, Python style; window: the last step number, included. A number or a reference.",
                   "maximum": 9007199254740991,
                   "minimum": -9007199254740991,
-                  "type": "integer"
+                  "properties": {
+                    "control": {
+                      "description": "The id of a control whose current value the place takes.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "default": {
+                      "description": "The literal the place takes while the input has no value."
+                    },
+                    "entity": {
+                      "description": "selection: the entity path; only a pick on that entity counts.",
+                      "type": "string"
+                    },
+                    "field": {
+                      "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                      "type": "string"
+                    },
+                    "selection": {
+                      "description": "The id of a panel whose last pick the place reads.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "state": {
+                      "description": "The id of a state variable whose current value the place takes.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [],
+                  "type": [
+                    "integer",
+                    "object"
+                  ]
                 }
               },
               "required": [
@@ -2332,7 +2522,7 @@
           },
           "patch": {
             "additionalProperties": false,
-            "description": "The keys to change: catalog, sql, from or transform; null removes one.",
+            "description": "The keys to change: catalog, sql, from, transform or history; null removes one.",
             "properties": {
               "catalog": {
                 "description": "A catalog source id, from catalog.list, such as live:attn.weights or table:run42_metrics.",
@@ -2351,6 +2541,15 @@
                 "pattern": "^[a-z][a-z0-9_-]{0,63}$",
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "history": {
+                "description": "The steps the app keeps for a source whose root is a live tensor, from 0 to 65536; 64 when absent for such a source without from.",
+                "maximum": 65536,
+                "minimum": 0,
+                "type": [
+                  "integer",
                   "null"
                 ]
               },
@@ -2384,6 +2583,16 @@
                         "array"
                       ]
                     },
+                    "columns": {
+                      "description": "path: the two or three column indices that give the coordinates; the first three columns when absent.",
+                      "items": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "maxItems": 3,
+                      "minItems": 2,
+                      "type": "array"
+                    },
                     "fn": {
                       "description": "reduce: the function; entropy treats the axis as a probability distribution, in nats; argmax and argmin take one axis.",
                       "enum": [
@@ -2401,14 +2610,62 @@
                       "type": "string"
                     },
                     "index": {
-                      "description": "slice: the one index to keep, negative counting from the end; it drops the axis. Not with start, stop or step.",
+                      "additionalProperties": false,
+                      "description": "slice: the one index to keep, negative counting from the end; it drops the axis. Not with start, stop or step. A number or a reference.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
-                      "type": "integer"
+                      "properties": {
+                        "control": {
+                          "description": "The id of a control whose current value the place takes.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "default": {
+                          "description": "The literal the place takes while the input has no value."
+                        },
+                        "entity": {
+                          "description": "selection: the entity path; only a pick on that entity counts.",
+                          "type": "string"
+                        },
+                        "field": {
+                          "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                          "type": "string"
+                        },
+                        "selection": {
+                          "description": "The id of a panel whose last pick the place reads.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "state": {
+                          "description": "The id of a state variable whose current value the place takes.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [],
+                      "type": [
+                        "integer",
+                        "object"
+                      ]
                     },
                     "keepdims": {
                       "description": "reduce: keep the reduced axes with size 1; false by default.",
                       "type": "boolean"
+                    },
+                    "max_cells": {
+                      "description": "surface: the most cells of the height field, from 1 to 262144; 32768 when absent.",
+                      "maximum": 262144,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "max_points": {
+                      "description": "path: the most points of the polyline, from 2 to 1048576; 65536 when absent.",
+                      "maximum": 1048576,
+                      "minimum": 2,
+                      "type": "integer"
                     },
                     "mode": {
                       "description": "normalise: the rescaling.",
@@ -2421,19 +2678,67 @@
                       "type": "string"
                     },
                     "op": {
-                      "description": "slice selects along one axis; reduce reduces over axes; normalise rescales values.",
+                      "description": "slice selects along one axis; reduce reduces over axes; normalise rescales values; window keeps a range of the source's recent steps as a new leading axis; surface turns a tensor of rank 2 into a height field of geometry; path turns a tensor of rows into a polyline of geometry.",
                       "enum": [
                         "slice",
                         "reduce",
-                        "normalise"
+                        "normalise",
+                        "window",
+                        "surface",
+                        "path"
+                      ],
+                      "type": "string"
+                    },
+                    "pool": {
+                      "description": "surface: how the cells merge when the tensor has more than max_cells; mean when absent.",
+                      "enum": [
+                        "mean",
+                        "max",
+                        "min"
                       ],
                       "type": "string"
                     },
                     "start": {
-                      "description": "slice: the first index, Python style, negative allowed.",
+                      "additionalProperties": false,
+                      "description": "slice: the first index, Python style, negative allowed; window: the first step number, included. A number or a reference.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
-                      "type": "integer"
+                      "properties": {
+                        "control": {
+                          "description": "The id of a control whose current value the place takes.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "default": {
+                          "description": "The literal the place takes while the input has no value."
+                        },
+                        "entity": {
+                          "description": "selection: the entity path; only a pick on that entity counts.",
+                          "type": "string"
+                        },
+                        "field": {
+                          "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                          "type": "string"
+                        },
+                        "selection": {
+                          "description": "The id of a panel whose last pick the place reads.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "state": {
+                          "description": "The id of a state variable whose current value the place takes.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [],
+                      "type": [
+                        "integer",
+                        "object"
+                      ]
                     },
                     "step": {
                       "description": "slice: the step, at least 1.",
@@ -2441,11 +2746,89 @@
                       "minimum": 1,
                       "type": "integer"
                     },
+                    "steps": {
+                      "additionalProperties": false,
+                      "description": "window: the last N kept steps up to the cursor; not with start or stop. A number or a reference.",
+                      "maximum": 65536,
+                      "minimum": 1,
+                      "properties": {
+                        "control": {
+                          "description": "The id of a control whose current value the place takes.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "default": {
+                          "description": "The literal the place takes while the input has no value."
+                        },
+                        "entity": {
+                          "description": "selection: the entity path; only a pick on that entity counts.",
+                          "type": "string"
+                        },
+                        "field": {
+                          "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                          "type": "string"
+                        },
+                        "selection": {
+                          "description": "The id of a panel whose last pick the place reads.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "state": {
+                          "description": "The id of a state variable whose current value the place takes.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [],
+                      "type": [
+                        "integer",
+                        "object"
+                      ]
+                    },
                     "stop": {
-                      "description": "slice: the index to stop before, Python style.",
+                      "additionalProperties": false,
+                      "description": "slice: the index to stop before, Python style; window: the last step number, included. A number or a reference.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
-                      "type": "integer"
+                      "properties": {
+                        "control": {
+                          "description": "The id of a control whose current value the place takes.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "default": {
+                          "description": "The literal the place takes while the input has no value."
+                        },
+                        "entity": {
+                          "description": "selection: the entity path; only a pick on that entity counts.",
+                          "type": "string"
+                        },
+                        "field": {
+                          "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                          "type": "string"
+                        },
+                        "selection": {
+                          "description": "The id of a panel whose last pick the place reads.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "state": {
+                          "description": "The id of a state variable whose current value the place takes.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [],
+                      "type": [
+                        "integer",
+                        "object"
+                      ]
                     }
                   },
                   "required": [
@@ -2518,6 +2901,12 @@
                 "pattern": "^[a-z][a-z0-9_-]{0,63}$",
                 "type": "string"
               },
+              "history": {
+                "description": "The steps the app keeps for a source whose root is a live tensor, from 0 to 65536; 64 when absent for such a source without from.",
+                "maximum": 65536,
+                "minimum": 0,
+                "type": "integer"
+              },
               "id": {
                 "description": "The source's id in this spec, which panels bind.",
                 "maxLength": 64,
@@ -2552,6 +2941,16 @@
                         "array"
                       ]
                     },
+                    "columns": {
+                      "description": "path: the two or three column indices that give the coordinates; the first three columns when absent.",
+                      "items": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "maxItems": 3,
+                      "minItems": 2,
+                      "type": "array"
+                    },
                     "fn": {
                       "description": "reduce: the function; entropy treats the axis as a probability distribution, in nats; argmax and argmin take one axis.",
                       "enum": [
@@ -2569,14 +2968,62 @@
                       "type": "string"
                     },
                     "index": {
-                      "description": "slice: the one index to keep, negative counting from the end; it drops the axis. Not with start, stop or step.",
+                      "additionalProperties": false,
+                      "description": "slice: the one index to keep, negative counting from the end; it drops the axis. Not with start, stop or step. A number or a reference.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
-                      "type": "integer"
+                      "properties": {
+                        "control": {
+                          "description": "The id of a control whose current value the place takes.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "default": {
+                          "description": "The literal the place takes while the input has no value."
+                        },
+                        "entity": {
+                          "description": "selection: the entity path; only a pick on that entity counts.",
+                          "type": "string"
+                        },
+                        "field": {
+                          "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                          "type": "string"
+                        },
+                        "selection": {
+                          "description": "The id of a panel whose last pick the place reads.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "state": {
+                          "description": "The id of a state variable whose current value the place takes.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [],
+                      "type": [
+                        "integer",
+                        "object"
+                      ]
                     },
                     "keepdims": {
                       "description": "reduce: keep the reduced axes with size 1; false by default.",
                       "type": "boolean"
+                    },
+                    "max_cells": {
+                      "description": "surface: the most cells of the height field, from 1 to 262144; 32768 when absent.",
+                      "maximum": 262144,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "max_points": {
+                      "description": "path: the most points of the polyline, from 2 to 1048576; 65536 when absent.",
+                      "maximum": 1048576,
+                      "minimum": 2,
+                      "type": "integer"
                     },
                     "mode": {
                       "description": "normalise: the rescaling.",
@@ -2589,19 +3036,67 @@
                       "type": "string"
                     },
                     "op": {
-                      "description": "slice selects along one axis; reduce reduces over axes; normalise rescales values.",
+                      "description": "slice selects along one axis; reduce reduces over axes; normalise rescales values; window keeps a range of the source's recent steps as a new leading axis; surface turns a tensor of rank 2 into a height field of geometry; path turns a tensor of rows into a polyline of geometry.",
                       "enum": [
                         "slice",
                         "reduce",
-                        "normalise"
+                        "normalise",
+                        "window",
+                        "surface",
+                        "path"
+                      ],
+                      "type": "string"
+                    },
+                    "pool": {
+                      "description": "surface: how the cells merge when the tensor has more than max_cells; mean when absent.",
+                      "enum": [
+                        "mean",
+                        "max",
+                        "min"
                       ],
                       "type": "string"
                     },
                     "start": {
-                      "description": "slice: the first index, Python style, negative allowed.",
+                      "additionalProperties": false,
+                      "description": "slice: the first index, Python style, negative allowed; window: the first step number, included. A number or a reference.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
-                      "type": "integer"
+                      "properties": {
+                        "control": {
+                          "description": "The id of a control whose current value the place takes.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "default": {
+                          "description": "The literal the place takes while the input has no value."
+                        },
+                        "entity": {
+                          "description": "selection: the entity path; only a pick on that entity counts.",
+                          "type": "string"
+                        },
+                        "field": {
+                          "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                          "type": "string"
+                        },
+                        "selection": {
+                          "description": "The id of a panel whose last pick the place reads.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "state": {
+                          "description": "The id of a state variable whose current value the place takes.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [],
+                      "type": [
+                        "integer",
+                        "object"
+                      ]
                     },
                     "step": {
                       "description": "slice: the step, at least 1.",
@@ -2609,11 +3104,89 @@
                       "minimum": 1,
                       "type": "integer"
                     },
+                    "steps": {
+                      "additionalProperties": false,
+                      "description": "window: the last N kept steps up to the cursor; not with start or stop. A number or a reference.",
+                      "maximum": 65536,
+                      "minimum": 1,
+                      "properties": {
+                        "control": {
+                          "description": "The id of a control whose current value the place takes.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "default": {
+                          "description": "The literal the place takes while the input has no value."
+                        },
+                        "entity": {
+                          "description": "selection: the entity path; only a pick on that entity counts.",
+                          "type": "string"
+                        },
+                        "field": {
+                          "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                          "type": "string"
+                        },
+                        "selection": {
+                          "description": "The id of a panel whose last pick the place reads.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "state": {
+                          "description": "The id of a state variable whose current value the place takes.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [],
+                      "type": [
+                        "integer",
+                        "object"
+                      ]
+                    },
                     "stop": {
-                      "description": "slice: the index to stop before, Python style.",
+                      "additionalProperties": false,
+                      "description": "slice: the index to stop before, Python style; window: the last step number, included. A number or a reference.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
-                      "type": "integer"
+                      "properties": {
+                        "control": {
+                          "description": "The id of a control whose current value the place takes.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "default": {
+                          "description": "The literal the place takes while the input has no value."
+                        },
+                        "entity": {
+                          "description": "selection: the entity path; only a pick on that entity counts.",
+                          "type": "string"
+                        },
+                        "field": {
+                          "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                          "type": "string"
+                        },
+                        "selection": {
+                          "description": "The id of a panel whose last pick the place reads.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "state": {
+                          "description": "The id of a state variable whose current value the place takes.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [],
+                      "type": [
+                        "integer",
+                        "object"
+                      ]
                     }
                   },
                   "required": [
@@ -2772,63 +3345,352 @@
             "description": "The bindings by slot: a spec source id, or <source>.<column> for one column of a tabular source.",
             "properties": {
               "color": {
-                "description": "points: a value per point that sets its colour through the colormap.",
+                "additionalProperties": false,
+                "description": "points: a value per point that sets its colour through the colormap. A reference to a text state whose choices are source ids also works.",
                 "maxLength": 320,
                 "minLength": 1,
                 "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
-                "type": "string"
+                "properties": {
+                  "control": {
+                    "description": "The id of a control whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "default": {
+                    "description": "The literal the place takes while the input has no value."
+                  },
+                  "entity": {
+                    "description": "selection: the entity path; only a pick on that entity counts.",
+                    "type": "string"
+                  },
+                  "field": {
+                    "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                    "type": "string"
+                  },
+                  "selection": {
+                    "description": "The id of a panel whose last pick the place reads.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "description": "The id of a state variable whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": [
+                  "string",
+                  "object"
+                ]
               },
               "positions": {
-                "description": "points: a tensor of shape [n, 2] or [n, 3], instead of x, y and z.",
+                "additionalProperties": false,
+                "description": "points: a tensor of shape [n, 2] or [n, 3], instead of x, y and z. A reference to a text state whose choices are source ids also works.",
                 "maxLength": 320,
                 "minLength": 1,
                 "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
-                "type": "string"
+                "properties": {
+                  "control": {
+                    "description": "The id of a control whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "default": {
+                    "description": "The literal the place takes while the input has no value."
+                  },
+                  "entity": {
+                    "description": "selection: the entity path; only a pick on that entity counts.",
+                    "type": "string"
+                  },
+                  "field": {
+                    "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                    "type": "string"
+                  },
+                  "selection": {
+                    "description": "The id of a panel whose last pick the place reads.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "description": "The id of a state variable whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": [
+                  "string",
+                  "object"
+                ]
               },
               "rows": {
-                "description": "table: the id of a tabular source whose rows are shown.",
+                "additionalProperties": false,
+                "description": "table: the id of a tabular source whose rows are shown. A reference to a text state whose choices are source ids also works.",
                 "maxLength": 64,
                 "minLength": 1,
                 "pattern": "^[a-z][a-z0-9_-]{0,63}$",
-                "type": "string"
+                "properties": {
+                  "control": {
+                    "description": "The id of a control whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "default": {
+                    "description": "The literal the place takes while the input has no value."
+                  },
+                  "entity": {
+                    "description": "selection: the entity path; only a pick on that entity counts.",
+                    "type": "string"
+                  },
+                  "field": {
+                    "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                    "type": "string"
+                  },
+                  "selection": {
+                    "description": "The id of a panel whose last pick the place reads.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "description": "The id of a state variable whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": [
+                  "string",
+                  "object"
+                ]
               },
               "scene": {
-                "description": "scene (spec version 1): the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes.",
+                "additionalProperties": false,
+                "description": "scene (spec version 1): the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes. A reference to a text state whose choices are source ids also works.",
                 "maxLength": 256,
                 "minLength": 6,
                 "pattern": "^live:.+$",
-                "type": "string"
+                "properties": {
+                  "control": {
+                    "description": "The id of a control whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "default": {
+                    "description": "The literal the place takes while the input has no value."
+                  },
+                  "entity": {
+                    "description": "selection: the entity path; only a pick on that entity counts.",
+                    "type": "string"
+                  },
+                  "field": {
+                    "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                    "type": "string"
+                  },
+                  "selection": {
+                    "description": "The id of a panel whose last pick the place reads.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "description": "The id of a state variable whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": [
+                  "string",
+                  "object"
+                ]
               },
               "size": {
-                "description": "points: a value per point that sets its size.",
+                "additionalProperties": false,
+                "description": "points: a value per point that sets its size. A reference to a text state whose choices are source ids also works.",
                 "maxLength": 320,
                 "minLength": 1,
                 "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
-                "type": "string"
+                "properties": {
+                  "control": {
+                    "description": "The id of a control whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "default": {
+                    "description": "The literal the place takes while the input has no value."
+                  },
+                  "entity": {
+                    "description": "selection: the entity path; only a pick on that entity counts.",
+                    "type": "string"
+                  },
+                  "field": {
+                    "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                    "type": "string"
+                  },
+                  "selection": {
+                    "description": "The id of a panel whose last pick the place reads.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "description": "The id of a state variable whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": [
+                  "string",
+                  "object"
+                ]
               },
               "value": {
-                "description": "text: a column, shown as its last value, or a tensor of one element.",
+                "additionalProperties": false,
+                "description": "text: a column, shown as its last value, or a tensor of one element. A reference to a text state whose choices are source ids also works.",
                 "maxLength": 320,
                 "minLength": 1,
                 "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
-                "type": "string"
+                "properties": {
+                  "control": {
+                    "description": "The id of a control whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "default": {
+                    "description": "The literal the place takes while the input has no value."
+                  },
+                  "entity": {
+                    "description": "selection: the entity path; only a pick on that entity counts.",
+                    "type": "string"
+                  },
+                  "field": {
+                    "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                    "type": "string"
+                  },
+                  "selection": {
+                    "description": "The id of a panel whose last pick the place reads.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "description": "The id of a state variable whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": [
+                  "string",
+                  "object"
+                ]
               },
               "values": {
-                "description": "heatmap: a rank-2 tensor; histogram: the values to count; image: a tensor [H, W], [H, W, 3] or [H, W, 4].",
+                "additionalProperties": false,
+                "description": "heatmap: a rank-2 tensor; histogram: the values to count; image: a tensor [H, W], [H, W, 3] or [H, W, 4]. A reference to a text state whose choices are source ids also works.",
                 "maxLength": 320,
                 "minLength": 1,
                 "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
-                "type": "string"
+                "properties": {
+                  "control": {
+                    "description": "The id of a control whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "default": {
+                    "description": "The literal the place takes while the input has no value."
+                  },
+                  "entity": {
+                    "description": "selection: the entity path; only a pick on that entity counts.",
+                    "type": "string"
+                  },
+                  "field": {
+                    "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                    "type": "string"
+                  },
+                  "selection": {
+                    "description": "The id of a panel whose last pick the place reads.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "description": "The id of a state variable whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": [
+                  "string",
+                  "object"
+                ]
               },
               "x": {
-                "description": "series: the x values, a binding such as loss.step; points: the x coordinates.",
+                "additionalProperties": false,
+                "description": "series: the x values, a binding such as loss.step; points: the x coordinates. A reference to a text state whose choices are source ids also works.",
                 "maxLength": 320,
                 "minLength": 1,
                 "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
-                "type": "string"
+                "properties": {
+                  "control": {
+                    "description": "The id of a control whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "default": {
+                    "description": "The literal the place takes while the input has no value."
+                  },
+                  "entity": {
+                    "description": "selection: the entity path; only a pick on that entity counts.",
+                    "type": "string"
+                  },
+                  "field": {
+                    "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                    "type": "string"
+                  },
+                  "selection": {
+                    "description": "The id of a panel whose last pick the place reads.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "description": "The id of a state variable whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": [
+                  "string",
+                  "object"
+                ]
               },
               "y": {
-                "description": "series: one binding or a list of 1 to 16 bindings drawn as lines; points: the y coordinates.",
+                "additionalProperties": false,
+                "description": "series: one binding or a list of 1 to 16 bindings drawn as lines; points: the y coordinates. A reference to a text state whose choices are source ids also works.",
                 "items": {
                   "maxLength": 320,
                   "minLength": 1,
@@ -2840,17 +3702,86 @@
                 "minItems": 1,
                 "minLength": 1,
                 "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
+                "properties": {
+                  "control": {
+                    "description": "The id of a control whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "default": {
+                    "description": "The literal the place takes while the input has no value."
+                  },
+                  "entity": {
+                    "description": "selection: the entity path; only a pick on that entity counts.",
+                    "type": "string"
+                  },
+                  "field": {
+                    "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                    "type": "string"
+                  },
+                  "selection": {
+                    "description": "The id of a panel whose last pick the place reads.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "description": "The id of a state variable whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [],
                 "type": [
                   "string",
-                  "array"
+                  "array",
+                  "object"
                 ]
               },
               "z": {
-                "description": "points: the z coordinates, for a 3-D cloud.",
+                "additionalProperties": false,
+                "description": "points: the z coordinates, for a 3-D cloud. A reference to a text state whose choices are source ids also works.",
                 "maxLength": 320,
                 "minLength": 1,
                 "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
-                "type": "string"
+                "properties": {
+                  "control": {
+                    "description": "The id of a control whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "default": {
+                    "description": "The literal the place takes while the input has no value."
+                  },
+                  "entity": {
+                    "description": "selection: the entity path; only a pick on that entity counts.",
+                    "type": "string"
+                  },
+                  "field": {
+                    "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                    "type": "string"
+                  },
+                  "selection": {
+                    "description": "The id of a panel whose last pick the place reads.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "description": "The id of a state variable whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": [
+                  "string",
+                  "object"
+                ]
               }
             },
             "required": [],
@@ -3233,87 +4164,480 @@
                 "description": "Slots to bind, or null to unbind one.",
                 "properties": {
                   "color": {
-                    "description": "points: a value per point that sets its colour through the colormap.",
+                    "additionalProperties": false,
+                    "description": "points: a value per point that sets its colour through the colormap. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 320,
                     "minLength": 1,
                     "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [],
                     "type": [
                       "string",
+                      "object",
                       "null"
                     ]
                   },
                   "positions": {
-                    "description": "points: a tensor of shape [n, 2] or [n, 3], instead of x, y and z.",
+                    "additionalProperties": false,
+                    "description": "points: a tensor of shape [n, 2] or [n, 3], instead of x, y and z. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 320,
                     "minLength": 1,
                     "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [],
                     "type": [
                       "string",
+                      "object",
                       "null"
                     ]
                   },
                   "rows": {
-                    "description": "table: the id of a tabular source whose rows are shown.",
+                    "additionalProperties": false,
+                    "description": "table: the id of a tabular source whose rows are shown. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 64,
                     "minLength": 1,
                     "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [],
                     "type": [
                       "string",
+                      "object",
                       "null"
                     ]
                   },
                   "scene": {
-                    "description": "scene (spec version 1): the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes.",
+                    "additionalProperties": false,
+                    "description": "scene (spec version 1): the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 256,
                     "minLength": 6,
                     "pattern": "^live:.+$",
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [],
                     "type": [
                       "string",
+                      "object",
                       "null"
                     ]
                   },
                   "size": {
-                    "description": "points: a value per point that sets its size.",
+                    "additionalProperties": false,
+                    "description": "points: a value per point that sets its size. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 320,
                     "minLength": 1,
                     "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [],
                     "type": [
                       "string",
+                      "object",
                       "null"
                     ]
                   },
                   "value": {
-                    "description": "text: a column, shown as its last value, or a tensor of one element.",
+                    "additionalProperties": false,
+                    "description": "text: a column, shown as its last value, or a tensor of one element. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 320,
                     "minLength": 1,
                     "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [],
                     "type": [
                       "string",
+                      "object",
                       "null"
                     ]
                   },
                   "values": {
-                    "description": "heatmap: a rank-2 tensor; histogram: the values to count; image: a tensor [H, W], [H, W, 3] or [H, W, 4].",
+                    "additionalProperties": false,
+                    "description": "heatmap: a rank-2 tensor; histogram: the values to count; image: a tensor [H, W], [H, W, 3] or [H, W, 4]. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 320,
                     "minLength": 1,
                     "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [],
                     "type": [
                       "string",
+                      "object",
                       "null"
                     ]
                   },
                   "x": {
-                    "description": "series: the x values, a binding such as loss.step; points: the x coordinates.",
+                    "additionalProperties": false,
+                    "description": "series: the x values, a binding such as loss.step; points: the x coordinates. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 320,
                     "minLength": 1,
                     "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [],
                     "type": [
                       "string",
+                      "object",
                       "null"
                     ]
                   },
                   "y": {
-                    "description": "series: one binding or a list of 1 to 16 bindings drawn as lines; points: the y coordinates.",
+                    "additionalProperties": false,
+                    "description": "series: one binding or a list of 1 to 16 bindings drawn as lines; points: the y coordinates. A reference to a text state whose choices are source ids also works.",
                     "items": {
                       "maxLength": 320,
                       "minLength": 1,
@@ -3325,19 +4649,116 @@
                     "minItems": 1,
                     "minLength": 1,
                     "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [],
                     "type": [
                       "string",
                       "array",
+                      "object",
                       "null"
                     ]
                   },
                   "z": {
-                    "description": "points: the z coordinates, for a 3-D cloud.",
+                    "additionalProperties": false,
+                    "description": "points: the z coordinates, for a 3-D cloud. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 320,
                     "minLength": 1,
                     "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [],
                     "type": [
                       "string",
+                      "object",
                       "null"
                     ]
                   }
@@ -3681,63 +5102,352 @@
                 "description": "The panel's bindings, by slot.",
                 "properties": {
                   "color": {
-                    "description": "points: a value per point that sets its colour through the colormap.",
+                    "additionalProperties": false,
+                    "description": "points: a value per point that sets its colour through the colormap. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 320,
                     "minLength": 1,
                     "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
-                    "type": "string"
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": "string"
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": "string"
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [],
+                    "type": [
+                      "string",
+                      "object"
+                    ]
                   },
                   "positions": {
-                    "description": "points: a tensor of shape [n, 2] or [n, 3], instead of x, y and z.",
+                    "additionalProperties": false,
+                    "description": "points: a tensor of shape [n, 2] or [n, 3], instead of x, y and z. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 320,
                     "minLength": 1,
                     "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
-                    "type": "string"
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": "string"
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": "string"
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [],
+                    "type": [
+                      "string",
+                      "object"
+                    ]
                   },
                   "rows": {
-                    "description": "table: the id of a tabular source whose rows are shown.",
+                    "additionalProperties": false,
+                    "description": "table: the id of a tabular source whose rows are shown. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 64,
                     "minLength": 1,
                     "pattern": "^[a-z][a-z0-9_-]{0,63}$",
-                    "type": "string"
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": "string"
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": "string"
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [],
+                    "type": [
+                      "string",
+                      "object"
+                    ]
                   },
                   "scene": {
-                    "description": "scene (spec version 1): the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes.",
+                    "additionalProperties": false,
+                    "description": "scene (spec version 1): the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 256,
                     "minLength": 6,
                     "pattern": "^live:.+$",
-                    "type": "string"
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": "string"
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": "string"
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [],
+                    "type": [
+                      "string",
+                      "object"
+                    ]
                   },
                   "size": {
-                    "description": "points: a value per point that sets its size.",
+                    "additionalProperties": false,
+                    "description": "points: a value per point that sets its size. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 320,
                     "minLength": 1,
                     "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
-                    "type": "string"
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": "string"
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": "string"
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [],
+                    "type": [
+                      "string",
+                      "object"
+                    ]
                   },
                   "value": {
-                    "description": "text: a column, shown as its last value, or a tensor of one element.",
+                    "additionalProperties": false,
+                    "description": "text: a column, shown as its last value, or a tensor of one element. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 320,
                     "minLength": 1,
                     "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
-                    "type": "string"
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": "string"
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": "string"
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [],
+                    "type": [
+                      "string",
+                      "object"
+                    ]
                   },
                   "values": {
-                    "description": "heatmap: a rank-2 tensor; histogram: the values to count; image: a tensor [H, W], [H, W, 3] or [H, W, 4].",
+                    "additionalProperties": false,
+                    "description": "heatmap: a rank-2 tensor; histogram: the values to count; image: a tensor [H, W], [H, W, 3] or [H, W, 4]. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 320,
                     "minLength": 1,
                     "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
-                    "type": "string"
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": "string"
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": "string"
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [],
+                    "type": [
+                      "string",
+                      "object"
+                    ]
                   },
                   "x": {
-                    "description": "series: the x values, a binding such as loss.step; points: the x coordinates.",
+                    "additionalProperties": false,
+                    "description": "series: the x values, a binding such as loss.step; points: the x coordinates. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 320,
                     "minLength": 1,
                     "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
-                    "type": "string"
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": "string"
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": "string"
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [],
+                    "type": [
+                      "string",
+                      "object"
+                    ]
                   },
                   "y": {
-                    "description": "series: one binding or a list of 1 to 16 bindings drawn as lines; points: the y coordinates.",
+                    "additionalProperties": false,
+                    "description": "series: one binding or a list of 1 to 16 bindings drawn as lines; points: the y coordinates. A reference to a text state whose choices are source ids also works.",
                     "items": {
                       "maxLength": 320,
                       "minLength": 1,
@@ -3749,17 +5459,86 @@
                     "minItems": 1,
                     "minLength": 1,
                     "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": "string"
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": "string"
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [],
                     "type": [
                       "string",
-                      "array"
+                      "array",
+                      "object"
                     ]
                   },
                   "z": {
-                    "description": "points: the z coordinates, for a 3-D cloud.",
+                    "additionalProperties": false,
+                    "description": "points: the z coordinates, for a 3-D cloud. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 320,
                     "minLength": 1,
                     "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
-                    "type": "string"
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": "string"
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": "string"
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [],
+                    "type": [
+                      "string",
+                      "object"
+                    ]
                   }
                 },
                 "required": [],
@@ -4425,6 +6204,9 @@
                       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
                       "type": "string"
                     },
+                    "mins": {
+                      "description": "Spec version 1: a JSON object that gives a panel or control child, by its id, its minimum size as [columns, lines] of the text scale, each an integer from 4 to 400."
+                    },
                     "ratio": {
                       "description": "For a split of exactly two children, the share of the first, from 0.05 to 0.95; null for an even split and for tabs.",
                       "maximum": 0.95,
@@ -4433,6 +6215,16 @@
                         "number",
                         "null"
                       ]
+                    },
+                    "shares": {
+                      "description": "Spec version 1: one positive share for each child of a split, in place of ratio; each child first gets its minimum and the rest goes by the shares.",
+                      "items": {
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "maxItems": 64,
+                      "minItems": 2,
+                      "type": "array"
                     },
                     "split": {
                       "description": "horizontal puts the children side by side, vertical one above another, tabs in tabs.",
@@ -4553,6 +6345,9 @@
                       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
                       "type": "string"
                     },
+                    "mins": {
+                      "description": "Spec version 1: a JSON object that gives a panel or control child, by its id, its minimum size as [columns, lines] of the text scale, each an integer from 4 to 400."
+                    },
                     "ratio": {
                       "description": "For a split of exactly two children, the share of the first, from 0.05 to 0.95; null for an even split and for tabs.",
                       "maximum": 0.95,
@@ -4561,6 +6356,16 @@
                         "number",
                         "null"
                       ]
+                    },
+                    "shares": {
+                      "description": "Spec version 1: one positive share for each child of a split, in place of ratio; each child first gets its minimum and the rest goes by the shares.",
+                      "items": {
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "maxItems": 64,
+                      "minItems": 2,
+                      "type": "array"
                     },
                     "split": {
                       "description": "horizontal puts the children side by side, vertical one above another, tabs in tabs.",
@@ -4682,6 +6487,9 @@
                       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
                       "type": "string"
                     },
+                    "mins": {
+                      "description": "Spec version 1: a JSON object that gives a panel or control child, by its id, its minimum size as [columns, lines] of the text scale, each an integer from 4 to 400."
+                    },
                     "ratio": {
                       "description": "For a split of exactly two children, the share of the first, from 0.05 to 0.95; null for an even split and for tabs.",
                       "maximum": 0.95,
@@ -4690,6 +6498,16 @@
                         "number",
                         "null"
                       ]
+                    },
+                    "shares": {
+                      "description": "Spec version 1: one positive share for each child of a split, in place of ratio; each child first gets its minimum and the rest goes by the shares.",
+                      "items": {
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "maxItems": 64,
+                      "minItems": 2,
+                      "type": "array"
                     },
                     "split": {
                       "description": "horizontal puts the children side by side, vertical one above another, tabs in tabs.",
@@ -4770,7 +6588,7 @@
         ],
         "type": "object"
       },
-      "summary": "Replaces the whole layout of the open spec. The layout is a flat list of nodes: each node splits its space horizontally or vertically between its children, with ratio the share of the first child, or shows them in tabs. A child is a panel id or another node's id, and root names the top node, or the one panel when there is only one. Every panel of the spec should appear once; a panel left out is not drawn. Undo restores the previous layout. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+      "summary": "Replaces the whole layout of the open spec. The layout is a flat list of nodes: each node splits its space horizontally or vertically between its children, with ratio the share of the first child or shares one share for each child, or shows them in tabs; mins gives a panel or control child its minimum in columns and lines. A child is a panel id or another node's id, and root names the top node, or the one panel when there is only one. Every panel of the spec should appear once; a panel left out is not drawn. Undo restores the previous layout. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
       "agents": true,
@@ -5432,8 +7250,44 @@
                 "type": "boolean"
               },
               "max": {
-                "description": "slider and range: the high end of the range, above min; with param:, the parameter's own maximum when absent.",
-                "type": "number"
+                "additionalProperties": false,
+                "description": "slider and range: the high end of the range, above min, a number or a reference to a control, a selection or a state such as the cursor's latest; with param:, the parameter's own maximum when absent.",
+                "properties": {
+                  "control": {
+                    "description": "The id of a control whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "default": {
+                    "description": "The literal the place takes while the input has no value."
+                  },
+                  "entity": {
+                    "description": "selection: the entity path; only a pick on that entity counts.",
+                    "type": "string"
+                  },
+                  "field": {
+                    "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                    "type": "string"
+                  },
+                  "selection": {
+                    "description": "The id of a panel whose last pick the place reads.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "description": "The id of a state variable whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": [
+                  "number",
+                  "object"
+                ]
               },
               "max_length": {
                 "description": "text: the most bytes of the value, at most 1024.",
@@ -5442,8 +7296,44 @@
                 "type": "integer"
               },
               "min": {
-                "description": "slider and range: the low end of the range; with param:, the parameter's own minimum when absent.",
-                "type": "number"
+                "additionalProperties": false,
+                "description": "slider and range: the low end of the range, a number or a reference to a control, a selection or a state such as the cursor's first; with param:, the parameter's own minimum when absent.",
+                "properties": {
+                  "control": {
+                    "description": "The id of a control whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "default": {
+                    "description": "The literal the place takes while the input has no value."
+                  },
+                  "entity": {
+                    "description": "selection: the entity path; only a pick on that entity counts.",
+                    "type": "string"
+                  },
+                  "field": {
+                    "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                    "type": "string"
+                  },
+                  "selection": {
+                    "description": "The id of a panel whose last pick the place reads.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "description": "The id of a state variable whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": [
+                  "number",
+                  "object"
+                ]
               },
               "min_span": {
                 "description": "range: the least distance between lo and hi.",
@@ -5700,9 +7590,58 @@
                     ]
                   },
                   "max": {
-                    "description": "slider and range: the high end of the range, above min; with param:, the parameter's own maximum when absent.",
+                    "additionalProperties": false,
+                    "description": "slider and range: the high end of the range, above min, a number or a reference to a control, a selection or a state such as the cursor's latest; with param:, the parameter's own maximum when absent.",
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [],
                     "type": [
                       "number",
+                      "object",
                       "null"
                     ]
                   },
@@ -5716,9 +7655,58 @@
                     ]
                   },
                   "min": {
-                    "description": "slider and range: the low end of the range; with param:, the parameter's own minimum when absent.",
+                    "additionalProperties": false,
+                    "description": "slider and range: the low end of the range, a number or a reference to a control, a selection or a state such as the cursor's first; with param:, the parameter's own minimum when absent.",
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [],
                     "type": [
                       "number",
+                      "object",
                       "null"
                     ]
                   },
@@ -5883,8 +7871,44 @@
                     "type": "boolean"
                   },
                   "max": {
-                    "description": "slider and range: the high end of the range, above min; with param:, the parameter's own maximum when absent.",
-                    "type": "number"
+                    "additionalProperties": false,
+                    "description": "slider and range: the high end of the range, above min, a number or a reference to a control, a selection or a state such as the cursor's latest; with param:, the parameter's own maximum when absent.",
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": "string"
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": "string"
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [],
+                    "type": [
+                      "number",
+                      "object"
+                    ]
                   },
                   "max_length": {
                     "description": "text: the most bytes of the value, at most 1024.",
@@ -5893,8 +7917,44 @@
                     "type": "integer"
                   },
                   "min": {
-                    "description": "slider and range: the low end of the range; with param:, the parameter's own minimum when absent.",
-                    "type": "number"
+                    "additionalProperties": false,
+                    "description": "slider and range: the low end of the range, a number or a reference to a control, a selection or a state such as the cursor's first; with param:, the parameter's own minimum when absent.",
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": "string"
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": "string"
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [],
+                    "type": [
+                      "number",
+                      "object"
+                    ]
                   },
                   "min_span": {
                     "description": "range: the least distance between lo and hi.",
@@ -7136,6 +9196,13 @@
                   "description": "The last step that the source keeps.",
                   "type": "integer"
                 },
+                "note": {
+                  "description": "Why the source keeps fewer steps than it asks for, or null.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "requested": {
                   "description": "How many steps the spec asks the source to keep.",
                   "type": "integer"
@@ -7151,7 +9218,8 @@
                 "last",
                 "steps",
                 "requested",
-                "bytes"
+                "bytes",
+                "note"
               ],
               "type": "object"
             },
@@ -9328,6 +11396,9 @@
             "pattern": "^[a-z][a-z0-9_-]{0,63}$",
             "type": "string"
           },
+          "params": {
+            "description": "A JSON object that gives each of the stage's named parameters, at most 16 names, a number or a binding reference to a control, a selection or a state; the WGSL reads them by name."
+          },
           "wgsl": {
             "description": "The stage's WGSL: the function material or vertex, with helper functions and constants, at most 16 KiB.",
             "maxLength": 16384,
@@ -9886,10 +11957,11 @@
                 "type": "integer"
               },
               "kind": {
-                "description": "geometry writes arrays that a scene panel draws as one entity; pixels writes an RGBA8 image that the live view program.<id> carries.",
+                "description": "geometry writes arrays that a scene panel draws as one entity; pixels writes an RGBA8 image that the live view program.<id> carries; tensor writes an array of f32 values with the given shape that a source can read.",
                 "enum": [
                   "geometry",
-                  "pixels"
+                  "pixels",
+                  "tensor"
                 ],
                 "type": "string"
               },
@@ -9913,6 +11985,17 @@
                   "lines"
                 ],
                 "type": "string"
+              },
+              "shape": {
+                "description": "tensor: the output's shape, from 1 to 4 sizes, with at most 1,000,000 elements in all.",
+                "items": {
+                  "maximum": 1000000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "maxItems": 4,
+                "minItems": 1,
+                "type": "array"
               },
               "style": {
                 "additionalProperties": false,
@@ -9963,6 +12046,9 @@
               "kind"
             ],
             "type": "object"
+          },
+          "params": {
+            "description": "A JSON object that gives each of the program's named parameters, at most 16 names, a number or a binding reference to a control, a selection or a state; the WGSL reads them by name."
           },
           "title": {
             "description": "The program's label; the id when absent.",
@@ -10273,10 +12359,11 @@
                     ]
                   },
                   "kind": {
-                    "description": "geometry writes arrays that a scene panel draws as one entity; pixels writes an RGBA8 image that the live view program.<id> carries.",
+                    "description": "geometry writes arrays that a scene panel draws as one entity; pixels writes an RGBA8 image that the live view program.<id> carries; tensor writes an array of f32 values with the given shape that a source can read.",
                     "enum": [
                       "geometry",
                       "pixels",
+                      "tensor",
                       null
                     ],
                     "type": [
@@ -10312,6 +12399,20 @@
                     ],
                     "type": [
                       "string",
+                      "null"
+                    ]
+                  },
+                  "shape": {
+                    "description": "tensor: the output's shape, from 1 to 4 sizes, with at most 1,000,000 elements in all.",
+                    "items": {
+                      "maximum": 1000000,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "maxItems": 4,
+                    "minItems": 1,
+                    "type": [
+                      "array",
                       "null"
                     ]
                   },
@@ -10381,6 +12482,9 @@
                   "object",
                   "null"
                 ]
+              },
+              "params": {
+                "description": "A JSON object that gives each of the program's named parameters, at most 16 names, a number or a binding reference to a control, a selection or a state; the WGSL reads them by name."
               },
               "title": {
                 "description": "The program's label.",
@@ -10606,10 +12710,11 @@
                     "type": "integer"
                   },
                   "kind": {
-                    "description": "geometry writes arrays that a scene panel draws as one entity; pixels writes an RGBA8 image that the live view program.<id> carries.",
+                    "description": "geometry writes arrays that a scene panel draws as one entity; pixels writes an RGBA8 image that the live view program.<id> carries; tensor writes an array of f32 values with the given shape that a source can read.",
                     "enum": [
                       "geometry",
-                      "pixels"
+                      "pixels",
+                      "tensor"
                     ],
                     "type": "string"
                   },
@@ -10633,6 +12738,17 @@
                       "lines"
                     ],
                     "type": "string"
+                  },
+                  "shape": {
+                    "description": "tensor: the output's shape, from 1 to 4 sizes, with at most 1,000,000 elements in all.",
+                    "items": {
+                      "maximum": 1000000,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "maxItems": 4,
+                    "minItems": 1,
+                    "type": "array"
                   },
                   "style": {
                     "additionalProperties": false,
@@ -10683,6 +12799,9 @@
                   "kind"
                 ],
                 "type": "object"
+              },
+              "params": {
+                "description": "A JSON object that gives each of the program's named parameters, at most 16 names, a number or a binding reference to a control, a selection or a state; the WGSL reads them by name."
               },
               "title": {
                 "description": "The program's label.",
@@ -10936,12 +13055,14 @@
                   "type": "string"
                 },
                 "kind": {
-                  "description": "The program's output kind or the stage's kind.",
+                  "description": "The program's output kind, the stage's kind, or operator for the first surface or path step of a source over a live tensor, which runs in the script and has the id operator.<source>.<step index>.",
                   "enum": [
                     "geometry",
                     "pixels",
+                    "tensor",
                     "material",
-                    "vertex"
+                    "vertex",
+                    "operator"
                   ],
                   "type": "string"
                 },
@@ -11112,12 +13233,14 @@
                   "type": "string"
                 },
                 "kind": {
-                  "description": "The program's output kind or the stage's kind.",
+                  "description": "The program's output kind, the stage's kind, or operator for the first surface or path step of a source over a live tensor, which runs in the script and has the id operator.<source>.<step index>.",
                   "enum": [
                     "geometry",
                     "pixels",
+                    "tensor",
                     "material",
-                    "vertex"
+                    "vertex",
+                    "operator"
                   ],
                   "type": "string"
                 },

@@ -117,8 +117,9 @@ struct PanelData {
     std::vector<SlotData> slots;  // in slot name order, list slots in their order
     std::vector<EntityData> entities;  // scene panels: one per entity, in spec order
     // The generations of the served roots the panel binds, mixed in binding
-    // order; 0 when it binds none. Equal to panel_generation() for as long as
-    // none of those sources changes.
+    // order, with the cursor and the versions of the references it reads;
+    // 0 when it reads neither. Equal to panel_generation() for as long as
+    // none of those sources and references changes.
     std::uint64_t generation = 0;
 };
 
@@ -233,8 +234,23 @@ PanelData resolve_panel(const spec::Spec& spec, std::string_view panel_id, Loade
 // held, a panel that reads kept steps (a source that keeps steps, or a
 // window) mixes in the cursor's step, so that a move of the cursor changes
 // the generation. Without it the cursor is taken as live.
+//
+// With a value store in `chain`, the versions of every reference that the
+// panel reads (its slots, its options, its entities' slots and options and
+// the steps of its chains) are mixed in too, so that a changed control,
+// state or pick changes the generation also while no source changes, and a
+// panel that reads references but no served source has a generation too.
 std::uint64_t panel_generation(const spec::Spec& spec, std::string_view panel_id, const DataSources& sources,
                                const ChainContext* chain = nullptr);
+
+// The panel with the references of its options and of its entities' options
+// applied (design/instrument-interface.md, Reference Places): `range`,
+// `x_range`, `y_range` and `colormap` take the value that their reference
+// reads now, or keep the panel's own default while it reads none; the table
+// of an entity option's reference keeps its form and takes the value as its
+// `default`, which the scene reads. A null `chain` or one without a value
+// store gives each reference its default.
+spec::Panel panel_with_values(const spec::Panel& panel, const ChainContext* chain);
 
 // ---- Kept steps (history.h) -------------------------------------------------
 

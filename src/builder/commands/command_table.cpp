@@ -134,20 +134,36 @@ const std::pair<const char*, const char*> kFragments[] = {
 
     {"safe_integer", R"json({"type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991})json"},
 
+    {"reference", R"json({
+      "type": "object", "additionalProperties": false, "required": [],
+      "description": "A binding reference that the app evaluates in place of a literal: { control = <id> } reads a control, { selection = <panel id>, field = <pick field> } reads the last pick of a panel, and { state = <id> } reads a state variable.",
+      "properties": {
+        "control": {"type": "string", "minLength": 1, "maxLength": 64, "description": "The id of a control whose current value the place takes."},
+        "selection": {"type": "string", "minLength": 1, "maxLength": 64, "description": "The id of a panel whose last pick the place reads."},
+        "state": {"type": "string", "minLength": 1, "maxLength": 64, "description": "The id of a state variable whose current value the place takes."},
+        "field": {"type": "string", "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest."},
+        "entity": {"type": "string", "description": "selection: the entity path; only a pick on that entity counts."},
+        "default": {"description": "The literal the place takes while the input has no value."}}})json"},
+
     {"transform", R"json({
       "type": "object", "additionalProperties": false, "required": ["op"],
       "properties": {
-        "op": {"type": "string", "enum": ["slice", "reduce", "normalise"], "description": "slice selects along one axis; reduce reduces over axes; normalise rescales values."},
+        "op": {"type": "string", "enum": ["slice", "reduce", "normalise", "window", "surface", "path"], "description": "slice selects along one axis; reduce reduces over axes; normalise rescales values; window keeps a range of the source's recent steps as a new leading axis; surface turns a tensor of rank 2 into a height field of geometry; path turns a tensor of rows into a polyline of geometry."},
         "axis": {"type": ["integer", "array"], "minimum": -8, "maximum": 7, "minItems": 1, "maxItems": 8, "items": {"$use": "axis"},
                  "description": "The axis, from -8 to 7, counting from 0 (negative counts from the end). Required for slice and reduce; reduce also takes a list of 1 to 8 axes. normalise without an axis covers the whole tensor."},
-        "index": {"$use": "safe_integer", "description": "slice: the one index to keep, negative counting from the end; it drops the axis. Not with start, stop or step."},
-        "start": {"$use": "safe_integer", "description": "slice: the first index, Python style, negative allowed."},
-        "stop": {"$use": "safe_integer", "description": "slice: the index to stop before, Python style."},
+        "index": {"$use": "reference", "type": ["integer", "object"], "minimum": -9007199254740991, "maximum": 9007199254740991, "description": "slice: the one index to keep, negative counting from the end; it drops the axis. Not with start, stop or step. A number or a reference."},
+        "start": {"$use": "reference", "type": ["integer", "object"], "minimum": -9007199254740991, "maximum": 9007199254740991, "description": "slice: the first index, Python style, negative allowed; window: the first step number, included. A number or a reference."},
+        "stop": {"$use": "reference", "type": ["integer", "object"], "minimum": -9007199254740991, "maximum": 9007199254740991, "description": "slice: the index to stop before, Python style; window: the last step number, included. A number or a reference."},
+        "steps": {"$use": "reference", "type": ["integer", "object"], "minimum": 1, "maximum": 65536, "description": "window: the last N kept steps up to the cursor; not with start or stop. A number or a reference."},
         "step": {"type": "integer", "minimum": 1, "maximum": 9007199254740991, "description": "slice: the step, at least 1."},
         "fn": {"type": "string", "enum": ["mean", "sum", "min", "max", "std", "var", "norm", "argmax", "argmin", "entropy"],
                "description": "reduce: the function; entropy treats the axis as a probability distribution, in nats; argmax and argmin take one axis."},
         "keepdims": {"type": "boolean", "description": "reduce: keep the reduced axes with size 1; false by default."},
-        "mode": {"type": "string", "enum": ["minmax", "zscore", "softmax", "l2"], "description": "normalise: the rescaling."}}})json"},
+        "mode": {"type": "string", "enum": ["minmax", "zscore", "softmax", "l2"], "description": "normalise: the rescaling."},
+        "max_cells": {"type": "integer", "minimum": 1, "maximum": 262144, "description": "surface: the most cells of the height field, from 1 to 262144; 32768 when absent."},
+        "pool": {"type": "string", "enum": ["mean", "max", "min"], "description": "surface: how the cells merge when the tensor has more than max_cells; mean when absent."},
+        "columns": {"type": "array", "minItems": 2, "maxItems": 3, "items": {"type": "integer", "minimum": 0}, "description": "path: the two or three column indices that give the coordinates; the first three columns when absent."},
+        "max_points": {"type": "integer", "minimum": 2, "maximum": 1048576, "description": "path: the most points of the polyline, from 2 to 1048576; 65536 when absent."}}})json"},
 
     {"source", R"json({
       "type": "object", "additionalProperties": false, "required": ["id"],
@@ -156,23 +172,24 @@ const std::pair<const char*, const char*> kFragments[] = {
         "catalog": {"$use": "catalog_id", "maxLength": 256, "description": "A catalog source id, from catalog.list, such as live:attn.weights or table:run42_metrics."},
         "sql": {"type": "string", "minLength": 1, "maxLength": 65536, "description": "One read-only SELECT (DuckDB SQL) over the workspace's tables, named as in data.query."},
         "from": {"$use": "id", "description": "The id of another source of this spec that this one derives from, usually through transforms."},
-        "transform": {"type": "array", "maxItems": 16, "items": {"$use": "transform"}, "description": "Up to 16 tensor transforms applied in order; only for tensor-shaped data."}}})json"},
+        "transform": {"type": "array", "maxItems": 16, "items": {"$use": "transform"}, "description": "Up to 16 tensor transforms applied in order; only for tensor-shaped data."},
+        "history": {"type": "integer", "minimum": 0, "maximum": 65536, "description": "The steps the app keeps for a source whose root is a live tensor, from 0 to 65536; 64 when absent for such a source without from."}}})json"},
 
     {"bind", R"json({
       "type": "object", "additionalProperties": false, "required": [],
       "properties": {
-        "x": {"$use": "binding", "description": "series: the x values, a binding such as loss.step; points: the x coordinates."},
-        "y": {"type": ["string", "array"], "minLength": 1, "maxLength": 320, "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
+        "x": {"$use": "reference", "type": ["string", "object"], "minLength": 1, "maxLength": 320, "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$", "description": "series: the x values, a binding such as loss.step; points: the x coordinates. A reference to a text state whose choices are source ids also works."},
+        "y": {"$use": "reference", "type": ["string", "array", "object"], "minLength": 1, "maxLength": 320, "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
               "minItems": 1, "maxItems": 16, "items": {"$use": "binding"},
-              "description": "series: one binding or a list of 1 to 16 bindings drawn as lines; points: the y coordinates."},
-        "z": {"$use": "binding", "description": "points: the z coordinates, for a 3-D cloud."},
-        "color": {"$use": "binding", "description": "points: a value per point that sets its colour through the colormap."},
-        "size": {"$use": "binding", "description": "points: a value per point that sets its size."},
-        "positions": {"$use": "binding", "description": "points: a tensor of shape [n, 2] or [n, 3], instead of x, y and z."},
-        "values": {"$use": "binding", "description": "heatmap: a rank-2 tensor; histogram: the values to count; image: a tensor [H, W], [H, W, 3] or [H, W, 4]."},
-        "rows": {"$use": "id", "description": "table: the id of a tabular source whose rows are shown."},
-        "value": {"$use": "binding", "description": "text: a column, shown as its last value, or a tensor of one element."},
-        "scene": {"type": "string", "minLength": 6, "maxLength": 256, "pattern": "^live:.+$", "description": "scene (spec version 1): the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes."}}})json"},
+              "description": "series: one binding or a list of 1 to 16 bindings drawn as lines; points: the y coordinates. A reference to a text state whose choices are source ids also works."},
+        "z": {"$use": "reference", "type": ["string", "object"], "minLength": 1, "maxLength": 320, "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$", "description": "points: the z coordinates, for a 3-D cloud. A reference to a text state whose choices are source ids also works."},
+        "color": {"$use": "reference", "type": ["string", "object"], "minLength": 1, "maxLength": 320, "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$", "description": "points: a value per point that sets its colour through the colormap. A reference to a text state whose choices are source ids also works."},
+        "size": {"$use": "reference", "type": ["string", "object"], "minLength": 1, "maxLength": 320, "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$", "description": "points: a value per point that sets its size. A reference to a text state whose choices are source ids also works."},
+        "positions": {"$use": "reference", "type": ["string", "object"], "minLength": 1, "maxLength": 320, "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$", "description": "points: a tensor of shape [n, 2] or [n, 3], instead of x, y and z. A reference to a text state whose choices are source ids also works."},
+        "values": {"$use": "reference", "type": ["string", "object"], "minLength": 1, "maxLength": 320, "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$", "description": "heatmap: a rank-2 tensor; histogram: the values to count; image: a tensor [H, W], [H, W, 3] or [H, W, 4]. A reference to a text state whose choices are source ids also works."},
+        "rows": {"$use": "reference", "type": ["string", "object"], "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9_-]{0,63}$", "description": "table: the id of a tabular source whose rows are shown. A reference to a text state whose choices are source ids also works."},
+        "value": {"$use": "reference", "type": ["string", "object"], "minLength": 1, "maxLength": 320, "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$", "description": "text: a column, shown as its last value, or a tensor of one element. A reference to a text state whose choices are source ids also works."},
+        "scene": {"$use": "reference", "type": ["string", "object"], "minLength": 6, "maxLength": 256, "pattern": "^live:.+$", "description": "scene (spec version 1): the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes. A reference to a text state whose choices are source ids also works."}}})json"},
 
     {"options", R"json({
       "type": "object", "additionalProperties": false, "required": [],
@@ -222,6 +239,8 @@ const std::pair<const char*, const char*> kFragments[] = {
                               "id": {"$use": "id", "description": "The node's id; it must not be a panel's or a control's id."},
                               "split": {"type": "string", "enum": ["horizontal", "vertical", "tabs"], "description": "horizontal puts the children side by side, vertical one above another, tabs in tabs."},
                               "ratio": {"type": ["number", "null"], "minimum": 0.05, "maximum": 0.95, "description": "For a split of exactly two children, the share of the first, from 0.05 to 0.95; null for an even split and for tabs."},
+                              "shares": {"type": "array", "minItems": 2, "maxItems": 64, "items": {"type": "number", "minimum": 0}, "description": "Spec version 1: one positive share for each child of a split, in place of ratio; each child first gets its minimum and the rest goes by the shares."},
+                              "mins": {"description": "Spec version 1: a JSON object that gives a panel or control child, by its id, its minimum size as [columns, lines] of the text scale, each an integer from 4 to 400."},
                               "title": {"type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "The node's tab label when it is a child of tabs, or null."},
                               "children": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$use": "id"}, "description": "Panel ids, control ids (spec version 1) and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once."}}}}}})json"},
 
@@ -232,8 +251,8 @@ const std::pair<const char*, const char*> kFragments[] = {
     {"control_options", R"json({
       "type": "object", "additionalProperties": false, "required": [],
       "properties": {
-        "min": {"type": "number", "description": "slider and range: the low end of the range; with param:, the parameter's own minimum when absent."},
-        "max": {"type": "number", "description": "slider and range: the high end of the range, above min; with param:, the parameter's own maximum when absent."},
+        "min": {"$use": "reference", "type": ["number", "object"], "description": "slider and range: the low end of the range, a number or a reference to a control, a selection or a state such as the cursor's first; with param:, the parameter's own minimum when absent."},
+        "max": {"$use": "reference", "type": ["number", "object"], "description": "slider and range: the high end of the range, above min, a number or a reference to a control, a selection or a state such as the cursor's latest; with param:, the parameter's own maximum when absent."},
         "step": {"type": "number", "minimum": 0, "description": "slider and range: the step between values, above 0; continuous when absent."},
         "log": {"type": "boolean", "description": "slider: a log scale, which needs min above 0; with param:, the parameter's own scale when absent."},
         "value": {"description": "slider bound to value: the number it starts with, min when absent; range: [lo, hi]; toggle: a boolean; picker, text and segmented: the value or the list of values it starts with."},
@@ -387,7 +406,7 @@ const std::pair<const char*, const char*> kFragments[] = {
     {"program_output", R"json({
       "type": "object", "additionalProperties": false, "required": ["kind"],
       "properties": {
-        "kind": {"type": "string", "enum": ["geometry", "pixels"], "description": "geometry writes arrays that a scene panel draws as one entity; pixels writes an RGBA8 image that the live view program.<id> carries."},
+        "kind": {"type": "string", "enum": ["geometry", "pixels", "tensor"], "description": "geometry writes arrays that a scene panel draws as one entity; pixels writes an RGBA8 image that the live view program.<id> carries; tensor writes an array of f32 values with the given shape that a source can read."},
         "panel": {"$use": "id", "description": "geometry: the scene panel whose scene gets the entity."},
         "entity": {"$use": "entity_path", "description": "geometry: the entity path; programs/<id> when absent."},
         "part": {"type": "string", "enum": ["points", "lines"], "description": "geometry: points draws one point for each item; lines draws one segment for each two items; points when absent."},
@@ -400,6 +419,7 @@ const std::pair<const char*, const char*> kFragments[] = {
                     "vmax": {"type": "number", "description": "The value at the high end; the batch's maximum when absent."}}},
         "width": {"type": "integer", "minimum": 1, "maximum": 2048, "description": "pixels: the image's width."},
         "height": {"type": "integer", "minimum": 1, "maximum": 2048, "description": "pixels: the image's height."},
+        "shape": {"type": "array", "minItems": 1, "maxItems": 4, "items": {"type": "integer", "minimum": 1, "maximum": 1000000}, "description": "tensor: the output's shape, from 1 to 4 sizes, with at most 1,000,000 elements in all."},
         "format": {"type": "string", "enum": ["rgba8unorm"], "description": "pixels: the format; the program writes pixels, a var<storage, read_write> array<u32> of width times height items packed with pack4x8unorm, row by row."}}})json"},
 
     {"program_limits", R"json({
@@ -419,14 +439,15 @@ const std::pair<const char*, const char*> kFragments[] = {
         "inputs": {"type": "array", "maxItems": 8, "items": {"$use": "program_input"}, "description": "The tensors the program reads, at most 8."},
         "output": {"$use": "program_output", "description": "The program's one output."},
         "limits": {"$use": "program_limits", "description": "The program's limits."},
-        "workgroups": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "description": "The workgroup counts x, y and z of the dispatch; from max_count or the image size and the entry's workgroup size when absent."}}})json"},
+        "workgroups": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "description": "The workgroup counts x, y and z of the dispatch; from max_count or the image size and the entry's workgroup size when absent."},
+        "params": {"description": "A JSON object that gives each of the program's named parameters, at most 16 names, a number or a binding reference to a control, a selection or a state; the WGSL reads them by name."}}})json"},
 
     {"program_status", R"json({
       "type": "object", "additionalProperties": false,
       "required": ["id", "kind", "host", "state", "every", "every_min", "last_pass_ms", "last_cost_ms", "step_ms", "overhead_share", "passes_per_s", "last_step", "runs", "memory_bytes", "memory_limit_bytes", "error", "sha256"],
       "properties": {
         "id": {"type": "string", "description": "The program's id, or a stage as <panel>/<entity>/<kind>."},
-        "kind": {"type": "string", "enum": ["geometry", "pixels", "material", "vertex"], "description": "The program's output kind or the stage's kind."},
+        "kind": {"type": "string", "enum": ["geometry", "pixels", "tensor", "material", "vertex", "operator"], "description": "The program's output kind, the stage's kind, or operator for the first surface or path step of a source over a live tensor, which runs in the script and has the id operator.<source>.<step index>."},
         "host": {"type": "string", "enum": ["script", "viewer", "none"], "description": "Where it runs: script for a program in the attached script, viewer for a stage, none when nothing runs it."},
         "state": {"type": "string", "enum": ["waiting", "review", "compiled", "running", "refused", "stopped"], "description": "waiting for a host, review in a foreign spec without a review, compiled before its first pass, running, refused by a check, or stopped by a limit."},
         "every": {"type": ["integer", "null"], "description": "The steps between two passes of the program: the cadence N that all programs share, or a multiple of N for a larger limits.every; null for a stage or before the first pass."},
@@ -497,14 +518,15 @@ const std::pair<const char*, const char*> kFragments[] = {
         "speed": {"type": "number", "description": "The play speed in steps per second."}}})json"},
 
     {"cursor_source", R"json({
-      "type": "object", "additionalProperties": false, "required": ["id", "first", "last", "steps", "requested", "bytes"],
+      "type": "object", "additionalProperties": false, "required": ["id", "first", "last", "steps", "requested", "bytes", "note"],
       "properties": {
         "id": {"type": "string", "description": "The source's id."},
         "first": {"type": "integer", "description": "The first step that the source keeps."},
         "last": {"type": "integer", "description": "The last step that the source keeps."},
         "steps": {"type": "integer", "description": "How many steps the source keeps."},
         "requested": {"type": "integer", "description": "How many steps the spec asks the source to keep."},
-        "bytes": {"type": "integer", "description": "The size of the kept steps in bytes."}}})json"},
+        "bytes": {"type": "integer", "description": "The size of the kept steps in bytes."},
+        "note": {"type": ["string", "null"], "description": "Why the source keeps fewer steps than it asks for, or null."}}})json"},
 
     // What a spec edit returns besides its own fields.
     {"warnings", R"json({"type": "array", "items": {"$use": "diagnostic"}, "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer."})json"},
@@ -856,6 +878,7 @@ const Row kRows[] = {
         "sql": {"type": "string", "minLength": 1, "maxLength": 65536, "description": "One read-only SELECT (DuckDB SQL) over the workspace's tables, named as in data.query."},
         "from": {"$use": "id", "description": "The id of another source of this spec that this one derives from, usually through transforms."},
         "transform": {"type": "array", "maxItems": 16, "items": {"$use": "transform"}, "description": "Up to 16 tensor transforms applied in order; only for tensor-shaped data."},
+        "history": {"type": "integer", "minimum": 0, "maximum": 65536, "description": "The steps the app keeps for a source whose root is a live tensor, from 0 to 65536; 64 when absent for such a source without from."},
         "dry_run": {"$use": "dry_run"}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "warnings", "diff", "applied"],
       "properties": {
@@ -871,7 +894,7 @@ const Row kRows[] = {
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "patch"],
       "properties": {
         "id": {"$use": "id", "description": "The source's id in the open spec."},
-        "patch": {"$patch": "source", "description": "The keys to change: catalog, sql, from or transform; null removes one."},
+        "patch": {"$patch": "source", "description": "The keys to change: catalog, sql, from, transform or history; null removes one."},
         "dry_run": {"$use": "dry_run"}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["source", "warnings", "diff", "applied"],
       "properties": {
@@ -1030,8 +1053,9 @@ const Row kRows[] = {
      R"json({"panel": "loss", "target": "heat", "where": "below", "ratio": 0.4})json"},
     {"layout.set", true, false, true,
      "Replaces the whole layout of the open spec. The layout is a flat list of nodes: each node splits its space "
-     "horizontally or vertically between its children, with ratio the share of the first child, or shows them in "
-     "tabs. A child is a panel id or another node's id, and root names the top node, or the one panel when there "
+     "horizontally or vertically between its children, with ratio the share of the first child or shares one share "
+     "for each child, or shows them in tabs; mins gives a panel or control child its minimum in columns and lines. "
+     "A child is a panel id or another node's id, and root names the top node, or the one panel when there "
      "is only one. Every panel of the spec should appear once; a panel left out is not drawn. Undo restores the "
      "previous layout. The result holds the change as a diff; with dry_run true the change is only checked and not applied.",
      R"json({"type": "object", "additionalProperties": false, "required": ["layout"],
@@ -1671,6 +1695,7 @@ const Row kRows[] = {
         "entity": {"$use": "entity_path", "description": "The entity of the panel's scene, such as programs/ribbons or a path the script publishes."},
         "kind": {"$use": "stage_kind"},
         "wgsl": {"type": "string", "minLength": 1, "maxLength": 16384, "description": "The stage's WGSL: the function material or vertex, with helper functions and constants, at most 16 KiB."},
+        "params": {"description": "A JSON object that gives each of the stage's named parameters, at most 16 names, a number or a binding reference to a control, a selection or a state; the WGSL reads them by name."},
         "dry_run": {"$use": "dry_run"}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["panel", "entity", "kind", "messages", "warnings", "diff", "applied"],
       "properties": {
@@ -1748,6 +1773,7 @@ const Row kRows[] = {
         "output": {"$use": "program_output", "description": "The program's one output."},
         "limits": {"$use": "program_limits", "description": "The program's limits; the defaults when absent."},
         "workgroups": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "description": "The workgroup counts x, y and z of the dispatch; from max_count or the image size and the entry's workgroup size when absent."},
+        "params": {"description": "A JSON object that gives each of the program's named parameters, at most 16 names, a number or a binding reference to a control, a selection or a state; the WGSL reads them by name."},
         "dry_run": {"$use": "dry_run"}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "messages", "warnings", "diff", "applied"],
       "properties": {

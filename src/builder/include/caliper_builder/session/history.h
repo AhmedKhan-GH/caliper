@@ -33,6 +33,11 @@ namespace caliper_builder {
 
 inline constexpr std::int64_t kDefaultLiveDepth = 64;
 inline constexpr std::uint64_t kHistoryBudgetBytes = std::uint64_t(512) << 20;
+// The most that one source keeps: a quarter of the budget, 128 MiB. A raw
+// activation of 512 by 4096 values (8 MiB a step) thus keeps 16 steps and
+// leaves the rest of the budget to the other sources; a reduce step before
+// the source's history point keeps more.
+inline constexpr std::uint64_t kHistorySourceBytes = kHistoryBudgetBytes / 4;
 
 // The fields of the cursor (design/instrument-interface.md, Cursor).
 struct CursorState {
@@ -52,6 +57,9 @@ struct KeptSource {
     std::int64_t steps = 0;               // how many it keeps now
     std::int64_t requested = 0;           // its depth before the budget
     std::uint64_t bytes = 0;
+    // Why it keeps fewer steps than it requests, naming the source and the
+    // reduce step that keeps more; empty when it keeps them all.
+    std::string note;
 };
 
 class StepHistory {
@@ -70,6 +78,11 @@ public:
     // A new value of a live view at a step: the stamp's step, else the run's
     // step at arrival. Each source whose root is `catalog_id` keeps it.
     void append(const std::string& catalog_id, std::int64_t step, const TensorData& value);
+    // The newest value of a live series at a step. A series keeps its own
+    // ring of values without their steps, so only a source over it that
+    // states `history` keeps these, as 0-d values, and a window over that
+    // source gives each value with its step.
+    void append_series(const std::string& catalog_id, std::int64_t step, double value);
 
     // The newest kept value of `source` at or before `step`.
     std::optional<std::pair<std::int64_t, TensorData>> at(const std::string& source, std::int64_t step) const;
@@ -91,6 +104,8 @@ public:
     void tick(double seconds);
 
 private:
+    void append_to(const std::string& catalog_id, std::int64_t step, const TensorData& value, bool declared_only);
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

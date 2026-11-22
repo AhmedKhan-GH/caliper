@@ -84,6 +84,10 @@ struct CommandOutput {
     UndoRecord undo;
     bool no_effect = false;
     std::vector<CommandInvocation> follow_ups;
+    // The arguments that the journal and the redo record keep in place of the
+    // invocation's, when the handler completed them (camera.save adds the
+    // app's orbit, so that a replay needs no app); null keeps the invocation's.
+    nlohmann::json recorded_args;
 
     static CommandOutput ok(nlohmann::json result, UndoRecord undo = UndoRecord::none());
     static CommandOutput fail(Error error);
