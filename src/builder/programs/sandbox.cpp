@@ -588,6 +588,17 @@ Compiled compile_and_reflect(std::string_view wgsl) {
         r.name = e.name ? e.name : "";
         r.stage = static_cast<EntryStage>(e.stage);
         r.workgroup_size = {e.workgroup_size[0], e.workgroup_size[1], e.workgroup_size[2]};
+        for (std::size_t k = 0, n = caliper_wgsl_module_entry_io_count(module, i); k < n; ++k) {
+            caliper_wgsl_io io{};
+            if (caliper_wgsl_module_entry_io(module, i, k, &io) != CALIPER_WGSL_OK) continue;
+            ReflectedIo v;
+            v.location = io.location;
+            v.scalar = static_cast<IoScalar>(io.scalar);
+            v.components = io.components;
+            v.interpolation = static_cast<IoInterpolation>(io.interpolation);
+            v.sampling = static_cast<IoSampling>(io.sampling);
+            (io.direction == CALIPER_WGSL_IO_INPUT ? r.inputs : r.outputs).push_back(v);
+        }
         out.reflection.entries.push_back(std::move(r));
     }
     caliper_wgsl_module_destroy(module);

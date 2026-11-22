@@ -68,7 +68,7 @@ extern "C" {
 
 /** The interface version of this header. caliper_wgsl_abi_version() returns
  *  the version the library was built with, and a host refuses a mismatch. */
-#define CALIPER_WGSL_ABI_VERSION 2u
+#define CALIPER_WGSL_ABI_VERSION 3u
 
 /** The result of a call. */
 typedef enum caliper_wgsl_status {
@@ -196,6 +196,60 @@ typedef struct caliper_wgsl_entry_point {
     uint32_t workgroup_size[3];
 } caliper_wgsl_entry_point;
 
+/** The direction of an interface value (caliper_wgsl_io.direction). */
+typedef enum caliper_wgsl_io_direction {
+    CALIPER_WGSL_IO_INPUT = 0,
+    CALIPER_WGSL_IO_OUTPUT = 1
+} caliper_wgsl_io_direction;
+
+/** The scalar type of an interface value (caliper_wgsl_io.scalar). */
+typedef enum caliper_wgsl_scalar {
+    CALIPER_WGSL_SCALAR_OTHER = 0,   /**< Not a scalar or a vector of 32-bit or 16-bit numbers. */
+    CALIPER_WGSL_SCALAR_F32 = 1,
+    CALIPER_WGSL_SCALAR_I32 = 2,
+    CALIPER_WGSL_SCALAR_U32 = 3,
+    CALIPER_WGSL_SCALAR_F16 = 4
+} caliper_wgsl_scalar;
+
+/** The interpolation of an interface value (caliper_wgsl_io.interpolation). */
+typedef enum caliper_wgsl_interpolation {
+    CALIPER_WGSL_INTERPOLATION_PERSPECTIVE = 0,
+    CALIPER_WGSL_INTERPOLATION_LINEAR = 1,
+    CALIPER_WGSL_INTERPOLATION_FLAT = 2,
+    CALIPER_WGSL_INTERPOLATION_OTHER = 3
+} caliper_wgsl_interpolation;
+
+/** The sampling of an interface value (caliper_wgsl_io.sampling). */
+typedef enum caliper_wgsl_sampling {
+    CALIPER_WGSL_SAMPLING_CENTER = 0,
+    CALIPER_WGSL_SAMPLING_CENTROID = 1,
+    CALIPER_WGSL_SAMPLING_SAMPLE = 2,
+    CALIPER_WGSL_SAMPLING_FIRST = 3,
+    CALIPER_WGSL_SAMPLING_EITHER = 4
+} caliper_wgsl_sampling;
+
+/** One user-defined input or output of an entry point: a value with a
+ *  @location attribute, as an argument or the result of the entry point, or
+ *  as a member of a struct that one of them has as its type. Built-in values
+ *  are not listed. An interpolation or a sampling that the source leaves out
+ *  has WGSL's default: perspective and center for a float, flat and first
+ *  for an integer. A host compares a vertex entry's outputs with a fragment
+ *  entry's inputs, and a fragment entry's outputs with its targets, before
+ *  it makes a pipeline. */
+typedef struct caliper_wgsl_io {
+    /** A caliper_wgsl_io_direction. */
+    uint32_t direction;
+    uint32_t location;
+    /** A caliper_wgsl_scalar. */
+    uint32_t scalar;
+    /** 1 for a scalar, 2 to 4 for a vector; 0 with CALIPER_WGSL_SCALAR_OTHER. */
+    uint32_t components;
+    /** A caliper_wgsl_interpolation. */
+    uint32_t interpolation;
+    /** A caliper_wgsl_sampling. */
+    uint32_t sampling;
+} caliper_wgsl_io;
+
 /** A validated WGSL module. */
 typedef struct caliper_wgsl_module caliper_wgsl_module;
 
@@ -233,6 +287,16 @@ size_t caliper_wgsl_module_entry_point_count(const caliper_wgsl_module* module);
 /** Reads entry point index, in source order, into *entry_point. */
 caliper_wgsl_status caliper_wgsl_module_entry_point(const caliper_wgsl_module* module, size_t index,
                                                     caliper_wgsl_entry_point* entry_point);
+
+/** Returns the number of user-defined inputs and outputs of entry point
+ *  `entry` (caliper_wgsl_io), 0 when there is no such entry point. */
+size_t caliper_wgsl_module_entry_io_count(const caliper_wgsl_module* module, size_t entry);
+
+/** Reads input or output `index` of entry point `entry` into *io: the
+ *  inputs first, in the order of the arguments and of their struct members,
+ *  then the outputs in the order of the result's members. */
+caliper_wgsl_status caliper_wgsl_module_entry_io(const caliper_wgsl_module* module, size_t entry, size_t index,
+                                                 caliper_wgsl_io* io);
 
 /** Translates the entry point name of the given stage to MSL text in *msl. */
 caliper_wgsl_status caliper_wgsl_translate_msl(const caliper_wgsl_module* module, const char* name,

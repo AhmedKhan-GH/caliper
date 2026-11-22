@@ -13,9 +13,9 @@ use std::ptr;
 use naga::back::{msl, spv};
 use naga::proc::{BoundsCheckPolicies, BoundsCheckPolicy, Layouter};
 use naga::valid::{Capabilities, ModuleInfo, ValidationFlags, Validator};
-use naga::{AddressSpace, ImageClass, ScalarKind, ShaderStage, SourceLocation, TypeInner};
+use naga::{AddressSpace, Binding as IoBinding, ImageClass, Interpolation, Sampling, ScalarKind, ShaderStage, SourceLocation, TypeInner};
 
-const ABI_VERSION: u32 = 2;
+const ABI_VERSION: u32 = 3;
 const NAGA_VERSION: &CStr = c"30.0.2";
 
 const STATUS_OK: i32 = 0;
@@ -36,6 +36,26 @@ const KIND_SAMPLER: u32 = 6;
 
 const ACCESS_READ: u32 = 1;
 const ACCESS_WRITE: u32 = 2;
+
+const IO_INPUT: u32 = 0;
+const IO_OUTPUT: u32 = 1;
+
+const SCALAR_OTHER: u32 = 0;
+const SCALAR_F32: u32 = 1;
+const SCALAR_I32: u32 = 2;
+const SCALAR_U32: u32 = 3;
+const SCALAR_F16: u32 = 4;
+
+const INTERPOLATION_PERSPECTIVE: u32 = 0;
+const INTERPOLATION_LINEAR: u32 = 1;
+const INTERPOLATION_FLAT: u32 = 2;
+const INTERPOLATION_OTHER: u32 = 3;
+
+const SAMPLING_CENTER: u32 = 0;
+const SAMPLING_CENTROID: u32 = 1;
+const SAMPLING_SAMPLE: u32 = 2;
+const SAMPLING_FIRST: u32 = 3;
+const SAMPLING_EITHER: u32 = 4;
 
 const BOUNDS_CHECKED: u32 = 0;
 const BOUNDS_UNCHECKED_BUFFERS: u32 = 1;
@@ -105,6 +125,17 @@ pub struct EntryPoint {
     workgroup_size: [u32; 3],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Io {
+    direction: u32,
+    location: u32,
+    scalar: u32,
+    components: u32,
+    interpolation: u32,
+    sampling: u32,
+}
+
 // A failure before it is written into an Error.
 struct Failure {
     status: i32,
@@ -138,6 +169,7 @@ struct Entry {
     name: CString,
     stage: ShaderStage,
     workgroup_size: [u32; 3],
+    io: Vec<Io>,
 }
 
 pub struct Module {
@@ -204,6 +236,61 @@ fn stage_name(s: ShaderStage) -> &'static str {
         ShaderStage::Fragment => "fragment",
         ShaderStage::Compute => "compute",
         _ => "other",
+    }
+}
+
+// The user-defined inputs or outputs of an entry point (include/caliper/wgsl.h, caliper_wgsl_io):
+// each value with a @location attribute, as an argument or a result, or as a member of a struct
+// that one of them has as its type. Built-in values are left out. An interpolation or a
+// sampling that the source leaves out gets WGSL's default, thus `@interpolate(flat)` and
+// `@interpolate(flat, first)` compare equal: perspective and center for a float, flat and
+// first for an integer.
+fn collect_io(module: &naga::Module, binding: Option<&IoBinding>, ty: naga::Handle<naga::Type>, direction: u32, out: &mut Vec<Io>) {
+    match binding {
+        Some(IoBinding::BuiltIn(_)) => {}
+        Some(IoBinding::Location { location, interpolation, sampling, .. }) => {
+            let (scalar, components) = match module.types[ty].inner {
+                TypeInner::Scalar(s) => (s, 1u32),
+                TypeInner::Vector { size, scalar } => (scalar, size as u32),
+                _ => {
+                    out.push(Io { direction, location: *location, scalar: SCALAR_OTHER, components: 0, interpolation: INTERPOLATION_OTHER, sampling: SAMPLING_CENTER });
+                    return;
+                }
+            };
+            let code = match (scalar.kind, scalar.width) {
+                (ScalarKind::Float, 4) => SCALAR_F32,
+                (ScalarKind::Float, 2) => SCALAR_F16,
+                (ScalarKind::Sint, 4) => SCALAR_I32,
+                (ScalarKind::Uint, 4) => SCALAR_U32,
+                _ => SCALAR_OTHER,
+            };
+            let float = scalar.kind == ScalarKind::Float;
+            let interpolation = match interpolation {
+                Some(Interpolation::Perspective) => INTERPOLATION_PERSPECTIVE,
+                Some(Interpolation::Linear) => INTERPOLATION_LINEAR,
+                Some(Interpolation::Flat) => INTERPOLATION_FLAT,
+                Some(_) => INTERPOLATION_OTHER,
+                None if float => INTERPOLATION_PERSPECTIVE,
+                None => INTERPOLATION_FLAT,
+            };
+            let sampling = match sampling {
+                Some(Sampling::Center) => SAMPLING_CENTER,
+                Some(Sampling::Centroid) => SAMPLING_CENTROID,
+                Some(Sampling::Sample) => SAMPLING_SAMPLE,
+                Some(Sampling::First) => SAMPLING_FIRST,
+                Some(Sampling::Either) => SAMPLING_EITHER,
+                None if interpolation == INTERPOLATION_FLAT => SAMPLING_FIRST,
+                None => SAMPLING_CENTER,
+            };
+            out.push(Io { direction, location: *location, scalar: code, components, interpolation, sampling });
+        }
+        None => {
+            if let TypeInner::Struct { ref members, .. } = module.types[ty].inner {
+                for m in members {
+                    collect_io(module, m.binding.as_ref(), m.ty, direction, out);
+                }
+            }
+        }
     }
 }
 
@@ -381,10 +468,20 @@ fn create(source: &[u8], options: Options) -> Result<Module, Failure> {
     let entries = module
         .entry_points
         .iter()
-        .map(|ep| Entry {
-            name: c_string(&ep.name),
-            stage: ep.stage,
-            workgroup_size: if ep.stage == ShaderStage::Compute { ep.workgroup_size } else { [0; 3] },
+        .map(|ep| {
+            let mut io = Vec::new();
+            for arg in &ep.function.arguments {
+                collect_io(&module, arg.binding.as_ref(), arg.ty, IO_INPUT, &mut io);
+            }
+            if let Some(result) = &ep.function.result {
+                collect_io(&module, result.binding.as_ref(), result.ty, IO_OUTPUT, &mut io);
+            }
+            Entry {
+                name: c_string(&ep.name),
+                stage: ep.stage,
+                workgroup_size: if ep.stage == ShaderStage::Compute { ep.workgroup_size } else { [0; 3] },
+                io,
+            }
         })
         .collect();
     Ok(Module { module, info, options, resources, entries })
@@ -696,6 +793,26 @@ pub unsafe extern "C" fn caliper_wgsl_module_entry_point(module: *const Module, 
     })
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn caliper_wgsl_module_entry_io_count(module: *const Module, entry: usize) -> usize {
+    guard_value(0, || module_ref(module).ok().and_then(|m| m.entries.get(entry)).map_or(0, |e| e.io.len()))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn caliper_wgsl_module_entry_io(module: *const Module, entry: usize, index: usize, io: *mut Io) -> i32 {
+    guard(ptr::null_mut(), || {
+        let m = module_ref(module)?;
+        let e = m.entries.get(entry).ok_or_else(|| Failure::new(STATUS_ARGUMENT, "the entry point index is out of range"))?;
+        let v = e.io.get(index).ok_or_else(|| Failure::new(STATUS_ARGUMENT, "the interface index is out of range"))?;
+        if io.is_null() {
+            return Err(Failure::new(STATUS_ARGUMENT, "the interface pointer is NULL"));
+        }
+        // SAFETY: io is non-null and writable, as the header requires.
+        unsafe { io.write(*v) };
+        Ok(())
+    })
+}
+
 unsafe fn translate(
     module: *const Module,
     out: *mut Buffer,
@@ -941,5 +1058,68 @@ fn run(@builtin(global_invocation_id) id: vec3<u32>) { b[id.x] = a[id.x]; }
         let mut options = DEFAULT_OPTIONS;
         options.bounds_checks = 2;
         assert_eq!(check_options(&options).err().map(|f| f.status), Some(STATUS_ARGUMENT));
+    }
+
+    const STAGES: &str = r#"
+struct VsOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(2) @interpolate(flat) item: u32,
+    @location(3) @interpolate(linear, centroid) t: f32,
+}
+struct Picked {
+    @location(0) color: vec4<f32>,
+    @location(1) id: vec2<u32>,
+}
+@vertex
+fn vs(@builtin(vertex_index) v: u32) -> VsOut {
+    var o: VsOut;
+    o.position = vec4<f32>(f32(v), 0.0, 0.0, 1.0);
+    o.item = v;
+    return o;
+}
+@fragment
+fn fs(in: VsOut, @location(5) @interpolate(flat, first) extra: vec2<i32>) -> Picked {
+    var p: Picked;
+    p.color = in.color * in.t + vec4<f32>(f32(extra.x));
+    p.id = vec2<u32>(in.item, 0u);
+    return p;
+}
+@fragment
+fn plain() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }
+"#;
+
+    #[test]
+    fn entry_points_list_their_locations_with_defaults_and_without_builtins() {
+        let m = module_of(STAGES, BOUNDS_CHECKED);
+        let io = |name: &str| m.entries.iter().find(|e| e.name.to_str() == Ok(name)).map(|e| e.io.clone()).unwrap();
+        let v = |direction, location, scalar, components, interpolation, sampling| Io {
+            direction,
+            location,
+            scalar,
+            components,
+            interpolation,
+            sampling,
+        };
+        assert_eq!(
+            io("vs"),
+            vec![
+                v(IO_OUTPUT, 0, SCALAR_F32, 4, INTERPOLATION_PERSPECTIVE, SAMPLING_CENTER),
+                v(IO_OUTPUT, 2, SCALAR_U32, 1, INTERPOLATION_FLAT, SAMPLING_FIRST),
+                v(IO_OUTPUT, 3, SCALAR_F32, 1, INTERPOLATION_LINEAR, SAMPLING_CENTROID),
+            ]
+        );
+        assert_eq!(
+            io("fs"),
+            vec![
+                v(IO_INPUT, 0, SCALAR_F32, 4, INTERPOLATION_PERSPECTIVE, SAMPLING_CENTER),
+                v(IO_INPUT, 2, SCALAR_U32, 1, INTERPOLATION_FLAT, SAMPLING_FIRST),
+                v(IO_INPUT, 3, SCALAR_F32, 1, INTERPOLATION_LINEAR, SAMPLING_CENTROID),
+                v(IO_INPUT, 5, SCALAR_I32, 2, INTERPOLATION_FLAT, SAMPLING_FIRST),
+                v(IO_OUTPUT, 0, SCALAR_F32, 4, INTERPOLATION_PERSPECTIVE, SAMPLING_CENTER),
+                v(IO_OUTPUT, 1, SCALAR_U32, 2, INTERPOLATION_FLAT, SAMPLING_FIRST),
+            ]
+        );
+        assert_eq!(io("plain"), vec![v(IO_OUTPUT, 0, SCALAR_F32, 4, INTERPOLATION_PERSPECTIVE, SAMPLING_CENTER)]);
     }
 }
