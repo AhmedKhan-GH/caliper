@@ -178,15 +178,32 @@ void SceneView::set_box_fit(bool on) {
     changed();
 }
 
-void SceneView::set_depth_offset(const std::string& path, int offset) {
-    offset = std::clamp(offset, -8, 8);
-    auto it = depth_offsets_.find(path);
-    if (offset == 0 ? it == depth_offsets_.end() : (it != depth_offsets_.end() && it->second == offset)) return;
-    if (offset == 0)
-        depth_offsets_.erase(it);
+void SceneView::set_style(const std::string& path, const BatchStyle& style) {
+    BatchStyle s = style;
+    s.depth_offset = std::clamp(s.depth_offset, -8, 8);
+    auto it = styles_.find(path);
+    const bool plain = s.depth_offset == 0 && !(s.size_px > 0) && !s.point_shape;
+    if (it != styles_.end() && it->second.depth_offset == s.depth_offset && it->second.size_px == s.size_px &&
+        it->second.point_shape == s.point_shape)
+        return;
+    if (plain && it == styles_.end()) return;
+    if (plain)
+        styles_.erase(it);
     else
-        depth_offsets_[path] = offset;
+        styles_[path] = s;
     rebuild(path);
+}
+
+bool SceneView::set_orbit(const Orbit& o) {
+    if (tree_.space() != Space::k3D) return false;
+    look_through("", nullptr);
+    Orbit next = o;
+    next.elevation = std::clamp(next.elevation, -kMaxElevation, kMaxElevation);
+    if (!(next.distance > 0) || !std::isfinite(next.distance)) return false;
+    camera_ = next;
+    moved_ = true;
+    changed();
+    return true;
 }
 
 bool SceneView::start_without_bounds() const {
@@ -331,7 +348,11 @@ void SceneView::rebuild(const std::string& path) {
             if (it == slots_.end() || !it->second.present) continue;
             std::string err;
             caliper_scene::Batch b = it->second.batch;
-            if (auto d = depth_offsets_.find(path); d != depth_offsets_.end()) b.depth_offset = int8_t(d->second);
+            if (auto st = styles_.find(path); st != styles_.end()) {
+                b.depth_offset = int8_t(st->second.depth_offset);
+                if (st->second.size_px > 0) b.size_px = st->second.size_px;
+                if (st->second.point_shape) b.point_shape = *st->second.point_shape;
+            }
             if (!tree_.set_batch(e, b, fixed, &err)) note((path.empty() ? "the root" : path) + ": " + err);
         }
     changed();
@@ -412,7 +433,7 @@ bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
     const bool has_flat = flat_color(params, &rgba);
     if (has_flat) b.flat_rgba = rgba;
     b.colormap = colormap_id(params);
-    if (!caliper_host::colormap_lut(int32_t(b.colormap))) b.colormap = 0;
+    if (!caliper_gfx::cmap::builtin_lut(int32_t(b.colormap))) b.colormap = 0;
 
     // The colormap's range: the fixed ends, or the producer's stats for the AUTO ones, as in
     // SNAPSHOT; a flat AUTO range widens by 0.5 on each side, as a heatmap's does.

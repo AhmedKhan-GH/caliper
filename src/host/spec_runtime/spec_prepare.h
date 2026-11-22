@@ -22,9 +22,19 @@
 #include <caliper_builder/session/resolve.h>
 #include <caliper_builder/spec/spec.h>
 
+#include "scene/camera.h"   // StartingCamera
+
+#include <caliper_builder/session/values.h>   // PickFields
+#include <caliper_builder/spec/entity.h>
+
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
+
+namespace caliper_live_views {
+class SceneView;
+}
 
 namespace caliper_host {
 
@@ -179,5 +189,84 @@ std::string spec_source_origin(const caliper_builder::spec::Spec& spec, const st
 
 // Four significant digits, as the live views' headers write numbers.
 std::string spec_fmt4(double v);
+
+// ---- Scene entities (design/instrument-interface.md, Scene Entities and Data Box) ----------
+
+// The data box of a scene panel's entities: the range of the data on each axis, x, y and z, and
+// the box that the entities are drawn in, centred at the origin of the panel's scene. A wide flat
+// range becomes a box whose sides differ at most four times (`box = "auto"`), or the proportions
+// that the option `box` gives; the longest side is 2 scene units.
+struct EntityBox {
+    double lo[3] = {0, 0, 0}, hi[3] = {1, 1, 1};   // data units
+    double half[3] = {1, 1, 1};                    // the drawn box's half sizes, scene units
+    // One axis from data units into the box, and back.
+    double to_box(int axis, double v) const;
+    double to_data(int axis, double b) const;
+};
+
+// What one entity draws: its arrays in the box's units, ready for one part of the scene view
+// (points, lines as one strip or segments, or a surface as a mesh of the grid's cells), and
+// what a pick on it needs to give the fields of the section Pick Fields.
+struct EntityDraw {
+    std::string entity;                       // the entity's path
+    std::string path;                         // "spec/<path>" in the panel's scene
+    caliper_builder::spec::DrawKind draw = caliper_builder::spec::DrawKind::points;
+    caliper_builder::Error error;             // entity.shape, entity.length, entity.limit or the resolve error
+    std::vector<float> positions;             // (N, 3), scene units
+    std::vector<double> values;               // (N), data values for the colormap; empty for a flat colour
+    std::vector<uint8_t> colors;              // (N, 4); empty when absent
+    std::vector<float> radii;                 // points: (N), scene units; empty when absent
+    std::vector<float> normals;               // surface: (V, 3)
+    std::vector<int32_t> indices;             // surface: (T, 3), the cells whose four heights are numbers
+    bool strip = false;                       // lines: one strip through the points, else segments
+    int64_t rows = 0, cols = 0;               // surface: the grid
+    std::vector<double> data[3];              // each item's x, y and z in data units
+    std::vector<double> row_coord, col_coord; // surface: the x of each row, the y of each column
+    std::vector<int64_t> steps;               // the step of each row (surface) or item (lines), after a window
+    bool column_from_y = false, row_from_x = false;   // surface: the input's indices from the y and x slots
+    int colormap = 0;
+    double vmin = 0, vmax = 1;
+    uint32_t flat_rgba = 0;                   // 0: the scene's default colour
+    float size_px = 0, width_px = 2;
+    bool square = false;
+    int depth_offset = 0;
+    bool visible = true;
+    uint64_t generation = 0;
+};
+
+struct EntityScene {
+    std::string up = "+z";                    // the panel's option up, else z up
+    bool walls = true;                        // the option axes: the back walls of the box with a grid
+    EntityBox box;
+    std::vector<EntityDraw> draws;            // in the panel's entity order
+    bool empty() const { return draws.empty(); }
+};
+
+// Builds the entities of a scene panel from their resolved arrays (PanelData::entities). An
+// entity with an error, a wrong shape or a length that differs between its slots draws nothing
+// and keeps its error. Literal options apply; a reference takes its default.
+EntityScene build_entity_scene(const caliper_builder::spec::Panel& panel, const caliper_builder::PanelData& data);
+
+// The pick fields of a hit on item `item` of the entity part at `path` ("spec/<entity path>"): a
+// point or a line vertex, or a vertex of a surface's cell. Empty when `path` is no entity.
+std::optional<caliper_builder::PickFields> entity_pick_fields(const EntityScene& scene, const std::string& path,
+                                                              uint64_t item);
+
+// The starting camera of a scene panel from its option view_camera: an orbit table, a saved
+// view's name (the option `views`), or a camera entity's path. Angles are in degrees.
+caliper_scene::StartingCamera spec_starting_camera(const caliper_builder::spec::Panel& panel);
+
+class SpecScene;
+// The entities that a SpecScene (spec_entities.h) built last.
+const EntityScene& spec_scene_content(const SpecScene& scene);
+
+// Writes the entities into a scene view that the panel owns: the scene's up, one part for each
+// entity that draws (points, lines, or a surface as a mesh) with its colormap, range, size, width
+// and depth offset, and a clear for each entity that no longer draws. `drawn` holds the paths
+// written by the last call. The scene's bounds are the data box, so that the fit frames it. With
+// walls, the three walls of the box away from the starting camera, with grid lines at round
+// numbers of the data, go to "spec-box/walls".
+void apply_entity_scene(caliper_live_views::SceneView& view, const EntityScene& scene,
+                        std::vector<std::string>* drawn);
 
 }  // namespace caliper_host

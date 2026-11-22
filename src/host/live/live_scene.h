@@ -45,6 +45,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -188,14 +189,22 @@ public:
     // fit of a spec panel's entities, so that a wide flat box fills the picture's width.
     void set_box_fit(bool on);
     bool box_fit() const { return box_fit_; }
+    // Moves the view's own camera to `o` (camera.set): it leaves a camera looked through and stays
+    // for the session, as a move of the person's does, until a reset. False in a 2-D scene.
+    bool set_orbit(const caliper_scene::Orbit& o);
     // Whether the person orbited, panned or zoomed since the view opened or was reset. Until then
     // the view follows the scene: it frames the bounds again when they grow past what it framed,
     // as when a viewer attaches late and the scene's parts arrive one by one, and when the
     // picture changes shape.
     bool moved() const { return moved_; }
-    // The depth offset of every batch of the entity at `path`, -8 to 8 (scene.h,
-    // Batch::depth_offset); 0 removes it.
-    void set_depth_offset(const std::string& path, int offset);
+    // What a spec panel sets on the batches of one entity beyond the scene messages: its depth
+    // offset, -8 to 8 (scene.h, Batch::depth_offset), and the size and shape of its points.
+    struct BatchStyle {
+        int depth_offset = 0;
+        float size_px = 0;                                    // 0: by count, as the points view
+        std::optional<caliper_scene::PointShape> point_shape;
+    };
+    void set_style(const std::string& path, const BatchStyle& style);
     // The scale bar of a picture of w x h logical pixels (scene/scale_bar.h) at the camera the view
     // draws with; hidden while the option is off and while it looks through a pinhole.
     caliper_scene::ScaleBar scale_bar(double w, double h) const;
@@ -334,7 +343,7 @@ private:
     bool box_fit_ = false;
     caliper_scene::Aabb fitted_bounds_;       // the bounds and the picture's shape of the last fit
     double fitted_aspect_ = 0;
-    std::map<std::string, int> depth_offsets_;   // by entity path
+    std::map<std::string, BatchStyle> styles_;   // by entity path
     caliper_scene::Axis up_mode_ = caliper_scene::Axis::PosY;   // the orbit's axis, or the one it returns to
     bool up_chosen_ = false;           // the person switched: the scene's up no longer moves the view
     bool was_through_ = false;         // the last frame looked through a pinhole

@@ -8,6 +8,8 @@
 #include "spec_runtime/spec_transport.h"
 #include "spec_runtime/spec_stage_host.h"
 #include "live/live_views_scene.h"   // a scene drawn into a scene panel's rectangle
+#include "live/live_scene.h"         // the scene view of a panel's entities
+#include "spec_runtime/spec_entities.h"
 #include "scene/scene.h"   // kPalette
 
 #include "ui/sternbild_fonts.h"
@@ -1076,10 +1078,100 @@ bool spec_scene_event(const char* type, const std::string& panel_id, const std::
     return true;
 }
 
-// The gesture and pick state of each scene panel, by panel id.
+// The scene of a panel's entities (design/instrument-interface.md, Scene Entities): what they
+// built last, and the scene view that the panel owns, on a backend of the graphics layer from the
+// runtime's scene layer, made at the first draw.
+struct EntityPanel {
+    SpecScene scene;
+    std::unique_ptr<caliper_gfx::Backend> gfx;   // owned; null when the view borrows a backend
+    std::unique_ptr<caliper_live_views::SceneView> view;
+    std::vector<std::string> drawn;               // the paths written into the view
+    bool dirty = true;                            // built again since the view took it
+    std::string notice;                           // why no view could start
+    caliper_scene::StartingCamera start;          // the panel's view_camera, applied when it changes
+    bool start_set = false;
+};
+
+// The gesture and pick state of each scene panel, and the scenes of panels with entities, by id.
 struct SpecRuntime::SceneStates {
     std::map<std::string, caliper_live_views::SceneRectState> by_panel;
+    std::map<std::string, std::unique_ptr<EntityPanel>> entities;
+    EntityPanel& entity(const std::string& id) {
+        std::unique_ptr<EntityPanel>& p = entities[id];
+        if (!p) p = std::make_unique<EntityPanel>();
+        return *p;
+    }
 };
+
+namespace {
+
+bool same_starting(const caliper_scene::StartingCamera& a, const caliper_scene::StartingCamera& b) {
+    auto vec = [](const std::optional<caliper_scene::Vec3>& x, const std::optional<caliper_scene::Vec3>& y) {
+        return x.has_value() == y.has_value() && (!x || (x->x == y->x && x->y == y->y && x->z == y->z));
+    };
+    return a.form == b.form && vec(a.target, b.target) && a.distance == b.distance && a.azimuth_deg == b.azimuth_deg &&
+           a.elevation_deg == b.elevation_deg && a.entity == b.entity;
+}
+
+}  // namespace
+
+caliper_live_views::SceneView* SpecRuntime::entity_view(const std::string& panel_id) {
+    auto it = scenes_->entities.find(panel_id);
+    if (it == scenes_->entities.end()) return nullptr;
+    EntityPanel& ep = *it->second;
+    if (!ep.view && ep.notice.empty()) {
+        caliper_gfx::Backend* backend = nullptr;
+        const caliper_gfx::ProgramDesc* programs = nullptr;
+        std::string why;
+        bool ok = false;
+        if (scene_layer_) {
+            ok = scene_layer_(&ep.gfx, &backend, &programs, &why);
+        } else {
+            CaliperCore* core = core_ ? core_() : nullptr;
+            ok = core && caliper_live_views::open_layer(core, "scenes", &ep.gfx, &backend, &programs, &why);
+            if (!core) why = "Scene entities need the graphics layer, which starts with a live session";
+        }
+        if (ok) {
+            auto view = std::make_unique<caliper_live_views::SceneView>(*backend, programs);
+            if (view->init(&why)) {
+                view->set_box_fit(true);
+                ep.view = std::move(view);
+            }
+        }
+        if (!ep.view) {
+            ep.gfx.reset();
+            ep.notice = why.empty() ? "The scene cannot start here" : why;
+        }
+    }
+    if (!ep.view) return nullptr;
+    // The panel's starting camera; the walls of the box face away from it, so they follow.
+    if (ep.start_set && !same_starting(ep.view->starting(), ep.start)) {
+        ep.view->set_starting(ep.start);
+        ep.dirty = true;
+    }
+    if (ep.dirty) {
+        apply_entity_scene(*ep.view, spec_scene_content(ep.scene), &ep.drawn);
+        ep.dirty = false;
+    }
+    return ep.view.get();
+}
+
+caliper_live_views::SceneView* SpecRuntime::scene_view_of(const std::string& panel_id) {
+    if (!spec_) return nullptr;
+    const spec::Panel* p = spec_->find_panel(panel_id);
+    if (!p || p->primitive != spec::Primitive::scene) return nullptr;
+    if (!p->entities.empty()) return entity_view(panel_id);
+    auto it = p->bind.find(spec::kSceneSlot);
+    if (it == p->bind.end() || it->second.bindings.empty()) return nullptr;
+    const std::optional<std::string> name = spec::live_scene_name(it->second.bindings.front());
+    CaliperCore* core = core_ ? core_() : nullptr;
+    return name && core ? caliper_live_views::scene_view(core, name->c_str()) : nullptr;
+}
+
+const SpecScene* SpecRuntime::entity_scene(const std::string& panel_id) const {
+    auto it = scenes_->entities.find(panel_id);
+    return it == scenes_->entities.end() ? nullptr : &it->second->scene;
+}
 
 SpecRuntime::SpecRuntime(SpecTextures& textures) : textures_(textures), scenes_(std::make_unique<SceneStates>()) {}
 
@@ -1117,6 +1209,10 @@ void SpecRuntime::bind_scene(Entry& e) {
         e.view.scene = nullptr;
         return;
     }
+    if (!e.panel.entities.empty()) {
+        bind_entity_scene(e);
+        return;
+    }
     // The entry moves between maps when the spec changes, so the call keeps
     // copies of what it draws; a change of the panel prepares it again.
     const std::string panel = e.panel.id;
@@ -1148,6 +1244,50 @@ void SpecRuntime::bind_scene(Entry& e) {
         return caliper_live_views::draw_scene_in_rect(core, scene, id.c_str(), content.Min, content.GetSize(), so,
                                                       scenes_->by_panel[panel],
                                                       sink) == caliper_live_views::SceneRectResult::drawn;
+    };
+}
+
+void SpecRuntime::bind_entity_scene(Entry& e) {
+    const std::string panel = e.panel.id;
+    caliper_live_views::SceneRectOptions o;
+    o.labels = e.panel.options.scene.labels.value_or(true);
+    o.scale_bar = e.panel.options.scene.scale_bar.value_or(false);
+    e.view.scene = [this, panel, o](const ImRect& content) {
+        caliper_live_views::SceneView* view = entity_view(panel);
+        EntityPanel& ep = scenes_->entity(panel);
+        if (!view) return false;   // no backend here: the panel shows its source as offline
+        caliper_live_views::SceneRectOptions so = o;
+        so.stages = app_stage_host_impl()->source(panel);
+        so.stage_message = app_stage_host_impl()->message(panel);
+        const std::string id = "##spec.entities." + panel;
+        auto sink = [this, &panel, &ep](const char* type, const std::string& detail) {
+            caliper_builder::Event ev;
+            if (!events_ || !spec_scene_event(type, panel, "", detail, &ev)) return;
+            const bool pick = ev.kind == caliper_builder::EventKind::pick;
+            if (pick && ev.fields.contains("entity") && ev.fields["entity"].is_string() &&
+                ev.fields.contains("index") && ev.fields["index"].is_number_integer())
+                if (auto f = ep.scene.pick_fields(ev.fields["entity"].get<std::string>(),
+                                                  ev.fields["index"].get<std::uint64_t>()))
+                    ev.fields["fields"] = caliper_builder::pick_fields_json(*f);
+            caliper_builder::Event kept = pick ? ev : caliper_builder::Event{};
+            events_->push(std::move(ev));
+            if (pick) {
+                SpecInstrumentHost host = instrument_host(spec_ ? &*spec_ : nullptr);
+                record_spec_pick(panel, kept, host);
+            }
+        };
+        const float scale = ImGui::GetIO().DisplayFramebufferScale.x > 0 ? ImGui::GetIO().DisplayFramebufferScale.x : 1.0f;
+        const auto r = caliper_live_views::draw_scene_view_in_rect(*view, scale, id.c_str(), content.Min,
+                                                                   content.GetSize(), so, scenes_->by_panel[panel], sink);
+        // An entity that draws nothing says why, over the picture: its path and its code.
+        for (const EntityDraw& d : spec_scene_content(ep.scene).draws)
+            if (d.error && d.error.code != "entity.no_data") {
+                const char* label = d.error.code == "entity.limit" ? "Over limit" : "Wrong shape";
+                ImGui::GetWindowDrawList()->AddText(ImVec2(content.Min.x + 8, content.Max.y - 22), IM_COL32(230, 120, 90, 255),
+                                                    (std::string(label) + " " + d.entity + " (" + d.error.code + ")").c_str());
+                break;
+            }
+        return r != caliper_live_views::SceneRectResult::missing;
     };
 }
 
@@ -1229,6 +1369,16 @@ void SpecRuntime::prepare(Entry& e, const PanelData& data, const spec::Spec* spe
     ++e.view.version;
     e.stale = false;
     e.generation = data.generation;
+    if (e.panel.primitive == spec::Primitive::scene && !e.panel.entities.empty()) {
+        EntityPanel& ep = scenes_->entity(e.panel.id);
+        ep.scene.set_entities(e.panel, data);
+        ep.dirty = true;
+        const caliper_scene::StartingCamera start = spec_starting_camera(e.panel);
+        if (!ep.start_set || !same_starting(start, ep.start)) {
+            ep.start = start;
+            ep.start_set = true;
+        }
+    }
     bind_scene(e);
 }
 
@@ -1261,8 +1411,9 @@ void SpecRuntime::update_only(const SpecLayout* shown) {
         if (shown && !shown->find(kv.first)) continue;   // a hidden tab waits until it shows
         // A shown panel whose served data has a new generation is resolved
         // again; the probe reads no data.
-        if (e.panel.primitive == spec::Primitive::scene) {
-            // A scene panel binds no source: its scene comes from the live core at each draw.
+        if (e.panel.primitive == spec::Primitive::scene && e.panel.entities.empty()) {
+            // A scene panel without entities binds no source: its scene comes from the live core
+            // at each draw. One with entities resolves their arrays as any panel resolves its slots.
             if (!e.stale) continue;
             PanelData data;
             data.panel = e.panel.id;
@@ -1463,7 +1614,7 @@ void SpecRuntime::draw(const ImRect& area, const SpecLook& L) {
                 }
                 if (e.stale) {
                     PanelData data;
-                    if (pp->primitive == spec::Primitive::scene) {
+                    if (pp->primitive == spec::Primitive::scene && pp->entities.empty()) {
                         data.panel = lp.id;
                         data.primitive = pp->primitive;
                     } else if (source_) {

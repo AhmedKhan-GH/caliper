@@ -242,9 +242,16 @@ SceneRectResult draw_scene_in_rect(CaliperCore* core, const std::string& name, c
         state = SceneRectState{};
         return SceneRectResult::missing;
     }
+    return draw_scene_view_in_rect(*sc, core->scale, imgui_id, p0, size, options, state, sink);
+}
+
+SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, const char* imgui_id, ImVec2 p0,
+                                        ImVec2 size, const SceneRectOptions& options, SceneRectState& state,
+                                        const SceneRectSink& sink) {
+    SceneView* sc = &view;
     if (size.x < 4.0f || size.y < 4.0f) return SceneRectResult::too_small;
     constexpr int kMaxTarget = 8192, kHysteresisPx = 8;
-    const float scale = core->scale > 0.0f ? core->scale : 1.0f;
+    const float scale = pixel_scale > 0.0f ? pixel_scale : 1.0f;
     int want_w = std::clamp(int(size.x * scale), 1, kMaxTarget);
     int want_h = std::clamp(int(size.y * scale), 1, kMaxTarget);
     if (sc->has_target() && std::abs(want_w - int(sc->width())) <= kHysteresisPx &&
