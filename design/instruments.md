@@ -1,26 +1,12 @@
 # Instruments
 
-This page defines the interfaces of milestone M1, the vertical slice of the agent-built playground. In M1, an agent that uses only `caliper-mcp` adds a live 3-D scene and a slider to a spec, changes a parameter of a training script, and receives a pick from the scene. The training script has one Caliper line, `caliper.watch(model, optimizer)`.
+This page defines the interfaces of the first vertical slice of the agent-built playground. In this slice, an agent that uses only `caliper-mcp` adds a live 3-D scene and a slider to a spec, changes a parameter of a training script, and receives a pick from the scene. The training script has one Caliper line, `caliper.watch(model, optimizer)`.
 
-The page states the spec format version 1, the new commands, the event format of `events.wait`, the run control of the app and the extension of `caliper.watch`. Five tracks build M1 in parallel against these interfaces. Entities from spec sources, binding references, programs, the model runner and interventions come in later milestones. This page leaves room for them and does not define them.
-
-## Status
-
-The interfaces are in code. The JSON Schema of version 1, the command descriptors, the C++ headers and the effect class `run` are complete. Each new command answers `command.not_implemented` until its track fills its handler. The tests of the command table, the MCP tool table and the MCP resources pass with the new commands.
-
-| File | Content | Track That Fills It |
-|---|---|---|
-| `src/builder/spec/schema/caliper-spec-v1.schema.json` | JSON Schema of version 1 | spec1 (tests and the MCP resource) |
-| `src/builder/include/caliper_builder/spec/instrument.h` | Scene options, controls, control targets | spec1 (`instrument.cpp`) |
-| `src/builder/include/caliper_builder/session/run_control.h` | Run control interface and run commands | controls (`run_commands.cpp`) |
-| `src/builder/include/caliper_builder/session/events.h` | Event ring, `events.wait`, journal feed | events (`event_ring.cpp`) |
-| `src/host/spec_runtime/spec_instruments.h` | Control leaves in the spec runtime | controls (`spec_controls.cpp`) |
-| `src/builder/session/control_edit.cpp` | `control.create`, `control.patch`, `control.remove` | controls |
-| `src/builder/commands/command_table.cpp` | Descriptors of the eight new commands | none in M1 |
+The page states the spec format version 1, the new commands, the event format of `events.wait`, the run control of the app and the extension of `caliper.watch`. Entities from spec sources, binding references, programs, the model runner and interventions come in later versions. This page leaves room for them and does not define them.
 
 ## Spec Version 1
 
-Version 1 is version 0 with two additions for M1: the primitive `scene` and the top-level array `control`. Binding references, scene entities and programs join version 1 in later milestones, before version 1 goes into `main`. Until then, the reader refuses their keys as `spec.unknown_key`.
+Version 1 is version 0 with two additions: the primitive `scene` and the top-level array `control`. Binding references, scene entities and programs join version 1 later, before version 1 goes into `main`. Until then, the reader refuses their keys as `spec.unknown_key`.
 
 ### Version Rules
 
@@ -76,9 +62,9 @@ The `bind` string has one of four forms:
 - `param:<name>` is a parameter that the script registered with `caliper.param`.
 - `action:<name>` is an action that the script registered with `caliper.action`.
 - `run:pause` is the pause and the resume of the run.
-- `value` is a value that the spec holds. Binding references read it in a later milestone.
+- `value` is a value that the spec holds. Binding references read it later.
 
-A name has 1 to 63 bytes of UTF-8 and no control characters, as `caliper.param` requires. The prefix `intervene:` is reserved for milestone M5. M1 builds the kinds `slider` and `button`. The kinds `range`, `toggle`, `picker` and `text` are part of the format, but the validator refuses them until they are built.
+A name has 1 to 63 bytes of UTF-8 and no control characters, as `caliper.param` requires. The prefix `intervene:` is reserved for interventions. The first version builds the kinds `slider` and `button`. The kinds `range`, `toggle`, `picker` and `text` are part of the format, but the validator refuses them until they are built.
 
 | Kind | Targets | Options |
 |---|---|---|
@@ -278,7 +264,7 @@ The ring lives in the session, so that `events.wait` works the same way in the a
 
 ## Watch Hook
 
-The acceptance check of the trajectory allows one Caliper line in the training script. The line is `caliper.watch(model, optimizer)`.
+The acceptance test allows one Caliper line in the training script. The line is `caliper.watch(model, optimizer)`.
 
 ### Current Watch
 
@@ -311,9 +297,9 @@ The scene `model` has one entity, `modules`, of boxes. The boxes stand along +y 
 
 ## Acceptance Test
 
-The test of M1 starts a script whose only Caliper line is `caliper.watch(model, optimizer)`. It then starts the hidden app with `--url` and the script's stream link, and it drives `caliper-mcp` as a child process over stdio. Through the MCP tools, it creates a scene panel bound to `live:model` and a slider bound to `param:lr`. It changes the parameter with `run_set_param` and reads the new value from the script's output at its next step. A pick in the scene panel, made through the app's test seam, comes back from `events_wait`.
+The instrument acceptance test starts a script whose only Caliper line is `caliper.watch(model, optimizer)`. It then starts the hidden app with `--url` and the script's stream link, and it drives `caliper-mcp` as a child process over stdio. Through the MCP tools, it creates a scene panel bound to `live:model` and a slider bound to `param:lr`. It changes the parameter with `run_set_param` and reads the new value from the script's output at its next step. A pick in the scene panel, made through the app's test seam, comes back from `events_wait`.
 
 ## Open Points
 
-- A learning rate scheduler sets the rate again at each of its steps. The watch track decides whether `lr` scales the scheduler's base rates or the current rates.
-- The watch track decides whether the shared memory session also carries the views when the server runs, so that no view appears twice in the app.
+- A learning rate scheduler sets the rate again at each of its steps. It is open whether `lr` scales the scheduler's base rates or the current rates.
+- It is open whether the shared memory session also carries the views when the server runs, so that no view appears twice in the app.

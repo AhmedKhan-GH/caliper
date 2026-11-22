@@ -693,7 +693,7 @@ if(APPLE)
     set_target_properties(caliper_torch_tests PROPERTIES
         BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
     # adapters/torch.hpp reaches the producer MTLCommandQueue through the C
-    # ObjC runtime (objc_msgSend/sel_registerName — M2), so any macOS TU
+    # ObjC runtime (objc_msgSend/sel_registerName), so any macOS TU
     # including it must link libobjc.
     target_link_libraries(caliper_torch_tests PRIVATE objc)
 endif()
@@ -890,13 +890,13 @@ else()
 endif()
 set_tests_properties(caliper_wgsl_tests PROPERTIES LABELS "wgsl")
 
-# The acceptance test of milestone M1 (design/instruments.md, Acceptance Test): a script whose only
+# The instrument acceptance test (design/instruments.md, Acceptance Test): a script whose only
 # Caliper line is caliper.watch(model, optimizer), the hidden app attached to it, and caliper-mcp
 # as a child. tests/m1/driver.py runs tests/m1/transcript.jsonl through the MCP tools and exits 77
 # where the app, Metal, torch or the native network sender is missing, which ctest reports as skipped.
 # CALIPER_M1_PYTHON names a Python with torch; the builder's test Python or the one found is the default.
 if(NOT WIN32 AND CALIPER_WITH_BUILDER)
-    set(CALIPER_M1_PYTHON "" CACHE FILEPATH "A Python with torch for the M1 acceptance test; empty uses the test Python")
+    set(CALIPER_M1_PYTHON "" CACHE FILEPATH "A Python with torch for the instrument acceptance test; empty uses the test Python")
     set(_m1_python "${CALIPER_M1_PYTHON}")
     if(NOT _m1_python AND CALIPER_BUILDER_TEST_PYTHON)
         set(_m1_python "${CALIPER_BUILDER_TEST_PYTHON}")

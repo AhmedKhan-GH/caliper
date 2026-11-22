@@ -24,8 +24,8 @@
 // RunControls lives; the four commands are frame_thread commands. Nothing
 // here throws.
 //
-// This header is an interface of milestone M1: the track "controls" writes
-// the commands (src/builder/session/run_commands.cpp) and the app's
+// This header is the interface of the run control: the commands are in
+// src/builder/session/run_commands.cpp, and the app has its own
 // implementation.
 #include <caliper_builder/commands/registry.h>
 #include <caliper_builder/error.h>
