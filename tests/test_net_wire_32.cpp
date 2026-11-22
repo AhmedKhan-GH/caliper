@@ -11,10 +11,13 @@
 // `resources` and keeps the newest of each for a late viewer.
 #include <doctest/doctest.h>
 
-#include "net/hub.h"
 #include "net/json.h"
 #include "net/wire.h"
+#if !defined(_WIN32)   // the hub and the WebSocket layer are not built on Windows yet
+#include "live/live_programs.h"
+#include "net/hub.h"
 #include "net/ws.h"
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -1163,6 +1166,7 @@ TEST_CASE("net/wire 3.2: truncations and bit flips of the 3.2 frames never crash
 }
 
 // ---- the hub and the capability "resources" ------------------------------------------------------------
+#if !defined(_WIN32)
 namespace {
 namespace hubres {
 
@@ -1415,3 +1419,103 @@ TEST_CASE("net/hub 3.2: an instance of a piece goes to a producer with resources
         CHECK(got->common);
     }
 }
+
+// ---- the app's program sync and instances of pieces --------------------------------------------------------
+namespace {
+namespace syncres {
+
+// A link that records what the sync sends; it takes pieces when told to.
+struct FakeLink final : caliper_live::ProgramLink {
+    bool pieces = false;
+    uint64_t epoch_n = 1;
+    uint32_t next = 1;
+    std::vector<Program> sent;
+    bool ready() override { return true; }
+    uint64_t epoch() override { return epoch_n; }
+    uint32_t send(Program msg) override {
+        msg.request_id = next++;
+        sent.push_back(std::move(msg));
+        return sent.back().request_id;
+    }
+    std::vector<caliper_live::ProgramAnswer> take() override { return {}; }
+    bool takes_pieces() override { return pieces; }
+};
+
+caliper_live::WantedProgram instance(double gain) {
+    const Program golden = std::get<Program>(hubres::golden("program_set_piece"));
+    caliper_live::WantedProgram w;
+    w.id = "heads";
+    w.kind = "piece";
+    w.panel = "bars";
+    w.piece = golden.piece;
+    w.sha256 = golden.piece.find("hash")->as_string().substr(7);
+    w.manifest = golden.manifest;
+    w.bind = golden.bind;
+    w.segments = golden.segments;
+    w.common = *golden.common;
+    w.derive = *golden.derive;
+    w.draw = *golden.draw;
+    w.params = Json::object();
+    w.params.set("gain", gain);
+    return w;
+}
+
+}  // namespace syncres
+}  // namespace
+
+TEST_CASE("live programs: an instance of a piece goes out in the instance form, only to a script that takes pieces") {
+    using namespace syncres;
+    caliper_live::ProgramSync sync;
+    FakeLink link;
+    sync.want({instance(2.0)});
+    sync.poll(link);
+    CHECK(link.sent.empty());
+    REQUIRE(sync.records().size() == 1);
+    CHECK(sync.records()[0].state == "refused");
+    CHECK(sync.records()[0].error_code == "program.resources_unavailable");
+    const auto changes = sync.take_changes();
+    REQUIRE(changes.size() == 1);
+    CHECK(changes[0].change == "refused");
+
+    // Once the script takes pieces, the set goes out once, as the golden frame's instance with its own request id.
+    link.pieces = true;
+    sync.poll(link);
+    sync.poll(link);
+    REQUIRE(link.sent.size() == 1);
+    Program m = link.sent[0];
+    CHECK(m.op == CALIPER_NET_PROGRAM_SET);
+    CHECK(m.declaration.is_null());
+    CHECK_FALSE(m.wgsl);
+    CHECK_FALSE(m.sha256);
+    std::vector<uint8_t> bytes;
+    std::string err;
+    REQUIRE(encode(Message(m), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    Message back;
+    REQUIRE(decode_bytes(bytes, &back).ok());
+    const Program& p = std::get<Program>(back);
+    const Program golden = std::get<Program>(hubres::golden("program_set_piece"));
+    CHECK(p.piece == golden.piece);
+    CHECK(p.manifest == golden.manifest);
+    CHECK(p.bind == golden.bind);
+    CHECK(p.params == golden.params);
+    CHECK(p.panel == golden.panel);
+    CHECK(p.segments == golden.segments);
+    CHECK(p.common == golden.common);
+    CHECK(p.derive == golden.derive);
+    CHECK(p.draw == golden.draw);
+
+    // A new value alone goes out as op params; another binding sends the set again.
+    sync.want({instance(3.0)});
+    sync.poll(link);
+    REQUIRE(link.sent.size() == 2);
+    CHECK(link.sent[1].op == CALIPER_NET_PROGRAM_PARAMS);
+    caliper_live::WantedProgram rebound = instance(3.0);
+    rebound.bind.set("attn", "live:blocks.1.attn");
+    sync.want({rebound});
+    sync.poll(link);
+    REQUIRE(link.sent.size() == 3);
+    CHECK(link.sent[2].op == CALIPER_NET_PROGRAM_SET);
+    CHECK(link.sent[2].bind.find("attn")->as_string() == "live:blocks.1.attn");
+}
+#endif   // !_WIN32
+

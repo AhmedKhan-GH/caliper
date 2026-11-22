@@ -16,6 +16,12 @@
 // the open spec, status() gives the status items of program.status, and pump()
 // runs the sync once per frame and pushes the program events.
 //
+// An instance of a piece (design/programmable-graphics.md, Program
+// Instances) goes out as the instance form of PROGRAM set, with its sections
+// resolved, only to a script that takes pieces (capability "resources"); the
+// app's host also moves each RESOURCE version the stream received into the
+// session's step history.
+//
 // Threads: want(), poll() and take_changes() run on the frame thread;
 // records() may run on any thread.
 #pragma once
@@ -47,6 +53,14 @@ struct WantedProgram {
     // Set when the app refuses the program before it sends it: the record
     // shows it as refused and nothing goes out.
     std::string refused_code, refused_message;
+    // An instance of a piece, when `piece` is an object: the pin {name,
+    // version, hash}, the manifest, the bindings, the segments of `common`,
+    // and the sections with the imports resolved. `sha256` then holds the 64
+    // hex digits of the piece's hash, and `declaration`, `wgsl` and `scene`
+    // stay empty.
+    caliper_net::Json piece, manifest, bind, segments;
+    std::string common, derive, draw;
+    bool instance() const { return piece.is_object(); }
 };
 
 // Where a ProgramSync sends and reads: the attached stream in the app, a fake
@@ -64,6 +78,10 @@ public:
     virtual uint32_t send(caliper_net::wire::Program msg) = 0;
     // The script's answers since the last call, oldest first.
     virtual std::vector<ProgramAnswer> take() = 0;
+    // Whether the script takes instances of pieces (capability "resources").
+    virtual bool takes_pieces() { return false; }
+    // The RESOURCE versions the stream received since the last call.
+    virtual std::vector<ReceivedResource> take_resources() { return {}; }
 };
 
 // The ProgramLink of an Attachment's network stream; not ready while the
@@ -75,6 +93,8 @@ public:
     uint64_t epoch() override;
     uint32_t send(caliper_net::wire::Program msg) override;
     std::vector<ProgramAnswer> take() override;
+    bool takes_pieces() override;
+    std::vector<ReceivedResource> take_resources() override;
 
 private:
     NetSource* source() const;
@@ -169,7 +189,8 @@ inline void ProgramSync::want(std::vector<WantedProgram> programs) {
         if (Entry* old = find(w.id)) {
             e = *old;
             if (old->rec.want.sha256 != w.sha256 || old->rec.want.declaration != w.declaration ||
-                old->rec.want.scene != w.scene) {
+                old->rec.want.scene != w.scene || old->rec.want.piece != w.piece || old->rec.want.bind != w.bind ||
+                old->rec.want.panel != w.panel || old->rec.want.manifest != w.manifest) {
                 e.sent_sha.clear();   // changed: send it again
                 e.sends = 0;
                 e.pending = 0;
@@ -326,14 +347,42 @@ inline void ProgramSync::poll(ProgramLink& link) {
     for (Entry& e : entries_) {
         if (!e.rec.want.refused_code.empty() || e.sent_sha == e.rec.want.sha256) continue;
         if (e.sends >= kMaxSends) continue;
+        const WantedProgram& w = e.rec.want;
         caliper_net::wire::Program m;
         m.op = CALIPER_NET_PROGRAM_SET;
-        m.id = e.rec.want.id;
-        m.declaration = e.rec.want.declaration;
-        if (e.rec.want.params.is_object()) m.declaration.set("params", e.rec.want.params);
-        m.wgsl = e.rec.want.wgsl;
-        m.sha256 = e.rec.want.sha256;
-        if (!e.rec.want.scene.empty()) m.scene = e.rec.want.scene;
+        m.id = w.id;
+        if (w.instance()) {
+            // An instance goes only to a script that takes pieces; until then it shows why.
+            if (!link.takes_pieces()) {
+                if (e.rec.error_code != "program.resources_unavailable") {
+                    e.rec.host = "none";
+                    e.rec.state = "refused";
+                    e.rec.item = caliper_net::Json();
+                    e.rec.error_code = "program.resources_unavailable";
+                    e.rec.error_message = "The attached script takes no pieces: it and the server must announce the "
+                                          "capability resources, which Caliper LIB does under "
+                                          "caliper.watch(model, optimizer).";
+                    e.rec.line = e.rec.column = 0;
+                    note_change(e);
+                }
+                continue;
+            }
+            m.piece = w.piece;
+            m.manifest = w.manifest;
+            if (w.bind.is_object() && w.bind.size() > 0) m.bind = w.bind;
+            if (w.params.is_object()) m.params = w.params;
+            if (!w.panel.empty()) m.panel = w.panel;
+            if (w.segments.is_array()) m.segments = w.segments;
+            if (!w.common.empty()) m.common = w.common;
+            if (!w.derive.empty()) m.derive = w.derive;
+            if (!w.draw.empty()) m.draw = w.draw;
+        } else {
+            m.declaration = w.declaration;
+            if (w.params.is_object()) m.declaration.set("params", w.params);
+            m.wgsl = w.wgsl;
+            m.sha256 = w.sha256;
+            if (!w.scene.empty()) m.scene = w.scene;
+        }
         const uint32_t rid = link.send(std::move(m));
         if (rid == 0) break;   // the queue is full: the next frame tries again
         e.pending = rid;
@@ -382,7 +431,9 @@ inline std::vector<ProgramChange> ProgramSync::take_changes() {
 #include "sha256.h"
 
 #include <caliper_builder/operators/operators.h>
+#include <caliper_builder/programs/pieces.h>
 #include <caliper_builder/programs/sandbox.h>
+#include <caliper_builder/session/history.h>
 #include <caliper_builder/session/chain_hooks.h>
 #include <caliper_builder/session/program_host.h>
 #include <caliper_builder/session/session.h>
@@ -420,6 +471,44 @@ public:
 
     // How many values of a reference the declared range of their param refused.
     std::uint64_t refused_params() const { return refused_params_; }
+
+    // Where the pieces of the library and the workspace come from: the piece
+    // that a pin names, or nothing when its source lacks it. An inline piece
+    // comes from the open spec. Without a lookup, a program pinned to a
+    // library or workspace piece is refused with piece.missing. Frame thread.
+    using PieceLookup =
+        std::function<std::optional<caliper_builder::spec::Piece>(const caliper_builder::spec::PieceRef&)>;
+    void set_pieces(PieceLookup lookup) {
+        pieces_ = std::move(lookup);
+        rebuild();
+    }
+
+    // Moves each RESOURCE version that `link` received into `history`, with
+    // the `keep` and the element's fields of its resource in the piece of its
+    // program; the history keeps only the versions of the open spec's
+    // instances. Frame thread.
+    void deliver_resources(ProgramLink& link, caliper_builder::StepHistory& history) {
+        for (ReceivedResource& r : link.take_resources()) {
+            ++resources_received_;
+            std::uint32_t keep = 0;
+            std::vector<caliper_builder::ResourceField> fields;
+            if (auto p = resource_info_.find(r.program); p != resource_info_.end())
+                if (auto q = p->second.find(r.resource); q != p->second.end()) {
+                    keep = q->second.keep;
+                    fields = q->second.fields;
+                }
+            caliper_builder::ResourceVersion v;
+            v.step = r.step;
+            v.count = r.count;
+            v.stride = r.stride;
+            v.width = r.width;
+            v.height = r.height;
+            v.bytes = std::move(r.bytes);
+            history.append_resource(r.program, r.resource, keep, std::move(fields), std::move(v));
+        }
+    }
+    // The RESOURCE versions moved into the history so far.
+    std::uint64_t resources_received() const { return resources_received_; }
 
     std::vector<caliper_builder::ProgramStatus> status() const override {
         std::vector<caliper_builder::ProgramStatus> out;
@@ -486,6 +575,7 @@ public:
             }
         }
         pump(link, session ? &session->events() : nullptr);
+        if (session) deliver_resources(link, session->history());
     }
 
     // Once per frame: runs the sync through `link` and pushes one `program`
@@ -592,6 +682,88 @@ public:
         return w;
     }
 
+    // The wanted program of an instance of a piece: the pin, the manifest as
+    // canonical JSON, the bindings, the params with `values` in place of the
+    // references, the panel, and the sections with the imports resolved:
+    // `common` holds the lib modules and common.wgsl, and `segments` their
+    // lines. A missing piece, another hash than the pin's, or imports that do
+    // not resolve refuse it before anything goes out.
+    static WantedProgram wanted_instance(const caliper_builder::spec::Program& p,
+                                         const caliper_builder::spec::Piece* piece,
+                                         const std::map<std::string, double>& values) {
+        namespace sp = caliper_builder::spec;
+        namespace pg = caliper_builder::programs;
+        WantedProgram w;
+        w.id = p.id;
+        w.kind = "piece";
+        w.panel = p.panel.value_or("");
+        const sp::PieceRef& ref = *p.piece;
+        const std::string hex_prefix = "sha256:";
+        w.sha256 = ref.hash.compare(0, hex_prefix.size(), hex_prefix) == 0 ? ref.hash.substr(hex_prefix.size()) : ref.hash;
+        w.piece = caliper_net::Json::object();
+        w.piece.set("name", ref.name);
+        w.piece.set("version", ref.version);
+        w.piece.set("hash", ref.hash);
+        auto refuse = [&](const std::string& code, const std::string& message) {
+            w.refused_code = code;
+            w.refused_message = message;
+            return w;
+        };
+        const std::string pin = ref.name + "@" + std::to_string(ref.version);
+        if (p.id.size() > CALIPER_NET_PROGRAM_ID_MAX)
+            return refuse("program.bad_target", "A program id is at most " + std::to_string(CALIPER_NET_PROGRAM_ID_MAX) +
+                                                    " bytes on the wire.");
+        if (!piece)
+            return refuse(pg::kPieceMissing, "The piece " + pin + " that the program " + p.id + " pins is not in " +
+                                                 sp::piece_from_name(ref.from) + ".");
+        const std::string hash = piece->hash.empty() ? pg::piece_hash(*piece) : piece->hash;
+        if (hash != ref.hash)
+            return refuse(pg::kPieceHashMismatch, "The piece " + pin + " has the hash " + hash +
+                                                      ", and the program " + p.id + " pins " + ref.hash + ".");
+        const pg::Resolved resolved = pg::resolve_imports(*piece);
+        if (!resolved.verdict.ok()) return refuse(resolved.verdict.code, resolved.verdict.message);
+        auto file = [&](const char* name) {
+            auto it = resolved.files.find(name);
+            return it == resolved.files.end() ? std::string() : it->second;
+        };
+        auto lines = [](const std::string& t) {
+            std::uint32_t n = (std::uint32_t)std::count(t.begin(), t.end(), '\n');
+            return t.empty() || t.back() == '\n' ? n : n + 1;
+        };
+        const std::string common_file = file("common.wgsl");
+        w.common = resolved.lib_text + common_file;
+        w.segments = caliper_net::Json::array();
+        for (const pg::Segment& seg : resolved.lib_segments) {
+            caliper_net::Json j = caliper_net::Json::object();
+            j.set("part", seg.part);
+            j.set("first_line", seg.first_line);
+            j.set("lines", seg.lines);
+            w.segments.push(std::move(j));
+        }
+        if (!common_file.empty()) {
+            caliper_net::Json j = caliper_net::Json::object();
+            j.set("part", "common.wgsl");
+            j.set("first_line", lines(resolved.lib_text) + 1);
+            j.set("lines", lines(common_file));
+            w.segments.push(std::move(j));
+        }
+        if (piece->derive) w.derive = file("derive.wgsl");
+        if (piece->draw) w.draw = file("draw.wgsl");
+        if (w.derive.empty() && w.draw.empty())
+            return refuse(pg::kPieceBadManifest, "The piece " + pin + " has neither a derive half nor a draw half.");
+        std::string err;
+        const std::string manifest = pg::canonical_manifest(*piece);
+        if (manifest.empty() || !caliper_net::Json::parse(manifest.data(), manifest.size(), &w.manifest, &err))
+            return refuse(pg::kProgramNotBuilt, "The manifest of the piece " + pin + " has no canonical form yet.");
+        w.bind = caliper_net::Json::object();
+        for (const auto& [input, binding] : p.bind) w.bind.set(input, binding);
+        if (!values.empty()) {
+            w.params = caliper_net::Json::object();
+            for (const auto& [name, v] : values) w.params.set(name, v);
+        }
+        return w;
+    }
+
     // The status item of program.status of `r`.
     static caliper_builder::ProgramStatus to_status(const ProgramRecord& r) {
         caliper_builder::ProgramStatus s;
@@ -672,15 +844,63 @@ private:
         std::optional<caliper_builder::programs::ParamType> type;
     };
 
+    // The keep and the element's fields of one published resource.
+    struct ResourceInfo {
+        std::uint32_t keep = 0;
+        std::vector<caliper_builder::ResourceField> fields;
+    };
+
+    // The piece that `ref` pins: an inline piece of the open spec, or one of
+    // the lookup's.
+    std::optional<caliper_builder::spec::Piece> find_piece(const caliper_builder::spec::PieceRef& ref) const {
+        if (ref.from == caliper_builder::spec::PieceFrom::inline_piece) {
+            for (const auto& piece : spec_.pieces)
+                if (piece.name == ref.name && piece.version == ref.version) return piece;
+            return std::nullopt;
+        }
+        return pieces_ ? pieces_(ref) : std::nullopt;
+    }
+
+    // The keep and fields of each published resource of `piece`, for the history.
+    static std::map<std::string, ResourceInfo> resource_infos(const caliper_builder::spec::Piece& piece) {
+        namespace sp = caliper_builder::spec;
+        std::map<std::string, ResourceInfo> out;
+        for (const sp::Resource& r : piece.resources) {
+            if (!r.publish) continue;
+            ResourceInfo info;
+            info.keep = r.keep.value_or(0);
+            if (r.kind == sp::ResourceKind::texture) {
+                info.fields.push_back({"texel", "u32", 0});
+            } else {
+                caliper_builder::programs::ElementLayout layout;
+                if (caliper_builder::programs::element_layout(r.layout, &layout).ok())
+                    for (const auto& f : layout.fields) info.fields.push_back({f.name, f.type, f.offset});
+            }
+            out[r.id] = std::move(info);
+        }
+        return out;
+    }
+
     // The wanted programs from the spec, the operators and the params' values.
     void rebuild() {
         namespace sp = caliper_builder::spec;
         std::vector<WantedProgram> wanted;
         std::map<std::string, std::map<std::string, ParamSlot>> next;
+        resource_info_.clear();
         for (const auto& p : spec_.programs) {
             std::map<std::string, double> values;
             std::vector<caliper_builder::programs::ParamField> fields;
-            caliper_builder::programs::params_fields(p.wgsl, &fields, nullptr);
+            std::optional<sp::Piece> piece;
+            if (p.piece) {
+                piece = find_piece(*p.piece);
+                if (piece) {
+                    resource_info_[p.id] = resource_infos(*piece);
+                    for (const sp::PieceParam& pp : piece->params)
+                        fields.push_back({pp.name, static_cast<caliper_builder::programs::ParamType>(pp.type)});
+                }
+            } else {
+                caliper_builder::programs::params_fields(p.wgsl, &fields, nullptr);
+            }
             for (const auto& [name, place] : p.params) {
                 ParamSlot slot{place, 0, std::nullopt};
                 for (const auto& f : fields)
@@ -696,7 +916,8 @@ private:
                 values[name] = slot.value;
                 next[p.id][name] = slot;
             }
-            wanted.push_back(wanted_program(spec_, p, &values));
+            if (p.piece) wanted.push_back(wanted_instance(p, piece ? &*piece : nullptr, values));
+            else wanted.push_back(wanted_program(spec_, p, &values));
         }
         for (const Operator& op : operators_) {
             const sp::Program p = caliper_builder::operators::operator_program(op.source, 0, op.shape);
@@ -722,6 +943,9 @@ private:
     std::map<std::string, std::map<std::string, ParamSlot>> params_;   // by program id, then name
     std::uint64_t frames_ = 0;
     std::uint64_t refused_params_ = 0;   // values refused for the declared range of their field
+    PieceLookup pieces_;                 // the library's and the workspace's pieces
+    std::map<std::string, std::map<std::string, ResourceInfo>> resource_info_;   // by program id, then resource id
+    std::uint64_t resources_received_ = 0;
 };
 
 }  // namespace caliper_live
