@@ -28,6 +28,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -546,6 +547,34 @@ TEST_CASE("api commands: a held command that nobody decides is withdrawn with co
     CHECK(waited < 5.0);
     CHECK(app.session->registry().pending_approvals().empty());
     CHECK(app.server->stats().commands_held == 0);
+}
+
+TEST_CASE("api commands: events.wait is a long poll that the server holds until a matching event comes") {
+    SessionApp app;
+    const uint16_t port = app.port();
+    caliper_builder::EventRing& ring = app.session->events();
+    // The call holds a thread of its own, so the frame thread keeps serving
+    // other commands while it waits.
+    std::future<Response> held = std::async(std::launch::async, [port] {
+        return read_response(send_command(port, "events.wait", {{"kinds", {"pick"}}, {"timeout_s", 30}}, "mcp", "", ""));
+    });
+    REQUIRE(wait_for([&] { return ring.waiting(caliper_builder::EventKind::pick) > 0; }));
+    CHECK(command(port, "spec.new", {{"id", "dash"}}, "mcp")["ok"] == true);
+    CHECK(held.wait_for(std::chrono::milliseconds(0)) == std::future_status::timeout);
+    caliper_builder::Event pick;
+    pick.kind = caliper_builder::EventKind::pick;
+    pick.panel = "world";
+    pick.fields = {{"entity", "modules"}, {"index", 1}};
+    ring.push(std::move(pick));
+    const Response r = held.get();
+    REQUIRE(r.status == 200);
+    const json env = r.value();
+    INFO(env.dump());
+    REQUIRE(env["ok"] == true);
+    REQUIRE(env["result"]["events"].size() == 1);
+    CHECK(env["result"]["events"][0]["kind"] == "pick");
+    CHECK(env["result"]["events"][0]["panel"] == "world");
+    CHECK(ring.waiting() == 0);
 }
 
 TEST_CASE("api commands: an api call gets command.needs_approval at once and reads the outcome later") {
