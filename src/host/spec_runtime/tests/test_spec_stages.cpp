@@ -9,6 +9,8 @@
 #include "spec_test_canvas.h"
 
 #include "gfx/metal_backend.h"
+#include "live/live_scene.h"
+#include "net/wire.h"
 #include "gfx/shaders/generated/programs.h"
 #include "gfx/shaders/generated/programs_metal.h"
 #include "scene/backend_resources.h"
@@ -296,18 +298,20 @@ TEST_SUITE("gpu") {
 
 namespace {
 
-// One source of one build, for the GPU case.
+// One source of one build, for the GPU cases.
 struct OneSource final : StageSource {
     std::shared_ptr<const StageBuild> b;
     std::string path = "cloud";
     std::string refusal;
+    uint64_t rev = 1;
+    uint32_t staged_frames = 0, plain_frames = 0;
     std::shared_ptr<const StageBuild> build(std::string_view p, Primitive prim) const override {
         return b && p == path && prim == b->primitive ? b : nullptr;
     }
-    uint64_t revision() const override { return 1; }
+    uint64_t revision() const override { return rev; }
     float time_s() const override { return 0.0f; }
     void refused(const StageBuild&, const std::string& m) override { refusal = m; }
-    void frames_done(double, uint32_t, bool) override {}
+    void frames_done(double, uint32_t frames, bool staged) override { (staged ? staged_frames : plain_frames) += frames; }
 };
 
 // Three square points 4 pixels wide in a 2-D scene of 64 x 64 pixels, drawn through the scene
@@ -527,6 +531,82 @@ TEST_CASE("stages: a material stage recolours points, a vertex stage moves them,
     CHECK(drawn(&staged) == plain);
     CHECK(staged == 0);
     CHECK(cache.size() == 0);
+}
+
+TEST_CASE("stages: a scene view draws its panel's stages, again on a new revision, and reports their frames") {
+    if (!have_compiler()) {
+        MESSAGE("skipped: this build has no caliper-wgsl library");
+        return;
+    }
+    caliper_host::SpecOffscreen* canvas = spec_test::canvas();
+    if (!canvas || !canvas->native_device()) {
+        MESSAGE("skipped: no Metal device");
+        return;
+    }
+    std::unique_ptr<caliper_gfx::Backend> gfx = caliper_gfx::make_metal_backend(canvas->native_device(), canvas->native_queue());
+    REQUIRE(gfx);
+    {
+        caliper_live_views::SceneView v(*gfx, caliper_gfx::shaders::kMetalPrograms);
+        std::string why;
+        REQUIRE_MESSAGE(v.init(&why), why);
+        v.describe(caliper_net::wire::SceneView{CALIPER_NET_SPACE_3D, "+y", ""});
+        const float xyz[9] = {-1.0f, -1.0f, 0.0f, 0.0f, 0.5f, 0.0f, 1.0f, -0.5f, 0.0f};
+        caliper_net::wire::SceneUpdate u;
+        u.sub = 1;
+        u.view = "stages";
+        u.seq = 1;
+        u.path = "cloud";
+        u.part = CALIPER_NET_PART_POINTS;
+        u.params.set("size", caliper_net::Json(8.0));
+        u.arrays.push_back(caliper_net::wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {3, 3}, xyz, sizeof xyz));
+        REQUIRE_MESSAGE(v.apply(u, &why), why);
+
+        constexpr uint32_t S = 64, clear = 0xff000000u;
+        std::vector<uint8_t> plain, staged;
+        REQUIRE_MESSAGE(v.render(S, S, 1.0f, clear, &why), why);
+        CHECK(v.staged_draws() == 0);
+        REQUIRE(v.read_pixels(&plain, &why));
+
+        OneSource src;
+        const std::string red = kRed;
+        const caliper_host::StageCompile c = caliper_host::compile_stage_program(Primitive::Points, &red, nullptr, "view");
+        REQUIRE(c.build);
+        src.b = c.build;
+        v.set_stage_source(&src);
+        const uint64_t frames = v.cost().frames;
+        REQUIRE_MESSAGE(v.render(S, S, 1.0f, clear, &why), why);
+        CHECK(v.cost().frames == frames + 1);
+        CHECK(v.staged_draws() == 1);
+        REQUIRE(v.read_pixels(&staged, &why));
+        size_t magenta = 0, lit = 0;
+        for (size_t i = 0; i < staged.size(); i += 4) {
+            uint32_t a, b;
+            std::memcpy(&a, &plain[i], 4);
+            std::memcpy(&b, &staged[i], 4);
+            if (a != clear) ++lit;
+            if (b == 0xffff00ffu) ++magenta;
+        }
+        CHECK(lit > 0);
+        CHECK(magenta == lit);
+        v.poll();
+        CHECK(src.staged_frames >= 1);
+        CHECK(src.refusal.empty());
+
+        // Nothing changed: no new frame; a new revision of the source: a new frame.
+        REQUIRE(v.render(S, S, 1.0f, clear, &why));
+        CHECK(v.cost().frames == frames + 1);
+        ++src.rev;
+        REQUIRE(v.render(S, S, 1.0f, clear, &why));
+        CHECK(v.cost().frames == frames + 2);
+
+        // Without the source the view draws the built-in program again.
+        v.set_stage_source(nullptr);
+        std::vector<uint8_t> again;
+        REQUIRE(v.render(S, S, 1.0f, clear, &why));
+        CHECK(v.staged_draws() == 0);
+        REQUIRE(v.read_pixels(&again, &why));
+        CHECK(again == plain);
+    }
 }
 
 }  // TEST_SUITE("gpu")

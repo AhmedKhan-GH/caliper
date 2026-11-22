@@ -77,9 +77,11 @@ if(BUILD_TESTS AND TARGET doctest::doctest)
         tests/test_spec_draw.cpp
         tests/test_panel_render.cpp
         tests/test_spec_shot.cpp
-        tests/test_spec_stages.cpp)
+        tests/test_spec_stages.cpp
+        tests/test_spec_pixels.cpp)
     target_link_libraries(caliper_spec_runtime_tests PRIVATE
-        caliper_spec_runtime doctest::doctest caliper_builder_duckdb caliper_builder_acp)
+        caliper_spec_runtime doctest::doctest caliper_builder_duckdb caliper_builder_acp
+        caliper_catalog_providers)
     target_include_directories(caliper_spec_runtime_tests PRIVATE ${THIRD_PARTY_DIR}/stb)
     target_compile_definitions(caliper_spec_runtime_tests PRIVATE
         CALIPER_SPEC_FIXTURES="${CMAKE_SOURCE_DIR}/src/builder/spec/tests/fixtures"
