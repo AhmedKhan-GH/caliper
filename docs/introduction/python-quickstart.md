@@ -12,7 +12,7 @@ tell which quadrant of a 28x28 image holds a Gaussian blob, on synthetic data
 for the full version.
 
 Prereqs: Apple Silicon, macOS 14 (Sonoma) or later, Python 3.12, PyTorch with MPS, and
-CMake plus Ninja on `PATH`. [Live streaming](../explanations/live-streaming.md)
+CMake plus Ninja on `PATH`. [Live streaming](../python/live-streaming.md)
 explains the design; this page only uses it.
 
 ## Build and install the wheel
@@ -164,7 +164,7 @@ This is what `train_show.py --mode attach` does:
 
 Either viewer is a separate process: it stays responsive whatever the training
 loop does, it keeps the last frames when the script exits, and closing it does
-not stop training. [Attach to a running script](../guides/attach-to-a-running-script.md)
+not stop training. [Attach to a running script](../python/script-attachment.md)
 covers listing, detaching and what happens when either side goes away.
 
 ## The own window
@@ -222,7 +222,7 @@ newest completed one at up to 60 fps, so most steps are skipped by design. In
 the benchmark behind these numbers (the same TinyCNN plus a 1024x1024 weight
 shown every step, attach mode, MPS), 468 of 9,460 calls in 8 s took a snapshot,
 training ran at 98.1 % of the commit-matched control (see
-[the commit effect](../explanations/live-streaming.md#sync)) and the median step
+[the commit effect](../python/live-streaming.md#sync)) and the median step
 to screen was 23.53 ms. A call that took a snapshot cost 35.5 µs median, a
 skipped one 2.0 µs.
 
@@ -243,9 +243,9 @@ the step-to-screen median and p95, one line per view, and **Detach**.
 
 ## Next
 
-- [Caliper LIB](../references/python-api.md) lists every call, argument and
+- [Caliper LIB](../python/caliper-lib-api.md) lists every call, argument and
   accepted layout.
-- [Attach to a running script](../guides/attach-to-a-running-script.md) for the
+- [Attach to a running script](../python/script-attachment.md) for the
   session workflow.
-- [Live streaming](../explanations/live-streaming.md) for how snapshots, the
+- [Live streaming](../python/live-streaming.md) for how snapshots, the
   slot ring and the two modes work, with the measurements.

@@ -1,11 +1,11 @@
-# Caliper LIB
+# Caliper LIB API
 
 Caliper LIB is the `caliper` Python package: `import caliper` gives a PyTorch script live views of its tensors. This page
 lists every public call of the `caliper` package (version 0.1.0, Python 3.12,
 macOS arm64) and of `caliper.live`. The package needs macOS 14 (Sonoma) or
 later on Apple silicon, and its wheel is tagged `macosx_14_0_arm64`. The source of truth is
 `python/caliper/__init__.py`; the design is in
-[Live streaming](../explanations/live-streaming.md), and
+[Live streaming](live-streaming.md), and
 [Watch a PyTorch training run live](../introduction/python-quickstart.md) walks through
 a script.
 
@@ -74,7 +74,7 @@ torch 2.14.1, 18 cores, load average about 3):
 | Step to screen, median, `rate=0` | 8.39 to 9.9 ms | 9.23 to 9.75 ms |
 
 The control is the same loop recording a `torch.mps.Event` at 60 Hz without
-snapshots; [the commit effect](../explanations/live-streaming.md#sync) explains
+snapshots; [the commit effect](live-streaming.md#sync) explains
 why. `torch.mps.current_allocated_memory()` changed by 0.0 MB in every row. A
 CPU 256x256 snapshot cost 80.0 µs (window) and 66.1 µs (attach) median.
 
@@ -306,9 +306,9 @@ to display.
 `caliper.serve()` serves the script's live views over a WebSocket on the
 loopback interface, `caliper.widget()` shows one of them in a notebook cell,
 and data views let each viewer choose which part of a tensor travels.
-[Network streaming](../explanations/network-streaming.md) explains the design,
-the [Wire protocol](wire-protocol.md) reference defines the messages, and
-[Watch a training run in a notebook](../tutorials/watch-a-training-run-in-a-notebook.md)
+[Network streaming](network-streaming.md) explains the design,
+the [Wire protocol](../references/wire-protocol.md) reference defines the messages, and
+[Watch a training run in a notebook](notebook-training-runs.md)
 uses all three. `caliper.connect()` streams the same views to a `caliper serve`
 hub instead, or as well. `websockets` is a dependency of the package. The widget needs
 the extra `caliper[notebook]`, which adds anywidget.
@@ -349,7 +349,7 @@ Start the stream server of this process, print its link,
 The server listens on 127.0.0.1 only and makes a new random session token.
 While it listens, it writes the stream file `streams/<pid>.json` in
 Caliper's app-data folder (`$CALIPER_DATA_DIR` when set, see
-[Environment](environment.md)), with mode 0600 in a folder of mode 0700: its
+[Environment](../references/environment.md)), with mode 0600 in a folder of mode 0700: its
 pid, the machine's name, the session id, the script's name, the start time,
 the port, the stream link with its token, `control` and the names of its
 views, which the server rewrites when the views change. The Caliper app lists
@@ -366,7 +366,7 @@ still returns at once.
 |---|---|---|
 | `http://127.0.0.1:<port>/?token=<token>` | The viewer page: every view of the stream in a grid | Not needed; the page reads it from its own link |
 | `http://127.0.0.1:<port>/<file>` | The page's modules, the WebAssembly views and the fonts, from the package | Not needed; the files hold no data |
-| `ws://127.0.0.1:<port>/v3/stream?token=<token>` | The stream, as the [Wire protocol](wire-protocol.md) reference defines it | Required |
+| `ws://127.0.0.1:<port>/v3/stream?token=<token>` | The stream, as the [Wire protocol](../references/wire-protocol.md) reference defines it | Required |
 
 Every request must name the server in its `Host` header, `127.0.0.1:<port>` or
 `localhost:<port>`. The stream also refuses a wrong token and an `Origin`
@@ -402,7 +402,7 @@ affected. These are limits of Caliper LIB's server, not rules of the protocol.
 | `close()` | Deliver what is pending (for about a second), end every connection and stop the server |
 
 An event is a dict with `view`, `type` (`"select"`, `"pick"` or `"hover"`),
-`detail` (in source indices, as the [Wire protocol](wire-protocol.md#events)
+`detail` (in source indices, as the [Wire protocol](../references/wire-protocol.md#events)
 reference lists for each kind), `sub`, `seq`, `data_view`, `connection` and
 `time`. `on_event` functions run on a thread of their own, `caliper.events`,
 never on the training thread; an exception in one becomes a `RuntimeWarning`
@@ -421,7 +421,7 @@ hub = caliper.connect(url=None)
 
 Stream every view of this process to a `caliper serve` hub on this machine, as
 a producer, and return the connection, a `caliper._net_native.HubConnection`.
-[Run a hub](../guides/run-a-hub.md) explains the hub.
+[Run a hub](hub-setup.md) explains the hub.
 
 | Argument | Type | Default | Meaning |
 |---|---|---|---|
@@ -487,7 +487,7 @@ Its traits, synced through anywidget:
 
 The `detail` of an event is given in source indices; for a `select` in a
 points view it holds `indices`, the positions in the points that were shown,
-and `row_ids`, their source indices. The [Wire protocol](wire-protocol.md)
+and `row_ids`, their source indices. The [Wire protocol](../references/wire-protocol.md)
 reference lists the detail of every kind. `w.on_select(callback)` calls
 `callback(selection)` each time the browser reports a new selection, and
 `w.on_select(callback, remove=True)` stops it.
@@ -502,8 +502,8 @@ the stream and takes effect during the cell.
 
 A data view decides which data of a tensor travels: a slice, selection,
 projection or aggregation that the producer computes on the tensor's device.
-[Network streaming](../explanations/network-streaming.md#data-views) explains
-the idea, and the [Wire protocol](wire-protocol.md#data-views) reference
+[Network streaming](network-streaming.md#data-views) explains
+the idea, and the [Wire protocol](../references/wire-protocol.md#data-views) reference
 defines the rules exactly. A view offers data views when its tensors have
 named dimensions:
 
@@ -607,13 +607,13 @@ Controls let viewers reach back into the running script: pause, resume and
 single-step its training loop, change the parameters it registered, and run
 the actions it registered. Linked selection makes a selection in one view
 highlight the same items in the other views. Both travel on the stream as
-messages of wire protocol 3.1 ([Controls](wire-protocol.md#controls) and
-[Linked selection](wire-protocol.md#linked-selection)), so they work while a
+messages of wire protocol 3.1 ([Controls](../references/wire-protocol.md#controls) and
+[Linked selection](../references/wire-protocol.md#linked-selection)), so they work while a
 notebook cell runs, when the kernel cannot read widget messages. The viewers
 of `caliper.serve()` may control unless it was started with `control=False`;
 the viewers of a hub that `connect()` streams to may control only when the hub
 was started with `--allow-control`. Both senders carry them.
-[Control a running script](../guides/control-a-running-script.md) uses them in
+[Control a running script](script-control.md) uses them in
 a training loop. Every call also works without a server: parameters keep their
 values, `step()` returns at once, and an action can be called from Python.
 
@@ -647,7 +647,7 @@ or a notebook's interrupt, ends the wait with `KeyboardInterrupt`, and the run
 is no longer paused afterwards. Right before it waits, it sends the snapshots
 and series values of the step it paused at, and the run state goes to each
 viewer after them, so a view that reads `paused` already shows that step
-([What a viewer may rely on](wire-protocol.md#what-a-viewer-may-rely-on-when-a-run-pauses)).
+([What a viewer may rely on](../references/wire-protocol.md#what-a-viewer-may-rely-on-when-a-run-pauses)).
 With nothing waiting, a call costs about 22 ns on an Apple silicon Mac, with a
 viewer attached or not: it counts the step and reads one flag.
 
@@ -867,7 +867,7 @@ dtype or device reallocates its slots.
 | Variable | Effect |
 |---|---|
 | `CALIPER_SESSION` | `0` stops the first view call from opening a session (default `1`) |
-| `CALIPER_DATA_DIR` | Root of the session files (`<root>/live`) for the script, the Caliper app's session list and `caliper-viewer`; also the in-process core's data directory when no `data_dir` is given. For the Caliper app it moves the whole app-data folder ([Folders and environment variables](environment.md#the-app-data-folder)) |
+| `CALIPER_DATA_DIR` | Root of the session files (`<root>/live`) for the script, the Caliper app's session list and `caliper-viewer`; also the in-process core's data directory when no `data_dir` is given. For the Caliper app it moves the whole app-data folder ([Folders and environment variables](../references/environment.md#the-app-data-folder)) |
 | `CALIPER_VIEWER` | Path of `caliper-viewer` for `auto_launch` and `viewer_executable()` |
 | `CALIPER_PY_LOG` | Non-empty and not `0`: echo the in-process core's log lines to stderr |
 | `CALIPER_PY_LIVE_APPLY` | `0`: in-process heatmaps and images use the embed v1.2 view path (`view_tensor` with `WAIT_GPU` on the frame thread) instead of the typed live views |

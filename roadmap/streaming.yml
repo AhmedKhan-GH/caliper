@@ -9,7 +9,7 @@ features:
     status: shipped
     summary: Caliper LIB is the Python package whose view calls, show, points, series and histogram, send snapshots of a script's tensors to a viewer without making the training loop wait.
     depends_on: []
-    docs: docs/references/python-api.md
+    docs: docs/python/caliper-lib-api.md
     issue: null
 
   - id: STR-02
@@ -33,7 +33,7 @@ features:
     status: shipped
     summary: Snapshots of a script's tensors are copied on the device into shared memory, and a viewer process on the same machine samples them at its own pace, so the script never waits for the display.
     depends_on: [STR-01]
-    docs: docs/explanations/live-streaming.md
+    docs: docs/python/live-streaming.md
     issue: null
 
   - id: STR-05
@@ -41,7 +41,7 @@ features:
     status: shipped
     summary: caliper.serve sends a script's live views over a WebSocket to a notebook widget or a browser tab, reducing each snapshot on the device and letting the latest snapshot win.
     depends_on: [STR-02, STR-04]
-    docs: docs/explanations/network-streaming.md
+    docs: docs/python/network-streaming.md
     issue: null
 
   - id: STR-06
@@ -49,7 +49,7 @@ features:
     status: shipped
     summary: The hub is a separate process that holds the live sessions of several scripts, lets viewers choose one, keeps an ended session's last data and forwards controls when allowed.
     depends_on: [STR-05]
-    docs: docs/guides/run-a-hub.md
+    docs: docs/python/hub-setup.md
     issue: null
 
   - id: STR-07
@@ -57,7 +57,7 @@ features:
     status: shipped
     summary: A notebook widget shows a training run's live views inside Jupyter or VS Code, with a controls panel to pause, step and change parameters while the cell runs.
     depends_on: [STR-03, STR-05]
-    docs: docs/tutorials/watch-a-training-run-in-a-notebook.md
+    docs: docs/python/notebook-training-runs.md
     issue: null
 
   - id: STR-08
@@ -65,7 +65,7 @@ features:
     status: shipped
     summary: A data view tells the producer which part of a large tensor to send, such as a slice, a reduction or a downsample, so the reduction runs on the device and only the result travels.
     depends_on: [STR-05]
-    docs: docs/explanations/network-streaming.md#data-views
+    docs: docs/python/network-streaming.md#data-views
     issue: null
 
   - id: STR-09
@@ -152,7 +152,7 @@ features:
     status: planned
     summary: A live session over shared memory is read by one viewer today, and this work lets several viewers read the same session by giving each reader its own claims.
     depends_on: [STR-04]
-    docs: docs/explanations/live-streaming.md#known-limits
+    docs: docs/python/live-streaming.md#known-limits
     issue: null
 
   - id: STR-19
@@ -345,7 +345,7 @@ features:
     status: shipped
     summary: The app lists the live sessions and streams on the machine, attaches to one from the landing screen or with --url, and shows it on the live page.
     depends_on: [STR-05]
-    docs: docs/guides/attach-to-a-running-script.md#attach-from-the-caliper-app
+    docs: docs/python/script-attachment.md#attach-from-the-caliper-app
     issue: null
 
   - id: STR-44
@@ -353,7 +353,7 @@ features:
     status: shipped
     summary: caliper-viewer is the standalone viewer in Caliper LIB's wheel that lists live sessions and attaches to one without the Caliper app.
     depends_on: [STR-04]
-    docs: docs/guides/attach-to-a-running-script.md#attach-with-caliper-viewer
+    docs: docs/python/script-attachment.md#attach-with-caliper-viewer
     issue: null
 
   - id: STR-45
@@ -361,7 +361,7 @@ features:
     status: shipped
     summary: caliper.watch hooks a torch module so that the outputs and, if asked, the gradients of chosen modules show as live views at a chosen interval.
     depends_on: [STR-01]
-    docs: docs/references/python-api.md#watch
+    docs: docs/python/caliper-lib-api.md#watch
     issue: null
 
   - id: STR-46
@@ -369,7 +369,7 @@ features:
     status: shipped
     summary: caliper.window and caliper.offscreen open a window in the script's own process or a synchronous offscreen canvas as a route for the view calls.
     depends_on: [STR-01]
-    docs: docs/references/python-api.md#routes-and-lifetime
+    docs: docs/python/caliper-lib-api.md#routes-and-lifetime
     issue: null
 
   - id: STR-47

@@ -1,0 +1,14 @@
+nav:
+  - index.md
+  - Tutorials:
+      - notebook-training-runs.md
+  - Guides:
+      - script-attachment.md
+      - script-control.md
+      - hub-setup.md
+  - Concepts:
+      - live-streaming.md
+      - network-streaming.md
+      - zero-copy-tensors.md
+  - Reference:
+      - caliper-lib-api.md

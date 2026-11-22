@@ -1,4 +1,4 @@
-# Network streaming
+# Network Streaming
 
 Network streaming sends a script's live views over a WebSocket, so that a
 notebook widget, a browser tab or the hub can show them. It keeps the view calls
@@ -6,8 +6,8 @@ and the snapshots of [Live streaming](live-streaming.md), adds a transport that
 copies each snapshot from the device into a socket, and adds data views, which
 decide which part of a large tensor travels at all.
 
-To use it, start with [Watch a training run in a notebook](../tutorials/watch-a-training-run-in-a-notebook.md).
-The calls are in the [Caliper LIB](../references/python-api.md#serve) reference,
+To use it, start with [Watch a training run in a notebook](notebook-training-runs.md).
+The calls are in the [Caliper LIB](caliper-lib-api.md#serve) reference,
 and the [Wire protocol](../references/wire-protocol.md) reference defines every
 message on the stream. This page explains the design and does not repeat the
 protocol.
@@ -47,7 +47,7 @@ app, a widget and a browser tab at once.
 
 What differs is where a snapshot ends. The two local transports give the viewer
 the memory the snapshot was written to, without a copy
-([Zero-copy tensor visualization](zero-copy.md)). A socket needs bytes, so the
+([Zero-copy tensor visualization](zero-copy-tensors.md)). A socket needs bytes, so the
 network transport copies each snapshot off the device and encodes it as one
 binary message. The zero-copy claim therefore applies only to viewing on the
 same machine through a live session or the own window; a viewer on the network
@@ -57,7 +57,7 @@ The viewers in the browser live in the `web/` package: the `<caliper-view>`
 element, the notebook widget built on it, and the viewer page. The element
 decides per view what draws it. Where WebGPU gives an adapter, Caliper's own
 view layer compiled to WebAssembly (`web/wasm`, drawn by the
-[WebGPU backend](rendering.md#the-webgpu-backend)) draws the
+[WebGPU backend](../explanations/rendering.md#the-webgpu-backend)) draws the
 kinds its loader lists, which are now all five: heatmaps, images, points,
 series and histograms. A kind the loader does not list is drawn by small views
 written for the browser in TypeScript. Without an adapter the TypeScript views
@@ -187,7 +187,7 @@ view engine and the event handlers live there. They are rare, and the native
 sender queues at most 256 of them per connection. In the other direction, a
 connection's replies and other control messages wait in a bounded queue on both
 senders, and a viewer that fills it by sending requests while it reads nothing
-loses its connection; the [Python API](../references/python-api.md#serve)
+loses its connection; the [Python API](caliper-lib-api.md#serve)
 states the limits.
 
 When the native sender is not built, `caliper.serve()` uses a sender written in

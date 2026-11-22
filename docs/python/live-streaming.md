@@ -1,4 +1,4 @@
-# Live streaming
+# Live Streaming
 
 The goal is a normal PyTorch script that keeps training at full speed while
 Caliper shows its tensors live, without the script waiting for the GPU or the
@@ -12,7 +12,7 @@ training from 331 to 159 steps/s with two shows per step. Live streaming removes
 the wait: `show()` waits for nothing and the viewer samples at its own pace.
 
 To use it, start with [Watch a PyTorch training run live](../introduction/python-quickstart.md);
-every call is in the [Caliper LIB](../references/python-api.md) reference.
+every call is in the [Caliper LIB](caliper-lib-api.md) reference.
 
 !!! note "Status"
     macOS / Metal (Apple Silicon) only, local only: protocol v2
@@ -249,7 +249,7 @@ full check and the build options).
 
 These are the prototype measurements the decision rests on. The final code's
 numbers (98.3 to 99.5 % of the control in the own window, 98.1 to 99.4 % in
-attach mode, at 60 Hz) are in [Cost of a call](../references/python-api.md#cost-of-a-call).
+attach mode, at 60 Hz) are in [Cost of a call](caliper-lib-api.md#cost-of-a-call).
 
 The TinyCNN of `train_show.py` plus a synthetic SxS f32 weight rewritten in
 place and shown every step; 10 s after a 1 s warm-up; two repeats (run 1 /

@@ -252,7 +252,7 @@ and its pid.
 listed, for screenshots and headless checks; `CALIPER_HOME_AFTER=<seconds>`
 goes Home once, that long after the page opened (the applet page honours it
 too).
-[Attach to a running script](../guides/attach-to-a-running-script.md) covers
+[Attach to a running script](../python/script-attachment.md) covers
 the session files, the standalone viewer and what happens when either side
 goes away.
 

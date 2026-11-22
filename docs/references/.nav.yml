@@ -27,7 +27,6 @@ nav:
       - service-feed-v1.md
   - Hosts and clients:
       - embedding.md
-      - python-api.md
       - wire-protocol.md
       - browser-elements.md
       - api.md

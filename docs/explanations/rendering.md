@@ -7,7 +7,7 @@ to becoming a texture, in the hottest loop the framework owns.
 
 The answer is to keep graphics out of the contract entirely. This page describes the seam that does it, the
 backends behind it, how each one updates a texture, and how the geometry path draws 3-D data. How a tensor reaches
-pixels without a CPU round trip, and what each path costs, is in [Zero-copy tensor visualization](zero-copy.md).
+pixels without a CPU round trip, and what each path costs, is in [Zero-copy tensor visualization](../python/zero-copy-tensors.md).
 
 ## Why the ABI never names a graphics API
 
@@ -154,4 +154,4 @@ Metal therefore keeps no per-texture sync objects, no back-pressure wait and no 
 is in use. The remaining CPU waits are in readbacks, the offscreen canvas, the geometry rigidity check and a rare fallback, not in the update path.
 
 The larger stall was never in the renderer. Draining the whole device at the handoff was the dominant cost, and that
-is what the stream-ordered handoff removes; [Zero-copy tensor visualization](zero-copy.md#the-sync-ladder) covers it.
+is what the stream-ordered handoff removes; [Zero-copy tensor visualization](../python/zero-copy-tensors.md#the-sync-ladder) covers it.

@@ -139,7 +139,7 @@ those canvases and never paints applet pixels.
   directory. `CALIPER_DATA_DIR` is read once, when the process first looks the
   folder up.
 - **Live session files follow `CALIPER_DATA_DIR` first.** The session files
-  under `live/` (see [Live streaming](../explanations/live-streaming.md#sessions))
+  under `live/` (see [Live streaming](../python/live-streaming.md#sessions))
   are found in an explicit root when the caller gives one, else in
   `CALIPER_DATA_DIR`, and only then in the core's `data_dir` or the operating
   system's folder (`src/host/live/live_shm.h`).
@@ -319,7 +319,7 @@ returns. The contract follows from that:
 - **Before the call** the producer must have finished writing those bytes.
   Device-side ordering through `tensor->stream` only covers producer work
   committed before the call. The first Python `caliper.show` met this with
-  `torch.mps.synchronize()`; the [live-streaming](../explanations/live-streaming.md)
+  `torch.mps.synchronize()`; the [live-streaming](../python/live-streaming.md)
   layer instead applies a snapshot only after a polled `torch.mps.Event` reports
   it complete.
 - **Without `WAIT_GPU`** the bytes must not be rewritten until the next update
@@ -375,7 +375,7 @@ them. The header documents the per-kind payload contract, the claim rule that
 pause flag. `include/caliper/live.h` is the shared-memory session protocol and
 the client and viewer C API that feed it from another process. Both are
 macOS/Metal only today; the design is in
-[Live streaming](../explanations/live-streaming.md).
+[Live streaming](../python/live-streaming.md).
 
 ## The caliper-embed package
 

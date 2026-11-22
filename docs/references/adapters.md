@@ -58,7 +58,7 @@ weight.
 ### CUDA tensors (Windows)
 
 A CUDA tensor maps to `CALIPER_DEV_CUDA` with `data` = the device pointer; the
-Vulkan backend imports it via external-memory interop (see [Zero-copy](../explanations/zero-copy.md)). The
+Vulkan backend imports it via external-memory interop (see [Zero-copy](../python/zero-copy-tensors.md)). The
 CUDA branch is compiled under
 
 ```cpp

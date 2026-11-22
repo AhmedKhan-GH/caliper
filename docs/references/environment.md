@@ -27,8 +27,8 @@ Inside it:
 | `hub.json` | The hub file, while `caliper serve` runs: the hub's port and session token, for producers on this machine (mode 0600). See [Caliper CLI](cli.md#caliper-serve). |
 | `api.json` | The API file, while the app or `caliper shot` serves [Caliper API](api.md): its address, the token of outside agents, whose commands are reviewed, and the link of its spec page (mode 0600), removed when the process exits. Your own session token is not in it: it is printed on the start line only. Without `CALIPER_DATA_DIR`, `shot` writes it into its temporary folder with its stores, so a shot never replaces the API file of the app you are running; its start line names the file. |
 | `api-agent-<pid>-<n>.json` | The API file of one agent the app runs, the side chat's agent or the widget agent's sidecar, while that agent's session lasts: the same keys as `api.json`, with a token of the agent's own whose commands are reviewed (mode 0600). See [Caliper API](api.md#started-by-the-app). |
-| `live/` | The live session folder. A script that calls `caliper.show` writes `<pid>.json` here, and the viewer lists these files; see [Attach to a running script](../guides/attach-to-a-running-script.md). |
-| `streams/` | The stream files, one `<pid>.json` (mode 0600, in a folder of mode 0700) for each script whose `caliper.serve()` listens: its stream link with the token and what the app's session list shows of it, removed when the server closes. The app's `F4 Attach to process` lists these streams; see [Attach to a stream by its link](../guides/attach-to-a-running-script.md#attach-to-a-stream-by-its-link). |
+| `live/` | The live session folder. A script that calls `caliper.show` writes `<pid>.json` here, and the viewer lists these files; see [Attach to a running script](../python/script-attachment.md). |
+| `streams/` | The stream files, one `<pid>.json` (mode 0600, in a folder of mode 0700) for each script whose `caliper.serve()` listens: its stream link with the token and what the app's session list shows of it, removed when the server closes. The app's `F4 Attach to process` lists these streams; see [Attach to a stream by its link](../python/script-attachment.md#attach-to-a-stream-by-its-link). |
 | `imgui.ini` | The saved window layout. Delete it to return to the default layouts. |
 | `fonts/SternbildDisplay-Regular.otf` | The default location of the display face, used when `CALIPER_DISPLAY_FONT` is not set. |
 | `metrics.duckdb`, `data.duckdb`, `artifacts.duckdb` | The stores behind [`metrics.v1`](service-metrics-v1.md), [`data.v1`](service-data-v1.md) and [`artifacts.v1`](service-artifacts-v1.md). |
@@ -123,7 +123,7 @@ The metrics, data, loader, embed and live tests also set `CALIPER_DUCKDB_*`, `CA
 | `CALIPER_REQUIRE_WEB_VIEWS` | `1` makes a missing set of the WebAssembly views an error where it is otherwise a warning or a skip: in a wheel build and in `python/tests/test_assets.py`. A wheel build treats `CI=true` as `1` unless this is `0`. | `python/check_web_views.cmake`, `python/tests/test_assets.py` |
 | `GITHUB_TOKEN`, `GH_TOKEN` | A token that `scripts/fetch_wasm.py` sends to the GitHub API, and only there, to download CI's build of the WebAssembly views. Without one it can use only a release's build. | `scripts/fetch_wasm.py` |
 
-See [Caliper LIB](python-api.md) for the calls themselves.
+See [Caliper LIB](../python/caliper-lib-api.md) for the calls themselves.
 
 ## Startup log lines
 

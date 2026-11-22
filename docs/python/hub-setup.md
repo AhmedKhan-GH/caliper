@@ -1,4 +1,4 @@
-# Run a hub
+# Hub Setup
 
 The hub is a separate process, `caliper serve`, that holds the live sessions of several training scripts at once. Each script connects out to it as a producer, and viewers connect to it, list the sessions and attach to one. This page covers starting the hub, connecting scripts and viewers to it, what it keeps after a script ends, and its limits. The protocol it speaks is [wire protocol v3](../references/wire-protocol.md), and every option is in [Caliper CLI](../references/cli.md#caliper-serve).
 
@@ -56,7 +56,7 @@ import caliper
 hub = caliper.connect()
 ```
 
-It takes the hub's address and token from its argument, either the stream URL `ws://127.0.0.1:<port>/v3/stream?token=<token>` or the viewer link that the hub prints. Without an argument it reads `CALIPER_HUB_URL`, and without that the hub file; it raises `RuntimeError` when there is no hub file. It returns at once and connects in the background, so the training loop never waits for the hub. When the hub cannot be reached or the connection drops, it tries again after half a second, doubling the wait up to 30 seconds, and proposes the session id the hub gave it, so that its session resumes. It stops trying when the hub closes the connection with BYE `replaced`. A script can also run `caliper.serve()`: every view call then reaches the hub and the script's own viewers. `connect()` needs the native sender, which `python scripts/build_netio.py` builds, and the [Python API](../references/python-api.md#connect) lists what it returns.
+It takes the hub's address and token from its argument, either the stream URL `ws://127.0.0.1:<port>/v3/stream?token=<token>` or the viewer link that the hub prints. Without an argument it reads `CALIPER_HUB_URL`, and without that the hub file; it raises `RuntimeError` when there is no hub file. It returns at once and connects in the background, so the training loop never waits for the hub. When the hub cannot be reached or the connection drops, it tries again after half a second, doubling the wait up to 30 seconds, and proposes the session id the hub gave it, so that its session resumes. It stops trying when the hub closes the connection with BYE `replaced`. A script can also run `caliper.serve()`: every view call then reaches the hub and the script's own viewers. `connect()` needs the native sender, which `python scripts/build_netio.py` builds, and the [Python API](caliper-lib-api.md#connect) lists what it returns.
 
 A script that loses its connection and connects again with the same id, pid and start time **resumes** its session. The hub closes the old connection, if it is still open, with BYE `replaced`, keeps the session's viewers attached and subscribes again to every view they watch.
 
@@ -66,7 +66,7 @@ Any viewer of protocol v3 connects to the hub with the viewer link or the stream
 
 - **A browser tab** opens the viewer link, `http://127.0.0.1:<port>/?token=<token>`, when the hub serves the page (`--assets`).
 - **A notebook widget or a `<caliper-view>` element** takes the stream link, `ws://127.0.0.1:<port>/v3/stream?token=<token>`, as its source.
-- **The Caliper app and caliper-viewer** take either link, as [Attach to a stream by its link](attach-to-a-running-script.md#attach-to-a-stream-by-its-link) describes. With several sessions, add `&session=<session id>` to choose one:
+- **The Caliper app and caliper-viewer** take either link, as [Attach to a stream by its link](script-attachment.md#attach-to-a-stream-by-its-link) describes. With several sessions, add `&session=<session id>` to choose one:
 
 ```sh
 caliper-viewer --headless --url "http://127.0.0.1:7340/?token=$TOKEN&session=clp-41222-9f03ab" --exit-after 5 --stats

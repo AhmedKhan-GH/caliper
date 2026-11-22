@@ -14,7 +14,7 @@ The terms below are used across these pages with one meaning each.
 
 **Caliper CLI.** The subcommands of the `caliper` executable, such as `list`, `check`, `new`, `install`, `dev` and `shot`. See [Caliper CLI](cli.md).
 
-**Caliper LIB.** The `caliper` Python package, which gives a training script live views of its tensors. See [Caliper LIB](python-api.md).
+**Caliper LIB.** The `caliper` Python package, which gives a training script live views of its tensors. See [Caliper LIB](../python/caliper-lib-api.md).
 
 **Caliper API.** The HTTP interface to the running app, so that a program in any language can list and launch applets, stream data to the app and fetch what it shows. Version 0 is built; see [Caliper API](api.md). A full API that drives the app's state from outside is planned.
 
@@ -46,6 +46,6 @@ The terms below are used across these pages with one meaning each.
 
 **Frame watchdog.** The host's timer on each applet's frame call. Three consecutive frames over about 250 ms raise a flag on the applet's page that points long work to background jobs. It flags and does not stop the applet.
 
-**Live session.** A Python process that streams tensors to the Caliper app through shared memory, so a training script keeps running while the app shows its data. See [Live streaming](../explanations/live-streaming.md).
+**Live session.** A Python process that streams tensors to the Caliper app through shared memory, so a training script keeps running while the app shows its data. See [Live streaming](../python/live-streaming.md).
 
-**Viewer.** The Caliper process that attaches to a live session and draws what the script streams. It runs separately from the script. See [Live streaming](../explanations/live-streaming.md).
+**Viewer.** The Caliper process that attaches to a live session and draws what the script streams. It runs separately from the script. See [Live streaming](../python/live-streaming.md).

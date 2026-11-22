@@ -1,4 +1,4 @@
-# Watch a training run in a notebook
+# Notebook Training Runs
 
 This tutorial trains a model in a Jupyter notebook and shows four live views
 of it inside the notebook while it trains: the loss as a series, the attention
@@ -18,7 +18,7 @@ version.
 Prereqs: Apple Silicon, macOS 14 (Sonoma) or later, Python 3.12, PyTorch with MPS, and
 JupyterLab or VS Code with its Jupyter extension. [Watch a PyTorch training run
 live](../introduction/python-quickstart.md) introduces the view calls in a plain script, and
-[Network streaming](../explanations/network-streaming.md) explains the design
+[Network streaming](network-streaming.md) explains the design
 that this page uses.
 
 <!-- SPRINT2-FILL screenshot: the controls panel and the four widgets (loss,
@@ -42,7 +42,7 @@ The second command builds the native sender of `caliper.serve()`,
 `caliper._netio`, in a few seconds and copies it into the installed package.
 Run it once, and again after you reinstall the wheel. Without it, the server
 uses a slower sender written in Python and says so once when it starts; the
-[cost of streaming](../explanations/network-streaming.md#cost-of-streaming)
+[cost of streaming](network-streaming.md#cost-of-streaming)
 compares the two.
 
 The widgets draw with Caliper's own views compiled to WebAssembly. They are
@@ -147,7 +147,7 @@ one that saves the model's weights. `caliper.items` names the 512 evaluation
 sequences an **item space**, `eval`, so that a selection of some of them in one
 view marks the same sequences in every view that shows them, and gives each
 sequence two details, its class and the position of its marker, which a viewer
-shows for the selected sequences. [Control a running script](../guides/control-a-running-script.md)
+shows for the selected sequences. [Control a running script](script-control.md)
 explains each call.
 
 ## The widgets
@@ -246,7 +246,7 @@ tensor:
 
 The producer applies the index first, then the reduction, then the budget,
 which pools a heatmap or samples points that would exceed the viewer's limit.
-The [Caliper LIB](../references/python-api.md#data-views) reference lists every field.
+The [Caliper LIB](caliper-lib-api.md#data-views) reference lists every field.
 
 ## What you see
 
@@ -362,7 +362,7 @@ useful name.
 The view calls behave the same in a notebook as in a script. A call that the
 rate limit skips returns after a clock check, and a call that takes a snapshot
 queues a few operations on the device and returns at once
-([Cost of a call](../references/python-api.md#cost-of-a-call)). Each view takes
+([Cost of a call](caliper-lib-api.md#cost-of-a-call)). Each view takes
 at most 60 snapshots per second by default. A widget draws the newest snapshot
 it has, so most training steps are skipped by design, while the series receives
 every value, sent as deltas.
@@ -393,12 +393,12 @@ browser tab.
 
 ## Next
 
-- [Caliper LIB](../references/python-api.md#serve) documents `serve`, `widget`
-  and the data view arguments, and its [Controls](../references/python-api.md#controls)
+- [Caliper LIB](caliper-lib-api.md#serve) documents `serve`, `widget`
+  and the data view arguments, and its [Controls](caliper-lib-api.md#controls)
   the calls of the controls.
-- [Control a running script](../guides/control-a-running-script.md) adds the
+- [Control a running script](script-control.md) adds the
   controls to a script of your own.
-- [Network streaming](../explanations/network-streaming.md) explains the
+- [Network streaming](network-streaming.md) explains the
   transport, data views and the security position.
 - [Wire protocol](../references/wire-protocol.md) defines every message on the
   stream.

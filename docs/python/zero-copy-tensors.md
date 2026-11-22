@@ -1,9 +1,9 @@
-# Zero-copy tensor visualization
+# Zero-Copy Tensors
 
 This page explains how a tensor goes from a training step to pixels without a CPU round trip, on each platform. It
 covers where the bytes live, when it is safe to read them, how many times they are copied on each path, and what the
-fallback costs. The renderer seam it relies on is described in [Rendering](rendering.md), and the Windows
-interop machinery in [Vulkan and CUDA on Windows](vulkan-cuda.md).
+fallback costs. The renderer seam it relies on is described in [Rendering](../explanations/rendering.md), and the Windows
+interop machinery in [Vulkan and CUDA on Windows](../explanations/vulkan-cuda.md).
 
 ## What the words mean
 
@@ -52,7 +52,7 @@ Windows backend instead lets a CUDA kernel in torch's own context write the Vulk
 primary CUDA context, so a kernel launched by Caliper can read any torch tensor through its device pointer. Only the
 output image has to be visible to both APIs, and Caliper allocates that itself, as exportable memory. The full ladder
 of paths, the synchronization with semaphores and the measured costs are in
-[Vulkan and CUDA on Windows](vulkan-cuda.md).
+[Vulkan and CUDA on Windows](../explanations/vulkan-cuda.md).
 
 The host stays free of the CUDA toolkit. It loads the CUDA driver API from `nvcuda.dll` at run time, and the Vulkan
 loader comes from the GPU driver.

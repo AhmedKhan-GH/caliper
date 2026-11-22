@@ -100,7 +100,7 @@ view's next draw. On the worker side, drain the producer stream/queue once at th
 handoff **before** publishing the slot (this is the triple-buffer / ready-slot
 discipline the exemplars use with [`caliper.jobs.v1`](service-jobs-v1.md)); the frame
 thread does every draw and never touches the learner's tensors. The reasons for the two halves of this rule are in
-[Zero-copy tensor visualization](../explanations/zero-copy.md#geometry-stays-on-the-drain-rung).
+[Zero-copy tensor visualization](../python/zero-copy-tensors.md#geometry-stays-on-the-drain-rung).
 
 ## caliper.geometry.v1_1 — general primitives
 

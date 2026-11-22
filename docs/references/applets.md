@@ -14,7 +14,7 @@ describes, and `CALIPER_BUILD_APPLETS=ON` also builds the `applets/` folders
 inside the core build.
 
 Several applets share one pattern, described in
-[Zero-copy](../explanations/zero-copy.md). A worker thread computes with torch and
+[Zero-copy](../python/zero-copy-tensors.md). A worker thread computes with torch and
 writes into tensors allocated from an
 [`ExportablePool`](adapters.md#exportable_poolhpp), and the renderer draws from
 that same memory through [`caliper.geometry.v1`](service-geometry-v1.md) without a

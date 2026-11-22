@@ -1,4 +1,4 @@
-# Attach to a running script
+# Script Attachment
 
 A script that calls `caliper.show` (or any other view call) opens a **live
 session** on its first call. A viewer can attach to it at any point while the
@@ -6,7 +6,7 @@ script runs, detach, and attach again; the training loop never waits for it.
 This page covers the viewer side: finding a session, attaching from the
 Caliper app (the usual way) or with the standalone `caliper-viewer`, what each
 shows, detaching, and what happens when either process goes away. The design
-is in [Live streaming](../explanations/live-streaming.md).
+is in [Live streaming](live-streaming.md).
 
 Everything here is macOS / Metal, local, same user.
 
@@ -268,7 +268,7 @@ otherwise every control is off and the bar says why:
 - the server lets this viewer control: `caliper.serve()` of a script does
   unless it was told to refuse controls, and a hub does only when it was
   started with `--allow-control` (`caliper serve --allow-control`, or the app's
-  `--api` stream with `--allow-control`; see [Run a hub](run-a-hub.md#controls-and-selections));
+  `--api` stream with `--allow-control`; see [Run a hub](hub-setup.md#controls-and-selections));
 - the script takes controls (it announced them);
 - the session is live: the controls of an ended session stay visible and off.
 

@@ -33,7 +33,7 @@ features:
     status: shipped
     summary: Protocol 3.1 controls let a viewer pause, step and resume a running script, change its registered parameters and run its registered actions, which an interpretability run uses to repeat an experiment.
     depends_on: [STR-03]
-    docs: docs/guides/control-a-running-script.md
+    docs: docs/python/script-control.md
     issue: null
 
   - id: INT-05

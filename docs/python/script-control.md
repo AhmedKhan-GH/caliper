@@ -1,6 +1,6 @@
-# Control a running script
+# Script Control
 
-A training loop that streams its views with `caliper.serve()` can also take controls from its viewers while it trains: a viewer pauses the loop, runs it one step at a time, changes a learning rate, saves a checkpoint, and selects samples in one view to see them highlighted in the others. This guide adds each of these to a loop with Caliper LIB, the `caliper` Python package. The calls are listed in [Caliper LIB](../references/python-api.md#controls), and the messages that carry them are [wire protocol 3.1](../references/wire-protocol.md#controls).
+A training loop that streams its views with `caliper.serve()` can also take controls from its viewers while it trains: a viewer pauses the loop, runs it one step at a time, changes a learning rate, saves a checkpoint, and selects samples in one view to see them highlighted in the others. This guide adds each of these to a loop with Caliper LIB, the `caliper` Python package. The calls are listed in [Caliper LIB](caliper-lib-api.md#controls), and the messages that carry them are [wire protocol 3.1](../references/wire-protocol.md#controls).
 
 Controls travel on the same stream as the views, so they reach the script while a notebook cell runs. A notebook's own widget messages cannot, because the kernel reads them only between cells.
 
@@ -110,4 +110,4 @@ The viewer page that the link of `caliper.serve()` opens shows the same panel ab
 
 Every viewer that holds the session token of `caliper.serve()` may control the script. The token is in the link that `caliper.serve()` prints, and the server listens on 127.0.0.1 only. To let viewers watch without changing anything, start the server with `caliper.serve(control=False)`: the viewers still show the run state, the parameters and the actions, with every control disabled. Controls cannot run code that the script did not register: a viewer can only set a registered parameter to a value that the script checks, and run a registered action by its name.
 
-A script that streams to the hub of Caliper CLI with `caliper.connect()` takes the same controls, and the hub, `caliper serve`, forwards them to it only when it was started with `--allow-control`; [Run a hub](run-a-hub.md#controls-and-selections) explains that option.
+A script that streams to the hub of Caliper CLI with `caliper.connect()` takes the same controls, and the hub, `caliper serve`, forwards them to it only when it was started with `--allow-control`; [Run a hub](hub-setup.md#controls-and-selections) explains that option.

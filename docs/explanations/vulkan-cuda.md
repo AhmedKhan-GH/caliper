@@ -3,7 +3,7 @@
 On Windows with an NVIDIA GPU, Caliper renders with Vulkan and shares GPU memory with CUDA, so a torch tensor reaches
 the screen without passing through host memory. This page explains how the two APIs are paired, which path an update
 takes, how the paths are synchronized, and what each costs. The renderer seam is described in
-[Rendering](rendering.md), and the general idea in [Zero-copy tensor visualization](zero-copy.md).
+[Rendering](rendering.md), and the general idea in [Zero-copy tensor visualization](../python/zero-copy-tensors.md).
 
 The backend is `src/host/renderer/vulkan_renderer.cpp`, a Windows-only translation unit. The host loads the CUDA driver
 API from `nvcuda.dll` at run time (`src/host/cuda_driver.h`) and uses the Vulkan loader that ships with the GPU
@@ -83,7 +83,7 @@ the update runs the buffer-to-image pass with no copy. An optimally tiled image 
 way a unified-memory buffer can back a Metal texture, so zero-copy here means zero copies of the data, not zero GPU
 work. Without interop (OpenGL, or CUDA unpaired) `alloc_shared` falls back to a CPU vector.
 
-An [imported allocation](zero-copy.md#imported-allocations) is a block the applet exported with
+An [imported allocation](../python/zero-copy-tensors.md#imported-allocations) is a block the applet exported with
 `cuMemCreate` and a shareable handle. `import_allocation` imports it into Vulkan with `VkImportMemoryWin32HandleInfoKHR`
 after duplicating the handle, and unwinds fully on failure. `update_texture_from_alloc` then reads it at a byte offset
 with no copy: a descriptor offset for the f32 compute pass, a `bufferOffset` for the u8 blit, reported as
@@ -213,4 +213,4 @@ Release still waits for the queue to go idle.
 **The handoff itself.** Eliding the adapter's drain through stream ordering changed training steps per second by about
 zero on this hardware, within laptop thermal variance of 15 to 20 percent, because the training loop's own per-step
 `loss.item()` already synchronizes. The verified gain is that the frame thread stops stalling, and that ordering is
-correct, as [Zero-copy tensor visualization](zero-copy.md#what-the-stream-ordered-rung-buys) explains.
+correct, as [Zero-copy tensor visualization](../python/zero-copy-tensors.md#what-the-stream-ordered-rung-buys) explains.
