@@ -424,7 +424,7 @@ def detach(model=None) -> None:
     with _LOCK:
         if model is not None and _STATE["model"] is not model:
             return
-        ids = list(_PROGS)
+        ids = list(_PROGS) + list(_DRAWN)
     for pid in ids:
         remove(pid)
     with _LOCK:
