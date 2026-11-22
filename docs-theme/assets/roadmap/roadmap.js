@@ -30,6 +30,7 @@
   };
   var STATUS_LABEL = { shipped: "Shipped on main", built: "Built on a branch", progress: "In progress on a branch",
     planned: "Planned", idea: "Idea", decision: "Decision to settle" };
+  var SCOPE_LABEL = { core: "Core", supporting: "Supporting", peripheral: "Peripheral" };
   var SVG = "http://www.w3.org/2000/svg";
 
   var el = window.RoadmapWindow && RoadmapWindow.el;
@@ -220,9 +221,12 @@
       heading.textContent = sec.title;
       g.appendChild(heading);
       var edgesG = sv("g", { "class": "rm-edges" }), nodesG = sv("g", { "class": "rm-nodes" });
+      var scopeOf = {};
+      layout.nodes.forEach(function (n) { if (byNode[n.id]) scopeOf[n.key] = byNode[n.id].scope; });
       layout.edges.forEach(function (e) {
         if (e.pillar !== sec.prefix) return;
-        var path = sv("path", { "class": "rm-edge" + (e.draft ? " is-draft" : ""), d: roundedPath(e.points),
+        var core = scopeOf[e.from] === "core" && scopeOf[e.to] === "core";
+        var path = sv("path", { "class": "rm-edge" + (e.draft ? " is-draft" : "") + (core ? " is-core" : ""), d: roundedPath(e.points),
           "marker-end": "url(#rm-arrow)", "data-id": e.id, "data-source": e.source, "data-target": e.target,
           "data-from": e.from, "data-to": e.to });
         edgesG.appendChild(path);
@@ -232,12 +236,12 @@
         if (n.pillar !== sec.prefix) return;
         var real = byNode[n.id], a;
         if (n.ref) {
-          a = sv("a", { "class": "rm-ref", href: "#" + n.id, "data-of": n.id, "data-key": n.key });
+          a = sv("a", { "class": "rm-ref sc-" + real.scope, href: "#" + n.id, "data-of": n.id, "data-key": n.key });
           a.appendChild(sv("rect", { "class": "rm-shape", x: n.x, y: n.y, width: n.width, height: n.height, rx: 4, ry: 4 }));
           a.setAttribute("aria-label", n.id + " " + real.title + ", in another pillar");
         } else {
           var status = shown(real);
-          a = sv("a", { "class": "rm-node s-" + status, href: real.url, "data-id": n.id });
+          a = sv("a", { "class": "rm-node s-" + status + " sc-" + real.scope, href: real.url, "data-id": n.id });
           a.appendChild(shapeFor(n, status));
         }
         drawLabel(a, Object.assign({}, n, { title: real.title }));
@@ -291,7 +295,18 @@
     var sb = RoadmapWindow.searchBox("Find a feature by id or title", "Find a feature by id or title, then press Enter");
     var input = sb.input;
     var pillarList = el("div", "roadmap-pillars");
-    rail.append(legend, sb.box, sb.status, pillarList);
+    /* Core Path: fades every feature outside the playground's core, and every line that leaves it. */
+    var coreBtn = el("button", "roadmap-core-toggle", "Core Path");
+    coreBtn.type = "button";
+    coreBtn.setAttribute("aria-pressed", "false");
+    function setCore(on) {
+      mount.classList.toggle("is-core-only", on);
+      coreBtn.setAttribute("aria-pressed", on ? "true" : "false");
+      try { localStorage.setItem("roadmap-core-only", on ? "1" : "0"); } catch (e) { /* storage may be blocked */ }
+    }
+    coreBtn.addEventListener("click", function () { setCore(!mount.classList.contains("is-core-only")); });
+    try { if (localStorage.getItem("roadmap-core-only") === "1") setCore(true); } catch (e) { /* ignore */ }
+    rail.append(legend, coreBtn, sb.box, sb.status, pillarList);
 
     var canvas = el("div", "roadmap-canvas");
     var svg = sv("svg", { "class": "roadmap-svg", role: "img", "aria-label": "Roadmap graph of every feature by pillar" });
@@ -440,7 +455,7 @@
       tip.textContent = "";
       var head = el("div", "roadmap-tip-head");
       head.append(el("span", "roadmap-id", n.id), el("span", null, n.title));
-      var meta = STATUS_LABEL[shown(n)] + (n.sprint != null ? " · Sprint " + n.sprint : "");
+      var meta = STATUS_LABEL[shown(n)] + (n.scope ? " · " + SCOPE_LABEL[n.scope] : "") + (n.sprint != null ? " · Sprint " + n.sprint : "");
       tip.append(head, el("div", "roadmap-tip-meta", meta));
       if (n.summary) tip.append(el("div", "roadmap-tip-summary", n.summary));
       if (n.branches && n.branches.length) tip.append(el("div", "roadmap-tip-branches", "Branches: " + n.branches.join(", ")));

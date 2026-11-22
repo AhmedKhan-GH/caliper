@@ -7,6 +7,7 @@ features:
   - id: INT-01
     title: GPTScope
     status: shipped
+    scope: peripheral
     summary: GPTScope is an applet that trains a small character-level language model live and shows what it has learned in seven windows, each answering one question.
     depends_on: [COR-03]
     docs: docs/applets/in-tree-applets.md#gptscope
@@ -15,6 +16,7 @@ features:
   - id: INT-02
     title: ThoughtSpace
     status: shipped
+    scope: peripheral
     summary: ThoughtSpace draws the model's residual stream as a 3-D constellation, with every token's state at every depth as a point and a trail joining the depths.
     depends_on: [INT-01]
     docs: docs/applets/in-tree-applets.md#gptscope
@@ -23,6 +25,7 @@ features:
   - id: INT-03
     title: Head views
     status: shipped
+    scope: peripheral
     summary: The head views plot each attention head by mean attended distance and entropy, and draw the attention matrix of a selected head as a texture.
     depends_on: [INT-01]
     docs: docs/applets/in-tree-applets.md#gptscope
@@ -31,6 +34,7 @@ features:
   - id: INT-04
     title: Controls for experiments
     status: shipped
+    scope: core
     summary: Protocol 3.1 controls let a viewer pause, step and resume a running script, change its registered parameters and run its registered actions, which an interpretability run uses to repeat an experiment.
     depends_on: [STR-03]
     docs: docs/python/script-control.md
@@ -39,6 +43,7 @@ features:
   - id: INT-05
     title: Inspector
     status: built
+    scope: peripheral
     summary: The inspector is an applet that attaches to a running script and shows its model in docked panes for inference, the list of tensors, a single tensor and the J-space trace.
     depends_on: [INT-08]
     branches: [inspector]
@@ -47,6 +52,7 @@ features:
   - id: INT-06
     title: Inspector tensor view
     status: built
+    scope: peripheral
     summary: The tensor view draws a tensor at its true shape, zooms down to single cells by sampling the visible region, and lets a person read and edit cells, rows and columns.
     depends_on: [INT-05]
     branches: [inspector]
@@ -55,6 +61,7 @@ features:
   - id: INT-07
     title: Inspector 3-D model view
     status: built
+    scope: peripheral
     summary: The 3-D model view draws every tensor of a model as a panel sized to its shape and textured with its heatmap, grouped and stacked by layer.
     depends_on: [INT-05]
     branches: [inspector]
@@ -63,6 +70,7 @@ features:
   - id: INT-08
     title: App-to-script requests
     status: built
+    scope: core
     summary: A script serves requests over a socket next to its session, so the app can ask it to run a task, stream events back, cancel it and fetch tensor values in binary chunks.
     depends_on: [STR-04]
     branches: [inspector]
@@ -71,6 +79,7 @@ features:
   - id: INT-09
     title: Language models run from the app
     status: built
+    scope: peripheral
     summary: An example script loads a small language model with MLX and serves the inspector's requests, with generation, a tensor list, sampled views and in-memory weight edits.
     depends_on: [INT-08]
     branches: [inspector]
@@ -79,6 +88,7 @@ features:
   - id: INT-10
     title: Intervention API
     status: planned
+    scope: peripheral
     summary: Intervention points declared on a PyTorch model in Caliper LIB let the viewer ablate, scale, steer and patch at step boundaries, with each intervention recorded with the run and compared with the original.
     depends_on: [INT-20, INT-32, RUN-05]
     sprint: 6
@@ -88,6 +98,7 @@ features:
   - id: INT-11
     title: Ablate
     status: planned
+    scope: peripheral
     summary: Ablate removes a chosen head, layer output or direction from a model's computation during a run.
     depends_on: [INT-10]
     sprint: 6
@@ -97,6 +108,7 @@ features:
   - id: INT-12
     title: Scale
     status: planned
+    scope: peripheral
     summary: Scale multiplies a chosen activation or direction by a factor during a run.
     depends_on: [INT-10]
     sprint: 6
@@ -105,6 +117,7 @@ features:
   - id: INT-13
     title: Steer
     status: planned
+    scope: peripheral
     summary: Steer adds a chosen direction to the residual stream at selected layers and positions during a run.
     depends_on: [INT-10]
     sprint: 6
@@ -114,6 +127,7 @@ features:
   - id: INT-14
     title: Patch
     status: planned
+    scope: peripheral
     summary: Patch replaces an activation in one run with the matching activation from another run.
     depends_on: [INT-10]
     sprint: 6
@@ -122,6 +136,7 @@ features:
   - id: INT-15
     title: J-space Trace pane
     status: built
+    scope: peripheral
     summary: The Trace pane reads a model through a Jacobian lens as it generates, showing the J-space grid and the attention patterns token by token, with a playback clock and the whole run as a tape.
     depends_on: [INT-05, INT-32]
     branches: [inspector]
@@ -130,6 +145,7 @@ features:
   - id: INT-16
     title: Induction metrics
     status: planned
+    scope: peripheral
     summary: Induction metrics score each attention head for induction behaviour and show the scores in GPTScope.
     depends_on: [INT-03]
     design: design/roadmap.md#undecided
@@ -138,6 +154,7 @@ features:
   - id: INT-17
     title: Activation patching in GPTScope
     status: planned
+    scope: peripheral
     summary: Activation patching in GPTScope lets a person replace activations of one run with those of another and see the effect on the model's output.
     depends_on: [INT-01, INT-14]
     design: design/roadmap.md#undecided
@@ -146,6 +163,7 @@ features:
   - id: INT-18
     title: MLX support
     status: planned
+    scope: peripheral
     summary: Support for MLX lets the interpretability tools read activations and apply interventions on models written in MLX.
     depends_on: [INT-10]
     issue: null
@@ -153,6 +171,7 @@ features:
   - id: INT-19
     title: JAX support
     status: planned
+    scope: peripheral
     summary: Support for JAX lets the interpretability tools read activations and apply interventions on models written in JAX.
     depends_on: [INT-10]
     issue: null
@@ -160,6 +179,7 @@ features:
   - id: INT-20
     title: Interventions and the inspector
     status: decision
+    scope: peripheral
     summary: This decision sets when the inspector branch, which already holds a J-space Trace pane and J-space interventions, merges, and how those interventions become the general intervention API of sprint 6.
     depends_on: []
     issue: null
@@ -167,6 +187,7 @@ features:
   - id: INT-21
     title: Interventions from the viewer
     status: planned
+    scope: peripheral
     summary: A person picks a head in the attention view and ablates it, or turns a selection in an embedding into a steering direction, from the viewer.
     depends_on: [INT-03, INT-10]
     sprint: 6
@@ -175,6 +196,7 @@ features:
   - id: INT-22
     title: nnsight and TransformerLens adapters
     status: planned
+    scope: peripheral
     summary: A model wrapped in nnsight or TransformerLens offers its intervention points to Caliper through an adapter.
     depends_on: [INT-10]
     sprint: 6
@@ -183,6 +205,7 @@ features:
   - id: INT-23
     title: Head ablation demo
     status: planned
+    scope: peripheral
     summary: A demo finds which attention head a model relies on to find a class marker, by ablating heads live and watching the accuracy.
     depends_on: [INT-11, INT-21]
     sprint: 6
@@ -191,6 +214,7 @@ features:
   - id: INT-24
     title: OpenGLlama applet
     status: idea
+    scope: peripheral
     summary: OpenGLlama could return as an applet of its own beside the inspector.
     depends_on: [INT-05]
     issue: null
@@ -198,6 +222,7 @@ features:
   - id: INT-25
     title: Point picking in ThoughtSpace
     status: idea
+    scope: peripheral
     summary: A person could pick a point in ThoughtSpace's constellation and see its token and depth.
     depends_on: [INT-02]
     issue: null
@@ -205,6 +230,7 @@ features:
   - id: INT-26
     title: Learned projection in ThoughtSpace
     status: idea
+    scope: peripheral
     summary: ThoughtSpace could offer a learned projection of the residual stream beside its fixed one.
     depends_on: [INT-02]
     issue: null
@@ -212,6 +238,7 @@ features:
   - id: INT-27
     title: EmbedScope
     status: shipped
+    scope: peripheral
     summary: EmbedScope trains a small MNIST network with a learned 3-D bottleneck and draws the test set's embeddings as a live scatter of ten classes, with SQL panels.
     depends_on: [REN-04, RUN-01]
     docs: docs/applets/in-tree-applets.md#embedscope
@@ -220,6 +247,7 @@ features:
   - id: INT-28
     title: Vocabulary embedding view
     status: built
+    scope: peripheral
     summary: A 3-D view draws every row of a model's embedding table as a point, grouped by token kind, so that a person can orbit the vocabulary and read a token by hovering its point.
     depends_on: [INT-05, INT-09]
     branches: [inspector]
@@ -228,6 +256,7 @@ features:
   - id: INT-29
     title: Token trajectories
     status: built
+    scope: peripheral
     summary: A 3-D view draws each token of a run as a path up the model's layers and marks the layer from which the lens settles on the next token.
     depends_on: [INT-15]
     branches: [inspector]
@@ -236,6 +265,7 @@ features:
   - id: INT-30
     title: GrokScope
     status: built
+    scope: peripheral
     summary: GrokScope is an applet in which a small network learns modular addition, memorising first and generalising thousands of steps later, shown as a tower of rings of its token embedding.
     depends_on: [COR-04]
     branches: [inspector]
@@ -244,6 +274,7 @@ features:
   - id: INT-31
     title: Interpretability example scripts
     status: built
+    scope: peripheral
     summary: Two example scripts reproduce published interpretability measurements live in Caliper, finding induction heads in one small language model and a truth direction in another.
     depends_on: [STR-01]
     branches: [inspector]
@@ -252,6 +283,7 @@ features:
   - id: INT-32
     title: J-space interventions
     status: built
+    scope: peripheral
     summary: The inspector reads a running language model through a Jacobian lens and intervenes in its J-space across a band of layers, by ablating, removing or swapping lens directions or injecting a scaled direction, with intact and intervened runs sampled alike.
     depends_on: [INT-09]
     branches: [inspector]
@@ -260,6 +292,7 @@ features:
   - id: INT-33
     title: Interventions in the Trace pane
     status: planned
+    scope: peripheral
     summary: The Trace pane drives the intervention API, so that a person intervenes from the trace view on any model that the API supports and compares the run before and after.
     depends_on: [INT-10, INT-15]
     sprint: 6

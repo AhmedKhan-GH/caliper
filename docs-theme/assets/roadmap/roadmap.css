@@ -172,3 +172,16 @@
 .md-typeset a.md-button:hover, .md-typeset a.md-button:focus-visible {
   color: var(--parchment, var(--rm-text)); background: var(--plate-hover, transparent); border-color: var(--bronze, var(--rm-accent));
 }
+
+/* Scope: the Core Path toggle in the rail fades what lies outside the playground's core. */
+.roadmap-core-toggle {
+  display: block; width: 100%; margin: .2rem 0 .6rem; padding: .45rem .6rem; font: inherit; font-size: .74rem; text-align: left;
+  color: var(--rm-text); background: none; cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--rm-text-dim) 45%, transparent); border-radius: 4px;
+}
+.roadmap-core-toggle:hover { background: color-mix(in srgb, var(--rm-accent) 14%, transparent); }
+.roadmap-core-toggle[aria-pressed="true"] { border-color: var(--rm-accent); background: color-mix(in srgb, var(--rm-accent) 20%, transparent); }
+.is-core-only .rm-node:not(.sc-core), .is-core-only .rm-ref:not(.sc-core) { opacity: .16; }
+.is-core-only .rm-edge:not(.is-core) { opacity: .07; }
+.md-typeset .roadmap-scope { font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; }
+.md-typeset .roadmap-scope--core { color: var(--rm-accent); }

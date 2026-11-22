@@ -52,7 +52,8 @@ SECTION_TITLES = {"shipped": "Shipped", "built": "Built", "progress": "In progre
                   "planned": "Planned", "idea": "Ideas", "decision": "Decisions"}
 BADGE_LABELS = {"shipped": "Shipped", "built": "Built", "progress": "In progress",
                 "planned": "Planned", "idea": "Idea", "decision": "Decision"}
-FEATURE_KEYS = ["id", "title", "status", "summary", "depends_on", "sprint", "docs",
+SCOPE_LABELS = {"core": "Core", "supporting": "Supporting", "peripheral": "Peripheral"}
+FEATURE_KEYS = ["id", "title", "status", "scope", "summary", "depends_on", "sprint", "docs",
                 "branches", "in_progress", "design", "issue", "draft"]
 COVERAGE = "coverage"
 CANDIDATES = "candidates"
@@ -413,6 +414,8 @@ def feature_page(feature, pillars_by_prefix, features, root, base):
         ("Id", "`%s`" % feature["id"]),
         ("Status", '<span class="roadmap-badge roadmap-badge--%s">%s</span>'
          % (shown, BADGE_LABELS[shown])),
+        ("Scope", '<span class="roadmap-scope roadmap-scope--%s">%s</span>'
+         % (feature["scope"], SCOPE_LABELS.get(feature["scope"], "None"))),
         ("Pillar", "[%s](%s.md)" % (md(pillar["title"]), pillar["slug"])),
         ("Sprint", str(feature["sprint"]) if feature["sprint"] else "None"),
         ("Depends on", _feature_links(feature["depends_on"], features)),
@@ -491,7 +494,7 @@ def graph_json(pillars, features):
     nodes = []
     for f in sorted(features.values(), key=lambda f: (order[f["pillar"]], id_key(f["id"]))):
         nodes.append({"id": f["id"], "title": f["title"], "status": f["status"],
-                      "in_progress": f["in_progress"], "pillar": f["pillar"],
+                      "scope": f["scope"], "in_progress": f["in_progress"], "pillar": f["pillar"],
                       "summary": f["summary"], "sprint": f["sprint"],
                       "branches": f["branches"], "draft": f["draft"],
                       "url": f["id"].lower() + "/"})
@@ -548,7 +551,8 @@ def registry_json(pillars, features, site):
                      "url": "%sroadmap/%s/" % (site, p["slug"]),
                      "features": [f["id"] for f in p["features"]]} for p in pillars],
         "features": [
-            {"id": f["id"], "title": f["title"], "status": f["status"], "pillar": f["pillar"],
+            {"id": f["id"], "title": f["title"], "status": f["status"], "scope": f["scope"],
+             "pillar": f["pillar"],
              "summary": f["summary"], "depends_on": f["depends_on"], "unblocks": f["unblocks"],
              "sprint": f["sprint"], "docs": f["docs"], "branches": f["branches"],
              "in_progress": f["in_progress"], "design": f["design"], "issue": f["issue"],

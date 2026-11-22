@@ -7,6 +7,7 @@ features:
   - id: RUN-01
     title: Metrics stores grouped by run
     status: shipped
+    scope: peripheral
     summary: The metrics service logs scalars, histograms, images and hyperparameters under an experiment, a run, a tag and a step, and stores them so that each run's curves can be read back in order.
     depends_on: []
     docs: docs/applets/services/caliper-metrics-v1.md
@@ -15,6 +16,7 @@ features:
   - id: RUN-02
     title: Artifacts
     status: shipped
+    scope: peripheral
     summary: The artifacts service is a content-addressed store of checkpoints and exports, deduplicated on disk by their sha256 digest and linked to the run that produced them.
     depends_on: []
     docs: docs/applets/services/caliper-artifacts-v1.md
@@ -23,6 +25,7 @@ features:
   - id: RUN-03
     title: Run database
     status: planned
+    scope: peripheral
     summary: A local database keeps the runs that the metrics and artifacts stores record as a history that outlives each session.
     depends_on: [RUN-01, RUN-02]
     sprint: 5
@@ -31,6 +34,7 @@ features:
   - id: RUN-04
     title: History browser
     status: planned
+    scope: peripheral
     summary: A browser in the app lists the stored runs and opens any of them.
     depends_on: [RUN-03]
     sprint: 5
@@ -39,6 +43,7 @@ features:
   - id: RUN-05
     title: Run comparison
     status: planned
+    scope: peripheral
     summary: One page holds two or more runs, each live or recorded, and shows their views side by side.
     depends_on: [RUN-03, STR-13]
     sprint: 5
@@ -47,6 +52,7 @@ features:
   - id: RUN-06
     title: Shared cursor across runs
     status: planned
+    scope: peripheral
     summary: One cursor moves every run on the page together, aligning runs by step or by time and showing the latest earlier item, with its distance, for a run that has none at the cursor.
     depends_on: [RUN-05]
     sprint: 5
@@ -55,6 +61,7 @@ features:
   - id: RUN-07
     title: Linked cameras and selections
     status: planned
+    scope: peripheral
     summary: Runs compared on one page share their cameras and their selections, so that moving or selecting in one run does the same in the others.
     depends_on: [REN-12, RUN-05]
     sprint: 5
@@ -63,6 +70,7 @@ features:
   - id: RUN-08
     title: Difference views
     status: planned
+    scope: peripheral
     summary: A difference view shows one run minus another as a heatmap for tensors of the same shape, with loss curves overlaid on one axis and histograms on shared bins.
     depends_on: [RUN-05]
     sprint: 5
@@ -71,6 +79,7 @@ features:
   - id: RUN-09
     title: Error bands
     status: planned
+    scope: peripheral
     summary: Error bands draw the uncertainty of a series as a shaded range around its line.
     depends_on: [RUN-05]
     sprint: 5
@@ -79,6 +88,7 @@ features:
   - id: RUN-10
     title: Checkpoint browser
     status: idea
+    scope: peripheral
     summary: A checkpoint browser would list stored checkpoints with previews and might resume training from one.
     depends_on: [RUN-02]
     design: design/roadmap.md#undecided
@@ -87,6 +97,7 @@ features:
   - id: RUN-11
     title: Learning-rate comparison demo
     status: planned
+    scope: peripheral
     summary: A demo compares two learning rates and shows which one separates the Fashion-MNIST classes first.
     depends_on: [RUN-08]
     sprint: 5
@@ -95,6 +106,7 @@ features:
   - id: RUN-12
     title: Import of other trackers' logs
     status: idea
+    scope: peripheral
     summary: Logs from other experiment trackers, such as TensorBoard, could be imported into the run database.
     depends_on: [RUN-03]
     issue: null
@@ -102,6 +114,7 @@ features:
   - id: RUN-13
     title: Hyperparameter sweep views
     status: idea
+    scope: peripheral
     summary: Views could show the runs of a hyperparameter sweep together.
     depends_on: [RUN-05]
     issue: null

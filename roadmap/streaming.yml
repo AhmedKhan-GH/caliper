@@ -7,6 +7,7 @@ features:
   - id: STR-01
     title: Caliper LIB
     status: shipped
+    scope: core
     summary: Caliper LIB is the Python package whose view calls, show, points, series and histogram, send snapshots of a script's tensors to a viewer without making the training loop wait.
     depends_on: []
     docs: docs/python/caliper-lib-api.md
@@ -15,6 +16,7 @@ features:
   - id: STR-02
     title: Wire protocol v3
     status: shipped
+    scope: core
     summary: Wire protocol v3 defines the binary frames of a live stream over a WebSocket, including the session handshake, view subscriptions, snapshots, series deltas and data views.
     depends_on: []
     docs: docs/reference/wire-protocol.md
@@ -23,6 +25,7 @@ features:
   - id: STR-03
     title: Protocol 3.1 controls
     status: shipped
+    scope: core
     summary: The controls of protocol 3.1 let a viewer pause, resume and step a training loop, change registered parameters, run registered actions and share a selection between views.
     depends_on: [STR-02]
     docs: docs/reference/run-control-messages.md#controls
@@ -31,6 +34,7 @@ features:
   - id: STR-04
     title: Live streaming
     status: shipped
+    scope: core
     summary: Snapshots of a script's tensors are copied on the device into shared memory, and a viewer process on the same machine samples them at its own pace, so the script never waits for the display.
     depends_on: [STR-01]
     docs: docs/python/live-streaming.md
@@ -39,6 +43,7 @@ features:
   - id: STR-05
     title: Network streaming
     status: shipped
+    scope: core
     summary: caliper.serve sends a script's live views over a WebSocket to a notebook widget or a browser tab, reducing each snapshot on the device and letting the latest snapshot win.
     depends_on: [STR-02, STR-04]
     docs: docs/python/network-streaming.md
@@ -47,6 +52,7 @@ features:
   - id: STR-06
     title: Hub
     status: shipped
+    scope: core
     summary: The hub is a separate process that holds the live sessions of several scripts, lets viewers choose one, keeps an ended session's last data and forwards controls when allowed.
     depends_on: [STR-05]
     docs: docs/python/hub-setup.md
@@ -55,6 +61,7 @@ features:
   - id: STR-07
     title: Notebooks
     status: shipped
+    scope: core
     summary: A notebook widget shows a training run's live views inside Jupyter or VS Code, with a controls panel to pause, step and change parameters while the cell runs.
     depends_on: [STR-03, STR-05]
     docs: docs/python/notebook-training-runs.md
@@ -63,6 +70,7 @@ features:
   - id: STR-08
     title: Data views
     status: shipped
+    scope: core
     summary: A data view tells the producer which part of a large tensor to send, such as a slice, a reduction or a downsample, so the reduction runs on the device and only the result travels.
     depends_on: [STR-05]
     docs: docs/python/data-views.md
@@ -71,6 +79,7 @@ features:
   - id: STR-09
     title: Wire protocol 3.2
     status: built
+    scope: core
     summary: Wire protocol 3.2 adds the scene, text and bar view kinds, timelines and stamps, the scene messages for points, lines, arrows, boxes, meshes, images, cameras, transforms, class tables and clears, and the recording and cursor messages, in the C++, Python and TypeScript codecs.
     depends_on: [STR-03]
     sprint: 4
@@ -80,6 +89,7 @@ features:
   - id: STR-10
     title: caliper.scene
     status: built
+    scope: core
     summary: caliper.scene builds 3-D and 2-D scenes of points, lines, meshes, arrows, boxes, images and cameras, with entity transforms, a class table, clears and a starting camera, checked on the device and sent by both senders with the state a late viewer needs.
     depends_on: [STR-05, STR-09]
     sprint: 4
@@ -89,6 +99,7 @@ features:
   - id: STR-11
     title: Loss landscape demo
     status: built
+    scope: core
     summary: Demo 0 is a notebook that streams the loss surface around a model's current weights as a mesh, with the optimizer's path across it, recomputed on the device while the model trains.
     depends_on: [REN-12, STR-07, STR-10]
     sprint: 4
@@ -98,6 +109,7 @@ features:
   - id: STR-12
     title: Recordings on MCAP
     status: built
+    scope: peripheral
     summary: Recordings are MCAP files written and read by Caliper's own C++ recorder and reader, with a timeline and keyframe index, commit points, recovery, tailing, segments, thinning and caliper.record, so that a session can be replayed.
     depends_on: [SPC-04, STR-23]
     sprint: 4
@@ -108,6 +120,7 @@ features:
   - id: STR-13
     title: Scrubber
     status: built
+    scope: peripheral
     summary: The scrubber moves a cursor over a recording's timelines in the app, over its live buffer and over opened files, with every view showing its state at the cursor.
     depends_on: [STR-12]
     sprint: 4
@@ -118,6 +131,7 @@ features:
   - id: STR-14
     title: Record button
     status: planned
+    scope: peripheral
     summary: A Record button in the app's session toolbar starts and stops writing the attached session to a recording file kept in the workspace.
     depends_on: [STR-12]
     sprint: 4
@@ -126,6 +140,7 @@ features:
   - id: STR-15
     title: Recordings through the hub
     status: planned
+    scope: peripheral
     summary: caliper serve records each producer session it relays and serves recording files and folders as ended sessions, each viewer with its own cursor.
     depends_on: [STR-06, STR-12]
     sprint: 5
@@ -134,6 +149,7 @@ features:
   - id: STR-16
     title: WebTransport
     status: planned
+    scope: core
     summary: WebTransport becomes a second transport for the stream beside the WebSocket.
     depends_on: [STR-05]
     design: design/streaming-and-embedding.md#data-streaming
@@ -142,6 +158,7 @@ features:
   - id: STR-17
     title: Security review
     status: planned
+    scope: supporting
     summary: This step is a dedicated review of the stream's security, which must finish before any session leaves the local machine.
     depends_on: [STR-05]
     design: design/streaming-and-embedding.md#security
@@ -150,6 +167,7 @@ features:
   - id: STR-18
     title: Several viewers per session
     status: planned
+    scope: core
     summary: A live session over shared memory is read by one viewer today, and this work lets several viewers read the same session by giving each reader its own claims.
     depends_on: [STR-04]
     docs: docs/python/live-streaming.md#limits
@@ -158,6 +176,7 @@ features:
   - id: STR-19
     title: f16 and bf16
     status: planned
+    scope: core
     summary: This work adds zero-copy kernels for half-precision and bfloat16 tensors, so that snapshots of such tensors are taken on the device without a conversion on the host.
     depends_on: [REN-08, STR-04]
     issue: null
@@ -165,6 +184,7 @@ features:
   - id: STR-20
     title: Shared memory on Windows
     status: planned
+    scope: supporting
     summary: Named shared memory through CreateFileMapping carries the local live session on Windows, with CUDA tensors copied on the device without blocking training.
     depends_on: [PLT-07]
     design: design/windows-parity.md#3-caliper-lib
@@ -173,6 +193,7 @@ features:
   - id: STR-21
     title: Shared memory on Linux
     status: planned
+    scope: peripheral
     summary: This work carries the local live session over POSIX shared memory on Linux arm64.
     depends_on: [PLT-14]
     issue: null
@@ -180,6 +201,7 @@ features:
   - id: STR-22
     title: ROS 2 import
     status: planned
+    scope: peripheral
     summary: ROS 2 recordings in MCAP open in Caliper, with transforms, point clouds, images and markers decoded into scene entities and named frames translated into the entity tree.
     depends_on: [REN-11, STR-12]
     sprint: 6
@@ -188,6 +210,7 @@ features:
   - id: STR-23
     title: Timelines in Caliper LIB
     status: built
+    scope: peripheral
     summary: Caliper LIB stamps what it sends on step, time and the script's own timelines, on both senders, and the hub forwards stamps only to viewers that announced timelines.
     depends_on: [STR-09]
     sprint: 4
@@ -198,6 +221,7 @@ features:
   - id: STR-24
     title: Scenes through shared memory
     status: planned
+    scope: core
     summary: The shared-memory session gains a scene layout, so that a script attached to the app on the same machine sends its scenes with in-place import from the slots.
     depends_on: [REN-17, STR-10]
     sprint: 4
@@ -206,6 +230,7 @@ features:
   - id: STR-25
     title: Scene data views
     status: planned
+    scope: core
     summary: A scene data view reduces a scene on the producer's device, beyond the default view, so that only the part a viewer needs travels.
     depends_on: [STR-08, STR-09]
     sprint: 4
@@ -214,6 +239,7 @@ features:
   - id: STR-26
     title: Recording reader in the browser
     status: planned
+    scope: peripheral
     summary: A reader written in TypeScript opens a recording file in the browser viewer, through a page address with ?recording=, with no server behind it.
     depends_on: [EMB-01, STR-12]
     sprint: 4
@@ -222,6 +248,7 @@ features:
   - id: STR-27
     title: Scrubber in the browser
     status: planned
+    scope: peripheral
     summary: The browser viewer scrubs a recording opened from a file, with the same cursor and timelines as the scrubber in the app.
     depends_on: [STR-13, STR-26]
     sprint: 4
@@ -230,6 +257,7 @@ features:
   - id: STR-28
     title: Recording export to Parquet
     status: planned
+    scope: peripheral
     summary: caliper export --to parquet writes a recording's series and tables as Parquet files for analysis in other tools.
     depends_on: [STR-12]
     sprint: 4
@@ -238,6 +266,7 @@ features:
   - id: STR-29
     title: Recordings in the workspace
     status: planned
+    scope: peripheral
     summary: Recordings made in the app are written into the workspace, listed in its tables and offered in the catalog as sources of the kind recording.
     depends_on: [STR-14]
     sprint: 4
@@ -246,6 +275,7 @@ features:
   - id: STR-30
     title: Training run demo
     status: planned
+    scope: peripheral
     summary: A demo records a training run with its class table, item space and lasso selection and scrubs it, as the acceptance of timelines and recordings.
     depends_on: [REN-41, REN-46, STR-13]
     sprint: 4
@@ -254,6 +284,7 @@ features:
   - id: STR-31
     title: Applet scenes in recordings and the hub
     status: planned
+    scope: peripheral
     summary: Scenes that applets draw through the scene service are recorded with a session and travel through the hub like a script's scenes.
     depends_on: [REN-35, STR-15]
     sprint: 5
@@ -262,6 +293,7 @@ features:
   - id: STR-32
     title: Events over shared memory
     status: planned
+    scope: core
     summary: A small ring buffer carries events from the app back to a script attached through shared memory, as the network route already does.
     depends_on: [REN-46, STR-24]
     sprint: 6
@@ -270,6 +302,7 @@ features:
   - id: STR-33
     title: Robot run demo
     status: planned
+    scope: peripheral
     summary: A demo opens a recorded robot run and shows where along it a model's prediction drifts.
     depends_on: [STR-22]
     sprint: 6
@@ -278,6 +311,7 @@ features:
   - id: STR-34
     title: Data views of tables
     status: planned
+    scope: core
     summary: A data view for a table tells the producer which rows to send, as data views of tensors already do for slices and reductions.
     depends_on: [STR-08]
     issue: null
@@ -285,6 +319,7 @@ features:
   - id: STR-35
     title: Zoom as a data view
     status: planned
+    scope: core
     summary: A zoom or a selection that needs more detail than a snapshot holds becomes a request for another data view, which the producer computes.
     depends_on: [STR-08]
     issue: null
@@ -292,6 +327,7 @@ features:
   - id: STR-36
     title: Arrays from JAX and CuPy
     status: planned
+    scope: core
     summary: Arrays from frameworks other than torch, such as JAX and CuPy, reach the views through DLPack.
     depends_on: [STR-01]
     issue: null
@@ -299,6 +335,7 @@ features:
   - id: STR-37
     title: Smaller Caliper LIB wheel
     status: idea
+    scope: supporting
     summary: A build of Caliper LIB without the metrics and artifacts stores could make the wheel smaller.
     depends_on: [STR-01]
     issue: null
@@ -306,6 +343,7 @@ features:
   - id: STR-38
     title: Foxglove bridge source
     status: idea
+    scope: peripheral
     summary: Caliper could read a live source that speaks the Foxglove bridge protocol, so that robotics tools that serve it stream into the views.
     depends_on: [STR-05]
     issue: null
@@ -313,6 +351,7 @@ features:
   - id: STR-39
     title: Recordings in generic MCAP viewers
     status: idea
+    scope: peripheral
     summary: A decoder for Caliper's additions to MCAP could let generic MCAP viewers open Caliper recordings.
     depends_on: [STR-12]
     issue: null
@@ -320,6 +359,7 @@ features:
   - id: STR-40
     title: Distributed training in one view
     status: idea
+    scope: peripheral
     summary: The streams of a training run spread over several GPUs and machines could combine into one view.
     depends_on: [STR-06]
     issue: null
@@ -327,6 +367,7 @@ features:
   - id: STR-41
     title: Feed service
     status: shipped
+    scope: peripheral
     summary: caliper.feed.v1 gives applets telemetry channels of the machine from ring buffers that the host owns, read without blocking and with every lost sample counted.
     depends_on: [COR-03]
     docs: docs/applets/services/caliper-feed-v1.md
@@ -335,6 +376,7 @@ features:
   - id: STR-42
     title: PulseScope
     status: shipped
+    scope: peripheral
     summary: PulseScope draws one strip chart per telemetry channel of the machine from the feed service, with the current value, a stale marker and a count of lost samples.
     depends_on: [STR-41]
     docs: docs/applets/in-tree-applets.md#pulsescope
@@ -343,6 +385,7 @@ features:
   - id: STR-43
     title: Attaching from the app
     status: shipped
+    scope: core
     summary: The app lists the live sessions and streams on the machine, attaches to one from the landing screen or with --url, and shows it on the live page.
     depends_on: [STR-05]
     docs: docs/python/script-attachment.md#app-attachment
@@ -351,6 +394,7 @@ features:
   - id: STR-44
     title: caliper-viewer
     status: shipped
+    scope: core
     summary: caliper-viewer is the standalone viewer in Caliper LIB's wheel that lists live sessions and attaches to one without the Caliper app.
     depends_on: [STR-04]
     docs: docs/python/script-attachment.md#viewer-attachment
@@ -359,6 +403,7 @@ features:
   - id: STR-45
     title: caliper.watch
     status: shipped
+    scope: core
     summary: caliper.watch hooks a torch module so that the outputs and, if asked, the gradients of chosen modules show as live views at a chosen interval.
     depends_on: [STR-01]
     docs: docs/python/view-calls.md#watch
@@ -367,6 +412,7 @@ features:
   - id: STR-46
     title: Own window and offscreen canvas
     status: shipped
+    scope: core
     summary: caliper.window and caliper.offscreen open a window in the script's own process or a synchronous offscreen canvas as a route for the view calls.
     depends_on: [STR-01]
     docs: docs/python/routes-and-inspection.md#routes-and-lifetime
@@ -375,6 +421,7 @@ features:
   - id: STR-47
     title: Clock exchange
     status: idea
+    scope: supporting
     summary: The wire protocol could gain a clock exchange, so that a viewer can show a stream's absolute latency.
     depends_on: [STR-02]
     issue: null

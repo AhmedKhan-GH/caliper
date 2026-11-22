@@ -40,7 +40,7 @@
     },
     "feature": {
       "type": "object",
-      "required": ["id", "title", "status", "summary", "depends_on"],
+      "required": ["id", "title", "status", "scope", "summary", "depends_on"],
       "additionalProperties": false,
       "properties": {
         "id": { "$ref": "#/$defs/id" },
@@ -54,6 +54,10 @@
         "status": {
           "description": "shipped: on main. built: work on a branch that is not merged, finished unless in_progress is true. planned: in a plan. idea: undecided. decision: an open question that must be settled before the features that depend on it.",
           "enum": ["shipped", "built", "planned", "idea", "decision"]
+        },
+        "scope": {
+          "description": "How central the feature is to the agent-built ML playground. core: the playground itself or a direct step on its path. supporting: infrastructure core features depend on. peripheral: not needed for the playground now.",
+          "enum": ["core", "supporting", "peripheral"]
         },
         "summary": {
           "description": "One sentence on what the feature is.",

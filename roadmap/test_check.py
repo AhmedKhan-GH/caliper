@@ -25,6 +25,7 @@ features:
   - id: COR-01
     title: Host
     status: shipped
+    scope: core
     summary: The native application.
     depends_on: []
     docs: docs/guide.md#first-part
@@ -32,6 +33,7 @@ features:
   - id: COR-02
     title: ABI
     status: shipped
+    scope: core
     summary: The frozen header.
     depends_on:
       - COR-01
@@ -40,6 +42,7 @@ features:
   - id: COR-03
     title: Packaging
     status: built
+    scope: core
     summary: Packages applets.
     depends_on:
       - COR-02
@@ -59,6 +62,7 @@ features:
   - id: REN-01
     title: Scene core
     status: planned
+    scope: core
     summary: Holds the scene.
     depends_on:
       - COR-03
@@ -263,6 +267,7 @@ class CheckTest(unittest.TestCase):
   - id: REN-02
     title: Open question
     status: decision
+    scope: core
     summary: Which way to go.
     depends_on: []
     issue: null
@@ -275,6 +280,7 @@ class CheckTest(unittest.TestCase):
   - id: REN-02
     title: Open question
     status: decision
+    scope: core
     summary: Which way to go.
     depends_on: []
     issue: null
@@ -313,12 +319,14 @@ class CheckTest(unittest.TestCase):
   - id: REN-02
     title: Open question
     status: decision
+    scope: core
     summary: Which way to go.
     depends_on: []
     issue: null
   - id: REN-03
     title: Step after the question
     status: planned
+    scope: core
     summary: Waits for the question.
     depends_on:
       - REN-02
@@ -928,12 +936,14 @@ entries:
   - id: REN-100
     title: Hundredth
     status: planned
+    scope: core
     summary: Comes last.
     depends_on: []
     issue: null
   - id: REN-99
     title: Ninety-ninth
     status: planned
+    scope: core
     summary: Comes before the hundredth.
     depends_on: []
     issue: null
@@ -968,11 +978,11 @@ class EscapingTest(unittest.TestCase):
         page = self.render("roadmap/cor-02.md")
         self.assertIn("<h1>%s</h1>" % self.SHOWN, page)
         self.assertIn("Reads a | b and &lt;folder&gt; as text, with *x* and [y].", page)
-        self.assertEqual(page.count("<tr>"), 11)  # the header and ten rows
+        self.assertEqual(page.count("<tr>"), 12)  # the header and eleven rows
 
     def test_a_dependent_page_keeps_its_table_rows(self):
         page = self.render("roadmap/cor-03.md")  # COR-03 depends on COR-02
-        self.assertEqual(page.count("<tr>"), 11)
+        self.assertEqual(page.count("<tr>"), 12)
         self.assertIn(self.SHOWN + "</a>", page)
 
     def test_pillar_page(self):
