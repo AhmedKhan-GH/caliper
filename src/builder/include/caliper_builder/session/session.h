@@ -104,8 +104,10 @@
 #include <caliper_builder/commands/registry.h>
 #include <caliper_builder/error.h>
 #include <caliper_builder/loaders/store.h>
+#include <caliper_builder/session/events.h>
 #include <caliper_builder/session/loader_catalog.h>
 #include <caliper_builder/session/resolve.h>
+#include <caliper_builder/session/run_control.h>
 #include <caliper_builder/spec/spec.h>
 #include <caliper_builder/spec/validate.h>
 
@@ -258,6 +260,19 @@ public:
     // Binds app.info, app.applets, app.launch, panel.render and capture.frame
     // to the host, or leaves them unbound (command.not_bound) for null.
     void set_host(std::shared_ptr<SessionHost> host);
+
+    // The running script's controls, which run.state, run.set_param,
+    // run.action and run.pause act through (run_control.h). The app gives its
+    // own and takes it back with null before it destroys it; without one the
+    // four commands answer command.not_available. Any thread.
+    void set_run_control(RunControl* control);
+    RunControl* run_control() const;
+
+    // The ring of events that events.wait reads (events.h). The session feeds
+    // it the spec and approval events from its journal; the app pushes the
+    // picks, selections, control changes and run changes. It lives as long as
+    // the session.
+    EventRing& events();
 
     // Turns the review of spec edits on or off for one origin, from the
     // app's settings; it holds from the next invocation the policy sees.

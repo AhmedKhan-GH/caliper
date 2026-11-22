@@ -2780,6 +2780,13 @@
                 "pattern": "^[a-z][a-z0-9_-]{0,63}$",
                 "type": "string"
               },
+              "scene": {
+                "description": "scene (spec version 1): the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes.",
+                "maxLength": 256,
+                "minLength": 6,
+                "pattern": "^live:.+$",
+                "type": "string"
+              },
               "size": {
                 "description": "points: a value per point that sets its size.",
                 "maxLength": 320,
@@ -2853,6 +2860,10 @@
             "additionalProperties": false,
             "description": "The primitive's options.",
             "properties": {
+              "axes": {
+                "description": "scene: whether the axes and the ground grid are drawn; true by default.",
+                "type": "boolean"
+              },
               "bins": {
                 "description": "histogram: the number of bins, from 1 to 65536; 64 by default.",
                 "maximum": 65536,
@@ -2880,6 +2891,32 @@
                 "minItems": 1,
                 "type": "array"
               },
+              "exclude": {
+                "description": "scene: entity path patterns not to draw, applied after include.",
+                "items": {
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "type": "array"
+              },
+              "include": {
+                "description": "scene: entity path patterns to draw, where * matches one path segment and ** any number; every entity when absent.",
+                "items": {
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "type": "array"
+              },
+              "labels": {
+                "description": "scene: whether the entities' labels are drawn; true by default.",
+                "type": "boolean"
+              },
               "range": {
                 "description": "heatmap and image: the values at the ends of the colormap; histogram: the binned range; [min, max] with min below max.",
                 "items": {
@@ -2889,10 +2926,63 @@
                 "minItems": 2,
                 "type": "array"
               },
+              "scale_bar": {
+                "description": "scene: whether a scale bar in the scene's units is drawn; false by default.",
+                "type": "boolean"
+              },
               "text": {
                 "description": "text: static text to show.",
                 "maxLength": 16384,
                 "type": "string"
+              },
+              "up": {
+                "description": "scene: the axis kept upright; the scene's own when absent.",
+                "enum": [
+                  "+x",
+                  "-x",
+                  "+y",
+                  "-y",
+                  "+z",
+                  "-z"
+                ],
+                "type": "string"
+              },
+              "view_camera": {
+                "additionalProperties": false,
+                "description": "scene: the camera the panel opens on, an orbit object or the entity path of a camera in the scene; the scene's own when absent.",
+                "maxLength": 255,
+                "minLength": 1,
+                "properties": {
+                  "azimuth": {
+                    "description": "The orbit's azimuth in degrees, read against up.",
+                    "type": "number"
+                  },
+                  "distance": {
+                    "description": "The distance from the target, above 0.",
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "elevation": {
+                    "description": "The orbit's elevation in degrees, from -89 to 89.",
+                    "maximum": 89,
+                    "minimum": -89,
+                    "type": "number"
+                  },
+                  "target": {
+                    "description": "The point the orbit looks at.",
+                    "items": {
+                      "type": "number"
+                    },
+                    "maxItems": 3,
+                    "minItems": 3,
+                    "type": "array"
+                  }
+                },
+                "required": [],
+                "type": [
+                  "object",
+                  "string"
+                ]
               },
               "x_label": {
                 "description": "series, heatmap, points and histogram: the label of the x axis.",
@@ -2975,7 +3065,7 @@
             "type": "object"
           },
           "primitive": {
-            "description": "What the panel draws. Required slots: series y; heatmap values; points x and y, or positions; histogram values; table rows; image values; text none.",
+            "description": "What the panel draws. Required slots: series y; heatmap values; points x and y, or positions; histogram values; table rows; image values; text none; scene scene (spec version 1).",
             "enum": [
               "series",
               "heatmap",
@@ -2983,7 +3073,8 @@
               "histogram",
               "table",
               "image",
-              "text"
+              "text",
+              "scene"
             ],
             "type": "string"
           },
@@ -3128,6 +3219,16 @@
                       "null"
                     ]
                   },
+                  "scene": {
+                    "description": "scene (spec version 1): the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes.",
+                    "maxLength": 256,
+                    "minLength": 6,
+                    "pattern": "^live:.+$",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
                   "size": {
                     "description": "points: a value per point that sets its size.",
                     "maxLength": 320,
@@ -3205,6 +3306,13 @@
                 "additionalProperties": false,
                 "description": "Options to set, or null to clear one.",
                 "properties": {
+                  "axes": {
+                    "description": "scene: whether the axes and the ground grid are drawn; true by default.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
                   "bins": {
                     "description": "histogram: the number of bins, from 1 to 65536; 64 by default.",
                     "maximum": 65536,
@@ -3242,6 +3350,41 @@
                       "null"
                     ]
                   },
+                  "exclude": {
+                    "description": "scene: entity path patterns not to draw, applied after include.",
+                    "items": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "minItems": 1,
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "include": {
+                    "description": "scene: entity path patterns to draw, where * matches one path segment and ** any number; every entity when absent.",
+                    "items": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "minItems": 1,
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "labels": {
+                    "description": "scene: whether the entities' labels are drawn; true by default.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
                   "range": {
                     "description": "heatmap and image: the values at the ends of the colormap; histogram: the binned range; [min, max] with min below max.",
                     "items": {
@@ -3254,10 +3397,83 @@
                       "null"
                     ]
                   },
+                  "scale_bar": {
+                    "description": "scene: whether a scale bar in the scene's units is drawn; false by default.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
                   "text": {
                     "description": "text: static text to show.",
                     "maxLength": 16384,
                     "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "up": {
+                    "description": "scene: the axis kept upright; the scene's own when absent.",
+                    "enum": [
+                      "+x",
+                      "-x",
+                      "+y",
+                      "-y",
+                      "+z",
+                      "-z",
+                      null
+                    ],
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "view_camera": {
+                    "additionalProperties": false,
+                    "description": "scene: the camera the panel opens on, an orbit object or the entity path of a camera in the scene; the scene's own when absent.",
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "properties": {
+                      "azimuth": {
+                        "description": "The orbit's azimuth in degrees, read against up.",
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      },
+                      "distance": {
+                        "description": "The distance from the target, above 0.",
+                        "minimum": 0,
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      },
+                      "elevation": {
+                        "description": "The orbit's elevation in degrees, from -89 to 89.",
+                        "maximum": 89,
+                        "minimum": -89,
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      },
+                      "target": {
+                        "description": "The point the orbit looks at.",
+                        "items": {
+                          "type": "number"
+                        },
+                        "maxItems": 3,
+                        "minItems": 3,
+                        "type": [
+                          "array",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [],
+                    "type": [
+                      "object",
                       "string",
                       "null"
                     ]
@@ -3337,7 +3553,8 @@
                   "histogram",
                   "table",
                   "image",
-                  "text"
+                  "text",
+                  "scene"
                 ],
                 "type": "string"
               },
@@ -3418,6 +3635,13 @@
                     "pattern": "^[a-z][a-z0-9_-]{0,63}$",
                     "type": "string"
                   },
+                  "scene": {
+                    "description": "scene (spec version 1): the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes.",
+                    "maxLength": 256,
+                    "minLength": 6,
+                    "pattern": "^live:.+$",
+                    "type": "string"
+                  },
                   "size": {
                     "description": "points: a value per point that sets its size.",
                     "maxLength": 320,
@@ -3486,6 +3710,10 @@
                 "additionalProperties": false,
                 "description": "The panel's options.",
                 "properties": {
+                  "axes": {
+                    "description": "scene: whether the axes and the ground grid are drawn; true by default.",
+                    "type": "boolean"
+                  },
                   "bins": {
                     "description": "histogram: the number of bins, from 1 to 65536; 64 by default.",
                     "maximum": 65536,
@@ -3513,6 +3741,32 @@
                     "minItems": 1,
                     "type": "array"
                   },
+                  "exclude": {
+                    "description": "scene: entity path patterns not to draw, applied after include.",
+                    "items": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "include": {
+                    "description": "scene: entity path patterns to draw, where * matches one path segment and ** any number; every entity when absent.",
+                    "items": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "labels": {
+                    "description": "scene: whether the entities' labels are drawn; true by default.",
+                    "type": "boolean"
+                  },
                   "range": {
                     "description": "heatmap and image: the values at the ends of the colormap; histogram: the binned range; [min, max] with min below max.",
                     "items": {
@@ -3522,10 +3776,63 @@
                     "minItems": 2,
                     "type": "array"
                   },
+                  "scale_bar": {
+                    "description": "scene: whether a scale bar in the scene's units is drawn; false by default.",
+                    "type": "boolean"
+                  },
                   "text": {
                     "description": "text: static text to show.",
                     "maxLength": 16384,
                     "type": "string"
+                  },
+                  "up": {
+                    "description": "scene: the axis kept upright; the scene's own when absent.",
+                    "enum": [
+                      "+x",
+                      "-x",
+                      "+y",
+                      "-y",
+                      "+z",
+                      "-z"
+                    ],
+                    "type": "string"
+                  },
+                  "view_camera": {
+                    "additionalProperties": false,
+                    "description": "scene: the camera the panel opens on, an orbit object or the entity path of a camera in the scene; the scene's own when absent.",
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "properties": {
+                      "azimuth": {
+                        "description": "The orbit's azimuth in degrees, read against up.",
+                        "type": "number"
+                      },
+                      "distance": {
+                        "description": "The distance from the target, above 0.",
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      "elevation": {
+                        "description": "The orbit's elevation in degrees, from -89 to 89.",
+                        "maximum": 89,
+                        "minimum": -89,
+                        "type": "number"
+                      },
+                      "target": {
+                        "description": "The point the orbit looks at.",
+                        "items": {
+                          "type": "number"
+                        },
+                        "maxItems": 3,
+                        "minItems": 3,
+                        "type": "array"
+                      }
+                    },
+                    "required": [],
+                    "type": [
+                      "object",
+                      "string"
+                    ]
                   },
                   "x_label": {
                     "description": "series, heatmap, points and histogram: the label of the x axis.",
@@ -3581,7 +3888,8 @@
                   "histogram",
                   "table",
                   "image",
-                  "text"
+                  "text",
+                  "scene"
                 ],
                 "type": "string"
               },
@@ -3949,7 +4257,7 @@
             "type": "boolean"
           },
           "panel": {
-            "description": "The id of the panel to place.",
+            "description": "The id of the panel, or of the control (spec version 1), to place.",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -3963,7 +4271,7 @@
             "type": "number"
           },
           "target": {
-            "description": "The id of the panel to place it next to.",
+            "description": "The id of the panel or control to place it next to.",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -4021,7 +4329,7 @@
                   "additionalProperties": false,
                   "properties": {
                     "children": {
-                      "description": "Panel ids and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once.",
+                      "description": "Panel ids, control ids (spec version 1) and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once.",
                       "items": {
                         "maxLength": 64,
                         "minLength": 1,
@@ -4033,7 +4341,7 @@
                       "type": "array"
                     },
                     "id": {
-                      "description": "The node's id; it must not be a panel's id.",
+                      "description": "The node's id; it must not be a panel's or a control's id.",
                       "maxLength": 64,
                       "minLength": 1,
                       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -4078,7 +4386,7 @@
                 "type": "array"
               },
               "root": {
-                "description": "The id of the top node, or of the one panel when the layout is a single panel.",
+                "description": "The id of the top node, or of the one panel or control when the layout is a single leaf.",
                 "maxLength": 64,
                 "minLength": 1,
                 "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -4149,7 +4457,7 @@
                   "additionalProperties": false,
                   "properties": {
                     "children": {
-                      "description": "Panel ids and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once.",
+                      "description": "Panel ids, control ids (spec version 1) and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once.",
                       "items": {
                         "maxLength": 64,
                         "minLength": 1,
@@ -4161,7 +4469,7 @@
                       "type": "array"
                     },
                     "id": {
-                      "description": "The node's id; it must not be a panel's id.",
+                      "description": "The node's id; it must not be a panel's or a control's id.",
                       "maxLength": 64,
                       "minLength": 1,
                       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -4206,7 +4514,7 @@
                 "type": "array"
               },
               "root": {
-                "description": "The id of the top node, or of the one panel when the layout is a single panel.",
+                "description": "The id of the top node, or of the one panel or control when the layout is a single leaf.",
                 "maxLength": 64,
                 "minLength": 1,
                 "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -4278,7 +4586,7 @@
                   "additionalProperties": false,
                   "properties": {
                     "children": {
-                      "description": "Panel ids and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once.",
+                      "description": "Panel ids, control ids (spec version 1) and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once.",
                       "items": {
                         "maxLength": 64,
                         "minLength": 1,
@@ -4290,7 +4598,7 @@
                       "type": "array"
                     },
                     "id": {
-                      "description": "The node's id; it must not be a panel's id.",
+                      "description": "The node's id; it must not be a panel's or a control's id.",
                       "maxLength": 64,
                       "minLength": 1,
                       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -4335,7 +4643,7 @@
                 "type": "array"
               },
               "root": {
-                "description": "The id of the top node, or of the one panel when the layout is a single panel.",
+                "description": "The id of the top node, or of the one panel or control when the layout is a single leaf.",
                 "maxLength": 64,
                 "minLength": 1,
                 "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -4966,6 +5274,1223 @@
         "type": "object"
       },
       "summary": "Returns the frame the app draws, the whole window, as a PNG image, so that you can see the app as the person does. It changes nothing."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "bind": {
+            "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, or value for a value the spec holds. A slider binds param: or value; a button binds action: or run:pause. run.state lists the names.",
+            "maxLength": 320,
+            "minLength": 5,
+            "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value)$",
+            "type": "string"
+          },
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The new control's id; panels and controls share one set of ids.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "kind": {
+            "description": "slider sets a number in a range; button acts once when pressed. range, toggle, picker and text are reserved and refused with spec.unsupported_control until they are built.",
+            "enum": [
+              "slider",
+              "button",
+              "range",
+              "toggle",
+              "picker",
+              "text"
+            ],
+            "type": "string"
+          },
+          "options": {
+            "additionalProperties": false,
+            "description": "The control's options.",
+            "properties": {
+              "log": {
+                "description": "slider: a log scale, which needs min above 0; with param:, the parameter's own scale when absent.",
+                "type": "boolean"
+              },
+              "max": {
+                "description": "slider: the high end of the range, above min; with param:, the parameter's own maximum when absent.",
+                "type": "number"
+              },
+              "min": {
+                "description": "slider: the low end of the range; with param:, the parameter's own minimum when absent.",
+                "type": "number"
+              },
+              "step": {
+                "description": "slider: the step between values, above 0; continuous when absent.",
+                "minimum": 0,
+                "type": "number"
+              },
+              "value": {
+                "description": "slider bound to value: the value it starts with; min when absent.",
+                "type": "number"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "place": {
+            "additionalProperties": false,
+            "description": "Where to put the control, next to a panel or control of the layout.",
+            "properties": {
+              "ratio": {
+                "default": 0.5,
+                "description": "The share of the space the new control gets; 0.5 when absent.",
+                "maximum": 0.95,
+                "minimum": 0.05,
+                "type": "number"
+              },
+              "target": {
+                "description": "The id of a panel or control already in the layout.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                "type": "string"
+              },
+              "where": {
+                "description": "beside puts it to the right of the target; tabbed shows both in tabs.",
+                "enum": [
+                  "beside",
+                  "above",
+                  "below",
+                  "tabbed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "target",
+              "where"
+            ],
+            "type": "object"
+          },
+          "title": {
+            "description": "The control's label; the id when absent.",
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "bind"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "edit",
+      "examples": [
+        {
+          "bind": "param:lr",
+          "id": "lr",
+          "kind": "slider",
+          "options": {
+            "log": true
+          },
+          "place": {
+            "ratio": 0.15,
+            "target": "world",
+            "where": "below"
+          },
+          "title": "Learning rate"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "control.create",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The new control's id.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "warnings",
+          "diff",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "summary": "Adds a control to the open spec: a slider or a button that the person and you can use. bind names its one target: param:<name> for a parameter of the running script, action:<name> for an action of it, run:pause for pausing and resuming the run, or value for a value the spec holds. run.state lists the parameters and actions. A control is a leaf of the layout, like a panel: place puts it next to a panel or control, and without place it goes under the whole layout. Undo removes it. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The control's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "patch": {
+            "additionalProperties": false,
+            "description": "The keys to change; null removes one.",
+            "properties": {
+              "bind": {
+                "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, or value for a value the spec holds. A slider binds param: or value; a button binds action: or run:pause. run.state lists the names.",
+                "maxLength": 320,
+                "minLength": 5,
+                "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value)$",
+                "type": "string"
+              },
+              "kind": {
+                "description": "What the control is.",
+                "enum": [
+                  "slider",
+                  "button",
+                  "range",
+                  "toggle",
+                  "picker",
+                  "text"
+                ],
+                "type": "string"
+              },
+              "options": {
+                "additionalProperties": false,
+                "description": "Options to set, or null to clear one.",
+                "properties": {
+                  "log": {
+                    "description": "slider: a log scale, which needs min above 0; with param:, the parameter's own scale when absent.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "max": {
+                    "description": "slider: the high end of the range, above min; with param:, the parameter's own maximum when absent.",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "min": {
+                    "description": "slider: the low end of the range; with param:, the parameter's own minimum when absent.",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "step": {
+                    "description": "slider: the step between values, above 0; continuous when absent.",
+                    "minimum": 0,
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "value": {
+                    "description": "slider bound to value: the value it starts with; min when absent.",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "title": {
+                "description": "The control's label.",
+                "maxLength": 256,
+                "minLength": 1,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [],
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "patch"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "edit",
+      "examples": [
+        {
+          "id": "lr",
+          "patch": {
+            "options": {
+              "max": 0.1,
+              "min": 0.0001
+            },
+            "title": "Learning rate"
+          }
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "control.patch",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
+            "type": "boolean"
+          },
+          "control": {
+            "additionalProperties": false,
+            "description": "The control as it is now, or would be after a dry run.",
+            "properties": {
+              "bind": {
+                "description": "The control's target, such as param:lr.",
+                "type": "string"
+              },
+              "id": {
+                "description": "The control's id.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                "type": "string"
+              },
+              "kind": {
+                "description": "What the control is.",
+                "enum": [
+                  "slider",
+                  "button",
+                  "range",
+                  "toggle",
+                  "picker",
+                  "text"
+                ],
+                "type": "string"
+              },
+              "options": {
+                "additionalProperties": false,
+                "description": "The control's options.",
+                "properties": {
+                  "log": {
+                    "description": "slider: a log scale, which needs min above 0; with param:, the parameter's own scale when absent.",
+                    "type": "boolean"
+                  },
+                  "max": {
+                    "description": "slider: the high end of the range, above min; with param:, the parameter's own maximum when absent.",
+                    "type": "number"
+                  },
+                  "min": {
+                    "description": "slider: the low end of the range; with param:, the parameter's own minimum when absent.",
+                    "type": "number"
+                  },
+                  "step": {
+                    "description": "slider: the step between values, above 0; continuous when absent.",
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "value": {
+                    "description": "slider bound to value: the value it starts with; min when absent.",
+                    "type": "number"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "title": {
+                "description": "The control's title, or null when it has none.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "title",
+              "bind",
+              "options"
+            ],
+            "type": "object"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "control",
+          "warnings",
+          "diff",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "summary": "Changes a control of the open spec with a JSON merge patch (RFC 7386) of its kind, title, bind and options: the keys given replace the control's own, a key set to null is removed, and options merge key by key. The id cannot change. The id comes from spec.get. Undo restores the control. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The control's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "edit",
+      "examples": [
+        {
+          "id": "lr"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "control.remove",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The removed control's id.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "warnings",
+          "diff",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "summary": "Removes a control from the open spec and from its layout. The id comes from spec.get. Undo restores it in its place. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "read",
+      "examples": [
+        {}
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "run.state",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "description": "The actions the script registered, in its order.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "help": {
+                  "description": "The script's one-line help for the action.",
+                  "type": "string"
+                },
+                "name": {
+                  "description": "The action's name, as the script registered it with caliper.action.",
+                  "type": "string"
+                },
+                "queued": {
+                  "description": "Whether a run of the action waits for the script's next step.",
+                  "type": "boolean"
+                },
+                "running": {
+                  "description": "Whether the action runs now.",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "name",
+                "running",
+                "queued"
+              ],
+              "type": "object"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "attached": {
+            "description": "Whether a script is attached to the app.",
+            "type": "boolean"
+          },
+          "control": {
+            "description": "Whether the app may pause the run, set its parameters and run its actions.",
+            "type": "boolean"
+          },
+          "params": {
+            "description": "The parameters the script registered, in its order.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "choices": {
+                  "description": "A choice parameter's values.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "help": {
+                  "description": "The script's one-line help for the parameter.",
+                  "type": "string"
+                },
+                "log": {
+                  "description": "Whether the parameter is shown on a log scale.",
+                  "type": "boolean"
+                },
+                "max": {
+                  "description": "The highest value the script accepts; absent when it set none.",
+                  "type": "number"
+                },
+                "min": {
+                  "description": "The lowest value the script accepts; absent when it set none.",
+                  "type": "number"
+                },
+                "name": {
+                  "description": "The parameter's name, as the script registered it with caliper.param.",
+                  "type": "string"
+                },
+                "pending": {
+                  "description": "A value that was sent and applies at the script's next step, or null.",
+                  "type": [
+                    "number",
+                    "integer",
+                    "boolean",
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "description": "The parameter's type.",
+                  "enum": [
+                    "number",
+                    "integer",
+                    "boolean",
+                    "choice"
+                  ],
+                  "type": "string"
+                },
+                "value": {
+                  "description": "The value the script uses now.",
+                  "type": [
+                    "number",
+                    "integer",
+                    "boolean",
+                    "string"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "value",
+                "pending"
+              ],
+              "type": "object"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "script": {
+            "description": "The attached script's name; absent when none is attached.",
+            "type": "string"
+          },
+          "state": {
+            "description": "The run's state: none before the script's first step, then running, pausing (a pause waits for the next step), paused or stepping.",
+            "enum": [
+              "none",
+              "running",
+              "pausing",
+              "paused",
+              "stepping"
+            ],
+            "type": "string"
+          },
+          "step": {
+            "description": "The script's step, the count of its caliper.step() calls, or null before the first.",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "steps_left": {
+            "description": "While stepping, the steps left before the run pauses again; null otherwise.",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "why_not": {
+            "description": "When control is false, the reason in one sentence, such as a stream started without control.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attached",
+          "control",
+          "state",
+          "params",
+          "actions"
+        ],
+        "type": "object"
+      },
+      "summary": "Returns the state of the script that the app is attached to: whether one is attached, whether the app may control it and why not, the run's state and step, its parameters with their values, ranges and pending values, and its actions. It changes nothing."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The parameter's name, from run.state.",
+            "maxLength": 63,
+            "minLength": 1,
+            "type": "string"
+          },
+          "value": {
+            "description": "The new value: a number for a number or integer parameter, true or false for a boolean, one of the choices for a choice.",
+            "type": [
+              "number",
+              "integer",
+              "boolean",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "run",
+      "examples": [
+        {
+          "name": "lr",
+          "value": 0.001
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "run.set_param",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The parameter's name.",
+            "type": "string"
+          },
+          "pending": {
+            "description": "True: the value waits for the script's next step.",
+            "type": "boolean"
+          },
+          "value": {
+            "description": "The value sent.",
+            "type": [
+              "number",
+              "integer",
+              "boolean",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "value",
+          "pending"
+        ],
+        "type": "object"
+      },
+      "summary": "Sets one parameter of the running script, such as its learning rate. The value applies at the script's next step (caliper.step(), or each optimizer step under caliper.watch(model, optimizer)), and the script clamps it to the parameter's range. The result says the value is pending; a run event of change param reports the value the script applied, through events.wait. run.state lists the parameters."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The action's name, from run.state.",
+            "maxLength": 63,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "run",
+      "examples": [
+        {
+          "name": "save_checkpoint"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "run.action",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The action's name.",
+            "type": "string"
+          },
+          "queued": {
+            "description": "True: the action waits for the script's next step.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "queued"
+        ],
+        "type": "object"
+      },
+      "summary": "Runs one action that the running script registered with caliper.action, such as saving a checkpoint. The script runs it at its next step; the result says it is queued, and a run event of change action brings the text it returned, or its error, through events.wait. run.state lists the actions."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "default": 1,
+            "description": "step: the number of steps to run; 1 when absent.",
+            "maximum": 1000000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "op": {
+            "description": "pause stops at the next step; resume runs on; step runs count steps, then pauses.",
+            "enum": [
+              "pause",
+              "resume",
+              "step"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "op"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "run",
+      "examples": [
+        {
+          "op": "pause"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "run.pause",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "description": "The request sent.",
+            "type": "string"
+          },
+          "state": {
+            "description": "The run's state: none before the script's first step, then running, pausing (a pause waits for the next step), paused or stepping.",
+            "enum": [
+              "none",
+              "running",
+              "pausing",
+              "paused",
+              "stepping"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "op",
+          "state"
+        ],
+        "type": "object"
+      },
+      "summary": "Pauses the running script at its next step, resumes it, or lets it run a number of steps and pause again. A script pauses only at a step, so a pause before its first step is refused. The result gives the state the request was sent in; run.state and the run events of change state follow it."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "default": 0,
+            "description": "The cursor of the previous result; 0, the default, returns the oldest events the app still keeps.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kinds": {
+            "description": "Only these kinds; every kind when absent.",
+            "items": {
+              "enum": [
+                "pick",
+                "select",
+                "control",
+                "run",
+                "spec",
+                "approval"
+              ],
+              "type": "string"
+            },
+            "maxItems": 6,
+            "minItems": 1,
+            "type": "array"
+          },
+          "limit": {
+            "default": 64,
+            "description": "The most events returned; 64 when absent.",
+            "maximum": 256,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "panels": {
+            "description": "Only events of these panels or controls; events of every panel and of none when absent.",
+            "items": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+              "type": "string"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "type": "array"
+          },
+          "timeout_s": {
+            "default": 10,
+            "description": "How long to wait for a first event, in seconds, at most 60; 10 when absent, 0 to answer at once.",
+            "maximum": 60,
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "read",
+      "examples": [
+        {
+          "cursor": 0,
+          "kinds": [
+            "pick"
+          ],
+          "panels": [
+            "world"
+          ],
+          "timeout_s": 30
+        }
+      ],
+      "frame_thread": false,
+      "mutates": false,
+      "name": "events.wait",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "The cursor to pass to the next call: past every event this call looked at, matching or not.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "events": {
+            "description": "The events that match, oldest first.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "applet": {
+                  "description": "spec: the open spec's applet id.",
+                  "type": "string"
+                },
+                "approval": {
+                  "description": "approval: the approval's id.",
+                  "type": "string"
+                },
+                "attached": {
+                  "description": "run with change attach: whether a script is attached now.",
+                  "type": "boolean"
+                },
+                "bind": {
+                  "description": "control: the control's target, such as param:lr.",
+                  "type": "string"
+                },
+                "change": {
+                  "description": "run: what changed: the run's state, a parameter applied at a step, the end of an action, or the attachment of a script.",
+                  "enum": [
+                    "state",
+                    "param",
+                    "action",
+                    "attach"
+                  ],
+                  "type": "string"
+                },
+                "command": {
+                  "description": "spec and approval: the command, such as panel.create.",
+                  "type": "string"
+                },
+                "control": {
+                  "description": "control: the control's id.",
+                  "type": "string"
+                },
+                "entities": {
+                  "description": "select: the items selected by entity; empty when the selection was cleared.",
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "entity": {
+                        "description": "The entity path.",
+                        "type": "string"
+                      },
+                      "indices": {
+                        "description": "The items' indices in the batch.",
+                        "items": {
+                          "type": "integer"
+                        },
+                        "type": "array"
+                      },
+                      "primitive": {
+                        "description": "The scene part.",
+                        "type": "string"
+                      },
+                      "row_ids": {
+                        "description": "The items' rows in the source tensor.",
+                        "items": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "entity",
+                      "primitive",
+                      "indices",
+                      "row_ids"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 256,
+                  "type": "array"
+                },
+                "entity": {
+                  "description": "pick: the entity path of the item picked.",
+                  "type": "string"
+                },
+                "event": {
+                  "description": "spec: whether the command was done, undone or redone.",
+                  "enum": [
+                    "do",
+                    "undo",
+                    "redo"
+                  ],
+                  "type": "string"
+                },
+                "index": {
+                  "description": "pick: the item's index in the batch the script sent.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "kind": {
+                  "description": "What happened.",
+                  "enum": [
+                    "pick",
+                    "select",
+                    "control",
+                    "run",
+                    "spec",
+                    "approval"
+                  ],
+                  "type": "string"
+                },
+                "name": {
+                  "description": "run with change param or action: the parameter's or the action's name.",
+                  "type": "string"
+                },
+                "origin": {
+                  "description": "Who caused it: ui for the person in the app, script for the running script, else the origin of the command.",
+                  "enum": [
+                    "ui",
+                    "builder",
+                    "agent",
+                    "mcp",
+                    "api",
+                    "script"
+                  ],
+                  "type": "string"
+                },
+                "panel": {
+                  "description": "The spec panel or control it happened in, or null.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pixel": {
+                  "description": "pick on an image: the pixel, x then y.",
+                  "items": {
+                    "type": "integer"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "position": {
+                  "description": "pick: the point hit, in scene coordinates, or null without depth.",
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "primitive": {
+                  "description": "pick: the scene part of the item, such as points or boxes.",
+                  "type": "string"
+                },
+                "row_id": {
+                  "description": "pick: the item's row in the script's source tensor, or null when the scene does not say.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "script": {
+                  "description": "run with change attach: the attached script's name.",
+                  "type": "string"
+                },
+                "seq": {
+                  "description": "The event's number; it grows by one with each event the app records.",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "state": {
+                  "description": "run with change state: the run's new state; approval: pending, approved, denied or expired.",
+                  "type": "string"
+                },
+                "status": {
+                  "description": "run with change action: how the action ended.",
+                  "enum": [
+                    "ok",
+                    "error"
+                  ],
+                  "type": "string"
+                },
+                "step": {
+                  "description": "run: the script's step when it changed, or null before the first step.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "target": {
+                  "description": "approval of a run command: the parameter or the action it names.",
+                  "type": "string"
+                },
+                "text": {
+                  "description": "run with change action: the text the action returned, or its error message.",
+                  "type": "string"
+                },
+                "time": {
+                  "description": "When the app recorded it, in UTC ISO 8601 with milliseconds.",
+                  "type": "string"
+                },
+                "truncated": {
+                  "description": "select: whether the selection held more than 32768 items and was cut.",
+                  "type": "boolean"
+                },
+                "value": {
+                  "description": "control: the control's new value; run with change param: the value the script applied.",
+                  "type": [
+                    "number",
+                    "integer",
+                    "boolean",
+                    "string",
+                    "null"
+                  ]
+                },
+                "view": {
+                  "description": "pick and select: the live view, such as the scene's name; null otherwise.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "seq",
+                "time",
+                "kind",
+                "panel",
+                "view",
+                "origin"
+              ],
+              "type": "object"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "lost": {
+            "description": "How many events after the given cursor the app dropped before this call, because the ring keeps 1024; 0 when none.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "more": {
+            "description": "Whether more matching events wait after cursor, beyond limit.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "events",
+          "cursor",
+          "lost",
+          "more"
+        ],
+        "type": "object"
+      },
+      "summary": "Returns the events that came after a cursor: picks and selections in the app's views and scene panels, changes of controls, changes of the running script (state, parameters, actions, attachment), edits of the open spec and approvals. It answers at once when events wait, and otherwise holds the call until one comes or timeout_s ends. Pass the cursor of each result to the next call. The app keeps the last 1024 events; lost counts those that were dropped before you read them. Hovers are not events. It changes nothing."
     },
     {
       "agents": false,

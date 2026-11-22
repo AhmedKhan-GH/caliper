@@ -19,10 +19,13 @@ find_package(Threads REQUIRED)
 add_library(caliper_builder_session STATIC
     applet_files.cpp
     context_bundle.cpp
+    control_edit.cpp
+    event_ring.cpp
     line_diff.cpp
     loader_catalog.cpp
     panel_data.cpp
     resolve.cpp
+    run_commands.cpp
     session.cpp
     spec_edit.cpp
     util.cpp)
@@ -55,6 +58,9 @@ target_link_libraries(caliper-builder-host PRIVATE caliper_builder_session_host)
 
 caliper_builder_add_tests(session
     SOURCES
+        tests/test_control_edit.cpp
+        tests/test_events.cpp
+        tests/test_run_commands.cpp
         tests/test_line_diff.cpp
         tests/test_table_conformance.cpp
         tests/test_spec_edit.cpp

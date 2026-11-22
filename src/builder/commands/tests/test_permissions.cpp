@@ -67,8 +67,18 @@ TEST_CASE("every command of the table says what it does, and the classes agree w
             CHECK_FALSE(d.destructive);  // an edit of the open spec is never destructive
         }
         if (d.destructive) CHECK(d.effect == CommandEffect::change);
+        if (d.effect == CommandEffect::run) {
+            // Acting on the running script changes no workspace state and has no undo.
+            CHECK_FALSE(d.mutates);
+            CHECK_FALSE(d.destructive);
+        }
         CHECK(command_descriptor_to_json(d)["effect"] == command_effect_name(d.effect));
     }
+    // The run commands of design/instruments.md act on the running script.
+    for (const char* name : {"run.set_param", "run.action", "run.pause"}) CHECK(cmd(name).effect == CommandEffect::run);
+    CHECK(cmd("run.state").effect == CommandEffect::read);
+    CHECK(cmd("events.wait").effect == CommandEffect::read);
+    CHECK(command_effect_from_name("run") == CommandEffect::run);
     // Replacing the open spec is not a plain edit.
     for (const char* name : {"spec.new", "spec.open", "applet.open", "app.launch"})
         CHECK(cmd(name).effect == CommandEffect::change);
@@ -105,6 +115,8 @@ TEST_CASE("Accept edits applies an edit of the open spec and nothing else") {
     // A change, and a replacement of the open spec, still ask.
     for (const char* name : {"loader.run", "loader.delete", "applet.save", "spec.new", "data.import"})
         CHECK(decide(name, AgentMode::accept_edits, ApprovalDecision::ask).decision == ApprovalDecision::ask);
+    // A run command is not an edit: it still asks.
+    CHECK(decide("run.set_param", AgentMode::accept_edits, ApprovalDecision::ask).decision == ApprovalDecision::ask);
     // What the policy allowed stays allowed; a denial stays a denial.
     CHECK(decide("loader.create", AgentMode::accept_edits, ApprovalDecision::allow).decision == ApprovalDecision::allow);
     CHECK(decide("panel.patch", AgentMode::accept_edits, ApprovalDecision::deny).decision == ApprovalDecision::deny);

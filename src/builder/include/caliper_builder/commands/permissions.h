@@ -74,7 +74,7 @@ AgentPrincipal agent_principal(const CommandInvocation& invocation);
 
 // Whether the invocation would change something, as Read only judges it: a
 // command whose effect is `read` does not; an `edit` does unless it is a dry
-// run or names a stacked preview; any other command does.
+// run or names a stacked preview; any other command, a `run` included, does.
 bool invocation_changes(const CommandDescriptor& descriptor, const CommandInvocation& invocation);
 
 // What decides one governed invocation besides its command.
@@ -106,6 +106,14 @@ struct AgentRule {
     std::string command;
     bool operator==(const AgentRule& o) const { return agent == o.agent && command == o.command; }
 };
+
+// The name under which a rule allows an invocation: the command's name, and
+// for run.set_param and run.action the command's name, ":" and the parameter
+// or the action it names ("run.set_param:lr"), so that a card's rule allows
+// one parameter or one action and not the whole command
+// (design/instruments.md, Run Effect Class). The session looks session and
+// saved rules up by this key.
+std::string permission_rule_key(const CommandInvocation& invocation);
 
 // The id a saved rule names: "mcp", or 1 to 64 characters of a-z 0-9 _ -
 // for a chat agent ("claude", "custom").

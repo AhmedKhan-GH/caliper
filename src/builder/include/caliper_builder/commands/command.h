@@ -43,13 +43,16 @@ std::optional<CommandOrigin> command_origin_from_name(std::string_view name);
 // preview's begin, diff and discard); `edit` edits the open spec in memory,
 // which undo reverses exactly; `change` does anything else that changes
 // something: it writes or deletes saved data, runs a loader, replaces the open
-// spec or the page the app shows, or moves the history. Accept edits applies
-// only `edit` without a card. Every command of the table states one (a test
-// checks it); `unset`, which a descriptor made elsewhere may leave, counts as
-// `change`, so a command nobody classified asks.
-enum class CommandEffect { unset, read, edit, change };
+// spec or the page the app shows, or moves the history; `run` acts on the
+// running script that the app is attached to (a parameter, an action, a
+// pause), which changes no workspace state and has no undo
+// (design/instruments.md, Run Effect Class). Accept edits applies only `edit`
+// without a card. Every command of the table states one (a test checks it);
+// `unset`, which a descriptor made elsewhere may leave, counts as `change`, so
+// a command nobody classified asks.
+enum class CommandEffect { unset, read, edit, change, run };
 
-// "read", "edit" or "change" ("change" for unset).
+// "read", "edit", "change" or "run" ("change" for unset).
 const char* command_effect_name(CommandEffect effect);
 std::optional<CommandEffect> command_effect_from_name(std::string_view name);
 

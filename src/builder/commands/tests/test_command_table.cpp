@@ -33,7 +33,9 @@ const char* const kV0[] = {
     "spec.validate",   "source.add",      "source.patch",   "source.remove", "panel.create",     "panel.patch",
     "panel.remove",    "panel.render",    "panel.data",     "layout.place",  "layout.set",       "preview.begin",
     "preview.diff",    "preview.commit",  "preview.discard", "applet.save",  "applet.open",      "applet.list",
-    "review.status",   "capture.frame",   "history.undo",   "history.redo",  "history.list",
+    "review.status",   "capture.frame",   "control.create", "control.patch", "control.remove",   "run.state",
+    "run.set_param",   "run.action",      "run.pause",      "events.wait",   "history.undo",     "history.redo",
+    "history.list",
 };
 
 std::set<std::string> names_where(bool (*pred)(const CommandDescriptor&)) {
@@ -129,15 +131,16 @@ TEST_CASE("the flags follow the design page") {
           std::set<std::string>{"data.import", "loader.create", "loader.update", "loader.run", "loader.delete",
                                 "spec.new", "spec.open", "spec.set_text", "source.add", "source.patch",
                                 "source.remove", "panel.create", "panel.patch", "panel.remove", "layout.place",
-                                "layout.set", "preview.commit", "applet.save", "applet.open", "history.undo",
-                                "history.redo"});
+                                "layout.set", "preview.commit", "applet.save", "applet.open", "control.create",
+                                "control.patch", "control.remove", "history.undo", "history.redo"});
     CHECK(names_where([](const CommandDescriptor& d) { return d.frame_thread; }) ==
           std::set<std::string>{"app.applets", "app.launch", "spec.new", "spec.open", "spec.get", "spec.set_text",
                                 "spec.validate", "source.add", "source.patch", "source.remove", "panel.create",
                                 "panel.patch", "panel.remove", "panel.render", "panel.data", "layout.place", "layout.set",
                                 "preview.begin", "preview.diff", "preview.commit", "preview.discard",
-                                "applet.save", "applet.open", "capture.frame", "history.undo", "history.redo",
-                                "history.list"});
+                                "applet.save", "applet.open", "capture.frame", "control.create", "control.patch",
+                                "control.remove", "run.state", "run.set_param", "run.action", "run.pause",
+                                "history.undo", "history.redo", "history.list"});
     // Every destructive command mutates.
     for (const auto& d : cb::command_table())
         if (d.destructive) CHECK(d.mutates);
