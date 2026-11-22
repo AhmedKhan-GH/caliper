@@ -3,10 +3,11 @@ does (the CALIPER_RUN_* variables, output into output.log) and acts as the runne
 link that the script writes into its link file. The link file is written, the parameter values
 apply, the action caliper.checkpoint writes a loadable file, a fork resumes from it at the
 checkpoint's step with a changed parameter and its first loss continues the parent's,
-caliper.stop ends the process with exit code 0, watch(model) alone serves an inference loop, and a
-run ends when the process that started it ends without ending it, also when the app ended
-before the script imported the managed-run code, and the run's files are written through new
-temporary files that never follow a link.
+caliper.stop ends the process with exit code 0, a checkpoint and a stop at once send both final
+replies before BYE also when the server's thread hands them over late, watch(model) alone serves
+an inference loop, and a run ends when the process that started it ends without ending it, also
+when the app ended before the script imported the managed-run code, and the run's files are
+written through new temporary files that never follow a link.
 
 The scripts pace their loops with a short sleep; the tests wait only on files and messages."""
 from __future__ import annotations
@@ -169,7 +170,11 @@ def _stream(link: str) -> types.SimpleNamespace:
 
 
 def _act(link: str, name: str):
-    """Run the action ``name`` as the runner does; returns (CONTROLS before it, its last reply)."""
+    """Run the action ``name`` as the runner does; returns (CONTROLS before it, its last reply).
+
+    The final reply is part of the protocol (a ``run`` answered ``queued`` is answered again when
+    the action returned), also for ``caliper.stop``: the script closes its server after the reply
+    went out and before it exits."""
     async def go():
         async with Viewer(_stream(link)) as v:
             state = await v.state(lambda m: m.run["state"] == "running" and {

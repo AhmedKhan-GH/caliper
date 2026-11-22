@@ -4,8 +4,9 @@ control flag, CONTROLS after VIEWS, pause, resume and step of a loop that
 calls caliper.step(), parameter values with clamping, actions with their two
 replies, a read-only server, a script without a checkpoint, a flood of
 requests, a 3.0 viewer, linked selection from sampled points to row ids with
-details, the last step's snapshot of a paused run, and the cost of
-caliper.step() with a viewer attached."""
+details, the last step's snapshot of a paused run, the run state of a pause
+that a close sends before BYE, and the cost of caliper.step() with a viewer
+attached."""
 from __future__ import annotations
 
 import asyncio
