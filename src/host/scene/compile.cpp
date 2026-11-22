@@ -149,6 +149,7 @@ struct Spec {
     uint32_t colormap = 0;
     float vmin = 0, vmax = 1;
     bool uses_cmap = false;
+    const StageProgram* stage = nullptr;   // the entity's stage program in place of the built-in entries
     DrawMapEntry entry;
 };
 
@@ -335,6 +336,10 @@ CompileResult SceneCompiler::run(const SceneTree& tree, const ViewCamera& camera
     }
     fb.class_count = 65536;
     fb.class_default = kDefaultRgba;
+    if (opts.stages) {   // the stage entries' time and step (stages.cpp); zero without stages
+        std::memcpy(&fb.pad0, &opts.stage_time_s, sizeof fb.pad0);
+        fb.pad1 = opts.stage_step;
+    }
     const uint32_t frame_off = out.uniform(&fb, sizeof fb);
 
     std::vector<Spec> specs;
@@ -381,6 +386,10 @@ CompileResult SceneCompiler::run(const SceneTree& tree, const ViewCamera& camera
             s.translucent = b.translucent || (cs.mode == 0 && (b.flat_rgba >> 24) < 255);
             return cs;
         };
+        // A points or lines batch of an entity with a stage draws the stage program's entries.
+        auto use_stage = [&](Spec& s, Primitive p) {
+            if (opts.stages) s.stage = opts.stages->find(tree.path(e), p);
+        };
 
         for (int k = 1; k <= kPrimitiveCount; ++k) {
             const Primitive prim = Primitive(k);
@@ -396,6 +405,7 @@ CompileResult SceneCompiler::run(const SceneTree& tree, const ViewCamera& camera
                     s.vs = "vs_points";
                     s.fs = "fs_points";
                     s.fs_pick = "fs_points_pick";
+                    use_stage(s, prim);
                     const BatchArray& pos = *b.array(Role::Positions);
                     stream(s, 0, pos.format, Step::Instance, pos.buffer, pos.offset, stride_of(pos));
                     color_streams(s, b, 1, Step::Instance);
@@ -424,6 +434,7 @@ CompileResult SceneCompiler::run(const SceneTree& tree, const ViewCamera& camera
                     s.vs = "vs_lines";
                     s.fs = "fs_color";
                     s.fs_pick = "fs_pick";
+                    use_stage(s, prim);
                     const BatchArray& pos = *b.array(Role::Positions);
                     const ColorSource cs = color_source(b);
                     const uint32_t ps = pos.stride;
@@ -819,9 +830,29 @@ CompileResult SceneCompiler::run(const SceneTree& tree, const ViewCamera& camera
         s.params.item_base = 0;
 
         DrawRecord r;
-        r.pipeline = res.render_pipeline(s.program, d);
-        for (uint32_t g = 0; g < 3; ++g)
-            if (declares_group(s.program, g)) r.groups[g] = res.bind_group(s.program, g, g == 2 ? s.image : Texture{}, s.image_binding);
+        if (s.stage) {
+            // The stage program's entries take the same vertex inputs and bindings as the built-in
+            // ones, which the layouts were checked against; a refused pipeline keeps the built-in.
+            RenderPipelineDesc sd = d;
+            sd.vertex_entry = s.stage->vs.c_str();
+            sd.fragment_entry = pick ? s.stage->fs_pick.c_str() : s.stage->fs.c_str();
+            r.pipeline = res.stage_pipeline(*s.stage, s.program, sd);
+            if (!r.pipeline) s.stage = nullptr;
+        }
+        if (s.stage) {
+            for (uint32_t g = 0; g < 3 && s.stage; ++g) {
+                if (!declares_group(s.program, g)) continue;
+                r.groups[g] = res.stage_bind_group(*s.stage, s.program, g, g == 2 ? s.image : Texture{}, s.image_binding);
+                if (!r.groups[g]) s.stage = nullptr;
+            }
+            if (s.stage) ++result.staged;
+            else r.groups[0] = r.groups[1] = r.groups[2] = BindGroup{};
+        }
+        if (!s.stage) {
+            r.pipeline = res.render_pipeline(s.program, d);
+            for (uint32_t g = 0; g < 3; ++g)
+                if (declares_group(s.program, g)) r.groups[g] = res.bind_group(s.program, g, g == 2 ? s.image : Texture{}, s.image_binding);
+        }
         const uint32_t params_off = out.uniform(&s.params, sizeof s.params);
         const uint32_t cmap_off = s.uses_cmap ? cmap_offset(s.colormap, s.vmin, s.vmax) : cmap_offset(0, 0.0f, 1.0f);
         // Dynamic offsets in (group, binding) order: the frame block, the draw block, the colormap.

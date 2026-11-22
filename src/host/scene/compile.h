@@ -18,6 +18,7 @@
 #include "scene/camera.h"
 #include "scene/resources.h"
 #include "scene/scene.h"
+#include "scene/stages.h"
 
 #include <cstdint>
 #include <string>
@@ -45,6 +46,14 @@ struct CompileOptions {
     // and alpha kept; a batch with full_strength is never faded.
     float point_att_ref = 0.0f;
     float point_fade_w0 = 0.0f, point_fade_w1 = 0.0f;
+    // The stages of the panel (stages.h): the points and lines batches of an entity that the lookup
+    // gives a StageProgram draw with it, in the colour pass and the pick pass. With a lookup, the
+    // frame block's pad words carry stage_time_s (as f32 bits) and stage_step, which the stage
+    // entries read; without one they stay zero, thus a scene without stages compiles to the same
+    // bytes as before.
+    const StageLookup* stages = nullptr;
+    float stage_time_s = 0.0f;
+    uint32_t stage_step = 0;
 };
 
 // The constants of the depth cues above, written out in src/host/gfx/shaders/scene/points.wgsl and
@@ -89,6 +98,7 @@ struct CompileResult {
     bool ok = false;
     uint32_t draws = 0;
     uint32_t skipped = 0;                       // batches not drawn (reasons in notes)
+    uint32_t staged = 0;                        // draws with a stage program
     std::vector<std::string> notes;
 };
 

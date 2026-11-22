@@ -85,6 +85,7 @@ SceneView::SceneView(caliper_gfx::Backend& backend, const caliper_gfx::ProgramDe
     : gfx_(backend), programs_(programs), colormaps_(std::make_shared<caliper_gfx::cmap::KeyBlockCache>()) {}
 
 SceneView::~SceneView() {
+    stages_.reset();
     for (auto& kv : slots_) release(kv.second);
     slots_.clear();
     for (const Buffer b : hl_buffers_) gfx_.release(b);
@@ -99,6 +100,7 @@ SceneView::~SceneView() {
 bool SceneView::init(std::string* why) {
     res_ = std::make_unique<BackendResources>(gfx_, programs_, caliper_gfx::cmap::colormap_source(colormaps_));
     pick_ = std::make_unique<PickPass>(gfx_);
+    stages_ = std::make_unique<caliper_scene::StageCache>(gfx_);
     return res_->init(why);
 }
 
@@ -244,6 +246,12 @@ void SceneView::rebuild(const std::string& path) {
 
 bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
     ++counts_.messages;
+    // The stages' step: the first timeline of the update's stamp, the producer's step.
+    if (u.stamp && u.stamp->is(CALIPER_NET_DTYPE_I64, 1) && u.stamp->size >= 8 && u.stamp->data) {
+        int64_t step = 0;
+        std::memcpy(&step, u.stamp->data, sizeof step);
+        stamp_step_ = step;
+    }
     const caliper_net::Json& params = u.params;
     const int part = wire::scene_part_index(u.part);
     const std::string where = (u.path.empty() ? std::string("the root") : u.path) + " " + u.part;
@@ -802,7 +810,26 @@ bool SceneView::request_pick(float x, float y, std::string* why) {
     opt.height = height_;
     opt.pixel_scale = scale_;
     opt.clear_rgba = clear_;
+    opt = stage_options(opt);   // a moved item picks where it draws
     return pick_->request(tree_, effective_camera(), opt, compiler_, *res_, x, y, generation_, why);
+}
+
+void SceneView::set_stage_source(caliper_scene::StageSource* source) {
+    if (!stages_) return;
+    if (source != stages_->source()) {
+        stages_->set_source(source);
+        stage_revision_ = source ? source->revision() : 0;
+        changed();
+    }
+}
+
+CompileOptions SceneView::stage_options(CompileOptions opt) const {
+    if (stages_ && stages_->source()) {
+        opt.stages = stages_.get();
+        opt.stage_time_s = stages_->source()->time_s();
+        opt.stage_step = uint32_t(std::max<int64_t>(0, stamp_step_));
+    }
+    return opt;
 }
 
 PickPass::Result SceneView::poll_pick(Hit* out) {
@@ -1253,6 +1280,9 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
         changed();
     }
     if (tree_.revision() != drawn_revision_ || tree_.pose_revision() != drawn_pose_) changed();
+    if (stages_ && stages_->source() &&
+        (stages_->source()->revision() != stage_revision_ || (staged_ > 0 && stages_->animated())))
+        changed();
     // Back on the orbit after looking through a pinhole (the view's own camera, or a camera entity
     // looked through): the mode chosen meanwhile applies.
     const bool through_now = std::holds_alternative<ThroughPinhole>(effective_camera());
@@ -1294,7 +1324,13 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
     DrawMap map;
     if (!through_.empty() && !std::holds_alternative<ThroughPinhole>(effective_camera()))
         note(through_ + " holds no camera now; the view shows the orbit");
-    const CompileResult r = compiler_.compile(tree_, effective_camera(), opt, *res_, list, &map);
+    if (stages_) {
+        if (stages_->source()) stage_revision_ = stages_->source()->revision();
+        stages_->begin_frame();
+    }
+    const CompileResult r = compiler_.compile(tree_, effective_camera(), stage_options(opt), *res_, list, &map);
+    if (stages_) stages_->end_frame();   // programs no draw used go back to the layer
+    staged_ = r.staged;
     for (const std::string& n : r.notes) note(n);
     cost_.compile_ms = ms_since(t0);
     if (!r.ok) {
@@ -1372,6 +1408,9 @@ void SceneView::poll() {
     gfx_.poll();
     const caliper_gfx::Stats st = gfx_.take_stats();
     if (st.gpu_ms >= 0) cost_.gpu_ms = st.gpu_ms;
+    // The stages' time watchdog reads the mean GPU time of the frames completed since the last poll.
+    if (st.gpu_ms >= 0 && st.gpu_submits > 0 && stages_ && stages_->source())
+        stages_->source()->frames_done(st.gpu_ms / double(st.gpu_submits), st.gpu_submits, staged_ > 0);
 }
 
 uint64_t SceneView::imgui_texture() const { return color_ ? gfx_.imgui_texture_id(color_) : 0; }

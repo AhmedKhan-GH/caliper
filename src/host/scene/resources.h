@@ -17,6 +17,8 @@ namespace caliper_scene {
 
 using caliper_gfx::shaders::ProgramId;
 
+struct StageProgram;
+
 // The scene core's constant streams, uploaded once into the buffer static_geometry() returns:
 // what a stream at stride 0 reads when a batch has no such array, and the unit geometry of
 // camera frustums and entity axes.
@@ -67,6 +69,21 @@ public:
     // The colormap block of a colormap and range (renderer core, "Exact colormap output"); the
     // keys come from the CPU reference.
     virtual void colormap_block(uint32_t colormap, float vmin, float vmax, caliper_gfx::shaders::Cmap* out) = 0;
+    // A pipeline of a stage program (stages.h) in place of the built-in program `builtin`, for this
+    // descriptor (desc.program is left empty, its entries are the stage program's). The stage
+    // program binds what `builtin` binds. Null keeps the built-in program: an implementation
+    // without stages, or a pipeline the layer refused.
+    virtual caliper_gfx::Pipeline stage_pipeline(const StageProgram& stage, ProgramId builtin,
+                                                 const caliper_gfx::RenderPipelineDesc& desc) {
+        (void)stage, (void)builtin, (void)desc;
+        return {};
+    }
+    // Group `group` of a stage program, with the entries that bind_group() gives `builtin`.
+    virtual caliper_gfx::BindGroup stage_bind_group(const StageProgram& stage, ProgramId builtin, uint32_t group,
+                                                    caliper_gfx::Texture image, uint32_t image_binding) {
+        (void)stage, (void)builtin, (void)group, (void)image, (void)image_binding;
+        return {};
+    }
 };
 
 }  // namespace caliper_scene

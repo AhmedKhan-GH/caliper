@@ -260,6 +260,7 @@ SceneRectResult draw_scene_in_rect(CaliperCore* core, const std::string& name, c
         state.up_applied = options.up;
     }
     sc->set_scale_bar(options.scale_bar);
+    sc->set_stage_source(options.stages);
 
     // ---- input: an invisible button owns the rectangle, so that a drag never moves the window
     ImGui::SetCursorScreenPos(p0);
@@ -309,6 +310,14 @@ SceneRectResult draw_scene_in_rect(CaliperCore* core, const std::string& name, c
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p1(p0.x + size.x, p0.y + size.y);
     if (const uint64_t tex = sc->imgui_texture()) dl->AddImage((ImTextureID)tex, p0, p1);
+    if (!options.stage_message.empty()) {   // a stage's refusal or stop, over the picture's bottom
+        const float pad = 4.0f, h = ImGui::GetTextLineHeight() + 2 * pad;
+        const ImVec2 a(p0.x, std::max(p0.y, p1.y - h));
+        dl->AddRectFilled(a, p1, IM_COL32(0, 0, 0, 170));
+        dl->PushClipRect(a, p1, true);
+        dl->AddText(ImVec2(a.x + pad, a.y + pad), IM_COL32(255, 196, 120, 255), options.stage_message.c_str());
+        dl->PopClipRect();
+    }
 
     // ---- picks and selections, in the render target's pixels
     const float kx = sc->width() ? float(sc->width()) / size.x : 1.0f;

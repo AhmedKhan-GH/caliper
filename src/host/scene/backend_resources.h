@@ -47,9 +47,19 @@ public:
     caliper_gfx::Buffer owned_buffer(uint64_t key, uint64_t bytes, uint32_t usage) override;
     void retain_owned(caliper_gfx::View<uint64_t> keys) override;
     void colormap_block(uint32_t colormap, float vmin, float vmax, caliper_gfx::shaders::Cmap* out) override;
+    // Pipelines and groups of stage programs, cached by the program's handle; retain_owned()
+    // releases those of programs that the view's StageCache released.
+    caliper_gfx::Pipeline stage_pipeline(const StageProgram& stage, ProgramId builtin,
+                                         const caliper_gfx::RenderPipelineDesc& desc) override;
+    caliper_gfx::BindGroup stage_bind_group(const StageProgram& stage, ProgramId builtin, uint32_t group,
+                                            caliper_gfx::Texture image, uint32_t image_binding) override;
+    // The pipelines and groups of stage programs held (tests).
+    size_t stage_objects() const { return stage_pipelines_.size() + stage_groups_.size(); }
 
 private:
     caliper_gfx::Program program(ProgramId id);
+    caliper_gfx::BindGroup make_group(caliper_gfx::Program program, ProgramId id, uint32_t group,
+                                      caliper_gfx::Texture image, uint32_t image_binding);
 
     caliper_gfx::Backend& backend_;
     const caliper_gfx::ProgramDesc* programs_;
@@ -58,6 +68,9 @@ private:
     std::map<uint32_t, caliper_gfx::Program> program_;
     std::map<std::string, caliper_gfx::Pipeline> pipelines_;
     std::map<std::string, caliper_gfx::BindGroup> groups_;
+    // Stage programs' pipelines and groups, by key, with the program each one belongs to.
+    struct StageObject { caliper_gfx::Program program; uint64_t handle = 0; caliper_gfx::Texture image; };
+    std::map<std::string, StageObject> stage_pipelines_, stage_groups_;
     // The image of each group 2 by its key: a group whose image the view released goes back to
     // the layer at the next retain_owned, so that images replaced at a new size leave nothing.
     std::map<std::string, caliper_gfx::Texture> group_images_;
