@@ -10,6 +10,8 @@ of the trajectory spec:
 - ``hooks``: call back with module outputs, gradients and each optimizer step (M2).
 - ``probe``: run the model forward on inputs that Caliper supplies (M11).
 - ``state`` and ``restore``: save and load the model and the optimizer, for a fork (M4).
+- ``points`` and ``ablate``: the intervention points of the model and the ablation of one point
+  through a forward hook (``design/gpu-programs.md``, Interventions), in ``caliper._ablate``.
 
 M4 implements ``state`` and ``restore``, and the loss tap of ``caliper.watch(model, optimizer)``
 (the wrapper of ``torch.autograd.backward``) lives here because it patches torch. The other
@@ -117,6 +119,46 @@ class TorchAdapter:
             NotImplementedError: Until the operators of M11.
         """
         raise NotImplementedError("TorchAdapter.probe arrives with the operators (M11)")
+
+    # -- interventions (design/gpu-programs.md, Interventions) ----------------------
+    def points(self, model) -> list:
+        """List the intervention points of ``model``.
+
+        Each module of ``model.named_modules()`` is a point with its dotted name. A module with an
+        integer ``num_heads``, ``n_heads`` or ``n_head`` and one child ``nn.Linear`` named
+        ``out_proj``, ``o_proj``, ``c_proj`` or ``proj``, whose ``in_features`` divides by the head
+        count, also gives the points ``<module>#<h>``, one for each head.
+
+        Args:
+            model (torch.nn.Module): The watched model.
+
+        Returns:
+            list[dict]: One item for each point, in the model's order, with the keys ``point``,
+            ``kind`` (``"module"`` or ``"head"``), ``module``, ``head`` (an index or ``None``),
+            ``type`` (the module's class name) and ``shape`` (``None`` until a forward pass).
+        """
+        from ._ablate import points
+        return points(model)
+
+    def ablate(self, model, point: str):
+        """Set the output of one point of ``model`` to zero, from its next forward pass.
+
+        A module's point zeroes its output with a forward hook. A head's point zeroes that head's
+        slice of the input of the module's output projection with a forward pre-hook. The caller
+        installs it at a step boundary, between two optimizer steps.
+
+        Args:
+            model (torch.nn.Module): The watched model.
+            point (str): A point that :meth:`points` lists.
+
+        Returns:
+            Callable[[], None]: Removes the ablation; calling it twice does nothing.
+
+        Raises:
+            KeyError: When ``model`` has no such point.
+        """
+        from ._ablate import ablate
+        return ablate(model, point)
 
     # -- M4: state of a fork ---------------------------------------------------------
     def state(self, model, optimizer=None, extra=None) -> bytes:
