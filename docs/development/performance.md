@@ -171,6 +171,20 @@ The windowless mode runs at about 60 frames per second. The first command opens 
 
 A table that `caliper.data.v1` rebuilt with `CREATE OR REPLACE TABLE` several times per second on a persistent store became slow. Over one session, in EmbedScope on Windows, each rebuild went from 80 ms to 500 ms. The cause is the growth of the write-ahead log and the catalog. `TEMP` tables do not have this problem.
 
+## Vulkan and CUDA Costs
+
+Measured on one RTX 500 Ada laptop GPU, driver 596.47, Release build. Small samples, so the numbers describe this hardware only.
+
+- Training (embed_scope, MNIST, 20 s per run, three runs per path): training steps are level within noise. The direct path removes the 2.5 to 3.5 s frame-thread block in `retire()` and lowers frame time p99 from 19.8 to 22.5 ms down to 12.8 to 19.3 ms. Frame time p50 stays at about 8.3 ms because of vsync.
+- With a single image per texture, about 97 percent of kernels waited on a frame, and 30-second training dropped to 880 to 897 steps against 1407 on the buffer path. The second image is required.
+- One update by size (call / done): 256 by 256 is 57 / 265 µs buffer and 30 / 65 µs direct. 4096 by 4096 is 100 / 1971 µs buffer and 51 / 1391 µs direct. Source: gfx test `Vulkan+CUDA: timing — update cost by size`.
+- Texture create and release costs about 1 ms at applet sizes. Release still waits for the queue to go idle.
+- Eliding the adapter drain through stream ordering did not change training steps per second within 15 to 20 percent thermal variance, because `loss.item()` already synchronizes. The gain is that the frame thread stops stalling.
+
+## CI Build Cache
+
+With sccache, the CI build step takes about 13 min cold and about 1 min warm on macOS. On Windows, it takes about 26 min cold and about 3 min warm. The sccache entries of both lanes total about 130 MB.
+
 ## Related Pages
 
 - [Live Streaming](../python/live-streaming.md)
