@@ -7,7 +7,7 @@ on:
     # snippets, and the docstrings and headers the API reference is built from.
     paths: ['docs/**', 'design/**', 'docs-theme/**', 'mkdocs.yml',
             'sdk/include/**', 'include/caliper/**', 'python/caliper/**', 'examples/**', 'roadmap/**',
-            'candidates/**', 'scripts/check_doc_headings.py', 'scripts/test_check_doc_headings.py',
+            'candidates/**', 'requirements-docs.txt',
             'scripts/check_api_reference.py', 'scripts/test_check_api_reference.py',
             '.github/workflows/docs.yml']
   workflow_dispatch:
@@ -27,21 +27,16 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      # Pinned to the versions the docs are built with. The design build also
-      # depends on MkDocs accepting design/mkdocs.yml inside its own docs folder
-      # when the file is named by a relative path, as here. mkdocstrings,
-      # mkdocstrings-python, griffelib and mkdocs-autorefs render the Python API
-      # reference from the docstrings, and ruff formats its signatures.
-      - run: pip install mkdocs==1.6.1 mkdocs-material==9.8.1 mkdocs-awesome-nav==3.3.0 pymdown-extensions==13.1 mkdocstrings==1.0.8 mkdocstrings-python==2.0.10 griffelib==2.4.1 mkdocs-autorefs==1.4.5 ruff==0.17.3
-      # The roadmap registry check and its tests need jsonschema; the site build does not.
-      - run: pip install jsonschema==4.25.1
-      # Validates the roadmap registry in roadmap/ against its schema and rules.
-      - run: python roadmap/check.py
-      - run: python -m unittest discover -s roadmap -p 'test_*.py' -v
-      # Fails on docs headings that break the title rule (Title Case, no leading
-      # article or Your, no colon, no question) and tests the check.
-      - run: python scripts/check_doc_headings.py
-      - run: python -m unittest scripts/test_check_doc_headings.py -v
+      # The versions are pinned in requirements-docs.txt, which a local build reads too. The design
+      # build also depends on MkDocs accepting design/mkdocs.yml inside its own docs folder when the
+      # file is named by a relative path, as here.
+      - run: pip install -r requirements-docs.txt
+      # Validates the roadmap registry, its coverage ledger and the candidates against their schemas
+      # and rules.
+      - run: sternbild-docs check-roadmap
+      # Fails on docs headings that break the title rule (Title Case, no leading article or Your,
+      # no colon, no question).
+      - run: sternbild-docs check-headings
       # Fails when a name of caliper.__all__ or caliper.live.__all__ has no
       # docstring or no ::: directive, or when a service table entry or an embed,
       # live or live_views function has no doc comment or no generated table,

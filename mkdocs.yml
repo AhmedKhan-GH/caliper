@@ -11,10 +11,6 @@ validation:
   anchors: warn
 theme:
   name: material
-  # Icons, fonts and the stylesheet live outside docs/, which holds documents only.
-  custom_dir: docs-theme
-  logo: assets/caliper-icon-minerals.svg
-  favicon: assets/caliper-icon-minerals.svg
   font: false
   palette:
     scheme: slate
@@ -30,13 +26,11 @@ theme:
     - content.code.copy
     - search.suggest
 extra:
-  # The header logo opens the full docs tree (docs/contents.md, filled by docs-theme/hooks/contents.py).
+  # The header logo opens the full docs tree (docs/contents.md, filled by the sternbild plugin).
   homepage: /caliper/docs/contents/
 # The navigation follows the folders under docs/; a .nav.yml in a folder sets its order.
-# Generates the roadmap's pages and data files from the registry in roadmap/.
+# The sternbild plugin supplies the theme, brand icon, contents tree, and the roadmap and candidate pages.
 hooks:
-  - roadmap/build.py
-  - docs-theme/hooks/contents.py
   # Fills the C API reference tables (<!-- c-api ... --> placeholders) from the headers' doc comments.
   - docs-theme/hooks/c_reference.py
 # A local `mkdocs serve` rebuilds when the registry, the Python package or the C headers change.
@@ -49,6 +43,14 @@ watch:
 plugins:
   - search
   - awesome-nav
+  # The roadmap pages and graph come from the registry in roadmap/, with its coverage ledger, and the
+  # candidate pages from candidates/.
+  - sternbild:
+      roadmap: roadmap/
+      candidates: candidates/
+      coverage: true
+      repo_url: https://github.com/AhmedKhan-GH/caliper
+      icon: assets/brand/caliper-icon-minerals.svg
   # The Python API reference: `::: caliper.<name>` in a page renders that object from its docstring
   # (Google style). The source is read statically, so the build imports neither caliper nor torch.
   - autorefs
