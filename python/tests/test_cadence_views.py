@@ -297,6 +297,27 @@ def test_costly_views_get_no_floor(loop):
     assert 20000 * 1.0e-3 / (s.end() - t0) >= 0.95
 
 
+
+def test_the_last_single_step_is_a_pass_whatever_its_views_cost(loop, monkeypatch):
+    # Costly views get no floor, thus the run that single-steps once paused at a step that was
+    # no pass and showed an older one: the step after which the run pauses is a pass.
+    from caliper import _controls as C
+    s = loop(cpu=0.5e-3, gpu=1.0e-3, snap_s=60e-3)
+    s.train(20000)
+    assert P.views_stats()["floor_passes"] == 0
+    k = 20000
+    while P._CAD.due(k + 1):                       # a step that the cadence makes no pass
+        s.train(1, first=k)
+        k += 1
+    monkeypatch.setattr(C.CONTROLS, "state", C.RUN_STEPPING)
+    monkeypatch.setattr(C.CONTROLS, "steps_left", 1)
+    s.train(1, first=k)
+    assert P._STATE["pass"] == k + 1
+    monkeypatch.setattr(C.CONTROLS, "state", C.RUN_RUNNING)
+    monkeypatch.setattr(C.CONTROLS, "steps_left", 0)
+    s.train(1, first=k + 1)
+    assert s.ring.steps[-1] == k + 1
+
 def test_a_pass_that_took_nothing_does_not_count(loop):
     s = loop(cpu=0.3e-3, gpu=0.4e-3, snap_s=1.0e-3, rate=1000.0)
     s.train(200)
