@@ -1,0 +1,313 @@
+# yaml-language-server: $schema=schema.json
+title: ACP integration plan page
+kind: page
+source: design/acp-integration.md
+ref: main
+summary: The plan page design/acp-integration.md on main, read heading by heading; each plan heading has
+  an entry or is listed as holding no feature.
+not_features:
+- MCP over ACP
+entries:
+- heading: The protocol on 15 November 2026
+  item: Section heading for the facts about ACP read on 15 November 2026.
+  ids:
+  - AGT-03
+- heading: Versions
+  item: Caliper speaks ACP version 1 first and adds version 2 beside it once it is stable.
+  ids:
+  - AGT-03
+- heading: Versions
+  item: Support for ACP version 2 is deferred until the draft is stable.
+  ids:
+  - AGT-22
+- heading: The methods a client needs
+  item: 'The methods a client needs in ACP: initialize, session/new, prompt, cancel and permission requests.'
+  ids:
+  - AGT-03
+- heading: Session updates
+  item: The session update kinds the side chat reads.
+  ids:
+  - AGT-03
+- heading: MCP servers in session/new
+  item: How an MCP server is handed to an agent in session/new, which the side chat uses to give the agent
+    caliper-mcp.
+  ids:
+  - AGT-03
+  - AGT-02
+- heading: Tool calls, diffs and permission
+  item: Tool calls, diffs and permission requests of the protocol that the side chat shows as cards.
+  ids:
+  - AGT-03
+- heading: Transport
+  item: 'Transport of ACP: JSON lines over standard input and output.'
+  ids:
+  - AGT-03
+- heading: The agents on 15 November 2026
+  item: Section heading for the four agents Caliper detects and their findings.
+  ids:
+  - AGT-03
+- heading: Claude Code
+  item: Claude Code through its ACP adapter as a detected agent of the side chat.
+  ids:
+  - AGT-03
+- heading: Codex
+  item: Codex through its ACP adapter as a detected agent of the side chat.
+  ids:
+  - AGT-03
+- heading: Gemini CLI
+  item: Gemini CLI, native ACP, as a detected agent of the side chat.
+  ids:
+  - AGT-03
+- heading: opencode
+  item: opencode as a detected agent, usable with a local model through Ollama.
+  ids:
+  - AGT-03
+  - AGT-04
+- heading: What the findings mean for Caliper
+  item: Summary of what the four agents share and where they differ.
+  ids:
+  - AGT-03
+- heading: The design of the side chat
+  item: Section heading for the design of the side chat pane.
+  ids:
+  - AGT-03
+- heading: One client for both roles
+  item: One AcpClient drives both the person's own agent in the side chat and the widget agent's sidecar,
+    with the key only in the environment.
+  ids:
+  - AGT-03
+  - AGT-05
+- heading: Processes and threads
+  item: AcpClient runs one agent in its own process group with reader, writer and stderr threads, and
+    chat events reach the UI through the client's queue.
+  ids:
+  - AGT-03
+- heading: Turns, permission prompts and spec diffs
+  item: 'Two kinds of approval show a change the same way: the agent''s own permission requests as cards
+    in the chat, and command approvals from the command layer.'
+  ids:
+  - AGT-03
+  - AGT-06
+- heading: Turns, permission prompts and spec diffs
+  item: A spec change is shown as a diff of the canonical TOML before it is applied; commands are preferred
+    to file edits.
+  ids:
+  - AGT-03
+- heading: Approvals and diffs for every agent
+  item: Approval of destructive commands from the agent, mcp and api origins, held for up to 120 seconds,
+    with no self-approval.
+  ids:
+  - AGT-06
+  - SPC-05
+- heading: Approvals and diffs for every agent
+  item: 'The origin comes from the token: api.json holds the mcp token and each agent session gets its
+    own agent token, with stream access limited to watching.'
+  ids:
+  - AGT-01
+  - AGT-02
+- heading: Approvals and diffs for every agent
+  item: Agent permissions Ask, Accept edits, Read only and, for the chat's session only, Allow all, with
+    card answers that allow a command for the session or always.
+  ids:
+  - AGT-06
+- heading: Approvals and diffs for every agent
+  item: Diff previews and review of spec edits in the command layer, with conflict handling, on by default
+    for agent and mcp.
+  ids:
+  - SPC-05
+  - AGT-06
+- heading: Approvals and diffs for every agent
+  item: 'One card for one change: caliper-agent reads review.status once per turn and asks through ACP
+    only for what Caliper does not review itself.'
+  ids:
+  - AGT-03
+  - AGT-05
+- heading: Approvals and diffs for every agent
+  item: The approval cards strip at the window's bottom edge on every page, showing origin, command, compact
+    diff, loss, time left, Approve and Deny, and a REVIEW mark on the panel.
+  ids:
+  - AGT-17
+- heading: Approvals and diffs for every agent
+  item: The test decisions file CALIPER_TEST_APPROVALS in a hidden app, and no Approve all for a turn.
+  ids:
+  - AGT-17
+- heading: Approvals and diffs for every agent
+  item: 'What remains: the side chat''s own cards for the permission requests of an agent''s tools, beside
+    the strip, and the review setting per origin in its settings.'
+  ids:
+  - AGT-23
+- heading: Cancellation
+  item: Cancel sends session/cancel, withdraws open permission cards, and offers Restart after 10 seconds
+    without an end.
+  ids:
+  - AGT-03
+- heading: Crashes and hangs
+  item: 'Crash and hang handling: exit status, STALLED after two minutes of silence, a FAULTS chip for
+    bad messages, bounded limits and ordered shutdown.'
+  ids:
+  - AGT-03
+- heading: The working folder and the declined capabilities
+  item: The agent starts in the workspace folder, and Caliper declines the file system, terminal, auth
+    and elicitation capabilities.
+  ids:
+  - AGT-03
+- heading: Configuring an agent
+  item: Four detected agents by their own commands on PATH and a custom agent by command line, kept in
+    the app's settings and never in a workspace.
+  ids:
+  - AGT-03
+- heading: Configuring an agent
+  item: 'Planned: read the agent registry at runtime instead of the fixed presets.'
+  ids:
+  - AGT-26
+- heading: Local models in the side chat
+  item: The side chat runs any ACP agent on any model, local models included, with no Caliper code; opencode
+    on Ollama is the worked example, with a Local model mark per agent.
+  ids:
+  - AGT-04
+- heading: Local models in the side chat
+  item: A measured run of caliper-agent in its general role on the Ollama preset in the hidden app, 7
+    model requests in about 80 seconds.
+  ids:
+  - AGT-04
+  - AGT-05
+- heading: Local models in the side chat
+  item: 'Not verified: whether opencode passes a stdio MCP server''s env as Caliper sends it, whether
+    a small local model uses 35 tools well, and the whole path on Windows.'
+  ids:
+  - AGT-04
+- heading: The handoff from the widget agent
+  item: Ask in chat sends the request, the context bundle blocks, the widget conversation, the preview
+    diff and the target ids to the side chat as a draft the person sends.
+  ids:
+  - AGT-18
+- heading: The side chat as built
+  item: 'The side chat pane as built: states with header tags, a conversation with streamed text, thoughts,
+    tool call rows, plans and permission cards, Login, No agent, input and agent picker.'
+  ids:
+  - AGT-03
+- heading: The side chat as built
+  item: Consecutive calls of one command fold into one row with a count and outcome.
+  ids:
+  - AGT-03
+- heading: The side chat as built
+  item: The Local model picker setting and the Shared GPU note in the header while a live session is attached.
+  ids:
+  - AGT-04
+- heading: The side chat as built
+  item: The opening context asks the agent to use the Caliper tools and not to ask before a Caliper command;
+    the agent starts with the first message.
+  ids:
+  - AGT-03
+- heading: The side chat as built
+  item: The environment of the agent's PATH comes from the app, and reading the login shell's environment
+    for a Finder-launched app is not built.
+  ids:
+  - AGT-03
+- heading: The side chat as built
+  item: caliper-chat-shot and the stub agent for captures and tests.
+  ids:
+  - AGT-03
+- heading: The side chat in the app
+  item: The side chat on the spec page and live page with the Chat toggle, a viewport side bar column,
+    and side-chat.json settings that never hold a key.
+  ids:
+  - AGT-03
+- heading: The side chat in the app
+  item: The side chat starts Caliper API on loopback when the app runs without --api, visibly, with a
+    per-session agent token, and stops it when the agent ends unless Open in browser gave out a link.
+  ids:
+  - AGT-03
+  - AGT-01
+- heading: The side chat in the app
+  item: The chat header shows the session mode; Shift-Tab cycles Ask, Accept edits and Read only; Allow
+    all has a banner; APPLIED rows can be undone; saved rules are revoked in the settings.
+  ids:
+  - AGT-06
+- heading: The side chat in the app
+  item: Ask in chat from the inline surface opens the chat with the handoff draft.
+  ids:
+  - AGT-18
+- heading: The side chat in the app
+  item: Tests caliper_chat_pane and caliper_side_chat_app, including a mode walk-through.
+  ids:
+  - AGT-03
+  - AGT-06
+- heading: The manual check with a real agent
+  item: The manual check is a user script with caliper-acp-harness for Claude Code, Codex, Gemini CLI
+    and opencode; it was not run on this branch.
+  ids:
+  - AGT-03
+- heading: What is built and what waits
+  item: 'What is built: the subprocess helper, JSON-RPC peer, AcpClient, presets, harness, review of spec
+    edits, approval cards and the side chat with its tests.'
+  ids:
+  - AGT-03
+- heading: What is built and what waits
+  item: 'Waits: the side chat on the landing page and a Selection tab above the chat on the live page.'
+  ids:
+  - AGT-27
+- heading: What is built and what waits
+  item: 'Waits: open items of the side chat''s Caliper API, such as life cycle edges, a second app on
+    one app-data folder, Accept on preview.commit from another origin, test timing and token revocation
+    of open streams.'
+  reason: maintenance
+- heading: What is built and what waits
+  item: 'Waits: the review setting per origin in the side chat''s settings.'
+  ids:
+  - AGT-23
+- heading: What is built and what waits
+  item: 'Waits: running the spec validator on an agent''s own edit of a spec file before the person answers.'
+  ids:
+  - AGT-24
+- heading: What is built and what waits
+  item: 'Waits: a warning when a workspace holds an opencode configuration.'
+  ids:
+  - AGT-03
+- heading: What is built and what waits
+  item: 'Waits: packaging caliper-mcp beside the app''s executable.'
+  ids:
+  - AGT-10
+- heading: What is built and what waits
+  item: 'Waits: session/load, session/resume, modes and config options in the side chat, images in prompts,
+    and version 2.'
+  ids:
+  - AGT-25
+- heading: What is built and what waits
+  item: 'Waits: the Windows implementation of Process.'
+  ids:
+  - PLT-13
+- heading: What is built and what waits
+  item: 'Waits: the environment of a GUI app, since an app started from the Finder does not inherit the
+    shell PATH.'
+  ids:
+  - AGT-03
+- heading: What is built and what waits
+  item: 'Waits: reading the agent registry at runtime instead of fixed presets.'
+  ids:
+  - AGT-26
+- heading: Decisions
+  item: 'Decisions of the side chat: version 1 first, declined capabilities, chat events through the client''s
+    queue, any agent on any model, four detected agents plus custom, one card per change, the chat starts
+    the API visibly, the origin is the token''s, and a per-agent local-model mark.'
+  ids:
+  - AGT-03
+  - AGT-04
+  - AGT-06
+- heading: Risks
+  item: 'Risks: pace of adapter change, edits outside Caliper''s control in permission-skipping modes,
+    the folder not being a sandbox, server name clashes, adapter issues, workspace opencode configuration,
+    and local model variation.'
+  ids:
+  - AGT-03
+- heading: Risks
+  item: 'Planned mitigation: the side chat warns when the workspace holds opencode.json, opencode.jsonc
+    or an .opencode folder.'
+  ids:
+  - AGT-03
+- heading: Notes on the contracts
+  item: 'Notes: an agent''s MCP call should wait for the user''s answer with a time limit, and Codex also
+    speaks ACP through an adapter.'
+  ids:
+  - AGT-02
+  - AGT-03

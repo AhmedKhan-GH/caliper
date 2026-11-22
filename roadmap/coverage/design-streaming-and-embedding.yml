@@ -1,0 +1,145 @@
+# yaml-language-server: $schema=schema.json
+title: Streaming and embedding plan page
+kind: page
+source: design/streaming-and-embedding.md
+ref: main
+summary: The plan page design/streaming-and-embedding.md on main, read heading by heading; each plan heading
+  has an entry or is listed as holding no feature.
+not_features:
+- Streaming and embedding
+entries:
+- heading: The order of surfaces
+  item: 'ML tools first; remaining surfaces in order: the rest of C++ embedding, Rust bindings, Swift.'
+  ids:
+  - EMB-12
+  - EMB-14
+  - EMB-15
+- heading: Data streaming
+  item: Data streaming is the only way Caliper reaches a browser; only snapshots of tensors travel.
+  ids:
+  - STR-05
+- heading: Data streaming
+  item: WebTransport beside the WebSocket.
+  ids:
+  - STR-16
+- heading: Data streaming
+  item: Data views of tables, such as a subset of rows.
+  ids:
+  - STR-34
+- heading: Data streaming
+  item: 'A zoom as a data view: a zoom or selection that needs more detail becomes a request for another
+    data view computed by the producer.'
+  ids:
+  - STR-35
+- heading: The web viewer
+  item: The web viewer is the live views, ImGui, ImPlot and ImPlot3D compiled to WebAssembly and drawn
+    by a WebGPU backend behind HostRenderer.
+  ids:
+  - EMB-01
+  - EMB-04
+- heading: The web viewer
+  item: 'Order 1, done: Caliper''s real views in notebooks and browsers for every live view kind.'
+  ids:
+  - EMB-04
+  - EMB-03
+- heading: The web viewer
+  item: 'Order 2: every built-in view; geometry path and ImPlot3D remain and need a WebGPU geometry pipeline
+    within the vertex-stage storage buffer limit.'
+  ids:
+  - EMB-08
+  - EMB-09
+- heading: The web viewer
+  item: 'Order 3: the whole Caliper interface in a browser.'
+  ids:
+  - EMB-10
+- heading: The web viewer
+  item: 'Order 4: applets in the browser through the split.'
+  ids:
+  - EMB-11
+- heading: The web viewer
+  item: 'Order 5: the WebGPU backend as the native fallback through Dawn.'
+  ids:
+  - REN-25
+- heading: The web viewer
+  item: 'Smaller steps: clipboard and multi-touch gestures in the canvas.'
+  ids:
+  - EMB-19
+- heading: The web viewer
+  item: 'Smaller steps: a CI job that runs the module''s checks on SwiftShader.'
+  ids:
+  - EMB-04
+- heading: The web viewer
+  item: 'Smaller steps: testing in Safari, Firefox and on Windows.'
+  ids:
+  - EMB-20
+- heading: The web viewer
+  item: No computation runs in the browser; no second ML stack; an unported applet is shown only in the
+    native app.
+  ids:
+  - EMB-11
+- heading: Limits in the browser
+  item: The WebGPU binding moves with Emscripten, whose emdawnwebgpu port changes between releases.
+  ids:
+  - EMB-04
+- heading: Limits in the browser
+  item: The download grows with the views; the module is about 495 KB with Brotli.
+  ids:
+  - EMB-08
+  - EMB-09
+- heading: Applets in the browser
+  item: Every applet splits into a native computation and an interface compiled to WebAssembly; the SDK
+    allows interface code only services with a wire form; earlier applets stay native-only.
+  ids:
+  - EMB-11
+  - SPC-21
+- heading: Spec applets
+  item: Spec applets run in the browser unchanged and satisfy the split by construction.
+  ids:
+  - EMB-06
+  - SPC-08
+- heading: Spec applets
+  item: 'Built first slice: a saved spec applet opens in a browser tab at /v0/spec, drawn from panel.data
+    under a viewer token.'
+  ids:
+  - EMB-06
+- heading: Spec applets
+  item: 'What remains: the page fed by a hub or caliper.serve(), live sources over the stream rather than
+    polls.'
+  ids:
+  - EMB-27
+- heading: Spec applets
+  item: 'What remains: the three tensor transforms in the page for producers that send raw snapshots.'
+  ids:
+  - EMB-27
+- heading: Renderers
+  item: Metal and Vulkan stay the fast paths; the standard webgpu.h renderer can serve native fallbacks
+    through Dawn.
+  ids:
+  - REN-25
+- heading: The embedding package
+  item: 'The minimal package is built; the rest comes later: several views in one app.'
+  ids:
+  - EMB-12
+- heading: The embedding package
+  item: Rendering a frame to an image file from the embedding package.
+  ids:
+  - EMB-22
+- heading: The embedding package
+  item: HiDPI work in the embedding package.
+  ids:
+  - EMB-23
+- heading: The embedding package
+  item: A Qt widget for the embedding package.
+  ids:
+  - PLT-10
+  - EMB-24
+- heading: Security
+  item: Streaming stays on loopback with the session token until a dedicated security review; the streaming
+    socket never carries the command layer.
+  ids:
+  - STR-17
+- heading: Platforms
+  item: The plan covers macOS and Windows; Linux is not planned for now.
+  ids:
+  - PLT-14
+  - PLT-15

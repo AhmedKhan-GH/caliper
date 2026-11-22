@@ -1,0 +1,72 @@
+# yaml-language-server: $schema=schema.json
+title: Platform candidates plan page
+kind: page
+source: design/platform-candidates.md
+ref: main
+summary: The plan page design/platform-candidates.md on main, read heading by heading; each plan heading
+  has an entry or is listed as holding no feature.
+entries:
+- heading: Platform candidates
+  item: Phase 2 settles the split into native computation and WebAssembly interface; drawing pieces belong
+    to the interface, computing pieces stay native.
+  ids:
+  - SPC-21
+  - EMB-11
+- heading: Candidates
+  item: 'Python sidecar over pipes: starts a Python process with a version handshake, a cache version
+    and a synthetic-data mode; a sidecar service.'
+  ids:
+  - SPC-19
+- heading: Candidates
+  item: 'Layout grid: panes as shares of the window with minimums tied to the text scale, as plain rectangles.'
+  ids:
+  - SPC-17
+- heading: Candidates
+  item: 'Tour overlay: steps through regions from a data file; a host tour service where applets register
+    regions and ship a tour file.'
+  ids:
+  - SPC-18
+- heading: Candidates
+  item: '3-D annotation scene: arrows, rings, labels, layers and legends on geometry records, in caliper::viz.'
+  ids:
+  - SPC-20
+- heading: Candidates
+  item: 'Colour by value: colours points by a chosen value with a scale and key, in caliper::viz.'
+  ids:
+  - SPC-20
+- heading: Candidates
+  item: 'Catalog tree: a taxonomy tree with values inline that opens to the selected item, in caliper::viz.'
+  ids:
+  - SPC-20
+- heading: Candidates
+  item: 'Scripted runs and capture: screenshots, a timed demo timeline and screen recording driven by
+    environment variables; a host automation and capture service.'
+  ids:
+  - SPC-16
+- heading: Candidates
+  item: 'Text scale: one factor applied to fonts, metrics and pane minimums, a host setting in caliper.ui.'
+  ids:
+  - SPC-17
+- heading: Findings about existing services
+  item: caliper.jobs.v1 needs a quiet job kind that dismisses itself.
+  ids:
+  - COR-27
+- heading: Findings about existing services
+  item: 'Screen capture belongs to the host: a service that owns capture, scripting and recording, starting
+    from caliper shot and Caliper API''s capture.'
+  ids:
+  - SPC-16
+  - COR-08
+- heading: Findings about existing services
+  item: ImGui errors went unnoticed; development builds of the host should show them.
+  reason: maintenance
+- heading: Order
+  item: 'The order: 1 sidecar service, 2 layout grid and text scale, 3 tour service, 4 automation and
+    capture, 5 viz components, 6 quiet job kind.'
+  ids:
+  - SPC-19
+  - SPC-17
+  - SPC-18
+  - SPC-16
+  - SPC-20
+  - COR-27

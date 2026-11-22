@@ -1,0 +1,265 @@
+# yaml-language-server: $schema=schema.json
+title: Widget agent plan page
+kind: page
+source: design/widget-agent.md
+ref: main
+summary: The plan page design/widget-agent.md on main, read heading by heading; each plan heading has
+  an entry or is listed as holding no feature.
+entries:
+- heading: The role
+  item: The widget agent answers one request about one target in seconds, with only the commands that
+    apply, every change drawn as a preview, and an accepted change as one undo step.
+  ids:
+  - AGT-05
+- heading: The role
+  item: Work that does not fit one target belongs to the side chat, handed over with Ask in chat.
+  ids:
+  - AGT-05
+  - AGT-18
+- heading: Entry points
+  item: Command-K on a panel, from the focused panel or its menu (Ctrl+K on Windows).
+  ids:
+  - AGT-05
+- heading: Entry points
+  item: Command-K on a selection of points or a range in a panel, made by a shift-drag.
+  ids:
+  - AGT-05
+- heading: Entry points
+  item: A prompt line under a dropped file's row, working on the loader the drop created and its outputs,
+    with no change for a question.
+  ids:
+  - AGT-05
+  - SPC-03
+- heading: Entry points
+  item: A Command-K button beside a property in the builder pane's property inspector, for a panel's or
+    a source's property.
+  ids:
+  - AGT-05
+  - SPC-07
+- heading: The inline prompt and the preview
+  item: The inline prompt opens inside the target panel under its title strip and shows the request, the
+    agent's step and Cancel.
+  ids:
+  - AGT-05
+- heading: The inline prompt and the preview
+  item: The preview is drawn in place with a PREVIEW tag, a compact diff of changed keys and Accept, Reject,
+    Refine and Diff actions.
+  ids:
+  - AGT-05
+- heading: The inline prompt and the preview
+  item: 'Other card states: DECLINED, a handoff reason tag, CONFLICT, STOPPED or FAILED, LIMIT and NO
+    CHANGE.'
+  ids:
+  - AGT-05
+- heading: The inline prompt and the preview
+  item: A change that adds, removes or moves panels is drawn as the preview of the whole spec with dashed
+    bronze frames for new panels.
+  ids:
+  - AGT-05
+- heading: The inline prompt and the preview
+  item: The surface, the scripted agent, the agent over AcpClient, caliper-widget-shot, and the page's
+    InlineWidget as built.
+  ids:
+  - AGT-05
+- heading: The inline prompt and the preview
+  item: 'Not built yet: the packaging of caliper-agent with a Python runtime; until then the app finds
+    it through CALIPER_AGENT_PYTHON.'
+  ids:
+  - AGT-10
+- heading: The context bundle
+  item: The app builds a context bundle of the target's spec fragment, schema and sample, render and selection,
+    sized to a quarter of the model's context, with cuts marked.
+  ids:
+  - AGT-05
+- heading: The context bundle
+  item: build_context_bundle() returns ACP content blocks, the scope and meta, with forge-proof data markers.
+  ids:
+  - AGT-05
+- heading: The tool scope
+  item: The tool scope is the subset of the command table, reads and previewable edits only, that the
+    widget agent may use for one target, enforced by the sidecar and kept as data in widget_scopes.json.
+  ids:
+  - AGT-05
+  - SPC-05
+- heading: The tool scope
+  item: When no spec is open, a drop runs spec.new first and a reject undoes it while it is still the
+    top step.
+  ids:
+  - AGT-05
+- heading: The turn budget, the model and the effort
+  item: A prompt makes at most 6 model requests and 8 tool calls and 8,000 output tokens; reaching a limit
+    shows LIMIT.
+  ids:
+  - AGT-05
+- heading: The turn budget, the model and the effort
+  item: Claude Haiku 5.5 at effort low is the Claude default, and any of the four models and any effort
+    can be chosen in the settings.
+  ids:
+  - AGT-05
+- heading: Preview and apply on the command layer
+  item: 'Stacked previews in the session: preview.begin, diff, commit and discard, edits that name a preview,
+    and Accept, Reject and Refine mapped onto them.'
+  ids:
+  - AGT-05
+  - SPC-05
+- heading: Preview and apply on the command layer
+  item: Accept is preview.commit from the ui or builder origin only, so an agent cannot accept its own
+    proposal; a preview expires after 30 minutes.
+  ids:
+  - AGT-05
+- heading: Handoff to the side chat
+  item: Ask in chat from the widget agent, including the handoff tool with a kind and a reason that turns
+    into the card's Ask in chat.
+  ids:
+  - AGT-18
+- heading: With no provider set up
+  item: With no provider, command-K still opens the prompt with only Ask in chat, tagged NO PROVIDER with
+    a Setup action.
+  ids:
+  - AGT-05
+- heading: One journal, one history, one queue
+  item: Both roles reach the command layer through one queue, one journal under the agent origin with
+    widget- groups, and one undo history.
+  ids:
+  - AGT-05
+  - AGT-03
+- heading: How it stays an ACP agent
+  item: The widget agent is the same caliper-agent over the same AcpClient, with _meta.caliper.widget
+    on session/new carrying the target, scope and preview, and session/close.
+  ids:
+  - AGT-05
+  - AGT-03
+- heading: Providers
+  item: 'The widget agent is model-agnostic: Claude on its native API and every other model through an
+    OpenAI-compatible API on Pydantic AI.'
+  ids:
+  - AGT-15
+- heading: Providers
+  item: At most 20 strict tools in one Claude request.
+  ids:
+  - AGT-05
+- heading: Providers
+  item: One manual run of the dashboard prompt against Qwen 3.8 27B on Ollama built the dashboard in 135
+    seconds.
+  ids:
+  - AGT-05
+- heading: Refusals
+  item: A refusal ends the prompt with a card that offers Rephrase, Retry and Model, with server-side
+    fallbacks off.
+  ids:
+  - AGT-05
+- heading: Refusals
+  item: Server-side refusal fallbacks can be switched on once Pydantic AI keeps the fallback block.
+  ids:
+  - AGT-05
+- heading: Presets
+  item: 'The settings in the app: a popup from the landing or any page with presets, base URL, model,
+    effort and one key row per provider, stored in widget-agent.json.'
+  ids:
+  - AGT-05
+- heading: Presets
+  item: 'The presets as data: anthropic, openai, gemini, openrouter, ollama, lmstudio and custom, with
+    fixed hosted base URLs and a remote-host warning.'
+  ids:
+  - AGT-15
+- heading: Presets
+  item: One key per provider in the operating system's credential store, placed only in the sidecar's
+    environment, with scrubbing of known key shapes.
+  ids:
+  - AGT-15
+- heading: Presets
+  item: The Ollama and LM Studio presets use loopback addresses and need no key.
+  ids:
+  - AGT-04
+- heading: Presets
+  item: Any OpenAI-compatible service or server is reached by the Custom preset, such as Mistral, DeepSeek,
+    Groq, llama.cpp, vLLM and mlx_lm.server.
+  ids:
+  - AGT-15
+- heading: Capabilities and degradations
+  item: The capability probe tests tool calling and vision with two short calls, caches the result per
+    base URL and model, and honours the person's overrides.
+  ids:
+  - AGT-16
+- heading: Capabilities and degradations
+  item: Degradations when a model lacks tool calling, vision, context length, strict schemas, parallel
+    calls, streamed arguments or reasoning output.
+  ids:
+  - AGT-05
+- heading: The provider conformance suite
+  item: The conformance suite runs twelve widget tasks against a provider and model with scripted and
+    fake-server modes and a verdict per model.
+  ids:
+  - AGT-14
+- heading: The provider conformance suite
+  item: Real conformance runs are manual and opt-in, and need --real and CALIPER_CONFORMANCE_REAL=1.
+  ids:
+  - AGT-14
+- heading: The provider conformance suite
+  item: 'The suite ran once against Qwen 3.8 27B on Ollama: 10 of 12 tasks passed.'
+  ids:
+  - AGT-14
+- heading: The provider conformance suite
+  item: A Caliper version in result rows and the staleness mark wait for a release numbering of the sidecar.
+  ids:
+  - AGT-14
+- heading: GPU contention
+  item: The Shared GPU note appears in the widget agent's settings and prompt row while a live session
+    is attached and the base URL is loopback, and in the side chat for a marked local agent.
+  ids:
+  - AGT-04
+  - AGT-05
+- heading: Security
+  item: 'Widget agent security: commands only, workspace data as data, keys in the credential store, no
+    self-approval, one host, and loopback default with warnings for remote addresses.'
+  ids:
+  - AGT-05
+- heading: Limits
+  item: 'Limits: one target per prompt, 6 requests and 8 tool calls, 64 recorded edits per preview, 16
+    sessions, 30 minutes per preview, and no loaders, saves, undo or whole-spec replacement.'
+  ids:
+  - AGT-05
+- heading: Decisions
+  item: 'Decisions: two roles, the app builds the bundle, scope derived from the command table, stacked
+    previews, Accept as preview.commit, a handoff tool, Claude Haiku 5.5 at low effort, one sidecar for
+    every command-K, and Pydantic AI as the provider layer.'
+  ids:
+  - AGT-05
+- heading: Decisions
+  item: Until caliper-agent is packaged, the app finds it through CALIPER_AGENT_PYTHON and needs Caliper
+    API.
+  ids:
+  - AGT-10
+- heading: Work items
+  item: 'Items 9 to 13 done: stacked previews, the _meta argument, the ACP SDK evaluation, widget sessions
+    and the context bundle.'
+  ids:
+  - AGT-05
+- heading: Work items
+  item: 'Item 14 built: the inline surface on a panel, a selection, a dropped file and a property; the
+    packaging of caliper-agent with a Python runtime moved to sprint 5.'
+  ids:
+  - AGT-05
+  - AGT-10
+- heading: Work items
+  item: 'Items 15 to 19 done: Pydantic AI providers, the capability probe, presets and key store with
+    settings, the conformance suite and the GPU note.'
+  ids:
+  - AGT-05
+- heading: Work items
+  item: The Windows Credential Manager store, one entry per provider, is on the Windows parity page.
+  ids:
+  - PLT-13
+- heading: Open items
+  item: 'Open: Escape and command-K pass through the settings popup to the page and the prompt.'
+  reason: maintenance
+- heading: Open items
+  item: 'Open: a property''s prompt anchor lacks its panel, so it can draw under another panel''s row.'
+  reason: maintenance
+- heading: Open items
+  item: 'Open: a source''s preview is not drawn in the panels that read it, until Accept.'
+  ids:
+  - AGT-29
+- heading: Open items
+  item: 'Open: a selection outlives its spec when the spec changes or its panel goes.'
+  reason: maintenance

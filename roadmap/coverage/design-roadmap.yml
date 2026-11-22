@@ -1,0 +1,702 @@
+# yaml-language-server: $schema=schema.json
+title: Roadmap plan page
+kind: page
+source: design/roadmap.md
+ref: main
+summary: The plan page design/roadmap.md on main, read heading by heading, and the parts that the sprint4
+  branch's older-based version adds or changes, which name the ref sprint4.
+not_features:
+- Roadmap
+- Developer features
+entries:
+- heading: Where things stand
+  item: 'State on 15 November 2026: host, SDK with 19 service ids, Caliper Embed 1.4.0, Caliper LIB, nine
+    in-tree applets not compiled by the core build; the inspector is on the inspector branch and not on
+    main.'
+  ids:
+  - COR-01
+  - COR-03
+  - COR-13
+  - EMB-07
+  - INT-05
+- heading: Where things stand
+  item: Streaming to notebooks, browsers and the app, the hub, Caliper API v0 and caliper build are built.
+  ids:
+  - STR-05
+  - STR-06
+  - AGT-01
+  - COR-10
+- heading: 'Phase 1: one core with versioned applets'
+  item: 'Step 1: the versioning contract and promotion rule are written in Compatibility and epochs.'
+  ids:
+  - COR-02
+- heading: 'Phase 1: one core with versioned applets'
+  item: 'Step 2: the SDK installs as the caliper-sdk package with headers, CMake config, pinned UI stack
+    and caliper_add_applet().'
+  ids:
+  - COR-04
+- heading: 'Phase 1: one core with versioned applets'
+  item: 'Step 3: the host names no applet; windows dock by role, the core build compiles no applets, CI
+    checks the host names none.'
+  ids:
+  - COR-01
+- heading: 'Phase 1: one core with versioned applets'
+  item: 'Step 3 still to do: CI starts the empty core and checks that the landing screen shows its empty
+    state.'
+  ids:
+  - COR-01
+- heading: 'Phase 1: one core with versioned applets'
+  item: 'Step 4: applets load from outside the repository through --applets, CALIPER_APPLET_PATH, the
+    user applets folder and the search order.'
+  ids:
+  - COR-06
+- heading: 'Phase 1: one core with versioned applets'
+  item: 'Step 4 still to do: shipped applets signed in the app bundle.'
+  ids:
+  - COR-17
+- heading: 'Phase 1: one core with versioned applets'
+  item: 'Step 5: the caliper subcommands list, check, info, new, install <folder>, dev and shot; caliper
+    shot is the first piece of the capture service.'
+  ids:
+  - COR-07
+  - COR-08
+  - COR-09
+  - COR-12
+  - SPC-16
+- heading: 'Phase 1: one core with versioned applets'
+  item: 'Step 6: the minimal embedding package, caliper-embed with one shared library, caliper_embed_api_version()
+    and examples/embed_host.'
+  ids:
+  - EMB-07
+- heading: 'Phase 1: one core with versioned applets'
+  item: 'Step 7: move the inspector applet''s general pieces into the core as services, each in its own
+    commit with tests.'
+  ids:
+  - COR-14
+- heading: 'Phase 1: one core with versioned applets'
+  item: 'Step 8: acceptance, the inspector and two scopes build from their own repository and load into
+    a released Caliper; two versions of one applet resolve.'
+  ids:
+  - COR-15
+- heading: 'Phase 1: one core with versioned applets'
+  item: 'Step 9: move the first-party scopes to a caliper-applets repository and the inspector to its
+    own repository.'
+  ids:
+  - COR-16
+- heading: 'Phase 1: one core with versioned applets'
+  item: OpenGLlama comes back with the inspector work as an applet beside the inspector.
+  ids:
+  - INT-24
+- heading: 'Phase 2: promote proven features'
+  item: 'Promotion 1 in the roadmap''s order: capture and automation, starting from caliper shot.'
+  ids:
+  - SPC-16
+- heading: 'Phase 2: promote proven features'
+  item: 'Promotion 2: the layout grid and the text scale.'
+  ids:
+  - SPC-17
+- heading: 'Phase 2: promote proven features'
+  item: 'Promotion 3: tours.'
+  ids:
+  - SPC-18
+- heading: 'Phase 2: promote proven features'
+  item: 'Promotion 4: the Python sidecar.'
+  ids:
+  - SPC-19
+- heading: 'Phase 2: promote proven features'
+  item: 'Promotion 5: the caliper::viz components (annotation scene, colour by value, catalog tree).'
+  ids:
+  - SPC-20
+- heading: 'Phase 2: promote proven features'
+  item: 'Promotion 6: a quiet job kind.'
+  ids:
+  - COR-27
+- heading: 'Phase 2: promote proven features'
+  item: Development builds treat ImGui errors as failures.
+  reason: maintenance
+- heading: 'Phase 2: promote proven features'
+  item: 'Phase 2 starts by settling one decision: every applet splits into a native computation and a
+    WebAssembly interface, and interface code may use only services with a wire form; applets built before
+    stay native-only.'
+  ids:
+  - SPC-21
+  - EMB-11
+- heading: 'Phase 3: agent-built panels'
+  item: Drop data in, make loaders, build visuals by hand in a builder pane, with the side chat, the widget
+    agent, or an outside agent over MCP; everything built is data.
+  ids:
+  - SPC-07
+  - SPC-03
+  - AGT-02
+  - AGT-03
+  - AGT-05
+- heading: 'Phase 3: agent-built panels'
+  item: 'The parts: command layer, loaders, catalog, spec format with seven primitives, spec applet kind,
+    caliper-mcp, side chat, widget agent.'
+  ids:
+  - SPC-05
+  - SPC-03
+  - SPC-04
+  - SPC-01
+  - SPC-08
+  - AGT-02
+  - AGT-03
+  - AGT-05
+- heading: 'Phase 3: agent-built panels'
+  item: 'Status paragraph says the libraries are not yet wired into the app: command endpoints, spec runtime
+    and applet kind, drag and drop, builder pane, side chat and widget inline surface.'
+  ids:
+  - SPC-07
+  - SPC-05
+  - AGT-01
+- heading: 'Phase 3: agent-built panels'
+  ref: sprint4
+  item: The sprint4 branch's shorter Phase 3 text (about six spec primitives, series, heatmap, points,
+    mesh, table, histogram) comes from the older base and lists mesh as a spec primitive.
+  ids:
+  - SPC-11
+- heading: 'Phase 4: the registry'
+  item: Registry at caliperapp.ai of spec applets and signed first-party applets, a Browse tab, versioned
+    install by id, publishing by pull request.
+  ids:
+  - COR-18
+- heading: API
+  item: Caliper LIB, Caliper Embed and Caliper API v0 are built.
+  ids:
+  - STR-01
+  - EMB-07
+  - AGT-01
+- heading: API
+  item: The full API comes later with the command layer, so a program can drive the app's state from outside.
+  ids:
+  - AGT-01
+  - SPC-05
+- heading: API
+  ref: sprint4
+  item: The API subsection describes API v0 as planned work; main already ships it, so this is the older
+    base.
+  ids:
+  - AGT-01
+- heading: Caliper CLI
+  item: The built subcommands, among them build and serve, are described in Caliper CLI.
+  ids:
+  - COR-10
+  - COR-11
+- heading: Caliper CLI
+  item: caliper install <url>, caliper package and caliper publish come later with the .caliperapp format,
+    the signing policy and the registry.
+  ids:
+  - COR-19
+  - COR-23
+  - COR-18
+  - COR-28
+- heading: Caliper CLI
+  item: Hot reload comes later; its entry points are undecided.
+  ids:
+  - COR-20
+- heading: Caliper CLI
+  ref: sprint4
+  item: The Caliper CLI subsection is rewritten on the older base; recordings add caliper open and caliper
+    export in recordings.md.
+  ids:
+  - COR-26
+  - STR-28
+- heading: MCP
+  item: An MCP server comes in Phase 3 beside the command layer and uses the capture service that Phase
+    2 adds.
+  ids:
+  - AGT-02
+  - SPC-16
+- heading: MCP
+  item: 'Use: visualising the work of any agent.'
+  ids:
+  - AGT-02
+- heading: MCP
+  item: 'Use: watching training runs.'
+  ids:
+  - AGT-02
+  - STR-05
+- heading: MCP
+  item: 'Use: running interpretability experiments automatically through the inspector''s intervention
+    API.'
+  ids:
+  - AGT-02
+  - INT-10
+- heading: MCP
+  item: 'Use: answering questions about data through caliper.data.v1.'
+  ids:
+  - AGT-02
+  - SPC-04
+- heading: MCP
+  item: 'Use: making figures and screenshots for the documentation.'
+  ids:
+  - AGT-02
+  - SPC-16
+- heading: MCP
+  item: 'Use: driving applets in tests.'
+  ids:
+  - AGT-02
+  - SPC-16
+- heading: MCP
+  item: 'Use: explaining what is on the screen from the tour data.'
+  ids:
+  - AGT-02
+  - SPC-18
+- heading: MCP
+  item: If agents need to see the screen sooner, the capture service moves earlier, not MCP.
+  ids:
+  - SPC-16
+- heading: Streaming and embedding
+  item: 'Plan link and order of surfaces: Python scripts and notebooks, web viewer, C++ embedding, Rust
+    bindings, Swift; data streaming is the only way Caliper reaches a browser.'
+  ids:
+  - EMB-12
+  - EMB-14
+  - EMB-15
+- heading: Streaming and embedding
+  item: 'Built so far: embedding package, network streaming over protocol v3 with data views, caliper.serve(),
+    notebook widgets, 3.1 controls, app and viewer attach by link, hub, browser views.'
+  ids:
+  - EMB-07
+  - STR-02
+  - STR-08
+  - STR-05
+  - STR-03
+  - STR-07
+  - STR-06
+  - EMB-01
+  - EMB-04
+  - EMB-03
+- heading: Streaming and embedding
+  item: Streaming costs the training loop 1 to 2.5 % for one view, 3 to 4.6 % for three, at most 1 % with
+    no viewer.
+  ids:
+  - STR-05
+- heading: Streaming and embedding
+  item: 'Still to do 1: interventions on a model, such as ablating a head or steering, after the controls
+    of 3.1; they come with the inspector work.'
+  ids:
+  - INT-10
+  - INT-11
+  - INT-13
+  - INT-20
+- heading: Streaming and embedding
+  item: 'Still to do 2.1: clipboard and multi-touch in the canvas.'
+  ids:
+  - EMB-19
+- heading: Streaming and embedding
+  item: 'Still to do 2.1: a CI job for the browser module''s checks.'
+  ids:
+  - EMB-04
+- heading: Streaming and embedding
+  item: 'Still to do 2.1: testing in Safari, Firefox and on Windows.'
+  ids:
+  - PLT-09
+  - EMB-20
+- heading: Streaming and embedding
+  item: 'Still to do 2.2: every built-in view; the geometry path and ImPlot3D remain.'
+  ids:
+  - EMB-08
+  - EMB-09
+- heading: Streaming and embedding
+  item: 'Still to do 2.3: the whole Caliper interface in a browser, with file-system storage, DuckDB WebAssembly
+    and cross-origin isolation.'
+  ids:
+  - EMB-10
+- heading: Streaming and embedding
+  item: 'Still to do 2.4: applets in the browser, through the split settled in Phase 2.'
+  ids:
+  - EMB-11
+  - SPC-21
+- heading: Streaming and embedding
+  item: 'Still to do 2.5: the same WebGPU backend as the native fallback through Dawn.'
+  ids:
+  - REN-25
+- heading: Streaming and embedding
+  item: 'Still to do 3: WebTransport beside the WebSocket.'
+  ids:
+  - STR-16
+- heading: Streaming and embedding
+  item: 'Still to do 3: the dedicated security review before any session leaves the machine.'
+  ids:
+  - STR-17
+- heading: Streaming and embedding
+  item: 'Still to do 4: the rest of C++ embedding, Rust bindings and Swift.'
+  ids:
+  - EMB-12
+  - EMB-14
+  - EMB-15
+- heading: Data and Cloud
+  item: Run history, comparison and recording and replay are planned for the desktop app after Phase 1
+    and after streaming, on the local DuckDB stores, with no account or server.
+  ids:
+  - RUN-03
+  - RUN-05
+  - STR-12
+- heading: Data and Cloud
+  item: A hosted product, which is outside the public registry.
+  reason: out-of-scope
+- heading: Data and Cloud
+  ref: sprint4
+  item: The Data and Cloud paragraph moves up; run history, comparison and recording stay planned.
+  ids:
+  - RUN-03
+  - RUN-05
+  - STR-12
+- heading: Renderers
+  item: The WebGPU backend is built for the browser; its native role through Dawn is not part of the current
+    work.
+  ids:
+  - REN-13
+  - REN-25
+- heading: Renderers
+  item: Metal on macOS and Vulkan on Windows stay the normal path at full speed with zero-copy; nothing
+    routes them through another layer.
+  ids:
+  - REN-01
+  - REN-02
+  - REN-08
+- heading: Renderers
+  item: 'Renderers 1: run the WebGPU backend as the native fallback through Dawn, chosen only when Metal
+    or Vulkan is unavailable, drawing via Direct3D 12 or 11, OpenGL ES or SwiftShader.'
+  ids:
+  - REN-25
+- heading: Renderers
+  item: 'Renderers 2: retire the GLEW OpenGL fallback once the Dawn path covers its cases.'
+  ids:
+  - REN-17
+  - REN-03
+- heading: Renderers
+  item: 'Renderers 3: evaluate writing each shader once and translating it, for example with Slang; the
+    WebGPU backend''s two shaders are hand-written WGSL for now.'
+  ids:
+  - REN-10
+- heading: Renderers
+  item: 'Caliper then maintains three renderers: Metal, Vulkan and WebGPU.'
+  ids:
+  - REN-01
+  - REN-02
+  - REN-13
+- heading: Renderers
+  ref: sprint4
+  item: 'The rewritten Renderers section: Metal and Vulkan backends of a thin graphics layer, GLEW retired
+    now, one WebGPU backend with the Dawn fallback landing with Windows parity, shaders written once in
+    WGSL and translated by Naga, a scene service for applets, and one version of each graphics service.'
+  ids:
+  - REN-17
+  - REN-13
+  - REN-25
+  - REN-10
+  - REN-16
+  - COR-25
+- heading: Renderers
+  ref: sprint4
+  item: The Vulkan backend of the layer comes with Windows parity; until then the Windows app draws ImGui
+    pages and refuses textures, geometry and applet scenes.
+  ids:
+  - PLT-11
+  - PLT-02
+- heading: Windows parity
+  item: Windows parity follows the macOS sprints; the steps are on the Windows parity page.
+  ids:
+  - PLT-05
+- heading: Windows parity
+  ref: sprint4
+  item: Windows parity follows the macOS sprints; the Dawn fallback and the Vulkan backend of the layer
+    are its renderer work.
+  ids:
+  - PLT-11
+  - REN-25
+- heading: Smaller work
+  item: A development build lists the hello and sine_scope test fixtures as shipped applets.
+  reason: maintenance
+- heading: Smaller work
+  item: Rewrite code comments that cite deleted design documents by bare section number.
+  reason: maintenance
+- heading: Smaller work
+  item: Fix stale comments in embed_scope.cpp (sql_job) and cuda_driver.h (CALIPER_VULKAN_SELFTEST).
+  reason: maintenance
+- heading: Smaller work
+  item: Measure EmbedScope's training step time without the device drain, then retire the comment that
+    says the drain dominates.
+  reason: test
+- heading: Smaller work
+  item: GPTScope's head heatmap re-creates its texture on every probe when the zero-copy pool is unused;
+    create it once and update it.
+  reason: maintenance
+- heading: Smaller work
+  item: EmbedScope saves its checkpoint on the frame thread; move the save into a job.
+  reason: maintenance
+- heading: Smaller work
+  item: Add the Vulkan mirror of the geometry.v1_2 textured POINT row in tests/gfx.
+  ids:
+  - REN-06
+- heading: Smaller work
+  item: Re-check the G15 instance-offset gate in the Metal and Vulkan backends and isolate the Metal G1
+    to G12 re-gate.
+  ids:
+  - REN-07
+- heading: Smaller work
+  item: 'CI: cache the FetchContent downloads and cache or shallow-clone third_party/.'
+  reason: maintenance
+- heading: Smaller work
+  ref: sprint4
+  item: Smaller-work items change only in link form.
+  reason: maintenance
+- heading: Not now
+  item: Lua or WebAssembly applets and third-party native applets are not now.
+  ids:
+  - SPC-21
+  - COR-23
+  - SPC-15
+- heading: Not now
+  item: A hosted product, which is outside the public registry.
+  reason: out-of-scope
+- heading: Not now
+  item: Linux is not planned for now.
+  ids:
+  - PLT-14
+  - PLT-15
+- heading: Not now
+  item: A second native host is not needed now; examples/embed_host stays as the embedding example and
+    test.
+  ids:
+  - EMB-07
+- heading: Invariants
+  item: Applets supply no shaders.
+  ids:
+  - SPC-14
+- heading: Invariants
+  item: A missing capability falls back to a working slower path and says so.
+  ids:
+  - REN-03
+  - REN-25
+- heading: Risks
+  item: Every additive revision grows the ABI surface that must be kept working.
+  ids:
+  - COR-03
+- heading: Risks
+  item: Once a registry exists, an epoch bump strands installed applets until rebuilt.
+  ids:
+  - COR-18
+  - COR-02
+- heading: Risks
+  item: A registry is a supply-chain target; see signing.
+  ids:
+  - COR-18
+  - COR-23
+- heading: Risks
+  ref: sprint4
+  item: 'The risk on ABI surface changes: graphics services keep one version each from sprint 4, so an
+    incompatible change costs an epoch bump instead.'
+  ids:
+  - COR-25
+- heading: Open questions
+  item: 'Signing third-party applets on macOS: disable-library-validation entitlement or same-team signing
+    only; decide before the first third-party applet ships.'
+  ids:
+  - COR-23
+  - COR-24
+- heading: Open questions
+  item: 'Applet shaders: whether applets still supply no shaders once agent-built panels exist.'
+  ids:
+  - SPC-14
+  - SPC-21
+- heading: Undecided
+  item: 'Reviewer bundle: one download that runs an applet and its demo on a machine that never built
+    Caliper.'
+  ids:
+  - COR-38
+- heading: Undecided
+  item: 'The em-controller: an actor-critic policy that steers FieldScope''s plasma, as an applet of its
+    own.'
+  ids:
+  - COR-37
+- heading: Undecided
+  item: 'Digital twins: a population twin on InstanceScope''s unused per-variant reduction and a machine
+    thermal twin fed by caliper.feed.v1.'
+  ids:
+  - COR-36
+- heading: Undecided
+  item: 'Research publishing beyond export: a Python DLPack path into the geometry bridge.'
+  ids:
+  - STR-36
+- heading: Undecided
+  item: 'Research publishing beyond export: applets written in Python.'
+  ids:
+  - SPC-19
+  - COR-31
+- heading: Undecided
+  item: 'Artifacts redesign: a checkpoint browser with previews and resuming training from a checkpoint.'
+  ids:
+  - RUN-10
+- heading: Undecided
+  item: 'Applet dependency packaging: whether an applet may link its own heavy dependencies, and runtime
+    packs that the host installs once; no pack manager exists.'
+  ids:
+  - COR-33
+- heading: Undecided
+  item: '`.caliperapp` bundles: per-platform binaries and manifest keys for platforms, authors, licence
+    and runtimes.'
+  ids:
+  - COR-19
+- heading: Undecided
+  item: 'Hot reload: which entry points reloading needs, such as save_state, load_state, on_suspend, on_resume.'
+  ids:
+  - COR-20
+- heading: Undecided
+  item: 'SDK conformance: a conformance checker and reference applets built against each SDK release.'
+  ids:
+  - COR-21
+- heading: Undecided
+  item: 'Isolation and reach: applets in a separate process.'
+  ids:
+  - COR-22
+- heading: Undecided
+  item: 'Isolation and reach: scripting bindings.'
+  ids:
+  - COR-32
+- heading: Undecided
+  item: 'Live streaming: several viewers per session.'
+  ids:
+  - STR-18
+- heading: Undecided
+  item: 'Live streaming: f16, bf16 and RGB zero-copy kernels.'
+  ids:
+  - STR-19
+- heading: Undecided
+  item: 'Live streaming: a smaller wheel without the stores.'
+  ids:
+  - STR-37
+- heading: Undecided
+  item: 'Live streaming: an arm64 wheel job.'
+  ids:
+  - PLT-14
+- heading: Undecided
+  item: 'Embedding: a canvas-info query.'
+  ids:
+  - EMB-21
+- heading: Undecided
+  item: 'Zero-copy: device-backed alloc_shared on Metal.'
+  ids:
+  - REN-60
+- heading: Undecided
+  item: 'Zero-copy: a pool of exportable Vulkan images.'
+  ids:
+  - REN-59
+- heading: Undecided
+  item: 'Geometry: thick lines and ribbons.'
+  ids:
+  - REN-30
+- heading: Undecided
+  item: 'Geometry: MSAA.'
+  ids:
+  - REN-29
+- heading: Undecided
+  item: 'Geometry: a culling flag.'
+  ids:
+  - REN-58
+- heading: Undecided
+  item: 'Geometry: volumetric rendering.'
+  ids:
+  - REN-28
+- heading: Undecided
+  item: 'Telemetry sources: feed channels registered by applets or read from serial, UDP or MQTT.'
+  ids:
+  - COR-35
+- heading: Undecided
+  item: 'GPTScope follow-ups: point picking in ThoughtSpace.'
+  ids:
+  - REN-15
+  - INT-25
+- heading: Undecided
+  item: 'GPTScope follow-ups: a learned projection in ThoughtSpace.'
+  ids:
+  - INT-26
+- heading: Undecided
+  item: 'GPTScope follow-ups: induction-head metrics.'
+  ids:
+  - INT-16
+- heading: Undecided
+  item: 'GPTScope follow-ups: activation patching.'
+  ids:
+  - INT-17
+- heading: Undecided
+  item: 'Instrument inputs: live input slots bound to applet manifests through a live_input service.'
+  ids:
+  - COR-34
+- heading: Scenes and recordings
+  ref: sprint4
+  item: 'The new section: 3-D scenes and recordings are designed and not built, built by sprint 4 as increments,
+    with five parts (renderer core, scenes, timelines and recordings, scenes in the browser, the two demos).'
+  ids:
+  - STR-12
+  - REN-11
+- heading: Scenes and recordings
+  ref: sprint4
+  item: 'The renderer core part: one graphics layer, one shader source, a shared scene core, zero-copy
+    as an import capability, GLEW retired early, views moved onto the layer, TypeScript WebGPU views removed,
+    a scene service replacing the geometry service, one version of each graphics service with one epoch
+    bump.'
+  ids:
+  - REN-09
+  - REN-10
+  - REN-11
+  - REN-16
+  - REN-17
+  - REN-35
+  - COR-25
+- heading: Scenes and recordings
+  ref: sprint4
+  item: 'The scenes part: entities with transforms, points, lines, arrows, boxes, meshes, images and pinhole
+    cameras, with a text log and a bar chart whose drawing moved to sprint 5.'
+  ids:
+  - STR-10
+  - REN-37
+  - REN-38
+  - REN-40
+  - REN-41
+  - REN-51
+  - REN-52
+- heading: Scenes and recordings
+  ref: sprint4
+  item: 'The timelines and recordings part: stamps on several timelines, the recording file, recordings
+    in the workspace and the scrubber in the app and the browser.'
+  ids:
+  - STR-12
+  - STR-13
+  - STR-23
+- heading: Scenes and recordings
+  ref: sprint4
+  item: 'The browser part: scenes on the WebGPU backend of the renderer core, and the demos part: the
+    loss landscape and the training run, with three other demos moved to sprint 5.'
+  ids:
+  - REN-13
+  - STR-11
+  - REN-37
+  - REN-38
+  - REN-39
+  - REN-41
+  - STR-30
+- heading: Sprint 5
+  ref: sprint4
+  item: 'The new subsection: the up-axis switch and the starting camera, then sprint 5''s run comparison,
+    linked cameras, slice planes and isosurfaces, mesh files, a URDF helper, follow an entity, trails,
+    ellipsoids and error bands, ROS 2 import, an orthographic projection with preset views, saved viewpoints,
+    more shapes and events over shared memory; a fly mode is left out.'
+  ids:
+  - RUN-05
+  - RUN-07
+  - REN-26
+  - REN-27
+  - REN-18
+  - REN-19
+  - REN-20
+  - STR-22
+  - REN-23
+  - REN-21
+  - REN-43
+  - REN-45
+  - REN-47
+  - REN-50
+  - STR-32

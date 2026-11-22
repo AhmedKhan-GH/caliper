@@ -1,0 +1,116 @@
+# yaml-language-server: $schema=schema.json
+title: Catalog plan page
+kind: page
+source: design/catalog.md
+ref: main
+summary: The plan page design/catalog.md on main, read heading by heading; each plan heading has an entry
+  or is listed as holding no feature.
+entries:
+- heading: What is built and what is planned
+  item: 'The library caliper_builder_catalog: CatalogEntry with a strict JSON form, the CatalogProvider
+    interface, Catalog that merges providers, an in-memory provider for tests and sample_tensor().'
+  ids:
+  - SPC-04
+- heading: What is built and what is planned
+  item: LoaderCatalogProvider and the handlers of catalog.list, catalog.describe and catalog.sample in
+    the session library.
+  ids:
+  - SPC-04
+  - SPC-05
+- heading: What is built and what is planned
+  item: The host providers LiveCatalog, FeedCatalog and MetricsCatalog with register_catalog_providers(),
+    each also the data source of its kind for the session's resolve.
+  ids:
+  - SPC-04
+- heading: What is built and what is planned
+  item: Tests of the providers against a real metrics store, a real feed store, a stand-in live core and
+    an offscreen embed core.
+  ids:
+  - SPC-04
+- heading: What is built and what is planned
+  item: 'Planned: the app calls register_catalog_providers() when it opens its session and the live catalog''s
+    update() once per frame.'
+  ids:
+  - SPC-04
+  - SPC-06
+- heading: The entry
+  item: A catalog entry always has fourteen keys (id, kind, name, title, origin, columns, rows, dtype,
+    shape, rate_hz, bytes, wire, warnings, updated_at) with null where not applicable, and a strict parser
+    that reports catalog.invalid_entry.
+  ids:
+  - SPC-04
+- heading: Ids
+  item: A source id is <kind>:<name> split at the first colon, with parse_catalog_id() and catalog.invalid_id.
+  ids:
+  - SPC-04
+- heading: Kinds
+  item: The five kinds table, tensor, live, feed and metric, with their shapes and what columns, dtype,
+    rate_hz and bytes mean for each.
+  ids:
+  - SPC-04
+- heading: Origins
+  item: 'Where each source comes from: a loader output, a database table no loader made, a live view,
+    a caliper.feed.v1 channel or a caliper.metrics.v1 run and tag, with a closed set of origin keys and
+    naming rules; a live view''s tensor is its newest snapshot''s payload.'
+  ids:
+  - SPC-04
+  - RUN-01
+- heading: The commands
+  item: catalog.list, catalog.describe and catalog.sample, with their arguments, results and one sample
+    shape for every kind.
+  ids:
+  - SPC-04
+  - SPC-05
+- heading: Sampling rules and limits
+  item: 'Sample bounds: the first limit rows of a table, newest of a feed, last points of a metric, string
+    cells cut at 1024 bytes, tensor statistics exact to 2^26 elements then strided, and a slice of at
+    most 64 per axis and 4096 values.'
+  ids:
+  - SPC-04
+- heading: Providers, merging and refreshing
+  item: How providers are merged, refreshed and costed.
+  ids:
+  - SPC-04
+- heading: The provider interface
+  item: Providers implement list, describe, sample and revision, with a name, a priority and at most 32
+    per catalog.
+  ids:
+  - SPC-04
+- heading: Merging
+  item: Catalog merges providers by priority, reports duplicate ids, drops invalid entries with warnings
+    and tolerates a failing provider.
+  ids:
+  - SPC-04
+- heading: Refreshing
+  item: The catalog keeps no cache; each provider keeps its own state current, and the revision lets a
+    pane list again only when the catalog changes.
+  ids:
+  - SPC-04
+- heading: What each call costs
+  item: A table of what list, describe and sample cost for the live, feed and metric providers and on
+    which thread they may run; a live view is copied on the frame thread only while someone reads it.
+  ids:
+  - SPC-04
+- heading: The cost of a live panel, measured
+  item: The benchmark caliper_catalog_providers_bench measures the cost of a live attention-entropy panel
+    from 0.8 MB to 144 MB; figures were taken on a busy machine and are an upper bound.
+  ids:
+  - SPC-04
+  - SPC-08
+- heading: The cost of a live panel, measured
+  item: 'A cheaper path for large live tensors: reduce on the producer through a data view, or recompute
+    a slow panel at most a few times a second, or resolve it on a worker thread and draw the last result.
+    The page says neither of the last two is built.'
+  ids:
+  - STR-08
+  - SPC-36
+- heading: Reserved names
+  item: The catalog kind recording and the schema name caliper_recordings are reserved for recorded sessions;
+    version 0 refuses the kind with catalog.invalid_id.
+  ids:
+  - STR-12
+- heading: Decisions
+  item: 'Recorded catalog decisions: every key present, a closed origin set, metric names by run id, strided
+    statistics, priority duplicates, no cache and tiled heatmaps given as cells.'
+  ids:
+  - SPC-04
