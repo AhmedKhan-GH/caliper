@@ -902,10 +902,14 @@ void record_spec_pick(const std::string& panel, const caliper_builder::Event& pi
     // the keys of a live view's pick (entity, index, row_id, position).
     const json& f = pick.fields.contains("fields") && pick.fields["fields"].is_object() ? pick.fields["fields"] : pick.fields;
     cb::PickFields out;
+    // A whole number of the pick, when it is a finite number of a magnitude
+    // of at most 2^53 - 1, so that the rounding is exact and defined.
     auto integer = [&](const char* k) -> std::optional<std::int64_t> {
         const auto it = f.find(k);
         if (it == f.end() || !it->is_number()) return std::nullopt;
-        return static_cast<std::int64_t>(std::llround(it->get<double>()));
+        const double d = it->get<double>();
+        if (!std::isfinite(d) || std::fabs(d) > 9007199254740991.0) return std::nullopt;
+        return static_cast<std::int64_t>(std::llround(d));
     };
     auto number = [&](const char* k) -> std::optional<double> {
         const auto it = f.find(k);

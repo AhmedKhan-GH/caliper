@@ -268,6 +268,16 @@ TensorResult TensorData::map_file(const std::string& path, uint64_t offset, DTyp
     return r;
 }
 
+std::optional<double> TensorData::element_at(int64_t i) const {
+    if (i < 0 || static_cast<uint64_t>(i) >= numel_ || !data_) return std::nullopt;
+    return element(static_cast<uint64_t>(i));
+}
+
+std::optional<double> TensorData::element_at(int64_t row, int64_t column) const {
+    if (shape_.size() != 2 || row < 0 || column < 0 || row >= shape_[0] || column >= shape_[1]) return std::nullopt;
+    return element_at(row * shape_[1] + column);
+}
+
 double TensorData::element(uint64_t i) const {
     const uint8_t* p = data_ + i * dtype_size(dtype_);
     switch (dtype_) {

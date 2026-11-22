@@ -9,6 +9,8 @@
 
 #include "helpers.h"
 
+#include <limits>
+
 using namespace caliper_builder;
 using namespace session_test;
 using nlohmann::json;
@@ -312,6 +314,46 @@ TEST_CASE("state: selection commands") {
 
     CHECK(err(*s, "selection.set", {{"panel", "nope"}, {"clear", true}}) == "panel.not_found");
     CHECK(err(*s, "selection.set", {{"panel", "heat"}, {"entity", "e"}, {"index", 0}}) == "selection.bad_item");
+}
+
+// selection.set reads an item only inside the entity's arrays: a negative
+// index and one that wraps to a negative one are refused at the command, and
+// one past the items at the data.
+TEST_CASE("state: selection.set refuses an index outside the entity's items") {
+    const std::string ws = fresh_dir("state-selection-range") + "/workspace";
+    write_safetensors_f32(ws + "/data/cloud.safetensors", "p", {4, 3}, {0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3});
+    write_safetensors_f32(ws + "/data/hills.safetensors", "h", {2, 3}, {1, 2, 3, 4, 5, 6});
+    auto s = open_session(ws);
+    ok(*s, "data.import", {{"paths", {"data/cloud.safetensors", "data/hills.safetensors"}}});
+    ok(*s, "spec.new", {{"id", "bench"}});
+    ok(*s, "source.add", {{"id", "cloud"}, {"catalog", "tensor:cloud_p"}});
+    ok(*s, "source.add", {{"id", "hills"}, {"catalog", "tensor:hills_h"}});
+    ok(*s, "panel.create", {{"id", "world"}, {"primitive", "scene"}, {"bind", {{"scene", "live:model"}}}});
+    ok(*s, "entity.set", {{"panel", "world"}, {"entity", {{"path", "dots"}, {"draw", "points"}, {"bind", {{"positions", "cloud"}}}}}});
+    ok(*s, "entity.set", {{"panel", "world"}, {"entity", {{"path", "land"}, {"draw", "surface"}, {"bind", {{"height", "hills"}}}}}});
+
+    const json last = ok(*s, "selection.set", {{"panel", "world"}, {"entity", "dots"}, {"index", 3}});
+    CHECK(last["fields"]["index"] == 3);
+    CHECK(last["fields"]["x"] == 3.0);
+    const json cell = ok(*s, "selection.set", {{"panel", "world"}, {"entity", "land"}, {"index", 5}});
+    CHECK(cell["fields"]["z"] == 6.0);
+    for (const char* entity : {"dots", "land"}) {
+        INFO(entity);
+        // The command's schema refuses a negative value (command.invalid_args);
+        // an unsigned value past the signed range passes it and would wrap
+        // to -1, which the command refuses.
+        for (const json& index : {json(-1), json(std::numeric_limits<std::int64_t>::min()),
+                                  json(std::numeric_limits<std::uint64_t>::max())}) {
+            INFO(index.dump());
+            const auto r = invoke(*s, "selection.set", {{"panel", "world"}, {"entity", entity}, {"index", index}});
+            CHECK_FALSE(r.ok);
+            CHECK(r.error.where == "args.index");
+            if (index.is_number_unsigned()) CHECK(r.error.code == "selection.bad_item");
+        }
+        CHECK(err(*s, "selection.set", {{"panel", "world"}, {"entity", entity}, {"index", 6}}) == "selection.bad_item");
+    }
+    // The refused calls left the last pick as it was.
+    CHECK(ok(*s, "selection.get", {{"panel", "world"}})["fields"]["entity"] == "land");
 }
 
 // A range with follow moves with its upper bound while its upper end stands on it.

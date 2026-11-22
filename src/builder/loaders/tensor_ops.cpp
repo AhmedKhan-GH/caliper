@@ -67,7 +67,9 @@ void slice_bounds(const TensorTransform& t, int64_t n, int64_t* start, int64_t* 
     const int64_t s = t.start ? clamp(*t.start) : 0;
     const int64_t e = t.stop ? clamp(*t.stop) : n;
     *start = s;
-    *count = e > s ? (e - s + step - 1) / step : 0;
+    // (e - s - 1) / step + 1 is the ceiling of (e - s) / step without the
+    // overflow of e - s + step - 1 for a step near the int64_t limit.
+    *count = e > s ? (e - s - 1) / step + 1 : 0;
 }
 
 std::vector<uint64_t> row_major_strides(const std::vector<int64_t>& shape) {

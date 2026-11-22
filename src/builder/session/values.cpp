@@ -36,11 +36,17 @@ using spec::StateType;
 
 constexpr double kEps = 1e-9;
 
+// A whole number of a magnitude of at most 2^53 - 1, which a double and an
+// int64_t both keep exactly.
 bool integral(const json& v) {
-    if (v.is_number_integer()) return true;
+    if (v.is_number_unsigned()) return v.get<std::uint64_t>() <= 9007199254740991ULL;
+    if (v.is_number_integer()) {
+        const std::int64_t i = v.get<std::int64_t>();
+        return i >= -9007199254740991LL && i <= 9007199254740991LL;
+    }
     if (!v.is_number_float()) return false;
     const double d = v.get<double>();
-    return std::isfinite(d) && std::floor(d) == d && std::fabs(d) <= 9.007199254740992e15;
+    return std::isfinite(d) && std::floor(d) == d && std::fabs(d) <= 9007199254740991.0;
 }
 
 // Two values are the same value: equal JSON, or equal numbers.

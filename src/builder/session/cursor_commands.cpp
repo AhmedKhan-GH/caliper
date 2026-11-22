@@ -5,6 +5,9 @@
 // and add one `cursor` event for each change that a command makes.
 #include <caliper_builder/session/instrument_commands.h>
 
+#include <cstdint>
+#include <limits>
+
 namespace caliper_builder {
 
 namespace {
@@ -80,6 +83,11 @@ CommandOutput cursor_command(const CommandContext& ctx, InstrumentContext& ic) {
                 Error("command.invalid_args", "speed must be a number from 0.1 to 1000.", "args.speed"));
         wanted.speed = s.get<double>();
     }
+    // A step past the signed range would wrap to a negative one.
+    if (has_step && args["step"].is_number_unsigned() &&
+        args["step"].get<std::uint64_t>() > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+        return CommandOutput::fail(
+            Error("command.invalid_args", "step is a whole number in the signed 64-bit range.", "args.step"));
     if (has_step) wanted.step = args["step"].get<std::int64_t>();
     if (has_playing) wanted.playing = args["playing"].get<bool>();
     // A step or play holds the view unless live says otherwise; live = true

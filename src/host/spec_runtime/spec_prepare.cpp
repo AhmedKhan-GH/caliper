@@ -539,7 +539,8 @@ void prepare_points(PreparedPanel& p, const spec::Panel& panel, const PanelData&
         const float span = P.cmax - P.cmin;
         P.rgba.reserve(P.color.size());
         for (float c : P.color) {
-            const float t = std::isfinite(c) && span != 0.0f ? std::clamp((c - P.cmin) / span, 0.0f, 1.0f) : 0.0f;
+            float t = std::isfinite(c) && span != 0.0f ? std::clamp((c - P.cmin) / span, 0.0f, 1.0f) : 0.0f;
+            if (!(t >= 0.0f && t <= 1.0f)) t = 0.0f;   // NaN when the range is not finite
             P.rgba.push_back(lut[(int)(t * 255.0f + 0.5f)]);
         }
     }
