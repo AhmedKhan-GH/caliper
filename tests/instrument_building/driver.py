@@ -14,7 +14,7 @@ to <work>/result.json, also after a failure. The test runs without a window and 
 Exit code 0 passes, 77 skips, 1 fails.
 
 usage: driver.py --app <caliper> --mcp <caliper-mcp> --python <python> --work <dir>
-                 [--capture-dir <dir>] [--stop-after <step letter or name>] [--limit-s 580]
+                 [--capture-dir <dir>] [--stop-after <step letter or name>] [--limit-s 540]
 """
 import argparse
 import base64
@@ -716,7 +716,10 @@ class Test:
 
         def newest():
             # The two panels read the run at different frames, so the bound value may be one point ahead.
-            self.answer("control_set", {"id": "window", "value": [0, 2048]})   # clamps its end to the newest step
+            # control.set clamps the end to the newest step, where it then follows the run. An end of 2048
+            # stood on the newest step only while the run was below step 2048, which made the step depend
+            # on the speed of the run.
+            self.answer("control_set", {"id": "window", "value": [0, 2**53 - 1]})
             xs, ys = self.series("trace")
             value = (self.pdata("readout_text").get("data") or {}).get("value")
             self.res["last_try_of_live_text"] = {"x": xs[-2:], "y": ys[-4:], "value": value, "cursor": self.cursor_now()}
@@ -813,19 +816,24 @@ class Test:
                         and abs(p["value"] - before["lr"]) > 1e-9 * max(1.0, abs(before["lr"])):
                     return p
             return None
+        # Waits for the run to report a changed lr; 90 s is only a deadline, the loop returns as soon as it holds.
         self.res["lr_after"] = self.until("the run took a new lr from the slider", took_lr, 90)
         self.capture("lr-dragged")
         m = self.mark()
         (self.work / "toggle_on").write_text("")
+        # Waits for the run's "intervene ablate" event; 90 s is only a deadline, it returns when the event comes.
         on = self.event("the ablation applied", {"kind": "run", "change": "intervene", "point": self.toggle_point,
                                                  "op": "ablate"}, m, 90)
         self.res["toggle_on_event"] = on
         self.capture("toggle-on")
         m = self.mark()
         (self.work / "toggle_off").write_text("")
+        # Waits for the run's event that clears the ablation; 90 s is only a deadline, it returns when the event comes.
         self.res["toggle_off_event"] = self.event("the ablation cleared", {"kind": "run", "change": "intervene",
                                                                          "point": self.toggle_point, "op": None},
                                                   m, 90)
+        # The clear event shows that the second click reached the run, so the UI script may end.
+        (self.work / "script_done").write_text("")
 
     def step_o_operator(self):
         """An operator source from live:head.act drawn on world, then removed."""
@@ -840,6 +848,7 @@ class Test:
                         and p.get("host") == "script" and p.get("state") == "running" and (p.get("runs") or 0) >= 1:
                     return p
             return None
+        # Waits for the operator program to run in the script; 90 s is only a deadline, it returns when it runs.
         try:
             self.res["operator_status"] = self.until("operator.head_surface.0 runs in the script", listed, 90)
         except Fail as e:
@@ -860,6 +869,7 @@ class Test:
     def step_p_stop(self):
         """run_stop, the exit of the run, no live pid of the script, then app and mcp stop by their pids."""
         self.answer("run_stop", {"run": self.run})
+        # Waits for the run to report "exited"; 90 s is only a deadline, it returns as soon as the state holds.
         self.until("the run is exited", lambda: self.runs().get(self.run, {}).get("state") == "exited", 90)
         self.until("no pid of the script is alive", lambda: not [p for p in sorted(self.pids) if alive(p)], 60)
         self.res["train_pids_gone"] = sorted(self.pids)
@@ -914,6 +924,8 @@ class Test:
 
 def run(a):
     signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(Fail("over the time limit")))
+    # The alarm fires at least 60 s before the ctest TIMEOUT of 600 s (tests/CMakeLists.txt), so the cleanup
+    # in the finally block below (stop the app, caliper-mcp and the script) ends before ctest kills the test.
     signal.alarm(a.limit_s)
     work = Path(a.work).resolve()
     for exe in (a.app, a.mcp):
@@ -954,7 +966,7 @@ def run(a):
         # when the test writes its file (src/host/builder/spec_ui_driver.h).
         ui = (f"patience 900; wait-file {work}/lr_drag; drag panel:lr 0.62 0.5 to panel:lr 0.25 0.5; "
               f"wait-file {work}/toggle_on; click panel:ablate; wait-file {work}/toggle_off; click panel:ablate; "
-              f"wait 5")
+              f"wait-file {work}/script_done")
         app = subprocess.Popen([a.app, "--hidden", "--api", "--api-port", "0"],
                                env=dict(env, CALIPER_TEST_APPROVALS=str(decisions), CALIPER_TEST_SPEC_UI=ui),
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -968,6 +980,7 @@ def run(a):
                 lines.append(raw.rstrip("\n"))
         threading.Thread(target=drain, daemon=True).start()
         api_file = work / "data" / "api.json"
+        # Waits for the app to write its API file; 90 s is only a deadline, the loop ends as soon as the file exists.
         end = time.monotonic() + 90
         while not api_file.exists():
             for line in list(lines):
@@ -1021,7 +1034,7 @@ def main():
     ap.add_argument("--work", required=True)
     ap.add_argument("--capture-dir")
     ap.add_argument("--stop-after", help="a step letter or name: a, b, ... or start, run, ...")
-    ap.add_argument("--limit-s", type=int, default=580)
+    ap.add_argument("--limit-s", type=int, default=540)
     a = ap.parse_args()
     try:
         res = run(a)

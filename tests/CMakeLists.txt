@@ -944,6 +944,7 @@ if(NOT WIN32 AND CALIPER_WITH_BUILDER AND _acceptance_python)
         --work "${CMAKE_CURRENT_BINARY_DIR}/instrument-building-work"
         --capture-dir "${CMAKE_CURRENT_BINARY_DIR}/instrument-building-captures")
     set_tests_properties(caliper_instrument_building_acceptance PROPERTIES LABELS "instrument_building;acceptance"
+        # TIMEOUT stays 60 s or more above the driver's --limit-s (540), which leaves room for its cleanup.
         TIMEOUT 600 SKIP_RETURN_CODE 77)
 endif()
 
