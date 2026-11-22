@@ -68,7 +68,7 @@ A testing and demo aid drives the session without Caliper API: `CALIPER_COMMAND_
 
 `--hidden` is a testing aid: it runs the real app, with its renderer and its frame loop, but never shows its window. Setting `CALIPER_HIDDEN=1` does the same. It is accepted when starting the app and with `dev`; with any other subcommand it is a usage error, and it takes no value. With `--api` it lets a test or an agent drive the whole app through [Caliper API](../agents/http-api.md), captures included, with nothing on screen.
 
-In this mode the app starts as the test binaries that open hidden windows do ([Testing](../development/testing.md#the-pixel-exact-graphics-suite)):
+In this mode the app starts as the test binaries that open hidden windows do ([Testing](../development/testing.md#pixel-exact-graphics-suite)):
 
 - On macOS the process has no Dock icon and no menu bar, and it is never activated: the activation policy is `NSApplicationActivationPolicyProhibited` before and after GLFW starts, and GLFW builds no menu bar.
 - The window is created invisible and unfocused, and nothing shows it later. Should anything make it visible, the app hides it again at once and says so on standard error.
@@ -213,7 +213,7 @@ The SDK's prefix is found without being named. `build` takes the first of these 
 
 1. `CALIPER_SDK_DIR`, when it is set and not empty. A folder without the SDK is an error.
 2. The prefix the executable is installed in: the folder above the executable's folder, then the executable's folder.
-3. `caliper-sdk` in the home folder, where the [tutorials](../development/development-basics.md#the-development-loop) install the SDK.
+3. `caliper-sdk` in the home folder, where the [tutorials](../development/development-basics.md#development-loop) install the SDK.
 
 When none of them holds the SDK, `build` says where it looked and lets CMake search its own places, such as `CMAKE_PREFIX_PATH` in the environment and the system prefixes.
 

@@ -71,7 +71,7 @@ Notes:
   when the host provides no libtorch. `caliper_add_applet(... TORCH)` writes
   the key into the built manifest. A value that is not a non-empty string is a
   manifest error. See
-  [Each applet's version and what it requires](../development/compatibility-and-epochs.md#each-applets-version-and-what-it-requires).
+  [Each applet's version and what it requires](../development/compatibility-and-epochs.md#applet-versions-and-requirements).
 - **The `[build]` table is written by the build, never by hand.**
   `caliper_add_applet()` copies the manifest that the author writes to the
   folder beside the built library and adds the table to that copy, and it
@@ -80,12 +80,12 @@ Notes:
   diagnosis, which the host shows in the Inspector and never compares.
   `ui_stack`, when present, must be a non-empty string equal to the host's own
   hash, or the applet is refused. See
-  [The SDK version](../development/compatibility-and-epochs.md#the-sdk-version).
+  [The SDK version](../development/compatibility-and-epochs.md#sdk-version).
 - **`[data].schema` versions the applet's stored data.** The host refuses an
   applet whose schema is lower than the highest schema that has opened its
   data folder. An applet without the key is never checked, and a value that
   is not an integer of at least 1 is a manifest error. See
-  [The version of each applet's stored data](../development/compatibility-and-epochs.md#the-version-of-each-applets-stored-data).
+  [The version of each applet's stored data](../development/compatibility-and-epochs.md#stored-data-versions).
 
 ## Spec Applets
 

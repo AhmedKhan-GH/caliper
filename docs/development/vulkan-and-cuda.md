@@ -10,7 +10,7 @@ API from `nvcuda.dll` at run time (`src/host/cuda_driver.h`) and uses the Vulkan
 driver, so neither the CUDA toolkit nor the Vulkan SDK is needed to build or run it. A machine without an NVIDIA GPU
 builds and runs the same binary; the Vulkan backend then renders without interop, and the CPU-staged paths apply.
 
-## Pairing the devices
+## Device Pairing
 
 Vulkan and CUDA each enumerate their own devices, and a tensor is only reachable by Vulkan when both name the same
 physical GPU. The backend picks a Vulkan device by preferring a discrete GPU that exports external memory. It then
@@ -22,13 +22,13 @@ With no match, interop is switched off rather than falling back to device 0, bec
 would corrupt images. This covers hybrid laptops where Vulkan picks the integrated GPU, machines without CUDA, and
 software Vulkan drivers. Vulkan still renders, and the bridge CPU-stages tensors.
 
-## Which path an update takes
+## Update Paths
 
 Interop has two parts that work independently: the memory that is shared between the APIs, and how the work is
 ordered between them. The update ladder is described first in [Rendering](../applets/rendering.md#windows-update-ladder).
 This section gives the detail.
 
-### The direct image path
+### Direct Image Path
 
 The first rung gives CUDA the Vulkan image to write. Each
 texture's `VkImage` is allocated as an exportable dedicated allocation, imported into CUDA once, mapped with
@@ -54,7 +54,7 @@ copied.
 `last_device_path()` reports `direct-cmap` or `direct-blit` for this rung. If the exportable image cannot be created,
 or the CUDA import fails, the backend logs the reason once and the texture uses the buffer path.
 
-### The buffer path
+### Buffer Path
 
 The fallback rung is the design that came first. It is interop at the level of buffers,
 and the direct path supersedes it for tensor updates. Each texture has a shared `VkBuffer`, created with
@@ -70,12 +70,12 @@ The paths are reported as `compute` and `blit`. Buffer-level interop never lets 
 which avoids the tiling and alignment problems of sharing images. The direct path accepts those problems in exchange
 for removing the copy and the pass.
 
-### CPU staging
+### CPU Staging
 
 When no device path applies, the bridge converts on the CPU and uploads, as on OpenGL. This is also the path for CPU
 tensors.
 
-### `alloc_shared` and imported allocations
+### `alloc_shared` and Imported Allocations
 
 `alloc_shared` on Vulkan returns a device-backed tensor: `HostRenderer::alloc_device_shared` makes the texture's shared
 buffer the tensor's memory and returns its CUDA pointer. The applet's kernels write the texture's memory directly, and
@@ -91,7 +91,7 @@ with no copy: a descriptor offset for the f32 compute pass, a `bufferOffset` for
 `minStorageBufferOffsetAlignment`, and the u8 offset a multiple of four; torch sub-allocations are 512-byte aligned, so
 real offsets pass. Geometry draws from the same imports.
 
-### Why torch's caching allocator cannot be imported
+### Caching Allocator Limits
 
 Importing memory into Vulkan needs an allocation made exportable, with a Win32 handle. `cudaMalloc` memory, which is
 what torch's caching allocator hands out, has no handle. That is why Vulkan exports and CUDA imports in this backend,
@@ -114,7 +114,7 @@ mlx can reach the bridge through the same descriptor.
 The producer's CUDA work and Vulkan's work run on different queues, so the backend orders them on the GPU instead of
 waiting on the CPU.
 
-### Timeline semaphores
+### Timeline Semaphores
 
 Each texture has a shared timeline semaphore, created in Vulkan with `VK_KHR_timeline_semaphore`, exported as an opaque
 Win32 handle and imported into CUDA with `cuImportExternalSemaphore`. On the buffer path, CUDA's stream-ordered copy
@@ -130,7 +130,7 @@ overwritten. The direct path has no such wait.
 When the producer hands over a non-NULL stream, which means the host honors the stream-ordered handoff, the copy and
 the signal ride that stream and the adapter's full-device drain is skipped.
 
-### The synchronous fallback
+### Synchronous Fallback
 
 A device that cannot export timeline semaphores (the `timelineSemaphore` feature and the Win32 external-semaphore
 extension are both required) cannot pipeline. The texture then uses the synchronous model: copy, `cuCtxSynchronize`,
@@ -138,14 +138,14 @@ and a fence-waited Vulkan submission. Correctness never depends on the optimizat
 does not honor stream-ordered handoff there, so adapters keep draining. The direct path needs the pipelined objects and is unavailable
 in this mode.
 
-### Build-time SPIR-V
+### Build-Time SPIR-V
 
 The Vulkan shaders are compiled to SPIR-V at build time by an in-tree glslang and embedded in the binary as byte arrays. Colormaps are fixed by the byte-exact contract, so run-time code
 generation would buy nothing. The build fetches the Vulkan headers and volk, so no SDK needs to be installed. All
 shaders go through one CMake function, `caliper_compile_shader`, because the generated headers have to stay bit-identical
 for the byte-exact guarantee to hold.
 
-## Reading the log and the switches
+## Log Lines and Switches
 
 The backend prints one-time lines to stderr, each tagged `[vulkan] device path:`, so a run shows which path is live.
 
@@ -172,7 +172,7 @@ Each message prints once per process. Two environment variables change the backe
 `CALIPER_RENDERER=gl` selects the OpenGL backend. See [Verify on Windows hardware](windows-verification.md) for
 the full procedure.
 
-## Measured costs
+## Measured Costs
 
 These measurements come from an RTX 500 Ada laptop GPU, driver 596.47, in a Release build. They are one machine and
 small samples, and they describe this hardware rather than a general rule.

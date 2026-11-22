@@ -175,7 +175,7 @@ describes the function and the package.
 
 This tutorial copies hello so that the walk above matches the code you build.
 To start an applet of your own, `caliper new <name>` writes a project of the
-same shape, as [Development basics](../development/development-basics.md#the-development-loop)
+same shape, as [Development basics](../development/development-basics.md#development-loop)
 shows.
 
 ## Applet Loading
@@ -220,5 +220,5 @@ way must ship. If the row is missing, run `caliper check` on the folder. If its
 status is `REFUSED`, `FAILED` or `QUARANTINED` instead of `READY`, the **Inspector** shows the
 loader's reason under Status (see the
 [refusal reference](../reference/refusal-messages.md)). Esc, or the `esc Home` button,
-returns to the landing screen. [Development basics](../development/development-basics.md#the-landing-screen)
+returns to the landing screen. [Development basics](../development/development-basics.md#landing-screen)
 describes the panes and keys.

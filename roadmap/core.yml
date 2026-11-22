@@ -332,7 +332,7 @@ features:
     status: shipped
     summary: The landing screen has a command bar, the Projects, Instruments, Inspector and Activity panes and a status bar, and it lists, launches and restarts applets and attaches to live sessions.
     depends_on: [COR-01]
-    docs: docs/development/development-basics.md#the-landing-screen
+    docs: docs/development/development-basics.md#landing-screen
     issue: null
 
   - id: COR-44

@@ -999,30 +999,30 @@ entries:
   item: The glossary of terms.
   ids:
   - COR-01
-- page: docs/development/development-basics.md#the-mental-model
+- page: docs/development/development-basics.md#mental-model
   item: 'The mental model: the host is a running program and an applet is one shared library it loads.'
   ids:
   - COR-01
-- page: docs/development/development-basics.md#where-every-library-comes-from
+- page: docs/development/development-basics.md#library-sources
   item: Where every library comes from.
   ids:
   - COR-04
-- page: docs/development/development-basics.md#anatomy-of-an-applet
+- page: docs/development/development-basics.md#applet-anatomy
   item: The anatomy of an applet.
   ids:
   - COR-05
   - COR-51
-- page: docs/development/development-basics.md#the-development-loop
+- page: docs/development/development-basics.md#development-loop
   item: The edit, build and run loop with caliper build and caliper dev.
   ids:
   - COR-09
   - COR-10
-- page: docs/development/development-basics.md#the-landing-screen
+- page: docs/development/development-basics.md#landing-screen
   item: The landing screen has Projects, Instruments, Inspector and Activity panes, a command bar and
     function keys.
   ids:
   - COR-43
-- page: docs/development/development-basics.md#attaching-to-a-training-script
+- page: docs/development/development-basics.md#training-script-attachment
   item: Attaching to a training script from the landing screen with F4.
   ids:
   - STR-04
@@ -1031,11 +1031,11 @@ entries:
   item: Jobs and window layout.
   ids:
   - COR-46
-- page: docs/development/development-basics.md#running-the-tests
+- page: docs/development/development-basics.md#test-runs
   item: Running the tests.
   ids:
   - PLT-03
-- page: docs/development/development-basics.md#the-rules-each-one-guards-something-real
+- page: docs/development/development-basics.md#rules
   item: The rules each guard something real.
   ids:
   - COR-01
@@ -1196,11 +1196,11 @@ entries:
   - COR-02
   - COR-03
   - COR-05
-- page: docs/development/compatibility-and-epochs.md#negotiation-at-load
+- page: docs/development/compatibility-and-epochs.md#load-negotiation
   item: Negotiation at load.
   ids:
   - COR-06
-- page: docs/development/compatibility-and-epochs.md#the-promotion-rule
+- page: docs/development/compatibility-and-epochs.md#promotion-rule
   item: The rule for promoting an applet capability into the core.
   ids:
   - COR-14

@@ -4,7 +4,7 @@ What building on Caliper actually looks like: what code you write, what code
 is already running, where every library comes from, and the edit-build-run
 loop. Read this before [Your first applet](../applets/first-applet.md).
 
-## The mental model
+## Mental Model
 
 When your applet runs, **the host is already a living program**: it owns the
 window, the renderer (Metal on macOS, Vulkan on Windows, GL fallback), the ImGui/ImPlot/ImPlot3D
@@ -23,7 +23,7 @@ containment — is the host's job. You never initialize a window, a GL/Metal
 context, or an ImGui context; if you find yourself wanting to, you're
 fighting the model.
 
-## Where every library comes from
+## Library Sources
 
 The repository and CMake build wire the project dependencies together. Platform
 toolchains and system prerequisites must still be installed; see the root
@@ -42,7 +42,7 @@ pinned and provided; what is *yours* (curl) you link privately; what is
 *persistent* (DuckDB) hides behind frozen service tables. [SDK package](../applets/sdk-package.md)
 describes what the installed SDK holds.
 
-## Anatomy of an applet
+## Applet Anatomy
 
 Three files, one folder. This is the entire footprint:
 
@@ -69,7 +69,7 @@ examples/hello/
   (`examples/sine_scope/`) for an ML applet, which adds `TORCH`. The only parts you
   edit: project and target name, source files, manifest filename.
 
-### The smallest complete applet, in full
+### Smallest Complete Applet
 
 This is everything — all three files. They live in this repository as
 `examples/hello/`, which builds on its own against the installed SDK and inside
@@ -96,7 +96,7 @@ supply all of it. Growing from here toward ML means adding a `jobs.v1`
 training job and the bridge — that path is
 [Your first ML applet](../applets/first-ml-applet.md).
 
-## The development loop
+## Development Loop
 
 ```bash
 # 1. once, in your Caliper checkout: build the host and install the SDK
@@ -125,7 +125,7 @@ one window, and a test that runs the applet on the fixture host. Pass a full id,
 such as `com.example.my-applet`, to choose the id yourself.
 [Caliper CLI](../reference/cli.md#caliper-new) describes the template.
 
-### Loading your applet
+### Applet Loading
 
 `caliper check` runs the checks the host makes before it opens a library, and
 `caliper dev` starts Caliper with the folder searched before every other applet
@@ -156,7 +156,7 @@ caches, scratch files go there and nowhere else. [Folders and environment variab
 lists the folder on every platform; `CALIPER_DATA_DIR` moves the whole
 app-data folder, and your data folder with it.
 
-## The landing screen
+## Landing Screen
 
 `./cmake-build-release/caliper` opens on the landing screen: a command bar along the top,
 four docked panes, and a status bar along the bottom. It is drawn with ImGui,
@@ -164,7 +164,7 @@ so it looks the same on Metal, Vulkan and GL.
 
 | Pane | Shows |
 |---|---|
-| **Projects** | Your own work: the dashboards of the open workspace, the spec applets you made with `F3 New dashboard` and saved, one row each with name, id and status, and under them the ways in. With no dashboard the header says `none yet`. `F2 Open folder` is disabled and says "not yet available" on hover. `F3 New dashboard` makes a new dashboard ([Builder pane](../builder/builder-pane.md)). `F4 Attach to process` lists the live sessions of training scripts running on this machine in the pane (see [Attaching to a training script](#attaching-to-a-training-script)); the pane header counts them, for example `1 dashboard · 1 live session`. |
+| **Projects** | Your own work: the dashboards of the open workspace, the spec applets you made with `F3 New dashboard` and saved, one row each with name, id and status, and under them the ways in. With no dashboard the header says `none yet`. `F2 Open folder` is disabled and says "not yet available" on hover. `F3 New dashboard` makes a new dashboard ([Builder pane](../builder/builder-pane.md)). `F4 Attach to process` lists the live sessions of training scripts running on this machine in the pane (see [Attaching to a training script](#training-script-attachment)); the pane header counts them, for example `1 dashboard · 1 live session`. |
 | **Instruments** | Every installed applet the loader found, one row each: name, id, version, tag and status (`READY`, `ACTIVE`, `REFUSED`, `FAILED` or `QUARANTINED`). The workspace's dashboards are under Projects instead. Click a column header to sort by it; the default is tag, and the choice lasts for the session. Only `READY` rows launch. |
 | **Inspector** | The selected applet's manifest: id, version, tag, ABI epoch, minimum host, required and optional services, binary path, status and summary. The `⏎ Launch` button sits at the bottom; when the applet cannot launch it is disabled, with the reason beside it. For an applet quarantined by a C++ exception, `⌘R Restart` takes the reason's place; after a signal it reads `restart Caliper to reload`. |
 | **Activity** | Running jobs with their progress, then the host log, newest first: the renderer chosen, the applet folders scanned, launches, failed launches, failed jobs, quarantines, restarts, returns home, and live sessions attached, ended and detached, with any failed attach and its reason. |
@@ -203,7 +203,7 @@ row, however it was launched (`CALIPER_AUTOLAUNCH` included); Home from a
 dashboard lands on its row under Projects, also when it was just made and
 saved.
 
-### Attaching to a training script
+### Training Script Attachment
 
 A Python script that calls `caliper.show` (or any other view call) opens a
 live session on its first call, and Caliper can attach to it while it runs
@@ -256,7 +256,7 @@ too).
 the session files, the standalone viewer and what happens when either side
 goes away.
 
-### Jobs and window layout
+### Jobs and Window Layout
 
 While a job runs or a failure is kept, the **Jobs** tray is a strip of its own
 above the status bar, on every page. It takes its height from the area the
@@ -284,7 +284,7 @@ The window opens at 95% of the screen's work area.
 size exactly, so screenshots and layout checks are reproducible on any
 display; a malformed value is ignored.
 
-## Running the tests
+## Test Runs
 
 The `release` and `debug` presets build the tests (`BUILD_TESTS=ON`):
 
@@ -325,7 +325,7 @@ before it returns. A suite that uses them ends with `CALIPER_GPU_TEST_MAIN()` in
 place of `DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN`. A bare `MESSAGE` and `return`
 would report the suite as passed.
 
-## The rules (each one guards something real)
+## Rules
 
 - **No raw GL/Metal/Vulkan calls in applets** ([Platform rules](../introduction/architecture.md#platform-rules)). Draw through
   ImGui/ImPlot/ImPlot3D; get tensors on screen through `tensor_bridge.v1`.
@@ -340,7 +340,7 @@ would report the suite as passed.
 - **If a service is optional, degrade visibly** — a disabled panel saying
   "metrics: absent (ok)" beats silent absence.
 
-## Reading order
+## Reading Order
 
 1. This page — the lay of the land.
 2. [Your first applet](../applets/first-applet.md) — walk hello line by line.

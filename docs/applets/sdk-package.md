@@ -1,6 +1,6 @@
 # SDK Package
 
-The SDK installs as the `caliper-sdk` CMake package, version 0.2.0. An applet builds against it from a folder of its own with `find_package(caliper-sdk)` and `caliper_add_applet()`, and needs nothing else from the Caliper source tree. On macOS the host runs on macOS 14 (Sonoma) or later, and an applet built against the package is built for the same minimum unless its project chooses another. How the SDK version relates to the ABI epoch is in [The SDK version](../development/compatibility-and-epochs.md#the-sdk-version).
+The SDK installs as the `caliper-sdk` CMake package, version 0.2.0. An applet builds against it from a folder of its own with `find_package(caliper-sdk)` and `caliper_add_applet()`, and needs nothing else from the Caliper source tree. On macOS the host runs on macOS 14 (Sonoma) or later, and an applet built against the package is built for the same minimum unless its project chooses another. How the SDK version relates to the ABI epoch is in [The SDK version](../development/compatibility-and-epochs.md#sdk-version).
 
 ## Installation
 

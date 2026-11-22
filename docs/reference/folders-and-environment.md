@@ -80,7 +80,7 @@ On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shor
 | Variable | What it does | Read in |
 |---|---|---|
 | `CALIPER_RENDERER=gl` | Selects the OpenGL fallback instead of Metal or Vulkan. Any other value leaves the platform default. An embedding host that asks for the default renderer honours it too. | `src/host/core_lifecycle.cpp` |
-| `CALIPER_VULKAN_NO_DIRECT` | Set to any value, it turns off the [direct path](../development/vulkan-and-cuda.md#the-direct-image-path), where a CUDA kernel writes the Vulkan image, so updates use the buffer path. | `src/host/renderer/vulkan_renderer.cpp` |
+| `CALIPER_VULKAN_NO_DIRECT` | Set to any value, it turns off the [direct path](../development/vulkan-and-cuda.md#direct-image-path), where a CUDA kernel writes the Vulkan image, so updates use the buffer path. | `src/host/renderer/vulkan_renderer.cpp` |
 | `CALIPER_VULKAN_STATS` | Set to any value, the Vulkan renderer prints one summary line at shutdown with frame times and the count of direct and buffer updates. | `src/host/renderer/vulkan_renderer.cpp` |
 
 ## Applet and Example Variables

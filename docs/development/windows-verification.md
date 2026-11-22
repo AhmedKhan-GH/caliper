@@ -5,7 +5,7 @@ backend, the tensor bridge, the geometry service, the CUDA kernels or the torch 
 compiled out on macOS and only run on this hardware. The method is the same for every such change: build, run the
 tests until none are skipped, run an applet and read which path is live, then record what you saw.
 
-## Prerequisites
+## Requirements
 
 - **Windows with an NVIDIA GPU and a current driver.** The driver provides both `vulkan-1.dll` and `nvcuda.dll`. The
   host loads each at run time, so neither the Vulkan SDK nor the CUDA toolkit is needed to build or run the host.
@@ -39,7 +39,7 @@ provides. The first configure downloads libtorch
 (about 2 GB) and fetches the Vulkan headers, volk and glslang, which is why no SDK is needed. The build compiles the
 shaders to SPIR-V and embeds them, so a mistake in a shader or in the parameter block layout shows up as a build error.
 
-## Run the test suites
+## Test Runs
 
 Run everything first:
 
@@ -65,7 +65,7 @@ The gfx suite has four environments, and the Vulkan ones are the point of this g
 Select rows by name with doctest, for example `caliper_gfx_tests -tc="gfx/Vulkan+CUDA*"`, which is useful when
 iterating on one path.
 
-### Reading skips
+### Skipped Tests
 
 A case that finds no device counts a skip and says why. At the end the binary prints a line of the form
 `[caliper-tests] skipped N of M test cases ...` and exits with code 77, which ctest reports as Skipped instead of
@@ -79,7 +79,7 @@ have the GPU. Read the full log for a "skipping" line before you trust a pass.
 If a byte-exact row fails, stop and find out why. Do not loosen the comparison. The CPU reference is the single source
 of truth for every backend, and a mismatch is either a backend bug or a bug in the shared reference.
 
-## Read the startup log
+## Startup Log
 
 Run the application from a terminal so its standard error is visible:
 
@@ -106,7 +106,7 @@ Each line prints once per process, so a line that never appears means that path 
 line should name a zero-copy path only when one of these confirms it. See
 [Vulkan and CUDA on Windows](vulkan-and-cuda.md) for what each path does.
 
-## Measure and compare
+## Measurement and Comparison
 
 Set `CALIPER_VULKAN_STATS=1` before launching and quit the application normally. At exit the backend prints one line:
 
@@ -128,14 +128,14 @@ Three configurations of the same binary isolate a change:
 - **`CALIPER_RENDERER=gl`.** The OpenGL backend. The applet should show an identical image and say that it is on its
   fallback, with no zero-copy claim.
 
-### Validation layers
+### Validation Layers
 
 For a change that touches descriptors, pipelines or the parameter block, run once with the Vulkan validation layer. The
 backend is built without the SDK, so install the Vulkan SDK separately and enable `VK_LAYER_KHRONOS_validation`, for
 example with `VK_INSTANCE_LAYERS`. Run the gfx suite and a live applet that exercises the path, and read the output for
 complaints in that area. Findings that predate your change belong in the record as such, not as blockers.
 
-## Watch the first Windows CI run
+## First Windows CI Run
 
 The Windows lane of `.github/workflows/build.yml` runs the same steps as the macOS lane: the core build without
 applets, the whole ctest suite with the command-line tests and `caliper_cli_new_builds`, the SDK and embedding package
@@ -157,7 +157,7 @@ Several of these pieces have only run on macOS so far. When the lane first runs 
 | `caliper_embed_install` and `caliper_embed.dll` | The module-definition file exports every C function that `embed.h`, `live.h` and `live_views.h` declare, except `caliper_live_*`. It now includes `caliper_core_live_attach_url`, which `src/host/live/live_unsupported.cpp` defines on Windows as a call that fails with a reason. An unresolved export at the link of `caliper_embed.dll` names a declared function that has no Windows definition. |
 | Hidden windows | The gfx and export suites open hidden windows. On Windows a hidden window has no taskbar button, so the background helper that keeps the macOS test process out of the Dock does nothing there. |
 
-## What to record
+## Recorded Results
 
 Write down enough that another person can repeat the check and compare numbers:
 

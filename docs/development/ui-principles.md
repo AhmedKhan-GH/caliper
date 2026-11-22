@@ -57,7 +57,7 @@ first-time users; the rules below hold at any density.
 - **Selection is linked.** Selecting an item in any view marks the same item
   everywhere else.
 
-## Colour and size
+## Colour and Size
 
 - **One colour key across the whole app.** The same class or entity has the
   same colour in every pane.
@@ -65,7 +65,7 @@ first-time users; the rules below hold at any density.
 - **Text scale is a setting,** applied to fonts, metrics and pane minimums
   together.
 
-## Checking a layout
+## Layout Checks
 
 - Lay panes out as plain rectangles, computed without ImGui, so tests can check
   the sizes without a window.
