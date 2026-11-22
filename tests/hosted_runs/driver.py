@@ -181,13 +181,12 @@ class Check:
                 raise Fail(f"the step of {run} did not reach {factor} times {first}: {step}")
             self.pace(1)
 
-    def loss_gap(self, panel, fork, parent, margin):
-        """The fork learns more slowly: at the last step that both lines have, its loss is higher than its
-        parent's by the factor `margin`. Its line also spans a third of the plot's width or more."""
-        r = self.mcp.call("panel_data", {"panel": panel})
-        lines = {l["binding"]: l for l in ((r.get("structuredContent") or {}).get("data") or {}).get("lines", [])}
-
-        def series(binding):
+    def loss_gap(self, panel, fork, parent, margin, after=150):
+        """The fork learns more slowly: `after` steps past its start, its loss is higher than its parent's
+        by the factor `margin`. Its line also spans a third of the plot's width or more. The check waits
+        until the panel's data of both runs reaches that step, so a slow machine compares the same step
+        as a fast one."""
+        def series(lines, binding):
             l = lines.get(binding)
             if not l:
                 raise Fail(f"panel {panel} has no line {binding}: {list(lines)}")
@@ -197,11 +196,20 @@ class Check:
                 v.frombytes(base64.b64decode(l[k]["base64"]))
                 out.append(list(v))
             return out
-        fx, fy = series(fork)
-        px, py = series(parent)
-        if len(fx) < 2 or len(px) < 2:
-            raise Fail(f"panel {panel}: a line has fewer than two points")
-        common = min(fx[-1], px[-1])
+        end = time.monotonic() + 120
+        while True:
+            r = self.mcp.call("panel_data", {"panel": panel})
+            lines = {l["binding"]: l
+                     for l in ((r.get("structuredContent") or {}).get("data") or {}).get("lines", [])}
+            fx, fy = series(lines, fork)
+            px, py = series(lines, parent)
+            if len(fx) >= 2 and len(px) >= 2 and min(fx[-1], px[-1]) >= fx[0] + after:
+                break
+            if time.monotonic() > end:
+                raise Fail(f"panel {panel}: the lines did not reach {after} steps past the fork's start: "
+                           f"fork {fx[:1]}..{fx[-1:]}, parent {px[:1]}..{px[-1:]}")
+            self.pace(1)
+        common = fx[0] + after
 
         def at(xs, ys):
             return ys[min(range(len(xs)), key=lambda i: abs(xs[i] - common))]
