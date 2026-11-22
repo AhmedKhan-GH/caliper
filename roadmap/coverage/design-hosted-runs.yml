@@ -1,0 +1,77 @@
+# yaml-language-server: $schema=schema.json
+title: Hosted Runs plan page
+kind: page
+source: design/hosted-runs.md
+summary: The plan page design/hosted-runs.md, read heading by heading; each plan heading has an entry
+  or is listed as holding no feature.
+not_features:
+- Status
+- Open Points
+entries:
+- heading: Process Contract
+  item: The model runner starts a workspace script as a managed run with a fixed set of environment variables.
+  ids:
+  - SPC-19
+- heading: Commands
+  item: Five run commands join the command layer and the MCP tool table.
+  ids:
+  - SPC-05
+  - AGT-02
+  - SPC-19
+- heading: Run Start
+  item: The command run.start starts a script of the workspace as a managed run.
+  ids:
+  - SPC-19
+- heading: Run Fork
+  item: The command run.fork starts a new run from a checkpoint of a run, with changed parameters.
+  ids:
+  - SPC-19
+  - RUN-10
+- heading: Run Stop
+  item: The command run.stop stops a managed run at its next checkpoint, and ends its process after a limit.
+  ids:
+  - SPC-19
+- heading: Run List
+  item: The command run.list lists the managed runs and the attached script with their states.
+  ids:
+  - SPC-19
+- heading: Run Logs
+  item: The command run.logs returns the last output lines of a managed run.
+  ids:
+  - SPC-19
+- heading: Review Card
+  item: A start or a fork of a managed run always waits for a review card, in every mode.
+  ids:
+  - AGT-17
+  - AGT-06
+- heading: Model Runner
+  item: The model runner of the app owns the child processes and the table of runs.
+  ids:
+  - SPC-19
+- heading: Child Processes
+  item: One small interface starts and ends the child processes on POSIX and on Windows.
+  ids:
+  - SPC-19
+- heading: Runner Connection
+  item: The runner keeps its own viewer connection to each managed run for its state, actions and series.
+  ids:
+  - SPC-19
+  - STR-03
+- heading: Attachment
+  item: The app attaches to a new managed run, and the run commands take the run they act on.
+  ids:
+  - SPC-19
+  - STR-03
+- heading: Run Sources
+  item: The catalog sources run:<id>/<view> carry the series of managed runs, so two loss curves draw side by side.
+  ids:
+  - SPC-19
+  - RUN-05
+- heading: Runner Events
+  item: The runner sends an event each time a managed run changes its state.
+  ids:
+  - AGT-21
+- heading: Errors
+  item: The runner commands answer with fixed error codes.
+  ids:
+  - SPC-05
