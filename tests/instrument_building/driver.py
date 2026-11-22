@@ -306,6 +306,13 @@ class Test:
         return {"rows": rows, "x": xs, "version": b.get("version"), "state": b.get("state"),
                 "error": b.get("error")}
 
+    def kept_gap(self):
+        """The largest gap between two kept steps of the source act, from the x values of the terrain. The script
+        takes a snapshot at each pass of the shared cadence, a few times a second, and the app keeps the ones that
+        it reads, thus kept steps stand apart by that gap, not by one step."""
+        xs = sorted(set(self.terrain()["x"]))
+        return int(max((b - a for a, b in zip(xs, xs[1:])), default=0))
+
     # -- captures ----------------------------------------------------------------------------------------
     @staticmethod
     def png_of(result):
@@ -519,7 +526,8 @@ class Test:
             {"id": "row2", "split": "horizontal", "children": ["measure", "palette", "transport", "now", "readout_text"]}]}})
 
     def step_g_terrain(self):
-        """The first drawn terrain, the time to it, two renders at least 20 steps apart, and the loss line."""
+        """The first drawn terrain, the time to it, two renders at least 20 steps apart, the loss line, and the
+        warning of the shared cadence in the catalog."""
         def terrain_rows():
             t = self.terrain()
             return t if t["rows"] > 0 else None
@@ -531,7 +539,10 @@ class Test:
         l1 = self.cursor_now()["latest"]
         self.res["terrain_early"] = {"rows": first["rows"], "version": first["version"], "latest": l1}
         self.capture("terrain-early", early_png)
-        self.until(f"the latest step reaches {l1 + 20}", lambda: self.cursor_now()["latest"] >= l1 + 20, 120)
+        # A row comes with a kept step of act, at a pass of the shared cadence that the app reads, not at every
+        # step. The test thus waits for 20 more steps and for a row that came after the first render.
+        self.until(f"the latest step reaches {l1 + 20} and the terrain has a new row",
+                   lambda: self.cursor_now()["latest"] >= l1 + 20 and self.terrain()["rows"] > first["rows"], 120)
         later_png = self.render("world")
         later = self.terrain()
         l2 = self.cursor_now()["latest"]
@@ -540,8 +551,9 @@ class Test:
             raise Fail(f"step {self.cur}: terrain rows did not grow: {first['rows']} then {later['rows']} "
                        f"(latest {l1} then {l2})")
         self.capture("terrain-later", later_png)
-        # The hidden window draws a frame about once a second, and the catalog keeps one value of a view for
-        # each frame, so the test waits for 40 rows: the terrain then reads as a terrain.
+        # The script takes a snapshot at each pass of the shared cadence, a few times a second, and the app keeps
+        # one value of a view for each frame that it draws, about once a second in the hidden window. A row thus
+        # comes at the slower of the two, so the test waits for 40 rows: the terrain then reads as a terrain.
         full = self.until("the terrain has 40 rows", lambda: (lambda t: t if t["rows"] >= 40 else None)(self.terrain()),
                           150)
         self.res["terrain_full"] = {"rows": full["rows"], "latest": self.cursor_now()["latest"]}
@@ -555,6 +567,21 @@ class Test:
             raise Fail(f"step {self.cur}: the loss line holds {n} points and its z slot {slots['z'].get('shape')}")
         self.res["loss_line"] = {"points": n, "draw": loss.get("draw"), "z_min": slots["z"].get("min"),
                                  "z_max": slots["z"].get("max")}
+        # Everything that viewers ask of the run keeps to 2 % of its training time, by the shared cadence of the
+        # programs. The live catalog gives each view that the cadence thins a warning that says how often it
+        # updates and why: every N steps for the budget, or passes of the views alone for the floor.
+        def cadence_note():
+            entries = {e["id"]: e for e in self.answer("catalog_list", {"limit": 1000}).get("entries", [])}
+            notes = [w for w in entries.get(ACT_ID, {}).get("warnings", []) if w.startswith("Updates ")]
+            return notes[0] if notes else None
+        note = self.until(f"catalog_list gives {ACT_ID} the warning of the shared cadence", cadence_note, 60)
+        self.res["cadence_note"] = note
+        every = re.search(r"every (\d+) steps", note)
+        budget = note.startswith("Updates every ") and "keep to 2 % of the training time" in note
+        floor = note.startswith("Updates on passes of the views alone")
+        if not every or int(every.group(1)) < 3 or not (budget or floor):
+            raise Fail(f"step {self.cur}: the cadence warning of {ACT_ID} is {note!r}")
+        print(f"  cadence warning of {ACT_ID}: {note}")
         self.capture("terrain-full")
 
     def step_h_window(self):
@@ -624,9 +651,14 @@ class Test:
         live = {"detail": self.detail(), "world": self.terrain(), "trace": self.pdata("trace"),
                 "loss": self.pdata("loss")}
         c = self.cursor_now()
+        # The kept steps stand apart by the gap of the cadence, and the cursor snaps to the kept step nearest the
+        # step asked for: 100 steps back, give or take 100 steps before it and 50 after it, or the gap if larger.
+        gap = self.kept_gap()
+        lo_ok, hi_ok = c["latest"] - 100 - max(100, gap), min(c["latest"] - 1, c["latest"] - 100 + max(50, gap))
+        self.res["cursor_kept_gap"] = gap
         held = self.answer("cursor_set", {"step": c["latest"] - 100, "live": False})["cursor"]
         step = held.get("step")   # the cursor snaps to a kept step, which is not always the step asked for
-        if held.get("live") or step is None or not c["latest"] - 200 <= step <= c["latest"] - 50:
+        if held.get("live") or step is None or not lo_ok <= step <= hi_ok:
             raise Fail(f"step {self.cur}: cursor_set of {c['latest'] - 100} gave {json.dumps(held)}, not an "
                        f"earlier step held")
 
@@ -720,10 +752,13 @@ class Test:
             # stood on the newest step only while the run was below step 2048, which made the step depend
             # on the speed of the run.
             self.answer("control_set", {"id": "window", "value": [0, 2**53 - 1]})
+            # The newest point of trace is the newest kept step of act, which stands behind the newest step that
+            # the app received by up to the gap of the cadence.
+            behind = max(200, 2 * self.kept_gap())
             xs, ys = self.series("trace")
             value = (self.pdata("readout_text").get("data") or {}).get("value")
             self.res["last_try_of_live_text"] = {"x": xs[-2:], "y": ys[-4:], "value": value, "cursor": self.cursor_now()}
-            if xs and xs[-1] >= self.cursor_now()["latest"] - 200 and isinstance(value, (int, float)) \
+            if xs and xs[-1] >= self.cursor_now()["latest"] - behind and isinstance(value, (int, float)) \
                     and any(abs(y - value) <= 1e-4 * max(1.0, abs(value)) for y in ys[-4:]):
                 return {"step": xs[-1], "value": value}
             return None

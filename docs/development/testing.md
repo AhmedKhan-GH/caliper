@@ -267,6 +267,7 @@ The ctest entry `caliper_instrument_building_acceptance` (`tests/instrument_buil
 The driver checks each part by state, events and panel data, not by eye:
 
 - A scene panel holds a terrain from the `surface` operator over `live:blocks.0.attn.proj.act`. Its row count in `panel_data` rises while the run trains, and the loss is a line entity in the same scene.
+- The entry of `live:blocks.0.attn.proj.act` in `catalog_list` has the warning of the shared cadence, which says how many steps apart the view updates and why.
 - A pick on the terrain through `selection_set` gives a `pick` event with fields and writes the state `token`. The version and the values of the heatmap that reads the state through a reference change.
 - A narrower range window leaves terrain rows whose `x` values stay inside the window.
 - The transport holds the cursor at an earlier kept step. The data of the heatmap, the terrain and the series panels is the data at that step. Then the cursor is live again.
@@ -276,7 +277,7 @@ The driver checks each part by state, events and panel data, not by eye:
 - A person's drag changes `lr` in the run, and the toggle ablates `blocks.0.attn.proj` and releases it.
 - A source from `live:head.act` with a `surface` step runs as the program `operator.head_surface.0` in the script, draws as an entity and is removed again.
 
-The driver waits on events and published state, never for a fixed time. It waits for 40 terrain rows before the checks that need a terrain. It prints the time from the first tool call to the first render of a terrain that has rows. It takes the SHA-256 of the app, of `caliper-mcp` and of each file of the Python package before and after, and the lists must be equal. Last, no process that the driver started may be alive, by its pid.
+The driver waits on events and published state, never for a fixed time. A terrain row comes with a step that the app keeps, at a pass of the shared cadence, thus the kept steps stand some steps apart. The driver takes that gap from the `x` values of the terrain where a check compares steps. It waits for 40 terrain rows before the checks that need a terrain. It prints the time from the first tool call to the first render of a terrain that has rows. It takes the SHA-256 of the app, of `caliper-mcp` and of each file of the Python package before and after, and the lists must be equal. Last, no process that the driver started may be alive, by its pid.
 
 `tests/CMakeLists.txt` defines the entry only when the platform is not Windows, `CALIPER_WITH_BUILDER` is on and the Python of the instrument test is set. It has the labels `instrument_building` and `acceptance` and a timeout of 600 seconds. It exits with code 77, which ctest reports as skipped, when the app, Metal, torch, numpy, the native network sender `caliper._netio` or the producer module `caliper._producer` is missing. The macOS job of the workflow runs it in its own step.
 
