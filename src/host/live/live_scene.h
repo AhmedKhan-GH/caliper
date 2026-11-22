@@ -193,8 +193,10 @@ public:
 
     // The stages of the panel that shows the view (scene/stage_cache.h, design/gpu-programs.md):
     // the points and lines of an entity with a stage draw its program, in the colour pass and the
-    // pick pass. Null draws the built-in programs. The panel sets it before each render; a new
-    // source, a new revision of it, or a stage that reads the time draws the view again.
+    // pick pass, and the highlight of a selection draws the selected items with them. Null draws
+    // the built-in programs. The panel sets it before each render; a new source, a new revision of
+    // it, or a stage that reads the time draws the view again. A rectangle selection projects the
+    // batches' own positions on the CPU, which a vertex stage does not move.
     void set_stage_source(caliper_scene::StageSource* source);
     // The draws of the last frame that used a stage program.
     uint32_t staged_draws() const { return staged_; }

@@ -261,6 +261,7 @@ SceneRectResult draw_scene_in_rect(CaliperCore* core, const std::string& name, c
     }
     sc->set_scale_bar(options.scale_bar);
     sc->set_stage_source(options.stages);
+    sc->poll();   // the GPU time of completed frames: the info line and the stages' time watchdog
 
     // ---- input: an invisible button owns the rectangle, so that a drag never moves the window
     ImGui::SetCursorScreenPos(p0);

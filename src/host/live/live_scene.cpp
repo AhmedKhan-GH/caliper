@@ -1383,7 +1383,8 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
                 CompileOptions dopt = opt;
                 if (dim_compiler_.compile(dim, pz, dopt, *res_, dl, nullptr).ok) frame.render(std::move(dl));
             }
-            const CompileResult hr = hl_compiler_.compile(hl, hl_cam, opt, *res_, hll, nullptr);
+            // The selected items draw with their entity's stages, where and as the picture draws them.
+            const CompileResult hr = hl_compiler_.compile(hl, hl_cam, stage_options(opt), *res_, hll, nullptr);
             if (hr.ok) frame.render(std::move(hll));
             else if (!hr.notes.empty()) note("the highlight: " + hr.notes[0]);
         }
