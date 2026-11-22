@@ -110,6 +110,144 @@ TEST_CASE("runs panel: the card text of a start and a fork") {
           "as Python code beside its parent.");
 }
 
+// The fields read every text as the card writes it: the Parameters field of
+// a fork holds the card's own text of the parent's parameters, and it reads
+// back to the same names and values; the arguments of a card read back to the
+// same arguments.
+TEST_CASE("runs panel: the fields read the card's quotes and escapes") {
+    const json pairs = json::parse(R"([{"name":"a=b","value":"1"},{"name":"note","value":"ok\" c=2"},)"
+                                   R"({"name":"path","value":"C:\\data\\new"},{"name":"lines","value":"x\ny\r\tz"},)"
+                                   R"({"name":"two words","value":"a b"},{"name":"list","value":"a,b"},)"
+                                   R"({"name":"empty","value":""},{"name":"truth","value":"true"},)"
+                                   R"({"name":"eq","value":"x=y"},{"name":"mark","value":"\u202ecba"},)"
+                                   R"({"name":"tag","value":"\udb40\udc41"},{"name":"cafe","value":"caf\u00e9"},)"
+                                   R"({"name":"n","value":2},{"name":"lr","value":0.5},{"name":"on","value":false}])");
+    const std::string text = caliper_host::run_params_text(pairs);
+    CHECK(text == R"("a=b"="1" note="ok\" c=2" path="C:\\data\\new" lines="x\ny\r\tz" "two words"="a b" )"
+                  R"(list="a,b" empty="" truth="true" eq=x=y mark="\u202ecba" tag="\udb40\udc41" )"
+                  "cafe=\"caf\xC3\xA9\" n=2 lr=0.5 on=false");
+    CHECK(card_text("run.fork", {{"run", "train-1"}, {"params", pairs}}, "train.py") ==
+          "Fork the run train-1 at its next checkpoint, with the parameters " + text +
+              ". The fork runs train.py as Python code beside its parent.");
+    json back;
+    std::string problem;
+    REQUIRE_MESSAGE(caliper_host::parse_run_params(text, &back, &problem), problem);
+    CHECK(back == pairs);
+
+    const std::vector<std::string> args{"a\" b", "x\ny. The script", "C:\\data", "--lr=0.1", "\xE2\x80\xAE" "cba",
+                                        "",      "a,b",              "caf\xC3\xA9"};
+    const std::string start = card_text("run.start", {{"script", "train.py"}, {"args", args}});
+    const std::string head = "Start train.py as a new managed run, with the arguments ";
+    const std::string tail = " and no parameters. The script runs as Python code on this computer.";
+    REQUIRE(start.size() > head.size() + tail.size());
+    REQUIRE(start.compare(0, head.size(), head) == 0);
+    REQUIRE(start.compare(start.size() - tail.size(), tail.size(), tail) == 0);
+    std::vector<std::string> read;
+    REQUIRE_MESSAGE(caliper_host::split_run_args(start.substr(head.size(), start.size() - head.size() - tail.size()),
+                                                 &read, &problem),
+                    problem);
+    CHECK(read == args);
+
+    // Outside quotes a backslash is itself; inside, only the escapes of the
+    // card are known, and an escaped quote does not close the quotes.
+    REQUIRE(caliper_host::split_run_args(R"(C:\data)", &read, &problem));
+    CHECK(read == std::vector<std::string>{"C:\\data"});
+    CHECK_FALSE(caliper_host::split_run_args(R"("a\")", &read, &problem));
+    CHECK(problem == "A quote in Arguments is not closed.");
+    CHECK_FALSE(caliper_host::parse_run_params(R"(path="C:\data")", &back, &problem));
+    CHECK(problem == "Parameters has the escape \\d in quotes, which is not known; write \\\\ for a backslash.");
+    CHECK_FALSE(caliper_host::parse_run_params(R"(p="\ud800")", &back, &problem));
+    CHECK(problem == "Parameters has the escape \\ud800 in quotes without its other half.");
+    CHECK_FALSE(caliper_host::parse_run_params(R"(p="\u12")", &back, &problem));
+    CHECK(problem == "Parameters has a \\u in quotes without four hex digits.");
+    // A name in quotes keeps its '='; a quoted word with no '=' outside the
+    // quotes has no value.
+    CHECK_FALSE(caliper_host::parse_run_params(R"("lr=1")", &back, &problem));
+    CHECK(problem == "Parameter \"lr=1\" has no value; write name=value.");
+}
+
+// The lines of the drawn card keep every character of the session's text:
+// quotes, escapes and an argument wider than a line show in full and in
+// order, each line inside the card.
+TEST_CASE("runs panel: the card's lines keep every character of its text") {
+    const caliper_host::RunsPanelMetrics m = caliper_host::RunsPanelMetrics::for_text_scale(1.0f);
+    caliper_host::RunsPanelLayoutInput in;
+    in.area = {0, 40, 1440, 820};
+    in.card = card_text("run.start", {{"script", "train.py"},
+                                      {"args", {"a\" b", "C:\\data", "x\ny", "two words"}},
+                                      {"params", json::array({{{"name", "note"}, {"value", "ok\" c=2"}}})}});
+    caliper_host::RunsPanelLayout L = caliper_host::layout_runs_panel(in, m, measure);
+    REQUIRE(L.card_lines.size() > 1);
+    std::string joined;
+    for (const auto& line : L.card_lines) {
+        CHECK(measure(line) <= L.card.w - 2 * m.gap);
+        joined += (joined.empty() ? "" : " ") + line;
+    }
+    CHECK(joined == in.card);
+
+    in.card = card_text("run.start", {{"script", "train.py"}, {"args", {std::string(256, 'z')}}});
+    L = caliper_host::layout_runs_panel(in, m, measure);
+    std::string all, want;
+    for (const auto& line : L.card_lines) {
+        CHECK(measure(line) <= L.card.w - 2 * m.gap);
+        all += line;
+    }
+    for (const char c : in.card)
+        if (c != ' ') want += c;
+    all.erase(std::remove(all.begin(), all.end(), ' '), all.end());
+    CHECK(all == want);
+}
+
+// What a person types with quotes, backslashes, spaces, '=' and newlines goes
+// to the session as it is, and the one card shows it as it runs: the card's
+// text of the fields is the typed text, and the fork's field holds the card's
+// text again.
+TEST_CASE("runs panel: typed quotes and escapes run as the card shows them") {
+    const std::string ws = fresh_dir("panel_escapes") + "/workspace";
+    auto s = open_session(ws);
+    write_text(fs::path(ws) / "train.py", "print('train')\n");
+    FakeRunner runner;
+    s->set_model_runner(&runner);
+    RunsPanel panel;
+    panel.frame(s.get(), &runner);
+    panel.set_open(true);
+    REQUIRE(panel.script() == "train.py");
+
+    const std::string args = R"("say \"hi\"" "C:\\data dir" "x\ny" --lr=0.1 "")";
+    const std::string params = R"("a=b"="1" note="ok\" c=2" path="C:\\data\\new" lines="x\ny" eq=x=y n=2)";
+    panel.set_args(args);
+    panel.set_params(params);
+    REQUIRE_MESSAGE(panel.review(), panel.problem());
+    tick(*s, panel, &runner);
+    REQUIRE(s->registry().pending_approvals().size() == 1);
+    CHECK(panel.card() == "Start train.py as the managed run train-1, with the arguments " + args +
+                              " and the parameters " + params + ". The script runs as Python code on this computer.");
+    CHECK(panel.card() == cb::run_card_text(s->registry().pending_approvals()[0].invocation, ""));
+    REQUIRE(panel.approve());
+    tick(*s, panel, &runner);
+    REQUIRE(runner.starts.size() == 1);
+    CHECK(runner.starts[0].args == std::vector<std::string>{"say \"hi\"", "C:\\data dir", "x\ny", "--lr=0.1", ""});
+    const json values{{"a=b", "1"}, {"note", "ok\" c=2"}, {"path", "C:\\data\\new"}, {"lines", "x\ny"},
+                      {"eq", "x=y"},  {"n", 2}};
+    CHECK(runner.starts[0].params == values);
+
+    // The fork's field holds the parent's parameters as the card writes them
+    // (by name), and a fork with them unchanged runs with the same values.
+    runner.runs[0].state = "running";
+    panel.frame(s.get(), &runner);
+    panel.begin_fork("train-1");
+    const std::string field = R"("a=b"="1" eq=x=y lines="x\ny" n=2 note="ok\" c=2" path="C:\\data\\new")";
+    CHECK(panel.params() == field);
+    REQUIRE_MESSAGE(panel.review(), panel.problem());
+    tick(*s, panel, &runner);
+    CHECK(panel.card() == "Fork the run train-1 at its next checkpoint, with the parameters " + field +
+                              ". The fork runs train.py as Python code beside its parent.");
+    REQUIRE(panel.approve());
+    tick(*s, panel, &runner);
+    REQUIRE(runner.forks.size() == 1);
+    CHECK(runner.forks[0].params == values);
+}
+
 TEST_CASE("runs panel: the suggested id and the workspace's scripts") {
     const std::string ws = fresh_dir("scripts");
     write_text(fs::path(ws) / "train.py", "");

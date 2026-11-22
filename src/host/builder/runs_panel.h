@@ -60,20 +60,29 @@ struct RunsRect {
 // The text width of a string in the panel's font.
 using RunsMeasure = std::function<float(const std::string& text)>;
 
-// The Parameters field: pairs name=value, separated by spaces or commas. A
-// value is a number, true or false, or else a string (quotes removed). The
-// pairs come out in the command table's form, [{"name", "value"}], at most
-// kRunMaxParams of them. False with *problem for a pair without '=', an empty
-// or long name (more than 63 bytes), a name given twice, or too many pairs.
+// The two fields read every text as the review card writes it
+// (caliper_builder::run_card_text()), so that the card shows the typed text
+// as it runs: a bare word is itself, a backslash too, and double quotes keep
+// spaces, commas and '=' inside one word and read the escapes of JSON (\",
+// \\, \n, \t, \uXXXX and the others).
+//
+// The Parameters field: pairs name=value, separated by spaces or commas, split
+// at the first '=' outside quotes. A value without quotes is a number, true
+// or false, or else a string; a value in quotes is a string. The pairs come
+// out in the command table's form, [{"name", "value"}], at most kRunMaxParams
+// of them. False with *problem for a pair without '=', an empty or long name
+// (more than 63 bytes), a name given twice, too many pairs, an open quote or
+// an escape that the card does not write.
 bool parse_run_params(const std::string& text, nlohmann::json* pairs, std::string* problem);
 
-// The Arguments field: split at spaces; double quotes keep spaces inside one
-// argument. False with *problem for more than kRunMaxArgs arguments or an
-// open quote.
+// The Arguments field: split at spaces, with quotes and escapes as above.
+// False with *problem for more than kRunMaxArgs arguments, an open quote or an
+// escape that the card does not write.
 bool split_run_args(const std::string& text, std::vector<std::string>* args, std::string* problem);
 
-// Parameters as the Parameters field writes them: "lr=0.05 mode=adam", from
-// an object of values by name or from the command table's pairs.
+// Parameters as the card shows them, which the Parameters field of a fork
+// holds and parse_run_params() reads back: "lr=0.05 mode=adam", from an object
+// of values by name or from the command table's pairs.
 using caliper_builder::run_params_text;
 
 // A free run id for a script, as the model runner chooses one: the file name

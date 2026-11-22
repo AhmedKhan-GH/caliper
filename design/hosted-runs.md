@@ -92,7 +92,7 @@ A managed run executes Python code, thus `run.start` and `run.fork` always wait 
 
 The card shows every text in full. A word of printable ASCII with no space, quote, backslash or comma shows as it is. Every other text shows in double quotes, with the escapes of JSON and each control or format character as `\uXXXX`. Thus no argument reads as two, and no value can end the card. A parameter name with `=` and a string value that reads as a number, `true` or `false` show in quotes too.
 
-One function of the session, `run_card_text()`, writes these texts for the approval tray and for the runs panel. A start or a fork from the runs panel waits on the session's card like any other call. The panel shows that card with Approve and Cancel, and the tray shows the same card. A decision in either one decides the call, thus the person confirms a start or a fork exactly once.
+One function of the session, `run_card_text()`, writes these texts for the approval tray and for the runs panel. The Parameters and Arguments fields of the panel read texts in the same form, thus a typed text shows on the card as it runs. The Parameters field of a fork holds the card's text of the parameters of the parent, from `run_params_text()`, which also writes the parameters of the card. A start or a fork from the runs panel waits on the session's card like any other call. The panel shows that card with Approve and Cancel, and the tray shows the same card. A decision in either one decides the call, thus the person confirms a start or a fork exactly once.
 
 ## Model Runner
 
