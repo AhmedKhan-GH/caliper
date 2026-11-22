@@ -4,10 +4,11 @@ on:
   pull_request:
     # The docs site, the design pages, their theme and MkDocs configs
     # (design/mkdocs.yml is under design/), the sources the docs embed as
-    # snippets, and the docstrings the Python API reference is built from.
+    # snippets, and the docstrings and headers the API reference is built from.
     paths: ['docs/**', 'design/**', 'docs-theme/**', 'mkdocs.yml',
             'sdk/include/**', 'include/caliper/**', 'python/caliper/**', 'examples/**', 'roadmap/**',
             'candidates/**', 'scripts/check_doc_headings.py', 'scripts/test_check_doc_headings.py',
+            'scripts/check_api_reference.py', 'scripts/test_check_api_reference.py',
             '.github/workflows/docs.yml']
   workflow_dispatch:
 permissions:
@@ -41,5 +42,11 @@ jobs:
       # article or Your, no colon, no question) and tests the check.
       - run: python scripts/check_doc_headings.py
       - run: python -m unittest scripts/test_check_doc_headings.py -v
+      # Fails when a name of caliper.__all__ or caliper.live.__all__ has no
+      # docstring or no ::: directive, or when a service table entry or an embed,
+      # live or live_views function has no doc comment or no generated table,
+      # and tests the check and the header parser of docs-theme/hooks/c_reference.py.
+      - run: python scripts/check_api_reference.py
+      - run: python -m unittest scripts/test_check_api_reference.py -v
       - run: mkdocs build --strict
       - run: mkdocs build --strict -f design/mkdocs.yml
