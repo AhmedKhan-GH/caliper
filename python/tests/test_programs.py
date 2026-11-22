@@ -281,6 +281,9 @@ def test_the_cadence_converges_on_a_gpu_bound_run(sim):
     item = P.status()[0]
     assert item["every"] == st["every"] and item["state"] == "running"
     assert item["step_ms"] == st["step_ms"] and item["last_cost_ms"] == st["cost_ms"]
+    # Passes a second on the fake clock: one cycle of N base steps and the overhead of its pass.
+    cycle_ms = item["every"] * item["step_ms"] + item["last_cost_ms"]
+    assert item["passes_per_s"] == pytest.approx(1e3 / cycle_ms, rel=0.15)
 
 
 def test_the_cadence_converges_on_a_cpu_bound_run(sim):
@@ -375,6 +378,7 @@ def test_a_pass_over_the_budget_at_the_ceiling_stops_the_programs(sim, monkeypat
     s.train(3000)
     item = P.status()[0]
     assert item["state"] == "stopped" and item["error"]["code"] == "program.over_budget"
+    assert item["passes_per_s"] is None and item["overhead_share"] > 0.04
     assert re.search(r"more than the ceiling of 2[4-7] steps", item["error"]["message"])
     assert seen and seen[-1]["state"] == "stopped"
     assert not P.ACTIVE                              # training goes on without the program
@@ -434,8 +438,8 @@ def test_a_declaration_is_refused_before_any_pass(monkeypatch):
     decl["limits"]["time_ms"] = 60
     assert P.install("g", decl, src, scene="s")["error"]["code"] == "program.over_limits"
     assert set(item) == {"id", "kind", "state", "every", "every_min", "last_pass_ms", "last_cost_ms",
-                         "step_ms", "overhead_share", "last_step", "runs", "memory_bytes",
-                         "memory_limit_bytes", "error", "sha256"}
+                         "step_ms", "overhead_share", "passes_per_s", "last_step", "runs",
+                         "memory_bytes", "memory_limit_bytes", "error", "sha256"}
     P.remove("g")
     assert P.status() == [] and not P.ACTIVE
 

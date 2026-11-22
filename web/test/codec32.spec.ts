@@ -993,6 +993,7 @@ test('golden values of programs and interventions', async () => {
   expect([st.request_id, st.step, st.step_ms]).toEqual([12, 1200, 31.25]);
   expect(st.programs).toHaveLength(2);
   expect(st.programs.map((x) => x.state)).toEqual(['running', 'refused']);
+  expect([st.programs[0].overhead_share, st.programs[0].passes_per_s]).toEqual([0.03125, 2.5]);
   expect((st.programs[1].error as Record<string, unknown>).code).toBe('program.unknown_input');
   const wt = frame32('program_state_waiting') as ProgramStateMsg;
   expect([wt.request_id, wt.step, wt.programs.length]).toEqual([undefined, undefined, 1]);

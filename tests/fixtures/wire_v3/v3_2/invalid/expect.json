@@ -261,6 +261,9 @@
   "program_state_programs.bin": {
     "error": "bad_request"
   },
+  "program_state_rate.bin": {
+    "error": "bad_request"
+  },
   "program_state_repeat.bin": {
     "error": "bad_request"
   },
@@ -271,6 +274,9 @@
     "error": "bad_request"
   },
   "program_state_sha256.bin": {
+    "error": "bad_request"
+  },
+  "program_state_share.bin": {
     "error": "bad_request"
   },
   "program_state_state.bin": {

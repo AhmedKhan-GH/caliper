@@ -639,7 +639,8 @@ def _sha(text: str) -> str:
 
 def _program_vectors() -> dict:
     running = {"id": "rows", "kind": "geometry", "state": "running", "every": 12, "every_min": 5,
-               "last_pass_ms": 0.25, "last_cost_ms": 1.5, "step_ms": 31.25, "last_step": 1200,
+               "last_pass_ms": 0.25, "last_cost_ms": 11.71875, "step_ms": 31.25,
+               "overhead_share": 0.03125, "passes_per_s": 2.5, "last_step": 1200,
                "runs": 7, "memory_bytes": 1310720, "memory_limit_bytes": 67108864,
                "error": None, "sha256": _sha(WGSL)}
     refused = {"id": "image", "kind": "pixels", "state": "refused", "every_min": 1,
@@ -745,6 +746,8 @@ def _program_invalid() -> dict:
         "program_state_runs": (state(dict(item, runs=-1)), bad),
         "program_state_runs_exact": (state(dict(item, runs=2**53)), bad),
         "program_state_every": (state(dict(item, every=0)), bad),
+        "program_state_share": (state(dict(item, overhead_share=-0.5)), bad),
+        "program_state_rate": (state(dict(item, passes_per_s="2")), bad),
         "program_state_error": (state(dict(item, error={"message": "x"})), bad),
         "program_state_sha256": (state(dict(item, sha256="a" * 63)), bad),
         "program_state_step": (state(item, step=-1), bad),

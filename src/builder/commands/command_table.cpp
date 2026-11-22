@@ -403,17 +403,19 @@ const std::pair<const char*, const char*> kFragments[] = {
 
     {"program_status", R"json({
       "type": "object", "additionalProperties": false,
-      "required": ["id", "kind", "host", "state", "every", "every_min", "last_pass_ms", "last_cost_ms", "step_ms", "last_step", "runs", "memory_bytes", "memory_limit_bytes", "error", "sha256"],
+      "required": ["id", "kind", "host", "state", "every", "every_min", "last_pass_ms", "last_cost_ms", "step_ms", "overhead_share", "passes_per_s", "last_step", "runs", "memory_bytes", "memory_limit_bytes", "error", "sha256"],
       "properties": {
         "id": {"type": "string", "description": "The program's id, or a stage as <panel>/<entity>/<kind>."},
         "kind": {"type": "string", "enum": ["geometry", "pixels", "material", "vertex"], "description": "The program's output kind or the stage's kind."},
         "host": {"type": "string", "enum": ["script", "viewer", "none"], "description": "Where it runs: script for a program in the attached script, viewer for a stage, none when nothing runs it."},
         "state": {"type": "string", "enum": ["waiting", "review", "compiled", "running", "refused", "stopped"], "description": "waiting for a host, review in a foreign spec without a review, compiled before its first pass, running, refused by a check, or stopped by a limit."},
-        "every": {"type": ["integer", "null"], "description": "The cadence N: the program runs every N steps; null for a stage or before the first pass."},
+        "every": {"type": ["integer", "null"], "description": "The steps between two passes of the program: the cadence N that all programs share, or a multiple of N for a larger limits.every; null for a stage or before the first pass."},
         "every_min": {"type": ["integer", "null"], "description": "The declared limits.every; null for a stage or when absent."},
         "last_pass_ms": {"type": ["number", "null"], "description": "The GPU time of the last pass or frame in milliseconds, or null."},
-        "last_cost_ms": {"type": ["number", "null"], "description": "The time the last pass step added to the training step in milliseconds, or null."},
-        "step_ms": {"type": ["number", "null"], "description": "The median training step time in milliseconds that sets the cadence, or null."},
+        "last_cost_ms": {"type": ["number", "null"], "description": "The overhead D of a pass in milliseconds: the time that a pass adds to the run's wall clock, shared by all programs; null for a stage or before it is measured."},
+        "step_ms": {"type": ["number", "null"], "description": "The base step time b in milliseconds: the time of a training step far from a pass; null for a stage or before it is measured."},
+        "overhead_share": {"type": ["number", "null"], "minimum": 0, "description": "The measured share of the training time that the passes take, D / (N b), which the cadence aims to keep at or below 0.04; null for a stage or before it is measured."},
+        "passes_per_s": {"type": ["number", "null"], "minimum": 0, "description": "The passes of the program a second on the run's wall clock, over its last passes; null for a stage, before its second pass and while it does not run."},
         "last_step": {"type": ["integer", "null"], "description": "The script's step of the last pass, or null."},
         "runs": {"type": "integer", "minimum": 0, "description": "The count of passes, or of frames for a stage."},
         "memory_bytes": {"type": "integer", "minimum": 0, "description": "The bytes of its output buffers and bound tensors."},
@@ -1464,8 +1466,9 @@ const Row kRows[] = {
      R"json({"id": "rows"})json"},
     {"program.status", false, false, true,
      "Returns the state of each GPU program and each stage of the open spec: where it runs, whether it compiled, runs, "
-     "was refused or stopped, its cadence N, the GPU time of its last pass, the time it adds to a training step, its "
-     "memory, and its last error with line and column. It changes nothing.",
+     "was refused or stopped, its cadence N, the GPU time of its last pass, the overhead of a pass and the base step "
+     "time on the run's wall clock, the measured share of the training time, its passes a second, its memory, and "
+     "its last error with line and column. It changes nothing.",
      R"json({"type": "object", "additionalProperties": false, "required": [],
       "properties": {
         "id": {"type": "string", "minLength": 1, "maxLength": 320, "description": "Only this program, or this stage as <panel>/<entity>/<kind>; every program and stage when absent."}}})json",

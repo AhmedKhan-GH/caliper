@@ -93,6 +93,7 @@ def _facade():
 def _refused(program_id: str, kind: str, code: str, message: str, sha256: str = "") -> dict:
     return {"id": program_id, "kind": kind, "state": "refused", "every": None,
             "every_min": None, "last_pass_ms": None, "last_cost_ms": None, "step_ms": None,
+            "overhead_share": None, "passes_per_s": None,
             "last_step": None, "runs": 0, "memory_bytes": 0, "memory_limit_bytes": 0,
             "error": {"code": code, "message": message[:_wire.TEXT_MAX], "line": 0,
                       "column": 0},

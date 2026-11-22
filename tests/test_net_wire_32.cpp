@@ -194,6 +194,11 @@ TEST_CASE("net/wire 3.2 programs") {
         CHECK(s.step.value_or(0) == 1200);
         CHECK(s.step_ms.value_or(0) == 31.25);
         CHECK(s.programs.size() == 2);
+        const Json& run = s.programs.items().front();   // the cadence keys of a running program
+        REQUIRE(run.find("overhead_share"));
+        REQUIRE(run.find("passes_per_s"));
+        CHECK(run.find("overhead_share")->as_double() == 0.03125);
+        CHECK(run.find("passes_per_s")->as_double() == 2.5);
     }
     {
         const Message m = load("program_state_waiting");

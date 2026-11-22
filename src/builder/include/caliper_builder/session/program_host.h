@@ -43,11 +43,15 @@ struct ProgramStatus {
     std::string host = "none";                    // "script", "viewer" or "none"
     std::string state = "waiting";                // "waiting", "review", "compiled", "running", "refused", "stopped"
     std::string panel;                            // the target scene panel of a geometry output or a stage; empty otherwise
-    std::optional<std::uint32_t> every;           // the cadence N
+    // The cadence (design/gpu-programs.md, Cadence) as the script measures it
+    // on the run's wall clock; null for a stage and before it is measured.
+    std::optional<std::uint32_t> every;           // steps between passes: N, or a multiple of N
     std::optional<std::uint32_t> every_min;       // the declared limits.every
     std::optional<double> last_pass_ms;           // GPU time of the last pass or frame
-    std::optional<double> last_cost_ms;           // time the last pass step added on the training thread
-    std::optional<double> step_ms;                // the median step time that sets N
+    std::optional<double> last_cost_ms;           // the overhead D of a pass, shared by all programs
+    std::optional<double> step_ms;                // the base step time b
+    std::optional<double> overhead_share;         // D / (N b): the share of the training time
+    std::optional<double> passes_per_s;           // passes a second over the program's last passes
     std::optional<std::int64_t> last_step;        // the script's step of the last pass
     std::uint64_t runs = 0;                       // passes, or frames of a stage
     std::uint64_t memory_bytes = 0;               // output buffers and bound tensors
