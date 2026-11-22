@@ -381,8 +381,8 @@ TEST_CASE("resources are listed in pages and read by URI") {
         REQUIRE(pages < 10);
     }
     CHECK(pages == 3);
-    // 451 pages, the schema compiled in, and the command table.
-    CHECK(seen.size() == 453);
+    // 451 pages, the two spec schemas compiled in, and the command table.
+    CHECK(seen.size() == 454);
     CHECK(seen.count(kCommandTableUri) == 1);
     CHECK(seen.count(kSpecSchemaUri) == 1);
     CHECK(seen.count("caliper://docs/index.md") == 1);
