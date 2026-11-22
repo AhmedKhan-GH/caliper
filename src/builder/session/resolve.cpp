@@ -2,13 +2,16 @@
 
 #include <caliper_builder/catalog/catalog_entry.h>
 #include <caliper_builder/loaders/tensor_ops.h>
+#include <caliper_builder/session/history.h>
 #include <caliper_builder/session/loader_catalog.h>
+#include <caliper_builder/session/values.h>
 #include <caliper_builder/spec/format.h>
 
 #include <algorithm>
 #include <exception>
 #include <map>
 #include <set>
+#include <variant>
 
 #include "util.h"
 
@@ -121,11 +124,120 @@ std::uint64_t mix_generation(std::uint64_t h, std::uint64_t g) {
     return z ^ (z >> 31);
 }
 
+// One step of a chain: its source and its index in the source's transforms,
+// from the root's first step to the bound source's last.
+struct ChainStep {
+    const spec::Source* source = nullptr;
+    std::size_t index = 0;
+    spec::TransformOp op() const { return source->transforms[index].op; }
+};
+
+std::vector<ChainStep> chain_steps(const Chain& chain) {
+    std::vector<ChainStep> out;
+    for (const spec::Source* s : chain.path)
+        for (std::size_t k = 0; k < s->transforms.size(); ++k) out.push_back({s, k});
+    return out;
+}
+
+bool is_operator(spec::TransformOp op) { return op == spec::TransformOp::surface || op == spec::TransformOp::path; }
+
+// Whether a chain reads kept steps: a window, or a source that keeps steps,
+// whose value at a held cursor comes from the history.
+bool reads_kept_steps(const spec::Spec& s, const Chain& chain) {
+    for (const spec::Source* p : chain.path) {
+        if (history_depth(s, *p) > 0) return true;
+        for (const spec::Transform& t : p->transforms)
+            if (t.op == spec::TransformOp::window) return true;
+    }
+    return false;
+}
+
+// The binding that a slot reference reads now: a text state whose value is
+// a source id (design/instrument-interface.md, State Readers, Retarget).
+Error reference_binding(const spec::Reference& ref, const ChainContext* ctx, std::string* out) {
+    json v = ctx && ctx->values ? ctx->values->value(ref) : ref.fallback;
+    if (v.is_null()) v = ref.fallback;
+    if (v.is_string() && !v.get<std::string>().empty()) {
+        *out = v.get<std::string>();
+        return {};
+    }
+    return Error("resolve.waiting", "The slot reads " + ref.target + ", which has no source id yet.", ref.target);
+}
+
+// Each binding of a panel's slots in slot order, list slots in their order,
+// with a slot reference read now; a reference without a value is left out
+// and reported in `error`.
+struct BoundSlot {
+    std::string slot;
+    std::size_t index = 0;
+    std::string binding;
+};
+
+std::vector<BoundSlot> panel_bindings(const spec::Panel& panel, const ChainContext* ctx, Error* error) {
+    std::vector<BoundSlot> out;
+    for (const auto& [slot, value] : panel.bind) {
+        if (value.bindings.empty() && value.reference) {
+            std::string b;
+            if (Error err = reference_binding(*value.reference, ctx, &b)) {
+                if (error && !*error) *error = err;
+                continue;
+            }
+            out.push_back({slot, 0, b});
+            continue;
+        }
+        for (std::size_t i = 0; i < value.bindings.size(); ++i) out.push_back({slot, i, value.bindings[i]});
+    }
+    return out;
+}
+
+// Each binding of the entities of a scene panel, in entity order and then
+// slot order, as its first element the entity's index.
+std::vector<std::pair<std::size_t, BoundSlot>> entity_bindings(const spec::Panel& panel, const ChainContext* ctx,
+                                                                std::map<std::size_t, Error>* errors) {
+    std::vector<std::pair<std::size_t, BoundSlot>> out;
+    for (std::size_t i = 0; i < panel.entities.size(); ++i) {
+        const spec::Entity& e = panel.entities[i];
+        if (e.source) {
+            out.push_back({i, {std::string(), 0, *e.source}});
+            continue;
+        }
+        for (const auto& [slot, value] : e.slots) {
+            std::string b;
+            if (const std::string* literal = std::get_if<std::string>(&value)) {
+                b = *literal;
+            } else if (Error err = reference_binding(std::get<spec::Reference>(value), ctx, &b)) {
+                if (errors && !errors->count(i)) (*errors)[i] = err;
+                continue;
+            }
+            out.push_back({i, {slot, 0, b}});
+        }
+    }
+    return out;
+}
+
+// While the cursor is held, a panel that reads kept steps mixes in the
+// cursor's step, so that its generation changes when the cursor moves.
+std::uint64_t mix_cursor(std::uint64_t generation, bool reads_history, const ChainContext* ctx) {
+    if (!reads_history || !ctx || ctx->cursor_live) return generation;
+    return mix_generation(mix_generation(generation, 0xC0A5u), static_cast<std::uint64_t>(ctx->cursor_step));
+}
+
+// The value of a tensor chain: the tensor, the step of each row after a
+// window, the geometry arrays after an operator, and what the cursor chose.
+struct ChainValue {
+    TensorData tensor;
+    TensorData steps;
+    GeometryArrays geometry;
+    std::optional<std::int64_t> step;
+    bool live_only = false;
+};
+
 class PanelResolver {
 public:
     PanelResolver(const spec::Spec& s, LoaderStore& store, const ResolveLimits& limits, DataSources* sources,
                   const ChainContext* chain)
-        : spec_(s), store_(store), limits_(limits), sources_(sources), chain_(chain ? *chain : ChainContext{}) {}
+        : spec_(s), store_(store), limits_(limits), sources_(sources), chain_(chain ? *chain : ChainContext{}),
+          chain_given_(chain != nullptr) {}
 
     PanelData run(std::string_view panel_id) {
         PanelData out;
@@ -136,75 +248,182 @@ public:
             return out;
         }
         out.primitive = panel->primitive;
+        const ChainContext* ctx = chain_given_ ? &chain_ : nullptr;
         // A scene panel draws a live scene of the attached script, which the
-        // app's live views hold; it binds no source, so it resolves to no slot.
-        if (panel->primitive == spec::Primitive::scene) return out;
+        // app's live views hold, and the entities that it builds from the
+        // spec's sources (design/instrument-interface.md, Scene Entities).
+        if (panel->primitive == spec::Primitive::scene) {
+            resolve_entities(*panel, out);
+            return out;
+        }
+        Error reference_error;
+        const std::vector<BoundSlot> bound = panel_bindings(*panel, ctx, &reference_error);
+        if (reference_error) {
+            out.error = reference_error;
+            if (sources_) out.generation = panel_generation(spec_, panel_id, *sources_, ctx);
+            return out;
+        }
         // First, what each tabular root must give, so that each is read once.
-        for (const auto& [slot, value] : panel->bind) {
-            for (const std::string& b : value.bindings) {
-                const Binding parts = split_binding(b);
-                Chain chain = chain_of(parts.source);
-                if (chain.error) {
-                    out.error = chain.error;
-                    if (sources_) out.generation = panel_generation(spec_, panel_id, *sources_);
-                    return out;
-                }
-                if (chain.kind != RootKind::table && chain.kind != RootKind::sql && chain.kind != RootKind::served_table)
-                    continue;
-                const std::string root = chain.path.front()->id;
-                if (!parts.column.empty()) {
-                    needed_[root].insert(parts.column);
-                } else if (slot == "rows" && panel->options.columns) {
-                    for (const auto& c : *panel->options.columns) needed_[root].insert(c);
-                } else {
-                    whole_.insert(root);
-                }
+        for (const BoundSlot& b : bound)
+            if (Error err = note_binding(*panel, b.slot, b.binding)) {
+                out.error = err;
+                if (sources_) out.generation = panel_generation(spec_, panel_id, *sources_, ctx);
+                return out;
             }
-        }
         bool served = false;
+        bool history = false;
         std::uint64_t generation = 0;
-        for (const auto& [slot, value] : panel->bind) {
-            for (std::size_t i = 0; i < value.bindings.size(); ++i) {
-                SlotData data;
-                data.slot = slot;
-                data.index = i;
-                data.binding = value.bindings[i];
-                const Binding parts = split_binding(data.binding);
-                data.source = parts.source;
-                data.column = parts.column;
-                bool slot_served = false;
-                if (Error err = fill(*panel, data, &slot_served)) {
-                    out.error = std::move(err);
-                    out.slots.clear();
-                    if (sources_) out.generation = panel_generation(spec_, panel_id, *sources_);
-                    return out;
-                }
-                if (slot_served) {
-                    served = true;
-                    generation = mix_generation(generation, data.generation);
-                }
-                out.slots.push_back(std::move(data));
+        for (const BoundSlot& b : bound) {
+            SlotData data;
+            data.slot = b.slot;
+            data.index = b.index;
+            data.binding = b.binding;
+            const Binding parts = split_binding(data.binding);
+            data.source = parts.source;
+            data.column = parts.column;
+            bool slot_served = false;
+            if (Error err = fill(*panel, data, &slot_served)) {
+                out.error = std::move(err);
+                out.slots.clear();
+                if (sources_) out.generation = panel_generation(spec_, panel_id, *sources_, ctx);
+                return out;
             }
+            history = history || reads_kept_steps(spec_, chain_of(data.source));
+            if (slot_served) {
+                served = true;
+                generation = mix_generation(generation, data.generation);
+            }
+            out.slots.push_back(std::move(data));
         }
-        out.generation = served ? generation : 0;
+        out.generation = served ? mix_cursor(generation, history, ctx) : 0;
         return out;
     }
 
 private:
     Chain chain_of(const std::string& id) const { return ::caliper_builder::chain_of(spec_, id, sources_); }
 
+    // Notes what a tabular root must give for one binding.
+    Error note_binding(const spec::Panel& panel, const std::string& slot, const std::string& binding) {
+        const Binding parts = split_binding(binding);
+        Chain chain = chain_of(parts.source);
+        if (chain.error) return chain.error;
+        if (chain.kind != RootKind::table && chain.kind != RootKind::sql && chain.kind != RootKind::served_table)
+            return {};
+        const std::string root = chain.path.front()->id;
+        if (!parts.column.empty()) {
+            needed_[root].insert(parts.column);
+        } else if (slot == "rows" && panel.options.columns) {
+            for (const auto& c : *panel.options.columns) needed_[root].insert(c);
+        } else {
+            whole_.insert(root);
+        }
+        return {};
+    }
+
+    // The arrays of each entity (design/instrument-interface.md, Array
+    // Resolution): a source id gives one slot for each geometry array of the
+    // source, a table gives one slot for each binding. An entity's error
+    // does not stop the panel or the other entities.
+    void resolve_entities(const spec::Panel& panel, PanelData& out) {
+        const ChainContext* ctx = chain_given_ ? &chain_ : nullptr;
+        std::map<std::size_t, Error> errors;
+        const auto bound = entity_bindings(panel, ctx, &errors);
+        for (const auto& [i, b] : bound)
+            if (!errors.count(i))
+                if (Error err = note_binding(panel, b.slot, b.binding)) errors[i] = err;
+        out.entities.resize(panel.entities.size());
+        bool served = false;
+        bool history = false;
+        std::uint64_t generation = 0;
+        for (std::size_t i = 0; i < panel.entities.size(); ++i) out.entities[i].path = panel.entities[i].path;
+        for (const auto& [i, b] : bound) {
+            EntityData& e = out.entities[i];
+            if (errors.count(i)) continue;
+            SlotData data;
+            data.slot = b.slot;
+            data.binding = b.binding;
+            const Binding parts = split_binding(b.binding);
+            data.source = parts.source;
+            data.column = parts.column;
+            bool slot_served = false;
+            if (Error err = fill(panel, data, &slot_served)) {
+                errors[i] = err;
+                continue;
+            }
+            history = history || reads_kept_steps(spec_, chain_of(data.source));
+            if (slot_served) {
+                served = true;
+                generation = mix_generation(generation, data.generation);
+                e.generation = mix_generation(e.generation, data.generation);
+            }
+            if (!b.slot.empty()) {
+                e.slots.push_back(std::move(data));
+                continue;
+            }
+            // A source id: each geometry array binds the slot of its name.
+            if (data.geometry.empty()) {
+                errors[i] = Error("entity.shape",
+                                  "The source " + data.source +
+                                      " gives a tensor, not geometry; end it with surface or path, or bind the "
+                                      "entity's slots in a table.",
+                                  panel.entities[i].path);
+                continue;
+            }
+            for (const auto& [name, array] : data.geometry) {
+                SlotData one;
+                one.slot = name;
+                one.binding = data.source + "." + name;
+                one.source = data.source;
+                one.column = name;
+                one.kind = SlotData::Kind::tensor;
+                one.tensor = array;
+                one.steps = data.steps;
+                one.step = data.step;
+                one.live_only = data.live_only;
+                one.generation = data.generation;
+                e.slots.push_back(std::move(one));
+            }
+        }
+        for (auto& [i, err] : errors) {
+            out.entities[i].slots.clear();
+            out.entities[i].error = err;
+            if (out.entities[i].error.where.empty()) out.entities[i].error.where = panel.entities[i].path;
+        }
+        out.generation = served ? mix_cursor(generation, history, ctx) : 0;
+    }
+
     Error fill(const spec::Panel& panel, SlotData& data, bool* served) {
         Chain chain = chain_of(data.source);
         if (chain.error) return chain.error;
         *served = is_served(chain.kind);
         if (chain.kind == RootKind::tensor || chain.kind == RootKind::served_tensor) {
-            if (!data.column.empty())
+            ChainValue v;
+            if (Error err = value_of(chain, &v, &data.generation)) return err;
+            data.kind = SlotData::Kind::tensor;
+            data.step = v.step;
+            data.live_only = v.live_only;
+            data.steps = v.steps;
+            data.geometry = v.geometry;
+            if (!data.column.empty()) {
+                // A geometry array by name, and the columns of a window: the
+                // step of each row and the stacked value.
+                const auto array = v.geometry.find(data.column);
+                if (array != v.geometry.end()) {
+                    data.tensor = array->second;
+                    return {};
+                }
+                if (v.steps.valid() && data.column == "step") {
+                    data.tensor = v.steps;
+                    return {};
+                }
+                if (v.steps.valid() && data.column == "value") {
+                    data.tensor = std::move(v.tensor);
+                    return {};
+                }
                 return Error("resolve.not_tabular", "The source " + data.source + " is a tensor and has no columns.",
                              data.binding);
-            TensorData t;
-            if (Error err = tensor_of(chain, &t, &data.generation)) return err;
-            data.kind = SlotData::Kind::tensor;
-            data.tensor = std::move(t);
+            }
+            data.tensor = std::move(v.tensor);
             return {};
         }
         for (const spec::Source* s : chain.path)
@@ -213,6 +432,27 @@ private:
                              s->id);
         const QueryResult* q = nullptr;
         if (Error err = table_of(chain, &q)) return err;
+        // While the cursor is held, a table with a step column shows its rows
+        // up to the cursor (design/instrument-interface.md, Latest at the
+        // Cursor: a series shows the points up to the cursor).
+        QueryResult held;
+        if (chain_.history && !chain_.cursor_live) {
+            std::optional<std::size_t> step_column;
+            for (std::size_t c = 0; c < q->columns.size(); ++c)
+                if (q->columns[c].name == "step") step_column = c;
+            if (step_column) {
+                held.columns = q->columns;
+                held.truncated = q->truncated;
+                held.rows = json::array();
+                for (const auto& row : q->rows) {
+                    const json cell = row.is_array() && *step_column < row.size() ? row[*step_column] : json();
+                    if (cell.is_number() && cell.get<double>() > static_cast<double>(chain_.cursor_step)) continue;
+                    held.rows.push_back(row);
+                }
+                q = &held;
+                data.step = chain_.cursor_step;
+            }
+        }
         auto column_index = [&](const std::string& name, std::size_t* out) -> Error {
             for (std::size_t c = 0; c < q->columns.size(); ++c)
                 if (q->columns[c].name == name) {
@@ -254,16 +494,25 @@ private:
         return {};
     }
 
-    // The tensor of a served root (a live view), from the cache when the
-    // chain was computed from the generation its source has now.
-    Error served_tensor_of(const Chain& chain, TensorData* out, std::uint64_t* generation) {
+    std::uint64_t served_generation(const Chain& chain) const {
+        if (!sources_ || chain.kind != RootKind::served_tensor) return 0;
+        return sources_->generation(*chain.path.front()->catalog);
+    }
+
+    // The tensor of a served root (a live view) through its shipped steps,
+    // from the cache when the chain was computed from the generation its
+    // source has now.
+    Error served_tensor_of(const Chain& chain, const std::vector<ChainStep>& steps, ChainValue* out,
+                           std::uint64_t* generation) {
         const spec::Source& root = *chain.path.front();
         std::shared_ptr<CatalogDataSource> source = sources_->get(chain.catalog_kind);
         if (!source)
             return Error("resolve.unavailable", "No data source is registered for the source " + root.id + ".", root.id);
-        const std::string key = chain_key(chain, chain_);
+        bool cached_form = true;
+        for (const ChainStep& s : steps) cached_form = cached_form && !is_operator(s.op());
+        const std::string key = cached_form ? chain_key(chain, chain_) : std::string();
         const std::uint64_t now = source->generation(*root.catalog);
-        if (now != 0 && sources_->find_cached(key, now, out)) {
+        if (cached_form && now != 0 && sources_->find_cached(key, now, &out->tensor)) {
             *generation = now;
             return {};
         }
@@ -284,112 +533,172 @@ private:
                          "The source " + *root.catalog + " gave a tensor of " + std::to_string(data.tensor.nbytes()) +
                              " bytes, past the limit of " + std::to_string(limits_.max_tensor_bytes) + ".",
                          root.id);
-        TensorData t = std::move(data.tensor);
-        if (Error err = apply_chain(chain, &t)) return err;
-        sources_->store_cached(key, data.generation, t);
+        out->tensor = std::move(data.tensor);
+        if (Error err = run_steps(steps, 0, *out)) return err;
+        if (cached_form) sources_->store_cached(key, data.generation, out->tensor);
         *generation = data.generation;
-        *out = std::move(t);
         return {};
     }
 
-    Error tensor_of(const Chain& chain, TensorData* out, std::uint64_t* generation) {
+    // The newest value of a chain: its root's newest data through every step.
+    Error live_value(const Chain& chain, const std::vector<ChainStep>& steps, ChainValue* out,
+                     std::uint64_t* generation) {
+        if (chain.kind == RootKind::served_tensor) return served_tensor_of(chain, steps, out, generation);
+        const spec::Source& root = *chain.path.front();
+        TensorResult loaded = store_.load_tensor(*root.catalog);
+        if (loaded.error) return loaded.error;
+        out->tensor = std::move(loaded.tensor);
+        *generation = 0;
+        return run_steps(steps, 0, *out);
+    }
+
+    // The value of a tensor chain (design/instrument-interface.md, Latest at
+    // the Cursor): after the chain's last window, its stack of kept steps
+    // through the steps after it; while the cursor is held, the newest kept
+    // value at or before the cursor of the nearest source that keeps steps,
+    // through the steps after its history point; else the newest value.
+    Error value_of(const Chain& chain, ChainValue* out, std::uint64_t* generation) {
         const std::string bound = chain.path.back()->id;
-        const auto cached = tensors_.find(bound);
-        if (cached != tensors_.end()) {
+        const auto cached = values_.find(bound);
+        if (cached != values_.end()) {
             *out = cached->second.first;
             *generation = cached->second.second;
             return {};
         }
-        TensorData t;
+        const std::vector<ChainStep> steps = chain_steps(chain);
+        std::optional<std::size_t> window;
+        for (std::size_t i = 0; i < steps.size(); ++i)
+            if (steps[i].op() == spec::TransformOp::window) window = i;
+        ChainValue v;
         std::uint64_t g = 0;
-        if (chain.kind == RootKind::served_tensor) {
-            if (Error err = served_tensor_of(chain, &t, &g)) return err;
+        if (window) {
+            const ChainStep& w = steps[*window];
+            spec::Transform literal;
+            if (Error err = literal_step(w, &literal)) return err;
+            if (Error err = apply_window(literal, *w.source, chain_, &v.tensor, &v.steps)) {
+                if (err.where.empty()) err.where = step_where(w);
+                return err;
+            }
+            if (Error err = run_steps(steps, *window + 1, v)) return err;
+            g = served_generation(chain);
+        } else if (chain_.history && !chain_.cursor_live && chain.kind == RootKind::served_tensor) {
+            const spec::Source* keeper = nullptr;
+            for (auto it = chain.path.rbegin(); it != chain.path.rend() && !keeper; ++it)
+                if (history_depth(spec_, **it) > 0) keeper = *it;
+            std::optional<std::pair<std::int64_t, TensorData>> kept;
+            if (keeper) kept = chain_.history->at(keeper->id, chain_.cursor_step);
+            if (kept) {
+                v.tensor = std::move(kept->second);
+                v.step = kept->first;
+                if (Error err = run_steps(steps, history_point(spec_, *keeper), v)) return err;
+                g = served_generation(chain);
+            } else {
+                if (Error err = live_value(chain, steps, &v, &g)) return err;
+                v.live_only = true;
+            }
         } else {
-            const spec::Source& root = *chain.path.front();
-            TensorResult loaded = store_.load_tensor(*root.catalog);
-            if (loaded.error) return loaded.error;
-            t = std::move(loaded.tensor);
-            if (Error err = apply_chain(chain, &t)) return err;
+            if (Error err = live_value(chain, steps, &v, &g)) return err;
         }
-        tensors_[bound] = {t, g};
+        values_[bound] = {v, g};
         *generation = g;
-        *out = std::move(t);
+        *out = std::move(v);
         return {};
     }
 
-    // Applies the transforms of the root and of each source down the chain, in
-    // order, refusing a result past max_tensor_bytes before it is made.
-    Error apply_chain(const Chain& chain, TensorData* tensor) {
-        TensorData& t = *tensor;
-        for (const spec::Source* s : chain.path) {
-            if (s->transforms.empty()) continue;
-            // The references of each step take their values first
-            // (chain_hooks.h); the shipped steps then read literals only.
-            spec::Source literal = *s;
-            for (std::size_t k = 0; k < literal.transforms.size(); ++k) {
-                if (literal.transforms[k].references.empty()) continue;
-                if (Error err = substitute_references(s->transforms[k], chain_, &literal.transforms[k])) {
-                    err.where = "source " + s->id + ", transform[" + std::to_string(k) + "]";
-                    return err;
-                }
-            }
-            const json records = spec::to_json(literal).value("transform", json::array());
-            for (std::size_t k = 0; k < records.size(); ++k) {
-                const std::string where = "source " + s->id + ", transform[" + std::to_string(k) + "]";
-                // The steps of design/instrument-interface.md have their own
-                // owners: the window over kept steps and the operators.
-                const spec::TransformOp op = literal.transforms[k].op;
-                if (op == spec::TransformOp::window) {
-                    TensorData steps;
-                    if (Error err = apply_window(literal.transforms[k], *s, chain_, &t, &steps)) {
-                        if (err.where.empty()) err.where = where;
-                        return err;
-                    }
-                    continue;
-                }
-                if (op == spec::TransformOp::surface || op == spec::TransformOp::path) {
-                    GeometryArrays geometry;
-                    if (Error err = apply_operator(literal.transforms[k], t, nullptr, &geometry)) {
-                        if (err.where.empty()) err.where = where;
-                        return err;
-                    }
-                    continue;
-                }
-                json record = records[k];
-                record.erase("x");
-                TensorTransform tt;
-                if (Error err = transform_from_json(record, &tt)) {
-                    err.where = where;
-                    return err;
-                }
-                std::vector<int64_t> shape;
-                DType dtype = DType::f32;
-                if (Error err = transform_result_shape(t.shape(), t.dtype(), tt, &shape, &dtype)) {
-                    err.where = where;
-                    return err;
-                }
-                uint64_t numel = 0;
-                uint64_t nbytes = 0;
-                if (Error err = check_shape(shape, dtype, &numel, &nbytes)) {
-                    err.where = where;
-                    return err;
-                }
-                if (nbytes > limits_.max_tensor_bytes)
-                    return Error("resolve.too_large",
-                                 "The transform would make a tensor of " + std::to_string(nbytes) +
-                                     " bytes, past the limit of " + std::to_string(limits_.max_tensor_bytes) + ".",
-                                 where);
-                TensorResult r = apply_transform(t, tt);
-                if (r.error) {
-                    r.error.where = where;
-                    return r.error;
-                }
-                t = std::move(r.tensor);
-            }
+    static std::string step_where(const ChainStep& s) {
+        return "source " + s.source->id + ", transform[" + std::to_string(s.index) + "]";
+    }
+
+    // The step with each reference replaced by the literal it reads now
+    // (chain_hooks.h).
+    Error literal_step(const ChainStep& s, spec::Transform* out) const {
+        const spec::Transform& t = s.source->transforms[s.index];
+        if (t.references.empty()) {
+            *out = t;
+            return {};
+        }
+        if (Error err = substitute_references(t, chain_, out)) {
+            err.where = step_where(s);
+            return err;
         }
         return {};
     }
 
+    // Applies the chain's steps from `from` to the end, refusing a result
+    // past max_tensor_bytes before it is made. An operator gives geometry,
+    // and no shipped step may follow it.
+    Error run_steps(const std::vector<ChainStep>& steps, std::size_t from, ChainValue& v) {
+        for (std::size_t i = from; i < steps.size(); ++i) {
+            const ChainStep& s = steps[i];
+            const std::string where = step_where(s);
+            spec::Transform literal;
+            if (Error err = literal_step(s, &literal)) return err;
+            const spec::TransformOp op = literal.op;
+            if (op == spec::TransformOp::window)
+                return Error("spec.bad_transform", "A window is the first step of a source.", where);
+            if (!v.geometry.empty())
+                return Error("spec.bad_transform", "A step after an operator has no tensor to read.", where);
+            if (is_operator(op)) {
+                if (Error err = apply_operator(literal, v.tensor, v.steps.valid() ? &v.steps : nullptr, &v.geometry)) {
+                    if (err.where.empty()) err.where = where;
+                    return err;
+                }
+                continue;
+            }
+            spec::Source one;
+            one.id = s.source->id;
+            one.transforms = {literal};
+            json record = spec::to_json(one).value("transform", json::array()).at(0);
+            record.erase("x");
+            TensorTransform tt;
+            if (Error err = transform_from_json(record, &tt)) {
+                err.where = where;
+                return err;
+            }
+            std::vector<int64_t> shape;
+            DType dtype = DType::f32;
+            if (Error err = transform_result_shape(v.tensor.shape(), v.tensor.dtype(), tt, &shape, &dtype)) {
+                err.where = where;
+                return err;
+            }
+            uint64_t numel = 0;
+            uint64_t nbytes = 0;
+            if (Error err = check_shape(shape, dtype, &numel, &nbytes)) {
+                err.where = where;
+                return err;
+            }
+            if (nbytes > limits_.max_tensor_bytes)
+                return Error("resolve.too_large",
+                             "The transform would make a tensor of " + std::to_string(nbytes) +
+                                 " bytes, past the limit of " + std::to_string(limits_.max_tensor_bytes) + ".",
+                             where);
+            TensorData rows = v.steps.valid() ? rows_after(tt, v.tensor.rank(), v.steps) : TensorData();
+            TensorResult r = apply_transform(v.tensor, tt);
+            if (r.error) {
+                r.error.where = where;
+                return r.error;
+            }
+            v.tensor = std::move(r.tensor);
+            v.steps = std::move(rows);
+        }
+        return {};
+    }
+
+    // The steps of a window's rows after one shipped step: kept while the
+    // stacked axis 0 stays, sliced with it, and dropped when the step
+    // removes it.
+    static TensorData rows_after(const TensorTransform& tt, int rank, const TensorData& rows) {
+        auto axis0 = [&](int64_t a) { return (a < 0 ? a + rank : a) == 0; };
+        bool touches = false;
+        for (int64_t a : tt.axes) touches = touches || axis0(a);
+        if (tt.op == TransformOp::normalise || !touches) return rows;
+        if (tt.op == TransformOp::reduce) return TensorData();
+        if (tt.index) return TensorData();
+        TensorTransform along = tt;
+        along.axes = {0};
+        TensorResult r = apply_transform(rows, along);
+        return r.error ? TensorData() : std::move(r.tensor);
+    }
     Error table_of(const Chain& chain, const QueryResult** out) {
         const spec::Source& root = *chain.path.front();
         const auto cached = tables_.find(root.id);
@@ -475,10 +784,11 @@ private:
     const ResolveLimits& limits_;
     DataSources* sources_ = nullptr;
     ChainContext chain_;
+    bool chain_given_ = false;   // a caller's context, not the default one
     std::map<std::string, std::set<std::string>> needed_;  // by tabular root
     std::set<std::string> whole_;                          // tabular roots read whole
     std::set<std::string> truncated_;                      // cut at max_cells here
-    std::map<std::string, std::pair<TensorData, std::uint64_t>> tensors_;  // by bound source, with its generation
+    std::map<std::string, std::pair<ChainValue, std::uint64_t>> values_;  // by bound source, with its generation
     std::map<std::string, QueryResult> tables_;            // by tabular root
     std::map<std::string, std::uint64_t> table_generations_;  // by served tabular root
 };
@@ -570,21 +880,31 @@ void DataSources::store_cached(const std::string& key, std::uint64_t generation,
     cache_bytes_ += tensor.nbytes();
 }
 
-std::uint64_t panel_generation(const spec::Spec& s, std::string_view panel_id, const DataSources& sources) {
+std::uint64_t panel_generation(const spec::Spec& s, std::string_view panel_id, const DataSources& sources,
+                               const ChainContext* chain) {
     const spec::Panel* panel = s.find_panel(panel_id);
-    if (!panel || panel->primitive == spec::Primitive::scene) return 0;
-    bool served = false;
-    std::uint64_t generation = 0;
-    for (const auto& [slot, value] : panel->bind) {
-        (void)slot;
-        for (const std::string& b : value.bindings) {
-            const Chain chain = chain_of(s, split_binding(b).source, &sources);
-            if (!is_served(chain.kind) || chain.path.empty()) continue;
-            served = true;
-            generation = mix_generation(generation, sources.generation(*chain.path.front()->catalog));
+    if (!panel) return 0;
+    std::vector<std::string> bindings;
+    if (panel->primitive == spec::Primitive::scene) {
+        for (const auto& [i, b] : entity_bindings(*panel, chain, nullptr)) {
+            (void)i;
+            bindings.push_back(b.binding);
         }
+    } else {
+        for (const BoundSlot& b : panel_bindings(*panel, chain, nullptr)) bindings.push_back(b.binding);
     }
-    return served ? generation : 0;
+    bool served = false;
+    bool history = false;
+    std::uint64_t generation = 0;
+    for (const std::string& b : bindings) {
+        const Chain c = chain_of(s, split_binding(b).source, &sources);
+        if (c.path.empty()) continue;
+        history = history || reads_kept_steps(s, c);
+        if (!is_served(c.kind)) continue;
+        served = true;
+        generation = mix_generation(generation, sources.generation(*c.path.front()->catalog));
+    }
+    return served ? mix_cursor(generation, history, chain) : 0;
 }
 
 const char* slot_kind_name(SlotData::Kind kind) {
