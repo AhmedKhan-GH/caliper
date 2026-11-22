@@ -23,6 +23,7 @@
 #include <deque>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <utility>
 
@@ -147,6 +148,11 @@ struct Session::Impl {
     std::atomic<ModelRunner*> model_runner{nullptr};
     std::atomic<ProgramHost*> program_host{nullptr};
     std::atomic<StageHost*> stage_host{nullptr};
+    // What the program and stage hosts were last given (reconcile_hosts()).
+    std::mutex reconcile_mutex;
+    std::optional<spec::Spec> reconciled;
+    ProgramHost* reconciled_program_host = nullptr;
+    StageHost* reconciled_stage_host = nullptr;
     std::string workspace;
     SessionOptions options;
     std::unique_ptr<LoaderStore> store;
@@ -1545,6 +1551,32 @@ struct Session::Impl {
         return doc ? doc->spec.applet.id : std::string();
     }
 
+    // Makes the hosts of GPU programs and stages run what the open spec holds
+    // (program_host.h, design/gpu-programs.md, Attachment): after each
+    // journaled command (an edit, an undo, a redo, an open), each host's
+    // reconcile() gets the open spec when it differs from what the hosts got
+    // last, or when a host was set since; with no spec open, an empty one.
+    // It runs on the thread that ran the command, the frame thread in the app.
+    void reconcile_hosts() {
+        ProgramHost* programs = program_host.load();
+        StageHost* stages = stage_host.load();
+        std::lock_guard<std::mutex> lock(reconcile_mutex);
+        if (!programs && !stages && !reconciled) return;
+        spec::Spec now;
+        {
+            std::lock_guard<std::mutex> doc_lock(doc_mutex);
+            if (doc) now = doc->spec;
+        }
+        const bool changed = !reconciled || !(*reconciled == now);
+        const bool new_hosts = programs != reconciled_program_host || stages != reconciled_stage_host;
+        if (!changed && !new_hosts) return;
+        reconciled = now;
+        reconciled_program_host = programs;
+        reconciled_stage_host = stages;
+        if (programs) programs->reconcile(now);
+        if (stages) stages->reconcile(now);
+    }
+
     void bind_all() {
         auto bind = [this](const char* name, CommandOutput (Impl::*fn)(const CommandContext&)) {
             registry->bind(name, [this, fn](const CommandContext& ctx) {
@@ -1797,6 +1829,9 @@ Session::Open Session::open(const std::string& workspace, SessionOptions options
             // The journal appends after the command's handler returned, so
             // the open spec is not locked here.
             note_journal_event(*ring, e, self->open_applet_id());
+            // A host's reconcile() runs here, under the journal's lock: it
+            // sends and compiles, and never invokes a command.
+            self->reconcile_hosts();
             if (app) app(e);
         };
         CommandJournal::Open j = CommandJournal::open((im.ws() / "journal" / "commands.jsonl").u8string(), im.options.journal);
