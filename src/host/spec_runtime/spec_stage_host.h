@@ -19,8 +19,11 @@
 #include <caliper_builder/programs/sandbox.h>
 #include <caliper_builder/session/program_host.h>
 
+#include <nlohmann/json.hpp>
+
 #include <chrono>
 #include <cstddef>
+#include <functional>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -41,8 +44,13 @@ struct StageCompile {
 // Composes, validates and translates the program of one entity for one primitive (points or
 // lines) with the given material and vertex sources (either may be null, not both). Without the
 // caliper-wgsl library the verdict is program.compiler_unavailable.
+//
+// `params` names the f32 fields of the uniform `params` that the stages read (their params, in
+// name order): the composed module declares them after the stage sources (sandbox.h,
+// stage_params_declaration()), and the build binds them at @group(3) @binding(0).
 StageCompile compile_stage_program(caliper_scene::Primitive primitive, const std::string* material,
-                                   const std::string* vertex, const std::string& label);
+                                   const std::string* vertex, const std::string& label,
+                                   const std::vector<std::string>& params = {});
 
 // Joins per-entry MSL texts of one module into one text: their common leading lines once, then
 // what follows in each. caliper-wgsl translates one entry point at a time, and the graphics
@@ -106,6 +114,10 @@ public:
     // The line a panel shows over its picture: its first stage that a check refused or the
     // watchdog stopped, with the code, the line and the column; empty when none.
     std::string message(const std::string& panel) const;
+    // What the references of the stages' params read (the session's values, ValueStore::value()
+    // in the app); null gives each reference its default. The panels evaluate them at each frame
+    // (StageSource::params()), thus a new value reaches the uniform at the next frame.
+    void set_evaluate(std::function<nlohmann::json(const caliper_builder::spec::Reference&)> evaluate);
 
 private:
     struct Record;
@@ -118,6 +130,7 @@ private:
     std::vector<Record> records_;                    // the last reconciled spec's stages, in its order
     std::map<std::string, std::unique_ptr<Panel>> panels_;
     caliper_builder::EventSink* events_ = nullptr;
+    std::function<nlohmann::json(const caliper_builder::spec::Reference&)> evaluate_;
 };
 
 // The host behind app_stage_host(), as its class.

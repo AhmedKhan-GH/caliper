@@ -19,6 +19,8 @@
 
 #include <caliper_builder/session/events.h>
 
+#include <nlohmann/json.hpp>
+
 #include <doctest/doctest.h>
 #include <stb_image_write.h>
 
@@ -292,6 +294,74 @@ TEST_CASE("stages: the host compiles the stages of a scene panel, refuses one wi
     b = host.source("view")->build("cloud", Primitive::Points);
     REQUIRE(b);
     CHECK(b->vertex);
+}
+
+TEST_CASE("stages: a stage reads its params from a uniform the program binds at group 3, and the host packs them each frame") {
+    if (!have_compiler() || !have_sandbox()) {
+        MESSAGE("skipped: this build has no caliper-wgsl library or sandbox");
+        return;
+    }
+    const std::string level =
+        "fn material(in: MaterialIn) -> vec4<f32> {\n"
+        "  if (abs(in.value - params.level) < params.band) { return vec4<f32>(1.0, 0.6, 0.2, 1.0); }\n"
+        "  return in.color;\n}\n";
+    const caliper_host::StageCompile c =
+        caliper_host::compile_stage_program(Primitive::Points, &level, nullptr, "params", {"band", "level"});
+    INFO(c.verdict.message);
+    REQUIRE(c.build);
+    CHECK(c.build->params == std::vector<std::string>{"band", "level"});
+    bool uniform = false;
+    for (const caliper_gfx::BindingDesc& b : c.build->bindings)
+        if (b.group == pg::kStageParamsGroup && b.binding == 0) uniform = b.type == caliper_gfx::BindingType::Uniform && b.size == 16;
+    CHECK(uniform);
+    // Without the names the source does not compile, and its line is the stage's own.
+    const caliper_host::StageCompile bare = caliper_host::compile_stage_program(Primitive::Points, &level, nullptr, "bare");
+    CHECK_FALSE(bare.build);
+    CHECK(bare.verdict.line == 2);
+
+    // The host: a literal and a reference to a control, read at each frame with no new build.
+    spec::Stage st = stage("view", "cloud", spec::StageKind::material, level);
+    st.params["band"] = 0.05;
+    spec::Reference gain;
+    gain.kind = spec::Reference::Kind::control;
+    gain.target = "level";
+    gain.fallback = 0.25;
+    st.params["level"] = gain;
+    AppStageHost host;
+    host.reconcile(scene_spec({st}));
+    REQUIRE(host.status().size() == 1);
+    INFO(host.message("view"));
+    CHECK(host.status()[0].state == "compiled");
+    StageSource* src = host.source("view");
+    REQUIRE(src);
+    const std::shared_ptr<const StageBuild> before = src->build("cloud", Primitive::Points);
+    REQUIRE(before);
+    auto floats = [](const std::vector<uint8_t>& bytes) {
+        std::vector<float> f(bytes.size() / 4);
+        std::memcpy(f.data(), bytes.data(), f.size() * 4);
+        return f;
+    };
+    std::vector<float> f = floats(src->params("cloud"));
+    REQUIRE(f.size() == 4);   // two fields padded to 16 bytes, in name order: band, level
+    CHECK(f[0] == doctest::Approx(0.05));
+    CHECK(f[1] == doctest::Approx(0.25));   // the reference's default
+    double value = 0.6;
+    host.set_evaluate([&](const spec::Reference& r) { return r.target == "level" ? nlohmann::json(value) : r.fallback; });
+    CHECK(floats(src->params("cloud"))[1] == doctest::Approx(0.6));
+    value = 0.7;   // the next frame reads the new value
+    CHECK(floats(src->params("cloud"))[1] == doctest::Approx(0.7));
+    CHECK(src->build("cloud", Primitive::Points) == before);   // no compile, no new hash
+
+    // A name the stage reads and does not declare is refused with the stage's line.
+    spec::Stage wrong = st;
+    wrong.params.erase("band");
+    host.reconcile(scene_spec({wrong}));
+    REQUIRE(host.status().size() == 1);
+    CHECK(host.status()[0].state == "refused");
+    REQUIRE(host.status()[0].error);
+    CHECK(host.status()[0].error->code == pg::kStageParamsMismatch);
+    CHECK(host.status()[0].error->line == 2);
+    host.set_evaluate(nullptr);
 }
 
 TEST_SUITE("gpu") {
@@ -607,6 +677,70 @@ TEST_CASE("stages: a scene view draws its panel's stages, again on a new revisio
         REQUIRE(v.read_pixels(&again, &why));
         CHECK(again == plain);
     }
+}
+
+}  // TEST_SUITE("gpu")
+
+TEST_SUITE("gpu") {
+
+TEST_CASE("stages: the cache gives a stage program its params at each find, and keeps the built-in program until the view binds them") {
+    if (!have_compiler()) {
+        MESSAGE("skipped: this build has no caliper-wgsl library");
+        return;
+    }
+    caliper_host::SpecOffscreen* canvas = spec_test::canvas();
+    if (!canvas || !canvas->native_device() || !canvas->native_queue()) {
+        MESSAGE("skipped: no Metal device");
+        return;
+    }
+    auto gfx = caliper_gfx::make_metal_backend(canvas->native_device(), canvas->native_queue());
+    REQUIRE(gfx);
+    const std::string level = "fn material(in: MaterialIn) -> vec4<f32> { return in.color * params.gain; }\n";
+    const caliper_host::StageCompile c =
+        caliper_host::compile_stage_program(Primitive::Points, &level, nullptr, "gain", {"gain"});
+    REQUIRE(c.build);
+
+    struct ParamSource final : StageSource {
+        std::shared_ptr<const StageBuild> b;
+        float gain = 0.5f;
+        std::string refusal;
+        std::shared_ptr<const StageBuild> build(std::string_view, Primitive) const override { return b; }
+        uint64_t revision() const override { return 1; }
+        float time_s() const override { return 0.0f; }
+        void refused(const StageBuild&, const std::string& m) override { refusal = m; }
+        void frames_done(double, uint32_t, bool) override {}
+        std::vector<uint8_t> params(std::string_view) const override {
+            return pg::pack_params({pg::ParamField{"gain", pg::ParamType::f32}}, {{"gain", double(gain)}});
+        }
+    } src;
+    src.b = c.build;
+    StageCache cache(*gfx);
+    cache.set_source(&src);
+    cache.begin_frame();
+    CHECK(cache.find("cloud", Primitive::Points) == nullptr);   // the view does not bind params yet
+    CHECK(src.refusal.find("params") != std::string::npos);
+    cache.end_frame();
+
+    StageCache bound(*gfx);
+    bound.set_source(&src);
+    bound.set_params_bound(true);
+    bound.begin_frame();
+    const StageProgram* p = bound.find("cloud", Primitive::Points);
+    REQUIRE(p);
+    float got = 0;
+    REQUIRE(p->params.size() == 16);
+    std::memcpy(&got, p->params.data(), 4);
+    CHECK(got == 0.5f);
+    const uint64_t program = p->program.id;
+    bound.end_frame();
+    src.gain = 2.0f;   // a new value: the next frame's find gives it, with the same program
+    bound.begin_frame();
+    p = bound.find("cloud", Primitive::Points);
+    REQUIRE(p);
+    std::memcpy(&got, p->params.data(), 4);
+    CHECK(got == 2.0f);
+    CHECK(p->program.id == program);
+    bound.end_frame();
 }
 
 }  // TEST_SUITE("gpu")
