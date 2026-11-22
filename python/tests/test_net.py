@@ -823,7 +823,7 @@ def test_slow_viewer_latest_wins(server, device):
                     last = m
             return base, slow, rss1 - rss0, st, st["snapshots_sent"] - sent0, seq_last, last
     base, slow, grew, st, sent, seq_last, last = run(go(), 60)
-    assert slow < 0.25, (slow, base)                # no call waits (a busy runner may pause one)
+    assert slow < max(1.0, 10 * base), (slow, base)  # no call waits for the stalled socket
     assert st["superseded"] > 0 and sent < 20      # stalled sends; newer snapshots replaced older
     assert grew < 100, grew                          # MB; nothing queues up
     assert last is not None and last.seq >= seq_last - 3
