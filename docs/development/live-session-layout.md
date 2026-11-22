@@ -36,11 +36,41 @@ Each view has one segment, `/<session>-v<id>`. It starts with a header page that
 
 Each process makes one shared-storage `MTLBuffer` from the segment that it maps, with `newBufferWithBytesNoCopy`. [Live Streaming](../python/live-streaming.md#security) gives the file mode and the access rules.
 
-Each shared struct has a magic, a version and a `struct_size`, and a reader does not accept a struct that does not agree.
+The client creates and unlinks every name. A lister unlinks the names of a dead client, and the viewer only maps them. Each shared struct has a magic, a version and a `struct_size`, and a reader does not accept a struct that does not agree.
+
+## Protocol Constants
+
+The sizes, the magic numbers and the other constants of the protocol are in `include/caliper/live.h`.
+
+<!-- c-api ids include/caliper/live.h CALIPER_LIVE_PROTOCOL_VERSION CALIPER_LIVE_*_MAGIC CALIPER_LIVE_MAX_VIEWS CALIPER_LIVE_SLOTS CALIPER_LIVE_NAME_MAX CALIPER_LIVE_SEGNAME_MAX CALIPER_LIVE_SESSION_MAX CALIPER_LIVE_SCRIPT_MAX CALIPER_LIVE_STATS_BYTES CALIPER_LIVE_SLOT_NONE CALIPER_LIVE_ATTACH_WINDOW_NS -->
+
+## Enums
+
+The kind of a view, the state of a table row and the state of a session are enums.
+
+<!-- c-api types include/caliper/live.h CaliperLiveKind CaliperLiveEntryState CaliperLiveSessionState level=3 -->
+
+### Snapshot Flags
+
+The `flags` field of a slot holds these bits.
+
+<!-- c-api ids include/caliper/live.h CALIPER_LIVE_SNAP_* -->
+
+## Shared Structs
+
+The control segment and each view segment hold these structs. They are append-only, as the section on versions explains.
+
+<!-- c-api types include/caliper/live.h CaliperLiveControl CaliperLiveViewEntry CaliperLiveSlotMeta CaliperLiveSegmentHeader level=3 -->
 
 ## Slot Synchronization
 
-The viewer writes a heartbeat into the control table each time it polls. Publish and claim are lock-free, and the two sides store with seq_cst. Thus the client sees the viewer's claim and does not use the slot, or the viewer sees the new publish.
+The viewer writes a heartbeat into the control table each time it polls. `caliper_live_client_attached` reads it, and with no viewer the client takes no snapshot at all. A snapshot is one GPU-to-GPU copy on the torch stream into a free slot, and the viewer samples at its own frame rate. Thus it can skip snapshots by design.
+
+Publish and claim are lock-free, and the sync words use the atomic builtins of the compiler on the shared mapping. The two sides store with seq_cst. Thus the client sees the viewer's claim and does not use the slot, or the viewer sees the new publish.
+
+The viewer holds at most two claims for each view. `viewer_reading_slot` is the snapshot that it applied last, and a points view draws it every frame. `viewer_prev_slot` is the one before it, until the GPU read of it retires. The client may write a slot that is not `published_slot`, not a claim and not one of its own pending slots. If no such slot is left, the client drops the new snapshot and counts it in `dropped_client`. Thus it never overwrites a snapshot in flight, and the oldest pending snapshot always completes and publishes.
+
+The client publishes after the GPU work of the snapshot completes, which it finds with a polled `torch.mps.Event`. It fills the slot metadata, stores `published_slot` with seq_cst, and then adds 1 to `seq` with release order. To take a snapshot, the viewer sees that `seq` changed and stores `viewer_prev_slot` as its current claim. Then it loads `published_slot`, stores `viewer_reading_slot` with seq_cst, and loads `published_slot` again. If the slot moved, it tries again. It takes a new snapshot only when `viewer_prev_slot` is free again, and it polls for this and never waits.
 
 `caliper_core_live_view_read_done` polls the completion handles of the renderer, and thus no part of Caliper waits for the viewer's GPU reads. The claim words have one reader only, and thus a session has one viewer.
 
@@ -58,6 +88,12 @@ The time that the viewer holds a slot is different for each view kind, because i
 ## Versions
 
 The live protocol is at v2 in `include/caliper/live.h`, and the embed typed views are at v1.3 in `include/caliper/live_views.h`.
+
+The fields of the shared structs are append-only. Version 2 appended the aux region, the second claim, the slot metadata for points, series and histograms, and the session identity. A reader refuses another magic or protocol version, and it refuses a `struct_size` that is smaller than its own. The dtype values are the `CaliperDType` values of `caliper/tensor.h`.
+
+## Threading
+
+A client function may run on any one thread at a time for each client, and the Python glue serializes them with the GIL. `caliper_live_client_attached` may run on any thread, and so may the listing functions. The viewer functions, `caliper_core_live_*`, run on the frame thread only, like the embed views that they drive.
 
 ## Source Files
 

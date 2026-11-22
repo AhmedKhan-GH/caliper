@@ -40,23 +40,19 @@ caliper_core_shutdown(core);
 
 ### `embed.h` Functions
 
-| Function | Purpose |
-|---|---|
-| `caliper_core_create(desc)` | Create the core. Returns `NULL` for a second live core, an unsupported renderer or a renderer failure. |
-| `caliper_core_shutdown(core)` | Tear down in reverse order of create. Safe on `NULL`. |
-| `caliper_core_attach_canvas(core, native_view, desc)` | Attach the one canvas. Pass `NULL` for `native_view` with `CALIPER_CANVAS_OFFSCREEN`. Returns 1, or 0 with `last_error` set. |
-| `caliper_core_frame(core)` | Run one frame: clear, draw the loaded applet under the crash guard, composite and present or store. |
-| `caliper_core_event(core, event)` | Feed one input event. A no-op before a canvas exists. |
-| `caliper_core_load_applet(core, manifest_id)` | Load and launch an applet. Any loaded applet is torn down first, so reloading the same id restarts it and a failed launch leaves no applet loaded. An unknown id is refused without disturbing the running applet. |
-| `caliper_core_unload_applet(core)` | Tear down the loaded applet. A no-op if none is loaded. Call between frames. |
-| `caliper_core_read_pixels(core, buf, stride)` | Copy the last composited frame as tightly packed RGBA8 with `stride` bytes per row. Offscreen canvases only. |
-| `caliper_core_last_error(core)` | The reason for the most recent refusal, or an empty string. Never `NULL` for a live core, and valid until the next core call. |
-| `caliper_core_get_service(core, id)` | The service table an applet receives for `id`, or `NULL` ([below](#host-service-access)). |
-| `caliper_core_view_tensor`, `_view_remove`, `_view_count`, `_view_info`, `_view_readback` | Built-in tensor views ([below](#built-in-tensor-views)). |
-| `caliper_core_colormap_lut(colormap, out256)` | The built-in 256-entry colormap table. Needs no core. |
-| `caliper_embed_api_version()` | The version of the interface the loaded library implements, encoded like `CALIPER_EMBED_VERSION` ([below](#versions)). Needs no core. |
+The lifecycle, applet control and readback calls:
 
-The header `caliper/live_views.h` declares the typed live-view calls (`caliper_core_live_*`). See [typed live views](#typed-live-views).
+<!-- c-api calls include/caliper/embed.h caliper_core_create caliper_core_shutdown caliper_core_attach_canvas caliper_core_frame caliper_core_event caliper_core_load_applet caliper_core_unload_applet caliper_core_read_pixels caliper_core_last_error -->
+
+The service call is in [Host Service Access](#host-service-access), the view calls are in [Built-In Tensor Views](#built-in-tensor-views) and the version call is in [Versions](#versions). The header `caliper/live_views.h` declares the typed live-view calls (`caliper_core_live_*`), described in [Typed Live Views](#typed-live-views).
+
+### `embed.h` Types
+
+<!-- c-api types include/caliper/embed.h CaliperCore CaliperRenderer CaliperLogFn CaliperCrashFn CaliperCoreDesc CaliperCanvasMode CaliperCanvasDesc CaliperEventType CaliperInputEvent level=4 -->
+
+The modifier flags of `CaliperInputEvent.mods` are constants:
+
+<!-- c-api ids include/caliper/embed.h CALIPER_MOD_* -->
 
 ## Ownership
 
@@ -95,11 +91,11 @@ All calls except the any-thread services below belong to one thread, the one tha
 
 `embed.h` versions the interface in one encoding, `(major << 16) | (minor << 8) | patch`, which `CALIPER_EMBED_MAKE_VERSION` builds:
 
-| Part | Macro | Meaning |
-|---|---|---|
-| Major | `CALIPER_EMBED_VERSION_MAJOR`, equal to `CALIPER_EMBED_API_VERSION` | Bumps when a struct grows, which the `struct_size` gate enforces. It is 1. |
-| Minor | `CALIPER_EMBED_VERSION_MINOR` | Counts the additive sections on that major: v1.1 (services, `data_dir`, log routing), v1.2 (tensor views), v1.3 (typed live views) and v1.4 (the version call). It is 4. |
-| Patch | `CALIPER_EMBED_VERSION_PATCH` | Counts library fixes that change no declaration. It is 0. |
+<!-- c-api ids include/caliper/embed.h CALIPER_EMBED_API_VERSION CALIPER_EMBED_MAKE_VERSION CALIPER_EMBED_VERSION* -->
+
+The call `caliper_embed_api_version` returns the version of the loaded library:
+
+<!-- c-api calls include/caliper/embed.h caliper_embed_api_version -->
 
 `CALIPER_EMBED_VERSION` is the version of the header that an embedder compiled against. `caliper_embed_api_version()` returns the version of the library that the process loaded, which is the `CALIPER_EMBED_VERSION` of the header the library was built from. An embedder runs on a library of the same major whose minor is at least the minor of the header:
 
@@ -114,6 +110,8 @@ if ((lib >> 16) != CALIPER_EMBED_VERSION_MAJOR ||
 The macros are integer constant expressions, so `#if` can test them. The call needs no core and may run on any thread. `CALIPER_EMBED_HAVE_VIEWS` stays defined as 1 for code that tests for the views. The [`caliper-embed` package](#caliper-embed-package) carries the same version.
 
 ## Host Service Access
+
+<!-- c-api calls include/caliper/embed.h caliper_core_get_service -->
 
 `caliper_core_get_service(core, id)` returns the same service table that an applet receives from `CaliperHost.get_service` for that id. Examples are `"caliper.metrics.v1"`, `"caliper.jobs.v1"`, `"caliper.artifacts.v1"` and `"caliper.data.v1"`. Cast the result to the matching struct from the `caliper/services` headers and call its function pointers as an applet would. No renderer, torch or ImGui type crosses the seam. The interchange is the C ABI, `CaliperTensor` and Arrow C streams. A C++ host can use the `caliper.hpp` sugar. The call returns `NULL` for an unknown id or a `NULL` core. The pointer is a process-static table, valid from create until shutdown.
 
@@ -139,14 +137,11 @@ The view section of `caliper/embed.h` lets a host hand the core a `CaliperTensor
 
 The section is additive: `CALIPER_EMBED_API_VERSION` stays 1 and no existing struct changed. `CALIPER_EMBED_HAVE_VIEWS` is defined as 1, so a host can test for views at compile time.
 
-| Call | Behavior |
-|---|---|
-| `caliper_core_view_tensor(core, desc)` | Create or update the view named `desc->name`. The same name updates in place. Returns 1 on success, or 0 with `last_error` set. A failed first show leaves no view, and a failed update keeps the previous pixels of the view. |
-| `caliper_core_view_remove(core, name)` | Returns 1 if the view existed and was removed (texture and import released). |
-| `caliper_core_view_count(core)` | Number of views. |
-| `caliper_core_view_info(core, name, out)` | Fill a `CaliperViewInfo` (below). Returns 1 on success. |
-| `caliper_core_view_readback(core, name, buf, buf_bytes)` | Copy the **texture** of the view (not the canvas) as tightly packed RGBA8, `width*height*4` bytes. Use it for tests and measurement. |
-| `caliper_core_colormap_lut(colormap, out256)` | The built-in 256-entry RGBA8 LUT, each entry `r | g<<8 | b<<16 | a<<24`. Needs no core. Callable from any thread. |
+<!-- c-api calls include/caliper/embed.h caliper_core_view_* caliper_core_colormap_lut -->
+
+<!-- c-api types include/caliper/embed.h CaliperViewDesc -->
+
+<!-- c-api ids include/caliper/embed.h CALIPER_VIEW_FLAG_* CALIPER_EMBED_HAVE_VIEWS -->
 
 Windowed views are drawn in creation order and tiled left to right. The views of a live session take the cells of a grid instead (see [What you see](../python/script-attachment.md)). A small tensor is magnified by a whole-number factor and sampled nearest, so cells stay cells. With `CALIPER_VIEWS_DEBUG=1`, or `views_debug` set on the core of a host, each window carries an info line (`WxH dtype device path updates=N last=ms`). `CALIPER_VIEW_FLAG_RAW` draws the texture 1:1 at canvas (0,0) with no window chrome. The byte-exact `read_pixels` tests compare this surface.
 
@@ -182,15 +177,7 @@ The texture is the own copy of the pixels in the view, and the core reads the so
 
 A different `vmin`, `vmax` or `colormap` on an existing f32 view re-pins the mapping of the bridge entry. The core then maps the new tensor into the **same** texture, and `creates` does not change. A different shape or dtype recreates the texture (`creates += 1`). The core builds the new texture before it releases the old one, so a failed recreate leaves the old view intact.
 
-| `CaliperViewInfo` field | Meaning |
-|---|---|
-| `path` | Renderer path of the last update: `compute-imported`, `blit-imported`, `compute`, `blit` or `cpu-staged`. Valid until the next core call. |
-| `width`, `height` | Texture size in texels. |
-| `device` | `CaliperDeviceKind` of the last tensor. |
-| `updates` | Successful updates. |
-| `last_update_ms` | CPU wall time of the last `view_tensor` call, including the GPU wait when `WAIT_GPU` was set. |
-| `imported` | 1 if the last update read an imported `MTLBuffer` in place. |
-| `creates` | Texture (re)creations: 1 after the first show, plus 1 for each shape or dtype change. |
+<!-- c-api types include/caliper/embed.h CaliperViewInfo level=0 -->
 
 ### Threading
 
@@ -198,7 +185,15 @@ Every view function except `caliper_core_colormap_lut` is **frame-thread only**.
 
 ### Typed Live Views
 
-The header `caliper/live_views.h` builds on this section. `caliper_core_live_apply` takes a `CaliperLiveSnapshot` of one of five kinds (heatmap, image, points, series, histogram) and keeps a typed view of that name. Heatmap and image live views are drawn through the tensor view of the same name, so `caliper_core_view_info`, `_readback`, `_count` and `_remove` keep working for them. The header documents the payload contract for each kind, the claim rule that `caliper_core_live_view_read_done` reports for each kind, and the pause flag of each core. The header `caliper/live.h` is the shared-memory session protocol, with the client and viewer C API that feed it from another process. Both work on macOS with Metal only. The design is in [Live streaming](../python/live-streaming.md).
+The header `caliper/live_views.h` builds on this section. `caliper_core_live_apply` takes a `CaliperLiveSnapshot` of one of five kinds (heatmap, image, points, series, histogram) and keeps a typed view of that name. Heatmap and image live views are drawn through the tensor view of the same name, so `caliper_core_view_info`, `_readback`, `_count` and `_remove` keep working for them. The header documents the payload contract for each kind in `CaliperLiveSnapshot`, the claim rule that `caliper_core_live_view_read_done` reports for each kind, and the pause flag of each core. The header `caliper/live.h` is the shared-memory session protocol, with the client and viewer C API that feed it from another process. Both work on macOS with Metal only. The design is in [Live streaming](../python/live-streaming.md).
+
+All typed live-view calls run on the frame thread, between frames and after `attach_canvas`. `caliper_core_shutdown` destroys the views.
+
+<!-- c-api calls include/caliper/live_views.h -->
+
+<!-- c-api types include/caliper/live_views.h level=4 -->
+
+<!-- c-api ids include/caliper/live_views.h -->
 
 ## Live Session Attachment
 
@@ -227,19 +222,27 @@ caliper_core_frame(core);
 caliper_core_live_detach(core);                 /* release claims, clear the heartbeat */
 ```
 
-| Call | Purpose |
-|---|---|
-| `caliper_live_data_root()` | The resolved default data root |
-| `caliper_live_list_sessions(out, cap)` / `_in(root, out, cap)` | Lists sessions newest first, reclaims stale ones and returns the count |
-| `caliper_core_live_attach(core, token)` | Attaches by token. It refuses an unknown token, another protocol version and a session that another live viewer holds |
-| `caliper_core_live_attach_pid(core, pid, root)` | Attaches to the session of process `pid` |
-| `caliper_core_live_attach_url(core, link)` | Attaches to a stream by its link. It waits up to 2 s for the server and fails with the reason when nothing listens or the server refuses |
-| `caliper_core_live_picker(core, enable, root)` | Draws the session list while the core is not attached |
-| `caliper_core_live_poll(core)` | Applies the newest completed snapshot of every view and writes the heartbeat, once per frame. It returns -1 when the core is not attached |
-| `caliper_core_live_detach(core)` | Drops the views and claims and clears the heartbeat |
-| `caliper_core_live_status` / `_view_status` | Gives the counters that the status window shows |
-
 A host whose window can be hidden must keep its frame timer running. macOS slows the frames of a hidden window, and a slow viewer writes its heartbeat late. A stale heartbeat stops the script's snapshots while the user is still attached. For this reason, `caliper-viewer` holds an `NSProcessInfo` activity with `NSActivityUserInitiatedAllowingIdleSystemSleep | NSActivityLatencyCritical`, and the Caliper app holds the same activity while a session is attached.
+
+### Live Session Calls
+
+The listing calls work from any thread. The viewer calls run on the frame thread of a core with an attached canvas.
+
+<!-- c-api calls include/caliper/live.h caliper_live_data_root caliper_live_list_sessions* -->
+
+<!-- c-api calls include/caliper/live.h caliper_core_live_* -->
+
+The embedding library also exports the client and segment calls that a producer uses.
+
+<!-- c-api calls include/caliper/live.h caliper_live_last_error caliper_live_now_ns caliper_live_client_* caliper_live_segment_* -->
+
+### Live Session Types
+
+<!-- c-api types include/caliper/live.h CaliperLiveSessionInfo CaliperLiveStatus CaliperLiveViewStatus CaliperLiveClientDesc CaliperLiveViewDesc CaliperLiveSegmentInfo CaliperLivePublish level=4 -->
+
+The header defines these feature macros and client flags:
+
+<!-- c-api ids include/caliper/live.h CALIPER_EMBED_HAVE_* CALIPER_LIVE_CLIENT_* -->
 
 ## `caliper-embed` Package
 
@@ -347,6 +350,4 @@ A case-insensitive `torch` grep over the binaries gives false positives from Duc
 
 ## Header Listing
 
-```c
---8<-- "include/caliper/embed.h"
-```
+The tables on this page list every declaration of `caliper/embed.h` and `caliper/live_views.h` with the doc comment of each. The `caliper-embed` package installs both headers, with `live.h`, under `include/caliper-embed/caliper/` ([package contents](#caliper-embed-package)).
