@@ -285,3 +285,57 @@ TEST_CASE("documents the schema of version 1 refuses are refused by the library 
         CHECK(library_accepts(d));
     }
 }
+
+TEST_CASE("the schema of version 1 takes programs, stages and provenance, and refuses what the library refuses") {
+    auto parsed = cs::parse_toml(fixture("programs.spec.toml"));
+    REQUIRE(parsed.ok());
+    const json canonical = cs::to_json(parsed.spec);
+    std::vector<std::string> errors = checker_v1().errors(canonical);
+    CHECK_MESSAGE(errors.empty(), join_errors(errors));
+
+    const std::string head = R"("caliper_spec": 1, "applet": {"id": "a"}, "panel": [{"id": "w", "primitive": "scene", "bind": {"scene": "live:model"}}])";
+    auto doc = [&](const std::string& rest) { return json::parse("{" + head + ", " + rest + "}"); };
+    const std::string geometry = R"({"kind": "geometry", "panel": "w", "max_count": 8, "arrays": ["positions"]})";
+    auto program = [&](const std::string& output, const std::string& more = "") {
+        return R"("program": [{"id": "p", "wgsl": "x", "inputs": [{"var": "v", "source": "live:v"}], "output": )" + output +
+               more + "}]";
+    };
+    const std::vector<json> refused = {
+        doc(program(R"({"kind": "geometry", "panel": "w", "max_count": 0, "arrays": ["positions"]})")),
+        doc(program(R"({"kind": "geometry", "panel": "w", "max_count": 8, "arrays": ["normals"]})")),
+        doc(program(R"({"kind": "geometry", "panel": "w", "max_count": 8})")),
+        doc(program(R"({"kind": "pixels", "width": 4, "height": 4, "panel": "w"})")),
+        doc(program(R"({"kind": "pixels", "width": 4096, "height": 4})")),
+        doc(program(R"({"kind": "geometry", "panel": "w", "max_count": 8, "arrays": ["positions"], "width": 4})")),
+        doc(program(geometry, R"(, "limits": {"every": 0})")),
+        doc(program(geometry, R"(, "limits": {"time_ms": 60})")),
+        doc(program(geometry, R"(, "workgroups": [1, 2])")),
+        doc(program(geometry, R"(, "runs": true)")),
+        doc(R"("program": [{"id": "p", "wgsl": "x", "inputs": [{"var": "v", "source": "w"}], "output": )" + geometry + "}]"),
+        doc(R"("stage": [{"panel": "w", "entity": "e", "kind": "compute", "wgsl": "x"}])"),
+        doc(R"("stage": [{"panel": "w", "entity": "a//b", "kind": "material", "wgsl": "x"}])"),
+        doc(R"("provenance": {"from": "x"})"),
+        doc(R"("provenance": {"foreign": true, "reviewed": [{"target": "program:p", "sha256": "abc"}]})"),
+        doc(R"("control": [{"id": "k", "kind": "toggle", "bind": "action:save"}])"),
+        doc(R"("control": [{"id": "k", "kind": "toggle", "bind": "intervene:blocks.0", "options": {"min": 0}}])"),
+    };
+    for (const json& d : refused) {
+        CAPTURE(d.dump());
+        CHECK_FALSE(checker_v1().passes(d));
+        CHECK_FALSE(library_accepts(d));
+    }
+    const std::vector<json> accepted = {
+        doc(program(geometry)),
+        doc(program(R"({"kind": "pixels", "width": 4, "height": 4})", R"(, "limits": {"every": 5, "memory_mb": 8})")),
+        doc(R"("stage": [{"panel": "w", "entity": "programs/p", "kind": "vertex", "wgsl": "x"}])"),
+        doc(R"("provenance": {"foreign": true, "from": "a download", "reviewed": [{"target": "stage:w/programs/p/vertex", "sha256": ")" +
+            std::string(64, 'f') + R"("}]})"),
+        doc(R"("control": [{"id": "k", "kind": "toggle", "bind": "intervene:blocks.0.attn#3"}])"),
+    };
+    for (const json& d : accepted) {
+        CAPTURE(d.dump());
+        errors = checker_v1().errors(d);
+        CHECK_MESSAGE(errors.empty(), join_errors(errors));
+        CHECK(library_accepts(d));
+    }
+}

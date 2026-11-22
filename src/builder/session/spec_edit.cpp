@@ -314,6 +314,12 @@ SpecEdit panel_remove(const spec::Spec& s, const json& args, const spec::SourceR
         remove_leaf(*next.layout, id, &drop);
         if (drop) next.layout.reset();
     }
+    // The panel's stages go with it, in the same undo step
+    // (design/gpu-programs.md, Stage Declaration). A program that draws in the
+    // panel stays, and the validator refuses the removal until it moves.
+    next.stages.erase(std::remove_if(next.stages.begin(), next.stages.end(),
+                                     [&](const spec::Stage& st) { return st.panel == id; }),
+                      next.stages.end());
     return finish(std::move(next), resolver, json{{"id", id}});
 }
 
@@ -353,9 +359,19 @@ SpecEdit layout_set(const spec::Spec& s, const json& args, const spec::SourceRes
     return finish(std::move(next), resolver, json{{"layout", std::move(flat)}});
 }
 
-SpecEdit set_text(const json& args, const spec::SourceResolver& resolver) {
+// No command writes the provenance table (design/gpu-programs.md,
+// Provenance): a new text keeps the open spec's table as it is.
+SpecEdit set_text(const spec::Spec& s, const json& args, const spec::SourceResolver& resolver) {
     SpecTextCheck checked = check_spec_text(str_arg(args, "text"), resolver);
     if (checked.error) return refuse(std::move(checked.error));
+    if (!(checked.spec.provenance == s.provenance))
+        return refuse(fail("spec.provenance_locked",
+                           s.provenance.empty()
+                               ? std::string("No command writes a provenance table; only the app marks a spec that "
+                                             "came from outside the workspace. Remove [provenance] from the text.")
+                               : std::string("The open spec came from outside the workspace, and no command changes "
+                                             "its provenance table; keep [provenance] as spec.get shows it."),
+                           "args.text"));
     SpecEdit out;
     for (auto& d : checked.diagnostics)
         if (!d.is_error()) out.warnings.push_back(std::move(d));
@@ -608,7 +624,7 @@ SpecEdit apply_spec_edit(const spec::Spec& s, std::string_view name, const json&
                          const spec::SourceResolver& resolver) {
     try {
         const json args = without_dry_run(raw_args);
-        if (name == "spec.set_text") return set_text(args, resolver);
+        if (name == "spec.set_text") return set_text(s, args, resolver);
         if (name == "source.add") return source_add(s, args, resolver);
         if (name == "source.patch") return source_patch(s, args, resolver);
         if (name == "source.remove") return source_remove(s, args, resolver);

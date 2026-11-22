@@ -186,9 +186,10 @@ struct Spec {
     const Program* find_program(std::string_view id) const;
 };
 
-// The lowest format version that holds `spec`: 1 when it has a scene panel or
-// a control, else 0. An edit that adds either to a version 0 spec raises the
-// version to this one in the same step.
+// The lowest format version that holds `spec`: 1 when it has a scene panel, a
+// control, a program, a stage or a provenance table, else 0. An edit that adds
+// one of them to a version 0 spec raises the version to this one in the same
+// step.
 std::int64_t required_version(const Spec& spec);
 // The first version whose documents may use the primitive.
 std::int64_t primitive_version(Primitive p);

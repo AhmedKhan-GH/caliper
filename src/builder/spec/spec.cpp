@@ -189,7 +189,9 @@ bool operator==(const Spec& a, const Spec& b) {
 std::int64_t primitive_version(Primitive p) { return p == Primitive::scene ? kInstrumentVersion : 0; }
 
 std::int64_t required_version(const Spec& spec) {
-    std::int64_t v = spec.controls.empty() ? 0 : kInstrumentVersion;
+    const bool v1_tables =
+        !spec.controls.empty() || !spec.programs.empty() || !spec.stages.empty() || !spec.provenance.empty();
+    std::int64_t v = v1_tables ? kInstrumentVersion : 0;
     for (const Panel& p : spec.panels) v = std::max(v, primitive_version(p.primitive));
     return v;
 }

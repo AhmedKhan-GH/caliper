@@ -68,11 +68,21 @@ Decoded<LayoutNode> layout_from_json(const nlohmann::json& item, const std::stri
 // version; an edit that adds a scene panel or a control to a version 0 spec
 // raises its version (required_version() in spec.h).
 Decoded<Control> control_from_json(const nlohmann::json& item, const std::string& path = "control");
+// One program and one stage (spec version 1, program.h), for program.create,
+// program.patch and stage.set, with the checks of a whole document.
+Decoded<Program> program_from_json(const nlohmann::json& item, const std::string& path = "program");
+Decoded<Stage> stage_from_json(const nlohmann::json& item, const std::string& path = "stage");
 
 nlohmann::json to_json(const Source& source);
 nlohmann::json to_json(const Panel& panel);
 nlohmann::json to_json(const LayoutNode& node);
 nlohmann::json to_json(const Control& control);
+// The canonical JSON of a program: geometry outputs always carry part and
+// pixels outputs always carry format, and only the keys of the output's kind
+// are written. A stage, and the provenance table of a spec that is not empty.
+nlohmann::json to_json(const Program& program);
+nlohmann::json to_json(const Stage& stage);
+nlohmann::json to_json(const Provenance& provenance);
 
 // Fills the line and column of each diagnostic that has none from the
 // positions of a parsed TOML text: the position of its path, or of the nearest
