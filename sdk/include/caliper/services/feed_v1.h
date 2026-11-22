@@ -1,91 +1,90 @@
 #pragma once
-/* caliper.feed.v1 — live telemetry ingestion (physical twins, rung one).
+/* caliper.feed.v1 — live telemetry ingestion (docs/applets/services/caliper-feed-v1.md).
  *
- * The HOST owns telemetry providers (v0: the Mac's own sensors), buffers their
- * samples in per-channel ring buffers with timestamps + sequence numbers, and
- * vends this tiny PULL-BASED, ANY-THREAD, NON-BLOCKING read surface. Applets
- * copy samples into their own tensors on their job threads (tensors -> pixels
- * stays downstream); embedders reach the same surface through
- * caliper_core_get_service. Sources are enumerable, reads never block, and data
- * loss is VISIBLE (sequence gaps), never silent.
- *
- * Four entry points, all any-thread and non-blocking:
- *   caps()          — capability bits; bit 0 (CALIPER_FEED_CAP_LIVE) is set iff
- *                     at least one channel is registered (channel_count() > 0),
- *                     i.e. live telemetry is available on THIS host. A host with
- *                     no provider (Windows v0) or no channels reports 0 and every
- *                     read yields nothing — honest degradation, never fake data.
- *   channel_count() — number of registered channels.
- *   channel_info()  — fill a caller-owned CaliperFeedChannelInfo for an index.
- *   read()          — copy new samples for a channel past a caller-held cursor.
- *
- * Rationale for pull + caller cursors: no callbacks across the ABI (no
- * reentrancy/threading contract to defend), no per-subscriber host state (any
- * number of readers, including embedder UI threads, at any cadence). Push can
- * be layered later without breaking this surface (reserved0 holds the slot).
- *
- * Invariants (feed spec): only C types cross the ABI; timestamps are host-clock
- * ns (the same epoch across channels, so series align); loss is visible via seq
- * gaps, never silent; absent capability => inert entry points + honest status.
- *
- * IMMUTABLE once published; additive growth lands as feed.v1_1. */
+ * The host owns the telemetry providers, buffers their samples in a ring buffer for each channel, and vends a
+ * pull-based read surface. Every entry point is callable from any thread and never blocks. The caller holds the
+ * read cursor, so no callbacks cross the ABI and the host keeps no state for each reader. A loss of samples shows
+ * as a gap in the sequence numbers and is never silent. Immutable once published: additive growth is feed.v1_1. */
 #include <stdint.h>
 #include <stddef.h>
 
+/** The id of this service, which `get_service` takes. */
 #define CALIPER_FEED_V1 "caliper.feed.v1"
 
-/* caps() bit 0: live telemetry is available (>= 1 channel registered). */
+/**
+ * Bit 0 of `caps()`, set if and only if the host has at least one registered channel. Without a provider or a
+ * channel, `caps()` returns 0 and every read yields nothing.
+ */
 #define CALIPER_FEED_CAP_LIVE (1u << 0)
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* One measurement of one channel. seq is per-channel monotonic from 1; t_ns is
- * the host steady clock (mach_absolute-derived ns), same epoch across channels.
- * 24 bytes, 8-aligned, static_asserted. */
+/**
+ * One measurement of one channel.
+ *
+ * The struct is 24 bytes and 8-aligned.
+ */
 typedef struct CaliperFeedSample {
+    /** The sequence number of the sample. It counts up from 1 for each channel. */
     uint64_t seq;
+    /** The time of the sample in nanoseconds of the host steady clock. All channels share one epoch. */
     int64_t  t_ns;
+    /** The measured value, in the units of the channel. */
     float    value;
+    /** Reserved. */
     float    reserved0;
 } CaliperFeedSample;
 
-/* One channel's descriptor. The CALLER sets struct_size = sizeof(this); the host
- * fills the rest. id is a stable string (e.g. "sys.cpu.util"); units is a short
- * label ("%", "degC", "W"); nominal_hz is a rate hint (0 = irregular). */
+/**
+ * The descriptor of one channel.
+ *
+ * The caller sets `struct_size` to `sizeof(CaliperFeedChannelInfo)`, and the host fills the other fields.
+ */
 typedef struct CaliperFeedChannelInfo {
-    uint32_t struct_size;   /* caller sets; host fills the rest */
+    /** `sizeof(CaliperFeedChannelInfo)`, which the caller sets. */
+    uint32_t struct_size;
+    /** The stable channel id as a NUL-terminated string, for example "sys.cpu.util". */
     char     id[64];
+    /** The display name of the channel as a NUL-terminated string. */
     char     name[64];
+    /** A short label for the units as a NUL-terminated string, for example "%", "degC" or "W". */
     char     units[16];
-    float    nominal_hz;    /* 0 = irregular */
+    /** A hint of the sample rate in hertz. 0 means irregular. */
+    float    nominal_hz;
 } CaliperFeedChannelInfo;
 
+/**
+ * The live telemetry service.
+ *
+ * Every entry is callable from any thread and never blocks. A channel keeps a fixed number of the newest samples,
+ * and an overflow drops the oldest sample.
+ */
 typedef struct CaliperFeedV1 {
+    /** `sizeof(CaliperFeedV1)` as the host built it. */
     uint32_t struct_size;
-    uint32_t (*caps)(void);                      /* bit 0: live (see header) */
+    /** Return the capability bits. Bit 0 is `CALIPER_FEED_CAP_LIVE`. */
+    uint32_t (*caps)(void);
+    /** Return the number of registered channels. */
     uint32_t (*channel_count)(void);
-    /* Fill *info for channel `index`. Returns 1 on success, 0 on a bad index
-     * (>= channel_count) or a bad size (info->struct_size <
-     * sizeof(CaliperFeedChannelInfo)); on 0 the *info is left UNTOUCHED. */
+    /**
+     * Fill `*info` for the channel at `index` and return 1. Return 0 and leave `*info` untouched if `index` is not
+     * less than `channel_count()` or if `info->struct_size` is smaller than `sizeof(CaliperFeedChannelInfo)`.
+     */
     uint32_t (*channel_info)(uint32_t index, CaliperFeedChannelInfo* info);
-    /* Copy up to `max` samples with seq > *cursor into buf (OLDEST-FIRST),
-     * advance *cursor to the last copied seq, and return the count copied.
-     *   - cursor==0 is a TAIL read: start at the newest sample minus `max`, so a
-     *     fresh reader gets at most `max` newest samples (seq starts at 1, so 0
-     *     is never a real sample — it is the sentinel for "start fresh").
-     *   - Unknown channel_id (or null buf, or max==0) -> 0, *cursor UNTOUCHED.
-     *   - Caught up (no seq > *cursor) -> 0, *cursor UNTOUCHED.
-     *   - A GAP: if *cursor points below the oldest still-buffered sample (the
-     *     ring overwrote it), the copy resumes at the oldest available sample,
-     *     so the returned seqs JUMP past *cursor+1 — data was lost, honestly
-     *     observable by the caller (returned seq > previous *cursor + 1).
-     * Capacity: each channel keeps at most a fixed number of newest samples;
-     * older samples are dropped (overflow drops oldest). Non-blocking. */
+    /**
+     * Copy up to `max` samples with `seq` greater than `*cursor` into `buf`, oldest first, advance `*cursor` to the
+     * last copied `seq` and return the count. A cursor of 0 is a tail read that starts at the newest sample minus
+     * `max`. An unknown channel id, a `NULL` buffer, a `max` of 0 or a reader that has caught up returns 0 and
+     * leaves the cursor untouched. If the ring overwrote the sample after `*cursor`, the copy resumes at the oldest
+     * sample that remains, so the first returned `seq` is greater than `*cursor + 1`. The jump is the number of
+     * lost samples.
+     */
     uint32_t (*read)(const char* channel_id, CaliperFeedSample* buf,
                      uint32_t max, uint64_t* cursor);
-    void*    reserved0;     /* future: applet-registered sources */
+    /** Reserved for sources that applets register. Always `NULL`. */
+    void*    reserved0;
 } CaliperFeedV1;
 
 #ifdef __cplusplus

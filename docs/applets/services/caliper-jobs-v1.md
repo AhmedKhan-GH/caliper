@@ -2,9 +2,17 @@
 
 Service id `caliper.jobs.v1` provides background compute with progress and cancel.
 
-```c
---8<-- "sdk/include/caliper/services/jobs_v1.h"
-```
+## Types
+
+<!-- c-api types sdk/include/caliper/services/jobs_v1.h CaliperJobControl CaliperJobFn level=3 -->
+
+## Calls
+
+<!-- c-api calls sdk/include/caliper/services/jobs_v1.h CaliperJobsV1 -->
+
+## Ids
+
+<!-- c-api ids sdk/include/caliper/services/jobs_v1.h -->
 
 ## Semantics
 

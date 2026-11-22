@@ -2,17 +2,17 @@
 
 Service id `caliper.artifacts.v1` is a content-addressed artifact store. It keeps deduplicated, lineage-tracked checkpoints and exports.
 
-```c
---8<-- "sdk/include/caliper/services/artifacts_v1.h"
-```
+## Calls
+
+<!-- c-api calls sdk/include/caliper/services/artifacts_v1.h -->
+
+## Ids
+
+<!-- c-api ids sdk/include/caliper/services/artifacts_v1.h -->
 
 ## Semantics
 
-The store keeps checkpoints and exports under a key that comes from their content. It deduplicates them on disk and links each one to the run that produced it. An applet calls all three entry points from a **job thread**.
-
-- **`put(name, bytes, len, run, out_digest)`** hashes the bytes with **sha256** and stores the blob under that hash. It records the digest, `name`, `run`, `len` and a timestamp in the index. It writes the **64 hex chars + NUL** of the digest into `out_digest[65]` and returns `true`.
-- **`path_of`** returns the file path of a blob, or `nullptr` if the blob is unknown.
-- **`exists`** returns `true` if the blob is known.
+The store keeps checkpoints and exports under a key that comes from their content. It deduplicates them on disk and links each one to the run that produced it. An applet calls all three entry points from a **job thread**. Hashing uses **sha256**, and a `put` writes the digest into `out_digest[65]` as **64 hex chars + NUL**.
 
 The digest is a pure function of the bytes, so identical bytes always land at the same path.
 

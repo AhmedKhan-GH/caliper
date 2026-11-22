@@ -1,20 +1,18 @@
 # caliper.metrics.v1 and v1_1
 
-Service id `caliper.metrics.v1` is a write-only metrics log that uses the TensorBoard vocabulary. `caliper.metrics.v1_1` adds one read entry, `query()`, and is described [below](#calipermetricsv1_1). Each header below is embedded verbatim.
+Service id `caliper.metrics.v1` is a write-only metrics log that uses the TensorBoard vocabulary. `caliper.metrics.v1_1` adds one read entry, `query()`, and is described [below](#calipermetricsv1_1). The tables below come from the headers.
 
-```c
---8<-- "sdk/include/caliper/services/metrics_v1.h"
-```
+## Calls
+
+<!-- c-api calls sdk/include/caliper/services/metrics_v1.h -->
+
+## Ids
+
+<!-- c-api ids sdk/include/caliper/services/metrics_v1.h -->
 
 ## Semantics
 
-The vocabulary is **experiment / run / tag / step**, as in TensorBoard.
-
-- **`begin_run(experiment, run_name)`** opens a run and returns its id. A `0` id means error and is never a valid run, so check for it and skip streaming. Every scalar, histogram, image and hyperparameter you log is scoped to that id.
-- **`end_run(run)`** closes the run. Call it on every exit path of your training job, both completion and cancellation, so a run never stays "running". Partial curves logged before the end are kept.
-- **`scalar(run, tag, step, value)`** appends one point. The **tag** is the series name, for example `"train/loss"` or `"test/accuracy"`, and the `/` groups tags into panes in the dashboard. The **step** is the x-axis, and you choose the axis when you choose the step.
-- **`hparams_json(run, json_utf8)`** attaches a flat JSON object of hyperparameters to the run, for example `{"lr":0.001,"batch":256}`, so runs are comparable.
-- **`histogram` / `image`** log a distribution or a picture at a step.
+The vocabulary is **experiment / run / tag / step**, as in TensorBoard. A `0` run id means error and is never valid, so check for it and skip streaming. The **step** is the x-axis, and you choose the axis when you choose the step.
 
 Use a global batch index as the step for per-batch loss. Use the same global step for accuracy that you sample every N batches, so loss and accuracy line up. A per-epoch step hides the learning transient on fast-converging datasets. The store keeps points ordered by step and returns them in that order.
 
@@ -38,18 +36,18 @@ Metrics is an optional service, so probe for it and stream only when it is prese
 
 `caliper.metrics.v1` is write-only across the ABI and immutable. A consumer such as an embedding host ([Embedding Caliper](../../web/embedding-api.md#host-service-access)) cannot list runs or read scalars through it. `caliper.metrics.v1_1` is the additive read revision. Its table starts with the byte-identical v1 writer prefix and appends two entries: `query` and `last_error`.
 
-```c
---8<-- "sdk/include/caliper/services/metrics_v1_1.h"
-```
+### Calls
 
-### `query`
+<!-- c-api calls sdk/include/caliper/services/metrics_v1_1.h -->
 
-`query(sql_utf8, out)` runs one SQL statement against the metrics store and streams the result as Arrow ([Arrow interchange](../tensor-and-arrow-headers.md#arrow-header)).
+### Ids
 
-- **One SELECT only.** The host parses the text without executing it and refuses anything that is not exactly one `SELECT` statement. This blocks statement chaining (`SELECT 1; DROP TABLE runs`) and every `INSERT`, `UPDATE`, `DELETE` and DDL statement. The host accepts a read-only introspection `PRAGMA` that DuckDB rewrites into a `SELECT`. It refuses setter pragmas. This differs from `query` in `caliper.data.v1`, which runs any SQL against a separate store, because this `query` runs on the live writer connection.
-- **Stream ownership.** On success the host fills `*out` with a live `ArrowArrayStream`. The caller drains it (`get_schema`, then `get_next` until a released empty array) and calls `out->release(out)` exactly once. This is the same rule as `caliper.data.v1`.
-- **Failure.** `query` returns `false`, leaves `*out` untouched and sets the error.
-- **`last_error()`** returns the reason the last `query` on the calling thread failed. The string is host-owned, never `NULL` and thread-local. It stays valid until the next `metrics.v1_1` call on the same thread.
+<!-- c-api ids sdk/include/caliper/services/metrics_v1_1.h -->
+
+### Query Rules
+
+- **One SELECT only.** The host refuses statement chaining (`SELECT 1; DROP TABLE runs`) and every `INSERT`, `UPDATE`, `DELETE` and DDL statement. It refuses setter pragmas. This differs from `query` in `caliper.data.v1`, which runs any SQL against a separate store, because this `query` runs on the live writer connection.
+- **Stream ownership.** This is the same rule as in `caliper.data.v1` (see [Arrow interchange](../tensor-and-arrow-headers.md#arrow-header)).
 - **Threads.** Applet job threads and a host UI thread that is not the frame thread may all call `query`. The host serializes every writer and reader.
 
 ### Read Access via `query`
