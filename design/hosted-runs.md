@@ -1,6 +1,6 @@
 # Hosted Runs
 
-This page defines the app side of milestone M4, Hosted Runs. The model runner of the app starts a Python script of the workspace as a managed run, attaches to it, forks it from a checkpoint and stops it. An agent drives the runner through five commands of `caliper-mcp`, and it needs no terminal and no script of its own. The script side, `caliper.watch()` with its checkpoint and stop actions, is part of Caliper LIB and follows the same process contract.
+This page defines the app side of Hosted Runs. The model runner of the app starts a Python script of the workspace as a managed run, attaches to it, forks it from a checkpoint and stops it. An agent drives the runner through five commands of `caliper-mcp`, and it needs no terminal and no script of its own. The script side, `caliper.watch()` with its checkpoint and stop actions, is part of Caliper LIB and follows the same process contract.
 
 ## Status
 
@@ -89,6 +89,8 @@ A managed run executes Python code, thus `run.start` and `run.fork` always wait 
 | `run.fork` | Fork the run `<run>` at its next checkpoint, with the parameters `<params>`. The fork runs `<script>` as Python code beside its parent. |
 | `run.stop` | Stop the run `<run>` at its next checkpoint, and end its process after `<n>` seconds. |
 
+One function of the session, `run_card_text()`, writes these texts for the approval tray and for the runs panel. A start or a fork from the runs panel waits on the session's card like any other call. The panel shows that card with Approve and Cancel, and the tray shows the same card. A decision in either one decides the call, thus the person confirms a start or a fork exactly once.
+
 ## Model Runner
 
 The model runner is a host component of the app in `src/host/runner/`. It owns the child processes, one viewer connection for each managed run and the table of runs. The session reaches it through the interface `ModelRunner` of `runner_commands.h`, which the app gives to `Session::set_model_runner()`. A session without a runner answers the five commands with `command.not_available`, as it does for the run commands without a run control.
@@ -97,7 +99,7 @@ The model runner is a host component of the app in `src/host/runner/`. It owns t
 
 The interface `ChildProcess` of `child_process.h` starts a program with arguments, environment, working folder and an output file. It reads the exit without a wait, and it ends the process by its id. The POSIX code uses `posix_spawn` and puts the child in a process group of its own, so that a terminal signal to the app does not reach the child. The Windows code uses `CreateProcessW` and a job object that ends the child when the app closes. The Windows code is not tested.
 
-No process outlives the app. When the app closes, the runner ends every child by its process id and waits for each exit, at most 2 seconds before the forced end.
+No process outlives the app. When the app closes, the runner ends every child by its process id and waits for each exit, at most 2 seconds before the forced end. When the app ends without its normal close, such as in a crash, a managed run ends itself on POSIX: `caliper.watch()` starts a thread that reads the parent's process id every half second, and the run exits with code 1 when the parent changes. The Windows job object covers this case on Windows.
 
 ### Runner Connection
 
@@ -130,5 +132,4 @@ The runner sends a `run` event of change `runner` each time a managed run change
 
 ## Open Points
 
-- When the app ends without its normal close, such as in a crash, the POSIX children stay. The script side can end itself when its parent process goes. The Windows job object covers this case on Windows.
 - A run source keeps its values only in memory. A later milestone can store them in the run database (RUN-03).

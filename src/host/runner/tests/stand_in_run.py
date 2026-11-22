@@ -1,6 +1,6 @@
 """A stand-in of a managed run for the model runner's tests (design/hosted-runs.md, Process Contract).
 
-It follows the process contract of the M4 seam with the public Caliper LIB only, so that the runner
+It follows the process contract of a managed run with the public Caliper LIB only, so that the runner
 can be tested before caliper.watch() implements the contract: it serves its stream, writes the link
 file atomically, applies CALIPER_RUN_PARAMS to the parameter lr, resumes from CALIPER_RUN_RESUME,
 and registers the actions caliper.checkpoint (writes checkpoint-<step>.json and returns its path) and

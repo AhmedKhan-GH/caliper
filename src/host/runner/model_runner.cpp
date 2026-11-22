@@ -890,7 +890,7 @@ void ModelRunner::loop() {
                         spec.env.emplace_back("PYTHONUNBUFFERED", "1");
                         spec.cwd = s.options.workspace;
                         spec.output = f.output;
-                        // checkpoint-<step>.<ext> (the M4 seam) gives the step of the checkpoint.
+                        // checkpoint-<step>.<ext> (the process contract) gives the step of the checkpoint.
                         const std::string file = fs::u8path(rep.message).filename().u8string();
                         if (file.rfind("checkpoint-", 0) == 0) {
                             std::uint64_t step = 0;
