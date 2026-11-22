@@ -114,15 +114,26 @@ def test_every_attached_transport_receives_the_offer():
             caliper._detach_transport(r)
 
 
-def test_rate_limit(fake):
+class _Clock:
+    """The time module with a perf_counter that the test sets, so that the rate limit is checked
+    on a known sequence of calls and times rather than on how fast the machine makes the calls."""
+    now = 1000.0
+
+    def perf_counter(self):
+        return self.now
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+def test_rate_limit(fake, monkeypatch):
     x = torch.rand(8, 8)
+    clock = _Clock()
+    monkeypatch.setattr(caliper, "time", clock)
     taken = 0
-    t_end = time.perf_counter() + 0.5
-    calls = 0
-    while time.perf_counter() < t_end:
+    for _ in range(500):                            # 500 calls, 1 ms apart: 0.5 s
         taken += bool(caliper.show(x, "rl", rate=20))
-        calls += 1
-    assert calls > 1000
+        clock.now += 0.001
     assert 8 <= taken <= 12, taken                  # 20 Hz over 0.5 s (first call immediate)
     n0 = len(fake.published)
     for _ in range(50):
