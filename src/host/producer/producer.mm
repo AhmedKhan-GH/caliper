@@ -1639,9 +1639,10 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
     // 2. The module: the generated header, the lib modules, common.wgsl and derive.wgsl, composed
     // here from the declaration as the app composes it.
     const sp::Piece piece = piece_of(d);
-    sb::Resolved resolved;
+    // The section common holds the lib modules before common.wgsl; split, so that the composer
+    // blanks the modules that read the draw prelude, as in the app.
+    sb::Resolved resolved = d->common_size ? sb::split_common(std::string_view(d->common, d->common_size)) : sb::Resolved{};
     resolved.files["derive.wgsl"] = std::string(d->wgsl, d->wgsl_size);
-    if (d->common_size) resolved.files["common.wgsl"] = std::string(d->common, d->common_size);
     const sb::Composed composed = sb::compose_derive(piece, resolved);
     if (!composed.verdict.ok())
         return fail(error, CALIPER_PRODUCER_REFUSED, static_code(composed.verdict.code), composed.verdict.message);

@@ -15,7 +15,9 @@
 #include <caliper_builder/programs/pieces.h>
 
 #include <algorithm>
+#include <cctype>
 #include <set>
+#include <vector>
 
 namespace caliper_builder::programs {
 
@@ -106,7 +108,65 @@ Verdict element_of(const spec::Resource& r, std::string* type, std::string* stru
     return {};
 }
 
+// Whether a lib module's text names a binding or a struct of the draw prelude:
+// an identifier with the prefix caliper_ or Caliper, other than the derive
+// header's own CaliperFrame and CaliperShapes. Comments do not count.
+bool reads_draw_prelude(std::string_view text) {
+    std::size_t i = 0;
+    const std::size_t n = text.size();
+    auto ident = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; };
+    while (i < n) {
+        if (text.compare(i, 2, "//") == 0) {
+            while (i < n && text[i] != '\n') ++i;
+        } else if (text.compare(i, 2, "/*") == 0) {
+            const std::size_t end = text.find("*/", i + 2);
+            i = end == std::string_view::npos ? n : end + 2;
+        } else if (ident(text[i]) && !std::isdigit(static_cast<unsigned char>(text[i]))) {
+            const std::size_t b = i;
+            while (i < n && ident(text[i])) ++i;
+            const std::string_view w = text.substr(b, i - b);
+            if ((w.rfind("caliper_", 0) == 0 || w.rfind("Caliper", 0) == 0) && w != "CaliperFrame" &&
+                w != "CaliperShapes")
+                return true;
+        } else {
+            ++i;
+        }
+    }
+    return false;
+}
+
+// The same text with every line empty: the line count stays, thus every
+// segment after it keeps its lines.
+std::string blank_lines(std::string_view text) {
+    return std::string(static_cast<std::size_t>(std::count(text.begin(), text.end(), '\n')), '\n');
+}
+
 }  // namespace
+
+Resolved split_common(std::string_view common) {
+    Resolved r;
+    std::size_t at = 0;
+    std::uint32_t line = 1;
+    for (bool found = true; found;) {
+        found = false;
+        for (std::string_view name : lib_modules()) {
+            std::string body(lib_module(name));
+            if (body.empty()) continue;
+            if (body.back() != '\n') body += '\n';
+            if (common.compare(at, body.size(), body) != 0) continue;
+            const auto lines = static_cast<std::uint32_t>(std::count(body.begin(), body.end(), '\n'));
+            r.modules.push_back(std::string(name));
+            r.lib_segments.push_back(Segment{"lib/" + std::string(name), line, lines});
+            r.lib_text += body;
+            line += lines;
+            at += body.size();
+            found = true;
+            break;
+        }
+    }
+    if (at < common.size()) r.files["common.wgsl"] = std::string(common.substr(at));
+    return r;
+}
 
 Composed compose_derive(const spec::Piece& piece, const Resolved& resolved) {
     Composed c;
@@ -214,7 +274,32 @@ Composed compose_derive(const spec::Piece& piece, const Resolved& resolved) {
     };
     add("header", h);
     if (!resolved.lib_text.empty()) {
-        const std::string lib = with_final_newline(resolved.lib_text);
+        const std::string text = with_final_newline(resolved.lib_text);
+        // A module that reads the draw prelude would not compile here: its lines stay, blank.
+        std::vector<std::size_t> starts{0};   // the offset of each line; the last is the end
+        for (std::size_t k = 0; k < text.size(); ++k)
+            if (text[k] == '\n') starts.push_back(k + 1);
+        std::string lib;
+        std::size_t done = 0;
+        for (const Segment& s : resolved.lib_segments) {
+            const std::size_t from = s.first_line ? s.first_line - 1 : 0, to = from + s.lines;
+            if (to >= starts.size() || starts[from] < done) continue;
+            const std::string_view module = std::string_view(text).substr(starts[from], starts[to] - starts[from]);
+            if (!reads_draw_prelude(module)) continue;
+            const std::size_t slash = s.part.rfind('/') == std::string::npos ? 0 : s.part.rfind('/') + 1;
+            const std::string import = s.part.substr(slash);
+            const std::string name = import.substr(0, import.find('@'));
+            for (const char* f : {"common.wgsl", "derive.wgsl"})
+                if (auto it = resolved.files.find(f);
+                    it != resolved.files.end() && it->second.find(name + "__") != std::string::npos)
+                    return fail(refuse(kPieceUnknownImport, std::string(f) + " calls " + name + "::, but " + import +
+                                                                " reads the draw prelude, which only the draw "
+                                                                "half has; call it from draw.wgsl."));
+            lib += text.substr(done, starts[from] - done);
+            lib += blank_lines(module);
+            done = starts[to];
+        }
+        lib += text.substr(done);
         for (const Segment& s : resolved.lib_segments)
             c.segments.push_back({s.part, line + (s.first_line ? s.first_line - 1 : 0), s.lines});
         c.text += lib;
