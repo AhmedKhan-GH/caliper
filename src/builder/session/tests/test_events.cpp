@@ -328,7 +328,7 @@ TEST_CASE("events: closing the session wakes a held wait_for_events and waits fo
         auto held = std::async(std::launch::async, [&] {
             return wait_for_events(s->queue(), s->events(), wait_call({{"cursor", 0}, {"timeout_s", 60}}));
         });
-        REQUIRE(frame.more_frames(10));
+        while (s->events().waiting() == 0) std::this_thread::yield();   // the wait is held
         s->close();
         REQUIRE(held.wait_for(std::chrono::seconds(0)) == std::future_status::ready);   // close() waited for it
         got = held.get();
