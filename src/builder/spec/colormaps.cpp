@@ -4,11 +4,12 @@
 namespace caliper_builder::spec {
 
 const std::vector<std::string>& colormap_names() {
-    // These are the four names of format version 0. The other twelve
-    // (cividis, inferno, plasma, turbo, twilight, coolwarm, batlow, vik, roma,
-    // oslo, lajolla and berlin) join with their color tables in the graphics
-    // layer, so that a name never exists without its colors.
-    static const std::vector<std::string> names = {"viridis", "magma", "rdbu", "greys"};
+    // The sixteen names, in id order. The graphics layer holds the color table
+    // of each id (src/host/gfx/colormap_tables.h), so a name never exists
+    // without its colors.
+    static const std::vector<std::string> names = {
+        "viridis", "magma",    "rdbu",    "greys",    "cividis", "inferno", "plasma",  "turbo",
+        "twilight", "coolwarm", "batlow", "vik",      "roma",    "oslo",    "lajolla", "berlin"};
     return names;
 }
 

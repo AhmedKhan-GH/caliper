@@ -134,11 +134,13 @@ struct PreparedText {
     bool has_value = false;
 };
 
-// The colormaps of the format, as the live views number theirs, plus greys.
+// The ids of the first four colormaps of the format, as the live views number theirs, plus
+// greys. All sixteen names map to ids 0 to 15 (caliper_builder::spec::colormap_id).
 enum SpecColormap { kCmapViridis = 0, kCmapMagma = 1, kCmapRdbu = 2, kCmapGreys = 3 };
+// The id of a colormap name, or the fallback for an unknown name.
 int spec_colormap(const std::string& name, int fallback);
-// The 256-entry RGBA8 table of a colormap (r | g<<8 | b<<16 | a<<24), the
-// live views' own for viridis, magma and rdbu.
+// The 256-entry RGBA8 table of a colormap id (r | g<<8 | b<<16 | a<<24), from the
+// graphics layer's builtin_lut; viridis for an unknown id.
 const uint32_t* spec_colormap_lut(int colormap);
 
 struct PreparedPanel {

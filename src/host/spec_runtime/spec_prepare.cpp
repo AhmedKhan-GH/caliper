@@ -1,6 +1,9 @@
 // spec_prepare.cpp: the data of one spec panel made ready to draw
 // (spec_prepare.h).
 #include "spec_runtime/spec_prepare.h"
+#include "gfx/colormap_tables.h"
+#include <caliper_builder/spec/colormaps.h>
+#include <optional>
 
 #include "scene/scene.h"                 // kPalette
 #include "spec_runtime/spec_layout.h"   // spec_panel_title, spec_binding_name
@@ -740,25 +743,13 @@ std::string spec_fmt4(double v) {
 uint32_t spec_class_color(int label) { return caliper_live_views::kPalette[(label < 0 ? 0 : label) % 16]; }
 
 int spec_colormap(const std::string& name, int fallback) {
-    if (name == "viridis") return kCmapViridis;
-    if (name == "magma") return kCmapMagma;
-    if (name == "rdbu") return kCmapRdbu;
-    if (name == "greys") return kCmapGreys;
-    return fallback;
+    const std::optional<int> id = caliper_builder::spec::colormap_id(name);
+    return id ? *id : fallback;
 }
 
 const uint32_t* spec_colormap_lut(int colormap) {
-    static const uint32_t* greys = [] {
-        static uint32_t t[256];
-        for (uint32_t i = 0; i < 256; ++i) t[i] = 0xff000000u | (i << 16) | (i << 8) | i;
-        return t;
-    }();
-    switch (colormap) {
-        case kCmapMagma: return colormap_lut(CALIPER_CMAP_MAGMA);
-        case kCmapRdbu: return colormap_lut(CALIPER_CMAP_RDBU);
-        case kCmapGreys: return greys;
-        default: return colormap_lut(CALIPER_CMAP_VIRIDIS);
-    }
+    const uint32_t* lut = caliper_gfx::cmap::builtin_lut(colormap);
+    return lut != nullptr ? lut : caliper_gfx::cmap::builtin_lut(kCmapViridis);
 }
 
 std::string spec_source_origin(const spec::Spec& s, const std::string& source_id) {

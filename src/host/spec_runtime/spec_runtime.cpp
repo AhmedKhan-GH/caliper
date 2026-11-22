@@ -14,6 +14,7 @@
 #include "ui/sternbild_theme.h"
 
 #include <caliper_builder/session/session.h>
+#include <caliper_builder/spec/colormaps.h>   // colormap_names
 #include <caliper_builder/session/spec_edit.h>
 
 #include <imgui_internal.h>
@@ -102,16 +103,21 @@ std::vector<double> nice_ticks(double lo, double hi, int n) {
     return out;
 }
 
-// ImPlot colormaps of the four spec colormaps, added once per ImPlot context.
+// ImPlot colormaps of the sixteen spec colormaps, added once per ImPlot context, each named
+// "caliper.<name>" from caliper_builder::spec::colormap_names().
 ImPlotColormap implot_colormap(int cm) {
-    static const char* const kNames[] = {"caliper.viridis", "caliper.magma", "caliper.rdbu", "caliper.greys"};
-    const int i = std::clamp(cm, 0, 3);
-    ImPlotColormap id = ImPlot::GetColormapIndex(kNames[i]);
+    static const std::vector<std::string> kNames = [] {
+        std::vector<std::string> v;
+        for (const std::string& n : caliper_builder::spec::colormap_names()) v.push_back("caliper." + n);
+        return v;
+    }();
+    const int i = std::clamp(cm, 0, int(kNames.size()) - 1);
+    ImPlotColormap id = ImPlot::GetColormapIndex(kNames[i].c_str());
     if (id < 0) {
         const uint32_t* lut = spec_colormap_lut(i);
         ImU32 cols[256];
         for (int k = 0; k < 256; ++k) cols[k] = (ImU32)lut[k];
-        id = ImPlot::AddColormap(kNames[i], cols, 256, false);
+        id = ImPlot::AddColormap(kNames[i].c_str(), cols, 256, false);
     }
     return id;
 }
