@@ -41,7 +41,7 @@ features:
     status: built
     summary: The inspector is an applet that attaches to a running script and shows its model in docked panes for inference, the list of tensors and a single tensor.
     depends_on: [INT-08]
-    branch: inspector
+    branches: [inspector]
     issue: null
 
   - id: INT-06
@@ -49,7 +49,7 @@ features:
     status: built
     summary: The tensor view draws a tensor at its true shape, zooms down to single cells by sampling the visible region, and lets a person read and edit cells, rows and columns.
     depends_on: [INT-05]
-    branch: inspector
+    branches: [inspector]
     issue: null
 
   - id: INT-07
@@ -57,7 +57,7 @@ features:
     status: built
     summary: The 3-D model view draws every tensor of a model as a panel sized to its shape and textured with its heatmap, grouped and stacked by layer.
     depends_on: [INT-05]
-    branch: inspector
+    branches: [inspector]
     issue: null
 
   - id: INT-08
@@ -65,7 +65,7 @@ features:
     status: built
     summary: A script serves requests over a socket next to its session, so the app can ask it to run a task, stream events back, cancel it and fetch tensor values in binary chunks.
     depends_on: [STR-04]
-    branch: inspector
+    branches: [inspector]
     issue: null
 
   - id: INT-09
@@ -73,7 +73,7 @@ features:
     status: built
     summary: An example script loads a small language model with MLX and serves the inspector's requests, with generation, a tensor list, sampled views and in-memory weight edits.
     depends_on: [INT-08]
-    branch: inspector
+    branches: [inspector]
     issue: null
 
   - id: INT-10

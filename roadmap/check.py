@@ -204,9 +204,10 @@ def run_checks(root):
                         break
 
     counts = Counter(f["status"] for _, f in features.values())
+    in_progress = sum(1 for _, f in features.values() if f.get("in_progress"))
     edges = sum(len(v) for v in graph.values())
-    summary = "%d features, %d edges (%s)" % (
-        len(features), edges, ", ".join("%d %s" % (counts[s], s) for s in STATUSES))
+    summary = "%d features, %d edges (%s; %d in progress)" % (
+        len(features), edges, ", ".join("%d %s" % (counts[s], s) for s in STATUSES), in_progress)
     return errors, warnings, summary
 
 

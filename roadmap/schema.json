@@ -52,7 +52,7 @@
           "pattern": "^[^:]+$"
         },
         "status": {
-          "description": "shipped: on main. built: finished on a branch that is not merged. planned: in a plan. idea: undecided. decision: an open question that must be settled before the features that depend on it.",
+          "description": "shipped: on main. built: work on a branch that is not merged, finished unless in_progress is true. planned: in a plan. idea: undecided. decision: an open question that must be settled before the features that depend on it.",
           "enum": ["shipped", "built", "planned", "idea", "decision"]
         },
         "summary": {
@@ -80,10 +80,16 @@
           "type": ["string", "null"],
           "pattern": "^docs/[a-z0-9/-]+\\.md(#[a-z0-9_-]+)?$"
         },
-        "branch": {
-          "description": "For a built feature, the branch where the work sits.",
-          "type": ["string", "null"],
-          "pattern": "^[A-Za-z0-9._/-]+$"
+        "branches": {
+          "description": "For built work, every branch that holds it, the most complete first. Work spread over branches that are not merged into each other names each of them.",
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9._/-]+$" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "in_progress": {
+          "description": "For built work only: true while the work on its branches is unfinished, such as a commit whose subject starts with WIP. The pages and the graph show it as in progress, apart from finished built work.",
+          "type": "boolean"
         },
         "design": {
           "description": "The design page that proposes the feature, from the repository root, with an optional anchor.",
@@ -107,7 +113,11 @@
         },
         {
           "if": { "properties": { "status": { "const": "built" } } },
-          "then": { "required": ["branch"], "properties": { "branch": { "type": "string" } } }
+          "then": { "required": ["branches"] }
+        },
+        {
+          "if": { "properties": { "in_progress": { "const": true } }, "required": ["in_progress"] },
+          "then": { "properties": { "status": { "const": "built" } } }
         }
       ]
     }

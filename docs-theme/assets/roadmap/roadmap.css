@@ -58,6 +58,7 @@
 }
 .roadmap-badge--shipped { color: var(--rm-shipped); background: color-mix(in srgb, var(--rm-shipped) 30%, transparent); }
 .roadmap-badge--built { color: var(--rm-built); background: color-mix(in srgb, var(--rm-built) 30%, transparent); }
+.roadmap-badge--progress { color: var(--rm-built); border-style: dashed; background: color-mix(in srgb, var(--rm-built) 12%, transparent); }
 .roadmap-badge--planned { color: var(--rm-planned); background: color-mix(in srgb, var(--rm-planned) 30%, transparent); }
 .roadmap-badge--idea { color: var(--rm-idea); border-style: dashed; background: none; }
 .roadmap-badge--decision { color: var(--rm-decision); background: none; }
@@ -87,6 +88,7 @@
 .roadmap-sw { display: inline-block; width: 1.5rem; height: .8rem; border: 2px solid; border-radius: 3px; box-sizing: border-box; }
 .roadmap-sw--shipped { border-color: var(--rm-shipped); background: color-mix(in srgb, var(--rm-shipped) 30%, transparent); }
 .roadmap-sw--built { border-color: var(--rm-built); background: color-mix(in srgb, var(--rm-built) 30%, transparent); }
+.roadmap-sw--progress { border-color: var(--rm-built); border-style: dashed; background: color-mix(in srgb, var(--rm-built) 12%, transparent); }
 .roadmap-sw--planned { border-color: var(--rm-planned); background: color-mix(in srgb, var(--rm-planned) 30%, transparent); }
 .roadmap-sw--idea { border-color: var(--rm-idea); border-style: dashed; border-width: 1.5px; }
 .roadmap-sw--decision { border-color: var(--rm-decision); border-radius: 0; clip-path: polygon(15% 0, 100% 0, 100% 70%, 85% 100%, 0 100%, 0 30%); }

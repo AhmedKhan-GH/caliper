@@ -74,7 +74,7 @@ features:
     summary: The graphics layer, an internal C++ layer shaped like WebGPU, holds buffers, textures, pipelines, draw lists and a uniform arena, validates every frame, and has a Metal backend.
     depends_on: [REN-01]
     sprint: 4
-    branch: sprint4-pr1-main2
+    branches: [sprint4-pr1-main2]
     issue: null
 
   - id: REN-10
@@ -83,7 +83,7 @@ features:
     summary: Scene shaders are written once in WGSL, and a generator with a pinned Naga translates them into the programs that each backend of the graphics layer loads.
     depends_on: [REN-09]
     sprint: 4
-    branch: sprint4-pr1-main2
+    branches: [sprint4-pr1-main2]
     issue: null
 
   - id: REN-11
@@ -92,7 +92,7 @@ features:
     summary: "The scene core is the one camera and scene model of the views: an entity tree with cameras, bounds and fitting, which it compiles into a draw list of the graphics layer, with a pick pass."
     depends_on: [REN-10]
     sprint: 4
-    branch: sprint4-pr1-main2
+    branches: [sprint4-pr1-main2]
     issue: null
 
   - id: REN-12
@@ -101,7 +101,7 @@ features:
     summary: The scene view is a live view of kind scene that draws the points, lines and meshes of a protocol 3.2 scene through the scene core, in the app and in the browser, with an orbit camera.
     depends_on: [REN-11, REN-14, STR-09]
     sprint: 4
-    branch: sprint4-pr1-main2
+    branches: [sprint4-pr1-main2]
     issue: null
 
   - id: REN-13
@@ -110,7 +110,7 @@ features:
     summary: The WebGPU backend of the graphics layer runs in the browser, so the WebAssembly views draw scenes through the same layer as the native renderers.
     depends_on: [REN-10, EMB-04]
     sprint: 4
-    branch: sprint4-pr1-main2
+    branches: [sprint4-pr1-main2]
     issue: null
 
   - id: REN-14
@@ -119,7 +119,7 @@ features:
     summary: A colormap is decided by integer comparisons against keys derived once from the CPU reference, so every shader and adapter gives the same colours as the reference.
     depends_on: [REN-13]
     sprint: 4
-    branch: sprint4-pr1-main2
+    branches: [sprint4-pr1-main2]
     issue: null
 
   - id: REN-15
@@ -128,7 +128,7 @@ features:
     summary: Picking draws the scene's entity and item ids into a small ID texture around the cursor and decodes them to name the entity and item under it.
     depends_on: [REN-11]
     sprint: 4
-    branch: sprint4-pr1-main2
+    branches: [sprint4-pr1-main2]
     issue: null
 
   - id: REN-16

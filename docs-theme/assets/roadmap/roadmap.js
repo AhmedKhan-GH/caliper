@@ -4,7 +4,7 @@
   "use strict";
 
   var NODE_W = 200, NODE_H = 44, ROW = 52, LANE_PAD = 14, COLLAPSED_H = 100, MIN_LANE_H = 110, MAX_ROWS = 4, COL_GAP = 16, LAYER_GAP = 56, FIT_PAD = 24;
-  var STATUS_LABEL = { shipped: "Shipped on main", built: "Built on a branch", planned: "Planned", idea: "Idea", decision: "Decision to settle" };
+  var STATUS_LABEL = { shipped: "Shipped on main", built: "Built on a branch", progress: "In progress on a branch", planned: "Planned", idea: "Idea", decision: "Decision to settle" };
   var STATUS_RANK = { shipped: 0, built: 1, planned: 2, idea: 2, decision: 2 };
   var MEDIA = "not all and (max-width: 44.9375em)";  // the complement of the narrow-screen rule in roadmap.css
 
@@ -94,7 +94,7 @@
     bFit.setAttribute("aria-label", "Fit the whole graph");
     zoomBox.append(bIn, bOut, bFit);
     var legend = el("div", "roadmap-legend");
-    ["shipped", "built", "planned", "idea", "decision"].forEach(function (s) {
+    ["shipped", "built", "progress", "planned", "idea", "decision"].forEach(function (s) {
       var item = el("span");
       item.append(el("i", "roadmap-sw roadmap-sw--" + s), document.createTextNode(STATUS_LABEL[s]));
       legend.appendChild(item);
@@ -109,7 +109,7 @@
     /* ---- Cytoscape elements ---- */
     var elements = [];
     data.nodes.forEach(function (n) {
-      elements.push({ group: "nodes", classes: "feat s-" + n.status, data: { id: n.id, title: n.title, status: n.status, pillar: n.pillar, label: n.title } });
+      elements.push({ group: "nodes", classes: "feat s-" + n.status + (n.in_progress ? " wip" : ""), data: { id: n.id, title: n.title, status: n.status, pillar: n.pillar, label: n.title } });
       elements.push({ group: "nodes", classes: "ghost", data: { id: "g:" + n.id, label: n.id, of: n.id } });
     });
     data.edges.forEach(function (e) {
@@ -298,7 +298,7 @@
       tip.textContent = "";
       var head = el("div", "roadmap-tip-head");
       head.append(el("span", "roadmap-id", d.id), el("span", null, d.title));
-      var meta = STATUS_LABEL[d.status] + (d.sprint != null ? " · Sprint " + d.sprint : "");
+      var meta = STATUS_LABEL[d.in_progress ? "progress" : d.status] + (d.sprint != null ? " · Sprint " + d.sprint : "");
       tip.append(head, el("div", "roadmap-tip-meta", meta));
       if (d.summary) tip.append(el("div", "roadmap-tip-summary", d.summary));
       if (d.draft) tip.append(el("p", "roadmap-tip-draft", "Draft. The dependencies of this feature are not settled."));
@@ -468,6 +468,8 @@
       } },
       { selector: "node.s-shipped", style: tinted(c.shipped) },
       { selector: "node.s-built", style: tinted(c.built) },
+      // Built work whose branches are unfinished: the built colour, a paler fill and a dashed outline.
+      { selector: "node.s-built.wip", style: { "background-color": mix(c.built, lane, 0.12), "border-style": "dashed", "border-width": 2.5 } },
       { selector: "node.s-planned", style: tinted(c.planned) },
       { selector: "node.s-idea", style: { "background-color": lane, "background-opacity": 1, "border-color": c.idea, "border-width": 1.5, "border-style": "dashed" } },
       { selector: "node.s-decision", style: { shape: "cut-rectangle", "background-color": lane, "background-opacity": 1, "border-color": c.decision, "border-width": 2, "border-style": "solid" } },

@@ -42,7 +42,7 @@ features:
     depends_on:
       - COR-02
     sprint: 4
-    branch: feature/packaging
+    branches: [feature/packaging]
     design: design/plan.md#the-plan
     issue: null
     draft: true
@@ -81,13 +81,38 @@ Text.
 
 PLAN = "# The plan page\n\n## The plan\n"
 
+PLAN_LEDGER = """\
+title: The plan page
+kind: page
+source: design/plan.md
+summary: The one plan page.
+entries:
+  - heading: The plan
+    item: The packaging step and the scene core after it.
+    ids: [COR-03, REN-01]
+"""
 
-def make_repo(tmp, pillars=None):
+DOCS_LEDGER = """\
+title: The docs
+kind: docs
+summary: The pages of shipped features.
+entries:
+  - page: docs/guide.md#first-part
+    item: The host and its ABI.
+    ids: [COR-01, COR-02]
+"""
+
+
+def make_repo(tmp, pillars=None, ledger=None):
     root = Path(tmp)
     (root / "roadmap").mkdir()
     shutil.copy(HERE / "schema.json", root / "roadmap" / "schema.json")
     for name, text in (pillars or {"core": CORE, "rendering": RENDERING}).items():
         (root / "roadmap" / (name + ".yml")).write_text(text, encoding="utf-8")
+    (root / "roadmap" / "coverage").mkdir()
+    shutil.copy(HERE / "coverage" / "schema.json", root / "roadmap" / "coverage" / "schema.json")
+    for name, text in (ledger or {"design-plan": PLAN_LEDGER, "docs": DOCS_LEDGER}).items():
+        (root / "roadmap" / "coverage" / (name + ".yml")).write_text(text, encoding="utf-8")
     (root / "docs").mkdir()
     (root / "docs" / "guide.md").write_text(GUIDE, encoding="utf-8")
     (root / "design").mkdir()
@@ -121,6 +146,7 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(warnings, [])
         self.assertIn("4 features, 3 edges", summary)
         self.assertIn("2 shipped, 1 built, 1 planned", summary)
+        self.assertIn("0 in progress", summary)
 
     def test_schema_failure(self):
         errors, _, _ = self.run_check(edit={"core": ("status: built", "status: finished")})
@@ -216,7 +242,8 @@ class CheckTest(unittest.TestCase):
         self.assertError(errors, "COR-02", "COR-03", "higher status rank")
 
     def test_built_may_depend_on_built(self):
-        errors, _, _ = self.run_check(edit={"rendering": ("status: planned", "status: built\n    branch: x")})
+        errors, _, _ = self.run_check(edit={"rendering": ("status: planned",
+                                                          "status: built\n    branches: [x]")})
         self.assertEqual(errors, [])
 
     def test_unused_decision(self):
@@ -288,6 +315,23 @@ class CheckTest(unittest.TestCase):
         errors, warnings, _ = self.run_check(pillars={"core": CORE, "rendering": extra})
         self.assertEqual(errors, [])
         self.assertEqual(warnings, [])
+
+    def test_branches_must_be_a_list(self):
+        errors, _, _ = self.run_check(edit={"core": ("branches: [feature/packaging]",
+                                                     "branches: feature/packaging")})
+        self.assertError(errors, "COR-03", "schema")
+
+    def test_several_branches_and_in_progress(self):
+        errors, _, summary = self.run_check(edit={"core": (
+            "branches: [feature/packaging]", "branches: [feature/packaging, feature/more]\n"
+            "    in_progress: true")})
+        self.assertEqual(errors, [])
+        self.assertIn("1 in progress", summary)
+
+    def test_in_progress_only_on_built_work(self):
+        errors, _, _ = self.run_check(edit={"rendering": ("status: planned",
+                                                          "status: planned\n    in_progress: true")})
+        self.assertError(errors, "REN-01", "schema")
 
     def test_command_line_exit_codes(self):
         root = make_repo(self.tmp)
@@ -365,19 +409,73 @@ class BuildTest(unittest.TestCase):
         self.assertIn("| Depends on | [The ABI](cor-02.md) (`COR-02`) |", page)
         self.assertIn("| Unblocks | [The scene core](ren-01.md) (`REN-01`) |", page)
         self.assertIn("| Docs | None |", page)
-        self.assertIn("| Branch | [`feature/packaging`]"
-                      "(https://github.com/AhmedKhan-GH/caliper/tree/feature/packaging) |", page)
+        self.assertIn("| Branches | `feature/packaging` |", page)
         self.assertIn("| Design | [The plan page, The plan]"
                       "(https://github.com/AhmedKhan-GH/caliper/blob/main/design/plan.md"
                       "#the-plan) |", page)
         self.assertTrue(page.rstrip().endswith("Back to the [roadmap graph](index.md)."))
+        self.assertIn("## Sources", page)
+        self.assertIn("- [design/plan.md](https://github.com/AhmedKhan-GH/caliper/blob/main/"
+                      "design/plan.md#the-plan), under *The plan*. The packaging step and the "
+                      "scene core after it.", page)
+        self.assertNotIn("in progress", page)
 
         shipped = (self.out / "roadmap" / "cor-01.md").read_text()
         self.assertNotIn("Draft", shipped)
         self.assertIn("| Docs | [The guide, First part](../guide.md#first-part) |", shipped)
+        self.assertIn("- [The guide, First part](../guide.md#first-part). The host and its ABI.",
+                      shipped)
         second = (self.out / "roadmap" / "cor-02.md").read_text()
         self.assertIn("| Issue | [#7](https://github.com/AhmedKhan-GH/caliper/issues/7) |",
                       second)
+
+    def test_in_progress_and_branch_sources(self):
+        path = self.root / "roadmap" / "core.yml"
+        path.write_text(path.read_text().replace(
+            "branches: [feature/packaging]",
+            "branches: [feature/packaging, feature/more]\n    in_progress: true"), encoding="utf-8")
+        (self.root / "roadmap" / "coverage" / "branches.yml").write_text("""\
+title: The branch map
+kind: branches
+summary: Every branch with commits that main lacks.
+entries:
+  - branch: feature/more
+    state: unique
+    wip: true
+    commits: 2 commits, abc1234 and def5678
+    item: "WIP: the packaging's second half."
+    ids: [COR-03]
+""", encoding="utf-8")
+        self.run_build()
+        page = (self.out / "roadmap" / "cor-03.md").read_text()
+        self.assertIn('| Status | <span class="roadmap-badge roadmap-badge--progress">In progress'
+                      '</span> |', page)
+        self.assertIn("| Branches | `feature/packaging`<br>`feature/more` |", page)
+        self.assertIn("unfinished, so the feature shows as in progress", page)
+        self.assertIn("- Branch `feature/more`, 2 commits, abc1234 and def5678. WIP: the "
+                      "packaging's second half.", page)
+        pillar = (self.out / "roadmap" / "core.md").read_text()
+        self.assertIn("## In progress", pillar)
+        self.assertNotIn("## Built", pillar)
+        graph = json.loads((self.out / "roadmap" / "graph.json").read_text())
+        node = graph["nodes"][2]
+        self.assertEqual((node["status"], node["in_progress"], node["branches"]),
+                         ("built", True, ["feature/packaging", "feature/more"]))
+        data = json.loads((self.out / "roadmap.json").read_text())
+        sources = data["features"][2]["sources"]
+        self.assertEqual([s["ledger"] for s in sources],
+                         ["roadmap/coverage/branches.yml", "roadmap/coverage/design-plan.yml"])
+        self.assertEqual(sources[1]["source"], "design/plan.md")
+
+    def test_page_read_from_another_branch(self):
+        (self.root / "roadmap" / "coverage" / "design-later.yml").write_text(
+            PLAN_LEDGER.replace("design/plan.md", "design/later.md")
+            .replace("kind: page", "kind: page\nref: feature/later")
+            .replace("[COR-03, REN-01]", "[REN-01]"), encoding="utf-8")
+        self.run_build()
+        page = (self.out / "roadmap" / "ren-01.md").read_text()
+        self.assertIn("- `design/later.md` on the branch `feature/later`, under *The plan*. "
+                      "The packaging step and the scene core after it.", page)
 
     def test_graph_json(self):
         self.run_build()

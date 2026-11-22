@@ -74,7 +74,7 @@ features:
     summary: Protocol 3.2 adds the scenes capability, the scene view kind and the scene update and clear messages for points, lines and meshes, with codecs in C++, Python and TypeScript and golden frames.
     depends_on: [STR-03]
     sprint: 4
-    branch: sprint4-pr1-main2
+    branches: [sprint4-pr1-main2]
     issue: null
 
   - id: STR-10
@@ -83,7 +83,7 @@ features:
     summary: caliper.scene adds the Caliper LIB calls that build a 3-D scene of meshes, line strips and points, with colours or colormapped values, and stream it over caliper.serve with a state kept for late viewers.
     depends_on: [STR-05, STR-09]
     sprint: 4
-    branch: sprint4-pr1-main2
+    branches: [sprint4-pr1-main2]
     issue: null
 
   - id: STR-11
@@ -92,7 +92,7 @@ features:
     summary: Demo 0 is a notebook that streams the loss surface around a model's current weights as a mesh, with the optimizer's path across it, recomputed on the device while the model trains.
     depends_on: [STR-07, STR-10, REN-12]
     sprint: 4
-    branch: sprint4-pr1-main2
+    branches: [sprint4-pr1-main2]
     issue: null
 
   - id: STR-12

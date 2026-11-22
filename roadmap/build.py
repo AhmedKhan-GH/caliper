@@ -36,12 +36,15 @@ GITHUB = "https://github.com/AhmedKhan-GH/caliper"
 
 STATUS_ORDER = ["shipped", "built", "planned", "idea", "decision"]
 STATUS_RANK = {"shipped": 0, "built": 1, "planned": 2, "idea": 2, "decision": 2}
-SECTION_TITLES = {"shipped": "Shipped", "built": "Built", "planned": "Planned",
-                  "idea": "Ideas", "decision": "Decisions"}
-BADGE_LABELS = {"shipped": "Shipped", "built": "Built", "planned": "Planned",
-                "idea": "Idea", "decision": "Decision"}
+# What the pages show: built work whose branches are unfinished shows as in progress.
+SHOWN_ORDER = ["shipped", "built", "progress", "planned", "idea", "decision"]
+SECTION_TITLES = {"shipped": "Shipped", "built": "Built", "progress": "In progress",
+                  "planned": "Planned", "idea": "Ideas", "decision": "Decisions"}
+BADGE_LABELS = {"shipped": "Shipped", "built": "Built", "progress": "In progress",
+                "planned": "Planned", "idea": "Idea", "decision": "Decision"}
 FEATURE_KEYS = ["id", "title", "status", "summary", "depends_on", "sprint", "docs",
-                "branch", "design", "issue", "draft"]
+                "branches", "in_progress", "design", "issue", "draft"]
+COVERAGE = "coverage"
 
 
 class RegistryError(Exception):
@@ -132,6 +135,13 @@ def first_heading(headings):
     return None
 
 
+def shown_status(feature):
+    """The status a page shows: 'progress' for built work that is unfinished."""
+    if feature["status"] == "built" and feature.get("in_progress"):
+        return "progress"
+    return feature["status"]
+
+
 def split_ref(ref):
     """'docs/a.md#x' -> ('docs/a.md', 'x'); no anchor gives None."""
     path, _, anchor = ref.partition("#")
@@ -173,7 +183,10 @@ def load_registry(root):
                 raise RegistryError("%s: %s: duplicate id" % (name, fid))
             feature = {key: raw.get(key) for key in FEATURE_KEYS}
             feature["depends_on"] = sorted(raw.get("depends_on") or [], key=id_key)
+            feature["branches"] = list(raw.get("branches") or [])
+            feature["in_progress"] = bool(raw.get("in_progress"))
             feature["draft"] = bool(raw.get("draft"))
+            feature["sources"] = []
             feature["pillar"] = pillar["prefix"]
             feature["file"] = name
             feature["unblocks"] = []
@@ -190,7 +203,35 @@ def load_registry(root):
             features[dep]["unblocks"].append(fid)
     for feature in features.values():
         feature["unblocks"].sort(key=id_key)
+    for group in read_coverage(root):
+        for entry in group["entries"]:
+            for fid in entry.get("ids") or []:
+                if fid in features:
+                    features[fid]["sources"].append((group, entry))
     return pillars, features
+
+
+# Coverage ledger
+
+def read_coverage(root):
+    """Returns the ledger groups under root/roadmap/coverage, sorted by file name.
+
+    Each group is its YAML mapping with its file name under the key `file`. A file that is not
+    a mapping is skipped here; the checker reports it.
+    """
+    folder = Path(root) / "roadmap" / COVERAGE
+    groups = []
+    for path in sorted(folder.glob("*.yml")):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as err:
+            raise RegistryError("roadmap/%s/%s: not valid YAML: %s" % (COVERAGE, path.name, err))
+        if isinstance(data, dict):
+            data = dict(data)
+            data["file"] = "roadmap/%s/%s" % (COVERAGE, path.name)
+            data["entries"] = [e for e in data.get("entries") or [] if isinstance(e, dict)]
+            groups.append(data)
+    return groups
 
 
 # Pages
@@ -228,8 +269,8 @@ def pillar_page(pillar):
              md(pillar["summary"]), "",
              "The [roadmap graph](index.md) shows how these features depend on features in "
              "other pillars.", ""]
-    for status in STATUS_ORDER:
-        items = [f for f in pillar["features"] if f["status"] == status]
+    for status in SHOWN_ORDER:
+        items = [f for f in pillar["features"] if shown_status(f) == status]
         if not items:
             continue
         lines += ["## " + SECTION_TITLES[status], ""]
@@ -255,24 +296,79 @@ def feature_page(feature, pillars_by_prefix, features, root, base):
             if feature["docs"] else "None")
     design = (_heading_link(root, "roadmap", feature["design"], "design", base)
               if feature["design"] else "None")
-    branch = ("[`%s`](%s/tree/%s)" % (feature["branch"], base, feature["branch"])
-              if feature["branch"] else "None")
+    # Most work branches are not published, so a branch is named rather than linked.
+    branches = ("<br>".join("`%s`" % b for b in feature["branches"])
+                if feature["branches"] else "None")
+    shown = shown_status(feature)
     issue = ("[#%d](%s/issues/%d)" % (feature["issue"], base, feature["issue"])
              if feature["issue"] else "None")
     rows = [
         ("Id", "`%s`" % feature["id"]),
         ("Status", '<span class="roadmap-badge roadmap-badge--%s">%s</span>'
-         % (feature["status"], BADGE_LABELS[feature["status"]])),
+         % (shown, BADGE_LABELS[shown])),
         ("Pillar", "[%s](%s.md)" % (md(pillar["title"]), pillar["slug"])),
         ("Sprint", str(feature["sprint"]) if feature["sprint"] else "None"),
         ("Depends on", _feature_links(feature["depends_on"], features)),
         ("Unblocks", _feature_links(feature["unblocks"], features)),
-        ("Docs", docs), ("Branch", branch), ("Design", design), ("Issue", issue),
+        ("Docs", docs), ("Branches", branches), ("Design", design), ("Issue", issue),
     ]
     lines += ["| Field | Value |", "| --- | --- |"]
     lines += ["| %s | %s |" % row for row in rows]
-    lines += ["", "Back to the [roadmap graph](index.md).", ""]
+    if feature["in_progress"]:
+        lines += ["", "The work on these branches is unfinished, so the feature shows as in "
+                  "progress."]
+    lines += [""]
+    if feature["sources"]:
+        lines += ["## Sources", "",
+                  "The [coverage ledger](%s/tree/main/roadmap/coverage) records where this "
+                  "feature comes from:" % base, ""]
+        lines += ["- " + source_line(root, group, entry, base)
+                  for group, entry in feature["sources"]]
+        lines += [""]
+    lines += ["Back to the [roadmap graph](index.md).", ""]
     return "\n".join(lines)
+
+
+def _sentence(text):
+    text = md(text)
+    return text if text.endswith((".", "?", "!")) else text + "."
+
+
+def source_line(root, group, entry, base):
+    """One line of a feature page's Sources list: where the item is, then the item."""
+    kind = group.get("kind")
+    ref = entry.get("ref") or group.get("ref") or "main"
+    if kind == "page":
+        path = group["source"]
+        heading = entry.get("heading")
+        on_main = ref == "main" and (Path(root) / path).is_file()
+        if on_main:
+            anchor = ""
+            if heading:
+                for _, text, slug in read_headings(Path(root) / path) or []:
+                    if text == heading_text(heading):
+                        anchor = "#" + slug
+                        break
+            where = "[%s](%s/blob/main/%s%s)" % (md(path), base, path, anchor)
+        else:
+            where = "`%s` on the branch `%s`" % (path, ref)
+        if heading:
+            where += ", under *%s*" % md(heading_text(heading))
+    elif kind == "docs":
+        where = _heading_link(root, "roadmap", entry["page"], "docs", base)
+    elif kind == "github":
+        number = entry.get("pr")
+        where = "[Pull request #%d](%s/pull/%d)" % (number, base, number)
+    elif kind in ("branches", "worktrees"):
+        label = "Branch" if kind == "branches" else "Uncommitted work on the branch"
+        where = "%s `%s`" % (label, entry["branch"])
+        if entry.get("commits"):
+            where += ", %s" % md(entry["commits"])
+    elif kind == "notes":
+        where = "%s, `%s`" % (md(group.get("title", "Notes")), entry["file"])
+    else:
+        where = md(group.get("title", group["file"]))
+    return "%s. %s" % (where, _sentence(entry["item"]))
 
 
 def _dump(obj):
@@ -284,8 +380,10 @@ def graph_json(pillars, features):
     nodes = []
     for f in sorted(features.values(), key=lambda f: (order[f["pillar"]], id_key(f["id"]))):
         nodes.append({"id": f["id"], "title": f["title"], "status": f["status"],
-                      "pillar": f["pillar"], "summary": f["summary"], "sprint": f["sprint"],
-                      "draft": f["draft"], "url": f["id"].lower() + "/"})
+                      "in_progress": f["in_progress"], "pillar": f["pillar"],
+                      "summary": f["summary"], "sprint": f["sprint"],
+                      "branches": f["branches"], "draft": f["draft"],
+                      "url": f["id"].lower() + "/"})
     edges = []
     for f in sorted(features.values(), key=lambda f: id_key(f["id"])):
         for dep in f["depends_on"]:
@@ -298,6 +396,18 @@ def graph_json(pillars, features):
         "nodes": nodes, "edges": edges})
 
 
+def _source_ref(group, entry):
+    """A ledger entry for roadmap.json: its ledger file and the fields that place the item."""
+    ref = {"ledger": group["file"], "item": entry["item"]}
+    for key in ("heading", "ref", "page", "pr", "branch", "state", "file"):
+        if entry.get(key) is not None:
+            ref[key] = entry[key]
+    if group.get("kind") == "page":
+        ref["source"] = group["source"]
+        ref.setdefault("ref", group.get("ref") or "main")
+    return ref
+
+
 def registry_json(pillars, features, site):
     return _dump({
         "site": site,
@@ -308,8 +418,9 @@ def registry_json(pillars, features, site):
         "features": [
             {"id": f["id"], "title": f["title"], "status": f["status"], "pillar": f["pillar"],
              "summary": f["summary"], "depends_on": f["depends_on"], "unblocks": f["unblocks"],
-             "sprint": f["sprint"], "docs": f["docs"], "branch": f["branch"],
-             "design": f["design"], "issue": f["issue"], "draft": f["draft"],
+             "sprint": f["sprint"], "docs": f["docs"], "branches": f["branches"],
+             "in_progress": f["in_progress"], "design": f["design"], "issue": f["issue"],
+             "draft": f["draft"], "sources": [_source_ref(g, e) for g, e in f["sources"]],
              "url": "%sroadmap/%s/" % (site, f["id"].lower())}
             for f in sorted(features.values(), key=lambda f: id_key(f["id"]))]})
 

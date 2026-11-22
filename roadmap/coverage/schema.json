@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Caliper roadmap coverage ledger",
+  "description": "One group of sources of the roadmap: a plan page, the branch map, the orchestrators' notes, the docs, the pull requests or the uncommitted work. Each entry names one source item and either the registry ids it maps to or the reason it is not a feature.",
+  "type": "object",
+  "required": ["title", "kind", "summary", "entries"],
+  "additionalProperties": false,
+  "properties": {
+    "title": {
+      "description": "The group's name, as the feature pages show it.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "kind": {
+      "description": "page: one plan page under design/. branches: the branch map. worktrees: uncommitted work in the worktrees. notes: the orchestrators' notes. docs: the docs pages. github: the pull requests and issues.",
+      "enum": ["page", "branches", "worktrees", "notes", "docs", "github"]
+    },
+    "source": {
+      "description": "For a page: its path from the repository root. The check requires every ## and ### heading of the page, when the page is on the current branch, to appear in an entry or under not_features.",
+      "type": "string",
+      "pattern": "^design/[a-z0-9-]+\\.md$"
+    },
+    "ref": {
+      "description": "Where the group was read: main, or the branch that holds a page that main lacks or a newer version of it.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._/-]+$"
+    },
+    "summary": {
+      "description": "One or two sentences on the group: what was read, and which version where two branches differ.",
+      "type": "string",
+      "minLength": 1
+    },
+    "not_features": {
+      "description": "For a page: its headings that hold no feature, such as Risks or Open questions, as written without the #s.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "entries": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/entry" }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "page" } } },
+      "then": {
+        "required": ["source"],
+        "properties": { "entries": { "items": { "required": ["heading"] } } }
+      },
+      "else": { "properties": { "source": false, "not_features": false } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "docs" } } },
+      "then": { "properties": { "entries": { "items": { "required": ["page"] } } } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "github" } } },
+      "then": { "properties": { "entries": { "items": { "required": ["pr"] } } } }
+    },
+    {
+      "if": { "properties": { "kind": { "enum": ["branches", "worktrees"] } } },
+      "then": { "properties": { "entries": { "items": { "required": ["branch", "state"] } } } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "notes" } } },
+      "then": { "properties": { "entries": { "items": { "required": ["file"] } } } }
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}-[0-9]{2,3}$"
+    },
+    "branch": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._/-]+$"
+    },
+    "entry": {
+      "type": "object",
+      "required": ["item"],
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["ids"], "not": { "required": ["reason"] } },
+        { "required": ["reason"], "not": { "required": ["ids"] } }
+      ],
+      "properties": {
+        "item": {
+          "description": "The source item, named precisely: a step, a table row, a bullet, a commit series or a file's finding.",
+          "type": "string",
+          "minLength": 1
+        },
+        "ids": {
+          "description": "The registry ids the item is or serves.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/id" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "reason": {
+          "description": "Why the item maps to no feature. maintenance: small upkeep. test: a test or measurement only. docs: a docs page only. merged: folded into another item of the ledger. on-main: a branch whose work is on main. contained: a branch whose commits another branch holds. superseded: replaced by later work. abandoned: left unfinished with nothing after it. out-of-scope: outside the public registry. context: background with no feature in it.",
+          "enum": ["maintenance", "test", "docs", "merged", "on-main", "contained", "superseded",
+                   "abandoned", "out-of-scope", "context"]
+        },
+        "heading": {
+          "description": "For a page: the heading the item sits under, as written without the #s.",
+          "type": "string",
+          "minLength": 1
+        },
+        "ref": {
+          "description": "For a page: the branch the item was read from when it differs from the group's, such as a newer version of the page.",
+          "$ref": "#/$defs/branch"
+        },
+        "page": {
+          "description": "For the docs: the page, from the repository root, with an optional anchor.",
+          "type": "string",
+          "pattern": "^docs/[a-z0-9/-]+\\.md(#[a-z0-9_-]+)?$"
+        },
+        "pr": {
+          "description": "For GitHub: the number of the pull request.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "branch": {
+          "description": "For the branch map and the worktrees: the branch.",
+          "$ref": "#/$defs/branch"
+        },
+        "state": {
+          "description": "For a branch: on-main, its work is on main; contained, another branch holds its commits; superseded, later work replaced it; abandoned, left with nothing after it; unique, it holds work no other branch holds. For a worktree: uncommitted, or clean.",
+          "enum": ["on-main", "contained", "superseded", "abandoned", "unique", "uncommitted", "clean"]
+        },
+        "in": {
+          "description": "For a contained or superseded branch: the branches that hold its work.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/branch" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "wip": {
+          "description": "For a branch: true when its unique work is unfinished.",
+          "type": "boolean"
+        },
+        "commits": {
+          "description": "For a branch: the commits the entry covers, as hashes and a count.",
+          "type": "string",
+          "minLength": 1
+        },
+        "file": {
+          "description": "For the notes: the file, relative to the notes folder.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._/-]+$"
+        },
+        "note": {
+          "description": "Anything else a reader needs, such as a contradiction the item settled.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
