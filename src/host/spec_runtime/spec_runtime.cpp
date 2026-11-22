@@ -1143,6 +1143,34 @@ struct ProgramHost {
     std::function<std::string()> workspace;                 // the app's workspace folder, for its pieces
 };
 
+// One status item for each program that the scene panels draw: half "draw" and its draw object.
+std::vector<caliper_builder::ProgramStatus> drawn_items(const caliper_draw::DrawHost& host) {
+    std::vector<caliper_builder::ProgramStatus> out;
+    for (const auto& [id, s] : host.status()) {
+        caliper_builder::ProgramStatus st;
+        st.id = id;
+        st.kind = "piece";
+        st.host = "viewer";
+        st.half = "draw";
+        caliper_builder::DrawStatus d;
+        d.state = caliper_draw::draw_status_json(s).value("state", std::string("waiting"));
+        if (s.frame_ms >= 0) d.frame_ms = s.frame_ms;
+        d.frame_limit_ms = s.frame_limit_ms;
+        d.memory_bytes = s.memory_bytes;
+        d.memory_limit_bytes = s.memory_limit_bytes;
+        if (s.resource_step >= 0) d.resource_step = s.resource_step;
+        if (!s.error.ok()) {
+            d.error = caliper_builder::ProgramError{s.error.code, s.error.message, s.error.line, s.error.column};
+            d.error_where = s.error.where;
+        }
+        if (s.pass >= 0) st.pass = static_cast<std::uint32_t>(s.pass);
+        st.state = d.state;
+        st.draw = std::move(d);
+        out.push_back(std::move(st));
+    }
+    return out;
+}
+
 ProgramHost& program_host() {
     static ProgramHost* h = [] {
         auto* p = new ProgramHost();
@@ -1167,6 +1195,8 @@ ProgramHost& program_host() {
             *out = std::move(f.piece);
             return v;
         });
+        // program.status shows each draw half through the stage host's items.
+        app_stage_host_impl()->set_drawn([p] { return drawn_items(p->host); });
         return p;
     }();
     return *h;
