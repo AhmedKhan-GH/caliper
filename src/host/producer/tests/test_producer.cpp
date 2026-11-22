@@ -1,6 +1,6 @@
-// Tests of the producer runtime's C interface (caliper_producer.h). The
-// interface's ABI version and its error handling are fixed; the runtime's
-// cases come with the runtime.
+// Tests of the producer runtime's C interface (caliper_producer.h) on every
+// platform: the ABI version and the error handling. The runtime's cases on the
+// Metal device are in test_producer_metal.mm.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
