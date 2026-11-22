@@ -443,7 +443,7 @@ A PROGRAM `set` that holds the key `piece` installs an instance of a piece. It h
 
 The sections are UTF-8 text of dtype u8 and shape (B,), with the imports resolved. `common` holds the lib modules and `common.wgsl`, 1 to 589,824 bytes. `derive` and `draw` hold the halves, 1 to 65,536 bytes each. An instance carries `derive` or `draw` or both, and each receiver composes the prelude and the generated header itself.
 
-The producer also sends this form to each viewer that announced `resources`, so that a viewer gets each draw half from the same place as its resources. It sends each installed instance with `request_id` 0 and without `derive` when the viewer attaches and after each install, and it sends PROGRAM `remove` with `request_id` 0 after a removal. A viewer does not answer these messages. PROGRAM_STATE gives an instance the status kind `piece`.
+The producer also sends this form to each viewer that announced `resources`, so that a viewer gets each draw half from the same place as its resources. It sends each installed instance with `request_id` 0 and all three sections when the viewer attaches and after each install, because the pin's hash covers `derive.wgsl` and a viewer can check the hash only with that text. It sends PROGRAM `remove` with `request_id` 0 after a removal. A viewer does not answer these messages. PROGRAM_STATE gives an instance the status kind `piece`.
 
 ### `resource`
 
