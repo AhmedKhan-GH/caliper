@@ -311,4 +311,106 @@ TEST_CASE("operators: the runtime refuses params that differ from struct Params"
     CHECK(prog == 0);
 }
 
+TEST_CASE("operators: a path whose params name more rows than its tensor holds reads zero past the tensor") {
+    // The app derives an operator's params from the catalog's shape, which can be older than the
+    // tensor. Here they name 16 rows of a tensor of 8, and the storage goes on after the tensor
+    // with values of 9. An operator is a program of a spec, translated with bounds checks, thus a
+    // row past the import reads zero and never the storage after it.
+    const int64_t rows = 8, cols = 4;
+    void* contents = nullptr;
+    void* buffer = caliper_test_shared_buffer(size_t(2 * rows * cols * 4), &contents);
+    if (!buffer) { MESSAGE("no Metal device"); return; }
+    struct Release {
+        void* b;
+        ~Release() { caliper_test_release_buffer(b); }
+    } release{buffer};
+    if (operator_wgsl("path").empty()) { MESSAGE("no WGSL sources above the working directory"); return; }
+    auto* data = static_cast<float*>(contents);
+    for (int64_t i = 0; i < rows * cols; ++i) data[i] = float(i / cols + 1);
+    for (int64_t i = rows * cols; i < 2 * rows * cols; ++i) data[i] = 9.0f;
+    caliper_producer* rt = nullptr;
+    caliper_producer_error e{};
+    REQUIRE(caliper_producer_create(nullptr, &rt, &e) == CALIPER_PRODUCER_OK);
+    struct Destroy {
+        caliper_producer* rt;
+        ~Destroy() { caliper_producer_destroy(rt); }
+    } destroy{rt};
+    caliper_producer_tensor t{};
+    t.name = "blocks.0.mlp.weight";
+    t.buffer = buffer;
+    t.byte_size = uint64_t(rows * cols * 4);
+    t.dtype = CALIPER_PRODUCER_F32;
+    t.ndim = 2;
+    t.shape[0] = rows;
+    t.shape[1] = cols;
+    uint32_t tensor = 0;
+    REQUIRE(caliper_producer_import(rt, &t, &tensor, &e) == CALIPER_PRODUCER_OK);
+    caliper_producer_error_free(&e);
+    OperatorDesc od("path", tensor,
+                    {{"rows", double(2 * rows)}, {"cols", double(cols)}, {"stride", 2.0},
+                     {"points", double(rows)}, {"out_cols", double(cols)}},
+                    {rows, cols});
+    uint32_t prog = 0;
+    if (!compile(rt, od.d, &prog)) return;
+    const std::vector<float> out = pass(rt, prog, 1);
+    REQUIRE(out.size() == size_t(rows * cols));
+    for (int64_t p = 0; p < rows; ++p)
+        for (int64_t c = 0; c < cols; ++c) {
+            INFO("point ", p, ", column ", c);
+            // Row 2p of the tensor holds 2p + 1; a row past the tensor reads zero, not 9.
+            CHECK(out[size_t(p * cols + c)] == (2 * p < rows ? float(2 * p + 1) : 0.0f));
+        }
+}
+
+TEST_CASE("operators: a surface bound again to new storage of the same size keeps its params") {
+    // An operator's tensor can come back in new storage at each step, as a gradient does. The
+    // runtime then binds the new import in place of the old one without a compile, and the
+    // uniform params stay bound: the pool max that they choose applies to the new values.
+    struct Release {
+        void* b = nullptr;
+        ~Release() { caliper_test_release_buffer(b); }
+    } second;   // released after the runtime of dev
+    const int64_t rows = 12, cols = 10, f = 2;
+    Device dev(rows, cols);
+    if (!dev.ok()) { MESSAGE("no Metal device"); return; }
+    if (operator_wgsl("surface").empty()) { MESSAGE("no WGSL sources above the working directory"); return; }
+    for (int64_t i = 0; i < rows * cols; ++i) dev.data[i] = float(i % 7) - 3.0f;
+    void* contents = nullptr;
+    second.b = caliper_test_shared_buffer(size_t(rows * cols * 4), &contents);
+    REQUIRE(second.b);
+    auto* moved = static_cast<float*>(contents);
+    for (int64_t i = 0; i < rows * cols; ++i) moved[i] = float(i % 5) * 2.0f - 1.0f;
+    caliper_producer_tensor t{};
+    t.name = "blocks.0.attn.proj.weight";
+    t.buffer = second.b;
+    t.byte_size = uint64_t(rows * cols * 4);
+    t.dtype = CALIPER_PRODUCER_F32;
+    t.ndim = 2;
+    t.shape[0] = rows;
+    t.shape[1] = cols;
+    uint32_t tensor = 0;
+    caliper_producer_error e{};
+    REQUIRE(caliper_producer_import(dev.rt, &t, &tensor, &e) == CALIPER_PRODUCER_OK);
+    const int64_t out_rows = k::ceil_div(rows, f), out_cols = k::ceil_div(cols, f);
+    OperatorDesc od("surface", dev.tensor,
+                    {{"rows", double(rows)}, {"cols", double(cols)}, {"factor", double(f)},
+                     {"out_rows", double(out_rows)}, {"out_cols", double(out_cols)},
+                     {"pool", double(k::kPoolMax)}},
+                    {out_rows, out_cols});
+    uint32_t prog = 0;
+    if (!compile(dev.rt, od.d, &prog)) return;
+    std::vector<float> ref;
+    k::surface_heights(dev.data, rows, cols, f, k::kPoolMax, &ref);
+    check_heights(pass(dev.rt, prog, 1), ref);
+    const caliper_producer_status s = caliper_producer_rebind(dev.rt, prog, dev.tensor, tensor, &e);
+    const std::string why = e.message ? e.message : "";
+    caliper_producer_error_free(&e);
+    REQUIRE_MESSAGE(s == CALIPER_PRODUCER_OK, why);
+    k::surface_heights(moved, rows, cols, f, k::kPoolMax, &ref);
+    check_heights(pass(dev.rt, prog, 2), ref);
+    caliper_producer_program_status st{};
+    REQUIRE(caliper_producer_read_status(dev.rt, prog, &st) == CALIPER_PRODUCER_OK);
+    CHECK(st.runs == 2);
+}
+
 #endif

@@ -793,6 +793,37 @@ TEST_CASE("stages: a stage's params reach its program as the uniform at group 3,
     CHECK(pixel(dark, px, py) == 0xff000000u);
     CHECK(cache.find("cloud", Primitive::Points)->program.id == program);   // no new compile
     capture("stage-params.png", full);
+
+    // A stage with params is translated with the same bounds checks as one without: beside the
+    // uniform at group 3, a texel load far outside the class table and a column far past the
+    // draw's matrix read zero, and the local array's index is clamped to its last element, 1.0.
+    // With the param at 1.0, thus magenta.
+    const std::string far = R"(fn material(in: MaterialIn) -> vec4<f32> {
+    let far = u32(in.color.a * 0.0) + 100000u;
+    var local = array<f32, 4>(0.0, 0.0, 0.0, 1.0);
+    let texel = textureLoad(class_table, vec2<u32>(far, far), 0);
+    let column = p.mvp[far];
+    return vec4<f32>(local[far] + texel.r + column.x, texel.g + column.y, params.level + column.z, 1.0);
+}
+)";
+    const caliper_host::StageCompile checked =
+        caliper_host::compile_stage_program(Primitive::Points, &far, nullptr, "far", {"level"});
+    REQUIRE_MESSAGE(checked.build, checked.verdict.message);
+    CHECK(checked.build->params == std::vector<std::string>{"level"});
+    CHECK(checked.build->msl.find("DefaultConstructible") != std::string::npos);
+    src.b = checked.build;
+    src.level = 1.0f;
+    const std::vector<uint8_t> out_of_range = drawn();
+    CHECK(staged == 1);
+    size_t covered = 0, magenta = 0;
+    for (int y = 0; y < StageRig::kSide; ++y)
+        for (int x = 0; x < StageRig::kSide; ++x) {
+            if (pixel(plain, x, y) != StageRig::kClear) ++covered;
+            if (pixel(out_of_range, x, y) == 0xffff00ffu) ++magenta;
+        }
+    CHECK(covered > 0);
+    CHECK(magenta == covered);
+    cache.set_source(nullptr);
 }
 
 TEST_CASE("stages: a scene view draws its panel's stages, again on a new revision, and reports their frames") {
