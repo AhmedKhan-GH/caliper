@@ -27,8 +27,10 @@ concurrency:
 # from scratch.
 env:
   LIBTORCH_VERSION: 2.5.1
-  # The Python torch of the instrument acceptance test matches the libtorch the build fetches.
-  ACCEPTANCE_TORCH_VERSION: 2.5.1
+  # The Python torch of the acceptance tests. GPU programs import the script's MPS tensors through
+  # DLPack and caliper.watch stages them in pinned memory, and torch 2.5.1 (the libtorch the build
+  # fetches) does neither for MPS tensors, thus this torch is newer than that libtorch.
+  ACCEPTANCE_TORCH_VERSION: 2.15.0
   SCCACHE_GHA_ENABLED: "true"
 
 jobs:
