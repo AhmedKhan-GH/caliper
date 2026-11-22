@@ -571,8 +571,9 @@ static inline uint32_t caliper_net_align(uint32_t n) {
  * published resource that the pass wrote as one RESOURCE with the section
  * "resource" to each viewer or hub that announced "resources". It sends the
  * draw half of each installed program to such a peer as PROGRAM "set" with
- * request_id 0 and without the section "derive", when the peer attaches and
- * after each install, and PROGRAM "remove" with request_id 0 after a
+ * request_id 0 and all three sections, when the peer attaches and after each
+ * install (the pin's hash covers derive.wgsl, thus a viewer checks it only
+ * with that section), and PROGRAM "remove" with request_id 0 after a
  * removal. RESOURCE holds "program", "resource", "step" (the run's step at
  * the pass), "count" (valid elements), "stride" (bytes of one element, a
  * multiple of 4) and, for a texture, "width" and "height" (count = width *

@@ -190,7 +190,17 @@ SourcePlace source_place(const Composed& composed, std::uint32_t line, std::uint
 // The derive half's module: the generated header (group 0 the frame uniform
 // `caliper`, `params` and `shapes`; group 1 the tensor inputs; group 2 the
 // resources and their counters), the lib modules, common.wgsl, derive.wgsl.
+// A lib module that reads the draw prelude (colormap@1, pick@1, camera@1)
+// keeps its segment with every line blank, because the derive half has no
+// prelude; a call of it from common.wgsl or derive.wgsl is
+// piece.unknown_import.
 Composed compose_derive(const spec::Piece& piece, const Resolved& resolved);
+// The section `common` of PROGRAM split back: its leading lib modules, which
+// the app put before common.wgsl in the order of imports, into lib_text and
+// lib_segments, and the rest into files["common.wgsl"]. A host that gets the
+// resolved text, as the script does, thus composes the module that the app
+// composed.
+Resolved split_common(std::string_view common);
 // The module of one pass of the draw half: the prelude, the generated header
 // (group 0 `params`; group 1 the counts, the published resources and the
 // buffer inputs, read-only; group 2 the draw buffers, read_write only in a

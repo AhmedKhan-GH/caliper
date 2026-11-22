@@ -140,7 +140,7 @@ class ProgramsPort:
                                                  "HELLO and caliper.watch(model, optimizer)")
         elif not self.controls.may_control(link):
             code, text = _wire.ERR_FORBIDDEN, "this server does not allow control"
-        elif msg.op == _wire.PROGRAM_SET and (
+        elif msg.op == _wire.PROGRAM_SET and msg.piece is None and (
                 hashlib.sha256(msg.wgsl.encode("utf-8")).hexdigest() != msg.sha256):
             code, text = _wire.ERR_BAD_REQUEST, "'sha256' is not the SHA-256 of 'wgsl'"
         if code is not None:
@@ -195,6 +195,21 @@ class ProgramsPort:
             return
         if msg.op == _wire.PROGRAM_PARAMS:
             self._set_params(msg)
+            return
+        if msg.piece is not None:
+            try:
+                _facade().install_piece(msg.id, piece=msg.piece, manifest=msg.manifest, bind=msg.bind,
+                                        params=msg.params, panel=msg.panel, segments=msg.segments,
+                                        common=msg.common or "", derive=msg.derive or "", draw=msg.draw or "")
+            except Exception as e:
+                self._installed.discard(msg.id)
+                pin = str((msg.piece or {}).get("hash") or "").removeprefix("sha256:")
+                if not _wire._sha256_hex(pin):
+                    pin = ""
+                self._local[msg.id] = _refused(msg.id, _wire.STATUS_PIECE, UNAVAILABLE,
+                                               f"The script cannot run pieces: {e}", pin)
+                return
+            self._installed.add(msg.id)
             return
         decl = msg.declaration
         kind = _wire.STATUS_OPERATOR if decl.get("builtin") else decl["output"]["kind"]

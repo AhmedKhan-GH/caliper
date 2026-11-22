@@ -49,7 +49,10 @@ inline constexpr std::size_t kFields = 16;                       // fields of on
 inline constexpr std::uint32_t kStrideMax = 256;                 // bytes of one element
 inline constexpr std::uint32_t kCountMax = 4'194'304;            // elements of one buffer
 inline constexpr std::uint32_t kTextureSideMax = 4096;           // pixels of one texture side
-inline constexpr std::uint64_t kResourceBytesMax = 64ull << 20;  // bytes of one resource, as CALIPER_NET_RESOURCE_MAX_BYTES
+inline constexpr std::uint64_t kResourceBytesMax = 64ull << 20;  // bytes of one private resource or draw buffer
+// Bytes of one published resource: CALIPER_NET_RESOURCE_MAX_BYTES, 64 MiB less 64 KiB, thus each
+// version fits one RESOURCE frame with its metadata.
+inline constexpr std::uint64_t kPublishedBytesMax = 67'043'328;
 inline constexpr std::uint32_t kKeepDefault = 256;               // kept versions of a resource in the step history
 inline constexpr std::uint32_t kKeepMax = 4096;
 inline constexpr std::size_t kDerivePasses = 8;

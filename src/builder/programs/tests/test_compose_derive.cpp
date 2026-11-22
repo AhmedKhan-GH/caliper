@@ -3,9 +3,11 @@
 // for the arcs piece, the segments that map a line back to its file, and each
 // refusal of a name, a type or a count that would reach the WGSL text.
 #include <caliper_builder/programs/pieces.h>
+#include <caliper_builder/programs/sandbox.h>
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <string>
 
 namespace cp = caliper_builder::programs;
@@ -214,4 +216,47 @@ TEST_CASE("the composer refuses every name and type that would change the header
     const cp::Composed c = cp::compose_derive(arcs(), bad);
     CHECK(c.verdict.code == cp::kPieceUnknownImport);
     CHECK(c.text.empty());
+}
+
+TEST_CASE("the lib modules that read the draw prelude stay blank in the derive module, with their lines") {
+    cs::Piece p;
+    p.name = "plain";
+    p.imports = {"colormap@1", "easing@1", "pick@1"};
+    p.resources.push_back(buffer("a", "f32", 4));
+    p.derive = cs::Derive{{{"run", {1, 1, 1}, {"a"}}}, {}, {}, {}};
+    p.files["derive.wgsl"] = "@compute @workgroup_size(1) fn run() { a[0] = easing::smooth(0.5); }\n";
+    const cp::Resolved r = cp::resolve_imports(p);
+    REQUIRE(r.verdict.ok());
+    const cp::Composed c = cp::compose_derive(p, r);
+    REQUIRE(c.verdict.ok());
+    // No prelude name reaches the module; easing@1 keeps its text.
+    CHECK(c.text.find("caliper_") == std::string::npos);
+    CHECK(c.text.find("fn easing__smooth") != std::string::npos);
+    REQUIRE(c.segments.size() == 5);
+    CHECK(c.segments[1].part == "lib/colormap@1");
+    CHECK(c.segments[3].part == "lib/pick@1");
+    // Every segment keeps its lines, thus a message still maps to its file.
+    std::uint32_t lines = 0;
+    for (const cp::Segment& s : c.segments) lines += s.lines;
+    CHECK(lines == std::uint32_t(std::count(c.text.begin(), c.text.end(), '\n')));
+    CHECK(c.segments[4].first_line == c.segments[3].first_line + c.segments[3].lines);
+    if (cp::compiler_available()) CHECK(cp::compile_and_reflect(c.text).verdict.ok());
+
+    // The script gets the resolved text in one section: split, it composes the same module.
+    std::string common = r.lib_text;
+    const cp::Resolved split = cp::split_common(common + "const K: u32 = 2u;\n");
+    CHECK(split.lib_text == r.lib_text);
+    REQUIRE(split.lib_segments.size() == 3);
+    CHECK(split.lib_segments[2].part == "lib/pick@1");
+    CHECK(split.lib_segments[2].first_line == r.lib_segments[2].first_line);
+    CHECK(split.files.at("common.wgsl") == "const K: u32 = 2u;\n");
+    cp::Resolved again = split;
+    again.files.erase("common.wgsl");
+    again.files["derive.wgsl"] = r.files.at("derive.wgsl");
+    CHECK(cp::compose_derive(p, again).text == c.text);
+    CHECK(cp::split_common("fn f() {}\n").lib_text.empty());
+
+    // A call of such a module from the derive half is refused with a reason.
+    p.files["derive.wgsl"] = "@compute @workgroup_size(1) fn run() { a[0] = colormap::magma(0.5).x; }\n";
+    CHECK(cp::compose_derive(p, cp::resolve_imports(p)).verdict.code == cp::kPieceUnknownImport);
 }

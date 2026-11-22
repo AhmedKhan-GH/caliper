@@ -122,6 +122,10 @@ public:
     // in the app); null gives each reference its default. The panels evaluate them at each frame
     // (StageSource::params()), thus a new value reaches the uniform at the next frame.
     void set_evaluate(std::function<nlohmann::json(const caliper_builder::spec::Reference&)> evaluate);
+    // The status items of the instances whose draw half the scene panels run, with half "draw"
+    // and `draw` set; status() gives them after the stages, so that program.status shows each
+    // draw half (caliper_builder::StageHost). Any thread.
+    void set_drawn(std::function<std::vector<caliper_builder::ProgramStatus>()> drawn);
 
 private:
     struct Record;
@@ -135,6 +139,7 @@ private:
     std::map<std::string, std::unique_ptr<Panel>> panels_;
     caliper_builder::EventSink* events_ = nullptr;
     std::function<nlohmann::json(const caliper_builder::spec::Reference&)> evaluate_;
+    std::function<std::vector<caliper_builder::ProgramStatus>()> drawn_;   // under mutex_
 };
 
 // The host behind app_stage_host(), as its class.

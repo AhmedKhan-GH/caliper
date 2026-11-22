@@ -330,11 +330,13 @@ private:
                                 "The buffer " + quote(r.id) + " has count " + std::to_string(r.count) +
                                     "; a buffer has 1 to " + std::to_string(pl::kCountMax) + " elements.",
                                 where + ".count");
-                if (bytes_of(r.count, l.stride) > pl::kResourceBytesMax)
+                // A published buffer goes out in one RESOURCE frame, thus the wire's bound.
+                const std::uint64_t max_bytes = r.publish ? pl::kPublishedBytesMax : pl::kResourceBytesMax;
+                if (bytes_of(r.count, l.stride) > max_bytes)
                     return fail(kProgramBadResource,
                                 "The buffer " + quote(r.id) + " holds " + std::to_string(bytes_of(r.count, l.stride)) +
-                                    " bytes; a resource holds at most " + std::to_string(pl::kResourceBytesMax) +
-                                    " bytes.",
+                                    " bytes; a " + (r.publish ? "published" : "private") + " resource holds at most " +
+                                    std::to_string(max_bytes) + " bytes.",
                                 where + ".count");
                 if (r.width || r.height)
                     return fail(kProgramBadResource, "A buffer has no width or height.", where + ".width");
@@ -347,6 +349,14 @@ private:
                                 "A texture's width and height are from 1 to " + std::to_string(pl::kTextureSideMax) +
                                     " pixels.",
                                 where + ".width");
+                // Four bytes a texel; a published texture fits one RESOURCE frame (4,096 by 4,096 does not).
+                const std::uint64_t bytes = std::uint64_t(r.width) * r.height * 4;
+                if (r.publish && bytes > pl::kPublishedBytesMax)
+                    return fail(kProgramBadResource,
+                                "The texture " + quote(r.id) + " holds " + std::to_string(bytes) +
+                                    " bytes; a published resource holds at most " +
+                                    std::to_string(pl::kPublishedBytesMax) + " bytes.",
+                                where + ".height");
             }
         }
         return {};

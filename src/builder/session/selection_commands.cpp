@@ -148,7 +148,7 @@ CommandOutput program_pick(const CommandContext& ctx, InstrumentContext& ic, con
         return CommandOutput::fail(Error("selection.bad_item", "The item of a program is a whole number from 0 to 4294967295.",
                                          "args.item"));
     const std::uint64_t item = given.get<std::uint64_t>();
-    const FoundPiece found = resolve_pin(PieceLibrary::builtin(), std::string(), ic.spec, *program->piece);
+    const FoundPiece found = resolve_pin(PieceLibrary::builtin(), ic.workspace, ic.spec, *program->piece);
     if (found.error) return CommandOutput::fail(found.error);
     const spec::Piece& piece = found.piece;
     if (!piece.draw || !piece.draw->pick)

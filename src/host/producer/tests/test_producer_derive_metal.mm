@@ -13,6 +13,10 @@
 #include "producer/caliper_producer.h"
 #include "producer/caliper_producer_derive.h"
 
+#if CALIPER_PRODUCER_HAVE_LIB_MODULES
+#include <caliper_builder/programs/pieces.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -675,3 +679,30 @@ TEST_CASE("a resource and an input that no pass uses still compile, and a privat
     CHECK(read<float>(f.rt, prog, "unused", &out).empty());   // counted, and nothing counted it
     caliper_producer_error_free(&e);
 }
+
+#if CALIPER_PRODUCER_HAVE_LIB_MODULES
+TEST_CASE("a derive half compiles when common carries lib modules that read the draw prelude") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    // The section common as the app sends it: the lib modules in the order of imports, then common.wgsl.
+    std::string lib;
+    for (const char* m : {"colormap@1", "easing@1", "pick@1", "camera@1"}) {
+        std::string body(caliper_builder::programs::lib_module(m));
+        if (!body.empty() && body.back() != '\n') body += '\n';
+        lib += body;
+    }
+    Piece p = f.piece("@compute @workgroup_size(1)\nfn run() { a[0] = easing__smooth(0.5) + K; }\n", 2);
+    p.common = lib + "const K: f32 = 1.0;\n";
+    p.buffer("a", "f32", 4);
+    p.pass("run", 1, {"a"});
+    const caliper_producer_derive_desc d = p.desc();
+    uint32_t prog = 0;
+    caliper_producer_error e{};
+    if (!compile_or_skip(f.rt, d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+    caliper_producer_frame frame{1, 0.0, 3};
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+    caliper_producer_output out{};
+    CHECK(read<float>(f.rt, prog, "a", &out)[0] == doctest::Approx(1.5f));
+    caliper_producer_error_free(&e);
+}
+#endif

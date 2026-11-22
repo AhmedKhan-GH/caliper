@@ -3133,7 +3133,7 @@ class Program(_Msg):
     pin, ``{name, version, hash}``), ``manifest``, and optionally ``bind``, ``params``,
     ``panel`` and ``segments``, with the sections ``common``, ``derive`` and ``draw``
     in place of ``wgsl``. A producer also sends this form, with ``request_id`` 0 and
-    without ``derive``, to each viewer that announced "resources"."""
+    with all three sections, to each viewer that announced "resources"."""
     TYPE: ClassVar[MsgType] = MsgType.PROGRAM
     request_id: int
     op: str                                      # "set" or "remove"

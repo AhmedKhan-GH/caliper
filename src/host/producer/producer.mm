@@ -761,6 +761,11 @@ caliper_producer_status check_derive_desc(const caliper_producer_derive_desc* d,
                                                     ", which is no resource of the piece.");
         }
     }
+    // Only the form of the hash: the derive half arrives with its imports resolved and without
+    // the manifest, thus the runtime cannot compute it. The app computes the hash
+    // from the author's files and sends a program only when it equals the pin
+    // (design/programmable-graphics.md, Sandbox), the script takes PROGRAM only from a peer that
+    // may control it, and what runs here is checked and translated with bounds checks either way.
     if (d->piece_hash) {
         const std::string h = d->piece_hash;
         const bool hex = h.size() == 71 && h.rfind("sha256:", 0) == 0 &&
@@ -1634,9 +1639,10 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
     // 2. The module: the generated header, the lib modules, common.wgsl and derive.wgsl, composed
     // here from the declaration as the app composes it.
     const sp::Piece piece = piece_of(d);
-    sb::Resolved resolved;
+    // The section common holds the lib modules before common.wgsl; split, so that the composer
+    // blanks the modules that read the draw prelude, as in the app.
+    sb::Resolved resolved = d->common_size ? sb::split_common(std::string_view(d->common, d->common_size)) : sb::Resolved{};
     resolved.files["derive.wgsl"] = std::string(d->wgsl, d->wgsl_size);
-    if (d->common_size) resolved.files["common.wgsl"] = std::string(d->common, d->common_size);
     const sb::Composed composed = sb::compose_derive(piece, resolved);
     if (!composed.verdict.ok())
         return fail(error, CALIPER_PRODUCER_REFUSED, static_code(composed.verdict.code), composed.verdict.message);
