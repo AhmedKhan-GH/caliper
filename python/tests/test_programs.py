@@ -664,3 +664,110 @@ def test_programs_that_share_a_moving_gradient_both_keep_running(run):
     assert [s["state"] for s in st] == ["running", "running"], st
     assert [s["runs"] for s in st] == [4, 4]          # steps 8 to 11
     assert P.stats()["imports"] == 1                 # the older imports were released
+
+
+# ---- the tensor output, the params and the operator kind (no device) -----------------------------
+class FakeRuntime:
+    """The native runtime as far as a program without inputs touches it."""
+
+    def __init__(self):
+        self.programs, self.sets, self.removed, self.fail = [], [], [], False
+
+    def program(self, pid, wgsl, inputs, kind, **kw):
+        self.programs.append((pid, kind, kw))
+        return len(self.programs)
+
+    def set_params(self, handle, params):
+        if self.fail:
+            raise RuntimeError("program.params_mismatch", "Params has no field nope.", 0, 0, 3)
+        self.sets.append((handle, params))
+
+    def status(self, h):
+        return {"state": "compiled", "memory_bytes": 4096}
+
+    def remove(self, h):
+        self.removed.append(h)
+
+    def release(self, h):
+        pass
+
+
+@pytest.fixture
+def fake_rt(monkeypatch):
+    rt = FakeRuntime()
+    monkeypatch.setitem(P._STATE, "rt", rt)
+    yield rt
+    for item in P.status():
+        P.remove(item["id"])
+    P.listeners.clear()
+
+
+def _tensor(shape=(2, 3), **extra):
+    decl = {"output": {"kind": "tensor", "shape": list(shape)}, "limits": {}}
+    decl.update(extra)
+    return decl
+
+
+@pytest.mark.parametrize("shape", [[], [0], [2, -1], [1, 2, 3, 4, 5], [1001, 1001], "2x3", None, [2.5], [True]])
+def test_a_tensor_output_with_a_bad_shape_is_refused(fake_rt, shape):
+    decl = {"output": {"kind": "tensor", "shape": shape}}
+    item = P.install("t", decl, "")
+    assert item["state"] == "refused" and item["error"]["code"] == "program.output_mismatch"
+    assert fake_rt.programs == []
+
+
+def test_a_tensor_program_compiles_with_its_shape_and_start_values(fake_rt):
+    item = P.install("t", _tensor((2, 3), params={"level": 0.5, "k": 2}), "src", sha256="ab")
+    assert item["state"] == "compiled" and item["kind"] == "tensor" and item["sha256"] == "ab"
+    (pid, kind, kw), = fake_rt.programs
+    assert (pid, kind) == ("t", "tensor")
+    assert kw["tensor_shape"] == [2, 3] and kw["params"] == [("level", 0.5), ("k", 2.0)]
+    P.install("t2", _tensor((4,)), "src")
+    assert "params" not in fake_rt.programs[-1][2]
+
+
+def test_set_params_stores_and_reaches_the_runtime_without_a_compile(fake_rt):
+    P.install("t", _tensor(params={"level": 0.5}), "src", sha256="ab")
+    before = P.status()[0]
+    P.set_params("t", {"level": 0.75, "k": 3})
+    assert fake_rt.sets == [(1, [("level", 0.75), ("k", 3.0)])]
+    assert len(fake_rt.programs) == 1 and fake_rt.removed == []     # no compile again
+    after = P.status()[0]
+    assert after["sha256"] == "ab" and after["state"] == before["state"] and after["error"] is None
+    assert P._PROGS["t"].params == {"level": 0.75, "k": 3.0}
+    P.set_params("none", {"level": 1})                              # an unknown id does nothing
+    assert len(fake_rt.sets) == 1
+
+
+def test_stored_params_are_the_start_values_of_a_compile_again(fake_rt):
+    P.install("t", _tensor(params={"level": 0.5}), "src")
+    P.set_params("t", {"level": 0.9})
+    p = P._PROGS["t"]
+    P._compile(p)
+    assert fake_rt.programs[-1][2]["params"] == [("level", 0.9)]
+
+
+def test_a_name_that_params_lacks_shows_an_error_and_keeps_the_values(fake_rt):
+    seen = []
+    P.listeners.append(seen.append)
+    P.install("t", _tensor(params={"level": 0.5}), "src")
+    fake_rt.fail = True
+    P.set_params("t", {"nope": 1})
+    assert P._PROGS["t"].params == {"level": 0.5}
+    assert P.status()[0]["error"]["code"] == "program.params_mismatch"
+    assert seen[-1]["error"]["code"] == "program.params_mismatch"
+
+
+def test_a_builtin_program_reports_the_kind_operator(fake_rt):
+    item = P.install("operator.terrain.0", _tensor((8, 8), builtin="surface@1"), "src")
+    assert item["kind"] == "operator" and P._PROGS["operator.terrain.0"].kind == "tensor"
+    assert P.install("plain", _tensor((8, 8)), "src")["kind"] == "tensor"
+
+
+def test_a_tensor_output_is_shown_in_its_shape(monkeypatch, fake_rt):
+    shown = []
+    monkeypatch.setattr(caliper, "show", lambda t, name="tensor", **kw: shown.append((name, t.clone())))
+    P.install("t", _tensor((2, 3)), "src")
+    P._publish(P._PROGS["t"], {"out": torch.arange(6.0), "count": 6})
+    name, t = shown[-1]
+    assert name == "program.t" and t.shape == (2, 3) and t[1, 2] == 5

@@ -192,10 +192,13 @@ class ProgramsPort:
             except Exception:
                 pass
             return
-        kind = msg.declaration["output"]["kind"]
+        if msg.op == _wire.PROGRAM_PARAMS:
+            self._set_params(msg)
+            return
+        decl = msg.declaration
+        kind = _wire.STATUS_OPERATOR if decl.get("builtin") else decl["output"]["kind"]
         try:
-            _facade().install(msg.id, msg.declaration, msg.wgsl, scene=msg.scene,
-                              sha256=msg.sha256)
+            _facade().install(msg.id, decl, msg.wgsl, scene=msg.scene, sha256=msg.sha256)
         except Exception as e:                       # NotImplementedError until the runtime is built
             self._installed.discard(msg.id)
             self._local[msg.id] = _refused(msg.id, kind, UNAVAILABLE,
@@ -203,6 +206,15 @@ class ProgramsPort:
                                            msg.sha256)
             return
         self._installed.add(msg.id)
+
+    def _set_params(self, msg: _wire.Program) -> None:
+        """A params op: new values for the uniform of an installed program, read at its next
+        pass. The facade ignores an id that no program holds, as for a removal, and the answer then
+        shows the programs without it."""
+        try:
+            _facade().set_params(msg.id, msg.params)
+        except Exception:
+            pass                                     # a bad name shows in the status, not here
 
     def items(self) -> list:
         """The status items to send: the facade's, then the ones refused here, at most
