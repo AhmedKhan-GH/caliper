@@ -22,7 +22,22 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures" / "wire_v3"
 HEADER_H = ROOT / "include" / "caliper" / "live_net.h"
-PAGE = ROOT / "docs" / "references" / "wire-protocol.md"
+# The wire protocol reference is split across these pages of the docs tree.
+PAGES = [ROOT / "docs" / "reference" / name for name in (
+    "wire-protocol.md", "wire-frames.md", "session-messages.md", "data-messages.md",
+    "data-view-messages.md", "run-control-messages.md", "linked-selection-messages.md")]
+
+
+def _pages():
+    return "\n".join(p.read_text() for p in PAGES if p.exists())
+
+
+def _section(page, heading):
+    m = re.search(r"^## " + re.escape(heading) + r"$", page, re.M | re.I)
+    assert m, heading
+    rest = page[m.end():]
+    end = re.search(r"^## ", rest, re.M)
+    return page[m.start():m.end() + (end.start() if end else len(rest))]
 
 sys.path.insert(0, str(ROOT / "python"))
 from caliper import _wire as w  # noqa: E402
@@ -626,7 +641,7 @@ def test_header_matches_codec():
 
 
 def test_page_tables_match_header():
-    page = PAGE.read_text()
+    page = _pages()
     consts = _header_constants()
     rows = re.findall(r"^\| `0x([0-9a-f]{4})` \| `(\w+)` \|", page, re.M)
     assert {int(i, 16): n for i, n in rows} == {int(t): t.name.lower() for t in w.MsgType}
@@ -637,7 +652,7 @@ def test_page_tables_match_header():
     assert len(limits) >= 25
     for n, v in limits:
         assert consts[n] == int(v.replace(",", "")), n
-    errs = set(re.findall(r"^\| `([a-z_]+)` \| ", page[page.index("## Error codes"):], re.M))
+    errs = set(re.findall(r"^\| `([a-z_]+)` \| ", _section(page, "Error codes"), re.M))
     assert errs == {v for n, v in consts.items() if n.startswith("CALIPER_NET_ERR_")}
     dtypes = re.findall(r"^\| (\d) \| `(\w+)` \| (\d) \|", page, re.M)
     assert {int(i): int(s) for i, _, s in dtypes} == {int(k): v for k, v in w.DTYPE_SIZE.items()}
@@ -645,7 +660,7 @@ def test_page_tables_match_header():
 
 
 def test_page_frame_layout_matches_struct():
-    page = PAGE.read_text()
+    page = _pages()
     rows = re.findall(r"^\| (\d+) \| (\d) \| (u\d+) \| `(\w+)` \|", page, re.M)
     names = ["magic", "major", "minor", "type", "flags", "frame_len", "meta_len",
              "section_count", "reserved"]
@@ -658,8 +673,8 @@ def test_page_frame_layout_matches_struct():
 
 
 def test_page_worked_example_is_the_golden_frame():
-    page = PAGE.read_text()
-    part = page[page.index("## Worked example"):]
+    page = _pages()
+    part = _section(page, "Worked example")
     block = part[part.index("```text") + len("```text"):]
     block = block[:block.index("```")]
     data = bytearray()
@@ -674,4 +689,4 @@ def test_page_worked_example_is_the_golden_frame():
 
 
 def test_page_embeds_the_header():
-    assert '--8<-- "include/caliper/live_net.h"' in PAGE.read_text()
+    assert '--8<-- "include/caliper/live_net.h"' in _pages()
