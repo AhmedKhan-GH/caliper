@@ -526,6 +526,16 @@ json panel_data_result(const spec::Spec& spec, const PanelData& data, std::uint6
             case spec::Primitive::histogram: encode_histogram(e, *panel, data); break;
             case spec::Primitive::table: encode_table(e, *panel, data, limits); break;
             case spec::Primitive::text: encode_text(e, *panel, data, limits); break;
+            case spec::Primitive::scene: {
+                // The app draws the live scene itself; the data names it.
+                auto it = panel->bind.find(spec::kSceneSlot);
+                const std::optional<std::string> name =
+                    it == panel->bind.end() || it->second.bindings.empty()
+                        ? std::nullopt
+                        : spec::live_scene_name(it->second.bindings.front());
+                e.data = {{"scene", name ? json(*name) : json(nullptr)}};
+                break;
+            }
         }
     } catch (const std::exception&) {   // memory: the page shows a data error
         e = {};

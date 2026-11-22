@@ -258,3 +258,118 @@ TEST_CASE("an edit leaves the spec within the format's limits") {
     for (int i = 0; i < 64; ++i) s = must(edit(s, "source.add", {{"id", "s" + std::to_string(i)}, {"sql", "SELECT 1"}}));
     CHECK(edit(s, "source.add", {{"id", "one_more"}, {"sql", "SELECT 1"}}).error.code == "spec.too_many");
 }
+
+// ---- spec version 1: scene panels and controls in the layout ----------------
+
+namespace {
+
+json scene_args(const std::string& id) {
+    return {{"id", id}, {"primitive", "scene"}, {"title", "Model"}, {"bind", {{"scene", "live:model"}}}};
+}
+
+spec::Control slider(const std::string& id) {
+    spec::Control c;
+    c.id = id;
+    c.kind = spec::ControlKind::slider;
+    c.bind = "param:" + id;
+    return c;
+}
+
+}  // namespace
+
+TEST_CASE("panel.create of a scene panel raises a version 0 spec to version 1 in the same edit") {
+    const spec::Spec s = base();
+    REQUIRE(s.version == 0);
+    SpecEdit e = edit(s, "panel.create", scene_args("world"));
+    spec::Spec next = must(e);
+    CHECK(next.version == 1);
+    REQUIRE(next.panels.size() == 1);
+    CHECK(next.panels[0].primitive == spec::Primitive::scene);
+    CHECK(next.panels[0].bind.at("scene").bindings == std::vector<std::string>{"live:model"});
+    CHECK(e.result == json{{"id", "world"}});
+    CHECK(e.warnings.empty());   // no resolver: the scene is not looked up
+    // A resolver that does not know the scene gives the warning of an offline source.
+    SpecEdit offline = edit(s, "panel.create", scene_args("world"), resolver);
+    REQUIRE(offline.error.ok());
+    REQUIRE(offline.warnings.size() == 1);
+    CHECK(offline.warnings[0].code == "spec.unresolved_source");
+    // A panel of version 0 leaves the version as it is.
+    CHECK(must(edit(two_sources(), "panel.create", {{"id", "p"}, {"primitive", "series"}, {"bind", {{"y", "m.loss"}}}},
+                    resolver))
+              .version == 0);
+    // The scene slot holds live:<scene name>.
+    SpecEdit bad = edit(s, "panel.create", {{"id", "w"}, {"primitive", "scene"}, {"bind", {{"scene", "model"}}}});
+    CHECK(bad.error.code == "spec.bad_binding");
+    // panel.patch takes the scene options.
+    SpecEdit patched = edit(next, "panel.patch", {{"id", "world"}, {"patch", {{"options", {{"up", "+z"}, {"axes", false}}}}}});
+    spec::Spec after = must(patched);
+    CHECK(after.panels[0].options.scene.up == std::optional<std::string>("+z"));
+    CHECK(patched.result.at("panel").at("options") == json{{"axes", false}, {"up", "+z"}});
+}
+
+TEST_CASE("the default layout puts a row of controls under the panels") {
+    spec::Spec s = base();
+    s.version = 1;
+    s.controls.push_back(slider("lr"));
+    REQUIRE(effective_layout(s));
+    CHECK(*effective_layout(s) == LayoutNode::of_panel("lr"));
+    s.controls.push_back(slider("momentum"));
+    s = must(edit(s, "panel.create", scene_args("world")));
+    // panel.create writes the layout: the panel above the controls it found.
+    REQUIRE(s.layout);
+    CHECK(layout_text(s) == layout_text([] {
+              spec::Spec t;
+              t.applet.id = "t";
+              LayoutNode row;
+              row.kind = LayoutNode::Kind::split;
+              row.split = spec::SplitDirection::horizontal;
+              row.children = {LayoutNode::of_panel("lr"), LayoutNode::of_panel("momentum")};
+              LayoutNode root;
+              root.kind = LayoutNode::Kind::split;
+              root.split = spec::SplitDirection::vertical;
+              root.children = {LayoutNode::of_panel("world"), row};
+              t.layout = root;
+              return t;
+          }()));
+    // A second panel goes beside the first, and the controls stay under both.
+    s = must(edit(s, "panel.create", scene_args("other")));
+    REQUIRE(s.layout->children.size() == 2);
+    CHECK(s.layout->children[0].kind == LayoutNode::Kind::split);
+    CHECK(s.layout->children[0].split == spec::SplitDirection::horizontal);
+    CHECK(s.layout->children[1].children.size() == 2);
+    // Without a layout of its own, the spec places panels as version 0 and the controls under them.
+    spec::Spec d = base();
+    d.version = 1;
+    d.panels = s.panels;
+    d.controls = s.controls;
+    const auto root = effective_layout(d);
+    REQUIRE(root);
+    CHECK(root->split == spec::SplitDirection::vertical);
+    REQUIRE(root->children.size() == 2);
+    CHECK(root->children[0].children.size() == 2);   // the panels, as version 0 places them
+    CHECK(root->children[1].split == spec::SplitDirection::horizontal);
+}
+
+TEST_CASE("layout.place and the flat layout accept control ids") {
+    spec::Spec s = base();
+    s = must(edit(s, "panel.create", scene_args("world")));
+    s.controls.push_back(slider("lr"));
+    s.controls.push_back(slider("momentum"));
+    s.layout.reset();
+    s = must(edit(s, "layout.place", {{"panel", "momentum"}, {"target", "world"}, {"where", "beside"}}));
+    const json flat = layout_to_flat(*s.layout, s);
+    for (const json& node : flat.at("nodes")) {
+        CHECK(node.at("id") != "lr");
+        CHECK(node.at("id") != "momentum");
+    }
+    FlatLayoutParse back = layout_from_flat(flat, s);
+    REQUIRE(back.error.ok());
+    CHECK(back.root == *s.layout);
+    SpecEdit set = edit(s, "layout.set", {{"layout", {{"root", "n1"}, {"nodes", json::array({{{"id", "n1"}, {"split", "vertical"}, {"children", {"world", "lr", "momentum"}}}})}}}});
+    spec::Spec placed = must(set);
+    CHECK(placed.layout->children.size() == 3);
+    SpecEdit clash = edit(s, "layout.set", {{"layout", {{"root", "lr"}, {"nodes", json::array({{{"id", "lr"}, {"split", "vertical"}, {"children", {"world", "momentum"}}}})}}}});
+    CHECK(clash.error.code == "layout.invalid");
+    CHECK(edit(s, "layout.place", {{"panel", "nothing"}, {"target", "world"}, {"where", "beside"}}).error.code ==
+          "panel.not_found");
+}
