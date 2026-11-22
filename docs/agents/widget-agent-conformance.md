@@ -1,4 +1,4 @@
-# Widget agent conformance
+# Widget Agent Conformance
 
 The conformance suite runs the same widget tasks against a provider and a model, checks each result against a pass
 criterion, and writes a result file, so that a person can see which models do the widget agent's work well. This page

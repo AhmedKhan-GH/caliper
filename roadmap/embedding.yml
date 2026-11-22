@@ -52,7 +52,7 @@ features:
     status: shipped
     summary: A saved spec applet opens in a browser tab at the page that Caliper API serves at /v0/spec, drawn with the spec page's layout and look from the app's panel data.
     depends_on: [AGT-01, SPC-08]
-    docs: docs/references/api.md#get-v0spec
+    docs: docs/agents/http-api.md#get-v0spec
     design: design/streaming-and-embedding.md#spec-applets
     issue: null
 

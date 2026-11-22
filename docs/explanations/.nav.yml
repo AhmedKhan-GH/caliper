@@ -4,6 +4,5 @@ nav:
   - vulkan-cuda.md
   - testing.md
   - ui-principles.md
-  - agent-roles.md
   - glob: "*"
     ignore_no_matches: true

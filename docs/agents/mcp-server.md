@@ -1,9 +1,9 @@
-# MCP server
+# MCP Server
 
 `caliper-mcp` is the Model Context Protocol (MCP) server through which an agent outside the app, such as Claude Code,
 Codex or a program of your own, drives the running Caliper app. The agent starts it as a stdio server, and it gives
 the agent one tool per command of the command layer, with read-only resources beside them, and carries out each tool
-call through [Caliper API](api.md) on the loopback address. The app's [side chat](side-chat.md) hands the same
+call through [Caliper API](http-api.md) on the loopback address. The app's [side chat](side-chat.md) hands the same
 executable to its agent.
 
 !!! note "Status"
@@ -15,15 +15,15 @@ executable to its agent.
 ## What you need running
 
 1. The app with Caliper API on: `caliper --api`, or the app with its side chat's agent started, which starts the API
-   itself ([Started by the app](api.md#started-by-the-app)).
+   itself ([Started by the app](http-api.md#started-by-the-app)).
 2. `caliper-mcp`, which ships beside the `caliper` executable; a development build puts it at `src/builder/mcp/caliper-mcp` in the build folder.
 
 While the API is on, the app writes the **API file**, `api.json` in the app-data folder ([Folders and environment
-variables](environment.md#the-app-data-folder)), for example `~/Library/Application Support/Caliper/api.json` on macOS,
+variables](../references/environment.md#the-app-data-folder)), for example `~/Library/Application Support/Caliper/api.json` on macOS,
 with mode 0600, and removes it when it exits. The file holds the address and the token of outside agents. That token
 runs commands as the origin `mcp`: each change an outside agent makes to the open spec waits on an approval card in
 the app until you approve or deny it, and so does each command that deletes or overwrites saved data
-([Who sends a command](api.md#who-sends-a-command)). Your own session token, which the app prints on its start line
+([Who sends a command](http-api.md#who-sends-a-command)). Your own session token, which the app prints on its start line
 and which runs commands without review, is in no file, and `caliper-mcp` never needs it.
 
 `caliper-mcp` reads the API file at every call, so it needs no token or key in its configuration, and it follows an
@@ -104,7 +104,7 @@ serves on this machine chooses the calls instead, through Ollama's own chat API 
 
 ## Tools
 
-Each command of the [command table](api.md#get-v0commands) that an agent may send becomes one tool, named after the
+Each command of the [command table](http-api.md#get-v0commands) that an agent may send becomes one tool, named after the
 command with `_` for its first dot (`panel_create` for `panel.create`) and titled with the command's name. Its input
 schema is the command's arguments, its output schema the command's result, and its description the command's summary.
 `history.undo` and `history.redo` are yours and are not offered; an agent takes back a change with an edit that you

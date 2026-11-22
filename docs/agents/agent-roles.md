@@ -1,4 +1,4 @@
-# Agent roles
+# Agent Roles
 
 Caliper's agents have two roles. The **side chat** is a chat pane where your own agent, such as Claude Code, Codex,
 Gemini CLI or opencode, works with you on conversations and bigger jobs. The **widget agent** works inline on one thing
@@ -7,8 +7,8 @@ reject. This page explains what each role is for, what each costs, how each can 
 data goes, what each may do, and when the widget agent hands a request to the chat.
 
 !!! note "Status"
-    The widget agent's inline prompt works on the app's spec page ([Widget agent](../references/widget-agent.md)), and
-    the side chat on the spec page and the live page ([Side chat](../references/side-chat.md)); both are tested with
+    The widget agent's inline prompt works on the app's spec page ([Widget agent](widget-agent.md)), and
+    the side chat on the spec page and the live page ([Side chat](side-chat.md)); both are tested with
     test agents, never with a person's agent or key. The designs are in ACP integration (`design/acp-integration.md`),
     Widget agent (`design/widget-agent.md`) and Widget agent sidecar (`design/byok-agent.md`).
 
@@ -26,7 +26,7 @@ Caliper tells who sends a command by the token it comes with, not by what the re
 token in Caliper API's file, `api.json`, which is what an agent outside the app reads, are reviewed, and so are those
 of the side chat's agent and the widget agent, which get tokens of their own. Only the session token that the app
 prints when its API starts runs commands without review, and Caliper writes it to no file
-([Caliper API](../references/api.md#who-sends-a-command)).
+([Caliper API](http-api.md#who-sends-a-command)).
 
 You review a waiting change on its card, in a strip that opens at the bottom of the window, above the jobs tray, on
 whatever page you are on. The card says who asks (MCP agent, Side chat, Widget agent or API), the command and what it
@@ -91,7 +91,7 @@ start of every request, so the API can cache them. The key comes from the Claude
 macOS Keychain, shows only whether a key is set, and has a control that removes it. The key reaches the agent only in
 its environment when Caliper starts it, and never appears in a file, a log, the journal or a command line. Once other
 providers are added, each one that needs a key gets an entry of its own. [Set up the widget
-agent](../guides/set-up-the-widget-agent.md) gives the steps.
+agent](widget-agent-setup.md) gives the steps.
 
 ## Local and free operation
 
@@ -103,7 +103,7 @@ instead.
   ACP integration (`design/acp-integration.md`) sets up step by step.
 - **The widget agent** offers presets for local model servers, Ollama and LM Studio, with no key, in its settings. A
   model must be able to call tools to drive Caliper; Caliper checks that, and also whether the model can look at
-  images, when you choose Probe. [Widget agent conformance](../references/widget-agent-conformance.md) lists how
+  images, when you choose Probe. [Widget agent conformance](widget-agent-conformance.md) lists how
   models did on a set of test tasks.
 
 A local model shares your computer with everything else. On a Mac it uses the same GPU and the same memory as a

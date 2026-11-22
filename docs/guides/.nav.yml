@@ -3,6 +3,5 @@ nav:
   - embed-caliper.md
   - verify-on-windows.md
   - ci.md
-  - set-up-the-widget-agent.md
   - glob: "*"
     ignore_no_matches: true

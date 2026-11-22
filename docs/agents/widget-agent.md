@@ -1,17 +1,17 @@
-# Widget agent
+# Widget Agent
 
 The widget agent is `caliper-agent`, Caliper's own ACP agent, in the role in which it works on one target: a panel, a
 selection, a dropped file or a property. This page gives the interface between Caliper and that role: how a widget
 session is opened, which commands it may use, what a prompt may hold, and what each answer carries.
-[Agent roles](../explanations/agent-roles.md) explains the two roles,
-[Set up the widget agent](../guides/set-up-the-widget-agent.md) shows the person's side, and
+[Agent roles](agent-roles.md) explains the two roles,
+[Set up the widget agent](widget-agent-setup.md) shows the person's side, and
 [Widget agent conformance](widget-agent-conformance.md) tests a provider and a model against the widget tasks.
 
 !!! note "Status"
     The agent and its widget sessions are built and tested in `src/builder/agent/`. The inline surface that opens them
     on a panel, a selection, a dropped file and a property is built in `src/host/builder/` and works on the app's spec
     page ([The inline surface](#the-inline-surface)). `caliper-agent` is not yet packaged with a Python runtime, so
-    the app finds it through `CALIPER_AGENT_PYTHON` ([Environment variables](environment.md)).
+    the app finds it through `CALIPER_AGENT_PYTHON` ([Environment variables](../references/environment.md)).
 
 ## Starting the agent
 
@@ -161,7 +161,7 @@ For a server whose context length the agent did not choose, nothing is checked.
 ## Opening a widget session
 
 Before it opens the session, Caliper begins a stacked preview of the open spec with `preview.begin`, from the `ui`
-origin and scoped to the target, as the [Caliper API](api.md) page describes for `X-Caliper-Preview`. It then sends
+origin and scoped to the target, as the [Caliper API](http-api.md) page describes for `X-Caliper-Preview`. It then sends
 `session/new` with the preview's id in `_meta.caliper.widget`:
 
 ```json

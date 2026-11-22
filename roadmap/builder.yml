@@ -45,7 +45,7 @@ features:
     status: shipped
     summary: The command layer is a table of typed commands with undo, a journal, approvals and previews, served to programs through Caliper API.
     depends_on: []
-    docs: docs/references/api.md#get-v0commands
+    docs: docs/agents/http-api.md#get-v0commands
     design: design/command-layer.md
     issue: null
 

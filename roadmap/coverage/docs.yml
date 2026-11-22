@@ -420,78 +420,78 @@ entries:
   item: The full caliper.hpp source.
   ids:
   - COR-51
-- page: docs/references/api.md#starting-it
+- page: docs/agents/http-api.md#starting-it
   item: Caliper API starts with --api or CALIPER_API=1, and from the app for Open in browser and the side
     chat.
   ids:
   - AGT-01
-- page: docs/references/api.md#started-by-the-app
+- page: docs/agents/http-api.md#started-by-the-app
   item: The app starts the API on its own for the browser viewer and the side chat.
   ids:
   - AGT-01
   - EMB-06
-- page: docs/references/api.md#the-windowless-mode
+- page: docs/agents/http-api.md#the-windowless-mode
   item: Caliper API with caliper shot and the hidden app runs without a visible window.
   ids:
   - AGT-01
   - COR-42
-- page: docs/references/api.md#security
+- page: docs/agents/http-api.md#security
   item: Loopback only, behind tokens that say who sends each command.
   ids:
   - AGT-01
-- page: docs/references/api.md#who-sends-a-command
+- page: docs/agents/http-api.md#who-sends-a-command
   item: The session token and the token for outside agents differ in what waits for approval.
   ids:
   - AGT-06
-- page: docs/references/api.md#get-v0info
+- page: docs/agents/http-api.md#get-v0info
   item: GET /v0/info returns what caliper info prints, as JSON.
   ids:
   - AGT-01
   - COR-40
-- page: docs/references/api.md#get-v0applets
+- page: docs/agents/http-api.md#get-v0applets
   item: GET /v0/applets returns what caliper list prints.
   ids:
   - AGT-01
   - COR-39
-- page: docs/references/api.md#post-v0appletsidlaunch
+- page: docs/agents/http-api.md#post-v0appletsidlaunch
   item: POST /v0/applets/{id}/launch opens an applet page.
   ids:
   - AGT-01
-- page: docs/references/api.md#get-v0capturepng
+- page: docs/agents/http-api.md#get-v0capturepng
   item: GET /v0/capture.png returns a capture of the frame the app draws.
   ids:
   - AGT-01
-- page: docs/references/api.md#get-v3stream
+- page: docs/agents/http-api.md#get-v3stream
   item: GET /v3/stream serves wire protocol v3 as a hub.
   ids:
   - AGT-01
   - STR-02
-- page: docs/references/api.md#get-v0commands
+- page: docs/agents/http-api.md#get-v0commands
   item: GET /v0/commands lists the command layer table.
   ids:
   - SPC-05
-- page: docs/references/api.md#post-v0commandsname
+- page: docs/agents/http-api.md#post-v0commandsname
   item: POST /v0/commands/{name} runs a command.
   ids:
   - SPC-05
   - AGT-01
-- page: docs/references/api.md#get-v0approvalsid
+- page: docs/agents/http-api.md#get-v0approvalsid
   item: GET /v0/approvals/{id} reads an approval.
   ids:
   - SPC-05
-- page: docs/references/api.md#get-v0spec
+- page: docs/agents/http-api.md#get-v0spec
   item: GET /v0/spec serves the browser viewer of a spec applet.
   ids:
   - EMB-06
-- page: docs/references/api.md#threads-and-limits
+- page: docs/agents/http-api.md#threads-and-limits
   item: Threads and limits of the API.
   ids:
   - AGT-01
-- page: docs/references/api.md#errors
+- page: docs/agents/http-api.md#errors
   item: The error codes of the API.
   ids:
   - AGT-01
-- page: docs/references/api.md#examples
+- page: docs/agents/http-api.md#examples
   item: Examples of calls.
   ids:
   - AGT-01
@@ -703,137 +703,137 @@ entries:
   item: Each gesture is one undo step and is journaled by the command layer.
   ids:
   - SPC-05
-- page: docs/references/mcp-server.md#what-you-need-running
+- page: docs/agents/mcp-server.md#what-you-need-running
   item: caliper-mcp needs the app running with Caliper API on.
   ids:
   - AGT-02
-- page: docs/references/mcp-server.md#command-line
+- page: docs/agents/mcp-server.md#command-line
   item: The command line of caliper-mcp.
   ids:
   - AGT-02
-- page: docs/references/mcp-server.md#configuring-an-agent
+- page: docs/agents/mcp-server.md#configuring-an-agent
   item: How to configure an outside agent to start caliper-mcp.
   ids:
   - AGT-02
-- page: docs/references/mcp-server.md#tools
+- page: docs/agents/mcp-server.md#tools
   item: One tool per agent-permitted command, with schema checks and permission modes.
   ids:
   - AGT-02
   - AGT-06
-- page: docs/references/mcp-server.md#resources
+- page: docs/agents/mcp-server.md#resources
   item: Read-only resources beside the tools.
   ids:
   - AGT-02
-- page: docs/references/side-chat.md#opening-it
+- page: docs/agents/side-chat.md#opening-it
   item: The side chat opens on the spec page and the live page.
   ids:
   - AGT-03
-- page: docs/references/side-chat.md#the-agents
+- page: docs/agents/side-chat.md#the-agents
   item: 'The agents the side chat runs: Claude Code, Codex, Gemini CLI, opencode or any ACP agent.'
   ids:
   - AGT-03
-- page: docs/references/side-chat.md#what-caliper-starts
+- page: docs/agents/side-chat.md#what-caliper-starts
   item: What Caliper starts and hands to the agent.
   ids:
   - AGT-03
-- page: docs/references/side-chat.md#the-pane
+- page: docs/agents/side-chat.md#the-pane
   item: The side chat pane.
   ids:
   - AGT-03
-- page: docs/references/side-chat.md#modes
+- page: docs/agents/side-chat.md#modes
   item: The modes Ask, Accept edits, Read only and Allow all.
   ids:
   - AGT-06
-- page: docs/references/side-chat.md#local-models
+- page: docs/agents/side-chat.md#local-models
   item: Local models in the side chat warn when a model and a run share the GPU.
   ids:
   - AGT-04
-- page: docs/references/side-chat.md#ask-in-chat
+- page: docs/agents/side-chat.md#ask-in-chat
   item: Ask in chat hands a request from the inline prompt to the side chat.
   ids:
   - AGT-03
   - AGT-05
-- page: docs/references/side-chat.md#caliper-chat-shot
+- page: docs/agents/side-chat.md#caliper-chat-shot
   item: caliper-chat-shot is a development tool that draws the side chat with a stub agent and writes
     a PNG per state.
   ids:
   - AGT-03
-- page: docs/references/widget-agent.md#starting-the-agent
+- page: docs/agents/widget-agent.md#starting-the-agent
   item: caliper-agent starts as an ACP child process with provider presets.
   ids:
   - AGT-05
-- page: docs/references/widget-agent.md#presets
+- page: docs/agents/widget-agent.md#presets
   item: The provider presets of caliper-agent.
   ids:
   - AGT-05
-- page: docs/references/widget-agent.md#checking-a-model
+- page: docs/agents/widget-agent.md#checking-a-model
   item: caliper-agent probe checks what a model can do and prints a JSON result, which the settings run
     when a model is picked.
   ids:
   - AGT-16
-- page: docs/references/widget-agent.md#what-the-agent-assumes-of-a-model
+- page: docs/agents/widget-agent.md#what-the-agent-assumes-of-a-model
   item: What the agent assumes of a model.
   ids:
   - AGT-05
-- page: docs/references/widget-agent.md#ollamas-own-chat-api
+- page: docs/agents/widget-agent.md#ollamas-own-chat-api
   item: Ollama is driven through its own chat API.
   ids:
   - AGT-05
   - AGT-07
-- page: docs/references/widget-agent.md#opening-a-widget-session
+- page: docs/agents/widget-agent.md#opening-a-widget-session
   item: How a widget session is opened.
   ids:
   - AGT-05
-- page: docs/references/widget-agent.md#the-tool-scope
+- page: docs/agents/widget-agent.md#the-tool-scope
   item: The commands a widget session may use.
   ids:
   - AGT-05
-- page: docs/references/widget-agent.md#the-context-bundle
+- page: docs/agents/widget-agent.md#the-context-bundle
   item: The context bundle a prompt carries.
   ids:
   - AGT-05
-- page: docs/references/widget-agent.md#prompts
+- page: docs/agents/widget-agent.md#prompts
   item: What a prompt may hold.
   ids:
   - AGT-05
-- page: docs/references/widget-agent.md#answers
+- page: docs/agents/widget-agent.md#answers
   item: What each answer carries, held in a preview for accept.
   ids:
   - AGT-05
-- page: docs/references/widget-agent.md#in-the-side-chat
+- page: docs/agents/widget-agent.md#in-the-side-chat
   item: A widget session continues in the side chat.
   ids:
   - AGT-05
   - AGT-03
-- page: docs/references/widget-agent.md#closing
+- page: docs/agents/widget-agent.md#closing
   item: Closing a widget session.
   ids:
   - AGT-05
-- page: docs/references/widget-agent.md#the-inline-surface
+- page: docs/agents/widget-agent.md#the-inline-surface
   item: The inline surface opens a one-line prompt with Command K on the focused panel.
   ids:
   - AGT-05
-- page: docs/references/widget-agent.md#the-settings-in-the-app
+- page: docs/agents/widget-agent.md#the-settings-in-the-app
   item: The widget agent settings popup holds provider, key and model.
   ids:
   - AGT-05
-- page: docs/references/widget-agent-conformance.md#how-a-task-runs
+- page: docs/agents/widget-agent-conformance.md#how-a-task-runs
   item: The conformance suite runs the widget tasks against a provider and a model.
   ids:
   - AGT-14
-- page: docs/references/widget-agent-conformance.md#verdicts
+- page: docs/agents/widget-agent-conformance.md#verdicts
   item: Verdicts checked against each task criterion.
   ids:
   - AGT-14
-- page: docs/references/widget-agent-conformance.md#running-it
+- page: docs/agents/widget-agent-conformance.md#running-it
   item: How to run caliper-agent-conformance.
   ids:
   - AGT-14
-- page: docs/references/widget-agent-conformance.md#result-files
+- page: docs/agents/widget-agent-conformance.md#result-files
   item: The result files.
   ids:
   - AGT-14
-- page: docs/references/widget-agent-conformance.md#publishing-results
+- page: docs/agents/widget-agent-conformance.md#publishing-results
   item: Publishing results.
   ids:
   - AGT-14
@@ -1155,7 +1155,7 @@ entries:
   ids:
   - STR-06
   - COR-11
-- page: docs/guides/set-up-the-widget-agent.md
+- page: docs/agents/widget-agent-setup.md
   item: Set up the widget agent with a provider, a key, a model and a local model.
   ids:
   - AGT-05
@@ -1164,7 +1164,7 @@ entries:
   item: A procedure to verify a Windows build on real hardware.
   ids:
   - PLT-05
-- page: docs/explanations/agent-roles.md
+- page: docs/agents/agent-roles.md
   item: Explains when to use the side chat and when the widget agent.
   ids:
   - AGT-03

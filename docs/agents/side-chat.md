@@ -1,8 +1,8 @@
-# Side chat
+# Side Chat
 
 The side chat is the pane where your own agent works with you over the Agent Client Protocol (ACP): Claude Code through
 its adapter, Codex through its adapter, Gemini CLI, opencode, or any other ACP agent that you add by its command. This
-page gives what Caliper starts, what it hands the agent, and what the pane shows. [Agent roles](../explanations/agent-roles.md)
+page gives what Caliper starts, what it hands the agent, and what the pane shows. [Agent roles](agent-roles.md)
 explains when to use the side chat and when the widget agent.
 
 !!! note "Status"
@@ -23,10 +23,10 @@ views fill what the column leaves. The chat stays open when the page changes, so
 from the live page shows beside the same conversation: the app shows the spec page for each `spec.new`, `spec.open` and
 `applet.open` of the agent, so that you see the spec whose edits you review, except over a compiled applet's page,
 which an agent never ends: there the spec opens in the session, the page stays, and Activity says how to get to it
-([Caliper CLI](cli.md#the-spec-page)).
+([Caliper CLI](../references/cli.md#the-spec-page)).
 
 The chat's settings are kept in `side-chat.json` in the app-data folder ([Folders and environment
-variables](environment.md)): the chosen agent, the custom agent's name and command line, whether an agent's "always
+variables](../references/environment.md)): the chosen agent, the custom agent's name and command line, whether an agent's "always
 allow" options are offered, the agents you marked as running on a local model (`local_model_agents`, a list of agent
 ids), and whether the chat is open. They never hold a key.
 
@@ -76,7 +76,7 @@ folder, and sends:
   API: when the app was started without `--api`, the side chat starts it then, on 127.0.0.1 at a free port, says so in
   the conversation ("Caliper API started on 127.0.0.1:<port> for this chat"), in Activity and in the status bar, and
   stops it when the agent ends, unless Open in browser has given out a link of it since
-  ([Started by the app](api.md#started-by-the-app)). The API file is the
+  ([Started by the app](http-api.md#started-by-the-app)). The API file is the
   session's own, `api-agent-<pid>-<n>.json` in the app-data folder, never `api.json`: its token is the agent's, with the
   origin `agent`, and the app revokes it and removes the file when the agent's session ends. The origin comes from that
   token, not from `--origin`, so every command the agent sends through Caliper API, by `caliper-mcp` or by any other
@@ -168,7 +168,7 @@ behind and choosing the agent again brings it back.
 While a training run streams into Caliper (the app is attached to a live session) and the chosen agent is marked, the
 chat's header shows **Shared GPU** after the agent's name, framed in bronze, as the widget agent's settings and its ⌘K
 prompt do for a model server on this machine. The model and the run then share the same GPU and memory; Set up the
-widget agent ([Share the GPU with a training run](../guides/set-up-the-widget-agent.md#share-the-gpu-with-a-training-run))
+widget agent ([Share the GPU with a training run](widget-agent-setup.md#share-the-gpu-with-a-training-run))
 gives the advice. As the header narrows, the note gives way after the agent's version and before its name.
 
 ## Ask in chat

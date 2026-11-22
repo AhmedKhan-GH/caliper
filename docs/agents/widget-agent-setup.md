@@ -1,11 +1,11 @@
-# Set up the widget agent
+# Widget Agent Setup
 
 The widget agent works inline on one panel and shows each change in place for you to accept or reject. It needs a
 model provider: Claude, OpenAI, Gemini or OpenRouter with an API key, a model server on your own machine such as
 Ollama or LM Studio, which needs no key, or any other server with an OpenAI-compatible API. This guide shows how to
 open the widget agent's settings, choose a provider, enter a key, pick a model, check what the model can do, use the
 widget agent, share the GPU with a training run, and remove the key again.
-[Agent roles](../explanations/agent-roles.md) explains how the widget agent differs from the side chat.
+[Agent roles](agent-roles.md) explains how the widget agent differs from the side chat.
 
 !!! note "Status"
     The settings and ⌘K on a panel, on a selection, on a dropped file and on a property of a panel or a source are
@@ -182,7 +182,7 @@ Custom preset instead, Caliper cannot set the length, and you set it yourself: s
 `OLLAMA_CONTEXT_LENGTH=16384 ollama serve`, which applies to every model, or make a copy of the model with a
 Modelfile that holds `FROM <model>` and `PARAMETER num_ctx 16384` (`ollama create <name> -f Modelfile`).
 
-[Widget agent conformance](../references/widget-agent-conformance.md) lists how models did on the widget agent's
+[Widget agent conformance](widget-agent-conformance.md) lists how models did on the widget agent's
 test tasks, and shows how to run the tasks against your own model. A server on another computer works too, through
 the address of Ollama, LM Studio or Custom, but then your data leaves your machine, and the settings show Remote
 address.
@@ -212,11 +212,11 @@ note when you mark the agent as running on a local model, as below.
 
 The side chat runs your own agent, so it uses whatever model your agent is set up for, local models included.
 `caliper-agent` itself can be that agent: give the side chat the custom command that
-[Side chat](../references/side-chat.md#the-agents) shows, with the Ollama preset and your model, and the chat runs on
+[Side chat](side-chat.md#the-agents) shows, with the Ollama preset and your model, and the chat runs on
 the local model with no account. ACP integration (`design/acp-integration.md`) sets up opencode with a model served by
 Ollama as another worked example. When your agent runs a model on this machine, choose **Local model** in the chat's
 agent picker; while a training run is attached, the chat's header then shows **Shared GPU**, and the advice above
-applies ([Side chat](../references/side-chat.md#local-models)).
+applies ([Side chat](side-chat.md#local-models)).
 
 ## Remove the key
 
