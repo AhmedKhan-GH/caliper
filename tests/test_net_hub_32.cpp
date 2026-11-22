@@ -588,6 +588,87 @@ TEST_CASE("net/hub 3.2: a reset drops what a viewer that stopped reading has que
           std::vector<std::string>{"big:points", "reset", ":lines", "big:points"});
 }
 
+// The pending batches of a viewer that stopped reading stay bounded: past CALIPER_NET_MAX_BATCHES
+// entity parts (the hub has forgotten the scene's state by then), the hub drops them and asks the
+// producer for its state, which opens with a reset.
+TEST_CASE("net/hub 3.2: a viewer that stopped reading while the producer writes new entities gets a new state") {
+    Runner h;
+    World32 w;
+    auto p = std::make_unique<SceneProducer>();
+    REQUIRE(p->connect(h.url()));
+    w.peers.push_back(p.get());
+    REQUIRE(w.until([&] { return p->welcomed; }));
+    auto slow = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
+    subscribe(*slow, 4, "world");
+    REQUIRE(w.until([&] { return slow->scene_log(4).size() == 2; }));
+    const size_t before = stall(w, h, *p, *slow, 4);
+    const int n = (int)CALIPER_NET_MAX_BATCHES + 100;
+    const uint64_t in = h.hub->stats().scenes_in;
+    for (int i = 0; i < n; ++i) p->points("e/" + std::to_string(i), {(float)i, 0, 0});
+    // The producer's state, which the hub asked for: a reset, its static frame, "big" and the n entities.
+    // The producer is polled until the hub has all of it, since `resume` reads the viewer alone.
+    REQUIRE(w.until([&] { return p->scene_subscribes == 2 && h.hub->stats().scenes_in == in + 2 * (uint64_t)n + 3; },
+                    20000));
+    auto after_reset = [&](const std::vector<std::string>& log) -> long {
+        auto r = std::find(log.begin() + (long)before, log.end(), "reset");
+        return r == log.end() ? -1 : (long)(log.end() - r) - 1;
+    };
+    REQUIRE(resume(*slow, 4, [&](const std::vector<std::string>& log) { return after_reset(log) >= n + 2; }));
+    // Without the cap the viewer got one batch per entity part and no reset.
+    const std::vector<std::string> log = slow->scene_log(4);
+    CHECK(std::count(log.begin() + (long)before, log.end(), "reset") == 1);
+    CHECK(after_reset(log) == n + 2);
+}
+
+// The pending entity transforms of a viewer that stopped reading stay bounded: past
+// CALIPER_NET_MAX_BATCHES entities the hub's own state, which holds every transform, replaces them.
+TEST_CASE("net/hub 3.2: a viewer that stopped reading while the producer moves many entities gets the hub's state") {
+    Runner h;
+    World32 w;
+    auto p = std::make_unique<SceneProducer>();
+    REQUIRE(p->connect(h.url()));
+    w.peers.push_back(p.get());
+    REQUIRE(w.until([&] { return p->welcomed; }));
+    auto slow = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
+    subscribe(*slow, 4, "world");
+    REQUIRE(w.until([&] { return slow->scene_log(4).size() == 2; }));
+    const size_t before = stall(w, h, *p, *slow, 4);
+    const size_t start = slow->inbox.size();
+    const uint32_t up = p->scene_subs().at(0);
+    // Three SCENE_TRANSFORMS of 1000 new entities each: 3000 pending transforms pass the cap.
+    std::vector<float> mats;
+    for (int k = 0; k < 1000; ++k) {
+        for (int e = 0; e < 16; ++e) mats.push_back(e % 5 == 0 ? 1.f : 0.f);
+    }
+    const uint64_t in = h.hub->stats().scenes_in;
+    for (int m = 0; m < 3; ++m) {
+        wire::SceneTransforms t;
+        t.sub = up;
+        t.view = "world";
+        t.seq = ++p->seq;
+        t.stamp_ns = mono_ns32();
+        for (int k = 0; k < 1000; ++k) t.paths.push_back("m" + std::to_string(m) + "/" + std::to_string(k));
+        t.is_static = true;
+        t.matrices = wire::Section::make("matrices", CALIPER_NET_DTYPE_F32, {1000, 16}, mats.data(), mats.size() * 4);
+        p->send(t);
+    }
+    REQUIRE(w.until([&] { return h.hub->stats().scenes_in == in + 3; }));
+    REQUIRE(resume(*slow, 4, [&](const std::vector<std::string>& log) {
+        size_t paths = 0;
+        for (size_t i = start; i < slow->inbox.size(); ++i)
+            if (auto* t = std::get_if<wire::SceneTransforms>(&slow->inbox[i].m)) paths += t->paths.size();
+        return std::find(log.begin() + (long)before, log.end(), "reset") != log.end() && paths == 3000;
+    }));
+    // Without the cap the transforms waited in the viewer's queue and came with no reset; now they
+    // come once, in the hub's state after its reset.
+    const std::vector<std::string> log = slow->scene_log(4);
+    CHECK(std::count(log.begin() + (long)before, log.end(), "reset") == 1);
+    size_t paths = 0;
+    for (size_t i = start; i < slow->inbox.size(); ++i)
+        if (auto* t = std::get_if<wire::SceneTransforms>(&slow->inbox[i].m)) paths += t->paths.size();
+    CHECK(paths == 3000);
+}
+
 namespace {
 // Every scene message of `sub` in arrival order, the new ones included: "classes", "transforms
 // static|stamped p1,p2" and "path:part" (with "#k" for a piece of a split update).

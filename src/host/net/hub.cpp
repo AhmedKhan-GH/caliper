@@ -127,6 +127,10 @@ struct SceneMsg {
 // The messages a viewer's scene subscription may have waiting in order (a state, a reset and at
 // most CALIPER_NET_MAX_BATCHES batches, and as many clears); past it the hub's own state replaces them.
 constexpr size_t kSceneFirstMax = 2 * CALIPER_NET_MAX_BATCHES;
+// A viewer's pending batches (one per entity part) and pending entity transforms (one per entity)
+// wait while its send is in flight and count in no budget, so each holds at most this many; past
+// it the hub's own state replaces them, as past kSceneFirstMax.
+constexpr size_t kScenePendingMax = CALIPER_NET_MAX_BATCHES;
 // (path, part): the byte order of the paths, then the parts in the order points, lines, arrows,
 // boxes, mesh, image, camera. The class table is kept under ("", kClassesOrder) and the entity
 // transforms under ("", kTransformsOrder), so that a late viewer's state sends them first, in the
@@ -2061,10 +2065,12 @@ struct Hub::Impl {
                     if (v->transforms_pending.count(kv.first)) ++c.scenes_superseded;
                     v->transforms_pending[kv.first] = kv.second;
                 }
+                if (v->transforms_pending.size() > kScenePendingMax) resync_scene(s, *ch, *v);
             } else {
                 ScenePtr& slot = v->scene_pending[key];
                 if (slot) ++c.scenes_superseded;
                 slot = msg;
+                if (v->scene_pending.size() > kScenePendingMax) resync_scene(s, *ch, *v);
             }
             mark_dirty(k.conn);
         }
@@ -2162,8 +2168,9 @@ struct Hub::Impl {
         for (const auto& kv : ch.scene_held) v.scene_first.emplace_back(kv.second, true);
     }
 
-    // A viewer's in-order queue passed kSceneFirstMax (it stopped reading while the producer
-    // clears): the hub's own state replaces it, since it holds the effect of every message so far.
+    // A viewer's in-order queue passed kSceneFirstMax, or its pending batches or entity transforms
+    // passed kScenePendingMax (it stopped reading while the producer clears or writes new entities):
+    // the hub's own state replaces them, since it holds the effect of every message so far.
     // While the hub holds no complete state, the producer's next state does instead: it opens with a
     // reset, which drops what was queued before it, so the queue is dropped now.
     void resync_scene(Session& s, Channel& ch, VSub& v) {
@@ -2173,6 +2180,7 @@ struct Hub::Impl {
         }
         v.scene_first.clear();
         v.scene_pending.clear();
+        v.transforms_pending.clear();
         if (ch.scene_forgotten && ch.up_sub && !ch.up_request && s.producer) {
             ch.scene_forgotten = false;
             send_subscribe(s, ch);
