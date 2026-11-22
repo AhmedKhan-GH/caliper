@@ -214,7 +214,8 @@
               "tensor",
               "live",
               "feed",
-              "metric"
+              "metric",
+              "run"
             ],
             "type": "string"
           },
@@ -318,7 +319,8 @@
                     "tensor",
                     "live",
                     "feed",
-                    "metric"
+                    "metric",
+                    "run"
                   ],
                   "type": "string"
                 },
@@ -501,7 +503,7 @@
             "description": "The source id, <kind>:<name>, from catalog.list.",
             "maxLength": 263,
             "minLength": 3,
-            "pattern": "^(table|tensor|live|feed|metric):.+$",
+            "pattern": "^(table|tensor|live|feed|metric|run):.+$",
             "type": "string"
           }
         },
@@ -592,7 +594,8 @@
                   "tensor",
                   "live",
                   "feed",
-                  "metric"
+                  "metric",
+                  "run"
                 ],
                 "type": "string"
               },
@@ -770,7 +773,7 @@
             "description": "The source id, <kind>:<name>, from catalog.list.",
             "maxLength": 263,
             "minLength": 3,
-            "pattern": "^(table|tensor|live|feed|metric):.+$",
+            "pattern": "^(table|tensor|live|feed|metric|run):.+$",
             "type": "string"
           },
           "limit": {
@@ -867,7 +870,8 @@
               "tensor",
               "live",
               "feed",
-              "metric"
+              "metric",
+              "run"
             ],
             "type": "string"
           },
@@ -2106,7 +2110,7 @@
             "description": "A catalog source id, from catalog.list, such as live:attn.weights or table:run42_metrics.",
             "maxLength": 256,
             "minLength": 3,
-            "pattern": "^(table|tensor|live|feed|metric):.+$",
+            "pattern": "^(table|tensor|live|feed|metric|run):.+$",
             "type": "string"
           },
           "dry_run": {
@@ -2334,7 +2338,7 @@
                 "description": "A catalog source id, from catalog.list, such as live:attn.weights or table:run42_metrics.",
                 "maxLength": 256,
                 "minLength": 3,
-                "pattern": "^(table|tensor|live|feed|metric):.+$",
+                "pattern": "^(table|tensor|live|feed|metric|run):.+$",
                 "type": [
                   "string",
                   "null"
@@ -2504,7 +2508,7 @@
                 "description": "A catalog source id, from catalog.list, such as live:attn.weights or table:run42_metrics.",
                 "maxLength": 256,
                 "minLength": 3,
-                "pattern": "^(table|tensor|live|feed|metric):.+$",
+                "pattern": "^(table|tensor|live|feed|metric|run):.+$",
                 "type": "string"
               },
               "from": {

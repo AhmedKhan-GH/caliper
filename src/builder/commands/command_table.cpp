@@ -17,7 +17,7 @@ using nlohmann::json;
 const std::pair<const char*, const char*> kFragments[] = {
     {"id", R"json({"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$", "minLength": 1, "maxLength": 64})json"},
 
-    {"catalog_id", R"json({"type": "string", "pattern": "^(table|tensor|live|feed|metric):.+$", "minLength": 3,
+    {"catalog_id", R"json({"type": "string", "pattern": "^(table|tensor|live|feed|metric|run):.+$", "minLength": 3,
                            "maxLength": 263})json"},
 
     {"diagnostic", R"json({
@@ -60,7 +60,7 @@ const std::pair<const char*, const char*> kFragments[] = {
                    "wire", "warnings", "updated_at"],
       "properties": {
         "id": {"type": "string", "description": "The source id, <kind>:<name>; a spec source names it in its catalog field."},
-        "kind": {"type": "string", "enum": ["table", "tensor", "live", "feed", "metric"],
+        "kind": {"type": "string", "enum": ["table", "tensor", "live", "feed", "metric", "run"],
                  "description": "table: a DuckDB table or view, such as a loader made; tensor: a tensor read from a file, an image or an audio clip; live: a live view of the attached live session; feed: a channel of live telemetry; metric: a run and tag of logged metrics."},
         "name": {"type": "string", "description": "The name part of the id. For a table it is the table's name in SQL."},
         "title": {"type": "string", "description": "A name for a person."},
@@ -85,7 +85,7 @@ const std::pair<const char*, const char*> kFragments[] = {
       "required": ["id", "kind", "columns", "rows", "total_rows", "truncated", "cut_cells", "dtype", "shape", "stats", "slice"],
       "properties": {
         "id": {"type": "string", "description": "The source id."},
-        "kind": {"type": "string", "enum": ["table", "tensor", "live", "feed", "metric"], "description": "The source's kind."},
+        "kind": {"type": "string", "enum": ["table", "tensor", "live", "feed", "metric", "run"], "description": "The source's kind."},
         "columns": {"type": ["array", "null"], "items": {"$use": "column"}, "description": "For a tabular source, its columns, in the order of each row's cells; null otherwise."},
         "rows": {"type": ["array", "null"], "items": {"type": "array", "items": {"$use": "cell"}},
                  "description": "For a tabular source, the rows given, each a list of cells in column order: a table's first rows, a feed's newest, a metric's last by step. NaN and infinities are the strings nan, inf and -inf; dates are ISO 8601 strings; nested values are their JSON text. Null otherwise."},
@@ -422,7 +422,7 @@ const Row kRows[] = {
      "It changes nothing.",
      R"json({"type": "object", "additionalProperties": false, "required": [],
       "properties": {
-        "kind": {"type": "string", "enum": ["table", "tensor", "live", "feed", "metric"], "description": "Only sources of this kind."},
+        "kind": {"type": "string", "enum": ["table", "tensor", "live", "feed", "metric", "run"], "description": "Only sources of this kind."},
         "prefix": {"type": "string", "maxLength": 256, "description": "Only sources whose name starts with this text, case-sensitive."},
         "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100, "description": "The most entries to return, from 1 to 1000; 100 when absent."}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["entries", "truncated", "warnings"],

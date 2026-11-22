@@ -149,7 +149,7 @@ public:
     DataSources(const DataSources&) = delete;
     DataSources& operator=(const DataSources&) = delete;
 
-    // Registers the source of `kind` (live, feed or metric), or removes it for
+    // Registers the source of `kind` (live, feed, metric or run), or removes it for
     // null; false for table and tensor. The cache is emptied, since the new
     // source's generations are not the old one's.
     bool set(CatalogKind kind, std::shared_ptr<CatalogDataSource> source);
@@ -181,7 +181,7 @@ private:
     };
     Options options_;
     mutable std::mutex mutex_;
-    std::shared_ptr<CatalogDataSource> live_, feed_, metric_;
+    std::shared_ptr<CatalogDataSource> live_, feed_, metric_, run_;
     std::map<std::string, Cached> cache_;
     std::list<std::string> uses_;  // keys, most recently used first
     std::uint64_t cache_bytes_ = 0;
