@@ -18,6 +18,8 @@ if(APPLE)
 else()
     add_library(caliper_producer STATIC producer.cpp)
 endif()
+# The derive half of the graphics form (caliper_producer_derive.h), on every platform.
+target_sources(caliper_producer PRIVATE derive.cpp)
 target_include_directories(caliper_producer PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 set_target_properties(caliper_producer PROPERTIES
     CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
@@ -34,7 +36,8 @@ if(NOT MSVC)
 endif()
 
 if(BUILD_TESTS AND TARGET doctest::doctest)
-    add_executable(caliper_producer_tests tests/test_producer.cpp tests/test_producer_operators.cpp)
+    add_executable(caliper_producer_tests tests/test_producer.cpp tests/test_producer_operators.cpp
+                                          tests/test_producer_derive.cpp)
     target_link_libraries(caliper_producer_tests PRIVATE caliper_producer doctest::doctest)
     set_target_properties(caliper_producer_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
     if(APPLE)
