@@ -7,6 +7,11 @@
 #include "embed/render_stats.h"   // copy counters
 #include "live/live_scene.h"
 #include "live/scene_overlays.h"
+#include "scene/pick.h"   // FramePick: the programs' pick
+#if defined(CALIPER_HAVE_DRAW)
+#include "draw/draw_runtime.h"
+#include <nlohmann/json.hpp>
+#endif
 #include "renderer/host_renderer.h"
 
 #if defined(__EMSCRIPTEN__)
@@ -18,6 +23,9 @@
 #endif
 
 #include <algorithm>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <cmath>
 #include <cstdio>
 
@@ -229,6 +237,183 @@ const SceneView* scene_view(const View& v) { return v.scene ? v.scene->view.get(
 
 // ---- A scene drawn into a rectangle ----------------------------------------------------------------
 
+namespace {
+
+// Asks the entities' pick pass and, while the view draws programs, the frame pick of its ID
+// target for the pixel (x, y); true when either was asked.
+bool ask_picks(SceneView& view, SceneRectState& state, float x, float y) {
+    std::string why;
+    state.entity_pending = view.request_pick(x, y, &why);
+    state.entity_dropped = false;
+    state.entity_detail.clear();
+    state.program_detail.clear();
+    state.frame_pending = false;
+#if defined(CALIPER_HAVE_DRAW)
+    if (!view.draw_runtimes().empty() && view.id_target()) {
+        if (!state.frame_pick) state.frame_pick = std::make_shared<caliper_scene::FramePick>(view.backend());
+        state.frame_pending = state.frame_pick->request(view.id_target(), view.depth_target(), view.width(),
+                                                        view.height(), x, y, &why);
+    }
+#endif
+    return state.entity_pending || state.frame_pending;
+}
+
+// Takes the frame pick once it answered: the item of the program whose pick id the texel holds,
+// read from the version that the frame showed. A pick id that names no program, or an item
+// outside its item map's valid count, gives nothing.
+void poll_program_pick(const SceneView& view, SceneRectState& state) {
+#if defined(CALIPER_HAVE_DRAW)
+    if (!state.frame_pick) {
+        state.frame_pending = false;
+        return;
+    }
+    const std::vector<const caliper_draw::DrawRuntime*> runtimes = view.draw_runtimes();
+    const auto is_program = [&](uint32_t id) {
+        for (const caliper_draw::DrawRuntime* rt : runtimes)
+            if (rt->pick_id() == id) return true;
+        return false;
+    };
+    caliper_scene::FrameHit fh;
+    const caliper_scene::PickPass::Result r = state.frame_pick->poll(is_program, &fh);
+    if (r == caliper_scene::PickPass::Result::Pending) return;
+    state.frame_pending = false;
+    if (r != caliper_scene::PickPass::Result::Hit) return;
+    for (const caliper_draw::DrawRuntime* rt : runtimes)
+        if (rt->pick_id() == fh.pick_id)
+            if (const std::optional<caliper_draw::PickedItem> picked = rt->pick(fh.item)) {
+                state.program_detail = program_pick_detail(*picked);
+                state.program_depth = fh.depth;
+            }
+#else
+    (void)view;
+    state.frame_pending = false;
+#endif
+}
+
+// The labels of the programs' text tables at the view's size: each anchor projected with the
+// programs' camera (clip space for a piece whose camera is none), those in front of the eye and
+// inside the picture, the higher priority first, at most kMaxLabels.
+std::vector<caliper_scene::LabelAnchor> program_labels(const SceneView& view) {
+    std::vector<caliper_scene::LabelAnchor> out;
+#if defined(CALIPER_HAVE_DRAW)
+    struct Ranked {
+        float priority;
+        caliper_scene::LabelAnchor anchor;
+    };
+    std::vector<Ranked> all;
+    const caliper_scene::Mat4 identity;
+    for (const caliper_draw::DrawRuntime* rt : view.draw_runtimes()) {
+        const bool clip_space = rt->camera() == caliper_builder::spec::CameraMode::none;
+        const caliper_scene::Mat4& clip = clip_space ? identity : view.program_clip();
+        for (caliper_draw::Label& l : rt->labels()) {
+            double h[4];
+            caliper_scene::transform_h(clip, {l.position[0], l.position[1], l.position[2]}, h);
+            if (!(h[3] > 0)) continue;
+            const double nx = h[0] / h[3], ny = h[1] / h[3];
+            if (!std::isfinite(nx) || !std::isfinite(ny) || std::fabs(nx) > 1.0 || std::fabs(ny) > 1.0) continue;
+            caliper_scene::LabelAnchor a;
+            a.x = float((nx + 1.0) * 0.5 * view.width());
+            a.y = float((1.0 - ny) * 0.5 * view.height());
+            a.depth = float(h[3]);
+            a.text = std::move(l.text);
+            all.push_back({l.priority, std::move(a)});
+        }
+    }
+    std::stable_sort(all.begin(), all.end(), [](const Ranked& a, const Ranked& b) { return a.priority > b.priority; });
+    for (std::size_t i = 0; i < all.size() && i < caliper_host::kMaxLabels; ++i) out.push_back(std::move(all[i].anchor));
+#else
+    (void)view;
+#endif
+    return out;
+}
+
+// The axes mark of a 3-D scene in the corner whose bottom-right is `corner`: an arrow for each of
+// x, y and z from one centre, as the camera's rotation turns it, the farthest drawn first, each
+// with its letter at its tip. Returns the rectangle it takes; an empty one in a 2-D scene or
+// before the view has a camera.
+caliper_host::LabelRect draw_axes_mark(ImDrawList* dl, const SceneView& view, ImVec2 corner) {
+    const caliper_scene::ViewCamera cam = view.effective_camera();
+    if (std::holds_alternative<caliper_scene::PanZoom>(cam) || !view.width() || !view.height()) return {};
+    const caliper_scene::CameraMatrices m = caliper_scene::camera_matrices(cam, view.tree(), view.width(), view.height());
+    if (!m.ok) return {};
+    const float font = ImGui::GetFontSize();
+    const float len = std::round(1.6f * font), margin = std::round(0.8f * font);
+    const ImVec2 c(corner.x - margin - len - font * 0.5f, corner.y - margin - len - font * 0.5f);
+    struct Arrow {
+        float dx, dy, depth;
+        const char* name;
+        ImU32 color;
+    };
+    Arrow arrows[3] = {{0, 0, 0, "x", IM_COL32(222, 92, 84, 255)},
+                       {0, 0, 0, "y", IM_COL32(112, 186, 104, 255)},
+                       {0, 0, 0, "z", IM_COL32(96, 146, 232, 255)}};
+    for (int i = 0; i < 3; ++i) {
+        // Column i of the view's rotation: where world axis i points on the screen (y down there).
+        arrows[i].dx = float(m.view.at(0, i));
+        arrows[i].dy = -float(m.view.at(1, i));
+        arrows[i].depth = float(m.view.at(2, i));
+        if (!std::isfinite(arrows[i].dx) || !std::isfinite(arrows[i].dy) || !std::isfinite(arrows[i].depth)) return {};
+    }
+    std::sort(std::begin(arrows), std::end(arrows), [](const Arrow& a, const Arrow& b) { return a.depth < b.depth; });
+    const ImU32 shade = IM_COL32(0, 0, 0, 140);
+    dl->AddCircleFilled(c, len + font * 0.5f, IM_COL32(0, 0, 0, 70));
+    for (const Arrow& a : arrows) {
+        const ImVec2 tip(c.x + a.dx * len, c.y + a.dy * len);
+        dl->AddLine(c, tip, shade, 4.0f);
+        dl->AddLine(c, tip, a.color, 2.0f);
+        const ImVec2 ts = ImGui::CalcTextSize(a.name);
+        const ImVec2 at(std::round(c.x + a.dx * (len + font * 0.45f) - ts.x * 0.5f),
+                        std::round(c.y + a.dy * (len + font * 0.45f) - ts.y * 0.5f));
+        dl->AddText(ImVec2(at.x + 1.0f, at.y + 1.0f), shade, a.name);
+        dl->AddText(at, a.color, a.name);
+    }
+    const float r = len + font;
+    return {c.x - r, c.y - r, c.x + r, c.y + r};
+}
+
+}  // namespace
+
+bool scene_path_matches(const std::string& pattern, const std::string& path) {
+    const auto split = [](const std::string& s) {
+        std::vector<std::string> parts;
+        std::size_t at = 0;
+        while (parts.size() <= 16) {
+            const std::size_t next = s.find('/', at);
+            parts.push_back(s.substr(at, next == std::string::npos ? std::string::npos : next - at));
+            if (next == std::string::npos) break;
+            at = next + 1;
+        }
+        return parts;
+    };
+    const std::vector<std::string> p = split(pattern), q = split(path);
+    if (p.size() > 16 || q.size() > 16 || pattern.empty() || path.empty()) return false;
+    // match[i][j]: the first i segments of the pattern match the first j of the path.
+    std::vector<std::vector<char>> match(p.size() + 1, std::vector<char>(q.size() + 1, 0));
+    match[0][0] = 1;
+    for (std::size_t i = 1; i <= p.size(); ++i)
+        for (std::size_t j = 0; j <= q.size(); ++j) {
+            if (p[i - 1] == "**")
+                match[i][j] = match[i - 1][j] || (j > 0 && match[i][j - 1]);
+            else if (j > 0)
+                match[i][j] = match[i - 1][j - 1] && (p[i - 1] == "*" || p[i - 1] == q[j - 1]);
+        }
+    return match[p.size()][q.size()] != 0;
+}
+
+std::string program_pick_detail(const caliper_draw::PickedItem& picked) {
+#if defined(CALIPER_HAVE_DRAW)
+    nlohmann::json fields = nlohmann::json::object();
+    for (const auto& [name, value] : picked.fields) fields[name] = value;
+    const nlohmann::json detail = {{"program", picked.program}, {"item", picked.item}, {"step", picked.step},
+                                   {"fields", fields},
+                                   {"index", {picked.index[0], picked.index[1], picked.index[2], picked.index[3]}}};
+    return detail.dump();
+#else
+    (void)picked;
+    return {};
+#endif
+}
+
 void pick_scene_rect(SceneRectState& state, float u, float v) {
     state.seam_u = std::clamp(u, 0.0f, 1.0f);
     state.seam_v = std::clamp(v, 0.0f, 1.0f);
@@ -267,7 +452,29 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
             if (options.up == caliper_scene::axis_name(a)) sc->switch_up(a);
         state.up_applied = options.up;
     }
+    if (options.view_camera && options.view_camera_key != state.camera_applied) {
+        sc->set_starting(*options.view_camera);
+        state.camera_applied = options.view_camera_key;
+    }
     sc->set_scale_bar(options.scale_bar);
+    // The panel's include and exclude, and its programs (draw/draw_host.h): set before each
+    // render, because a panel and the app's window can draw one view.
+    std::string filter_key;
+    std::function<bool(const std::string&)> keep;
+    if (!options.include.empty() || !options.exclude.empty()) {
+        for (const std::string& pattern : options.include) filter_key += "+" + pattern + "\x1f";
+        for (const std::string& pattern : options.exclude) filter_key += "-" + pattern + "\x1f";
+        keep = [inc = options.include, exc = options.exclude](const std::string& path) {
+            bool in = inc.empty();
+            for (const std::string& pattern : inc) in = in || scene_path_matches(pattern, path);
+            if (!in) return false;
+            for (const std::string& pattern : exc)
+                if (scene_path_matches(pattern, path)) return false;
+            return true;
+        };
+    }
+    sc->set_entity_filter(filter_key, std::move(keep));
+    sc->set_draw_feed(options.draw_feed);
     sc->set_stage_source(options.stages);
     sc->poll();   // the GPU time of completed frames: the info line and the stages' time watchdog
 
@@ -311,6 +518,11 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
         sc->zoom(io.MouseWheel, mx, my, size.x, size.y);
     }
     if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) sc->fit();
+    if (sc->width() && sc->height()) {   // the pointer of the programs' prelude, in physical pixels
+        const uint32_t buttons = (io.MouseDown[0] ? 1u : 0u) | (io.MouseDown[1] ? 2u : 0u) | (io.MouseDown[2] ? 4u : 0u);
+        sc->set_pointer((io.MousePos.x - p0.x) * float(sc->width()) / size.x,
+                        (io.MousePos.y - p0.y) * float(sc->height()) / size.y, hovered ? buttons : 0u, hovered && valid);
+    }
 
     // ---- GPU: the scene core compiles and submits when something changed
     const uint32_t clear = ImGui::GetColorU32(ImGuiCol_WindowBg) | 0xff000000u;
@@ -319,10 +531,12 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p1(p0.x + size.x, p0.y + size.y);
     if (const uint64_t tex = sc->imgui_texture()) dl->AddImage((ImTextureID)tex, p0, p1);
+    std::vector<caliper_host::LabelRect> keep_clear;   // the view's own texts, which no label covers
     if (!options.stage_message.empty()) {   // a stage's refusal or stop, over the picture's bottom
         const float pad = 4.0f, h = ImGui::GetTextLineHeight() + 2 * pad;
         const ImVec2 a(p0.x, std::max(p0.y, p1.y - h));
         dl->AddRectFilled(a, p1, IM_COL32(0, 0, 0, 170));
+        keep_clear.push_back({a.x, a.y, p1.x, p1.y});
         dl->PushClipRect(a, p1, true);
         dl->AddText(ImVec2(a.x + pad, a.y + pad), IM_COL32(255, 196, 120, 255), options.stage_message.c_str());
         dl->PopClipRect();
@@ -342,8 +556,7 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
                 if (sc->clear_selection() && sink) sink("select", "{}");
             } else if (valid) {
                 const ImVec2 t = target_px(io.MousePos.x, io.MousePos.y);
-                std::string pick_why;
-                state.click = sc->request_pick(t.x, t.y, &pick_why) || state.click;
+                state.click = ask_picks(*sc, state, t.x, t.y) || state.click;
             }
         }
         state.down = false;
@@ -353,17 +566,31 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
     // live scene that changes before the pick's readback drops the result, and
     // the pick is then asked again at the next draw.
     if (state.seam_u >= 0.0f && !state.click && sc->width() && sc->height()) {
-        std::string pick_why;
-        state.seam_asked = sc->request_pick(state.seam_u * float(sc->width()), state.seam_v * float(sc->height()),
-                                            &pick_why);
+        state.seam_asked = ask_picks(*sc, state, state.seam_u * float(sc->width()), state.seam_v * float(sc->height()));
         state.click = state.seam_asked;
     }
+    // The entities' pick pass and the programs' frame pick answer apart; the pick goes out once
+    // both did, the program's item unless the entity's hit is nearer.
     caliper_scene::Hit hit;
     const caliper_scene::PickPass::Result pr = sc->poll_pick(&hit);
-    if (pr == caliper_scene::PickPass::Result::Hit || pr == caliper_scene::PickPass::Result::Miss ||
-        pr == caliper_scene::PickPass::Result::Dropped) {
-        if (state.click && pr == caliper_scene::PickPass::Result::Hit && sink) sink("pick", sc->pick_detail(hit));
-        if (state.seam_asked && pr != caliper_scene::PickPass::Result::Dropped) state.seam_u = state.seam_v = -1.0f;
+    if (state.entity_pending && (pr == caliper_scene::PickPass::Result::Hit ||
+                                 pr == caliper_scene::PickPass::Result::Miss ||
+                                 pr == caliper_scene::PickPass::Result::Dropped)) {
+        state.entity_pending = false;
+        state.entity_dropped = pr == caliper_scene::PickPass::Result::Dropped;
+        if (pr == caliper_scene::PickPass::Result::Hit) {
+            state.entity_detail = sc->pick_detail(hit);
+            state.entity_depth = hit.depth;
+        }
+    }
+    if (state.frame_pending) poll_program_pick(*sc, state);
+    if (state.click && !state.entity_pending && !state.frame_pending) {
+        const bool program = !state.program_detail.empty() &&
+                             (state.entity_detail.empty() || !(state.entity_depth < state.program_depth));
+        const std::string& detail = program ? state.program_detail : state.entity_detail;
+        if (!detail.empty() && sink) sink("pick", detail);
+        const bool answered = !detail.empty() || !state.entity_dropped;
+        if (state.seam_asked && answered) state.seam_u = state.seam_v = -1.0f;
         state.seam_asked = false;
         state.click = false;
     }
@@ -384,21 +611,57 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
             dl->AddLine(a, b, ink, 2.0f);
             dl->AddLine(a, ImVec2(a.x, a.y - 5.0f), ink, 2.0f);
             dl->AddLine(b, ImVec2(b.x, b.y - 5.0f), ink, 2.0f);
-            dl->AddText(ImVec2(a.x, a.y - 6.0f - ImGui::GetTextLineHeight()), ink, bar.label.c_str());
+            const ImVec2 at(a.x, a.y - 6.0f - ImGui::GetTextLineHeight());
+            dl->AddText(at, ink, bar.label.c_str());
+            const float label_w = ImGui::CalcTextSize(bar.label.c_str()).x;
+            keep_clear.push_back({a.x - 2.0f, at.y - 2.0f, std::max(b.x, at.x + label_w) + 2.0f, a.y + 2.0f});
         }
     }
+    if (options.axes) {
+        const float bottom = keep_clear.empty() || options.stage_message.empty() ? p1.y : keep_clear.front().y0;
+        if (const caliper_host::LabelRect mark = draw_axes_mark(dl, *sc, ImVec2(p1.x, bottom)); mark.x1 > mark.x0)
+            keep_clear.push_back(mark);
+    }
+    // The selection count at the top right, placed before the labels so that none covers it.
+    char count_text[48] = {};
+    ImVec2 count_at;
+    if (sc->highlighted()) {
+        std::snprintf(count_text, sizeof count_text, "%llu selected", (unsigned long long)sc->highlighted());
+        const ImVec2 ts = ImGui::CalcTextSize(count_text);
+        count_at = ImVec2(p1.x - ts.x - 10.0f, p0.y + 8.0f);
+        keep_clear.push_back({count_at.x - 2.0f, count_at.y - 2.0f, count_at.x + ts.x + 2.0f, count_at.y + ts.y + 2.0f});
+    }
     if (options.labels && sc->width() && sc->height()) {
-        // The item labels and the annotations' labels (scene_overlays.h).
-        const std::vector<caliper_scene::LabelAnchor> labels = sc->labels();
-        std::vector<bool> annotations(labels.size(), false), rings(labels.size(), false);
-        for (std::size_t i = 0; i < labels.size(); ++i) {
-            const std::string& path = sc->tree().path(labels[i].entity);
-            annotations[i] = path.rfind("spec-overlay/", 0) == 0;
-            rings[i] = path.rfind("spec-overlay/marker/", 0) == 0;
+        // The annotations' labels, then the programs' labels by their priority, then the item
+        // labels nearest first (scene_overlays.h).
+        std::vector<caliper_scene::LabelAnchor> labels, items;
+        std::vector<bool> annotations, rings;
+        for (caliper_scene::LabelAnchor& a : sc->labels()) {
+            const std::string& path = sc->tree().path(a.entity);
+            if (path.rfind("spec-overlay/", 0) != 0) {
+                items.push_back(std::move(a));
+                continue;
+            }
+            rings.push_back(path.rfind("spec-overlay/marker/", 0) == 0);
+            labels.push_back(std::move(a));
         }
+        std::vector<int> priorities;
+        for (std::size_t i = 0; i < labels.size(); ++i) priorities.push_back(int(i));
+        for (caliper_scene::LabelAnchor& a : program_labels(*sc)) {
+            priorities.push_back(int(caliper_host::kMaxLabels + labels.size()));
+            labels.push_back(std::move(a));
+        }
+        annotations.assign(rings.size(), true);
+        for (caliper_scene::LabelAnchor& a : items) {
+            priorities.push_back(int(2 * caliper_host::kMaxLabels + labels.size()));
+            labels.push_back(std::move(a));
+        }
+        annotations.resize(labels.size(), false);
+        rings.resize(labels.size(), false);
         SceneOverlayInput in;
         in.annotations = &annotations;
         in.rings = &rings;
+        in.priorities = &priorities;
         in.accent = IM_COL32(176, 141, 87, 255);
         in.draw = dl;
         in.origin = p0;
@@ -407,14 +670,10 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
         in.labels = &labels;
         in.ink = ink;
         in.shade = shade;
+        in.keep_clear = &keep_clear;
         draw_scene_overlays(in);
     }
-    if (sc->highlighted()) {
-        char t[48];
-        std::snprintf(t, sizeof t, "%llu selected", (unsigned long long)sc->highlighted());
-        const ImVec2 ts = ImGui::CalcTextSize(t);
-        dl->AddText(ImVec2(p1.x - ts.x - 10.0f, p0.y + 8.0f), ink, t);
-    }
+    if (count_text[0]) dl->AddText(count_at, ink, count_text);
     dl->PopClipRect();
     return SceneRectResult::drawn;
 }

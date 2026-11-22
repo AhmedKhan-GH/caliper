@@ -14,11 +14,13 @@
 //
 // The session creates both classes (session.h, Session::values()), and
 // values.cpp defines them.
+#include <array>
 #include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -43,6 +45,13 @@ struct PickFields {
     std::optional<double> value;                       // the color value at the pick
     std::optional<std::int64_t> step;                  // after a window
     std::optional<std::string> annotation;             // a pick on a label or a marker
+    // A pick of a program's item (design/programmable-graphics.md, Picking): the program, the
+    // element of its item map, the map's fields by name, and its first four integer fields as
+    // tensor indices, -1 where there are fewer.
+    std::optional<std::string> program;
+    std::optional<std::int64_t> item;
+    std::vector<std::pair<std::string, double>> program_fields;
+    std::optional<std::array<std::int64_t, 4>> tensor_index;
 };
 // The fields as the `pick` event and selection.get give them; absent fields
 // are left out.

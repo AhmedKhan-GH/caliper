@@ -8,6 +8,10 @@
 #include <caliper_builder/session/values.h>
 
 #include "helpers.h"
+#include "../../../../tests/gfx/example_pieces.h"   // the attention arcs piece and its resources
+
+#include <caliper_builder/commands/command_table.h>
+#include <caliper_builder/programs/pieces.h>
 
 #include <limits>
 
@@ -417,4 +421,114 @@ options = { min = { control = "win", field = "lo" }, max = 10, value = [2, 8] }
     REQUIRE(v.is_array());
     CHECK(v[1].get<double>() == 8.0);
     CHECK(values.set_control("win", nlohmann::json::array({1, 9}), CommandOrigin::ui, nullptr).ok());
+}
+
+// selection.set on a program's item: the item map's fields of the version at the cursor, the pick
+// event and the select state, with each refusal of a program, a panel, an item and a version.
+TEST_CASE("state: selection.set picks a program's item and refuses what the program does not draw") {
+    namespace ex = caliper_test_pieces;
+    spec::Spec sp = parse(R"(
+[[state]]
+id = "picked_head"
+type = "integer"
+min = 0
+max = 63
+
+[[panel]]
+id = "world"
+primitive = "scene"
+bind = { scene = "live:model" }
+options = { select = { state = "picked_head", field = "head" } }
+
+[[panel]]
+id = "side"
+primitive = "scene"
+bind = { scene = "live:model" }
+)");
+    spec::Piece piece = ex::attention_arcs();
+    piece.hash = programs::piece_hash(piece);
+    sp.pieces.push_back(piece);
+    const auto program = [&](const char* id, const char* panel, const std::string& hash) {
+        spec::Program p;
+        p.id = id;
+        spec::PieceRef pin;
+        pin.name = piece.name;
+        pin.version = piece.version;
+        pin.hash = hash;
+        pin.from = spec::PieceFrom::inline_piece;
+        p.piece = pin;
+        p.panel = panel;
+        sp.programs.push_back(p);
+    };
+    program("tower_arcs", "world", piece.hash);
+    program("side_arcs", "side", piece.hash);
+    program("stale_arcs", "world", "sha256:" + std::string(64, '0'));
+    program("short_arcs", "world", piece.hash);
+    ValueStore values;
+    values.reset(sp);
+    StepHistory history;
+    history.configure(sp);
+    Recorder recorder;
+    InstrumentContext ic{sp, true, values, history, &recorder};
+    const auto run = [&](const char* name, const json& args) {
+        CommandInvocation inv;
+        inv.name = name;
+        inv.args = args;
+        const CommandDescriptor* d = find_command_descriptor(name);
+        REQUIRE(d != nullptr);
+        const CommandContext ctx{inv, *d};
+        return selection_command(ctx, ic);
+    };
+    // Before the program published a version, nothing is picked.
+    CHECK(run("selection.set", {{"panel", "world"}, {"program", "tower_arcs"}, {"item", 0}}).error.code == "selection.bad_item");
+    const ex::ArcResources res = ex::arc_resources();
+    ResourceVersion v;
+    v.step = 0;
+    v.count = std::uint32_t(res.arcs.size());
+    v.stride = 24;
+    const auto* b = reinterpret_cast<const std::uint8_t*>(res.arcs.data());
+    v.bytes = std::make_shared<const std::vector<std::uint8_t>>(b, b + res.arcs.size() * sizeof(ex::Arc));
+    history.append_resource("tower_arcs", "arcs", 4, {}, v);
+
+    const CommandOutput out = run("selection.set", {{"panel", "world"}, {"program", "tower_arcs"}, {"item", 2}});
+    REQUIRE_MESSAGE(out.error.code.empty(), out.error.message);
+    const ex::Arc& a = res.arcs[2];
+    const json& f = out.result["fields"];
+    CHECK(f["program"] == "tower_arcs");
+    CHECK(f["item"] == 2);
+    CHECK(f["step"] == 0);
+    CHECK(f["layer"] == a.layer);
+    CHECK(f["head"] == a.head);
+    CHECK(f["fields"]["from_token"] == a.from_token);
+    CHECK(f["fields"]["to_token"] == a.to_token);
+    CHECK(f["fields"]["weight"] == doctest::Approx(a.weight));
+    CHECK(f["index"] == json::array({a.layer, a.head, a.from_token, a.to_token}));
+    CHECK(values.value(state_ref("picked_head")) == a.head);
+    bool picked = false;
+    for (const Event& e : recorder.events)
+        picked = picked || (e.kind == EventKind::pick && e.fields["program"] == "tower_arcs" && e.fields["item"] == 2);
+    CHECK(picked);
+    CHECK(run("selection.get", {{"panel", "world"}}).result["fields"] == f);
+
+    // The refusals: a program the spec lacks, one that draws in another panel, an item past the
+    // version's count or past 32 bits, and a pin whose hash the piece does not have.
+    CHECK(run("selection.set", {{"panel", "world"}, {"program", "nope"}, {"item", 0}}).error.code == "program.not_found");
+    CHECK(run("selection.set", {{"panel", "world"}, {"program", "side_arcs"}, {"item", 0}}).error.code ==
+          "selection.bad_item");
+    CHECK(run("selection.set", {{"panel", "world"}, {"program", "tower_arcs"}, {"item", res.arcs.size()}}).error.code ==
+          "selection.bad_item");
+    CHECK(run("selection.set", {{"panel", "world"}, {"program", "tower_arcs"}, {"item", 4294967296ull}}).error.code ==
+          "selection.bad_item");
+    CHECK(run("selection.set", {{"panel", "world"}, {"program", "tower_arcs"}, {"item", -1}}).error.code ==
+          "selection.bad_item");
+    CHECK(run("selection.set", {{"panel", "world"}, {"program", "tower_arcs"}}).error.code == "selection.bad_item");
+    CHECK(run("selection.set", {{"panel", "world"}, {"program", "stale_arcs"}, {"item", 0}}).error.code ==
+          "piece.hash_mismatch");
+    // A version whose bytes hold fewer elements than its count: the item past the bytes is refused.
+    ResourceVersion shortv = v;
+    shortv.bytes = std::make_shared<const std::vector<std::uint8_t>>(b, b + 3 * sizeof(ex::Arc));
+    history.append_resource("short_arcs", "arcs", 4, {}, shortv);
+    CHECK(run("selection.set", {{"panel", "world"}, {"program", "short_arcs"}, {"item", 2}}).error.code.empty());
+    CHECK(run("selection.set", {{"panel", "world"}, {"program", "short_arcs"}, {"item", 3}}).error.code ==
+          "selection.bad_item");
 }

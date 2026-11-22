@@ -750,6 +750,18 @@ nlohmann::json pick_fields_json(const PickFields& fields) {
     if (fields.value) out["value"] = *fields.value;
     if (fields.step) out["step"] = *fields.step;
     if (fields.annotation) out["annotation"] = *fields.annotation;
+    // A program's pick: its item map's fields also by name, so that a select names one of them.
+    if (fields.program) {
+        out["program"] = *fields.program;
+        if (fields.item) out["item"] = *fields.item;
+        nlohmann::json f = nlohmann::json::object();
+        for (const auto& [name, value] : fields.program_fields) {
+            f[name] = value;
+            if (!out.contains(name)) out[name] = value;
+        }
+        out["fields"] = std::move(f);
+        if (fields.tensor_index) out["index"] = *fields.tensor_index;
+    }
     return out;
 }
 

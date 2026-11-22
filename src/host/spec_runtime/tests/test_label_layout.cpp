@@ -4,7 +4,10 @@
 
 #include "spec_runtime/label_layout.h"
 
+#include <cmath>
 #include <cstdint>
+#include <string>
+#include <string_view>
 #include <vector>
 
 using namespace caliper_host;
@@ -172,4 +175,56 @@ TEST_CASE("a panel places at most 512 labels, the first in priority") {
     // The lowest priorities are the last boxes, and those are shown.
     CHECK(placed[599].shown);
     CHECK_FALSE(placed[0].shown);
+}
+
+TEST_CASE("a cut text keeps the longest prefix that fits, ends on a whole character and on no space") {
+    // One unit of width for each byte; the ellipsis is three bytes.
+    const auto bytes = [](std::string_view t) { return (float)t.size(); };
+    const std::string ell = kTextEllipsis;
+    CHECK(fit_with_ellipsis("short", 5, bytes) == "short");
+    CHECK(fit_with_ellipsis("abcdefghij", 8, bytes) == "abcde" + ell);
+    CHECK(fit_with_ellipsis("abcd efghij", 8, bytes) == "abcd" + ell);   // no space before the ellipsis
+    // "\xC3\xA9" is one character of two bytes, which a cut never splits.
+    CHECK(fit_with_ellipsis("ab\xC3\xA9xyzw", 6, bytes) == "ab" + ell);
+    CHECK(fit_with_ellipsis("ab\xC3\xA9xyzw", 7, bytes) == "ab\xC3\xA9" + ell);
+    CHECK(fit_with_ellipsis("abcdef", 3, bytes) == ell);   // only the ellipsis fits
+    CHECK(fit_with_ellipsis("   abcdef", 5, bytes) == ell);
+}
+
+TEST_CASE("a cut text refuses a width that is negative or not a number, and a width where no ellipsis fits") {
+    const auto bytes = [](std::string_view t) { return (float)t.size(); };
+    CHECK(fit_with_ellipsis("abcdef", 2, bytes).empty());
+    CHECK(fit_with_ellipsis("abcdef", -1, bytes).empty());
+    CHECK(fit_with_ellipsis("abcdef", std::nanf(""), bytes).empty());
+    CHECK(fit_with_ellipsis("abcdef", 10, nullptr).empty());
+    CHECK(fit_with_ellipsis("", 0, bytes).empty());
+}
+
+TEST_CASE("a cut text of 1,024 bytes takes few measures and gives what a search from the end gives") {
+    std::string text;
+    Lcg g{7};
+    for (int i = 0; i < 1024; ++i) text.push_back(g.next(0, 1) < 0.15f ? ' ' : (char)('a' + (int)g.next(0, 26)));
+    int measures = 0;
+    // A proportional font: a space is narrow and the letters differ.
+    const auto width = [&](std::string_view t) {
+        ++measures;
+        float w = 0;
+        for (char c : t) w += c == ' ' ? 3.0f : 5.0f + (float)(c % 4);
+        return w;
+    };
+    for (float limit : {40.0f, 333.0f, 2000.0f, 5000.0f}) {
+        measures = 0;
+        const std::string got = fit_with_ellipsis(text, limit, width);
+        CHECK(measures <= 14);
+        // The longest prefix that fits, found from the end as before.
+        std::string want;
+        for (std::size_t n = text.size(); n > 0 && want.empty(); --n) {
+            if (text[n - 1] == ' ') continue;
+            const std::string t = text.substr(0, n) + kTextEllipsis;
+            if (width(t) <= limit) want = t;
+        }
+        if (want.empty()) want = kTextEllipsis;
+        CHECK(got == want);
+        CHECK(width(got) <= limit);
+    }
 }
