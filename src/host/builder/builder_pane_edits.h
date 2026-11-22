@@ -86,7 +86,8 @@ std::vector<PaneShape> pane_transform_shapes(const caliper_builder::spec::Spec& 
 // The names of a tensor's dims through a source's transforms, set on each
 // shape of pane_transform_shapes(): `names` are the source's own (a live
 // view's dims, one per dim of shapes[0]); a slice with an index and a reduce
-// without keepdims take their axis's name away, other steps keep them.
+// without keepdims take their axis's name away, a window puts "step" in
+// front, a surface or a path ends the names, other steps keep them.
 // Shapes after a step whose shape is not known get none. Nothing is set when
 // `names` does not match the source's rank.
 void pane_name_dims(std::vector<PaneShape>& shapes, const std::vector<caliper_builder::spec::Transform>& transforms,
@@ -103,6 +104,13 @@ std::string pane_axis_text(int64_t axis, int64_t size, const std::string& name =
 // end of 0 to size - 1, and *clamped says it was. Unchanged when the size is
 // not known.
 int64_t pane_clamp_index(int64_t index, int64_t size, bool* clamped);
+// The parameters of a step that Properties shows but does not edit (a
+// window, a surface or a path, which commands add), as pairs of a key and its
+// text in the order of the plan's tables: a literal as it is written, a
+// reference as its table ({ control = "window", field = "lo" }), and a key
+// that the step leaves out as its default. Empty for the steps that the pane
+// edits (slice, reduce and normalise).
+std::vector<std::pair<std::string, std::string>> pane_step_fields(const caliper_builder::spec::Transform& t);
 
 // ---- primitives, slots and options ------------------------------------------------------
 

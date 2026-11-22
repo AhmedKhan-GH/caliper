@@ -891,6 +891,62 @@ TEST_CASE("builder pane: a reduce's axes toggle in a list, never empty") {
     CHECK(p.transform_axes_chosen(1) == std::vector<int64_t>{1});
 }
 
+// A window, a surface and a path come from commands. Properties shows each
+// with its name and every parameter as text, a reference as its table and a
+// left-out key as its default, and the pane neither edits nor adds them.
+TEST_CASE("builder pane: window, surface and path steps show their parameters read-only") {
+    using Fields = std::vector<std::pair<std::string, std::string>>;
+    const auto step = [](const json& t) {
+        const auto d = spec::source_from_json(json{{"id", "s"}, {"from", "act"}, {"transform", json::array({t})}});
+        REQUIRE(d.value.transforms.size() == 1);
+        return d.value.transforms[0];
+    };
+    CHECK(pane_step_fields(step({{"op", "window"},
+                                 {"start", {{"control", "window"}, {"field", "lo"}}},
+                                 {"stop", {{"control", "window"}, {"field", "hi"}}}})) ==
+          Fields{{"start", "{ control = \"window\", field = \"lo\" }"},
+                 {"stop", "{ control = \"window\", field = \"hi\" }"}});
+    CHECK(pane_step_fields(step({{"op", "window"}, {"steps", 2048}})) == Fields{{"steps", "2048"}});
+    CHECK(pane_step_fields(step({{"op", "window"}, {"steps", {{"state", "depth"}, {"default", 64}}}})) ==
+          Fields{{"steps", "{ state = \"depth\", default = 64 }"}});
+    CHECK(pane_step_fields(step({{"op", "window"}})) == Fields{{"steps", "every kept step (default)"}});
+    CHECK(pane_step_fields(step({{"op", "surface"}, {"max_cells", 4096}, {"pool", "max"}})) ==
+          Fields{{"max_cells", "4096"}, {"pool", "max"}});
+    CHECK(pane_step_fields(step({{"op", "surface"}})) ==
+          Fields{{"max_cells", "32768 (default)"}, {"pool", "mean (default)"}});
+    CHECK(pane_step_fields(step({{"op", "path"}, {"columns", {0, 2}}, {"max_points", 500}})) ==
+          Fields{{"columns", "0, 2"}, {"max_points", "500"}});
+    CHECK(pane_step_fields(step({{"op", "path"}})) ==
+          Fields{{"columns", "the first three (default)"}, {"max_points", "65536 (default)"}});
+    // The steps that the pane edits have their own fields.
+    CHECK(pane_step_fields(step({{"op", "normalise"}, {"mode", "zscore"}})).empty());
+
+    // A window puts the step axis in front of the names; an operator ends them.
+    PaneShape a;
+    a.known = true;
+    a.dims = {64};
+    PaneShape b = a;
+    b.dims = {16, 64};
+    std::vector<PaneShape> shapes = {a, b};
+    pane_name_dims(shapes, {step({{"op", "window"}, {"steps", 16}})}, {"token"});
+    CHECK(shapes[1].names == std::vector<std::string>{"step", "token"});
+    PaneShape g;
+    g.known = true;
+    g.dims = {16, 64};
+    shapes = {b, g};
+    pane_name_dims(shapes, {step({{"op", "surface"}})}, {"step", "token"});
+    CHECK(shapes[1].names.empty());
+
+    // The pane adds none of them, and sends nothing.
+    Rig r = rig("pane-read-only-steps");
+    BuilderPane& p = *r.pane;
+    p.select("tensor:attn_weights");
+    const size_t sent = p.sent().size();
+    for (spec::TransformOp op : {spec::TransformOp::window, spec::TransformOp::surface, spec::TransformOp::path})
+        CHECK_FALSE(p.add_transform(op));
+    CHECK(p.sent().size() == sent);
+}
+
 // A new dashboard's empty canvas says how to start in build mode, and
 // nothing more once it has a panel or outside build mode.
 TEST_CASE("builder pane: an empty canvas says how to start") {
