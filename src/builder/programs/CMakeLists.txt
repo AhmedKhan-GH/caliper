@@ -4,12 +4,12 @@
 # viewer's stages run the same checks. It needs only the standard library and
 # the header-only value types of spec/program.h (with nlohmann_json), and it
 # links the runtime WGSL compiler caliper::wgsl when the build has it.
-# graphics.cpp holds the composer and the checks of the graphics form
+# pieces.cpp holds the names, imports, hash, composer and checks of pieces
 # (design/programmable-graphics.md), which the browser module also compiles,
-# and draw_prelude.cmake embeds draw_prelude.wgsl for it.
-include("${CMAKE_CURRENT_SOURCE_DIR}/draw_prelude.cmake")
-caliper_draw_prelude_source(_caliper_draw_prelude_cpp)
-add_library(caliper_builder_programs STATIC sandbox.cpp graphics.cpp "${_caliper_draw_prelude_cpp}")
+# and programs_text.cmake embeds the draw prelude and the lib modules for it.
+include("${CMAKE_CURRENT_SOURCE_DIR}/programs_text.cmake")
+caliper_programs_text_source(_caliper_programs_text_cpp)
+add_library(caliper_builder_programs STATIC sandbox.cpp pieces.cpp "${_caliper_programs_text_cpp}")
 target_include_directories(caliper_builder_programs PUBLIC "${CALIPER_BUILDER_INCLUDE_ROOT}")
 target_link_libraries(caliper_builder_programs PUBLIC nlohmann_json::nlohmann_json)
 target_compile_features(caliper_builder_programs PUBLIC cxx_std_17)
@@ -25,5 +25,5 @@ endif()
 caliper_builder_add_tests(programs
     SOURCES
         tests/test_sandbox.cpp
-        tests/test_graphics.cpp
+        tests/test_pieces.cpp
     LIBS caliper_builder_programs)

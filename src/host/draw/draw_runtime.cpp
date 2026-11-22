@@ -31,12 +31,14 @@ DrawRuntime::DrawRuntime(caliper_gfx::Backend& gfx, bool webgpu) : impl_(std::ma
 
 DrawRuntime::~DrawRuntime() = default;
 
-Verdict DrawRuntime::decode(std::string_view, std::string_view, std::string_view, GraphicsProgram* out) {
-    if (out) *out = GraphicsProgram{};
+Verdict DrawRuntime::decode(std::string_view, std::string_view, std::string_view, caliper_builder::spec::Piece* piece,
+                            Instance* instance) {
+    if (piece) *piece = caliper_builder::spec::Piece{};
+    if (instance) *instance = Instance{};
     return not_built("The decoder");
 }
 
-Verdict DrawRuntime::install(const GraphicsProgram&, std::uint32_t, const std::vector<StateType>&) {
+Verdict DrawRuntime::install(const caliper_builder::spec::Piece&, const Instance&, std::uint32_t) {
     impl_->status = DrawStatus{};
     impl_->status.state = DrawState::refused;
     impl_->status.error = not_built("The render graph");

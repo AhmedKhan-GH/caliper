@@ -3,10 +3,11 @@
 // (design/programmable-graphics.md, Render Graph, Draw State, Safety of
 // Draws, Picking and Text).
 //
-// One DrawRuntime runs one program of the graphics form in one scene view,
-// on that view's backend of the graphics layer (gfx/gfx.h). It decodes the
-// draw half from the declaration of a PROGRAM message, composes each pass
-// with programs/graphics.h, creates the pipelines, allocates the resources,
+// One DrawRuntime runs the draw half of one program, an instance of a piece,
+// in one scene view, on that view's backend of the graphics layer
+// (gfx/gfx.h). It decodes the piece's manifest and its resolved files from a
+// PROGRAM message, checks the piece's hash against the pin, composes each
+// pass with programs/pieces.h, creates the pipelines, allocates the resources,
 // the draw buffers and the offscreen targets, and records the passes of one
 // frame in their declared order into a frame of their own, so that the
 // layer's GPU time of a submit is the program's time. The app and the
@@ -16,13 +17,16 @@
 // The scene view owns the camera, the host target (color, ID and depth),
 // the pick readback, the labels and the step cursor; it gives each frame's
 // values in FrameInputs. Every function runs on the view's frame thread.
+// Params that follow controls or state reach it as the packed bytes of the
+// struct Params; a piece reads no state variable by name.
 // Until the draw half is built, install() answers program.not_built and the
 // runtime draws nothing. Nothing here throws.
 #include "gfx/gfx.h"
 
-#include <caliper_builder/programs/graphics.h>
+#include <caliper_builder/programs/pieces.h>
 
 #include <array>
+#include <map>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -34,14 +38,21 @@
 
 namespace caliper_draw {
 
-using caliper_builder::programs::GraphicsProgram;
-using caliper_builder::programs::StateType;
 using caliper_builder::programs::Verdict;
+
+// The instance that a viewer draws: the program's id, its bindings and the
+// scene panel of its draw half. The piece holds the manifest and the
+// resolved files (common.wgsl and draw.wgsl, imports included).
+struct Instance {
+    std::string program;
+    std::map<std::string, std::string> bind;   // input name to program:<id>/<resource> for a buffer input
+    std::string panel;
+};
 
 // One version of a published resource: the bytes of a RESOURCE message, or
 // a version that the step history kept. The bytes stay the caller's.
 struct ResourceVersion {
-    std::string resource;            // the resource's id
+    std::string resource;            // the resource's id, or a buffer input's name
     std::int64_t step = -1;          // the step of the derive pass that wrote it
     std::uint32_t count = 0;         // valid elements; a texture's width * height
     const std::uint8_t* bytes = nullptr;
@@ -57,7 +68,7 @@ struct Selected {
 };
 
 // What the scene view gives one frame of a program: the values of
-// CaliperView, the selection, and the packed bytes of `params` and `state`.
+// CaliperView, the selection, and the packed bytes of `params`.
 struct FrameInputs {
     std::array<float, 16> clip_from_world{};
     std::array<float, 16> world_from_clip{};
@@ -73,8 +84,7 @@ struct FrameInputs {
     bool live = true;
     bool cursor_moved = false;       // a command, a key or the transport moved the cursor
     std::vector<Selected> selection; // at most kMaxSelected
-    std::vector<std::uint8_t> params;   // the struct Params, as pack_params() of sandbox.h packs it
-    std::vector<std::uint8_t> state;    // the struct CaliperState, in draw.state order
+    std::vector<std::uint8_t> params;   // the generated struct Params, in the manifest's order
 };
 
 // The host target of the scene view, which the program's passes with the
@@ -128,19 +138,19 @@ public:
     DrawRuntime(const DrawRuntime&) = delete;
     DrawRuntime& operator=(const DrawRuntime&) = delete;
 
-    // Decodes the draw half, the resources and the params' names from the
-    // JSON metadata "declaration" of a PROGRAM message and its sections
-    // "draw" and "common". The app decodes the JSON of its own spec with the
-    // same function, so that both viewers read one form.
-    static Verdict decode(std::string_view declaration_json, std::string_view draw_wgsl, std::string_view common_wgsl,
-                          GraphicsProgram* out);
+    // Decodes the piece and the instance from the JSON metadata "declaration"
+    // of a PROGRAM message and its sections "common" and "draw", and checks
+    // the piece's hash against the pin (piece.hash_mismatch). The app decodes
+    // the JSON of its own spec with the same function, so that both viewers
+    // read one form.
+    static Verdict decode(std::string_view declaration_json, std::string_view common_wgsl, std::string_view draw_wgsl,
+                          caliper_builder::spec::Piece* piece, Instance* instance);
 
     // Checks, composes and compiles each pass, then allocates the draw
     // buffers and the targets. `pick_id` is the program's id in the ID
-    // target, which the scene view gives out; `state` gives the WGSL types of
-    // draw.state. A program that is installed again replaces this one and
-    // starts with zeroed buffers.
-    Verdict install(const GraphicsProgram& program, std::uint32_t pick_id, const std::vector<StateType>& state);
+    // target, which the scene view gives out. A program that is installed
+    // again replaces this one and starts with zeroed buffers.
+    Verdict install(const caliper_builder::spec::Piece& piece, const Instance& instance, std::uint32_t pick_id);
     // Releases every object of the program.
     void remove();
 

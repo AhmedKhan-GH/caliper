@@ -252,6 +252,7 @@ struct Spec {
     std::vector<Control> controls;   // `control`, spec version 1 (instrument.h); empty in version 0
     std::vector<Program> programs;   // `program`, spec version 1 (program.h); empty in version 0
     std::vector<Stage> stages;       // `stage`, spec version 1 (program.h); empty in version 0
+    std::vector<Piece> pieces;       // `piece`, inline pieces (piece.h); the codec refuses the key until it reads it
     std::vector<StateVar> states;    // `state`, spec version 1 (state.h); empty in version 0
     Provenance provenance;           // `provenance`, spec version 1 (program.h); empty for the person's own spec
     nlohmann::json x;

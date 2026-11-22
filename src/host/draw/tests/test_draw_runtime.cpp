@@ -16,10 +16,12 @@ TEST_CASE("a draw runtime refuses a program as not built and draws nothing") {
     cd::DrawRuntime runtime(gfx, /*webgpu=*/false);
     CHECK(runtime.status().state == cd::DrawState::waiting);
 
-    cp::GraphicsProgram program;
-    CHECK(cd::DrawRuntime::decode("{}", "", "", &program).code == cp::kProgramNotBuilt);
-    program.id = "arcs";
-    const cp::Verdict v = runtime.install(program, 1, {});
+    caliper_builder::spec::Piece piece;
+    cd::Instance instance;
+    CHECK(cd::DrawRuntime::decode("{}", "", "", &piece, &instance).code == cp::kProgramNotBuilt);
+    piece.name = "attention_arcs";
+    instance.program = "tower_arcs";
+    const cp::Verdict v = runtime.install(piece, instance, 1);
     CHECK(v.code == cp::kProgramNotBuilt);
     CHECK(runtime.status().state == cd::DrawState::refused);
     CHECK(runtime.status().error.code == cp::kProgramNotBuilt);

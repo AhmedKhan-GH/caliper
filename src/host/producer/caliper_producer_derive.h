@@ -1,7 +1,7 @@
 /*
- * The producer runtime's C interface for the derive half of a program of the
- * graphics form (design/programmable-graphics.md, Derive Half and
- * Resources), beside caliper_producer.h.
+ * The producer runtime's C interface for the derive half of a piece
+ * (design/programmable-graphics.md, Derive Half and Resources), beside
+ * caliper_producer.h.
  *
  * A derive program runs several compute passes, in their order and in one
  * submit, at a pass of the shared cadence, under the same time watchdog,
@@ -9,8 +9,9 @@
  * typed resources that keep their contents between runs (a resource with
  * `clear` is zeroed before each run), and a counted buffer's counter is set
  * to zero before each run. The runtime composes the module itself with
- * compose_derive() of caliper_builder/programs/graphics.h from this
- * description, so that the script checks the same text as the app.
+ * compose_derive() of caliper_builder/programs/pieces.h from this
+ * description and the files that PROGRAM carries with their imports
+ * resolved, so that the script checks the same text as the app.
  *
  * caliper_producer_run() runs a derive program like any other, and
  * caliper_producer_read_status() reports it. After a pass, the facade reads
@@ -32,7 +33,7 @@ typedef enum caliper_producer_resource_kind {
     CALIPER_PRODUCER_RESOURCE_TEXTURE = 2   /* array<u32> of width*height packed rgba8unorm texels */
 } caliper_producer_resource_kind;
 
-/* One entry of `resources` (spec/graphics.h, Resource). */
+/* One entry of `resources` (spec/piece.h, Resource). */
 typedef struct caliper_producer_resource_desc {
     const char* id;
     uint32_t kind;                    /* caliper_producer_resource_kind                       */
@@ -56,14 +57,16 @@ typedef struct caliper_producer_derive_pass {
     size_t write_count;
 } caliper_producer_derive_pass;
 
-/* The derive half of a program after the facade's parse of its declaration. */
+/* The derive half of a program, an instance of a piece, after the facade's
+ * parse of its PROGRAM declaration. */
 typedef struct caliper_producer_derive_desc {
-    const char* id;
-    const char* wgsl;                 /* derive.wgsl                                          */
+    const char* id;                   /* the program's id                                     */
+    const char* piece_hash;           /* "sha256:<hex>", which the runtime checks again       */
+    const char* wgsl;                 /* derive.wgsl, imports resolved                        */
     size_t wgsl_size;
-    const char* common;               /* `common`, or NULL                                    */
+    const char* common;               /* the lib modules and common.wgsl, or NULL             */
     size_t common_size;
-    const caliper_producer_input* inputs;
+    const caliper_producer_input* inputs;   /* `var` is the piece's input name                */
     size_t input_count;               /* at most 8                                            */
     const char* const* input_types;   /* "f32", "i32" or "u32" for each input; NULL: all f32  */
     const caliper_producer_resource_desc* resources;
@@ -71,6 +74,7 @@ typedef struct caliper_producer_derive_desc {
     const caliper_producer_derive_pass* passes;
     size_t pass_count;                /* 1 to 8                                               */
     const caliper_producer_param* params;
+    const char* const* param_types;   /* "f32", "i32" or "u32" for each param, in order       */
     size_t param_count;               /* at most 16                                           */
     double time_limit_ms;             /* all passes of one run                                */
     uint64_t memory_limit_bytes;      /* resources and bound tensors                          */

@@ -1,4 +1,4 @@
-// The derive half of a program of the graphics form in the producer runtime
+// The derive half of a piece in the producer runtime
 // (caliper_producer_derive.h, design/programmable-graphics.md). Not built
 // yet: each function answers CALIPER_PRODUCER_UNSUPPORTED with the code
 // "program.not_built", on every platform.
@@ -15,7 +15,7 @@ caliper_producer_status not_built(caliper_producer_error* error) {
         error->code = "program.not_built";
         error->line = 0;
         error->column = 0;
-        static const char kText[] = "The derive half of programmable graphics is not built yet.";
+        static const char kText[] = "The derive half of pieces is not built yet.";
         error->message = static_cast<char*>(std::malloc(sizeof kText));
         if (error->message) std::memcpy(error->message, kText, sizeof kText);
     }

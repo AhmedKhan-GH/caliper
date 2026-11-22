@@ -14070,60 +14070,45 @@
             "description": "Whether the result carries the generated headers; true when absent.",
             "type": "boolean"
           },
-          "program": {
+          "piece": {
             "additionalProperties": false,
-            "description": "The program, as program.create takes it.",
+            "description": "The piece, as piece.update takes it.",
             "properties": {
-              "common": {
-                "description": "WGSL that both halves include: structs such as Params, constants and functions, with no binding and no entry point.",
-                "maxLength": 16384,
-                "type": "string"
+              "depends": {
+                "description": "Pieces whose outputs feed this piece's buffer inputs, or that are drawn with it.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "description": "The piece's name.",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                      "type": "string"
+                    },
+                    "version": {
+                      "description": "Its version.",
+                      "maximum": 1000000,
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "type": "array"
               },
               "derive": {
                 "additionalProperties": false,
-                "description": "The derive half, which runs in the training script; absent for a program that only draws.",
+                "description": "The derive half, which runs in the training script; absent for a piece that only draws.",
                 "properties": {
                   "every": {
                     "description": "The fewest steps between two runs; the shared cadence may run it less often, never more often.",
                     "maximum": 10000,
                     "minimum": 1,
                     "type": "integer"
-                  },
-                  "inputs": {
-                    "description": "The tensors that the derive half reads, read-only and in place.",
-                    "items": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "source": {
-                          "description": "A live tensor of the script, live:<name>.",
-                          "maxLength": 263,
-                          "minLength": 3,
-                          "pattern": "^(table|tensor|live|feed|metric|run):.+$",
-                          "type": "string"
-                        },
-                        "type": {
-                          "description": "The element type of the generated array; f32 when absent. The tensor's dtype must match it.",
-                          "enum": [
-                            "f32",
-                            "i32",
-                            "u32"
-                          ],
-                          "type": "string"
-                        },
-                        "var": {
-                          "description": "The name of the generated array<T> in the WGSL.",
-                          "pattern": "^[a-z][a-z0-9_]{0,31}$",
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "var",
-                        "source"
-                      ],
-                      "type": "object"
-                    },
-                    "maxItems": 8,
-                    "type": "array"
                   },
                   "memory_mb": {
                     "description": "The budget of the resources and the bound tensors in MiB; 64 when absent.",
@@ -14137,7 +14122,7 @@
                       "additionalProperties": false,
                       "properties": {
                         "entry": {
-                          "description": "The compute entry point; never main.",
+                          "description": "The compute entry point of derive.wgsl; never main.",
                           "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
                           "type": "string"
                         },
@@ -14153,7 +14138,7 @@
                           "type": "array"
                         },
                         "writes": {
-                          "description": "The resources that the pass may change; the others are read-only in it.",
+                          "description": "The resources that the pass changes; a published resource that no pass names is sent after the first run only.",
                           "items": {
                             "pattern": "^[a-z][a-z0-9_]{0,31}$",
                             "type": "string"
@@ -14176,23 +14161,21 @@
                     "maximum": 50,
                     "minimum": 0.01,
                     "type": "number"
-                  },
-                  "wgsl": {
-                    "description": "The derive half's WGSL: compute entry points, functions and constants, with no binding and no directive; the composer declares the inputs, the resources, caliper and params.",
-                    "maxLength": 65536,
-                    "minLength": 1,
-                    "type": "string"
                   }
                 },
                 "required": [
-                  "wgsl",
                   "passes"
                 ],
                 "type": "object"
               },
+              "description": {
+                "description": "One line that says what the piece draws or publishes.",
+                "maxLength": 256,
+                "type": "string"
+              },
               "draw": {
                 "additionalProperties": false,
-                "description": "The draw half, which runs in the viewer every frame.",
+                "description": "The draw half, which runs in the viewer every frame; absent for a piece that only publishes.",
                 "properties": {
                   "buffers": {
                     "description": "Buffers that the draw half keeps between frames.",
@@ -14206,7 +14189,7 @@
                           "type": "integer"
                         },
                         "element": {
-                          "description": "A plain element type; give either element, or struct with fields.",
+                          "description": "a plain element type; give either element, or struct with fields.",
                           "enum": [
                             "f32",
                             "i32",
@@ -14219,7 +14202,7 @@
                           "type": "string"
                         },
                         "fields": {
-                          "description": "The struct's fields in order, each written name: type.",
+                          "description": "the struct's fields in order, each written name: type.",
                           "items": {
                             "pattern": "^[a-z_][a-z0-9_]{0,31}: (f32|i32|u32|vec2<f32>|vec4<f32>|vec2<u32>|vec4<u32>)$",
                             "type": "string"
@@ -14229,7 +14212,7 @@
                           "type": "array"
                         },
                         "id": {
-                          "description": "The buffer's id, unique among the program's resources and draw buffers.",
+                          "description": "The buffer's id, unique among the piece's inputs, resources and draw buffers.",
                           "pattern": "^[a-z][a-z0-9_]{0,31}$",
                           "type": "string"
                         },
@@ -14243,7 +14226,7 @@
                           "type": "string"
                         },
                         "struct": {
-                          "description": "The name of the generated struct.",
+                          "description": "the name of the struct that the composer generates from fields.",
                           "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$",
                           "type": "string"
                         }
@@ -14273,17 +14256,10 @@
                     "type": "number"
                   },
                   "memory_mb": {
-                    "description": "The budget of the resources, the draw buffers and the targets in the viewer, in MiB; 64 when absent.",
+                    "description": "The budget of the resources, buffer inputs, draw buffers and targets in the viewer, in MiB; 64 when absent.",
                     "maximum": 256,
                     "minimum": 1,
                     "type": "integer"
-                  },
-                  "panel": {
-                    "description": "The scene panel whose host target the draw half writes.",
-                    "maxLength": 64,
-                    "minLength": 1,
-                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
-                    "type": "string"
                   },
                   "passes": {
                     "description": "The passes of one frame, in this order.",
@@ -14291,7 +14267,7 @@
                       "additionalProperties": false,
                       "properties": {
                         "blend": {
-                          "description": "render: the color blend; opaque into host, additive into an offscreen target, when absent. The ID never blends.",
+                          "description": "render: the color blend; opaque into host and additive into an offscreen target when absent. The ID never blends.",
                           "enum": [
                             "opaque",
                             "alpha",
@@ -14309,7 +14285,7 @@
                           "type": "string"
                         },
                         "entry": {
-                          "description": "compute: the compute entry point.",
+                          "description": "compute: the compute entry point of draw.wgsl.",
                           "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
                           "type": "string"
                         },
@@ -14319,9 +14295,7 @@
                           "type": "string"
                         },
                         "instances": {
-                          "description": "render: the instance count, or a buffer resource's id whose valid count at the cursor is the count; 1 when absent.",
-                          "maximum": 4194304,
-                          "minimum": 1,
+                          "description": "render: the instance count from 1 to 4194304, or the id of a buffer resource or buffer input whose valid count at the cursor is the count; 1 when absent.",
                           "type": [
                             "integer",
                             "string"
@@ -14336,7 +14310,7 @@
                           "type": "string"
                         },
                         "pick": {
-                          "description": "render into host: the fragment returns CaliperPicked and writes caliper_id(item) at location 1, which the pick readback reads; false when absent.",
+                          "description": "render into host: the fragment returns CaliperPicked and writes pick::id(item) at location 1, which the pick readback reads; false when absent.",
                           "type": "boolean"
                         },
                         "reads": {
@@ -14387,7 +14361,7 @@
                           "type": "array"
                         },
                         "writes": {
-                          "description": "compute: the draw buffers that the pass may change.",
+                          "description": "compute: the draw buffers that the pass changes.",
                           "items": {
                             "pattern": "^[a-z][a-z0-9_]{0,31}$",
                             "type": "string"
@@ -14410,7 +14384,7 @@
                     "description": "The item map: a picked item is an element index of the resource.",
                     "properties": {
                       "fields": {
-                        "description": "The struct's fields that the pick event carries, in this order; the first four integer fields are the tensor indices of the linked selection.",
+                        "description": "The struct's fields that the pick event carries, in this order; its first four integer fields are the tensor indices of the linked selection.",
                         "items": {
                           "pattern": "^[a-z_][a-z0-9_]{0,31}$",
                           "type": "string"
@@ -14430,17 +14404,6 @@
                       "fields"
                     ],
                     "type": "object"
-                  },
-                  "state": {
-                    "description": "State variables of the spec that the draw half reads as state.<id>.",
-                    "items": {
-                      "maxLength": 64,
-                      "minLength": 1,
-                      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
-                      "type": "string"
-                    },
-                    "maxItems": 16,
-                    "type": "array"
                   },
                   "targets": {
                     "description": "Offscreen rgba8unorm targets, such as a glow for a bloom.",
@@ -14464,12 +14427,9 @@
                           "type": "string"
                         },
                         "scale": {
-                          "description": "The size against the host target; 1 when absent.",
-                          "enum": [
-                            1,
-                            0.5,
-                            0.25
-                          ],
+                          "description": "The size against the host target: 1, 0.5 or 0.25; 1 when absent.",
+                          "maximum": 1,
+                          "minimum": 0.25,
                           "type": "number"
                         }
                       },
@@ -14506,7 +14466,7 @@
                         "type": "string"
                       },
                       "strings": {
-                        "description": "The texts of the labels.",
+                        "description": "The texts of the labels; an instance may give its own.",
                         "items": {
                           "maxLength": 64,
                           "type": "string"
@@ -14520,33 +14480,186 @@
                       "strings"
                     ],
                     "type": "object"
-                  },
-                  "wgsl": {
-                    "description": "The draw half's WGSL: entry points, functions and constants, with no binding and no directive; the prelude and the composer declare every binding.",
-                    "maxLength": 65536,
-                    "minLength": 1,
-                    "type": "string"
                   }
                 },
                 "required": [
-                  "panel",
-                  "wgsl",
                   "passes"
                 ],
                 "type": "object"
               },
-              "id": {
-                "description": "The program's id, unique among programs.",
-                "maxLength": 55,
-                "minLength": 1,
-                "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+              "files": {
+                "additionalProperties": false,
+                "description": "The WGSL files, with no binding and no directive; the prelude, the composer and the imports declare the rest.",
+                "properties": {
+                  "common": {
+                    "description": "common.wgsl: structs, constants and functions that both halves include.",
+                    "maxLength": 65536,
+                    "type": "string"
+                  },
+                  "derive": {
+                    "description": "derive.wgsl: the derive half's compute entry points.",
+                    "maxLength": 65536,
+                    "type": "string"
+                  },
+                  "draw": {
+                    "description": "draw.wgsl: the draw half's entry points.",
+                    "maxLength": 65536,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "hash": {
+                "description": "The piece's hash over its canonical manifest and its resolved WGSL; the host computes it, and a given value must match.",
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "imports": {
+                "description": "Lib modules by name and version, such as colormap@1, whose items the WGSL calls as colormap::magma.",
+                "items": {
+                  "pattern": "^[a-z][a-z0-9_]{0,31}@[1-9][0-9]{0,5}$",
+                  "type": "string"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "inputs": {
+                "description": "The typed inputs that an instance binds.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "dtype": {
+                      "description": "tensor: the element type; f32 when absent. The bound tensor's dtype must match it.",
+                      "enum": [
+                        "f32",
+                        "i32",
+                        "u32"
+                      ],
+                      "type": "string"
+                    },
+                    "element": {
+                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "enum": [
+                        "f32",
+                        "i32",
+                        "u32",
+                        "vec2<f32>",
+                        "vec4<f32>",
+                        "vec2<u32>",
+                        "vec4<u32>"
+                      ],
+                      "type": "string"
+                    },
+                    "fields": {
+                      "description": "buffer: the struct's fields in order, each written name: type.",
+                      "items": {
+                        "pattern": "^[a-z_][a-z0-9_]{0,31}: (f32|i32|u32|vec2<f32>|vec4<f32>|vec2<u32>|vec4<u32>)$",
+                        "type": "string"
+                      },
+                      "maxItems": 16,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "kind": {
+                      "description": "tensor: a tensor of the script, read by the derive half; buffer: another program's published buffer resource, read by the draw half.",
+                      "enum": [
+                        "tensor",
+                        "buffer"
+                      ],
+                      "type": "string"
+                    },
+                    "name": {
+                      "description": "The input's name, which the WGSL reads as a generated read-only array.",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                      "type": "string"
+                    },
+                    "rank_max": {
+                      "description": "tensor: the most axes; 8 when absent.",
+                      "maximum": 8,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "rank_min": {
+                      "description": "tensor: the fewest axes; 1 when absent.",
+                      "maximum": 8,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "struct": {
+                      "description": "buffer: the name of the struct that the composer generates from fields.",
+                      "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$",
+                      "type": "string"
+                    },
+                    "title": {
+                      "description": "The input's label in the builder.",
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "name": {
+                "description": "The piece's name, at most 32 characters; its workspace folder is pieces/<name>/<version>/.",
+                "pattern": "^[a-z][a-z0-9_]{0,31}$",
                 "type": "string"
               },
               "params": {
-                "description": "A JSON object that gives each of the program's named parameters, at most 16 names, a number or a binding reference; both halves read them as params.<name> from the struct Params of common."
+                "description": "The parameters, which become controls when an instance gives no value.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "default": {
+                      "description": "The value when an instance gives none; 0 when absent.",
+                      "type": "number"
+                    },
+                    "max": {
+                      "description": "The greatest value.",
+                      "type": "number"
+                    },
+                    "min": {
+                      "description": "The least value; with max, an instance without a value gets a range control.",
+                      "type": "number"
+                    },
+                    "name": {
+                      "description": "The parameter's name, a field of the generated struct Params that both halves read as params.<name>.",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                      "type": "string"
+                    },
+                    "title": {
+                      "description": "The label of the control.",
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "type": {
+                      "description": "The field's type; f32 when absent.",
+                      "enum": [
+                        "f32",
+                        "i32",
+                        "u32"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 16,
+                "type": "array"
               },
               "resources": {
-                "description": "The resources that the derive half writes and the draw half reads.",
+                "description": "The resources that the derive half writes; the published ones are outputs.",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
@@ -14594,7 +14707,7 @@
                       "type": "integer"
                     },
                     "id": {
-                      "description": "The resource's id, a WGSL name of at most 32 characters, unique among the program's resources and draw buffers; both halves read it by this name.",
+                      "description": "The resource's id, a WGSL name, unique among the piece's inputs, resources and draw buffers.",
                       "pattern": "^[a-z][a-z0-9_]{0,31}$",
                       "type": "string"
                     },
@@ -14613,11 +14726,11 @@
                       "type": "string"
                     },
                     "publish": {
-                      "description": "false: a private resource of the derive half that keeps state between runs and is never sent; true when absent.",
+                      "description": "false: a private resource of the derive half that keeps state between runs and is never sent; true when absent, and the resource is an output that viewers and other pieces read.",
                       "type": "boolean"
                     },
                     "struct": {
-                      "description": "buffer: the name of the struct that the composer generates from fields in both halves.",
+                      "description": "buffer: the name of the struct that the composer generates from fields.",
                       "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$",
                       "type": "string"
                     },
@@ -14637,22 +14750,56 @@
                 "maxItems": 8,
                 "type": "array"
               },
-              "title": {
-                "description": "The program's label.",
-                "maxLength": 256,
-                "minLength": 1,
-                "type": "string"
+              "sample": {
+                "description": "A small input for the preview.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "description": "The file's bytes in base64, when a command writes it; at most 1 MiB for all samples.",
+                      "maxLength": 1398104,
+                      "type": "string"
+                    },
+                    "input": {
+                      "description": "A tensor or buffer input of the piece.",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                      "type": "string"
+                    },
+                    "shape": {
+                      "description": "The sample's shape; its file is sample/<input>.bin, raw little-endian elements.",
+                      "items": {
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "maxItems": 8,
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "input",
+                    "shape"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "version": {
+                "description": "The piece's version; 1 when absent. A saved version never changes.",
+                "maximum": 1000000,
+                "minimum": 1,
+                "type": "integer"
               }
             },
             "required": [
-              "id",
-              "draw"
+              "name"
             ],
             "type": "object"
           }
         },
         "required": [
-          "program"
+          "piece"
         ],
         "type": "object"
       },
@@ -14660,27 +14807,36 @@
       "effect": "read",
       "examples": [
         {
-          "program": {
+          "piece": {
             "draw": {
-              "panel": "world",
+              "camera": "none",
               "passes": [
                 {
                   "fragment": "fs",
                   "kind": "render"
                 }
-              ],
-              "wgsl": "@fragment fn fs(in: CaliperFullscreen) -> @location(0) vec4<f32> { return vec4<f32>(in.uv, 0.0, 1.0); }"
+              ]
             },
-            "id": "field"
+            "files": {
+              "draw": "@fragment fn fs(in: CaliperFullscreen) -> @location(0) vec4<f32> { return vec4<f32>(in.uv, 0.0, 1.0); }"
+            },
+            "name": "uv_field"
           }
         }
       ],
       "frame_thread": false,
       "mutates": false,
-      "name": "program.check",
+      "name": "piece.check",
       "result": {
         "additionalProperties": false,
         "properties": {
+          "hash": {
+            "description": "The piece's hash, or null when the manifest or an import is refused.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "headers": {
             "additionalProperties": false,
             "description": "The generated headers, or empty texts when headers is false.",
@@ -14701,7 +14857,7 @@
             "type": "object"
           },
           "messages": {
-            "description": "The messages, errors first; line and column are in the part that the message names.",
+            "description": "The messages, errors first; each names the file in its message, and line and column are in that file.",
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -14744,7 +14900,7 @@
             "type": "array"
           },
           "ok": {
-            "description": "Whether the declaration and every pass pass the checks.",
+            "description": "Whether the manifest and every pass pass the checks.",
             "type": "boolean"
           },
           "passes": {
@@ -14782,13 +14938,2044 @@
         },
         "required": [
           "ok",
+          "hash",
           "messages",
           "passes",
           "headers"
         ],
         "type": "object"
       },
-      "summary": "Checks a program of the graphics form without adding it: the declaration, then each pass of the derive half and the draw half composed with the prelude and the generated header and compiled as the script and the viewer compile it. Returns the messages with the part, line and column, and the generated header of each half, which names every binding the source may use. It changes nothing."
+      "summary": "Checks a piece on its own without saving it: its name, its manifest, its imports, and each pass of the derive half and the draw half composed with the prelude and the generated header and compiled as the script and the viewer compile it. Returns the messages with the file, line and column, the piece's hash, and the generated header of each half, which names every binding the files may use. It changes nothing."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "description": "Only the pieces of this source; every source when absent.",
+            "enum": [
+              "library",
+              "workspace",
+              "inline"
+            ],
+            "type": "string"
+          },
+          "match": {
+            "description": "Only the pieces whose names match this glob, such as glow_*; every piece when absent.",
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "read",
+      "examples": [
+        {
+          "from": "library"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "piece.list",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "pieces": {
+            "description": "The pieces, library first, then workspace and inline, by name and version.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "derives": {
+                  "description": "Whether it has a derive half.",
+                  "type": "boolean"
+                },
+                "description": {
+                  "description": "Its one line.",
+                  "type": "string"
+                },
+                "draws": {
+                  "description": "Whether it has a draw half.",
+                  "type": "boolean"
+                },
+                "from": {
+                  "description": "library, workspace or inline in the open spec.",
+                  "enum": [
+                    "library",
+                    "workspace",
+                    "inline"
+                  ],
+                  "type": "string"
+                },
+                "hash": {
+                  "description": "Its hash.",
+                  "type": "string"
+                },
+                "inputs": {
+                  "description": "Its inputs' names.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "name": {
+                  "description": "The piece's name.",
+                  "type": "string"
+                },
+                "outputs": {
+                  "description": "Its published resources' ids.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "params": {
+                  "description": "Its parameters' names.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "pinned_by": {
+                  "description": "The programs of the open spec that pin this version.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "version": {
+                  "description": "Its version.",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "name",
+                "version",
+                "from",
+                "description",
+                "hash",
+                "draws",
+                "derives",
+                "inputs",
+                "params",
+                "outputs",
+                "pinned_by"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "pieces"
+        ],
+        "type": "object"
+      },
+      "summary": "Lists the pieces that an instrument can use: the built-in library, the workspace's pieces/ folder and the inline pieces of the open spec, each version with its inputs, parameters, outputs, hash and the programs of the open spec that pin it. It changes nothing."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "description": "The source; library, then workspace, then inline when absent.",
+            "enum": [
+              "library",
+              "workspace",
+              "inline"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "The piece's name.",
+            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+            "type": "string"
+          },
+          "version": {
+            "description": "The version; the newest when absent.",
+            "maximum": 1000000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "read",
+      "examples": [
+        {
+          "name": "points"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "piece.show",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "description": "Its source.",
+            "enum": [
+              "library",
+              "workspace",
+              "inline"
+            ],
+            "type": "string"
+          },
+          "path": {
+            "description": "The piece's folder relative to the workspace, pieces/<name>/<version>; null for a library or inline piece.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "piece": {
+            "additionalProperties": false,
+            "description": "The piece, with its files and its hash.",
+            "properties": {
+              "depends": {
+                "description": "Pieces whose outputs feed this piece's buffer inputs, or that are drawn with it.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "description": "The piece's name.",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                      "type": "string"
+                    },
+                    "version": {
+                      "description": "Its version.",
+                      "maximum": 1000000,
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "derive": {
+                "additionalProperties": false,
+                "description": "The derive half, which runs in the training script; absent for a piece that only draws.",
+                "properties": {
+                  "every": {
+                    "description": "The fewest steps between two runs; the shared cadence may run it less often, never more often.",
+                    "maximum": 10000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "memory_mb": {
+                    "description": "The budget of the resources and the bound tensors in MiB; 64 when absent.",
+                    "maximum": 512,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "passes": {
+                    "description": "The compute passes, run in this order in one submit at a pass of the shared cadence.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "entry": {
+                          "description": "The compute entry point of derive.wgsl; never main.",
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+                          "type": "string"
+                        },
+                        "workgroups": {
+                          "description": "The workgroup counts x, y and z; [1, 1, 1] when absent.",
+                          "items": {
+                            "maximum": 65535,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxItems": 3,
+                          "minItems": 3,
+                          "type": "array"
+                        },
+                        "writes": {
+                          "description": "The resources that the pass changes; a published resource that no pass names is sent after the first run only.",
+                          "items": {
+                            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                            "type": "string"
+                          },
+                          "maxItems": 8,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "entry"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 8,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "time_ms": {
+                    "description": "The most GPU time of one run of all passes in milliseconds; 4 when absent.",
+                    "maximum": 50,
+                    "minimum": 0.01,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "passes"
+                ],
+                "type": "object"
+              },
+              "description": {
+                "description": "One line that says what the piece draws or publishes.",
+                "maxLength": 256,
+                "type": "string"
+              },
+              "draw": {
+                "additionalProperties": false,
+                "description": "The draw half, which runs in the viewer every frame; absent for a piece that only publishes.",
+                "properties": {
+                  "buffers": {
+                    "description": "Buffers that the draw half keeps between frames.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "count": {
+                          "description": "The elements.",
+                          "maximum": 4194304,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "element": {
+                          "description": "a plain element type; give either element, or struct with fields.",
+                          "enum": [
+                            "f32",
+                            "i32",
+                            "u32",
+                            "vec2<f32>",
+                            "vec4<f32>",
+                            "vec2<u32>",
+                            "vec4<u32>"
+                          ],
+                          "type": "string"
+                        },
+                        "fields": {
+                          "description": "the struct's fields in order, each written name: type.",
+                          "items": {
+                            "pattern": "^[a-z_][a-z0-9_]{0,31}: (f32|i32|u32|vec2<f32>|vec4<f32>|vec2<u32>|vec4<u32>)$",
+                            "type": "string"
+                          },
+                          "maxItems": 16,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "id": {
+                          "description": "The buffer's id, unique among the piece's inputs, resources and draw buffers.",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                          "type": "string"
+                        },
+                        "reset": {
+                          "description": "When the buffer returns to zero besides an install and a new run: install only, also when the cursor moves by a command, a key or the transport, or also when a resource changes version; install when absent.",
+                          "enum": [
+                            "install",
+                            "cursor",
+                            "resource"
+                          ],
+                          "type": "string"
+                        },
+                        "struct": {
+                          "description": "the name of the struct that the composer generates from fields.",
+                          "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "count"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
+                  },
+                  "camera": {
+                    "description": "The host camera of the panel: orbit in 3-D, pan_zoom in 2-D, or none for clip space; orbit when absent.",
+                    "enum": [
+                      "orbit",
+                      "pan_zoom",
+                      "none"
+                    ],
+                    "type": "string"
+                  },
+                  "frame_ms": {
+                    "description": "The most GPU time of the draw half in one frame in milliseconds; 4 when absent. Over it on 30 frames in a row, the program stops.",
+                    "maximum": 16,
+                    "minimum": 0.1,
+                    "type": "number"
+                  },
+                  "memory_mb": {
+                    "description": "The budget of the resources, buffer inputs, draw buffers and targets in the viewer, in MiB; 64 when absent.",
+                    "maximum": 256,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "passes": {
+                    "description": "The passes of one frame, in this order.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "blend": {
+                          "description": "render: the color blend; opaque into host and additive into an offscreen target when absent. The ID never blends.",
+                          "enum": [
+                            "opaque",
+                            "alpha",
+                            "additive"
+                          ],
+                          "type": "string"
+                        },
+                        "depth": {
+                          "description": "render into host: none, a less-or-equal test, or the test with a write; write with a vertex entry and none for a full-screen triangle when absent. Offscreen targets have no depth.",
+                          "enum": [
+                            "none",
+                            "test",
+                            "write"
+                          ],
+                          "type": "string"
+                        },
+                        "entry": {
+                          "description": "compute: the compute entry point of draw.wgsl.",
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+                          "type": "string"
+                        },
+                        "fragment": {
+                          "description": "render: the fragment entry point.",
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+                          "type": "string"
+                        },
+                        "instances": {
+                          "description": "render: the instance count from 1 to 4194304, or the id of a buffer resource or buffer input whose valid count at the cursor is the count; 1 when absent.",
+                          "type": [
+                            "integer",
+                            "string"
+                          ]
+                        },
+                        "kind": {
+                          "description": "compute: a dispatch that may write draw buffers; render: a draw into the host target or an offscreen target.",
+                          "enum": [
+                            "compute",
+                            "render"
+                          ],
+                          "type": "string"
+                        },
+                        "pick": {
+                          "description": "render into host: the fragment returns CaliperPicked and writes pick::id(item) at location 1, which the pick readback reads; false when absent.",
+                          "type": "boolean"
+                        },
+                        "reads": {
+                          "description": "Offscreen targets that the pass samples; an earlier pass of the frame wrote them, and the pass never reads its own target.",
+                          "items": {
+                            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                            "type": "string"
+                          },
+                          "maxItems": 4,
+                          "type": "array"
+                        },
+                        "target": {
+                          "description": "render: host, the scene panel's color, ID and depth, or an offscreen target; host when absent.",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                          "type": "string"
+                        },
+                        "topology": {
+                          "description": "render: the topology; triangle_list when absent.",
+                          "enum": [
+                            "triangle_list",
+                            "triangle_strip",
+                            "line_list",
+                            "line_strip",
+                            "point_list"
+                          ],
+                          "type": "string"
+                        },
+                        "vertex": {
+                          "description": "render: the vertex entry point; absent for a full-screen triangle drawn by the prelude's caliper_fullscreen.",
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+                          "type": "string"
+                        },
+                        "vertices": {
+                          "description": "render: the vertices of one instance; 3 for a full-screen triangle, necessary with vertex.",
+                          "maximum": 65536,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "workgroups": {
+                          "description": "compute: the workgroup counts; [1, 1, 1] when absent.",
+                          "items": {
+                            "maximum": 65535,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxItems": 3,
+                          "minItems": 3,
+                          "type": "array"
+                        },
+                        "writes": {
+                          "description": "compute: the draw buffers that the pass changes.",
+                          "items": {
+                            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                            "type": "string"
+                          },
+                          "maxItems": 4,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 16,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "pick": {
+                    "additionalProperties": false,
+                    "description": "The item map: a picked item is an element index of the resource.",
+                    "properties": {
+                      "fields": {
+                        "description": "The struct's fields that the pick event carries, in this order; its first four integer fields are the tensor indices of the linked selection.",
+                        "items": {
+                          "pattern": "^[a-z_][a-z0-9_]{0,31}$",
+                          "type": "string"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "resource": {
+                        "description": "A buffer resource with a struct.",
+                        "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "resource",
+                      "fields"
+                    ],
+                    "type": "object"
+                  },
+                  "targets": {
+                    "description": "Offscreen rgba8unorm targets, such as a glow for a bloom.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "clear": {
+                          "description": "The color at the start of each frame; transparent black when absent.",
+                          "items": {
+                            "maximum": 1,
+                            "minimum": 0,
+                            "type": "number"
+                          },
+                          "maxItems": 4,
+                          "minItems": 4,
+                          "type": "array"
+                        },
+                        "id": {
+                          "description": "The target's id, which the draw half samples as texture_2d<f32>.",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                          "type": "string"
+                        },
+                        "scale": {
+                          "description": "The size against the host target: 1, 0.5 or 0.25; 1 when absent.",
+                          "maximum": 1,
+                          "minimum": 0.25,
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "id"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
+                  },
+                  "text": {
+                    "additionalProperties": false,
+                    "description": "Labels that the host draws and places.",
+                    "properties": {
+                      "anchors": {
+                        "description": "A buffer resource with a struct; one label at each valid element.",
+                        "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                        "type": "string"
+                      },
+                      "position": {
+                        "description": "The vec4<f32> field whose xyz is the label's world position; position when absent.",
+                        "pattern": "^[a-z_][a-z0-9_]{0,31}$",
+                        "type": "string"
+                      },
+                      "priority": {
+                        "description": "An f32 field; a label of a higher priority wins an overlap.",
+                        "pattern": "^[a-z_][a-z0-9_]{0,31}$",
+                        "type": "string"
+                      },
+                      "string": {
+                        "description": "The u32 field that indexes strings; string when absent.",
+                        "pattern": "^[a-z_][a-z0-9_]{0,31}$",
+                        "type": "string"
+                      },
+                      "strings": {
+                        "description": "The texts of the labels; an instance may give its own.",
+                        "items": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "maxItems": 4096,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "anchors",
+                      "strings"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "passes"
+                ],
+                "type": "object"
+              },
+              "files": {
+                "additionalProperties": false,
+                "description": "The WGSL files, with no binding and no directive; the prelude, the composer and the imports declare the rest.",
+                "properties": {
+                  "common": {
+                    "description": "common.wgsl: structs, constants and functions that both halves include.",
+                    "maxLength": 65536,
+                    "type": "string"
+                  },
+                  "derive": {
+                    "description": "derive.wgsl: the derive half's compute entry points.",
+                    "maxLength": 65536,
+                    "type": "string"
+                  },
+                  "draw": {
+                    "description": "draw.wgsl: the draw half's entry points.",
+                    "maxLength": 65536,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "hash": {
+                "description": "The piece's hash over its canonical manifest and its resolved WGSL; the host computes it, and a given value must match.",
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "imports": {
+                "description": "Lib modules by name and version, such as colormap@1, whose items the WGSL calls as colormap::magma.",
+                "items": {
+                  "pattern": "^[a-z][a-z0-9_]{0,31}@[1-9][0-9]{0,5}$",
+                  "type": "string"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "inputs": {
+                "description": "The typed inputs that an instance binds.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "dtype": {
+                      "description": "tensor: the element type; f32 when absent. The bound tensor's dtype must match it.",
+                      "enum": [
+                        "f32",
+                        "i32",
+                        "u32"
+                      ],
+                      "type": "string"
+                    },
+                    "element": {
+                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "enum": [
+                        "f32",
+                        "i32",
+                        "u32",
+                        "vec2<f32>",
+                        "vec4<f32>",
+                        "vec2<u32>",
+                        "vec4<u32>"
+                      ],
+                      "type": "string"
+                    },
+                    "fields": {
+                      "description": "buffer: the struct's fields in order, each written name: type.",
+                      "items": {
+                        "pattern": "^[a-z_][a-z0-9_]{0,31}: (f32|i32|u32|vec2<f32>|vec4<f32>|vec2<u32>|vec4<u32>)$",
+                        "type": "string"
+                      },
+                      "maxItems": 16,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "kind": {
+                      "description": "tensor: a tensor of the script, read by the derive half; buffer: another program's published buffer resource, read by the draw half.",
+                      "enum": [
+                        "tensor",
+                        "buffer"
+                      ],
+                      "type": "string"
+                    },
+                    "name": {
+                      "description": "The input's name, which the WGSL reads as a generated read-only array.",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                      "type": "string"
+                    },
+                    "rank_max": {
+                      "description": "tensor: the most axes; 8 when absent.",
+                      "maximum": 8,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "rank_min": {
+                      "description": "tensor: the fewest axes; 1 when absent.",
+                      "maximum": 8,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "struct": {
+                      "description": "buffer: the name of the struct that the composer generates from fields.",
+                      "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$",
+                      "type": "string"
+                    },
+                    "title": {
+                      "description": "The input's label in the builder.",
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "name": {
+                "description": "The piece's name, at most 32 characters; its workspace folder is pieces/<name>/<version>/.",
+                "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                "type": "string"
+              },
+              "params": {
+                "description": "The parameters, which become controls when an instance gives no value.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "default": {
+                      "description": "The value when an instance gives none; 0 when absent.",
+                      "type": "number"
+                    },
+                    "max": {
+                      "description": "The greatest value.",
+                      "type": "number"
+                    },
+                    "min": {
+                      "description": "The least value; with max, an instance without a value gets a range control.",
+                      "type": "number"
+                    },
+                    "name": {
+                      "description": "The parameter's name, a field of the generated struct Params that both halves read as params.<name>.",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                      "type": "string"
+                    },
+                    "title": {
+                      "description": "The label of the control.",
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "type": {
+                      "description": "The field's type; f32 when absent.",
+                      "enum": [
+                        "f32",
+                        "i32",
+                        "u32"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              "resources": {
+                "description": "The resources that the derive half writes; the published ones are outputs.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "clear": {
+                      "description": "true: zeroed before each run of the derive passes; false when absent, and the contents stay from the run before.",
+                      "type": "boolean"
+                    },
+                    "count": {
+                      "description": "buffer: the elements.",
+                      "maximum": 4194304,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "counted": {
+                      "description": "buffer: the derive half also gets the counter <id>_count, an atomic<u32> set to zero before each run, and the valid elements are the first min(counter, count); false when absent.",
+                      "type": "boolean"
+                    },
+                    "element": {
+                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "enum": [
+                        "f32",
+                        "i32",
+                        "u32",
+                        "vec2<f32>",
+                        "vec4<f32>",
+                        "vec2<u32>",
+                        "vec4<u32>"
+                      ],
+                      "type": "string"
+                    },
+                    "fields": {
+                      "description": "buffer: the struct's fields in order, each written name: type.",
+                      "items": {
+                        "pattern": "^[a-z_][a-z0-9_]{0,31}: (f32|i32|u32|vec2<f32>|vec4<f32>|vec2<u32>|vec4<u32>)$",
+                        "type": "string"
+                      },
+                      "maxItems": 16,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "height": {
+                      "description": "texture: the height in pixels.",
+                      "maximum": 4096,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "id": {
+                      "description": "The resource's id, a WGSL name, unique among the piece's inputs, resources and draw buffers.",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                      "type": "string"
+                    },
+                    "keep": {
+                      "description": "The versions that the app's step history keeps, thinned evenly over the run; 256 when absent.",
+                      "maximum": 4096,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "kind": {
+                      "description": "buffer: count elements of a layout; texture: an rgba8unorm image that the derive half writes as a packed array<u32> and the draw half samples as texture_2d<f32>.",
+                      "enum": [
+                        "buffer",
+                        "texture"
+                      ],
+                      "type": "string"
+                    },
+                    "publish": {
+                      "description": "false: a private resource of the derive half that keeps state between runs and is never sent; true when absent, and the resource is an output that viewers and other pieces read.",
+                      "type": "boolean"
+                    },
+                    "struct": {
+                      "description": "buffer: the name of the struct that the composer generates from fields.",
+                      "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$",
+                      "type": "string"
+                    },
+                    "width": {
+                      "description": "texture: the width in pixels.",
+                      "maximum": 4096,
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "sample": {
+                "description": "A small input for the preview.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "description": "The file's bytes in base64, when a command writes it; at most 1 MiB for all samples.",
+                      "maxLength": 1398104,
+                      "type": "string"
+                    },
+                    "input": {
+                      "description": "A tensor or buffer input of the piece.",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                      "type": "string"
+                    },
+                    "shape": {
+                      "description": "The sample's shape; its file is sample/<input>.bin, raw little-endian elements.",
+                      "items": {
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "maxItems": 8,
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "input",
+                    "shape"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "version": {
+                "description": "The piece's version; 1 when absent. A saved version never changes.",
+                "maximum": 1000000,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "pinned_by": {
+            "description": "The programs of the open spec that pin this version.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "piece",
+          "from",
+          "path",
+          "pinned_by"
+        ],
+        "type": "object"
+      },
+      "summary": "Returns one piece with its manifest and its WGSL files, its source, its folder and the programs of the open spec that pin it. The newest version of the first source that has the name when version and from are absent. It changes nothing."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The inline piece's name.",
+            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+            "type": "string"
+          },
+          "version": {
+            "description": "The version to write; the inline piece's own when absent.",
+            "maximum": 1000000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "change",
+      "examples": [
+        {
+          "name": "attention_arcs"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "piece.save",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
+            "type": "boolean"
+          },
+          "hash": {
+            "description": "Its hash.",
+            "type": "string"
+          },
+          "messages": {
+            "description": "The messages, errors first; each names the file in its message, and line and column are in that file.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as program.compile_failed or program.writes_input.",
+                  "type": "string"
+                },
+                "column": {
+                  "description": "The column in bytes, from 1; 0 when the message has no place.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "line": {
+                  "description": "The line in the given source, from 1; 0 when the message has no place.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "message": {
+                  "description": "The message of the compiler or the sandbox, in one line.",
+                  "type": "string"
+                },
+                "severity": {
+                  "description": "Whether the message stops the source or only warns.",
+                  "enum": [
+                    "error",
+                    "warning"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "severity",
+                "code",
+                "message",
+                "line",
+                "column"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "name": {
+            "description": "The piece's name.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The piece's folder relative to the workspace, pieces/<name>/<version>; null for a library or inline piece.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "programs": {
+            "description": "The programs that now pin the workspace piece.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "The version written.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "hash",
+          "path",
+          "programs",
+          "messages",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "summary": "Extracts an inline piece of the open spec into the workspace as pieces/<name>/<version>/ and pins the programs that used it to the workspace piece, in one undo step of the spec. A version that exists is piece.exists. It checks the piece first."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "as": {
+            "description": "The workspace name; the library name when absent.",
+            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+            "type": "string"
+          },
+          "name": {
+            "description": "The library piece's name.",
+            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+            "type": "string"
+          },
+          "version": {
+            "description": "The library version; the newest when absent.",
+            "maximum": 1000000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "change",
+      "examples": [
+        {
+          "as": "glow_points",
+          "name": "points"
+        }
+      ],
+      "frame_thread": false,
+      "mutates": true,
+      "name": "piece.copy",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "hash": {
+            "description": "Its hash.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The workspace piece's name.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The piece's folder relative to the workspace, pieces/<name>/<version>; null for a library or inline piece.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "Its version, 1.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "hash",
+          "path"
+        ],
+        "type": "object"
+      },
+      "summary": "Forks a library piece into the workspace as version 1 of a new name, or of its own name, so that the person or the agent can change it. A library piece never changes, and an instrument uses the workspace copy only when its program says from workspace."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "piece": {
+            "additionalProperties": false,
+            "description": "The piece, with its manifest and files.",
+            "properties": {
+              "depends": {
+                "description": "Pieces whose outputs feed this piece's buffer inputs, or that are drawn with it.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "description": "The piece's name.",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                      "type": "string"
+                    },
+                    "version": {
+                      "description": "Its version.",
+                      "maximum": 1000000,
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "derive": {
+                "additionalProperties": false,
+                "description": "The derive half, which runs in the training script; absent for a piece that only draws.",
+                "properties": {
+                  "every": {
+                    "description": "The fewest steps between two runs; the shared cadence may run it less often, never more often.",
+                    "maximum": 10000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "memory_mb": {
+                    "description": "The budget of the resources and the bound tensors in MiB; 64 when absent.",
+                    "maximum": 512,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "passes": {
+                    "description": "The compute passes, run in this order in one submit at a pass of the shared cadence.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "entry": {
+                          "description": "The compute entry point of derive.wgsl; never main.",
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+                          "type": "string"
+                        },
+                        "workgroups": {
+                          "description": "The workgroup counts x, y and z; [1, 1, 1] when absent.",
+                          "items": {
+                            "maximum": 65535,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxItems": 3,
+                          "minItems": 3,
+                          "type": "array"
+                        },
+                        "writes": {
+                          "description": "The resources that the pass changes; a published resource that no pass names is sent after the first run only.",
+                          "items": {
+                            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                            "type": "string"
+                          },
+                          "maxItems": 8,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "entry"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 8,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "time_ms": {
+                    "description": "The most GPU time of one run of all passes in milliseconds; 4 when absent.",
+                    "maximum": 50,
+                    "minimum": 0.01,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "passes"
+                ],
+                "type": "object"
+              },
+              "description": {
+                "description": "One line that says what the piece draws or publishes.",
+                "maxLength": 256,
+                "type": "string"
+              },
+              "draw": {
+                "additionalProperties": false,
+                "description": "The draw half, which runs in the viewer every frame; absent for a piece that only publishes.",
+                "properties": {
+                  "buffers": {
+                    "description": "Buffers that the draw half keeps between frames.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "count": {
+                          "description": "The elements.",
+                          "maximum": 4194304,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "element": {
+                          "description": "a plain element type; give either element, or struct with fields.",
+                          "enum": [
+                            "f32",
+                            "i32",
+                            "u32",
+                            "vec2<f32>",
+                            "vec4<f32>",
+                            "vec2<u32>",
+                            "vec4<u32>"
+                          ],
+                          "type": "string"
+                        },
+                        "fields": {
+                          "description": "the struct's fields in order, each written name: type.",
+                          "items": {
+                            "pattern": "^[a-z_][a-z0-9_]{0,31}: (f32|i32|u32|vec2<f32>|vec4<f32>|vec2<u32>|vec4<u32>)$",
+                            "type": "string"
+                          },
+                          "maxItems": 16,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "id": {
+                          "description": "The buffer's id, unique among the piece's inputs, resources and draw buffers.",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                          "type": "string"
+                        },
+                        "reset": {
+                          "description": "When the buffer returns to zero besides an install and a new run: install only, also when the cursor moves by a command, a key or the transport, or also when a resource changes version; install when absent.",
+                          "enum": [
+                            "install",
+                            "cursor",
+                            "resource"
+                          ],
+                          "type": "string"
+                        },
+                        "struct": {
+                          "description": "the name of the struct that the composer generates from fields.",
+                          "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "count"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
+                  },
+                  "camera": {
+                    "description": "The host camera of the panel: orbit in 3-D, pan_zoom in 2-D, or none for clip space; orbit when absent.",
+                    "enum": [
+                      "orbit",
+                      "pan_zoom",
+                      "none"
+                    ],
+                    "type": "string"
+                  },
+                  "frame_ms": {
+                    "description": "The most GPU time of the draw half in one frame in milliseconds; 4 when absent. Over it on 30 frames in a row, the program stops.",
+                    "maximum": 16,
+                    "minimum": 0.1,
+                    "type": "number"
+                  },
+                  "memory_mb": {
+                    "description": "The budget of the resources, buffer inputs, draw buffers and targets in the viewer, in MiB; 64 when absent.",
+                    "maximum": 256,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "passes": {
+                    "description": "The passes of one frame, in this order.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "blend": {
+                          "description": "render: the color blend; opaque into host and additive into an offscreen target when absent. The ID never blends.",
+                          "enum": [
+                            "opaque",
+                            "alpha",
+                            "additive"
+                          ],
+                          "type": "string"
+                        },
+                        "depth": {
+                          "description": "render into host: none, a less-or-equal test, or the test with a write; write with a vertex entry and none for a full-screen triangle when absent. Offscreen targets have no depth.",
+                          "enum": [
+                            "none",
+                            "test",
+                            "write"
+                          ],
+                          "type": "string"
+                        },
+                        "entry": {
+                          "description": "compute: the compute entry point of draw.wgsl.",
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+                          "type": "string"
+                        },
+                        "fragment": {
+                          "description": "render: the fragment entry point.",
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+                          "type": "string"
+                        },
+                        "instances": {
+                          "description": "render: the instance count from 1 to 4194304, or the id of a buffer resource or buffer input whose valid count at the cursor is the count; 1 when absent.",
+                          "type": [
+                            "integer",
+                            "string"
+                          ]
+                        },
+                        "kind": {
+                          "description": "compute: a dispatch that may write draw buffers; render: a draw into the host target or an offscreen target.",
+                          "enum": [
+                            "compute",
+                            "render"
+                          ],
+                          "type": "string"
+                        },
+                        "pick": {
+                          "description": "render into host: the fragment returns CaliperPicked and writes pick::id(item) at location 1, which the pick readback reads; false when absent.",
+                          "type": "boolean"
+                        },
+                        "reads": {
+                          "description": "Offscreen targets that the pass samples; an earlier pass of the frame wrote them, and the pass never reads its own target.",
+                          "items": {
+                            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                            "type": "string"
+                          },
+                          "maxItems": 4,
+                          "type": "array"
+                        },
+                        "target": {
+                          "description": "render: host, the scene panel's color, ID and depth, or an offscreen target; host when absent.",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                          "type": "string"
+                        },
+                        "topology": {
+                          "description": "render: the topology; triangle_list when absent.",
+                          "enum": [
+                            "triangle_list",
+                            "triangle_strip",
+                            "line_list",
+                            "line_strip",
+                            "point_list"
+                          ],
+                          "type": "string"
+                        },
+                        "vertex": {
+                          "description": "render: the vertex entry point; absent for a full-screen triangle drawn by the prelude's caliper_fullscreen.",
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+                          "type": "string"
+                        },
+                        "vertices": {
+                          "description": "render: the vertices of one instance; 3 for a full-screen triangle, necessary with vertex.",
+                          "maximum": 65536,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "workgroups": {
+                          "description": "compute: the workgroup counts; [1, 1, 1] when absent.",
+                          "items": {
+                            "maximum": 65535,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxItems": 3,
+                          "minItems": 3,
+                          "type": "array"
+                        },
+                        "writes": {
+                          "description": "compute: the draw buffers that the pass changes.",
+                          "items": {
+                            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                            "type": "string"
+                          },
+                          "maxItems": 4,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 16,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "pick": {
+                    "additionalProperties": false,
+                    "description": "The item map: a picked item is an element index of the resource.",
+                    "properties": {
+                      "fields": {
+                        "description": "The struct's fields that the pick event carries, in this order; its first four integer fields are the tensor indices of the linked selection.",
+                        "items": {
+                          "pattern": "^[a-z_][a-z0-9_]{0,31}$",
+                          "type": "string"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "resource": {
+                        "description": "A buffer resource with a struct.",
+                        "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "resource",
+                      "fields"
+                    ],
+                    "type": "object"
+                  },
+                  "targets": {
+                    "description": "Offscreen rgba8unorm targets, such as a glow for a bloom.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "clear": {
+                          "description": "The color at the start of each frame; transparent black when absent.",
+                          "items": {
+                            "maximum": 1,
+                            "minimum": 0,
+                            "type": "number"
+                          },
+                          "maxItems": 4,
+                          "minItems": 4,
+                          "type": "array"
+                        },
+                        "id": {
+                          "description": "The target's id, which the draw half samples as texture_2d<f32>.",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                          "type": "string"
+                        },
+                        "scale": {
+                          "description": "The size against the host target: 1, 0.5 or 0.25; 1 when absent.",
+                          "maximum": 1,
+                          "minimum": 0.25,
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "id"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
+                  },
+                  "text": {
+                    "additionalProperties": false,
+                    "description": "Labels that the host draws and places.",
+                    "properties": {
+                      "anchors": {
+                        "description": "A buffer resource with a struct; one label at each valid element.",
+                        "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                        "type": "string"
+                      },
+                      "position": {
+                        "description": "The vec4<f32> field whose xyz is the label's world position; position when absent.",
+                        "pattern": "^[a-z_][a-z0-9_]{0,31}$",
+                        "type": "string"
+                      },
+                      "priority": {
+                        "description": "An f32 field; a label of a higher priority wins an overlap.",
+                        "pattern": "^[a-z_][a-z0-9_]{0,31}$",
+                        "type": "string"
+                      },
+                      "string": {
+                        "description": "The u32 field that indexes strings; string when absent.",
+                        "pattern": "^[a-z_][a-z0-9_]{0,31}$",
+                        "type": "string"
+                      },
+                      "strings": {
+                        "description": "The texts of the labels; an instance may give its own.",
+                        "items": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "maxItems": 4096,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "anchors",
+                      "strings"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "passes"
+                ],
+                "type": "object"
+              },
+              "files": {
+                "additionalProperties": false,
+                "description": "The WGSL files, with no binding and no directive; the prelude, the composer and the imports declare the rest.",
+                "properties": {
+                  "common": {
+                    "description": "common.wgsl: structs, constants and functions that both halves include.",
+                    "maxLength": 65536,
+                    "type": "string"
+                  },
+                  "derive": {
+                    "description": "derive.wgsl: the derive half's compute entry points.",
+                    "maxLength": 65536,
+                    "type": "string"
+                  },
+                  "draw": {
+                    "description": "draw.wgsl: the draw half's entry points.",
+                    "maxLength": 65536,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "hash": {
+                "description": "The piece's hash over its canonical manifest and its resolved WGSL; the host computes it, and a given value must match.",
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "imports": {
+                "description": "Lib modules by name and version, such as colormap@1, whose items the WGSL calls as colormap::magma.",
+                "items": {
+                  "pattern": "^[a-z][a-z0-9_]{0,31}@[1-9][0-9]{0,5}$",
+                  "type": "string"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "inputs": {
+                "description": "The typed inputs that an instance binds.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "dtype": {
+                      "description": "tensor: the element type; f32 when absent. The bound tensor's dtype must match it.",
+                      "enum": [
+                        "f32",
+                        "i32",
+                        "u32"
+                      ],
+                      "type": "string"
+                    },
+                    "element": {
+                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "enum": [
+                        "f32",
+                        "i32",
+                        "u32",
+                        "vec2<f32>",
+                        "vec4<f32>",
+                        "vec2<u32>",
+                        "vec4<u32>"
+                      ],
+                      "type": "string"
+                    },
+                    "fields": {
+                      "description": "buffer: the struct's fields in order, each written name: type.",
+                      "items": {
+                        "pattern": "^[a-z_][a-z0-9_]{0,31}: (f32|i32|u32|vec2<f32>|vec4<f32>|vec2<u32>|vec4<u32>)$",
+                        "type": "string"
+                      },
+                      "maxItems": 16,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "kind": {
+                      "description": "tensor: a tensor of the script, read by the derive half; buffer: another program's published buffer resource, read by the draw half.",
+                      "enum": [
+                        "tensor",
+                        "buffer"
+                      ],
+                      "type": "string"
+                    },
+                    "name": {
+                      "description": "The input's name, which the WGSL reads as a generated read-only array.",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                      "type": "string"
+                    },
+                    "rank_max": {
+                      "description": "tensor: the most axes; 8 when absent.",
+                      "maximum": 8,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "rank_min": {
+                      "description": "tensor: the fewest axes; 1 when absent.",
+                      "maximum": 8,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "struct": {
+                      "description": "buffer: the name of the struct that the composer generates from fields.",
+                      "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$",
+                      "type": "string"
+                    },
+                    "title": {
+                      "description": "The input's label in the builder.",
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "name": {
+                "description": "The piece's name, at most 32 characters; its workspace folder is pieces/<name>/<version>/.",
+                "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                "type": "string"
+              },
+              "params": {
+                "description": "The parameters, which become controls when an instance gives no value.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "default": {
+                      "description": "The value when an instance gives none; 0 when absent.",
+                      "type": "number"
+                    },
+                    "max": {
+                      "description": "The greatest value.",
+                      "type": "number"
+                    },
+                    "min": {
+                      "description": "The least value; with max, an instance without a value gets a range control.",
+                      "type": "number"
+                    },
+                    "name": {
+                      "description": "The parameter's name, a field of the generated struct Params that both halves read as params.<name>.",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                      "type": "string"
+                    },
+                    "title": {
+                      "description": "The label of the control.",
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "type": {
+                      "description": "The field's type; f32 when absent.",
+                      "enum": [
+                        "f32",
+                        "i32",
+                        "u32"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              "resources": {
+                "description": "The resources that the derive half writes; the published ones are outputs.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "clear": {
+                      "description": "true: zeroed before each run of the derive passes; false when absent, and the contents stay from the run before.",
+                      "type": "boolean"
+                    },
+                    "count": {
+                      "description": "buffer: the elements.",
+                      "maximum": 4194304,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "counted": {
+                      "description": "buffer: the derive half also gets the counter <id>_count, an atomic<u32> set to zero before each run, and the valid elements are the first min(counter, count); false when absent.",
+                      "type": "boolean"
+                    },
+                    "element": {
+                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "enum": [
+                        "f32",
+                        "i32",
+                        "u32",
+                        "vec2<f32>",
+                        "vec4<f32>",
+                        "vec2<u32>",
+                        "vec4<u32>"
+                      ],
+                      "type": "string"
+                    },
+                    "fields": {
+                      "description": "buffer: the struct's fields in order, each written name: type.",
+                      "items": {
+                        "pattern": "^[a-z_][a-z0-9_]{0,31}: (f32|i32|u32|vec2<f32>|vec4<f32>|vec2<u32>|vec4<u32>)$",
+                        "type": "string"
+                      },
+                      "maxItems": 16,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "height": {
+                      "description": "texture: the height in pixels.",
+                      "maximum": 4096,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "id": {
+                      "description": "The resource's id, a WGSL name, unique among the piece's inputs, resources and draw buffers.",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                      "type": "string"
+                    },
+                    "keep": {
+                      "description": "The versions that the app's step history keeps, thinned evenly over the run; 256 when absent.",
+                      "maximum": 4096,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "kind": {
+                      "description": "buffer: count elements of a layout; texture: an rgba8unorm image that the derive half writes as a packed array<u32> and the draw half samples as texture_2d<f32>.",
+                      "enum": [
+                        "buffer",
+                        "texture"
+                      ],
+                      "type": "string"
+                    },
+                    "publish": {
+                      "description": "false: a private resource of the derive half that keeps state between runs and is never sent; true when absent, and the resource is an output that viewers and other pieces read.",
+                      "type": "boolean"
+                    },
+                    "struct": {
+                      "description": "buffer: the name of the struct that the composer generates from fields.",
+                      "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$",
+                      "type": "string"
+                    },
+                    "width": {
+                      "description": "texture: the width in pixels.",
+                      "maximum": 4096,
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "sample": {
+                "description": "A small input for the preview.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "description": "The file's bytes in base64, when a command writes it; at most 1 MiB for all samples.",
+                      "maxLength": 1398104,
+                      "type": "string"
+                    },
+                    "input": {
+                      "description": "A tensor or buffer input of the piece.",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                      "type": "string"
+                    },
+                    "shape": {
+                      "description": "The sample's shape; its file is sample/<input>.bin, raw little-endian elements.",
+                      "items": {
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "maxItems": 8,
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "input",
+                    "shape"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "version": {
+                "description": "The piece's version; 1 when absent. A saved version never changes.",
+                "maximum": 1000000,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "piece"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "change",
+      "examples": [
+        {
+          "piece": {
+            "draw": {
+              "camera": "none",
+              "passes": [
+                {
+                  "fragment": "fs",
+                  "kind": "render"
+                }
+              ]
+            },
+            "files": {
+              "draw": "@fragment fn fs(in: CaliperFullscreen) -> @location(0) vec4<f32> { return vec4<f32>(in.uv, 0.0, 1.0); }"
+            },
+            "name": "uv_field"
+          }
+        }
+      ],
+      "frame_thread": false,
+      "mutates": true,
+      "name": "piece.update",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "hash": {
+            "description": "Its hash.",
+            "type": "string"
+          },
+          "messages": {
+            "description": "The messages, errors first; each names the file in its message, and line and column are in that file.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as program.compile_failed or program.writes_input.",
+                  "type": "string"
+                },
+                "column": {
+                  "description": "The column in bytes, from 1; 0 when the message has no place.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "line": {
+                  "description": "The line in the given source, from 1; 0 when the message has no place.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "message": {
+                  "description": "The message of the compiler or the sandbox, in one line.",
+                  "type": "string"
+                },
+                "severity": {
+                  "description": "Whether the message stops the source or only warns.",
+                  "enum": [
+                    "error",
+                    "warning"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "severity",
+                "code",
+                "message",
+                "line",
+                "column"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "name": {
+            "description": "The piece's name.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The piece's folder relative to the workspace, pieces/<name>/<version>; null for a library or inline piece.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The version written.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "hash",
+          "path",
+          "messages"
+        ],
+        "type": "object"
+      },
+      "summary": "Writes a new version of a workspace piece after it passes the checks: the version must be above every saved one, and the next one when absent. Saved versions never change, and the programs that pin them keep them until program.patch pins the new one."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The piece's name.",
+            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+            "type": "string"
+          },
+          "version": {
+            "description": "The version to remove.",
+            "maximum": 1000000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "version"
+        ],
+        "type": "object"
+      },
+      "destructive": true,
+      "effect": "change",
+      "examples": [
+        {
+          "name": "glow_points",
+          "version": 1
+        }
+      ],
+      "frame_thread": false,
+      "mutates": true,
+      "name": "piece.remove",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The piece's name.",
+            "type": "string"
+          },
+          "removed": {
+            "description": "Whether the folder is gone.",
+            "type": "boolean"
+          },
+          "version": {
+            "description": "The version.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "removed"
+        ],
+        "type": "object"
+      },
+      "summary": "Removes one version of a workspace piece and its folder. A version that a program of the open spec pins is piece.in_use, and a library piece is piece.read_only."
     },
     {
       "agents": true,
@@ -14835,7 +17022,7 @@
       "examples": [
         {
           "count": 4,
-          "id": "arcs",
+          "id": "tower_arcs",
           "resource": "arcs"
         }
       ],

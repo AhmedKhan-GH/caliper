@@ -339,8 +339,12 @@ public:
         if (version_ >= kInstrumentVersion) {
             keys(root, "",
                  {"caliper_spec", "applet", "source", "panel", "control", "state", "program", "stage", "provenance",
-                  "layout"},
+                  "layout", kPiecesKey},
                  "a spec");
+            // Inline pieces (design/programmable-graphics.md, Pieces) are
+            // refused until this codec reads them.
+            if (root.find(kPiecesKey) != root.end())
+                sink_.error("spec.not_built", "The key piece of a spec is not built yet.", kPiecesKey);
         } else {
             keys(root, "", {"caliper_spec", "applet", "source", "panel", "layout"}, "a spec");
         }
@@ -460,15 +464,15 @@ public:
     Program program(const json& o, const std::string& path) {
         Program p;
         if (!table(o, path, path)) return p;
-        // The graphics form (design/programmable-graphics.md, Declaration):
-        // its keys are refused until this codec reads them.
-        bool graphics = false;
-        for (const char* k : kGraphicsKeys) {
+        // An instance of a piece (design/programmable-graphics.md, Program
+        // Instances): its keys are refused until this codec reads them.
+        bool instance = false;
+        for (const char* k : kInstanceKeys) {
             if (o.find(k) == o.end()) continue;
-            graphics = true;
+            instance = true;
             sink_.error("spec.not_built", "The program key " + quote(k) + " is not built yet.", key_path(path, k));
         }
-        if (graphics) {
+        if (instance) {
             p.id = required_string(o, "id", path, "A program");
             return p;
         }

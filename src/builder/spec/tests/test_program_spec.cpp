@@ -254,20 +254,22 @@ TEST_CASE("every older fixture reads as before and has no programs") {
     CHECK(cs::validate(v1.spec).ok());
 }
 
-TEST_CASE("the reader refuses the keys of the graphics form as not built yet") {
-    // design/programmable-graphics.md, Declaration: the codec reads these
-    // keys with the work that builds the form; until then each one is
-    // spec.not_built at its own path, and no key is unknown or missing.
+TEST_CASE("the reader refuses inline pieces and the keys of a piece's instance as not built yet") {
+    // design/programmable-graphics.md, Pieces and Program Instances: the
+    // codec reads these keys with the work that builds pieces; until then
+    // each one is spec.not_built at its own path, and no key is unknown or
+    // missing.
     const std::string program =
-        "[[program]]\nid = \"arcs\"\n"
-        "common = \"struct Arc { from: u32 }\"\n"
-        "resources = [{ id = \"arcs\", kind = \"buffer\", struct = \"Arc\", fields = [\"from: u32\"], count = 64 }]\n"
-        "derive = { wgsl = \"x\", inputs = [], passes = [{ entry = \"build\" }] }\n"
-        "draw = { panel = \"world\", wgsl = \"x\", passes = [{ kind = \"render\", fragment = \"fs\" }] }\n";
+        "[[program]]\nid = \"tower_arcs\"\n"
+        "piece = { name = \"attention_arcs\", version = 1, hash = \"sha256:00\", from = \"workspace\" }\n"
+        "bind = { attn0 = \"live:blocks.0.attn.weights.act\" }\n"
+        "panel = \"world\"\n"
+        "[[piece]]\nname = \"attention_arcs\"\nversion = 1\n";
     const auto r = cs::parse_toml(with_panels(program));
     CHECK(!r.ok());
-    for (const char* key : {"resources", "common", "derive", "draw"})
+    for (const char* key : {"piece", "bind", "panel"})
         CHECK(has(r.diagnostics, "spec.not_built", (std::string("program[0].") + key).c_str()));
+    CHECK(has(r.diagnostics, "spec.not_built", "piece"));
     CHECK(!has(r.diagnostics, "spec.unknown_key"));
     CHECK(!has(r.diagnostics, "spec.missing_key"));
 }

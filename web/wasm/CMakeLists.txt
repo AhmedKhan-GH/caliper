@@ -79,14 +79,14 @@ target_sources(caliper_view_layer PRIVATE
     ${CALIPER_ROOT}/src/host/scene/pick.cpp
     ${CALIPER_ROOT}/src/host/scene/scale_bar.cpp
     ${CALIPER_ROOT}/src/host/scene/backend_resources.cpp)
-# The draw half of programs (design/programmable-graphics.md): the same render
-# graph, composer and prelude file as the app, from one source each.
-include("${CALIPER_ROOT}/src/builder/programs/draw_prelude.cmake")
-caliper_draw_prelude_source(_caliper_draw_prelude_cpp)
+# The draw half of pieces (design/programmable-graphics.md): the same render
+# graph, composer, prelude and lib modules as the app, from one source each.
+include("${CALIPER_ROOT}/src/builder/programs/programs_text.cmake")
+caliper_programs_text_source(_caliper_programs_text_cpp)
 target_sources(caliper_view_layer PRIVATE
     ${CALIPER_ROOT}/src/host/draw/draw_runtime.cpp
-    ${CALIPER_ROOT}/src/builder/programs/graphics.cpp
-    ${_caliper_draw_prelude_cpp})
+    ${CALIPER_ROOT}/src/builder/programs/pieces.cpp
+    ${_caliper_programs_text_cpp})
 target_include_directories(caliper_view_layer PUBLIC ${CALIPER_ROOT}/src/builder/include)
 target_compile_definitions(caliper_view_layer PUBLIC IMGUI_IMPL_WEBGPU_BACKEND_DAWN)
 # The scene core's arithmetic without contraction, as natively (the root CMakeLists.txt's caliper_scene),

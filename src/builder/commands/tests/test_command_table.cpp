@@ -41,7 +41,8 @@ const char* const kV0[] = {
     "run.state",
     "run.set_param",   "run.action",      "run.pause",      "run.list",      "run.start",        "run.fork",
     "run.stop",        "run.logs",        "events.wait",    "stage.set",     "stage.remove",     "stage.check",
-    "program.create",  "program.patch",   "program.remove", "program.status", "program.check",  "program.read",
+    "program.create",  "program.patch",   "program.remove", "program.status", "piece.check",    "piece.list",
+    "piece.show",      "piece.save",      "piece.copy",     "piece.update",  "piece.remove",     "program.read",
     "intervene.points", "intervene.set",
     "intervene.clear", "intervene.list",  "history.undo",   "history.redo",  "history.list",
 };
@@ -136,7 +137,7 @@ TEST_CASE("no command takes or returns a value named like a secret") {
 
 TEST_CASE("the flags follow the design page") {
     CHECK(names_where([](const CommandDescriptor& d) { return d.destructive; }) ==
-          std::set<std::string>{"loader.update", "loader.run", "loader.delete", "applet.save"});
+          std::set<std::string>{"loader.update", "loader.run", "loader.delete", "applet.save", "piece.remove"});
     CHECK(names_where([](const CommandDescriptor& d) { return d.mutates; }) ==
           std::set<std::string>{"data.import", "loader.create", "loader.update", "loader.run", "loader.delete",
                                 "spec.new", "spec.open", "spec.set_text", "source.add", "source.patch",
@@ -145,7 +146,8 @@ TEST_CASE("the flags follow the design page") {
                                 "control.patch", "control.remove", "stage.set", "stage.remove", "program.create",
                                 "program.patch", "program.remove", "history.undo", "history.redo", "state.create",
                                 "state.patch", "state.remove", "entity.set", "entity.remove", "annotation.set",
-                                "annotation.remove", "camera.save"});
+                                "annotation.remove", "camera.save", "piece.save", "piece.copy", "piece.update",
+                                "piece.remove"});
     CHECK(names_where([](const CommandDescriptor& d) { return d.frame_thread; }) ==
           std::set<std::string>{"app.applets", "app.launch", "spec.new", "spec.open", "spec.get", "spec.set_text",
                                 "spec.validate", "source.add", "source.patch", "source.remove", "panel.create",
@@ -158,7 +160,7 @@ TEST_CASE("the flags follow the design page") {
                                 "cursor.step", "camera.get", "camera.set", "camera.save", "run.state", "run.set_param", "run.action", "run.pause",
                                 "run.list", "run.start", "run.fork", "run.stop", "run.logs", "stage.set",
                                 "stage.remove", "program.create", "program.patch", "program.remove", "program.status",
-                                "program.read", "intervene.points", "intervene.set", "intervene.clear", "intervene.list",
+                                "piece.list", "piece.show", "piece.save", "program.read", "intervene.points", "intervene.set", "intervene.clear", "intervene.list",
                                 "history.undo", "history.redo", "history.list"});
     // Every destructive command mutates.
     for (const auto& d : cb::command_table())

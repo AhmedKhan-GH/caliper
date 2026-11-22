@@ -9,6 +9,8 @@
 // review in a foreign spec whose provenance lacks its hash, else waiting.
 #include "program_checks.h"
 
+#include <caliper_builder/programs/pieces.h>
+
 #include <caliper_builder/session/program_commands.h>
 #include <caliper_builder/session/chain_hooks.h>
 
@@ -212,9 +214,8 @@ CommandOutput program_command(const CommandContext& context, const spec::Spec& s
     if (name == "stage.check") return stage_check(context.invocation.args);
     if (name == "program.status") return program_status(context.invocation.args, spec, programs, stages);
     // design/programmable-graphics.md, Commands: not built yet.
-    if (name == "program.check" || name == "program.read")
-        return CommandOutput::fail(
-            Error(programs::kProgramNotBuilt, name + " of programmable graphics is not built yet."));
+    if (name == "program.read" || name.rfind("piece.", 0) == 0)
+        return CommandOutput::fail(Error(programs::kProgramNotBuilt, name + " is not built yet."));
     return CommandOutput::fail(Error("command.unknown", name + " is not a stage or program read command."));
 }
 

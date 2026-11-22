@@ -18,7 +18,7 @@ if(APPLE)
 else()
     add_library(caliper_producer STATIC producer.cpp)
 endif()
-# The derive half of the graphics form (caliper_producer_derive.h), on every platform.
+# The derive half of a piece (caliper_producer_derive.h), on every platform.
 target_sources(caliper_producer PRIVATE derive.cpp)
 target_include_directories(caliper_producer PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 set_target_properties(caliper_producer PROPERTIES

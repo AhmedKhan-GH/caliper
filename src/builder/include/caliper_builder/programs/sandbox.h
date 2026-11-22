@@ -30,7 +30,6 @@
 // warning program.not_checked, and the hosts check again before any backend
 // sees the program. The functions are defined in src/builder/programs/.
 // Nothing here throws. Every function is safe from any thread.
-#include <caliper_builder/programs/graphics.h>
 #include <caliper_builder/programs/reflection.h>
 #include <caliper_builder/spec/program.h>
 
@@ -83,10 +82,6 @@ inline constexpr const char* kProgramUnavailable = "program.unavailable";
 inline constexpr const char* kStageOverTime = "stage.over_time";
 
 // ---- reflection, verdict and compile result: programs/reflection.h
-
-// The part of a program that the composer and the checks of the graphics
-// form read (graphics.h): its id, its params' names and its graphics form.
-GraphicsProgram graphics_program(const spec::Program& program);
 
 // Whether this build has the caliper-wgsl library.
 bool compiler_available();

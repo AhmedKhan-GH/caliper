@@ -1,7 +1,8 @@
 // Caliper draw prelude, version 1 (design/programmable-graphics.md, Prelude).
-// The host puts this text first in every pass of a program's draw half, in
-// the app and in the browser module, and binds group 0. Every name that
-// starts with caliper_, Caliper or CALIPER_ belongs to the host.
+// The host puts this text first in every pass of a piece's draw half, in the
+// app and in the browser module, and binds group 0. Every name that starts
+// with caliper_, Caliper or CALIPER_ belongs to the host. The helpers that
+// read these bindings are the lib modules colormap, pick and camera.
 
 // The view of one frame. Matrices map world positions to clip space as the
 // panel's camera does; with the camera mode none they are identities.
@@ -56,65 +57,6 @@ struct CaliperPicked {
 @group(0) @binding(2) var caliper_linear: sampler;
 @group(0) @binding(3) var caliper_nearest: sampler;
 @group(0) @binding(4) var caliper_colormaps: texture_2d<f32>;
-
-// The rows of caliper_colormaps.
-const CALIPER_VIRIDIS: u32 = 0u;
-const CALIPER_MAGMA: u32 = 1u;
-const CALIPER_RDBU: u32 = 2u;
-const CALIPER_GREYS: u32 = 3u;
-const CALIPER_MAX_SELECTED: u32 = 256u;
-
-// The ID that a pass with pick = true writes at location 1.
-fn caliper_id(item: u32) -> vec2<u32> {
-    return vec2<u32>(caliper_view.frame.z, item);
-}
-
-// The clip position of a world position.
-fn caliper_clip(world: vec3<f32>) -> vec4<f32> {
-    return caliper_view.clip_from_world * vec4<f32>(world, 1.0);
-}
-
-// The color of t, from 0 to 1, on a host colormap, linear between its texels.
-fn caliper_colormap(map: u32, t: f32) -> vec4<f32> {
-    let size = textureDimensions(caliper_colormaps);
-    let row = i32(min(map, size.y - 1u));
-    let x = clamp(t, 0.0, 1.0) * f32(size.x - 1u);
-    let x0 = i32(floor(x));
-    let x1 = min(x0 + 1, i32(size.x) - 1);
-    let a = textureLoad(caliper_colormaps, vec2<i32>(x0, row), 0);
-    let b = textureLoad(caliper_colormaps, vec2<i32>(x1, row), 0);
-    return mix(a, b, x - f32(x0));
-}
-
-// The count of valid entries of caliper_selection.
-fn caliper_selection_count() -> u32 {
-    return min(caliper_view.frame.w, min(arrayLength(&caliper_selection), CALIPER_MAX_SELECTED));
-}
-
-// Whether an item of this program is in the linked selection.
-fn caliper_selected(item: u32) -> bool {
-    let n = caliper_selection_count();
-    for (var i = 0u; i < n; i = i + 1u) {
-        let s = caliper_selection[i];
-        if (s.pick == caliper_view.frame.z && s.item == item) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// Whether a selected item of any program has these tensor indices; an index
-// below 0 matches every index.
-fn caliper_selected_index(index: vec4<i32>) -> bool {
-    let n = caliper_selection_count();
-    for (var i = 0u; i < n; i = i + 1u) {
-        let s = caliper_selection[i].index;
-        if (all((index == s) | (index < vec4<i32>(0)))) {
-            return true;
-        }
-    }
-    return false;
-}
 
 // The vertex entry of a render pass without `vertex`: one triangle that
 // covers the target, drawn with 3 vertices.
