@@ -24,14 +24,16 @@ A program declaration holds the WGSL source and a declaration of its inputs, its
 
 | Key | Value |
 |---|---|
-| `id` | The program's id, unique among programs |
+| `id` | The program's id, unique among programs, at most 55 characters |
 | `title` | An optional label |
 | `wgsl` | The WGSL source, at most 64 KiB |
-| `entry` | The compute entry point; the one compute entry point when absent |
+| `entry` | The compute entry point; the one compute entry point when absent; never `main` |
 | `inputs` | At most 8 inputs, each `{var, source}`: a WGSL variable and a live tensor `live:<name>` |
 | `output` | One output of kind `geometry` or `pixels` |
 | `limits` | `time_ms`, `memory_mb` and `every`, each optional |
 | `workgroups` | Three workgroup counts; derived from the output when absent |
+
+A program id has at most 55 characters, because a pixels output is the live view `program.<id>`, and a view name holds at most 63 bytes. The entry point cannot be named `main`, because Metal reserves that name and the translation to MSL renames such a function. The sandbox refuses it with `program.compile_failed` and the place of the name, before a host sees it.
 
 An input binds a tensor of the script by its name, read-only. The names are the parameter names of `model.named_parameters()`, such as `layers.0.weight`, a parameter's gradient as `<parameter>.grad`, and a module's last output as `<module>.act`. The WGSL declares each input as `var<storage, read>` with the name of `var`, in any group and binding.
 
@@ -155,11 +157,12 @@ Each error has a code and one plain sentence. The codes are constants in `src/bu
 | `program.exists` | A program with this id is in the spec |
 | `program.not_found` | The spec has no program with this id |
 | `stage.not_found` | The panel has no stage of this kind on this entity |
-| `stage.not_scene_panel` | The panel is not a scene panel |
-| `program.bad_target` | The output names a panel that is not a scene panel |
+| `stage.not_scene_panel` | The panel is not a scene panel, or `stage.set` names a panel that the spec does not have |
+| `program.bad_target` | The output names a panel that is not a scene panel, or `program.create` names a panel that the spec does not have |
+| `spec.provenance_locked` | `spec.set_text` gives a provenance table that differs from the open spec's |
 | `program.too_large` | The source is above its size limit |
 | `program.directive_not_allowed` | The source has an `enable`, `requires` or `diagnostic` directive |
-| `program.compile_failed` | The compiler refused the source; the message has the line and the column |
+| `program.compile_failed` | The compiler refused the source, or the entry point is named `main`; the message has the line and the column |
 | `program.no_entry` | No compute entry point, or not the named one |
 | `program.binding_undeclared` | A binding of the source is not an input, an output array, `count`, `pixels` or `caliper` |
 | `program.writes_input` | An input is not `var<storage, read>` |
@@ -170,7 +173,7 @@ Each error has a code and one plain sentence. The codes are constants in `src/bu
 | `stage.entry_not_allowed` | A stage declares an entry point |
 | `stage.compile_failed` | The viewer's composed shader does not compile; the line and the column are in the stage's source |
 
-Without the compiler library, `program.create` and `stage.set` apply the edit with the warning `program.not_checked`. The hosts check each program and each stage again before a backend sees it, thus the editor's check gives early messages and is not the guard.
+The validator of a spec reports a target panel that the spec does not have as `spec.unknown_panel`. Without the compiler library, `program.create` and `stage.set` apply the edit with the warning `program.not_checked`. The hosts check each program and each stage again before a backend sees it, thus the editor's check gives early messages and is not the guard.
 
 ## Sandbox
 
@@ -218,14 +221,14 @@ The hosts report these codes in a status item and in a `program` event. The cons
 
 A program never runs on each step by default. It runs every N steps, and the runtime sets N from the measured cost of a pass against the measured step time. Thus training keeps at least 95 % of its speed, and the runtime uses at most 4 % of it, as `design/producer-runtime.md` states in Budget per Step.
 
-The facade measures two times on the training thread. `T` is the median time between two `caliper.step()` calls over the last 32 steps without a pass. `C` is the median added time of the last 8 steps with a pass, from the start of the first sync point to the end of the third. The rate of the budget is then:
+The facade measures two times on the training thread, each between two moments when torch's queue is empty, because torch's MPS queue lets the training thread run ahead of the GPU. `T` is the time from the end of one pass to the end of the next first sync point, divided by the steps in between. `C` is the time of the pass, which is the second and the third sync point, plus the idle time of the GPU after the first sync point. The facade takes that idle time as the wait of the first sync point, but at most the median time to queue a step. `design/producer-runtime.md` gives the reason and the measured values in Cadence Measurement. The rate of the budget is then:
 
 ```text
 N_budget = ceil(C / (0.04 × T))
 N        = max(N_budget, every, 1)
 ```
 
-All due programs share one pass step and its sync points, thus `C` is the cost of the pass with all of them. A program with a larger `every` runs on each pass step that is a multiple of its own `max(N, every)`, rounded up to a multiple of `N`. After a program is installed, the facade measures `T` for 8 steps and runs the first pass. It then computes N after each pass, and it changes N only when the new value differs by more than 25 %. N is at most 10000. The declaration can ask for a slower cadence with `every`, never for a faster one.
+All due programs share one pass step and its sync points, thus `C` is the cost of the pass with all of them. A program with a larger `every` runs on each pass step that is a multiple of its own `max(N, every)`, rounded up to a multiple of `N`. After a program is installed, the first step runs one extra first sync point, so that the first `T` starts from an empty queue, and the facade measures `T` for 8 steps and runs the first pass. It then computes N after each pass, and it changes N only when the new value differs by more than 25 %. N is at most 10000. The declaration can ask for a slower cadence with `every`, never for a faster one.
 
 ## Wire Path
 
@@ -274,8 +277,8 @@ The facade in the script gives each output to the publish path of a `caliper.sce
 | `every` | The cadence N; null for a stage or before the first pass |
 | `every_min` | The declared `every`; null for a stage |
 | `last_pass_ms` | The GPU time of the last pass, or null |
-| `last_cost_ms` | The added time of the last pass step on the training thread, or null |
-| `step_ms` | The median step time `T`, or null |
+| `last_cost_ms` | The cost `C` of the last pass step: the pass plus the GPU's idle time after the first sync point, or null |
+| `step_ms` | The step time `T` between two empty queues of torch, or null |
 | `last_step` | The step of the last pass, or null |
 | `runs` | The count of passes |
 | `memory_bytes` | The bytes of the output buffers and the bound tensors |
@@ -303,7 +306,7 @@ The Python side has two files with final signatures. `python/caliper/_programs.p
 
 ## Viewer Stage Interface
 
-The scene compiler takes the stages through `src/host/scene/stages.h`. The spec runtime compiles each stage of a scene panel after the sandbox checks, with the prelude of `stage_prelude()` and the entry points of `stage_entries()`, and gives the result as a `StageProgram`. The compiler asks a `StageLookup` for each entity's program and uses it in place of the built-in program of the primitive, in the draw pass and in the pick pass.
+The scene compiler takes the stages through `src/host/scene/stages.h`. The app's stage host runs the sandbox checks on each stage of a scene panel and composes the entity's shader with the prelude of `stage_prelude()` and the entry points of `stage_entries()`. Each scene view has its own Metal backend, thus the view's stage cache makes the `StageProgram` from that shader on its backend. The compiler asks a `StageLookup` for each entity's program and uses it in place of the built-in program of the primitive, in the draw pass and in the pick pass.
 
 ## Interventions
 
@@ -311,7 +314,7 @@ The first intervention is `ablate`. It sets the output of a module to zero, or o
 
 ### Intervention Points
 
-Each module of `model.named_modules()` is a point, with its dotted name, such as `blocks.0.attn`. A module gives heads when it has an integer attribute `num_heads`, `n_heads` or `n_head`, and one child `nn.Linear` with the name `out_proj`, `o_proj`, `c_proj` or `proj` whose `in_features` divides by the head count. Each head is then a point `<module>#<h>`, such as `blocks.0.attn#3`. The ablation of a head sets that head's slice of the child's input to zero, with a forward pre-hook on the child.
+Each module of `model.named_modules()` is a point, with its dotted name, such as `blocks.0.attn`. A module gives heads when it has an integer attribute `num_heads`, `n_heads` or `n_head`, and one child `nn.Linear` with the name `out_proj`, `o_proj`, `c_proj` or `proj` whose `in_features` divides by the head count. Each head is then a point `<module>#<h>`, such as `blocks.0.attn#3`. The ablation of a head sets that head's slice of the child's input to zero, with a forward pre-hook on the child. `nn.MultiheadAttention` gives no heads, because it never calls its child `out_proj` (Decisions, Head Names).
 
 ### Intervention Commands
 
@@ -380,7 +383,7 @@ Each decision below has its reason in one line.
 - **Two parts.** Geometry has `points` and `lines` now, because `mesh` needs a second counter for its indices.
 - **New messages.** `PROGRAM` and `PROGRAM_STATE` are new under the capability `programs`, because `CONTROL` carries no code and no arguments, and a data view names a reduction.
 - **Intervention wire.** Interventions use `CONTROL` and `CONTROLS` under the capability `interventions`, because an intervention applies at the same step boundary as a parameter.
-- **Head names.** A head's point is `<module>#<h>`, because a torch module name never holds `#`, and the head rule covers `nn.MultiheadAttention` and the usual GPT layouts.
+- **Head names.** A head's point is `<module>#<h>`, because a torch module name never holds `#`. The head rule covers the usual GPT layouts, whose attention module calls a child output projection. It does not cover `nn.MultiheadAttention`, because that module passes the weight of `out_proj` to `F.multi_head_attention_forward` and never calls `out_proj`, thus a pre-hook there never runs. The points of `nn.MultiheadAttention` are the module and its children, without heads.
 - **Toggle now.** The toggle control is built with the interventions, because the acceptance test needs it. The picker and the text control stay for the interface layer.
 - **Sandbox library.** The sandbox is the builder module `caliper_builder_programs` without dependencies, because the builder configures on its own and all three hosts must run the same checks.
 - **Unchecked edits.** Without the compiler library, an edit applies with `program.not_checked`, because the hosts check again before any run.
@@ -398,3 +401,4 @@ Each decision below has its reason in one line.
 - **Browser stages.** The browser gives the WGSL of a stage to WebGPU directly, and the prelude must match. This comes with browser parity.
 - **Deferred wait.** The producer runtime keeps the wait at once, as `design/producer-runtime.md` decides.
 - **Review card.** The card that adds a hash to `provenance.reviewed` comes with saved instruments.
+- **Wheel.** The wheel builds `caliper._producer` without the sandbox and without the WGSL compiler, because it configures with `CALIPER_WITH_BUILDER=OFF` and no prebuilt archive of the compiler is pinned in `tools/shaders/caliper-wgsl/prebuilt.cmake` yet. Thus an installed package answers `program.compiler_unavailable` for each program, and only a build from source with `CALIPER_WGSL_FROM_SOURCE=ON` runs programs in the script. When CI publishes the pinned archives, the wheel defines `CALIPER_WGSL_DOWNLOAD` and builds `src/builder/programs` with its JSON library.

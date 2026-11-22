@@ -144,7 +144,7 @@ typedef struct caliper_producer_program_desc {
 /* What a pass of caliper_producer_run() reads about the step. */
 typedef struct caliper_producer_frame {
     int64_t step;          /* the script's step                                    */
-    double time_s;         /* seconds since the runtime was created                */
+    double time_s;         /* seconds since the program was installed (the caller's clock) */
     uint32_t every;        /* the cadence N of this pass, for the uniform caliper   */
 } caliper_producer_frame;
 

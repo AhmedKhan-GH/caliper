@@ -28,9 +28,10 @@ namespace caliper_scene {
 // The kinds of a stage, as spec::StageKind.
 enum class StageKind : uint8_t { Material = 0, Vertex = 1 };
 
-// The program of one entity with its stages in place. The spec runtime owns
-// the program; it stays valid until the runtime gives a new StageProgram for
-// the entity or drops it, after the frames that used it completed.
+// The program of one entity with its stages in place. Each scene view has its
+// own Metal backend, thus the view's StageCache (scene/stage_cache.h) makes and
+// owns the program; it stays valid until the cache gives a new StageProgram
+// for the entity or drops it, after the frames that used it completed.
 struct StageProgram {
     caliper_gfx::Program program;   // made through the layer from the composed shader
     std::string vs;                 // the vertex entry point in it
