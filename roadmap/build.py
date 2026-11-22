@@ -573,10 +573,11 @@ def generate(root, site=DEFAULT_SITE):
                     feature_page(features[fid], by_prefix, features, root, GITHUB), False))
     cand = read_candidates(root, features)
     if cand:
-        out.append(("roadmap/%s/index.md" % CANDIDATES, candidates_index(), True))
+        # Outside the sidebar: the graph's rail links the navigator, which links each pillar page.
+        out.append(("roadmap/%s/index.md" % CANDIDATES, candidates_index(), False))
         for p in cand:
             out.append(("roadmap/%s/%s.md" % (CANDIDATES, p["slug"]),
-                        candidates_page(p, features, by_prefix), True))
+                        candidates_page(p, features, by_prefix), False))
         out.append(("roadmap/candidates.json", candidates_json(cand, features), True))
     out.append(("roadmap/graph.json", graph_json(pillars, features), True))
     out.append(("roadmap.json", registry_json(pillars, features, site), True))
