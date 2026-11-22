@@ -4,7 +4,9 @@ link that the script writes into its link file. The link file is written, the pa
 apply, the action caliper.checkpoint writes a loadable file, a fork resumes from it at the
 checkpoint's step with a changed parameter and its first loss continues the parent's,
 caliper.stop ends the process with exit code 0, watch(model) alone serves an inference loop, and a
-run ends when the process that started it ends without ending it.
+run ends when the process that started it ends without ending it, also when the app ended
+before the script imported the managed-run code, and the run's files are written through new
+temporary files that never follow a link.
 
 The scripts pace their loops with a short sleep; the tests wait only on files and messages."""
 from __future__ import annotations
@@ -290,3 +292,50 @@ def test_a_run_ends_when_the_process_that_started_it_ends(tmp_path):
     assert link.exists(), text
     assert not alive, f"the run {pid} outlived its parent:\n{text}"
     assert "that started this managed run ended" in text
+
+
+@pytest.mark.skipif(os.name != "posix", reason="the job object of the runner covers Windows")
+def test_a_run_ends_when_its_app_ended_before_the_import(tmp_path):
+    """The app named by CALIPER_RUN_APP_PID ended before the script imported the managed-run code
+    and before any watch(); the run exits at the import, with the reason in its output."""
+    gone = subprocess.Popen([sys.executable, "-c", "pass"])
+    gone.wait(timeout=60)                 # an app that ended: its id names no process now
+    run_dir = tmp_path / "runs" / "early"
+    run_dir.mkdir(parents=True)
+    script = tmp_path / "script.py"
+    script.write_text("import time\nimport caliper\ncaliper.param('lr', 0.1)\ntime.sleep(60)\n")
+    env = dict(os.environ, PYTHONPATH=PYTHONPATH, CALIPER_SESSION="0", CALIPER_NETIO="0",
+               CALIPER_RUN_ID="early", CALIPER_RUN_DIR=str(run_dir),
+               CALIPER_RUN_LINK_FILE=str(run_dir / "link"), CALIPER_RUN_APP_PID=str(gone.pid))
+    for k in ("CALIPER_RUN_PARAMS", "CALIPER_RUN_RESUME", "CALIPER_RUN_PARENT"):
+        env.pop(k, None)
+    proc = subprocess.Popen([sys.executable, str(script)], env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT)
+    try:
+        out, _ = proc.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        proc.kill()                       # by its own pid, so that no process is left
+        out, _ = proc.communicate()
+    text = out.decode(errors="replace")
+    assert proc.returncode == M.PARENT_GONE_EXIT, text
+    assert f"the process {gone.pid} that started this managed run ended" in text
+
+
+def test_write_never_writes_through_a_link(tmp_path, monkeypatch):
+    """The temporary file of _write is new (O_EXCL | O_NOFOLLOW): a link at its name is refused and
+    the file that the link names is not changed; a normal write gives mode 0600."""
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep")
+    trap = tmp_path / ".link.trap.tmp"
+    trap.symlink_to(victim)
+    monkeypatch.setattr(M, "_temp_name", lambda folder, base: str(trap))
+    with pytest.raises(FileExistsError):
+        M._write(str(tmp_path / "link"), b"http://127.0.0.1:1/")
+    assert victim.read_text() == "keep"
+    assert not (tmp_path / "link").exists()
+    monkeypatch.undo()
+    M._write(str(tmp_path / "link"), b"http://127.0.0.1:1/")
+    assert (tmp_path / "link").read_bytes() == b"http://127.0.0.1:1/"
+    if os.name == "posix":
+        assert stat.S_IMODE((tmp_path / "link").stat().st_mode) == 0o600
+    assert [p.name for p in tmp_path.iterdir() if p.name.endswith(".tmp")] == [trap.name]

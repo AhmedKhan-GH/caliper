@@ -4,7 +4,10 @@
 // process contract with Caliper LIB: a start, the run sources, the run
 // control through the runner's connection, a fork from a checkpoint with a
 // lower learning rate whose loss continues from its parent's, a stop of both,
-// a start that writes no link, and no child left at the end. Every wait
+// a start that writes no link, a stop of a fork that waits for its
+// checkpoint, a fork whose parent exits just after its checkpoint reply, the
+// end of the child's whole process group, the size limit and the mode of
+// output.log, and no child left at the end. Every wait
 // waits on the runner's state, never on a fixed sleep, and every child is
 // ended by its own process id, also when a check fails.
 #include "runner/child_process.h"
@@ -15,12 +18,20 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
 #include <cmath>
+#include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <sstream>
+#include <thread>
+
+#include <signal.h>
+#include <unistd.h>
 
 namespace cb = caliper_builder;
 namespace cr = caliper_runner;
@@ -127,6 +138,8 @@ TEST_CASE("runner: a child process writes its output to the file and reports its
     CHECK(out.find("err\n") != std::string::npos);
     CHECK(out.find("from the runner\n") != std::string::npos);
     CHECK(out.find(dir) != std::string::npos);
+    // Only the person who runs the app reads the output.
+    CHECK((fs::status(spec.output).permissions() & fs::perms::all) == (fs::perms::owner_read | fs::perms::owner_write));
     // Once ended, the process id is never used again.
     child->kill();
     CHECK(child->poll(&code));
@@ -139,6 +152,27 @@ TEST_CASE("runner: a child process writes its output to the file and reports its
     sleeper->terminate();
     REQUIRE(sleeper->wait(10000, &code));
     CHECK(code == -15);
+
+    // A request to end reaches the child's whole process group: a process
+    // that the child started, as a venv launcher starts the interpreter,
+    // ends with it.
+    const std::string pid_file = dir + "/grandchild.pid";
+    spec.args = {"-c", "sleep 120 & echo $! > grandchild.pid.tmp; mv grandchild.pid.tmp grandchild.pid; wait"};
+    auto launcher = cr::start_child(spec, &err);
+    REQUIRE_MESSAGE(launcher, err);
+    for (int i = 0; i < 500 && !fs::exists(pid_file); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    REQUIRE(fs::exists(pid_file));
+    const pid_t grandchild = static_cast<pid_t>(std::stol(read_file(pid_file)));
+    REQUIRE(grandchild > 1);
+    launcher->terminate();
+    REQUIRE(launcher->wait(10000, &code));
+    bool gone = false;
+    for (int i = 0; i < 500 && !gone; ++i) {
+        gone = ::kill(grandchild, 0) != 0 && errno == ESRCH;
+        if (!gone) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    if (!gone) ::kill(grandchild, SIGKILL);   // by its own id, so that no process is left
+    CHECK(gone);
 
     spec.program = dir + "/missing";
     CHECK_FALSE(cr::start_child(spec, &err));
@@ -199,7 +233,7 @@ TEST_CASE("runner: a start that writes no link fails at the start limit, and its
 TEST_CASE("runner: a managed run starts, forks from a checkpoint with a lower lr, and both stop") {
     Workspace w("runner_fork");
     if (w.python.empty()) {
-        MESSAGE("skipped: no Python that imports Caliper LIB (CALIPER_M1_PYTHON)");
+        MESSAGE("skipped: the build names no Python that imports Caliper LIB");
         return;
     }
     cr::ModelRunner::Options o;
@@ -350,4 +384,156 @@ TEST_CASE("runner: run.list adds the person's own attached script as user") {
     runner.frame(false, "");
     CHECK(runner.control_of("user", &err) == nullptr);
     runner.set_app_control(nullptr);
+}
+
+namespace {
+
+// A runner of the stand-in that every check ends, also when one fails.
+struct StandIn {
+    Workspace w;
+    cr::ModelRunner runner;
+    explicit StandIn(const std::string& name, double start_limit_s = 60.0)
+        : w(name), runner([&] {
+              cr::ModelRunner::Options o;
+              o.workspace = w.ws;
+              o.python = w.python;
+              o.start_limit_s = start_limit_s;
+              return o;
+          }()) {}
+    ~StandIn() { runner.shutdown(); }
+};
+
+}  // namespace
+
+TEST_CASE("runner: a stop ends a fork that waits for its checkpoint, and the checkpoint starts nothing") {
+    if (std::string(CALIPER_RUNNER_TEST_PYTHON).empty()) {
+        MESSAGE("skipped: the build names no Python that imports Caliper LIB");
+        return;
+    }
+    StandIn t("runner_stop_waiting_fork");
+    cr::ModelRunner& runner = t.runner;
+    cb::RunEntry base;
+    // One step a second, so that the fork waits for the checkpoint.
+    REQUIRE(!runner.start(t.w.start({"100000", "1.0"}, json::object(), "base"), &base));
+    REQUIRE(runner.wait_for(state_is("base", "running"), 60000));
+    cb::RunForkRequest fr;
+    fr.parent = "base";
+    cb::RunEntry fork;
+    REQUIRE(!runner.fork(fr, &fork));
+    CHECK(fork.state == "starting");
+    cb::RunEntry stopped;
+    REQUIRE(!runner.stop(fork.id, 10, &stopped));
+    CHECK(stopped.state == "exited");
+    CHECK(stopped.stopping);
+    // The parent saves the checkpoint at its next step and goes on; the fork
+    // stays ended and starts no process.
+    const std::string checkpoint_dir = t.w.ws + "/runs/base";
+    REQUIRE(runner.wait_for([&](const auto&) {
+        for (const auto& f : fs::directory_iterator(checkpoint_dir))
+            if (f.path().filename().u8string().rfind("checkpoint-", 0) == 0) return values_of(runner, "run:base/loss").size() >= 4;
+        return false;
+    }, 60000));
+    const std::vector<cb::RunEntry> runs = runner.list();
+    const cb::RunEntry* after = find(runs, fork.id);
+    REQUIRE(after);
+    CHECK(after->state == "exited");
+    CHECK(runner.running_pids().size() == 1);
+    CHECK_FALSE(fs::exists(t.w.ws + "/runs/" + fork.id + "/output.log"));
+    REQUIRE(!runner.stop("base", 30, &stopped));
+    REQUIRE(runner.wait_for(state_is("base", "exited"), 60000));
+    CHECK(runner.running_pids().empty());
+}
+
+TEST_CASE("runner: a fork starts when its parent exits in the pass of its checkpoint reply") {
+    if (std::string(CALIPER_RUNNER_TEST_PYTHON).empty()) {
+        MESSAGE("skipped: the build names no Python that imports Caliper LIB");
+        return;
+    }
+    StandIn t("runner_fork_parent_exits");
+    cr::ModelRunner& runner = t.runner;
+    cb::RunEntry base;
+    REQUIRE(!runner.start(t.w.start({"100000", "0.02", "exit-after-checkpoint"}, json::object(), "base"), &base));
+    REQUIRE(runner.wait_for(state_is("base", "running"), 60000));
+    cb::RunForkRequest fr;
+    fr.parent = "base";
+    fr.params = json{{"lr", 0.01}};
+    cb::RunEntry fork;
+    REQUIRE(!runner.fork(fr, &fork));
+    REQUIRE(runner.wait_for([&](const std::vector<cb::RunEntry>& runs) {
+        const cb::RunEntry* f = find(runs, fork.id);
+        return f && f->state != "starting";
+    }, 60000));
+    REQUIRE(runner.wait_for(state_is("base", "exited"), 60000));
+    const std::vector<cb::RunEntry> runs = runner.list();
+    const cb::RunEntry* f = find(runs, fork.id);
+    REQUIRE(f);
+    INFO("the fork: " << f->state << " " << f->error.value_or(""));
+    CHECK(f->state == "running");
+    std::vector<std::string> lines;
+    REQUIRE(!runner.logs("base", 200, &lines));
+    REQUIRE(!lines.empty());
+    CHECK(lines.back().find("exits after the checkpoint") == 0);
+    // The process contract gives the child the app's process id.
+    bool app_pid = false;
+    for (const auto& l : lines) app_pid = app_pid || l.find("for the app " + std::to_string(::getpid())) != std::string::npos;
+    CHECK(app_pid);
+    cb::RunEntry stopped;
+    REQUIRE(!runner.stop(fork.id, 30, &stopped));
+    REQUIRE(runner.wait_for(state_is(fork.id, "exited"), 60000));
+    CHECK(runner.running_pids().empty());
+}
+
+TEST_CASE("runner: output.log moves to output.log.1 at its size limit, and run.logs reads both") {
+    Workspace w("runner_output_limit");
+    std::ofstream(w.ws + "/scripts/noisy.py")
+        << "import time\nfor i in range(3000):\n    print('line %05d ' % i + 'x' * 90)\nprint('done', flush=True)\n"
+           "time.sleep(120)\n";
+    cr::ModelRunner::Options o;
+    o.workspace = w.ws;
+    o.python = w.python.empty() ? "python3" : w.python;
+    o.start_limit_s = 60.0;
+    o.kill_grace_s = 1.0;
+    o.output_limit_bytes = 64 * 1024;
+    cr::ModelRunner runner(o);
+    struct Guard {
+        cr::ModelRunner& r;
+        ~Guard() { r.shutdown(); }
+    } guard{runner};
+    cb::RunStartRequest r;
+    r.script_path = w.ws + "/scripts/noisy.py";
+    r.script = "scripts/noisy.py";
+    cb::RunEntry e;
+    REQUIRE(!runner.start(r, &e));
+    const std::string out = w.ws + "/runs/" + e.id + "/output.log";
+    // The script printed about 290 KiB; the runner keeps the file near the
+    // limit at each pass.
+    bool done = false;
+    for (int i = 0; i < 1000 && !done; ++i) {
+        std::vector<std::string> lines;
+        std::error_code ec;
+        done = !runner.logs(e.id, 3, &lines) && std::find(lines.begin(), lines.end(), "done") != lines.end() &&
+               fs::file_size(out, ec) <= o.output_limit_bytes && !ec;
+        if (!done) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    REQUIRE(done);
+    REQUIRE(fs::exists(out + ".1"));
+    CHECK(read_file(out + ".1").find("line ") != std::string::npos);
+    const auto owner_only = fs::perms::owner_read | fs::perms::owner_write;
+    CHECK((fs::status(out).permissions() & fs::perms::all) == owner_only);
+    CHECK((fs::status(out + ".1").permissions() & fs::perms::all) == owner_only);
+    CHECK(read_file(out).find("caliper: output.log reached 65536 bytes") != std::string::npos);
+    // run.logs reads the older lines from output.log.1 when output.log has
+    // fewer.
+    std::vector<std::string> lines;
+    REQUIRE(!runner.logs(e.id, 200, &lines));
+    CHECK(lines.size() == 200);
+    CHECK(std::find(lines.begin(), lines.end(), "done") != lines.end());
+    CHECK(std::find(lines.begin(), lines.end(), "line 02999 " + std::string(90, 'x')) != lines.end());
+    cb::RunEntry stopped;
+    REQUIRE(!runner.stop(e.id, 0, &stopped));
+    REQUIRE(runner.wait_for([&](const std::vector<cb::RunEntry>& runs) {
+        const cb::RunEntry* x = find(runs, e.id);
+        return x && (x->state == "exited" || x->state == "failed");
+    }, 20000));
+    CHECK(runner.running_pids().empty());
 }

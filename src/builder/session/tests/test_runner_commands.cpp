@@ -196,8 +196,7 @@ TEST_CASE("runner commands: run.start takes only a file of the workspace and che
     CHECK(r["run"]["managed"] == true);
     CHECK(r["run"]["parent"].is_null());
     CHECK(r["run"]["params"] == json::array({{{"name", "lr"}, {"value", 0.01}}}));
-    // An absolute path in the workspace is the same script.
-    approved(*f.s, "run.start", {{"script", f.ws + "/scripts/train.py"}});
+    approved(*f.s, "run.start", {{"script", "scripts/train.py"}});
     CHECK(f.runner.starts.at(1).script == "scripts/train.py");
     CHECK(f.runner.starts.at(1).id.empty());
 
@@ -351,4 +350,91 @@ TEST_CASE("runner commands: a runner event keeps its run, parent, exit code and 
     CHECK(got["parent"] == "base");
     CHECK(got["exit_code"] == 1);
     CHECK(got["error"] == "The script ended with exit code 1.");
+}
+
+TEST_CASE("runner commands: run.start takes the script only as the path that the card shows and that runs") {
+    Fixture f("runner_resolved");
+    // Another path to the same file gets no card; the error names the path.
+    for (const std::string& other : {f.ws + "/scripts/train.py", std::string("./scripts/train.py"),
+                                     std::string("scripts/../scripts/train.py"), std::string("scripts//train.py")}) {
+        const CommandResult r = send(*f.s, "run.start", {{"script", other}}, CommandOrigin::mcp, "");
+        INFO(other << " answered " << r.error.code << ": " << r.error.message);
+        CHECK(r.error.code == kRunScriptRefused);
+        CHECK(r.error.message.find("scripts/train.py of the workspace") != std::string::npos);
+    }
+#ifndef _WIN32
+    // A link in the workspace to the script is refused too, as the card
+    // would name the link and not the file that runs.
+    std::filesystem::create_symlink("scripts/train.py", f.ws + "/link.py");
+    CHECK(send(*f.s, "run.start", {{"script", "link.py"}}, CommandOrigin::mcp, "").error.code == kRunScriptRefused);
+    // A link made after the card was approved refuses the start.
+    std::filesystem::create_directories(f.ws + "/real");
+    write_text(f.ws + "/real/train.py", "print('real')\n");
+    std::filesystem::create_directories(f.ws + "/swap");
+    write_text(f.ws + "/swap/train.py", "print('swap')\n");
+    const CommandResult r = send(*f.s, "run.start", {{"script", "swap/train.py"}}, CommandOrigin::mcp, "");
+    REQUIRE(r.error.code == "command.needs_approval");
+    std::filesystem::remove_all(f.ws + "/swap");
+    std::filesystem::create_directory_symlink("real", f.ws + "/swap");
+    const CommandResult done = f.s->registry().approve(r.approval);
+    CHECK(done.error.code == kRunScriptRefused);
+#endif
+    CHECK(f.s->registry().pending_approvals().empty());
+    CHECK(f.runner.starts.empty());
+}
+
+TEST_CASE("runner commands: a start past the limits gets no card, and the card shows each value in full") {
+    Fixture f("runner_limits");
+    f.runner.runs.push_back(running("train-1"));
+    auto refused = [&f](const char* name, json args) {
+        const CommandResult r = send(*f.s, name, std::move(args), CommandOrigin::mcp, "");
+        INFO(name << " answered " << r.error.code << ": " << r.error.message);
+        CHECK(r.error.code == "command.invalid_args");
+    };
+    std::string e200;   // 200 characters of 2 bytes: the schema's 256 characters pass, the 256 bytes do not
+    for (int i = 0; i < 200; ++i) e200 += "\xC3\xA9";
+    refused("run.start", {{"script", "scripts/train.py"}, {"args", {std::string(257, 'a')}}});
+    refused("run.start", {{"script", "scripts/train.py"}, {"args", {e200}}});
+    refused("run.start", {{"script", "scripts/train.py"}, {"args", json::array({std::string(256, 'a'), std::string(256, 'b'),
+                                                                                 std::string(256, 'c'), std::string(256, 'd'),
+                                                                                 "e"})}});
+    refused("run.start", {{"script", "scripts/train.py"}, {"params", json::array({{{"name", "note"}, {"value", e200}}})}});
+    json many = json::array();
+    for (int i = 0; i < 5; ++i) many.push_back(json{{"name", "p" + std::to_string(i)}, {"value", std::string(250, 'x')}});
+    refused("run.start", {{"script", "scripts/train.py"}, {"params", many}});
+    refused("run.fork", {{"run", "train-1"}, {"params", many}});
+    CHECK(f.s->registry().pending_approvals().empty());
+    CHECK(f.runner.starts.empty());
+    CHECK(f.runner.forks.empty());
+
+    // At the limits the start gets its card, and runs once approved.
+    const json full{{"script", "scripts/train.py"},
+                    {"args", json::array({std::string(256, 'a'), std::string(256, 'b'), std::string(256, 'c'),
+                                          std::string(256, 'd')})}};
+    approved(*f.s, "run.start", full, CommandOrigin::mcp);
+    REQUIRE(f.runner.starts.size() == 1);
+    CHECK(f.runner.starts[0].args.size() == 4);
+
+    // Quotes, backslashes, newlines and direction overrides cannot fake a
+    // second argument, a parameter or the end of the card.
+    CommandInvocation inv;
+    inv.name = "run.start";
+    inv.args = {{"script", "scripts/train.py"},
+                {"args", {"a\" b", "x\ny. The script", "C:\\data", "--lr=0.1", "\xE2\x80\xAE" "cba"}},
+                {"params", json::array({{{"name", "a=b"}, {"value", "1"}},
+                                        {{"name", "note"}, {"value", "ok\" c=2"}},
+                                        {{"name", "n"}, {"value", 2}}})}};
+    CHECK(run_card_text(inv, "") ==
+          "Start scripts/train.py as a new managed run, with the arguments \"a\\\" b\" \"x\\ny. The script\" "
+          "\"C:\\\\data\" --lr=0.1 \"\\u202ecba\" and the parameters \"a=b\"=\"1\" note=\"ok\\\" c=2\" n=2. The "
+          "script runs as Python code on this computer.");
+    inv.args = {{"script", "my scripts/train.py"}, {"args", {std::string(256, 'z')}}};
+    const std::string card = run_card_text(inv, "");
+    CHECK(card.find("Start \"my scripts/train.py\" as") == 0);
+    CHECK(card.find(std::string(256, 'z')) != std::string::npos);   // in full, not cut
+    inv.name = "run.fork";
+    inv.args = {{"run", "train-1"}};
+    CHECK(run_card_text(inv, "a\nb.py") ==
+          "Fork the run train-1 at its next checkpoint, with no changed parameters. The fork runs \"a\\nb.py\" as "
+          "Python code beside its parent.");
 }

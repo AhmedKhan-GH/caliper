@@ -1,7 +1,7 @@
 #pragma once
 // The model runner's commands (design/hosted-runs.md): run.list, run.start,
 // run.fork, run.stop and run.logs, and the optional argument `run` of the run
-// commands of M1 (run_control.h).
+// commands of run_control.h (run.state, run.set_param, run.action, run.pause).
 //
 // The app implements ModelRunner in its host component (src/host/runner/
 // model_runner.h): it starts a script of the workspace as a Python child
@@ -47,6 +47,14 @@ inline constexpr const char* kRunStartFailed = "run.start_failed";      // the i
 inline constexpr std::size_t kRunMaxArgs = 64;
 inline constexpr std::size_t kRunMaxParams = 64;
 inline constexpr std::size_t kRunMaxIdBytes = 40;
+// The byte limits of the arguments and of the parameters, which keep the card
+// short enough to show them in full: one argument, all arguments, one string
+// value, and all parameter names and string values. The handlers refuse a
+// start or a fork past a limit before it gets a card.
+inline constexpr std::size_t kRunMaxArgBytes = 256;
+inline constexpr std::size_t kRunMaxArgsBytes = 1024;
+inline constexpr std::size_t kRunMaxParamValueBytes = 256;
+inline constexpr std::size_t kRunMaxParamsBytes = 1024;
 
 // One run of run.list (the schema run_entry of the command table).
 struct RunEntry {
@@ -80,8 +88,13 @@ std::string run_params_text(const nlohmann::json& params);
 // Review Card), the one source of the agent's card and of the runs panel's:
 // the script, its arguments and its parameters of a start; the run and the
 // parameters of a fork, with `script` the parent's ("" when unknown); the run
-// and the limit of a stop. Long arguments and parameters are cut. "" for any
-// other command.
+// and the limit of a stop. Every text shows in full: a word of printable
+// ASCII with no space, quote, backslash or comma shows bare, and any other
+// text in double quotes with JSON's escapes and each control or format
+// character as \uXXXX, so that no argument reads as two and no value ends the
+// card. A parameter name with '=' and a string value that reads as a number,
+// true or false are in quotes too. The handlers refuse what passes the
+// limits above, so nothing is cut. "" for any other command.
 std::string run_card_text(const CommandInvocation& invocation, const std::string& script);
 
 // A start of run.start, after the handler checked it.
@@ -120,8 +133,8 @@ public:
     // The last `lines` lines of the run's output.log, oldest first. Fails with
     // run.not_found or run.not_managed.
     virtual Error logs(const std::string& run, int lines, std::vector<std::string>* out) = 0;
-    // The run control that acts on `run` for the run commands of M1, and the
-    // app's switch to that run at its next frame when it does not show it.
+    // The run control that acts on `run` for the run commands of
+    // run_control.h, and the app's switch to that run at its next frame when it does not show it.
     // Null with *error (run.not_found, run.not_ready) when there is none. The
     // pointer stays valid until the next call of the frame thread.
     virtual RunControl* control_of(const std::string& run, Error* error) = 0;
@@ -144,9 +157,10 @@ CommandOutput runner_command(const CommandContext& context, ModelRunner* runner,
 // origin (design/hosted-runs.md, Review Card).
 Error runner_precheck(const CommandInvocation& invocation, ModelRunner* runner, const std::string& workspace);
 
-// The handler of the run commands of M1 with the argument `run`: without it,
-// run_command(context, control); with it, the run control that `runner`
-// gives for that run (`user` is the person's script, through `control`).
+// The handler of the run commands of run_control.h with the argument `run`:
+// without it, run_command(context, control); with it, the run control that
+// `runner` gives for that run (`user` is the person's script, through
+// `control`).
 CommandOutput run_command(const CommandContext& context, RunControl* control, ModelRunner* runner);
 
 }  // namespace caliper_builder

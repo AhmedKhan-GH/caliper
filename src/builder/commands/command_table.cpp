@@ -270,11 +270,11 @@ const std::pair<const char*, const char*> kFragments[] = {
 
     {"run_state_name", R"json({"type": "string", "enum": ["none", "running", "pausing", "paused", "stepping"], "description": "The run's state: none before the script's first step, then running, pausing (a pause waits for the next step), paused or stepping."})json"},
     {"run_id", R"json({"type": "string", "pattern": "^[a-z0-9-]{1,40}$", "minLength": 1, "maxLength": 40, "description": "A run's id, from run.list: a managed run's id, or user for the person's own attached script."})json"},
-    {"run_params", R"json({"type": "array", "maxItems": 64, "description": "Parameter values by name, at most 64; the script applies each one when it registers that parameter with caliper.param.",
+    {"run_params", R"json({"type": "array", "maxItems": 64, "description": "Parameter values by name, at most 64, whose names and string values have at most 1024 bytes in all, so that the review card shows them in full; the script applies each one when it registers that parameter with caliper.param.",
       "items": {"type": "object", "additionalProperties": false, "required": ["name", "value"],
                 "properties": {
                   "name": {"type": "string", "minLength": 1, "maxLength": 63, "description": "The parameter's name, as the script registers it."},
-                  "value": {"type": ["number", "integer", "boolean", "string"], "description": "Its value: a number, true or false, or a string."}}}})json"},
+                  "value": {"type": ["number", "integer", "boolean", "string"], "maxLength": 256, "description": "Its value: a number, true or false, or a string of at most 256 bytes."}}}})json"},
     {"run_entry", R"json({
       "type": "object", "additionalProperties": false,
       "required": ["id", "managed", "state", "script", "args", "params", "parent", "step", "exit_code", "attached", "stopping", "error"],
@@ -1145,8 +1145,8 @@ const Row kRows[] = {
      "writes the stream link that the app attaches to.",
      R"json({"type": "object", "additionalProperties": false, "required": ["script"],
       "properties": {
-        "script": {"type": "string", "minLength": 1, "maxLength": 1024, "description": "The script's path, relative to the workspace or absolute; it must be a file in the workspace."},
-        "args": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 4096}, "description": "The script's command-line arguments; none when absent."},
+        "script": {"type": "string", "minLength": 1, "maxLength": 1024, "description": "The script's path relative to the workspace, with / between folders and no ., .. or link in it, such as scripts/train.py, so that the review card names the file that runs; another path to a file of the workspace fails with run.script_refused, whose message gives the path to use."},
+        "args": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 256}, "description": "The script's command-line arguments, each at most 256 bytes and at most 1024 bytes in all, so that the review card shows them in full; none when absent."},
         "params": {"$use": "run_params"},
         "id": {"$use": "run_id", "description": "The new run's id, unique in the workspace; the script's file name and a number, such as train-1, when absent."}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["run"],

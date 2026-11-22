@@ -6250,7 +6250,8 @@
                         "type": "string"
                       },
                       "value": {
-                        "description": "Its value: a number, true or false, or a string.",
+                        "description": "Its value: a number, true or false, or a string of at most 256 bytes.",
+                        "maxLength": 256,
                         "type": [
                           "number",
                           "integer",
@@ -6334,9 +6335,9 @@
         "additionalProperties": false,
         "properties": {
           "args": {
-            "description": "The script's command-line arguments; none when absent.",
+            "description": "The script's command-line arguments, each at most 256 bytes and at most 1024 bytes in all, so that the review card shows them in full; none when absent.",
             "items": {
-              "maxLength": 4096,
+              "maxLength": 256,
               "type": "string"
             },
             "maxItems": 64,
@@ -6350,7 +6351,7 @@
             "type": "string"
           },
           "params": {
-            "description": "Parameter values by name, at most 64; the script applies each one when it registers that parameter with caliper.param.",
+            "description": "Parameter values by name, at most 64, whose names and string values have at most 1024 bytes in all, so that the review card shows them in full; the script applies each one when it registers that parameter with caliper.param.",
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -6361,7 +6362,8 @@
                   "type": "string"
                 },
                 "value": {
-                  "description": "Its value: a number, true or false, or a string.",
+                  "description": "Its value: a number, true or false, or a string of at most 256 bytes.",
+                  "maxLength": 256,
                   "type": [
                     "number",
                     "integer",
@@ -6380,7 +6382,7 @@
             "type": "array"
           },
           "script": {
-            "description": "The script's path, relative to the workspace or absolute; it must be a file in the workspace.",
+            "description": "The script's path relative to the workspace, with / between folders and no ., .. or link in it, such as scripts/train.py, so that the review card names the file that runs; another path to a file of the workspace fails with run.script_refused, whose message gives the path to use.",
             "maxLength": 1024,
             "minLength": 1,
             "type": "string"
@@ -6463,7 +6465,8 @@
                       "type": "string"
                     },
                     "value": {
-                      "description": "Its value: a number, true or false, or a string.",
+                      "description": "Its value: a number, true or false, or a string of at most 256 bytes.",
+                      "maxLength": 256,
                       "type": [
                         "number",
                         "integer",
@@ -6563,7 +6566,8 @@
                   "type": "string"
                 },
                 "value": {
-                  "description": "Its value: a number, true or false, or a string.",
+                  "description": "Its value: a number, true or false, or a string of at most 256 bytes.",
+                  "maxLength": 256,
                   "type": [
                     "number",
                     "integer",
@@ -6662,7 +6666,8 @@
                       "type": "string"
                     },
                     "value": {
-                      "description": "Its value: a number, true or false, or a string.",
+                      "description": "Its value: a number, true or false, or a string of at most 256 bytes.",
+                      "maxLength": 256,
                       "type": [
                         "number",
                         "integer",
@@ -6826,7 +6831,8 @@
                       "type": "string"
                     },
                     "value": {
-                      "description": "Its value: a number, true or false, or a string.",
+                      "description": "Its value: a number, true or false, or a string of at most 256 bytes.",
+                      "maxLength": 256,
                       "type": [
                         "number",
                         "integer",
