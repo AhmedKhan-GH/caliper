@@ -9363,8 +9363,21 @@
             "minimum": 0,
             "type": "integer"
           },
+          "item": {
+            "description": "The element of the program's item map to pick, at the cursor.",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
           "panel": {
             "description": "The panel's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "program": {
+            "description": "A program of the panel whose item to pick, in place of an entity.",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -9400,7 +9413,7 @@
         ],
         "type": "object"
       },
-      "summary": "Makes a pick in a panel: the entity and the item at index, or clear to remove the selection. It makes the same pick event, field values and state writes as a person's pick, with the origin of the caller. It returns the pick fields. It changes the session and not the workspace, so it has no undo step."
+      "summary": "Makes a pick in a panel: the entity and the item at index, a program that draws in the panel and the item of its item map, or clear to remove the selection. It makes the same pick event, field values and state writes as a person's pick, with the origin of the caller. It returns the pick fields. It changes the session and not the workspace, so it has no undo step."
     },
     {
       "agents": true,
