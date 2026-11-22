@@ -42,6 +42,8 @@
 #include "host/runner/model_runner.h"
 #include <caliper_builder/session/session.h>
 #include "host/spec_runtime/spec_runtime.h"
+#include "host/spec_runtime/spec_stages.h"
+#include "live/live_programs.h"
 #endif
 #include "host/builder/spec_ui_driver.h"
 #include "app_paths.h"
@@ -342,6 +344,11 @@ public:
             session_.frame();
 #if CALIPER_WITH_BUILDER
             frame_runner();
+            // GPU programs (design/gpu-programs.md, Attachment): the attached
+            // script's programs follow the open spec's, and its PROGRAM_STATE
+            // becomes program.status and the program events.
+            if (caliper_builder::Session* s = session_.session()) program_host_.pump(program_link_, &s->events());
+            else program_host_.pump(program_link_, nullptr);
 #endif
             save_prompt_.frame(session_);   // "Save changes to <name>?" and what waits on it
             approvals_.frame(session_.session(), session_.worker_busy(), glfwGetTime());
@@ -613,6 +620,10 @@ public:
         // and the spec page's scene panels draw its live scenes.
         session_.set_run_link(&run_link_);
 #if CALIPER_WITH_BUILDER
+        // The hosts of GPU programs: the programs run in the attached script,
+        // the stages in the spec runtime's scene panels.
+        session_.set_program_host(&program_host_);
+        session_.set_stage_host(caliper_host::app_stage_host());
         // The model runner of Hosted Runs (design/hosted-runs.md): its runs
         // live in the workspace's runs folder, and run.list, run.start,
         // run.fork, run.stop and run.logs act through it.
@@ -859,6 +870,10 @@ public:
         approvals_.close();
         if (live_.core()) caliper_live_set_event_tap(live_.core(), {});
         session_.set_run_link(nullptr);   // before the attachment goes
+#if CALIPER_WITH_BUILDER
+        session_.set_program_host(nullptr);
+        session_.set_stage_host(nullptr);
+#endif
         session_.close();
         // Workers FIRST: a job may hold a pointer into applet state, so every
         // worker must be joined before close_all() destroys that state (the
@@ -2039,6 +2054,8 @@ private:
     caliper_builder::Session* runner_session_ = nullptr;    // the session that holds its run sources
     caliper_host::AgentSettings agent_settings_;   // the widget agent's settings, a popup over any page
     caliper_host::RunsPanel runs_panel_;           // the managed runs, a popup over any page
+    caliper_live::AppProgramHost program_host_;    // the open spec's programs in the attached script
+    caliper_live::AttachmentProgramLink program_link_{live_};
 #endif
     caliper_host::CommandLine cl_;          // for starting Caliper API later, for the chat
     bool api_started_here_ = false;         // the app started the API without --api (api_for())

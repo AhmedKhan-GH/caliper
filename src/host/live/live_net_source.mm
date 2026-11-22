@@ -163,8 +163,9 @@ Controls parse_controls(const wire::Controls& c) {
 // What the frame thread asks the network thread to send (the network thread
 // owns the socket and the subscriptions, and fills in what only it knows).
 struct Outgoing {
-    enum class Kind { Control, Event, ViewRequest, Unsubscribe } kind = Kind::Control;
+    enum class Kind { Control, Event, ViewRequest, Unsubscribe, Program } kind = Kind::Control;
     wire::Control control;
+    wire::Program program;     // Program
     uint64_t key = 0;          // Event, ViewRequest: the view
     std::string type;          // Event
     Json body;                 // Event: detail; ViewRequest: the data view
@@ -369,6 +370,51 @@ public:
             return 0;
         }
         return id;
+    }
+
+    // ---- 3.2 draft: GPU programs (frame thread) ----------------------------------------------
+    bool programs_ready(std::string* why) override {
+        std::lock_guard<std::mutex> g(mu_);
+        std::string no;
+        if (failed_ || !connected_ || !attached_) no = "not attached to a session";
+        else if (ended_) no = "the session has ended";
+        else if (!server_programs_) no = "the server takes no programs";
+        else if (!welcome_control_) no = "the server does not let this viewer control (a hub needs --allow-control)";
+        else if (!has_cap(session_caps_, CALIPER_NET_CAP_PROGRAMS))
+            no = "the script takes no programs (it needs caliper.watch(model, optimizer))";
+        if (why) *why = no;
+        return no.empty();
+    }
+
+    uint64_t program_epoch() override {
+        std::lock_guard<std::mutex> g(mu_);
+        return program_epoch_;
+    }
+
+    uint32_t send_program(wire::Program msg) override {
+        if (!programs_ready(nullptr)) return 0;
+        Outgoing o;
+        o.kind = Outgoing::Kind::Program;
+        msg.request_id = next_control_id_++;
+        if (msg.request_id == 0) msg.request_id = next_control_id_++;
+        const uint32_t id = msg.request_id;
+        o.program = std::move(msg);
+        return enqueue(std::move(o)) ? id : 0;
+    }
+
+    std::vector<ProgramAnswer> take_program_answers() override {
+        std::lock_guard<std::mutex> g(mu_);
+        std::vector<ProgramAnswer> out(program_answers_.begin(), program_answers_.end());
+        program_answers_.clear();
+        return out;
+    }
+
+    static constexpr size_t kMaxProgramAnswers = 64;   // answers the frame thread has not read
+
+    void push_program_answer(ProgramAnswer a) {
+        std::lock_guard<std::mutex> g(mu_);
+        if (program_answers_.size() >= kMaxProgramAnswers) program_answers_.pop_front();
+        program_answers_.push_back(std::move(a));
     }
 
     std::vector<ControlReply> take_control_replies() override {
@@ -625,7 +671,8 @@ private:
                         // it draws scenes.
                         wire::Hello h;
                         h.role = CALIPER_NET_ROLE_VIEWER;
-                        h.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_SCENES};
+                        h.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_SCENES,
+                                          CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS};
                         Json sw = Json::object();
                         sw.set("name", "caliper-app");
                         sw.set("version", caliper_host::kHostVersionStr);
@@ -779,6 +826,7 @@ private:
         else if (auto* c = std::get_if<wire::Controls>(&m)) on_controls(*c);
         else if (auto* cr = std::get_if<wire::ControlReply>(&m)) on_control_reply(*cr);
         else if (auto* sel = std::get_if<wire::Selection>(&m)) on_selection(*sel);
+        else if (auto* ps = std::get_if<wire::ProgramState>(&m)) on_program_state(*ps);
         else if (auto* su = std::get_if<wire::SceneUpdate>(&m)) {
             if (!su->split.is_null()) {
                 on_piece(r.frame.meta, r.type, *su);
@@ -896,6 +944,8 @@ private:
         std::lock_guard<std::mutex> g(mu_);
         server_controls_ = has_cap(w.capabilities, CALIPER_NET_CAP_CONTROLS);
         server_selection_ = has_cap(w.capabilities, CALIPER_NET_CAP_SELECTION);
+        server_programs_ = has_cap(w.capabilities, CALIPER_NET_CAP_PROGRAMS);
+        program_fresh_ = true;   // a new connection: the next attachment is a new epoch
         welcome_control_ = w.control.value_or(false);
         // A server that is itself the producer (caliper.serve()) names its own
         // capabilities; a hub's session list names the session's.
@@ -924,6 +974,16 @@ private:
             out.error_message = str_or(r.error.find("message"), "");
         }
         push_reply(std::move(out));
+    }
+
+    // 3.2 draft: GPU programs.
+    void on_program_state(const wire::ProgramState& ps) {
+        ProgramAnswer a;
+        a.request_id = ps.request_id;
+        a.programs = ps.programs;
+        a.step = ps.step;
+        a.step_ms = ps.step_ms;
+        push_program_answer(std::move(a));
     }
 
     void on_selection(const wire::Selection& s) {
@@ -967,6 +1027,18 @@ private:
                         break;
                     }
                     send(o.control);
+                    break;
+                }
+                case Outgoing::Kind::Program: {   // 3.2 draft
+                    if (!ready) {   // answered here, as the server would, so no request waits
+                        ProgramAnswer a;
+                        a.request_id = o.program.request_id;
+                        a.error_code = CALIPER_NET_ERR_NOT_ATTACHED;
+                        a.error_message = "the stream is not attached to a session";
+                        push_program_answer(std::move(a));
+                        break;
+                    }
+                    send(o.program);
                     break;
                 }
                 case Outgoing::Kind::Event: {
@@ -1137,6 +1209,14 @@ private:
     }
 
     void on_error(const wire::Error& e) {
+        if (e.in_reply_to && *e.in_reply_to == CALIPER_NET_MSG_PROGRAM && e.request_id) {
+            ProgramAnswer a;   // a refused PROGRAM: its program's error, not the stream's
+            a.request_id = e.request_id;
+            a.error_code = e.code.empty() ? std::string(CALIPER_NET_ERR_BAD_REQUEST) : e.code;
+            a.error_message = e.message;
+            push_program_answer(std::move(a));
+            return;
+        }
         set_problem("the server reported " + e.code + (e.message.empty() ? "" : ": " + e.message));
     }
 
@@ -1247,6 +1327,11 @@ private:
             item_axes_ = std::move(axes);
             views_ = next;
             ++views_gen_;
+            if (program_fresh_ || program_session_ != session_id_) {
+                ++program_epoch_;   // the script may hold none of the programs sent before
+                program_fresh_ = false;
+                program_session_ = session_id_;
+            }
             attached_ = true;
             ever_attached_ = true;
             ended_ = !live;
@@ -1445,6 +1530,11 @@ private:
     bool server_controls_ = false, welcome_control_ = false, have_controls_ = false;
     bool server_selection_ = false;   // network thread only after WELCOME
     std::vector<std::string> session_caps_;
+    // 3.2 draft, GPU programs; guarded by mu_.
+    bool server_programs_ = false, program_fresh_ = false;
+    uint64_t program_epoch_ = 0;
+    std::string program_session_;
+    std::deque<ProgramAnswer> program_answers_;
     Controls controls_;
     std::deque<ControlReply> replies_;
     std::map<std::string, LinkedSelection> selections_;

@@ -36,7 +36,7 @@ EXPECT = json.loads((V32 / "invalid" / "expect.json").read_text())
 def test_the_frames_are_there():
     assert len(VALID) >= 60
     types = {w.decode_frame((FIXTURES / f"{n}.bin").read_bytes()).type for n in VALID}
-    assert {0x70, 0x71, 0x72, 0x73, 0x74, 0x78, 0x79, 0x7A, 0x7B} <= types
+    assert {0x70, 0x71, 0x72, 0x73, 0x74, 0x78, 0x79, 0x7A, 0x7B, 0x80, 0x81} <= types
     msgs = [w.decode((FIXTURES / f"{n}.bin").read_bytes()) for n in VALID]
     parts = {m.part for m in msgs if isinstance(m, w.SceneUpdate)}
     assert parts == set(w.PARTS)
@@ -176,8 +176,8 @@ def test_golden_values_of_the_other_parts():
 def test_31_receivers_find_the_frames_well_formed():
     for n in VALID:
         f = w.decode_frame((FIXTURES / f"{n}.bin").read_bytes())
-        assert f.type in (0x01, 0x02, 0x10, 0x20, 0x24, 0x30, 0x31, 0x50, 0x70, 0x71, 0x72, 0x73,
-                          0x74, 0x78, 0x79, 0x7A, 0x7B)
+        assert f.type in (0x01, 0x02, 0x10, 0x20, 0x24, 0x30, 0x31, 0x50, 0x51, 0x52, 0x70, 0x71,
+                          0x72, 0x73, 0x74, 0x78, 0x79, 0x7A, 0x7B, 0x80, 0x81)
 
 
 @pytest.mark.parametrize("name", sorted(EXPECT))
@@ -449,7 +449,8 @@ def test_page_example_is_the_golden_frame():
     rows = dict(re.findall(r"^\| `0x([0-9a-f]{4})` \| `(\w+)` \|", page, re.M))
     assert rows == {"0070": "scene_update", "0071": "scene_transforms", "0072": "scene_clear",
                     "0073": "scene_classes", "0074": "text", "0078": "recordings",
-                    "0079": "recording_open", "007a": "cursor", "007b": "time_state"}
+                    "0079": "recording_open", "007a": "cursor", "007b": "time_state",
+                    "0080": "program", "0081": "program_state"}
 
 
 
@@ -674,3 +675,65 @@ def test_split_update_of_a_large_mesh():
     with pytest.raises(ValueError):
         w.split_update(u, 9, max_frame=16 * 1024)       # more than 16 pieces
     assert w.split_update(u, 9) == [u]                  # fits one frame
+
+
+# ---------------------------------------------------------------------------
+# GPU programs and interventions
+# ---------------------------------------------------------------------------
+def test_golden_values_of_programs():
+    import hashlib
+    g = _d("program_set_geometry")
+    assert (g.op, g.id, g.scene, g.request_id) == ("set", "rows", "world", 11)
+    assert hashlib.sha256(g.wgsl.encode("utf-8")).hexdigest() == g.sha256
+    assert "\u00b5" in g.wgsl and g.declaration["output"]["max_count"] == 4096
+    f = w.decode_frame((V32 / "program_set_geometry.bin").read_bytes())
+    assert [s.name for s in f.sections] == ["wgsl"] and f.sections[0].dtype == w.DType.U8
+    p = _d("program_set_pixels")
+    assert p.scene is None and p.declaration["output"]["width"] == 64
+    r = _d("program_remove")
+    assert (r.op, r.declaration, r.wgsl, r.sha256) == ("remove", None, None, None)
+    assert w.decode_frame((V32 / "program_remove.bin").read_bytes()).sections == []
+    st = _d("program_state_reply")
+    assert (st.request_id, st.step, st.step_ms) == (12, 1200, 31.25)
+    assert [x["state"] for x in st.programs] == ["running", "refused"]
+    assert st.programs[1]["error"]["code"] == "program.unknown_input"
+    wt = _d("program_state_waiting")
+    assert wt.request_id is None and wt.step is None and len(wt.programs) == 1
+
+
+def test_golden_values_of_interventions():
+    s = _d("control_intervene_set")
+    assert s.intervene == {"set": {"point": "blocks.0.attn#3", "op": "ablate",
+                                   "from_step": 1201, "until_step": None}}
+    assert _d("control_intervene_clear").intervene == {"clear": "blocks.0.attn#3"}
+    assert _d("control_intervene_clear_all").intervene == {"clear_all": True}
+    assert _d("control_reply_intervene").op == "intervene"
+    c = _d("controls_interventions")
+    assert [p["kind"] for p in c.interventions["points"]] == ["module", "head"]
+    assert c.interventions["active"][0]["state"] == "active"
+    assert w.decode((FIXTURES / "v3_1" / "controls.bin").read_bytes()).interventions is None
+
+
+def test_program_codec_rules():
+    src = "fn f() {}"
+    sha = "0" * 64
+    decl = {"output": {"kind": "pixels", "width": 4, "height": 4}}
+    ok = w.Program(1, "set", "img", decl, src, sha)
+    assert w.decode(w.encode(ok)) == ok
+    # An id of exactly 55 bytes passes, and program.<id> then fits a view name.
+    long_id = "p" * w.PROGRAM_ID_MAX
+    assert w.decode(w.encode(w.Program(1, "remove", long_id))).id == long_id
+    assert len(f"program.{long_id}".encode()) <= w.NAME_MAX
+    # A remove ignores a declaration and a section it does not need.
+    rm = w.encode_frame(w.MsgType.PROGRAM, {"request_id": 2, "op": "remove", "id": "img",
+                                            "declaration": 5})
+    assert w.decode(rm).declaration is None
+    # A geometry output needs the scene; a pixels output does not.
+    geo = {"output": {"kind": "geometry", "part": "points", "max_count": 1,
+                      "arrays": ["positions"]}}
+    with pytest.raises(w.MessageError):
+        w.decode(w.encode(w.Program(1, "set", "g", geo, src, sha)))
+    assert w.decode(w.encode(w.Program(1, "set", "g", geo, src, sha, "s"))).scene == "s"
+    # A wgsl section of exactly the limit passes.
+    big = "a" * w.PROGRAM_SOURCE_MAX
+    assert len(w.decode(w.encode(w.Program(1, "set", "img", decl, big, sha))).wgsl) == len(big)

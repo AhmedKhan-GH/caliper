@@ -1,0 +1,27 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 163,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 139,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 82
+  },
+  "meta": {
+    "error": {
+      "code": "intervene.unknown_point",
+      "message": "The model has no point blocks.9."
+    },
+    "op": "intervene",
+    "request_id": 21,
+    "status": "error"
+  },
+  "meta_offset": 24,
+  "name": "v3_2/control_reply_intervene",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "control_reply"
+}
