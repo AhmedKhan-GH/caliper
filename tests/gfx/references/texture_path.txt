@@ -1,0 +1,101 @@
+# The texture path's references (tests/gfx/gfx_texture_path.mm): one line per case, the readback's
+# FNV-1a hash, its path label, the renderer's copies and bytes for the update, and how many
+# texels differ from the CPU reference (cpu_ref_differs).
+bridge-alloc-private-magma-dec-17x9-at20 17x9 fnv1a64=8d6ca1e1d94d7309 path=compute-imported copies=0 bytes=0 cpu_ref_differs=none info=update_texture_from_alloc magma [1, -1] from a private MTLBuffer at byte 20
+bridge-alloc-private-u8c4-64x48-at0 64x48 fnv1a64=4ee73a763628d282 path=blit-imported copies=0 bytes=0 cpu_ref_differs=none info=update_texture_from_alloc u8 (H, W, 4) from a private MTLBuffer at byte 0
+bridge-alloc-private-u8c4-64x48-at20 64x48 fnv1a64=229666279cdb91c5 path=blit-imported copies=0 bytes=0 cpu_ref_differs=none info=update_texture_from_alloc u8 (H, W, 4) from a private MTLBuffer at byte 20
+bridge-alloc-private-viridis-wide-255x129-at0 255x129 fnv1a64=c5b569e334c13b65 path=compute-imported copies=0 bytes=0 cpu_ref_differs=none info=update_texture_from_alloc viridis [-3, 5] from a private MTLBuffer at byte 0
+bridge-alloc-private-viridis-wide-255x129-at20 255x129 fnv1a64=3ef6e1eebc2929e8 path=compute-imported copies=0 bytes=0 cpu_ref_differs=none info=update_texture_from_alloc viridis [-3, 5] from a private MTLBuffer at byte 20
+bridge-alloc-private-viridis-wide-255x129-at4096 255x129 fnv1a64=deb5c36e3b55f4b5 path=compute-imported copies=0 bytes=0 cpu_ref_differs=none info=update_texture_from_alloc viridis [-3, 5] from a private MTLBuffer at byte 4096
+bridge-alloc-shared-magma-dec-17x9-at20 17x9 fnv1a64=187245ea1e8286d3 path=compute-imported copies=0 bytes=0 cpu_ref_differs=none info=update_texture_from_alloc magma [1, -1] from a shared MTLBuffer at byte 20
+bridge-alloc-shared-u8c4-64x48-at0 64x48 fnv1a64=3509e3ad37ecc716 path=blit-imported copies=0 bytes=0 cpu_ref_differs=none info=update_texture_from_alloc u8 (H, W, 4) from a shared MTLBuffer at byte 0
+bridge-alloc-shared-u8c4-64x48-at20 64x48 fnv1a64=e9dfaf721fb4b587 path=blit-imported copies=0 bytes=0 cpu_ref_differs=none info=update_texture_from_alloc u8 (H, W, 4) from a shared MTLBuffer at byte 20
+bridge-alloc-shared-viridis-wide-255x129-at0 255x129 fnv1a64=0db6193c7f7166e6 path=compute-imported copies=0 bytes=0 cpu_ref_differs=none info=update_texture_from_alloc viridis [-3, 5] from a shared MTLBuffer at byte 0
+bridge-alloc-shared-viridis-wide-255x129-at20 255x129 fnv1a64=742815ef6a1a67db path=compute-imported copies=0 bytes=0 cpu_ref_differs=none info=update_texture_from_alloc viridis [-3, 5] from a shared MTLBuffer at byte 20
+bridge-alloc-shared-viridis-wide-255x129-at4096 255x129 fnv1a64=535c87ee272f8f05 path=compute-imported copies=0 bytes=0 cpu_ref_differs=none info=update_texture_from_alloc viridis [-3, 5] from a shared MTLBuffer at byte 4096
+bridge-create-cpu-u8c1-17x9 17x9 fnv1a64=96c2275fe142f598 path=cpu-staged copies=1 bytes=612 cpu_ref_differs=none info=texture_from_tensor u8 (H, W, 1) from a cpu tensor
+bridge-create-cpu-u8c1-256x256 256x256 fnv1a64=130f3114cd9df254 path=cpu-staged copies=1 bytes=262144 cpu_ref_differs=none info=texture_from_tensor u8 (H, W, 1) from a cpu tensor
+bridge-create-cpu-u8c1-3x2 3x2 fnv1a64=3d98f400b7072a8e path=cpu-staged copies=1 bytes=24 cpu_ref_differs=none info=texture_from_tensor u8 (H, W, 1) from a cpu tensor
+bridge-create-cpu-u8c3-17x9 17x9 fnv1a64=3cee87cb564396ad path=cpu-staged copies=1 bytes=612 cpu_ref_differs=none info=texture_from_tensor u8 (H, W, 3) from a cpu tensor
+bridge-create-cpu-u8c3-256x256 256x256 fnv1a64=c0652df48bf2eca1 path=cpu-staged copies=1 bytes=262144 cpu_ref_differs=none info=texture_from_tensor u8 (H, W, 3) from a cpu tensor
+bridge-create-cpu-u8c3-3x2 3x2 fnv1a64=4f00a1b00074961b path=cpu-staged copies=1 bytes=24 cpu_ref_differs=none info=texture_from_tensor u8 (H, W, 3) from a cpu tensor
+bridge-create-cpu-u8c4-17x9 17x9 fnv1a64=c9db3b17eaf39038 path=cpu-staged copies=1 bytes=612 cpu_ref_differs=none info=texture_from_tensor u8 (H, W, 4) from a cpu tensor
+bridge-create-cpu-u8c4-256x256 256x256 fnv1a64=43ac258fa88d85c1 path=cpu-staged copies=1 bytes=262144 cpu_ref_differs=none info=texture_from_tensor u8 (H, W, 4) from a cpu tensor
+bridge-create-cpu-u8c4-3x2 3x2 fnv1a64=d2295eb4de29d5c9 path=cpu-staged copies=1 bytes=24 cpu_ref_differs=none info=texture_from_tensor u8 (H, W, 4) from a cpu tensor
+bridge-create-cpu-viridis-unit-1000x7 1000x7 fnv1a64=5d80fb3a18008460 path=cpu-staged copies=1 bytes=28000 cpu_ref_differs=none info=texture_from_tensor_mapped viridis [0, 1] from a cpu tensor
+bridge-create-cpu-viridis-unit-1024x768 1024x768 fnv1a64=bccb22eb4db4edf6 path=cpu-staged copies=1 bytes=3145728 cpu_ref_differs=none info=texture_from_tensor_mapped viridis [0, 1] from a cpu tensor
+bridge-create-cpu-viridis-unit-17x9 17x9 fnv1a64=1d0cb141780e6d67 path=cpu-staged copies=1 bytes=612 cpu_ref_differs=none info=texture_from_tensor_mapped viridis [0, 1] from a cpu tensor
+bridge-create-cpu-viridis-unit-1x1 1x1 fnv1a64=73d5b07c2ceac19d path=cpu-staged copies=1 bytes=4 cpu_ref_differs=none info=texture_from_tensor_mapped viridis [0, 1] from a cpu tensor
+bridge-create-cpu-viridis-unit-255x129 255x129 fnv1a64=6209ceb93d37d9b9 path=cpu-staged copies=1 bytes=131580 cpu_ref_differs=none info=texture_from_tensor_mapped viridis [0, 1] from a cpu tensor
+bridge-create-cpu-viridis-unit-256x256 256x256 fnv1a64=c8b9659ae62e62bf path=cpu-staged copies=1 bytes=262144 cpu_ref_differs=none info=texture_from_tensor_mapped viridis [0, 1] from a cpu tensor
+bridge-create-cpu-viridis-unit-3x2 3x2 fnv1a64=b430ad7db3d2504c path=cpu-staged copies=1 bytes=24 cpu_ref_differs=none info=texture_from_tensor_mapped viridis [0, 1] from a cpu tensor
+bridge-create-cpu-viridis-unit-64x48 64x48 fnv1a64=3b54af307268d03b path=cpu-staged copies=1 bytes=12288 cpu_ref_differs=none info=texture_from_tensor_mapped viridis [0, 1] from a cpu tensor
+bridge-create-cpu-viridis-unit-7x1000 7x1000 fnv1a64=2f05421a12781639 path=cpu-staged copies=1 bytes=28000 cpu_ref_differs=none info=texture_from_tensor_mapped viridis [0, 1] from a cpu tensor
+bridge-create-private-u8c4-17x9 17x9 fnv1a64=431b817ce26d18f6 path=blit copies=0 bytes=0 cpu_ref_differs=none info=texture_from_tensor u8 (H, W, 4) from a private MTLBuffer
+bridge-create-private-u8c4-256x256 256x256 fnv1a64=21c1a037aa4ebdda path=blit copies=0 bytes=0 cpu_ref_differs=none info=texture_from_tensor u8 (H, W, 4) from a private MTLBuffer
+bridge-create-shared-u8c4-17x9 17x9 fnv1a64=d5d3b68d90bee67b path=blit copies=0 bytes=0 cpu_ref_differs=none info=texture_from_tensor u8 (H, W, 4) from a shared MTLBuffer
+bridge-create-shared-u8c4-256x256 256x256 fnv1a64=6a15f6bc16d15319 path=blit copies=0 bytes=0 cpu_ref_differs=none info=texture_from_tensor u8 (H, W, 4) from a shared MTLBuffer
+bridge-create-shared-viridis-unit-1000x7 1000x7 fnv1a64=d51d4caa885d23ce path=compute copies=0 bytes=0 cpu_ref_differs=none info=texture_from_tensor_mapped viridis [0, 1] from a shared tensor
+bridge-create-shared-viridis-unit-1024x768 1024x768 fnv1a64=b4a536cd6281bfea path=compute copies=0 bytes=0 cpu_ref_differs=none info=texture_from_tensor_mapped viridis [0, 1] from a shared tensor
+bridge-create-shared-viridis-unit-17x9 17x9 fnv1a64=2bf1ef9b7a4497d3 path=compute copies=0 bytes=0 cpu_ref_differs=none info=texture_from_tensor_mapped viridis [0, 1] from a shared tensor
+bridge-create-shared-viridis-unit-1x1 1x1 fnv1a64=73d5b07c2ceac19d path=compute copies=0 bytes=0 cpu_ref_differs=none info=texture_from_tensor_mapped viridis [0, 1] from a shared tensor
+bridge-create-shared-viridis-unit-255x129 255x129 fnv1a64=197a3dae65b35130 path=compute copies=0 bytes=0 cpu_ref_differs=none info=texture_from_tensor_mapped viridis [0, 1] from a shared tensor
+bridge-create-shared-viridis-unit-256x256 256x256 fnv1a64=062936cc7d70874f path=compute copies=0 bytes=0 cpu_ref_differs=none info=texture_from_tensor_mapped viridis [0, 1] from a shared tensor
+bridge-create-shared-viridis-unit-3x2 3x2 fnv1a64=119adbc5949d02e7 path=compute copies=0 bytes=0 cpu_ref_differs=none info=texture_from_tensor_mapped viridis [0, 1] from a shared tensor
+bridge-create-shared-viridis-unit-64x48 64x48 fnv1a64=2f8a28f8be461ba9 path=compute copies=0 bytes=0 cpu_ref_differs=none info=texture_from_tensor_mapped viridis [0, 1] from a shared tensor
+bridge-create-shared-viridis-unit-7x1000 7x1000 fnv1a64=302d86788971d372 path=compute copies=0 bytes=0 cpu_ref_differs=none info=texture_from_tensor_mapped viridis [0, 1] from a shared tensor
+bridge-shared-u8c4-17x9 17x9 fnv1a64=1ed1686f7f21270b path=cpu-staged copies=1 bytes=612 cpu_ref_differs=none info=alloc_shared u8 (H, W, 4), written, then update_texture
+bridge-shared-viridis-unit-64x48 64x48 fnv1a64=08794e231b4d1493 path=cpu-staged copies=1 bytes=12288 cpu_ref_differs=none info=alloc_shared f32, written, then update_texture viridis [0, 1]
+bridge-update-cpu-magma-sym-64x48 64x48 fnv1a64=aa12763e28356bb9 path=cpu-staged copies=1 bytes=12288 cpu_ref_differs=none info=update_texture magma [-1, 1] from a cpu tensor
+bridge-update-cpu-rdbu-sym-64x48 64x48 fnv1a64=00df3f37f1df2171 path=cpu-staged copies=1 bytes=12288 cpu_ref_differs=none info=update_texture rdbu [-1, 1] from a cpu tensor
+bridge-update-cpu-viridis-dec-64x48 64x48 fnv1a64=5fae5f0d8cea8bf8 path=cpu-staged copies=1 bytes=12288 cpu_ref_differs=none info=update_texture viridis [1, -1] from a cpu tensor
+bridge-update-cpu-viridis-flat-64x48 64x48 fnv1a64=b534ace6443f6325 path=cpu-staged copies=1 bytes=12288 cpu_ref_differs=none info=update_texture viridis [2, 2] from a cpu tensor
+bridge-update-cpu-viridis-frac-64x48 64x48 fnv1a64=d399af9204dd25ea path=cpu-staged copies=1 bytes=12288 cpu_ref_differs=none info=update_texture viridis [-0.5, 0.75] from a cpu tensor
+bridge-update-cpu-viridis-huge-64x48 64x48 fnv1a64=b534ace6443f6325 path=cpu-staged copies=1 bytes=12288 cpu_ref_differs=none info=update_texture viridis [-3e+38, 3e+38] from a cpu tensor
+bridge-update-cpu-viridis-inf-64x48 64x48 fnv1a64=b534ace6443f6325 path=cpu-staged copies=1 bytes=12288 cpu_ref_differs=none info=update_texture viridis [0, inf] from a cpu tensor
+bridge-update-cpu-viridis-ninf-64x48 64x48 fnv1a64=b534ace6443f6325 path=cpu-staged copies=1 bytes=12288 cpu_ref_differs=none info=update_texture viridis [-inf, 0] from a cpu tensor
+bridge-update-cpu-viridis-sym-64x48 64x48 fnv1a64=27f599720d0b9287 path=cpu-staged copies=1 bytes=12288 cpu_ref_differs=none info=update_texture viridis [-1, 1] from a cpu tensor
+bridge-update-cpu-viridis-third-64x48 64x48 fnv1a64=eff1e0933c5087f8 path=cpu-staged copies=1 bytes=12288 cpu_ref_differs=none info=update_texture viridis [0, 3] from a cpu tensor
+bridge-update-cpu-viridis-tiny-64x48 64x48 fnv1a64=8a4ab4ff2f33aaca path=cpu-staged copies=1 bytes=12288 cpu_ref_differs=none info=update_texture viridis [1e-38, 2e-38] from a cpu tensor
+bridge-update-cpu-viridis-unit-64x48 64x48 fnv1a64=bfb79f87740e10cc path=cpu-staged copies=1 bytes=12288 cpu_ref_differs=none info=update_texture viridis [0, 1] from a cpu tensor
+bridge-update-cpu-viridis-wide-64x48 64x48 fnv1a64=57bfce77fa8628f7 path=cpu-staged copies=1 bytes=12288 cpu_ref_differs=none info=update_texture viridis [-3, 5] from a cpu tensor
+bridge-update-private-magma-sym-64x48 64x48 fnv1a64=e37985e670f18f0b path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture magma [-1, 1] from a private tensor
+bridge-update-private-rdbu-sym-64x48 64x48 fnv1a64=07f906d80010602a path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture rdbu [-1, 1] from a private tensor
+bridge-update-private-viridis-dec-64x48 64x48 fnv1a64=80bf71a080a25017 path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture viridis [1, -1] from a private tensor
+bridge-update-private-viridis-flat-64x48 64x48 fnv1a64=b534ace6443f6325 path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture viridis [2, 2] from a private tensor
+bridge-update-private-viridis-frac-64x48 64x48 fnv1a64=121b74c037c4c21c path=compute copies=0 bytes=0 cpu_ref_differs=42 info=update_texture viridis [-0.5, 0.75] from a private tensor
+bridge-update-private-viridis-huge-64x48 64x48 fnv1a64=b534ace6443f6325 path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture viridis [-3e+38, 3e+38] from a private tensor
+bridge-update-private-viridis-inf-64x48 64x48 fnv1a64=b534ace6443f6325 path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture viridis [0, inf] from a private tensor
+bridge-update-private-viridis-ninf-64x48 64x48 fnv1a64=b534ace6443f6325 path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture viridis [-inf, 0] from a private tensor
+bridge-update-private-viridis-sym-64x48 64x48 fnv1a64=58b588d699490522 path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture viridis [-1, 1] from a private tensor
+bridge-update-private-viridis-third-64x48 64x48 fnv1a64=afed2e090f524849 path=compute copies=0 bytes=0 cpu_ref_differs=86 info=update_texture viridis [0, 3] from a private tensor
+bridge-update-private-viridis-tiny-64x48 64x48 fnv1a64=6665c7ce3a3d3e03 path=compute copies=0 bytes=0 cpu_ref_differs=1347 info=update_texture viridis [1e-38, 2e-38] from a private tensor
+bridge-update-private-viridis-unit-64x48 64x48 fnv1a64=84cde471a5afcfe0 path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture viridis [0, 1] from a private tensor
+bridge-update-private-viridis-wide-64x48 64x48 fnv1a64=4301de867cd7f5d4 path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture viridis [-3, 5] from a private tensor
+bridge-update-shared-magma-sym-64x48 64x48 fnv1a64=b234c1cf2a81bb27 path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture magma [-1, 1] from a shared tensor
+bridge-update-shared-rdbu-sym-64x48 64x48 fnv1a64=1c2a3fe48d6f78ac path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture rdbu [-1, 1] from a shared tensor
+bridge-update-shared-viridis-dec-64x48 64x48 fnv1a64=e0e08110a04fcaa0 path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture viridis [1, -1] from a shared tensor
+bridge-update-shared-viridis-flat-64x48 64x48 fnv1a64=b534ace6443f6325 path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture viridis [2, 2] from a shared tensor
+bridge-update-shared-viridis-frac-64x48 64x48 fnv1a64=374e2b9c8d8f46ca path=compute copies=0 bytes=0 cpu_ref_differs=42 info=update_texture viridis [-0.5, 0.75] from a shared tensor
+bridge-update-shared-viridis-huge-64x48 64x48 fnv1a64=b534ace6443f6325 path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture viridis [-3e+38, 3e+38] from a shared tensor
+bridge-update-shared-viridis-inf-64x48 64x48 fnv1a64=b534ace6443f6325 path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture viridis [0, inf] from a shared tensor
+bridge-update-shared-viridis-ninf-64x48 64x48 fnv1a64=b534ace6443f6325 path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture viridis [-inf, 0] from a shared tensor
+bridge-update-shared-viridis-sym-64x48 64x48 fnv1a64=3361f7c2bb7f0d98 path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture viridis [-1, 1] from a shared tensor
+bridge-update-shared-viridis-third-64x48 64x48 fnv1a64=15bdf955447c6eaa path=compute copies=0 bytes=0 cpu_ref_differs=86 info=update_texture viridis [0, 3] from a shared tensor
+bridge-update-shared-viridis-tiny-64x48 64x48 fnv1a64=005b7cb0a2b387a1 path=compute copies=0 bytes=0 cpu_ref_differs=1346 info=update_texture viridis [1e-38, 2e-38] from a shared tensor
+bridge-update-shared-viridis-unit-64x48 64x48 fnv1a64=f6f6a4dd4b21f516 path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture viridis [0, 1] from a shared tensor
+bridge-update-shared-viridis-wide-64x48 64x48 fnv1a64=c1a96365b19f1d69 path=compute copies=0 bytes=0 cpu_ref_differs=none info=update_texture viridis [-3, 5] from a shared tensor
+embed-cpu-rdbu-flat-1000x7 1000x7 fnv1a64=51cf88e7c4795425 path=cpu-staged imported=0 copies=1 bytes=28000 cpu_ref_differs=none info=caliper_core_view_tensor rdbu [2, 2] from a cpu tensor
+embed-cpu-u8c4-17x9 17x9 fnv1a64=b989b9913a938f7d path=cpu-staged imported=0 copies=1 bytes=612 cpu_ref_differs=none info=caliper_core_view_tensor u8 (H, W, 4) from a cpu tensor
+embed-cpu-viridis-unit-64x48 64x48 fnv1a64=adb79e2f6fbcedef path=cpu-staged imported=0 copies=1 bytes=12288 cpu_ref_differs=none info=caliper_core_view_tensor viridis [0, 1] from a cpu tensor
+embed-private-magma-sym-255x129 255x129 fnv1a64=3e061cdfbfd6fe2c path=compute-imported imported=1 copies=0 bytes=0 cpu_ref_differs=none info=caliper_core_view_tensor magma [-1, 1] from a private tensor
+embed-private-u8c4-256x256 256x256 fnv1a64=5c507b122824f13e path=blit-imported imported=1 copies=0 bytes=0 cpu_ref_differs=none info=caliper_core_view_tensor u8 (H, W, 4) from a private tensor
+embed-shared-rdbu-dec-17x9-at20 17x9 fnv1a64=50943ec6c7244cd2 path=compute-imported imported=1 copies=0 bytes=0 cpu_ref_differs=none info=caliper_core_view_tensor rdbu [1, -1] from a shared tensor
+embed-shared-u8c4-64x48-at64 64x48 fnv1a64=5550077987f73e80 path=blit-imported imported=1 copies=0 bytes=0 cpu_ref_differs=none info=caliper_core_view_tensor u8 (H, W, 4) from a shared tensor
+embed-shared-viridis-tiny-1024x768 1024x768 fnv1a64=456e525320c42705 path=compute-imported imported=1 copies=0 bytes=0 cpu_ref_differs=344606 info=caliper_core_view_tensor viridis [1e-38, 2e-38] from a shared tensor
+embed-shared-viridis-unit-64x48-at64 64x48 fnv1a64=1eaf7afccf18210f path=compute-imported imported=1 copies=0 bytes=0 cpu_ref_differs=none info=caliper_core_view_tensor viridis [0, 1] from a shared tensor
+live-heatmap-cpu-viridis-auto-64x48 64x48 fnv1a64=5eac18601961a5c5 path=cpu-staged imported=0 copies=1 bytes=12288 cpu_ref_differs=none info=caliper_core_live_apply heatmap viridis range from stats [-2, 3] from a cpu tensor
+live-heatmap-private-rdbu-fixed-sym-17x9 17x9 fnv1a64=7d85220d070847bb path=compute-imported imported=1 copies=0 bytes=0 cpu_ref_differs=none info=caliper_core_live_apply heatmap rdbu fixed [-1, 1] from a private tensor
+live-heatmap-shared-magma-auto-255x129-at64 255x129 fnv1a64=3a3600b05e9d21a0 path=compute-imported imported=1 copies=0 bytes=0 cpu_ref_differs=452 info=caliper_core_live_apply heatmap magma range from stats [-0.5, 0.75] from a shared tensor
+live-image-cpu-u8c4-64x48 64x48 fnv1a64=d291ab931142e2dd path=cpu-staged imported=0 copies=1 bytes=12288 cpu_ref_differs=none info=caliper_core_live_apply image from a cpu tensor
+live-image-shared-u8c4-17x9-at64 17x9 fnv1a64=cee2c263b68f5f40 path=blit-imported imported=1 copies=0 bytes=0 cpu_ref_differs=none info=caliper_core_live_apply image from a shared tensor

@@ -25,8 +25,9 @@ enum class ProgramId : uint32_t {
     scene_image = 6,
     colormap_probe = 7,  // test only
     colormap_texture = 8,
+    fill_texture = 9,
 };
-inline constexpr uint32_t kProgramCount = 9;
+inline constexpr uint32_t kProgramCount = 10;
 
 // Naga's MSL gives every entry that uses a Storage or StorageReadWrite binding one more
 // argument: a buffer at this Metal index holding one u32 per such binding of the program,
@@ -252,6 +253,16 @@ inline constexpr BindingDesc kColormapTextureBindings[] = {
     {1, 1, BindingType::Uniform, uint8_t(kStageCompute), true, 4112, Format::RGBA8Unorm, 2},  // m
 };
 
+// ---- fill_texture
+inline constexpr EntryDesc kFillTextureEntries[] = {
+    {"cs_fill_texture", kStageCompute, {16, 8, 1}},
+};
+inline constexpr BindingDesc kFillTextureBindings[] = {
+    {0, 0, BindingType::Uniform, uint8_t(kStageCompute), true, 16, Format::RGBA8Unorm, 0},  // fp
+    {0, 1, BindingType::Storage, uint8_t(kStageCompute), false, 4, Format::RGBA8Unorm, 1},  // fill_words
+    {0, 2, BindingType::StorageTexture, uint8_t(kStageCompute), false, 0, Format::RGBA8Unorm, 0},  // fill_out
+};
+
 // The descriptions by program id, with no sources, for code that needs no backend.
 struct ProgramDescription {
     const char* name; const EntryDesc* entries; uint8_t entry_count;
@@ -271,6 +282,7 @@ inline constexpr ProgramDescription kProgramDescriptions[kProgramCount] = {
     {"scene_image", kSceneImageEntries, 6, kSceneImageBindings, 8, nullptr, 0, kSceneImageFragmentOutputs, 5, kSceneImagePairs, 4, false, false},
     {"colormap_probe", kColormapProbeEntries, 1, kColormapProbeBindings, 3, nullptr, 0, nullptr, 0, nullptr, 0, true, false},
     {"colormap_texture", kColormapTextureEntries, 1, kColormapTextureBindings, 4, nullptr, 0, nullptr, 0, nullptr, 0, false, true},
+    {"fill_texture", kFillTextureEntries, 1, kFillTextureBindings, 3, nullptr, 0, nullptr, 0, nullptr, 0, false, false},
 };
 
 }  // namespace caliper_gfx::shaders

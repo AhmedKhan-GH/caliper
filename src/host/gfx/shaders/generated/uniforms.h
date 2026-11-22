@@ -133,4 +133,16 @@ static_assert(offsetof(TexParams, height) == 4, "TexParams::height");
 static_assert(offsetof(TexParams, base) == 8, "TexParams::base");
 static_assert(offsetof(TexParams, row) == 12, "TexParams::row");
 
+struct alignas(16) FillParams {
+    uint32_t width;  // 0
+    uint32_t height;  // 4
+    uint32_t base;  // 8
+    uint32_t row;  // 12
+};
+static_assert(sizeof(FillParams) == 16, "FillParams");
+static_assert(offsetof(FillParams, width) == 0, "FillParams::width");
+static_assert(offsetof(FillParams, height) == 4, "FillParams::height");
+static_assert(offsetof(FillParams, base) == 8, "FillParams::base");
+static_assert(offsetof(FillParams, row) == 12, "FillParams::row");
+
 }  // namespace caliper_gfx::shaders

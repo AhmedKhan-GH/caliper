@@ -504,6 +504,24 @@ if(APPLE)
     set_tests_properties(caliper_shader_tests PROPERTIES LABELS "gfx" SKIP_RETURN_CODE 77)
 endif()
 
+# caliper_gfx_texture_tests: the texture path's rows of the graphics suite (tests/gfx/
+# gfx_texture_path.mm). Each case puts a tensor into a texture through the tensor bridge, an embed
+# view or a heatmap or image live view of an offscreen core and reads it back, against the
+# committed record of tests/gfx/references/texture_path.txt and the CPU reference. Labelled gfx
+# with caliper_gfx_tests; skips (77) without a Metal device.
+if(APPLE)
+    add_executable(caliper_gfx_texture_tests gfx/gfx_texture_path.mm)
+    target_link_libraries(caliper_gfx_texture_tests PRIVATE doctest::doctest libcaliper caliper::sdk)
+    target_include_directories(caliper_gfx_texture_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host
+        ${CMAKE_SOURCE_DIR}/third_party/stb)
+    target_compile_definitions(caliper_gfx_texture_tests PRIVATE CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+    set_target_properties(caliper_gfx_texture_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    set_source_files_properties(gfx/gfx_texture_path.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    add_test(NAME caliper_gfx_texture_tests COMMAND caliper_gfx_texture_tests)
+    set_tests_properties(caliper_gfx_texture_tests PROPERTIES LABELS "gfx" SKIP_RETURN_CODE 77 ENVIRONMENT
+        "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_gfx_texture_tests")
+endif()
+
 # ---------------------------------------------------------------------------
 # caliper_export_tests — caliper.export.v1 battery (Rung E1). Links libcaliper
 # (host_services vends the export service + the composition reaches its g_bridge/

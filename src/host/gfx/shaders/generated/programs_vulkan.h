@@ -16,6 +16,7 @@
 #include "gfx/shaders/generated/scene_image_spv.h"
 #include "gfx/shaders/generated/colormap_probe_spv.h"
 #include "gfx/shaders/generated/colormap_texture_spv.h"
+#include "gfx/shaders/generated/fill_texture_spv.h"
 
 namespace caliper_gfx::shaders {
 
@@ -38,6 +39,8 @@ inline constexpr ProgramDesc kVulkanPrograms[kProgramCount] = {
      kProgramDescriptions[7].bindings, kProgramDescriptions[7].binding_count, nullptr, nullptr, kColormapProbeSpirv, uint32_t(sizeof(kColormapProbeSpirv)), false},
     {"colormap_texture", kProgramDescriptions[8].entries, kProgramDescriptions[8].entry_count,
      kProgramDescriptions[8].bindings, kProgramDescriptions[8].binding_count, nullptr, nullptr, kColormapTextureSpirv, uint32_t(sizeof(kColormapTextureSpirv)), true},
+    {"fill_texture", kProgramDescriptions[9].entries, kProgramDescriptions[9].entry_count,
+     kProgramDescriptions[9].bindings, kProgramDescriptions[9].binding_count, nullptr, nullptr, kFillTextureSpirv, uint32_t(sizeof(kFillTextureSpirv)), false},
 };
 
 }  // namespace caliper_gfx::shaders

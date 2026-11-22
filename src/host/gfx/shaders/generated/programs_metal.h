@@ -16,6 +16,7 @@
 #include "gfx/shaders/generated/scene_image_msl.h"
 #include "gfx/shaders/generated/colormap_probe_msl.h"
 #include "gfx/shaders/generated/colormap_texture_msl.h"
+#include "gfx/shaders/generated/fill_texture_msl.h"
 
 namespace caliper_gfx::shaders {
 
@@ -38,6 +39,8 @@ inline constexpr ProgramDesc kMetalPrograms[kProgramCount] = {
      kProgramDescriptions[7].bindings, kProgramDescriptions[7].binding_count, nullptr, kColormapProbeMsl, nullptr, 0, false},
     {"colormap_texture", kProgramDescriptions[8].entries, kProgramDescriptions[8].entry_count,
      kProgramDescriptions[8].bindings, kProgramDescriptions[8].binding_count, nullptr, kColormapTextureMsl, nullptr, 0, true},
+    {"fill_texture", kProgramDescriptions[9].entries, kProgramDescriptions[9].entry_count,
+     kProgramDescriptions[9].bindings, kProgramDescriptions[9].binding_count, nullptr, kFillTextureMsl, nullptr, 0, false},
 };
 
 }  // namespace caliper_gfx::shaders

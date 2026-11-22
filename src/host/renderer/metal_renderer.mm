@@ -12,6 +12,8 @@
 // live as members / in an internal id table; the uint64 texture ids handed to
 // callers are sequential handles, never raw retained pointers (§5.4).
 #include "host_renderer.h"
+#include "gfx/gfx.h"
+#include "gfx/metal_backend.h"
 #include <caliper/services/tensor_bridge_v1_2.h>   // CALIPER_ALLOC_HANDLE_MTLBUFFER
 #include <caliper/services/geometry_v1_1.h>
 #include <caliper/services/geometry_v1_2.h>
@@ -544,6 +546,7 @@ public:
         textures_ = [NSMutableDictionary dictionary];
         events_ = [NSMutableDictionary dictionary];
         pass_desc_ = [MTLRenderPassDescriptor new];
+        gfx_ = caliper_gfx::make_metal_backend((__bridge void*)device_, (__bridge void*)queue_);
         canvas_ready_ = true;
         return true;
     }
@@ -648,6 +651,7 @@ public:
     void canvas_shutdown() override {
         if (!canvas_ready_) return;
         stats_print();
+        gfx_.reset();   // waits for its last submit; nothing of it may outlive the queue
         ImGui_ImplMetal_Shutdown();
         [events_ removeAllObjects]; events_ = nil; event_values_.clear();
         depth_textures_.clear();
@@ -701,6 +705,7 @@ public:
         textures_ = [NSMutableDictionary dictionary];
         events_ = [NSMutableDictionary dictionary];
         pass_desc_ = [MTLRenderPassDescriptor new];
+        gfx_ = caliper_gfx::make_metal_backend((__bridge void*)device_, (__bridge void*)queue_);
         return true;
     }
 
@@ -836,6 +841,7 @@ public:
 
     void shutdown() override {
         stats_print();
+        gfx_.reset();   // waits for its last submit; nothing of it may outlive the queue
         cap_buf_ = nil;
         cap_state_->store(kCapNone);
         ImGui_ImplMetal_Shutdown();
@@ -966,6 +972,7 @@ public:
     }
     void* native_device() const override { return (__bridge void*)device_; }
     void* native_queue() const override { return (__bridge void*)queue_; }
+    caliper_gfx::Backend* gfx() override { return gfx_.get(); }
     // Typed live views: +1 handle on the last geometry draw's command buffer
     // (polled with device_update_is_done, dropped with device_update_release).
     void* geom_draw_retain_last() override {
@@ -1990,6 +1997,7 @@ private:
     }
 
     GLFWwindow*                 window_ = nullptr;
+    std::unique_ptr<caliper_gfx::Backend> gfx_;   // the graphics layer on device_ and queue_
     id<MTLDevice>               device_ = nil;
     id<MTLCommandQueue>         queue_  = nil;
     CAMetalLayer*               layer_  = nil;
