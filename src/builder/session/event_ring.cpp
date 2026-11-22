@@ -132,8 +132,10 @@ const std::vector<const char*>& kind_keys(EventKind kind) {
     static const std::vector<const char*> pick = {"entity", "primitive", "index", "row_id", "position", "pixel"};
     static const std::vector<const char*> select = {"entities", "truncated"};
     static const std::vector<const char*> control = {"control", "bind", "value"};
-    static const std::vector<const char*> run = {"change", "state", "step",     "name",    "value",
-                                                 "status", "text",  "attached", "script"};
+    // The runner's change (design/hosted-runs.md, Runner Events) adds run,
+    // parent, exit_code and error.
+    static const std::vector<const char*> run = {"change", "state",  "step",   "name",      "value", "status", "text",
+                                                 "attached", "script", "run", "parent", "exit_code", "error"};
     static const std::vector<const char*> spec = {"command", "event", "applet"};
     static const std::vector<const char*> approval = {"approval", "command", "state", "target"};
     switch (kind) {

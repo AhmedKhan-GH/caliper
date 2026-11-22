@@ -7,6 +7,7 @@
 #include "helpers.h"
 
 #include <caliper_builder/commands/permissions.h>
+#include <caliper_builder/session/events.h>
 #include <caliper_builder/session/runner_commands.h>
 #include <caliper_builder/session/session.h>
 
@@ -332,4 +333,22 @@ TEST_CASE("runner commands: run ids are 1 to 40 characters of a-z, 0-9 and -") {
     CHECK_FALSE(valid_run_id("Train"));
     CHECK_FALSE(valid_run_id("a_b"));
     CHECK_FALSE(valid_run_id("a/b"));
+}
+
+TEST_CASE("runner commands: a runner event keeps its run, parent, exit code and error in events.wait") {
+    auto s = open_session(fresh_dir("runner_events") + "/workspace");
+    Event e;
+    e.kind = EventKind::run;
+    e.origin = "script";
+    e.fields = {{"change", "runner"}, {"run", "base-2"}, {"state", "failed"}, {"parent", "base"},
+                {"exit_code", 1},      {"error", "The script ended with exit code 1."}};
+    s->events().push(e);
+    const json r = ok(*s, "events.wait", {{"cursor", 0}, {"kinds", {"run"}}, {"timeout_s", 0}});
+    REQUIRE(r["events"].size() == 1);
+    const json& got = r["events"][0];
+    CHECK(got["change"] == "runner");
+    CHECK(got["run"] == "base-2");
+    CHECK(got["parent"] == "base");
+    CHECK(got["exit_code"] == 1);
+    CHECK(got["error"] == "The script ended with exit code 1.");
 }
