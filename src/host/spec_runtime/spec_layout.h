@@ -4,14 +4,16 @@
 //
 // The layout tree is a panel id, a split or tabs. A split divides its space
 // along its axis: `horizontal` side by side, `vertical` top to bottom; with
-// two children the first takes `ratio` (0.5 by default) of the space, with
-// more they share it equally. Tabs show one child at a time under a strip of
+// `shares` (spec version 1) each child takes its share of the space, else
+// with two children the first takes `ratio` (0.5 by default) of the space,
+// and with more they share it equally. Tabs show one child at a time under a strip of
 // tab labels. Between the children of a split lies a gap of `gap` pixels, the
 // 1 px rule of the house style, which the runtime draws by filling the area
 // with the rule colour before the panels.
 //
 // Every panel has a minimum size that grows with the text scale, and a node's
-// minimum is what its children need. A split gives each child at least its
+// minimum is what its children need. A leaf's `min` (spec version 1) sets
+// its minimum in characters and lines of the text scale. A split gives each child at least its
 // minimum while the space allows, and otherwise shares the space in
 // proportion to the minimums, so the rectangles never leave the area. Every
 // edge is a whole pixel. Header-only parts need nothing but the spec library.
@@ -43,6 +45,11 @@ struct SpecLayoutMetrics {
     // spec_control_height()), else control_row_h.
     float min_control_w = 120.0f;
     float control_row_h = 30.0f;
+    // A leaf's `min` of [columns, lines] (design/instrument-interface.md,
+    // Layout Shares): the width of one character and the height of one line
+    // of the UI face.
+    float char_w = 8.0f;
+    float line_h = 18.0f;
     std::function<float(const caliper_builder::spec::Control&)> control_height;
 
     // The metrics at a text scale: the minimums and the tab strip grow with
@@ -118,6 +125,13 @@ SpecLayout compute_spec_layout(const caliper_builder::spec::LayoutNode& root, co
 // least its minimum while the length allows, else in proportion to the
 // minimums. Whole pixels that sum to the length.
 std::vector<float> spec_layout_shares(float length, const std::vector<float>& mins, double ratio);
+// The same with the weights of a split's `shares`, one per child: each child
+// takes its weight's part of the length, a child whose part falls below its
+// minimum keeps the minimum, and the others share the rest again by their
+// weights. Empty weights, or a count that differs from the minimums', give
+// the function above.
+std::vector<float> spec_layout_shares(float length, const std::vector<float>& mins, double ratio,
+                                      const std::vector<double>& weights);
 
 // The title a panel is shown under: its title, else the names of what it
 // draws, never its bare id: the y columns of a series ("loss, accuracy"),
