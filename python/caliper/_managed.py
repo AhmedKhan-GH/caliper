@@ -11,6 +11,7 @@ is Caliper-specific:
 | ``CALIPER_RUN_PARAMS`` | Optional JSON object of parameter name to value |
 | ``CALIPER_RUN_RESUME`` | Optional checkpoint file to load before the first step (a fork) |
 | ``CALIPER_RUN_PARENT`` | Optional id of the parent run (a fork) |
+| ``CALIPER_RUN_INTERVENTIONS`` | Optional JSON array of the interventions that a fork applies before its first step |
 | ``CALIPER_RUN_APP_PID`` | The process id of the app whose model runner started the run |
 
 In a managed run, ``caliper.watch(model, optimizer)`` and ``caliper.watch(model)`` also do these
@@ -28,8 +29,11 @@ things, in this order:
 3. ``attach``: register the actions ``caliper.checkpoint`` and ``caliper.stop``. Without an
    optimizer, each forward pass of the model becomes the checkpoint of the run (it calls
    ``caliper.step()``), so an inference loop with ``watch(model)`` alone takes actions too; such a
-   script does not also call ``caliper.step()``. Last, write the link file, so that the app that
-   attaches finds the parameters and the actions there.
+   script does not also call ``caliper.step()``. With an optimizer, the run keeps checkpoints
+   for a fork from a past step (``KeptCheckpoints``), and a fork with
+   ``CALIPER_RUN_INTERVENTIONS`` applies them at the first forward pass of the model, thus before
+   its first step. Last, write the link file, so that the app that attaches finds the parameters
+   and the actions there.
 
 ``caliper.checkpoint`` writes ``<run dir>/checkpoint-<step>.pt`` at the checkpoint where it runs,
 before the weights change, and returns the path. The file is a ``torch.save`` dict with the keys
@@ -48,6 +52,16 @@ app ended, also in a crash where the app cannot end its children and also before
 thread ends the run at once with exit code ``PARENT_GONE_EXIT``. Nothing reads the run after that,
 so the thread does not wait for a checkpoint. Without ``CALIPER_RUN_APP_PID`` the thread watches
 the parent's process id, from ``prepare`` on.
+
+A run with an optimizer keeps checkpoints in ``<run dir>/kept/checkpoint-<step>.pt``, in the format
+of ``caliper.checkpoint``, at the step boundary before the weights change, so that ``run.fork``
+with a step starts from the newest kept checkpoint at or before it (``KeptCheckpoints``). The
+first step is always kept. Later steps are kept at least a stride apart, and only while the time
+of the kept checkpoints stays within ``KEEP_SHARE`` of the run's wall clock. When more than
+``KEEP_MAX`` are kept, every second one goes, the oldest and the newest stay, and the stride
+doubles, thus the kept checkpoints span the whole run evenly, as the kept versions of a resource
+do. They hold at most ``KEEP_BYTES`` together: a run whose checkpoint is too large for two keeps
+only its first.
 """
 from __future__ import annotations
 
@@ -70,7 +84,8 @@ ENV_PARAMS = "CALIPER_RUN_PARAMS"
 ENV_RESUME = "CALIPER_RUN_RESUME"
 ENV_PARENT = "CALIPER_RUN_PARENT"
 ENV_APP_PID = "CALIPER_RUN_APP_PID"
-_VARS = (ENV_ID, ENV_DIR, ENV_LINK, ENV_PARAMS, ENV_RESUME, ENV_PARENT)
+ENV_INTERVENTIONS = "CALIPER_RUN_INTERVENTIONS"
+_VARS = (ENV_ID, ENV_DIR, ENV_LINK, ENV_PARAMS, ENV_RESUME, ENV_PARENT, ENV_INTERVENTIONS)
 
 CHECKPOINT = "caliper.checkpoint"
 """The action that saves the run's state and returns the path of the file."""
@@ -88,6 +103,16 @@ PARENT_POLL_S = 0.5
 PARENT_GONE_EXIT = 1
 NONE = object()
 """What ``value`` returns for a parameter that the runner gives no value."""
+KEEP_DIR = "kept"
+"""The folder of the kept checkpoints in the run folder."""
+KEEP_MAX = 32
+"""The most kept checkpoints; one more thins them."""
+KEEP_SHARE = 0.01
+"""The most share of the run's wall clock that the kept checkpoints take."""
+KEEP_BYTES = 1 << 30
+"""The most bytes of the kept checkpoints together."""
+INTERVENTIONS_MAX = 16
+"""The most interventions of ``CALIPER_RUN_INTERVENTIONS``."""
 
 
 def _params(text):
@@ -103,6 +128,20 @@ def _params(text):
         warnings.warn(f"caliper: {ENV_PARAMS} is not a JSON object; no parameter value applies",
                       RuntimeWarning, stacklevel=3)
         return {}
+    return got
+
+
+def _interventions(text):
+    """The interventions of ``CALIPER_RUN_INTERVENTIONS``: a list of objects, each with the keys
+    of ``intervene.set``. Text that is not such a list raises, because a fork must never run
+    without the interventions that it was started with."""
+    if not text:
+        return []
+    got = json.loads(text)
+    if (not isinstance(got, list) or len(got) > INTERVENTIONS_MAX
+            or not all(isinstance(x, dict) for x in got)):
+        raise ValueError(f"{ENV_INTERVENTIONS} is not a JSON array of at most "
+                         f"{INTERVENTIONS_MAX} interventions")
     return got
 
 
@@ -146,6 +185,91 @@ def _write(path: str, data: bytes) -> None:
         raise
 
 
+class KeptCheckpoints:
+    """The checkpoints that a managed run keeps for a fork from a past step, thinned evenly.
+
+    ``keep`` runs at each step boundary, before the weights change. It writes
+    ``<folder>/checkpoint-<step>.pt`` for the first step it sees, and later for a step at least
+    ``stride`` steps past the newest kept one while the time of the kept checkpoints is at most
+    ``share`` of the wall clock since the first. When more than ``limit`` are kept, the second,
+    fourth and every other second one goes, the oldest and the newest stay, and the stride
+    doubles. The limit is also at most ``bytes_max`` over the size of one checkpoint; below 2, the
+    run keeps no more than its first.
+
+    Attributes:
+        kept (list[tuple[int, str]]): The kept steps and their files, oldest first.
+        stride (int): The fewest steps between two kept checkpoints.
+        off (bool): ``True`` once the run keeps no more.
+    """
+
+    def __init__(self, folder, clock=time.monotonic, limit=KEEP_MAX, share=KEEP_SHARE,
+                 bytes_max=KEEP_BYTES):
+        self.folder = folder
+        self.clock = clock
+        self.limit = limit
+        self.share = share
+        self.bytes_max = bytes_max
+        self.kept = []
+        self.stride = 1
+        self.off = False
+        self._spent = 0.0
+        self._since = None
+
+    def due(self, step: int) -> bool:
+        """Whether ``keep`` writes the checkpoint of ``step``."""
+        if self.off:
+            return False
+        if not self.kept:
+            return True
+        if step < self.kept[-1][0] + self.stride:
+            return False
+        return self._spent <= self.share * (self.clock() - self._since)
+
+    def keep(self, step: int, state) -> str | None:
+        """Write the checkpoint of ``step`` when it is due, and thin the kept ones.
+
+        Args:
+            step (int): The step of the boundary.
+            state (Callable[[], bytes]): Gives the bytes of the checkpoint; it runs only when the
+                checkpoint is due.
+
+        Returns:
+            str | None: The new file's path, or ``None`` when the step is not kept.
+
+        Raises:
+            OSError: When the folder or the file cannot be written.
+        """
+        if not self.due(step):
+            return None
+        start = self.clock()
+        if self._since is None:
+            self._since = start
+        if os.path.islink(self.folder):
+            raise OSError(f"{self.folder} is a link")
+        os.makedirs(self.folder, mode=0o700, exist_ok=True)
+        data = state()
+        path = os.path.join(self.folder, f"checkpoint-{step}.pt")
+        _write(path, data)
+        self.kept.append((step, path))
+        self._spent += self.clock() - start
+        limit = min(self.limit, self.bytes_max // max(len(data), 1))
+        if limit < 2:
+            self.off = True
+            print(f"caliper: the run keeps no checkpoint after step {step}: one holds "
+                  f"{len(data)} bytes, and two pass {self.bytes_max}", flush=True)
+        elif len(self.kept) > limit:
+            last = len(self.kept) - 1
+            gone = [kp for i, kp in enumerate(self.kept) if i % 2 == 1 and i != last]
+            self.kept = [kp for i, kp in enumerate(self.kept) if i % 2 == 0 or i == last]
+            self.stride *= 2
+            for _, p in gone:
+                try:
+                    os.unlink(p)
+                except FileNotFoundError:
+                    pass
+        return path
+
+
 class ManagedRun:
     """The managed run of this process, from the variables that the model runner set.
 
@@ -156,19 +280,25 @@ class ManagedRun:
         params (dict): ``CALIPER_RUN_PARAMS``, parsed.
         resume (str | None): ``CALIPER_RUN_RESUME``.
         parent (str | None): ``CALIPER_RUN_PARENT``.
+        interventions (list[dict]): ``CALIPER_RUN_INTERVENTIONS``, parsed.
+        kept (KeptCheckpoints): The checkpoints that the run keeps for a fork from a past step.
         values (dict): The value each parameter gets: the checkpoint's after a resume, then
             ``params``.
         step (int | None): The step of the checkpoint that the run resumed from.
         stopping (bool): ``True`` once ``caliper.stop`` ran.
     """
 
-    def __init__(self, run_id, run_dir, link_file=None, params=None, resume=None, parent=None):
+    def __init__(self, run_id, run_dir, link_file=None, params=None, resume=None, parent=None,
+                 interventions=None):
         self.id = run_id
         self.dir = run_dir
         self.link_file = link_file
         self.params = dict(params or {})
         self.resume = resume
         self.parent = parent
+        self.interventions = list(interventions or [])
+        self.kept = KeptCheckpoints(os.path.join(run_dir, KEEP_DIR))
+        self._first = None               # the hook that applies the interventions
         self.values = dict(self.params)
         self.step = None
         self.stopping = False
@@ -184,6 +314,9 @@ class ManagedRun:
 
         Returns:
             ManagedRun | None: ``None`` when ``CALIPER_RUN_DIR`` is not set.
+
+        Raises:
+            ValueError: When ``CALIPER_RUN_INTERVENTIONS`` is not a JSON array of interventions.
         """
         env = os.environ if env is None else env
         vals = tuple(env.get(k) or None for k in _VARS)
@@ -191,10 +324,11 @@ class ManagedRun:
 
     @classmethod
     def _make(cls, vals):
-        run_id, run_dir, link, params, resume, parent = vals
+        run_id, run_dir, link, params, resume, parent, interventions = vals
         if run_dir is None:
             return None
-        return cls(run_id, run_dir, link, _params(params), resume, parent)
+        return cls(run_id, run_dir, link, _params(params), resume, parent,
+                   _interventions(interventions))
 
     def value(self, name: str):
         """The value that parameter ``name`` gets at its registration, or ``NONE``."""
@@ -263,6 +397,13 @@ class ManagedRun:
             help="Ends the script cleanly at the next checkpoint, before the weights change."))
         if optimizer is None:
             handle._handles.append(model.register_forward_hook(self._forward))
+        elif hasattr(optimizer, "register_step_pre_hook"):
+            # after the pre-hook of caliper._watch_run, which calls caliper.step() first
+            handle._handles.append(optimizer.register_step_pre_hook(
+                lambda opt, args, kwargs: self._keep(model, optimizer)))
+        if self.interventions:
+            self._first = model.register_forward_pre_hook(lambda mod, args: self._intervene())
+            handle._handles.append(self._first)
         self.write_link(pkg.serve().url)
 
     def write_link(self, url: str) -> None:
@@ -274,18 +415,73 @@ class ManagedRun:
         _write(self.link_file, url.encode("utf-8"))
 
     # -- the actions and the checkpoint ------------------------------------------------
-    def checkpoint(self, model, optimizer) -> str:
-        """The action ``caliper.checkpoint``: write the state and return the file's path."""
+    def _state(self, model, optimizer, step) -> bytes:
+        """The bytes of a checkpoint of ``step`` (``caliper._adapter.TorchAdapter.state``)."""
         ctl = self._pkg._CTL
-        step = ctl.n
         with ctl.lock:
             params = {n: p.value for n, p in ctl.params.items()}
-        data = TORCH.state(model, optimizer, {
+        return TORCH.state(model, optimizer, {
             "format": FORMAT, "version": VERSION, "run": self.id, "parent": self.parent,
             "step": step, "params": params})
+
+    def checkpoint(self, model, optimizer) -> str:
+        """The action ``caliper.checkpoint``: write the state and return the file's path."""
+        step = self._pkg._CTL.n
+        data = self._state(model, optimizer, step)
         path = os.path.join(self.dir, f"checkpoint-{step}.pt")
         _write(path, data)
         return path
+
+    def _keep(self, model, optimizer) -> None:
+        """At each step boundary before the weights change: keep a checkpoint when one is due.
+        An error stops the keeping with a warning and never stops the step."""
+        step = self._pkg._CTL.n
+        if self.stopping or self.kept.off or not isinstance(step, int) or isinstance(step, bool) \
+                or step < 0:
+            return
+        try:
+            self.kept.keep(step, lambda: self._state(model, optimizer, step))
+        except Exception as e:           # noqa: BLE001 - the training goes on
+            self.kept.off = True
+            warnings.warn(f"caliper: run {self.id} keeps no more checkpoints: "
+                          f"{type(e).__name__}: {e}", RuntimeWarning, stacklevel=2)
+
+    def _intervene(self) -> None:
+        """At the first forward pass: apply ``interventions`` before the first step, as
+        ``intervene.set`` would at a checkpoint, and take this hook off.
+
+        Raises:
+            RuntimeError: When the script takes no interventions, or one is refused; the fork
+                must not train without them.
+        """
+        first, self._first = self._first, None
+        if first is None:
+            return
+        first.remove()
+        ctl = self._pkg._CTL
+        error = None
+        with ctl.lock:
+            if ctl._iv_model is None:
+                error = "the script watches no model with caliper.watch(model, optimizer)"
+            else:
+                for iv in self.interventions:
+                    refused = ctl._intervene({"set": iv})
+                    if refused is not None:
+                        error = f"{iv.get('point')!r}: {refused[1]}"
+                        break
+                if error is None:
+                    ctl._apply_interventions()
+                    failed = [iv for iv in ctl._ivs.values() if iv.error]
+                    if failed:
+                        error = f"{failed[0].point!r}: {failed[0].error}"
+            ctl._update_busy()
+        if error is not None:
+            print(f"caliper: run {self.id} cannot apply its interventions: {error}", flush=True)
+            raise RuntimeError(f"the fork's interventions cannot apply: {error}")
+        ctl._publish()
+        print(f"caliper: run {self.id} applies "
+              + ", ".join(f"{iv.get('op')} {iv.get('point')}" for iv in self.interventions)
+              + " from its first step", flush=True)
 
     def request_stop(self) -> str:
         """The action ``caliper.stop``: end the script when its checkpoint returns."""
