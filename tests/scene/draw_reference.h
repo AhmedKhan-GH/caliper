@@ -220,6 +220,11 @@ struct Reference {
     uint32_t clear = 0;
     std::vector<uint32_t> rgba, id;   // id: (draw + 1) << 24 | (item + 1), 0 for the clear
     std::vector<uint32_t> base;       // the identity of the last opaque write, under any blended ones
+    // The other side of the top identity's edge: the nearest colour of another identity that the top
+    // write replaced or hid in depth (the clear at first), and that identity, which an edge pixel may
+    // show although no neighbour does (web geometry, "Parity": an edge pixel takes either side).
+    std::vector<uint32_t> behind, behind_id;
+    std::vector<double> behind_z;
     std::vector<float> depth;
     std::vector<double> depth_d;      // the same depth before its rounding to f32
     std::vector<uint8_t> contested;   // a write tied in depth with another identity, within 1e-5
@@ -236,6 +241,7 @@ struct Reference {
 
     Reference(int w, int h, uint32_t c)
         : W(w), H(h), clear(c), rgba(size_t(w) * h, c), id(size_t(w) * h, 0), base(size_t(w) * h, 0),
+          behind(size_t(w) * h, c), behind_id(size_t(w) * h, 0), behind_z(size_t(w) * h, 2.0),
           depth(size_t(w) * h, 1.0f), depth_d(size_t(w) * h, 1.0), contested(size_t(w) * h, 0),
           tol(size_t(w) * h, 0) {}
 
@@ -284,9 +290,23 @@ struct Reference {
                 const size_t k = size_t(j) * W + i;
                 // Near ties in depth between two identities: the GPU may break them the other way.
                 if (st.depth_test && id[k] != 0 && id[k] != ident && std::fabs(z - depth_d[k]) < 1e-5) contested[k] = 1;
-                if (st.depth_test && !(float(z) <= depth[k])) continue;
+                if (st.depth_test && !(float(z) <= depth[k])) {
+                    // Hidden here: the nearest such fragment of another identity is the far side.
+                    float c[4];
+                    if (!st.blend && id[k] != ident && z < behind_z[k] && shades[size_t(shade)](v, q, c)) {
+                        behind[k] = pack(c);
+                        behind_id[k] = ident;
+                        behind_z[k] = z;
+                    }
+                    continue;
+                }
                 float c[4];
                 if (!shades[size_t(shade)](v, q, c)) continue;
+                if (id[k] != ident) {   // what this write replaces is the far side of its edge
+                    behind[k] = rgba[k];
+                    behind_id[k] = id[k];
+                    behind_z[k] = depth_d[k];
+                }
                 if (st.blend) {
                     float d[4];
                     unpack(rgba[k], d);
@@ -1103,6 +1123,8 @@ inline Comparison compare(const Reference& ref, const std::vector<uint8_t>& got)
                         const size_t kk = size_t(y) * ref.W + x;
                         ok = max_diff(g, ref.rgba[kk]) <= std::max(ref.tol[kk], ref.tol[k]);
                     }
+                // Or the far side of the top primitive's edge, which it hides here and no neighbour need show.
+                if (!ok) ok = max_diff(g, ref.behind[k]) <= std::max(int(ref.tol[k]), ref.tolerance(ref.behind_id[k]));
                 if (ok && d > 0) ++c.differ_edge;
             }
             if (!ok) {
