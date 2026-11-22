@@ -1,6 +1,8 @@
 // JSON merge patches (RFC 7386) of one panel or one source of a spec.
 #include <caliper_builder/spec/patch.h>
 
+#include <algorithm>
+
 #include <caliper_builder/spec/format.h>
 
 #include "internal.h"
@@ -11,7 +13,7 @@ namespace {
 
 using detail::json;
 
-enum class Item { panel, source };
+enum class Item { panel, source, control };
 
 PatchResult patch_item(const Spec& spec, Item item, std::string_view id, const json& patch,
                        const SourceResolver& resolver) {
@@ -19,12 +21,16 @@ PatchResult patch_item(const Spec& spec, Item item, std::string_view id, const j
     r.spec = spec;
     try {
         const bool panel = item == Item::panel;
-        const char* noun = panel ? "panel" : "source";
+        const char* noun = panel ? "panel" : item == Item::control ? "control" : "source";
         std::size_t index = 0;
         bool found = false;
-        const std::size_t count = panel ? spec.panels.size() : spec.sources.size();
+        const std::size_t count = panel                   ? spec.panels.size()
+                                  : item == Item::control ? spec.controls.size()
+                                                          : spec.sources.size();
         for (std::size_t i = 0; i < count && !found; ++i) {
-            const std::string& item_id = panel ? spec.panels[i].id : spec.sources[i].id;
+            const std::string& item_id = panel                   ? spec.panels[i].id
+                                         : item == Item::control ? spec.controls[i].id
+                                                                 : spec.sources[i].id;
             if (item_id == id) {
                 index = i;
                 found = true;
@@ -55,7 +61,9 @@ PatchResult patch_item(const Spec& spec, Item item, std::string_view id, const j
                 return r;
             }
         }
-        const json target = panel ? to_json(spec.panels[index]) : to_json(spec.sources[index]);
+        const json target = panel                   ? to_json(spec.panels[index])
+                            : item == Item::control ? to_json(spec.controls[index])
+                                                    : to_json(spec.sources[index]);
         const json merged = merge_patch(target, patch);
         auto new_id = merged.find("id");
         if (new_id == merged.end() || !new_id->is_string() || new_id->get<std::string>() != id) {
@@ -73,6 +81,13 @@ PatchResult patch_item(const Spec& spec, Item item, std::string_view id, const j
                 return r;
             }
             next.panels[index] = std::move(decoded.value);
+        } else if (item == Item::control) {
+            Decoded<Control> decoded = control_from_json(merged, path);
+            if (!decoded.ok()) {
+                r.diagnostics = std::move(decoded.diagnostics);
+                return r;
+            }
+            next.controls[index] = std::move(decoded.value);
         } else {
             Decoded<Source> decoded = source_from_json(merged, path);
             if (!decoded.ok()) {
@@ -81,6 +96,8 @@ PatchResult patch_item(const Spec& spec, Item item, std::string_view id, const j
             }
             next.sources[index] = std::move(decoded.value);
         }
+        // A patch that makes a panel a scene raises a version 0 spec to version 1 in the same step.
+        next.version = std::max(next.version, required_version(next));
         ValidationReport report = validate(next, resolver);
         r.applied = true;
         r.spec = std::move(next);
@@ -109,6 +126,11 @@ PatchResult patch_panel(const Spec& spec, std::string_view panel_id, const json&
 PatchResult patch_source(const Spec& spec, std::string_view source_id, const json& patch,
                          const SourceResolver& resolver) {
     return patch_item(spec, Item::source, source_id, patch, resolver);
+}
+
+PatchResult patch_control(const Spec& spec, std::string_view control_id, const json& patch,
+                          const SourceResolver& resolver) {
+    return patch_item(spec, Item::control, control_id, patch, resolver);
 }
 
 }  // namespace caliper_builder::spec

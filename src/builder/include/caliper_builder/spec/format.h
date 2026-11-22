@@ -63,10 +63,16 @@ struct Decoded {
 Decoded<Source> source_from_json(const nlohmann::json& item, const std::string& path = "source");
 Decoded<Panel> panel_from_json(const nlohmann::json& item, const std::string& path = "panel");
 Decoded<LayoutNode> layout_from_json(const nlohmann::json& item, const std::string& path = "layout");
+// One control (spec version 1, instrument.h), for control.create and
+// control.patch. The item decoders take the keys and primitives of the newest
+// version; an edit that adds a scene panel or a control to a version 0 spec
+// raises its version (required_version() in spec.h).
+Decoded<Control> control_from_json(const nlohmann::json& item, const std::string& path = "control");
 
 nlohmann::json to_json(const Source& source);
 nlohmann::json to_json(const Panel& panel);
 nlohmann::json to_json(const LayoutNode& node);
+nlohmann::json to_json(const Control& control);
 
 // Fills the line and column of each diagnostic that has none from the
 // positions of a parsed TOML text: the position of its path, or of the nearest

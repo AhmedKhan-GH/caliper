@@ -153,3 +153,33 @@ TEST_CASE("a patch of a source revalidates what derives from it") {
     REQUIRE(list.spec.sources[1].transforms.size() == 1);
     CHECK(list.spec.sources[1].transforms[0].axis_list);
 }
+
+TEST_CASE("a control takes a merge patch like a panel") {
+    auto parsed = cs::parse_toml(fixture("instruments.spec.toml"));
+    REQUIRE(parsed.ok());
+    auto r = cs::patch_control(parsed.spec, "lr", json::parse(R"({"title": "Rate", "options": {"log": null}})"));
+    REQUIRE_MESSAGE(r.ok(), dump(r.diagnostics));
+    CHECK(r.spec.controls[0].title == std::optional<std::string>("Rate"));
+    CHECK_FALSE(r.spec.controls[0].options.log.has_value());
+    CHECK(r.spec.controls[0].options.min.has_value());
+    CHECK(has(cs::patch_control(parsed.spec, "nope", json::object()).diagnostics, "spec.not_found"));
+    CHECK(has(cs::patch_control(parsed.spec, "lr", json::parse(R"({"id": "rate"})")).diagnostics, "spec.bad_patch",
+              "control[0].id"));
+    CHECK(has(cs::patch_control(parsed.spec, "lr", json::parse(R"({"kind": "dial"})")).diagnostics,
+              "spec.unknown_control_kind", "control[0].kind"));
+    auto mismatch = cs::patch_control(parsed.spec, "pause", json::parse(R"({"bind": "param:lr"})"));
+    CHECK(mismatch.applied);
+    CHECK(has(mismatch.diagnostics, "spec.control_mismatch", "control[1].bind"));
+}
+
+TEST_CASE("a patch that makes a panel a scene raises a version 0 spec to version 1") {
+    cs::Spec s = example();
+    REQUIRE(s.version == 0);
+    REQUIRE_FALSE(s.panels.empty());
+    const std::string id = s.panels[0].id;
+    auto r = cs::patch_panel(s, id, json::parse(R"({"primitive": "scene", "bind": null, "options": null})"));
+    CHECK(r.applied);
+    CHECK(r.spec.version == 1);
+    CHECK(r.spec.panels[0].primitive == cs::Primitive::scene);
+    CHECK(has(r.diagnostics, "spec.missing_slot", "panel[0].bind.scene"));
+}

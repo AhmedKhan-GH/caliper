@@ -169,7 +169,7 @@ TEST_CASE("documents the schema refuses are refused by the library too") {
     const std::string tensor = R"("source": [{"id": "t", "catalog": "tensor:t"}])";
     const std::string table = R"("source": [{"id": "m", "catalog": "table:m"}])";
     const std::vector<json> documents = {
-        json::parse(R"({"caliper_spec": 1, "applet": {"id": "a"}})"),
+        json::parse(R"({"caliper_spec": 2, "applet": {"id": "a"}})"),
         json::parse(R"({"caliper_spec": 0})"),
         json::parse(R"({"caliper_spec": 0, "applet": {"id": "Bad"}})"),
         json::parse(R"({"caliper_spec": 0, "applet": {"id": "a", "title": ""}})"),
@@ -215,5 +215,73 @@ TEST_CASE("documents the schema refuses are refused by the library too") {
         CHECK_FALSE(checker().passes(d));
         CHECK_FALSE(library_accepts(d));
         keep(d, false);
+    }
+}
+
+// ---- the JSON Schema of version 1 ---------------------------------------------
+
+namespace {
+
+// The schema of version 1 sits beside the fixtures' parent folder in the source tree.
+const SchemaChecker& checker_v1() {
+    static const SchemaChecker c(
+        json::parse(read_file(std::string(CALIPER_SPEC_FIXTURES) + "/../../schema/caliper-spec-v1.schema.json")));
+    return c;
+}
+
+}  // namespace
+
+TEST_CASE("the schema of version 1 accepts the version 1 fixture and every version 0 fixture raised to 1") {
+    auto v1 = cs::parse_toml(fixture("instruments.spec.toml"));
+    REQUIRE(v1.ok());
+    std::vector<std::string> errors = checker_v1().errors(cs::to_json(v1.spec));
+    CHECK_MESSAGE(errors.empty(), join_errors(errors));
+    CHECK_FALSE(checker().passes(cs::to_json(v1.spec)));   // version 0's schema refuses it
+    for (const std::string& name : valid_fixtures()) {
+        CAPTURE(name);
+        auto parsed = cs::parse_toml(fixture(name));
+        REQUIRE(parsed.ok());
+        json doc = cs::to_json(parsed.spec);
+        doc["caliper_spec"] = 1;
+        errors = checker_v1().errors(doc);
+        CHECK_MESSAGE(errors.empty(), join_errors(errors));
+        CHECK(library_accepts(doc));
+    }
+}
+
+TEST_CASE("documents the schema of version 1 refuses are refused by the library too") {
+    const std::string head = R"("caliper_spec": 1, "applet": {"id": "a"})";
+    auto doc = [&](const std::string& rest) { return json::parse("{" + head + ", " + rest + "}"); };
+    const std::string scene = R"("panel": [{"id": "w", "primitive": "scene", "bind": {"scene": "live:model"}}])";
+    const std::vector<json> documents = {
+        doc(R"("control": [{"id": "k", "kind": "knob", "bind": "value"}])"),
+        doc(R"("control": [{"id": "k", "kind": "slider"}])"),
+        doc(R"("control": [{"id": "k", "kind": "slider", "bind": "action:save"}])"),
+        doc(R"("control": [{"id": "k", "kind": "button", "bind": "param:lr"}])"),
+        doc(R"("control": [{"id": "k", "kind": "button", "bind": "run:pause", "options": {"min": 0}}])"),
+        doc(R"("control": [{"id": "k", "kind": "slider", "bind": "param:"}])"),
+        doc(R"("control": [{"id": "k", "kind": "slider", "bind": "intervene:x"}])"),
+        doc(R"("control": [{"id": "k", "kind": "slider", "bind": "value", "options": {"colormap": "magma"}}])"),
+        doc(R"("control": {"id": "k"})"),
+        doc(R"("panel": [{"id": "w", "primitive": "scene", "bind": {"scene": "model"}}])"),
+        doc(R"("panel": [{"id": "w", "primitive": "scene"}])"),
+        doc(R"("panel": [{"id": "w", "primitive": "scene", "bind": {"scene": "live:model", "x": "t"}}])"),
+        doc(R"("panel": [{"id": "w", "primitive": "scene", "bind": {"scene": "live:model"}, "options": {"up": "+w"}}])"),
+        doc(R"("panel": [{"id": "w", "primitive": "scene", "bind": {"scene": "live:model"}, "options": {"include": []}}])"),
+        doc(R"("panel": [{"id": "w", "primitive": "scene", "bind": {"scene": "live:model"}, "options": {"view_camera": {"elevation": 90}}}])"),
+        doc(R"("panel": [{"id": "w", "primitive": "scene", "bind": {"scene": "live:model"}, "options": {"colormap": "magma"}}])"),
+        json::parse(R"({"caliper_spec": 0, "applet": {"id": "a"}, "control": [{"id": "k", "kind": "button", "bind": "run:pause"}]})"),
+    };
+    for (const json& d : documents) {
+        CAPTURE(d.dump());
+        if (d.at("caliper_spec") == 1) CHECK_FALSE(checker_v1().passes(d));
+        CHECK_FALSE(library_accepts(d));
+    }
+    // And what both accept.
+    for (const json& d : {doc(scene), doc(R"("control": [{"id": "k", "kind": "slider", "bind": "param:lr", "options": {"min": 0.001, "max": 1, "log": true}}])")}) {
+        CAPTURE(d.dump());
+        const std::vector<std::string> errors = checker_v1().errors(d);
+        CHECK_MESSAGE(errors.empty(), join_errors(errors));
+        CHECK(library_accepts(d));
     }
 }

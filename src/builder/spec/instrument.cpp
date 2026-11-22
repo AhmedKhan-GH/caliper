@@ -1,11 +1,25 @@
 // The value types of spec version 1 (instrument.h, design/instruments.md).
 //
-// The comparisons and the names of the kinds are complete. The bind grammar
-// and the scene binding are stubs of milestone M1's interface commit: the
-// track "spec1" fills them with the codec and the validator.
+// The comparisons, the names of the kinds, the bind grammar of a control and
+// the binding of a scene slot.
 #include <caliper_builder/spec/instrument.h>
 
+#include "internal.h"
+
 namespace caliper_builder::spec {
+
+namespace {
+
+// A target's name: 1 to 63 bytes of valid UTF-8 without a control character,
+// as caliper.param requires.
+bool valid_target_name(std::string_view name) {
+    return !name.empty() && name.size() <= limits::kTargetNameBytes && detail::valid_utf8(name) &&
+           !detail::has_control(name, detail::TextKind::line);
+}
+
+bool starts_with(std::string_view s, std::string_view prefix) { return s.substr(0, prefix.size()) == prefix; }
+
+}  // namespace
 
 bool operator==(const SceneOptions& a, const SceneOptions& b) {
     return a.up == b.up && a.view_camera == b.view_camera && a.include == b.include && a.exclude == b.exclude &&
@@ -13,8 +27,11 @@ bool operator==(const SceneOptions& a, const SceneOptions& b) {
 }
 
 std::optional<std::string> live_scene_name(std::string_view binding) {
-    (void)binding;
-    return std::nullopt;   // stub: track spec1
+    if (!starts_with(binding, kLiveScenePrefix)) return std::nullopt;
+    const std::string_view name = binding.substr(std::string_view(kLiveScenePrefix).size());
+    if (name.empty() || !detail::valid_utf8(name) || detail::has_control(name, detail::TextKind::line))
+        return std::nullopt;
+    return std::string(name);
 }
 
 const char* control_kind_name(ControlKind kind) {
@@ -41,19 +58,52 @@ bool control_kind_built(ControlKind kind) { return kind == ControlKind::slider |
 bool operator==(const ControlTarget& a, const ControlTarget& b) { return a.kind == b.kind && a.name == b.name; }
 
 std::optional<ControlTarget> parse_control_target(std::string_view bind) {
-    (void)bind;
-    return std::nullopt;   // stub: track spec1
+    ControlTarget t;
+    if (bind == "value") {
+        t.kind = ControlTarget::Kind::value;
+        return t;
+    }
+    if (bind == "run:pause") {
+        t.kind = ControlTarget::Kind::run_pause;
+        return t;
+    }
+    std::string_view name;
+    if (starts_with(bind, "param:")) {
+        t.kind = ControlTarget::Kind::param;
+        name = bind.substr(6);
+    } else if (starts_with(bind, "action:")) {
+        t.kind = ControlTarget::Kind::action;
+        name = bind.substr(7);
+    } else {
+        return std::nullopt;   // intervene: is reserved for a later milestone
+    }
+    if (!valid_target_name(name)) return std::nullopt;
+    t.name = std::string(name);
+    return t;
 }
 
 std::string control_target_string(const ControlTarget& target) {
-    (void)target;
-    return {};   // stub: track spec1
+    switch (target.kind) {
+        case ControlTarget::Kind::param: return "param:" + target.name;
+        case ControlTarget::Kind::action: return "action:" + target.name;
+        case ControlTarget::Kind::run_pause: return "run:pause";
+        case ControlTarget::Kind::value: return "value";
+    }
+    return "value";
 }
 
 bool control_takes_target(ControlKind kind, const ControlTarget& target) {
-    (void)kind;
-    (void)target;
-    return false;   // stub: track spec1
+    switch (kind) {
+        case ControlKind::slider:
+            return target.kind == ControlTarget::Kind::param || target.kind == ControlTarget::Kind::value;
+        case ControlKind::button:
+            return target.kind == ControlTarget::Kind::action || target.kind == ControlTarget::Kind::run_pause;
+        case ControlKind::range:
+        case ControlKind::toggle:
+        case ControlKind::picker:
+        case ControlKind::text: return false;
+    }
+    return false;
 }
 
 bool operator==(const ControlOptions& a, const ControlOptions& b) {

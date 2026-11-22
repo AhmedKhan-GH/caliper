@@ -17,6 +17,7 @@ const std::vector<std::string>& slots_of(Primitive p) {
     static const std::vector<std::string> points = {"color", "positions", "size", "x", "y", "z"};
     static const std::vector<std::string> table = {"rows"};
     static const std::vector<std::string> text = {"value"};
+    static const std::vector<std::string> scene = {"scene"};
     switch (p) {
         case Primitive::series: return series;
         case Primitive::heatmap: return values;
@@ -25,6 +26,7 @@ const std::vector<std::string>& slots_of(Primitive p) {
         case Primitive::table: return table;
         case Primitive::image: return values;
         case Primitive::text: return text;
+        case Primitive::scene: return scene;
     }
     return values;
 }
@@ -37,6 +39,8 @@ const std::vector<std::string>& options_of(Primitive p) {
     static const std::vector<std::string> table = {"columns"};
     static const std::vector<std::string> image = {"colormap", "range"};
     static const std::vector<std::string> text = {"text"};
+    static const std::vector<std::string> scene = {"axes",      "exclude", "include",    "labels",
+                                                   "scale_bar", "up",      "view_camera"};
     switch (p) {
         case Primitive::series: return series;
         case Primitive::heatmap: return heatmap;
@@ -45,6 +49,7 @@ const std::vector<std::string>& options_of(Primitive p) {
         case Primitive::table: return table;
         case Primitive::image: return image;
         case Primitive::text: return text;
+        case Primitive::scene: return scene;
     }
     return text;
 }
@@ -82,8 +87,27 @@ const std::vector<std::string>& catalog_kinds() {
     return v;
 }
 
-const std::vector<std::string>& all_primitive_names() {
-    static const std::vector<std::string> v = {"series", "heatmap", "points", "histogram", "table", "image", "text"};
+const std::vector<std::string>& all_primitive_names() { return primitive_names(kLatestFormatVersion); }
+
+const std::vector<std::string>& primitive_names(std::int64_t version) {
+    static const std::vector<std::string> v0 = {"series", "heatmap", "points", "histogram", "table", "image", "text"};
+    static const std::vector<std::string> v1 = {"series", "heatmap", "points", "histogram",
+                                                "table",  "image",   "text",   "scene"};
+    return version >= kInstrumentVersion ? v1 : v0;
+}
+
+const std::vector<std::string>& control_kind_names() {
+    static const std::vector<std::string> v = {"slider", "button", "range", "toggle", "picker", "text"};
+    return v;
+}
+
+const std::vector<std::string>& control_option_names() {
+    static const std::vector<std::string> v = {"log", "max", "min", "step", "value"};
+    return v;
+}
+
+const std::vector<std::string>& scene_up_axes() {
+    static const std::vector<std::string> v = {"+x", "-x", "+y", "-y", "+z", "-z"};
     return v;
 }
 

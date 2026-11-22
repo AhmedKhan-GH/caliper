@@ -1,6 +1,8 @@
 #pragma once
-// JSON merge patches (RFC 7386) of one panel or one source of a spec, which the
-// command layer's panel.patch and source.patch call.
+// JSON merge patches (RFC 7386) of one panel, one source or one control of a
+// spec, which the command layer's panel.patch, source.patch and control.patch
+// call. A patch that makes a panel a scene raises a version 0 spec to version
+// 1 (required_version() in spec.h).
 //
 // The patch applies to the item's canonical JSON form (format.h): a key set to
 // null is removed, an object merges key by key, and any other value replaces
@@ -36,6 +38,10 @@ PatchResult patch_panel(const Spec& spec, std::string_view panel_id, const nlohm
                         const SourceResolver& resolver = {});
 PatchResult patch_source(const Spec& spec, std::string_view source_id, const nlohmann::json& patch,
                          const SourceResolver& resolver = {});
+// A patch of one control (spec version 1), which control.patch calls: the
+// same rules as a panel's, with the control's canonical JSON form.
+PatchResult patch_control(const Spec& spec, std::string_view control_id, const nlohmann::json& patch,
+                          const SourceResolver& resolver = {});
 
 // RFC 7386 applied to any JSON value. The caller bounds the patch's depth.
 nlohmann::json merge_patch(const nlohmann::json& target, const nlohmann::json& patch);
