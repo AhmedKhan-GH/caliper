@@ -15,6 +15,9 @@
 
 #include <doctest/doctest.h>
 
+#include <caliper_builder/session/chain_hooks.h>
+
+#include <cstring>
 #include <set>
 
 using namespace caliper_builder;
@@ -413,4 +416,93 @@ TEST_CASE("programs: a toggle bound to an intervention point enters the spec") {
     REQUIRE(s->open_spec()->spec.controls.size() == 1);
     CHECK(s->open_spec()->spec.controls[0].kind == spec::ControlKind::toggle);
     CHECK(s->open_spec()->spec.controls[0].bind == "intervene:blocks.0.attn#3");
+}
+
+// ---- the operator steps in the app (chain_hooks.h, operator_steps.cpp)
+
+namespace {
+
+TensorData floats(std::vector<int64_t> shape, const std::vector<float>& v) {
+    std::vector<uint8_t> bytes(v.size() * 4);
+    std::memcpy(bytes.data(), v.data(), bytes.size());
+    TensorResult r = TensorData::from_bytes(DType::f32, std::move(shape), std::move(bytes));
+    REQUIRE_FALSE(r.error);
+    return std::move(r.tensor);
+}
+
+std::vector<float> values_of(const TensorData& t) {
+    std::vector<float> v(static_cast<std::size_t>(t.numel()));
+    std::memcpy(v.data(), t.data(), v.size() * 4);
+    return v;
+}
+
+}  // namespace
+
+TEST_CASE("operator steps: surface and path give their named arrays, with the window's steps as coordinates") {
+    // A window of 4 kept steps of a row of 6: (4, 6), cell (r, c) = 10 r + c.
+    std::vector<float> g;
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 6; ++c) g.push_back(float(10 * r + c));
+    const TensorData input = floats({4, 6}, g);
+    const TensorData steps = floats({4}, {200, 201, 202, 203});
+
+    spec::Transform surface;
+    surface.op = spec::TransformOp::surface;
+    surface.max_cells = 6;
+    GeometryArrays out;
+    REQUIRE_FALSE(apply_operator(surface, input, &steps, &out));
+    REQUIRE(out.count("height"));
+    CHECK(out["height"].shape() == std::vector<int64_t>{2, 3});
+    CHECK(values_of(out["height"]) == std::vector<float>{5.5f, 7.5f, 9.5f, 25.5f, 27.5f, 29.5f});
+    CHECK(values_of(out["x"]) == std::vector<float>{200.5f, 202.5f});
+    CHECK(values_of(out["y"]) == std::vector<float>{0.5f, 2.5f, 4.5f});
+
+    spec::Transform path;
+    path.op = spec::TransformOp::path;
+    path.columns = {5, 0};
+    path.max_points = 2;
+    REQUIRE_FALSE(apply_operator(path, input, &steps, &out));
+    CHECK(out.count("height") == 0);
+    CHECK(out["positions"].shape() == std::vector<int64_t>{2, 3});
+    CHECK(values_of(out["positions"]) == std::vector<float>{5, 0, 0, 25, 20, 0});
+    CHECK(values_of(out["values"]) == std::vector<float>{200, 202});
+
+    // Another rank, and a column past the input.
+    Error err = apply_operator(surface, floats({24}, g), nullptr, &out);
+    CHECK(err.code == "resolve.operator_shape");
+    path.columns = {6, 0};
+    CHECK(apply_operator(path, input, nullptr, &out).code == "resolve.operator_shape");
+}
+
+TEST_CASE("operator steps: only the first step of a live tensor source runs in the script") {
+    spec::Spec s;
+    spec::Source live;
+    live.id = "w";
+    live.catalog = "live:blocks.0.attn.proj.weight";
+    spec::Transform op;
+    op.op = spec::TransformOp::surface;
+    live.transforms = {op};
+    spec::Source plain;
+    plain.id = "act";
+    plain.catalog = "live:blocks.0.attn.proj.act";
+    spec::Source derived;
+    derived.id = "terrain";
+    derived.from = "act";
+    derived.transforms = {op};
+    spec::Source windowed = derived;
+    windowed.id = "recent";
+    spec::Transform window;
+    window.op = spec::TransformOp::window;
+    window.steps = 16;
+    windowed.transforms = {window, op};
+    spec::Source file = live;
+    file.id = "f";
+    file.catalog = "tensor:acts";
+    s.sources = {live, plain, derived, windowed, file};
+    CHECK(operator_runs_in_script(s, s.sources[0], 0));
+    CHECK(operator_runs_in_script(s, s.sources[2], 0));    // from a live source without steps
+    CHECK_FALSE(operator_runs_in_script(s, s.sources[3], 1));   // after a window: in the app
+    CHECK_FALSE(operator_runs_in_script(s, s.sources[4], 0));   // not live
+    s.sources[1].transforms = {window};
+    CHECK_FALSE(operator_runs_in_script(s, s.sources[2], 0));   // its root has a step
 }
