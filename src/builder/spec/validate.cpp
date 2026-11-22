@@ -16,6 +16,11 @@ namespace {
 
 using namespace detail;
 
+// The largest size of a slider's number. The app's slider clamps to the same
+// value (spec_controls.cpp): beyond it, its range overflows, and an integer
+// parameter's value no longer fits the int64 that carries it.
+constexpr double kSliderLimit = 1e15;
+
 const std::vector<std::string>& dtypes() {
     static const std::vector<std::string> v = {"u8",  "i8",  "u16", "i16", "u32", "i32",
                                                "u64", "i64", "f16", "f32", "f64", "bool"};
@@ -300,7 +305,18 @@ private:
                                 op + "." + opt.first);
             return;
         }
-        // A slider.
+        // A slider. Its numbers are finite and at most kSliderLimit in size,
+        // so that the app's slider takes them without an overflow.
+        using Num = std::pair<const char*, const std::optional<double>*>;
+        const Num nums[] = {{"max", &o.max}, {"min", &o.min}, {"step", &o.step}, {"value", &o.value}};
+        bool bounded = true;
+        for (const Num& n : nums)
+            if (*n.second && !(std::fabs(**n.second) <= kSliderLimit)) {
+                sink_.error("spec.out_of_range", op + "." + n.first + " must be a finite number from -1e15 to 1e15.",
+                            op + "." + n.first);
+                bounded = false;
+            }
+        if (!bounded) return;
         if (o.min && o.max && !(*o.min < *o.max))
             sink_.error("spec.out_of_range", op + ".min must be below " + op + ".max.", op + ".min");
         if (o.step && !(*o.step > 0))

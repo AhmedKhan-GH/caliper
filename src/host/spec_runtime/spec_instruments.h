@@ -24,6 +24,8 @@
 #include <imgui.h>
 #include <imgui_internal.h>   // ImRect
 
+#include <string>
+
 namespace caliper_host {
 
 // What the app gives the runtime for instruments. Either pointer may be null:
@@ -38,6 +40,12 @@ struct SpecInstrumentHost {
 // of the look's type with its padding. The layout gives a control leaf this
 // height and the panels the rest.
 float spec_control_height(const caliper_builder::spec::Control& control, const SpecLook& look);
+
+// The label of a button. A button bound to an action shows its title and its
+// bind string, "Save (action:save)", so that a person sees what a click runs,
+// then "· queued" or "· running" while the action waits or runs. A button
+// bound to run:pause reads "Pause", or "Resume" while the run is paused.
+std::string spec_button_label(const caliper_builder::spec::Control& control, const caliper_builder::RunState& state);
 
 // Draws one control into `rect` of the current window: its title and its
 // widget, with the value it reads from the run control (param:), the state of

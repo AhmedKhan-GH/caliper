@@ -108,6 +108,11 @@ public:
             wrong(key_path(path, key), *it, "a number");
             return std::nullopt;
         }
+        // JSON text holds no infinity or NaN, but a value built in code can.
+        if (!std::isfinite(it->get<double>())) {
+            sink_.error("spec.out_of_range", key_path(path, key) + " must be a finite number.", key_path(path, key));
+            return std::nullopt;
+        }
         return it->get<double>();
     }
 

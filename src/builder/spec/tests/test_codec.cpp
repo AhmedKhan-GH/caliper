@@ -6,6 +6,7 @@
 #include <doctest/doctest.h>
 
 #include <cmath>
+#include <limits>
 
 #include "helpers.h"
 
@@ -564,6 +565,13 @@ TEST_CASE("the item decoders take the keys of version 1") {
                                                   "options": {"min": 0.001, "max": 1.0, "log": true}})"));
     auto bad = cs::control_from_json(json::parse(R"({"id": "k", "kind": "dial", "bind": "value"})"), "control[3]");
     CHECK(has(bad.diagnostics, "spec.unknown_control_kind", "control[3].kind"));
+    // A value built in code can hold infinity or NaN, which JSON text cannot; a control refuses both.
+    json huge = json::parse(R"({"id": "k", "kind": "slider", "bind": "value", "options": {}})");
+    huge["options"]["max"] = std::numeric_limits<double>::infinity();
+    CHECK(has(cs::control_from_json(huge, "control[0]").diagnostics, "spec.out_of_range", "control[0].options.max"));
+    json nan_min = json::parse(R"({"id": "k", "kind": "slider", "bind": "value", "options": {}})");
+    nan_min["options"]["min"] = std::numeric_limits<double>::quiet_NaN();
+    CHECK(has(cs::control_from_json(nan_min, "control[0]").diagnostics, "spec.out_of_range", "control[0].options.min"));
 
     auto p = cs::panel_from_json(json::parse(R"({"id": "w", "primitive": "scene", "bind": {"scene": "live:model"},
                                                  "options": {"axes": false}})"));

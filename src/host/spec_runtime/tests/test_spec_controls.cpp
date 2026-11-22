@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <functional>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -174,6 +175,39 @@ TEST_CASE("spec controls: a slider bound to param:lr sends the dragged value and
     CHECK(rec.events.size() == 1);
 }
 
+TEST_CASE("spec controls: a slider clamps the script's own range and value to finite numbers it can send") {
+    Ui ui;
+    FakeRun run;
+    run.run = training();
+    cb::RunParam& p = run.run.params[0];
+    p.type = "integer";
+    p.min = -1e300;
+    p.max = 1e300;
+    p.log = false;
+    p.value = 5;
+    SpecInstrumentHost host{nullptr, &run};
+    const SpecLook look;
+    spec::Control lr = make("huge", spec::ControlKind::slider, "param:lr");
+    auto draw = [&] { return caliper_host::draw_spec_control(lr, kRow, look, host); };
+    ui.frame([&] { draw(); });
+    CHECK(ui.click(390, 15, draw) >= 1);
+    REQUIRE_FALSE(run.sent.empty());
+    REQUIRE(run.sent.back().second.is_number_integer());
+    CHECK(run.sent.back().second.get<std::int64_t>() > 0);
+    CHECK(run.sent.back().second.get<std::int64_t>() <= 1000000000000000);
+
+    // A value that is not a number, and no range: the slider sends finite numbers.
+    p.type = "number";
+    p.min.reset();
+    p.max.reset();
+    p.value = std::numeric_limits<double>::quiet_NaN();
+    run.sent.clear();
+    lr.id = "nan";
+    ui.click(390, 15, draw);
+    REQUIRE_FALSE(run.sent.empty());
+    CHECK(std::isfinite(run.sent.back().second.get<double>()));
+}
+
 TEST_CASE("spec controls: a slider without a script, without control or without its parameter sends nothing") {
     Ui ui;
     FakeRun run;
@@ -243,6 +277,21 @@ TEST_CASE("spec controls: a button queues its action, and run:pause pauses a run
     spec::Control eval = make("eval", spec::ControlKind::button, "action:evaluate");
     ui.click(200, 15, [&] { return caliper_host::draw_spec_control(eval, kRow, look, host); });
     CHECK(run.sent.size() == 3);
+}
+
+TEST_CASE("spec controls: a button bound to an action shows the action it runs") {
+    cb::RunState st = training();
+    spec::Control wipe = make("wipe", spec::ControlKind::button, "action:save");
+    wipe.title = "Evaluate";
+    CHECK(caliper_host::spec_button_label(wipe, st) == "Evaluate (action:save)");
+    st.actions[0].queued = true;
+    CHECK(caliper_host::spec_button_label(wipe, st) == "Evaluate (action:save)  \xC2\xB7 queued");
+    CHECK(caliper_host::spec_button_label(make("save", spec::ControlKind::button, "action:save"), cb::RunState{}) ==
+          "save (action:save)");
+    spec::Control pause = make("pause", spec::ControlKind::button, "run:pause");
+    CHECK(caliper_host::spec_button_label(pause, st) == "Pause");
+    st.state = "paused";
+    CHECK(caliper_host::spec_button_label(pause, st) == "Resume");
 }
 
 // ---- drawn on the offscreen canvas (suite "gpu": caliper_spec_runtime_gpu) ----------------

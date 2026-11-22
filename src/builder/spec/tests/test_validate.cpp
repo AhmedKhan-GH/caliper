@@ -592,6 +592,12 @@ TEST_CASE("controls and scene panels use the codes of version 0 for their other 
               "control[0].options.step"));
     CHECK(has(check_v1(control("k", "slider", "param:lr", "log = true, min = 0")).diagnostics, "spec.out_of_range",
               "control[0].options.min"));
+    CHECK(has(check_v1(control("k", "slider", "value", "min = 0, max = 1e308")).diagnostics, "spec.out_of_range",
+              "control[0].options.max"));
+    CHECK(has(check_v1(control("k", "slider", "value", "value = -2e15")).diagnostics, "spec.out_of_range",
+              "control[0].options.value"));
+    CHECK(has(check_v1(control("k", "slider", "value", "step = 1e300")).diagnostics, "spec.out_of_range",
+              "control[0].options.step"));
     std::string many;
     for (int i = 0; i < 65; ++i) many += control("c" + std::to_string(i), "button", "run:pause");
     CHECK_MESSAGE(has(check_v1(many).diagnostics, "spec.too_many", "control"), first(check_v1(many)));

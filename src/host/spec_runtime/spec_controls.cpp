@@ -174,6 +174,16 @@ void disabled_tooltip(const std::string& why) {
     if (!why.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", why.c_str());
 }
 
+// The largest size of a number a slider takes, as the spec validator allows
+// (validate.cpp). A script's own range and value are not validated, so every
+// number is clamped to it here: ImGui asserts on a range beyond DBL_MAX / 2,
+// and an integer parameter's value is converted to an int64.
+constexpr double kSliderLimit = 1e15;
+
+double bounded(double v, double fallback) {
+    return std::isfinite(v) ? std::clamp(v, -kSliderLimit, kSliderLimit) : fallback;
+}
+
 double snap(double v, double lo, const std::optional<double>& step) {
     if (!step || *step <= 0.0) return v;
     return lo + std::round((v - lo) / *step) * *step;
@@ -221,6 +231,9 @@ bool draw_slider(const spec::Control& c, const spec::ControlTarget& t, const Row
         const auto it = own.find(key);
         shown = it != own.end() ? it->second : c.options.value.value_or(lo);
     }
+    lo = bounded(lo, 0.0);
+    hi = bounded(hi, lo + 1.0);
+    shown = bounded(shown, lo);
     if (log && lo <= 0.0) log = false;   // a log scale needs a positive range
     if (hi <= lo) hi = lo + 1.0;
 
@@ -244,7 +257,7 @@ bool draw_slider(const spec::Control& c, const spec::ControlTarget& t, const Row
     disabled_tooltip(why);
     if (disabled) return false;
     if (changed) {
-        v = snap(v, lo, c.options.step);
+        v = std::clamp(bounded(snap(v, lo, c.options.step), lo), lo, hi);   // a tiny step can overflow
         if (integer) v = std::round(v);
         changed = !same(v, shown);
     }
@@ -261,19 +274,14 @@ bool draw_slider(const spec::Control& c, const spec::ControlTarget& t, const Row
     return changed;
 }
 
-bool draw_button(const spec::Control& c, const spec::ControlTarget& t, const Row& row, const std::string& title,
-                 SpecInstrumentHost& host) {
+bool draw_button(const spec::Control& c, const spec::ControlTarget& t, const Row& row, SpecInstrumentHost& host) {
     const cb::RunState st = host.run ? host.run->state() : cb::RunState{};
     std::string why = why_disabled(host, st);
-    std::string label = title;
-    bool pause = true;
+    const std::string label = spec_button_label(c, st);
+    const bool pause = st.state != "paused";
     if (t.kind == spec::ControlTarget::Kind::action) {
-        const cb::RunAction* a = why.empty() ? find_action(st, t.name) : nullptr;
-        if (why.empty() && !a) why = "The script " + st.script + " has no action " + t.name + ".";
-        if (a && (a->queued || a->running)) label += a->running ? "  \xC2\xB7 running" : "  \xC2\xB7 queued";   // ·
+        if (why.empty() && !find_action(st, t.name)) why = "The script " + st.script + " has no action " + t.name + ".";
     } else if (t.kind == spec::ControlTarget::Kind::run_pause) {
-        pause = st.state != "paused";
-        label = pause ? "Pause" : "Resume";
         if (why.empty() && (st.state == "none" || !st.step))
             why = "The script has not made its first step; a run pauses only at a step.";
     } else {
@@ -282,9 +290,11 @@ bool draw_button(const spec::Control& c, const spec::ControlTarget& t, const Row
     ImGui::SetCursorScreenPos(row.widget.Min);
     const bool disabled = !why.empty();
     ImGui::BeginDisabled(disabled);
-    const bool pressed = ImGui::Button((label + "##button").c_str(), row.widget.GetSize());
+    const bool pressed = ImGui::Button((label + "###button").c_str(), row.widget.GetSize());
     ImGui::EndDisabled();
     disabled_tooltip(why);
+    if (!disabled && t.kind == spec::ControlTarget::Kind::action && ImGui::IsItemHovered())
+        ImGui::SetTooltip("A click runs the action %s of %s.", t.name.c_str(), st.script.c_str());
     if (!pressed || disabled) return false;
     if (t.kind == spec::ControlTarget::Kind::action) {
         host.run->run_action(t.name);
@@ -297,6 +307,17 @@ bool draw_button(const spec::Control& c, const spec::ControlTarget& t, const Row
 }
 
 }  // namespace
+
+std::string spec_button_label(const caliper_builder::spec::Control& control, const caliper_builder::RunState& state) {
+    const spec::ControlTarget t = target_of(control.bind);
+    if (t.kind == spec::ControlTarget::Kind::run_pause) return state.state != "paused" ? "Pause" : "Resume";
+    std::string label = control.title.value_or(control.id);
+    if (t.kind != spec::ControlTarget::Kind::action) return label;
+    label += " (" + spec::control_target_string(t) + ")";
+    const cb::RunAction* a = state.attached ? find_action(state, t.name) : nullptr;
+    if (a && (a->queued || a->running)) label += a->running ? "  \xC2\xB7 running" : "  \xC2\xB7 queued";   // ·
+    return label;
+}
 
 float spec_control_height(const caliper_builder::spec::Control& control, const SpecLook& look) {
     (void)control;   // both kinds of M1 take one row
@@ -319,7 +340,7 @@ bool draw_spec_control(const caliper_builder::spec::Control& control, const ImRe
         if (control.kind == spec::ControlKind::slider) {
             changed = draw_slider(control, t, row, host);
         } else if (button) {
-            changed = draw_button(control, t, row, title, host);
+            changed = draw_button(control, t, row, host);
         } else {
             ImGui::GetWindowDrawList()->AddText(row.widget.Min, look.faint,
                                                 (std::string(spec::control_kind_name(control.kind)) +
