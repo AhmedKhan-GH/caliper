@@ -387,3 +387,24 @@ def test_the_scene_colors_copy_nothing_from_the_host_after_the_first_time(monkey
     again = RunHooks._colors(hooks)[0]
     assert made == [] and torch.equal(first, again)
     assert again.shape == (3, 3)
+
+
+def test_a_watched_float_series_wakes_the_sender_at_most_at_the_session_rate(monkeypatch):
+    import time
+    monkeypatch.setattr(P, "views", lambda ring: None)
+    wakes = []
+    r = _net_ring.NetRing(wake=lambda: wakes.append(1))
+    r.tap("lr", 0.1)
+    r.series["lr"].watched = True
+    wakes.clear()
+    for _ in range(50):                           # on the clock: each value wakes it
+        r.tap("lr", 0.1)
+    assert len(wakes) == 50
+    wakes.clear()
+    r.step_tick(1, time.perf_counter())          # under the pass gate
+    t0 = time.perf_counter()
+    for _ in range(200):
+        r.tap("lr", 0.1)
+    elapsed = time.perf_counter() - t0
+    assert len(wakes) <= 1 + elapsed / r.tick_interval
+    assert len(r.series["lr"].q) == 251          # every value is kept for the sender

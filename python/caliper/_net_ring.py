@@ -253,6 +253,7 @@ class NetRing:
         self.passes = collections.deque(maxlen=PASS_RATE_SAMPLES + 1)   # (perf_counter, step)
         self.cadence: dict = {}                 # the shared cadence for the snapshots' status
         self.registered = False                 # caliper._programs gates this ring
+        self.float_wake_t = -math.inf           # the last wake for a float series value
 
     # -- the registry (training thread writes, network thread reads) -----------
     def _view(self, name: str, kind: int, now: float) -> ViewState:
@@ -640,7 +641,16 @@ class NetRing:
         if (cls is float or cls is int) and not s.refs and not s.held:
             s.q.append((float(value), time.monotonic_ns()))
             if s.watched:
-                self._wake()
+                # A wake at each step costs the training thread the sender's turn with the GIL:
+                # under the pass gate, floats wake it at most at the session's rate, and each
+                # pass's wake carries the rest.
+                if not self.step_mode:
+                    self._wake()
+                else:
+                    now = time.perf_counter()
+                    if now - self.float_wake_t >= self.tick_interval:
+                        self.float_wake_t = now
+                        self._wake()
             return s.watched
         torch = _TORCH or _torch()
         scalar = False
