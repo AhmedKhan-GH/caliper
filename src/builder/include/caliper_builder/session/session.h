@@ -108,6 +108,7 @@
 #include <caliper_builder/session/loader_catalog.h>
 #include <caliper_builder/session/resolve.h>
 #include <caliper_builder/session/run_control.h>
+#include <caliper_builder/session/runner_commands.h>
 #include <caliper_builder/spec/spec.h>
 #include <caliper_builder/spec/validate.h>
 
@@ -267,6 +268,14 @@ public:
     // four commands answer command.not_available. Any thread.
     void set_run_control(RunControl* control);
     RunControl* run_control() const;
+
+    // The app's model runner, which run.list, run.start, run.fork, run.stop
+    // and run.logs act through, and which gives the run commands their
+    // argument `run` (runner_commands.h, design/hosted-runs.md). The app gives
+    // its own and takes it back with null before it destroys it; without one
+    // the five commands answer command.not_available. Any thread.
+    void set_model_runner(ModelRunner* runner);
+    ModelRunner* model_runner() const;
 
     // The ring of events that events.wait reads (events.h). The session feeds
     // it the spec and approval events from its journal; the app pushes the

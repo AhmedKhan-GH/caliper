@@ -5796,7 +5796,15 @@
       "agents": true,
       "args": {
         "additionalProperties": false,
-        "properties": {},
+        "properties": {
+          "run": {
+            "description": "The run to act on: a managed run's id from run.list, or user for the person's own script; the attached script when absent. The app switches to a run it does not show.",
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[a-z0-9-]{1,40}$",
+            "type": "string"
+          }
+        },
         "required": [],
         "type": "object"
       },
@@ -5980,6 +5988,13 @@
             "minLength": 1,
             "type": "string"
           },
+          "run": {
+            "description": "The run to act on: a managed run's id from run.list, or user for the person's own script; the attached script when absent. The app switches to a run it does not show.",
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[a-z0-9-]{1,40}$",
+            "type": "string"
+          },
           "value": {
             "description": "The new value: a number for a number or integer parameter, true or false for a boolean, one of the choices for a choice.",
             "type": [
@@ -6047,6 +6062,13 @@
             "maxLength": 63,
             "minLength": 1,
             "type": "string"
+          },
+          "run": {
+            "description": "The run to act on: a managed run's id from run.list, or user for the person's own script; the attached script when absent. The app switches to a run it does not show.",
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[a-z0-9-]{1,40}$",
+            "type": "string"
           }
         },
         "required": [
@@ -6104,6 +6126,13 @@
               "step"
             ],
             "type": "string"
+          },
+          "run": {
+            "description": "The run to act on: a managed run's id from run.list, or user for the person's own script; the attached script when absent. The app switches to a run it does not show.",
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[a-z0-9-]{1,40}$",
+            "type": "string"
           }
         },
         "required": [
@@ -6147,6 +6176,787 @@
         "type": "object"
       },
       "summary": "Pauses the running script at its next step, resumes it, or lets it run a number of steps and pause again. A script pauses only at a step, so a pause before its first step is refused. The result gives the state the request was sent in; run.state and the run events of change state follow it."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "read",
+      "examples": [
+        {}
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "run.list",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "runs": {
+            "description": "The runs, managed runs first in the order of their start.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "args": {
+                  "description": "The script's arguments.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "attached": {
+                  "description": "Whether the app shows this run now.",
+                  "type": "boolean"
+                },
+                "error": {
+                  "description": "Why the run failed, in one sentence; null otherwise.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "exit_code": {
+                  "description": "The process's exit code once it ended, a signal as its negative number; null while it runs.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "description": "The run's id; user for the person's own attached script.",
+                  "type": "string"
+                },
+                "managed": {
+                  "description": "Whether the model runner started the run.",
+                  "type": "boolean"
+                },
+                "params": {
+                  "description": "The parameter values the run started with, or for a fork the values it changed.",
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": {
+                        "description": "The parameter's name, as the script registers it.",
+                        "maxLength": 63,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "value": {
+                        "description": "Its value: a number, true or false, or a string.",
+                        "type": [
+                          "number",
+                          "integer",
+                          "boolean",
+                          "string"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "value"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 64,
+                  "type": "array"
+                },
+                "parent": {
+                  "description": "The run a fork started from, or null.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "script": {
+                  "description": "The script: its path in the workspace for a managed run, its name for the person's script.",
+                  "type": "string"
+                },
+                "state": {
+                  "description": "starting until the script's stream answers, then running or paused, then exited or failed when its process ended.",
+                  "enum": [
+                    "starting",
+                    "running",
+                    "paused",
+                    "exited",
+                    "failed"
+                  ],
+                  "type": "string"
+                },
+                "step": {
+                  "description": "The step of the run's latest checkpoint, or null before its first.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "stopping": {
+                  "description": "Whether run.stop asked the run to stop.",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "managed",
+                "state",
+                "script",
+                "args",
+                "params",
+                "parent",
+                "step",
+                "exit_code",
+                "attached",
+                "stopping",
+                "error"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "type": "object"
+      },
+      "summary": "Lists the runs: the managed runs that the model runner started, in the order of their start, and the person's own script when the app is attached to one, with the id user. Each run has its state, script, arguments, parameters, parent, step and exit code. It changes nothing."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "args": {
+            "description": "The script's command-line arguments; none when absent.",
+            "items": {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "id": {
+            "description": "The new run's id, unique in the workspace; the script's file name and a number, such as train-1, when absent.",
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[a-z0-9-]{1,40}$",
+            "type": "string"
+          },
+          "params": {
+            "description": "Parameter values by name, at most 64; the script applies each one when it registers that parameter with caliper.param.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "description": "The parameter's name, as the script registers it.",
+                  "maxLength": 63,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "value": {
+                  "description": "Its value: a number, true or false, or a string.",
+                  "type": [
+                    "number",
+                    "integer",
+                    "boolean",
+                    "string"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "value"
+              ],
+              "type": "object"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "script": {
+            "description": "The script's path, relative to the workspace or absolute; it must be a file in the workspace.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "script"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "run",
+      "examples": [
+        {
+          "args": [
+            "--epochs",
+            "5"
+          ],
+          "params": [
+            {
+              "name": "lr",
+              "value": 0.01
+            }
+          ],
+          "script": "train.py"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "run.start",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "run": {
+            "additionalProperties": false,
+            "description": "The run as run.list gives it.",
+            "properties": {
+              "args": {
+                "description": "The script's arguments.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "attached": {
+                "description": "Whether the app shows this run now.",
+                "type": "boolean"
+              },
+              "error": {
+                "description": "Why the run failed, in one sentence; null otherwise.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "exit_code": {
+                "description": "The process's exit code once it ended, a signal as its negative number; null while it runs.",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "id": {
+                "description": "The run's id; user for the person's own attached script.",
+                "type": "string"
+              },
+              "managed": {
+                "description": "Whether the model runner started the run.",
+                "type": "boolean"
+              },
+              "params": {
+                "description": "The parameter values the run started with, or for a fork the values it changed.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "description": "The parameter's name, as the script registers it.",
+                      "maxLength": 63,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "value": {
+                      "description": "Its value: a number, true or false, or a string.",
+                      "type": [
+                        "number",
+                        "integer",
+                        "boolean",
+                        "string"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 64,
+                "type": "array"
+              },
+              "parent": {
+                "description": "The run a fork started from, or null.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "script": {
+                "description": "The script: its path in the workspace for a managed run, its name for the person's script.",
+                "type": "string"
+              },
+              "state": {
+                "description": "starting until the script's stream answers, then running or paused, then exited or failed when its process ended.",
+                "enum": [
+                  "starting",
+                  "running",
+                  "paused",
+                  "exited",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              "step": {
+                "description": "The step of the run's latest checkpoint, or null before its first.",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "stopping": {
+                "description": "Whether run.stop asked the run to stop.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "managed",
+              "state",
+              "script",
+              "args",
+              "params",
+              "parent",
+              "step",
+              "exit_code",
+              "attached",
+              "stopping",
+              "error"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "type": "object"
+      },
+      "summary": "Starts a Python script of the workspace as a managed run, for training or for inference, with arguments and parameter values, and attaches the app to it. It always waits for the person's approval on a review card, because the script runs as Python code. The result comes when the process starts, in the state starting; a run event of change runner, through events.wait, or run.list says when it runs. The script's caliper.watch() line writes the stream link that the app attaches to."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The fork's id, unique in the workspace; the parent's script name and a number when absent.",
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[a-z0-9-]{1,40}$",
+            "type": "string"
+          },
+          "params": {
+            "description": "The parameters that change in the fork; the checkpoint holds the others.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "description": "The parameter's name, as the script registers it.",
+                  "maxLength": 63,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "value": {
+                  "description": "Its value: a number, true or false, or a string.",
+                  "type": [
+                    "number",
+                    "integer",
+                    "boolean",
+                    "string"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "value"
+              ],
+              "type": "object"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "run": {
+            "description": "The parent: a managed run that runs or is paused.",
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[a-z0-9-]{1,40}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "run",
+      "examples": [
+        {
+          "params": [
+            {
+              "name": "lr",
+              "value": 0.001
+            }
+          ],
+          "run": "train-1"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "run.fork",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "run": {
+            "additionalProperties": false,
+            "description": "The run as run.list gives it.",
+            "properties": {
+              "args": {
+                "description": "The script's arguments.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "attached": {
+                "description": "Whether the app shows this run now.",
+                "type": "boolean"
+              },
+              "error": {
+                "description": "Why the run failed, in one sentence; null otherwise.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "exit_code": {
+                "description": "The process's exit code once it ended, a signal as its negative number; null while it runs.",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "id": {
+                "description": "The run's id; user for the person's own attached script.",
+                "type": "string"
+              },
+              "managed": {
+                "description": "Whether the model runner started the run.",
+                "type": "boolean"
+              },
+              "params": {
+                "description": "The parameter values the run started with, or for a fork the values it changed.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "description": "The parameter's name, as the script registers it.",
+                      "maxLength": 63,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "value": {
+                      "description": "Its value: a number, true or false, or a string.",
+                      "type": [
+                        "number",
+                        "integer",
+                        "boolean",
+                        "string"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 64,
+                "type": "array"
+              },
+              "parent": {
+                "description": "The run a fork started from, or null.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "script": {
+                "description": "The script: its path in the workspace for a managed run, its name for the person's script.",
+                "type": "string"
+              },
+              "state": {
+                "description": "starting until the script's stream answers, then running or paused, then exited or failed when its process ended.",
+                "enum": [
+                  "starting",
+                  "running",
+                  "paused",
+                  "exited",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              "step": {
+                "description": "The step of the run's latest checkpoint, or null before its first.",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "stopping": {
+                "description": "Whether run.stop asked the run to stop.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "managed",
+              "state",
+              "script",
+              "args",
+              "params",
+              "parent",
+              "step",
+              "exit_code",
+              "attached",
+              "stopping",
+              "error"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "type": "object"
+      },
+      "summary": "Starts a new managed run from the next checkpoint of a running run, with changed parameters, beside its parent: the parent saves a checkpoint through its caliper.checkpoint action, and the fork runs the same script and arguments from it. It always waits for the person's approval on a review card. The result comes at once, in the state starting; a run event of change runner or run.list says when the fork runs."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "kill_after_s": {
+            "default": 10,
+            "description": "How long the run has to end by itself, in seconds; 10 when absent, 0 to end the process at once.",
+            "maximum": 600,
+            "minimum": 0,
+            "type": "number"
+          },
+          "run": {
+            "description": "The managed run to stop.",
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[a-z0-9-]{1,40}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "run",
+      "examples": [
+        {
+          "kill_after_s": 30,
+          "run": "train-1"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "run.stop",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "run": {
+            "additionalProperties": false,
+            "description": "The run as run.list gives it.",
+            "properties": {
+              "args": {
+                "description": "The script's arguments.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "attached": {
+                "description": "Whether the app shows this run now.",
+                "type": "boolean"
+              },
+              "error": {
+                "description": "Why the run failed, in one sentence; null otherwise.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "exit_code": {
+                "description": "The process's exit code once it ended, a signal as its negative number; null while it runs.",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "id": {
+                "description": "The run's id; user for the person's own attached script.",
+                "type": "string"
+              },
+              "managed": {
+                "description": "Whether the model runner started the run.",
+                "type": "boolean"
+              },
+              "params": {
+                "description": "The parameter values the run started with, or for a fork the values it changed.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "description": "The parameter's name, as the script registers it.",
+                      "maxLength": 63,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "value": {
+                      "description": "Its value: a number, true or false, or a string.",
+                      "type": [
+                        "number",
+                        "integer",
+                        "boolean",
+                        "string"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 64,
+                "type": "array"
+              },
+              "parent": {
+                "description": "The run a fork started from, or null.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "script": {
+                "description": "The script: its path in the workspace for a managed run, its name for the person's script.",
+                "type": "string"
+              },
+              "state": {
+                "description": "starting until the script's stream answers, then running or paused, then exited or failed when its process ended.",
+                "enum": [
+                  "starting",
+                  "running",
+                  "paused",
+                  "exited",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              "step": {
+                "description": "The step of the run's latest checkpoint, or null before its first.",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "stopping": {
+                "description": "Whether run.stop asked the run to stop.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "managed",
+              "state",
+              "script",
+              "args",
+              "params",
+              "parent",
+              "step",
+              "exit_code",
+              "attached",
+              "stopping",
+              "error"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "type": "object"
+      },
+      "summary": "Stops a managed run at its next checkpoint through its caliper.stop action, and ends its process by its id when it has not ended after kill_after_s seconds. The result comes at once, with stopping true; run.list or a run event of change runner says when the run exited."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "lines": {
+            "default": 50,
+            "description": "How many of the last lines; 50 when absent, at most 200.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "run": {
+            "description": "The managed run.",
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[a-z0-9-]{1,40}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "read",
+      "examples": [
+        {
+          "lines": 20,
+          "run": "train-1"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "run.logs",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "lines": {
+            "description": "The last lines, oldest first.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "type": "array"
+          },
+          "run": {
+            "description": "The run's id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "lines"
+        ],
+        "type": "object"
+      },
+      "summary": "Returns the last lines that a managed run wrote to its standard output and standard error, which the runner keeps in the run's output.log. It changes nothing."
     },
     {
       "agents": true,
@@ -6253,12 +7063,13 @@
                   "type": "string"
                 },
                 "change": {
-                  "description": "run: what changed: the run's state, a parameter applied at a step, the end of an action, or the attachment of a script.",
+                  "description": "run: what changed: the run's state, a parameter applied at a step, the end of an action, the attachment of a script, or the state of a managed run (runner).",
                   "enum": [
                     "state",
                     "param",
                     "action",
-                    "attach"
+                    "attach",
+                    "runner"
                   ],
                   "type": "string"
                 },
@@ -6316,6 +7127,13 @@
                   "description": "pick: the entity path of the item picked.",
                   "type": "string"
                 },
+                "error": {
+                  "description": "run with change runner: why the run failed, else null.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "event": {
                   "description": "spec: whether the command was done, undone or redone.",
                   "enum": [
@@ -6324,6 +7142,13 @@
                     "redo"
                   ],
                   "type": "string"
+                },
+                "exit_code": {
+                  "description": "run with change runner: the exit code once the process ended, else null.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
                 },
                 "index": {
                   "description": "pick: the item's index in the batch the script sent.",
@@ -6365,6 +7190,13 @@
                     "null"
                   ]
                 },
+                "parent": {
+                  "description": "run with change runner: the run a fork started from, or null.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "pixel": {
                   "description": "pick on an image: the pixel, x then y.",
                   "items": {
@@ -6396,6 +7228,10 @@
                     "integer",
                     "null"
                   ]
+                },
+                "run": {
+                  "description": "run with change runner: the managed run's id.",
+                  "type": "string"
                 },
                 "script": {
                   "description": "run with change attach: the attached script's name.",

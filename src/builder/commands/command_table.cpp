@@ -269,6 +269,28 @@ const std::pair<const char*, const char*> kFragments[] = {
         "help": {"type": "string", "description": "The script's one-line help for the action."}}})json"},
 
     {"run_state_name", R"json({"type": "string", "enum": ["none", "running", "pausing", "paused", "stepping"], "description": "The run's state: none before the script's first step, then running, pausing (a pause waits for the next step), paused or stepping."})json"},
+    {"run_id", R"json({"type": "string", "pattern": "^[a-z0-9-]{1,40}$", "minLength": 1, "maxLength": 40, "description": "A run's id, from run.list: a managed run's id, or user for the person's own attached script."})json"},
+    {"run_params", R"json({"type": "array", "maxItems": 64, "description": "Parameter values by name, at most 64; the script applies each one when it registers that parameter with caliper.param.",
+      "items": {"type": "object", "additionalProperties": false, "required": ["name", "value"],
+                "properties": {
+                  "name": {"type": "string", "minLength": 1, "maxLength": 63, "description": "The parameter's name, as the script registers it."},
+                  "value": {"type": ["number", "integer", "boolean", "string"], "description": "Its value: a number, true or false, or a string."}}}})json"},
+    {"run_entry", R"json({
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "managed", "state", "script", "args", "params", "parent", "step", "exit_code", "attached", "stopping", "error"],
+      "properties": {
+        "id": {"type": "string", "description": "The run's id; user for the person's own attached script."},
+        "managed": {"type": "boolean", "description": "Whether the model runner started the run."},
+        "state": {"type": "string", "enum": ["starting", "running", "paused", "exited", "failed"], "description": "starting until the script's stream answers, then running or paused, then exited or failed when its process ended."},
+        "script": {"type": "string", "description": "The script: its path in the workspace for a managed run, its name for the person's script."},
+        "args": {"type": "array", "items": {"type": "string"}, "description": "The script's arguments."},
+        "params": {"$use": "run_params", "description": "The parameter values the run started with, or for a fork the values it changed."},
+        "parent": {"type": ["string", "null"], "description": "The run a fork started from, or null."},
+        "step": {"type": ["integer", "null"], "description": "The step of the run's latest checkpoint, or null before its first."},
+        "exit_code": {"type": ["integer", "null"], "description": "The process's exit code once it ended, a signal as its negative number; null while it runs."},
+        "attached": {"type": "boolean", "description": "Whether the app shows this run now."},
+        "stopping": {"type": "boolean", "description": "Whether run.stop asked the run to stop."},
+        "error": {"type": ["string", "null"], "description": "Why the run failed, in one sentence; null otherwise."}}})json"},
 
     {"event", R"json({
       "type": "object", "additionalProperties": false, "required": ["seq", "time", "kind", "panel", "view", "origin"],
@@ -295,7 +317,7 @@ const std::pair<const char*, const char*> kFragments[] = {
         "truncated": {"type": "boolean", "description": "select: whether the selection held more than 32768 items and was cut."},
         "control": {"type": "string", "description": "control: the control's id."},
         "bind": {"type": "string", "description": "control: the control's target, such as param:lr."},
-        "change": {"type": "string", "enum": ["state", "param", "action", "attach"], "description": "run: what changed: the run's state, a parameter applied at a step, the end of an action, or the attachment of a script."},
+        "change": {"type": "string", "enum": ["state", "param", "action", "attach", "runner"], "description": "run: what changed: the run's state, a parameter applied at a step, the end of an action, the attachment of a script, or the state of a managed run (runner)."},
         "state": {"type": "string", "description": "run with change state: the run's new state; approval: pending, approved, denied or expired."},
         "step": {"type": ["integer", "null"], "description": "run: the script's step when it changed, or null before the first step."},
         "name": {"type": "string", "description": "run with change param or action: the parameter's or the action's name."},
@@ -308,7 +330,11 @@ const std::pair<const char*, const char*> kFragments[] = {
         "event": {"type": "string", "enum": ["do", "undo", "redo"], "description": "spec: whether the command was done, undone or redone."},
         "applet": {"type": "string", "description": "spec: the open spec's applet id."},
         "approval": {"type": "string", "description": "approval: the approval's id."},
-        "target": {"type": "string", "description": "approval of a run command: the parameter or the action it names."}}})json"},
+        "target": {"type": "string", "description": "approval of a run command: the parameter or the action it names."},
+        "run": {"type": "string", "description": "run with change runner: the managed run's id."},
+        "parent": {"type": ["string", "null"], "description": "run with change runner: the run a fork started from, or null."},
+        "exit_code": {"type": ["integer", "null"], "description": "run with change runner: the exit code once the process ended, else null."},
+        "error": {"type": ["string", "null"], "description": "run with change runner: why the run failed, else null."}}})json"},
 
     // What a spec edit returns besides its own fields.
     {"warnings", R"json({"type": "array", "items": {"$use": "diagnostic"}, "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer."})json"},
@@ -1042,7 +1068,9 @@ const Row kRows[] = {
      "Returns the state of the script that the app is attached to: whether one is attached, whether the app may "
      "control it and why not, the run's state and step, its parameters with their values, ranges and pending "
      "values, and its actions. It changes nothing.",
-     kNoArgs,
+     R"json({"type": "object", "additionalProperties": false, "required": [],
+      "properties": {
+        "run": {"$use": "run_id", "description": "The run to act on: a managed run's id from run.list, or user for the person's own script; the attached script when absent. The app switches to a run it does not show."}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["attached", "control", "state", "params", "actions"],
       "properties": {
         "attached": {"type": "boolean", "description": "Whether a script is attached to the app."},
@@ -1063,7 +1091,8 @@ const Row kRows[] = {
      R"json({"type": "object", "additionalProperties": false, "required": ["name", "value"],
       "properties": {
         "name": {"type": "string", "minLength": 1, "maxLength": 63, "description": "The parameter's name, from run.state."},
-        "value": {"type": ["number", "integer", "boolean", "string"], "description": "The new value: a number for a number or integer parameter, true or false for a boolean, one of the choices for a choice."}}})json",
+        "value": {"type": ["number", "integer", "boolean", "string"], "description": "The new value: a number for a number or integer parameter, true or false for a boolean, one of the choices for a choice."},
+        "run": {"$use": "run_id", "description": "The run to act on: a managed run's id from run.list, or user for the person's own script; the attached script when absent. The app switches to a run it does not show."}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["name", "value", "pending"],
       "properties": {
         "name": {"type": "string", "description": "The parameter's name."},
@@ -1076,7 +1105,8 @@ const Row kRows[] = {
      "text it returned, or its error, through events.wait. run.state lists the actions.",
      R"json({"type": "object", "additionalProperties": false, "required": ["name"],
       "properties": {
-        "name": {"type": "string", "minLength": 1, "maxLength": 63, "description": "The action's name, from run.state."}}})json",
+        "name": {"type": "string", "minLength": 1, "maxLength": 63, "description": "The action's name, from run.state."},
+        "run": {"$use": "run_id", "description": "The run to act on: a managed run's id from run.list, or user for the person's own script; the attached script when absent. The app switches to a run it does not show."}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["name", "queued"],
       "properties": {
         "name": {"type": "string", "description": "The action's name."},
@@ -1089,12 +1119,78 @@ const Row kRows[] = {
      R"json({"type": "object", "additionalProperties": false, "required": ["op"],
       "properties": {
         "op": {"type": "string", "enum": ["pause", "resume", "step"], "description": "pause stops at the next step; resume runs on; step runs count steps, then pauses."},
-        "count": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 1, "description": "step: the number of steps to run; 1 when absent."}}})json",
+        "count": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 1, "description": "step: the number of steps to run; 1 when absent."},
+        "run": {"$use": "run_id", "description": "The run to act on: a managed run's id from run.list, or user for the person's own script; the attached script when absent. The app switches to a run it does not show."}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["op", "state"],
       "properties": {
         "op": {"type": "string", "description": "The request sent."},
         "state": {"$use": "run_state_name"}}})json",
      R"json({"op": "pause"})json"},
+
+    // model runner (design/hosted-runs.md)
+    {"run.list", false, false, true,
+     "Lists the runs: the managed runs that the model runner started, in the order of their start, and the person's "
+     "own script when the app is attached to one, with the id user. Each run has its state, script, arguments, "
+     "parameters, parent, step and exit code. It changes nothing.",
+     kNoArgs,
+     R"json({"type": "object", "additionalProperties": false, "required": ["runs"],
+      "properties": {
+        "runs": {"type": "array", "items": {"$use": "run_entry"}, "description": "The runs, managed runs first in the order of their start."}}})json",
+     "{}"},
+    {"run.start", false, false, true,
+     "Starts a Python script of the workspace as a managed run, for training or for inference, with arguments and "
+     "parameter values, and attaches the app to it. It always waits for the person's approval on a review card, "
+     "because the script runs as Python code. The result comes when the process starts, in the state starting; a run "
+     "event of change runner, through events.wait, or run.list says when it runs. The script's caliper.watch() line "
+     "writes the stream link that the app attaches to.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["script"],
+      "properties": {
+        "script": {"type": "string", "minLength": 1, "maxLength": 1024, "description": "The script's path, relative to the workspace or absolute; it must be a file in the workspace."},
+        "args": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 4096}, "description": "The script's command-line arguments; none when absent."},
+        "params": {"$use": "run_params"},
+        "id": {"$use": "run_id", "description": "The new run's id, unique in the workspace; the script's file name and a number, such as train-1, when absent."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["run"],
+      "properties": {
+        "run": {"$use": "run_entry", "description": "The run as run.list gives it."}}})json",
+     R"json({"script": "train.py", "args": ["--epochs", "5"], "params": [{"name": "lr", "value": 0.01}]})json"},
+    {"run.fork", false, false, true,
+     "Starts a new managed run from the next checkpoint of a running run, with changed parameters, beside its "
+     "parent: the parent saves a checkpoint through its caliper.checkpoint action, and the fork runs the same script "
+     "and arguments from it. It always waits for the person's approval on a review card. The result comes at once, "
+     "in the state starting; a run event of change runner or run.list says when the fork runs.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["run"],
+      "properties": {
+        "run": {"$use": "run_id", "description": "The parent: a managed run that runs or is paused."},
+        "params": {"$use": "run_params", "description": "The parameters that change in the fork; the checkpoint holds the others."},
+        "id": {"$use": "run_id", "description": "The fork's id, unique in the workspace; the parent's script name and a number when absent."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["run"],
+      "properties": {
+        "run": {"$use": "run_entry", "description": "The run as run.list gives it."}}})json",
+     R"json({"run": "train-1", "params": [{"name": "lr", "value": 0.001}]})json"},
+    {"run.stop", false, false, true,
+     "Stops a managed run at its next checkpoint through its caliper.stop action, and ends its process by its id "
+     "when it has not ended after kill_after_s seconds. The result comes at once, with stopping true; run.list or a "
+     "run event of change runner says when the run exited.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["run"],
+      "properties": {
+        "run": {"$use": "run_id", "description": "The managed run to stop."},
+        "kill_after_s": {"type": "number", "minimum": 0, "maximum": 600, "default": 10, "description": "How long the run has to end by itself, in seconds; 10 when absent, 0 to end the process at once."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["run"],
+      "properties": {
+        "run": {"$use": "run_entry", "description": "The run as run.list gives it."}}})json",
+     R"json({"run": "train-1", "kill_after_s": 30})json"},
+    {"run.logs", false, false, true,
+     "Returns the last lines that a managed run wrote to its standard output and standard error, which the runner "
+     "keeps in the run's output.log. It changes nothing.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["run"],
+      "properties": {
+        "run": {"$use": "run_id", "description": "The managed run."},
+        "lines": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50, "description": "How many of the last lines; 50 when absent, at most 200."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["run", "lines"],
+      "properties": {
+        "run": {"type": "string", "description": "The run's id."},
+        "lines": {"type": "array", "maxItems": 200, "items": {"type": "string"}, "description": "The last lines, oldest first."}}})json",
+     R"json({"run": "train-1", "lines": 20})json"},
 
     // events (design/instruments.md)
     {"events.wait", false, false, false,
@@ -1226,6 +1322,11 @@ const std::pair<const char*, CommandEffect> kEffects[] = {
     {"run.set_param", E::run},
     {"run.action", E::run},
     {"run.pause", E::run},
+    {"run.list", E::read},
+    {"run.start", E::run},
+    {"run.fork", E::run},
+    {"run.stop", E::run},
+    {"run.logs", E::read},
     {"events.wait", E::read},
     {"history.undo", E::change},
     {"history.redo", E::change},

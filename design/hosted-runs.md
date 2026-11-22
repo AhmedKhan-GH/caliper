@@ -23,7 +23,7 @@ A managed run is a Python process. The runner starts the workspace's interpreter
 | `CALIPER_RUN_ID` | The run's id, `[a-z0-9-]{1,40}` |
 | `CALIPER_RUN_DIR` | The folder `<workspace>/runs/<id>/`, which the runner makes |
 | `CALIPER_RUN_LINK_FILE` | `<run dir>/link.txt`, where the script writes its stream link |
-| `CALIPER_RUN_PARAMS` | The JSON object of the `params` argument, when it has values |
+| `CALIPER_RUN_PARAMS` | The `params` argument as a JSON object of values by name, when it has values |
 | `CALIPER_RUN_RESUME` | The checkpoint file of the parent, for a fork |
 | `CALIPER_RUN_PARENT` | The id of the parent, for a fork |
 
@@ -45,7 +45,7 @@ The commands run on the frame thread, as the run commands of M1 do. A handler ne
 
 ### Run Start
 
-`run.start` takes `script`, and optionally `args`, `params` and `id`. The script is a file path, relative to the workspace or absolute. Its real path must be in the workspace, else the command fails with `run.script_refused`. The arguments are at most 64 strings. The parameters are at most 64 names, each with a number, a Boolean or a string. Without `id`, the runner makes the id from the file name of the script and a number, such as `train-1`. An id whose run folder exists already fails with `run.exists`.
+`run.start` takes `script`, and optionally `args`, `params` and `id`. The script is a file path, relative to the workspace or absolute. Its real path must be in the workspace, else the command fails with `run.script_refused`. The arguments are at most 64 strings. The parameters are a list of at most 64 pairs of `name` and `value`, and a value is a number, a Boolean or a string. The list is not an object, because each schema of the command table is closed. Without `id`, the runner makes the id from the file name of the script and a number, such as `train-1`. An id whose run folder exists already fails with `run.exists`.
 
 ### Run Fork
 
