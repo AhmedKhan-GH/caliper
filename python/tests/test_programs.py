@@ -378,3 +378,16 @@ def test_outputs_pass_the_argument_checks_of_the_real_scene_calls(monkeypatch):
             P._STATE["rt"] = None
         P._CAD.reset()
         _scene.forget("progtest")
+
+
+@needs_device
+def test_programs_that_share_a_moving_gradient_both_keep_running(run):
+    net, opt, calls, _ = run
+    decl, src = _geometry(4, source="live:fc.weight.grad")
+    assert P.install("a", decl, src, scene="s")["state"] == "waiting"
+    assert P.install("b", decl, src, scene="s")["state"] == "waiting"
+    _train(net, opt, P.WARMUP_STEPS + 4)             # zero_grad sets the gradient to None each step
+    st = P.status()
+    assert [s["state"] for s in st] == ["running", "running"], st
+    assert [s["runs"] for s in st] == [4, 4]          # steps 8 to 11
+    assert P.stats()["imports"] == 1                 # the older imports were released

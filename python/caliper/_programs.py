@@ -57,7 +57,8 @@ _ARRAYS = ("positions", "colors", "values", "radii")
 
 _LOCK = threading.RLock()
 _PROGS: dict = {}       # id -> _Program, in the order of installation
-_IMPORTS: dict = {}     # input name -> _Import
+_IMPORTS: dict = {}     # input name -> its newest _Import
+_LIVE: dict = {}        # handle -> each _Import not released yet (an older one may still be bound)
 _ACTS: dict = {}        # module name -> its last output, for the inputs <module>.act
 _ACT_HOOKS: dict = {}   # module name -> the forward hook's handle
 _STATE = {"rt": None, "mod": None, "model": None, "optimizer": None, "t0": time.perf_counter()}
@@ -327,9 +328,6 @@ def _import(name: str, t) -> _Import:
                        f"The tensor {name} is on {t.device}; the producer runtime reads MPS tensors in "
                        "place only.")
     rt = _runtime()
-    if im is not None:
-        rt.release(im.handle)
-        del _IMPORTS[name]
     try:
         cap = _torch_adapter().export(t)
     except ValueError as e:
@@ -340,17 +338,21 @@ def _import(name: str, t) -> _Import:
         h = rt.bind(name, cap)
     except RuntimeError as e:
         raise _refusal(e) from e
-    im = _IMPORTS[name] = _Import(name, h, key)
+    im = _IMPORTS[name] = _LIVE[h] = _Import(name, h, key)
     return im
 
 
 def _release_unused() -> None:
-    used = {im.name for p in _PROGS.values() for im in p.bound.values()}
-    for name in [n for n in _IMPORTS if n not in used]:
-        im = _IMPORTS.pop(name)
-        rt = _STATE["rt"]
+    """Release each import that no program binds. An older import of a name stays while a
+    program still binds it, thus programs that share an input compile again one by one."""
+    used = {im.handle for p in _PROGS.values() for im in p.bound.values()}
+    rt = _STATE["rt"]
+    for h in [h for h in _LIVE if h not in used]:
+        im = _LIVE.pop(h)
+        if _IMPORTS.get(im.name) is im:
+            del _IMPORTS[im.name]
         if rt is not None:
-            rt.release(im.handle)
+            rt.release(h)
 
 
 def _check(p: _Program) -> None:
@@ -536,6 +538,7 @@ def _stop_all(code: str, message: str) -> list:
         p.handle = None
         p.bound = {}
     _IMPORTS.clear()
+    _LIVE.clear()
     rt = _STATE["rt"]
     _STATE["rt"] = None
     if rt is not None:
@@ -601,8 +604,10 @@ def _at_step(step: int) -> None:
                 if before != p.state:
                     changed.append(p)
                 every = _CAD.period(p.every_min)
-                _STATE["rt"].run([p.handle], int(step), time.perf_counter() - p.t0, every)
-                ran.append(p)
+                res = _STATE["rt"].run([p.handle], int(step), time.perf_counter() - p.t0, every)
+                if res.get("ran"):
+                    p.runs += 1                      # a compile again starts a new native count
+                    ran.append(p)
         except RuntimeError as e:                    # a timeout or a lost device
             r = _refusal(e)
             changed.extend(_stop_all(r.error["code"], r.error["message"]))
@@ -611,7 +616,6 @@ def _at_step(step: int) -> None:
         rt = _STATE["rt"]
         for p in ran:
             st = rt.status(p.handle)
-            p.runs = int(st.get("runs") or 0)
             p.last_step = int(step)
             p.last_pass_ms = st.get("last_pass_ms")
             p.every = _CAD.period(p.every_min)
