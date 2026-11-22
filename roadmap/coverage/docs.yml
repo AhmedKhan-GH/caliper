@@ -656,11 +656,11 @@ entries:
   item: The viewer page that caliper.serve serves and the notebook widgets are built from the elements.
   ids:
   - EMB-01
-- page: docs/builder/builder-pane.md#starting-a-dashboard
+- page: docs/builder/builder-pane.md#pane-access
   item: 'Three ways into the builder pane: a new dashboard, dropped files and an open spec.'
   ids:
   - SPC-07
-- page: docs/builder/builder-pane.md#where-things-are
+- page: docs/builder/builder-pane.md#layout-regions
   item: Where the parts of the builder pane are.
   ids:
   - SPC-07
@@ -676,7 +676,7 @@ entries:
   ids:
   - SPC-01
   - SPC-07
-- page: docs/builder/builder-pane.md#the-canvas
+- page: docs/builder/builder-pane.md#canvas
   item: The canvas places, moves and removes panels.
   ids:
   - SPC-07
@@ -686,12 +686,12 @@ entries:
   ids:
   - SPC-07
   - SPC-28
-- page: docs/builder/builder-pane.md#the-spec-text
+- page: docs/builder/builder-pane.md#spec-text
   item: The spec text strip shows and edits the canonical TOML of the open spec.
   ids:
   - SPC-01
   - SPC-07
-- page: docs/builder/builder-pane.md#open-in-browser
+- page: docs/builder/builder-pane.md#browser-preview
   item: Open in browser shows the saved dashboard at the browser viewer of Caliper API.
   ids:
   - EMB-06
@@ -699,7 +699,7 @@ entries:
   item: The keys of the builder pane.
   ids:
   - SPC-07
-- page: docs/builder/builder-pane.md#undo-and-the-journal
+- page: docs/builder/builder-pane.md#undo-and-journal
   item: Each gesture is one undo step and is journaled by the command layer.
   ids:
   - SPC-05

@@ -11,7 +11,7 @@ This page gives what the pane shows, what each of its controls does, and its key
     to a saved dashboard opened again, in the hidden app. It is not on the live page, and the browser viewer shows a
     spec without it.
 
-## Starting a dashboard
+## Pane Access
 
 There are three ways to the pane:
 
@@ -32,7 +32,7 @@ There are three ways to the pane:
 
 A dashboard is saved with ⌘S Save as a spec applet of the workspace, `applets/<id>/`, and appears at once under
 Projects on the landing screen, which selects it when you go Home from it. A saved dashboard opens in a browser with
-⌘O Open in browser in the page bar ([Open in browser](#open-in-browser)).
+⌘O Open in browser in the page bar ([Open in browser](#browser-preview)).
 
 The open spec stays open when you go Home, with its unsaved changes. Before one of your own actions replaces it or
 closes the app while it has unsaved changes, the app asks "Save changes to <name>?", where the name is the spec's
@@ -47,7 +47,7 @@ changes (the files go into it), so it does not ask either. An agent that replace
 approval card instead, and Caliper API's and `app.launch`'s launches do not ask. After a replacement, ⌘Z still
 brings the previous spec back with its unsaved changes.
 
-## Where things are
+## Layout Regions
 
 Build mode keeps the page bar, the status bar, the jobs tray and the approval cards where they are, and divides the
 rest of the window:
@@ -103,7 +103,7 @@ always has its required slots, so a primitive needs a selection that fits, excep
 "Text".
 Dragging a primitive onto the canvas places the new panel where it is dropped.
 
-## The canvas
+## Canvas
 
 The canvas draws the spec as the page does outside build mode. While the spec has no panel, it says so, and how to
 start: "No panels", and under it "Drop a data file, or pick a source in Sources".
@@ -162,7 +162,7 @@ sources, and its file.
 
 Text and numbers apply as you type; ids apply on Enter or when the field is left.
 
-## The spec text
+## Spec Text
 
 ⌘T Text opens a strip under the canvas with the open spec's text, in the canonical TOML that is saved. ⌘E Edit turns it
 into an editor, and Esc Done back. An edit applies as soon as the text is a valid spec, and the panels follow. While
@@ -171,7 +171,7 @@ valid spec, and other changes wait until the text is fixed or left. A change mad
 shows in the text at once, and the strip scrolls to the last line that changed when that line is out of view, so a
 new panel's block at the end of the text, or a title changed in the middle of it, comes into view.
 
-## Open in browser
+## Browser Preview
 
 ⌘O Open in browser in the page bar opens the saved dashboard that the page shows in your default browser, at the
 browser viewer of [Caliper API](../agents/http-api.md#get-v0spec), which draws it with the layout and the look of the spec page. It
@@ -205,7 +205,7 @@ can use it is in [Caliper API](../agents/http-api.md#started-by-the-app).
 
 Off macOS each ⌘ is Ctrl.
 
-## Undo and the journal
+## Undo and Journal
 
 The pane changes the workspace only through commands of the builder session, from the `builder` origin; the import of
 files you drop is from the `ui` origin. The commands of one gesture share a group, and a value that is typed or a rule

@@ -81,7 +81,7 @@ features:
     status: shipped
     summary: A panel is removed from a dashboard with the cross on its title strip, a menu entry or the delete key, as one undoable step.
     depends_on: [SPC-07]
-    docs: docs/builder/builder-pane.md#the-canvas
+    docs: docs/builder/builder-pane.md#canvas
     design: design/builder-pane.md#gestures-and-commands
     issue: null
 
