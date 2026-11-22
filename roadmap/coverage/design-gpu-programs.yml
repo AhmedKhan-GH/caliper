@@ -147,3 +147,11 @@ entries:
   ids:
   - SPC-14
   - INT-11
+- heading: Bounds Checks
+  item: Each program and stage of a spec is translated with bounds checks on buffer, texel and index accesses, so that it cannot read or write outside its own buffers.
+  ids:
+  - SPC-14
+- heading: Intervention Lifetime
+  item: Interventions end when no viewer with the control permission stays connected for the linger time.
+  ids:
+  - INT-10
