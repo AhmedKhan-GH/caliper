@@ -6,7 +6,7 @@ The page states the spec additions, the eleven new commands, the program declara
 
 ## Status
 
-The interfaces of this page are in the code: the command descriptors with handlers that answer `command.not_implemented`, the value types of the spec, the sandbox interface, the program hosts of the session, the C interface of the producer runtime, the stage interface of the scene compiler and the final signatures of the framework adapter. The features come next, in parallel work that fills these interfaces.
+The features of this page are built. The eleven commands edit the spec and read the hosts, the sandbox checks each program and stage, the producer runtime runs programs in the script on Metal, the app runs stages in its scene panels, and the toggle and the intervention commands ablate points of the watched model. A program runs only in a build with the WGSL compiler (Open Points, Wheel). The acceptance test of the eleven steps below is not in the repository yet.
 
 ## Spec Additions
 
