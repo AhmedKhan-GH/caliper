@@ -170,7 +170,7 @@ TEST_CASE("acceptance over MCP: an outside agent builds the dashboard through ca
     CHECK(uris.count("caliper://commands/command_table.json") == 1);
     CHECK(uris.count("caliper://schema/caliper-spec-v0.schema.json") == 1);
     const json page = child.request("doc", "resources/read", {{"uri", "caliper://docs/reference/cli.md"}});
-    CHECK(page["result"]["contents"][0]["text"].get<std::string>().rfind("# Caliper CLI", 0) == 0);
+    CHECK(page["result"]["contents"][0]["text"].get<std::string>().rfind("# CLI", 0) == 0);
     const json from_app = child.request("table", "resources/read", {{"uri", "caliper://commands/command_table.json"}});
     CHECK(json::parse(from_app["result"]["contents"][0]["text"].get<std::string>()) == table);
     const json schema = child.request("schema", "resources/read", {{"uri", "caliper://schema/caliper-spec-v0.schema.json"}});
