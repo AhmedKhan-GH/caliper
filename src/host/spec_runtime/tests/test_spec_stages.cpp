@@ -17,6 +17,7 @@
 #include "scene/pick.h"
 #include "scene/stage_cache.h"
 
+#include <caliper_builder/session/chain_hooks.h>
 #include <caliper_builder/session/events.h>
 
 #include <nlohmann/json.hpp>
@@ -24,6 +25,7 @@
 #include <doctest/doctest.h>
 #include <stb_image_write.h>
 
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <optional>
@@ -741,6 +743,228 @@ TEST_CASE("stages: the cache gives a stage program its params at each find, and 
     CHECK(got == 2.0f);
     CHECK(p->program.id == program);
     bound.end_frame();
+}
+
+}  // TEST_SUITE("gpu")
+
+// ---- the operators' geometry drawn in a scene view (design/instrument-interface.md, Operators)
+
+TEST_SUITE("gpu") {
+
+namespace {
+
+// A scene view of S by S pixels in 3-D with z up, its camera fitted and tilted.
+struct OperatorView {
+    static constexpr uint32_t S = 256, kClear = 0xff1a1a1au;
+    caliper_live_views::SceneView v;
+    uint64_t seq = 0;
+    explicit OperatorView(caliper_gfx::Backend& gfx) : v(gfx, caliper_gfx::shaders::kMetalPrograms) {}
+    bool init() {
+        std::string why;
+        if (!v.init(&why)) return false;
+        v.describe(caliper_net::wire::SceneView{CALIPER_NET_SPACE_3D, "+z", ""});
+        return true;
+    }
+    void apply(const std::string& path, const char* part, std::vector<caliper_net::wire::Section> arrays,
+               caliper_net::Json params) {
+        caliper_net::wire::SceneUpdate u;
+        u.sub = 1;
+        u.view = "operators";
+        u.seq = ++seq;
+        u.path = path;
+        u.part = part;
+        u.params = std::move(params);
+        u.arrays = std::move(arrays);
+        std::string why;
+        REQUIRE_MESSAGE(v.apply(u, &why), why);
+    }
+    std::vector<uint8_t> draw(float orbit_x, float orbit_y) {
+        std::string why;
+        REQUIRE_MESSAGE(v.render(S, S, 1.0f, kClear, &why), why);
+        v.fit();
+        v.orbit(orbit_x, orbit_y);
+        REQUIRE_MESSAGE(v.render(S, S, 1.0f, kClear, &why), why);
+        std::vector<uint8_t> px;
+        REQUIRE(v.read_pixels(&px, &why));
+        return px;
+    }
+};
+
+caliper_net::Json colormap_params(double vmin, double vmax) {
+    caliper_net::Json p = caliper_net::Json::object();
+    p.set("colormap", caliper_net::Json(0.0));   // viridis
+    p.set("vmin", caliper_net::Json(vmin));
+    p.set("vmax", caliper_net::Json(vmax));
+    return p;
+}
+
+// Writes `tiles` side by side as one PNG under CALIPER_STAGE_CAPTURE_DIR, when it is set.
+void capture_tiles(const char* name, const std::vector<std::vector<uint8_t>>& tiles, uint32_t side) {
+    const char* dir = std::getenv("CALIPER_STAGE_CAPTURE_DIR");
+    if (dir == nullptr || *dir == 0 || tiles.empty()) return;
+    const uint32_t w = side * uint32_t(tiles.size());
+    std::vector<uint8_t> out(size_t(w) * side * 4);
+    for (size_t t = 0; t < tiles.size(); ++t)
+        for (uint32_t y = 0; y < side; ++y)
+            std::memcpy(&out[(size_t(y) * w + t * side) * 4], &tiles[t][size_t(y) * side * 4], size_t(side) * 4);
+    const std::string path = std::string(dir) + "/" + name;
+    CHECK(stbi_write_png(path.c_str(), int(w), int(side), 4, out.data(), int(w) * 4) != 0);
+    MESSAGE("capture written: ", path);
+}
+
+size_t lit_pixels(const std::vector<uint8_t>& px, uint32_t clear) {
+    size_t n = 0;
+    for (size_t i = 0; i + 3 < px.size(); i += 4) {
+        uint32_t c;
+        std::memcpy(&c, &px[i], 4);
+        n += c != clear;
+    }
+    return n;
+}
+
+caliper_builder::TensorData f32_tensor(std::vector<int64_t> shape, const std::vector<float>& v) {
+    std::vector<uint8_t> bytes(v.size() * 4);
+    std::memcpy(bytes.data(), v.data(), bytes.size());
+    caliper_builder::TensorResult r = caliper_builder::TensorData::from_bytes(caliper_builder::DType::f32, std::move(shape),
+                                                                              std::move(bytes));
+    REQUIRE_FALSE(r.error);
+    return std::move(r.tensor);
+}
+
+std::vector<float> f32_values(const caliper_builder::TensorData& t) {
+    std::vector<float> v(size_t(t.numel()));
+    std::memcpy(v.data(), t.data(), v.size() * 4);
+    return v;
+}
+
+}  // namespace
+
+TEST_CASE("operators: a surface over a window of a tensor that grows by one row a step draws a growing terrain") {
+    caliper_host::SpecOffscreen* canvas = spec_test::canvas();
+    if (!canvas || !canvas->native_device() || !canvas->native_queue()) {
+        MESSAGE("skipped: no Metal device");
+        return;
+    }
+    auto gfx = caliper_gfx::make_metal_backend(canvas->native_device(), canvas->native_queue());
+    REQUIRE(gfx);
+    // The kept steps of a (24,) activation, one row a step: a ridge that drifts across the
+    // features and a ripple that grows with the step.
+    constexpr int kFeatures = 24, kSteps = 48;
+    auto row = [](int step, int c) {
+        const double centre = 4.0 + 16.0 * step / double(kSteps);
+        return float(std::exp(-0.5 * std::pow((c - centre) / 2.5, 2.0)) + 0.15 * std::sin(0.5 * c + 0.3 * step));
+    };
+    spec::Transform surface;
+    surface.op = spec::TransformOp::surface;
+    surface.max_cells = 4096;
+    std::vector<std::vector<uint8_t>> tiles;
+    size_t last_lit = 0;
+    for (int steps : {12, 24, 48}) {
+        // The window over the kept steps: (steps, 24), and the step of each row.
+        std::vector<float> window, stamps;
+        for (int k = 0; k < steps; ++k) {
+            stamps.push_back(float(1000 + k));
+            for (int c = 0; c < kFeatures; ++c) window.push_back(row(k, c));
+        }
+        const caliper_builder::TensorData rows = f32_tensor({steps}, stamps);
+        caliper_builder::GeometryArrays g;
+        REQUIRE_FALSE(caliper_builder::apply_operator(surface, f32_tensor({steps, kFeatures}, window), &rows, &g));
+        const std::vector<float> h = f32_values(g["height"]), x = f32_values(g["x"]), y = f32_values(g["y"]);
+        REQUIRE(h.size() == size_t(steps) * kFeatures);
+        CHECK(x.front() == 1000.0f);
+        CHECK(x.back() == float(1000 + steps - 1));
+
+        // The grid as a mesh: x the step over the run's 48 steps, y the feature, z the height.
+        std::vector<float> pos, val;
+        std::vector<int32_t> tri;
+        for (int i = 0; i < steps; ++i)
+            for (int j = 0; j < kFeatures; ++j) {
+                pos.push_back(-1.0f + 2.0f * (x[size_t(i)] - 1000.0f) / float(kSteps - 1));
+                pos.push_back(-1.0f + 2.0f * y[size_t(j)] / float(kFeatures - 1));
+                pos.push_back(0.5f * h[size_t(i) * kFeatures + j]);
+                val.push_back(h[size_t(i) * kFeatures + j]);
+            }
+        for (int i = 0; i + 1 < steps; ++i)
+            for (int j = 0; j + 1 < kFeatures; ++j) {
+                const int32_t a = i * kFeatures + j, b = a + 1, c = a + kFeatures, d = c + 1;
+                for (int32_t k : {a, c, b, b, c, d}) tri.push_back(k);
+            }
+        OperatorView ov(*gfx);
+        REQUIRE(ov.init());
+        // The run's data box at z 0: the terrain grows inside it.
+        const float box[24] = {-1, -1, 0, 1, -1, 0, 1, -1, 0, 1, 1, 0, 1, 1, 0, -1, 1, 0, -1, 1, 0, -1, -1, 0};
+        caliper_net::Json lp = caliper_net::Json::object();
+        lp.set("mode", caliper_net::Json(std::string(CALIPER_NET_LINES_SEGMENTS)));
+        lp.set("width", caliper_net::Json(1.5));
+        ov.apply("box", CALIPER_NET_PART_LINES,
+                 {caliper_net::wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {8, 3}, box, sizeof box)}, lp);
+        ov.apply("terrain", CALIPER_NET_PART_MESH,
+                 {caliper_net::wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {int64_t(pos.size() / 3), 3},
+                                                   pos.data(), pos.size() * 4),
+                  caliper_net::wire::Section::make("indices", CALIPER_NET_DTYPE_I32, {int64_t(tri.size() / 3), 3},
+                                                   tri.data(), tri.size() * 4),
+                  caliper_net::wire::Section::make("values", CALIPER_NET_DTYPE_F32, {int64_t(val.size())}, val.data(),
+                                                   val.size() * 4)},
+                 colormap_params(-0.2, 1.1));
+        std::vector<uint8_t> px = ov.draw(40.0f, 25.0f);
+        const size_t lit = lit_pixels(px, OperatorView::kClear);
+        CHECK(lit > last_lit);   // more steps, more terrain
+        last_lit = lit;
+        tiles.push_back(std::move(px));
+    }
+    capture_tiles("operators-terrain-growing.png", tiles, OperatorView::S);
+}
+
+TEST_CASE("operators: a path through the rows of a tensor draws a line strip with its kept rows") {
+    caliper_host::SpecOffscreen* canvas = spec_test::canvas();
+    if (!canvas || !canvas->native_device() || !canvas->native_queue()) {
+        MESSAGE("skipped: no Metal device");
+        return;
+    }
+    auto gfx = caliper_gfx::make_metal_backend(canvas->native_device(), canvas->native_queue());
+    REQUIRE(gfx);
+    // 600 rows of 5 columns: columns 1, 3 and 4 trace a spiral that rises, with noise in the others.
+    constexpr int kRows = 600, kCols = 5;
+    std::vector<float> t;
+    for (int r = 0; r < kRows; ++r) {
+        const double a = r * 0.035, rad = 0.3 + 0.7 * r / double(kRows);
+        t.push_back(float(std::sin(r * 1.7)));
+        t.push_back(float(rad * std::cos(a)));
+        t.push_back(float(std::cos(r * 0.9)));
+        t.push_back(float(rad * std::sin(a)));
+        t.push_back(float(-0.8 + 1.6 * r / double(kRows)));
+    }
+    spec::Transform path;
+    path.op = spec::TransformOp::path;
+    path.columns = {1, 3, 4};
+    path.max_points = 96;
+    caliper_builder::GeometryArrays g;
+    REQUIRE_FALSE(caliper_builder::apply_operator(path, f32_tensor({kRows, kCols}, t), nullptr, &g));
+    const std::vector<float> pos = f32_values(g["positions"]), val = f32_values(g["values"]);
+    const int64_t points = int64_t(val.size());
+    CHECK(points == 86);   // the stride is 7: rows 0, 7, ... 595
+    CHECK(val[1] == 7.0f);
+
+    OperatorView ov(*gfx);
+    REQUIRE(ov.init());
+    caliper_net::Json lp = colormap_params(0.0, double(kRows));
+    lp.set("mode", caliper_net::Json(std::string(CALIPER_NET_LINES_STRIPS)));
+    lp.set("width", caliper_net::Json(2.5));
+    const int32_t strip[1] = {int32_t(points)};
+    ov.apply("path", CALIPER_NET_PART_LINES,
+             {caliper_net::wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {points, 3}, pos.data(), pos.size() * 4),
+              caliper_net::wire::Section::make("strip_lengths", CALIPER_NET_DTYPE_I32, {1}, strip, sizeof strip),
+              caliper_net::wire::Section::make("values", CALIPER_NET_DTYPE_F32, {points}, val.data(), val.size() * 4)},
+             lp);
+    caliper_net::Json pp = colormap_params(0.0, double(kRows));
+    pp.set("radius", caliper_net::Json(0.04));
+    ov.apply("rows", CALIPER_NET_PART_POINTS,
+             {caliper_net::wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {points, 3}, pos.data(), pos.size() * 4),
+              caliper_net::wire::Section::make("values", CALIPER_NET_DTYPE_F32, {points}, val.data(), val.size() * 4)},
+             pp);
+    std::vector<uint8_t> px = ov.draw(30.0f, 35.0f);
+    CHECK(lit_pixels(px, OperatorView::kClear) > 500);
+    capture_tiles("operators-path-through-rows.png", {px}, OperatorView::S);
 }
 
 }  // TEST_SUITE("gpu")
