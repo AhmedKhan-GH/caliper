@@ -9,7 +9,7 @@ namespace caliper_scene {
 
 namespace {
 
-bool fail(std::string* error, const char* text) {
+bool fail(std::string* error, const std::string& text) {
     if (error) *error = text;
     return false;
 }
@@ -228,6 +228,54 @@ void fit(ViewCamera& cam, const Aabb& world, double aspect) {
     t.pan[0] = t.pan[1] = 0.0;
 }
 
+void fit_box(ViewCamera& cam, const Aabb& world, double aspect) {
+    Orbit* o = std::get_if<Orbit>(&cam);
+    if (!o) {
+        fit(cam, world, aspect);
+        return;
+    }
+    if (!(aspect > 0)) aspect = 1.0;
+    const Aabb b = or_unit(world);
+    const Vec3 c = b.center();
+    double r = b.radius();
+    if (!(r > 1e-12) || !std::isfinite(r)) r = 1.0;
+    // The camera's frame: e from the target to the eye, and the picture's right and up.
+    const Vec3 e = orbit_direction(*o);
+    const Vec3 right = normalize(cross(e * -1.0, axis_vector(o->up)));
+    const Vec3 up = cross(right, e * -1.0);
+    const double ty = std::tan(kOrbitFovY * 0.5) / kBoxFitMargin;
+    const double tx = ty * aspect;
+    // A corner q (from the centre) lies in the view when |q.right| <= tx (d - q.e) and
+    // |q.up| <= ty (d - q.e); the distance is the least d that holds for all eight.
+    double d = 0, front = -r;
+    for (int k = 0; k < 8; ++k) {
+        const Vec3 p{(k & 1) ? b.hi[0] : b.lo[0], (k & 2) ? b.hi[1] : b.lo[1], (k & 4) ? b.hi[2] : b.lo[2]};
+        const Vec3 q = p - c;
+        const double z = dot(q, e);
+        d = std::max(d, z + std::fabs(dot(q, right)) / tx);
+        d = std::max(d, z + std::fabs(dot(q, up)) / ty);
+        front = std::max(front, z);
+    }
+    // The eye stays outside the box, at least a tenth of the radius in front of its nearest corner.
+    d = std::max(d, front + 0.1 * r);
+    if (!(d > 0) || !std::isfinite(d)) d = r / std::sin(kOrbitFovY * 0.5) * kDefaultFitMargin;
+    o->target[0] = c.x;
+    o->target[1] = c.y;
+    o->target[2] = c.z;
+    o->distance = d;
+}
+
+bool aabb_contains(const Aabb& outer, const Aabb& inner, double tolerance) {
+    if (!inner.valid) return true;
+    if (!outer.valid) return false;
+    double ext = 0;
+    for (int i = 0; i < 3; ++i) ext = std::max(ext, outer.hi[i] - outer.lo[i]);
+    const double t = tolerance * (ext > 0 ? ext : 1.0);
+    for (int i = 0; i < 3; ++i)
+        if (inner.lo[i] < outer.lo[i] - t || inner.hi[i] > outer.hi[i] + t) return false;
+    return true;
+}
+
 // ---- The starting camera ----------------------------------------------------------------------------------------
 
 bool validate_starting_camera(const StartingCamera& s, Space space, std::string* error) {
@@ -250,7 +298,7 @@ bool validate_starting_camera(const StartingCamera& s, Space space, std::string*
     return true;
 }
 
-StartResult starting_camera(const StartingCamera& s, const SceneTree& tree, double aspect) {
+StartResult starting_camera(const StartingCamera& s, const SceneTree& tree, double aspect, bool box_fit) {
     StartResult r;
     const Aabb bounds = tree.scene_bounds();
     if (tree.space() == Space::k2D) {
@@ -279,7 +327,10 @@ StartResult starting_camera(const StartingCamera& s, const SceneTree& tree, doub
         if (s.elevation_deg) o.elevation = *s.elevation_deg * kPi / 180.0;
     }
     ViewCamera v = o;
-    fit(v, bounds, aspect);   // the target and distance of the fit, at these angles
+    if (box_fit)
+        fit_box(v, bounds, aspect);   // the target and distance of the fit, at these angles
+    else
+        fit(v, bounds, aspect);
     Orbit& fo = std::get<Orbit>(v);
     const bool orbit_form = s.form == StartingCamera::Form::Orbit;
     if (orbit_form && s.target) {

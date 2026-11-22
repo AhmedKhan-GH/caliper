@@ -20,6 +20,40 @@ namespace wire = caliper_net::wire;
 
 namespace {
 
+// A VIEWS entry's view_camera, as wire.cpp normalised it: null for the fit, a camera entity's
+// path, or an orbit object with any of target, distance, azimuth and elevation (degrees).
+bool starting_from_wire(const caliper_net::Json& v, StartingCamera* out) {
+    StartingCamera s;
+    if (v.is_string()) {
+        s.form = StartingCamera::Form::Entity;
+        s.entity = v.as_string();
+    } else if (v.is_object() && v.size() > 0) {
+        s.form = StartingCamera::Form::Orbit;
+        if (const caliper_net::Json* t = v.find("target"); t && t->is_array() && t->size() == 3)
+            s.target = Vec3{t->at(0).as_double(), t->at(1).as_double(), t->at(2).as_double()};
+        if (const caliper_net::Json* d = v.find("distance"); d && d->is_number()) s.distance = d->as_double();
+        if (const caliper_net::Json* a = v.find("azimuth"); a && a->is_number()) s.azimuth_deg = a->as_double();
+        if (const caliper_net::Json* e = v.find("elevation"); e && e->is_number()) s.elevation_deg = e->as_double();
+    } else if (!v.is_null() && !v.is_object()) {
+        return false;
+    }
+    *out = s;
+    return true;
+}
+
+template <class T>
+bool same_opt(const std::optional<T>& a, const std::optional<T>& b) {
+    return a.has_value() == b.has_value() && (!a || *a == *b);
+}
+
+bool same_start(const StartingCamera& a, const StartingCamera& b) {
+    const bool targets = a.target.has_value() == b.target.has_value() &&
+                         (!a.target || (a.target->x == b.target->x && a.target->y == b.target->y &&
+                                        a.target->z == b.target->z));
+    return a.form == b.form && targets && same_opt(a.distance, b.distance) && same_opt(a.azimuth_deg, b.azimuth_deg) &&
+           same_opt(a.elevation_deg, b.elevation_deg) && a.entity == b.entity;
+}
+
 constexpr size_t kMaxNotes = 8;
 constexpr uint64_t kMinCapacity = 4096;
 constexpr uint32_t kUsage = caliper_gfx::kVertex | caliper_gfx::kStorage | caliper_gfx::kCopyDst;
@@ -123,7 +157,66 @@ void SceneView::describe(const wire::SceneView& info) {
     if (PanZoom* p = std::get_if<PanZoom>(&camera_)) p->y_down = tree_.up() == Axis::NegY;
     if (!up_chosen_) up_mode_ = std::holds_alternative<Orbit>(camera_) ? std::get<Orbit>(camera_).up : tree_.up();
     tree_.set_units(info.units);
+    // The starting camera from the scene's VIEWS entry; null is the fit.
+    StartingCamera start;
+    if (starting_from_wire(info.view_camera, &start) && !same_start(start, start_)) set_starting(start);
     changed();
+}
+
+void SceneView::set_starting(const StartingCamera& s) {
+    start_ = s;
+    // A view whose camera the person has not moved takes the new starting camera at once; a
+    // moved one keeps its camera until its next reset.
+    if (!moved_) fitted_ = false;
+    changed();
+}
+
+void SceneView::set_box_fit(bool on) {
+    if (box_fit_ == on) return;
+    box_fit_ = on;
+    if (!moved_) fitted_ = false;
+    changed();
+}
+
+void SceneView::set_depth_offset(const std::string& path, int offset) {
+    offset = std::clamp(offset, -8, 8);
+    auto it = depth_offsets_.find(path);
+    if (offset == 0 ? it == depth_offsets_.end() : (it != depth_offsets_.end() && it->second == offset)) return;
+    if (offset == 0)
+        depth_offsets_.erase(it);
+    else
+        depth_offsets_[path] = offset;
+    rebuild(path);
+}
+
+bool SceneView::start_without_bounds() const {
+    return start_.form == StartingCamera::Form::Orbit && start_.target && start_.distance;
+}
+
+void SceneView::apply_start(double aspect) {
+    if (tree_.space() != Space::k3D) {
+        caliper_scene::fit(camera_, tree_.scene_bounds(), aspect);
+        return;
+    }
+    const StartResult r = caliper_scene::starting_camera(start_, tree_, aspect, box_fit_);
+    if (const Orbit* o = std::get_if<Orbit>(&r.camera)) {
+        Orbit next = *o;
+        // A mode the person chose stays: the starting eye and target hold, and the picture rolls.
+        if (up_chosen_ && next.up != up_mode_) caliper_scene::switch_up(next, up_mode_);
+        camera_ = next;
+    } else if (std::holds_alternative<ThroughPinhole>(r.camera)) {
+        // The entity form: the view looks through that camera, over the orbit of the fit, which a
+        // fit or the camera's absence returns to.
+        Orbit o;
+        o.up = up_chosen_ ? up_mode_ : tree_.up();
+        camera_ = o;
+        if (box_fit_)
+            caliper_scene::fit_box(camera_, tree_.scene_bounds(), aspect);
+        else
+            caliper_scene::fit(camera_, tree_.scene_bounds(), aspect);
+        through_ = start_.entity;
+    }
+    if (r.fell_back) note("view_camera names " + start_.entity + ", which holds no camera; the view opens on the fit");
 }
 
 void SceneView::note(const std::string& text) {
@@ -237,7 +330,9 @@ void SceneView::rebuild(const std::string& path) {
             const auto it = slots_.find(Key{path, p, fixed});
             if (it == slots_.end() || !it->second.present) continue;
             std::string err;
-            if (!tree_.set_batch(e, it->second.batch, fixed, &err)) note((path.empty() ? "the root" : path) + ": " + err);
+            caliper_scene::Batch b = it->second.batch;
+            if (auto d = depth_offsets_.find(path); d != depth_offsets_.end()) b.depth_offset = int8_t(d->second);
+            if (!tree_.set_batch(e, b, fixed, &err)) note((path.empty() ? "the root" : path) + ": " + err);
         }
     changed();
 }
@@ -1180,8 +1275,13 @@ void SceneView::fit() {
     look_through("", nullptr);   // a fit leaves a pinhole for the orbit of the fit
     tree_.update();
     const double aspect = (width_ && height_) ? double(width_) / double(height_) : 1.0;
-    caliper_scene::fit(camera_, tree_.scene_bounds(), aspect);
+    if (box_fit_)
+        caliper_scene::fit_box(camera_, tree_.scene_bounds(), aspect);
+    else
+        caliper_scene::fit(camera_, tree_.scene_bounds(), aspect);
     fitted_ = tree_.scene_bounds().valid;
+    fitted_bounds_ = tree_.scene_bounds();
+    fitted_aspect_ = aspect;
     changed();
 }
 
@@ -1299,10 +1399,22 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
 
     const auto t0 = std::chrono::steady_clock::now();
     tree_.update();
-    // The scene fits once, when it first has bounds, and then only when the person asks.
-    if (!fitted_ && tree_.scene_bounds().valid) {
-        caliper_scene::fit(camera_, tree_.scene_bounds(), double(width_) / double(height_));
-        fitted_ = true;
+    // The view follows the scene until the person moves its camera: it opens on its starting
+    // camera, filled from the fit, once the scene has bounds, and frames them again when they
+    // grow past what it framed (a late attach, parts that arrive one by one) or when the picture
+    // changes shape. Once the person orbits, pans or zooms, only a fit or a reset moves it.
+    {
+        const Aabb bounds = tree_.scene_bounds();
+        const double aspect = double(width_) / double(height_);
+        const bool can = bounds.valid || start_without_bounds();
+        const bool stale = !fitted_ || !caliper_scene::aabb_contains(fitted_bounds_, bounds, 0.01) ||
+                           std::fabs(aspect - fitted_aspect_) > 0.01 * fitted_aspect_;
+        if (!moved_ && can && stale) {
+            apply_start(aspect);
+            fitted_ = true;
+            fitted_bounds_ = bounds;
+            fitted_aspect_ = aspect;
+        }
     }
     if (res_->update_class_table(tree_)) {   // 65,536 texels from the host
         counts_.bytes_last += 65536u * 4u;
