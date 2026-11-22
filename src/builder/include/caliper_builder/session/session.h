@@ -109,11 +109,13 @@
 #include <caliper_builder/error.h>
 #include <caliper_builder/loaders/store.h>
 #include <caliper_builder/session/events.h>
+#include <caliper_builder/session/history.h>
 #include <caliper_builder/session/loader_catalog.h>
 #include <caliper_builder/session/program_host.h>
 #include <caliper_builder/session/resolve.h>
 #include <caliper_builder/session/run_control.h>
 #include <caliper_builder/session/runner_commands.h>
+#include <caliper_builder/session/values.h>
 #include <caliper_builder/spec/spec.h>
 #include <caliper_builder/spec/validate.h>
 
@@ -157,6 +159,11 @@ public:
     // app serves, the host draws the panel in that state.
     virtual CommandOutput render_panel(const spec::Spec& spec, const PanelData& data, int width, int height) = 0;
     virtual CommandOutput capture_frame() = 0;
+    // camera.get and camera.set of a scene panel, which need the app's view
+    // (design/instrument-interface.md, Starting Camera and Saved Views), with
+    // the command's name and arguments. camera.save asks camera.get here
+    // for the orbit it saves. The default answers command.not_implemented.
+    virtual CommandOutput camera_command(const std::string& name, const nlohmann::json& args);
 };
 
 // The names of the commands that SessionHost serves.
@@ -298,6 +305,12 @@ public:
     // picks, selections, control changes and run changes. It lives as long as
     // the session.
     EventRing& events();
+    // The current values of controls, state, picks and the cursor, and the
+    // kept steps of the open spec (design/instrument-interface.md). The
+    // session resets them when the open spec changes; the app's spec runtime
+    // reads them on the frame thread and the live catalog appends steps.
+    ValueStore& values();
+    StepHistory& history();
 
     // Turns the review of spec edits on or off for one origin, from the
     // app's settings; it holds from the next invocation the policy sees.

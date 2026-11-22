@@ -48,6 +48,7 @@
 #include "live/live_points.h"
 #include "live/live_scene.h"
 #include "live/live_views_scene.h"
+#include "live/scene_overlays.h"
 #include "embed/render_stats.h"   // copy counters
 #include "renderer/host_renderer.h"
 #include "tensor_bridge.h"   // colormap_lut
@@ -1504,16 +1505,20 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         dl->AddText(ImVec2(p0.x + avail.x - ts.x - 10.0f, p0.y + 8.0f), kSelText, t);
     }
 
-    // Labels: text over the picture at anchors the scene core projects, nearest first, at most 512.
+    // Labels: text over the picture at anchors the scene core projects, nearest first, at most
+    // 512, placed without overlap (scene_overlays.h); a label without room shows as a dot.
     if (sc->width() && sc->height()) {
-        const float sx = avail.x / float(sc->width()), sy = avail.y / float(sc->height());
-        const ImU32 ink = ImGui::GetColorU32(ImGuiCol_Text), shade = IM_COL32(0, 0, 0, 160);
+        const std::vector<caliper_scene::LabelAnchor> labels = sc->labels();
+        caliper_live_views::SceneOverlayInput in;
+        in.draw = dl;
+        in.origin = p0;
+        in.scale_x = avail.x / float(sc->width());
+        in.scale_y = avail.y / float(sc->height());
+        in.labels = &labels;
+        in.ink = ImGui::GetColorU32(ImGuiCol_Text);
+        in.shade = IM_COL32(0, 0, 0, 160);
         dl->PushClipRect(p0, ImVec2(p0.x + avail.x, p0.y + avail.y), true);
-        for (const caliper_scene::LabelAnchor& a : sc->labels()) {
-            const ImVec2 at(p0.x + a.x * sx + 4.0f, p0.y + a.y * sy - ImGui::GetTextLineHeight() - 2.0f);
-            dl->AddText(ImVec2(at.x + 1.0f, at.y + 1.0f), shade, a.text.c_str());
-            dl->AddText(at, ink, a.text.c_str());
-        }
+        caliper_live_views::draw_scene_overlays(in);
         dl->PopClipRect();
     }
 

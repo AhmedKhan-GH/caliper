@@ -205,7 +205,8 @@ TEST_CASE("the validator holds programs and stages to the limits of program.h an
 
 TEST_CASE("a toggle binds an intervention point or a parameter, and takes no options") {
     CHECK(cs::control_kind_built(cs::ControlKind::toggle));
-    CHECK_FALSE(cs::control_kind_built(cs::ControlKind::picker));
+    CHECK(cs::control_kind_built(cs::ControlKind::picker));
+    CHECK(cs::control_kind_built(cs::ControlKind::transport));
     const auto t = cs::parse_control_target("intervene:blocks.0.attn#3");
     REQUIRE(t);
     CHECK(t->kind == cs::ControlTarget::Kind::intervene);
@@ -231,10 +232,10 @@ TEST_CASE("a toggle binds an intervention point or a parameter, and takes no opt
                              "bind = \"intervene:blocks.0\"\n")
                   .diagnostics,
               "spec.control_mismatch", "control[0].bind"));
-    CHECK(has(cs::check_toml("caliper_spec = 1\n[applet]\nid = \"a\"\n[[control]]\nid = \"k\"\nkind = \"picker\"\n"
+    CHECK(has(cs::check_toml("caliper_spec = 1\n[applet]\nid = \"a\"\n[[control]]\nid = \"k\"\nkind = \"transport\"\n"
                              "bind = \"value\"\n")
                   .diagnostics,
-              "spec.unsupported_control", "control[0].kind"));
+              "spec.control_mismatch", "control[0].bind"));
 }
 
 TEST_CASE("every older fixture reads as before and has no programs") {

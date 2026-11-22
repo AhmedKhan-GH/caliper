@@ -235,7 +235,7 @@ std::string key_text(const std::string& k) {
 }
 
 const std::vector<std::string>& layout_order() {
-    static const std::vector<std::string> v = {"split", "tabs", "ratio", "title", "children", "x"};
+    static const std::vector<std::string> v = {"panel", "min", "split", "tabs", "ratio", "shares", "title", "children", "x"};
     return v;
 }
 
@@ -253,20 +253,43 @@ public:
         if (auto sources = j.find("source"); sources != j.end()) {
             for (const json& s : *sources) {
                 out_ += "\n[[source]]\n";
-                table(s, {"id", "catalog", "sql", "from", "x"}, false, "");
+                table(s, {"id", "catalog", "sql", "from", "history", "x"}, false, "");
                 if (auto ts = s.find("transform"); ts != s.end()) {
                     for (const json& t : *ts) {
                         out_ += "  [[source.transform]]\n";
-                        table(t, {"op", "axis", "index", "start", "stop", "step", "fn", "keepdims", "mode", "x"},
+                        table(t,
+                              {"op", "axis", "index", "start", "stop", "step", "fn", "keepdims", "mode", "steps",
+                               "max_cells", "pool", "columns", "max_points", "x"},
                               false, "  ");
                     }
                 }
+            }
+        }
+        if (auto states = j.find("state"); states != j.end()) {
+            for (const json& v : *states) {
+                out_ += "\n[[state]]\n";
+                table(v, {"id", "title", "type", "default", "min", "max", "choices", "x"}, false, "");
             }
         }
         if (auto panels = j.find("panel"); panels != j.end()) {
             for (const json& p : *panels) {
                 out_ += "\n[[panel]]\n";
                 table(p, {"id", "primitive", "title", "bind", "options", "x"}, false, "");
+                if (auto es = p.find("entity"); es != p.end()) {
+                    for (const json& e : *es) {
+                        out_ += "  [[panel.entity]]\n";
+                        table(e, {"path", "draw", "title", "bind", "options", "pose", "x"}, false, "  ");
+                    }
+                }
+                if (auto as = p.find("annotation"); as != p.end()) {
+                    for (const json& a : *as) {
+                        out_ += "  [[panel.annotation]]\n";
+                        table(a,
+                              {"id", "kind", "axis", "value", "range", "at", "text", "fields", "leader", "emphasis",
+                               "x"},
+                              false, "  ");
+                    }
+                }
             }
         }
         if (auto controls = j.find("control"); controls != j.end()) {
@@ -280,13 +303,13 @@ public:
         if (auto programs = j.find("program"); programs != j.end()) {
             for (const json& p : *programs) {
                 out_ += "\n[[program]]\n";
-                table(p, {"id", "title", "entry", "inputs", "output", "limits", "workgroups", "x", "wgsl"}, false, "");
+                table(p, {"id", "title", "entry", "inputs", "output", "limits", "workgroups", "params", "x", "wgsl"}, false, "");
             }
         }
         if (auto stages = j.find("stage"); stages != j.end()) {
             for (const json& s : *stages) {
                 out_ += "\n[[stage]]\n";
-                table(s, {"panel", "entity", "kind", "x", "wgsl"}, false, "");
+                table(s, {"panel", "entity", "kind", "params", "x", "wgsl"}, false, "");
             }
         }
         if (auto provenance = j.find("provenance"); provenance != j.end()) {
@@ -305,12 +328,18 @@ private:
         out_ += indent + key_text(key) + " = " + value(v, in_layout) + "\n";
     }
 
+    // The keys that a source and a panel write as their own arrays of tables.
+    static bool is_nested_array(const std::string& key) {
+        return key == "transform" || key == "entity" || key == "annotation";
+    }
+
     // Writes the keys of `t` in `order`; keys not in the order follow in byte order.
     void table(const json& t, const std::vector<std::string>& order, bool in_layout, const std::string& indent) {
         for (const std::string& k : order)
             if (auto it = t.find(k); it != t.end()) line(k, *it, in_layout && (k == "children" || k == "tabs"), indent);
         for (auto it = t.begin(); it != t.end(); ++it)
-            if (!detail::contains(order, it.key()) && it.key() != "transform") line(it.key(), it.value(), false, indent);
+            if (!detail::contains(order, it.key()) && !is_nested_array(it.key()))
+                line(it.key(), it.value(), false, indent);
     }
 
     std::string value(const json& v, bool in_layout) {

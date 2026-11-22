@@ -13,8 +13,15 @@
 #include "builder/widget_app.h"
 #include "builder/widget_surface.h"
 #include "applet_spec.h"
+#include "spec_runtime/spec_annotations.h"
 #include "spec_runtime/spec_offscreen.h"
 #include "spec_runtime/spec_runtime.h"
+#include "live/live_scene.h"   // camera.get and camera.set read and move a panel's scene view
+#include "export_service.h"     // export_encode_png
+#if defined(__APPLE__)
+#include "gfx/metal_backend.h"
+#include "gfx/shaders/generated/programs_metal.h"
+#endif
 #include "ui/applet_page.h"      // begin_page_bar, JobsTray
 #include "ui/landing_screen.h"   // draw_host_status_items
 #include "ui/sternbild_fonts.h"
@@ -109,16 +116,70 @@ private:
     std::map<std::string, uint64_t> generations_;
 };
 
-// panel.render through the runtime's offscreen renderer.
+// panel.render through the runtime's offscreen renderer. A scene panel with entities draws its
+// scene alone, as the page opens it (its starting camera and the box fit), into a scene view on
+// the device of an offscreen canvas of its own.
 class PanelRenderOffscreen final : public PanelRenderSeam {
 public:
+    explicit PanelRenderOffscreen(std::function<cb::Session*()> session) : session_(std::move(session)) {}
     cb::CommandOutput render_panel(const cb::spec::Spec& spec, const cb::PanelData& data, int width,
                                    int height) override {
+        cb::Session* s = session_ ? session_() : nullptr;
+        renderer_.set_instrument_state(s ? &s->values() : nullptr, s ? &s->history() : nullptr);
+        const cb::spec::Panel* p = spec.find_panel(data.panel);
+        if (p && p->primitive == cb::spec::Primitive::scene && !p->entities.empty())
+            return render_entities(*p, data, width, height);
         return panel_render_output(renderer_.render_panel(spec, data, width, height));
     }
 
 private:
+    cb::CommandOutput render_entities(const cb::spec::Panel& panel, const cb::PanelData& data, int width,
+                                      int height) {
+        auto refuse = [](const std::string& why) {
+            return cb::CommandOutput::fail(cb::Error("panel.render_failed", why));
+        };
+#if !defined(__APPLE__)
+        (void)panel;
+        (void)data;
+        (void)width;
+        (void)height;
+        return refuse("The scene of entities draws off screen only with the Metal renderer for now.");
+#else
+        std::string why;
+        if (!canvas_) canvas_ = SpecOffscreen::create(64, 64, 1.0f, &why);
+        if (!canvas_ || !canvas_->native_device()) return refuse("The scene cannot be drawn off screen: " + why + ".");
+        auto gfx = caliper_gfx::make_metal_backend(canvas_->native_device(), canvas_->native_queue());
+        if (!gfx) return refuse("The scene cannot be drawn off screen: no Metal backend.");
+        caliper_live_views::SceneView view(*gfx, caliper_gfx::shaders::kMetalPrograms);
+        if (!view.init(&why)) return refuse("The scene cannot be drawn off screen: " + why + ".");
+        view.set_box_fit(true);
+        view.set_starting(spec_starting_camera(panel));
+        std::vector<std::string> drawn;
+        const EntityScene scene = build_entity_scene(panel, data);
+        apply_entity_scene(view, scene, &drawn);
+        // The panel's markers and planes at the session's values; their texts need the page's
+        // overlay, which an offscreen scene does not draw.
+        SpecInstrumentHost host;
+        cb::Session* s = session_ ? session_() : nullptr;
+        host.values = s ? &s->values() : nullptr;
+        host.history = s ? &s->history() : nullptr;
+        std::vector<std::string> marks;
+        apply_annotation_marks(view, scene, scene_annotation_marks(panel, host), &marks);
+        std::vector<uint8_t> rgba;
+        if (!view.render(uint32_t(width), uint32_t(height), 1.0f, 0xff161616u, &why) || !view.read_pixels(&rgba, &why))
+            return refuse("The scene could not be drawn: " + why + ".");
+        PanelPng png;
+        png.width = width;
+        png.height = height;
+        if (!export_encode_png(rgba.data(), uint32_t(width), uint32_t(height), &png.png))
+            return refuse("The panel's image could not be encoded as PNG.");
+        return panel_render_output(png);
+#endif
+    }
+
+    std::function<cb::Session*()> session_;
     OffscreenPanelRenderer renderer_;
+    std::unique_ptr<SpecOffscreen> canvas_;   // its device draws the scenes of entities
 };
 
 // The folder's own name, which the status bar shows for the workspace.
@@ -425,9 +486,76 @@ struct SpecPage::Impl {
         if (can_remove(id) && builder->remove_panel(id) && focused == id) focused.clear();
     }
 
+    // camera.get and camera.set (design/instrument-interface.md, Commands): the orbit of the
+    // scene view that a scene panel shows, in degrees, and its saved views; a move stays for the
+    // session, as a person's does.
+    cb::CommandOutput camera_command(const std::string& name, const nlohmann::json& args) {
+        auto fail = [](const char* code, const std::string& message, const char* where = "") {
+            return cb::CommandOutput::fail(cb::Error(code, message, where));
+        };
+        const std::string panel = args.value("panel", std::string());
+        const std::optional<cb::spec::Spec>& spec = runtime->spec();
+        const cb::spec::Panel* p = spec ? spec->find_panel(panel) : nullptr;
+        if (!p) return fail("panel.not_found", "The open spec has no panel " + panel + ".", "args.panel");
+        if (p->primitive != cb::spec::Primitive::scene)
+            return fail("camera.not_scene_panel", "The panel " + panel + " is not a scene panel.", "args.panel");
+        caliper_live_views::SceneView* view = runtime->scene_view_of(panel);
+        if (!view)
+            return fail("command.not_available",
+                        "The scene panel " + panel + " has no scene view yet: it draws when the page shows it.");
+        constexpr double kDeg = 180.0 / caliper_scene::kPi;
+        auto orbit_json = [&](const caliper_scene::Orbit& o) {
+            return nlohmann::json{{"target", {o.target[0], o.target[1], o.target[2]}},
+                                  {"distance", o.distance},
+                                  {"azimuth", o.azimuth * kDeg},
+                                  {"elevation", o.elevation * kDeg}};
+        };
+        const caliper_scene::Orbit* now = std::get_if<caliper_scene::Orbit>(&view->camera());
+        if (!now) return fail("command.not_available", "The scene of " + panel + " is 2-D and has no orbit.");
+        if (name == "camera.get") {
+            nlohmann::json views = nlohmann::json::array();
+            for (const cb::spec::SavedView& v : p->options.views)
+                views.push_back({{"name", v.name},
+                                 {"target", {v.target[0], v.target[1], v.target[2]}},
+                                 {"distance", v.distance},
+                                 {"azimuth", v.azimuth},
+                                 {"elevation", v.elevation}});
+            return cb::CommandOutput::ok({{"orbit", orbit_json(*now)}, {"views", views}});
+        }
+        if (name != "camera.set") return fail("command.unknown", "The app does not answer " + name + ".");
+        caliper_scene::Orbit next = *now;
+        if (args.contains("view") && args["view"].is_string()) {
+            const std::string want = args["view"].get<std::string>();
+            const cb::spec::SavedView* found = nullptr;
+            for (const cb::spec::SavedView& v : p->options.views)
+                if (v.name == want) found = &v;
+            if (!found)
+                return fail("camera.unknown_view", "The panel " + panel + " has no saved view " + want + ".", "args.view");
+            for (int i = 0; i < 3; ++i) next.target[i] = found->target[size_t(i)];
+            next.distance = found->distance;
+            next.azimuth = found->azimuth / kDeg;
+            next.elevation = found->elevation / kDeg;
+        } else if (args.contains("orbit") && args["orbit"].is_object()) {
+            const nlohmann::json& o = args["orbit"];
+            if (auto t = o.find("target"); t != o.end() && t->is_array() && t->size() == 3)
+                for (size_t i = 0; i < 3; ++i) next.target[i] = (*t)[i].get<double>();
+            if (auto d = o.find("distance"); d != o.end() && d->is_number()) next.distance = d->get<double>();
+            if (auto a = o.find("azimuth"); a != o.end() && a->is_number()) next.azimuth = a->get<double>() / kDeg;
+            if (auto e = o.find("elevation"); e != o.end() && e->is_number()) next.elevation = e->get<double>() / kDeg;
+        } else {
+            return fail("command.invalid_args", "camera.set takes view or orbit.", "args");
+        }
+        if (!view->set_orbit(next)) return fail("command.invalid_args", "The orbit's distance is above 0.", "args.orbit");
+        return cb::CommandOutput::ok({{"orbit", orbit_json(std::get<caliper_scene::Orbit>(view->camera()))}});
+    }
+
     // The session the page reads: a new one (the workspace opened, or the
     // session closed) gets a new source.
     void bind(AppSession& app) {
+        if (this->app != &app)
+            app.set_camera_seam([this](const std::string& name, const nlohmann::json& args) {
+                return camera_command(name, args);
+            });
         this->app = &app;
         if (workspace.empty()) workspace = folder_name(app.workspace());
         cb::Session* s = app.session();
@@ -435,6 +563,8 @@ struct SpecPage::Impl {
         // session's event ring and the app's run control, which acts on the
         // attached script.
         runtime->set_instruments(s ? &s->events() : nullptr, app.run_control());
+        // The values that references read and the kept steps (design/instrument-interface.md).
+        runtime->set_instrument_state(s ? &s->values() : nullptr, s ? &s->history() : nullptr);
         if (s == bound) return;
         if (widget) {
             // Its session has gone or changed: the surface forgets its
@@ -686,8 +816,13 @@ struct SpecPage::Impl {
             // Instruments (design/instruments.md): the session's event ring and
             // the app's run control, which the app sets and takes back while
             // a script is attached, so they are read at each frame.
-            if (cb::Session* ses = app ? app->session() : nullptr) runtime->set_instruments(&ses->events(), ses->run_control());
-            else runtime->set_instruments(nullptr, nullptr);
+            if (cb::Session* ses = app ? app->session() : nullptr) {
+                runtime->set_instruments(&ses->events(), ses->run_control());
+                runtime->set_instrument_state(&ses->values(), &ses->history());
+            } else {
+                runtime->set_instruments(nullptr, nullptr);
+                runtime->set_instrument_state(nullptr, nullptr);
+            }
             // The page routes ⌘K and Escape (spec_key_action); the surface
             // takes Enter on its card and polls its agent.
             if (widget) widget->frame(look, focused, /*keys=*/false);
@@ -1140,6 +1275,7 @@ void SpecPage::shutdown() {
     // first): the inline surface forgets its preview without a command,
     // since a command into the closed session crashed the app on quitting
     // with a prompt open; then it goes, before the runtime it is attached to.
+    if (impl_->app) impl_->app->set_camera_seam(nullptr);   // camera.get and camera.set end with the page
     if (impl_->widget) impl_->widget->surface().abandon();
     impl_->drop_widget();
     if (impl_->settings) impl_->settings->set_on_change(nullptr);
@@ -1151,8 +1287,8 @@ void SpecPage::shutdown() {
     impl_->textures.reset();
 }
 
-std::shared_ptr<PanelRenderSeam> SpecPage::make_panel_renderer() {
-    return std::make_shared<PanelRenderOffscreen>();
+std::shared_ptr<PanelRenderSeam> SpecPage::make_panel_renderer(std::function<cb::Session*()> session) {
+    return std::make_shared<PanelRenderOffscreen>(std::move(session));
 }
 
 #else  // !CALIPER_WITH_BUILDER
@@ -1214,7 +1350,9 @@ bool SpecPage::enter_file(AppSession&, const std::string&, std::string* error) {
 }
 bool SpecPage::facts(const std::string&, SpecAppletFacts*) { return false; }
 void SpecPage::shutdown() {}
-std::shared_ptr<PanelRenderSeam> SpecPage::make_panel_renderer() { return nullptr; }
+std::shared_ptr<PanelRenderSeam> SpecPage::make_panel_renderer(std::function<caliper_builder::Session*()>) {
+    return nullptr;
+}
 
 #endif
 

@@ -48,6 +48,21 @@ bool valid_id(std::string_view s) {
     return true;
 }
 
+// A program's id: a spec id, or the id "operator.<source>.<step>" that the
+// app gives the program of an operator (design/instrument-interface.md,
+// Operator Programs), which no spec id can match because it holds dots.
+bool valid_program_id(std::string_view s) {
+    if (valid_id(s)) return true;
+    const std::string_view prefix = "operator.";
+    if (s.substr(0, prefix.size()) != prefix) return false;
+    const std::string_view rest = s.substr(prefix.size());
+    const std::size_t dot = rest.rfind('.');
+    if (dot == std::string_view::npos || dot + 1 >= rest.size() || rest.size() - dot - 1 > 5) return false;
+    for (char c : rest.substr(dot + 1))
+        if (!(c >= '0' && c <= '9')) return false;
+    return valid_id(rest.substr(0, dot));
+}
+
 // A WGSL identifier of at most 63 bytes, as the command table's pattern allows.
 bool valid_identifier(std::string_view s) {
     if (s.empty() || s.size() > 63) return false;
@@ -326,7 +341,7 @@ bool compiler_available() {
 // ---- 1. declarations
 
 Verdict check_declaration(const spec::Program& p) {
-    if (!valid_id(p.id))
+    if (!valid_program_id(p.id))
         return fail(kProgramOverLimits,
                     quote_text(p.id) + " is not a program id; an id is a lower-case letter followed by at most 63 "
                                    "lower-case letters, digits, _ or -.",
@@ -347,10 +362,12 @@ Verdict check_declaration(const spec::Program& p) {
 
     // The names the output and the frame uniform take.
     const spec::ProgramOutput& o = p.output;
-    std::set<std::string> fixed = {spec::kFrameVar};
+    std::set<std::string> fixed = {spec::kFrameVar, spec::kParamsVar};
     if (o.kind == spec::OutputKind::geometry) {
         fixed.insert(spec::kCountVar);
         for (spec::GeometryArray a : o.arrays) fixed.insert(spec::geometry_array_name(a));
+    } else if (o.kind == spec::OutputKind::tensor) {
+        fixed.insert(kTensorVar);
     } else {
         fixed.insert(spec::kPixelsVar);
     }
@@ -374,7 +391,38 @@ Verdict check_declaration(const spec::Program& p) {
             return fail(kProgramOverLimits, "Two inputs bind the var " + quote_text(in.var) + ".", where + ".var");
     }
 
-    if (o.kind == spec::OutputKind::geometry) {
+    if (p.params.size() > spec::kParams)
+        return fail(kProgramOverLimits,
+                    "The program has " + std::to_string(p.params.size()) + " params; the limit is " +
+                        std::to_string(spec::kParams) + ".",
+                    "params");
+    for (const auto& [name, value] : p.params) {
+        if (!valid_identifier(name) || name.substr(0, 2) == "__")
+            return fail(kProgramOverLimits, quote_text(name) + " is not a WGSL field name of at most 63 bytes.",
+                        "params." + name);
+        if (!spec::is_reference(value) && !std::isfinite(std::get<double>(value)))
+            return fail(kProgramOverLimits, "The param " + name + " is not a finite number.", "params." + name);
+    }
+
+    if (o.kind == spec::OutputKind::tensor) {
+        if (o.shape.empty() || o.shape.size() > 4)
+            return fail(kProgramOverLimits,
+                        "A tensor output has 1 to 4 axes, not " + std::to_string(o.shape.size()) + ".", "output.shape");
+        for (std::int64_t n : o.shape)
+            if (n < 1)
+                return fail(kProgramOverLimits, "Each axis of a tensor output is at least 1.", "output.shape");
+        if (tensor_elements(o) > 1000000)
+            return fail(kProgramOverLimits,
+                        "A tensor output holds at most 1,000,000 elements, not " + std::to_string(tensor_elements(o)) +
+                            ".",
+                        "output.shape");
+        if (!o.panel.empty() || o.entity || o.max_count != 0 || !o.arrays.empty() || o.width != 0 || o.height != 0 ||
+            !(o.style == spec::GeometryStyle{}))
+            return fail(kProgramOutputMismatch,
+                        "A tensor output takes its shape only; panel, entity, part, max_count, arrays, style, width "
+                        "and height are for geometry and pixels.",
+                        "output");
+    } else if (o.kind == spec::OutputKind::geometry) {
         if (!valid_id(o.panel))
             return fail(kProgramBadTarget,
                         o.panel.empty() ? std::string("A geometry output needs the panel of a scene to draw in.")
@@ -412,7 +460,7 @@ Verdict check_declaration(const spec::Program& p) {
                         "width and height must each be from 1 to " + std::to_string(lim::kPixelsSide) + ", not " +
                             std::to_string(o.width) + " by " + std::to_string(o.height) + ".",
                         o.width < 1 || o.width > lim::kPixelsSide ? "output.width" : "output.height");
-        if (!o.panel.empty() || o.entity || o.max_count != 0 || !o.arrays.empty() ||
+        if (!o.panel.empty() || o.entity || o.max_count != 0 || !o.arrays.empty() || !o.shape.empty() ||
             !(o.style == spec::GeometryStyle{}))
             return fail(kProgramOutputMismatch,
                         "A pixels output takes width, height and format only; panel, entity, part, max_count, arrays "
@@ -598,8 +646,10 @@ Verdict check_program(const spec::Program& p, const Reflection& r) {
                             "workgroups");
     }
 
+    if (Verdict v = check_params(p); !v.ok()) return v;
     const spec::ProgramOutput& o = p.output;
     const bool geometry = o.kind == spec::OutputKind::geometry;
+    const bool tensor = o.kind == spec::OutputKind::tensor;
     std::set<std::string> bound;
     for (const ReflectedBinding& b : r.bindings) {
         bound.insert(b.name);
@@ -631,7 +681,23 @@ Verdict check_program(const spec::Program& p, const Reflection& r) {
                                       toks, b.name);
             continue;
         }
-        if (!geometry && b.name == spec::kPixelsVar) {
+        if (b.name == spec::kParamsVar && !p.params.empty()) {
+            if (b.kind != BindingKind::uniform_buffer)
+                return at_declaration(fail(kProgramParamsMismatch,
+                                           "params must be var<uniform> params: Params, not " + binding_kind_text(b) +
+                                               ".",
+                                           b.name),
+                                      toks, b.name);
+            continue;
+        }
+        if (tensor && b.name == kTensorVar) {
+            if (!is_read_write_storage(b))
+                return at_declaration(fail(kProgramOutputMismatch,
+                                           "out must be var<storage, read_write> out: array<f32>.", b.name),
+                                      toks, b.name);
+            continue;
+        }
+        if (!geometry && !tensor && b.name == spec::kPixelsVar) {
             if (!is_read_write_storage(b))
                 return at_declaration(fail(kProgramOutputMismatch,
                                            "pixels must be var<storage, read_write> pixels: array<u32>.", b.name),
@@ -653,8 +719,8 @@ Verdict check_program(const spec::Program& p, const Reflection& r) {
         }
         return at_declaration(fail(kProgramBindingUndeclared,
                                    "The binding " + b.name + " is not an input, an output array of the declaration, " +
-                                       (geometry ? "count" : "pixels") + " or caliper; declare it as an input or "
-                                                                          "remove it.",
+                                       (geometry ? "count" : tensor ? "out" : "pixels") +
+                                       ", params or caliper; declare it as an input or remove it.",
                                    b.name),
                               toks, b.name);
     }
@@ -672,6 +738,12 @@ Verdict check_program(const spec::Program& p, const Reflection& r) {
                                 " is declared, and the entry point does not write it; use it or remove it from "
                                 "arrays.",
                             spec::geometry_array_name(a));
+    } else if (tensor) {
+        if (!bound.count(kTensorVar))
+            return fail(kProgramOutputMismatch,
+                        "A tensor program must write out, a var<storage, read_write> array<f32>, and the entry point "
+                        "does not use it.",
+                        kTensorVar);
     } else if (!bound.count(spec::kPixelsVar)) {
         return fail(kProgramOutputMismatch,
                     "A pixels program must write pixels, a var<storage, read_write> array<u32>, and the entry point "
@@ -736,11 +808,187 @@ std::array<std::uint32_t, 3> dispatch_size(const spec::Program& p, const Reflect
     if (!e) return {0, 0, 0};
     const auto& ws = e->workgroup_size;
     if (p.output.kind == spec::OutputKind::geometry) return {ceil_div(p.output.max_count, ws[0]), 1, 1};
+    if (p.output.kind == spec::OutputKind::tensor) return {ceil_div(tensor_elements(p.output), ws[0]), 1, 1};
     return {ceil_div(p.output.width, ws[0]), ceil_div(p.output.height, ws[1]), 1};
+}
+
+std::uint64_t tensor_elements(const spec::ProgramOutput& o) {
+    if (o.kind != spec::OutputKind::tensor || o.shape.empty()) return 0;
+    std::uint64_t n = 1;
+    for (std::int64_t d : o.shape) {
+        if (d < 1) return 0;
+        n = n > (std::uint64_t(1) << 40) ? n : n * std::uint64_t(d);
+    }
+    return n;
+}
+
+// ---- params
+
+bool params_fields(std::string_view wgsl, std::vector<ParamField>* fields, Verdict* why) {
+    fields->clear();
+    const std::vector<Token> toks = tokens(wgsl);
+    for (std::size_t i = 0; i + 2 < toks.size(); ++i) {
+        if (toks[i].text != "struct" || toks[i + 1].text != "Params" || toks[i + 2].text != "{") continue;
+        std::size_t k = i + 3;
+        while (k < toks.size() && toks[k].text != "}") {
+            if (toks[k].text == ",") {
+                ++k;
+                continue;
+            }
+            if (toks[k].text == "@" || k + 2 >= toks.size() || toks[k + 1].text != ":") {
+                if (why)
+                    *why = fail(kProgramParamsMismatch,
+                                "Each field of struct Params is name: f32, i32 or u32, with no attribute.", "params",
+                                toks[k].line, toks[k].column);
+                return true;
+            }
+            const std::string_view type = toks[k + 2].text;
+            ParamField f;
+            f.name = std::string(toks[k].text);
+            if (type == "f32") f.type = ParamType::f32;
+            else if (type == "i32") f.type = ParamType::i32;
+            else if (type == "u32") f.type = ParamType::u32;
+            else {
+                if (why)
+                    *why = fail(kProgramParamsMismatch,
+                                "The field " + f.name + " of struct Params is " + std::string(type) +
+                                    "; a field is f32, i32 or u32.",
+                                "params." + f.name, toks[k + 2].line, toks[k + 2].column);
+                return true;
+            }
+            fields->push_back(std::move(f));
+            k += 3;
+        }
+        return true;
+    }
+    return false;
+}
+
+Verdict check_params(const spec::Program& p) {
+    std::vector<ParamField> fields;
+    Verdict why;
+    const bool has = params_fields(p.wgsl, &fields, &why);
+    if (!why.ok()) return why;
+    const std::vector<Token> toks = tokens(p.wgsl);
+    if (!has) {
+        if (p.params.empty()) {
+            if (auto t = var_declaration(toks, spec::kParamsVar))
+                return fail(kProgramParamsMismatch,
+                            "The source declares params, and the program has no params; declare them or remove the "
+                            "variable.",
+                            "params", t->line, t->column);
+            return {};
+        }
+        return fail(kProgramParamsMismatch,
+                    "The program has params, and the source declares no struct Params; declare struct Params with "
+                    "one f32, i32 or u32 field for each name and var<uniform> params: Params.",
+                    "params");
+    }
+    std::set<std::string> names;
+    for (const auto& kv : p.params) names.insert(kv.first);
+    std::set<std::string> declared;
+    for (const ParamField& f : fields)
+        if (!declared.insert(f.name).second)
+            return fail(kProgramParamsMismatch, "struct Params declares the field " + f.name + " twice.", "params");
+    if (names != declared) {
+        std::string missing, extra;
+        for (const std::string& n : names)
+            if (!declared.count(n)) missing += (missing.empty() ? "" : ", ") + n;
+        for (const std::string& n : declared)
+            if (!names.count(n)) extra += (extra.empty() ? "" : ", ") + n;
+        std::string message = "The fields of struct Params differ from the names of params:";
+        if (!missing.empty()) message += " params names " + missing + ", which the struct lacks";
+        if (!missing.empty() && !extra.empty()) message += ", and";
+        if (!extra.empty()) message += " the struct declares " + extra + ", which params lacks";
+        message += ".";
+        Verdict v = fail(kProgramParamsMismatch, message, "params");
+        for (std::size_t i = 0; i + 1 < toks.size(); ++i)
+            if (toks[i].text == "struct" && toks[i + 1].text == "Params") {
+                v.line = toks[i + 1].line;
+                v.column = toks[i + 1].column;
+                break;
+            }
+        return v;
+    }
+    return {};
+}
+
+Verdict check_stage_params(const spec::Stage& s) {
+    const std::vector<Token> toks = tokens(s.wgsl);
+    for (std::size_t i = 0; i + 1 < toks.size(); ++i) {
+        const bool own_struct = toks[i].text == "struct" && toks[i + 1].text == "Params";
+        if (own_struct)
+            return fail(kStageParamsMismatch,
+                        "A stage declares no struct Params; the viewer declares it from the stage's params.", "wgsl",
+                        toks[i + 1].line, toks[i + 1].column);
+    }
+    if (auto t = var_declaration(toks, spec::kParamsVar))
+        return fail(kStageParamsMismatch,
+                    "A stage declares no params variable; the viewer declares params from the stage's params.",
+                    "wgsl", t->line, t->column);
+    for (std::size_t i = 0; i + 2 < toks.size(); ++i) {
+        if (toks[i].text != spec::kParamsVar || toks[i + 1].text != ".") continue;
+        if (i > 0 && toks[i - 1].text == ".") continue;   // a field named params of something else
+        const std::string name(toks[i + 2].text);
+        if (!s.params.count(name))
+            return fail(kStageParamsMismatch,
+                        s.params.empty() ? "The stage reads params." + name + ", and it has no params."
+                                         : "The stage reads params." + name + ", which is not a name of its params.",
+                        "params." + name, toks[i + 2].line, toks[i + 2].column);
+    }
+    return {};
+}
+
+std::vector<std::uint8_t> pack_params(const std::vector<ParamField>& fields,
+                                      const std::vector<std::pair<std::string, double>>& values) {
+    if (fields.empty()) return {};
+    std::vector<std::uint8_t> out(((fields.size() * 4 + 15) / 16) * 16, 0);
+    for (std::size_t i = 0; i < fields.size(); ++i) {
+        double v = 0;
+        for (const auto& kv : values)
+            if (kv.first == fields[i].name) v = kv.second;
+        if (!std::isfinite(v)) v = 0;
+        std::uint32_t bits = 0;
+        if (fields[i].type == ParamType::f32) {
+            const float f = static_cast<float>(v);
+            std::memcpy(&bits, &f, 4);
+        } else if (fields[i].type == ParamType::i32) {
+            const double r = std::round(std::clamp(v, -2147483648.0, 2147483647.0));
+            const std::int32_t n = static_cast<std::int32_t>(r);
+            std::memcpy(&bits, &n, 4);
+        } else {
+            bits = static_cast<std::uint32_t>(std::round(std::clamp(v, 0.0, 4294967295.0)));
+        }
+        std::memcpy(out.data() + i * 4, &bits, 4);
+    }
+    return out;
+}
+
+std::vector<ParamField> stage_params_fields(const spec::Stage& s) {
+    std::vector<ParamField> out;
+    for (const auto& kv : s.params) out.push_back(ParamField{kv.first, ParamType::f32});
+    return out;
+}
+
+std::string stage_params_declaration(const spec::Stage& s, bool uniform) {
+    if (s.params.empty()) return {};
+    std::string text = "\nstruct Params {";
+    bool first = true;
+    for (const auto& kv : s.params) {
+        text += (first ? " " : ", ") + kv.first + ": f32";
+        first = false;
+    }
+    text += " }\n";
+    if (uniform)
+        text += "@group(" + std::to_string(kStageParamsGroup) + ") @binding(0) var<uniform> params: Params;\n";
+    else
+        text += "var<private> params: Params;\n";
+    return text;
 }
 
 std::uint64_t output_bytes(const spec::Program& p) {
     const spec::ProgramOutput& o = p.output;
+    if (o.kind == spec::OutputKind::tensor) return tensor_elements(o) * 4;
     if (o.kind == spec::OutputKind::pixels) return std::uint64_t(o.width) * o.height * 4;
     std::uint64_t bytes = 4;   // count
     for (spec::GeometryArray a : o.arrays) bytes += std::uint64_t(o.max_count) * spec::geometry_array_words(a) * 4;

@@ -58,6 +58,9 @@ constexpr const char* kOverTime = "program.over_time";
 constexpr const char* kTimeout = "program.timeout";
 constexpr const char* kDeviceLost = "program.device_lost";
 constexpr const char* kUnavailable = "program.unavailable";
+constexpr const char* kParamsMismatch = "program.params_mismatch";
+constexpr uint64_t kTensorElementsMax = 1000000;
+constexpr size_t kParamsMax = 16;
 
 constexpr size_t kSourceBytes = 64 * 1024;
 constexpr size_t kInputs = 8;
@@ -116,7 +119,7 @@ caliper_producer_status fail(caliper_producer_error* e, caliper_producer_status 
     static const char* const kKnown[] = {
         kTooLarge, kCompileFailed, kNoEntry, kBindingUndeclared, kWritesInput, kOutputMismatch, kOverLimits,
         kCompilerUnavailable, kUnknownInput, kImportRefused, kOverMemory, kLayerRefused, kOverTime, kTimeout,
-        kDeviceLost, kUnavailable, "program.directive_not_allowed", "program.needs_review"};
+        kDeviceLost, kUnavailable, kParamsMismatch, "program.directive_not_allowed", "program.needs_review"};
     for (const char* k : kKnown)
         if (code == k) return k;
     return "program.compile_failed";
@@ -148,12 +151,23 @@ struct OutputArray {
     uint64_t bytes = 0;
 };
 
+// One field of the uniform `params`: its name, its type (0 f32, 1 i32, 2 u32,
+// as sandbox.h's ParamType) and its value now.
+struct ParamSlot {
+    std::string name;
+    uint32_t type = 0;
+    double value = 0;
+};
+
 struct Prog {
     bool live = false;
     std::string id;
     uint32_t kind = CALIPER_PRODUCER_GEOMETRY;
     uint32_t max_count = 0, width = 0, height = 0;
-    std::vector<OutputArray> arrays;   // geometry arrays, or the one array "pixels"
+    uint64_t tensor_elements = 0;      // tensor only: the elements of `out`
+    std::vector<ParamSlot> params;     // the fields of struct Params, in struct order
+    Buffer params_buffer;              // the uniform `params`, host-visible; null without params
+    std::vector<OutputArray> arrays;   // geometry arrays, the one array "pixels", or "out"
     Buffer count;                      // geometry only
     Program program;
     Pipeline pipeline;
@@ -173,6 +187,33 @@ struct Prog {
     uint32_t valid = 0;                // min(count, max_count) after the last pass
     const char* stop_code = nullptr;
 };
+
+}  // namespace
+
+namespace {
+
+// Writes the values of `p`'s params into its uniform buffer, 4 bytes each in
+// struct order: f32, or i32 and u32 rounded and clamped (sandbox.h,
+// pack_params()). The pass that reads them has completed, because a pass
+// waits before it returns.
+void write_params(Backend& be, const Prog& p) {
+    auto* m = static_cast<uint8_t*>(be.mapped(p.params_buffer));
+    if (!m) return;
+    for (size_t i = 0; i < p.params.size(); ++i) {
+        const ParamSlot& s = p.params[i];
+        uint32_t bits = 0;
+        if (s.type == 0) {
+            const float f = float(s.value);
+            std::memcpy(&bits, &f, 4);
+        } else if (s.type == 1) {
+            const int32_t n = int32_t(std::llround(std::clamp(s.value, -2147483648.0, 2147483647.0)));
+            std::memcpy(&bits, &n, 4);
+        } else {
+            bits = uint32_t(std::llround(std::clamp(s.value, 0.0, 4294967295.0)));
+        }
+        std::memcpy(m + i * 4, &bits, 4);
+    }
+}
 
 }  // namespace
 
@@ -208,8 +249,13 @@ Prog* prog_of(caliper_producer* rt, uint32_t h) {
     return &rt->programs[h - 1];
 }
 
-// The bind groups of a program from its bindings, its inputs' imports and its outputs. On a
-// failure the groups made so far are released and *what names the one that failed.
+// The bytes of a program's uniform `params`: 4 for each field, padded to 16, at least 16.
+uint64_t params_bytes(const Prog& p) {
+    return std::max<uint64_t>(16, ((p.params.size() * 4 + 15) / 16) * 16);
+}
+
+// The bind groups of a program from its bindings, its inputs' imports, its params and its
+// outputs. On a failure the groups made so far are released and *what names the one that failed.
 bool make_groups(caliper_producer* rt, const Prog& p, std::vector<BindGroup>* out, std::string* what) {
     Backend& be = *rt->be;
     uint32_t groups = 0;
@@ -251,6 +297,9 @@ bool make_groups(caliper_producer* rt, const Prog& p, std::vector<BindGroup>* ou
                 e.buffer = kArena;
             } else if (b.name == "count") {
                 e.buffer = p.count;
+            } else if (b.name == "params" && p.params_buffer) {
+                e.buffer = p.params_buffer;
+                e.size = params_bytes(p);
             } else {
                 for (const OutputArray& a : p.arrays)
                     if (a.name == b.name) e.buffer = a.buffer;
@@ -279,9 +328,11 @@ void free_prog(caliper_producer* rt, Prog& p) {
         if (a.buffer) rt->be->release(a.buffer);
     p.arrays.clear();
     if (p.count) rt->be->release(p.count);
+    if (p.params_buffer) rt->be->release(p.params_buffer);
     p.pipeline = {};
     p.program = {};
     p.count = {};
+    p.params_buffer = {};
 }
 
 void stop(Prog& p, const char* code) {
@@ -351,9 +402,26 @@ caliper_producer_status check_desc(const caliper_producer_program_desc* d, calip
     } else if (d->output_kind == CALIPER_PRODUCER_PIXELS) {
         if (d->width < 1 || d->width > kPixelsSide || d->height < 1 || d->height > kPixelsSide)
             return fail(error, CALIPER_PRODUCER_REFUSED, kOverLimits, "A pixels output is 1 to 2048 pixels on each side.");
+    } else if (d->output_kind == CALIPER_PRODUCER_TENSOR) {
+        if (d->tensor_ndim < 1 || d->tensor_ndim > 4)
+            return fail(error, CALIPER_PRODUCER_REFUSED, kOverLimits, "A tensor output has 1 to 4 axes.");
+        uint64_t n = 1;
+        for (uint32_t i = 0; i < d->tensor_ndim; ++i) {
+            if (d->tensor_shape[i] < 1 || d->tensor_shape[i] > int64_t(kTensorElementsMax))
+                return fail(error, CALIPER_PRODUCER_REFUSED, kOverLimits, "Each axis of a tensor output is at least 1.");
+            n *= uint64_t(d->tensor_shape[i]);
+            if (n > kTensorElementsMax)
+                return fail(error, CALIPER_PRODUCER_REFUSED, kOverLimits,
+                            "A tensor output holds at most 1,000,000 elements.");
+        }
     } else {
-        return fail(error, CALIPER_PRODUCER_REFUSED, kOutputMismatch, "The output is of kind geometry or pixels.");
+        return fail(error, CALIPER_PRODUCER_REFUSED, kOutputMismatch, "The output is of kind geometry, pixels or tensor.");
     }
+    if (d->param_count > kParamsMax || (d->param_count && !d->params))
+        return fail(error, CALIPER_PRODUCER_REFUSED, kOverLimits, "A program has at most 16 params.");
+    for (size_t i = 0; i < d->param_count; ++i)
+        if (!d->params[i].name || !*d->params[i].name || !std::isfinite(d->params[i].value))
+            return fail(error, CALIPER_PRODUCER_REFUSED, kOverLimits, "Each param has a name and a finite value.");
     if (!(d->time_limit_ms > 0) || d->time_limit_ms > kTimeMsMax)
         return fail(error, CALIPER_PRODUCER_REFUSED, kOverLimits, "limits.time_ms is above 0 and at most 50.");
     if (d->memory_limit_bytes == 0 || d->memory_limit_bytes > kMemoryMax)
@@ -382,6 +450,9 @@ sp::Program to_spec(const caliper_producer_program_desc* d, const std::vector<Im
         p.output.kind = sp::OutputKind::pixels;
         p.output.width = d->width;
         p.output.height = d->height;
+    } else if (d->output_kind == CALIPER_PRODUCER_TENSOR) {
+        p.output.kind = sp::OutputKind::tensor;
+        for (uint32_t i = 0; i < d->tensor_ndim && i < 4; ++i) p.output.shape.push_back(d->tensor_shape[i]);
     } else {
         p.output.kind = sp::OutputKind::geometry;
         p.output.part = d->part == CALIPER_PRODUCER_LINES ? sp::GeometryPart::lines : sp::GeometryPart::points;
@@ -390,6 +461,7 @@ sp::Program to_spec(const caliper_producer_program_desc* d, const std::vector<Im
             if (auto a = sp::geometry_array_from_name(d->arrays[i])) p.output.arrays.push_back(*a);
         p.output.panel = "script";   // the sandbox's declaration check wants a panel; a pixels output has none
     }
+    for (size_t i = 0; i < d->param_count; ++i) p.params[d->params[i].name] = d->params[i].value;
     p.limits.time_ms = d->time_limit_ms;
     p.limits.memory_mb = uint32_t(std::max<uint64_t>(1, d->memory_limit_bytes >> 20));
     if (d->workgroups[0] || d->workgroups[1] || d->workgroups[2])
@@ -575,6 +647,26 @@ caliper_producer_status caliper_producer_compile(caliper_producer* rt, const cal
     // 3. The source: its size and no directive.
     if (sandbox_refused(sb::check_source(wgsl, kSourceBytes), error, &refused)) return refused;
 #endif
+    // The fields of struct Params, from the source (sandbox.h); the binder
+    // below gives the uniform `params` these bytes.
+    std::vector<ParamSlot> param_slots;
+#if defined(CALIPER_PRODUCER_HAVE_SANDBOX)
+    {
+        std::vector<sb::ParamField> fields;
+        sb::Verdict why;
+        sb::params_fields(wgsl, &fields, &why);
+        for (const sb::ParamField& f : fields) {
+            ParamSlot slot{f.name, uint32_t(f.type), 0.0};
+            for (size_t i = 0; i < d->param_count; ++i)
+                if (f.name == d->params[i].name) slot.value = d->params[i].value;
+            param_slots.push_back(std::move(slot));
+        }
+    }
+#else
+    if (d->param_count)
+        return fail(error, CALIPER_PRODUCER_UNSUPPORTED, kParamsMismatch,
+                    "This build of the runtime has no sandbox, which reads the struct Params, so params cannot run.");
+#endif
 #if !defined(CALIPER_PRODUCER_HAVE_WGSL)
     return fail(error, CALIPER_PRODUCER_UNSUPPORTED, kCompilerUnavailable,
                 "This build of the runtime has no WGSL compiler, so a program cannot run.");
@@ -635,6 +727,12 @@ caliper_producer_status caliper_producer_compile(caliper_producer* rt, const cal
         }
 #endif
         const bool geometry = d->output_kind == CALIPER_PRODUCER_GEOMETRY;
+        const bool tensor = d->output_kind == CALIPER_PRODUCER_TENSOR;
+        uint64_t elements = 0;
+        if (tensor) {
+            elements = 1;
+            for (uint32_t i = 0; i < d->tensor_ndim; ++i) elements *= uint64_t(d->tensor_shape[i]);
+        }
         auto input_of = [&](const std::string& n) -> const caliper_producer_input* {
             for (size_t i = 0; i < d->input_count; ++i)
                 if (n == d->inputs[i].var) return &d->inputs[i];
@@ -645,7 +743,7 @@ caliper_producer_status caliper_producer_compile(caliper_producer* rt, const cal
                 if (n == d->arrays[i]) return true;
             return false;
         };
-        bool has_count = false, has_pixels = false, frame = false;
+        bool has_count = false, has_pixels = false, has_out = false, frame = false;
         std::vector<std::string> arrays_bound;
         std::vector<uint32_t> tensors;
         for (const Bound& b : bound) {
@@ -664,13 +762,16 @@ caliper_producer_status caliper_producer_compile(caliper_producer* rt, const cal
                     tensors.push_back(in->tensor);
                 continue;
             }
-            const bool output = geometry ? (declared_array(b.name) || b.name == "count") : b.name == "pixels";
+            const bool output = geometry ? (declared_array(b.name) || b.name == "count")
+                                : tensor ? b.name == "out"
+                                         : b.name == "pixels";
             if (output) {
                 if (b.kind != Kind::Storage || !b.write)
                     return fail(error, CALIPER_PRODUCER_REFUSED, kOutputMismatch,
                                 "The output " + b.name + " must be declared var<storage, read_write>" + where + ".");
                 if (b.name == "count") has_count = true;
                 else if (b.name == "pixels") has_pixels = true;
+                else if (b.name == "out") has_out = true;
                 else arrays_bound.push_back(b.name);
                 continue;
             }
@@ -681,8 +782,14 @@ caliper_producer_status caliper_producer_compile(caliper_producer* rt, const cal
                 frame = true;
                 continue;
             }
+            if (b.name == "params" && !param_slots.empty()) {
+                if (b.kind != Kind::Uniform || b.size > param_slots.size() * 4 + 15)
+                    return fail(error, CALIPER_PRODUCER_REFUSED, kParamsMismatch,
+                                "The binding params must be var<uniform> params: Params" + where + ".");
+                continue;
+            }
             return fail(error, CALIPER_PRODUCER_REFUSED, kBindingUndeclared,
-                        "The binding " + b.name + " is not an input, an output or caliper" + where + ".");
+                        "The binding " + b.name + " is not an input, an output, params or caliper" + where + ".");
         }
         if (geometry) {
             if (!has_count)
@@ -692,13 +799,17 @@ caliper_producer_status caliper_producer_compile(caliper_producer* rt, const cal
                 if (std::find(arrays_bound.begin(), arrays_bound.end(), d->arrays[i]) == arrays_bound.end())
                     return fail(error, CALIPER_PRODUCER_REFUSED, kOutputMismatch,
                                 std::string("The declared array ") + d->arrays[i] + " is not written by the entry point.");
+        } else if (tensor) {
+            if (!has_out)
+                return fail(error, CALIPER_PRODUCER_REFUSED, kOutputMismatch,
+                            "A tensor program must write var<storage, read_write> out: array<f32>.");
         } else if (!has_pixels) {
             return fail(error, CALIPER_PRODUCER_REFUSED, kOutputMismatch,
                         "A pixels program must write var<storage, read_write> pixels: array<u32>.");
         }
 
         // 8. The memory: the output buffers and the bound tensors.
-        uint64_t memory = geometry ? 4 : uint64_t(d->width) * d->height * 4;
+        uint64_t memory = geometry ? 4 : tensor ? elements * 4 : uint64_t(d->width) * d->height * 4;
         if (geometry)
             for (size_t i = 0; i < d->array_count; ++i)
                 memory += uint64_t(d->max_count) * (std::strcmp(d->arrays[i], "positions") ? 4 : 12);
@@ -713,6 +824,9 @@ caliper_producer_status caliper_producer_compile(caliper_producer* rt, const cal
         if (!dispatch[0] && !dispatch[1] && !dispatch[2]) {
             if (geometry) {
                 dispatch[0] = (d->max_count + wg[0] - 1) / wg[0];
+                dispatch[1] = dispatch[2] = 1;
+            } else if (tensor) {
+                dispatch[0] = uint32_t(std::min<uint64_t>((elements + wg[0] - 1) / wg[0], UINT32_MAX));
                 dispatch[1] = dispatch[2] = 1;
             } else {
                 dispatch[0] = (d->width + wg[0] - 1) / wg[0];
@@ -741,8 +855,10 @@ caliper_producer_status caliper_producer_compile(caliper_producer* rt, const cal
         p.id = d->id;
         p.kind = d->output_kind;
         p.max_count = geometry ? d->max_count : 0;
-        p.width = geometry ? 0 : d->width;
-        p.height = geometry ? 0 : d->height;
+        p.width = geometry || tensor ? 0 : d->width;
+        p.height = geometry || tensor ? 0 : d->height;
+        p.tensor_elements = elements;
+        p.params = param_slots;
         p.frame = frame;
         std::memcpy(p.dispatch, dispatch, sizeof dispatch);
         p.tensors = tensors;
@@ -811,6 +927,13 @@ caliper_producer_status caliper_producer_compile(caliper_producer* rt, const cal
                 if (!a.buffer) return layer_fail("output " + a.name);
                 p.arrays.push_back(std::move(a));
             }
+        } else if (tensor) {
+            OutputArray a;
+            a.name = "out";
+            a.bytes = elements * 4;
+            a.buffer = make_output(a.bytes, "out");
+            if (!a.buffer) return layer_fail("output out");
+            p.arrays.push_back(std::move(a));
         } else {
             OutputArray a;
             a.name = "pixels";
@@ -818,6 +941,17 @@ caliper_producer_status caliper_producer_compile(caliper_producer* rt, const cal
             a.buffer = make_output(a.bytes, "pixels");
             if (!a.buffer) return layer_fail("output pixels");
             p.arrays.push_back(std::move(a));
+        }
+
+        if (!p.params.empty()) {
+            BufferDesc bd;
+            bd.size = params_bytes(p);
+            bd.usage = kUniform;
+            bd.host_visible = true;
+            bd.label = "params";
+            p.params_buffer = be.create_buffer(bd);
+            if (!p.params_buffer) return layer_fail("params buffer");
+            write_params(be, p);
         }
 
         p.bound = bound;
@@ -880,6 +1014,8 @@ caliper_producer_status caliper_producer_rebind(caliper_producer* rt, uint32_t p
         next.id = p->id;
         next.program = p->program;
         next.count = p->count;
+        next.params = p->params;
+        next.params_buffer = p->params_buffer;
         next.bound = p->bound;
         next.inputs = p->inputs;
         for (auto& in : next.inputs)
@@ -975,6 +1111,8 @@ caliper_producer_status caliper_producer_run(caliper_producer* rt, const uint32_
             if (p->count) {
                 const auto* c = static_cast<const uint32_t*>(be.mapped(p->count));
                 p->valid = c ? std::min(*c, p->max_count) : 0;
+            } else if (p->kind == CALIPER_PRODUCER_TENSOR) {
+                p->valid = uint32_t(p->tensor_elements);
             } else {
                 p->valid = p->width * p->height;
             }
@@ -1014,6 +1152,30 @@ caliper_producer_status caliper_producer_read_output(caliper_producer* rt, uint3
     }
     return fail(error, CALIPER_PRODUCER_ARGUMENT, kOutputMismatch,
                 std::string("The program ") + p->id + " has no output " + name + ".");
+}
+
+caliper_producer_status caliper_producer_set_params(caliper_producer* rt, uint32_t program,
+                                                    const caliper_producer_param* params, size_t count,
+                                                    caliper_producer_error* error) {
+    if (!rt || (count && !params)) return fail(error, CALIPER_PRODUCER_ARGUMENT, kParamsMismatch, "A pointer is NULL.");
+    Prog* p = prog_of(rt, program);
+    if (!p) return fail(error, CALIPER_PRODUCER_ARGUMENT, kParamsMismatch, "The program handle is unknown.");
+    // Every name first, so that a refusal changes nothing.
+    for (size_t i = 0; i < count; ++i) {
+        const char* n = params[i].name;
+        const bool known = n && std::any_of(p->params.begin(), p->params.end(),
+                                            [&](const ParamSlot& s) { return s.name == n; });
+        if (!known)
+            return fail(error, CALIPER_PRODUCER_REFUSED, kParamsMismatch,
+                        std::string("The program ") + p->id + " has no param " + (n ? n : "(null)") + ".");
+        if (!std::isfinite(params[i].value))
+            return fail(error, CALIPER_PRODUCER_REFUSED, kOverLimits, std::string("The param ") + n + " is not finite.");
+    }
+    for (size_t i = 0; i < count; ++i)
+        for (ParamSlot& s : p->params)
+            if (s.name == params[i].name) s.value = params[i].value;
+    if (rt->be && p->params_buffer) write_params(*rt->be, *p);
+    return CALIPER_PRODUCER_OK;
 }
 
 caliper_producer_status caliper_producer_read_status(caliper_producer* rt, uint32_t program,

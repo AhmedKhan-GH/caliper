@@ -5,6 +5,8 @@
 #include <caliper/live.h>
 #include <caliper/live_views.h>
 #include <caliper_builder/catalog/tensor_sample.h>
+#include <caliper_builder/session/events.h>
+#include <caliper_builder/session/history.h>
 
 #include "embed/embed_core.h"
 #include "live/live_attach.h"
@@ -13,6 +15,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <map>
 #include <set>
 
 namespace caliper_host {
@@ -117,6 +120,9 @@ LiveCatalog::ViewFrame frame_shape_of(CaliperCore* core, const caliper_live_view
             if (!caliper_core_live_view_info(core, v.name.c_str(), &info) || info.width <= 0 || info.height <= 0)
                 return f;
             const std::int64_t h = info.height, w = info.width;
+            // The step stamp of the snapshot, when the script sent one; else the
+            // caller takes the run's step at arrival.
+            if (info.step != INT64_MIN) f.step = info.step;
             f.has_payload = true;
             f.data = v.tex_cpu;
             f.payload_bytes = static_cast<std::uint64_t>(h * w) * 4u;
@@ -210,15 +216,25 @@ void LiveCatalog::update(CaliperCore* core, const std::string& session) {
 void LiveCatalog::apply(bool attached, const std::string& session, const std::vector<ViewFrame>& views) {
     const std::uint64_t t = now();
     std::vector<const ViewFrame*> to_copy;
+    // The views whose steps the history keeps (resolve.h, kept_catalog_ids).
+    std::set<std::string> kept;
+    if (options_.history)
+        for (const std::string& id : caliper_builder::kept_catalog_ids(*options_.history))
+            if (const std::optional<std::string> name = view_name(id)) kept.insert(*name);
+    std::map<std::string, std::int64_t> steps;   // the step of each snapshot to keep, by view
+    bool new_attachment = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!attached) {
             if (attached_ || !views_.empty()) ++revision_;
+            if (attached_ && options_.history) options_.history->clear();
             views_.clear();
             attached_ = false;
             session_.clear();
             return;
         }
+        // A new attachment clears the kept steps (Step History, Reset).
+        new_attachment = !attached_ || session_ != session;
         if (!attached_) ++revision_;
         attached_ = true;
         session_ = session;
@@ -256,6 +272,9 @@ void LiveCatalog::apply(bool attached, const std::string& session, const std::ve
                 if (f.has_payload) {
                     v.arrivals.push_back(t);
                     v.updated_at = catalog_detail::utc_text_ms(std::chrono::system_clock::now());
+                    // The snapshot's step stamp, else the run's step at arrival.
+                    v.step = f.step;
+                    if (!v.step && options_.run_step) v.step = options_.run_step();
                 }
             }
             while (!v.arrivals.empty() && t - v.arrivals.front() > options_.rate_window_ns) v.arrivals.pop_front();
@@ -266,13 +285,18 @@ void LiveCatalog::apply(bool attached, const std::string& session, const std::ve
                 if (hz > 0 && hz <= CatalogLimits::max_rate_hz) v.rate_hz = hz;
             }
             if (!f.has_payload || !f.data || v.copied_updates == f.updates) continue;
-            const bool wanted = t < v.wanted_until;
+            // A view whose steps the history keeps is copied at each snapshot
+            // that has a step; of a series, the history keeps the newest value.
+            const bool keeps = kept.count(f.name) > 0 && v.step.has_value();
+            if (keeps) steps[f.name] = *v.step;
+            const bool wanted = keeps || t < v.wanted_until;
             if (!wanted && v.generation != 0 && t - v.copied_at < options_.idle_copy_ns) continue;
             v.copy_too_large = v.bytes > options_.max_view_bytes;
             if (v.copy_too_large) continue;
             to_copy.push_back(&f);
         }
     }
+    if (new_attachment && options_.history) options_.history->clear();
     // The copies, outside the lock: the payloads stay claimed until the next poll.
     std::vector<std::pair<const ViewFrame*, TensorData>> made;
     for (const ViewFrame* f : to_copy) {
@@ -281,6 +305,7 @@ void LiveCatalog::apply(bool attached, const std::string& session, const std::ve
         made.emplace_back(f, std::move(r.tensor));
     }
     if (made.empty()) return;
+    keep_steps(made, steps);
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto& [f, tensor] : made) {
         const auto it = views_.find(f->name);
@@ -426,6 +451,42 @@ ServedData LiveCatalog::read(const std::string& id, const ServedRequest& request
     out.tensor = v.copy;
     out.generation = v.generation;
     return out;
+}
+
+void LiveCatalog::keep_steps(const std::vector<std::pair<const ViewFrame*, TensorData>>& made,
+                             const std::map<std::string, std::int64_t>& steps) {
+    if (!options_.history || steps.empty()) return;
+    const caliper_builder::CursorState before = options_.history->cursor();
+    for (const auto& [f, tensor] : made) {
+        const auto step = steps.find(f->name);
+        if (step == steps.end()) continue;
+        const std::string id = caliper_builder::make_catalog_id(caliper_builder::CatalogKind::live, f->name);
+        if (f->kind == CALIPER_LIVE_KIND_SERIES) {
+            if (tensor.numel() > 0) options_.history->append_series(id, step->second, tensor.element(tensor.numel() - 1));
+            continue;
+        }
+        options_.history->append(id, step->second, tensor);
+    }
+    // A held cursor that fell out of every source moved to the first kept
+    // step: one `cursor` event says so (design/instrument-interface.md,
+    // Cursor Events). A live cursor's moves add no event.
+    const caliper_builder::CursorState after = options_.history->cursor();
+    if (before.live || after.live || after.step == before.step || !options_.events) return;
+    caliper_builder::Event e;
+    e.kind = caliper_builder::EventKind::cursor;
+    e.origin = "script";
+    e.fields = {{"change", "clamped"},      {"step", after.step},       {"first", after.first},
+                {"latest", after.latest},   {"playing", after.playing}, {"speed", after.speed}};
+    options_.events->push(std::move(e));
+}
+
+std::optional<std::int64_t> LiveCatalog::step(const std::string& id) const {
+    const std::optional<std::string> name = view_name(id);
+    const std::string key = name ? *name : id;
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = views_.find(key);
+    if (it == views_.end()) return std::nullopt;
+    return it->second.step;
 }
 
 std::uint64_t LiveCatalog::copies() const {

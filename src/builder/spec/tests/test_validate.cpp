@@ -543,9 +543,11 @@ TEST_CASE("the version 1 fixture is valid, and a scene the script does not send 
 TEST_CASE("the three error codes of version 1") {
     // spec.unknown_control_kind is the parser's.
     CHECK(has(check_v1(control("k", "knob", "value")).diagnostics, "spec.unknown_control_kind", "control[0].kind"));
-    for (const char* kind : {"range", "picker", "text"}) {
+    // Every kind is drawn, so none gives spec.unsupported_control any more.
+    for (const char* kind : {"range", "picker", "text", "segmented", "transport", "readout"}) {
         CAPTURE(kind);
-        CHECK(has(check_v1(control("k", kind, "value")).diagnostics, "spec.unsupported_control", "control[0].kind"));
+        CHECK_FALSE(has(check_v1(control("k", kind, "value")).diagnostics, "spec.unsupported_control",
+                        "control[0].kind"));
     }
     CHECK(has(check_v1(control("k", "slider", "action:save")).diagnostics, "spec.control_mismatch",
               "control[0].bind"));

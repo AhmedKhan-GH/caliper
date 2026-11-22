@@ -130,7 +130,7 @@ TEST_CASE("control commands: their own refusals come before the validator") {
                         {{"id", "x"}, {"kind", "slider"}, {"bind", "param:lr"}, {"place", {{"target", "nope"}, {"where", "below"}}}});
     CHECK(e.error.code == "panel.not_found");
     CHECK(e.error.where == "args.place.target");
-    e = apply_spec_edit(s, "control.patch", {{"id", "lr"}, {"patch", {{"options", {{"speed", 1}}}}}});
+    e = apply_spec_edit(s, "control.patch", {{"id", "lr"}, {"patch", {{"options", {{"knob", 1}}}}}});
     CHECK(e.error.code == "spec.unknown_option");
     e = apply_spec_edit(s, "control.patch", {{"id", "lr"}, {"patch", {{"options", {{"min", "low"}}}}}});
     CHECK(e.error.code == "spec.wrong_type");

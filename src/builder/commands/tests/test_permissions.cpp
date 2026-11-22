@@ -82,6 +82,15 @@ TEST_CASE("every command of the table says what it does, and the classes agree w
     for (const char* name : {"run.start", "run.fork", "run.stop"}) CHECK(cmd(name).effect == CommandEffect::run);
     for (const char* name : {"run.list", "run.logs"}) CHECK(cmd(name).effect == CommandEffect::read);
     CHECK(cmd("events.wait").effect == CommandEffect::read);
+    // design/instrument-interface.md, Commands: the edits are edits of the open spec, and the
+    // commands that set state, a control, a pick, the cursor or the camera change the session.
+    for (const char* name : {"state.create", "state.patch", "state.remove", "entity.set", "entity.remove",
+                             "annotation.set", "annotation.remove", "camera.save"})
+        CHECK(cmd(name).effect == CommandEffect::edit);
+    for (const char* name : {"state.set", "control.set", "selection.set", "cursor.set", "cursor.step", "camera.set"})
+        CHECK(cmd(name).effect == CommandEffect::change);
+    for (const char* name : {"state.get", "selection.get", "cursor.get", "camera.get"})
+        CHECK(cmd(name).effect == CommandEffect::read);
     // design/gpu-programs.md: stages and programs are edits of the open spec,
     // and an intervention acts on the running script.
     for (const char* name : {"stage.set", "stage.remove", "program.create", "program.patch", "program.remove"})

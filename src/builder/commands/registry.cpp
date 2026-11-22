@@ -571,6 +571,14 @@ CommandResult CommandRegistry::run(const CommandInvocation& inv, const Entry& en
     } else {
         CommandOutput out = call(entry, inv, false);
         if (!out.error && !out.follow_ups.empty()) return run_follow_ups(inv, entry, out);
+        // What the journal and the redo record keep: the arguments as the
+        // handler completed them, when it did.
+        CommandInvocation recorded_inv;
+        if (!out.recorded_args.is_null()) {
+            recorded_inv = inv;
+            recorded_inv.args = out.recorded_args;
+        }
+        const CommandInvocation& kept = out.recorded_args.is_null() ? inv : recorded_inv;
         // An outcome that changed nothing is a read, even of a mutating command.
         const bool changed = entry.descriptor.mutates && !out.no_effect;
         const bool journal_this = changed || (journal_ && journal_->options().include_read_only);
@@ -578,13 +586,13 @@ CommandResult CommandRegistry::run(const CommandInvocation& inv, const Entry& en
             if (journal_this) journal_do(inv, false, out.error.code, allowed_by);
             return CommandResult::failure(inv.id, out.error);
         }
-        const std::uint64_t seq = journal_this ? journal_do(inv, true, {}, allowed_by) : 0;
+        const std::uint64_t seq = journal_this ? journal_do(kept, true, {}, allowed_by) : 0;
         if (changed) {
             if (out.undo.kind == UndoRecord::Kind::none) {
                 history_.pass_by();
             } else {
                 HistoryRecord record;
-                record.invocation = inv;
+                record.invocation = kept;
                 record.destructive = entry.descriptor.destructive;
                 if (out.undo.kind == UndoRecord::Kind::inverse) {
                     const auto inverse = commands_.find(out.undo.inverse_name);

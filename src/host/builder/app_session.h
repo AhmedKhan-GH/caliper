@@ -284,6 +284,11 @@ public:
 
     // The spec runtime's seam for panel.render; null unbinds it.
     void set_panel_renderer(std::shared_ptr<PanelRenderSeam> renderer);
+    // The spec page's answer to camera.get and camera.set (design/instrument-interface.md,
+    // Commands), from the scene view that a panel shows; empty unbinds it, and the commands
+    // then answer command.not_available. Frame thread, as the commands run.
+    using CameraSeam = std::function<caliper_builder::CommandOutput(const std::string& name, const nlohmann::json& args)>;
+    void set_camera_seam(CameraSeam seam);
 
     // The attached script's run (live/live_attach.h): the app gives its
     // attachment's link once, and null before the attachment goes. The

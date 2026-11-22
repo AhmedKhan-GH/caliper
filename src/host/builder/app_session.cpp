@@ -471,6 +471,9 @@ struct AppSession::Impl {
             return im->render_panel(spec, data, width, height);
         }
         cb::CommandOutput capture_frame() override { return im->capture_frame(); }
+        cb::CommandOutput camera_command(const std::string& name, const json& args) override {
+            return im->camera_command(name, args);
+        }
     };
 
     Options opt;
@@ -518,6 +521,7 @@ struct AppSession::Impl {
 
     std::mutex renderer_m;
     std::shared_ptr<PanelRenderSeam> renderer;
+    AppSession::CameraSeam camera_seam;   // under renderer_m
 
     std::thread script;
     std::atomic<bool> script_on{false};
@@ -789,6 +793,16 @@ struct AppSession::Impl {
             return failed("command.not_available",
                           "panel.render needs the spec runtime, which this build of the app does not have yet.");
         return r->render_panel(spec, data, width, height);
+    }
+
+    cb::CommandOutput camera_command(const std::string& name, const json& args) {
+        AppSession::CameraSeam seam;
+        {
+            std::lock_guard<std::mutex> lock(renderer_m);
+            seam = camera_seam;
+        }
+        if (!seam) return failed("command.not_available", name + " needs the spec page of the app, which is not open.");
+        return seam(name, args);
     }
 
     cb::CommandOutput capture_frame() {
@@ -1099,6 +1113,11 @@ void AppSession::set_panel_renderer(std::shared_ptr<PanelRenderSeam> renderer) {
     impl_->renderer = std::move(renderer);
 }
 
+void AppSession::set_camera_seam(CameraSeam seam) {
+    std::lock_guard<std::mutex> lock(impl_->renderer_m);
+    impl_->camera_seam = std::move(seam);
+}
+
 void AppSession::set_run_link(caliper_live::RunLink* link) { impl_->run_ctl.set_link(link); }
 
 caliper_builder::RunControl* AppSession::run_control() { return &impl_->run_ctl; }
@@ -1182,6 +1201,7 @@ const std::string& AppSession::workspace() const { return impl_->opt.workspace; 
 bool AppSession::worker_busy() const { return false; }
 bool AppSession::script_running() const { return false; }
 void AppSession::set_panel_renderer(std::shared_ptr<PanelRenderSeam>) {}
+void AppSession::set_camera_seam(CameraSeam) {}
 void AppSession::set_run_link(caliper_live::RunLink*) {}
 caliper_builder::RunControl* AppSession::run_control() { return nullptr; }
 void AppSession::set_model_runner(caliper_builder::ModelRunner*) {}

@@ -490,6 +490,47 @@ TEST_CASE("the journal records the session, and a replay rebuilds the open spec"
     CHECK(*replay.spec == expected);
 }
 
+// camera.save asks the app for its orbit; the journal keeps that orbit, so
+// that a replay rebuilds the saved view without an app.
+class OrbitHost : public FakeHost {
+public:
+    CommandOutput camera_command(const std::string& name, const json& args) override {
+        if (name != "camera.get") return CommandOutput::fail(Error("command.not_bound", "Only camera.get here."));
+        return CommandOutput::ok({{"panel", args.value("panel", "")},
+                                  {"orbit", {{"target", {0.5, 0.25, 0.0}}, {"distance", 3.5}, {"azimuth", 40.0},
+                                             {"elevation", 25.0}}},
+                                  {"views", json::array()}});
+    }
+};
+
+TEST_CASE("the journal keeps the orbit that camera.save saved, and a replay needs no app") {
+    Fixture f("camera");
+    f.s->set_host(std::make_shared<OrbitHost>());
+    ok(*f.s, "spec.new", {{"id", "c"}});
+    ok(*f.s, "panel.create", {{"id", "world"}, {"primitive", "scene"}, {"bind", {{"scene", "live:model"}}}});
+    ok(*f.s, "camera.save", {{"panel", "world"}, {"name", "side"}});
+    const spec::Spec expected = f.s->open_spec()->spec;
+    REQUIRE(expected.find_panel("world"));
+    REQUIRE(expected.find_panel("world")->options.views.size() == 1);
+    CHECK(expected.find_panel("world")->options.views[0].azimuth == doctest::Approx(40.0));
+    const JournalRead read = read_journal(f.ws + "/journal/commands.jsonl");
+    REQUIRE(read.error.ok());
+    bool saw = false;
+    for (const auto& e : read.events)
+        if (e.name == "camera.save") {
+            saw = true;
+            CHECK(e.args.contains("orbit"));
+            CHECK(e.args["orbit"]["distance"] == 3.5);
+        }
+    CHECK(saw);
+    f.s->set_host(nullptr);
+    f.s->close();
+    const SpecReplay replay = replay_spec_journal(f.ws);
+    REQUIRE_MESSAGE(replay.error.ok(), replay.error.message);
+    REQUIRE(replay.spec);
+    CHECK(*replay.spec == expected);
+}
+
 TEST_CASE("running a Python loader asks every origin but the person's own, per invocation") {
     Fixture f("python");
     const std::string python = CALIPER_BUILDER_TEST_PYTHON;

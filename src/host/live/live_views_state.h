@@ -162,6 +162,7 @@ struct View {
     bool        imported = false;
     std::string path;
     int64_t     count = 0;
+    int64_t     step = INT64_MIN;           // the step stamp of the last apply; INT64_MIN when none
 
     // HEATMAP / IMAGE: the v1.2 view of the same name is ours (created or
     // adopted by an apply), and the +1 completion handles of its device
