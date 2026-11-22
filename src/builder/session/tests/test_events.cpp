@@ -337,6 +337,32 @@ TEST_CASE("events: closing the session wakes a held wait_for_events and waits fo
     CHECK(got->error.code == "command.shutdown");
 }
 
+TEST_CASE("events: wait_for_events holds at most kMaxEventWaits calls and answers one more at once") {
+    auto s = open_session(fresh_dir("events-bound") + "/workspace");
+    std::vector<std::future<CommandResult>> held;
+    std::optional<CommandResult> over, now;
+    {
+        FrameThread frame(*s);
+        for (std::size_t i = 0; i < kMaxEventWaits; ++i)
+            held.push_back(std::async(std::launch::async, [&] {
+                return wait_for_events(s->queue(), s->events(), wait_call({{"cursor", 0}, {"timeout_s", 60}}));
+            }));
+        while (s->events().waiting() < kMaxEventWaits) std::this_thread::yield();
+        over = wait_for_events(s->queue(), s->events(), wait_call({{"cursor", 0}, {"timeout_s", 60}}));
+        now = wait_for_events(s->queue(), s->events(), wait_call({{"cursor", 0}, {"timeout_s", 0}}));
+        CHECK(s->events().waiting() == kMaxEventWaits);
+        Event e;
+        e.kind = EventKind::pick;
+        s->events().push(e);   // the held calls answer with it
+        for (auto& f : held) CHECK(f.get().ok);
+    }
+    REQUIRE_FALSE(over->ok);
+    CHECK(over->error.code == kEventsTooManyWaits);
+    CHECK(over->error.where == "timeout_s");
+    CHECK(now->ok);
+    CHECK(s->events().waiting() == 0);
+}
+
 TEST_CASE("events: the session feeds spec events from its journal") {
     auto s = open_session(fresh_dir("events-spec") + "/workspace");
     write_text(s->workspace() + "/data/metrics.csv", "step,loss\n0,1.0\n1,0.5\n");

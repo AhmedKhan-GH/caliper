@@ -224,6 +224,12 @@ EventRead EventRing::read(std::uint64_t cursor, const EventFilter& filter, std::
 
 bool EventRing::wait(std::uint64_t cursor, const EventFilter& filter,
                      std::chrono::steady_clock::time_point deadline) const {
+    return *wait_if_room(cursor, filter, deadline, static_cast<std::size_t>(-1));
+}
+
+std::optional<bool> EventRing::wait_if_room(std::uint64_t cursor, const EventFilter& filter,
+                                            std::chrono::steady_clock::time_point deadline,
+                                            std::size_t max_waiting) const {
     std::unique_lock<std::mutex> lock(state_->mutex);
     std::uint64_t scanned = state_->start(cursor);
     auto found = [&] {
@@ -237,6 +243,7 @@ bool EventRing::wait(std::uint64_t cursor, const EventFilter& filter,
     };
     if (found()) return true;
     if (state_->closed) return false;
+    if (state_->waiting.size() >= max_waiting) return std::nullopt;
     state_->waiting.push_back(&filter);
     bool match = false;
     for (;;) {
@@ -320,7 +327,14 @@ CommandResult wait_for_events(CommandQueue& queue, EventRing& ring, CommandInvoc
         return first;
     // Wait for a match after everything the first answer looked at, then ask
     // the same question again, which answers at once.
-    ring.wait(first.result.value("cursor", w.cursor), w.filter, deadline);
+    if (!ring.wait_if_room(first.result.value("cursor", w.cursor), w.filter, deadline, kMaxEventWaits))
+        return CommandResult::failure(
+            first.id,
+            Error(kEventsTooManyWaits,
+                  std::to_string(kMaxEventWaits) +
+                      " calls of events.wait wait already, the most at once; call again after one answers, or with "
+                      "timeout_s 0, which answers at once.",
+                  "timeout_s"));
     invocation.args["timeout_s"] = 0;
     return queue.submit(std::move(invocation)).get();
 }

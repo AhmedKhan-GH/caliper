@@ -226,6 +226,8 @@ The call answers at once when matching events wait. Otherwise it holds the reque
 
 The handler never waits, because the command queue runs it on the frame thread. Instead, `wait_for_events()` holds the thread of the caller. It submits the call to the queue, and it waits on the ring when the answer holds no event. When a matching event comes, it submits the call again with `timeout_s` 0. Caliper API serves `POST /v0/commands/events.wait` through this function, on a thread of its own for each call. `Session::close()` waits until each such thread has left the function. The HTTP client of `caliper-mcp` thus waits up to 60 seconds plus a margin for this command.
 
+At most 8 calls of `events.wait` wait at once, because each held call takes one of the 32 command slots of Caliper API for up to 60 seconds. Thus 24 slots stay free for other commands. When 8 calls wait already, a call that finds no matching event fails at once with the code `events.too_many_waits`. A call with `timeout_s` 0 still answers. The bound is `kMaxEventWaits` in `events.h`.
+
 A long poll works with each MCP client and each protocol revision that `caliper-mcp` serves. The resource `caliper://events` with `resources/subscribe` is a later, additive path.
 
 ### Event Format
