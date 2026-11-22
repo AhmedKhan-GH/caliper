@@ -19,6 +19,8 @@ transform = [
 
 The app keeps the value after the longest run of steps from the start that read no reference. A source without references thus keeps its final value. It keeps one value for each step, and a later value of a step replaces an earlier one. The step comes from the stamp of the snapshot. A run that is faster than the app reads it keeps steps with gaps between them.
 
+While the script calls `caliper.step()`, a live source updates only on the pass steps of the shared cadence, a few times a second on a fast run. The gaps between kept steps are thus as wide as the steps between two passes. A watched series still delivers every value. See [Views in the Cadence](../agents/gpu-programs.md#views-in-the-cadence).
+
 | Rule | Value |
 |---|---|
 | Depth | `history` is from 0 to 65,536 steps. A source whose root is a live tensor and that has no `from` keeps 64 steps by default. Other sources keep none by default. |
