@@ -59,6 +59,7 @@ struct BufferInfo {
     uint32_t usage = 0;
     bool host_visible = false;
     bool imported = false;
+    bool read_only = false;   // ExternalBuffer::read_only of an import
     Route route = Route::InPlace;
 };
 
