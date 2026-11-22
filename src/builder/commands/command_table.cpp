@@ -350,7 +350,8 @@ const std::pair<const char*, const char*> kFragments[] = {
         "origin": {"type": "string", "enum": ["ui", "builder", "agent", "mcp", "api", "script"], "description": "Who caused it: ui for the person in the app, script for the running script, else the origin of the command."},
         "entity": {"type": "string", "description": "pick: the entity path of the item picked."},
         "primitive": {"type": "string", "description": "pick: the scene part of the item, such as points or boxes."},
-        "index": {"type": "integer", "minimum": 0, "description": "pick: the item's index in the batch the script sent."},
+        "index": {"type": ["integer", "array"], "items": {"type": "integer"}, "description": "pick: the item's index in the batch the script sent; for a pick of a piece's item, its item map's first four integer fields as tensor indices, -1 where there are fewer."},
+        "item": {"type": "integer", "minimum": 0, "description": "pick of a piece's item: the element index in the item map's resource."},
         "row_id": {"type": ["integer", "null"], "description": "pick: the item's row in the script's source tensor, or null when the scene does not say."},
         "position": {"type": ["array", "null"], "minItems": 3, "maxItems": 3, "items": {"type": "number"}, "description": "pick: the point hit, in scene coordinates, or null without depth."},
         "pixel": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "integer"}, "description": "pick on an image: the pixel, x then y."},
@@ -362,14 +363,14 @@ const std::pair<const char*, const char*> kFragments[] = {
                                  "indices": {"type": "array", "items": {"type": "integer"}, "description": "The items' indices in the batch."},
                                  "row_ids": {"type": "array", "items": {"type": ["integer", "null"]}, "description": "The items' rows in the source tensor."}}}},
         "truncated": {"type": "boolean", "description": "select: whether the selection held more than 32768 items and was cut."},
-        "fields": {"description": "pick: the pick fields as a JSON object."},
+        "fields": {"description": "pick: the pick fields as a JSON object; for a piece's item, the item map's fields of the element by name, as numbers."},
         "annotation": {"type": "string", "description": "pick: the id of the annotation that was picked."},
         "key": {"type": "string", "description": "control: the shortcut key that made the change, when a key did."},
         "control": {"type": "string", "description": "control: the control's id."},
         "bind": {"type": "string", "description": "control: the control's target, such as param:lr."},
         "change": {"type": "string", "enum": ["state", "param", "action", "attach", "runner", "intervene", "compiled", "refused", "stopped", "live", "held", "playing", "moved", "clamped"], "description": "cursor: what changed: live, held, playing, moved (by a command, a step or a key) or clamped (to the nearest kept step); run: what changed: the run's state, a parameter applied at a step, the end of an action, the attachment of a script, the state of a managed run (runner), or an intervention applied at a step (intervene); program: compiled, refused by a check, or stopped by a limit."},
         "state": {"type": "string", "description": "state: the state variable's id; run with change state: the run's new state; approval: pending, approved, denied or expired."},
-        "step": {"type": ["integer", "null"], "description": "run: the script's step when it changed, or null before the first step; cursor: the step that the cursor shows."},
+        "step": {"type": ["integer", "null"], "description": "run: the script's step when it changed, or null before the first step; cursor: the step that the cursor shows; pick of a piece's item: the step of the resource version that the frame showed."},
         "first": {"type": "integer", "description": "cursor: the first kept step."},
         "latest": {"type": "integer", "description": "cursor: the newest kept step."},
         "playing": {"type": "boolean", "description": "cursor: whether the cursor plays."},
@@ -393,7 +394,9 @@ const std::pair<const char*, const char*> kFragments[] = {
         "error": {"type": ["string", "null"], "description": "run with change runner: why the run failed, else null."},
         "point": {"type": "string", "description": "run with change intervene: the intervention point."},
         "op": {"type": ["string", "null"], "description": "run with change intervene: the op applied, or null when the point's interventions were cleared."},
-        "program": {"type": "string", "description": "program: the program's id, or the stage as <panel>/<entity>/<kind>."},
+        "program": {"type": "string", "description": "program: the program's id, or the stage as <panel>/<entity>/<kind>; pick of a piece's item: the program that drew it."},
+        "half": {"type": "string", "enum": ["derive", "draw"], "description": "program of an instance of a piece: the half that compiled, was refused or stopped."},
+        "pass": {"type": ["integer", "null"], "minimum": 0, "description": "program of an instance of a piece: the index of the pass in its half, or null for the whole half."},
         "host": {"type": "string", "enum": ["script", "viewer"], "description": "program: where it compiled, was refused or stopped."},
         "code": {"type": "string", "description": "program with change refused or stopped: a stable code, such as program.writes_input."},
         "message": {"type": "string", "description": "program with change refused or stopped: one plain sentence that says why."},
@@ -412,7 +415,9 @@ const std::pair<const char*, const char*> kFragments[] = {
         "code": {"type": "string", "description": "A stable code, such as program.compile_failed or program.writes_input."},
         "message": {"type": "string", "description": "The message of the compiler or the sandbox, in one line."},
         "line": {"type": "integer", "minimum": 0, "description": "The line in the given source, from 1; 0 when the message has no place."},
-        "column": {"type": "integer", "minimum": 0, "description": "The column in bytes, from 1; 0 when the message has no place."}}})json"},
+        "column": {"type": "integer", "minimum": 0, "description": "The column in bytes, from 1; 0 when the message has no place."},
+        "file": {"type": "string", "description": "A piece: the file of the line, such as draw.wgsl, common.wgsl, lib/colormap@1 or piece.toml."},
+        "where": {"type": "string", "description": "A piece: the manifest key or the pass of the message, such as draw.passes[1].target."}}})json"},
 
     {"program_input", R"json({
       "type": "object", "additionalProperties": false, "required": ["var", "source"],
@@ -447,7 +452,7 @@ const std::pair<const char*, const char*> kFragments[] = {
         "every": {"type": "integer", "minimum": 1, "maximum": 10000, "description": "The fewest steps between two passes; the runtime may run the program less often to keep training at 95 percent of its speed, never more often."}}})json"},
 
     {"program", R"json({
-      "type": "object", "additionalProperties": false, "required": ["id", "wgsl", "inputs", "output"],
+      "type": "object", "additionalProperties": false, "required": ["id"],
       "properties": {
         "id": {"$use": "id", "maxLength": 55, "description": "The program's id, unique among programs, at most 55 characters, because its pixels output is the live view program.<id>."},
         "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The program's label."},
@@ -457,12 +462,14 @@ const std::pair<const char*, const char*> kFragments[] = {
         "output": {"$use": "program_output", "description": "The program's one output."},
         "limits": {"$use": "program_limits", "description": "The program's limits."},
         "workgroups": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "description": "The workgroup counts x, y and z of the dispatch; from max_count or the image size and the entry's workgroup size when absent."},
-        "params": {"description": "A JSON object that gives each of the program's named parameters, at most 16 names, a number or a binding reference to a control, a selection or a state; the WGSL reads them by name."}}})json"},
+        "params": {"description": "A JSON object that gives each of the program's named parameters, at most 16 names, a number or a binding reference to a control, a selection or a state; the WGSL reads them by name."},
+        "piece": {"$use": "piece_pin", "description": "An instance of a piece: the pinned piece. Such a program has none of wgsl, entry, inputs, output, limits and workgroups; a mix is program.form_mixed."},
+        "bind": {"$use": "piece_bind"},
+        "panel": {"$use": "id", "description": "An instance: the scene panel that the piece's draw half writes; necessary when the piece draws."}}})json"},
 
-    // Pieces (design/programmable-graphics.md, Piece Manifest). The piece
-    // commands take them now; program.create, program.patch and the spec
-    // schema take a piece's instance with the codec, which refuses its keys
-    // with spec.not_built until then.
+    // Pieces (design/programmable-graphics.md, Piece Manifest and Program
+    // Instances): the manifest, the pin and the bindings of an instance, which
+    // the piece commands, program.create, program.patch and the spec take.
     {"piece_input", R"json({"type": "object", "additionalProperties": false, "required": ["name", "kind"], "properties": {"name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "description": "The input's name, which the WGSL reads as a generated read-only array."}, "kind": {"type": "string", "enum": ["tensor", "buffer"], "description": "tensor: a tensor of the script, read by the derive half; buffer: another program's published buffer resource, read by the draw half."}, "dtype": {"type": "string", "enum": ["f32", "i32", "u32"], "description": "tensor: the element type; f32 when absent. The bound tensor's dtype must match it."}, "rank_min": {"type": "integer", "minimum": 0, "maximum": 8, "description": "tensor: the fewest axes; 1 when absent."}, "rank_max": {"type": "integer", "minimum": 0, "maximum": 8, "description": "tensor: the most axes; 8 when absent."}, "element": {"type": "string", "enum": ["f32", "i32", "u32", "vec2<f32>", "vec4<f32>", "vec2<u32>", "vec4<u32>"], "description": "buffer: a plain element type; give either element, or struct with fields."}, "struct": {"type": "string", "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$", "description": "buffer: the name of the struct that the composer generates from fields."}, "fields": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"type": "string", "pattern": "^[a-z_][a-z0-9_]{0,31}: (f32|i32|u32|vec2<f32>|vec4<f32>|vec2<u32>|vec4<u32>)$"}, "description": "buffer: the struct's fields in order, each written name: type."}, "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The input's label in the builder."}}})json"},
 
     {"piece_param", R"json({"type": "object", "additionalProperties": false, "required": ["name"], "properties": {"name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "description": "The parameter's name, a field of the generated struct Params that both halves read as params.<name>."}, "type": {"type": "string", "enum": ["f32", "i32", "u32"], "description": "The field's type; f32 when absent."}, "default": {"type": "number", "description": "The value when an instance gives none; 0 when absent."}, "min": {"type": "number", "description": "The least value; with max, an instance without a value gets a range control."}, "max": {"type": "number", "description": "The greatest value."}, "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The label of the control."}}})json"},
@@ -477,6 +484,10 @@ const std::pair<const char*, const char*> kFragments[] = {
 
     {"piece", R"json({"type": "object", "additionalProperties": false, "required": ["name"], "properties": {"name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "description": "The piece's name, at most 32 characters; its workspace folder is pieces/<name>/<version>/."}, "version": {"type": "integer", "minimum": 1, "maximum": 1000000, "description": "The piece's version; 1 when absent. A saved version never changes."}, "description": {"type": "string", "maxLength": 256, "description": "One line that says what the piece draws or publishes."}, "inputs": {"type": "array", "maxItems": 8, "items": {"$use": "piece_input"}, "description": "The typed inputs that an instance binds."}, "params": {"type": "array", "maxItems": 16, "items": {"$use": "piece_param"}, "description": "The parameters, which become controls when an instance gives no value."}, "resources": {"type": "array", "maxItems": 8, "items": {"$use": "piece_resource"}, "description": "The resources that the derive half writes; the published ones are outputs."}, "imports": {"type": "array", "maxItems": 8, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}@[1-9][0-9]{0,5}$"}, "description": "Lib modules by name and version, such as colormap@1, whose items the WGSL calls as colormap::magma."}, "depends": {"type": "array", "maxItems": 8, "items": {"type": "object", "additionalProperties": false, "required": ["name", "version"], "properties": {"name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "description": "The piece's name."}, "version": {"type": "integer", "minimum": 1, "maximum": 1000000, "description": "Its version."}}}, "description": "Pieces whose outputs feed this piece's buffer inputs, or that are drawn with it."}, "derive": {"$use": "piece_derive", "description": "The derive half, which runs in the training script; absent for a piece that only draws."}, "draw": {"$use": "piece_draw", "description": "The draw half, which runs in the viewer every frame; absent for a piece that only publishes."}, "sample": {"type": "array", "maxItems": 8, "items": {"type": "object", "additionalProperties": false, "required": ["input", "shape"], "properties": {"input": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "description": "A tensor or buffer input of the piece."}, "shape": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "integer", "minimum": 1}, "description": "The sample's shape; its file is sample/<input>.bin, raw little-endian elements."}, "data": {"type": "string", "maxLength": 1398104, "description": "The file's bytes in base64, when a command writes it; at most 1 MiB for all samples."}}}, "description": "A small input for the preview."}, "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "The piece's hash over its canonical manifest and its resolved WGSL; the host computes it, and a given value must match."}, "files": {"type": "object", "additionalProperties": false, "required": [], "properties": {"common": {"type": "string", "maxLength": 65536, "description": "common.wgsl: structs, constants and functions that both halves include."}, "derive": {"type": "string", "maxLength": 65536, "description": "derive.wgsl: the derive half's compute entry points."}, "draw": {"type": "string", "maxLength": 65536, "description": "draw.wgsl: the draw half's entry points."}}, "description": "The WGSL files, with no binding and no directive; the prelude, the composer and the imports declare the rest."}}})json"},
 
+    {"piece_pin", R"json({"type": "object", "additionalProperties": false, "required": ["name"], "properties": {"name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "description": "The piece's name."}, "version": {"type": "integer", "minimum": 1, "maximum": 1000000, "description": "The piece's version; 1 when absent."}, "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "The piece's hash. The editor writes it when absent; a piece whose hash differs refuses the program with piece.hash_mismatch."}, "from": {"type": "string", "enum": ["library", "workspace", "inline"], "description": "The piece's source: the built-in library (the default), the workspace's pieces folder, or the spec's inline pieces."}}})json"},
+
+    {"piece_bind", R"json({"description": "A JSON object that binds each input of the piece by name, at most 8: live:<tensor> for a tensor input, program:<id>/<resource> for a buffer input that reads another program's published buffer. An input unbound, or bound to another dtype, rank or layout, is piece.bad_binding."})json"},
+
     {"piece_summary", R"json({"type": "object", "additionalProperties": false, "required": ["name", "version", "from", "description", "hash", "draws", "derives", "inputs", "params", "outputs", "pinned_by"], "properties": {"name": {"type": "string", "description": "The piece's name."}, "version": {"type": "integer", "description": "Its version."}, "from": {"type": "string", "enum": ["library", "workspace", "inline"], "description": "library, workspace or inline in the open spec."}, "description": {"type": "string", "description": "Its one line."}, "hash": {"type": "string", "description": "Its hash."}, "draws": {"type": "boolean", "description": "Whether it has a draw half."}, "derives": {"type": "boolean", "description": "Whether it has a derive half."}, "inputs": {"type": "array", "items": {"type": "string"}, "description": "Its inputs' names."}, "params": {"type": "array", "items": {"type": "string"}, "description": "Its parameters' names."}, "outputs": {"type": "array", "items": {"type": "string"}, "description": "Its published resources' ids."}, "pinned_by": {"type": "array", "items": {"type": "string"}, "description": "The programs of the open spec that pin this version."}}})json"},
 
     {"program_status", R"json({
@@ -484,7 +495,7 @@ const std::pair<const char*, const char*> kFragments[] = {
       "required": ["id", "kind", "host", "state", "every", "every_min", "last_pass_ms", "last_cost_ms", "step_ms", "overhead_share", "passes_per_s", "last_step", "runs", "memory_bytes", "memory_limit_bytes", "error", "sha256"],
       "properties": {
         "id": {"type": "string", "description": "The program's id, or a stage as <panel>/<entity>/<kind>."},
-        "kind": {"type": "string", "enum": ["geometry", "pixels", "tensor", "material", "vertex", "operator"], "description": "The program's output kind, the stage's kind, or operator for the first surface or path step of a source over a live tensor, which runs in the script and has the id operator.<source>.<step index>."},
+        "kind": {"type": "string", "enum": ["geometry", "pixels", "tensor", "material", "vertex", "operator", "piece"], "description": "The program's output kind, the stage's kind, piece for an instance of a piece, or operator for the first surface or path step of a source over a live tensor, which runs in the script and has the id operator.<source>.<step index>."},
         "host": {"type": "string", "enum": ["script", "viewer", "none"], "description": "Where it runs: script for a program in the attached script, viewer for a stage, none when nothing runs it."},
         "state": {"type": "string", "enum": ["waiting", "review", "compiled", "running", "refused", "stopped"], "description": "waiting for a host, review in a foreign spec without a review, compiled before its first pass, running, refused by a check, or stopped by a limit."},
         "every": {"type": ["integer", "null"], "description": "The steps between two passes of the program: the cadence N that all programs share, or a multiple of N for a larger limits.every; null for a stage or before the first pass."},
@@ -504,7 +515,22 @@ const std::pair<const char*, const char*> kFragments[] = {
                     "message": {"type": "string", "description": "One plain sentence that says what happened."},
                     "line": {"type": "integer", "minimum": 0, "description": "The line in the source, or 0."},
                     "column": {"type": "integer", "minimum": 0, "description": "The column in the source, or 0."}}},
-        "sha256": {"type": "string", "description": "The SHA-256 of the source the host runs, in hex; empty when none runs."}}})json"},
+        "sha256": {"type": "string", "description": "The SHA-256 of the source the host runs, in hex; empty when none runs."},
+        "piece": {"$use": "piece_pin", "description": "An instance: its pin; absent for another program."},
+        "draw": {"type": ["object", "null"], "additionalProperties": false, "description": "An instance whose piece draws: its draw half in the viewer; absent for another program.",
+                 "required": ["state", "frame_ms", "frame_limit_ms", "memory_bytes", "memory_limit_bytes", "resource_step", "error"],
+                 "properties": {
+                   "state": {"type": "string", "enum": ["waiting", "compiled", "running", "refused", "stopped"], "description": "The draw half's state in the viewer."},
+                   "frame_ms": {"type": ["number", "null"], "description": "The GPU time of its last frame in milliseconds, or null."},
+                   "frame_limit_ms": {"type": "number", "description": "Its draw.frame_ms."},
+                   "memory_bytes": {"type": "integer", "minimum": 0, "description": "The bytes of its resources, buffer inputs, draw buffers and targets in the viewer."},
+                   "memory_limit_bytes": {"type": "integer", "minimum": 0, "description": "Its draw.memory_mb in bytes."},
+                   "resource_step": {"type": ["integer", "null"], "description": "The step of the newest resource version that a frame drew, or null."},
+                   "error": {"type": ["object", "null"], "additionalProperties": false, "required": ["code", "message", "where"], "description": "The draw half's last error, or null.",
+                             "properties": {
+                               "code": {"type": "string", "description": "A stable code, such as program.draw_over_time."},
+                               "message": {"type": "string", "description": "One plain sentence that names the pass, its time or memory, and its limit."},
+                               "where": {"type": "string", "description": "The pass, such as draw.passes[1], or empty."}}}}}}})json"},
 
     {"intervention_point", R"json({
       "type": "object", "additionalProperties": false, "required": ["point", "kind", "module", "head", "type", "shape"],
@@ -1663,7 +1689,15 @@ const Row kRows[] = {
       "properties": {
         "run": {"$use": "run_id", "description": "The parent: a managed run that runs or is paused."},
         "params": {"$use": "run_params", "description": "The parameters that change in the fork; the checkpoint holds the others."},
-        "id": {"$use": "run_id", "description": "The fork's id, unique in the workspace; the parent's script name and a number when absent."}}})json",
+        "id": {"$use": "run_id", "description": "The fork's id, unique in the workspace; the parent's script name and a number when absent."},
+        "step": {"type": "integer", "minimum": 0, "description": "Start from the parent's newest kept checkpoint at or before this step, in place of its next checkpoint."},
+        "interventions": {"type": "array", "maxItems": 16, "description": "Interventions that the fork applies before its first step, each as intervene.set takes it.",
+                          "items": {"type": "object", "additionalProperties": false, "required": ["point", "op"],
+                                    "properties": {
+                                      "point": {"type": "string", "minLength": 1, "maxLength": 255, "description": "The point's name, from intervene.points."},
+                                      "op": {"type": "string", "enum": ["ablate", "scale", "steer", "patch"], "description": "What to do; scale, steer and patch are reserved."},
+                                      "from_step": {"type": "integer", "minimum": 0, "description": "The first step it acts on; the fork's first step when absent."},
+                                      "until_step": {"type": "integer", "minimum": 1, "description": "The step it ends before; it lasts when absent."}}}}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["run"],
       "properties": {
         "run": {"$use": "run_entry", "description": "The run as run.list gives it."}}})json",
@@ -1799,8 +1833,10 @@ const Row kRows[] = {
      "The program runs in the script's process every N steps, with N set so that training keeps 95 percent of its "
      "speed, and a program over its time or memory limit stops. The sandbox checks the declaration and the source "
      "first; a refused program is not added, and messages give the compiler's line and column. program.status reports "
-     "its state. Undo removes it. With dry_run true the change is only checked and not applied.",
-     R"json({"type": "object", "additionalProperties": false, "required": ["id", "wgsl", "inputs", "output"],
+     "its state. Undo removes it. With dry_run true the change is only checked and not applied. An instance of a "
+     "piece takes piece, bind, panel and params in place of the WGSL keys, and inline adds a whole piece to the "
+     "spec's inline pieces in the same step; a missing or changed piece is piece.missing or piece.hash_mismatch.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id"],
       "properties": {
         "id": {"$use": "id", "description": "The new program's id, unique among programs."},
         "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The program's label; the id when absent."},
@@ -1811,7 +1847,11 @@ const Row kRows[] = {
         "limits": {"$use": "program_limits", "description": "The program's limits; the defaults when absent."},
         "workgroups": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "description": "The workgroup counts x, y and z of the dispatch; from max_count or the image size and the entry's workgroup size when absent."},
         "params": {"description": "A JSON object that gives each of the program's named parameters, at most 16 names, a number or a binding reference to a control, a selection or a state; the WGSL reads them by name."},
-        "dry_run": {"$use": "dry_run"}}})json",
+        "dry_run": {"$use": "dry_run"},
+        "piece": {"$use": "piece_pin", "description": "An instance of a piece: the pinned piece, in place of wgsl, inputs and output."},
+        "bind": {"$use": "piece_bind"},
+        "panel": {"$use": "id", "description": "An instance: the scene panel that the piece's draw half writes; necessary when the piece draws."},
+        "inline": {"$use": "piece", "description": "A whole piece that joins the spec's inline pieces in the same step; without piece, the program pins it from inline."}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "messages", "warnings", "diff", "applied"],
       "properties": {
         "id": {"type": "string", "description": "The new program's id."},
@@ -1882,7 +1922,7 @@ const Row kRows[] = {
      "inline pieces of the open spec, each version with its inputs, parameters, outputs, hash and the programs of "
      "the open spec that pin it. It changes nothing.",
      R"json({"type": "object", "additionalProperties": false, "required": [], "properties": {"from": {"type": "string", "enum": ["library", "workspace", "inline"], "description": "Only the pieces of this source; every source when absent."}, "match": {"type": "string", "minLength": 1, "maxLength": 64, "description": "Only the pieces whose names match this glob, such as glow_*; every piece when absent."}}})json",
-     R"json({"type": "object", "additionalProperties": false, "required": ["pieces"], "properties": {"pieces": {"type": "array", "items": {"$use": "piece_summary"}, "description": "The pieces, library first, then workspace and inline, by name and version."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["pieces", "modules"], "properties": {"modules": {"type": "array", "items": {"type": "string"}, "description": "The lib modules that a piece imports, as <name>@<version>, such as colormap@1."}, "pieces": {"type": "array", "items": {"$use": "piece_summary"}, "description": "The pieces, library first, then workspace and inline, by name and version."}}})json",
      R"json({"from": "library"})json"},
     {"piece.show", false, false, true,
      "Returns one piece with its manifest and its WGSL files, its source, its folder and the programs of the open "
