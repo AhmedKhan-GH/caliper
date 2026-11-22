@@ -168,6 +168,9 @@ TEST_CASE("the validator holds programs and stages to the limits of program.h an
          "program.over_limits", "program[0].output.max_count"},
         {"[[program]]\nid = \"p\"\ninputs = []\nlimits = { every = 0 }\n" + pixels, "program.over_limits",
          "program[0].limits.every"},
+        // A program id of 56 bytes: its live view program.<id> would pass the wire's name limit.
+        {"[[program]]\nid = \"" + std::string(56, 'p') + "\"\ninputs = []\n" + pixels, "spec.bad_value",
+         "program[0].id"},
         {"[[program]]\nid = \"p\"\ninputs = [{ var = \"w\", source = \"w\" }]\n" + pixels, "program.over_limits",
          "program[0].inputs[0].source"},
         {"[[stage]]\npanel = \"chart\"\nentity = \"e\"\nkind = \"material\"\nwgsl = \"x\"\n", "stage.not_scene_panel",

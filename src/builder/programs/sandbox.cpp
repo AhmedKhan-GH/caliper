@@ -565,6 +565,21 @@ Verdict check_program(const spec::Program& p, const Reflection& r) {
             }
         return why;
     }
+    // Metal reserves the name main, and the translation to MSL renames such an
+    // entry point, which the graphics layer then cannot find by its name.
+    if (entry->name == "main") {
+        std::uint32_t line = 0, column = 0;
+        for (std::size_t i = 0; i + 1 < toks.size(); ++i)
+            if (toks[i].text == "fn" && toks[i + 1].text == "main") {
+                line = toks[i + 1].line;
+                column = toks[i + 1].column;
+                break;
+            }
+        return fail(kProgramCompileFailed,
+                    "An entry point cannot be named main, because Metal reserves that name; give it another name, "
+                    "such as run.",
+                    "entry", line, column);
+    }
     const auto& ws = entry->workgroup_size;
     const std::uint64_t invocations = std::uint64_t(ws[0]) * ws[1] * ws[2];
     if (invocations == 0 || invocations > lim::kWorkgroupInvocations)

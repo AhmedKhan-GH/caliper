@@ -616,7 +616,7 @@ struct RecordingStageHost : StageHost {
 
 const char* const kPixels =
     "@group(0) @binding(0) var<storage, read_write> pixels: array<u32>;\n"
-    "@compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3<u32>) {\n"
+    "@compute @workgroup_size(8, 8) fn fill(@builtin(global_invocation_id) id: vec3<u32>) {\n"
     "  if (id.x < 8u && id.y < 8u) { pixels[id.y * 8u + id.x] = 0xffffffffu; }\n"
     "}\n";
 

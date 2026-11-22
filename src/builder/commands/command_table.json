@@ -5285,10 +5285,10 @@
         "additionalProperties": false,
         "properties": {
           "bind": {
-            "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, or value for a value the spec holds. A slider binds param: or value; a button binds action: or run:pause. run.state lists the names.",
+            "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, value for a value the spec holds, or intervene:<point> for an intervention point that intervene.points lists. A slider binds param: or value; a button binds action: or run:pause; a toggle binds intervene:<point> or param:<name>. run.state lists the names of parameters and actions.",
             "maxLength": 320,
             "minLength": 5,
-            "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value)$",
+            "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|intervene:.{1,255})$",
             "type": "string"
           },
           "dry_run": {
@@ -5304,7 +5304,7 @@
             "type": "string"
           },
           "kind": {
-            "description": "slider sets a number in a range; button acts once when pressed. range, toggle, picker and text are reserved and refused with spec.unsupported_control until they are built.",
+            "description": "slider sets a number in a range; button acts once when pressed; toggle is on or off, and ablates intervene:<point> or sets a boolean param:<name>. range, picker and text are reserved and refused with spec.unsupported_control until they are built.",
             "enum": [
               "slider",
               "button",
@@ -5465,7 +5465,7 @@
         ],
         "type": "object"
       },
-      "summary": "Adds a control to the open spec: a slider or a button that the person and you can use. bind names its one target: param:<name> for a parameter of the running script, action:<name> for an action of it, run:pause for pausing and resuming the run, or value for a value the spec holds. run.state lists the parameters and actions. A control is a leaf of the layout, like a panel: place puts it next to a panel or control, and without place it goes under the whole layout. Undo removes it. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+      "summary": "Adds a control to the open spec: a slider, a button or a toggle that the person and you can use. bind names its one target: param:<name> for a parameter of the running script, action:<name> for an action of it, run:pause for pausing and resuming the run, value for a value the spec holds, or intervene:<point> for an intervention point, which a toggle ablates while it is on. run.state lists the parameters and actions, and intervene.points the points. A control is a leaf of the layout, like a panel: place puts it next to a panel or control, and without place it goes under the whole layout. Undo removes it. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
       "agents": true,
@@ -5489,10 +5489,10 @@
             "description": "The keys to change; null removes one.",
             "properties": {
               "bind": {
-                "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, or value for a value the spec holds. A slider binds param: or value; a button binds action: or run:pause. run.state lists the names.",
+                "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, value for a value the spec holds, or intervene:<point> for an intervention point that intervene.points lists. A slider binds param: or value; a button binds action: or run:pause; a toggle binds intervene:<point> or param:<name>. run.state lists the names of parameters and actions.",
                 "maxLength": 320,
                 "minLength": 5,
-                "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value)$",
+                "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|intervene:.{1,255})$",
                 "type": "string"
               },
               "kind": {
@@ -7704,7 +7704,7 @@
       "examples": [
         {
           "kind": "compute",
-          "wgsl": "@group(0) @binding(0) var<storage, read> w: array<f32>;\n@group(0) @binding(1) var<storage, read_write> positions: array<f32>;\n@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;\n@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {\n  let i = id.x;\n  if (i >= 256u) { return; }\n  positions[3u * i] = w[3u * i];\n  positions[3u * i + 1u] = w[3u * i + 1u];\n  positions[3u * i + 2u] = w[3u * i + 2u];\n  atomicAdd(&count, 1u);\n}\n"
+          "wgsl": "@group(0) @binding(0) var<storage, read> w: array<f32>;\n@group(0) @binding(1) var<storage, read_write> positions: array<f32>;\n@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;\n@compute @workgroup_size(64) fn run(@builtin(global_invocation_id) id: vec3<u32>) {\n  let i = id.x;\n  if (i >= 256u) { return; }\n  positions[3u * i] = w[3u * i];\n  positions[3u * i + 1u] = w[3u * i + 1u];\n  positions[3u * i + 2u] = w[3u * i + 2u];\n  atomicAdd(&count, 1u);\n}\n"
         }
       ],
       "frame_thread": false,
@@ -8097,7 +8097,7 @@
             "part": "points"
           },
           "title": "Rows of the first layer",
-          "wgsl": "@group(0) @binding(0) var<storage, read> w: array<f32>;\n@group(0) @binding(1) var<storage, read_write> positions: array<f32>;\n@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;\n@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {\n  let i = id.x;\n  if (i >= 256u) { return; }\n  positions[3u * i] = w[3u * i];\n  positions[3u * i + 1u] = w[3u * i + 1u];\n  positions[3u * i + 2u] = w[3u * i + 2u];\n  atomicAdd(&count, 1u);\n}\n"
+          "wgsl": "@group(0) @binding(0) var<storage, read> w: array<f32>;\n@group(0) @binding(1) var<storage, read_write> positions: array<f32>;\n@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;\n@compute @workgroup_size(64) fn run(@builtin(global_invocation_id) id: vec3<u32>) {\n  let i = id.x;\n  if (i >= 256u) { return; }\n  positions[3u * i] = w[3u * i];\n  positions[3u * i + 1u] = w[3u * i + 1u];\n  positions[3u * i + 2u] = w[3u * i + 2u];\n  atomicAdd(&count, 1u);\n}\n"
         }
       ],
       "frame_thread": true,
@@ -8572,8 +8572,8 @@
                 "type": "string"
               },
               "id": {
-                "description": "The program's id, unique among programs.",
-                "maxLength": 64,
+                "description": "The program's id, unique among programs, at most 55 characters, because its pixels output is the live view program.<id>.",
+                "maxLength": 55,
                 "minLength": 1,
                 "pattern": "^[a-z][a-z0-9_-]{0,63}$",
                 "type": "string"

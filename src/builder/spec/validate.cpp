@@ -275,6 +275,13 @@ private:
             const std::string path = index_path("program", i) + ".id";
             const std::string& v = spec_.programs[i].id;
             id(v, path);
+            if (valid_id(v) && v.size() > program_limits::kProgramIdChars)
+                sink_.error("spec.bad_value",
+                            "The program id " + quote(v) + " has " + std::to_string(v.size()) +
+                                " characters; a program id has at most " +
+                                std::to_string(program_limits::kProgramIdChars) +
+                                ", because its pixels output is the live view program.<id>.",
+                            path);
             if (!programs.insert(v).second)
                 sink_.error("spec.duplicate_id", "Two programs have the id " + quote(v) + ".", path);
         }

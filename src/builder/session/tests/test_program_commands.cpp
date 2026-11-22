@@ -81,7 +81,7 @@ const char* const kRows =
     "@group(0) @binding(0) var<storage, read> w: array<f32>;\n"
     "@group(0) @binding(1) var<storage, read_write> positions: array<f32>;\n"
     "@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;\n"
-    "@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {\n"
+    "@compute @workgroup_size(64) fn fill(@builtin(global_invocation_id) id: vec3<u32>) {\n"
     "  let i = id.x;\n"
     "  if (i >= 256u) { return; }\n"
     "  positions[3u * i] = w[3u * i];\n"
@@ -215,7 +215,7 @@ TEST_CASE("programs: program.patch merges a patch and checks again, and program.
     // A new kind replaces the output instead of merging into it.
     const std::string image =
         "@group(0) @binding(0) var<storage, read_write> pixels: array<u32>;\n"
-        "@compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3<u32>) {\n"
+        "@compute @workgroup_size(8, 8) fn fill(@builtin(global_invocation_id) id: vec3<u32>) {\n"
         "  if (id.x < 16u && id.y < 16u) { pixels[id.y * 16u + id.x] = 0xff0000ffu; }\n"
         "}\n";
     r = ok(*s, "program.patch",
@@ -301,7 +301,7 @@ TEST_CASE("stages: stage.check compiles a source and reflects its entry points a
     json r = ok(*s, "stage.check", d->examples.front());
     CHECK(r["ok"] == true);
     REQUIRE(r["entry_points"].size() == 1);
-    CHECK(r["entry_points"][0] == json::parse(R"({"name": "main", "stage": "compute", "workgroup_size": [64, 1, 1]})"));
+    CHECK(r["entry_points"][0] == json::parse(R"({"name": "run", "stage": "compute", "workgroup_size": [64, 1, 1]})"));
     REQUIRE(r["bindings"].size() == 3);
     CHECK(r["bindings"][0]["access"] == "read");
     CHECK(r["bindings"][1]["access"] == "read_write");

@@ -23,7 +23,7 @@ wgsl = """
 @group(0) @binding(1) var<storage, read_write> positions: array<f32>;
 @group(0) @binding(2) var<storage, read_write> values: array<f32>;
 @group(0) @binding(3) var<storage, read_write> count: atomic<u32>;
-@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+@compute @workgroup_size(64) fn rows(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = id.x;
   if (i >= 128u) { return; }
   positions[3u * i] = w[3u * i];
@@ -45,7 +45,7 @@ wgsl = """
 @group(0) @binding(1) var<storage, read_write> pixels: array<u32>;
 @group(0) @binding(2) var<uniform> caliper: CaliperFrame;
 struct CaliperFrame { step: u32, pass_index: u32, max_count: u32, width: u32, height: u32, time_s: f32, every: u32, pad: u32 }
-@compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+@compute @workgroup_size(8, 8) fn paint(@builtin(global_invocation_id) id: vec3<u32>) {
   if (id.x >= caliper.width || id.y >= caliper.height) { return; }
   let v = clamp(abs(g[id.y * caliper.width + id.x]) * 100.0, 0.0, 1.0);
   pixels[id.y * caliper.width + id.x] = pack4x8unorm(vec4<f32>(v, v, v, 1.0));
@@ -65,4 +65,4 @@ fn material(in: MaterialIn) -> vec4<f32> {
 [provenance]
 foreign = true
 from = "a spec shared by a colleague"
-reviewed = [{ target = "program:rows", sha256 = "b2280efaeee3bcfb732f464dc379b382360846bb415f72dfae61c845c12f2163" }]
+reviewed = [{ target = "program:rows", sha256 = "6882e5f49993ba93b2fef3a9a0f2e3ff893d19535607ff538d31e25bdc98b17d" }]

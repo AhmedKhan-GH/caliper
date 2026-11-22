@@ -226,8 +226,8 @@ const std::pair<const char*, const char*> kFragments[] = {
                               "children": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$use": "id"}, "description": "Panel ids, control ids (spec version 1) and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once."}}}}}})json"},
 
     // Spec version 1 controls (design/instruments.md, Control Table).
-    {"control_bind", R"json({"type": "string", "minLength": 5, "maxLength": 320, "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value)$",
-      "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, or value for a value the spec holds. A slider binds param: or value; a button binds action: or run:pause. run.state lists the names."})json"},
+    {"control_bind", R"json({"type": "string", "minLength": 5, "maxLength": 320, "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|intervene:.{1,255})$",
+      "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, value for a value the spec holds, or intervene:<point> for an intervention point that intervene.points lists. A slider binds param: or value; a button binds action: or run:pause; a toggle binds intervene:<point> or param:<name>. run.state lists the names of parameters and actions."})json"},
 
     {"control_options", R"json({
       "type": "object", "additionalProperties": false, "required": [],
@@ -392,7 +392,7 @@ const std::pair<const char*, const char*> kFragments[] = {
     {"program", R"json({
       "type": "object", "additionalProperties": false, "required": ["id", "wgsl", "inputs", "output"],
       "properties": {
-        "id": {"$use": "id", "description": "The program's id, unique among programs."},
+        "id": {"$use": "id", "maxLength": 55, "description": "The program's id, unique among programs, at most 55 characters, because its pixels output is the live view program.<id>."},
         "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The program's label."},
         "wgsl": {"type": "string", "minLength": 1, "maxLength": 65536, "description": "The WGSL source with a compute entry point, at most 64 KiB, with no enable, requires or diagnostic directive."},
         "entry": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$", "description": "The compute entry point; the one compute entry point when absent."},
@@ -1108,16 +1108,18 @@ const Row kRows[] = {
 
     // control (spec version 1; design/instruments.md)
     {"control.create", true, false, true,
-     "Adds a control to the open spec: a slider or a button that the person and you can use. bind names its one "
-     "target: param:<name> for a parameter of the running script, action:<name> for an action of it, run:pause for "
-     "pausing and resuming the run, or value for a value the spec holds. run.state lists the parameters and actions. "
+     "Adds a control to the open spec: a slider, a button or a toggle that the person and you can use. bind names its "
+     "one target: param:<name> for a parameter of the running script, action:<name> for an action of it, run:pause "
+     "for pausing and resuming the run, value for a value the spec holds, or intervene:<point> for an intervention "
+     "point, which a toggle ablates while it is on. run.state lists the parameters and actions, and intervene.points "
+     "the points. "
      "A control is a leaf of the layout, like a panel: place puts it next to a panel or control, and without place it "
      "goes under the whole layout. Undo removes it. The result holds the change as a diff; with dry_run true the "
      "change is only checked and not applied.",
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "kind", "bind"],
       "properties": {
         "id": {"$use": "id", "description": "The new control's id; panels and controls share one set of ids."},
-        "kind": {"type": "string", "enum": ["slider", "button", "range", "toggle", "picker", "text"], "description": "slider sets a number in a range; button acts once when pressed. range, toggle, picker and text are reserved and refused with spec.unsupported_control until they are built."},
+        "kind": {"type": "string", "enum": ["slider", "button", "range", "toggle", "picker", "text"], "description": "slider sets a number in a range; button acts once when pressed; toggle is on or off, and ablates intervene:<point> or sets a boolean param:<name>. range, picker and text are reserved and refused with spec.unsupported_control until they are built."},
         "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The control's label; the id when absent."},
         "bind": {"$use": "control_bind"},
         "options": {"$use": "control_options", "description": "The control's options."},
@@ -1398,7 +1400,7 @@ const Row kRows[] = {
                                  "name": {"type": "string", "description": "The WGSL variable's name."},
                                  "kind": {"type": "string", "enum": ["uniform", "storage", "texture", "uint_texture", "storage_texture", "sampler"], "description": "What the binding is."},
                                  "access": {"type": "string", "enum": ["read", "read_write", "write"], "description": "How the source may use it."}}}}}})json",
-     R"json({"kind": "compute", "wgsl": "@group(0) @binding(0) var<storage, read> w: array<f32>;\n@group(0) @binding(1) var<storage, read_write> positions: array<f32>;\n@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;\n@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {\n  let i = id.x;\n  if (i >= 256u) { return; }\n  positions[3u * i] = w[3u * i];\n  positions[3u * i + 1u] = w[3u * i + 1u];\n  positions[3u * i + 2u] = w[3u * i + 2u];\n  atomicAdd(&count, 1u);\n}\n"})json"},
+     R"json({"kind": "compute", "wgsl": "@group(0) @binding(0) var<storage, read> w: array<f32>;\n@group(0) @binding(1) var<storage, read_write> positions: array<f32>;\n@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;\n@compute @workgroup_size(64) fn run(@builtin(global_invocation_id) id: vec3<u32>) {\n  let i = id.x;\n  if (i >= 256u) { return; }\n  positions[3u * i] = w[3u * i];\n  positions[3u * i + 1u] = w[3u * i + 1u];\n  positions[3u * i + 2u] = w[3u * i + 2u];\n  atomicAdd(&count, 1u);\n}\n"})json"},
     {"program.create", true, false, true,
      "Adds a GPU program to the open spec: a WGSL compute pass that reads live tensors of the running script in place "
      "and read-only, and writes one output. A geometry output becomes an entity of a scene panel. A pixels output "
@@ -1425,7 +1427,7 @@ const Row kRows[] = {
         "warnings": {"$use": "warnings"},
         "diff": {"$use": "diff"},
         "applied": {"$use": "applied"}}})json",
-     R"json({"id": "rows", "title": "Rows of the first layer", "wgsl": "@group(0) @binding(0) var<storage, read> w: array<f32>;\n@group(0) @binding(1) var<storage, read_write> positions: array<f32>;\n@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;\n@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {\n  let i = id.x;\n  if (i >= 256u) { return; }\n  positions[3u * i] = w[3u * i];\n  positions[3u * i + 1u] = w[3u * i + 1u];\n  positions[3u * i + 2u] = w[3u * i + 2u];\n  atomicAdd(&count, 1u);\n}\n", "inputs": [{"var": "w", "source": "live:layers.0.weight"}], "output": {"kind": "geometry", "panel": "world", "part": "points", "max_count": 256, "arrays": ["positions"]}, "limits": {"every": 10}})json"},
+     R"json({"id": "rows", "title": "Rows of the first layer", "wgsl": "@group(0) @binding(0) var<storage, read> w: array<f32>;\n@group(0) @binding(1) var<storage, read_write> positions: array<f32>;\n@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;\n@compute @workgroup_size(64) fn run(@builtin(global_invocation_id) id: vec3<u32>) {\n  let i = id.x;\n  if (i >= 256u) { return; }\n  positions[3u * i] = w[3u * i];\n  positions[3u * i + 1u] = w[3u * i + 1u];\n  positions[3u * i + 2u] = w[3u * i + 2u];\n  atomicAdd(&count, 1u);\n}\n", "inputs": [{"var": "w", "source": "live:layers.0.weight"}], "output": {"kind": "geometry", "panel": "world", "part": "points", "max_count": 256, "arrays": ["positions"]}, "limits": {"every": 10}})json"},
     {"program.patch", true, false, true,
      "Changes a GPU program of the open spec with a JSON merge patch (RFC 7386) of its title, wgsl, entry, inputs, "
      "output, limits and workgroups: the keys given replace the program's own, a key set to null is removed, and "

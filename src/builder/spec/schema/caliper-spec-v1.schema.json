@@ -537,7 +537,7 @@
       "additionalProperties": false,
       "required": ["id", "wgsl", "inputs", "output"],
       "properties": {
-        "id": { "$ref": "#/$defs/id" },
+        "id": { "$ref": "#/$defs/id", "maxLength": 55 },
         "title": { "$ref": "#/$defs/title" },
         "wgsl": { "type": "string", "minLength": 1, "maxLength": 65536 },
         "entry": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$" },

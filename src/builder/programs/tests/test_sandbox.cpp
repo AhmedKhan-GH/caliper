@@ -20,7 +20,7 @@ const char* const kRows =
     "@group(0) @binding(0) var<storage, read> w: array<f32>;\n"
     "@group(0) @binding(1) var<storage, read_write> positions: array<f32>;\n"
     "@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;\n"
-    "@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {\n"
+    "@compute @workgroup_size(64) fn fill(@builtin(global_invocation_id) id: vec3<u32>) {\n"
     "  let i = id.x;\n"
     "  if (i >= 256u) { return; }\n"
     "  positions[3u * i] = w[3u * i];\n"
@@ -45,7 +45,7 @@ cs::Program pixels_program() {
     cs::Program p;
     p.id = "image";
     p.wgsl = "@group(0) @binding(0) var<storage, read_write> pixels: array<u32>;\n"
-             "@compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3<u32>) {\n"
+             "@compute @workgroup_size(8, 8) fn fill(@builtin(global_invocation_id) id: vec3<u32>) {\n"
              "  if (id.x >= 64u || id.y >= 32u) { return; }\n"
              "  pixels[id.y * 64u + id.x] = pack4x8unorm(vec4<f32>(1.0, 0.0, 0.0, 1.0));\n"
              "}\n";
@@ -71,14 +71,14 @@ cp::Reflection rows_reflection() {
     r.bindings = {binding("w", cp::BindingKind::storage_buffer, false),
                   binding("positions", cp::BindingKind::storage_buffer, true),
                   binding("count", cp::BindingKind::storage_buffer, true, 4)};
-    r.entries = {{"main", cp::EntryStage::compute, {64, 1, 1}}};
+    r.entries = {{"fill", cp::EntryStage::compute, {64, 1, 1}}};
     return r;
 }
 
 cp::Reflection pixels_reflection() {
     cp::Reflection r;
     r.bindings = {binding("pixels", cp::BindingKind::storage_buffer, true)};
-    r.entries = {{"main", cp::EntryStage::compute, {8, 8, 1}}};
+    r.entries = {{"fill", cp::EntryStage::compute, {8, 8, 1}}};
     return r;
 }
 
@@ -296,6 +296,12 @@ TEST_CASE("the entry point and the workgroup of a program are checked") {
     CHECK(cp::check_program(named, r).ok());
     named.entry = "missing";
     CHECK(cp::check_program(named, r).code == cp::kProgramNoEntry);
+    // Metal reserves main, thus an entry point of that name is refused with its cause.
+    r = rows_reflection();
+    r.entries[0].name = "main";
+    const cp::Verdict reserved = cp::check_program(rows, r);
+    CHECK(reserved.code == cp::kProgramCompileFailed);
+    CHECK(reserved.message.find("main") != std::string::npos);
     r = rows_reflection();
     r.entries[0].workgroup_size = {16, 16, 2};
     CHECK(cp::check_program(rows, r).code == cp::kProgramOverLimits);

@@ -32,6 +32,10 @@ namespace caliper_builder::spec {
 
 namespace program_limits {
 inline constexpr std::size_t kPrograms = 16;                    // `program` items; spec.too_many
+// A program's id: a pixels output is the live view `program.<id>`, whose name
+// holds at most 63 bytes (CALIPER_NET_NAME_MAX), thus the wire's PROGRAM takes
+// an id of at most 55 bytes (CALIPER_NET_PROGRAM_ID_MAX); spec.bad_value.
+inline constexpr std::size_t kProgramIdChars = 55;
 inline constexpr std::size_t kStages = 32;                      // `stage` items; spec.too_many
 inline constexpr std::size_t kProgramSourceBytes = 64 * 1024;   // a program's `wgsl`
 inline constexpr std::size_t kStageSourceBytes = 16 * 1024;     // a stage's `wgsl`

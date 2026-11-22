@@ -64,7 +64,7 @@ The `bind` string has one of four forms:
 - `run:pause` is the pause and the resume of the run.
 - `value` is a value that the spec holds. Binding references read it later.
 
-A name has 1 to 63 bytes of UTF-8 and no control characters, as `caliper.param` requires. The prefix `intervene:` is reserved for interventions. The first version builds the kinds `slider` and `button`. The kinds `range`, `toggle`, `picker` and `text` are part of the format, but the validator refuses them until they are built.
+A name has 1 to 63 bytes of UTF-8 and no control characters, as `caliper.param` requires. The prefix `intervene:` is reserved for interventions. The first version builds the kinds `slider` and `button`, and the GPU programs work builds `toggle` (see the GPU programs plan, Toggle Control). The kinds `range`, `picker` and `text` are part of the format, but the validator refuses them until they are built.
 
 | Kind | Targets | Options |
 |---|---|---|
