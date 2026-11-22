@@ -27,6 +27,7 @@
 // the slider or presses the button, with the value sent; the drag itself is
 // rate-limited by the run control and not recorded value by value.
 #include "spec_runtime/spec_instruments.h"
+#include "spec_runtime/spec_transport.h"
 
 #include <algorithm>
 #include <chrono>
@@ -462,6 +463,8 @@ bool draw_spec_control(const caliper_builder::spec::Control& control, const ImRe
             changed = draw_button(control, t, row, host);
         } else if (control.kind == spec::ControlKind::toggle) {
             changed = draw_toggle(control, t, row, look, host);
+        } else if (control.kind == spec::ControlKind::transport) {
+            changed = draw_transport_control(control, row.widget, look, host);   // spec_transport.h
         } else {
             ImGui::GetWindowDrawList()->AddText(row.widget.Min, look.faint,
                                                 (std::string(spec::control_kind_name(control.kind)) +
@@ -472,6 +475,13 @@ bool draw_spec_control(const caliper_builder::spec::Control& control, const ImRe
     ImGui::PopID();
     ImGui::SetCursorScreenPos(cursor);
     return changed;
+}
+
+void record_spec_pick(const std::string& panel, const caliper_builder::Event& pick, SpecInstrumentHost& host) {
+    // Not built yet: picks write no state (design/instrument-interface.md, Pick Fields).
+    (void)panel;
+    (void)pick;
+    (void)host;
 }
 
 }  // namespace caliper_host

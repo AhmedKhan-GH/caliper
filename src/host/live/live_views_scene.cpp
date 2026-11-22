@@ -6,6 +6,7 @@
 #include "embed/embed_core.h"
 #include "embed/render_stats.h"   // copy counters
 #include "live/live_scene.h"
+#include "live/scene_overlays.h"
 #include "renderer/host_renderer.h"
 
 #if defined(__EMSCRIPTEN__)
@@ -380,12 +381,17 @@ SceneRectResult draw_scene_in_rect(CaliperCore* core, const std::string& name, c
         }
     }
     if (options.labels && sc->width() && sc->height()) {
-        const float sx = size.x / float(sc->width()), sy = size.y / float(sc->height());
-        for (const caliper_scene::LabelAnchor& a : sc->labels()) {
-            const ImVec2 at(p0.x + a.x * sx + 4.0f, p0.y + a.y * sy - ImGui::GetTextLineHeight() - 2.0f);
-            dl->AddText(ImVec2(at.x + 1.0f, at.y + 1.0f), shade, a.text.c_str());
-            dl->AddText(at, ink, a.text.c_str());
-        }
+        // The item labels and the annotations' labels (scene_overlays.h).
+        const std::vector<caliper_scene::LabelAnchor> labels = sc->labels();
+        SceneOverlayInput in;
+        in.draw = dl;
+        in.origin = p0;
+        in.scale_x = size.x / float(sc->width());
+        in.scale_y = size.y / float(sc->height());
+        in.labels = &labels;
+        in.ink = ink;
+        in.shade = shade;
+        draw_scene_overlays(in);
     }
     if (sc->highlighted()) {
         char t[48];
