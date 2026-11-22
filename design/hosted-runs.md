@@ -109,7 +109,7 @@ The app attaches to one run at a time. When a managed run becomes ready, the run
 
 ## Run Sources
 
-The catalog kind `run` names the series of the managed runs. The id `run:<id>/<view>` names the series `<view>` of the run `<id>`, such as `run:train-1/loss`. The runner keeps the last 262,144 values of each series of each run, also after the run ends, until the app closes. A `series` panel draws a run source as it draws `live:loss`. Thus two panels, or one panel with two `y` slots, show the loss of a run and of its fork side by side.
+The catalog kind `run` names the series of the managed runs. The id `run:<id>/<view>` names the series `<view>` of the run `<id>`, such as `run:train-1/loss`. The runner keeps the last 262,144 values of each series of each run, also after the run ends, until the app closes. The series of a fork start with as many NaN values as the step of its checkpoint, which the file name `checkpoint-<step>` gives, so that the fork's curve continues its parent's curve on one step axis. A `series` panel draws a run source as it draws `live:loss`. Thus two panels, or one panel with two `y` slots, show the loss of a run and of its fork side by side.
 
 ## Runner Events
 

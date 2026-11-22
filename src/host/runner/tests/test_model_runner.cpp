@@ -259,7 +259,11 @@ TEST_CASE("runner: a managed run starts, forks from a checkpoint with a lower lr
     CHECK(fork.id == "stand-in-run-1");
     CHECK(fork.parent == std::optional<std::string>("base"));
     REQUIRE(runner.wait_for(state_is(fork.id, "running"), 60000));
-    REQUIRE(runner.wait_for([&](const auto&) { return values_of(runner, "run:" + fork.id + "/loss").size() >= 5; }, 60000));
+    REQUIRE(runner.wait_for([&](const auto&) {
+        std::size_t real = 0;
+        for (float v : values_of(runner, "run:" + fork.id + "/loss")) real += std::isnan(v) ? 0 : 1;
+        return real >= 5;
+    }, 60000));
     // The fork resumed at the checkpoint's step: its first loss continues the
     // parent's at the lower rate, below the parent's first loss.
     const std::vector<std::string> checkpoints = [&] {
@@ -272,8 +276,13 @@ TEST_CASE("runner: a managed run starts, forks from a checkpoint with a lower lr
     const json ck = json::parse(read_file(checkpoints[0]));
     const std::vector<float> forked = values_of(runner, "run:" + fork.id + "/loss");
     const std::vector<float> parent = values_of(runner, "run:base/loss");
-    CHECK(forked.front() == doctest::Approx(ck["loss"].get<double>() * (1.0 - 0.01)).epsilon(1e-4));
-    CHECK(forked.front() < parent.front());
+    // The fork's source starts at the checkpoint's step, after NaN values,
+    // so that its curve continues its parent's on one step axis.
+    const std::size_t at = static_cast<std::size_t>(ck["step"].get<std::uint64_t>());
+    REQUIRE(forked.size() > at);
+    for (std::size_t i = 0; i < at; ++i) CHECK(std::isnan(forked[i]));
+    CHECK(forked[at] == doctest::Approx(ck["loss"].get<double>() * (1.0 - 0.01)).epsilon(1e-4));
+    CHECK(forked[at] < parent.front());
     std::vector<std::string> lines;
     REQUIRE(!runner.logs(fork.id, 200, &lines));
     bool resumed = false;

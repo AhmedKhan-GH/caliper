@@ -16,6 +16,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -118,6 +119,10 @@ struct Run {
     // A fork that waits for its parent's checkpoint.
     std::string waits_for;                   // the parent's id; "" when not waiting
     std::uint32_t checkpoint_request = 0;
+    // A fork's series start at its parent's checkpoint step: the run sources
+    // put this many NaN values first, so that the fork's curve continues its
+    // parent's on one step axis.
+    std::uint64_t offset = 0;
     // A stop: when to ask the process to end, and when that was asked.
     std::optional<Clock::time_point> end_at;
     std::optional<Clock::time_point> terminated_at;
@@ -346,7 +351,8 @@ private:
         if (!r || !r->conn) return false;
         const auto it = r->conn->series().find(view);
         if (it == r->conn->series().end()) return false;
-        *values = it->second.values;
+        values->assign(static_cast<std::size_t>(r->offset), std::numeric_limits<float>::quiet_NaN());
+        values->insert(values->end(), it->second.values.begin(), it->second.values.end());
         if (gen) {
             const auto g = r->series_gen.find(view);
             *gen = g == r->series_gen.end() ? 0 : g->second.second;
@@ -373,8 +379,9 @@ private:
                 e.origin.view_type = "series";
                 e.origin.run_name = id;
                 e.dtype = cb::CatalogDtype::f32;
-                e.shape = std::vector<std::int64_t>{static_cast<std::int64_t>(ser.values.size())};
-                e.bytes = ser.values.size() * sizeof(float);
+                const std::size_t n = static_cast<std::size_t>(r->offset) + ser.values.size();
+                e.shape = std::vector<std::int64_t>{static_cast<std::int64_t>(n)};
+                e.bytes = n * sizeof(float);
                 e.wire = true;
                 out.push_back(std::move(e));
             }
@@ -883,6 +890,15 @@ void ModelRunner::loop() {
                         spec.env.emplace_back("PYTHONUNBUFFERED", "1");
                         spec.cwd = s.options.workspace;
                         spec.output = f.output;
+                        // checkpoint-<step>.<ext> (the M4 seam) gives the step of the checkpoint.
+                        const std::string file = fs::u8path(rep.message).filename().u8string();
+                        if (file.rfind("checkpoint-", 0) == 0) {
+                            std::uint64_t step = 0;
+                            std::size_t k = 11;
+                            for (; k < file.size() && file[k] >= '0' && file[k] <= '9' && step < (1ull << 40); ++k)
+                                step = step * 10 + static_cast<std::uint64_t>(file[k] - '0');
+                            if (k > 11) f.offset = std::min<std::uint64_t>(step, s.options.max_series_values);
+                        }
                         std::string err = py_error;
                         if (!python.empty()) f.proc = start_child(spec, &err);
                         if (!f.proc) {
