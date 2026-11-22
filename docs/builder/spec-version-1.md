@@ -56,7 +56,7 @@ The `bind` string has one of four forms:
 - `run:pause` is the pause and the resume of the run.
 - `value` is a value that the spec holds.
 
-Version 1 builds the kinds `slider` and `button`. The other four kinds are part of the format, but the validator refuses them with `spec.unsupported_control`.
+Version 1 builds the kinds `slider`, `button` and `toggle`. A toggle binds `intervene:<point>`, which it ablates while it is on, or `param:<name>` of a boolean parameter. The other three kinds are part of the format, but the validator refuses them with `spec.unsupported_control`.
 
 | Kind | Targets | Options |
 |---|---|---|

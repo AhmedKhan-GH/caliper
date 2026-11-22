@@ -40,6 +40,7 @@
 #include "scene/pick.h"
 #include "scene/scale_bar.h"
 #include "scene/scene.h"
+#include "scene/stage_cache.h"
 
 #include <cstdint>
 #include <map>
@@ -190,6 +191,18 @@ public:
     // After describe(): a remembered mode wins over the scene's up.
     void restore(const Settings& s);
 
+    // The stages of the panel that shows the view (scene/stage_cache.h, design/gpu-programs.md):
+    // the points and lines of an entity with a stage draw its program, in the colour pass and the
+    // pick pass, and the highlight of a selection draws the selected items with them. Null draws
+    // the built-in programs. The panel sets it before each render; a new source, a new revision of
+    // it, or a stage that reads the time draws the view again. A rectangle selection projects the
+    // batches' own positions on the CPU, which a vertex stage does not move.
+    void set_stage_source(caliper_scene::StageSource* source);
+    // The draws of the last frame that used a stage program.
+    uint32_t staged_draws() const { return staged_; }
+    // The step the stages read: the first stamp of the latest scene update that carried one.
+    int64_t stage_step() const { return stamp_step_; }
+
     // Compiles and submits when something changed since the last frame, into a target of
     // width x height physical pixels. False with *why when the layer refused the frame.
     bool render(uint32_t width, uint32_t height, float pixel_scale, uint32_t clear_rgba, std::string* why);
@@ -270,6 +283,13 @@ private:
     std::string through_;              // the camera entity looked through, or ""
     std::unique_ptr<caliper_scene::PickPass> pick_;
     uint64_t generation_ = 0;          // colour frames submitted
+    // The panel's stages: the programs on this view's backend, the source's revision drawn last,
+    // the stage draws of the last frame and the step from the stamps.
+    std::unique_ptr<caliper_scene::StageCache> stages_;
+    uint64_t stage_revision_ = 0;
+    uint32_t staged_ = 0;
+    int64_t stamp_step_ = 0;
+    caliper_scene::CompileOptions stage_options(caliper_scene::CompileOptions opt) const;
 
     // Selections and their highlight: the view's own (entity path and primitive to sorted indices),
     // the linked ones (item space to sorted items), and what draws them: a 2-D scene of one quad that

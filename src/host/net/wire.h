@@ -310,14 +310,16 @@ struct Controls {   // the run state, parameters and actions of a script
     Json params = Json::array();           // parameter entries, validated
     Json actions = Json::array();          // action entries, validated
     std::optional<Section> stamp;          // 3.2 draft: when the run state or a value changed
+    Json interventions;                    // 3.2 draft: {"points", "active"} as given; null when absent
 };
-struct Control {    // pause, resume, step, set, run
+struct Control {    // pause, resume, step, set, run, intervene (3.2 draft)
     static constexpr uint16_t kType = CALIPER_NET_MSG_CONTROL;
     uint32_t request_id = 0;
     std::string op;
     std::optional<std::string> name;       // set, run
     Json value;                            // set: a number, a boolean or a choice; null otherwise
     std::optional<uint32_t> count;         // step: at least 1; absent means 1
+    Json intervene;                        // intervene: exactly one of set, clear and clear_all, as given; null otherwise
 };
 struct ControlReply {
     static constexpr uint16_t kType = CALIPER_NET_MSG_CONTROL_REPLY;
@@ -453,6 +455,25 @@ struct TimeState {                   // server to viewer
     Json ranges = Json::object();    // timeline name -> [min, max] stamp text
     bool live = false;
 };
+// ---- 3.2 draft: GPU programs (capability "programs"; design/gpu-programs.md, Wire Path) ----
+// The rules of the block "GPU programs and interventions" at the end of _wire.py.
+struct Program {                     // viewer to producer: install or replace (op set) or remove (op remove) one program
+    static constexpr uint16_t kType = CALIPER_NET_MSG_PROGRAM;
+    uint32_t request_id = 0;
+    std::string op;                  // CALIPER_NET_PROGRAM_SET or _REMOVE
+    std::string id;                  // 1 to CALIPER_NET_PROGRAM_ID_MAX bytes of [a-z0-9_-], first a letter
+    Json declaration;                // set: the declaration as given (checked on decode); null otherwise
+    std::optional<std::string> wgsl;     // set: the section "wgsl", the source as UTF-8
+    std::optional<std::string> sha256;   // set: of the source, 64 lowercase hex digits
+    std::optional<std::string> scene;    // set: the scene of a geometry output (needed for geometry)
+};
+struct ProgramState {                // producer to viewer: the status item of each program, in installation order
+    static constexpr uint16_t kType = CALIPER_NET_MSG_PROGRAM_STATE;
+    Json programs = Json::array();   // the status items as given (checked on decode), kept verbatim
+    std::optional<uint32_t> request_id;   // the PROGRAM it answers; absent for an unrequested one
+    std::optional<uint64_t> step;         // the script's step
+    std::optional<double> step_ms;        // the median step time
+};
 // Stamp text: decimal digits with an optional leading minus, at most 20 characters, a signed 64-bit value.
 bool stamp_text_ok(const std::string& v);
 
@@ -517,7 +538,7 @@ bool resolve_scene_data_view(const Json& view, const Json& request, Json* out, s
 using Message = std::variant<Hello, Welcome, Bye, Error, Ping, Pong, Sessions, Attach, Views, Subscribe,
                              Unsubscribe, ViewRequest, ViewReply, Snapshot, Series, Event, Controls, Control,
                              ControlReply, Selection, SceneUpdate, SceneTransforms, SceneClear, SceneClasses,
-                             Text, Recordings, RecordingOpen, Cursor, TimeState, Unknown>;
+                             Text, Recordings, RecordingOpen, Cursor, TimeState, Program, ProgramState, Unknown>;
 
 struct DecodeResult {
     enum class Status { Ok, BadFrame, BadMessage };

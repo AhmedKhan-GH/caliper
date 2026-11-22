@@ -1,0 +1,30 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 155,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 131,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 81
+  },
+  "meta": {
+    "intervene": {
+      "set": {
+        "from_step": 1201,
+        "op": "ablate",
+        "point": "blocks.0.attn#3",
+        "until_step": null
+      }
+    },
+    "op": "intervene",
+    "request_id": 21
+  },
+  "meta_offset": 24,
+  "name": "v3_2/control_intervene_set",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "control"
+}

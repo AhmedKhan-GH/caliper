@@ -360,6 +360,22 @@ uint32_t RunControls::send(const char* op, const std::string& name, const Json& 
     return id;
 }
 
+bool RunControls::intervene(const Json& body) {
+    // The point a request names, for the notice and the log.
+    std::string what;
+    if (const Json* st = body.find("set"); st && st->is_object()) {
+        const Json* p = st->find("point");
+        what = p && p->is_string() ? p->as_string() : std::string();
+    } else if (const Json* c = body.find("clear"); c && c->is_string()) {
+        what = c->as_string();
+    } else if (body.has("clear_all")) {
+        what = "all";
+    }
+    const uint32_t id = send(kOpIntervene, what, body, 0);
+    if (id) ops_[id] = std::string(kOpIntervene) + (what.empty() ? "" : " " + what);
+    return id != 0;
+}
+
 bool RunControls::pause() {
     const uint32_t id = send(CALIPER_NET_OP_PAUSE, "", Json(), 0);
     if (id) ops_[id] = CALIPER_NET_OP_PAUSE;
@@ -979,6 +995,7 @@ std::string AttachmentRunLink::send(const std::string& op, const std::string& na
     else if (op == CALIPER_NET_OP_STEP) sent = rc->step(count);
     else if (op == CALIPER_NET_OP_SET) sent = rc->set(name, value);
     else if (op == CALIPER_NET_OP_RUN) sent = rc->run(name);
+    else if (op == kOpIntervene) sent = rc->intervene(value);
     else return "unknown request " + op;
     if (sent) return "";
     const std::string& why = rc->notice().text;

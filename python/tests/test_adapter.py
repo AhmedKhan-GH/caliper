@@ -1,6 +1,6 @@
 """The framework adapter (caliper._adapter): the state of a model and its optimizer saved and
 restored, so that a restored run continues exactly as the original, the loss tap that it owns,
-and the functions that wait for M2 and M11."""
+the export, sync point and hooks of the producer runtime, and the probe that is not available yet."""
 from __future__ import annotations
 
 import io
@@ -90,13 +90,55 @@ def test_the_loss_tap_is_counted_and_comes_off():
     assert torch.autograd.backward is orig and a.loss[1] is None
 
 
-@pytest.mark.parametrize("call", [
-    lambda a: a.export(torch.zeros(1)),
-    lambda a: a.framework_done(),
-    lambda a: a.before_write(lambda: None),
-    lambda a: a.hooks(None, None, None, None, None),
-    lambda a: a.probe(None, None),
-])
-def test_the_unavailable_functions_raise(call):
+def test_probe_is_not_available():
     with pytest.raises(NotImplementedError):
-        call(TorchAdapter())
+        TorchAdapter().probe(None, None)
+
+
+def test_export_gives_the_storage_without_a_copy_and_refuses_a_strided_view():
+    a = TorchAdapter()
+    w = torch.nn.Linear(4, 3).weight                 # requires grad: export detaches, no copy
+    back = torch.from_dlpack(a.export(w))
+    assert back.data_ptr() == w.data_ptr() and back.shape == w.shape
+    with pytest.raises(ValueError, match="not contiguous"):
+        a.export(w.t())
+
+
+def test_framework_done_returns_after_the_queued_work():
+    a = TorchAdapter()
+    a.framework_done()                               # CPU: returns at once
+    if torch.backends.mps.is_available():
+        x = torch.ones(256, 256, device="mps")
+        y = x @ x
+        a.framework_done()
+        a.framework_done()                           # one event, recorded again
+        assert float(y[0, 0].cpu()) == 256.0
+
+
+def test_hooks_call_back_and_come_off():
+    net, opt = _make()
+    a = TorchAdapter()
+    outs, grads, steps, writes = [], [], [], []
+    with pytest.raises(RuntimeError, match="optimizer"):
+        a.before_write(lambda: writes.append(1))
+    a.hooks(net, opt, lambda n, o: outs.append(n), lambda n, g: grads.append((n, g.shape)),
+            lambda: steps.append(1))
+    a.before_write(lambda: writes.append(1))
+    x, y = torch.randn(5, 6), torch.randn(5, 1)
+    _steps(net, opt, x, y, 2)
+    assert outs[:4] == ["0", "1", "2", ""] and len(outs) == 8
+    assert ("0.weight", torch.Size([12, 6])) in grads and len(grads) == 8
+    assert steps == [1, 1] and writes == [1, 1]
+    a.unhook(net)
+    a.unhook(opt)
+    outs.clear(), grads.clear(), steps.clear(), writes.clear()
+    _steps(net, opt, x, y, 1)
+    assert outs == grads == steps == writes == []
+
+
+def test_hooks_without_callbacks_add_nothing():
+    net, opt = _make()
+    a = TorchAdapter()
+    a.hooks(net, None, None, None, None)
+    assert all(not m._forward_hooks for m in net.modules())
+    a.unhook(net)

@@ -45,6 +45,7 @@ import math
 import time
 import warnings
 
+from . import _net_programs
 from ._adapter import TORCH
 
 __all__ = ["RunHooks"]
@@ -122,7 +123,13 @@ class RunHooks:
         self._torch = torch
         with pkg.LOCK:
             pkg._auto_tried = True      # the server carries the views, not the shared memory
-        pkg.serve()
+        _net_programs.enable()          # programs and interventions in the WELCOME from now on
+        self._caps = True
+        try:
+            pkg.serve()
+        except BaseException:
+            self._drop_caps()
+            raise
         groups = optimizer.param_groups
         start = _rate(groups[0]) if groups else float("nan")
         self.start = start
@@ -294,8 +301,16 @@ class RunHooks:
         except Exception as e:
             self._failed(e)
 
+    def _drop_caps(self) -> None:
+        if self._caps:
+            self._caps = False
+            _net_programs.disable()
+
     def close(self) -> None:
-        """Put the scheduler's rates back if a step is under way, remove ``lr`` and the loss tap."""
+        """Put the scheduler's rates back if a step is under way, remove ``lr`` and the loss tap,
+        and stop announcing ``programs`` and ``interventions`` when no other watch with an
+        optimizer is on."""
+        self._drop_caps()
         self._restore()
         if self.lr is not None:
             self.lr.remove()

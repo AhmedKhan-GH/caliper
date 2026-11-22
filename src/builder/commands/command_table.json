@@ -5285,10 +5285,10 @@
         "additionalProperties": false,
         "properties": {
           "bind": {
-            "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, or value for a value the spec holds. A slider binds param: or value; a button binds action: or run:pause. run.state lists the names.",
+            "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, value for a value the spec holds, or intervene:<point> for an intervention point that intervene.points lists. A slider binds param: or value; a button binds action: or run:pause; a toggle binds intervene:<point> or param:<name>. run.state lists the names of parameters and actions.",
             "maxLength": 320,
             "minLength": 5,
-            "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value)$",
+            "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|intervene:.{1,255})$",
             "type": "string"
           },
           "dry_run": {
@@ -5304,7 +5304,7 @@
             "type": "string"
           },
           "kind": {
-            "description": "slider sets a number in a range; button acts once when pressed. range, toggle, picker and text are reserved and refused with spec.unsupported_control until they are built.",
+            "description": "slider sets a number in a range; button acts once when pressed; toggle is on or off, and ablates intervene:<point> or sets a boolean param:<name>. range, picker and text are reserved and refused with spec.unsupported_control until they are built.",
             "enum": [
               "slider",
               "button",
@@ -5465,7 +5465,7 @@
         ],
         "type": "object"
       },
-      "summary": "Adds a control to the open spec: a slider or a button that the person and you can use. bind names its one target: param:<name> for a parameter of the running script, action:<name> for an action of it, run:pause for pausing and resuming the run, or value for a value the spec holds. run.state lists the parameters and actions. A control is a leaf of the layout, like a panel: place puts it next to a panel or control, and without place it goes under the whole layout. Undo removes it. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+      "summary": "Adds a control to the open spec: a slider, a button or a toggle that the person and you can use. bind names its one target: param:<name> for a parameter of the running script, action:<name> for an action of it, run:pause for pausing and resuming the run, value for a value the spec holds, or intervene:<point> for an intervention point, which a toggle ablates while it is on. run.state lists the parameters and actions, and intervene.points the points. A control is a leaf of the layout, like a panel: place puts it next to a panel or control, and without place it goes under the whole layout. Undo removes it. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
       "agents": true,
@@ -5489,10 +5489,10 @@
             "description": "The keys to change; null removes one.",
             "properties": {
               "bind": {
-                "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, or value for a value the spec holds. A slider binds param: or value; a button binds action: or run:pause. run.state lists the names.",
+                "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, value for a value the spec holds, or intervene:<point> for an intervention point that intervene.points lists. A slider binds param: or value; a button binds action: or run:pause; a toggle binds intervene:<point> or param:<name>. run.state lists the names of parameters and actions.",
                 "maxLength": 320,
                 "minLength": 5,
-                "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value)$",
+                "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|intervene:.{1,255})$",
                 "type": "string"
               },
               "kind": {
@@ -6988,11 +6988,12 @@
                 "control",
                 "run",
                 "spec",
-                "approval"
+                "approval",
+                "program"
               ],
               "type": "string"
             },
-            "maxItems": 6,
+            "maxItems": 7,
             "minItems": 1,
             "type": "array"
           },
@@ -7073,15 +7074,28 @@
                   "type": "string"
                 },
                 "change": {
-                  "description": "run: what changed: the run's state, a parameter applied at a step, the end of an action, the attachment of a script, or the state of a managed run (runner).",
+                  "description": "run: what changed: the run's state, a parameter applied at a step, the end of an action, the attachment of a script, the state of a managed run (runner), or an intervention applied at a step (intervene); program: compiled, refused by a check, or stopped by a limit.",
                   "enum": [
                     "state",
                     "param",
                     "action",
                     "attach",
-                    "runner"
+                    "runner",
+                    "intervene",
+                    "compiled",
+                    "refused",
+                    "stopped"
                   ],
                   "type": "string"
+                },
+                "code": {
+                  "description": "program with change refused or stopped: a stable code, such as program.writes_input.",
+                  "type": "string"
+                },
+                "column": {
+                  "description": "program with change refused: the column in the source, or 0.",
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "command": {
                   "description": "spec and approval: the command, such as panel.create.",
@@ -7160,6 +7174,14 @@
                     "null"
                   ]
                 },
+                "host": {
+                  "description": "program: where it compiled, was refused or stopped.",
+                  "enum": [
+                    "script",
+                    "viewer"
+                  ],
+                  "type": "string"
+                },
                 "index": {
                   "description": "pick: the item's index in the batch the script sent.",
                   "minimum": 0,
@@ -7173,13 +7195,30 @@
                     "control",
                     "run",
                     "spec",
-                    "approval"
+                    "approval",
+                    "program"
                   ],
+                  "type": "string"
+                },
+                "line": {
+                  "description": "program with change refused: the line in the source, or 0.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "message": {
+                  "description": "program with change refused or stopped: one plain sentence that says why.",
                   "type": "string"
                 },
                 "name": {
                   "description": "run with change param or action: the parameter's or the action's name.",
                   "type": "string"
+                },
+                "op": {
+                  "description": "run with change intervene: the op applied, or null when the point's interventions were cleared.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 },
                 "origin": {
                   "description": "Who caused it: ui for the person in the app, script for the running script, else the origin of the command.",
@@ -7216,6 +7255,10 @@
                   "minItems": 2,
                   "type": "array"
                 },
+                "point": {
+                  "description": "run with change intervene: the intervention point.",
+                  "type": "string"
+                },
                 "position": {
                   "description": "pick: the point hit, in scene coordinates, or null without depth.",
                   "items": {
@@ -7230,6 +7273,10 @@
                 },
                 "primitive": {
                   "description": "pick: the scene part of the item, such as points or boxes.",
+                  "type": "string"
+                },
+                "program": {
+                  "description": "program: the program's id, or the stage as <panel>/<entity>/<kind>.",
                   "type": "string"
                 },
                 "row_id": {
@@ -7336,7 +7383,2180 @@
         ],
         "type": "object"
       },
-      "summary": "Returns the events that came after a cursor: picks and selections in the app's views and scene panels, changes of controls, changes of the running script (state, parameters, actions, attachment), edits of the open spec and approvals. It answers at once when events wait, and otherwise holds the call until one comes or timeout_s ends. Pass the cursor of each result to the next call. The app keeps the last 1024 events; lost counts those that were dropped before you read them. Hovers are not events. It changes nothing."
+      "summary": "Returns the events that came after a cursor: picks and selections in the app's views and scene panels, changes of controls, changes of the running script (state, parameters, actions, attachment), edits of the open spec, approvals, and the compile, refusal and stop of GPU programs and stages. It answers at once when events wait, and otherwise holds the call until one comes or timeout_s ends. Pass the cursor of each result to the next call. The app keeps the last 1024 events; lost counts those that were dropped before you read them. Hovers are not events. It changes nothing."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
+          "entity": {
+            "description": "The entity of the panel's scene, such as programs/ribbons or a path the script publishes.",
+            "maxLength": 255,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]{1,63}(/[A-Za-z0-9_.-]{1,63}){0,15}$",
+            "type": "string"
+          },
+          "kind": {
+            "description": "material gives the color of each fragment with fn material(in: MaterialIn) -> vec4<f32>; vertex gives the position and the radius of each item with fn vertex(in: VertexIn) -> VertexOut.",
+            "enum": [
+              "material",
+              "vertex"
+            ],
+            "type": "string"
+          },
+          "panel": {
+            "description": "The scene panel's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "wgsl": {
+            "description": "The stage's WGSL: the function material or vertex, with helper functions and constants, at most 16 KiB.",
+            "maxLength": 16384,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "panel",
+          "entity",
+          "kind",
+          "wgsl"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "edit",
+      "examples": [
+        {
+          "entity": "programs/ribbons",
+          "kind": "material",
+          "panel": "world",
+          "wgsl": "fn material(in: MaterialIn) -> vec4<f32> {\n  return vec4<f32>(in.color.rgb * (0.5 + 0.5 * in.value), 1.0);\n}\n"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "stage.set",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
+          "entity": {
+            "description": "The entity path.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "The stage's kind.",
+            "type": "string"
+          },
+          "messages": {
+            "description": "The compiler's and the sandbox's warnings; an error refuses the edit instead.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as program.compile_failed or program.writes_input.",
+                  "type": "string"
+                },
+                "column": {
+                  "description": "The column in bytes, from 1; 0 when the message has no place.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "line": {
+                  "description": "The line in the given source, from 1; 0 when the message has no place.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "message": {
+                  "description": "The message of the compiler or the sandbox, in one line.",
+                  "type": "string"
+                },
+                "severity": {
+                  "description": "Whether the message stops the source or only warns.",
+                  "enum": [
+                    "error",
+                    "warning"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "severity",
+                "code",
+                "message",
+                "line",
+                "column"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "panel": {
+            "description": "The scene panel's id.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "panel",
+          "entity",
+          "kind",
+          "messages",
+          "warnings",
+          "diff",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "summary": "Sets the material or vertex stage of one entity of a scene panel: WGSL that the viewer runs in place of its own function for that entity. material gives the color of each fragment with fn material(in: MaterialIn) -> vec4<f32>; vertex gives the position and the radius of each item with fn vertex(in: VertexIn) -> VertexOut. The source holds functions and constants only, with no binding and no entry point. It replaces the stage of the same panel, entity and kind, and the entity still picks and selects. The sandbox checks it first, and messages give the compiler's line and column. Undo restores the stage before. With dry_run true the change is only checked and not applied."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
+          "entity": {
+            "description": "The entity path of the stage.",
+            "maxLength": 255,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]{1,63}(/[A-Za-z0-9_.-]{1,63}){0,15}$",
+            "type": "string"
+          },
+          "kind": {
+            "description": "material gives the color of each fragment with fn material(in: MaterialIn) -> vec4<f32>; vertex gives the position and the radius of each item with fn vertex(in: VertexIn) -> VertexOut.",
+            "enum": [
+              "material",
+              "vertex"
+            ],
+            "type": "string"
+          },
+          "panel": {
+            "description": "The scene panel's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "panel",
+          "entity",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "edit",
+      "examples": [
+        {
+          "entity": "programs/ribbons",
+          "kind": "material",
+          "panel": "world"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "stage.remove",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
+          "entity": {
+            "description": "The entity path.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "The removed stage's kind.",
+            "type": "string"
+          },
+          "panel": {
+            "description": "The scene panel's id.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "panel",
+          "entity",
+          "kind",
+          "warnings",
+          "diff",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "summary": "Removes the material or vertex stage of one entity of a scene panel, so that the entity draws with the viewer's own function again. Undo restores the stage. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "entry": {
+            "description": "compute: the entry point to check; the one compute entry point when absent.",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+            "type": "string"
+          },
+          "kind": {
+            "description": "How to compile it: as a material or vertex stage, or as a program's compute source.",
+            "enum": [
+              "material",
+              "vertex",
+              "compute"
+            ],
+            "type": "string"
+          },
+          "wgsl": {
+            "description": "The WGSL source.",
+            "maxLength": 65536,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "wgsl"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "read",
+      "examples": [
+        {
+          "kind": "compute",
+          "wgsl": "@group(0) @binding(0) var<storage, read> w: array<f32>;\n@group(0) @binding(1) var<storage, read_write> positions: array<f32>;\n@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;\n@compute @workgroup_size(64) fn run(@builtin(global_invocation_id) id: vec3<u32>) {\n  let i = id.x;\n  if (i >= 256u) { return; }\n  positions[3u * i] = w[3u * i];\n  positions[3u * i + 1u] = w[3u * i + 1u];\n  positions[3u * i + 2u] = w[3u * i + 2u];\n  atomicAdd(&count, 1u);\n}\n"
+        }
+      ],
+      "frame_thread": false,
+      "mutates": false,
+      "name": "stage.check",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "bindings": {
+            "description": "The bindings of the source, as the compiler reflects them.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "access": {
+                  "description": "How the source may use it.",
+                  "enum": [
+                    "read",
+                    "read_write",
+                    "write"
+                  ],
+                  "type": "string"
+                },
+                "binding": {
+                  "description": "The binding's number in its group.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "group": {
+                  "description": "The binding's group.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "kind": {
+                  "description": "What the binding is.",
+                  "enum": [
+                    "uniform",
+                    "storage",
+                    "texture",
+                    "uint_texture",
+                    "storage_texture",
+                    "sampler"
+                  ],
+                  "type": "string"
+                },
+                "name": {
+                  "description": "The WGSL variable's name.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "group",
+                "binding",
+                "name",
+                "kind",
+                "access"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "entry_points": {
+            "description": "The entry points of the source.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "description": "The entry point's name.",
+                  "type": "string"
+                },
+                "stage": {
+                  "description": "The entry point's stage.",
+                  "enum": [
+                    "vertex",
+                    "fragment",
+                    "compute"
+                  ],
+                  "type": "string"
+                },
+                "workgroup_size": {
+                  "description": "compute: the workgroup size x, y and z; zeros otherwise.",
+                  "items": {
+                    "type": "integer"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "name",
+                "stage",
+                "workgroup_size"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "messages": {
+            "description": "The messages, errors first.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as program.compile_failed or program.writes_input.",
+                  "type": "string"
+                },
+                "column": {
+                  "description": "The column in bytes, from 1; 0 when the message has no place.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "line": {
+                  "description": "The line in the given source, from 1; 0 when the message has no place.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "message": {
+                  "description": "The message of the compiler or the sandbox, in one line.",
+                  "type": "string"
+                },
+                "severity": {
+                  "description": "Whether the message stops the source or only warns.",
+                  "enum": [
+                    "error",
+                    "warning"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "severity",
+                "code",
+                "message",
+                "line",
+                "column"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "ok": {
+            "description": "Whether the source compiles and passes the checks that need no declaration.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "messages",
+          "entry_points",
+          "bindings"
+        ],
+        "type": "object"
+      },
+      "summary": "Compiles a WGSL source as the viewer compiles a stage or as the runtime compiles a program, and returns the compiler's and the sandbox's messages with line and column, the entry points and the bindings. kind material or vertex checks a stage with the viewer's prelude; kind compute checks a program's source without its declaration. It changes nothing."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
+          "entry": {
+            "description": "The compute entry point; the one compute entry point when absent.",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+            "type": "string"
+          },
+          "id": {
+            "description": "The new program's id, unique among programs.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "inputs": {
+            "description": "The tensors the program reads, at most 8.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "source": {
+                  "description": "The script's tensor as live:<name>: a parameter of model.named_parameters() such as live:layers.0.weight, its gradient as live:<parameter>.grad, or a module's last output as live:<module>.act. The program reads it in place and cannot write it.",
+                  "maxLength": 68,
+                  "minLength": 6,
+                  "pattern": "^live:.{1,63}$",
+                  "type": "string"
+                },
+                "var": {
+                  "description": "The WGSL variable that the input binds, declared var<storage, read> in any group and binding.",
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "var",
+                "source"
+              ],
+              "type": "object"
+            },
+            "maxItems": 8,
+            "type": "array"
+          },
+          "limits": {
+            "additionalProperties": false,
+            "description": "The program's limits; the defaults when absent.",
+            "properties": {
+              "every": {
+                "description": "The fewest steps between two passes; the runtime may run the program less often to keep training at 95 percent of its speed, never more often.",
+                "maximum": 10000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "memory_mb": {
+                "description": "The budget of the output buffers and the bound tensors in MiB; 64 when absent.",
+                "maximum": 512,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "time_ms": {
+                "description": "The most GPU time of one pass in milliseconds; 4 when absent. A program over it on 3 passes in a row stops.",
+                "maximum": 50,
+                "minimum": 0.01,
+                "type": "number"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "output": {
+            "additionalProperties": false,
+            "description": "The program's one output.",
+            "properties": {
+              "arrays": {
+                "description": "geometry: the arrays the program writes, each a var<storage, read_write> of that name: positions array<f32> with 3 for each item (necessary), colors array<u32> (RGBA8 from pack4x8unorm), values array<f32>, radii array<f32> (points only).",
+                "items": {
+                  "enum": [
+                    "positions",
+                    "colors",
+                    "values",
+                    "radii"
+                  ],
+                  "type": "string"
+                },
+                "maxItems": 4,
+                "minItems": 1,
+                "type": "array"
+              },
+              "entity": {
+                "description": "geometry: the entity path; programs/<id> when absent.",
+                "maxLength": 255,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_.-]{1,63}(/[A-Za-z0-9_.-]{1,63}){0,15}$",
+                "type": "string"
+              },
+              "format": {
+                "description": "pixels: the format; the program writes pixels, a var<storage, read_write> array<u32> of width times height items packed with pack4x8unorm, row by row.",
+                "enum": [
+                  "rgba8unorm"
+                ],
+                "type": "string"
+              },
+              "height": {
+                "description": "pixels: the image's height.",
+                "maximum": 2048,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "kind": {
+                "description": "geometry writes arrays that a scene panel draws as one entity; pixels writes an RGBA8 image that the live view program.<id> carries.",
+                "enum": [
+                  "geometry",
+                  "pixels"
+                ],
+                "type": "string"
+              },
+              "max_count": {
+                "description": "geometry: the most items; the program adds the valid count to count, a var<storage, read_write> atomic<u32>.",
+                "maximum": 1000000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "panel": {
+                "description": "geometry: the scene panel whose scene gets the entity.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                "type": "string"
+              },
+              "part": {
+                "description": "geometry: points draws one point for each item; lines draws one segment for each two items; points when absent.",
+                "enum": [
+                  "points",
+                  "lines"
+                ],
+                "type": "string"
+              },
+              "style": {
+                "additionalProperties": false,
+                "description": "geometry: how values map to colors.",
+                "properties": {
+                  "colormap": {
+                    "description": "The colormap of values; viridis when absent.",
+                    "enum": [
+                      "viridis",
+                      "magma",
+                      "rdbu",
+                      "greys"
+                    ],
+                    "type": "string"
+                  },
+                  "vmax": {
+                    "description": "The value at the high end; the batch's maximum when absent.",
+                    "type": "number"
+                  },
+                  "vmin": {
+                    "description": "The value at the low end; the batch's minimum when absent.",
+                    "type": "number"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "width": {
+                "description": "pixels: the image's width.",
+                "maximum": 2048,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          "title": {
+            "description": "The program's label; the id when absent.",
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "wgsl": {
+            "description": "The WGSL source with a compute entry point, at most 64 KiB, with no enable, requires or diagnostic directive. It may declare var<uniform> caliper: CaliperFrame, a struct of 8 u32 and f32 fields (step, pass_index, max_count, width, height, time_s, every, pad).",
+            "maxLength": 65536,
+            "minLength": 1,
+            "type": "string"
+          },
+          "workgroups": {
+            "description": "The workgroup counts x, y and z of the dispatch; from max_count or the image size and the entry's workgroup size when absent.",
+            "items": {
+              "maximum": 65535,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "wgsl",
+          "inputs",
+          "output"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "edit",
+      "examples": [
+        {
+          "id": "rows",
+          "inputs": [
+            {
+              "source": "live:layers.0.weight",
+              "var": "w"
+            }
+          ],
+          "limits": {
+            "every": 10
+          },
+          "output": {
+            "arrays": [
+              "positions"
+            ],
+            "kind": "geometry",
+            "max_count": 256,
+            "panel": "world",
+            "part": "points"
+          },
+          "title": "Rows of the first layer",
+          "wgsl": "@group(0) @binding(0) var<storage, read> w: array<f32>;\n@group(0) @binding(1) var<storage, read_write> positions: array<f32>;\n@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;\n@compute @workgroup_size(64) fn run(@builtin(global_invocation_id) id: vec3<u32>) {\n  let i = id.x;\n  if (i >= 256u) { return; }\n  positions[3u * i] = w[3u * i];\n  positions[3u * i + 1u] = w[3u * i + 1u];\n  positions[3u * i + 2u] = w[3u * i + 2u];\n  atomicAdd(&count, 1u);\n}\n"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "program.create",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The new program's id.",
+            "type": "string"
+          },
+          "messages": {
+            "description": "The compiler's and the sandbox's warnings; an error refuses the edit instead.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as program.compile_failed or program.writes_input.",
+                  "type": "string"
+                },
+                "column": {
+                  "description": "The column in bytes, from 1; 0 when the message has no place.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "line": {
+                  "description": "The line in the given source, from 1; 0 when the message has no place.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "message": {
+                  "description": "The message of the compiler or the sandbox, in one line.",
+                  "type": "string"
+                },
+                "severity": {
+                  "description": "Whether the message stops the source or only warns.",
+                  "enum": [
+                    "error",
+                    "warning"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "severity",
+                "code",
+                "message",
+                "line",
+                "column"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "messages",
+          "warnings",
+          "diff",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "summary": "Adds a GPU program to the open spec: a WGSL compute pass that reads live tensors of the running script in place and read-only, and writes one output. A geometry output becomes an entity of a scene panel. A pixels output becomes the live view program.<id>, which an image panel shows through a source of catalog live:program.<id>. The program runs in the script's process every N steps, with N set so that training keeps 95 percent of its speed, and a program over its time or memory limit stops. The sandbox checks the declaration and the source first; a refused program is not added, and messages give the compiler's line and column. program.status reports its state. Undo removes it. With dry_run true the change is only checked and not applied."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The program's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "patch": {
+            "additionalProperties": false,
+            "description": "The keys to change; null removes one.",
+            "properties": {
+              "entry": {
+                "description": "The compute entry point; the one compute entry point when absent.",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "inputs": {
+                "description": "The tensors the program reads, at most 8.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "source": {
+                      "description": "The script's tensor as live:<name>: a parameter of model.named_parameters() such as live:layers.0.weight, its gradient as live:<parameter>.grad, or a module's last output as live:<module>.act. The program reads it in place and cannot write it.",
+                      "maxLength": 68,
+                      "minLength": 6,
+                      "pattern": "^live:.{1,63}$",
+                      "type": "string"
+                    },
+                    "var": {
+                      "description": "The WGSL variable that the input binds, declared var<storage, read> in any group and binding.",
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "var",
+                    "source"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "limits": {
+                "additionalProperties": false,
+                "description": "The program's limits.",
+                "properties": {
+                  "every": {
+                    "description": "The fewest steps between two passes; the runtime may run the program less often to keep training at 95 percent of its speed, never more often.",
+                    "maximum": 10000,
+                    "minimum": 1,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "memory_mb": {
+                    "description": "The budget of the output buffers and the bound tensors in MiB; 64 when absent.",
+                    "maximum": 512,
+                    "minimum": 1,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "time_ms": {
+                    "description": "The most GPU time of one pass in milliseconds; 4 when absent. A program over it on 3 passes in a row stops.",
+                    "maximum": 50,
+                    "minimum": 0.01,
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "output": {
+                "additionalProperties": false,
+                "description": "The program's one output.",
+                "properties": {
+                  "arrays": {
+                    "description": "geometry: the arrays the program writes, each a var<storage, read_write> of that name: positions array<f32> with 3 for each item (necessary), colors array<u32> (RGBA8 from pack4x8unorm), values array<f32>, radii array<f32> (points only).",
+                    "items": {
+                      "enum": [
+                        "positions",
+                        "colors",
+                        "values",
+                        "radii"
+                      ],
+                      "type": "string"
+                    },
+                    "maxItems": 4,
+                    "minItems": 1,
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "entity": {
+                    "description": "geometry: the entity path; programs/<id> when absent.",
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9_.-]{1,63}(/[A-Za-z0-9_.-]{1,63}){0,15}$",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "format": {
+                    "description": "pixels: the format; the program writes pixels, a var<storage, read_write> array<u32> of width times height items packed with pack4x8unorm, row by row.",
+                    "enum": [
+                      "rgba8unorm",
+                      null
+                    ],
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "height": {
+                    "description": "pixels: the image's height.",
+                    "maximum": 2048,
+                    "minimum": 1,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "kind": {
+                    "description": "geometry writes arrays that a scene panel draws as one entity; pixels writes an RGBA8 image that the live view program.<id> carries.",
+                    "enum": [
+                      "geometry",
+                      "pixels",
+                      null
+                    ],
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "max_count": {
+                    "description": "geometry: the most items; the program adds the valid count to count, a var<storage, read_write> atomic<u32>.",
+                    "maximum": 1000000,
+                    "minimum": 1,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "panel": {
+                    "description": "geometry: the scene panel whose scene gets the entity.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "part": {
+                    "description": "geometry: points draws one point for each item; lines draws one segment for each two items; points when absent.",
+                    "enum": [
+                      "points",
+                      "lines",
+                      null
+                    ],
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "style": {
+                    "additionalProperties": false,
+                    "description": "geometry: how values map to colors.",
+                    "properties": {
+                      "colormap": {
+                        "description": "The colormap of values; viridis when absent.",
+                        "enum": [
+                          "viridis",
+                          "magma",
+                          "rdbu",
+                          "greys",
+                          null
+                        ],
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "vmax": {
+                        "description": "The value at the high end; the batch's maximum when absent.",
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      },
+                      "vmin": {
+                        "description": "The value at the low end; the batch's minimum when absent.",
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [],
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "width": {
+                    "description": "pixels: the image's width.",
+                    "maximum": 2048,
+                    "minimum": 1,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "title": {
+                "description": "The program's label.",
+                "maxLength": 256,
+                "minLength": 1,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "wgsl": {
+                "description": "The WGSL source with a compute entry point, at most 64 KiB, with no enable, requires or diagnostic directive.",
+                "maxLength": 65536,
+                "minLength": 1,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "workgroups": {
+                "description": "The workgroup counts x, y and z of the dispatch; from max_count or the image size and the entry's workgroup size when absent.",
+                "items": {
+                  "maximum": 65535,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "required": [],
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "patch"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "edit",
+      "examples": [
+        {
+          "id": "rows",
+          "patch": {
+            "limits": {
+              "every": 20
+            },
+            "output": {
+              "max_count": 512
+            }
+          }
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "program.patch",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
+          "messages": {
+            "description": "The compiler's and the sandbox's warnings; an error refuses the edit instead.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as program.compile_failed or program.writes_input.",
+                  "type": "string"
+                },
+                "column": {
+                  "description": "The column in bytes, from 1; 0 when the message has no place.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "line": {
+                  "description": "The line in the given source, from 1; 0 when the message has no place.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "message": {
+                  "description": "The message of the compiler or the sandbox, in one line.",
+                  "type": "string"
+                },
+                "severity": {
+                  "description": "Whether the message stops the source or only warns.",
+                  "enum": [
+                    "error",
+                    "warning"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "severity",
+                "code",
+                "message",
+                "line",
+                "column"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "program": {
+            "additionalProperties": false,
+            "description": "The program as it is now, or would be after a dry run.",
+            "properties": {
+              "entry": {
+                "description": "The compute entry point; the one compute entry point when absent.",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+                "type": "string"
+              },
+              "id": {
+                "description": "The program's id, unique among programs, at most 55 characters, because its pixels output is the live view program.<id>.",
+                "maxLength": 55,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                "type": "string"
+              },
+              "inputs": {
+                "description": "The tensors the program reads, at most 8.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "source": {
+                      "description": "The script's tensor as live:<name>: a parameter of model.named_parameters() such as live:layers.0.weight, its gradient as live:<parameter>.grad, or a module's last output as live:<module>.act. The program reads it in place and cannot write it.",
+                      "maxLength": 68,
+                      "minLength": 6,
+                      "pattern": "^live:.{1,63}$",
+                      "type": "string"
+                    },
+                    "var": {
+                      "description": "The WGSL variable that the input binds, declared var<storage, read> in any group and binding.",
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "var",
+                    "source"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "limits": {
+                "additionalProperties": false,
+                "description": "The program's limits.",
+                "properties": {
+                  "every": {
+                    "description": "The fewest steps between two passes; the runtime may run the program less often to keep training at 95 percent of its speed, never more often.",
+                    "maximum": 10000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "memory_mb": {
+                    "description": "The budget of the output buffers and the bound tensors in MiB; 64 when absent.",
+                    "maximum": 512,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "time_ms": {
+                    "description": "The most GPU time of one pass in milliseconds; 4 when absent. A program over it on 3 passes in a row stops.",
+                    "maximum": 50,
+                    "minimum": 0.01,
+                    "type": "number"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "output": {
+                "additionalProperties": false,
+                "description": "The program's one output.",
+                "properties": {
+                  "arrays": {
+                    "description": "geometry: the arrays the program writes, each a var<storage, read_write> of that name: positions array<f32> with 3 for each item (necessary), colors array<u32> (RGBA8 from pack4x8unorm), values array<f32>, radii array<f32> (points only).",
+                    "items": {
+                      "enum": [
+                        "positions",
+                        "colors",
+                        "values",
+                        "radii"
+                      ],
+                      "type": "string"
+                    },
+                    "maxItems": 4,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "entity": {
+                    "description": "geometry: the entity path; programs/<id> when absent.",
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9_.-]{1,63}(/[A-Za-z0-9_.-]{1,63}){0,15}$",
+                    "type": "string"
+                  },
+                  "format": {
+                    "description": "pixels: the format; the program writes pixels, a var<storage, read_write> array<u32> of width times height items packed with pack4x8unorm, row by row.",
+                    "enum": [
+                      "rgba8unorm"
+                    ],
+                    "type": "string"
+                  },
+                  "height": {
+                    "description": "pixels: the image's height.",
+                    "maximum": 2048,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "description": "geometry writes arrays that a scene panel draws as one entity; pixels writes an RGBA8 image that the live view program.<id> carries.",
+                    "enum": [
+                      "geometry",
+                      "pixels"
+                    ],
+                    "type": "string"
+                  },
+                  "max_count": {
+                    "description": "geometry: the most items; the program adds the valid count to count, a var<storage, read_write> atomic<u32>.",
+                    "maximum": 1000000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "panel": {
+                    "description": "geometry: the scene panel whose scene gets the entity.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "type": "string"
+                  },
+                  "part": {
+                    "description": "geometry: points draws one point for each item; lines draws one segment for each two items; points when absent.",
+                    "enum": [
+                      "points",
+                      "lines"
+                    ],
+                    "type": "string"
+                  },
+                  "style": {
+                    "additionalProperties": false,
+                    "description": "geometry: how values map to colors.",
+                    "properties": {
+                      "colormap": {
+                        "description": "The colormap of values; viridis when absent.",
+                        "enum": [
+                          "viridis",
+                          "magma",
+                          "rdbu",
+                          "greys"
+                        ],
+                        "type": "string"
+                      },
+                      "vmax": {
+                        "description": "The value at the high end; the batch's maximum when absent.",
+                        "type": "number"
+                      },
+                      "vmin": {
+                        "description": "The value at the low end; the batch's minimum when absent.",
+                        "type": "number"
+                      }
+                    },
+                    "required": [],
+                    "type": "object"
+                  },
+                  "width": {
+                    "description": "pixels: the image's width.",
+                    "maximum": 2048,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              "title": {
+                "description": "The program's label.",
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "wgsl": {
+                "description": "The WGSL source with a compute entry point, at most 64 KiB, with no enable, requires or diagnostic directive.",
+                "maxLength": 65536,
+                "minLength": 1,
+                "type": "string"
+              },
+              "workgroups": {
+                "description": "The workgroup counts x, y and z of the dispatch; from max_count or the image size and the entry's workgroup size when absent.",
+                "items": {
+                  "maximum": 65535,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "wgsl",
+              "inputs",
+              "output"
+            ],
+            "type": "object"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "program",
+          "messages",
+          "warnings",
+          "diff",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "summary": "Changes a GPU program of the open spec with a JSON merge patch (RFC 7386) of its title, wgsl, entry, inputs, output, limits and workgroups: the keys given replace the program's own, a key set to null is removed, and output and limits merge key by key. The id cannot change. The sandbox checks the program again, and the script runs the new version from its next pass. Undo restores the program. With dry_run true the change is only checked and not applied."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The program's id in the open spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "edit",
+      "examples": [
+        {
+          "id": "rows"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "program.remove",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The removed program's id.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "warnings",
+          "diff",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "summary": "Removes a GPU program from the open spec; the script stops it and frees its buffers, and its output leaves the scene or the live view. The id comes from spec.get or program.status. Undo restores it. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "Only this program, or this stage as <panel>/<entity>/<kind>; every program and stage when absent.",
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "read",
+      "examples": [
+        {
+          "id": "rows"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "program.status",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "programs": {
+            "description": "The programs, in the spec's order.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "error": {
+                  "additionalProperties": false,
+                  "description": "The last error, or null.",
+                  "properties": {
+                    "code": {
+                      "description": "A stable code, such as program.over_time.",
+                      "type": "string"
+                    },
+                    "column": {
+                      "description": "The column in the source, or 0.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "line": {
+                      "description": "The line in the source, or 0.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "message": {
+                      "description": "One plain sentence that says what happened.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "line",
+                    "column"
+                  ],
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "every": {
+                  "description": "The cadence N: the program runs every N steps; null for a stage or before the first pass.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "every_min": {
+                  "description": "The declared limits.every; null for a stage or when absent.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "host": {
+                  "description": "Where it runs: script for a program in the attached script, viewer for a stage, none when nothing runs it.",
+                  "enum": [
+                    "script",
+                    "viewer",
+                    "none"
+                  ],
+                  "type": "string"
+                },
+                "id": {
+                  "description": "The program's id, or a stage as <panel>/<entity>/<kind>.",
+                  "type": "string"
+                },
+                "kind": {
+                  "description": "The program's output kind or the stage's kind.",
+                  "enum": [
+                    "geometry",
+                    "pixels",
+                    "material",
+                    "vertex"
+                  ],
+                  "type": "string"
+                },
+                "last_cost_ms": {
+                  "description": "The time the last pass step added to the training step in milliseconds, or null.",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "last_pass_ms": {
+                  "description": "The GPU time of the last pass or frame in milliseconds, or null.",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "last_step": {
+                  "description": "The script's step of the last pass, or null.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "memory_bytes": {
+                  "description": "The bytes of its output buffers and bound tensors.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "memory_limit_bytes": {
+                  "description": "The budget from limits.memory_mb; 0 for a stage.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "runs": {
+                  "description": "The count of passes, or of frames for a stage.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "sha256": {
+                  "description": "The SHA-256 of the source the host runs, in hex; empty when none runs.",
+                  "type": "string"
+                },
+                "state": {
+                  "description": "waiting for a host, review in a foreign spec without a review, compiled before its first pass, running, refused by a check, or stopped by a limit.",
+                  "enum": [
+                    "waiting",
+                    "review",
+                    "compiled",
+                    "running",
+                    "refused",
+                    "stopped"
+                  ],
+                  "type": "string"
+                },
+                "step_ms": {
+                  "description": "The median training step time in milliseconds that sets the cadence, or null.",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "host",
+                "state",
+                "every",
+                "every_min",
+                "last_pass_ms",
+                "last_cost_ms",
+                "step_ms",
+                "last_step",
+                "runs",
+                "memory_bytes",
+                "memory_limit_bytes",
+                "error",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            "maxItems": 16,
+            "type": "array"
+          },
+          "stages": {
+            "description": "The stages, in the spec's order.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "error": {
+                  "additionalProperties": false,
+                  "description": "The last error, or null.",
+                  "properties": {
+                    "code": {
+                      "description": "A stable code, such as program.over_time.",
+                      "type": "string"
+                    },
+                    "column": {
+                      "description": "The column in the source, or 0.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "line": {
+                      "description": "The line in the source, or 0.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "message": {
+                      "description": "One plain sentence that says what happened.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "line",
+                    "column"
+                  ],
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "every": {
+                  "description": "The cadence N: the program runs every N steps; null for a stage or before the first pass.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "every_min": {
+                  "description": "The declared limits.every; null for a stage or when absent.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "host": {
+                  "description": "Where it runs: script for a program in the attached script, viewer for a stage, none when nothing runs it.",
+                  "enum": [
+                    "script",
+                    "viewer",
+                    "none"
+                  ],
+                  "type": "string"
+                },
+                "id": {
+                  "description": "The program's id, or a stage as <panel>/<entity>/<kind>.",
+                  "type": "string"
+                },
+                "kind": {
+                  "description": "The program's output kind or the stage's kind.",
+                  "enum": [
+                    "geometry",
+                    "pixels",
+                    "material",
+                    "vertex"
+                  ],
+                  "type": "string"
+                },
+                "last_cost_ms": {
+                  "description": "The time the last pass step added to the training step in milliseconds, or null.",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "last_pass_ms": {
+                  "description": "The GPU time of the last pass or frame in milliseconds, or null.",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "last_step": {
+                  "description": "The script's step of the last pass, or null.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "memory_bytes": {
+                  "description": "The bytes of its output buffers and bound tensors.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "memory_limit_bytes": {
+                  "description": "The budget from limits.memory_mb; 0 for a stage.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "runs": {
+                  "description": "The count of passes, or of frames for a stage.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "sha256": {
+                  "description": "The SHA-256 of the source the host runs, in hex; empty when none runs.",
+                  "type": "string"
+                },
+                "state": {
+                  "description": "waiting for a host, review in a foreign spec without a review, compiled before its first pass, running, refused by a check, or stopped by a limit.",
+                  "enum": [
+                    "waiting",
+                    "review",
+                    "compiled",
+                    "running",
+                    "refused",
+                    "stopped"
+                  ],
+                  "type": "string"
+                },
+                "step_ms": {
+                  "description": "The median training step time in milliseconds that sets the cadence, or null.",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "host",
+                "state",
+                "every",
+                "every_min",
+                "last_pass_ms",
+                "last_cost_ms",
+                "step_ms",
+                "last_step",
+                "runs",
+                "memory_bytes",
+                "memory_limit_bytes",
+                "error",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            "maxItems": 32,
+            "type": "array"
+          }
+        },
+        "required": [
+          "programs",
+          "stages"
+        ],
+        "type": "object"
+      },
+      "summary": "Returns the state of each GPU program and each stage of the open spec: where it runs, whether it compiled, runs, was refused or stopped, its cadence N, the GPU time of its last pass, the time it adds to a training step, its memory, and its last error with line and column. It changes nothing."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "match": {
+            "description": "Only the points whose names match this glob, such as blocks.*.attn*; every point when absent.",
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "read",
+      "examples": [
+        {
+          "match": "blocks.0.*"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "intervene.points",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "points": {
+            "description": "The points, in the model's order.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "head": {
+                  "description": "The head's index, or null for a module.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "description": "module for a module's output, head for one head of an attention module.",
+                  "enum": [
+                    "module",
+                    "head"
+                  ],
+                  "type": "string"
+                },
+                "module": {
+                  "description": "The module's dotted name.",
+                  "type": "string"
+                },
+                "point": {
+                  "description": "The point's name: a module's dotted name, or <module>#<h> for a head.",
+                  "type": "string"
+                },
+                "shape": {
+                  "description": "The shape of the module's last output, or null before the first step.",
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "description": "The module's class name, such as Linear or MultiheadAttention.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "point",
+                "kind",
+                "module",
+                "head",
+                "type",
+                "shape"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "step": {
+            "description": "The script's step, or null before the first.",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "points",
+          "step"
+        ],
+        "type": "object"
+      },
+      "summary": "Lists the intervention points of the model that the attached script watches: each module's output by its dotted name, and each head of an attention module as <module>#<h>, with the module's class and the shape of its last output. It changes nothing."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "from_step": {
+            "description": "The first step it acts on; the next step when absent.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "op": {
+            "description": "What to do: ablate sets the output to zero; scale, steer and patch are reserved and refused with intervene.op_reserved.",
+            "enum": [
+              "ablate",
+              "scale",
+              "steer",
+              "patch"
+            ],
+            "type": "string"
+          },
+          "point": {
+            "description": "The point's name, from intervene.points.",
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "until_step": {
+            "description": "The step it ends before; it lasts until it is cleared when absent.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "point",
+          "op"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "run",
+      "examples": [
+        {
+          "op": "ablate",
+          "point": "blocks.0.attn#3"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "intervene.set",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "description": "The op sent.",
+            "type": "string"
+          },
+          "pending": {
+            "description": "True: the intervention waits for the script's next step.",
+            "type": "boolean"
+          },
+          "point": {
+            "description": "The point.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "point",
+          "op",
+          "pending"
+        ],
+        "type": "object"
+      },
+      "summary": "Sets one intervention on a point of the attached model, applied at the script's next step through the module hooks: ablate sets the point's output to zero, or one head's part where the point is a head. scale, steer and patch are reserved. It lasts until intervene.clear, or from from_step until until_step. The result says it is pending; a run event of change intervene reports the step the script applied it at. intervene.points lists the points."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "all": {
+            "description": "true clears every intervention; point is then not given.",
+            "type": "boolean"
+          },
+          "point": {
+            "description": "The point whose interventions to clear, from intervene.list.",
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "run",
+      "examples": [
+        {
+          "point": "blocks.0.attn#3"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "intervene.clear",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "cleared": {
+            "description": "The points whose interventions are cleared.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pending": {
+            "description": "True: the change waits for the script's next step.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cleared",
+          "pending"
+        ],
+        "type": "object"
+      },
+      "summary": "Clears the interventions on one point of the attached model, or every intervention with all true, at the script's next step. The result names the points cleared and says the change is pending; a run event of change intervene reports the step the script applied it at."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "read",
+      "examples": [
+        {}
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "intervene.list",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "interventions": {
+            "description": "The interventions, oldest first.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "from_step": {
+                  "description": "The first step it acts on, or null for the next step.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "op": {
+                  "description": "What it does: ablate sets the point's output to zero.",
+                  "enum": [
+                    "ablate"
+                  ],
+                  "type": "string"
+                },
+                "point": {
+                  "description": "The point it acts on.",
+                  "type": "string"
+                },
+                "since_step": {
+                  "description": "The step the script applied it at, or null while it is pending.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "state": {
+                  "description": "pending until the script's next step, active, or ended after until_step.",
+                  "enum": [
+                    "pending",
+                    "active",
+                    "ended"
+                  ],
+                  "type": "string"
+                },
+                "until_step": {
+                  "description": "The step it ends before, or null until it is cleared.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "point",
+                "op",
+                "from_step",
+                "until_step",
+                "since_step",
+                "state"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "interventions"
+        ],
+        "type": "object"
+      },
+      "summary": "Lists the interventions on the attached model with their points, ops, step ranges and states: pending until the script's next step, active, or ended after their last step. It changes nothing."
     },
     {
       "agents": false,

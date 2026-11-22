@@ -56,7 +56,7 @@ inline bool operator!=(const SceneOptions& a, const SceneOptions& b) { return !(
 // empty when the binding has another form.
 std::optional<std::string> live_scene_name(std::string_view binding);
 
-// The kinds of a control. The first version builds slider and button; the others are part of
+// The kinds of a control. Caliper builds slider, button and toggle; the others are part of
 // the format and refused by the validator with spec.unsupported_control until
 // they are built.
 enum class ControlKind { slider, button, range, toggle, picker, text };
@@ -64,7 +64,7 @@ enum class ControlKind { slider, button, range, toggle, picker, text };
 // "slider", "button", "range", "toggle", "picker", "text".
 const char* control_kind_name(ControlKind kind);
 std::optional<ControlKind> control_kind_from_name(std::string_view name);
-// Whether this Caliper draws the kind (slider and button in the first version).
+// Whether this Caliper draws the kind (slider, button and toggle).
 bool control_kind_built(ControlKind kind);
 
 // The one target of a control, parsed from its `bind` string:
@@ -72,11 +72,14 @@ bool control_kind_built(ControlKind kind);
 //   action:<name>  an action the script registered with caliper.action
 //   run:pause      the run's pause and resume
 //   value          a value the spec holds, which references read later
-// A name has 1 to 63 bytes of UTF-8 and no control characters.
+//   intervene:<point>  an intervention point of the attached model, which a
+//                  toggle ablates while it is on (design/gpu-programs.md)
+// A name has 1 to 63 bytes of UTF-8 and no control characters; a point's
+// name has up to 255 bytes.
 struct ControlTarget {
-    enum class Kind { param, action, run_pause, value };
+    enum class Kind { param, action, run_pause, value, intervene };
     Kind kind = Kind::value;
-    std::string name;   // param and action only
+    std::string name;   // param, action and intervene only
 };
 bool operator==(const ControlTarget& a, const ControlTarget& b);
 
@@ -86,8 +89,8 @@ std::optional<ControlTarget> parse_control_target(std::string_view bind);
 // The bind string of a target: the inverse of parse_control_target().
 std::string control_target_string(const ControlTarget& target);
 // Whether a control of `kind` may bind `target`: a slider binds param: or
-// value, a button binds action: or run:pause (the validator's
-// spec.control_mismatch). The reserved kinds bind nothing in the first version.
+// value, a button binds action: or run:pause, a toggle binds intervene: or
+// param: (the validator's spec.control_mismatch). The reserved kinds bind nothing.
 bool control_takes_target(ControlKind kind, const ControlTarget& target);
 
 // The options of a control. An option that is not set is empty.

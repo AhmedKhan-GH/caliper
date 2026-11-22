@@ -162,8 +162,12 @@ std::string approval_loss(const caliper_builder::CommandInvocation& invocation,
 // "the attached script" when `script` is empty. For the model runner's
 // run.start, run.fork and run.stop (design/hosted-runs.md, Review Card): the
 // script, its arguments and its parameters; the parent and the parameters of
-// a fork, with `script` the parent's; the run and the limit of a stop. "" for
-// any other command.
+// a fork, with `script` the parent's; the run and the limit of a stop. For
+// intervene.set and intervene.clear (design/gpu-programs.md, Intervention
+// Effect): "Ablate blocks.0.attn#3 in train.py from the next step.", "Clear
+// the interventions on blocks.0.attn#3 in train.py at the next step." and,
+// with all true, "Clear every intervention in train.py at the next step."
+// "" for any other command.
 std::string approval_run_text(const caliper_builder::CommandInvocation& invocation, const std::string& script);
 
 enum class ApprovalState { waiting, deciding, approved, denied, timed_out, conflict, failed, withdrawn };
@@ -333,7 +337,9 @@ ApprovalStripLayout layout_approval_strip(const ApprovalLayoutInput& in, const A
 // a target names it (design/instruments.md, Approval Card): for
 // "run.set_param:lr", "Allow changes of lr for this session" and "Always
 // allow changes of lr"; for "run.action:save", "Allow action save for this
-// session" and "Always allow action save".
+// session" and "Always allow action save"; for "intervene.set:head",
+// "Allow interventions on head for this session"; for
+// "intervene.clear:head", "Always allow clearing the interventions on head".
 const char* approval_approve_label(bool rules);
 const char* approval_session_label();
 std::string approval_session_label(const std::string& rule);

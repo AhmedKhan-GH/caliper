@@ -1,0 +1,68 @@
+# Spec version 1 with GPU programs, a stage and a provenance table, as
+# design/gpu-programs.md describes them.
+caliper_spec = 1
+
+[applet]
+id = "programs"
+title = "Programs"
+
+[[panel]]
+id = "world"
+primitive = "scene"
+title = "Weights"
+bind = { scene = "live:model" }
+
+[[program]]
+id = "rows"
+title = "Rows of the first layer"
+inputs = [{ var = "w", source = "live:layers.0.weight" }]
+output = { kind = "geometry", panel = "world", entity = "programs/rows", part = "points", max_count = 128, arrays = ["positions", "values"], style = { colormap = "magma", vmin = -1.0, vmax = 1.0 } }
+limits = { every = 10, time_ms = 2.5 }
+wgsl = """
+@group(0) @binding(0) var<storage, read> w: array<f32>;
+@group(0) @binding(1) var<storage, read_write> positions: array<f32>;
+@group(0) @binding(2) var<storage, read_write> values: array<f32>;
+@group(0) @binding(3) var<storage, read_write> count: atomic<u32>;
+@compute @workgroup_size(64) fn rows(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = id.x;
+  if (i >= 128u) { return; }
+  positions[3u * i] = w[3u * i];
+  positions[3u * i + 1u] = w[3u * i + 1u];
+  positions[3u * i + 2u] = w[3u * i + 2u];
+  values[i] = w[3u * i];
+  atomicAdd(&count, 1u);
+}
+"""
+
+[[program]]
+id = "image"
+inputs = [{ var = "g", source = "live:layers.0.weight.grad" }]
+output = { kind = "pixels", width = 64, height = 32 }
+limits = { memory_mb = 16 }
+workgroups = [8, 4, 1]
+wgsl = """
+@group(0) @binding(0) var<storage, read> g: array<f32>;
+@group(0) @binding(1) var<storage, read_write> pixels: array<u32>;
+@group(0) @binding(2) var<uniform> caliper: CaliperFrame;
+struct CaliperFrame { step: u32, pass_index: u32, max_count: u32, width: u32, height: u32, time_s: f32, every: u32, pad: u32 }
+@compute @workgroup_size(8, 8) fn paint(@builtin(global_invocation_id) id: vec3<u32>) {
+  if (id.x >= caliper.width || id.y >= caliper.height) { return; }
+  let v = clamp(abs(g[id.y * caliper.width + id.x]) * 100.0, 0.0, 1.0);
+  pixels[id.y * caliper.width + id.x] = pack4x8unorm(vec4<f32>(v, v, v, 1.0));
+}
+"""
+
+[[stage]]
+panel = "world"
+entity = "programs/rows"
+kind = "material"
+wgsl = """
+fn material(in: MaterialIn) -> vec4<f32> {
+  return vec4<f32>(in.color.rgb * (0.5 + 0.5 * in.value), 1.0);
+}
+"""
+
+[provenance]
+foreign = true
+from = "a spec shared by a colleague"
+reviewed = [{ target = "program:rows", sha256 = "6882e5f49993ba93b2fef3a9a0f2e3ff893d19535607ff538d31e25bdc98b17d" }]

@@ -65,6 +65,21 @@ target_link_libraries(_live PRIVATE
 target_link_options(_live PRIVATE "LINKER:-exported_symbol,_PyInit__live")
 install(TARGETS _live LIBRARY DESTINATION caliper COMPONENT python)
 
+# caliper._producer — the producer runtime of GPU programs (python/src/_producer.mm over
+# src/host/producer/caliper_producer.h): the graphics layer without a window, the WGSL
+# compiler and the sandbox in the script's process. It links no libcaliper, and the facade
+# caliper._programs loads it on the first program only. Metal only for now.
+if(APPLE AND TARGET caliper_producer)
+    nanobind_add_module(_producer NB_STATIC src/_producer.mm)
+    target_include_directories(_producer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_compile_options(_producer PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+    set_target_properties(_producer PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+        OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
+    target_link_libraries(_producer PRIVATE caliper_producer "-framework Metal" "-framework Foundation")
+    target_link_options(_producer PRIVATE "LINKER:-exported_symbol,_PyInit__producer")
+    install(TARGETS _producer LIBRARY DESTINATION caliper COMPONENT python)
+endif()
+
 # caliper._netio — the native sender of caliper.serve() (python/src/_netio.cpp):
 # sockets, the protocol's upgrade checks, encoding and sending on a thread that
 # never takes the GIL. It links only caliper_net (src/host/net), no libcaliper;

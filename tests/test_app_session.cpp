@@ -1174,3 +1174,116 @@ TEST_CASE("app session: the session holds the app's run control, and the run com
     REQUIRE(link.sent.size() == 2);
     CHECK(link.sent[1].value == "0.03");
 }
+
+TEST_CASE("app session: the run control reads the CONTROLS key interventions in the run control's form") {
+    // The key as the script sends it (tests/fixtures/wire_v3/v3_2/controls_interventions.json).
+    const json iv = json::parse(R"({"points": [
+        {"point": "blocks.0.attn", "kind": "module", "module": "blocks.0.attn", "head": null, "type": "Attention",
+         "shape": [8, 64, 128]},
+        {"point": "blocks.0.attn#3", "kind": "head", "module": "blocks.0.attn", "head": 3, "type": "Attention",
+         "shape": null}],
+      "active": [
+        {"point": "blocks.0.attn", "op": "ablate", "from_step": null, "until_step": null, "since_step": 1190,
+         "state": "active"},
+        {"point": "blocks.0.attn#3", "op": "ablate", "from_step": 1201, "until_step": 1300, "since_step": null,
+         "state": "pending"}]})");
+    const std::vector<cb::InterventionPoint> pts = caliper_host::intervention_points_of(iv);
+    REQUIRE(pts.size() == 2);
+    CHECK(pts[0].point == "blocks.0.attn");
+    CHECK(pts[0].kind == "module");
+    CHECK_FALSE(pts[0].head);
+    CHECK(pts[0].shape == std::optional<std::vector<std::int64_t>>(std::vector<std::int64_t>{8, 64, 128}));
+    CHECK(pts[1].kind == "head");
+    CHECK(pts[1].head == std::optional<std::int64_t>(3));
+    CHECK(pts[1].module == "blocks.0.attn");
+    CHECK(pts[1].type == "Attention");
+    CHECK_FALSE(pts[1].shape);
+    const std::vector<cb::Intervention> ivs = caliper_host::interventions_of(iv);
+    REQUIRE(ivs.size() == 2);
+    CHECK(ivs[0].point == "blocks.0.attn#3");   // the pending one first
+    CHECK(ivs[0].from_step == std::optional<std::int64_t>(1201));
+    CHECK(ivs[0].until_step == std::optional<std::int64_t>(1300));
+    CHECK_FALSE(ivs[0].since_step);
+    CHECK(ivs[1].state == "active");
+    CHECK(ivs[1].since_step == std::optional<std::int64_t>(1190));
+    CHECK(caliper_host::intervention_points_of(json()).empty());
+    CHECK(caliper_host::interventions_of(json::array()).empty());
+}
+
+TEST_CASE("app session: the run control reports each applied and each stopped intervention as a run event") {
+    caliper_host::AppRunControl rc;
+    Recorder rec;
+    const auto key = [](const std::string& active) {
+        return json::parse(R"({"points": [], "active": )" + active + "}");
+    };
+    // The first key is the baseline: what was applied before is no event.
+    rc.feed_interventions(key(R"([{"point": "head", "op": "ablate", "from_step": null, "until_step": null,
+                                   "since_step": 4, "state": "active"}])"),
+                          12, true, rec);
+    CHECK(rec.events.empty());
+    rc.feed_interventions(key(R"([{"point": "head", "op": "ablate", "from_step": null, "until_step": null,
+                                   "since_step": 4, "state": "active"},
+                                  {"point": "blocks.0.attn#1", "op": "ablate", "from_step": null, "until_step": null,
+                                   "since_step": null, "state": "pending"}])"),
+                          13, false, rec);
+    CHECK(rec.events.empty());   // pending is no change yet
+    rc.feed_interventions(key(R"([{"point": "head", "op": "ablate", "from_step": null, "until_step": null,
+                                   "since_step": 4, "state": "active"},
+                                  {"point": "blocks.0.attn#1", "op": "ablate", "from_step": null, "until_step": null,
+                                   "since_step": 15, "state": "active"}])"),
+                          14, false, rec);
+    REQUIRE(rec.events.size() == 1);
+    CHECK(rec.events[0].kind == cb::EventKind::run);
+    CHECK(rec.events[0].origin == "script");
+    CHECK(rec.fields()[0] ==
+          json{{"change", "intervene"}, {"point", "blocks.0.attn#1"}, {"op", "ablate"}, {"step", 15}});
+    // A cleared point and an ended one stop: op null at the script's step.
+    rc.feed_interventions(key(R"([{"point": "blocks.0.attn#1", "op": "ablate", "from_step": null,
+                                   "until_step": 20, "since_step": 15, "state": "ended"}])"),
+                          20, false, rec);
+    REQUIRE(rec.events.size() == 3);
+    CHECK(rec.fields()[1] == json{{"change", "intervene"}, {"point", "blocks.0.attn#1"}, {"op", nullptr}, {"step", 20}});
+    CHECK(rec.fields()[2] == json{{"change", "intervene"}, {"point", "head"}, {"op", nullptr}, {"step", 20}});
+}
+
+TEST_CASE("app session: the run control refuses interventions from a script that did not announce them") {
+    caliper_host::AppRunControl rc;
+    cb::Intervention i;
+    i.point = "head";
+    CHECK_FALSE(rc.interventions_supported());
+    CHECK(rc.intervene_set(i).code == cb::kRunNotAttached);
+    FakeLink link;   // its CONTROLS carry no key interventions
+    rc.set_link(&link);
+    CHECK_FALSE(rc.interventions_supported());
+    CHECK(rc.intervention_points().empty());
+    CHECK(rc.interventions().empty());
+    CHECK(rc.intervene_set(i).code == cb::kInterveneNotSupported);
+    CHECK(rc.intervene_clear("").code == cb::kInterveneNotSupported);
+    CHECK(link.sent.empty());
+}
+
+TEST_CASE("app session: the run control reads the link's key interventions and sends intervene through the link") {
+    caliper_host::AppRunControl rc;
+    FakeLink link;
+    const std::string text = R"({"points": [{"point": "blocks.0.attn", "kind": "module", "module": "blocks.0.attn",
+        "head": null, "type": "Attention", "shape": null}], "active": []})";
+    std::string err;
+    REQUIRE(caliper_net::Json::parse(text.data(), text.size(), &link.ctl.interventions, &err));
+    rc.set_link(&link);
+    CHECK(rc.interventions_supported());
+    const std::vector<cb::InterventionPoint> pts = rc.intervention_points();
+    REQUIRE(pts.size() == 1);
+    CHECK(pts[0].point == "blocks.0.attn");
+    CHECK(rc.interventions().empty());
+    cb::Intervention i;
+    i.point = "blocks.0.attn";
+    CHECK(rc.intervene_set(i).ok());
+    CHECK(rc.intervene_clear("blocks.0.attn").ok());
+    CHECK(rc.intervene_clear("").ok());
+    REQUIRE(link.sent.size() == 3);
+    CHECK(link.sent[0].op == "intervene");
+    CHECK(json::parse(link.sent[0].value) == json{{"set", {{"point", "blocks.0.attn"}, {"op", "ablate"},
+                                                           {"from_step", nullptr}, {"until_step", nullptr}}}});
+    CHECK(json::parse(link.sent[1].value) == json{{"clear", "blocks.0.attn"}});
+    CHECK(json::parse(link.sent[2].value) == json{{"clear_all", true}});
+}

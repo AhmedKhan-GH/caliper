@@ -41,26 +41,37 @@ from __future__ import annotations
 import threading
 import time
 
-from . import _controls, _wire
+from . import _controls, _net_programs, _wire
 
 __all__ = ["ControlsPort", "capabilities"]
 
-_CAPS = frozenset((_wire.CAP_CONTROLS, _wire.CAP_SELECTION))
+_CAPS = frozenset((_wire.CAP_CONTROLS, _wire.CAP_SELECTION, _wire.CAP_PROGRAMS,
+                   _wire.CAP_INTERVENTIONS))
 ORDER_WAIT_S = _wire.ORDER_WAIT_MS / 1000    # the longest a pause's run state waits for data
 COPY_WAIT_S = 1.0                            # the longest a pause waits for the device's copies
 RECHECK_S = 0.002                            # how often a held run state looks again
 
 
 def capabilities(controls: bool) -> list:
-    """The capabilities a producer announces."""
+    """The capabilities a producer announces: with controls, also ``programs`` and
+    ``interventions`` while a ``caliper.watch(model, optimizer)`` is on."""
     if not controls:
         return [_wire.CAP_EVENTS]
-    return [_wire.CAP_CONTROLS, _wire.CAP_EVENTS, _wire.CAP_SELECTION]
+    return sorted([_wire.CAP_CONTROLS, _wire.CAP_EVENTS, _wire.CAP_SELECTION]
+                  + _net_programs.capabilities())
 
 
 def peer_caps(announced) -> frozenset:
-    """The 3.1 capabilities among those a peer announced."""
+    """The 3.1 capabilities, ``programs`` and ``interventions`` among those a peer announced."""
     return _CAPS & frozenset(announced or ())
+
+
+def _for_peer(meta: dict, link) -> dict:
+    """A CONTROLS meta for ``link``: without the key ``interventions`` when the peer did not
+    announce the capability (any other meta unchanged)."""
+    if "interventions" in meta and _wire.CAP_INTERVENTIONS not in link.caps:
+        return {k: v for k, v in meta.items() if k != "interventions"}
+    return meta
 
 
 class ControlsPort:
@@ -81,7 +92,9 @@ class ControlsPort:
         self._held = None                         # the CONTROLS that waits for data to go out
         self._held_until = 0.0
         self._recheck = False                     # the Python sender: a look again is on its way
+        self._posts: list = []                    # (link or None, frame, capability) to send
         self.route = _controls.attach(self)
+        self.programs = _net_programs.ProgramsPort(self)
         _controls.CONTROLS.wait_hooks.append(self._before_wait)
 
     # -- what caliper._controls calls (any thread) ---------------------------------------
@@ -97,6 +110,13 @@ class ControlsPort:
     def reply(self, conn, meta) -> None:
         with self._lock:
             self._replies.append((conn, meta))
+        self._kick()
+
+    def post(self, link, frame: bytes, cap: str) -> None:
+        """Send ``frame`` to ``link``, or to every attached peer that announced ``cap`` when
+        ``link`` is None, on the server's thread (from any thread)."""
+        with self._lock:
+            self._posts.append((link, frame, cap))
         self._kick()
 
     def may_control(self, conn) -> bool:
@@ -141,11 +161,12 @@ class ControlsPort:
         for type_, meta in self.route.snapshot_state():
             cap = _wire.CAP_CONTROLS if type_ == _wire.MsgType.CONTROLS else _wire.CAP_SELECTION
             if cap in link.caps:
-                frame = _wire.encode_frame(type_, meta)
+                frame = _wire.encode_frame(type_, _for_peer(meta, link))
                 if self.native:
                     self.server.nio.send_after_views(link.conn, frame)
                 else:
                     self._send(link, frame)           # the VIEWS marker is already queued
+        self.programs.on_attach(link)
 
     def annotate(self, entries: list) -> list:
         """VIEWS entries with their item spaces, for a peer with ``selection``."""
@@ -166,6 +187,7 @@ class ControlsPort:
             controls, self._controls = self._controls, None
             selections, self._selections = self._selections, {}
             replies, self._replies = self._replies, []
+            posts, self._posts = self._posts, []
             if controls is not None and (self._after_data or self._held is not None):
                 if self._held is None:
                     self._held_until = time.monotonic() + ORDER_WAIT_S
@@ -173,14 +195,18 @@ class ControlsPort:
                 self._after_data = False
         if self._held is not None:
             controls = self._release()
-        if controls is None and not selections and not replies:
+        if controls is None and not selections and not replies and not posts:
             return
         links = [ln for ln in list(self.server.producer.links) if ln.attached and not ln.closed]
         if controls is not None:
-            frame = _wire.encode_frame(_wire.MsgType.CONTROLS, controls)
+            frames = {}                               # with or without "interventions"
             for ln in links:
                 if _wire.CAP_CONTROLS in ln.caps:
-                    self._send(ln, frame)
+                    meta = _for_peer(controls, ln)
+                    key = meta is controls
+                    if key not in frames:
+                        frames[key] = _wire.encode_frame(_wire.MsgType.CONTROLS, meta)
+                    self._send(ln, frames[key])
         for meta in selections.values():
             frame = _wire.encode_frame(_wire.MsgType.SELECTION, meta)
             for ln in links:
@@ -189,6 +215,10 @@ class ControlsPort:
         for ln, meta in replies:
             if not ln.closed:
                 self._send(ln, _wire.encode_frame(_wire.MsgType.CONTROL_REPLY, meta))
+        for ln, frame, cap in posts:
+            for target in ([ln] if ln is not None else links):
+                if not target.closed and cap in target.caps:
+                    self._send(target, frame)
 
     def _release(self):
         """The held CONTROLS once the data sent before it has gone out (or the
@@ -222,6 +252,7 @@ class ControlsPort:
         return False
 
     def detach(self) -> None:
+        self.programs.close()
         self.route.detach()
         try:
             _controls.CONTROLS.wait_hooks.remove(self._before_wait)

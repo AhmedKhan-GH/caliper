@@ -24,6 +24,9 @@ struct SceneClear;
 struct SceneTransforms;
 struct SceneClasses;
 }  // namespace caliper_net::wire
+namespace caliper_scene {
+class StageSource;
+}  // namespace caliper_scene
 
 namespace caliper_live_views {
 
@@ -91,6 +94,10 @@ struct SceneRectOptions {
     std::string up;          // "+x", "-x", "+y", "-y", "+z" or "-z"; empty: the scene's own
     bool labels = true;      // the entities' labels over the picture
     bool scale_bar = false;  // a scale bar in the scene's units
+    // The panel's stages (scene/stage_cache.h), or null for the built-in programs, and a line that
+    // the picture shows at its bottom, such as a stage's refusal with its line and column.
+    caliper_scene::StageSource* stages = nullptr;
+    std::string stage_message;
 };
 
 // What a scene drawn into a rectangle keeps between frames: the gesture in progress, a click's

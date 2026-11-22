@@ -139,14 +139,28 @@ CONTROL has no section.
 | Key | Type | Meaning |
 |---|---|---|
 | `request_id` | integer (uint32) | Chosen by the viewer, echoed by CONTROL_REPLY |
-| `op` | string | `pause`, `resume`, `step`, `set` or `run` |
+| `op` | string | `pause`, `resume`, `step`, `set`, `run` or `intervene` |
 | `name` | string | `set`: the name of the parameter. `run`: the name of the action. Matched exactly, byte for byte |
 | `value` | number, boolean or string | `set` only: the new value |
 | `count` | integer (uint32), optional | `step` only: how many steps the loop runs before it pauses, at least 1. Default 1 |
+| `intervene` | object | `intervene` only, under the capability `interventions`: exactly one of `{"set": {point, op, from_step, until_step}}`, `{"clear": point}` and `{"clear_all": true}`, as [Interventions](#interventions) describes |
 
 A receiver ignores the keys that do not belong to the op. The key `args` is reserved for typed action arguments in a later version. A viewer sends it only to a producer that announced a capability for it, and 3.1 defines none. A viewer sends CONTROL only as [Control Permissions](#control-permissions) allows. It sends at most 30 `set` requests per second for one parameter, for example while a person drags a slider, and it ends with the value where the drag stops.
 
 A producer or a hub answers a CONTROL from a peer that did not announce `controls` in its HELLO with an ERROR `bad_request`. The ERROR names the request in `in_reply_to` and `request_id`, and the connection stays open.
+
+## Interventions
+
+An intervention changes a module of the model at a step boundary while the run trains. It belongs to the 3.2 draft and its capability `interventions` ([Wire protocol 3.2](wire-protocol-3-2.md#gpu-programs-and-interventions)). The script announces the capability only under `caliper.watch(model, optimizer)`, and a viewer or a hub sends the op `intervene` and the key `interventions` only to a peer that announced it. A hub answers an `intervene` to a producer without the capability with CONTROL_REPLY error `unsupported`.
+
+CONTROLS then carries the key `interventions`, an object with two arrays:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `points` | array of objects | At most 4,096 points: `point` and `module` (1 to 255 bytes), `kind` (`module` or `head`), and optionally `head` (uint32), `type` (the module's class, 1 to 63 bytes) and `shape` (at most 8 integers, or null before the first step) |
+| `active` | array of objects | At most 64 interventions: `point`, `op` (1 to 63 bytes), `state` (`pending`, `active` or `ended`), and optionally `from_step`, `until_step` and `since_step` (integers from 0 to 2^53 − 1, or null) |
+
+In CONTROL, `set.point` holds 1 to 255 bytes, `set.op` 1 to 63 bytes, and `from_step` and `until_step` are integers from 0 to 2^53 − 1 or null. The op `ablate` is the only one built; the script refuses another op, and a range or a point it does not know, in its CONTROL_REPLY. CONTROL_REPLY answers an `intervene` as it answers the other ops.
 
 ## `control_reply`
 

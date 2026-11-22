@@ -205,6 +205,8 @@ public:
     }
 
     bool done() const { return at_ >= steps_.size() || !error_.empty(); }
+    // Whether no press of a step waits for its release in the next frame.
+    bool released() const { return held_keys_.empty() && !mouse_down_ && !right_down_; }
     bool quit() const { return quit_; }
     const std::string& error() const { return error_; }
     std::vector<std::string> take_log() {
@@ -255,7 +257,9 @@ public:
 #endif
 
     void feed(SpecPage& page, AppSession& app, ChatPane* chat = nullptr) {
-        if (done()) return;
+        // A press of the last step is released after the script ended too, so
+        // that a click as the last step acts (a button acts at its release).
+        if (done() && released()) return;
         ImGuiIO& io = ImGui::GetIO();
         // Releases of the last frame's presses.
         for (ImGuiKey k : held_keys_) io.AddKeyEvent(k, false);
@@ -268,6 +272,7 @@ public:
             io.AddMouseButtonEvent(1, false);
             right_down_ = false;
         }
+        if (done()) return;
         // After a step of input, frames for the page to act on it and draw
         // its new rectangles, so the next step aims at where things are now.
         if (settle_ > 0) {

@@ -1,0 +1,350 @@
+// The producer runtime on the Metal device (caliper_producer.h, design/gpu-programs.md): a
+// shared MTLBuffer stands for a training tensor. The cases import it in place and read-only,
+// compile programs through the sandbox and caliper-wgsl, run passes, read the outputs, and
+// check each refusal with its code. Without a Metal device or the WGSL compiler, the cases that
+// need them return early with a message.
+#import <Foundation/Foundation.h>
+#import <Metal/Metal.h>
+
+#include <doctest/doctest.h>
+
+#include "producer/caliper_producer.h"
+
+#include <cmath>
+#include <cstring>
+#include <string>
+#include <vector>
+
+namespace {
+
+constexpr uint32_t kRows = 4, kCols = 8;
+
+// One point for each row of w: x the row, y the row's norm, z the step of the frame uniform.
+const char* kRowNorms = R"(struct CaliperFrame { step: u32, pass_index: u32, max_count: u32, width: u32,
+                         height: u32, time_s: f32, every: u32, pad: u32 }
+@group(0) @binding(0) var<storage, read> w: array<f32>;
+@group(0) @binding(1) var<storage, read_write> positions: array<f32>;
+@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;
+@group(0) @binding(3) var<uniform> caliper: CaliperFrame;
+@compute @workgroup_size(64)
+fn run(@builtin(global_invocation_id) id: vec3<u32>) {
+    let row = id.x;
+    if (row >= 4u) { return; }
+    var s = 0.0;
+    for (var c = 0u; c < 8u; c++) { let v = w[row * 8u + c]; s += v * v; }
+    let i = atomicAdd(&count, 1u);
+    positions[i * 3u] = f32(row);
+    positions[i * 3u + 1u] = sqrt(s);
+    positions[i * 3u + 2u] = f32(caliper.step);
+}
+)";
+
+struct Fixture {
+    id<MTLDevice> device = nil;
+    id<MTLBuffer> tensor = nil;
+    caliper_producer* rt = nullptr;
+    uint32_t w = 0;
+
+    Fixture() {
+        device = MTLCreateSystemDefaultDevice();
+        if (device == nil) return;
+        tensor = [device newBufferWithLength:4096 options:MTLResourceStorageModeShared];
+        fill(1.0f);
+        caliper_producer_error e{};
+        REQUIRE(caliper_producer_create(nullptr, &rt, &e) == CALIPER_PRODUCER_OK);
+        caliper_producer_tensor t = desc_of(0, kRows * kCols * 4);
+        REQUIRE(caliper_producer_import(rt, &t, &w, &e) == CALIPER_PRODUCER_OK);
+        CHECK(w != 0);
+        caliper_producer_error_free(&e);
+    }
+    ~Fixture() { caliper_producer_destroy(rt); }
+
+    // Row r holds r + scale in each column, thus its norm is (r + scale) * sqrt(8).
+    void fill(float scale) {
+        auto* f = static_cast<float*>([tensor contents]);
+        for (uint32_t r = 0; r < kRows; ++r)
+            for (uint32_t c = 0; c < kCols; ++c) f[r * kCols + c] = float(r) + scale;
+    }
+    caliper_producer_tensor desc_of(uint64_t offset, uint64_t bytes) const {
+        caliper_producer_tensor t{};
+        t.name = "layers.0.weight";
+        t.buffer = (__bridge void*)tensor;
+        t.byte_offset = offset;
+        t.byte_size = bytes;
+        t.dtype = CALIPER_PRODUCER_F32;
+        t.ndim = 2;
+        t.shape[0] = kRows;
+        t.shape[1] = kCols;
+        return t;
+    }
+};
+
+struct Desc {
+    caliper_producer_input input{"w", 0};
+    const char* arrays[1] = {"positions"};
+    caliper_producer_program_desc d{};
+    std::string src;
+
+    Desc(const char* wgsl, uint32_t tensor) {
+        src = wgsl;
+        input.tensor = tensor;
+        d.id = "norms";
+        d.wgsl = src.c_str();
+        d.wgsl_size = src.size();
+        d.inputs = &input;
+        d.input_count = 1;
+        d.output_kind = CALIPER_PRODUCER_GEOMETRY;
+        d.part = CALIPER_PRODUCER_POINTS;
+        d.max_count = kRows;
+        d.arrays = arrays;
+        d.array_count = 1;
+        d.time_limit_ms = 50.0;
+        d.memory_limit_bytes = 64u << 20;
+    }
+    void set(const char* wgsl) {
+        src = wgsl;
+        d.wgsl = src.c_str();
+        d.wgsl_size = src.size();
+    }
+};
+
+std::string replaced(std::string s, const std::string& from, const std::string& to) {
+    const size_t at = s.find(from);
+    REQUIRE(at != std::string::npos);
+    s.replace(at, from.size(), to);
+    return s;
+}
+
+// Compiles; false when this build has no WGSL compiler (the case then ends).
+bool compile_or_skip(caliper_producer* rt, const caliper_producer_program_desc& d, uint32_t* h,
+                     caliper_producer_error* e) {
+    const caliper_producer_status s = caliper_producer_compile(rt, &d, h, e);
+    if (s == CALIPER_PRODUCER_UNSUPPORTED && e->code && std::string(e->code) == "program.compiler_unavailable") {
+        MESSAGE("no WGSL compiler in this build: ", e->message);
+        return false;
+    }
+    if (s != CALIPER_PRODUCER_OK) {
+        const std::string why = std::string(e->code ? e->code : "") + ": " + (e->message ? e->message : "");
+        FAIL_CHECK(why);
+    }
+    return s == CALIPER_PRODUCER_OK;
+}
+
+caliper_producer_status compile_code(caliper_producer* rt, const caliper_producer_program_desc& d, std::string* code,
+                                     uint32_t* line = nullptr) {
+    uint32_t h = 0;
+    caliper_producer_error e{};
+    const caliper_producer_status s = caliper_producer_compile(rt, &d, &h, &e);
+    *code = e.code ? e.code : "";
+    if (line) *line = e.line;
+    if (s == CALIPER_PRODUCER_OK) CHECK(h != 0);
+    else CHECK(h == 0);
+    caliper_producer_error_free(&e);
+    return s;
+}
+
+}  // namespace
+
+TEST_CASE("the runtime imports a tensor in place, runs a geometry pass and reads its output") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    Desc d(kRowNorms, f.w);
+    uint32_t prog = 0;
+    caliper_producer_error e{};
+    if (!compile_or_skip(f.rt, d.d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+
+    caliper_producer_frame frame{7, 0.5, 3};
+    caliper_producer_pass pass{};
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, &pass, &e) == CALIPER_PRODUCER_OK);
+    CHECK(pass.ran == 1);
+    CHECK(pass.stopped == 0);
+    CHECK(pass.wall_ms >= 0);
+
+    caliper_producer_output out{};
+    REQUIRE(caliper_producer_read_output(f.rt, prog, "positions", &out, &e) == CALIPER_PRODUCER_OK);
+    REQUIRE(out.buffer != nullptr);
+    CHECK(out.count == kRows);
+    CHECK(out.words == 3);
+    CHECK(out.byte_size == kRows * 12);
+    auto check_norms = [&](float scale, float step) {
+        id<MTLBuffer> b = (__bridge id<MTLBuffer>)out.buffer;
+        const float* p = static_cast<const float*>([b contents]);
+        std::vector<bool> seen(kRows, false);
+        for (uint32_t i = 0; i < out.count; ++i) {
+            const auto row = uint32_t(p[i * 3]);
+            REQUIRE(row < kRows);
+            seen[row] = true;
+            CHECK(p[i * 3 + 1] == doctest::Approx((float(row) + scale) * std::sqrt(8.0f)).epsilon(1e-5));
+            CHECK(p[i * 3 + 2] == step);
+        }
+        for (bool s : seen) CHECK(s);
+    };
+    check_norms(1.0f, 7.0f);
+
+    // The script changes the tensor in place: the same import reads the new values.
+    f.fill(2.0f);
+    frame.step = 8;
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, &pass, &e) == CALIPER_PRODUCER_OK);
+    REQUIRE(caliper_producer_read_output(f.rt, prog, "positions", &out, &e) == CALIPER_PRODUCER_OK);
+    check_norms(2.0f, 8.0f);
+
+    caliper_producer_program_status st{};
+    REQUIRE(caliper_producer_read_status(f.rt, prog, &st) == CALIPER_PRODUCER_OK);
+    CHECK(st.state == CALIPER_PRODUCER_RUNNING);
+    CHECK(st.runs == 2);
+    CHECK(st.last_step == 8);
+    CHECK(st.memory_bytes == kRows * 12 + 4 + kRows * kCols * 4);
+    CHECK(st.stop_code == nullptr);
+
+    CHECK(caliper_producer_read_output(f.rt, prog, "colors", &out, &e) == CALIPER_PRODUCER_ARGUMENT);
+    caliper_producer_remove(f.rt, prog);
+    CHECK(caliper_producer_read_status(f.rt, prog, &st) == CALIPER_PRODUCER_ARGUMENT);
+    caliper_producer_error_free(&e);
+}
+
+TEST_CASE("a pixels program writes its packed RGBA8 image") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    Desc d(R"(@group(0) @binding(0) var<storage, read_write> pixels: array<u32>;
+@compute @workgroup_size(8, 8)
+fn run(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (id.x >= 4u || id.y >= 2u) { return; }
+    pixels[id.y * 4u + id.x] = pack4x8unorm(vec4<f32>(f32(id.x) / 3.0, f32(id.y), 0.0, 1.0));
+}
+)", f.w);
+    d.d.input_count = 0;
+    d.d.output_kind = CALIPER_PRODUCER_PIXELS;
+    d.d.width = 4;
+    d.d.height = 2;
+    uint32_t prog = 0;
+    caliper_producer_error e{};
+    if (!compile_or_skip(f.rt, d.d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+    caliper_producer_frame frame{1, 0.0, 1};
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+    caliper_producer_output out{};
+    REQUIRE(caliper_producer_read_output(f.rt, prog, "pixels", &out, &e) == CALIPER_PRODUCER_OK);
+    CHECK(out.count == 8);
+    CHECK(out.byte_size == 32);
+    const uint32_t* px = static_cast<const uint32_t*>([(__bridge id<MTLBuffer>)out.buffer contents]);
+    CHECK(px[0] == 0xFF000000u);       // x 0, y 0: black, opaque
+    CHECK(px[7] == 0xFF00FFFFu);       // x 3, y 1: red and green, opaque (R in the low byte)
+    caliper_producer_error_free(&e);
+}
+
+TEST_CASE("the read-only rule refuses an input declared read_write and a store to a read input") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    Desc d(kRowNorms, f.w);
+    uint32_t probe = 0;
+    caliper_producer_error e{};
+    if (!compile_or_skip(f.rt, d.d, &probe, &e)) { caliper_producer_error_free(&e); return; }
+    caliper_producer_remove(f.rt, probe);
+    caliper_producer_error_free(&e);
+
+    std::string code;
+    d.set(replaced(kRowNorms, "var<storage, read> w", "var<storage, read_write> w").c_str());
+    CHECK(compile_code(f.rt, d.d, &code) == CALIPER_PRODUCER_REFUSED);
+    CHECK(code == "program.writes_input");
+
+    // Naga refuses a store to var<storage, read>, with the line of the store.
+    d.set(replaced(kRowNorms, "let i = atomicAdd", "w[row] = 0.0;\n    let i = atomicAdd").c_str());
+    uint32_t line = 0;
+    CHECK(compile_code(f.rt, d.d, &code, &line) == CALIPER_PRODUCER_REFUSED);
+    CHECK(code == "program.compile_failed");
+    CHECK(line == 13);
+}
+
+TEST_CASE("the binder refuses undeclared bindings, missing outputs, unknown inputs and the memory budget") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    Desc d(kRowNorms, f.w);
+    uint32_t probe = 0;
+    caliper_producer_error e{};
+    if (!compile_or_skip(f.rt, d.d, &probe, &e)) { caliper_producer_error_free(&e); return; }
+    caliper_producer_error_free(&e);
+    std::string code;
+
+    std::string other = replaced(kRowNorms, "@compute",
+                                 "@group(1) @binding(0) var<storage, read_write> other: array<f32>;\n@compute");
+    other = replaced(other, "positions[i * 3u] = f32(row);", "positions[i * 3u] = f32(row);\n    other[0] = 1.0;");
+    d.set(other.c_str());
+    CHECK(compile_code(f.rt, d.d, &code) == CALIPER_PRODUCER_REFUSED);
+    CHECK(code == "program.binding_undeclared");
+
+    d.set(replaced(kRowNorms, "let i = atomicAdd(&count, 1u);", "let i = row;").c_str());
+    CHECK(compile_code(f.rt, d.d, &code) == CALIPER_PRODUCER_REFUSED);
+    CHECK(code == "program.output_mismatch");
+
+    d.set(kRowNorms);
+    d.input.tensor = 99;
+    CHECK(compile_code(f.rt, d.d, &code) == CALIPER_PRODUCER_REFUSED);
+    CHECK(code == "program.unknown_input");
+
+    d.input.tensor = f.w;
+    d.d.memory_limit_bytes = 64;   // 48 + 4 bytes of outputs and 128 of the tensor
+    CHECK(compile_code(f.rt, d.d, &code) == CALIPER_PRODUCER_OVER_BUDGET);
+    CHECK(code == "program.over_memory");
+
+    d.d.memory_limit_bytes = 64u << 20;
+    d.d.max_count = 2000000;
+    CHECK(compile_code(f.rt, d.d, &code) == CALIPER_PRODUCER_REFUSED);
+    CHECK(code == "program.over_limits");
+}
+
+TEST_CASE("an import that cannot be in place is refused, never copied") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    caliper_producer_error e{};
+    uint32_t h = 0;
+    caliper_producer_tensor t = f.desc_of(0, 8192);   // longer than its buffer
+    CHECK(caliper_producer_import(f.rt, &t, &h, &e) == CALIPER_PRODUCER_IMPORT_REFUSED);
+    CHECK(std::string(e.code) == "program.import_refused");
+    caliper_producer_error_free(&e);
+    t = f.desc_of(4, 64);                              // not at the storage offset alignment
+    CHECK(caliper_producer_import(f.rt, &t, &h, &e) == CALIPER_PRODUCER_IMPORT_REFUSED);
+    caliper_producer_error_free(&e);
+    NSObject* other = [NSObject new];
+    t = f.desc_of(0, 64);
+    t.buffer = (__bridge void*)other;                  // not an MTLBuffer
+    CHECK(caliper_producer_import(f.rt, &t, &h, &e) == CALIPER_PRODUCER_IMPORT_REFUSED);
+    CHECK(h == 0);
+    caliper_producer_error_free(&e);
+}
+
+TEST_CASE("the watchdog stops a program over its time limit, and a timeout stops every program") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    // A long loop over the row, thus every pass is over the sandbox's least limit of 0.01 ms.
+    const std::string slow = replaced(kRowNorms, "c < 8u; c++) { let v = w[row * 8u + c];",
+                                      "c < 200000u; c++) { let v = w[row * 8u + c % 8u];");
+    Desc d(slow.c_str(), f.w);
+    d.d.time_limit_ms = 0.01;
+    uint32_t prog = 0;
+    caliper_producer_error e{};
+    if (!compile_or_skip(f.rt, d.d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+    caliper_producer_frame frame{1, 0.0, 1};
+    caliper_producer_pass pass{};
+    for (int i = 0; i < 3; ++i) REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, &pass, &e) == CALIPER_PRODUCER_OK);
+    CHECK(pass.stopped == 1);
+    caliper_producer_program_status st{};
+    REQUIRE(caliper_producer_read_status(f.rt, prog, &st) == CALIPER_PRODUCER_OK);
+    CHECK(st.state == CALIPER_PRODUCER_STOPPED);
+    CHECK(st.runs == 3);
+    REQUIRE(st.stop_code);
+    CHECK(std::string(st.stop_code) == "program.over_time");
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, &pass, &e) == CALIPER_PRODUCER_OK);
+    CHECK(pass.ran == 0);   // a stopped program does not run again
+
+    d.d.time_limit_ms = 50.0;
+    d.d.id = "norms2";
+    uint32_t again = 0;
+    REQUIRE(caliper_producer_compile(f.rt, &d.d, &again, &e) == CALIPER_PRODUCER_OK);
+    CHECK(caliper_producer_run(f.rt, &again, 1, &frame, 1e-9, &pass, &e) == CALIPER_PRODUCER_TIMEOUT);
+    CHECK(std::string(e.code) == "program.timeout");
+    caliper_producer_error_free(&e);
+    REQUIRE(caliper_producer_read_status(f.rt, again, &st) == CALIPER_PRODUCER_OK);
+    CHECK(st.state == CALIPER_PRODUCER_STOPPED);
+    uint32_t after = 0;
+    CHECK(caliper_producer_compile(f.rt, &d.d, &after, &e) == CALIPER_PRODUCER_TIMEOUT);
+    caliper_producer_error_free(&e);
+}
