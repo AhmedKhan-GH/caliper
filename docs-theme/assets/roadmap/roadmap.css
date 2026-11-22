@@ -96,6 +96,11 @@
   border: 0; border-radius: 4px; padding: .38rem .45rem;
 }
 .roadmap-pillars button:hover { background: color-mix(in srgb, var(--rm-accent) 14%, transparent); }
+.roadmap-candidates {
+  display: block; margin-top: .6rem; padding: .5rem .45rem .38rem; border-top: 1px solid color-mix(in srgb, var(--rm-text-dim) 35%, transparent);
+  border-radius: 0 0 4px 4px; color: var(--rm-text); text-decoration: none;
+}
+.roadmap-candidates:hover { background: color-mix(in srgb, var(--rm-accent) 14%, transparent); color: var(--rm-text); }
 .roadmap-pillar-name { display: block; font-size: .74rem; letter-spacing: .02em; }
 .roadmap-pillar-counts { display: block; font-size: .62rem; line-height: 1.35; color: var(--rm-text-dim); margin-top: .1rem; }
 

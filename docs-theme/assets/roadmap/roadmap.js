@@ -311,7 +311,14 @@
     input.setAttribute("aria-label", "Find a feature by id or title, then press Enter");
     search.appendChild(input);
     var pillarList = el("div", "roadmap-pillars");
-    rail.append(legend, search, pillarList);
+    /* Candidates: ideas kept outside the registry, on their own pages under candidates/. */
+    var cand = el("a", "roadmap-candidates");
+    cand.href = "candidates/";
+    var candName = el("span", "roadmap-pillar-name"), candNote = el("span", "roadmap-pillar-counts");
+    candName.textContent = "Candidates";
+    candNote.textContent = "Ideas outside the registry, by pillar";
+    cand.append(candName, candNote);
+    rail.append(legend, search, pillarList, cand);
 
     var canvas = el("div", "roadmap-canvas");
     var svg = sv("svg", { "class": "roadmap-svg", role: "img", "aria-label": "Roadmap graph of every feature by pillar" });

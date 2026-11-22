@@ -23,3 +23,7 @@ The roadmap shows every feature of Caliper, shipped, built or planned, as one gr
 - [Interpretability and interventions](interpretability.md)
 - [Web and embedding](embedding.md)
 - [Platforms and distribution](platforms.md)
+
+## Candidates
+
+[Candidates](candidates/index.md) lists ideas that are not yet in the registry, grouped by pillar, including seven proposed pillars.
