@@ -1671,7 +1671,7 @@ def test_a_snapshot_over_the_frame_limit_is_not_sent(server, mode):
             gid = next(iter(v.groups.values())).__dict__["gid"]
             server.nio.publish(gid, "w", 10_000, 0, int(w.Kind.HEATMAP), "[]", "", 0, 0, 0.0, 1.0, 0, 0,
                                0, -1, int(w.DType.F32), [big.size, 1], big.ctypes.data, big.nbytes, 0, 0,
-                               "")
+                               "", False, 0, 0)
             # the native thread tries to send it and counts the failure
             deadline = time.monotonic() + 10
             while not server.stats()["producer"]["encode_failed"] and time.monotonic() < deadline:

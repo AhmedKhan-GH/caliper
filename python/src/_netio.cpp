@@ -42,6 +42,14 @@
 // that announced "selection" gets the VIEWS with item spaces (set_views()'s
 // second list).
 //
+// TIMELINES (wire protocol 3.2 draft, capability "timelines"). WELCOME
+// announces "timelines". To a peer that announced it, the VIEWS of an
+// attachment declare the timelines `step` (sequence) and `time` (time, with an
+// epoch), and each SNAPSHOT carries the section `stamp` i64 (2,): the run's
+// step when the view call took it (or CALIPER_NET_STAMP_ABSENT) and the wall
+// time in nanoseconds, which publish() takes from Python. A peer that did not
+// announce it gets neither, as from the Python sender.
+//
 // OWNERSHIP. publish() and series_append() copy the bytes they are given
 // before they return (with the GIL released), so the caller's pinned memory
 // must stay valid only for the duration of the call; from then on this module
@@ -143,6 +151,8 @@ struct Snap {
     bool has_aux = false;
     std::vector<uint8_t> aux;                 // (N,) f32
     Json cadence;                             // 3.2 draft: the views' cadence, for "programs" peers
+    bool has_stamp = false;                   // 3.2 draft: the stamp (step, wall ns), for "timelines" peers
+    int64_t stamp[2] = {CALIPER_NET_STAMP_ABSENT, 0};
 };
 
 struct Group {
@@ -218,6 +228,7 @@ struct Link {
     bool cap_controls = false;                // 3.1: the peer announced "controls"
     bool cap_selection = false;               // 3.1: the peer announced "selection"
     bool cap_scenes = false;                  // 3.2 draft: the peer announced "scenes"
+    bool cap_timelines = false;               // 3.2 draft: the peer announced "timelines"
     bool cap_programs = false;                // 3.2 draft: both sides announced "programs"
     bool cap_interventions = false;           // 3.2 draft: both sides announced "interventions"
     bool may_control = false;                 // 3.1: a CONTROL from it is accepted
@@ -531,8 +542,12 @@ public:
                  std::string axes_json, std::string tile_json, int64_t colormap, uint64_t flags, double vmin,
                  double vmax, uint64_t stats_ptr, size_t stats_n, int64_t points_dims, int64_t label_count,
                  int64_t dtype, std::vector<int64_t> shape, uint64_t data_ptr, size_t data_nbytes,
-                 uint64_t aux_ptr, size_t aux_n, std::string cadence_json) {
+                 uint64_t aux_ptr, size_t aux_n, std::string cadence_json, bool has_stamp, int64_t stamp_step,
+                 int64_t stamp_wall_ns) {
         auto s = std::make_shared<Snap>();
+        s->has_stamp = has_stamp;
+        s->stamp[0] = stamp_step;
+        s->stamp[1] = stamp_wall_ns;
         s->view = std::move(view);
         s->seq = seq;
         s->stamp_ns = stamp_ns;
@@ -884,12 +899,26 @@ private:
     // 3.1 (under mu_): the server's capabilities, and what a peer announced as
     // the JSON of its "opened" message for Python.
     std::vector<std::string> capabilities() const {
-        if (!controls_) return {CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_SCENES};
+        if (!controls_) return {CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_TIMELINES};
         if (g_watch_caps.load())
-            return {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_INTERVENTIONS,
-                    CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_SELECTION};
+            return {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_EVENTS,   CALIPER_NET_CAP_INTERVENTIONS,
+                    CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_SCENES,   CALIPER_NET_CAP_SELECTION,
+                    CALIPER_NET_CAP_TIMELINES};
         return {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_SCENES,
-                CALIPER_NET_CAP_SELECTION};
+                CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_TIMELINES};
+    }
+    // 3.2 draft: the timelines of the VIEWS to a peer that announced "timelines", as the
+    // Python sender declares them (caliper/_net.py, views_msg()).
+    static const Json& timelines() {
+        static const Json t = [] {
+            const std::string text =
+                "[{\"kind\":\"sequence\",\"name\":\"step\"},{\"epoch\":true,\"kind\":\"time\",\"name\":\"time\"}]";
+            Json v;
+            std::string err;
+            Json::parse(text.data(), text.size(), &v, &err, 8);
+            return v;
+        }();
+        return t;
     }
     static bool announces(const std::vector<std::string>& caps, const char* cap) {
         return std::find(caps.begin(), caps.end(), cap) != caps.end();
@@ -1062,6 +1091,7 @@ private:
             l.cap_controls = controls_ && announces(h->capabilities, CALIPER_NET_CAP_CONTROLS);
             l.cap_selection = controls_ && announces(h->capabilities, CALIPER_NET_CAP_SELECTION);
             l.cap_scenes = announces(h->capabilities, CALIPER_NET_CAP_SCENES);
+            l.cap_timelines = announces(h->capabilities, CALIPER_NET_CAP_TIMELINES);
             l.cap_programs = controls_ && g_watch_caps.load() && announces(h->capabilities, CALIPER_NET_CAP_PROGRAMS);
             l.cap_interventions =
                 controls_ && g_watch_caps.load() && announces(h->capabilities, CALIPER_NET_CAP_INTERVENTIONS);
@@ -1249,6 +1279,7 @@ private:
                     v.session = l.upstream && !up_session_.empty() ? up_session_ : ident_.id;
                     if (l.cap_scenes) v.views = l.cap_selection && views_sel_.is_array() ? views_sel_ : views_;
                     else v.views = l.cap_selection && views_sel_.is_array() ? views_sel_plain_ : views_plain_;
+                    if (l.cap_timelines) v.timelines = timelines();   // 3.2 draft
                 }
                 f = encode(v);
                 l.views_pending = false;
@@ -1324,6 +1355,8 @@ private:
             m.points_dims = sn->points_dims;
             m.label_count = sn->label_count;
             if (l.cap_programs && sn->cadence.is_object()) m.cadence = sn->cadence;
+            if (l.cap_timelines && sn->has_stamp)   // 3.2 draft: i64 (2,), step then wall ns
+                m.stamp = wire::Section::make("stamp", CALIPER_NET_DTYPE_I64, {2}, sn->stamp, sizeof sn->stamp);
             if (SharedBytes f = encode(m)) return f;
             --l.snapshots_sent;
         }
@@ -1391,6 +1424,7 @@ private:
                         l.cap_controls = controls_ && announces(w->capabilities, CALIPER_NET_CAP_CONTROLS);
                         l.cap_selection = controls_ && announces(w->capabilities, CALIPER_NET_CAP_SELECTION);
                         l.cap_scenes = announces(w->capabilities, CALIPER_NET_CAP_SCENES);
+                        l.cap_timelines = announces(w->capabilities, CALIPER_NET_CAP_TIMELINES);
                         l.cap_programs = controls_ && g_watch_caps.load() &&
                                          announces(w->capabilities, CALIPER_NET_CAP_PROGRAMS);
                         l.cap_interventions = controls_ && g_watch_caps.load() &&
