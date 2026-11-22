@@ -45,3 +45,4 @@ Both fail with a configuration error when run from inside `design/` or with an a
 | [Wire Protocol 3.2 Draft](wire-protocol-3-2.md) | What producers, the hub and servers still do with timelines, text logs, bar charts and recordings, and the numbers of 3.2 to confirm |
 | [Instruments](instruments.md) | The interfaces of milestone M1: spec version 1 with scene panels and controls, the run commands, the event ring of `events.wait` and `caliper.watch(model, optimizer)` |
 | [Web Geometry](web-geometry.md) | What remains of scenes in the browser: pipelines, encoded frames, budgets and lost devices, parity rows, and the fallback without WebGPU |
+| [Producer Runtime](producer-runtime.md) | The graphics layer without a window in the training process: the framework adapter, the sync points, the read-only rule, the budget per step and the measurements of its design spike |
