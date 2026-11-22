@@ -10,8 +10,9 @@ streams tensors loads nothing new.
 The facade keeps the cadence (``design/gpu-programs.md``, Cadence) by feedback on the run's wall
 clock. At each step it puts a mark on torch's queue (:class:`caliper._adapter.StepMarks`), which
 also gives the queued work to the GPU, and it reads the marks that completed without a wait. From
-their completion times it measures the base step time ``b`` over the steps without a pass and the
-overhead ``D`` that a pass adds to the steps around it, and it runs the programs every
+their completion times it measures the base step time ``b`` over the second half of each cycle
+between two passes and the overhead ``D`` that a pass adds to the first half, and it runs the
+programs every
 ``N = ceil(D / (0.04 * b))`` steps, moved by bounded factors, at least ``N_MIN`` and at most the
 steps of ``CEILING_S`` seconds. When even that ceiling costs more than the share, every program
 stops with ``program.over_budget`` and training goes on. It gives each geometry output to the
@@ -104,10 +105,12 @@ class _Cadence:
       far from both passes; ``b`` is the median of the last ``BASE_SAMPLES`` cycles, thus it
       follows a step time that changes;
     - the overhead ``D`` of the pass at ``k``: the time of the first half, from ``k - 1`` to ``m``,
-      minus ``(m - k + 1) * b``. It counts the GPU's idle time while the training thread waits,
+      minus ``m - k + 1`` steps at the time per step of the same cycle's second half, thus a step
+      time that changes moves only the one cycle across the change. It counts the GPU's idle time while the training thread waits,
       runs the pass, publishes and queues the next step, and the slower steps after a pass while
-      torch's queue fills again or the publish path works in its own thread. ``D`` is the median of
-      the last ``COST_SAMPLES`` cycles, which ignores a single slow pass.
+      torch's queue fills again or the publish path works in its own thread. ``D`` is the mean of
+      the last ``COST_SAMPLES`` cycles without the largest and the smallest. Thus it ignores a single
+      slow pass but counts costs that come back often, which a median can miss.
 
     When the training thread waits at each step anyway, all marks are late by the same time, and
     the lateness cancels. Else a mark in the middle of a cycle can be late, which makes ``D``
@@ -147,8 +150,12 @@ class _Cadence:
         return _median(self.base) if self.base else None
 
     def cost_s(self):
-        """The overhead ``D`` of a pass in seconds, or None before the first pass is measured."""
-        return _median(self.cost) if self.cost else None
+        """The overhead ``D`` of a pass in seconds, or None before the first pass is measured: the
+        mean of the last cycles without the largest and the smallest once there are four."""
+        c = sorted(self.cost)
+        if len(c) >= 4:
+            c = c[1:-1]
+        return sum(c) / len(c) if c else None
 
     def share(self):
         """The measured share ``D / (N * b)`` of the training time, or None."""
@@ -187,10 +194,13 @@ class _Cadence:
             else:
                 m = max(k + 1, (k + step) // 2)
                 mid, start = done.get(m), done.get(k - 1)
+                b = None
                 if mid is not None and step - 1 > m:
-                    self.base.append((end - mid) / (step - 1 - m))
+                    b = (end - mid) / (step - 1 - m)
+                    self.base.append(b)
                 if mid is not None and start is not None and self.base:
-                    self.cost.append(max(0.0, mid - start - (m - k + 1) * self.step_s()))
+                    b = self.step_s() if b is None else b
+                    self.cost.append(max(0.0, mid - start - (m - k + 1) * b))
                     self._update()
         self.k = step
         self.done = {s: v for s, v in done.items() if s >= step - 1}
