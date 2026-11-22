@@ -105,6 +105,7 @@ struct SceneRectState {
     bool click = false;      // a click's pick is in flight, so its result is a pick event
     float seam_u = -1.0f;    // a pick asked for by pick_scene_rect(), in 0..1 of the rectangle; -1: none
     float seam_v = -1.0f;
+    bool seam_asked = false; // the request in flight is the seam pick's
     std::string up_applied;  // the option `up` that was applied, so that it is applied once
 };
 
