@@ -17,7 +17,7 @@ features:
     status: shipped
     summary: On Windows the host draws with a Vulkan renderer and moves CUDA tensors to it through interop, with fallbacks when the fast path is unavailable.
     depends_on: []
-    docs: docs/explanations/vulkan-cuda.md
+    docs: docs/development/vulkan-and-cuda.md
     issue: null
 
   - id: PLT-03
@@ -25,7 +25,7 @@ features:
     status: shipped
     summary: Continuous integration builds and tests the core on macOS and on windows-latest, builds the applets and packages against the installed SDK, and checks that the host names no applet.
     depends_on: []
-    docs: docs/guides/ci.md
+    docs: docs/development/ci.md
     issue: null
 
   - id: PLT-04
@@ -42,7 +42,7 @@ features:
     status: planned
     summary: The Windows baseline runs full CI on windows-latest for every package and subcommand and runs the graphics, export and embed suites on Windows hardware with no skipped GPU rows.
     depends_on: [PLT-02, PLT-03]
-    docs: docs/guides/verify-on-windows.md
+    docs: docs/development/windows-verification.md
     design: design/windows-parity.md#1-build-and-test-baseline
     issue: null
 

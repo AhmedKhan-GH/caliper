@@ -1,0 +1,9 @@
+nav:
+  - index.md
+  - development-basics.md
+  - testing.md
+  - ci.md
+  - windows-verification.md
+  - vulkan-and-cuda.md
+  - compatibility-and-epochs.md
+  - ui-principles.md

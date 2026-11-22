@@ -1,4 +1,4 @@
-# Vulkan and CUDA on Windows
+# Vulkan and CUDA
 
 On Windows with an NVIDIA GPU, Caliper renders with Vulkan and shares GPU memory with CUDA, so a torch tensor reaches
 the screen without passing through host memory. This page explains how the two APIs are paired, which path an update
@@ -169,7 +169,7 @@ Each message prints once per process. Two environment variables change the backe
   `[vulkan] stats: N frames, ms p50 .. p99 .. max ..; updates direct .. buffer ..; kernel waits on a frame ..; retire
   blocks .. (.. ms total)`.
 
-`CALIPER_RENDERER=gl` selects the OpenGL backend. See [Verify on Windows hardware](../guides/verify-on-windows.md) for
+`CALIPER_RENDERER=gl` selects the OpenGL backend. See [Verify on Windows hardware](windows-verification.md) for
 the full procedure.
 
 ## Measured costs

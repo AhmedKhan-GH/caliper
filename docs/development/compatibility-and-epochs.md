@@ -1,4 +1,4 @@
-# Compatibility and epochs
+# Compatibility and Epochs
 
 This page explains how the ABI, the services, the SDK, the applets and their stored data are versioned, and how each changes without breaking applets that are already built. Everything this page describes is implemented. The loader does not download dependencies.
 

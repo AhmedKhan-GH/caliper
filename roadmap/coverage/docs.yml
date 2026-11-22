@@ -999,43 +999,43 @@ entries:
   item: The glossary of terms.
   ids:
   - COR-01
-- page: docs/tutorials/development-basics.md#the-mental-model
+- page: docs/development/development-basics.md#the-mental-model
   item: 'The mental model: the host is a running program and an applet is one shared library it loads.'
   ids:
   - COR-01
-- page: docs/tutorials/development-basics.md#where-every-library-comes-from
+- page: docs/development/development-basics.md#where-every-library-comes-from
   item: Where every library comes from.
   ids:
   - COR-04
-- page: docs/tutorials/development-basics.md#anatomy-of-an-applet
+- page: docs/development/development-basics.md#anatomy-of-an-applet
   item: The anatomy of an applet.
   ids:
   - COR-05
   - COR-51
-- page: docs/tutorials/development-basics.md#the-development-loop
+- page: docs/development/development-basics.md#the-development-loop
   item: The edit, build and run loop with caliper build and caliper dev.
   ids:
   - COR-09
   - COR-10
-- page: docs/tutorials/development-basics.md#the-landing-screen
+- page: docs/development/development-basics.md#the-landing-screen
   item: The landing screen has Projects, Instruments, Inspector and Activity panes, a command bar and
     function keys.
   ids:
   - COR-43
-- page: docs/tutorials/development-basics.md#attaching-to-a-training-script
+- page: docs/development/development-basics.md#attaching-to-a-training-script
   item: Attaching to a training script from the landing screen with F4.
   ids:
   - STR-04
   - STR-43
-- page: docs/tutorials/development-basics.md#jobs-and-window-layout
+- page: docs/development/development-basics.md#jobs-and-window-layout
   item: Jobs and window layout.
   ids:
   - COR-46
-- page: docs/tutorials/development-basics.md#running-the-tests
+- page: docs/development/development-basics.md#running-the-tests
   item: Running the tests.
   ids:
   - PLT-03
-- page: docs/tutorials/development-basics.md#the-rules-each-one-guards-something-real
+- page: docs/development/development-basics.md#the-rules-each-one-guards-something-real
   item: The rules each guard something real.
   ids:
   - COR-01
@@ -1104,7 +1104,7 @@ entries:
   item: Cost to the script when nobody is attached.
   ids:
   - STR-04
-- page: docs/guides/ci.md
+- page: docs/development/ci.md
   item: Continuous integration workflows, caches and the browser views tests.
   ids:
   - PLT-03
@@ -1160,7 +1160,7 @@ entries:
   ids:
   - AGT-05
   - AGT-04
-- page: docs/guides/verify-on-windows.md
+- page: docs/development/windows-verification.md
   item: A procedure to verify a Windows build on real hardware.
   ids:
   - PLT-05
@@ -1186,25 +1186,25 @@ entries:
   item: The core as an embeddable library.
   ids:
   - EMB-07
-- page: docs/explanations/compatibility.md#abi-hygiene
+- page: docs/development/compatibility-and-epochs.md#abi-hygiene
   item: ABI hygiene rules.
   ids:
   - COR-02
-- page: docs/explanations/compatibility.md#versioning
+- page: docs/development/compatibility-and-epochs.md#versioning
   item: Versioning of the host ABI epoch, service revisions, the SDK and applets.
   ids:
   - COR-02
   - COR-03
   - COR-05
-- page: docs/explanations/compatibility.md#negotiation-at-load
+- page: docs/development/compatibility-and-epochs.md#negotiation-at-load
   item: Negotiation at load.
   ids:
   - COR-06
-- page: docs/explanations/compatibility.md#the-promotion-rule
+- page: docs/development/compatibility-and-epochs.md#the-promotion-rule
   item: The rule for promoting an applet capability into the core.
   ids:
   - COR-14
-- page: docs/explanations/compatibility.md#toolchain-contract
+- page: docs/development/compatibility-and-epochs.md#toolchain-contract
   item: The toolchain contract.
   ids:
   - COR-04
@@ -1254,7 +1254,7 @@ entries:
   item: Why the ABI never names a graphics API.
   ids:
   - COR-02
-- page: docs/explanations/testing.md
+- page: docs/development/testing.md
   item: 'The test suites: unit, fixture host, pixel-exact graphics, embedding, CLI, builder.'
   ids:
   - PLT-03
@@ -1280,10 +1280,10 @@ entries:
   item: Supply chain and data.
   ids:
   - COR-01
-- page: docs/explanations/ui-principles.md
+- page: docs/development/ui-principles.md
   item: UI principles for text, layout, behaviour, colour and size.
   reason: context
-- page: docs/explanations/vulkan-cuda.md
+- page: docs/development/vulkan-and-cuda.md
   item: How Vulkan and CUDA are paired on Windows, with the direct image, buffer and CPU staging paths.
   ids:
   - PLT-02

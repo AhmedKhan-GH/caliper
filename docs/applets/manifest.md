@@ -30,7 +30,7 @@ The host scans these folders at startup, in this order:
 
 Spec applets are found in the same folders and also one folder down, as [Where spec applets are found](#where-spec-applets-are-found) says.
 
-Dropping a manifest and its library into the user applets folder, or running `caliper install <folder>`, installs an applet. When several folders hold copies of one applet id, the host loads one of them, as [Several copies of one applet](../explanations/compatibility.md#several-copies-of-one-applet) describes. [Caliper CLI](../reference/cli.md#the-search-order) gives the search order in full, and [Folders and environment variables](../reference/folders-and-environment.md) gives the folders on each platform and the variables that change them.
+Dropping a manifest and its library into the user applets folder, or running `caliper install <folder>`, installs an applet. When several folders hold copies of one applet id, the host loads one of them, as [Several copies of one applet](../development/compatibility-and-epochs.md#several-copies-of-one-applet) describes. [Caliper CLI](../reference/cli.md#the-search-order) gives the search order in full, and [Folders and environment variables](../reference/folders-and-environment.md) gives the folders on each platform and the variables that change them.
 
 ## Schema
 
@@ -71,7 +71,7 @@ Notes:
   when the host provides no libtorch. `caliper_add_applet(... TORCH)` writes
   the key into the built manifest. A value that is not a non-empty string is a
   manifest error. See
-  [Each applet's version and what it requires](../explanations/compatibility.md#each-applets-version-and-what-it-requires).
+  [Each applet's version and what it requires](../development/compatibility-and-epochs.md#each-applets-version-and-what-it-requires).
 - **The `[build]` table is written by the build, never by hand.**
   `caliper_add_applet()` copies the manifest that the author writes to the
   folder beside the built library and adds the table to that copy, and it
@@ -80,12 +80,12 @@ Notes:
   diagnosis, which the host shows in the Inspector and never compares.
   `ui_stack`, when present, must be a non-empty string equal to the host's own
   hash, or the applet is refused. See
-  [The SDK version](../explanations/compatibility.md#the-sdk-version).
+  [The SDK version](../development/compatibility-and-epochs.md#the-sdk-version).
 - **`[data].schema` versions the applet's stored data.** The host refuses an
   applet whose schema is lower than the highest schema that has opened its
   data folder. An applet without the key is never checked, and a value that
   is not an integer of at least 1 is a manifest error. See
-  [The version of each applet's stored data](../explanations/compatibility.md#the-version-of-each-applets-stored-data).
+  [The version of each applet's stored data](../development/compatibility-and-epochs.md#the-version-of-each-applets-stored-data).
 
 ## Spec applets
 

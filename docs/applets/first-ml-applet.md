@@ -18,7 +18,7 @@ cmake --build --preset release
 CALIPER_AUTOLAUNCH=dev.example.sine-scope ./cmake-build-release/caliper
 ```
 
-Prereqs: [Development basics](../tutorials/development-basics.md) (the mental model),
+Prereqs: [Development basics](../development/development-basics.md) (the mental model),
 [Your first applet](first-applet.md) (the hello walkthrough).
 
 ## Stage 0 — the build and the manifest

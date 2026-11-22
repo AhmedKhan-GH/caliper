@@ -24,7 +24,7 @@ backend is its own translation unit, and the host picks one at startup.
 | Backend | Selected | Update path | Notes |
 |---|---|---|---|
 | Metal | Default on macOS | A compute pass (f32 with a colormap) or a blit (u8) reads the MPS `MTLBuffer` in place | No CPU staging. Apple-only translation unit |
-| Vulkan with CUDA interop | Default on Windows | A CUDA kernel writes the Vulkan image directly; see [the update ladder](#the-update-ladder-on-windows) | Details in [Vulkan and CUDA on Windows](../explanations/vulkan-cuda.md). Windows-only translation unit |
+| Vulkan with CUDA interop | Default on Windows | A CUDA kernel writes the Vulkan image directly; see [the update ladder](#the-update-ladder-on-windows) | Details in [Vulkan and CUDA on Windows](../development/vulkan-and-cuda.md). Windows-only translation unit |
 | OpenGL 3.3 core | `CALIPER_RENDERER=gl`, or the only backend on other platforms | The bridge colormaps on the CPU and uploads the result | The fallback, loaded through GLEW. `tex_update_from_device` always returns `false` |
 | WebGPU | The browser views (`web/wasm`) | A WGSL compute pass colormaps the host-memory snapshot into the texture | Browser only; see [the WebGPU backend](#the-webgpu-backend) |
 
@@ -128,13 +128,13 @@ in place into an offscreen view, and the view is an ordinary `CaliperTextureId` 
 - **Growth by records.** Textures on meshes and instanced transforms were added by growing the draw record with
   appended fields, not by adding entry points. A revision is a new service id whose table and record begin with the
   previous revision's bytes, gated by a new capability bit, and a host draws a zero tail exactly as the earlier
-  revision did (see the [growth rules](../explanations/compatibility.md#growth-rules)). Both backends stay byte-exact against one shared
+  revision did (see the [growth rules](../development/compatibility-and-epochs.md#growth-rules)). Both backends stay byte-exact against one shared
   CPU reference.
 
 The Vulkan backend keeps a pipeline cache keyed by topology, blend mode and depth state, a descriptor set per draw,
 and a ring of per-draw parameter blocks. The Metal backend keeps the equivalent pipeline and depth-stencil caches.
 Metal compiles its shaders at run time, and Vulkan embeds SPIR-V built at compile time
-([Build-time SPIR-V](../explanations/vulkan-cuda.md#build-time-spir-v)).
+([Build-time SPIR-V](../development/vulkan-and-cuda.md#build-time-spir-v)).
 
 ## Why Metal pipelines by queue commit order
 

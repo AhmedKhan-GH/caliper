@@ -1,4 +1,4 @@
-# Continuous integration
+# CI
 
 This page describes how Caliper is built and tested on GitHub Actions: what runs, what is cached, and what to do when a run fails.
 

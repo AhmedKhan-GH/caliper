@@ -7,10 +7,10 @@ Explanations describe how Caliper works and why it is built that way. They are f
 | [Architecture](../introduction/architecture.md) | The host, the SDK, the applets and the frame loop |
 | [Rendering](../applets/rendering.md) | The renderer seam, the Metal, Vulkan and OpenGL backends, and the geometry path |
 | [Zero-copy tensor visualization](../python/zero-copy-tensors.md) | How a tensor reaches the screen without a CPU round trip on each platform, and how the handoff is synchronized |
-| [Vulkan and CUDA on Windows](vulkan-cuda.md) | Device pairing, the direct image path, pipelining and the measured costs on Windows |
+| [Vulkan and CUDA on Windows](../development/vulkan-and-cuda.md) | Device pairing, the direct image path, pipelining and the measured costs on Windows |
 | [Live streaming](../python/live-streaming.md) | How a Python process streams tensors to the app through shared memory |
 | [Network streaming](../python/network-streaming.md) | How live views travel over a WebSocket to notebooks and browsers, why data views exist, and the security position |
-| [Compatibility and epochs](compatibility.md) | How the ABI and the services grow without breaking applets |
+| [Compatibility and epochs](../development/compatibility-and-epochs.md) | How the ABI and the services grow without breaking applets |
 | [Trust model](../applets/trust-model.md) | What the host checks before loading an applet, and how it contains a fault |
-| [Testing](testing.md) | The test layers, the fixture host and the pixel-exact graphics suite |
-| [UI principles](ui-principles.md) | The rules for text, layout and behaviour in the host and in every applet |
+| [Testing](../development/testing.md) | The test layers, the fixture host and the pixel-exact graphics suite |
+| [UI principles](../development/ui-principles.md) | The rules for text, layout and behaviour in the host and in every applet |

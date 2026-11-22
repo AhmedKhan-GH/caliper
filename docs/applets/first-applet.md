@@ -1,6 +1,6 @@
 # First Applet
 
-*(New here? [Development basics](../tutorials/development-basics.md) explains what you write vs. what the host provides, and where every library comes from.)*
+*(New here? [Development basics](../development/development-basics.md) explains what you write vs. what the host provides, and where every library comes from.)*
 
 This walks the **hello** applet — the smallest complete Caliper applet on ABI
 epoch 2. It is the canonical starting point: one manifest, one macro, three
@@ -175,7 +175,7 @@ describes the function and the package.
 
 This tutorial copies hello so that the walk above matches the code you build.
 To start an applet of your own, `caliper new <name>` writes a project of the
-same shape, as [Development basics](../tutorials/development-basics.md#the-development-loop)
+same shape, as [Development basics](../development/development-basics.md#the-development-loop)
 shows.
 
 ## 5. Load it into Caliper
@@ -220,5 +220,5 @@ way must ship. If the row is missing, run `caliper check` on the folder. If its
 status is `REFUSED`, `FAILED` or `QUARANTINED` instead of `READY`, the **Inspector** shows the
 loader's reason under Status (see the
 [refusal reference](../reference/refusal-messages.md)). Esc, or the `esc Home` button,
-returns to the landing screen. [Development basics](../tutorials/development-basics.md#the-landing-screen)
+returns to the landing screen. [Development basics](../development/development-basics.md#the-landing-screen)
 describes the panes and keys.

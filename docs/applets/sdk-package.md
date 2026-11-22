@@ -1,6 +1,6 @@
 # SDK Package
 
-The SDK installs as the `caliper-sdk` CMake package, version 0.2.0. An applet builds against it from a folder of its own with `find_package(caliper-sdk)` and `caliper_add_applet()`, and needs nothing else from the Caliper source tree. On macOS the host runs on macOS 14 (Sonoma) or later, and an applet built against the package is built for the same minimum unless its project chooses another. How the SDK version relates to the ABI epoch is in [The SDK version](../explanations/compatibility.md#the-sdk-version).
+The SDK installs as the `caliper-sdk` CMake package, version 0.2.0. An applet builds against it from a folder of its own with `find_package(caliper-sdk)` and `caliper_add_applet()`, and needs nothing else from the Caliper source tree. On macOS the host runs on macOS 14 (Sonoma) or later, and an applet built against the package is built for the same minimum unless its project chooses another. How the SDK version relates to the ABI epoch is in [The SDK version](../development/compatibility-and-epochs.md#the-sdk-version).
 
 ## Installing the SDK
 
@@ -113,7 +113,7 @@ sdk = "0.2.0"
 ui_stack = "<the UI-stack hash>"
 ```
 
-With `TORCH`, the copy also gets `torch = "<version>"` in its `[compat]` table, unless the source already states it. The copy is written into the build folder at configure time and copied beside the library after every link. Under the Ninja and Makefile generators a changed copy also relinks the library, through `LINK_DEPENDS`, so the manifest beside the library never falls behind. The Xcode and Visual Studio generators ignore `LINK_DEPENDS`: after a change to the manifest alone, the copy beside the library stays stale until the next link, so delete the library or rebuild with `--clean-first`. The keys are described in [Manifest](manifest.md#schema), and how the host uses them in [Compatibility and epochs](../explanations/compatibility.md#versioning).
+With `TORCH`, the copy also gets `torch = "<version>"` in its `[compat]` table, unless the source already states it. The copy is written into the build folder at configure time and copied beside the library after every link. Under the Ninja and Makefile generators a changed copy also relinks the library, through `LINK_DEPENDS`, so the manifest beside the library never falls behind. The Xcode and Visual Studio generators ignore `LINK_DEPENDS`: after a change to the manifest alone, the copy beside the library stays stale until the next link, so delete the library or rebuild with `--clean-first`. The keys are described in [Manifest](manifest.md#schema), and how the host uses them in [Compatibility and epochs](../development/compatibility-and-epochs.md#versioning).
 
 ### Linking libtorch
 

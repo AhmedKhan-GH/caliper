@@ -711,7 +711,7 @@ entries:
   ids:
   - STR-12
 - file: s4-rec/STATUS.md
-  item: The ThreadSanitizer build command is still to be added to docs/explanations/testing.md.
+  item: The ThreadSanitizer build command is still to be added to docs/development/testing.md.
   ids:
   - STR-12
 - file: s4-tex/STATUS.md

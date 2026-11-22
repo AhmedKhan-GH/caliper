@@ -80,7 +80,7 @@ On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shor
 | Variable | What it does | Read in |
 |---|---|---|
 | `CALIPER_RENDERER=gl` | Selects the OpenGL fallback instead of Metal or Vulkan. Any other value leaves the platform default. An embedding host that asks for the default renderer honours it too. | `src/host/core_lifecycle.cpp` |
-| `CALIPER_VULKAN_NO_DIRECT` | Set to any value, it turns off the [direct path](../explanations/vulkan-cuda.md#the-direct-image-path), where a CUDA kernel writes the Vulkan image, so updates use the buffer path. | `src/host/renderer/vulkan_renderer.cpp` |
+| `CALIPER_VULKAN_NO_DIRECT` | Set to any value, it turns off the [direct path](../development/vulkan-and-cuda.md#the-direct-image-path), where a CUDA kernel writes the Vulkan image, so updates use the buffer path. | `src/host/renderer/vulkan_renderer.cpp` |
 | `CALIPER_VULKAN_STATS` | Set to any value, the Vulkan renderer prints one summary line at shutdown with frame times and the count of direct and buffer updates. | `src/host/renderer/vulkan_renderer.cpp` |
 
 ## Applet and example variables
@@ -107,7 +107,7 @@ On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shor
 | `CALIPER_TEST_APPLET_DIR=<folder>` | Runs the headless acceptance case of `caliper_tests` on the applets in that folder: each is negotiated, opened, checked, created and destroyed with the capabilities the `caliper` executable advertises. Without it the case is skipped. | `tests/test_applet_acceptance.cpp` |
 | `CALIPER_THROWING_WHERE` | Chooses where the test applet fails: `create`, `initialize`, `frame`, `frame-fault`, `frame-imgui`, `frame-imgui-fault`, `cleanup`, `job`, `job-fault` or `none`. The crash-guard and UI-recovery tests set it. | `tests/fixtures/throwing_applet/throwing_applet.cpp` |
 
-The metrics, data, loader, embed and live tests also set `CALIPER_DUCKDB_*`, `CALIPER_HELLO_*` and `CALIPER_DATA_DIR` themselves to exercise the code that reads them. ctest runs every test binary that opens the stores, and every command-line test, with `CALIPER_DATA_DIR` on a folder in the build tree, and runs the command-line tests with `CALIPER_APPLET_PATH` unset. See [Development basics](../tutorials/development-basics.md) for how the GPU skip variables behave.
+The metrics, data, loader, embed and live tests also set `CALIPER_DUCKDB_*`, `CALIPER_HELLO_*` and `CALIPER_DATA_DIR` themselves to exercise the code that reads them. ctest runs every test binary that opens the stores, and every command-line test, with `CALIPER_DATA_DIR` on a folder in the build tree, and runs the command-line tests with `CALIPER_APPLET_PATH` unset. See [Development basics](../development/development-basics.md) for how the GPU skip variables behave.
 
 ## Python variables
 

@@ -7,7 +7,7 @@ incompatible, negotiation refuses it and the landing screen shows one of the
 messages below as the applet's status text — no code from the applet is
 executed.
 
-The checks run in a fixed order (see [Compatibility](../explanations/compatibility.md)): **ABI epoch → minimum host
+The checks run in a fixed order (see [Compatibility](../development/compatibility-and-epochs.md)): **ABI epoch → minimum host
 version → UI-stack hash → libtorch version → required services → data schema**.
 The first failing check wins, so only one message is ever shown. These strings
 are contractual: the loader and the landing screen reuse them verbatim.

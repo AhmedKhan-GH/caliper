@@ -4,7 +4,7 @@ Tutorials take you from an empty checkout to a working result, one step at a tim
 
 | Page | What you build |
 |---|---|
-| [Development basics](development-basics.md) | A working build of the host, and the model of host, applets and services that the other pages assume |
+| [Development basics](../development/development-basics.md) | A working build of the host, and the model of host, applets and services that the other pages assume |
 | [Your first applet](../applets/first-applet.md) | The smallest applet: a manifest, one window and the `CALIPER_APPLET` macro |
 | [Your first ML applet](../applets/first-ml-applet.md) | An applet that trains on a background job, logs metrics and shows tensors through the bridge |
 | [Watch a PyTorch training run live](../introduction/python-quickstart.md) | A Python training script that streams tensors to the Caliper app |

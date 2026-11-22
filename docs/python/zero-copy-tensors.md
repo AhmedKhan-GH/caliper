@@ -3,7 +3,7 @@
 This page explains how a tensor goes from a training step to pixels without a CPU round trip, on each platform. It
 covers where the bytes live, when it is safe to read them, how many times they are copied on each path, and what the
 fallback costs. The renderer seam it relies on is described in [Rendering](../applets/rendering.md), and the Windows
-interop machinery in [Vulkan and CUDA on Windows](../explanations/vulkan-cuda.md).
+interop machinery in [Vulkan and CUDA on Windows](../development/vulkan-and-cuda.md).
 
 ## What the words mean
 
@@ -52,7 +52,7 @@ Windows backend instead lets a CUDA kernel in torch's own context write the Vulk
 primary CUDA context, so a kernel launched by Caliper can read any torch tensor through its device pointer. Only the
 output image has to be visible to both APIs, and Caliper allocates that itself, as exportable memory. The full ladder
 of paths, the synchronization with semaphores and the measured costs are in
-[Vulkan and CUDA on Windows](../explanations/vulkan-cuda.md).
+[Vulkan and CUDA on Windows](../development/vulkan-and-cuda.md).
 
 The host stays free of the CUDA toolkit. It loads the CUDA driver API from `nvcuda.dll` at run time, and the Vulkan
 loader comes from the GPU driver.
@@ -177,7 +177,7 @@ declined, a misaligned offset, a window that runs past the allocation, a release
 never a crash or a wrong image, and a refusal leaves the pixels and the reported path untouched. The bridge and the
 renderer each check the window in a form where no sum can overflow, and an allocation id is never reused, so an update
 after a release always refuses. The `gfx/Vulkan+CUDA` rows drive real `cuMemCreate` blocks through these gates and
-compare each readback byte for byte with the CPU reference; [Verify on Windows hardware](../guides/verify-on-windows.md)
+compare each readback byte for byte with the CPU reference; [Verify on Windows hardware](../development/windows-verification.md)
 lists them. The import memory-stability contract applies: the bytes must not be rewritten until
 the next update of the same texture.
 

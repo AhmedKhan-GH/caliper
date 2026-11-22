@@ -1,4 +1,4 @@
-# Verify on Windows hardware
+# Windows Verification
 
 This guide shows how to check a change on a Windows machine with an NVIDIA GPU. Do it for any change to the Vulkan
 backend, the tensor bridge, the geometry service, the CUDA kernels or the torch adapters, because those paths are
@@ -104,7 +104,7 @@ is set, which is useful for repeatable runs. The host and the Vulkan backend pri
 
 Each line prints once per process, so a line that never appears means that path never ran. An applet's own status
 line should name a zero-copy path only when one of these confirms it. See
-[Vulkan and CUDA on Windows](../explanations/vulkan-cuda.md) for what each path does.
+[Vulkan and CUDA on Windows](vulkan-and-cuda.md) for what each path does.
 
 ## Measure and compare
 
@@ -116,7 +116,7 @@ Set `CALIPER_VULKAN_STATS=1` before launching and quit the application normally.
 
 The counts say how many updates took each path, how often a kernel waited on a frame, and how long the frame thread
 blocked in `retire()`. Compare these with the measurements in
-[the measured costs](../explanations/vulkan-cuda.md#measured-costs), which were taken on an RTX 500 Ada laptop GPU, and
+[the measured costs](vulkan-and-cuda.md#measured-costs), which were taken on an RTX 500 Ada laptop GPU, and
 only compare runs that are alike. Laptop thermal throttling changes training speed by 15 to 20 percent on its own, so
 repeat each run and alternate the configurations.
 

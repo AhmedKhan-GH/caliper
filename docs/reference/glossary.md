@@ -20,7 +20,7 @@ The terms below are used across these pages with one meaning each.
 
 **Service.** A named, immutable C function table that the host vends through `get_service("caliper.x.vN")`. The [Service catalog](../applets/services/service-catalog.md) lists them all.
 
-**Revision.** An additive version of a service, published as a new id with a suffix such as `.v1_1`. Its table starts with a copy of the previous table and appends entries, and the older ids keep working. See [Compatibility and epochs](../explanations/compatibility.md).
+**Revision.** An additive version of a service, published as a new id with a suffix such as `.v1_1`. Its table starts with a copy of the previous table and appends entries, and the older ids keep working. See [Compatibility and epochs](../development/compatibility-and-epochs.md).
 
 **ABI epoch.** The integer version of the frozen applet contract, which is `abi.h` together with the UI-stack pin. It is 2 today. The host refuses an applet whose epoch differs from its own, before it loads any applet code.
 
@@ -40,7 +40,7 @@ The terms below are used across these pages with one meaning each.
 
 **Tensor bridge.** The service `caliper.tensor_bridge` that turns a `CaliperTensor` into a texture the applet shows this frame, on the GPU where the backend allows it. See [caliper.tensor_bridge.v1](../applets/services/caliper-tensor-bridge-v1.md).
 
-**Fixture host.** A headless fake `CaliperHost` in `sdk/testing`. It lets an applet's logic and the sugar be tested without the UI. See [Testing](../explanations/testing.md).
+**Fixture host.** A headless fake `CaliperHost` in `sdk/testing`. It lets an applet's logic and the sugar be tested without the UI. See [Testing](../development/testing.md).
 
 **Quarantine.** The state of an applet after a fault in one of its calls. The host does not call a quarantined applet again and keeps its library loaded. See [Trust model](../applets/trust-model.md).
 

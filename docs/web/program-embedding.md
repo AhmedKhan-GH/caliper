@@ -108,7 +108,7 @@ The core looks for applets in `applets_dir`, then in the folders of
 `CALIPER_APPLET_PATH`, then in the user applets folder, and last in an
 `applets` folder beside the executable. An applet loads when its ABI epoch and
 UI-stack hash match the core's and the core serves the services it requires
-([Compatibility](../explanations/compatibility.md)), which holds for applets
+([Compatibility](../development/compatibility-and-epochs.md)), which holds for applets
 built against the `caliper-sdk` package of the same core build. Without
 `data_dir` the core keeps its stores in the app-data folder: the folder that
 `CALIPER_DATA_DIR` names when it is set, and otherwise the operating system's

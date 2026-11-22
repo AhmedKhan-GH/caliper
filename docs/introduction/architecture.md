@@ -30,7 +30,7 @@ Caliper has four layers, with a single dependency rule: arrows point down only. 
 +------------------------------------------------------------------+
 ```
 
-**Dependency rule.** Applets depend on the SDK and the UI stack. The host implements the SDK. The SDK depends on nothing else in Caliper. Torch and DuckDB types never appear in an SDK header: the interchange types (`CaliperTensor` and Arrow C streams) cross the boundary instead. See [Compatibility and epochs](../explanations/compatibility.md).
+**Dependency rule.** Applets depend on the SDK and the UI stack. The host implements the SDK. The SDK depends on nothing else in Caliper. Torch and DuckDB types never appear in an SDK header: the interchange types (`CaliperTensor` and Arrow C streams) cross the boundary instead. See [Compatibility and epochs](../development/compatibility-and-epochs.md).
 
 **Only `caliper.ui.v1` may know the toolkit or the renderer.** Every other service describes data, such as tensors, tables, geometry and files, and never an ImGui, Metal, Vulkan or OpenGL type. That keeps the services usable by a host that draws with a different toolkit, and it is why a renderer change needs no applet rebuild. The one service that hands applets the ImGui, ImPlot and ImPlot3D contexts is [`caliper.ui.v1`](../applets/services/caliper-ui-v1.md).
 

@@ -17,7 +17,7 @@ features:
     status: shipped
     summary: The Vulkan renderer with CUDA interop is the default on Windows and writes the Vulkan image directly from a CUDA kernel, with timeline semaphores for synchronization.
     depends_on: []
-    docs: docs/explanations/vulkan-cuda.md
+    docs: docs/development/vulkan-and-cuda.md
     issue: null
 
   - id: REN-03

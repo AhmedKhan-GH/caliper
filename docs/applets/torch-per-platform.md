@@ -39,7 +39,7 @@ Step 5 above is one of two routes from a CUDA tensor to a Vulkan image, and an a
   `Bridge::texture_from_tensor_mapped` and `update_texture`. The host loads a CUDA kernel into torch's own context, and
   the kernel reads the tensor where it lies and writes the Vulkan image. Nothing is copied and nothing in the applet
   changes. If the kernel path refuses the tensor, the host copies it inside VRAM first, and if that fails it stages on
-  the CPU. See [Vulkan and CUDA on Windows](../explanations/vulkan-cuda.md).
+  the CPU. See [Vulkan and CUDA on Windows](../development/vulkan-and-cuda.md).
 - **The exportable pool.** Tensors allocated from an `ExportablePool` live in `cuMemCreate` blocks with shareable
   handles. The host imports a block once, and later updates and geometry draws address the tensor as an allocation id
   and a byte offset. The pool is what [`caliper.geometry.v1`](services/caliper-geometry-v1.md) draws from, because geometry

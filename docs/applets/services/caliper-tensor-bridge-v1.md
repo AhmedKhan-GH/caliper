@@ -60,7 +60,7 @@ Each path is tested by uploading known tensors, reading the texture back and com
 reference. The `caliper_gfx_tests` suite has an environment per backend: OpenGL, Metal, Vulkan (CPU-staged rows) and
 Vulkan with CUDA (device rows). The `compute` path is exact against `map_f32_to_rgba8` at ragged sizes such as 4 by 4,
 5 by 3 and 17 by 9, and the `blit` path against `expand_u8_to_rgba8`. The Windows ladder is described in
-[Vulkan and CUDA on Windows](../../explanations/vulkan-cuda.md).
+[Vulkan and CUDA on Windows](../../development/vulkan-and-cuda.md).
 
 !!! note "One tensor cannot be both"
     A single tensor is either zero-copy on Metal or accepted on OpenGL, not both. The OpenGL bridge's active device is
@@ -77,7 +77,7 @@ Vulkan with CUDA (device rows). The `compute` path is exact against `map_f32_to_
 
 Creating a texture costs far more than updating one. On the Windows backend, creating and releasing a texture at
 applet sizes costs about 1 ms together, and an update costs from about 30 microseconds to 1.4 ms depending on the texture size
-([measured costs](../../explanations/vulkan-cuda.md#measured-costs)).
+([measured costs](../../development/vulkan-and-cuda.md#measured-costs)).
 
 !!! warning "The range is pinned in v1"
     `update_texture` has no colormap-range channel. The `[vmin,vmax]` of a colormapped texture is fixed at creation.
@@ -120,7 +120,7 @@ reasons are in [Adapters](../adapters.md) and
 
 ## Additive revisions: v1_1 and v1_2
 
-Two additive revisions extend the bridge under one discipline, the [growth rules](../../explanations/compatibility.md#growth-rules).
+Two additive revisions extend the bridge under one discipline, the [growth rules](../../development/compatibility-and-epochs.md#growth-rules).
 The struct is prefix-identical, with the same members in the same order and with the same semantics. New members are
 appended, and each revision has one new capability bit. There is no ABI epoch bump, and the earlier headers, tables
 and ids stay frozen. An applet negotiates by asking the host for each id and calling `caps()`. A missing id or an

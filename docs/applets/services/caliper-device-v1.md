@@ -20,7 +20,7 @@ driver, or no device, the service reports the CPU.
 **Kinds name the memory/API domain, not a backend.** The enum is
 `CALIPER_DEV_CPU = 0`, `CALIPER_DEV_CUDA = 1`, `CALIPER_DEV_METAL = 2`.
 `METAL` deliberately does **not** say "MPS": it names the Metal memory/API
-domain, which covers torch-MPS, MLX, and ggml-Metal alike (see [Types that never cross the boundary](../../explanations/compatibility.md#types-that-never-cross-the-boundary)). "MPS" is
+domain, which covers torch-MPS, MLX, and ggml-Metal alike (see [Types that never cross the boundary](../../development/compatibility-and-epochs.md#types-that-never-cross-the-boundary)). "MPS" is
 a torch-specific backend name and must never appear in the ABI. An applet that
 uses libtorch maps `CALIPER_DEV_METAL → torch::kMPS` itself:
 

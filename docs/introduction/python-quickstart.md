@@ -121,7 +121,7 @@ Caliper to attach (two minutes by default, `--wait` to change it):
 ```
 
 Start the Caliper app (`cmake-build-release/caliper`, see
-[Development basics](../tutorials/development-basics.md)) while the script runs, and on its
+[Development basics](../development/development-basics.md)) while the script runs, and on its
 landing screen press F4 or click `F4 Attach to process` in the Projects pane.
 Projects lists the live sessions on this machine, refreshed every second: one
 row per script with its name, PID, start time, state and view names. Select

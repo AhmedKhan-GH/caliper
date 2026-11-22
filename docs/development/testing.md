@@ -93,4 +93,4 @@ A suite that needs a GPU must not report success when it found none. `tests/gpu_
 ctest --test-dir cmake-build-release --output-on-failure
 ```
 
-A ctest label selects a group: `gfx` (`caliper_gfx_tests`), `export` (`caliper_export_tests`), `torch` (`caliper_torch_tests`), `cli` (the command-line tests), `shot` (the `caliper shot` runs), `sdk` and `embed` (the package tests) and `boundary` (`caliper_host_names_no_applet`). For example, `ctest --test-dir cmake-build-release -L gfx` runs only the pixel-exact graphics suite. CI runs the whole set on macOS and Windows; see [Continuous integration](../guides/ci.md).
+A ctest label selects a group: `gfx` (`caliper_gfx_tests`), `export` (`caliper_export_tests`), `torch` (`caliper_torch_tests`), `cli` (the command-line tests), `shot` (the `caliper shot` runs), `sdk` and `embed` (the package tests) and `boundary` (`caliper_host_names_no_applet`). For example, `ctest --test-dir cmake-build-release -L gfx` runs only the pixel-exact graphics suite. CI runs the whole set on macOS and Windows; see [Continuous integration](ci.md).

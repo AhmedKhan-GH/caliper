@@ -1,4 +1,4 @@
-# UI principles
+# UI Principles
 
 These rules apply to the host and to every applet. They come from building and
 showing a domain applet to people outside the project, and they describe
