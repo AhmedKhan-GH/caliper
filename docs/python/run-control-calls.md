@@ -97,7 +97,7 @@ Without a scheduler, the new rates stay in `optimizer.param_groups`. Under a tor
 
 ## Programs in the Script
 
-Under `caliper.watch(model, optimizer)`, the script announces the capabilities `programs` and `interventions` to a viewer. The app then sends the GPU programs of its open spec as PROGRAM messages ([GPU Programs and Stages](../agents/gpu-programs.md)). The script needs no other line. A script that does not call `caliper.watch(model, optimizer)` announces neither capability.
+Under `caliper.watch(model, optimizer)`, the script announces the capabilities `programs` and `interventions` to a viewer. The app then sends the GPU programs of its open spec as PROGRAM messages ([GPU Programs](../agents/gpu-programs.md)). The script needs no other line. A script that does not call `caliper.watch(model, optimizer)` announces neither capability.
 
 The module `caliper._producer` loads when the first program arrives, thus a script that only streams tensors loads nothing new. It compiles the program through the sandbox, imports each input tensor on the GPU in place and read-only, and never copies a training tensor. `caliper.step()` runs the programs that are due after the work of the step is done. A program runs every N steps, as the cadence of the program rules, and its GPU time has a limit. A program that is refused or stopped is an error of its panel and never raises in the script.
 

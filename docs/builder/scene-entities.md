@@ -48,7 +48,7 @@ The entities stand under the root `spec/` of the scene of the panel, thus the en
 
 Positions need either `positions` or at least two of `x`, `y` and `z`. An axis without a slot takes the option of the same name. The option holds a number in data units, or `min` or `max` of the data box. Thus `y = "max"` puts the loss line on the back wall of the box. The option `own` lists the axes that map the data range of the entity onto the box.
 
-A `surface` is a height field. Caliper builds its triangles on the GPU from the grid, and a cell with a NaN height is a hole. The color comes from `values`, else from `height`, through the colormap. A stage on a surface entity is not built, because stages take points and lines only.
+A `surface` is a height field. Caliper builds its triangles on the GPU from the grid, and a cell with a NaN height is a hole. The color comes from `values`, else from `height`, through the colormap.
 
 The option `depth_offset` is an integer from -8 to 8. It moves the entity toward the camera by that many units. The default is 1 for `points` and `lines`, and 0 for `surface`. A line thus wins over the surface that it lies on.
 

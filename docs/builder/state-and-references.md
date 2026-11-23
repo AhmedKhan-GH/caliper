@@ -97,7 +97,7 @@ A reference stands only where its value changes data and never changes the shape
 | Annotation | `value`, `range`, `at` | Number, pair or position |
 | Bound text | Each entry of `fields` | Any |
 | Control options | `min`, `max` of a slider or a range | Number |
-| Program and stage | Each entry of `params` | Number |
+| Program | Each entry of `params` | Number |
 
 Every other key takes a literal: ids, kinds, `from`, `catalog`, the axes of a step, the parameters of an operator, `history`, poses and the layout. A reference there is `spec.reference_not_allowed`.
 
@@ -105,7 +105,7 @@ Every other key takes a literal: ids, kinds, `from`, `catalog`, the axes of a st
 
 Caliper builds a dependency index when a spec opens and after each edit. Its inputs are the value of each control and state variable, the last pick of each panel, the cursor and the generation of each source. A change of an input marks the readers of that input. At the next frame, each marked reader evaluates again, at most once. A slider drag thus costs one evaluation for each frame, and the last value wins. The steps of a chain before the first step that reads the changed input keep their cached results.
 
-A changed program parameter goes to the script in the message `PROGRAM` with the op `params`, and it applies at the next pass. A changed stage parameter goes to the uniform of the stage at the next frame.
+A changed program parameter goes to the script in the message `PROGRAM` with the op `params`, and it applies at the next pass.
 
 ## Reference Errors
 

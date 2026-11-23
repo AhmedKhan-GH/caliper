@@ -24,7 +24,7 @@ All additions join spec version 1, as the programs did, because version 1 has no
 | `segmented`, `readout`, `transport` | Control `kind` | New control kinds beside the built `range`, `picker` and `text` |
 | `state:<id>`, `cursor` | Control `bind` | New control targets |
 | `shares`, `min` | Layout | The shares of a split and the minimum of a leaf |
-| `params` | Program and stage | Named numbers that a program or a stage reads in a uniform |
+| `params` | Program | Named numbers that a program reads in a uniform |
 | `tensor` | Program output `kind` | An output that the script publishes as a live tensor |
 
 A binding reference can stand at some of these keys and at some keys that exist. The section Binding References lists the places.
@@ -66,7 +66,7 @@ A reference stands only where its value changes data and never changes the shape
 | Annotation | `value`, `range`, `at` | Number, pair or position |
 | Bound text | Each entry of `fields` | Any |
 | Control options | `min`, `max` of a slider or a range | Number |
-| Program and stage | Each entry of `params` | Number |
+| Program | Each entry of `params` | Number |
 
 Every other key takes a literal: ids, kinds, `from`, `catalog`, the axes of a step, the parameters of an operator, `history`, poses and the layout. A reference there is `spec.reference_not_allowed`.
 
@@ -82,11 +82,11 @@ A reference's value is rounded to the nearest whole number first. A value that i
 
 ### Re-Evaluation
 
-The app builds a dependency index when a spec opens and after each edit. The inputs of the index are the value of each control, each state variable, the last pick of each panel, the cursor and the generation of each source. Its readers are steps, options, slots, entities, annotations, bound texts and the `params` of programs and stages.
+The app builds a dependency index when a spec opens and after each edit. The inputs of the index are the value of each control, each state variable, the last pick of each panel, the cursor and the generation of each source. Its readers are steps, options, slots, entities, annotations, bound texts and the `params` of programs.
 
 A change of an input marks its readers. At the next frame, each marked reader evaluates again, at most once. A slider drag thus costs one evaluation for each frame, and the last value wins. The cache key of a source chain holds the values of the references that the chain reads, and the cursor step when the chain reads kept steps. A chain that no change touched thus hits the cache. In a chain that a change touched, the steps before the first step that reads the changed input keep their cached results.
 
-A changed program parameter goes to the script in the message `PROGRAM` with `op = "params"`, and it applies at the next pass. A changed stage parameter goes to the uniform of the stage in the viewer at once.
+A changed program parameter goes to the script in the message `PROGRAM` with `op = "params"`, and it applies at the next pass.
 
 ### Reference Rules
 
@@ -209,7 +209,7 @@ options = { mode = "strip", y = "max", own = ["z"], width_px = 2.0 }
 | `pose` | `{ position, rotation, scale }` | No | A translation, a quaternion `[x, y, z, w]` and a scale, as literals |
 | `x` | Table | No | Extensions |
 
-The entities stand under the reserved root `spec/` of the panel's scene, so that a stage names one as `spec/<path>`. A scene panel with at least one entity needs no `scene` slot. When it also binds a live scene, it draws both in one view with one camera.
+The entities stand under the reserved root `spec/` of the panel's scene, so that a program names one as `spec/<path>`. A scene panel with at least one entity needs no `scene` slot. When it also binds a live scene, it draws both in one view with one camera.
 
 ### Draw Kinds
 
@@ -223,7 +223,7 @@ This work delivers three draw kinds. `points` and `lines` exist in the scene mod
 
 Positions need either `positions` or at least two of `x`, `y` and `z`. An axis without a slot takes the option of the same name: a number in data units, or `min` or `max` of the data box. Thus `y = "max"` puts the loss line on the back wall of the box. The option `own` lists axes that map the entity's own data range onto the box, and the data box draws their ticks on the wall that the entity stands on.
 
-The `surface` draw kind is a height field. The viewer builds the triangles on its own GPU from the grid: a fixed index buffer for R by C cells, and a vertex stage that reads `height`, `x` and `y`. A cell with a NaN height is a hole. The color comes from `values`, else from `height`, through the colormap. A material stage reads the color value as `value`, as for other kinds.
+The `surface` draw kind is a height field. The viewer builds the triangles on its own GPU from the grid: a fixed index buffer for R by C cells, and a vertex stage that reads `height`, `x` and `y`. A cell with a NaN height is a hole. The color comes from `values`, else from `height`, through the colormap. A library piece reads the color value from its resource.
 
 ### Array Resolution
 
@@ -325,23 +325,25 @@ A program gains the output kind `tensor`, for operators and for agents. The decl
 
 ### Program Parameters
 
-A program and a stage gain the key `params`: at most 16 names, each a number or a reference.
+A program gains the key `params`: at most 16 names, each a number or a reference.
 
 ```toml
-[[stage]]
-panel = "world"
-entity = "spec/terrain"
-kind = "material"
+[[program]]
+id = "level"
+inputs = []
+output = { kind = "tensor", shape = [16] }
 params = { level = { control = "level" } }
 wgsl = """
-fn material(in: MaterialIn) -> vec4<f32> {
-  if (abs(in.value - params.level) < 0.01) { return vec4<f32>(1.0, 0.6, 0.2, 1.0); }
-  return in.color;
+struct Params { level: f32 }
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(16) fn fill(@builtin(global_invocation_id) id: vec3<u32>) {
+  out[id.x] = params.level;
 }
 """
 ```
 
-A program declares `var<uniform> params: Params`, and `Params` is a struct with one `f32`, `i32` or `u32` field for each name. The viewer adds the same declaration to the prelude of a stage. The sandbox refuses a struct whose fields differ from the names with `program.params_mismatch` or `stage.params_mismatch`. A changed value needs no compile and no new review, because the hash covers only the WGSL. The script applies new values at the next pass, and the viewer applies them at the next frame.
+A program declares `var<uniform> params: Params`, and `Params` is a struct with one `f32`, `i32` or `u32` field for each name. The sandbox refuses a struct whose fields differ from the names with `program.params_mismatch`. A changed value needs no compile and no new review, because the hash covers only the WGSL. The script applies new values at the next pass.
 
 ## Controls
 
@@ -671,7 +673,7 @@ The codes below join the validator. The sections above state when each applies.
 | `spec.operator_shape` | Error |
 | `spec.duplicate_shortcut`, `spec.reserved_shortcut` | Error |
 | `spec.bad_format` | Error |
-| `program.params_mismatch`, `stage.params_mismatch` | Error |
+| `program.params_mismatch` | Error |
 | `spec.state_writers` | Warning |
 | `spec.not_built` | Error, until the feature that reads the key is built |
 
@@ -695,7 +697,7 @@ Two event kinds are new, and two kinds gain keys. Each new key joins the list of
 | References, state, selections and re-evaluation | All | Nothing |
 | Entities | Resolution, upload and drawing | Nothing |
 | Operators | Steps after a shipped step or a window, through the CPU reference | The first operator of a live tensor source, on the producer runtime |
-| Program parameters | Evaluation, and stage uniforms | New values at the next pass |
+| Program parameters | Evaluation | New values at the next pass |
 | Controls and shortcuts | All, and parameters as today | New parameter values, as today |
 | Step history and cursor | All | Step stamps on its snapshots, which this work adds |
 | Bound text, annotations and layout | All | Nothing |
