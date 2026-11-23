@@ -1608,7 +1608,7 @@ TEST_CASE("live/net: the native source announces controls and selection, and a s
     CHECK(p.call([](FakeProducer& f) { return f.hello_caps; }) ==
           std::vector<std::string>{CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_SCENES,
                                    CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS,
-                                   CALIPER_NET_CAP_TIMELINES, CALIPER_NET_CAP_RESOURCES});
+                                   CALIPER_NET_CAP_TIMELINES, CALIPER_NET_CAP_RESOURCES, CALIPER_NET_CAP_SCENE_PIECES});
     CHECK(rc->access().allowed);
     CHECK(rc->why_not(CALIPER_NET_OP_PAUSE).empty());
     REQUIRE(rc->state().params.size() == 1);
@@ -3120,12 +3120,12 @@ TEST_CASE("live/net: the piece form's inbox pairs a scene program's versions wit
     u.piece.set("name", "points");
     u.piece.set("version", 1);
     u.resources = caliper_net::Json::object();
-    u.resources.set("points", caliper_net::Json(4.0));
+    u.resources.set("points", caliper_net::Json(uint64_t(4)));
     u.names = {"positions", "values", "radii"};
     std::string why;
     CHECK_FALSE(inbox.pair(u, nullptr, &why));   // another count
     CHECK(why.find("another count") != std::string::npos);
-    u.resources.set("points", caliper_net::Json(3.0));
+    u.resources.set("points", caliper_net::Json(uint64_t(3)));
     std::shared_ptr<const void> owner = inbox.pair(u, nullptr, &why);
     REQUIRE(owner);
     CHECK(inbox.held() == 0);
@@ -3166,8 +3166,8 @@ TEST_CASE("live/net: the piece form's inbox pairs a scene program's versions wit
     im.piece.set("name", "image");
     im.piece.set("version", 1);
     im.resources = caliper_net::Json::object();
-    im.resources.set("pixels", caliper_net::Json(6.0));
-    im.resources.set("info", caliper_net::Json(1.0));
+    im.resources.set("pixels", caliper_net::Json(uint64_t(6)));
+    im.resources.set("info", caliper_net::Json(uint64_t(1)));
     im.names = {"pixels"};
     REQUIRE(inbox.pair(im, nullptr, &why));
     arrays.clear();

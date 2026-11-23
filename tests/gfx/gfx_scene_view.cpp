@@ -1879,7 +1879,7 @@ bool draw_piece_form(const primitive_fixtures::Fixture& f, SceneView& view, std:
                 r.stride = stride;
                 r.data = wire::Section::make(CALIPER_NET_SECTION_RESOURCE, CALIPER_NET_DTYPE_U8, {int64_t(bytes.size())},
                                              bytes.data(), bytes.size());
-                pu.resources.set(rid, Json(double(r.count)));
+                pu.resources.set(rid, Json(uint64_t(r.count)));
                 wire::Message rd;
                 if (!roundtrip(r, &rd)) return false;
                 const auto& whole = std::get<wire::Resource>(rd);

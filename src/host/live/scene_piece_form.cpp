@@ -45,7 +45,8 @@ std::shared_ptr<const void> ScenePieceInbox::pair(wire::SceneUpdate& u, std::sha
     std::vector<wire::Section> out;
     for (const auto& kv : u.resources.members()) {
         const auto it = held_.find(*u.program + "/" + kv.first);
-        const uint32_t count = uint32_t(kv.second.as_double());
+        uint64_t count = 0;
+        kv.second.get_u64(&count);
         if (it == held_.end() || it->second.count != count) {
             if (why)
                 *why = "the resource " + kv.first + " of " + *u.program + (it == held_.end() ? " did not arrive" : " has another count");
