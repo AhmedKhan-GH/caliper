@@ -240,3 +240,8 @@ T1 and T5 start after this base. T2 follows T1 and delivers its loader before T3
 T6 follows the T3 and T4 interfaces. T8 follows T5, T6, and T7. T9 follows all tracks.
 Integration branches are `m7` and `m8`. Reviews use fresh Codex sessions and Gemini when quota permits.
 Each merge requires green macOS and Windows CI, the pre-push checks, and a public-content diff check.
+
+Git cannot store `m7` beside `m7/base`, or `m8` beside `m8/interventions`.
+Integration therefore uses `m7-integration` and `m8-integration` while track branches exist.
+After the workers finish, archive their branch names under `archive/` and rename each integration branch to its milestone name.
+The PR branches remain `m7` and `m8`. No worker changes its assigned branch while its task is active.
