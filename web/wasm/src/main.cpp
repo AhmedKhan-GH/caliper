@@ -27,6 +27,7 @@
 #include "draw_parity.h"
 #include "fonts.h"
 #include "gfx_selftest.h"
+#include "scene_parity.h"
 #include "scene_selftest.h"
 #include "gfx/shaders/generated/programs_webgpu.h"
 #include "net_source.h"
@@ -127,6 +128,7 @@ struct Page {
     std::string selftest;                 // the graphics layer's self-test: "" or its report
     std::string scene_selftest;           // the last scene row: "" or its report
     std::string draw_parity;              // the pixel comparison's draw: "" or its report
+    std::string scene_parity;             // the scene comparison's draw: "" or its report
 
     bool ready = false;                   // the first snapshot was applied
     bool destroyed = false;
@@ -209,6 +211,7 @@ void publish() {
     put("gfxSelftest", g.selftest.c_str());
     put("sceneSelftest", g.scene_selftest.c_str());
     put("drawParity", g.draw_parity.c_str());
+    put("sceneParity", g.scene_parity.c_str());
     put("programs", g.programs ? g.programs->status_json().c_str() : "[]");
     put("state", g.net ? g.net->state_text().c_str() : "starting");
     put("messages", g.net ? (double)g.net->messages() : 0.0);
@@ -737,6 +740,16 @@ void frame() {
         publish_parity();
         publish();
     }
+    // The scene comparison's targets and facts: Module.caliperSceneParity = {facts, color, ids}.
+    if (caliper_web::scene_parity_running() && g.renderer && g.renderer->gfx() &&
+        caliper_web::scene_parity_poll(*g.renderer->gfx(), &g.scene_parity)) {
+        const caliper_web::SceneParityResult& r = caliper_web::scene_parity_result();
+        EM_ASM({
+            Module["caliperSceneParity"] = ({"facts": UTF8ToString($0), "color": HEAPU8.slice($1, $1 + $2),
+                                             "ids": HEAPU8.slice($3, $3 + $4)});
+        }, r.facts.c_str(), r.color.data(), (int)r.color.size(), r.ids.data(), (int)r.ids.size());
+        publish();
+    }
 
     if (g.net && caliper_web::poll_source(g.core, *g.net, g.poll) > 0 && !g.ready) {
         g.ready = true;   // the first snapshot is drawn this frame
@@ -984,6 +997,27 @@ EMSCRIPTEN_KEEPALIVE int caliper_views_scene_selftest(const char* name) {
     return 1;
 }
 
+// Starts the browser's side of the scene comparison (scene_parity.h) from its config JSON: the
+// fixture, the switch of the shapes and the points to pick at. The report comes in
+// caliperStats.sceneParity and the targets and facts in Module.caliperSceneParity. 1 when it started.
+EMSCRIPTEN_KEEPALIVE int caliper_views_scene_parity(const char* config) {
+    if (!g.renderer || !g.renderer->gfx()) {
+        g.scene_parity = "fail not started: the renderer is not up";
+        publish();
+        return 0;
+    }
+    std::string why;
+    if (!caliper_web::scene_parity_start(*g.renderer->gfx(), caliper_gfx::shaders::kWebgpuPrograms,
+                                         config ? config : "", &why)) {
+        g.scene_parity = "fail not started: " + why;
+        publish();
+        return 0;
+    }
+    g.scene_parity.clear();
+    publish();
+    return 1;
+}
+
 // Starts the browser's side of the pixel comparison (draw_parity.h) on the fixture that the app's
 // side wrote: `frames` (n bytes of length-prefixed PROGRAM and RESOURCE frames) and `plan` (its
 // JSON). The report comes in caliperStats.drawParity and the targets in Module.caliperDrawParity.
@@ -1037,6 +1071,7 @@ EMSCRIPTEN_KEEPALIVE void caliper_views_destroy() {
     caliper_host::services_set_renderer(nullptr);   // drops the bridge before its renderer
     caliper_web::scene_selftest_stop();             // its scene view, before the backend
     caliper_web::draw_parity_stop();                // its runtimes and targets, before the backend
+    caliper_web::scene_parity_stop();               // its scene view, before the backend
     delete g.renderer;                              // shutdown(): textures, ImGui backend, surface
     g.renderer = nullptr;
     g.net.reset();

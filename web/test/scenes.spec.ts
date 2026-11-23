@@ -7,7 +7,9 @@
 // faces within 2 levels, blended, bilinear and interpolated pixels within 1. The module reports, per
 // fixture, how many pixels differ and why (web/wasm/src/scene_selftest.cpp); every report must say
 // "ok" and that none is outside the rules. Each picture is saved as scene-<fixture>-<level>.png
-// under the shots folder.
+// under the shots folder. These rows draw every shape with the scene core's built-in draw, whose draw
+// list the reference reads; the module's scene views draw them with the library pieces by default,
+// which the last test here checks, and draw_parity.spec.ts compares those pictures with the app's.
 //
 // The files come from CALIPER_WASM_DIR, else from python/caliper/_web, where scripts/build_wasm.py
 // puts them; without them these tests are skipped.
@@ -95,3 +97,64 @@ for (const compat of [false, true]) {
     }
   });
 }
+
+// The module's scene views draw their shapes with the library pieces by default, and a module made
+// with caliperConfig.shapes "builtin" draws every shape with the built-in draw, as
+// CALIPER_SCENE_SHAPES=builtin does in the app: the facts of the first frame of the fixture "boxes"
+// (web/wasm/src/scene_parity.h) in each module.
+test('the scene views draw their shapes with the library pieces, and caliperConfig.shapes "builtin" switches to the built-in draw', async ({ page }, info) => {
+  test.skip(info.project.name === 'canvas2d', 'the WebAssembly views need a WebGPU adapter');
+  const site = await serve(WEB, (name) => (FILES.includes(name.slice(1)) ? path.join(WASM, name.slice(1)) : null));
+  try {
+    await page.goto(`${site.origin}/test/blank.html`);
+    const facts = async (shapes: string | null) => page.evaluate(async ({ base, shapes }) => {
+      type M = { caliperStats?: Record<string, string>; caliperSceneParity?: { facts: string };
+                 _caliper_views_scene_parity(config: number): number; _caliper_views_destroy(): void;
+                 _free(p: number): void; stringToNewUTF8(s: string): number };
+      const { preloadCaliperViews } = await import(base + 'caliper-views-loader.js');
+      const { factory, wasm } = await preloadCaliperViews(base);
+      const canvas = document.createElement('canvas');
+      canvas.style.width = '64px';
+      canvas.style.height = '64px';
+      document.body.append(canvas);
+      const m: M = await factory({
+        canvas, caliperConfig: shapes ? { src: '', shapes } : { src: '' },
+        instantiateWasm: (imports: WebAssembly.Imports, receive: (i: WebAssembly.Instance, m: WebAssembly.Module) => void) => {
+          WebAssembly.instantiate(wasm as WebAssembly.Module, imports).then((i) => receive(i, wasm));
+          return {};
+        },
+        print: () => {}, printErr: () => {},
+      });
+      // Waits on what the module publishes each frame, never on a fixed time.
+      const until = async (f: () => boolean) => {
+        for (let i = 0; i < 6000 && !f(); i++) await new Promise((ok) => requestAnimationFrame(() => ok(null)));
+        return f();
+      };
+      if (!(await until(() => Number(m.caliperStats?.gfxReady) === 1))) return { report: 'fail no layer', facts: '{}' };
+      const q = m.stringToNewUTF8(JSON.stringify({ fixture: 'boxes', points: [] }));
+      const started = m._caliper_views_scene_parity(q);
+      m._free(q);
+      if (started) await until(() => !!m.caliperStats?.sceneParity);
+      const out = { report: m.caliperStats?.sceneParity ?? 'fail no report', facts: m.caliperSceneParity?.facts ?? '{}' };
+      m._caliper_views_destroy();
+      canvas.remove();
+      return out;
+    }, { base: `${site.origin}/`, shapes });
+    const byDefault = await facts(null);
+    const builtin = await facts('builtin');
+    console.log(`[${info.project.name}] boxes by default: ${byDefault.report}; with shapes "builtin": ${builtin.report}`);
+    expect(byDefault.report).toMatch(/^ok /);
+    expect(builtin.report).toMatch(/^ok /);
+    const p = JSON.parse(byDefault.facts) as { draw: string; pieces: number; builtin: number; programs: object };
+    const b = JSON.parse(builtin.facts) as { draw: string; pieces: number; builtin: number; programs: object };
+    expect(p.draw).toBe('pieces');
+    expect(p.pieces, 'the shapes that pieces drew').toBeGreaterThan(0);
+    expect(Object.keys(p.programs).length).toBe(p.pieces);
+    expect(b.draw).toBe('builtin');
+    expect(b.pieces).toBe(0);
+    expect(b.builtin).toBe(p.pieces + p.builtin);
+    expect(Object.keys(b.programs)).toEqual([]);
+  } finally {
+    site.close();
+  }
+});

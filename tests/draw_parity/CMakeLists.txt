@@ -41,6 +41,25 @@ function(caliper_draw_parity_targets)
     add_test(NAME caliper_draw_parity_app
         COMMAND caliper_draw_parity_app "${CMAKE_BINARY_DIR}/tests/draw_parity/out")
     set_tests_properties(caliper_draw_parity_app PROPERTIES LABELS "gfx;draw_parity" SKIP_RETURN_CODE 77 TIMEOUT 120)
+    # The scene comparison (scene_parity.h): the scene fixtures drawn by the app's scene view with the
+    # library pieces into <out>/scene, which draw_parity.spec.ts compares with the browser module's.
+    # The scene view (src/host/live/live_scene.cpp) is compiled in with the draw layer, as the
+    # graphics suite compiles it.
+    if(TARGET caliper_draw_host AND TARGET caliper_scene)
+        add_executable(caliper_scene_parity_app "${_dir}/scene_parity_app.mm"
+            "${CMAKE_SOURCE_DIR}/src/host/live/live_scene.cpp" "${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp")
+        target_include_directories(caliper_scene_parity_app PRIVATE
+            "${CMAKE_SOURCE_DIR}/src/host" "${CMAKE_SOURCE_DIR}/third_party/stb")
+        target_link_libraries(caliper_scene_parity_app PRIVATE caliper_draw_host caliper_scene caliper_gfx caliper_net
+            caliper::sdk "-framework Metal" "-framework Foundation")
+        target_compile_definitions(caliper_scene_parity_app PRIVATE CALIPER_HAVE_DRAW=1)
+        set_source_files_properties("${_dir}/scene_parity_app.mm" PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+        set_target_properties(caliper_scene_parity_app PROPERTIES
+            CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
+        add_test(NAME caliper_scene_parity_app
+            COMMAND caliper_scene_parity_app "${CMAKE_BINARY_DIR}/tests/draw_parity/out")
+        set_tests_properties(caliper_scene_parity_app PROPERTIES LABELS "gfx;draw_parity" SKIP_RETURN_CODE 77 TIMEOUT 120)
+    endif()
 endfunction()
 
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL caliper_draw_parity_targets)
