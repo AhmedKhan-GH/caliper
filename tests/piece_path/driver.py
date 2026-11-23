@@ -11,7 +11,10 @@ the step history, `program_read` returns the elements, the draw half draws a bar
 the weight, beside the row's index, so that a wrong layout, an unread tensor or a lost version shows. The driver
 waits on events and on published state, never for a fixed time, and runs without a window and without the network.
 
-Exit code 0 passes, 77 skips (no app, no torch, no Metal, no native sender, no producer module), 1 fails.
+Exit code 0 passes, 1 fails, and 77 skips for two reasons only, which the line "caliper_piece_path_acceptance
+skipped: ..." names: the machine has no Metal device (torch has no MPS device, or the app's renderer is not Metal),
+or the Python modules caliper._netio and caliper._producer are not built. Anything else that is missing, the app,
+caliper-mcp, torch or numpy, is a failure.
 
 usage: driver.py --app <caliper> --mcp <caliper-mcp> --python <python> --work <dir> [--capture-dir <dir>]
                  [--limit-s 240]
@@ -217,20 +220,28 @@ def run(a):
     work = Path(a.work).resolve()
     for exe in (a.app, a.mcp):
         if not exe or not Path(exe).exists():
-            raise Skip(f"{exe or 'a program'} is not built")
+            raise Fail(f"{exe or 'a program'} is not built")
     env = {k: v for k, v in os.environ.items()
            if k not in ("CALIPER_API", "CALIPER_AUTOLAUNCH", "CALIPER_EXIT_AFTER", "CALIPER_APPLET_PATH")
            and not k.startswith("CALIPER_RUN_")}
     env["PYTHONPATH"] = str(ROOT / "python") + os.pathsep + env.get("PYTHONPATH", "")
-    pre = subprocess.run([a.python, "-c", "import numpy, torch, caliper, caliper._netio, caliper._producer"],
-                         env=env, capture_output=True, text=True)
-    if pre.returncode != 0:
-        why = pre.stderr.strip().splitlines()[-1] if pre.stderr.strip() else "an import failed"
-        raise Skip(f"torch, numpy, the native network sender or the producer module is missing: {why}")
+
+    def imports(names):
+        r = subprocess.run([a.python, "-c", f"import {names}"], env=env, capture_output=True, text=True)
+        return None if r.returncode == 0 else (r.stderr.strip().splitlines() or ["an import failed"])[-1]
+
+    why = imports("numpy, torch, caliper")
+    if why:
+        raise Fail(f"the acceptance Python lacks numpy, torch or caliper: {why}")
+    why = imports("caliper._netio, caliper._producer")
+    if why:
+        raise Skip(f"the Python modules are not built: caliper._netio or caliper._producer is missing: {why}")
     gpu = subprocess.run([a.python, "-c", "import torch; raise SystemExit(0 if torch.backends.mps.is_available() else 3)"],
                          env=env, capture_output=True, text=True)
-    if gpu.returncode != 0:
+    if gpu.returncode == 3:
         raise Skip("this machine has no Metal device for torch")
+    if gpu.returncode != 0:
+        raise Fail(f"the check of the MPS device failed: {gpu.stderr.strip()[-200:]}")
     if work.exists():
         subprocess.run(["rm", "-rf", str(work)], check=True)
     (work / "data").mkdir(parents=True)
