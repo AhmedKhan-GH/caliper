@@ -85,9 +85,11 @@ An object that fails to upload (a cache write error) misses once on the next run
 **Downloads.** The configure step downloads sources from GitHub without authentication:
 - Release tarballs for zlib, curl, Vulkan-Headers, volk and glslang (on Windows).
 - Git clones of tomlplusplus and doctest (both lanes).
-- A shallow Git clone of the organization repository at the tag in `cmake/SternbildTokens.cmake`, for the design tokens. Every job that configures the app or the browser module makes this clone: both lanes, the browser views job, the wheel job and the WGSL compiler's build job.
+- A Git clone of the organization repository at the commit in `cmake/SternbildTokens.cmake`, for the design tokens. Every job that configures the app or the browser module makes this clone: both lanes, the browser views job, the wheel job and the WGSL compiler's build job.
 
-Before the clone of the design tokens, the configure asks the repository for the tag with `git ls-remote`. When git cannot reach the repository, the configure stops with a message that names the design tokens, the tag and git's own error. The message also gives the way out: configure again with network, or set `FETCHCONTENT_SOURCE_DIR_STERNBILD_TOKENS` to a local checkout of the organization repository at the tag. A build folder that already holds the tag skips the check and needs no network.
+The file pins the design tokens with two lines: `STERNBILD_TOKENS_TAG` names the release, and `STERNBILD_TOKENS_COMMIT` is the commit that the clone checks out. A tag can be moved, and the package runs CMake code at configure time, thus the build takes the commit. A bump changes both lines.
+
+Before the clone, the configure asks the repository for the tag with `git ls-remote`. When git cannot reach the repository, the configure stops with a message that names the design tokens, the release, the commit and git's own error. The message also gives the way out: configure again with network, or set `FETCHCONTENT_SOURCE_DIR_STERNBILD_TOKENS` to a local checkout of the organization repository at the commit. When the tag on the repository points to a commit other than the pinned one, the configure stops with a message that names both commits. A build folder that already holds the pinned commit skips the check and needs no network.
 
 CMake retries each download several times, with a longer wait each time. During GitHub incidents, the downloads can still fail with timeouts or 504 errors and the message "Each download failed!". This is not a code failure. Re-run only the failed job:
 
