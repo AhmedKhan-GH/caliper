@@ -272,7 +272,7 @@ Pieces have tests at several levels. Each refusal that [Pieces](../agents/pieces
 | Derive half | `caliper_producer_tests` | The derive half in the producer runtime on Metal: passes in order with the contents kept, clears and counters, read-only tensors, bounds, sizes, the watchdog and the timeout without a wait, a rebind and a texture |
 | Library piece | `caliper_points_match` | The piece `points@1` against the built-in points primitive on Metal, offscreen: the interior pixels equal, the edge pixels on either side, and 16 chosen picks that return the same items (`tests/points_match/`) |
 | Host | `caliper_spec_runtime` | The `programs` cases: the item map gives the fields and the index of an item and refuses an item past the count, the text table gives a label at each valid anchor, and a piece in a scene panel is picked at its pixel, writes a select state and places its labels |
-| Python | `python/tests/test_programs_pieces.py` | The facade of the script: an instance installs, the derive half runs and publishes RESOURCE, a draw half relays to a viewer, and the backlog of RESOURCE frames stays bounded |
+| Python | `python/tests/test_programs_pieces.py` | The facade of the script: an instance installs, the derive half runs and publishes RESOURCE, a draw half relays to a viewer, the backlog of RESOURCE frames stays bounded, a viewer gets the versions of a pass whole or skips the pass, and a pass above 8 MiB stops the program with `program.resource_too_large` |
 
 The wire frames have golden files and codec tests in all three languages, as [Wire Golden Frames](#wire-golden-frames) describes. The folder `tests/fixtures/wire_v3/v3_2` holds the frames of PROGRAM for an instance of a piece and of RESOURCE, and the invalid frames that each codec refuses.
 
@@ -287,7 +287,7 @@ The driver waits for the event `compiled` of both halves and checks each step by
 - The `draw` object of the status is `running` with a `resource_step`, and the panel gains at least 2,000 blue pixels against a capture of the empty panel.
 - `selection_set` with `program` and `item` gives the fields of row 5 and a `pick` event. The linked selection then marks the bar, which adds magenta pixels.
 
-The driver writes three captures, `empty`, `drawn` and `picked`, into `piece-path-captures` of the build folder. The entry has the labels `pieces` and `acceptance`, a timeout of 300 seconds, and the conditions and the exit code 77 of the GPU programs test.
+The driver writes three captures, `empty`, `drawn` and `picked`, into `piece-path-captures` of the build folder. The entry has the labels `pieces` and `acceptance`, a timeout of 300 seconds, and the conditions of the GPU programs test. It exits with code 77 only when the machine has no Metal device or the Python modules `caliper._netio` and `caliper._producer` are not built, and its last line names the reason. Anything else that is missing fails it. The Build workflow runs it in a step of its own, which accepts only the skip for a missing Metal device.
 
 ### Programmable Graphics Acceptance
 
