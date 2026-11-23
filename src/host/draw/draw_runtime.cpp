@@ -339,7 +339,7 @@ bool read_manifest(const json& m, cs::Piece* p, std::string* why) {
                     !r.str(t, "target", &dp->target) || !r.strings(t, "reads", &dp->reads) ||
                     !r.opt_u32(t, "vertices", &dp->vertices) ||
                     !r.enum_of(t, "topology", cs::draw_topology_from_name, &dp->topology) ||
-                    !r.flag(t, "pick", &dp->pick))
+                    !r.flag(t, "pick", &dp->pick) || !r.opt_str(t, "indices", &dp->indices))
                     return false;
                 const auto inst = t.find("instances");
                 if (inst != t.end()) {
@@ -1126,6 +1126,9 @@ Verdict DrawRuntime::install(const caliper_builder::spec::Piece& piece, const In
         m.slots.push_back(std::move(s));
     }
     for (Impl::Slot& s : m.slots)
+        for (const cs::DrawPass& p : draw.passes)
+            if (p.indices && *p.indices == s.id) s.index = true;
+    for (Impl::Slot& s : m.slots)
         if (!s.texture && (s.layout.stride == 0 || s.layout.stride % 4 != 0 || s.layout.stride > pl::kStrideMax))
             return refuse(refusal(cp::kProgramBadLayout, "The layout of " + s.id + " has no valid stride.", "resources"));
     for (const cs::DrawBuffer& b : draw.buffers) {
@@ -1242,7 +1245,7 @@ Verdict DrawRuntime::install(const caliper_builder::spec::Piece& piece, const In
         }
         s.capacity = std::max<std::uint64_t>(16, (s.layout.stride + 15) / 16 * 16);
         if (!account(m, 0, s.capacity, "the resource " + s.id, where)) return m.status.error;
-        s.buffer = make_buffer(g, s.capacity, gfx::kStorage | gfx::kCopyDst, s.id.c_str());
+        s.buffer = make_buffer(g, s.capacity, gfx::kStorage | gfx::kCopyDst | (s.index ? gfx::kIndex : 0u), s.id.c_str());
         if (!s.buffer || !zero_buffer(g, s.buffer, s.capacity))
             return refuse(refusal(cp::kProgramLayerRefused, "The graphics layer refused the buffer of " + s.id + ": " +
                                                                 g.last_error(), where));
@@ -1346,7 +1349,8 @@ Verdict DrawRuntime::set_resource(const ResourceVersion& version) {
             if (!account(m, s->capacity, cap, "a version of " + s->id + " of " + std::to_string(version.size) + " bytes",
                          where))
                 return m.status.error;
-            gfx::Buffer b = make_buffer(*m.gfx, cap, gfx::kStorage | gfx::kCopyDst, s->id.c_str());
+            gfx::Buffer b =
+                make_buffer(*m.gfx, cap, gfx::kStorage | gfx::kCopyDst | (s->index ? gfx::kIndex : 0u), s->id.c_str());
             if (!b) {
                 stop(m, cp::kProgramLayerRefused,
                      "Stopped " + m.instance.program + ": the graphics layer refused a buffer of " + s->id + ": " +
@@ -1498,6 +1502,15 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
             for (const Impl::Slot& sl : m.slots)
                 if (sl.id == *p.instances_of) instances = sl.has_version ? sl.count : 0;
         }
+        // An indexed pass draws the valid indices of its version: the buffer holds at least count
+        // elements of 4 bytes (set_resource), and each index is only the vertex entry's
+        // vertex_index, whose every read of a buffer is bounds-checked; no index is read on the CPU.
+        const Impl::Slot* index_slot = nullptr;
+        if (p.indices) {
+            for (const Impl::Slot& sl : m.slots)
+                if (sl.id == *p.indices) index_slot = &sl;
+            if (!index_slot || !index_slot->has_version || index_slot->count == 0 || !index_slot->buffer) instances = 0;
+        }
         const bool host = !offscreen(p);
         const std::size_t ti = host ? m.targets.size() : target_index(p.target);
         if (!host && ti == m.targets.size()) continue;   // refused by the manifest check
@@ -1519,6 +1532,10 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
             r.pipeline = s.pipelines[host ? variant : 0u];
             for (std::size_t gi = 0; gi < 3; ++gi) r.groups[gi] = s.groups[gi];
             r.count = p.vertex ? p.vertices.value_or(3) : 3;
+            if (index_slot) {
+                r.index_buffer = index_slot->buffer;
+                r.count = index_slot->count;
+            }
             r.instance_count = instances;
             r.pick_id = p.pick ? m.pick_id : 0;
             list.draw(r);

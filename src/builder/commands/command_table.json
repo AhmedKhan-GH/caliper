@@ -12900,6 +12900,11 @@
                           "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
                           "type": "string"
                         },
+                        "indices": {
+                          "description": "render with a vertex entry and a list topology: a published buffer resource or buffer input of u32 elements, whose valid elements the pass draws as an index buffer; each index is the vertex_index of the vertex entry, whose reads are bounds-checked. vertices then counts nothing.",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                          "type": "string"
+                        },
                         "instances": {
                           "description": "render: the instance count from 1 to 4194304, or the id of a buffer resource or buffer input whose valid count at the cursor is the count; 1 when absent.",
                           "type": [
@@ -15532,6 +15537,11 @@
                           "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
                           "type": "string"
                         },
+                        "indices": {
+                          "description": "render with a vertex entry and a list topology: a published buffer resource or buffer input of u32 elements, whose valid elements the pass draws as an index buffer; each index is the vertex_index of the vertex entry, whose reads are bounds-checked. vertices then counts nothing.",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                          "type": "string"
+                        },
                         "instances": {
                           "description": "render: the instance count from 1 to 4194304, or the id of a buffer resource or buffer input whose valid count at the cursor is the count; 1 when absent.",
                           "type": [
@@ -16618,6 +16628,11 @@
                           "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
                           "type": "string"
                         },
+                        "indices": {
+                          "description": "render with a vertex entry and a list topology: a published buffer resource or buffer input of u32 elements, whose valid elements the pass draws as an index buffer; each index is the vertex_index of the vertex entry, whose reads are bounds-checked. vertices then counts nothing.",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                          "type": "string"
+                        },
                         "instances": {
                           "description": "render: the instance count from 1 to 4194304, or the id of a buffer resource or buffer input whose valid count at the cursor is the count; 1 when absent.",
                           "type": [
@@ -17576,6 +17591,11 @@
                         "fragment": {
                           "description": "render: the fragment entry point.",
                           "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+                          "type": "string"
+                        },
+                        "indices": {
+                          "description": "render with a vertex entry and a list topology: a published buffer resource or buffer input of u32 elements, whose valid elements the pass draws as an index buffer; each index is the vertex_index of the vertex entry, whose reads are bounds-checked. vertices then counts nothing.",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$",
                           "type": "string"
                         },
                         "instances": {

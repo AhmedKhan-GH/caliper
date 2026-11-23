@@ -17,6 +17,7 @@
 
 #include "../../../../tests/gfx/example_draw.h"
 
+#include <array>
 #include <cstring>
 
 namespace cd = caliper_draw;
@@ -278,6 +279,71 @@ TEST_CASE("an optional buffer input left unbound has the count 0, and its passes
         const std::vector<gfx::DrawRecord> both = records(drawn[0]);
         REQUIRE(both.size() == 2);
         CHECK(both[1].instance_count == 2);
+    }
+}
+
+// A draw-only piece that draws the points of `pts` through the indices of `idx`.
+cs::Piece indexed_points() {
+    cs::Piece p;
+    p.name = "indexed";
+    cs::PieceInput pts;
+    pts.name = "pts";
+    pts.kind = cs::InputKind::buffer;
+    pts.layout.element = "vec4<f32>";
+    cs::PieceInput idx = pts;
+    idx.name = "idx";
+    idx.layout.element = "u32";
+    p.inputs = {pts, idx};
+    cs::Draw d;
+    d.camera = cs::CameraMode::none;
+    cs::DrawPass tri;
+    tri.vertex = "tri_vs";
+    tri.fragment = "tri_fs";
+    tri.indices = "idx";
+    tri.instances = 2;
+    d.passes = {tri};
+    p.draw = d;
+    p.files = {{"draw.wgsl", R"(@vertex
+fn tri_vs(@builtin(vertex_index) v: u32) -> @builtin(position) vec4<f32> { return pts[v]; }
+@fragment
+fn tri_fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }
+)"}};
+    return p;
+}
+
+TEST_CASE("an indexed pass draws the valid indices of its version as an index buffer, each instance") {
+    for (bool webgpu : modes()) {
+        CAPTURE(webgpu);
+        Host h;
+        cd::DrawRuntime rt(h.gfx, webgpu, checks());
+        cd::Instance in;
+        in.program = "indexed";
+        in.bind = {{"pts", "program:src/pts"}, {"idx", "program:src/idx"}};
+        const cp::Verdict v = rt.install(indexed_points(), in, 5);
+        REQUIRE_MESSAGE(v.ok(), v.message);
+        const std::vector<std::array<float, 4>> pts{{0, 0, 0, 1}, {1, 0, 0, 1}, {0, 1, 0, 1}, {1, 1, 0, 1}};
+        REQUIRE(rt.set_resource(version("pts", pts, 2)).ok());
+        const std::vector<std::uint32_t> idx{0, 1, 2, 2, 1, 3, 3, 1, 7};   // 7 is past the four points
+        REQUIRE(rt.set_resource(version("idx", idx, 2)).ok());
+        std::vector<gfx::Frame> frames = frame(h, rt);
+        REQUIRE(frames.size() == 1);
+        const gfx::DrawList& list = list_of(frames[0], 0);
+        REQUIRE(list.records().size == 1);
+        const gfx::DrawRecord& r = list.records()[0];
+        CHECK(r.index_buffer);
+        CHECK(r.count == 9);
+        CHECK(r.instance_count == 2);
+        // A version without indices skips the pass.
+        const std::vector<std::uint32_t> none;
+        REQUIRE(rt.set_resource(version("idx", none, 3)).ok());
+        frames = frame(h, rt);
+        CHECK(frames.empty());
+        // A version over the buffer's first capacity grows it, still with the index usage.
+        std::vector<std::uint32_t> many(3000, 1u);
+        REQUIRE(rt.set_resource(version("idx", many, 4)).ok());
+        frames = frame(h, rt);
+        REQUIRE(frames.size() == 1);
+        CHECK(list_of(frames[0], 0).records()[0].count == 3000);
     }
 }
 

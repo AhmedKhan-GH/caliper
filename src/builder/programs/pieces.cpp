@@ -382,6 +382,7 @@ std::string pass_json(const spec::DrawPass& p) {
     if (p.blend) o.str("blend", spec::draw_blend_name(*p.blend));
     if (p.depth) o.str("depth", spec::draw_depth_name(*p.depth));
     if (p.pick) o.flag("pick", true);
+    if (p.indices) o.str("indices", *p.indices);
     return o.text();
 }
 

@@ -421,6 +421,39 @@ TEST_CASE("the manifest check takes the arcs piece of the plan") {
     CHECK(v.ok());
 }
 
+TEST_CASE("an indexed pass draws a u32 buffer from a vertex entry as a list, and every other form is refused") {
+    cs::Piece p = arcs_piece();
+    cs::Resource idx;
+    idx.id = "idx";
+    idx.layout.element = "u32";
+    idx.count = 96;
+    p.resources.push_back(idx);
+    cs::DrawPass& arc = p.draw->passes[0];
+    arc.indices = "idx";
+    arc.topology = cs::DrawTopology::triangle_list;
+    arc.vertices.reset();   // the index count comes from the version
+    CHECK(cp::check_piece_manifest(p).ok());
+    CHECK(cp::canonical_manifest(p).find(R"("indices":"idx")") != std::string::npos);
+    cs::Piece bad = p;
+    bad.draw->passes[0].topology = cs::DrawTopology::triangle_strip;
+    CHECK(code_of(bad) == cp::kProgramBadPass);
+    bad = p;
+    bad.draw->passes[0].indices = "missing";
+    CHECK(code_of(bad) == cp::kProgramUnknownResource);
+    bad = p;
+    bad.draw->passes[0].indices = "heads";   // f32 elements
+    CHECK(code_of(bad) == cp::kProgramBadPass);
+    bad = p;
+    bad.draw->passes[0].indices = "labels";  // a struct
+    CHECK(code_of(bad) == cp::kProgramBadPass);
+    bad = p;
+    bad.draw->passes[2].indices = "idx";     // the full-screen bloom has no vertex entry
+    CHECK(code_of(bad) == cp::kProgramBadPass);
+    bad = p;
+    bad.resources.back().publish = false;     // a private resource never reaches the viewer
+    CHECK(code_of(bad) == cp::kProgramUnknownResource);
+}
+
 TEST_CASE("the manifest check refuses each breach with its code") {
     cs::Piece p = arcs_piece();
     p.name = "Arcs";

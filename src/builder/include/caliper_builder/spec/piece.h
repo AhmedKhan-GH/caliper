@@ -315,6 +315,9 @@ inline bool operator==(const DrawTarget& a, const DrawTarget& b) {
 // `writes` (draw buffers). A render pass has `fragment`, and `vertex` unless
 // it is a full-screen triangle; `instances` is a count or, through
 // `instances_of`, the valid count of a buffer resource or input at the cursor.
+// With `indices`, a render pass draws the valid elements of a u32 buffer
+// resource or input as an index buffer: each index is the vertex_index of the
+// vertex entry, and each instance draws all of them.
 struct DrawPass {
     PassKind kind = PassKind::render;
     std::string entry;                                   // compute
@@ -327,6 +330,7 @@ struct DrawPass {
     std::uint32_t instances = 1;
     std::optional<std::string> instances_of;             // a buffer resource or buffer input
     std::optional<std::uint32_t> vertices;               // render: 3 for the full-screen triangle
+    std::optional<std::string> indices;                  // render: a u32 buffer resource or input of indices
     DrawTopology topology = DrawTopology::triangle_list;
     std::optional<DrawBlend> blend;                      // opaque on the host target, additive offscreen
     std::optional<DrawDepth> depth;                      // write on the host target with a vertex entry, else none
@@ -336,7 +340,8 @@ inline bool operator==(const DrawPass& a, const DrawPass& b) {
     return a.kind == b.kind && a.entry == b.entry && a.workgroups == b.workgroups && a.writes == b.writes &&
            a.vertex == b.vertex && a.fragment == b.fragment && a.target == b.target && a.reads == b.reads &&
            a.instances == b.instances && a.instances_of == b.instances_of && a.vertices == b.vertices &&
-           a.topology == b.topology && a.blend == b.blend && a.depth == b.depth && a.pick == b.pick;
+           a.topology == b.topology && a.blend == b.blend && a.depth == b.depth && a.pick == b.pick &&
+           a.indices == b.indices;
 }
 
 // The item map: a picked item is the index of an element of `resource`, and

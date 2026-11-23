@@ -766,7 +766,7 @@ public:
         DrawPass p;
         strict_keys(o, path,
                     {"kind", "entry", "workgroups", "writes", "vertex", "fragment", "target", "reads", "instances",
-                     "vertices", "topology", "blend", "depth", "pick"},
+                     "vertices", "topology", "blend", "depth", "pick", "indices"},
                     "a pass of the draw half");
         if (o.find("kind") == o.end()) missing(path, "kind", "A pass of the draw half");
         if (auto k = named<PassKind>(o, "kind", path, pass_kind_from_name, {"compute", "render"}, "a kind of pass"))
@@ -793,6 +793,7 @@ public:
         p.blend = named<DrawBlend>(o, "blend", path, draw_blend_from_name, {"opaque", "alpha", "additive"}, "a blend");
         p.depth = named<DrawDepth>(o, "depth", path, draw_depth_from_name, {"none", "test", "write"}, "a depth");
         if (auto b = boolean(o, "pick", path)) p.pick = *b;
+        p.indices = string(o, "indices", path);
         return p;
     }
 

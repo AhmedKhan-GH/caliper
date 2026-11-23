@@ -509,7 +509,7 @@ private:
                 if (Verdict v = workgroups(pass.workgroups, where + ".workgroups"); !v.ok()) return v;
                 if (pass.vertex || !pass.fragment.empty() || pass.target != "host" || pass.instances != 1 ||
                     pass.instances_of || pass.vertices || pass.topology != spec::DrawTopology::triangle_list ||
-                    pass.blend || pass.depth || pass.pick)
+                    pass.blend || pass.depth || pass.pick || pass.indices)
                     return fail(kProgramBadPass,
                                 "A compute pass has entry, workgroups, writes and reads, and none of the keys of a "
                                 "render pass.",
@@ -531,8 +531,9 @@ private:
                 if (Verdict v = entry(pass.fragment, where + ".fragment"); !v.ok()) return v;
                 if (pass.vertex) {
                     if (Verdict v = entry(*pass.vertex, where + ".vertex"); !v.ok()) return v;
-                    if (!pass.vertices)
-                        return fail(kProgramBadPass, "A pass with a vertex entry gives vertices.", where + ".vertices");
+                    if (!pass.vertices && !pass.indices)
+                        return fail(kProgramBadPass, "A pass with a vertex entry gives vertices or indices.",
+                                    where + ".vertices");
                 } else {
                     if ((pass.vertices && *pass.vertices != 3) || pass.topology != spec::DrawTopology::triangle_list ||
                         pass.instances != 1 || pass.instances_of)
@@ -544,6 +545,28 @@ private:
                 if (pass.vertices && (*pass.vertices < 1 || *pass.vertices > pl::kVerticesMax))
                     return fail(kProgramBadPass,
                                 "vertices is from 1 to " + std::to_string(pl::kVerticesMax) + ".", where + ".vertices");
+                if (pass.indices) {
+                    // An index buffer: each index becomes the vertex entry's vertex_index, whose every
+                    // read of a buffer is bounds-checked. A strip would read the restart index.
+                    if (!pass.vertex)
+                        return fail(kProgramBadPass, "A pass with indices has a vertex entry.", where + ".indices");
+                    if (pass.topology == spec::DrawTopology::triangle_strip ||
+                        pass.topology == spec::DrawTopology::line_strip)
+                        return fail(kProgramBadPass,
+                                    "A pass with indices draws a list: triangle_list, line_list or point_list.",
+                                    where + ".topology");
+                    if (!countable(*pass.indices))
+                        return fail(kProgramUnknownResource,
+                                    "indices names " + quote(*pass.indices) +
+                                        ", which is no published buffer resource or buffer input of the piece.",
+                                    where + ".indices");
+                    const spec::Resource* r = find_resource(p_, *pass.indices);
+                    const spec::PieceInput* in = r ? nullptr : find_input(p_, *pass.indices);
+                    const spec::Layout& l = r ? r->layout : in->layout;
+                    if (!l.element || *l.element != "u32" || !l.fields.empty())
+                        return fail(kProgramBadPass, "indices names " + quote(*pass.indices) + ", whose elements are not u32.",
+                                    where + ".indices");
+                }
                 if (pass.instances_of) {
                     if (!countable(*pass.instances_of))
                         return fail(kProgramUnknownResource,

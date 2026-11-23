@@ -117,7 +117,8 @@ A pass has these keys. A compute pass uses `entry`, `workgroups` and `writes`. A
 | `target` | `host` (default), the color, ID and depth of the panel, or the id of an offscreen target |
 | `reads` | The offscreen targets that the pass samples |
 | `instances` | A count, or the id of a buffer resource or buffer input whose valid count at the cursor is the count. 1 when absent. |
-| `vertices` | The vertices of one instance, at most 65,536. It is necessary with `vertex`. |
+| `vertices` | The vertices of one instance, at most 65,536. It is necessary with `vertex` and without `indices`. |
+| `indices` | A published buffer resource or buffer input of `u32` elements. The pass draws its valid elements as an index buffer, and each instance draws all of them. |
 | `topology` | `triangle_list` (default), `triangle_strip`, `line_list`, `line_strip` or `point_list` |
 | `blend` | `opaque`, `alpha` or `additive`. The default is opaque into `host` and additive into a target. |
 | `depth` | `none`, `test` or `write`. The default is `write` with a vertex entry and `none` for a full-screen triangle. |
@@ -126,6 +127,8 @@ A pass has these keys. A compute pass uses `entry`, `workgroups` and `writes`. A
 The passes of one frame run in their declared order. A pass whose `instances` names a resource with no version yet, or with a valid count of zero, is skipped. An offscreen target is `rgba8unorm` at `scale` of the panel size, and it clears to `clear` at the start of each frame. A pass samples a target that an earlier pass of the frame wrote, and never its own target. No pass reads the host target. The ID never blends.
 
 A draw buffer keeps its contents from frame to frame, thus motion comes from the draw half. `caliper_view.frame.x` counts the frames since the last reset, and `caliper_view.frame.y` is 1 on the first frame after a reset. The host zeroes every draw buffer at an install, at a new attachment and at a new epoch. A buffer with `reset = "cursor"` also returns to zero when the cursor moves by a command, a key or the transport. A buffer with `reset = "resource"` also returns to zero when a resource of the frame changes its version. A change of a parameter never resets a buffer.
+
+An indexed pass has a vertex entry and the topology `triangle_list`, `line_list` or `point_list`, because a strip would read the index 4,294,967,295 as a restart. Each index becomes the `vertex_index` of the vertex entry. The render graph binds no vertex buffer, thus an index is only a number that the vertex entry reads, and every read of a buffer is bounds-checked. An index past the valid elements of a resource therefore reads zero or an element of the binding, and never memory outside it. The host checks no index on the CPU, which costs nothing per index. It only holds the index count to the elements of the version, which the buffer holds. A pass whose index resource has no version, or no valid element, is skipped.
 
 The render graph has no custom blend factors, no culling, no storage texture, no multisampling and no indirect draw or dispatch. A compute pass of the draw half never changes an instance count, because the count comes from the CPU copy of a resource.
 
