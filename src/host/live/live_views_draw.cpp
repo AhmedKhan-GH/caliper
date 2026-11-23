@@ -706,6 +706,7 @@ PointsArrays points_arrays(const PointsPayload& p) {
     a.pos_cpu = p.pos_cpu;
     a.aux = p.aux ? p.aux->buffer : caliper_gfx::Buffer{};
     a.aux_offset = p.aux_off;
+    a.aux_cpu = p.aux_cpu;
     a.count = p.n;
     return a;
 }
@@ -1168,7 +1169,9 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
             if (v.have_sel_draw && v.content_sel) v.sel_draw.last_draw = serial;
         }
         if (!ok && !v.draw_failed) core->log(1, "live: points '" + v.name + "': " + why);
-        v.dirty = false;   // a refused draw is not retried every frame (it logs)
+        // A refused draw is not retried every frame (it logs); a payload whose bytes are still on
+        // their way back from the GPU draws again at the next frame.
+        v.dirty = ok && sc->pending();
         v.draw_failed = !ok;
     }
     if (v.draw_failed) ImGui::TextUnformatted("points draw refused by the graphics layer (see log)");
