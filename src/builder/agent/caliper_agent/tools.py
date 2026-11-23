@@ -19,6 +19,7 @@ naming rule, never a particular command's schema.
   a single type. The meaning is the same.
 - A tool can be strict when every object in its schema is closed
   (`additionalProperties: false`) and lists `required`, and has no `$ref`.
+  Each schema node must declare a type, alternatives, or literal values.
   Otherwise it is sent without `strict`, so one open schema cannot make the
   whole request fail.
 - The Claude API compiles all strict schemas of a request together and refuses
@@ -243,9 +244,11 @@ def split_type_lists(schema: Any) -> Any:
 
 
 def is_strict_compatible(schema: Any) -> bool:
-    """Every object is closed and lists `required`, and nothing is referenced."""
+    """Every node has a type, alternatives, or literals. Objects are closed and have `required`."""
     if not isinstance(schema, dict):
-        return True
+        return False
+    if not any(key in schema for key in ("type", "anyOf", "oneOf", "allOf", "const", "enum")):
+        return False
     if "$ref" in schema:
         return False
     types = schema.get("type")

@@ -18,6 +18,7 @@ from caliper_agent.caliper_api import (ApiFileError, MAX_IMAGE_BYTES, default_ap
 from pydantic_ai.exceptions import ModelHTTPError, ModelRateLimitError, ToolFailed
 from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
 from pydantic_ai.models._anthropic_schema_limits import exceeded_limit
+from anthropic.lib._parse._transform import transform_schema
 
 from caliper_agent.claude import (NO_SERVER_FALLBACK, SERVER_SIDE_FALLBACKS, claude_settings, model_ids)
 from caliper_agent.loop import classify, close_tool_calls
@@ -109,7 +110,10 @@ def test_every_command_of_the_real_table_becomes_a_tool_strict_within_the_limits
     assert len(tools) == len(commands) >= 34
     for tool, command in zip(tools, commands):
         assert tool.name == tool_name(command.name) and command_name(tool.name) == command.name
-        assert tool.strict, f"{command.name} should be strict-compatible"
+        if tool.strict:
+            transform_schema(tool.input_schema)
+        else:
+            assert not tool.send_strict, command.name
         for schema in _walk_all(tool.input_schema):
             assert not (STRICT_UNSUPPORTED & set(schema)), command.name
             assert not isinstance(schema.get("type"), list), command.name

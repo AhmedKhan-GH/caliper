@@ -39,3 +39,15 @@ def test_unknown_effect_is_refused_and_an_absent_effect_stays_change():
         entry["effect"] = effect
         with pytest.raises(TableError, match="effect"):
             parse_command_table(json.dumps(document))
+
+
+@pytest.mark.parametrize("field", [{}, {"description": "Any JSON value."}])
+def test_unrestricted_fields_remain_available_without_strict_mode(field):
+    args = {"type": "object", "additionalProperties": False, "required": ["value"],
+            "properties": {"value": field}}
+    entry = {"name": "sample.edit", "effect": "edit", "mutates": True, "args": args}
+    commands = parse_command_table(json.dumps({"version": 0, "commands": [entry]}))
+    tool, = derive_tools(commands)
+    assert not tool.strict and not tool.send_strict
+    assert tool.input_schema == args == tool.command.args
+    assert tool.command.effect == "edit" and tool.command.mutates
