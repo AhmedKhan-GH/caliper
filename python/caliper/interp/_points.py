@@ -76,7 +76,7 @@ def semantic_points(model, *, required=True):
         return []
     modules = dict(model.named_modules())
     shapes = _shapes.get(model, {})
-    return [{"point": p.point, "kind": "semantic", "module": p.module, "head": None,
+    return [{"point": p.point, "kind": "module", "module": p.module, "head": None,
              "type": type(modules[p.module]).__name__,
              "shape": list(shapes[p.point]) if p.point in shapes else None,
              "probe": p.point.rsplit(".", 1)[1], "layer": p.layer,

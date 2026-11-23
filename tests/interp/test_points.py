@@ -16,7 +16,7 @@ def hooks(model):
 
 
 def semantic(model):
-    return [p for p in interp.points(model) if p["kind"] == "semantic"]
+    return [p for p in interp.points(model) if "probe" in p]
 
 
 def qwen(layers=4):
@@ -274,4 +274,27 @@ def test_delta_capture_refuses_populated_cache():
     with pytest.raises(ValueError, match="complete prompt"):
         with interp.capture(model, ["model.layers.0.attn_pattern"]):
             model(torch.tensor([[3]]), past_key_values=cache, use_cache=True)
+    assert hooks(model) == 0
+
+
+def test_semantic_points_round_trip_through_real_controls_codec():
+    from caliper import _wire
+    from caliper._controls import Controls
+    from caliper._watch import watch
+    model = TinyLM(layers=1)
+    controls = Controls()
+    handle = watch(model, activations=False, groups=False, scene=False)
+    controls.interventions_on(model, handle)
+    try:
+        model(torch.tensor([[1, 2]]))
+        controls.checkpoint()
+        message = _wire.Controls.from_frame(_wire.Frame(_wire.MsgType.CONTROLS, controls.controls_meta()))
+        decoded = _wire.decode(_wire.encode(message))
+        rows = {p["point"]: p for p in decoded.to_meta()["interventions"]["points"]}
+        assert rows["layers.0.mlp_out"]["kind"] == "module"
+        assert rows["layers.0.mlp_out"]["probe"] == "mlp_out"
+        assert rows["layers.0.attn_pattern"]["pattern"] == "softmax"
+        assert rows["layers.0.self_attn#0"]["kind"] == "head"
+    finally:
+        handle.remove()
     assert hooks(model) == 0
