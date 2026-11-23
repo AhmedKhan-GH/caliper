@@ -159,8 +159,8 @@ std::array<int, 4> field_reference(const std::vector<float>& pattern, int x, int
     const std::uint32_t ax = std::uint32_t(std::min(std::max(std::floor(px), 0.0f), float(T - 1)));
     const std::uint32_t ay = std::uint32_t(std::min(std::max(std::floor(py), 0.0f), float(T - 1)));
     const std::uint32_t bx = std::min(ax + 1, T - 1), by = std::min(ay + 1, T - 1);
-    const float fx = std::min(std::max(px - std::floor(px), 0.0f), 1.0f);
-    const float fy = std::min(std::max(py - std::floor(py), 0.0f), 1.0f);
+    const float fx = std::min(std::max(px - float(ax), 0.0f), 1.0f);
+    const float fy = std::min(std::max(py - float(ay), 0.0f), 1.0f);
     const float top = value(ay, ax) + (value(ay, bx) - value(ay, ax)) * fx;
     const float bottom = value(by, ax) + (value(by, bx) - value(by, ax)) * fx;
     const float t = std::min(std::max((top + (bottom - top) * fy) * gain, 0.0f), 1.0f);
