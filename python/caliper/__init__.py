@@ -618,8 +618,8 @@ def watch(model, optimizer=None, *, activations: bool = True, gradients: bool = 
     from ._watch import watch as _w
     h = _w(model, optimizer, activations=activations, gradients=gradients, every=every,
            include=include, rate=rate, groups=groups, scene=scene)
-    if optimizer is not None:                     # GPU programs read this model's tensors
-        _programs.attach(model, optimizer, h)
+    _programs.attach(model, optimizer, h)          # Derive inputs also belong to inference watches.
+    if optimizer is not None:
         _controls.CONTROLS.interventions_on(model, h)   # the points of the model, for interventions
     return h
 

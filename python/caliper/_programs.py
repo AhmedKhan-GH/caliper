@@ -53,8 +53,8 @@ never used from two threads at once. :data:`listeners` are called after the lock
 the lock takes the checks and the binder only, and the training thread never waits for the Metal
 compiler.
 
-INPUTS. An input's source is ``live:<name>``: a parameter or buffer of the watched model by its
-name in ``model.named_parameters()``, a parameter's gradient as ``<parameter>.grad``, or a
+INPUTS. An input's source is ``live:<name>``. It can name a tensor from ``caliper.interp.publish``.
+It can also name a parameter or buffer of the watched model, a parameter's gradient as ``<parameter>.grad``, or a
 module's last output as ``<module>.act``. A gradient or an output that does not exist yet keeps
 the program in the state ``waiting`` until it does. When the tensor of an input moves to new
 storage (a gradient set to ``None`` and made again, each new output of a module), the facade
@@ -410,6 +410,15 @@ def attach(model, optimizer, handle=None) -> None:
     Loads no native module. With ``handle`` (a WatchHandle), its ``remove()`` detaches again.
     """
     with _LOCK:
+        from .interp import _publish
+        # A watch replacement must not expose tensors from the previous model.
+        if _STATE["model"] is not None and _STATE["model"] is not model:
+            detach(_STATE["model"])
+        for name in _publish._TENSORS:
+            if _publish._model_name(model, name):
+                if handle is not None:
+                    handle.remove()
+                raise ValueError(f"publication {name!r} conflicts with a model tensor")
         _STATE["model"] = model
         _STATE["optimizer"] = optimizer
     if handle is not None and hasattr(handle, "_handles"):
@@ -436,6 +445,13 @@ def detach(model=None) -> None:
         remove(pid)
     with _LOCK:
         _drop_act_hooks()
+        from .interp import _publish
+        from .interp._points import clear_captures
+        current = _STATE["model"]
+        if current is not None:
+            clear_captures(current)
+        _publish._clear()
+        _release_unused()
         _STATE["model"] = None
         _STATE["optimizer"] = None
 
@@ -455,6 +471,10 @@ def _torch_adapter():
 def _resolve(name: str):
     """The tensor of an input name, or None for no such name; raises _Waiting for a gradient or an
     output that does not exist yet."""
+    from .interp._publish import _resolve as published
+    tensor = published(name)
+    if tensor is not None:
+        return tensor
     model = _STATE["model"]
     if model is None:
         return None
