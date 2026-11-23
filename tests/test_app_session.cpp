@@ -38,6 +38,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -55,6 +56,22 @@ using nlohmann::json;
 using namespace std::chrono_literals;
 
 namespace {
+
+// Activity displays a leading home directory as "~". Diagnostic logs retain the full path.
+std::string activity_path(const std::string& path) {
+#ifdef _WIN32
+    const char* home = std::getenv("USERPROFILE");
+#else
+    const char* home = std::getenv("HOME");
+#endif
+    if (!home || !*home) return path;
+    std::string prefix(home);
+    while (prefix.size() > 1 && (prefix.back() == '/' || prefix.back() == '\\')) prefix.pop_back();
+    if (path == prefix) return "~";
+    if (path.size() <= prefix.size() || path.compare(0, prefix.size(), prefix) != 0) return path;
+    const char separator = path[prefix.size()];
+    return separator == '/' || separator == '\\' ? "~" + path.substr(prefix.size()) : path;
+}
 
 // A folder of this run's own (test_temp.h), removed when the case ends.
 struct TempDir {
@@ -625,7 +642,7 @@ TEST_CASE("app session: one Activity line per journaled command, with its origin
     loop.finish();
     const auto lines = loop.lines();
     REQUIRE(lines.size() == 5);
-    CHECK(lines[0] == std::array<std::string, 3>{"workspace", t.str("ws"), "--workspace"});
+    CHECK(lines[0] == std::array<std::string, 3>{"workspace", activity_path(t.str("ws")), "--workspace"});
     CHECK(lines[1] == std::array<std::string, 3>{"ui command", "spec.new", ""});
     CHECK(lines[2] == std::array<std::string, 3>{"api command", "panel.create", ""});
     CHECK(lines[3] == std::array<std::string, 3>{"agent command", "panel.create", "panel.exists"});
@@ -684,7 +701,7 @@ TEST_CASE("app session: a workspace that cannot be opened leaves the app running
     const auto lines = loop.lines();
     REQUIRE(lines.size() == 1);
     CHECK(lines[0][0] == "workspace not opened");
-    CHECK(lines[0][1] == t.str("file"));
+    CHECK(lines[0][1] == activity_path(t.str("file")));
     CHECK(lines[0][2] == loop.session.open_error());
     CHECK(loop.err.str().find("[session] workspace not opened: " + t.str("file") + ": ") != std::string::npos);
 }
