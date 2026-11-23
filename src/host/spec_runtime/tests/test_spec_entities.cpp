@@ -1010,6 +1010,7 @@ struct DragFrame {
     std::uint64_t scene = 0, programs = 0;
     std::string camera, drawn;
     caliper_scene::Mat4 program_clip;   // the clip-from-world matrix of the programs' frame
+    std::vector<std::uint8_t> pixels;   // the panel's picture, on every 15th frame
     double ms = 0;
 };
 
@@ -1051,6 +1052,10 @@ std::vector<DragFrame> drag(ArcsPanel& p, caliper_live_views::SceneView& view, i
         f.camera = camera_now(view);
         f.drawn = view.drawn_camera_text();
         f.program_clip = view.program_clip();
+        if (k % 15 == 0) {   // a read back after the frame's time was taken
+            std::string why;
+            REQUIRE_MESSAGE(view.read_pixels(&f.pixels, &why), why);
+        }
         out.push_back(f);
     }
     input([&](ImGuiIO& io) { io.AddMouseButtonEvent(0, false); });
@@ -1072,6 +1077,19 @@ void check_each_frame(const std::vector<DragFrame>& frames) {
         CHECK(frames[i].camera != frames[i - 1].camera);
         CHECK(std::memcmp(frames[i].program_clip.m, frames[i - 1].program_clip.m, sizeof frames[i].program_clip.m) != 0);
     }
+    // The pictures that the GPU drew follow the camera: each one read back differs from the one before.
+    const std::vector<std::uint8_t>* last = nullptr;
+    int compared = 0;
+    for (const DragFrame& f : frames) {
+        if (f.pixels.empty()) continue;
+        if (last) {
+            CHECK(f.pixels.size() == last->size());
+            CHECK(f.pixels != *last);
+            ++compared;
+        }
+        last = &f.pixels;
+    }
+    CHECK(compared >= 4);
 }
 
 // The 95th percentile of the frame times, printed with its target. Above the target the test warns,
