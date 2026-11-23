@@ -10,7 +10,6 @@
 #include <chrono>
 #include <cstring>
 #include <deque>
-#include <limits>
 #include <random>
 
 #ifdef _WIN32
@@ -32,6 +31,8 @@ using pollfd_t = WSAPOLLFD;
 #  define CNET_WOULDBLOCK(e) ((e) == WSAEWOULDBLOCK)
 #  define CNET_INPROGRESS(e) ((e) == WSAEWOULDBLOCK || (e) == WSAEINPROGRESS)
 #  define CNET_INTR(e) ((e) == WSAEINTR)
+#  define cnet_peer_reset(e) ((e) == WSAECONNRESET || (e) == WSAECONNABORTED || (e) == WSAESHUTDOWN || \
+                              (e) == WSAENOTCONN || (e) == WSAETIMEDOUT)
 #  define CNET_SEND_FLAGS 0
 #  define CNET_SHUT_WR SD_SEND
 #else
@@ -52,6 +53,7 @@ using pollfd_t = struct pollfd;
 #  define CNET_WOULDBLOCK(e) ((e) == EAGAIN || (e) == EWOULDBLOCK)
 #  define CNET_INPROGRESS(e) ((e) == EINPROGRESS)
 #  define CNET_INTR(e) ((e) == EINTR)
+#  define cnet_peer_reset(e) ((e) == EPIPE || (e) == ECONNRESET || (e) == ENOTCONN || (e) == ETIMEDOUT)
 #  ifdef MSG_NOSIGNAL
 #    define CNET_SEND_FLAGS MSG_NOSIGNAL
 #  else
@@ -71,7 +73,6 @@ namespace {
 
 constexpr const char* kWsGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 constexpr size_t kReadChunk = 64 * 1024;
-constexpr size_t kReadBudget = 4u << 20;   // bytes read per connection per poll (fairness)
 
 // ---- sockets ------------------------------------------------------------------
 
@@ -690,14 +691,18 @@ public:
                 if (w < 0) {
                     const int e = cnet_errno();
                     if (CNET_WOULDBLOCK(e) || CNET_INTR(e)) return;
-                    // The peer is gone (a reset gives EPIPE or ECONNRESET), but what it
-                    // sent before its end can still wait in the socket: read it first,
-                    // so that its last message (an action's reply just before its
-                    // process exits) arrives before Closed and is not lost to a write
-                    // that came first. Nothing more can arrive, so the read is bounded.
+                    // The peer reset the connection, but what it sent before its end
+                    // can still wait in the socket: read it first, at most one poll's
+                    // read budget, so that its last message (an action's reply just
+                    // before its process exits) arrives before Closed and is not lost
+                    // to a write that came first. Any other error (ENOBUFS, ENOMEM)
+                    // ends the connection at once. Windows is not covered: Winsock can
+                    // drop the unread data at the reset, so this read can find nothing
+                    // there, and only the peer's own close, which writes its last
+                    // messages before its close frame, keeps them (untested there).
                     const std::string why = "send: " + sock_error_text(e);
-                    if (!reading_ && (phase_ == Phase::Open || phase_ == Phase::Closing))
-                        read_some(ev, std::numeric_limits<size_t>::max());
+                    if (!reading_ && cnet_peer_reset(e) && (phase_ == Phase::Open || phase_ == Phase::Closing))
+                        read_some(ev);
                     die(ev, close_code_ ? close_code_ : kCloseAbnormal, why);
                     return;
                 }
@@ -834,18 +839,18 @@ private:
     }
 
     // ---- reading ------------------------------------------------------------------------
-    // Reads what the socket holds, up to `budget` bytes. A flush that fails
-    // while a read runs (from a message's handler) does not read again.
-    void read_some(std::vector<Event>& ev, size_t budget = kReadBudget) {
+    // Reads what the socket holds, at most Options::read_budget_bytes. A flush
+    // that fails while a read runs (from a message's handler) does not read again.
+    void read_some(std::vector<Event>& ev) {
         reading_ = true;
-        read_loop(ev, budget);
+        read_loop(ev, std::max<size_t>(1, opt_.read_budget_bytes));
         reading_ = false;
     }
 
     void read_loop(std::vector<Event>& ev, size_t budget) {
         uint8_t buf[kReadChunk];
         while (budget > 0 && phase_ != Phase::Dead && phase_ != Phase::Decide && phase_ != Phase::Flush) {
-            const long long r = sock_recv(fd_, buf, sizeof buf);
+            const long long r = sock_recv(fd_, buf, std::min(sizeof buf, budget));
             if (r == 0) {
                 // The peer ended the TCP connection.
                 if (close_received_ || close_sent_)
@@ -856,7 +861,8 @@ private:
             }
             if (r < 0) {
                 const int e = cnet_errno();
-                if (CNET_WOULDBLOCK(e) || CNET_INTR(e)) return;
+                if (CNET_INTR(e)) continue;   // a signal came first: read again
+                if (CNET_WOULDBLOCK(e)) return;
                 die(ev, kCloseAbnormal, "recv: " + sock_error_text(e));
                 return;
             }
