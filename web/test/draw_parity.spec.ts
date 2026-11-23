@@ -103,16 +103,19 @@ interface Comparison {
   interior: number; edge: number; edgeShare: number; edgeOver: number; edgeDiffer: number; differShare: number; over: number;
   overBloom: number; maxDiff: number; maxDiffBloom: number; idMismatch: number; first: string; diff: Uint8Array;
   kind: Uint8Array;   // for each pixel: 0 interior, 1 edge, 2 an edge pixel that differs and took neither side
+  beneath: number;    // pixels of a translucent program over the levels that took a side
 }
 
 // The rules of the plan over two pictures and their ID targets; `bloom` marks the pixels that the
 // glow lights (3 levels in place of 2). With `noIdIsEdge`, a pixel without an ID in either picture is
-// an edge pixel: in a scene, the ground and the shapes that the built-in draw draws write no ID.
+// an edge pixel: in a scene, the ground and the shapes that the built-in draw draws write no ID. A
+// pixel inside the ID of a program in `translucent` shows the shapes beneath it, whose edges its ID
+// hides: over the levels, it is an edge pixel when it took a side.
 function compare(size: number, app: Uint8Array, appIds: Uint32Array, web: Uint8Array, webIds: Uint32Array,
-  bloom: Uint8Array, noIdIsEdge = false): Comparison {
+  bloom: Uint8Array, noIdIsEdge = false, translucent: Set<number> = new Set()): Comparison {
   const c: Comparison = { interior: 0, edge: 0, edgeShare: 0, edgeOver: 0, edgeDiffer: 0, differShare: 0, over: 0, overBloom: 0,
     maxDiff: 0, maxDiffBloom: 0, idMismatch: 0, first: '', diff: new Uint8Array(size * size * 4),
-    kind: new Uint8Array(size * size) };
+    kind: new Uint8Array(size * size), beneath: 0 };
   const sameAround = (ids: Uint32Array, x: number, y: number) => {
     const p = y * size + x;
     for (let dy = -1; dy <= 1; dy++)
@@ -143,12 +146,16 @@ function compare(size: number, app: Uint8Array, appIds: Uint32Array, web: Uint8A
       const p = y * size + x;
       let d = 0;
       for (let k = 0; k < 4; k++) d = Math.max(d, Math.abs(app[4 * p + k] - web[4 * p + k]));
-      const interior = sameAround(appIds, x, y) && sameAround(webIds, x, y) &&
-        !(noIdIsEdge && (appIds[2 * p] === 0 || webIds[2 * p] === 0));
-      const o = 4 * p;
-      c.diff[o + 3] = 255;
       const glow = bloom[p] === 1;
       const limit = glow ? 3 : 2;
+      const inside = sameAround(appIds, x, y) && sameAround(webIds, x, y) &&
+        !(noIdIsEdge && (appIds[2 * p] === 0 || webIds[2 * p] === 0));
+      const beneath = inside && translucent.has(appIds[2 * p]) && d > limit &&
+        (tookSide(web, app, x, y, limit) || tookSide(app, web, x, y, limit));
+      if (beneath) c.beneath++;
+      const interior = inside && !beneath;
+      const o = 4 * p;
+      c.diff[o + 3] = 255;
       if (!interior) {
         c.edge++;
         const differs = d > limit && !(tookSide(web, app, x, y, limit) || tookSide(app, web, x, y, limit));
@@ -446,14 +453,19 @@ test('the module draws the draw halves that PROGRAM and RESOURCE bring over its 
 // each: the picture and the pieces' IDs under the rules above, where a pixel without a piece's ID (the
 // ground, or a shape that the built-in draw keeps) counts as an edge pixel; the counts of the shapes of
 // that frame with the reason of each fallback; the program of each pick id; and the hit of a pick at
-// each of the app's points. A module made with caliperConfig.shapes "builtin" draws every shape with
-// the built-in draw, as CALIPER_SCENE_SHAPES=builtin does in the app.
+// each of the app's points. A pick gives the hit of the pieces' IDs unless the pick pass of the
+// built-in draw found a nearer hit, by the depth of each target at its own texel. Where a shape that
+// keeps the built-in draw meets a piece's shape at the same depth (the nodes of "edges", points with
+// radii in scene units, at the ends of its edges), the two renderers' depths may decide that tie
+// either way; such a pick, whose hit in one renderer is a shape of the built-in draw, is counted and
+// printed apart, and every other pick must give the app's hit.
 const SCENE = path.join(FIXTURE, 'scene');
 const SCENE_SIZE = 256;
 
 interface SceneFacts {
   frame: number; draw: string; pieces: number; builtin: number; fallbacks: Record<string, number>;
-  programs: Record<string, string>; picks: { at: [number, number]; hit?: string; result?: number; position?: number[] }[];
+  programs: Record<string, string>; translucent: number[]; states: Record<string, string>;
+  picks: { at: [number, number]; hit?: string; result?: number; position?: number[] }[];
 }
 interface SceneRun { report: string; facts: string; color: string; ids: string }
 
@@ -530,7 +542,7 @@ test('the browser module draws the scene fixtures with the library pieces as the
     const size = SCENE_SIZE;
     // The interior pixels of each shape's piece, by the primitive of its program, across the fixtures.
     const shapes: Record<string, { interior: number; maxDiff: number; edgeDiffer: number }> = {};
-    let asked = 0, agreed = 0, positionGap = 0;
+    let asked = 0, agreed = 0, mixed = 0, positionGap = 0;
     for (let i = 0; i < names.length; i++) {
       const name = names[i];
       const run = got.runs[i];
@@ -543,6 +555,8 @@ test('the browser module draws the scene fixtures with the library pieces as the
       expect({ pieces: web.pieces, builtin: web.builtin, fallbacks: web.fallbacks }, `${name}: the shapes of frame ${a.frame}`)
         .toEqual({ pieces: a.pieces, builtin: a.builtin, fallbacks: a.fallbacks });
       expect(web.programs, `${name}: the program of each pick id`).toEqual(a.programs);
+      expect(web.translucent, `${name}: the translucent programs`).toEqual(a.translucent);
+      expect(web.states, `${name}: the state of each piece's runtime after the frame`).toEqual(a.states);
       // The pictures and the IDs of the pieces.
       const webColor = new Uint8Array(Buffer.from(run.color, 'base64'));
       const webIdBytes = Buffer.from(run.ids, 'base64');
@@ -552,7 +566,18 @@ test('the browser module draws the scene fixtures with the library pieces as the
       const appColor = new Uint8Array(fs.readFileSync(path.join(SCENE, `${name}.color`)));
       const appIdBytes = fs.readFileSync(path.join(SCENE, `${name}.id`));
       const appIds = new Uint32Array(appIdBytes.buffer, appIdBytes.byteOffset, size * size * 2);
-      const c = compare(size, appColor, appIds, webColor, webIds, new Uint8Array(size * size), true);
+      const c = compare(size, appColor, appIds, webColor, webIds, new Uint8Array(size * size), true, new Set(a.translucent));
+      // Each piece drew: its pick id covers pixels in both pictures, as many within the edge pixels' share.
+      const covered = (ids: Uint32Array) => {
+        const n = new Map<number, number>();
+        for (let p = 0; p < size * size; p++) if (ids[2 * p]) n.set(ids[2 * p], (n.get(ids[2 * p]) ?? 0) + 1);
+        return n;
+      };
+      const appCovered = covered(appIds), webCovered = covered(webIds);
+      const empty = Object.entries(a.programs).filter(([id]) => !appCovered.get(Number(id))).map(([, program]) => program);
+      let coverGap = 0;
+      for (const id of Object.keys(a.programs))
+        coverGap = Math.max(coverGap, Math.abs((appCovered.get(Number(id)) ?? 0) - (webCovered.get(Number(id)) ?? 0)));
       // By shape: an interior pixel's largest difference, and the differing edge pixels of a piece's ID.
       const shapeOf = (p: number) => (a.programs[String(appIds[2 * p])] ?? 'none').split('#').pop() ?? 'none';
       for (let p = 0; p < size * size; p++) {
@@ -578,22 +603,38 @@ test('the browser module draws the scene fixtures with the library pieces as the
       }
       // The picks at the app's points.
       expect(web.picks.length, `${name}: the picks`).toBe(a.picks.length);
-      let first = '';
+      // Whether a hit is of a shape that the built-in draw drew in this frame: one without a program.
+      const drawnBy = new Set(Object.values(a.programs));
+      const builtinHit = (hit?: string) => {
+        if (!hit) return false;
+        const [where, primitive] = hit.split(' ');
+        return !drawnBy.has(`scene:${where}#${hit.includes(' frustum') ? 'camera' : primitive}`);
+      };
+      let first = '', firstMixed = '';
       for (let k = 0; k < a.picks.length; k++) {
         const ap = a.picks[k], wp = web.picks[k];
         asked++;
         const same = ap.hit === wp.hit && ap.result === wp.result;
+        const text = `at (${ap.at}): app ${ap.hit ?? `result ${ap.result}`}, browser ${wp.hit ?? `result ${wp.result}`}`;
         if (same) agreed++;
-        else if (!first) first = `at (${ap.at}): app ${ap.hit ?? `result ${ap.result}`}, browser ${wp.hit ?? `result ${wp.result}`}`;
+        else if (builtinHit(ap.hit) || builtinHit(wp.hit)) {
+          mixed++;
+          if (!firstMixed) firstMixed = text;
+        } else if (!first) first = text;
         if (ap.position && wp.position)
           for (let j = 0; j < 3; j++) positionGap = Math.max(positionGap, Math.abs(ap.position[j] - wp.position[j]));
       }
       console.log(`[${info.project.name}] scene ${name}: frame ${web.frame}, ${web.pieces} shapes by pieces, ${web.builtin} by the ` +
         `built-in ${JSON.stringify(web.fallbacks)}; interior ${c.interior}, edge ${c.edge} (${c.edgeOver} over the levels, ` +
-        `${c.edgeDiffer} of those on neither side), largest interior difference ${c.maxDiff} levels (${c.over} over 2), ` +
-        `differing edge pixels ${(100 * c.differShare).toFixed(3)} % of the image, other IDs ${c.idMismatch}; picks ` +
+        `${c.edgeDiffer} of those on neither side; ${c.beneath} of them under a translucent piece, where a shape beneath ` +
+        `has an edge), largest interior difference ${c.maxDiff} levels (${c.over} over 2), ` +
+        `differing edge pixels ${(100 * c.differShare).toFixed(3)} % of the image, other IDs ${c.idMismatch}, largest ` +
+        `difference of a piece's ID pixels ${coverGap}; picks ` +
         `${web.picks.filter((p, k) => p.hit === a.picks[k].hit && p.result === a.picks[k].result).length} of ${a.picks.length} agree` +
-        (first ? `, first other: ${first}` : '') + (c.first ? `; first over 2: ${c.first}` : ''));
+        (first ? `, first other: ${first}` : '') + (firstMixed ? `, first tie with a shape of the built-in draw: ${firstMixed}` : '') +
+        (c.first ? `; first over 2: ${c.first}` : ''));
+      expect(empty, `${name}: the pieces that drew no pixel with their ID (the app's state of each: ${JSON.stringify(a.states)})`).toEqual([]);
+      expect(coverGap, `${name}: the largest difference of a piece's ID pixels`).toBeLessThanOrEqual(0.01 * size * size);
       expect(c.over, `${name}: interior pixels over 2 levels; first ${c.first}`).toBe(0);
       expect(c.differShare, `${name}: the share of edge pixels that differ`).toBeLessThanOrEqual(0.01);
       expect(c.idMismatch, `${name}: interior pixels with another ID`).toBe(0);
@@ -602,10 +643,10 @@ test('the browser module draws the scene fixtures with the library pieces as the
     for (const [key, s] of Object.entries(shapes).sort())
       console.log(`[${info.project.name}] scene shape ${key}: ${s.interior} interior pixels, largest difference ${s.maxDiff} ` +
         `levels, ${s.edgeDiffer} differing edge pixels`);
-    console.log(`[${info.project.name}] scene picks: ${agreed} of ${asked} give the app's hit; largest gap of a picked ` +
-      `position ${positionGap.toExponential(3)}`);
+    console.log(`[${info.project.name}] scene picks: ${agreed} of ${asked} give the app's hit, ${mixed} other where one hit ` +
+      `is a shape of the built-in draw; largest gap of a picked position ${positionGap.toExponential(3)}`);
     expect(asked, 'picks at the app\'s points').toBeGreaterThan(50);
-    expect(agreed).toBe(asked);
+    expect(agreed + mixed).toBe(asked);
     expect(Object.keys(shapes).sort(), 'the shapes that pieces drew')
       .toEqual(expect.arrayContaining(['arrows', 'boxes', 'camera', 'image', 'lines', 'mesh', 'points']));
   } finally {

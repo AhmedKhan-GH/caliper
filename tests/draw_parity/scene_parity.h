@@ -9,9 +9,9 @@
 //
 // For one fixture, each side gives the facts of the first frame that the view drew, as JSON: the
 // frame, the shapes that pieces drew and those that the built-in drew with the reason of each
-// fallback, the program of each pick id, and the hits of picks. The pick points are interior pixels
-// of the pieces' IDs on a grid, as the graphics suite's comparison picks them, at most kPickPoints of
-// them, one for each program first. It depends on no test framework.
+// fallback, the program of each pick id, and the hits of picks. The pick points are pixels inside
+// one ID of the pieces (pick_points), at most kPickPoints of them, one for each program first. It
+// depends on no test framework.
 #pragma once
 
 #include "../scene/primitive_fixtures.h"
@@ -58,32 +58,48 @@ inline std::vector<std::uint64_t> pair_ids(const std::vector<std::uint8_t>& rg32
     return ids;
 }
 
-// The pick points: on the grid from 4 by 9 pixels, those whose 5 by 5 neighbourhood shows one ID of a
-// piece; one for each program in the order of the grid, then the others in that order, at most `most`.
+// The pick points: pixels of a piece's ID whose 3 by 3 neighbourhood shows that one ID (pick id and
+// item), else whose four neighbours do, else whose two neighbours on one line through it do, as a
+// line one pixel wide shows it. One for each program first, then one for each item, each the first
+// such pixel in row order with the larger neighbourhood preferred, at most `most`.
 inline std::vector<std::array<int, 2>> pick_points(const std::vector<std::uint64_t>& ids, int size,
                                                    std::size_t most = kPickPoints) {
-    std::vector<std::array<int, 2>> inside;
-    for (int y = 4; y < size; y += 9)
-        for (int x = 4; x < size; x += 9) {
-            const std::uint64_t own = ids[std::size_t(y) * size + x];
-            bool in = own != 0;
-            for (int dy = -2; dy <= 2 && in; ++dy)
-                for (int dx = -2; dx <= 2 && in; ++dx)
-                    in = ids[std::size_t(std::clamp(y + dy, 0, size - 1)) * size + std::clamp(x + dx, 0, size - 1)] == own;
-            if (in) inside.push_back({x, y});
+    struct Candidate {
+        int x = 0, y = 0, tier = 0;
+    };
+    auto at = [&](int x, int y) { return ids[std::size_t(y) * size + x]; };
+    std::map<std::uint64_t, Candidate> by_program, by_item;
+    std::vector<std::uint64_t> program_order, item_order;
+    for (int y = 1; y + 1 < size; ++y)
+        for (int x = 1; x + 1 < size; ++x) {
+            const std::uint64_t own = at(x, y);
+            if (own == 0) continue;
+            const bool across = at(x - 1, y) == own && at(x + 1, y) == own, down = at(x, y - 1) == own && at(x, y + 1) == own;
+            const bool diagonal = (at(x - 1, y - 1) == own && at(x + 1, y + 1) == own) ||
+                                  (at(x + 1, y - 1) == own && at(x - 1, y + 1) == own);
+            if (!across && !down && !diagonal) continue;
+            const bool square = across && down && at(x - 1, y - 1) == own && at(x + 1, y - 1) == own &&
+                                at(x - 1, y + 1) == own && at(x + 1, y + 1) == own;
+            const Candidate c{x, y, square ? 3 : across && down ? 2 : 1};
+            auto keep = [&](std::map<std::uint64_t, Candidate>& m, std::vector<std::uint64_t>& order, std::uint64_t key) {
+                auto it = m.find(key);
+                if (it == m.end()) {
+                    m.emplace(key, c);
+                    order.push_back(key);
+                } else if (c.tier > it->second.tier) {
+                    it->second = c;
+                }
+            };
+            keep(by_program, program_order, (own - 1) >> 32);
+            keep(by_item, item_order, own);
         }
     std::vector<std::array<int, 2>> out;
-    std::set<std::uint64_t> programs;
-    std::vector<bool> taken(inside.size(), false);
-    for (std::size_t i = 0; i < inside.size() && out.size() < most; ++i) {
-        const std::uint64_t own = ids[std::size_t(inside[i][1]) * size + inside[i][0]];
-        if (programs.insert((own - 1) >> 32).second) {
-            out.push_back(inside[i]);
-            taken[i] = true;
-        }
-    }
-    for (std::size_t i = 0; i < inside.size() && out.size() < most; ++i)
-        if (!taken[i]) out.push_back(inside[i]);
+    std::set<std::pair<int, int>> taken;
+    auto add = [&](const Candidate& c) {
+        if (out.size() < most && taken.insert({c.x, c.y}).second) out.push_back({c.x, c.y});
+    };
+    for (std::uint64_t k : program_order) add(by_program[k]);
+    for (std::uint64_t k : item_order) add(by_item[k]);
     return out;
 }
 
@@ -112,8 +128,10 @@ inline nlohmann::json hit_json(const caliper_live_views::SceneView& v, caliper_s
     return j;
 }
 
-// The facts of the frame that the view drew last: its frame count, what drew its shapes, and the
-// program of each pick id of the pieces.
+// The facts of the frame that the view drew last: its frame count, what drew its shapes, the program
+// of each pick id of the pieces, and the pick ids of the programs whose batch draws translucent (an
+// image below full opacity, a colour or colours with alpha below 255), through which the shapes
+// beneath show while their IDs do not.
 inline nlohmann::json frame_json(const caliper_live_views::SceneView& v) {
     nlohmann::json j = nlohmann::json::object();
     j["frame"] = v.cost().frames;
@@ -124,8 +142,27 @@ inline nlohmann::json frame_json(const caliper_live_views::SceneView& v) {
     j["fallbacks"] = nlohmann::json::object();
     for (const auto& [kind, n] : c.fallbacks) j["fallbacks"][kind] = n;
     j["programs"] = nlohmann::json::object();
-    for (const caliper_draw::DrawRuntime* rt : v.shape_runtimes())
-        j["programs"][std::to_string(rt->pick_id())] = rt->instance().program;
+    j["translucent"] = nlohmann::json::array();
+    j["states"] = nlohmann::json::object();
+    for (const caliper_draw::DrawRuntime* rt : v.shape_runtimes()) {
+        const std::string& id = rt->instance().program;   // scene:<path>#<primitive> or #camera
+        j["programs"][std::to_string(rt->pick_id())] = id;
+        // The runtime's state after the frame: running, or the code of its refusal or stop.
+        const caliper_draw::DrawStatus st = rt->status();
+        j["states"][std::to_string(rt->pick_id())] =
+            st.state == caliper_draw::DrawState::running ? std::string("running")
+                                                         : std::to_string(int(st.state)) + " " + st.error.code + " " +
+                                                               st.error.where + " " + st.error.message;
+        const std::size_t hash = id.rfind('#');
+        if (id.rfind("scene:", 0) != 0 || hash == std::string::npos) continue;
+        const caliper_scene::EntityId e = v.tree().find(id.substr(6, hash - 6));
+        for (int k = 1; k <= caliper_scene::kPrimitiveCount && e; ++k) {
+            if (id.compare(hash + 1, std::string::npos, caliper_scene::primitive_name(caliper_scene::Primitive(k))) != 0)
+                continue;
+            const caliper_scene::Batch* b = v.tree().batch(e, caliper_scene::Primitive(k));
+            if (b && (b->translucent || b->opacity < 1.0f || (b->flat_rgba >> 24) < 255u)) j["translucent"].push_back(rt->pick_id());
+        }
+    }
     return j;
 }
 
