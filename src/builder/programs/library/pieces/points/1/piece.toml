@@ -70,15 +70,21 @@ id = "points"
 kind = "buffer"
 struct = "Point"
 fields = ["position: vec4<f32>", "bits: u32", "index: u32"]
-count = 262144
+# 4,194,304 points of 32 bytes: 128 MiB, the most that a published resource holds.
+count = 4194304
 counted = true
+
+# The derive half holds the 128 MiB buffer and the positions (48 MiB) and values (16 MiB) of the most points.
+[derive]
+memory_mb = 256
 
 [[derive.passes]]
 entry = "copy_points"
-workgroups = [1024, 1, 1]
+workgroups = [16384, 1, 1]
 writes = ["points"]
 
 [draw]
+memory_mb = 160
 camera = "orbit"
 pick = { resource = "points", fields = ["index"] }
 

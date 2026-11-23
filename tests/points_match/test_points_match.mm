@@ -66,23 +66,32 @@ namespace sr = scene_reference;
 
 constexpr std::uint32_t kSize = 256;        // the target, square
 constexpr int kPoints = 256;
+constexpr int kMostPoints = 4194304;   // the most that the piece publishes: 128 MiB of 32 bytes
 constexpr float kPointSize = 10.0f;         // pixels
 constexpr std::uint32_t kPiecePick = 1u << 24;
 constexpr std::uint32_t kClear = dp::kBackground;
 
 // The fixture: positions in [-1, 1]^3 from a fixed LCG, and values at exact colormap levels.
 struct Cloud {
-    std::vector<float> positions;   // kPoints rows of (x, y, z)
-    std::vector<float> values;      // kPoints values, L / 255 with L = (i * 37) % 256
+    int n;
+    std::vector<float> positions;   // n rows of (x, y, z)
+    std::vector<float> values;      // n values, L / 255 with L = (i * 37) % 256
 
-    Cloud() {
+    // The first 256 points are the fixture. A larger cloud lifts them in front of the others, which
+    // lie in a slab behind and, being many, cover the target with points that no pixel can tell apart.
+    explicit Cloud(int count = kPoints) : n(count) {
         std::uint32_t state = 12345u;
         auto next = [&]() {
             state = state * 1664525u + 1013904223u;
             return float(double(state >> 8) / double(1u << 24)) * 2.0f - 1.0f;
         };
-        for (int i = 0; i < kPoints; ++i) {
-            for (int k = 0; k < 3; ++k) positions.push_back(next());
+        for (int i = 0; i < n; ++i) {
+            const bool bulk = i >= kPoints;
+            for (int k = 0; k < 3; ++k) {
+                float v = next();
+                if (n > kPoints && k == 2) v = bulk ? -0.75f + 0.25f * v : 0.2f + 0.5f * v;
+                positions.push_back(v);
+            }
             values.push_back(float((i * 37) % 256) / 255.0f);
         }
     }
@@ -202,8 +211,8 @@ std::vector<std::uint8_t> points_params(float size, std::uint32_t shape, std::ui
 
 // The element rows of the piece's resource `points`: position (x, y, z, 1), bits, index, two pad words.
 std::vector<std::uint8_t> point_rows(const Cloud& c) {
-    std::vector<std::uint8_t> out(std::size_t(kPoints) * 32, 0);
-    for (int i = 0; i < kPoints; ++i) {
+    std::vector<std::uint8_t> out(std::size_t(c.n) * 32, 0);
+    for (int i = 0; i < c.n; ++i) {
         std::uint8_t* row = out.data() + std::size_t(i) * 32;
         const float pos[4] = {c.positions[3 * i], c.positions[3 * i + 1], c.positions[3 * i + 2], 1.0f};
         std::uint32_t bits = 0, index = std::uint32_t(i);
@@ -215,13 +224,11 @@ std::vector<std::uint8_t> point_rows(const Cloud& c) {
     return out;
 }
 
-}  // namespace
-
-TEST_CASE("points_match: points@1 draws as the built-in points primitive") {
+void run_points_case(int n) {
     Metal m;
     if (!m.backend) CALIPER_SKIP_NO_GPU(m.why);
     gfx::Backend& g = *m.backend;
-    const Cloud cloud;
+    const Cloud cloud(n);
     const int S = int(kSize);
 
     // ---- The built-in draw ----------------------------------------------------------------------
@@ -240,10 +247,10 @@ TEST_CASE("points_match: points@1 draws as the built-in points primitive") {
     }
 
     // One buffer: the positions at 0 and the values after them, at a multiple of 256 bytes.
-    const std::uint64_t off_values = (std::uint64_t(kPoints) * 12 + 255) / 256 * 256;
-    std::vector<std::uint8_t> bytes(off_values + std::uint64_t(kPoints) * 4, 0);
-    std::memcpy(bytes.data(), cloud.positions.data(), std::size_t(kPoints) * 12);
-    std::memcpy(bytes.data() + off_values, cloud.values.data(), std::size_t(kPoints) * 4);
+    const std::uint64_t off_values = (std::uint64_t(n) * 12 + 255) / 256 * 256;
+    std::vector<std::uint8_t> bytes(off_values + std::uint64_t(n) * 4, 0);
+    std::memcpy(bytes.data(), cloud.positions.data(), std::size_t(n) * 12);
+    std::memcpy(bytes.data() + off_values, cloud.values.data(), std::size_t(n) * 4);
     gfx::Buffer data = g.create_buffer({bytes.size(), gfx::kVertex | gfx::kIndex | gfx::kStorage | gfx::kCopyDst, false,
                                         "points match"});
     REQUIRE_MESSAGE(bool(data), g.last_error());
@@ -260,13 +267,13 @@ TEST_CASE("points_match: points@1 draws as the built-in points primitive") {
     batch.arrays[0].role = sc::Role::Positions;
     batch.arrays[0].buffer = data;
     batch.arrays[0].offset = 0;
-    batch.arrays[0].count = kPoints;
+    batch.arrays[0].count = n;
     batch.arrays[0].stride = 12;
     batch.arrays[0].format = gfx::VertexFormat::F32x3;
     batch.arrays[1].role = sc::Role::Values;
     batch.arrays[1].buffer = data;
     batch.arrays[1].offset = off_values;
-    batch.arrays[1].count = kPoints;
+    batch.arrays[1].count = n;
     batch.arrays[1].stride = 4;
     batch.arrays[1].format = gfx::VertexFormat::F32;
     batch.colormap = 0;   // viridis
@@ -274,7 +281,7 @@ TEST_CASE("points_match: points@1 draws as the built-in points primitive") {
     batch.vmax = 1.0f;
     batch.size_px = kPointSize;
     batch.point_shape = sc::PointShape::Disc;
-    for (int i = 0; i < kPoints; ++i)
+    for (int i = 0; i < n; ++i)
         batch.bounds.add({cloud.positions[3 * i], cloud.positions[3 * i + 1], cloud.positions[3 * i + 2]});
     batch.seq = 1;
     REQUIRE(tree.set_batch(tree.ensure("cloud"), batch));
@@ -329,7 +336,7 @@ TEST_CASE("points_match: points@1 draws as the built-in points primitive") {
     cd::ResourceVersion version;
     version.resource = "points";
     version.step = 1;
-    version.count = kPoints;
+    version.count = n;
     version.bytes = rows.data();
     version.size = rows.size();
     {
@@ -401,7 +408,7 @@ TEST_CASE("points_match: points@1 draws as the built-in points primitive") {
         int x, y, item;
     };
     std::vector<Probe> candidates;
-    for (int i = 0; i < kPoints; ++i) {
+    for (int i = 0; i < n; ++i) {
         const sr::F4 c = sr::mul(mvp.data(), cloud.positions[3 * i], cloud.positions[3 * i + 1], cloud.positions[3 * i + 2]);
         if (!(c.w > 0)) continue;
         const int x = int(std::floor((c.x / c.w + 1) * 0.5 * S)), y = int(std::floor((1 - c.y / c.w) * 0.5 * S));
@@ -459,5 +466,11 @@ TEST_CASE("points_match: points@1 draws as the built-in points primitive") {
     g.release(depth);
     g.release(data);
 }
+
+}  // namespace
+
+TEST_CASE("points_match: points@1 draws as the built-in points primitive") { run_points_case(kPoints); }
+
+TEST_CASE("points_match: the most points that the piece publishes") { run_points_case(kMostPoints); }
 
 CALIPER_GPU_TEST_MAIN()
