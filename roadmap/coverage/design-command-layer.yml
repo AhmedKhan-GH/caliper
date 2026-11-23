@@ -208,8 +208,13 @@ entries:
   - AGT-06
   - AGT-05
 - heading: Modes
-  item: Ask, Accept edits, Read only and Allow all, where Allow all is the side chat's only and never
-    saved.
+  item: Ask, Accept edits, Read only and Allow all, for the side chat's agent and for caliper-mcp's
+    clients.
+  ids:
+  - AGT-06
+- heading: Allow All
+  item: Allow all as a saved mode of each principal, set only from the person's own UI, with the
+    approvals that still ask and the limit of the settings file.
   ids:
   - AGT-06
 - heading: Rules
