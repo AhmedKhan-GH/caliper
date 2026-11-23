@@ -16,6 +16,7 @@
 
 #include "core_lifecycle.h"            // the app-like host of the Attachment case
 #include "host_services.h"
+#include "draw/draw_runtime_impl.h"   // the resource versions that a scene frame showed
 #include "embed/embed_core.h"        // caliper_live_controls, the views' event sink
 #include "embed/render_stats.h"      // copy counters (white-box)
 #include "live/live_attach.h"
@@ -845,12 +846,38 @@ TEST_CASE("live/net: a scene view (protocol 3.2 draft) takes the scene's message
     REQUIRE(vi.width > 0);
     std::vector<uint8_t> px((size_t)vi.width * vi.height * 4);
     CHECK(caliper_core_live_view_readback(core, "world", px.data(), px.size()) == 1);
-    // One copy per uploaded array (the frame's, the cloud's and the split update's positions, the
-    // arrows' origins and vectors) and the class table's texture, uploaded with the frame that drew it.
+    // Scene copy counters cover decoded arrays. The earlier cloud update can reach the viewer
+    // before its replacement. The class table has no separate texture in the piece draw route.
     caliper_stats::ViewCopies vc{};
-    REQUIRE(poll_until(core, [&] {
-        return caliper_stats::view_copies(core, "world", &vc) && vc.total.bytes >= (frame.size() + b.size() + 2 * a.size() + 12) * 4 + 65536 * 4;
+    CHECK(caliper_stats::view_copies(core, "world", &vc));
+    const uint64_t array_bytes = (frame.size() + b.size() + 2 * a.size() + 12) * sizeof(float);
+    CHECK(vc.total.bytes >= array_bytes);
+    CHECK(vc.total.bytes <= array_bytes + a.size() * sizeof(float));
+    CHECK(vc.total.bytes == sv->counts().bytes_total);
+    CHECK(sv->counts().arrays_live == 5);
+
+    // The four pieces must show their current resource versions: one line (32 + 8 + 12 bytes),
+    // seven points (32 bytes each), and two arrows (32 bytes each, plus 12 bytes of info).
+    uint64_t resource_bytes = 0;
+    size_t resource_count = 0;
+    CHECK(poll_until(core, [&] {
+        resource_bytes = 0;
+        resource_count = 0;
+        const auto runtimes = sv->shape_runtimes();
+        bool shown = runtimes.size() == 4;
+        for (const auto* runtime : runtimes) {
+            shown = shown && runtime->status().frames > 0;
+            for (const auto& slot : runtime->internals().slots) {
+                shown = shown && !slot.texture && slot.has_version && slot.shown &&
+                        slot.drawn_serial == slot.serial && slot.shown->count == slot.count;
+                resource_bytes += uint64_t(slot.count) * slot.layout.stride;
+                ++resource_count;
+            }
+        }
+        return shown;
     }));
+    CHECK(resource_count == 7);
+    CHECK(resource_bytes == (32 + 8 + 12) + 7 * 32 + (2 * 32 + 12));
     caliper_core_live_detach(core);
     caliper_core_shutdown(core);
 }
