@@ -594,7 +594,8 @@ public:
     // last frame began, work_ms the time this frame took after its start, wait_ms the live page's
     // wait for its 60 Hz tick (wait names it), poll_ms the time in glfwPollEvents, drawable_ms the
     // renderer's wait for the window's drawable and drawable 0 a frame that got none. moves,
-    // buttons, wheel and other count the input events that ImGui handled in this frame. The
+    // buttons, wheel and other count the input events that ImGui handled in this frame, and popup
+    // is 1 while a popup is open, which takes the press that would start a drag elsewhere. The
     // panel columns describe the spec page's scene panel that holds a drag, else the one under
     // the pointer: whether it holds a drag, whether a pick waits for its readback, its scene
     // view's frame count, whether it redrew since the last line, its programs' frame count, the
@@ -602,7 +603,7 @@ public:
     // and that camera. "-" stands for a value that does not apply.
     static constexpr const char* kFrameLogHeader =
         "frame\tt_ms\tframe_ms\twork_ms\twait_ms\twait\tpoll_ms\tdrawable_ms\tdrawable\tpage\tfocused\toccluded\t"
-        "moves\tbuttons\twheel\tother\tmouse_x\tmouse_y\tmouse_down\tpanel\tpanel_down\tpick_pending\t"
+        "moves\tbuttons\twheel\tother\tmouse_x\tmouse_y\tmouse_down\tpopup\tpanel\tpanel_down\tpick_pending\t"
         "scene_frames\tredrew\tprogram_frames\tstep\tdrawn_is_now\tcamera";
 
     void log_frame() {
@@ -624,13 +625,14 @@ public:
                                                       : "spec";
         char head[512];
         std::snprintf(head, sizeof head,
-                      "%llu\t%.3f\t%.3f\t%.3f\t%.3f\t%s\t%.3f\t%.3f\t%d\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%.1f\t%.1f\t%u",
+                      "%llu\t%.3f\t%.3f\t%.3f\t%.3f\t%s\t%.3f\t%.3f\t%d\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%.1f\t%.1f\t%u\t%d",
                       (unsigned long long)++frame_no_, frame_times_.top,
                       last_frame_top_ < 0 ? 0.0 : frame_times_.top - last_frame_top_, end - frame_times_.top,
                       frame_times_.wait_ms, frame_times_.wait, frame_times_.poll_ms, w.drawable_ms,
                       w.drawable ? 1 : 0, page, glfwGetWindowAttrib(window_, GLFW_FOCUSED), w.occluded, moves, buttons,
                       wheel, other, ImGui::IsMousePosValid() ? io.MousePos.x : -1.0f,
-                      ImGui::IsMousePosValid() ? io.MousePos.y : -1.0f, down);
+                      ImGui::IsMousePosValid() ? io.MousePos.y : -1.0f, down,
+                      ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) ? 1 : 0);
         last_frame_top_ = frame_times_.top;
         std::string line = head;
         caliper_host::SpecPage::ScenePanelProbe p;
