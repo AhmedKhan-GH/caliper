@@ -223,7 +223,8 @@ def test_small_real_qwen_trace_with_all_twenty_four_blocks():
     graph = Tracer(model, Tokenizer(), dictionary).trace("small real architecture", max_targets=16)
     assert graph.layers == 24
     assert graph.completeness["max_absolute_residual"] < 2e-2
-    assert graph.completeness["forward_residual"] < 2e-5
+    assert graph.completeness["direct_forward_residual"] < 2e-5
+    assert graph.completeness["replacement_forward_residual"] < 2e-2
     assert graph.error_share > 0
 
 
@@ -313,3 +314,78 @@ def test_trace_cache_identity_full_state_and_lru(monkeypatch):
         tracer.trace(prompt, 0)
     assert len(tracer._cache) == 8
     assert initial not in tracer._cache.values()
+
+
+@pytest.mark.parametrize("real_qwen", [False, True])
+def test_full_replacement_keeps_active_masks_and_constant_errors(real_qwen):
+    from caliper.interp._frozen import FrozenPath
+    from .fixture import TinyLM
+    from .test_points import qwen
+    model = qwen() if real_qwen else TinyLM(layers=2)
+    dictionary = random_dictionary(model)
+    path = FrozenPath(model, torch.tensor([[1, 2, 3]]), dictionary)
+    x = path.embedding
+    # Large changes must not select new TopK entries or reapply ReLU.
+    zero = path.replacement(torch.zeros_like(x), dictionary)[1]
+    first = path.replacement(3 * x, dictionary)[1]
+    second = path.replacement(-2 * x, dictionary)[1]
+    combined = path.replacement(x, dictionary)[1]
+    torch.testing.assert_close(first + second - zero, combined, atol=2e-5 if real_qwen else 1e-9, rtol=1e-5 if real_qwen else 0)
+    assert all(not e.requires_grad for e in path.errors)
+
+
+def test_probability_coverage_and_no_invented_path():
+    from caliper.interp import Tracer
+    from .fixture import TinyLM, TinyTokenizer
+    model = TinyLM(layers=1)
+    model.lm_head.bias = torch.nn.Parameter(torch.zeros(512, dtype=torch.float64))
+    with torch.no_grad():
+        model.lm_head.weight.zero_()
+        model.lm_head.bias[42] = 20
+    graph = Tracer(model, TinyTokenizer(), exact_dictionary(model)).trace("A", 0)
+    assert graph.completeness["logit_targets"] == 1
+    assert graph.completeness["logit_probability_mass"] >= .95
+    assert graph.nodes[0]["token_id"] == 42 and graph.nodes[0]["kind"] == "logit"
+    assert graph.edges == [] and graph.error_share == graph.feature_share == 0
+    assert graph.completeness["max_absolute_residual"] < 1e-9
+
+
+def test_input_validation_and_inference_context():
+    from caliper.interp import Tracer
+    from .fixture import TinyLM, TinyTokenizer
+    model = TinyLM(layers=1)
+    dictionary = exact_dictionary(model)
+    tracer = Tracer(model, TinyTokenizer(), dictionary)
+    with torch.inference_mode():
+        graph = tracer.trace("A", 0)
+    assert graph.completeness["max_absolute_residual"] < 1e-9
+    with pytest.raises(TypeError, match="string"):
+        tracer.trace([1, 2])
+    model.train()
+    with pytest.raises(ValueError, match="evaluation"):
+        tracer.trace("A", 0)
+    model.eval()
+    for ids in (torch.tensor([1]), torch.tensor([[1.]]), torch.tensor([[512]]), torch.empty((1, 0), dtype=torch.long)):
+        tracer.tokenizer = lambda *args, **kwargs: {"input_ids": ids}
+        with pytest.raises(ValueError):
+            tracer.trace("invalid")
+    with pytest.raises(ValueError, match="dictionary"):
+        Tracer(model, TinyTokenizer(), None)
+
+
+def test_mid_forward_intervention_change_is_not_cached(monkeypatch):
+    from caliper.interp import Tracer
+    from .fixture import TinyLM, TinyTokenizer
+    model = TinyLM(layers=1)
+    tracer = Tracer(model, TinyTokenizer(), exact_dictionary(model))
+    state = []
+    monkeypatch.setattr(tracer, "_intervention_state", lambda: list(state))
+    def changed(*args):
+        state.append("changed")
+    handle = model.register_forward_hook(changed)
+    try:
+        with pytest.raises(RuntimeError, match="state changed"):
+            tracer.trace("A", 0)
+    finally:
+        handle.remove()
+    assert not tracer._cache and tracer._forward_cache is None

@@ -121,18 +121,22 @@ class _DirectEffects:
             products = products * activations
             weights[feature_slice] = products[:, active].T
             weights[error_slice] = (gradient * path.errors[layer]).sum(-1).T
+        expected = torch.stack([target.expected for target in targets])
+        affine = torch.stack([(path.bias_final if target.layer == path.layers else path.bias_reads[target.layer])
+                              [:, target.position] @ target.direction for target in targets])
+        encoder = torch.stack([target.encoder_bias for target in targets])
+        unembedding = torch.stack([target.unembedding_bias for target in targets])
+        incoming = weights.sum(0)
+        residual = (incoming + affine.sum(-1) + encoder + unembedding - expected).abs()
+        # One bounded readback per target batch avoids thousands of MPS scalar synchronizations.
+        accounting = torch.cat((expected[:, None], incoming[:, None], affine, encoder[:, None],
+                                unembedding[:, None], residual[:, None]), dim=1).tolist()
         diagnostics = []
-        for column, target in enumerate(targets):
-            bias_read = path.bias_final if target.layer == path.layers else path.bias_reads[target.layer]
-            affine = bias_read[:, target.position] @ target.direction
-            biases = {name: float(value) for name, value in zip(("decoder", "normalization", "attention"), affine)}
-            biases.update(encoder=float(target.encoder_bias), unembedding=float(target.unembedding_bias))
-            total = weights[:, column].sum() + affine.sum() + target.encoder_bias + target.unembedding_bias
-            residual = float((total - target.expected).abs())
-            diagnostics.append({"id": self.nodes[target.node]["id"], "expected": float(target.expected),
-                                "incoming": float(weights[:, column].sum()), "biases": biases,
-                                "absolute_residual": residual,
-                                "relative_residual": residual / max(1., abs(float(target.expected)))})
+        for target, row in zip(targets, accounting):
+            biases = dict(zip(("decoder", "normalization", "attention", "encoder", "unembedding"), row[2:7]))
+            diagnostics.append({"id": self.nodes[target.node]["id"], "expected": row[0],
+                                "incoming": row[1], "biases": biases, "absolute_residual": row[7],
+                                "relative_residual": row[7] / max(1., abs(row[0]))})
         path.guard.check("direct edge products")
         return weights, diagnostics
 
@@ -147,25 +151,27 @@ def _prune(effects, weights, target_indices, scores, normalized, *, max_nodes, m
     logits = effects.logit_nodes
     device = weights.device
     rank = torch.argsort(scores, descending=True, stable=True).tolist()
+    score_values = scores.tolist()
+    top_effects = weights[:, 0].tolist()
     total = float(scores.sum())
-    selected, retained = set(logits[:max_nodes]), 0.
-    retained = sum(float(scores[i]) for i in selected)
+    selected = set(logits[:max_nodes])
+    retained = sum(score_values[i] for i in selected)
     for index in rank:
         if retained >= .8 * total or len(selected) >= max_nodes:
             break
-        if index not in selected and scores[index] > 0:
+        if index not in selected and score_values[index] > 0:
             selected.add(index)
-            retained += float(scores[index])
+            retained += score_values[index]
     # A real token edge can preserve a supported path without a synthetic link.
     required_edge = None
     if max_nodes >= 2 and max_edges and logits[0] in selected:
         token_edges = weights[:effects.path.tokens, 0].abs()
         token = int(torch.argmax(token_edges))
-        if token_edges[token] > 0 and scores[token] > 0:
+        if token_edges[token] > 0 and score_values[token] > 0:
             if token not in selected:
                 if len(selected) == max_nodes:
                     removable = [i for i in selected if i != logits[0]]
-                    selected.remove(min(removable, key=lambda i: (float(scores[i]), -i)))
+                    selected.remove(min(removable, key=lambda i: (score_values[i], -i)))
                 selected.add(token)
             required_edge = (token, logits[0])
     order = sorted(selected)
@@ -214,7 +220,7 @@ def _prune(effects, weights, target_indices, scores, normalized, *, max_nodes, m
         if path is not None and len(path) <= max_edges:
             chosen = path + [i for i in chosen if i not in path][:max_edges - len(path)]
     row = {old: new for new, old in enumerate(order)}
-    display_nodes = [dict(nodes[i], index=row[i], influence=float(scores[i]), effect=float(weights[i, 0])) for i in order]
+    display_nodes = [dict(nodes[i], index=row[i], influence=score_values[i], effect=top_effects[i]) for i in order]
     value_list = values.tolist()
     display_edges = []
     for index in chosen:
@@ -223,7 +229,7 @@ def _prune(effects, weights, target_indices, scores, normalized, *, max_nodes, m
                               "weight": value_list[index]})
     display_edges.sort(key=lambda e: (e["target"], e["source"]))
     nonlogit_total = float(scores[:logits[0]].sum())
-    kept = sum(float(scores[i]) for i in order if i < logits[0])
+    kept = sum(score_values[i] for i in order if i < logits[0])
     omitted = max(0., 1. - kept / nonlogit_total) if nonlogit_total else 0.
     global_edge_total = float((normalized.sum(0) * scores[torch.tensor(target_indices, device=device)]).sum())
     retained_edges = float(importance[chosen].sum()) if chosen else 0.
@@ -269,8 +275,15 @@ class Tracer:
                 service.invalidate_source_cache()
             self._prompt = prompt
 
+    @torch.inference_mode(False)
     def trace(self, prompt, max_targets=512, max_nodes=512, max_edges=8192):
         """Publish and return one graph without truncation or model downloads."""
+        if self.model.training:
+            raise ValueError("trace requires an evaluation model")
+        device = next(self.model.parameters()).device
+        if device != self.guard.device:
+            self.guard = MemoryGuard(device)
+            self._forward_cache = None
         if not isinstance(prompt, str):
             raise TypeError("prompt must be a string")
         bounded_integer(max_targets, "max_targets", 0, 512)
@@ -288,7 +301,8 @@ class Tracer:
         identity = {"model": id(self.model), "model_weights": _versions(self.model),
                     "dictionary": id(self.dictionary), "dictionary_weights": _versions(self.dictionary),
                     "dictionary_metadata": self.dictionary.metadata,
-                    "prompt": prompt, "tokens": ids.tolist(), "interventions": self._intervention_state()}
+                    "tokenizer": id(self.tokenizer), "prompt": prompt, "tokens": ids.tolist(),
+                    "interventions": self._intervention_state()}
         state_key = hashlib.sha256(json.dumps(identity, sort_keys=True, allow_nan=False).encode()).hexdigest()
         cache_key = (state_key, max_targets, max_nodes, max_edges)
         if cache_key in self._cache:
@@ -301,6 +315,8 @@ class Tracer:
         else:
             self._forward_cache = None
             path = FrozenPath(self.model, ids.to(self.guard.device), self.dictionary, guard=self.guard)
+            if self._intervention_state() != identity["interventions"]:
+                raise RuntimeError("intervention state changed during the trace forward")
             self._forward_cache = (state_key, path)
         effects = _DirectEffects(path, self.dictionary, ids[0].tolist(), self.tokenizer)
         target_indices = list(effects.logit_nodes)
@@ -346,7 +362,10 @@ class Tracer:
             effects, weights, target_indices, scores, normalized, max_nodes=max_nodes, max_edges=max_edges)
         completeness = {"max_absolute_residual": max(d["absolute_residual"] for d in diagnostics),
                         "max_relative_residual": max(d["relative_residual"] for d in diagnostics),
-                        "forward_residual": path.forward_residual, "target_count": len(diagnostics),
+                        "forward_residual": path.forward_residual,
+                        "direct_forward_residual": path.direct_forward_residual,
+                        "replacement_forward_residual": path.replacement_forward_residual,
+                        "target_count": len(diagnostics),
                         "feature_targets": len(target_indices) - len(effects.logit_nodes),
                         "logit_targets": len(effects.logit_nodes), "logit_probability_mass": float(seeds.sum()),
                         "unvisited_feature_influence": float(scores[feature_mask & ~visited].sum()),
@@ -359,6 +378,9 @@ class Tracer:
                             error_share=error_share, feature_share=feature_share, trace_id=state_key,
                             device=path.device)
         self.guard.check("graph publication")
+        if self._intervention_state() != identity["interventions"]:
+            self._forward_cache = None
+            raise RuntimeError("intervention state changed during the trace")
         graph.publish()
         self._cache[cache_key] = graph
         while len(self._cache) > 8:

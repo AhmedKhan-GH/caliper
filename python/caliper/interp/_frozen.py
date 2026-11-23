@@ -270,6 +270,13 @@ class FrozenPath:
             self.forward_residual = max([float((a - b).abs().max()) for a, b in zip(reads, self.inputs)] +
                                         [float((F.linear(final[:, -1], self.unembedding,
                                                          self.unembedding_bias) - self.logits).abs().max())])
+            self.direct_forward_residual = self.forward_residual
+            replacement_reads, replacement_final = self.replacement(self.embedding, dictionary)
+            self.replacement_forward_residual = max(
+                max(float((a - b).abs().max()) for a, b in zip(replacement_reads, self.inputs)),
+                float((F.linear(replacement_final[:, -1], self.unembedding,
+                                self.unembedding_bias) - self.logits).abs().max()))
+            self.forward_residual = max(self.direct_forward_residual, self.replacement_forward_residual)
             tolerance = 1e-9 if self.dtype == torch.float64 else 2e-2
             if not self.forward_residual <= tolerance:
                 raise ValueError(f"frozen replacement forward mismatch: {self.forward_residual:.6g}")
@@ -293,3 +300,27 @@ class FrozenPath:
             reads.append(post_norm(x, norm))
             x = x + write + decoder * self.decoder_biases[i]
         return reads, self.final_norm(x, norm)
+
+
+    def replacement(self, embedding, dictionary):
+        """Evaluate transcoders with the recorded active masks and constant errors.
+
+        This affine forward verifies the complete local replacement. Direct
+        edges use ``run`` with independent writes and never differentiate here.
+        """
+        x = embedding
+        reads = []
+        for i, (input_norm, post_norm, mixer) in enumerate(zip(self.norms, self.post_norms, self.mixers)):
+            x = x + mixer(input_norm(x))
+            read = post_norm(x)
+            reads.append(read)
+            layer = dictionary.layers[i]
+            indices = self.features[i][0].topk(layer.k, dim=-1).indices
+            mask = self.features[i][0].gather(-1, indices) > 0
+            encoder = layer.W_enc.detach()[indices].to(self.dtype)
+            decoder = layer.W_dec.detach()[indices].to(self.dtype)
+            activation = (torch.einsum("btw,tkw->btk", read, encoder) +
+                          layer.b_enc.detach()[indices].to(self.dtype)) * mask
+            x = x + torch.einsum("btk,tkw->btw", activation, decoder) + self.decoder_biases[i] + self.errors[i]
+            self.guard.check(f"replacement layer {i}")
+        return reads, self.final_norm(x)
