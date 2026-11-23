@@ -313,7 +313,18 @@ The event `program` carries the keys `half` (`derive` or `draw`) and `pass`, the
 
 The script sends each version of a published resource to a viewer as one RESOURCE message. The message needs the capability `resources` on both ends. A script that does not announce it refuses an instance with `program.resources_unavailable`. One message carries one resource, thus a large resource never holds a small one back. The script sends the versions of a pass to a viewer only when its queue then holds at most 8 MiB and 64 KiB, which is half of the 16 MiB control queue of a connection. Thus a viewer that falls behind skips whole passes, and it gets a later pass when it catches up. A pass that would send more than 8 MiB, from a manifest that did not pass the app's check, stops the program with `program.resource_too_large`.
 
-The app keeps the versions of each published resource in the step history under `<program>/<resource>`, beside the kept steps of the sources. A resource keeps at most `keep` versions. When its ring is full, the history drops every second kept version. From then on it keeps a version only when its step lies far enough after the newest one. Thus the kept versions span the whole run evenly, and the step cursor scrubs the whole training. The viewer gives the draw half the newest kept version at or before the cursor.
+The app keeps the versions of each published resource in the step history under `<program>/<resource>`, beside the kept steps of the sources. A resource keeps at most `keep` versions. When its ring is full, the history drops every second kept version. From then on it keeps a version only when its step lies far enough after the newest one. Thus the kept versions span the whole run evenly, and the step cursor scrubs the whole training. The viewer gives the draw half the newest kept version at or before the cursor. A version that replaces another at the same step, as after a fork from that step, takes its place in the history, in the draw and in picks and labels.
+
+The app keeps only a version that the pinned piece declares. The program must be in the open spec, the piece must publish a resource of that name, and the version must have the declared stride, at most the declared count and count times stride bytes. A texture version must have the declared width and height. The app refuses every other version and keeps nothing of it. These limits hold for the resources in the step history:
+
+| Limit | Value |
+|---|---|
+| Resources of one program | 8, as many as a piece declares |
+| Resources of all programs | 128, 8 for each of the 16 programs of a script |
+| Bytes of one resource | 128 MiB, a quarter of the history budget |
+| Bytes of all resources | 256 MiB, half of the history budget of 512 MiB |
+
+Over the bytes of all resources, the largest rings drop every second version first. Then the largest rings drop their oldest versions, down to one version each. A version that does not fit beside one version of each other resource is not kept.
 
 The spec saves the pins, the bindings, the params and the inline pieces, and it never saves a resource. When an instrument opens, the app resolves each pin, checks each piece and sends each program to the attached script. The script publishes again from its next pass. Without an attached run, the state of the program is `waiting`.
 
@@ -355,12 +366,16 @@ The host owns the camera. A piece selects `orbit` for the 3-D orbit camera of th
 
 A draw half writes only the color, ID and depth of its panel and its own targets. The host records the passes of each program in a submit of its own after the frame of the scene. The GPU time of that submit is the frame time of the program. Where the backend has no timestamps, the host measures the time from the submit until the work is done, which is an upper bound.
 
+A training run on the same GPU can delay a correct frame by a second or more. Thus a frame that is not done 1 s after its submit is late, and the program submits no new frame until the late frame is done. Then the GPU time of the late frame decides. Where the backend has no timestamps, three late frames in a row decide.
+
 The host cannot stop a pass that runs on the GPU. Thus it removes a draw that goes over its budget and reports it. The other programs of the panel keep drawing, and the derive half keeps its own limits.
 
 | Condition | Result |
 |---|---|
 | A program is over `frame_ms` on 30 frames in a row | `program.draw_over_time`, naming the costliest pass |
-| A frame of a program is not done after 1 s | `program.draw_timeout`, at once |
+| A late frame took more than 1 s of GPU time, or the driver ended it | `program.draw_timeout` |
+| Three frames in a row are late, on a backend without timestamps | `program.draw_timeout` |
+| A frame of a program is not done after 5 s | `program.draw_timeout`, at once |
 | The programs of one panel together are over 16.7 ms on 30 frames in a row | `program.draw_over_time` for the costliest program |
 | A resource, a draw buffer or a target would pass `memory_mb` | `program.draw_over_memory` |
 | The graphics layer refuses a submitted frame | `program.layer_refused` |

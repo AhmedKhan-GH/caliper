@@ -10,10 +10,12 @@
 
 #include <caliper_builder/programs/sandbox.h>
 #include <caliper_builder/session/events.h>
+#include <caliper_builder/session/history.h>
 #include <caliper_builder/session/program_host.h>
 
 #include "gfx/example_pieces.h"
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -232,6 +234,72 @@ TEST_CASE("live/programs: a params change sends only values, and a value outside
 // before provenance.reviewed holds its hash: the source's SHA-256 for the
 // one-pass form, the piece's hash for an instance. Until then its state is
 // review, without an error and without an event.
+TEST_CASE("live/programs: only a resource that the pinned piece publishes, in its declared form, reaches the history") {
+    struct ResourceLink final : caliper_live::ProgramLink {
+        std::vector<caliper_live::ReceivedResource> incoming;
+        bool ready() override { return true; }
+        uint64_t epoch() override { return 1; }
+        uint32_t send(caliper_net::wire::Program) override { return 1; }
+        std::vector<caliper_live::ProgramAnswer> take() override { return {}; }
+        bool takes_pieces() override { return true; }
+        std::vector<caliper_live::ReceivedResource> take_resources() override {
+            std::vector<caliper_live::ReceivedResource> out;
+            out.swap(incoming);
+            return out;
+        }
+    };
+    cb::spec::Spec spec;
+    cb::spec::Piece arcs = caliper_test_pieces::attention_arcs();   // heads: f32 x 8; arcs: 24 bytes x 4096
+    arcs.hash = cb::programs::piece_hash(arcs);
+    spec.pieces = {arcs};
+    cb::spec::Program instance;
+    instance.id = "tower";
+    cb::spec::PieceRef pin;
+    pin.name = arcs.name;
+    pin.version = arcs.version;
+    pin.hash = arcs.hash;
+    pin.from = cb::spec::PieceFrom::inline_piece;
+    instance.piece = pin;
+    instance.bind = {{"attn0", "live:0.attn"}, {"attn1", "live:1.attn"}};
+    spec.programs = {instance};
+    caliper_live::AppProgramHost host;
+    host.reconcile(spec);
+    cb::StepHistory history;
+    history.configure(spec);
+    auto resource = [](const std::string& program, const std::string& name, uint32_t count, uint32_t stride,
+                       int64_t step) {
+        caliper_live::ReceivedResource r;
+        r.program = program;
+        r.resource = name;
+        r.step = step;
+        r.count = count;
+        r.stride = stride;
+        r.bytes = std::make_shared<const std::vector<uint8_t>>(std::size_t(count) * stride, uint8_t(7));
+        return r;
+    };
+    ResourceLink link;
+    link.incoming = {resource("tower", "heads", 8, 4, 10),       // as declared
+                     resource("tower", "arcs", 100, 24, 10),     // fewer than its count
+                     resource("tower", "spare", 8, 4, 10),       // a name that the piece does not publish
+                     resource("tower", "heads", 9, 4, 11),       // more than its count
+                     resource("tower", "arcs", 100, 32, 11),     // another stride
+                     resource("other", "heads", 8, 4, 10)};      // a program that the spec does not have
+    caliper_live::ReceivedResource texture = resource("tower", "heads", 4, 4, 12);
+    texture.width = texture.height = 2;                          // a texture where a buffer is declared
+    link.incoming.push_back(texture);
+    caliper_live::ReceivedResource short_bytes = resource("tower", "heads", 8, 4, 13);
+    short_bytes.bytes = std::make_shared<const std::vector<uint8_t>>(std::size_t(16), uint8_t(0));
+    link.incoming.push_back(short_bytes);
+    host.deliver_resources(link, history);
+    CHECK(host.resources_received() == 8);
+    CHECK(host.resources_refused() == 6);
+    std::vector<std::string> keys;
+    for (const cb::KeptResource& k : history.kept_resources()) keys.push_back(k.key);
+    CHECK(keys == std::vector<std::string>{"tower/arcs", "tower/heads"});
+    CHECK(history.resource_at("tower/heads", 100)->step == 10);
+    CHECK(history.resource_at("tower/arcs", 100)->count == 100);
+}
+
 TEST_CASE("live/programs: a foreign spec's programs and pieces wait for a review of their hash before they go out") {
     struct PieceLink final : caliper_live::ProgramLink {
         Link inner;

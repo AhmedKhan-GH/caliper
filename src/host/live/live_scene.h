@@ -52,7 +52,7 @@
 #include <vector>
 
 namespace caliper_scene { class BackendResources; }
-namespace caliper_draw { class DrawFeed; class DrawRuntime; }
+namespace caliper_draw { class DrawFeed; class DrawRuntime; struct PickedItem; }
 namespace caliper_gfx { namespace cmap { class KeyBlockCache; } }
 
 namespace caliper_live_views {
@@ -143,6 +143,22 @@ public:
     std::string pick_detail(const caliper_scene::Hit& h) const;
     // The source index of item `index` of the batch (path, primitive), through its payload axes.
     int64_t row_id(const std::string& path, caliper_scene::Primitive p, int64_t index) const;
+    // The programs' pick (scene/pick.h FramePick), which the view owns on its own backend: reads
+    // the window around (x, y), in physical pixels, of the ID target and the depth that the
+    // frames so far drew, and keeps what each program showed in the last frame. Returns the
+    // request's ticket, which a newer request supersedes; 0 with *why when nothing was asked, as
+    // while the view draws no program.
+    uint64_t request_program_pick(float x, float y, std::string* why);
+    // The answer to the request `ticket`: Hit fills *out and *depth with the item of the program
+    // whose pick id the texel holds, from the version that the program showed in the frame that
+    // the readback read, not from a newer one; Miss when no program's texel lies within the
+    // radius or that version holds no such item; Pending; Dropped when a newer request superseded
+    // it; None when nothing is asked.
+    caliper_scene::PickPass::Result poll_program_pick(uint64_t ticket, caliper_draw::PickedItem* out, float* depth);
+    // A number that no other view of the process has. A panel's pick state holds it beside its
+    // tickets, thus a request made in one view is never polled in another, whose backend may be
+    // another, after a detach, a new attachment or a panel that now draws its own scene.
+    uint64_t serial() const { return serial_; }
 
     // ---- selections ------------------------------------------------------------------------------
     // Selects the points, and the boxes by their centres, whose projection at the view's camera lies
@@ -350,6 +366,10 @@ private:
     caliper_scene::ViewCamera camera_ = caliper_scene::Orbit{};
     std::string through_;              // the camera entity looked through, or ""
     std::unique_ptr<caliper_scene::PickPass> pick_;
+    // The programs' pick: its readback, its ticket and what each program showed (live_scene.cpp).
+    struct ProgramPick;
+    std::unique_ptr<ProgramPick> program_pick_;
+    uint64_t serial_ = 0;
     uint64_t generation_ = 0;          // colour frames submitted
     // The panel's stages: the programs on this view's backend, the source's revision drawn last,
     // the stage draws of the last frame and the step from the stamps.

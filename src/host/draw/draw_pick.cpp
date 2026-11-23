@@ -1,6 +1,6 @@
 // The item map of a DrawRuntime (draw_runtime.h, design/programmable-graphics.md,
 // Picking): the fields of a picked element from the CPU copy of the version
-// that the last frame showed.
+// that a frame showed, the last one or the one whose ID target a pick read.
 //
 // The item comes from a fragment of the piece and the bytes from the stream,
 // thus each is checked where it is used: the item against the version's valid
@@ -13,6 +13,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <memory>
 
 namespace caliper_draw {
 
@@ -69,26 +70,49 @@ double component(const std::uint8_t* p, char kind, int i) {
     return double(v);
 }
 
+// What ShownItems holds: the program, its map and the element layout of the install that drew
+// the frame, and the copy of the version that the frame showed.
+struct ShownPick {
+    std::string program;
+    caliper_builder::spec::PickMap map;
+    cbp::ElementLayout layout;
+    std::shared_ptr<const DrawRuntime::Impl::Shown> shown;
+};
+
 }  // namespace
 
-std::optional<PickedItem> DrawRuntime::pick(std::uint32_t item) const {
+ShownItems DrawRuntime::shown_items() const {
     const Impl& m = *impl_;
-    if (!m.installed || !m.piece.draw || !m.piece.draw->pick) return std::nullopt;
-    const caliper_builder::spec::PickMap& map = *m.piece.draw->pick;
-    const Impl::Slot* s = buffer_slot(m, map.resource);
-    if (!s || !s->keep_cpu) return std::nullopt;
-    const Impl::Shown& v = s->shown;
-    const std::uint64_t stride = s->layout.stride;
+    if (!m.installed || !m.piece.draw || !m.piece.draw->pick) return {};
+    const Impl::Slot* s = buffer_slot(m, m.piece.draw->pick->resource);
+    if (!s || !s->keep_cpu || !s->shown) return {};
+    auto p = std::make_shared<ShownPick>();
+    p->program = m.instance.program;
+    p->map = *m.piece.draw->pick;
+    p->layout = s->layout;
+    p->shown = s->shown;
+    return ShownItems{std::move(p)};
+}
+
+std::optional<PickedItem> DrawRuntime::pick(std::uint32_t item) const { return pick_shown(item, shown_items()); }
+
+std::optional<PickedItem> DrawRuntime::pick_shown(std::uint32_t item, const ShownItems& shown) {
+    if (!shown) return std::nullopt;
+    const ShownPick& sp = *static_cast<const ShownPick*>(shown.state.get());
+    const caliper_builder::spec::PickMap& map = sp.map;
+    const Impl::Shown& v = *sp.shown;
+    const cbp::ElementLayout& layout = sp.layout;
+    const std::uint64_t stride = layout.stride;
     // The item against the valid count and the bytes the copy holds, without a product that wraps.
     if (stride == 0 || item >= v.count || std::uint64_t(item) >= v.bytes.size() / stride) return std::nullopt;
     const std::uint8_t* e = v.bytes.data() + std::uint64_t(item) * stride;
     PickedItem out;
-    out.program = m.instance.program;
+    out.program = sp.program;
     out.item = item;
     out.step = v.step;
     std::size_t integers = 0;
     for (std::size_t k = 0; k < map.fields.size() && k < caliper_builder::spec::piece_limits::kPickFields; ++k) {
-        const cbp::FieldLayout* f = field_of(s->layout, map.fields[k]);
+        const cbp::FieldLayout* f = field_of(layout, map.fields[k]);
         char kind = 0;
         int n = 0;
         if (!f || !scalar_of(f->type, &kind, &n)) continue;
