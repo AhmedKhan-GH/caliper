@@ -223,7 +223,11 @@ struct Link {
     bool pinged = false;
     bool closing = false;
     uint32_t nonce = 0;
-    std::deque<SharedBytes> control;          // frames before any data
+    struct QueuedFrame {
+        SharedBytes bytes;
+        bool scene = false;
+    };
+    std::deque<QueuedFrame> control;          // frames before any data
     bool views_pending = false;
     bool cap_controls = false;                // 3.1: the peer announced "controls"
     bool cap_selection = false;               // 3.1: the peer announced "selection"
@@ -234,7 +238,7 @@ struct Link {
     bool cap_scene_pieces = false;            // 3.2 draft: "scene_pieces" beside "scenes"
     bool cap_interventions = false;           // 3.2 draft: both sides announced "interventions"
     bool may_control = false;                 // 3.1: a CONTROL from it is accepted
-    std::deque<SharedBytes> after_views;      // 3.1: frames that follow the next VIEWS
+    std::deque<QueuedFrame> after_views;      // 3.1: frames that follow the next VIEWS
     size_t control_bytes = 0;                 // the bytes in control and after_views, scene frames aside
     size_t scene_bytes = 0;                   // 3.2 draft: the bytes of the scene frames among them
     bool overflow = false;                    // past kMaxControlFrames/Bytes: closed with 1008
@@ -905,7 +909,7 @@ private:
             return false;
         }
         bytes += b->size();
-        (after_views ? l.after_views : l.control).push_back(std::move(b));
+        (after_views ? l.after_views : l.control).push_back({std::move(b), scene});
         return true;
     }
 
@@ -1304,9 +1308,10 @@ private:
                 l.views_pending = false;
                 l.control.swap(l.after_views);    // the state that follows the VIEWS
             } else if (!l.control.empty()) {
-                f = l.control.front();
+                const bool scene = l.control.front().scene;
+                f = std::move(l.control.front().bytes);
                 l.control.pop_front();
-                size_t& bytes = scene_frame(*f) ? l.scene_bytes : l.control_bytes;
+                size_t& bytes = scene ? l.scene_bytes : l.control_bytes;
                 bytes -= std::min(bytes, f->size());
             } else {
                 f = next_data(l, now, final);
