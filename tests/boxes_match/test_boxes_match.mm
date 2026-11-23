@@ -543,4 +543,3 @@ TEST_CASE("boxes_match: boxes@1 at its capacity" * doctest::skip()) {
 }
 
 CALIPER_GPU_TEST_MAIN()
-

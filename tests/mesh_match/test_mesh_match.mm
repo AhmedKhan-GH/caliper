@@ -507,4 +507,3 @@ TEST_CASE("mesh_match: mesh@1 at its capacity" * doctest::skip()) {
 }
 
 CALIPER_GPU_TEST_MAIN()
-
