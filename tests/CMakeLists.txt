@@ -549,7 +549,7 @@ if(APPLE)
     # The scene view's rows: scenes from wire protocol 3.2 messages, applied to the live views'
     # scene view (src/host/live/live_scene.cpp, compiled in here as libcaliper compiles it).
     target_sources(caliper_gfx_tests PRIVATE gfx/gfx_scene_view.cpp
-        ${CMAKE_SOURCE_DIR}/src/host/live/live_scene.cpp)
+        ${CMAKE_SOURCE_DIR}/src/host/live/live_scene.cpp ${CMAKE_SOURCE_DIR}/src/host/live/scene_piece_form.cpp)
     target_link_libraries(caliper_gfx_tests PRIVATE caliper_net)
     target_compile_definitions(caliper_gfx_tests PRIVATE CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
     set_source_files_properties(gfx/gfx_scene_view.cpp PROPERTIES

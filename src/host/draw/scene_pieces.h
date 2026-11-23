@@ -105,6 +105,7 @@ struct ShapeCounts {
     std::uint32_t builtin = 0;
     std::map<std::string, std::uint32_t> fallbacks;
     std::uint32_t marks = 0;   // the highlight's programs
+    std::uint32_t received = 0;   // the shapes whose resources came in the piece form, drawn as they came
 };
 
 class ScenePieces final : public DrawFeed {
@@ -113,9 +114,10 @@ public:
     ~ScenePieces() override;
 
     // One part of one layer of an entity arrived (SceneView::apply), after the view stored `batch`:
-    // its arrays become the piece's resources.
+    // its arrays become the piece's resources. An update of the piece form brings the resources
+    // themselves in `received` (one section each, named by its id), which the piece draws as they are.
     void take(const std::string& path, caliper_scene::Primitive p, bool fixed, const caliper_net::wire::SceneUpdate& u,
-              const caliper_scene::Batch& batch);
+              const caliper_scene::Batch& batch, const std::vector<caliper_net::wire::Section>* received = nullptr);
     // The part of that layer is gone.
     void drop(const std::string& path, caliper_scene::Primitive p, bool fixed);
     void clear();

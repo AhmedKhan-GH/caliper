@@ -96,6 +96,7 @@ struct SceneShapeCounts {
     uint32_t builtin = 0;
     std::map<std::string, uint32_t> fallbacks;
     uint32_t marks = 0;   // the programs of the highlight of a selection, drawn by the pieces
+    uint32_t received = 0;   // the shapes drawn from resources that came in the piece form
 };
 
 class SceneView {
@@ -115,6 +116,7 @@ public:
 
     // One decoded message. False with *why when the scene store refused it; the view keeps what it
     // drew. A message's sections may be freed once the call returns.
+    // An update of the per-shape form, or of the piece form whose `paired` holds its resources.
     bool apply(const caliper_net::wire::SceneUpdate& u, std::string* why);
     bool apply(const caliper_net::wire::SceneTransforms& t, std::string* why);
     bool apply(const caliper_net::wire::SceneClear& c, std::string* why);
@@ -463,6 +465,9 @@ private:
     std::function<bool(const std::string&)> filter_;
     uint64_t filtered_rev_ = ~0ull;   // the tree's revision after the filter was applied
     void apply_entity_filter();
+    // The update in the per-shape form; `received` holds the piece form's resources, which the pieces draw.
+    bool apply_update(const caliper_net::wire::SceneUpdate& u, const std::vector<caliper_net::wire::Section>* received,
+                      std::string* why);
 
     caliper_gfx::Texture color_, depth_;
     uint32_t width_ = 0, height_ = 0, clear_ = 0;

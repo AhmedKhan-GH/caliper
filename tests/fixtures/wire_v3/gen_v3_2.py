@@ -327,6 +327,7 @@ def valid_vectors() -> dict[str, bytes]:
     msgs.update(_timeline_vectors())
     msgs.update(_program_vectors())
     msgs.update(_resource_vectors())
+    msgs.update(_scene_piece_vectors())
     out = {f"v3_2/{name}": w.encode(m, minor=M) for name, m in msgs.items()}
     # A split update: 20 coloured points in five pieces of at most 600 bytes, with a stamp.
     for k, piece in enumerate(w.split_update(SPLIT, update=4, max_frame=600)):
@@ -518,6 +519,7 @@ def invalid_vectors(valid: dict[str, bytes]) -> dict[str, tuple[bytes, dict]]:
         **_timeline_invalid(valid),
         **_program_invalid(),
         **_resource_invalid(),
+        **_scene_piece_invalid(),
     }
 
 
@@ -853,6 +855,52 @@ def _instance(request_id: int, derive: bool) -> "w.Program":
                      manifest=PIECE_MANIFEST, bind={"attn": "live:blocks.0.attn"}, panel="bars",
                      segments=PIECE_SEGMENTS, common=PIECE_COMMON,
                      derive=PIECE_DERIVE if derive else None, draw=PIECE_DRAW)
+
+
+# The piece form of SCENE_UPDATE: three points whose arrays travel as the resource "points" of the scene
+# program "scene.1", an instance of the library piece "points".
+SCENE_PIECE_VALUES = _f32([0.25, 0.5, 1.0])
+SCENE_PIECE_PIN = {"name": "points", "version": 1}
+SCENE_PIECE_KEYS = {"program": "scene.1", "piece": SCENE_PIECE_PIN, "resources": {"points": 3},
+                    "arrays": ["positions", "values"], "colormap": w.COLORMAP_MAGMA,
+                    "flags": w.SNAP_AUTO_VMIN | w.SNAP_AUTO_VMAX, "vmin": 0.0, "vmax": 1.0,
+                    "stats": _stats(SCENE_PIECE_VALUES, CLOUD)}
+
+
+def _scene_piece_vectors() -> dict:
+    # struct Point { position: vec4<f32>, bits: u32, index: u32 } and 8 bytes of padding: 32 bytes.
+    rows = np.zeros(3, dtype=[("position", "<f4", 4), ("bits", "<u4"), ("index", "<u4"), ("pad", "V8")])
+    rows["position"][:, :3] = CLOUD
+    rows["position"][:, 3] = 1.0
+    rows["bits"] = SCENE_PIECE_VALUES.view(np.uint32)
+    rows["index"] = np.arange(3)
+    return {
+        "scene_update_points_piece": _update(
+            2, "world", 14, STAMP + 1400, "world/cloud", w.PART_POINTS, {},
+            {k: SCENE_PIECE_KEYS[k] for k in ("colormap", "flags", "vmin", "vmax", "stats")},
+            stamp=STAMP_T, program="scene.1", piece=SCENE_PIECE_PIN, resources={"points": 3},
+            names=["positions", "values"]),
+        "resource_scene_points": w.Resource("scene.1", "points", 7, 3, 32, rows.tobytes()),
+    }
+
+
+def _scene_piece_invalid() -> dict:
+    bad = {"error": w.ERR_BAD_REQUEST}
+    key = SCENE_PIECE_KEYS
+    stamp = {"stamp": STAMP_T}
+    RS = w.MsgType.RESOURCE
+    return {
+        "scene_update_piece_section": (_frame("points", "p", {"positions": CLOUD, **stamp}, **key), bad),
+        "scene_update_piece_wrong": (_frame("points", "p", stamp, **dict(
+            key, piece=dict(SCENE_PIECE_PIN, name="lines"))), bad),
+        "scene_update_piece_arrays": (_frame("points", "p", stamp, **dict(key, arrays=["values"])), bad),
+        "scene_update_piece_split": (_frame("points", "p", stamp, **dict(
+            key, split={"update": 1, "piece": 0, "pieces": 2, "rows": {"positions": 3},
+                        "first": {"positions": 0}})), bad),
+        "resource_scene_id": (_meta_frame(RS, {"program": "scene.0123456789", "resource": "points",
+                                               "step": 7, "count": 3, "stride": 32},
+                                          {"resource": np.zeros(96, np.uint8)}), bad),
+    }
 
 
 def _resource_vectors() -> dict:

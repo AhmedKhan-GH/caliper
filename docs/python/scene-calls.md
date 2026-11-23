@@ -94,6 +94,10 @@ once the event has completed. Nothing reads the device on the training
 thread. A batch whose arrays pass one frame of 64 MiB travels as a split
 update of up to 16 pieces; a batch over 512 MiB raises `ValueError`.
 
+### Piece Form
+
+The Caliper app, `caliper-viewer` and Caliper's WebAssembly views announce the capability `scene_pieces`. To such a viewer, a batch of points and a color image travel in the piece form: the network thread writes the arrays from the host copies as the resources of the part's library piece, `points@1` or `image@1`, and sends them as RESOURCE before the update that names them ([Piece Form](../reference/wire-protocol-3-2.md#piece-form)). It writes each batch once for every such viewer, and only when the batch is sent, thus a batch that a newer one replaced is never written, and the training thread does the same work as before. The viewer draws the received bytes with its own library piece. A viewer without the capability, and the other parts and forms, get the arrays as before. `CALIPER_SCENE_SHAPES=builtin` in the script's environment sends every batch with its arrays to every viewer.
+
 ### Static Items
 
 A batch logged with `static=True` is copied once at the call,

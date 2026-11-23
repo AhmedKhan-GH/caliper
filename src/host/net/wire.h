@@ -352,6 +352,9 @@ struct Unknown {   // a type this version does not know; receivers ignore it
 
 // ---- protocol 3.2 draft: the scenes subset (proposals: minor 2, capability "scenes", kind 6, 0x0070 to 0x0073, dtype u16 6; the 3.2 block of caliper/live_net.h) ----
 // The rules of the block at the end of _wire.py, checked in the same order. A
+// Whether `id` is the id of a scene program, "scene.<n>" with 1 to 9 digits.
+bool scene_program_id(const std::string& id);
+
 // SceneUpdate's `arrays` hold the sections of its part in the part's order
 // (PART_SECTIONS); decoded, only the known ones, pointing into the frame like
 // every decoded Section. Every scene message may carry a stamp section, i64
@@ -376,6 +379,18 @@ struct SceneUpdate {                 // 3.2 draft: one part of one entity of a s
                                      // when whole. A piece's arrays are its rows, unchecked against the part
                                      // until SplitUpdates puts the update together; its params are empty
                                      // but in piece 0
+    // The piece form (capability "scene_pieces"): the scene program "scene.<n>" whose RESOURCE versions,
+    // sent just before, hold the batch's arrays as the resources of the library piece `piece` (the pin:
+    // name, version, hash); `resources` maps each resource id to the count of that version, and `names`
+    // lists the part's arrays the batch held (the key "arrays"). Such an update carries no array section.
+    std::optional<std::string> program;
+    Json piece;                      // null unless the piece form
+    Json resources;                  // null unless the piece form
+    std::vector<std::string> names;
+    // Receiver side, never on the wire: the RESOURCE versions that the receiver paired with a piece-form
+    // update (caliper_live::ScenePieceInbox), one section each, named by its resource id, u8 of the shape
+    // (count, stride), over bytes that the queued item keeps alive.
+    std::vector<Section> paired;
     const Section* array(const std::string& name) const;
 };
 struct SceneTransforms {             // 3.2 draft: entity transforms, (K, 16) f32 column-major matrices

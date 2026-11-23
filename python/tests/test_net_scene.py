@@ -992,7 +992,7 @@ def test_pump_native_counts_only_the_frames_a_connection_took():
         def queued(self, conn):
             return 0
 
-        def send(self, conn, frame):
+        def send(self, conn, frame, scene=False):
             self.calls += 1
             return False
 

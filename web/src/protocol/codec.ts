@@ -749,7 +749,7 @@ import {
   PART_CAMERA, PART_IMAGE, PART_KEYS, PART_LINES, PART_MESH, PART_POINTS, PART_SECTIONS, SCENE_DATA_VIEW, SCENE_PARTS, SPACE_2D,
   SPACE_3D, UP_AXES_2D, UP_AXES_3D,
   CURSOR_OPS, CURSOR_PLAY, CURSOR_SEEK, CURSOR_STEP, LEVEL_ERROR, MAX_BARS, MAX_CURSOR_STEP,
-  MAX_INCOMPLETE_UPDATES, MAX_PIECES, MAX_RECORDED, MAX_RECORDINGS, MAX_SPEED, MAX_UPDATE_BYTES, MIN_SPEED, PACE_EVEN, PACE_RECORDED,
+  MAX_INCOMPLETE_UPDATES, MAX_PIECES, MAX_RECORDED, MAX_RECORDINGS, MAX_RESOURCES, SCENE_PROGRAM_PREFIX, MAX_SPEED, MAX_UPDATE_BYTES, MIN_SPEED, PACE_EVEN, PACE_RECORDED,
   STAMP_TEXT_MAX, TEXT_LINE_MAX, TEXT_MAX_LINES, TIME_FOLLOWING, TIME_PAUSED, TIME_PLAYING, TIMELINE_SEQUENCE, TIMELINE_TIME,
   type CursorMsg, type RecordingEntry, type RecordingOpenMsg, type RecordingsMsg, type SplitKey, type TextMsg, type TimeStateMsg,
   type SceneArray, type SceneClass, type SceneClassesMsg, type SceneClearMsg, type SceneTransformsMsg, type SceneUpdateMsg,
@@ -1086,7 +1086,15 @@ export function decodeSceneUpdate(f: Frame): SceneUpdateMsg {
   const p = part as ScenePart;
   let params: Params;
   let arrays: Arrays;
-  if (split !== undefined) {
+  let pf: PieceForm | undefined;
+  if ('program' in f.meta) {
+    pf = decodePieceForm(f, p);
+    if (split !== undefined) bad(t, 'an update in the piece form is never split');
+    params = scenePartKeys(f, p);
+    if (p === PART_IMAGE && PIECE_OF_FORM[params.form as string] !== pf.piece.name) bad(t, `an image of the form '${params.form}' has no piece '${pf.piece.name}'`);
+    for (const name of PART_SECTIONS[p]) if (f.sections.some((s) => s.name === name)) bad(t, `an update in the piece form carries no array section, got '${name}'`);
+    arrays = {};
+  } else if (split !== undefined) {
     ({ params, arrays } = decodePiece(f, p, split as unknown as Record<string, unknown>));
   } else {
     params = scenePartKeys(f, p);
@@ -1112,8 +1120,32 @@ export function decodeSceneUpdate(f: Frame): SceneUpdateMsg {
   };
   if (flags.cursor !== undefined) m.cursor = flags.cursor;
   if (split !== undefined) m.split = split;
+  if (pf) { m.program = pf.program; m.piece = pf.piece; m.resources = pf.resources; m.names = pf.names; }
   if (stamp) m.stamp = i64(stamp);
   return m;
+}
+
+interface PieceForm { program: string; piece: { name: string; version: number; hash: string }; resources: Record<string, number>; names: string[] }
+const SCENE_PIECES: Record<string, readonly string[]> = {
+  points: ['points'], lines: ['lines'], arrows: ['arrows'], boxes: ['boxes'], mesh: ['mesh'], image: ['image', 'depth', 'segmentation'],
+};
+const PIECE_OF_FORM: Record<string, string> = { [FORM_COLOR]: 'image', [FORM_DEPTH]: 'depth', [FORM_SEGMENTATION]: 'segmentation' };
+/** The keys of the piece form of SCENE_UPDATE, checked in this order: program, piece, resources, arrays (python: _piece_form). */
+function decodePieceForm(f: Frame, part: ScenePart): PieceForm {
+  const program = req<string>(f, 'program', isSceneProgramId, 'a scene program id scene.<n> of 1 to 9 digits');
+  const piece = req<PieceForm['piece']>(f, 'piece', isLibraryPin, 'a library pin {name, version} with an optional hash');
+  if (!(SCENE_PIECES[part] ?? []).includes(piece.name)) bad(f.type, `the part '${part}' has no library piece '${piece.name}'`);
+  const resources = req<Record<string, number>>(f, 'resources', (v) => isObj(v)
+    && Object.keys(v as object).length >= 1 && Object.keys(v as object).length <= MAX_RESOURCES
+    && Object.entries(v as Record<string, unknown>).every(([k, n]) => isParamName(k) && isU32(n)),
+    `an object of 1 to ${MAX_RESOURCES} resource ids, each with a uint32 count`);
+  const table = PART_SECTIONS[part];
+  const names = req<string[]>(f, 'arrays', (v) => Array.isArray(v) && v.every((x) => typeof x === 'string'), 'a list of array names');
+  const idx = names.map((x) => table.indexOf(x));
+  if (names.length === 0 || names[0] !== table[0] || idx.some((i) => i < 0) || idx.some((i, k) => k > 0 && i <= idx[k - 1])) {
+    bad(f.type, `'arrays' must list the arrays of '${part}' in their order from '${table[0]}', each once, got [${names}]`);
+  }
+  return { program, piece, resources, names };
 }
 
 type PayloadAxisList = NonNullable<SceneUpdateMsg['axes']>;
@@ -1177,6 +1209,7 @@ export function decodeSceneClasses(f: Frame): SceneClassesMsg {
 
 function sceneUpdateMeta(m: SceneUpdateMsg): Record<string, unknown> {
   const meta: Record<string, unknown> = { sub: m.sub, view: m.view, seq: m.seq, stamp_ns: m.stamp_ns, path: m.path, part: m.part };
+  if (m.program !== undefined) Object.assign(meta, { program: m.program, piece: m.piece, resources: m.resources, arrays: m.names });
   for (const [key, v] of Object.entries(m.params)) {
     if (v === undefined || v === null) continue;
     meta[key] = key === 'stats' ? (v as number[]).map((x) => (Number.isFinite(x) ? x : null)) : v;
@@ -1663,9 +1696,12 @@ const isSafeUint = (v: unknown) => isInt(v) && v >= 0 && v <= Number.MAX_SAFE_IN
 const isNonneg = (v: unknown) => isFinite(v) && (v as number) >= 0;
 const OPERATOR_ID_RE = /^operator\.[a-z][a-z0-9_-]*\.[0-9]{1,5}$/;
 const PARAM_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-/** A program id: 1 to PROGRAM_ID_MAX bytes of [a-z0-9_-] with a letter first, or an operator id "operator.<spec id>.<n>" with 1 to 5 digits. */
+const SCENE_ID_RE = /^[0-9]{1,9}$/;
+/** The id of a scene program: "scene." and 1 to 9 decimal digits. */
+const isSceneProgramId = (v: unknown) => typeof v === 'string' && v.startsWith(SCENE_PROGRAM_PREFIX) && SCENE_ID_RE.test(v.slice(SCENE_PROGRAM_PREFIX.length));
+/** A program id: 1 to PROGRAM_ID_MAX bytes of [a-z0-9_-] with a letter first, an operator id "operator.<spec id>.<n>" with 1 to 5 digits, or a scene program id. */
 const isProgramId = (v: unknown) => typeof v === 'string' && v.length > 0 && utf8.encode(v).length <= PROGRAM_ID_MAX
-  && (v.startsWith('operator.') ? OPERATOR_ID_RE.test(v) : PROGRAM_ID_RE.test(v));
+  && (v.startsWith(SCENE_PROGRAM_PREFIX) ? isSceneProgramId(v) : v.startsWith('operator.') ? OPERATOR_ID_RE.test(v) : PROGRAM_ID_RE.test(v));
 const isParamName = (v: unknown) => typeof v === 'string' && v.length > 0 && v.length <= PROGRAM_PARAM_NAME_MAX && PARAM_NAME_RE.test(v) && !v.startsWith('__');
 /** Program parameters: 1 to PROGRAM_PARAMS_MAX names of a WGSL field, each with a finite number. */
 const isParams = (v: unknown) => {
@@ -1831,6 +1867,8 @@ const isPiecePin = (v: unknown) => {
   return typeof o.name === 'string' && o.name.length > 0 && o.name.length <= PIECE_NAME_MAX && PIECE_NAME_RE.test(o.name)
     && intIn(1, PIECE_VERSION_MAX)(o.version) && typeof o.hash === 'string' && PIECE_HASH_RE.test(o.hash);
 };
+/** The pin of a library piece in the piece form of SCENE_UPDATE: name and version as in isPiecePin, and hash optional (python: _library_pin). */
+const isLibraryPin = (v: unknown) => isObj(v) && isPiecePin({ hash: `sha256:${'0'.repeat(64)}`, ...(v as object) });
 /** One value of "bind": "live:<tensor>" (a tensor name of 1 to TENSOR_NAME_MAX bytes) or "program:<id>/<resource>". */
 const isBinding = (v: unknown) => {
   if (typeof v !== 'string') return false;

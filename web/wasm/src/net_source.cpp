@@ -147,10 +147,13 @@ void NetSource::close(const char* reason) {
 }
 
 void NetSource::on_open() {
+    scene_parts_ = wire::SplitResources();   // a new connection holds no version of a scene program
+    scene_inbox_.clear();
     wire::Hello h;
     h.role = CALIPER_NET_ROLE_VIEWER;
-    // The 3.2 draft: this viewer draws scenes, and the draw halves of pieces from PROGRAM and RESOURCE.
-    h.capabilities = {CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_RESOURCES};
+    // The 3.2 draft: this viewer draws scenes, the piece form of their batches, and the draw halves of
+    // pieces from PROGRAM and RESOURCE.
+    h.capabilities = {CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_RESOURCES, CALIPER_NET_CAP_SCENE_PIECES};
     Json sw = Json::object();
     sw.set("name", "caliper-views");
     sw.set("version", "0.1");
@@ -405,6 +408,16 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
                     hold = whole.keep;
                     sections = m.arrays;
                 }
+                // The piece form: the update takes the versions of its scene program that came just before it.
+                if (m.program) {
+                    std::string err;
+                    hold = scene_inbox_.pair(m, keep, &err);
+                    if (!hold) {
+                        if (caliper_live::scene_queue_push(v->scene, caliper_live::SceneItem{nullptr, "dropped: " + err}))
+                            resubscribe(*v);
+                        return;
+                    }
+                }
                 // A form the scene view does not draw yet (an encoded image) is answered ERROR
                 // unsupported and noted, not queued; a section it does not use (a stamp) is noted.
                 const std::string why = caliper_live::scene_not_drawn(m);
@@ -439,6 +452,17 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
             // A draw half that the script relays (design/programmable-graphics.md, Resource Message).
             if (cb_.program) cb_.program(m);
         } else if constexpr (std::is_same_v<T, wire::Resource>) {
+            if (wire::scene_program_id(m.program)) {
+                // A scene program's version, put together from its parts, waits for its piece-form update.
+                wire::WholeResource whole;
+                std::string err;
+                if (scene_parts_.add(m, &whole, &err) == wire::SplitResources::Result::Whole) {
+                    const wire::Resource& w = whole.resource;
+                    scene_inbox_.take(w, whole.keep ? whole.keep
+                                                    : std::make_shared<const std::vector<uint8_t>>(w.data.data, w.data.data + w.data.size));
+                }
+                return;
+            }
             // Its section points into the callback's bytes: the page host copies what it keeps.
             if (cb_.resource) cb_.resource(m);
         } else if constexpr (std::is_same_v<T, wire::Error>) {

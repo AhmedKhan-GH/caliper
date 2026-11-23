@@ -231,6 +231,7 @@ struct Link {
     bool cap_timelines = false;               // 3.2 draft: the peer announced "timelines"
     bool cap_programs = false;                // 3.2 draft: both sides announced "programs"
     bool cap_resources = false;               // 3.2 draft: "resources" beside "programs" (pieces)
+    bool cap_scene_pieces = false;            // 3.2 draft: "scene_pieces" beside "scenes"
     bool cap_interventions = false;           // 3.2 draft: both sides announced "interventions"
     bool may_control = false;                 // 3.1: a CONTROL from it is accepted
     std::deque<SharedBytes> after_views;      // 3.1: frames that follow the next VIEWS
@@ -430,11 +431,14 @@ public:
         wake_all();
     }
 
-    bool send(ConnId c, std::string frame) {
+    // `scene`: the frame counts toward the scene backlog (kMaxSceneBytes), as a scene program's RESOURCE
+    // that precedes its SCENE_UPDATE in the piece form does.
+    bool send(ConnId c, std::string frame, bool scene = false) {
         std::lock_guard<std::mutex> g(mu_);
         auto it = links_.find(c);
         if (it == links_.end()) return false;
-        const bool ok = push_control(it->second, std::make_shared<caliper_net::Bytes>(frame.begin(), frame.end()));
+        const bool ok = push_control(it->second, std::make_shared<caliper_net::Bytes>(frame.begin(), frame.end()),
+                                     false, scene);
         wake_all();
         return ok;
     }
@@ -885,9 +889,9 @@ private:
     // Queue a control frame (under mu_). Past kMaxControlFrames, kMaxControlBytes
     // or, for scene frames, kMaxSceneBytes the queue is dropped and the connection
     // marked, and the thread that owns its socket closes it with 1008 at its next pump.
-    bool push_control(Link& l, SharedBytes b, bool after_views = false) {
+    bool push_control(Link& l, SharedBytes b, bool after_views = false, bool scene_hint = false) {
         if (l.overflow || l.closing) return false;
-        const bool scene = scene_frame(*b);
+        const bool scene = scene_hint || scene_frame(*b);
         size_t& bytes = scene ? l.scene_bytes : l.control_bytes;
         if (l.control.size() + l.after_views.size() >= kMaxControlFrames ||
             bytes + b->size() > (scene ? kMaxSceneBytes : kMaxControlBytes)) {
@@ -908,13 +912,15 @@ private:
     // 3.1 (under mu_): the server's capabilities, and what a peer announced as
     // the JSON of its "opened" message for Python.
     std::vector<std::string> capabilities() const {
-        if (!controls_) return {CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_TIMELINES};
+        if (!controls_)
+            return {CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_SCENE_PIECES, CALIPER_NET_CAP_SCENES,
+                    CALIPER_NET_CAP_TIMELINES};
         if (g_watch_caps.load())
             return {CALIPER_NET_CAP_CONTROLS,  CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_INTERVENTIONS,
-                    CALIPER_NET_CAP_PROGRAMS,  CALIPER_NET_CAP_RESOURCES, CALIPER_NET_CAP_SCENES,
-                    CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_TIMELINES};
-        return {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_SCENES,
-                CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_TIMELINES};
+                    CALIPER_NET_CAP_PROGRAMS,  CALIPER_NET_CAP_RESOURCES, CALIPER_NET_CAP_SCENE_PIECES,
+                    CALIPER_NET_CAP_SCENES,    CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_TIMELINES};
+        return {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_SCENE_PIECES,
+                CALIPER_NET_CAP_SCENES,   CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_TIMELINES};
     }
     // 3.2 draft: the timelines of the VIEWS to a peer that announced "timelines", as the
     // Python sender declares them (caliper/_net.py, views_msg()).
@@ -939,6 +945,7 @@ private:
         o.set("scenes", l.cap_scenes);
         o.set("programs", l.cap_programs);
         o.set("resources", l.cap_resources);
+        o.set("scene_pieces", l.cap_scene_pieces);
         o.set("interventions", l.cap_interventions);
         o.set("control", l.may_control);
         o.set("upstream", l.upstream);
@@ -1101,6 +1108,7 @@ private:
             l.cap_controls = controls_ && announces(h->capabilities, CALIPER_NET_CAP_CONTROLS);
             l.cap_selection = controls_ && announces(h->capabilities, CALIPER_NET_CAP_SELECTION);
             l.cap_scenes = announces(h->capabilities, CALIPER_NET_CAP_SCENES);
+            l.cap_scene_pieces = l.cap_scenes && announces(h->capabilities, CALIPER_NET_CAP_SCENE_PIECES);
             l.cap_timelines = announces(h->capabilities, CALIPER_NET_CAP_TIMELINES);
             l.cap_programs = controls_ && g_watch_caps.load() && announces(h->capabilities, CALIPER_NET_CAP_PROGRAMS);
             l.cap_resources = l.cap_programs && announces(h->capabilities, CALIPER_NET_CAP_RESOURCES);
@@ -1435,6 +1443,7 @@ private:
                         l.cap_controls = controls_ && announces(w->capabilities, CALIPER_NET_CAP_CONTROLS);
                         l.cap_selection = controls_ && announces(w->capabilities, CALIPER_NET_CAP_SELECTION);
                         l.cap_scenes = announces(w->capabilities, CALIPER_NET_CAP_SCENES);
+                        l.cap_scene_pieces = l.cap_scenes && announces(w->capabilities, CALIPER_NET_CAP_SCENE_PIECES);
                         l.cap_timelines = announces(w->capabilities, CALIPER_NET_CAP_TIMELINES);
                         l.cap_programs = controls_ && g_watch_caps.load() &&
                                          announces(w->capabilities, CALIPER_NET_CAP_PROGRAMS);
@@ -1613,11 +1622,11 @@ NB_MODULE(_netio, m) {
              },
              nb::arg("timeout_ms"))
         .def("set_views", &NetIO::set_views, nb::arg("views"), nb::arg("selection_views") = "", R())
-        .def("send", [](NetIO& self, ConnId c, nb::bytes frame) {
+        .def("send", [](NetIO& self, ConnId c, nb::bytes frame, bool scene) {
                  std::string f(frame.c_str(), frame.size());
                  nb::gil_scoped_release release;
-                 return self.send(c, std::move(f));
-             })
+                 return self.send(c, std::move(f), scene);
+             }, nb::arg("conn"), nb::arg("frame"), nb::arg("scene") = false)
         .def("send_after_views", [](NetIO& self, ConnId c, nb::bytes frame) {
                  std::string f(frame.c_str(), frame.size());
                  nb::gil_scoped_release release;

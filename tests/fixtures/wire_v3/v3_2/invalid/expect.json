@@ -501,6 +501,9 @@
   "resource_program_missing.bin": {
     "error": "bad_request"
   },
+  "resource_scene_id.bin": {
+    "error": "bad_request"
+  },
   "resource_section_2d.bin": {
     "error": "bad_request"
   },
@@ -589,6 +592,18 @@
     "error": "bad_request"
   },
   "resource_width_alone.bin": {
+    "error": "bad_request"
+  },
+  "scene_update_piece_arrays.bin": {
+    "error": "bad_request"
+  },
+  "scene_update_piece_section.bin": {
+    "error": "bad_request"
+  },
+  "scene_update_piece_split.bin": {
+    "error": "bad_request"
+  },
+  "scene_update_piece_wrong.bin": {
     "error": "bad_request"
   },
   "segments_odd.bin": {

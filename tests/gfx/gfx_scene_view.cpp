@@ -30,6 +30,7 @@
 #include "gfx/metal_backend.h"
 #include "gfx/shaders/generated/programs_metal.h"
 #include "live/live_scene.h"
+#include "live/scene_piece_form.h"
 #if defined(CALIPER_HAVE_SCENE_PIECES)
 #include "draw/scene_pieces.h"
 #endif
@@ -57,6 +58,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 caliper_host::HostRenderer* gfx_metal_renderer();
@@ -1761,3 +1763,255 @@ TEST_CASE("gfx/Metal scene view: the switch between the pieces and the built-in 
     CHECK(take_any_pick(*pr.gfx, v, &hit) == caliper_scene::PickPass::Result::Dropped);
 }
 #endif
+
+namespace {
+
+// points@1's resource "points" of a points update in the per-shape form, as caliper._scene_pieces
+// writes it (python/caliper/_scene_pieces.py, pack_points): x, y and z (0 in 2-D) and in w the radius
+// (the row's, else the batch's "radius", else 1), then the bits of the color source (packed RGBA,
+// the f32 of a value, a class id, else NaN bits), the row index and 8 bytes of zero.
+std::vector<uint8_t> pack_points(const wire::SceneUpdate& u) {
+    const wire::Section* pos = u.array("positions");
+    const size_t n = size_t(pos->shape[0]), d = size_t(pos->shape[1]);
+    std::vector<uint8_t> out(n * 32, 0);
+    const wire::Section* colors = u.array("colors");
+    const wire::Section* values = u.array("values");
+    const wire::Section* ids = u.array("class_ids");
+    const wire::Section* radii = u.array("radii");
+    const Json* one = u.params.find("radius");
+    const float radius = one && one->is_number() ? float(one->as_double()) : 1.0f;
+    for (size_t i = 0; i < n; ++i) {
+        uint8_t* p = out.data() + i * 32;
+        std::memcpy(p, pos->data + i * d * 4, d * 4);
+        if (radii) std::memcpy(p + 12, radii->data + i * 4, 4);
+        else std::memcpy(p + 12, &radius, 4);
+        uint32_t bits = 0x7fc00000u;
+        if (colors) std::memcpy(&bits, colors->data + (colors->shape[0] == 1 ? 0 : i) * 4, 4);
+        else if (values) std::memcpy(&bits, values->data + i * 4, 4);
+        else if (ids) std::memcpy(&bits, ids->data + i * 4, 4);
+        std::memcpy(p + 16, &bits, 4);
+        const uint32_t index = uint32_t(i);
+        std::memcpy(p + 20, &index, 4);
+    }
+    return out;
+}
+
+// image@1's resources of a color image update, as caliper._scene_pieces writes them (pack_image):
+// "pixels" one packed RGBA a pixel (a grey image repeats its value, alpha 255) and "info" the width,
+// the height, the channels and 0, then the identity as four columns.
+std::pair<std::vector<uint8_t>, std::vector<uint8_t>> pack_image(const wire::SceneUpdate& u) {
+    const wire::Section* px = u.array("pixels");
+    const size_t h = size_t(px->shape[0]), w = size_t(px->shape[1]), n = w * h;
+    const bool grey = px->shape.size() == 2;
+    std::vector<uint8_t> pixels(n * 4);
+    for (size_t i = 0; i < n; ++i) {
+        if (grey) {
+            const uint32_t g = px->data[i], rgba = 0xff000000u | g | (g << 8) | (g << 16);
+            std::memcpy(&pixels[i * 4], &rgba, 4);
+        } else {
+            std::memcpy(&pixels[i * 4], px->data + i * 4, 4);
+        }
+    }
+    std::vector<uint8_t> info(80, 0);
+    const uint32_t size[4] = {uint32_t(w), uint32_t(h), grey ? 1u : 4u, 0};
+    std::memcpy(info.data(), size, 16);
+    for (int k = 0; k < 4; ++k) {
+        const float one = 1.0f;
+        std::memcpy(&info[size_t(16 + k * 16 + k * 4)], &one, 4);
+    }
+    return {std::move(pixels), std::move(info)};
+}
+
+bool color_image(const wire::SceneUpdate& u) {
+    const Json* form = u.params.find("form");
+    return u.part == CALIPER_NET_PART_IMAGE && form && form->is_string() && form->as_string() == CALIPER_NET_FORM_COLOR &&
+           u.array("pixels");
+}
+
+// A fixture's messages as a producer sends them to a viewer with "scene_pieces": each points update
+// as the RESOURCE of its scene program and the update in the piece form, through the codec, paired
+// by the viewer's inbox and applied, the others as they are.
+bool draw_piece_form(const primitive_fixtures::Fixture& f, SceneView& view, std::string* why) {
+    view.describe(f.info);
+    caliper_live::ScenePieceInbox inbox;
+    std::vector<std::shared_ptr<const void>> keep;
+    int program = 0;
+    auto roundtrip = [&](const wire::Message& m, wire::Message* out) {
+        auto bytes = std::make_shared<std::vector<uint8_t>>();
+        std::string err;
+        if (!wire::encode(m, bytes.get(), &err, CALIPER_NET_MINOR_3_2)) return *why = "encode: " + err, false;
+        const wire::DecodeResult r = wire::decode(bytes->data(), bytes->size(), out);
+        if (!r.ok()) return *why = "decode: " + r.message, false;
+        keep.push_back(bytes);
+        return true;
+    };
+    for (const wire::Message& m : f.messages) {
+        const auto* cu = std::get_if<wire::SceneUpdate>(&m);
+        const bool points = cu && cu->part == CALIPER_NET_PART_POINTS && cu->array("positions");
+        if (points || (cu && color_image(*cu))) {
+            const std::string id = "scene." + std::to_string(++program);
+            // (resource id, stride, bytes) of each resource, in the order they go before the update.
+            std::vector<std::tuple<std::string, uint32_t, std::vector<uint8_t>>> res;
+            wire::SceneUpdate pu = *cu;
+            pu.program = id;
+            pu.piece = Json::object();
+            pu.piece.set("version", 1);
+            pu.resources = Json::object();
+            if (points) {
+                res.emplace_back("points", 32u, pack_points(*cu));
+                pu.piece.set("name", "points");
+                for (const char* name : {"positions", "colors", "values", "class_ids", "radii"})
+                    if (cu->array(name)) pu.names.push_back(name);
+            } else {
+                auto [pixels, info] = pack_image(*cu);
+                res.emplace_back("pixels", 4u, std::move(pixels));
+                res.emplace_back("info", 80u, std::move(info));
+                pu.piece.set("name", "image");
+                pu.names.push_back("pixels");
+            }
+            pu.arrays.clear();
+            for (auto& [rid, stride, bytes] : res) {
+                wire::Resource r;
+                r.program = id;
+                r.resource = rid;
+                r.step = 0;
+                r.count = uint32_t(bytes.size() / stride);
+                r.stride = stride;
+                r.data = wire::Section::make(CALIPER_NET_SECTION_RESOURCE, CALIPER_NET_DTYPE_U8, {int64_t(bytes.size())},
+                                             bytes.data(), bytes.size());
+                pu.resources.set(rid, Json(uint64_t(r.count)));
+                wire::Message rd;
+                if (!roundtrip(r, &rd)) return false;
+                const auto& whole = std::get<wire::Resource>(rd);
+                if (!inbox.take(whole, std::make_shared<const std::vector<uint8_t>>(whole.data.data, whole.data.data + whole.data.size)))
+                    return *why = "the inbox took no scene program", false;
+            }
+            wire::Message ud;
+            if (!roundtrip(pu, &ud)) return false;
+            auto& piece = std::get<wire::SceneUpdate>(ud);
+            std::shared_ptr<const void> owner = inbox.pair(piece, nullptr, why);
+            if (!owner) return false;
+            keep.push_back(owner);
+            if (!view.apply(piece, why)) return false;
+            continue;
+        }
+        wire::Message d;
+        if (!roundtrip(m, &d)) return false;
+        bool ok = true;
+        if (const auto* u = std::get_if<wire::SceneUpdate>(&d)) ok = view.apply(*u, why);
+        else if (const auto* t = std::get_if<wire::SceneTransforms>(&d)) ok = view.apply(*t, why);
+        else if (const auto* c = std::get_if<wire::SceneClasses>(&d)) ok = view.apply(*c, why);
+        else if (const auto* k = std::get_if<wire::SceneClear>(&d)) ok = view.apply(*k, why);
+        if (!ok) return false;
+    }
+    if (!f.look_through.empty() && !view.look_through(f.look_through, why)) return false;
+    view.keep_draws(true);
+    return view.render(primitive_fixtures::kSize, primitive_fixtures::kSize, 1.0f, primitive_fixtures::kClear, why);
+}
+
+}  // namespace
+
+// The piece form of points and color images (wire protocol 3.2, capability "scene_pieces"): every fixture
+// whose points and color images arrive as points@1's and image@1's resources, written as
+// caliper._scene_pieces writes them, draws the same pixels as
+// from the per-shape part, both with the pieces (the received bytes against the converter's) and with
+// the built-in draw (the batch rebuilt from the bytes against the decoded one), and every pick on a
+// grid gives the same entity, primitive and item. The packing above writes the golden frame
+// resource_scene_points from the arrays of scene_update_points_piece's batch.
+TEST_CASE("gfx/Metal scene view: points and color images in the piece form draw as the per-shape part, with the same picks") {
+    ViewRig probe;
+    if (!probe.init()) CALIPER_SKIP_NO_GPU("no Metal device");
+    {   // the packing against the golden frame: three points with values
+        const fs::path dir = fs::path(CALIPER_TEST_SOURCE_ROOT) / "tests/fixtures/wire_v3/v3_2";
+        std::ifstream in(dir / "resource_scene_points.bin", std::ios::binary);
+        std::vector<uint8_t> frame((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        wire::Message m;
+        REQUIRE(wire::decode(frame.data(), frame.size(), &m).ok());
+        const auto& golden = std::get<wire::Resource>(m);
+        primitive_fixtures::Fixture g;
+        wire::SceneUpdate u = g.update("p", CALIPER_NET_PART_POINTS);
+        u.arrays.push_back(g.section("positions", CALIPER_NET_DTYPE_F32, {3, 3}, std::vector<float>{0, 0, 0, 1, 0, 0.5f, 0, 2, 0.25f}));
+        u.arrays.push_back(g.section("values", CALIPER_NET_DTYPE_F32, {3}, std::vector<float>{0.25f, 0.5f, 1.0f}));
+        const std::vector<uint8_t> packed = pack_points(u);
+        REQUIRE(golden.data.size == packed.size());
+        CHECK(std::memcmp(golden.data.data, packed.data(), packed.size()) == 0);
+    }
+    std::vector<primitive_fixtures::Fixture> fixtures = primitive_fixtures::all();
+    primitive_fixtures::Fixture flat = primitive_fixtures::through();
+    flat.name = "through-pieces";
+    for (wire::Message& m : flat.messages)
+        if (auto* u = std::get_if<wire::SceneUpdate>(&m)) u->params.erase("radius");
+    fixtures.push_back(flat);
+    fixtures.push_back(primitive_fixtures::through());
+    size_t with_points = 0;
+    for (const primitive_fixtures::Fixture& f : fixtures) {
+        CAPTURE(f.name);
+        uint32_t points = 0;
+        for (const wire::Message& m : f.messages)
+            if (const auto* u = std::get_if<wire::SceneUpdate>(&m); u && (u->part == CALIPER_NET_PART_POINTS || color_image(*u))) ++points;
+        if (points == 0) continue;
+        ++with_points;
+        for (const auto draw : {caliper_live_views::ShapeDraw::pieces, caliper_live_views::ShapeDraw::builtin}) {
+            ViewRig part, piece;
+            REQUIRE(part.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str(), draw));
+            REQUIRE(piece.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str(), draw));
+            primitive_rows::Row row;
+            row.fixture = f;
+            REQUIRE_MESSAGE(row.draw(*part.view), row.error);
+            std::string why;
+            REQUIRE_MESSAGE(draw_piece_form(f, *piece.view, &why), why);
+            const bool pieces = draw == caliper_live_views::ShapeDraw::pieces;
+            if (pieces) {
+                const SceneShapeCounts a = part.view->shape_counts(), b = piece.view->shape_counts();
+                CHECK(a.received == 0);
+                CHECK(b.pieces == a.pieces);
+                CHECK(b.builtin == a.builtin);
+                CHECK(b.fallbacks == a.fallbacks);
+                MESSAGE("[scene-piece-form] ", f.name, ": ", b.received, " of ", points, " points and color image batches drawn from the received bytes, ",
+                        b.pieces, " shapes by pieces, ", b.builtin, " by the built-in");
+            }
+            const std::vector<uint8_t> pa = pixels(*part.view), pb = pixels(*piece.view);
+            size_t differ = 0;
+            for (size_t i = 0; i < pa.size(); i += 4) differ += std::memcmp(&pa[i], &pb[i], 4) != 0;
+            capture_shapes(std::string("form-") + (pieces ? "pieces-" : "builtin-") + f.name, pb, pa, int(primitive_fixtures::kSize));
+            MESSAGE("[scene-piece-form] ", f.name, std::string(pieces ? " by pieces" : " by the built-in"), ": ", differ,
+                    " of ", pa.size() / 4, " pixels differ");
+            CHECK_MESSAGE(differ == 0, f.name);
+            if (!pieces) continue;
+            compare_fixture("form-" + f.name, piece, part, int(primitive_fixtures::kSize), 0);
+            // Picks at the pixels whose ID and its 3 x 3 neighbours are one item of a piece: at most 96, spread
+            // over the picture, each giving the same entity, primitive and item in both views.
+            const int S = int(primitive_fixtures::kSize);
+            const std::vector<uint64_t> ids = program_ids(*piece.gfx, *piece.view);
+            std::vector<std::pair<int, int>> at;
+            for (int y = 1; y + 1 < S; ++y)
+                for (int x = 1; x + 1 < S; ++x) {
+                    const uint64_t own = ids[size_t(y) * S + x];
+                    bool inside = own != 0;
+                    for (int dy = -1; dy <= 1 && inside; ++dy)
+                        for (int dx = -1; dx <= 1 && inside; ++dx) inside = ids[size_t(y + dy) * S + x + dx] == own;
+                    if (inside) at.emplace_back(x, y);
+                }
+            size_t asked = 0, agreed = 0;
+            const size_t step = std::max<size_t>(1, at.size() / 96);
+            for (size_t i = 0; i < at.size(); i += step) {
+                std::string why2;
+                caliper_scene::Hit ha, hb;
+                REQUIRE_MESSAGE(piece.view->request_pick(at[i].first + 0.5f, at[i].second + 0.5f, &why2), why2);
+                const auto ra = take_any_pick(*piece.gfx, *piece.view, &ha);
+                REQUIRE_MESSAGE(part.view->request_pick(at[i].first + 0.5f, at[i].second + 0.5f, &why2), why2);
+                const auto rb = take_any_pick(*part.gfx, *part.view, &hb);
+                ++asked;
+                if (ra == rb && (ra != caliper_scene::PickPass::Result::Hit ||
+                                 (piece.view->tree().path(ha.entity) == part.view->tree().path(hb.entity) &&
+                                  ha.primitive == hb.primitive && ha.item == hb.item && ha.has_pixel == hb.has_pixel &&
+                                  (!ha.has_pixel || (ha.pixel[0] == hb.pixel[0] && ha.pixel[1] == hb.pixel[1])))))
+                    ++agreed;
+            }
+            MESSAGE("[scene-piece-form] ", f.name, ": picks at item interiors ", agreed, " of ", asked, " agree");
+            CHECK(agreed == asked);
+            CHECK(asked > 0);
+        }
+    }
+    CHECK(with_points >= 3);
+}

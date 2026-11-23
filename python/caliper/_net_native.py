@@ -353,7 +353,8 @@ class NativeServer(NetServer):
                 info = json.loads(frame)
                 link.caps = frozenset(c for c in (_wire.CAP_CONTROLS, _wire.CAP_SELECTION,
                                                   _wire.CAP_SCENES, _wire.CAP_PROGRAMS,
-                                                  _wire.CAP_INTERVENTIONS, _wire.CAP_RESOURCES)
+                                                  _wire.CAP_INTERVENTIONS, _wire.CAP_RESOURCES,
+                                                  _wire.CAP_SCENE_PIECES)
                                       if info.get(c))
                 link.may_control = bool(info.get("control"))
             p.by_conn[conn] = link
