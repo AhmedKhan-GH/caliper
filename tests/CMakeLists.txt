@@ -270,7 +270,7 @@ if(TARGET caliper)
     caliper_cli_test(applets_needs_folder ARGS "--applets|--help" EXIT 2
         ERROR "--applets needs a folder")
     caliper_cli_test(info ARGS "info" EXIT 0
-        MATCH "abi_epoch 2.*service caliper\\.ui\\.v1_1")
+        MATCH "abi_epoch 3.*service caliper\\.ui\\.v1_1")
     caliper_cli_test(list ARGS "list|--applets|${CMAKE_BINARY_DIR}/applets" EXIT 0
         MATCH "READY +dev\\.caliper\\.hello +0\\.1\\.0 ")
     caliper_cli_test(check ARGS "check|${CMAKE_BINARY_DIR}/test-applets" EXIT 0

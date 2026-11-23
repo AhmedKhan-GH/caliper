@@ -29,7 +29,7 @@ static std::string lib_name(const std::string& stem) {
 
 // CALIPER_TEST_APPLETS_DIR + CALIPER_TEST_DATA_ROOT are compile definitions.
 static HostCaps caps() {
-    return HostCaps{2, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}};
+    return HostCaps{3, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}};
 }
 static int find_by_id(AppletLoader& L, const std::string& id) {
     for (int i = 0; i < L.count(); i++)
@@ -87,7 +87,7 @@ TEST_CASE("loader: descriptor/manifest agreement is enforced") {
                   dir / lib_name("hello"), fs::copy_options::overwrite_existing);
     std::ofstream(dir / "hello.caliper.toml") <<
         "[applet]\nid=\"dev.caliper.hello\"\nname=\"Hello\"\nversion=\"9.9.9\"\n"
-        "[compat]\nabi_epoch=2\n[services]\nrequired=[\"caliper.ui.v1\"]\n";
+        "[compat]\nabi_epoch=3\n[services]\nrequired=[\"caliper.ui.v1\"]\n";
     AppletLoader L(caps(), CALIPER_TEST_DATA_ROOT);
     L.scan(dir.string());
     REQUIRE(L.count() == 1);
@@ -122,7 +122,7 @@ TEST_CASE("loader: missing binary is a Failed card, not a crash") {
     fs::create_directories(dir);
     std::ofstream(dir / "ghost.caliper.toml") <<
         "[applet]\nid=\"x.ghost\"\nname=\"Ghost\"\nversion=\"1.0.0\"\n"
-        "[compat]\nabi_epoch=2\n";
+        "[compat]\nabi_epoch=3\n";
     AppletLoader L(caps(), CALIPER_TEST_DATA_ROOT);
     L.scan(dir.string());
     REQUIRE(L.count() == 1);
@@ -161,7 +161,7 @@ TEST_CASE("loader: a path-escaping manifest id is a Failed card, never a data di
     for (const char* id : ids) {
         std::ofstream(dir / ("bad" + std::to_string(n++) + ".caliper.toml")) <<
             "[applet]\nid=\"" << id << "\"\nname=\"Bad\"\nversion=\"1.0.0\"\n"
-            "[compat]\nabi_epoch=2\n";
+            "[compat]\nabi_epoch=3\n";
     }
     AppletLoader L(caps(), CALIPER_TEST_DATA_ROOT);
     L.scan(dir.string());
@@ -193,8 +193,8 @@ TEST_CASE("loader: descriptor-required service missing refuses with the friendly
                   dir / lib_name("hello"), fs::copy_options::overwrite_existing);
     std::ofstream(dir / "hello.caliper.toml") <<
         "[applet]\nid=\"dev.caliper.hello\"\nname=\"Hello\"\nversion=\"0.1.0\"\n"
-        "[compat]\nabi_epoch=2\n[services]\nrequired=[\"caliper.ui.v1\"]\n";
-    AppletLoader L(HostCaps{2, "0.6.0", {"caliper.ui.v1"}}, CALIPER_TEST_DATA_ROOT);
+        "[compat]\nabi_epoch=3\n[services]\nrequired=[\"caliper.ui.v1\"]\n";
+    AppletLoader L(HostCaps{3, "0.6.0", {"caliper.ui.v1"}}, CALIPER_TEST_DATA_ROOT);
     L.scan(dir.string());
     REQUIRE(L.count() == 1);
     CHECK(L.at(0).status == AppletStatus::Ready);      // manifest list passes
@@ -236,7 +236,7 @@ static void hello_copy(const fs::path& dir, const std::string& stem,
                   dir / lib_name(stem), fs::copy_options::overwrite_existing);
     std::ofstream(dir / (stem + ".caliper.toml")) <<
         "[applet]\nid=\"dev.caliper.hello\"\nname=\"Hello\"\nversion=\"0.1.0\"\n"
-        "[compat]\nabi_epoch=2\n[services]\nrequired=[\"caliper.ui.v1\"]\n" << extra;
+        "[compat]\nabi_epoch=3\n[services]\nrequired=[\"caliper.ui.v1\"]\n" << extra;
 }
 
 TEST_CASE("data stamp: read, raise, never lowered") {
@@ -311,7 +311,7 @@ TEST_CASE("data stamp: a lower schema is refused before dlopen") {
     fs::create_directories(t.path / "applets");
     std::ofstream(t.path / "applets" / "old.caliper.toml") <<
         "[applet]\nid=\"x.old\"\nname=\"Old\"\nversion=\"1.0.0\"\n"
-        "[compat]\nabi_epoch=2\n[data]\nschema=2\n";
+        "[compat]\nabi_epoch=3\n[data]\nschema=2\n";
     std::ofstream(t.path / "applets" / lib_name("old")) << "never opened";
     const std::string data_root = (t.path / "data").string();
     REQUIRE(raise_data_schema_stamp(data_root + "/x.old", 3));
@@ -344,10 +344,10 @@ TEST_CASE("loader: libtorch and UI-stack refusals come before dlopen") {
     fs::create_directories(t.path);
     std::ofstream(t.path / "t.caliper.toml") <<
         "[applet]\nid=\"x.torch\"\nname=\"T\"\nversion=\"1.0.0\"\n"
-        "[compat]\nabi_epoch=2\ntorch=\"2.5.1\"\n";
+        "[compat]\nabi_epoch=3\ntorch=\"2.5.1\"\n";
     std::ofstream(t.path / "u.caliper.toml") <<
         "[applet]\nid=\"x.ui\"\nname=\"U\"\nversion=\"1.0.0\"\n"
-        "[compat]\nabi_epoch=2\n[build]\nui_stack=\"ffff0000ffff0000\"\n";
+        "[compat]\nabi_epoch=3\n[build]\nui_stack=\"ffff0000ffff0000\"\n";
     std::ofstream(t.path / lib_name("t")) << "never opened";
     std::ofstream(t.path / lib_name("u")) << "never opened";
     HostCaps c = caps();

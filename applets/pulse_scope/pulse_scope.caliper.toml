@@ -6,7 +6,7 @@ summary = "This machine's own vitals, live: PulseScope enumerates every caliper.
 tag     = "Telemetry"
 
 [compat]
-abi_epoch = 2
+abi_epoch = 3
 min_host  = "0.6.0"
 
 [services]

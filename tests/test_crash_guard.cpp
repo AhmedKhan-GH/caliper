@@ -151,7 +151,7 @@ TEST_CASE("guard: exception thrown by an applet quarantines it, host survives") 
     // signal, naming the exception.
     caliper::testing::FixtureHost fx;
     CaliperFrameInfo fi{}; fi.struct_size = sizeof fi;
-    const HostCaps caps{2, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}};
+    const HostCaps caps{3, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}};
     auto find_throwing = [](AppletLoader& L) {
         for (int k = 0; k < L.count(); k++)
             if (L.at(k).manifest.id == "dev.caliper.throwing") return k;
@@ -226,7 +226,7 @@ TEST_CASE("guard: a fault in an applet's background job quarantines the applet")
     caliper::testing::FixtureHost fx;
     fx.provide(CALIPER_JOBS_V1, &kTestJobs);
     CaliperFrameInfo fi{}; fi.struct_size = sizeof fi;
-    const HostCaps caps{2, "0.6.0",
+    const HostCaps caps{3, "0.6.0",
                         {"caliper.ui.v1", "caliper.log.v1", "caliper.jobs.v1"}};
     auto launch_and_fail_a_job = [&](AppletLoader& L, const char* where) {
         setenv("CALIPER_THROWING_WHERE", where, 1);
@@ -289,7 +289,7 @@ TEST_CASE("loader: restart is offered after a C++ exception, refused after a sig
     caliper::testing::FixtureHost fx;
     fx.provide(CALIPER_JOBS_V1, &kTestJobs);
     CaliperFrameInfo fi{}; fi.struct_size = sizeof fi;
-    const HostCaps caps{2, "0.6.0",
+    const HostCaps caps{3, "0.6.0",
                         {"caliper.ui.v1", "caliper.log.v1", "caliper.jobs.v1"}};
     auto count = [&](const char* line) {
         int n = 0;

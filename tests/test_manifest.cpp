@@ -10,7 +10,7 @@ summary = "Gate-level circuit explorer"
 tag = "EDA"
 
 [compat]
-abi_epoch = 2
+abi_epoch = 3
 min_host = "0.6.0"
 
 [services]
@@ -26,7 +26,7 @@ TEST_CASE("manifest: golden parses fully") {
     CHECK(r.manifest.version == "1.0.0");
     CHECK(r.manifest.summary == "Gate-level circuit explorer");
     CHECK(r.manifest.tag == "EDA");
-    CHECK(r.manifest.abi_epoch == 2);
+    CHECK(r.manifest.abi_epoch == 3);
     CHECK(r.manifest.min_host == "0.6.0");
     REQUIRE(r.manifest.required_services.size() == 1);
     CHECK(r.manifest.required_services[0] == "caliper.ui.v1");
@@ -37,7 +37,7 @@ TEST_CASE("manifest: golden parses fully") {
 TEST_CASE("manifest: minimal — only id/name/version/epoch required") {
     auto r = parse_manifest_text(
         "[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\n"
-        "[compat]\nabi_epoch=2\n");
+        "[compat]\nabi_epoch=3\n");
     REQUIRE(r.ok);
     CHECK(r.manifest.min_host.empty());
     CHECK(r.manifest.required_services.empty());
@@ -49,18 +49,18 @@ TEST_CASE("manifest: adversarial inputs refuse with a reason") {
     const Case cases[] = {
         {"", "missing"},                                              // empty
         {"not toml {{{", "parse"},                                    // syntax
-        {"[applet]\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=2\n", "id"},
-        {"[applet]\nid=\"a.b\"\nname=\"A\"\n[compat]\nabi_epoch=2\n", "version"},
-        {"[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"1.0\"\n[compat]\nabi_epoch=2\n", "semver"},
+        {"[applet]\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=3\n", "id"},
+        {"[applet]\nid=\"a.b\"\nname=\"A\"\n[compat]\nabi_epoch=3\n", "version"},
+        {"[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"1.0\"\n[compat]\nabi_epoch=3\n", "semver"},
         {"[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\n", "abi_epoch"},
         {"[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=\"two\"\n", "abi_epoch"},
-        {"[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=2\nmin_host=\"soon\"\n", "semver"},
+        {"[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=3\nmin_host=\"soon\"\n", "semver"},
         // The id becomes a data-folder name: path escapes and non-[a-z0-9.-]
         // characters are refused at parse time, before any loader sees them.
-        {"[applet]\nid=\"../../escape\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=2\n", "applet id"},
-        {"[applet]\nid=\"a..b\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=2\n", "applet id"},
-        {"[applet]\nid=\"Dev.Caliper.X\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=2\n", "applet id"},
-        {"[applet]\nid=\"a/b\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=2\n", "applet id"},
+        {"[applet]\nid=\"../../escape\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=3\n", "applet id"},
+        {"[applet]\nid=\"a..b\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=3\n", "applet id"},
+        {"[applet]\nid=\"Dev.Caliper.X\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=3\n", "applet id"},
+        {"[applet]\nid=\"a/b\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=3\n", "applet id"},
     };
     for (auto& c : cases) {
         auto r = parse_manifest_text(c.toml);
@@ -73,7 +73,7 @@ TEST_CASE("manifest: adversarial inputs refuse with a reason") {
 TEST_CASE("manifest: unknown tables/keys are ignored (forward compat)") {
     auto r = parse_manifest_text(
         "[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\nauthors=[\"x\"]\n"
-        "[compat]\nabi_epoch=2\n[future]\nx=1\n");
+        "[compat]\nabi_epoch=3\n[future]\nx=1\n");
     CHECK(r.ok);
 }
 
@@ -110,12 +110,12 @@ TEST_CASE("applet id validation") {
 // The versioning keys (docs/development/compatibility-and-epochs.md): [compat].torch,
 // [build].sdk, [build].ui_stack and [data].schema, all optional.
 static const char* kMinimal =
-    "[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=2\n";
+    "[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=3\n";
 
 TEST_CASE("manifest: versioning keys parse") {
     auto r = parse_manifest_text(
         "[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\n"
-        "[compat]\nabi_epoch=2\ntorch=\"2.5.1\"\n"
+        "[compat]\nabi_epoch=3\ntorch=\"2.5.1\"\n"
         "[build]\nsdk=\"0.7.0\"\nui_stack=\"0123456789abcdef\"\n"
         "[data]\nschema=3\n");
     REQUIRE(r.ok);
@@ -205,7 +205,7 @@ TEST_CASE("manifest: an absent or library kind is a compiled applet as before") 
     CHECK(absent.manifest.kind == AppletKind::Library);
     auto library = parse_manifest_text(
         "[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\nkind=\"library\"\n"
-        "[compat]\nabi_epoch=2\n");
+        "[compat]\nabi_epoch=3\n");
     REQUIRE(library.ok);
     CHECK(library.manifest.kind == AppletKind::Library);
     // A library still needs its epoch; spec is an unknown key to it, ignored.
@@ -215,7 +215,7 @@ TEST_CASE("manifest: an absent or library kind is a compiled applet as before") 
     CHECK(no_epoch.error.find("abi_epoch") != std::string::npos);
     auto stray = parse_manifest_text(
         "[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\nspec=\"x.spec.toml\"\n"
-        "[compat]\nabi_epoch=2\n");
+        "[compat]\nabi_epoch=3\n");
     REQUIRE(stray.ok);
     CHECK(stray.manifest.kind == AppletKind::Library);
     CHECK(stray.manifest.spec.empty());
@@ -237,7 +237,7 @@ TEST_CASE("manifest: each refusal of a spec applet's manifest, keeping its kind"
         {head + "spec=\"..\"\n", "applet.spec is not a plain file name"},
         {head + "spec=\"a\\u0001b\"\n", "applet.spec is not a plain file name"},
         {head + "spec=7\n", "applet.spec is not a plain file name"},
-        {with_spec + "[compat]\nabi_epoch=2\n", "compat.abi_epoch does not apply to a spec applet"},
+        {with_spec + "[compat]\nabi_epoch=3\n", "compat.abi_epoch does not apply to a spec applet"},
         {with_spec + "[compat]\ntorch=\"2.5.1\"\n", "compat.torch does not apply to a spec applet"},
         {with_spec + "[compat]\nmin_host=\"soon\"\n", "compat.min_host is not strict semver"},
         {"compat=3\n" + with_spec, "[compat] is not a table"},
@@ -264,7 +264,7 @@ TEST_CASE("manifest: an unknown kind is a manifest error") {
         CAPTURE(kind);
         auto r = parse_manifest_text(
             std::string("[applet]\nid=\"a.b\"\nname=\"A\"\nversion=\"0.1.0\"\n") + kind +
-            "[compat]\nabi_epoch=2\n");
+            "[compat]\nabi_epoch=3\n");
         CHECK_FALSE(r.ok);
         CHECK(r.error.find("applet.kind") != std::string::npos);
         CHECK(r.manifest.kind == AppletKind::Library);

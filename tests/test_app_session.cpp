@@ -534,7 +534,7 @@ TEST_CASE("app session: the host serves app.info, app.applets, app.launch, captu
     FrameLoop loop;
     AppSession::Hooks h;
     h.info_json = [] {
-        return std::string(R"({"abi_epoch":2,"host":"0.6.0","libtorch":null,"sdk":"0.2.0",)"
+        return std::string(R"({"abi_epoch":3,"host":"0.6.0","libtorch":null,"sdk":"0.2.0",)"
                            R"("services":["caliper.log.v1"],"ui_stack":null})");
     };
     h.applets_json = [] {

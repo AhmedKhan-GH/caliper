@@ -34,7 +34,7 @@ std::string lib_name(const std::string& stem) {
 #endif
 }
 
-HostCaps caps() { return HostCaps{2, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}}; }
+HostCaps caps() { return HostCaps{3, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}}; }
 
 struct TempDir {
     fs::path path;
@@ -55,7 +55,7 @@ void fake_library(const fs::path& dir, const std::string& stem, const std::strin
     fs::create_directories(dir);
     std::ofstream(dir / (stem + ".caliper.toml")) <<
         "[applet]\nid=\"" << id << "\"\nname=\"Example\"\nversion=\"" << version <<
-        "\"\n[compat]\nabi_epoch=2\n";
+        "\"\n[compat]\nabi_epoch=3\n";
     std::ofstream(dir / lib_name(stem)) << "never opened";
 }
 
@@ -426,7 +426,7 @@ TEST_CASE("spec applets: min_host is checked, the keys of a library are not") {
     write_spec_applet(t.path / "a" / "future", "future", "local.future", "0.1.0", kValidSpec,
                       "[compat]\nmin_host = \"9.0.0\"\n");
     write_spec_applet(t.path / "a" / "epoch", "epoch", "local.epoch", "0.1.0", kValidSpec,
-                      "[compat]\nabi_epoch = 2\n");
+                      "[compat]\nabi_epoch = 3\n");
     AppletLoader L(caps(), t.str("data"));
     L.scan(t.str("a"));
     const int future = entry_at(L, t.path / "a" / "future" / "future.caliper.toml");
