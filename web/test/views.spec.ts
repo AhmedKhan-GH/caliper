@@ -183,13 +183,15 @@ test.describe('heatmap', () => {
     await expect.poll(async () => (await picks()).length).toBe(1);
     expect((await picks())[0]).toMatchObject({ event: { type: 'pick', detail: { row: 2, col: 5, value: 21 } } });
     await expect.poll(async () => (await dbg(page, 'h')).window).toEqual(d.window);
-    // A press that goes 3 pixels out and comes back stays a drag: no pick, and the release reports a hover.
+    // A press that goes 3 pixels out and comes back stays a drag. The same cell does not emit another hover.
+    await page.mouse.move(p.x, p.y);
     const h0 = await hovers();
     await page.mouse.down();
     await page.mouse.move(p.x + 3, p.y, { steps: 3 });
     await page.mouse.move(p.x, p.y, { steps: 3 });
     await page.mouse.up();
-    await expect.poll(hovers).toBeGreaterThan(h0);
+    await expect.poll(() => tip(page, 'h')).toBe('row 2  col 5\n21');
+    expect(await hovers()).toBe(h0);
     expect((await picks()).length).toBe(1);
     const back = (await dbg(page, 'h')).window;
     expect(back.x0).toBeCloseTo(d.window.x0, 6);
