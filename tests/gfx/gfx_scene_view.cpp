@@ -1974,10 +1974,43 @@ TEST_CASE("gfx/Metal scene view: points and color images in the piece form draw 
             size_t differ = 0;
             for (size_t i = 0; i < pa.size(); i += 4) differ += std::memcmp(&pa[i], &pb[i], 4) != 0;
             capture_shapes(std::string("form-") + (pieces ? "pieces-" : "builtin-") + f.name, pb, pa, int(primitive_fixtures::kSize));
-            MESSAGE("[scene-piece-form] ", f.name, (pieces ? " by pieces" : " by the built-in"), ": ", differ, " of ",
-                    pa.size() / 4, " pixels differ");
+            MESSAGE("[scene-piece-form] ", f.name, std::string(pieces ? " by pieces" : " by the built-in"), ": ", differ,
+                    " of ", pa.size() / 4, " pixels differ");
             CHECK_MESSAGE(differ == 0, f.name);
-            if (pieces) compare_fixture("form-" + f.name, piece, part, int(primitive_fixtures::kSize), 0);
+            if (!pieces) continue;
+            compare_fixture("form-" + f.name, piece, part, int(primitive_fixtures::kSize), 0);
+            // Picks at the pixels whose ID and its 3 x 3 neighbours are one item of a piece: at most 96, spread
+            // over the picture, each giving the same entity, primitive and item in both views.
+            const int S = int(primitive_fixtures::kSize);
+            const std::vector<uint64_t> ids = program_ids(*piece.gfx, *piece.view);
+            std::vector<std::pair<int, int>> at;
+            for (int y = 1; y + 1 < S; ++y)
+                for (int x = 1; x + 1 < S; ++x) {
+                    const uint64_t own = ids[size_t(y) * S + x];
+                    bool inside = own != 0;
+                    for (int dy = -1; dy <= 1 && inside; ++dy)
+                        for (int dx = -1; dx <= 1 && inside; ++dx) inside = ids[size_t(y + dy) * S + x + dx] == own;
+                    if (inside) at.emplace_back(x, y);
+                }
+            size_t asked = 0, agreed = 0;
+            const size_t step = std::max<size_t>(1, at.size() / 96);
+            for (size_t i = 0; i < at.size(); i += step) {
+                std::string why2;
+                caliper_scene::Hit ha, hb;
+                REQUIRE_MESSAGE(piece.view->request_pick(at[i].first + 0.5f, at[i].second + 0.5f, &why2), why2);
+                const auto ra = take_any_pick(*piece.gfx, *piece.view, &ha);
+                REQUIRE_MESSAGE(part.view->request_pick(at[i].first + 0.5f, at[i].second + 0.5f, &why2), why2);
+                const auto rb = take_any_pick(*part.gfx, *part.view, &hb);
+                ++asked;
+                if (ra == rb && (ra != caliper_scene::PickPass::Result::Hit ||
+                                 (piece.view->tree().path(ha.entity) == part.view->tree().path(hb.entity) &&
+                                  ha.primitive == hb.primitive && ha.item == hb.item && ha.has_pixel == hb.has_pixel &&
+                                  (!ha.has_pixel || (ha.pixel[0] == hb.pixel[0] && ha.pixel[1] == hb.pixel[1])))))
+                    ++agreed;
+            }
+            MESSAGE("[scene-piece-form] ", f.name, ": picks at item interiors ", agreed, " of ", asked, " agree");
+            CHECK(agreed == asked);
+            CHECK(asked > 0);
         }
     }
     CHECK(with_points >= 3);

@@ -62,11 +62,16 @@ def log_scene(scene) -> int:
 
 
 def attach(url, tmp, name, log):
+    # The app gets the log and never the script's CALIPER_SCENE_SHAPES, which would switch its own draw;
+    # the script reads the switch when the app subscribes, well after the app started.
+    shapes = os.environ.pop("CALIPER_SCENE_SHAPES", None)
     os.environ["CALIPER_SCENE_FALLBACK_LOG"] = log
     try:
         app = App(url, os.path.join(tmp, name), f"where {SCENE}; wait 60; where {SCENE}; wait 400")
     finally:
         del os.environ["CALIPER_SCENE_FALLBACK_LOG"]
+        if shapes is not None:
+            os.environ["CALIPER_SCENE_SHAPES"] = shapes
     renderer = app.wait_for(lambda l: l.startswith("[renderer] "), 60)
     if renderer is None or "metal" not in renderer:
         app.close()
