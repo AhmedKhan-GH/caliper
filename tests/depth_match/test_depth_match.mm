@@ -17,7 +17,6 @@ using namespace image_match;
 using caliper_net::Json;
 using pf::RGBA;
 
-const std::vector<float> kIdentity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 
 // The built-in's params of a depth image.
 struct DepthParams {
@@ -151,7 +150,7 @@ TEST_CASE("depth_match: depth@1 draws each depth map as the built-in depth image
         Case k;
         k.name = case_name("depth", "f32-fixed");
         k.scene = flat_scene("f32", d, w, h, p);
-        k.tensors = {tensor("depth", {std::int64_t(h), std::int64_t(w)}, d), pose_tensor(kIdentity)};
+        k.tensors = {tensor("depth", {std::int64_t(h), std::int64_t(w)}, d)};
         k.params = {{"vmin", 0.5}, {"vmax", 2.5}, {"auto_range", 0}};
         k.width = w;
         k.height = h;
@@ -183,7 +182,7 @@ TEST_CASE("depth_match: depth@1 draws each depth map as the built-in depth image
         Case k;
         k.name = case_name("depth", "u16-auto");
         k.scene = flat_scene("u16", raw, w, h, p);
-        k.tensors = {tensor("depth", {std::int64_t(h), std::int64_t(w)}, values), pose_tensor(kIdentity)};
+        k.tensors = {tensor("depth", {std::int64_t(h), std::int64_t(w)}, values)};
         k.params = {{"scale", 0.01}, {"colormap", 1}, {"auto_range", 3}, {"opacity", 0.8}};
         k.width = w;
         k.height = h;
@@ -210,7 +209,7 @@ TEST_CASE("depth_match: depth@1 draws each depth map as the built-in depth image
             Case k;
             k.name = case_name("depth", which == 0 ? "auto-start" : which == 1 ? "auto-flat" : "auto-none");
             k.scene = flat_scene("ranges", d, w, h, p);
-            k.tensors = {tensor("depth", {std::int64_t(h), std::int64_t(w)}, d), pose_tensor(kIdentity)};
+            k.tensors = {tensor("depth", {std::int64_t(h), std::int64_t(w)}, d)};
             k.params = {{"colormap", 2}, {"auto_range", double(p.flags)}, {"vmax", 3.0}};
             k.width = w;
             k.height = h;
@@ -253,7 +252,7 @@ TEST_CASE("depth_match: depth@1 draws each depth map as the built-in depth image
         Case k;
         k.name = case_name("depth", "one-pixel");
         k.scene = flat_scene("one", d, 1, 1, p);
-        k.tensors = {tensor("depth", {1, 1}, d), pose_tensor(kIdentity)};
+        k.tensors = {tensor("depth", {1, 1}, d)};
         k.params = {{"vmin", 1.0}, {"vmax", 2.0}, {"auto_range", 0}};
         k.width = k.height = 1;
         k.picks = 1;
@@ -273,7 +272,7 @@ TEST_CASE("depth_match: depth@1 draws each depth map as the built-in depth image
         Case k;
         k.name = case_name("depth", "largest");
         k.scene = flat_scene("large", d, w, h, p);
-        k.tensors = {tensor("depth", {std::int64_t(h), std::int64_t(w)}, d), pose_tensor(kIdentity)};
+        k.tensors = {tensor("depth", {std::int64_t(h), std::int64_t(w)}, d)};
         k.params = {{"vmin", 1.0}, {"vmax", 2.0}, {"auto_range", 0}};
         k.width = w;
         k.height = h;
@@ -290,8 +289,8 @@ TEST_CASE("depth_match: depth@1 draws nothing for a map above its limit or an em
     // On a camera with its cloud, so that neither pass draws.
     std::map<std::string, double> values = kCameraParams;
     values["cloud"] = 1;
-    check_refusals(fx.m, fx.piece, {tensor("depth", {1449, 1449}, large), pose_tensor(kIdentity)},
-                   {tensor("depth", {0, 16}, std::vector<float>{}), pose_tensor(kIdentity)}, 96, values);
+    check_refusals(fx.m, fx.piece, {tensor("depth", {1449, 1449}, large)},
+                   {tensor("depth", {0, 16}, std::vector<float>{})}, 96, values);
 }
 
 CALIPER_GPU_TEST_MAIN()

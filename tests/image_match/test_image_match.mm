@@ -32,7 +32,6 @@ Tensor image_tensor(const std::vector<std::uint32_t>& px, std::uint32_t w, std::
     return tensor("image", {std::int64_t(h), std::int64_t(w), std::int64_t(channels)}, v);
 }
 
-const std::vector<float> kIdentity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 
 // The packed RGBA of a pixel as the item map's field rgba gives it.
 double field_of(std::uint32_t rgba) { return double(rgba); }
@@ -136,7 +135,7 @@ TEST_CASE("image_match: image@1 draws each color image as the built-in image dra
         Case k;
         k.name = case_name("image", "grey-opacity");
         k.scene = flat_scene("grey", {}, w, h, true, grey, 0.0f, 0.0f, 0.6);
-        k.tensors = {tensor("image", {std::int64_t(h), std::int64_t(w)}, values), pose_tensor(kIdentity)};
+        k.tensors = {tensor("image", {std::int64_t(h), std::int64_t(w)}, values)};
         k.params = {{"opacity", 0.6}};
         k.width = w;
         k.height = h;
@@ -182,7 +181,7 @@ TEST_CASE("image_match: image@1 draws each color image as the built-in image dra
         Case k;
         k.name = case_name("image", "one-pixel");
         k.scene = flat_scene("one", px, 1, 1, false, {}, 0.0f, 0.0f, std::nullopt);
-        k.tensors = {image_tensor(px, 1, 1, 4), pose_tensor(kIdentity)};
+        k.tensors = {image_tensor(px, 1, 1, 4)};
         k.width = k.height = 1;
         k.picks = 1;
         k.field = [px](std::uint32_t i) { return field_of(px[i]); };
@@ -198,7 +197,7 @@ TEST_CASE("image_match: image@1 draws each color image as the built-in image dra
         Case k;
         k.name = case_name("image", "largest");
         k.scene = flat_scene("large", px, w, h, false, {}, 0.0f, 0.0f, std::nullopt);
-        k.tensors = {image_tensor(px, w, h, 4), pose_tensor(kIdentity)};
+        k.tensors = {image_tensor(px, w, h, 4)};
         k.width = w;
         k.height = h;
         k.interior_tolerance = 1;
@@ -213,8 +212,8 @@ TEST_CASE("image_match: image@1 draws nothing for an image above its limit or an
     Fixture fx;
     if (!fx.ready) CALIPER_SKIP_NO_GPU(fx.m.why);
     const std::vector<float> large(std::size_t(1449) * 1449 * 4, 0.5f);
-    check_refusals(fx.m, fx.piece, {tensor("image", {1449, 1449, 4}, large), pose_tensor(kIdentity)},
-                   {tensor("image", {0, 16, 4}, std::vector<float>{}), pose_tensor(kIdentity)}, 80, {});
+    check_refusals(fx.m, fx.piece, {tensor("image", {1449, 1449, 4}, large)},
+                   {tensor("image", {0, 16, 4}, std::vector<float>{})}, 80, {});
     // The built-in takes an empty image as the removal of the part, and draws nothing either.
     Builtin b(*fx.m.backend);
     pf::Fixture empty;

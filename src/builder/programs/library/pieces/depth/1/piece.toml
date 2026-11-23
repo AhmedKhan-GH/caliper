@@ -16,7 +16,8 @@ name = "pose"
 kind = "tensor"
 rank_min = 2
 rank_max = 2
-title = "Pose (4, 4) or (3, 4), row by row: the world from the image or from its camera"
+optional = true
+title = "Pose (4, 4) or (3, 4), row by row: the world from the image or from its camera; unbound, the identity"
 
 [[params]]
 name = "opacity"
