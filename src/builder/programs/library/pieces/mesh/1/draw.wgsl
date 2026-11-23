@@ -7,9 +7,11 @@
 //
 // The built-in draws an opaque mesh with depth, and a translucent one, with an alpha below 255 in
 // its one color or a vertex, without depth; its pick pass draws it with depth, thus the nearest
-// face wins. Pass 0 or 1 draws by the same rule, and pass 2 writes the IDs of a
-// translucent mesh with depth and leaves the color as it is. A pass that does not apply moves each
-// vertex out of the clip volume. Each pass draws the index buffer `faces`, thus a vertex runs once
+// face wins. Pass 0 or 1 draws the color by the same rule, and pass 2 writes the IDs of every face
+// with depth and leaves the color as it is; for an opaque mesh it meets the depth that pass 0
+// wrote. A color pass that writes no ID shades the flat faces of the shared edges as the built-in's
+// color pass does, which a pass that also wrote the ID did not on Metal. A pass that does not apply
+// moves each vertex out of the clip volume. Each pass draws the index buffer `faces`, thus a vertex runs once
 // for each index and the faces share their vertices, as in the built-in's indexed draw. The item of
 // a face is its first vertex, the flat value of the face's first index.
 
@@ -130,15 +132,7 @@ fn face_see_vs(@builtin(vertex_index) i: u32) -> MeshOut {
 
 @vertex
 fn face_id_vs(@builtin(vertex_index) i: u32) -> MeshOut {
-    return face_vertex(i, mesh_translucent());
-}
-
-@fragment
-fn face_fs(in: MeshOut) -> CaliperPicked {
-    var out: CaliperPicked;
-    out.color = shade(in);
-    out.id = pick::id(in.item);
-    return out;
+    return face_vertex(i, true);
 }
 
 @fragment

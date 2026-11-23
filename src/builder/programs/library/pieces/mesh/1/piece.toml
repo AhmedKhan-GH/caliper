@@ -128,15 +128,15 @@ camera = "orbit"
 frame_ms = 16
 pick = { resource = "vertices", fields = ["index"] }
 
-# The faces of an opaque mesh: they write depth and the ID, as the built-in's opaque draw does.
+# The faces of an opaque mesh: they write the color and depth alone, as the built-in's opaque draw
+# does; the IDs follow in the last pass.
 [[draw.passes]]
 kind = "render"
 vertex = "face_vs"
-fragment = "face_fs"
+fragment = "see_fs"
 indices = "faces"
 blend = "alpha"
 depth = "write"
-pick = true
 
 # The faces of a translucent mesh: they blend and write no depth.
 [[draw.passes]]
@@ -147,8 +147,8 @@ indices = "faces"
 blend = "alpha"
 depth = "test"
 
-# The IDs of a translucent mesh, nearest first as the built-in's pick pass finds them; they leave
-# the color as it is.
+# The IDs of every face, nearest first as the built-in's pick pass finds them, at the depth that the
+# first pass wrote for an opaque mesh; they leave the color as it is.
 [[draw.passes]]
 kind = "render"
 vertex = "face_id_vs"
