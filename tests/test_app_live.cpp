@@ -1571,11 +1571,13 @@ TEST_CASE("app live: an orbit and a pan whose press comes before the pointer's m
 }
 
 // ---- A slow start of an orbit and a pan, and the right click's tolerance ----------------------
-// A camera drag of a scene panel starts at the first frame that its pointer is 2 points from the
-// press (live/camera_drag.h) and moves the camera by the whole way from the press. At a point a
-// frame, the camera moves within one frame of the pointer's first move, and no point is lost: the
-// camera moves as far as a drag with no tolerance moves it. A right drag of 3 points pans and opens
-// no menu, and a right click released without a drag opens the panel's menu.
+// A scene panel's camera follows the pointer from the first point of motion after a press
+// (live/camera_drag.h). At a point a frame, the camera moves on the pointer's first move, and no
+// point is lost: the camera moves one step for each point. The release decides the click: a right
+// press that wobbles a point puts the camera back and opens the panel's menu, as a right click does,
+// and a right drag of 3 points, or one that goes 30 points out and comes back within a point, pans
+// and opens no menu. On a panel without a scene a right click that slips 4 points still opens the
+// menu, within ImGui's drag threshold as before.
 
 namespace {
 
@@ -1620,8 +1622,8 @@ double sum_of(const std::vector<double>& v) {
 
 }  // namespace
 
-TEST_CASE("app live: a slow orbit and pan of a scene panel move the camera from their first points, and a right "
-          "drag of 3 points pans without the menu that a right click opens") {
+TEST_CASE("app live: a slow orbit and pan of a scene panel move the camera on their first frame of motion, a right "
+          "press that wobbles a point puts the camera back and opens the menu, and longer right drags pan without it") {
     const Env env = test_env();
     if (!env.ok) return;
     TempDir t("slow");
@@ -1631,13 +1633,17 @@ TEST_CASE("app live: a slow orbit and pan of a scene panel move the camera from 
     Proc producer;
     const std::string link = start_producer(producer, env);
     // A point a frame: 30 moves of one point from 60 points right of the panel's left edge, at its
-    // middle height; then a right drag of 3 points, and a right click.
+    // middle height; then right drags of 3 points, of 1 point, and of 30 points out and 29 back, a
+    // right click, and a right click on the heatmap that slips 4 points.
     const std::string script = "wait-file " + t.str("spec-ready") +
                                ";page spec;wait 30;"
                                "drag panel:world 60 0.5 to panel:world 90 0.5 steps 30;wait 10;"
                                "drag panel:world 60 0.5 to panel:world 90 0.5 right steps 30;wait 10;"
                                "drag panel:world 60 0.5 to panel:world 63 0.5 right steps 3;wait 10;"
-                               "menu panel:world;wait 10;touch " +
+                               "drag panel:world 60 0.5 to panel:world 61 0.5 right steps 1;wait 10;key escape;wait 5;"
+                               "drag panel:world 60 0.5 to panel:world 90 0.5 then panel:world 61 0.5 right steps 30;"
+                               "wait 10;menu panel:world;wait 10;key escape;wait 5;"
+                               "drag panel:heat 60 0.5 to panel:heat 64 0.5 right steps 4;wait 10;touch " +
                                t.str("menu") + ";key escape;wait 5";
     std::vector<std::string> e = app_env(env, t, script, shots);
     e.push_back("CALIPER_FRAME_LOG=" + t.str("frames.tsv"));
@@ -1666,6 +1672,7 @@ TEST_CASE("app live: a slow orbit and pan of a scene panel move the camera from 
     ok(port, token, "panel.create",
        {{"id", "world"}, {"primitive", "scene"}, {"title", "Attention"},
         {"entity", json::array({{{"path", "attn"}, {"draw", "surface"}, {"bind", "attn"}}})}});
+    ok(port, token, "panel.create", {{"id", "heat"}, {"primitive", "heatmap"}, {"title", "Map"}, {"bind", {{"values", "attn"}}}});
     ok(port, token, "applet.save");
     ok(port, token, "applet.open", {{"id", "slow"}});
     std::ofstream(t.str("spec-ready")).put('\n');
@@ -1681,7 +1688,8 @@ TEST_CASE("app live: a slow orbit and pan of a scene panel move the camera from 
     REQUIRE(rows.size() > 100);
     const auto orbits = button_runs(rows, "world", 1), pans = button_runs(rows, "world", 2);
     REQUIRE(orbits.size() == 1);
-    REQUIRE(pans.size() == 3);   // the slow pan, the right drag of 3 points, the right click
+    // The slow pan, the right drags of 3 points, of 1 point and out and back, and the right click.
+    REQUIRE(pans.size() == 5);
     double pan_step = 0;
     for (const auto& drag : {std::make_pair(std::string("orbit"), orbits[0]), std::make_pair(std::string("pan"), pans[0])}) {
         const std::string& name = drag.first;
@@ -1689,9 +1697,8 @@ TEST_CASE("app live: a slow orbit and pan of a scene panel move the camera from 
         const DragStart d = drag_start(rows, drag.second);
         MESSAGE(name << ": the camera first moved " << d.frames << " frames after the pointer's first move");
         CHECK(d.pointer == 30.0);
-        CHECK(d.frames >= 0);
-        CHECK(d.frames <= 1);
-        REQUIRE(d.steps.size() >= 20);
+        CHECK(d.frames == 0);
+        REQUIRE(d.steps.size() == 30);
         const double median = median_of(d.steps);
         // No jump, and no point lost: the camera moved one step for each point of the pointer's way.
         MESSAGE(name << ": the first camera step is " << d.steps[0] / median << " times the median; the camera "
@@ -1700,19 +1707,43 @@ TEST_CASE("app live: a slow orbit and pan of a scene panel move the camera from 
         CHECK(sum_of(d.steps) == doctest::Approx(30.0 * median).epsilon(1e-3));
         if (name == "pan") pan_step = median;
     }
-    // The right drag of 3 points pans 3 steps of the slow pan and opens no menu.
+    auto popups = [&](size_t from, size_t to) {
+        int n = 0;
+        for (size_t i = from; i < to && i < rows.size(); ++i) n += rows[i].popup;
+        return n;
+    };
+    auto distance = [](const std::string& a, const std::string& b) {
+        const std::vector<double> x = camera_numbers(a), y = camera_numbers(b);
+        double d = 0;
+        for (size_t k = 0; k < x.size() && k < y.size(); ++k) d += (x[k] - y[k]) * (x[k] - y[k]);
+        return std::sqrt(d);
+    };
+    // The right drag of 3 points pans 3 steps of the slow pan from its first point and opens no menu.
     const DragStart short_drag = drag_start(rows, pans[1]);
     CHECK(short_drag.pointer == 3.0);
-    CHECK(short_drag.frames >= 0);
-    CHECK(short_drag.frames <= 1);
+    CHECK(short_drag.frames == 0);
     CHECK(sum_of(short_drag.steps) == doctest::Approx(3.0 * pan_step).epsilon(1e-3));
-    int popup_frames = 0;
-    for (size_t i = pans[1].first; i < pans[2].first; ++i) popup_frames += rows[i].popup;
-    CHECK(popup_frames == 0);
-    // The right click without a drag leaves the camera and opens the menu.
+    CHECK(popups(pans[1].first, pans[2].first) == 0);
+    // The right press that wobbles a point pans on that point, puts the camera back exactly at its
+    // release and opens the menu.
     REQUIRE(pans[2].second + 1 < rows.size());
+    const DragStart wobble = drag_start(rows, pans[2]);
+    CHECK(wobble.pointer == 1.0);
+    CHECK(wobble.frames == 0);
     CHECK(rows[pans[2].second + 1].camera == rows[pans[2].first].camera);
-    bool opened = false;
-    for (size_t i = pans[2].second; i < rows.size() && i < pans[2].second + 12; ++i) opened = opened || rows[i].popup == 1;
-    CHECK(opened);
+    CHECK(popups(pans[2].second, pans[2].second + 12) > 0);
+    // Out 30 points and back within one: a drag, which keeps its camera and opens no menu.
+    REQUIRE(pans[3].second + 1 < rows.size());
+    CHECK(drag_start(rows, pans[3]).pointer == 1.0);
+    const double kept = distance(rows[pans[3].second + 1].camera, rows[pans[3].first].camera);
+    CHECK(kept == doctest::Approx(pan_step).epsilon(1e-3));   // one point of pan from the press
+    CHECK(popups(pans[3].first, pans[4].first) == 0);
+    // The right click without a drag leaves the camera and opens the menu.
+    REQUIRE(pans[4].second + 1 < rows.size());
+    CHECK(rows[pans[4].second + 1].camera == rows[pans[4].first].camera);
+    CHECK(popups(pans[4].second, pans[4].second + 12) > 0);
+    // The heatmap's right click that slipped 4 points opens the menu.
+    const auto heat = button_runs(rows, "-", 2);
+    REQUIRE(heat.size() == 1);
+    CHECK(popups(heat[0].second, heat[0].second + 12) > 0);
 }

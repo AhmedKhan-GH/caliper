@@ -17,6 +17,7 @@
 #include "embed/embed_core.h"
 #include "gfx/gfx.h"
 #include "live/live_source.h"   // PayloadMap
+#include "scene/camera.h"            // ViewCamera, which a press keeps
 #include "scene/camera_defaults.h"   // the 3-D views' default camera
 #include "scene/scene.h"             // kPalette
 
@@ -121,18 +122,27 @@ struct LiveEvent {
 using EventSink = std::function<void(const LiveEvent&)>;
 
 // The pointer gesture on a view while a host listens for events: the browser
-// element's rule (web/src/views/interact.ts). A shift-drag selects; a drag
+// element's rule (web/src/views/interact.ts), except for the camera presses
+// below, which the browser element does not follow yet. A shift-drag selects; a drag
 // without shift pans or orbits; a press and release that moved at most
 // kClickSlop pixels is a click (a pick), and with shift it also clears the
 // selection. In a view with a camera (a scene, points), a press without shift
-// stays a click only within kCameraDragStart points (camera_drag.h), and its
-// drag moves the camera by the whole way from the press.
+// moves the camera from its first point of motion, and it is a click when the
+// pointer stayed within kCameraClickTolerance points of the press all along
+// (camera_drag.h): the camera then goes back to the camera of the press.
 struct Gesture {
     bool down = false, moved = false, selecting = false;
+    bool pressed = false;            // the press came in this frame
     bool shift = false, alt = false, ctrl = false;
     int button = 0;                  // ImGuiMouseButton of the press
     float x0 = 0.0f, y0 = 0.0f;      // press position (screen)
-    float lx = 0.0f, ly = 0.0f;      // the pointer when the drag last moved the view (a camera drag: the press, until it starts)
+    float lx = 0.0f, ly = 0.0f;      // the pointer when the drag last moved the view
+    float max_d2 = 0.0f;             // a camera press: the largest squared distance from the press
+    // A camera press: the camera and the view's moved() at the press, which a click puts back, and
+    // the camera that the press's own motion left last; while it is the view's camera the press can
+    // put it back.
+    caliper_scene::ViewCamera press_camera, step_camera;
+    bool press_moved = false, restorable = false;
     double d0x = 0.0, d0y = 0.0, d1x = 0.0, d1y = 0.0;   // drag ends in data coordinates
     std::vector<float> lasso;        // points: the lasso (x, y pairs, screen)
     bool rect = false;               // points: shift + alt selects a rectangle

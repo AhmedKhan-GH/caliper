@@ -216,6 +216,13 @@ public:
     // as when a viewer attaches late and the scene's parts arrive one by one, and when the
     // picture changes shape.
     bool moved() const { return moved_; }
+    // Puts back the camera and the moved() state that a press on the picture saved, when the press
+    // ends as a click (live/camera_drag.h): exactly as they were, and the view draws again.
+    void restore_camera(const caliper_scene::ViewCamera& camera, bool moved) {
+        camera_ = camera;
+        moved_ = moved;
+        changed();
+    }
     // What a spec panel sets on the batches of one entity beyond the scene messages: its depth
     // offset, -8 to 8 (scene.h, Batch::depth_offset), and the size and shape of its points.
     struct BatchStyle {

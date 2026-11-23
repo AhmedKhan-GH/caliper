@@ -86,6 +86,9 @@ public:
     void pan(float dx, float dy, float view_height);
     void zoom(float wheel, float mx, float my, double aspect);   // m: the pointer, -1 to 1
     const caliper_scene::ViewCamera& camera() const { return camera_; }
+    // Puts back a camera that a press on the picture saved, when the press ends as a click
+    // (live/camera_drag.h).
+    void set_camera(const caliper_scene::ViewCamera& camera) { camera_ = camera; }
     // The f32 clip-from-world matrix of a width x height target, as the draws get it.
     bool mvp(uint32_t width, uint32_t height, float out[16]) const;
 

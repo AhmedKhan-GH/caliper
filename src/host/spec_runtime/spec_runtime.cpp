@@ -7,6 +7,7 @@
 #include "spec_runtime/spec_shortcuts.h"
 #include "spec_runtime/spec_transport.h"
 #include "spec_runtime/spec_stage_host.h"
+#include "live/camera_drag.h"         // a right click on a 3-D points box, as on a scene
 #include "live/live_views_scene.h"   // a scene drawn into a scene panel's rectangle
 #include "live/live_scene.h"         // the scene view of a panel's entities
 #include "spec_runtime/spec_entities.h"
@@ -645,6 +646,44 @@ void draw_points2d(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
     draw_class_legend(P, c, L);
 }
 
+// A right press on a 3-D points panel's box, which ImPlot3D turns from the first point of motion
+// (as a scene panel's camera moves, live/camera_drag.h): after BeginPlot, before the box takes its
+// input, the press saves the turn, and a release whose pointer stayed within the click's tolerance
+// puts it back before the box draws, unless something else turned the box meanwhile (its own
+// animation after a double right click).
+void turn_press_begin(SpecPanelView& v, ImPlot3DPlot* box, const ImRect& plot) {
+    v.box_rect[0] = plot.Min.x, v.box_rect[1] = plot.Min.y, v.box_rect[2] = plot.GetWidth(), v.box_rect[3] = plot.GetHeight();
+    if (!box) return;
+    const ImGuiIO& io = ImGui::GetIO();
+    const ImPlot3DQuat& q = box->Rotation;
+    auto same = [&](const double t[4]) { return q.x == t[0] && q.y == t[1] && q.z == t[2] && q.w == t[3]; };
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && ImGui::IsWindowHovered() &&
+        ImGui::IsMouseHoveringRect(plot.Min, plot.Max)) {
+        v.turn_down = v.turn_restorable = true;
+        v.turn_max_d2 = 0.0f;
+        v.turn_press[0] = q.x, v.turn_press[1] = q.y, v.turn_press[2] = q.z, v.turn_press[3] = q.w;
+        for (int i = 0; i < 4; ++i) v.box_turn[i] = v.turn_press[i];
+    }
+    if (!v.turn_down) return;
+    if (!same(v.box_turn)) v.turn_restorable = false;
+    if (ImGui::IsMousePosValid()) {
+        const float dx = io.MousePos.x - io.MouseClickedPos[ImGuiMouseButton_Right].x;
+        const float dy = io.MousePos.y - io.MouseClickedPos[ImGuiMouseButton_Right].y;
+        v.turn_max_d2 = std::max(v.turn_max_d2, dx * dx + dy * dy);
+    }
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
+        if (v.turn_restorable && caliper_live_views::camera_press_is_click(v.turn_max_d2))
+            box->Rotation = ImPlot3DQuat(v.turn_press[0], v.turn_press[1], v.turn_press[2], v.turn_press[3]);
+        v.turn_down = false;
+    }
+}
+
+void turn_press_end(SpecPanelView& v, const ImPlot3DPlot* box) {
+    if (!box) return;
+    v.box_turn[0] = box->Rotation.x, v.box_turn[1] = box->Rotation.y, v.box_turn[2] = box->Rotation.z;
+    v.box_turn[3] = box->Rotation.w;
+}
+
 void draw_points3d(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
     const PreparedPanel& p = v.data;
     const PreparedPoints& P = p.points;
@@ -667,6 +706,8 @@ void draw_points3d(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
                 fit_limits(zs, false, 0.02, &z0, &z1))
                 ImPlot3D::SetupAxesLimits(x0, x1, y0, y1, z0, z1, ImPlot3DCond_Always);
         }
+        ImPlot3DPlot* box = ImPlot3D::GetCurrentPlot();
+        turn_press_begin(v, box, plot);
         const float base = caliper_live_views::point_size_px((uint64_t)P.x.size(), L.text_scale);
         ImPlot3DSpec spec;
         spec.Marker = ImPlot3DMarker_Square;
@@ -689,6 +730,7 @@ void draw_points3d(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
         }
         ImPlot3D::PlotScatter("##points", P.x.data(), P.y.data(), P.z.data(), (int)P.x.size(), spec);
         ImPlot3D::EndPlot();
+        turn_press_end(v, box);
     }
     ImPlot3D::PopStyleVar();
     ImGui::PopFont();
@@ -1377,6 +1419,26 @@ bool SpecRuntime::scene_rect(const std::string& panel_id, float rect[4]) const {
     const auto it = scenes_->by_panel.find(panel_id);
     if (it == scenes_->by_panel.end() || !(it->second.rect[2] > 0.0f) || !(it->second.rect[3] > 0.0f)) return false;
     for (int i = 0; i < 4; ++i) rect[i] = it->second.rect[i];
+    return true;
+}
+
+bool SpecRuntime::camera_area(const std::string& panel_id, float x, float y) const {
+    auto inside = [x, y](const float r[4]) {
+        return r[2] > 0.0f && r[3] > 0.0f && x >= r[0] && y >= r[1] && x < r[0] + r[2] && y < r[1] + r[3];
+    };
+    float r[4];
+    if (scene_rect(panel_id, r) && inside(r)) return true;
+    const auto it = entries_.find(panel_id);
+    return it != entries_.end() && it->second.view.data.primitive == spec::Primitive::points &&
+           it->second.view.data.points.three_d && inside(it->second.view.box_rect);
+}
+
+bool SpecRuntime::points_turn(const std::string& panel_id, double q[4]) const {
+    const auto it = entries_.find(panel_id);
+    if (it == entries_.end() || it->second.view.data.primitive != spec::Primitive::points ||
+        !it->second.view.data.points.three_d)
+        return false;
+    for (int i = 0; i < 4; ++i) q[i] = it->second.view.box_turn[i];
     return true;
 }
 

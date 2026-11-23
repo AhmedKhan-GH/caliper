@@ -16,7 +16,7 @@
 #include "spec_runtime/spec_annotations.h"
 #include "spec_runtime/spec_offscreen.h"
 #include "spec_runtime/spec_runtime.h"
-#include "live/camera_drag.h"   // a right click within the tolerance of a scene panel's pan opens the menu
+#include "live/camera_drag.h"   // a right click on a camera's picture is a click as the camera decides it
 #include "live/live_scene.h"   // camera.get and camera.set read and move a panel's scene view
 #include "export_service.h"     // export_encode_png
 #if defined(__APPLE__)
@@ -442,17 +442,24 @@ struct SpecPage::Impl {
         // A right click opens the menu when it is released without a drag, as the live scene's
         // camera menu does: a right press on a scene panel starts a pan, and a menu opened by that
         // press would take the next press, which then moves no camera.
-        // Without a drag means within the tolerance at which a scene panel's pan starts
-        // (live/camera_drag.h), so that a right drag that panned opens no menu. The release frame's
-        // own move is not in ImGui's drag distance yet, so the distance from the press to the pointer
-        // is checked too: a quick flick that ends in its last move is a drag.
+        // On a picture whose right drag turns a camera (a scene panel's picture, a 3-D points box),
+        // without a drag means as the camera decides that its press was a click, which then puts the
+        // camera back (live/camera_drag.h): the pointer stayed within the click's tolerance of the
+        // press all along, so a right drag that went farther opens no menu, also when it came back.
+        // Elsewhere (a chart, a table, the title strip) it means within ImGui's drag threshold.
+        // The release frame's own move is not in ImGui's drag distance yet, so the distance from the
+        // press to the pointer is checked too: a quick flick that ends in its last move is a drag.
         if (over && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
             const ImGuiIO& io = ImGui::GetIO();
-            const float dx = io.MousePos.x - io.MouseClickedPos[ImGuiMouseButton_Right].x;
-            const float dy = io.MousePos.y - io.MouseClickedPos[ImGuiMouseButton_Right].y;
-            if (!caliper_live_views::camera_drag_started_sqr(io.MouseDragMaxDistanceSqr[ImGuiMouseButton_Right]) &&
-                !caliper_live_views::camera_drag_started(dx, dy))
-                menu_request = f.id;
+            const ImVec2 press = io.MouseClickedPos[ImGuiMouseButton_Right];
+            const float dx = io.MousePos.x - press.x, dy = io.MousePos.y - press.y;
+            const bool camera = runtime && runtime->camera_area(f.id, press.x, press.y);
+            const bool click =
+                camera ? caliper_live_views::camera_press_is_click(
+                             std::max(io.MouseDragMaxDistanceSqr[ImGuiMouseButton_Right], dx * dx + dy * dy))
+                       : !ImGui::IsMouseDragPastThreshold(ImGuiMouseButton_Right) &&
+                             dx * dx + dy * dy <= io.MouseDragThreshold * io.MouseDragThreshold;
+            if (click) menu_request = f.id;
         }
     }
 

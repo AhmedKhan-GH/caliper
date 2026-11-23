@@ -2182,10 +2182,11 @@ TEST_CASE("live/app: a scene view's picks, hovers and selections reach the scrip
     a.detach();
 }
 
-// A scene view's camera drag starts at the first frame that its pointer is 2 points from the press
-// (live/camera_drag.h) and moves the camera by the whole way from the press, so a drag of a point a
-// frame moves the camera within one frame of its first move and as far as a drag with no tolerance.
-// A click, and a press that moves one point before its release, pick and leave the camera.
+// A scene view's camera follows the pointer from the first point of motion after a press
+// (live/camera_drag.h), so a drag of a point a frame moves the camera on its first frame of motion
+// and as far as the pointer went. A click, and a press that wobbles one point before its release,
+// pick and put the camera back exactly; a drag that goes 30 points out and comes back within a
+// point stays a drag.
 namespace {
 // The numbers of the view's orbit: target x, y, z, distance, azimuth and elevation.
 std::vector<double> orbit_numbers(const caliper_live_views::SceneView& sv) {
@@ -2200,8 +2201,8 @@ double camera_distance(const std::vector<double>& a, const std::vector<double>& 
 }
 }  // namespace
 
-TEST_CASE("live/app: a scene view's slow orbit and pans move the camera from their first points by the pointer's "
-          "whole way; a click and a press that moves one point pick and leave the camera") {
+TEST_CASE("live/app: a scene view's slow orbit and pans move the camera on their first frame of motion by the "
+          "pointer's whole way; a click and a press that wobbles one point pick and put the camera back") {
     HostFrame host;
     if (!host.ok) CALIPER_SKIP_NO_GPU("no Metal device for the host's offscreen canvas");
     FakeProducer p;
@@ -2256,10 +2257,11 @@ TEST_CASE("live/app: a scene view's slow orbit and pans move the camera from the
         if (moved) {
             io.AddMousePosEvent(cx + 1.0f, cy);
             frame();
+            CHECK(orbit_numbers(*sv) != cam);   // the wobble turned the camera on its first point
         }
         io.AddMouseButtonEvent(0, false);
         frame();
-        CHECK(orbit_numbers(*sv) == cam);
+        CHECK(orbit_numbers(*sv) == cam);   // and the click put it back exactly
         CHECK(frames_until([&] { return picks() == before + 1; }));
         // Past the double-click time, so that the next press is a click of its own.
         io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
@@ -2291,9 +2293,8 @@ TEST_CASE("live/app: a scene view's slow orbit and pans move the camera from the
             if (d > 0) steps.push_back(d);
         }
         MESSAGE("button " << button << ": the camera first moved " << first - 1 << " frames after the first move");
-        CHECK(first >= 1);
-        CHECK(first <= 2);
-        REQUIRE(steps.size() >= 20);
+        CHECK(first == 1);
+        REQUIRE(steps.size() == std::size_t(kMoves));
         std::vector<double> sorted = steps;
         std::sort(sorted.begin(), sorted.end());
         CHECK(steps[0] <= 3.0 * sorted[sorted.size() / 2]);
@@ -2311,7 +2312,31 @@ TEST_CASE("live/app: a scene view's slow orbit and pans move the camera from the
             CAPTURE(k);
             CHECK(cams.back()[k] == doctest::Approx(want[k]).epsilon(1e-6));
         }
+        CHECK(orbit_numbers(*sv) == cams.back());   // a drag: the release keeps the camera
+        io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+        for (int k = 0; k < 40; ++k) frame();
     }
+
+    // A drag 30 points out and 29 back: a drag, which picks nothing and keeps its camera.
+    const int picked = picks();
+    io.AddMousePosEvent(cx, cy);
+    frame();
+    const std::vector<double> out_from = orbit_numbers(*sv);
+    io.AddMouseButtonEvent(0, true);
+    frame();
+    for (int k = 1; k <= 30; ++k) {
+        io.AddMousePosEvent(cx + float(k), cy);
+        frame();
+    }
+    for (int k = 29; k >= 1; --k) {
+        io.AddMousePosEvent(cx + float(k), cy);
+        frame();
+    }
+    io.AddMouseButtonEvent(0, false);
+    for (int k = 0; k < 20; ++k) frame();
+    CHECK(picks() == picked);
+    CHECK(orbit_numbers(*sv) != out_from);
+    CHECK(orbit_numbers(*sv)[4] == doctest::Approx(out_from[4] + 0.01).epsilon(1e-9));   // one point of orbit
     a.detach();
 }
 

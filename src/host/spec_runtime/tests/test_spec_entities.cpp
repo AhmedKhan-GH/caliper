@@ -1160,12 +1160,14 @@ TEST_CASE("programs: a drag in a panel of programs draws each frame with that fr
     CHECK(view->draw_runtimes()[0]->resource_step("arcs") == step);
 }
 
-// ---- The start of a camera drag in a scene panel (live/camera_drag.h) ---------------------------
-// A camera drag starts at the first frame that its pointer is 2 points from the press and moves the
-// camera by the whole way from the press. A drag of a point a frame thus moves the camera within one
-// frame of its first move and as far as a drag with no tolerance, for the orbit of the left button
-// and the pans of the right and middle buttons. A click, and a press that moves one point before its
-// release, pick and leave the camera.
+// ---- A camera press in a scene panel (live/camera_drag.h) ----------------------------------------
+// The camera follows the pointer from the first point of motion after a press, for the orbit of the
+// left button and the pans of the right and middle buttons, so a drag of a point a frame moves the
+// camera on its first frame of motion and as far as the pointer went. The release decides the click:
+// a press whose pointer stayed within 2 points of it puts the camera back exactly as it was at the
+// press and picks the item under the press point, and a drag that went farther stays a drag, also
+// when it comes back to its start. A double click's fit stays, a resting finger's jitter leaves no
+// drift, a pick in flight survives the next drag, and a control over the picture takes its own press.
 
 namespace {
 
@@ -1190,12 +1192,22 @@ struct PanelInput {
         std::string why;
         REQUIRE_MESSAGE(p.c->render(1, [&](const ImRect& area) { p.rt->draw(area, p.c->look()); }, nullptr, &why), why);
     }
+    void frame() const { (*this)([](ImGuiIO&) {}); }
+    void move(float x, float y) const { (*this)([&](ImGuiIO& io) { io.AddMousePosEvent(x, y); }); }
+    void button(int b, bool down) const { (*this)([&](ImGuiIO& io) { io.AddMouseButtonEvent(b, down); }); }
+    // The pointer leaves, and the frames pass the double-click time, so that the next press is a
+    // click of its own.
+    void rest() const {
+        move(-FLT_MAX, -FLT_MAX);
+        for (int k = 0; k < 40; ++k) frame();
+    }
 };
 
-// A point of the view, from 0 to 1 across it, whose ID texel and the texels to its right up to
-// `reach` texels hold the program's pick id, so that a press there and a release `reach` texels to
-// the right both hit the program.
-bool program_span(caliper_live_views::SceneView& view, std::uint32_t pick_id, std::uint32_t reach, float* u, float* v) {
+// Two program items next to each other in the view's ID target: the texel (tx, ty) holds item
+// *press, and the texel `reach` texels to its right, or below it when *down, holds another item of
+// the program. False when the frame has none.
+bool adjacent_items(caliper_live_views::SceneView& view, std::uint32_t pick_id, std::uint32_t reach,
+                    std::uint32_t* tx, std::uint32_t* ty, bool* down, std::uint32_t* press) {
     caliper_gfx::Backend& gfx = view.backend();
     if (!view.id_target()) return false;
     const caliper_gfx::Readback rb = gfx.read_texture(view.id_target(), 0, 0, view.width(), view.height());
@@ -1203,26 +1215,47 @@ bool program_span(caliper_live_views::SceneView& view, std::uint32_t pick_id, st
     std::vector<std::uint8_t> ids;
     for (int k = 0; k < 200 && !gfx.take_readback(rb, &ids); ++k) gfx.wait(gfx.last_use(view.id_target()));
     if (ids.size() != std::size_t(view.width()) * view.height() * 8) return false;
-    auto id_at = [&](std::uint32_t x, std::uint32_t y) {
-        std::uint32_t texel[2];
-        std::memcpy(texel, ids.data() + (std::size_t(y) * view.width() + x) * 8, 8);
-        return texel[0];
+    auto texel = [&](std::uint32_t x, std::uint32_t y, std::uint32_t k) {
+        std::uint32_t t[2];
+        std::memcpy(t, ids.data() + (std::size_t(y) * view.width() + x) * 8, 8);
+        return t[k];
     };
-    for (std::uint32_t y = 0; y < view.height(); ++y)
-        for (std::uint32_t x = 1; x + reach + 1 < view.width(); ++x) {
-            bool all = true;
-            for (std::uint32_t k = 0; k <= reach + 1 && all; ++k) all = id_at(x - 1 + k, y) == pick_id;
-            if (!all) continue;
-            *u = (float(x) + 0.5f) / float(view.width());
-            *v = (float(y) + 0.5f) / float(view.height());
-            return true;
-        }
+    for (const bool vertical : {false, true})
+        for (std::uint32_t y = 0; y + (vertical ? reach : 0) < view.height(); ++y)
+            for (std::uint32_t x = 0; x + (vertical ? 0 : reach) < view.width(); ++x) {
+                const std::uint32_t x1 = vertical ? x : x + reach, y1 = vertical ? y + reach : y;
+                if (texel(x, y, 0) != pick_id || texel(x1, y1, 0) != pick_id || texel(x, y, 1) == texel(x1, y1, 1))
+                    continue;
+                *tx = x;
+                *ty = y;
+                *down = vertical;
+                *press = texel(x, y, 1);
+                return true;
+            }
     return false;
 }
 
+int pick_events(const ArcsPanel& p) {
+    int n = 0;
+    for (const caliper_builder::Event& e : p.events.got) n += e.kind == caliper_builder::EventKind::pick;
+    return n;
+}
+
+// The panel's picture rectangle and its centre, in whole points.
+struct PanelRect {
+    float r[4] = {0, 0, 0, 0};
+    float cx = 0, cy = 0;
+    explicit PanelRect(ArcsPanel& p) {
+        REQUIRE(p.rt->scene_rect("world", r));
+        cx = std::round(r[0] + 0.5f * r[2]);
+        cy = std::round(r[1] + 0.5f * r[3]);
+    }
+};
+
 }  // namespace
 
-TEST_CASE("programs: a slow drag in a scene panel moves the camera from its first points by the pointer's whole way") {
+TEST_CASE("programs: a slow drag in a scene panel moves the camera on its first frame of motion, by the pointer's "
+          "whole way") {
     SpecOffscreen* c = canvas();
     if (!c || !c->native_device()) {
         MESSAGE("skipped: no Metal device");
@@ -1231,24 +1264,23 @@ TEST_CASE("programs: a slow drag in a scene panel moves the camera from its firs
     ArcsPanel p(c, arcs_spec(false), canvas_layer(c));
     caliper_live_views::SceneView* view = p.running();
     REQUIRE(view != nullptr);
-    float r[4];
-    REQUIRE(p.rt->scene_rect("world", r));
-    const PanelInput input{p};
-    const float x0 = std::round(r[0] + 0.5f * r[2]), y = std::round(r[1] + 0.5f * r[3]);
+    const PanelRect pr(p);
+    const PanelInput in{p};
     constexpr int kMoves = 30;
     for (const int button : {0, 1, 2}) {
         CAPTURE(button);
-        input([&](ImGuiIO& io) { io.AddMousePosEvent(x0, y); });
+        in.move(pr.cx, pr.cy);
         const caliper_scene::ViewCamera before = view->camera();
-        input([&](ImGuiIO& io) { io.AddMouseButtonEvent(button, true); });
+        in.button(button, true);
         std::vector<std::vector<double>> cams = {orbit_numbers(*view)};
         REQUIRE(cams[0].size() == 6);
         for (int k = 1; k <= kMoves; ++k) {
-            input([&](ImGuiIO& io) { io.AddMousePosEvent(x0 + float(k), y); });
+            in.move(pr.cx + float(k), pr.cy);
             cams.push_back(orbit_numbers(*view));
         }
-        input([&](ImGuiIO& io) { io.AddMouseButtonEvent(button, false); });
-        input([&](ImGuiIO& io) { io.AddMousePosEvent(-FLT_MAX, -FLT_MAX); });
+        in.button(button, false);
+        CHECK(orbit_numbers(*view) == cams.back());   // a drag: the release keeps the camera
+        in.rest();
         int first = 0;
         std::vector<double> steps;
         for (int k = 1; k <= kMoves; ++k) {
@@ -1257,18 +1289,17 @@ TEST_CASE("programs: a slow drag in a scene panel moves the camera from its firs
             if (d > 0) steps.push_back(d);
         }
         MESSAGE("button " << button << ": the camera first moved " << first - 1 << " frames after the first move");
-        CHECK(first >= 1);
-        CHECK(first <= 2);
-        REQUIRE(steps.size() >= 20);
+        CHECK(first == 1);
+        REQUIRE(steps.size() == std::size_t(kMoves));
         std::vector<double> sorted = steps;
         std::sort(sorted.begin(), sorted.end());
         CHECK(steps[0] <= 3.0 * sorted[sorted.size() / 2]);
-        // The same drag with no tolerance: a step of one point at each move.
+        // The same drag as the scene view's own steps: one point at each move.
         const caliper_scene::ViewCamera after = view->camera();
         view->camera() = before;
         for (int k = 0; k < kMoves; ++k) {
             if (button == 0) view->orbit(1.0f, 0.0f);
-            else view->pan(1.0f, 0.0f, r[3]);
+            else view->pan(1.0f, 0.0f, pr.r[3]);
         }
         const std::vector<double> want = orbit_numbers(*view);
         view->camera() = after;
@@ -1280,8 +1311,8 @@ TEST_CASE("programs: a slow drag in a scene panel moves the camera from its firs
     }
 }
 
-TEST_CASE("programs: a click in a scene panel picks, and so does a press that moves one point before its release, "
-          "which leaves the camera") {
+TEST_CASE("programs: a click in a scene panel with a point of wobble puts the camera back exactly and picks the item "
+          "under its press, at its release") {
     SpecOffscreen* c = canvas();
     if (!c || !c->native_device()) {
         MESSAGE("skipped: no Metal device");
@@ -1290,30 +1321,304 @@ TEST_CASE("programs: a click in a scene panel picks, and so does a press that mo
     ArcsPanel p(c, arcs_spec(false), canvas_layer(c));
     caliper_live_views::SceneView* view = p.running();
     REQUIRE(view != nullptr);
-    float r[4];
-    REQUIRE(p.rt->scene_rect("world", r));
-    // A point of the arcs with one point of arcs to its right, in the ID target's texels.
-    const float kx = float(view->width()) / r[2];
-    float u = 0, v = 0;
-    REQUIRE(program_span(*view, view->draw_runtimes()[0]->pick_id(), std::uint32_t(std::ceil(kx)), &u, &v));
-    const float x = r[0] + u * r[2], y = r[1] + v * r[3];
-    const PanelInput input{p};
-    for (const int moved : {0, 1}) {
-        CAPTURE(moved);
+    const PanelRect pr(p);
+    const PanelInput in{p};
+    // Two arcs next to each other: the press on the one, the wobble of one point onto the other.
+    const float kx = float(view->width()) / pr.r[2], ky = float(view->height()) / pr.r[3];
+    REQUIRE(std::fabs(kx - std::round(kx)) < 1e-3f);
+    std::uint32_t tx = 0, ty = 0, item = 0;
+    bool vertical = false;
+    REQUIRE(adjacent_items(*view, view->draw_runtimes()[0]->pick_id(), std::uint32_t(std::round(kx)), &tx, &ty,
+                           &vertical, &item));
+    const float x = pr.r[0] + (float(tx) + 0.5f) / kx, y = pr.r[1] + (float(ty) + 0.5f) / ky;
+    const float wx = vertical ? x : x + 1.0f, wy = vertical ? y + 1.0f : y;
+    for (const int button : {0, 1, 2}) {
+        CAPTURE(button);
         p.events.got.clear();
-        input([&](ImGuiIO& io) { io.AddMousePosEvent(x, y); });
+        in.move(x, y);
         const std::vector<double> cam = orbit_numbers(*view);
-        input([&](ImGuiIO& io) { io.AddMouseButtonEvent(0, true); });
-        if (moved) input([&](ImGuiIO& io) { io.AddMousePosEvent(x + 1.0f, y); });
-        input([&](ImGuiIO& io) { io.AddMouseButtonEvent(0, false); });
-        for (int k = 0; k < 8 && !p.pick_event(); ++k) input([](ImGuiIO&) {});
+        in.button(button, true);
+        in.move(wx, wy);
+        CHECK(orbit_numbers(*view) != cam);   // the wobble moved the camera on its first point
+        for (int k = 0; k < 5; ++k) in.frame();
+        CHECK(pick_events(p) == 0);   // no pick while the button is held
+        in.button(button, false);
+        CHECK(orbit_numbers(*view) == cam);   // exactly the camera of the press
+        for (int k = 0; k < 8 && !p.pick_event(); ++k) in.frame();
+        if (button == 0) {
+            REQUIRE(p.pick_event() != nullptr);
+            CHECK(p.pick_event()->fields.value("program", std::string()) == "tower_arcs");
+            CHECK(p.pick_event()->fields.value("item", std::uint32_t(0xffffffffu)) == item);   // the press's item
+        } else {
+            CHECK(pick_events(p) == 0);
+        }
         CHECK(orbit_numbers(*view) == cam);
-        REQUIRE(p.pick_event() != nullptr);
-        CHECK(p.pick_event()->fields.value("program", std::string()) == "tower_arcs");
-        // Past the double-click time, so that the next press is a click of its own.
-        input([&](ImGuiIO& io) { io.AddMousePosEvent(-FLT_MAX, -FLT_MAX); });
-        for (int k = 0; k < 40; ++k) input([](ImGuiIO&) {});
+        in.rest();
     }
+}
+
+TEST_CASE("programs: a drag in a scene panel that goes 30 points out and comes back within a point stays a drag") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) {
+        MESSAGE("skipped: no Metal device");
+        return;
+    }
+    ArcsPanel p(c, arcs_spec(false), canvas_layer(c));
+    caliper_live_views::SceneView* view = p.running();
+    REQUIRE(view != nullptr);
+    const PanelRect pr(p);
+    const PanelInput in{p};
+    for (const int button : {0, 1}) {
+        CAPTURE(button);
+        p.events.got.clear();
+        in.move(pr.cx, pr.cy);
+        const caliper_scene::ViewCamera before = view->camera();
+        const std::vector<double> cam = orbit_numbers(*view);
+        in.button(button, true);
+        for (int k = 1; k <= 30; ++k) in.move(pr.cx + float(k), pr.cy);
+        for (int k = 29; k >= 1; --k) in.move(pr.cx + float(k), pr.cy);
+        in.button(button, false);
+        for (int k = 0; k < 8; ++k) in.frame();
+        CHECK(pick_events(p) == 0);
+        const std::vector<double> got = orbit_numbers(*view);
+        CHECK(got != cam);   // not put back
+        // The camera went 30 points out and 29 back: one point from the press.
+        const caliper_scene::ViewCamera after = view->camera();
+        view->camera() = before;
+        if (button == 0) view->orbit(1.0f, 0.0f);
+        else view->pan(1.0f, 0.0f, pr.r[3]);
+        const std::vector<double> want = orbit_numbers(*view);
+        view->camera() = after;
+        for (std::size_t k = 0; k < 6; ++k) {
+            CAPTURE(k);
+            CHECK(got[k] == doctest::Approx(want[k]).epsilon(1e-6));
+        }
+        in.rest();
+    }
+}
+
+TEST_CASE("programs: a double click in a scene panel fits, and the release of its wobbling second press keeps the fit") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) {
+        MESSAGE("skipped: no Metal device");
+        return;
+    }
+    ArcsPanel p(c, arcs_spec(false), canvas_layer(c));
+    caliper_live_views::SceneView* view = p.running();
+    REQUIRE(view != nullptr);
+    const PanelRect pr(p);
+    const PanelInput in{p};
+    // A pan away first, so that the fit moves the camera.
+    in.move(pr.cx, pr.cy);
+    in.button(1, true);
+    for (int k = 1; k <= 40; ++k) in.move(pr.cx + float(k), pr.cy);
+    in.button(1, false);
+    in.rest();
+    const caliper_scene::ViewCamera panned = view->camera();
+    view->fit();
+    const std::vector<double> fitted = orbit_numbers(*view);
+    view->camera() = panned;
+    REQUIRE(fitted != orbit_numbers(*view));
+    // Two clicks within the double-click time; the second press wobbles a point before its release.
+    in.move(pr.cx, pr.cy);
+    in.button(0, true);
+    in.button(0, false);
+    in.button(0, true);
+    CHECK(orbit_numbers(*view) == fitted);   // the second press fits
+    in.move(pr.cx + 1.0f, pr.cy);
+    CHECK(orbit_numbers(*view) != fitted);
+    in.button(0, false);
+    CHECK(orbit_numbers(*view) == fitted);   // its release puts back the fit, not the camera before it
+    in.rest();
+    CHECK(orbit_numbers(*view) == fitted);
+}
+
+TEST_CASE("programs: a resting finger's jitter on a scene panel moves the camera only while it rests, with no drift") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) {
+        MESSAGE("skipped: no Metal device");
+        return;
+    }
+    ArcsPanel p(c, arcs_spec(false), canvas_layer(c));
+    caliper_live_views::SceneView* view = p.running();
+    REQUIRE(view != nullptr);
+    const PanelRect pr(p);
+    const PanelInput in{p};
+    in.move(pr.cx, pr.cy);
+    const std::vector<double> start = orbit_numbers(*view);
+    // A trackpad's sub-point jitter, which never comes back to the press exactly.
+    const float jitter[][2] = {{0.25f, 0.0f}, {0.5f, -0.25f}, {0.75f, 0.25f}, {0.25f, 0.5f}, {-0.25f, 0.25f},
+                               {-0.5f, -0.5f}, {1.0f, 0.75f}, {0.5f, 1.25f}, {0.75f, 0.5f}, {0.25f, 0.25f}};
+    for (const int button : {0, 1, 0, 1, 0}) {
+        CAPTURE(button);
+        in.move(pr.cx, pr.cy);
+        in.button(button, true);
+        bool wobbled = false;
+        for (int k = 0; k < 20; ++k) {
+            in.move(pr.cx + jitter[k % 10][0], pr.cy + jitter[k % 10][1]);
+            wobbled = wobbled || orbit_numbers(*view) != start;
+        }
+        CHECK(wobbled);
+        in.button(button, false);
+        CHECK(orbit_numbers(*view) == start);
+        in.rest();
+    }
+    CHECK(orbit_numbers(*view) == start);
+}
+
+TEST_CASE("programs: a drag that starts while a click's pick is in flight moves the camera from its first point, and "
+          "the click's pick still answers with the item under it") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) {
+        MESSAGE("skipped: no Metal device");
+        return;
+    }
+    ArcsPanel p(c, arcs_spec(false), canvas_layer(c));
+    caliper_live_views::SceneView* view = p.running();
+    REQUIRE(view != nullptr);
+    const PanelRect pr(p);
+    const PanelInput in{p};
+    const float kx = float(view->width()) / pr.r[2], ky = float(view->height()) / pr.r[3];
+    std::uint32_t tx = 0, ty = 0, item = 0;
+    bool vertical = false;
+    REQUIRE(adjacent_items(*view, view->draw_runtimes()[0]->pick_id(), std::uint32_t(std::round(kx)), &tx, &ty,
+                           &vertical, &item));
+    const float x = pr.r[0] + (float(tx) + 0.5f) / kx, y = pr.r[1] + (float(ty) + 0.5f) / ky;
+    p.events.got.clear();
+    in.move(x, y);
+    in.button(0, true);
+    in.button(0, false);   // the click asks its pick
+    bool down = false, pending = false;
+    REQUIRE(p.rt->scene_gesture("world", &down, &pending));
+    MESSAGE("the click's pick is " << std::string(pending ? "in flight" : "answered") << " when the drag's press comes");
+    // The middle button, so that the press is no second click of a double click.
+    in.button(2, true);
+    REQUIRE(p.rt->scene_gesture("world", &down, &pending));
+    MESSAGE("the click's pick is " << std::string(pending ? "in flight" : "answered")
+                                   << " when the drag's first move comes");
+    const std::vector<double> pressed = orbit_numbers(*view);
+    in.move(x + 1.0f, y);
+    CHECK(orbit_numbers(*view) != pressed);   // the first point moved the camera
+    for (int k = 2; k <= 30; ++k) in.move(x + float(k), y);
+    in.button(2, false);
+    for (int k = 0; k < 8; ++k) in.frame();
+    REQUIRE(pick_events(p) == 1);   // the click's, and none of the drag
+    CHECK(p.pick_event()->fields.value("item", std::uint32_t(0xffffffffu)) == item);
+    CHECK(orbit_numbers(*view) != pressed);
+}
+
+TEST_CASE("programs: a press on a control in a child window over a scene panel's picture moves no camera") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) {
+        MESSAGE("skipped: no Metal device");
+        return;
+    }
+    ArcsPanel p(c, arcs_spec(false), canvas_layer(c));
+    caliper_live_views::SceneView* view = p.running();
+    REQUIRE(view != nullptr);
+    const PanelRect pr(p);
+    const PanelInput in{p};
+    // A button over the middle of the picture, in a child window of its own that the page's overlay
+    // draws after the panel's content, as the spec's controls are drawn.
+    bool active = false;
+    p.rt->set_overlay([&](const caliper_host::SpecPanelFrame& f) {
+        if (f.id != "world") return;
+        ImGui::SetCursorScreenPos(ImVec2(pr.cx - 40.0f, pr.cy - 20.0f));
+        if (ImGui::BeginChild("##overlay.child", ImVec2(80.0f, 40.0f), ImGuiChildFlags_None,
+                              ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+            ImGui::Button("##overlay.control", ImVec2(80.0f, 40.0f));
+            active = active || ImGui::IsItemActive();
+        }
+        ImGui::EndChild();
+    });
+    in.frame();
+    in.move(pr.cx, pr.cy);
+    in.frame();
+    const std::vector<double> cam = orbit_numbers(*view);
+    in.button(0, true);
+    for (int k = 1; k <= 30; ++k) in.move(pr.cx + float(k), pr.cy);
+    in.button(0, false);
+    in.frame();
+    CHECK(active);
+    CHECK(orbit_numbers(*view) == cam);
+    CHECK(pick_events(p) == 0);
+    in.rest();
+    // Beside the control the picture orbits.
+    in.move(pr.cx - 80.0f, pr.cy);
+    in.frame();
+    in.button(0, true);
+    in.move(pr.cx - 79.0f, pr.cy);
+    CHECK(orbit_numbers(*view) != cam);
+    in.button(0, false);
+    in.rest();
+    p.rt->set_overlay({});
+}
+
+// A 3-D points panel's box, which ImPlot3D turns with a right drag from the first point: a right
+// press that wobbles a point puts the turn of its press back at its release, and the page's menu
+// rule takes the box for a camera's picture (camera_area); a right drag of 3 points keeps its turn.
+namespace {
+struct CloudSource : SpecPanelSource {
+    PanelData resolve(const spec::Spec&, std::string_view) override {
+        std::vector<float> pos;
+        for (int i = 0; i < 64; ++i) pos.insert(pos.end(), {float(i % 4), float((i / 4) % 4), float(i / 16)});
+        return data({f32("positions", "w", {64, 3}, pos)}, spec::Primitive::points);
+    }
+    uint64_t revision() const override { return 1; }
+    uint64_t generation(const spec::Spec&, std::string_view) override { return 1; }
+};
+}  // namespace
+
+TEST_CASE("points3d: a right press that wobbles a point puts the box's turn back; a right drag of 3 points keeps it") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) {
+        MESSAGE("skipped: no Metal device");
+        return;
+    }
+    CloudSource source;
+    const spec::Spec s = one_panel("[[source]]\nid = \"w\"\ncatalog = \"tensor:w\"",
+                                   "primitive = \"points\"\nbind = { positions = \"w\" }");
+    std::unique_ptr<SpecRuntime> rt;
+    c->with_context([&] { rt = std::make_unique<SpecRuntime>(c->textures()); });
+    rt->set_source(&source);
+    rt->set_spec(s);
+    auto draw = [&](const ImRect& area) { rt->draw(area, c->look()); };
+    render(1000, 600, draw, 4);
+    auto frame = [&](const std::function<void(ImGuiIO&)>& fn) {
+        c->with_context([&] { fn(ImGui::GetIO()); });
+        std::string why;
+        REQUIRE_MESSAGE(c->render(1, draw, nullptr, &why), why);
+    };
+    auto turn = [&] {
+        std::vector<double> q(4);
+        REQUIRE(rt->points_turn("p", q.data()));
+        return q;
+    };
+    REQUIRE(rt->layout().panels.size() == 1);
+    const SpecLayoutPanel& lp = rt->layout().panels[0];
+    const float cx = std::round(lp.rect.x + 0.5f * lp.rect.w), cy = std::round(lp.rect.y + 0.55f * lp.rect.h);
+    CHECK(rt->camera_area("p", cx, cy));
+    CHECK_FALSE(rt->camera_area("p", lp.rect.x - 10.0f, cy));
+    frame([&](ImGuiIO& io) { io.AddMousePosEvent(cx, cy); });
+    const std::vector<double> press = turn();
+    // A right press that wobbles one point: the box turns on that point, and its release puts the
+    // turn of the press back.
+    frame([](ImGuiIO& io) { io.AddMouseButtonEvent(1, true); });
+    frame([&](ImGuiIO& io) { io.AddMousePosEvent(cx + 1.0f, cy); });
+    CHECK(turn() != press);
+    frame([](ImGuiIO& io) { io.AddMouseButtonEvent(1, false); });
+    CHECK(turn() == press);
+    for (int k = 0; k < 40; ++k) frame([](ImGuiIO&) {});
+    CHECK(turn() == press);
+    // A right drag of 3 points keeps its turn.
+    frame([&](ImGuiIO& io) { io.AddMousePosEvent(cx, cy); });
+    frame([](ImGuiIO& io) { io.AddMouseButtonEvent(1, true); });
+    for (int k = 1; k <= 3; ++k) frame([&](ImGuiIO& io) { io.AddMousePosEvent(cx + float(k), cy); });
+    const std::vector<double> turned = turn();
+    CHECK(turned != press);
+    frame([](ImGuiIO& io) { io.AddMouseButtonEvent(1, false); });
+    CHECK(turn() == turned);
+    c->with_context([&] { rt.reset(); });
 }
 
 TEST_CASE("programs: a runtime that goes takes its history back also after another runtime gave the event sink") {
