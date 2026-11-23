@@ -31,14 +31,9 @@
 #include <caliper_builder/programs/pieces.h>
 #include <caliper_builder/spec/spec.h>
 
-#define STB_IMAGE_WRITE_STATIC
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wmissing-field-initializers"
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#pragma clang diagnostic ignored "-Wunused-function"
-#include <stb_image_write.h>
-#pragma clang diagnostic pop
+// The derive half of a piece in the producer runtime, and the stb writer, come from the rig of the
+// boxes and mesh matches.
+#include "../boxes_match/match_rig.h"
 
 #include <algorithm>
 #include <array>
@@ -70,6 +65,19 @@ constexpr int kMostPoints = 4194304;   // the most that the piece publishes: 128
 constexpr float kPointSize = 10.0f;         // pixels
 constexpr std::uint32_t kPiecePick = 1u << 24;
 constexpr std::uint32_t kClear = dp::kBackground;
+
+// What the values of the cloud are: the f32 values of the colormap, whose rows the case builds by
+// hand, or a tensor of colors or class ids that the derive half of the piece turns into rows.
+enum class Values { f32, u8_rows, u32_packed, u16_classes };
+
+// The packed RGBA of point i of the color cases, r | g << 8 | b << 16 | a << 24, with whole levels.
+std::uint32_t packed_color(int i) {
+    return std::uint32_t((i * 53 + 40) % 256) | std::uint32_t((i * 97 + 90) % 256) << 8 |
+           std::uint32_t((i * 31 + 200) % 256) << 16 | 0xff000000u;
+}
+
+// The class id of point i of the class cases.
+std::uint32_t class_of(int i) { return std::uint32_t((i * 7) % 40); }
 
 // The fixture: positions in [-1, 1]^3 from a fixed LCG, and values at exact colormap levels.
 struct Cloud {
@@ -224,7 +232,7 @@ std::vector<std::uint8_t> point_rows(const Cloud& c) {
     return out;
 }
 
-void run_points_case(int n) {
+void run_points_case(int n, Values kind = Values::f32, const char* name = "") {
     Metal m;
     if (!m.backend) CALIPER_SKIP_NO_GPU(m.why);
     gfx::Backend& g = *m.backend;
@@ -250,7 +258,14 @@ void run_points_case(int n) {
     const std::uint64_t off_values = (std::uint64_t(n) * 12 + 255) / 256 * 256;
     std::vector<std::uint8_t> bytes(off_values + std::uint64_t(n) * 4, 0);
     std::memcpy(bytes.data(), cloud.positions.data(), std::size_t(n) * 12);
-    std::memcpy(bytes.data() + off_values, cloud.values.data(), std::size_t(n) * 4);
+    if (kind == Values::f32) {
+        std::memcpy(bytes.data() + off_values, cloud.values.data(), std::size_t(n) * 4);
+    } else {
+        for (int i = 0; i < n; ++i) {
+            const std::uint32_t v = kind == Values::u16_classes ? class_of(i) : packed_color(i);
+            std::memcpy(bytes.data() + off_values + std::size_t(i) * 4, &v, 4);
+        }
+    }
     gfx::Buffer data = g.create_buffer({bytes.size(), gfx::kVertex | gfx::kIndex | gfx::kStorage | gfx::kCopyDst, false,
                                         "points match"});
     REQUIRE_MESSAGE(bool(data), g.last_error());
@@ -270,12 +285,14 @@ void run_points_case(int n) {
     batch.arrays[0].count = n;
     batch.arrays[0].stride = 12;
     batch.arrays[0].format = gfx::VertexFormat::F32x3;
-    batch.arrays[1].role = sc::Role::Values;
+    batch.arrays[1].role = kind == Values::f32 ? sc::Role::Values
+                           : kind == Values::u16_classes ? sc::Role::ClassIds : sc::Role::Colors;
     batch.arrays[1].buffer = data;
     batch.arrays[1].offset = off_values;
     batch.arrays[1].count = n;
     batch.arrays[1].stride = 4;
-    batch.arrays[1].format = gfx::VertexFormat::F32;
+    batch.arrays[1].format = kind == Values::f32 ? gfx::VertexFormat::F32
+                             : kind == Values::u16_classes ? gfx::VertexFormat::S32 : gfx::VertexFormat::Unorm8x4;
     batch.colormap = 0;   // viridis
     batch.vmin = 0.0f;
     batch.vmax = 1.0f;
@@ -312,7 +329,7 @@ void run_points_case(int n) {
         const std::vector<sr::DrawInfo> draws = sr::draws_of(list, map, tree);
         REQUIRE(draws.size() == 1);
         builtin_params = draws[0].p;
-        CHECK(builtin_params.color_mode == 1);
+        CHECK(builtin_params.color_mode == (kind == Values::f32 ? 1u : kind == Values::u16_classes ? 4u : 2u));
         frame.render(std::move(list));
         const gfx::Serial s = g.submit(std::move(frame));
         REQUIRE_MESSAGE(s != 0, g.last_error());
@@ -332,11 +349,40 @@ void run_points_case(int n) {
     instance.panel = "cloud";
     const cd::Verdict installed = rt.install(piece, instance, kPiecePick);
     REQUIRE_MESSAGE(installed.ok(), installed.code << " " << installed.message);
-    const std::vector<std::uint8_t> rows = point_rows(cloud);
+    std::vector<std::uint8_t> rows;
+    std::uint32_t row_count = std::uint32_t(n);
+    if (kind == Values::f32) {
+        rows = point_rows(cloud);
+    } else {
+        // The derive half runs over the tensors, as a script's producer runtime runs it.
+        std::vector<match_rig::HostTensor> tensors;
+        tensors.push_back(match_rig::HostTensor::of("positions", "f32", {n, 3}, cloud.positions));
+        if (kind == Values::u8_rows) {
+            std::vector<std::uint8_t> v;
+            for (int i = 0; i < n; ++i)
+                for (int k = 0; k < 4; ++k) v.push_back(std::uint8_t((packed_color(i) >> (8 * k)) & 0xffu));
+            tensors.push_back(match_rig::HostTensor::of("values", "u8", {n, 4}, v));
+        } else if (kind == Values::u32_packed) {
+            std::vector<std::uint32_t> v;
+            for (int i = 0; i < n; ++i) v.push_back(packed_color(i));
+            tensors.push_back(match_rig::HostTensor::of("values", "u32", {n}, v));
+        } else {
+            std::vector<std::uint16_t> v;
+            for (int i = 0; i < n; ++i) v.push_back(std::uint16_t(class_of(i)));
+            tensors.push_back(match_rig::HostTensor::of("values", "u16", {n}, v));
+        }
+        const std::vector<match_rig::Published> all =
+            match_rig::run_derive(m.device, piece, tensors, {{"size", kPointSize}, {"color_mode", 2}});
+        REQUIRE(all.size() == 1);
+        rows = all[0].bytes;
+        row_count = all[0].count;
+        CHECK(row_count == std::uint32_t(n));
+        REQUIRE(rows.size() == std::size_t(n) * 32);
+    }
     cd::ResourceVersion version;
     version.resource = "points";
     version.step = 1;
-    version.count = n;
+    version.count = row_count;
     version.bytes = rows.data();
     version.size = rows.size();
     {
@@ -352,7 +398,7 @@ void run_points_case(int n) {
     in.cursor_step = 1;
     in.latest_step = 1;
     in.live = true;
-    in.params = points_params(kPointSize, 1, 1, 0xffffffffu, 0, 0.0f, 1.0f);
+    in.params = points_params(kPointSize, 1, kind == Values::f32 ? 1 : 2, 0xffffffffu, 0, 0.0f, 1.0f);
     std::vector<gfx::Serial> serials;
     {
         const bool drawn = target.frame(rt, in, &serials, &why);
@@ -368,7 +414,8 @@ void run_points_case(int n) {
     REQUIRE(builtin_color.size() == piece_color.size());
 
     // ---- The comparison -------------------------------------------------------------------------
-    std::size_t interior = 0, lit_interior = 0, edge = 0, failed = 0;
+    std::size_t interior = 0, lit_interior = 0, edge = 0, failed = 0, differ = 0;
+    int largest = 0;
     std::string first;
     for (int y = 0; y < S; ++y)
         for (int x = 0; x < S; ++x) {
@@ -378,6 +425,8 @@ void run_points_case(int n) {
                 ++interior;
                 lit_interior += pc != kClear;
                 ok = pc == bc;
+                differ += pc != bc;
+                largest = std::max(largest, channel_gap(pc, bc));
             } else {
                 ++edge;
                 ok = false;
@@ -396,8 +445,8 @@ void run_points_case(int n) {
                 }
             }
         }
-    MESSAGE("points match: ", interior, " interior pixels (", lit_interior, " lit), ", edge, " edge pixels, ", failed,
-            " failed");
+    MESSAGE("points match ", std::string(name), ": ", interior, " interior pixels (", lit_interior, " lit), ", edge, " edge pixels, ",
+            differ, " interior pixels differ, largest interior gap ", largest, ", ", failed, " failed");
     CHECK_MESSAGE(failed == 0, failed, " pixels outside the tolerances; ", first);
     CHECK(lit_interior >= 2000);
 
@@ -453,12 +502,12 @@ void run_points_case(int n) {
     MESSAGE("points match: ", agree, " of 16 picks name the piece's item");
 
     // ---- The captures ---------------------------------------------------------------------------
-    capture("points-match-builtin.png", builtin_color);
-    capture("points-match-piece.png", piece_color);
+    capture((std::string("points-match") + name + "-builtin.png").c_str(), builtin_color);
+    capture((std::string("points-match") + name + "-piece.png").c_str(), piece_color);
     std::vector<std::uint8_t> diff(piece_color.size());
     for (std::size_t i = 0; i < diff.size(); ++i)
         diff[i] = (i % 4 == 3) ? 255 : std::uint8_t(std::min(255, std::abs(int(piece_color[i]) - int(builtin_color[i])) * 32));
-    capture("points-match-diff.png", diff);
+    capture((std::string("points-match") + name + "-diff.png").c_str(), diff);
 
     g.release(pick_ids);
     g.release(pick_depth);
@@ -470,6 +519,14 @@ void run_points_case(int n) {
 }  // namespace
 
 TEST_CASE("points_match: points@1 draws as the built-in points primitive") { run_points_case(kPoints); }
+
+TEST_CASE("points_match: u8 color rows (N, 4) bound as bytes") { run_points_case(kPoints, Values::u8_rows, "-u8-rows"); }
+
+TEST_CASE("points_match: u32 packed RGBA") { run_points_case(kPoints, Values::u32_packed, "-u32-packed"); }
+
+TEST_CASE("points_match: u16 class ids through the default class colors") {
+    run_points_case(kPoints, Values::u16_classes, "-u16-classes");
+}
 
 TEST_CASE("points_match: the most points that the piece publishes") { run_points_case(kMostPoints); }
 

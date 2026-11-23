@@ -125,7 +125,7 @@ TEST_CASE("depth_match: depth@1 passes piece.check, and each of its passes compo
         if (r.publish) bytes += std::uint64_t(r.count) * l.stride;
     }
     MESSAGE("depth@1 publishes at most ", bytes, " bytes");
-    CHECK(bytes <= 8388608u);
+    CHECK(bytes <= (129u << 20));   // the most that a published resource holds, 128 MiB, and the small ones
 }
 
 TEST_CASE("depth_match: depth@1 draws each depth map as the built-in depth image draws it") {
@@ -188,6 +188,31 @@ TEST_CASE("depth_match: depth@1 draws each depth map as the built-in depth image
         k.height = h;
         k.field = [values](std::uint32_t i) { return double(values[i] * 0.01f); };
         run_case(fx.m, fx.piece, k);
+    }
+
+    SUBCASE("u16 in millimeters bound as u16, through a fixed range at a scale of 0.001") {
+        const std::uint32_t w = 16, h = 12;
+        std::vector<std::uint16_t> raw(std::size_t(w) * h);
+        for (std::uint32_t i = 0; i < raw.size(); ++i) {
+            raw[i] = std::uint16_t(500 + (i * 97) % 2000);
+            if (i % 31 == 7) raw[i] = 0;   // holes
+        }
+        DepthParams p;
+        p.scale = 0.001;
+        p.colormap = 0;
+        p.vmin = 0.5;
+        p.vmax = 2.5;
+        Case k;
+        k.name = case_name("depth", "u16-native");
+        k.scene = flat_scene("u16n", raw, w, h, p);
+        k.tensors = {tensor("depth", {std::int64_t(h), std::int64_t(w)}, raw, CALIPER_PRODUCER_U16)};
+        k.params = {{"scale", 0.001}, {"vmin", 0.5}, {"vmax", 2.5}, {"auto_range", 0}};
+        k.width = w;
+        k.height = h;
+        k.field = [raw](std::uint32_t i) { return double(float(raw[i]) * 0.001f); };
+        const Outcome o = run_case(fx.m, fx.piece, k);
+        CHECK(o.first);
+        CHECK(o.last);
     }
 
     SUBCASE("a range from the data at its start and fixed at its end, a flat range and no valid depth") {
@@ -285,12 +310,36 @@ TEST_CASE("depth_match: depth@1 draws each depth map as the built-in depth image
 TEST_CASE("depth_match: depth@1 draws nothing for a map above its limit or an empty one") {
     Fixture fx;
     if (!fx.ready) CALIPER_SKIP_NO_GPU(fx.m.why);
-    const std::vector<float> large(std::size_t(1449) * 1449, 1.5f);
+    const std::vector<float> large(std::size_t(5793) * 5793, 1.5f);   // 33,558,849 pixels, above the 33,554,432 of the piece
     // On a camera with its cloud, so that neither pass draws.
     std::map<std::string, double> values = kCameraParams;
     values["cloud"] = 1;
-    check_refusals(fx.m, fx.piece, {tensor("depth", {1449, 1449}, large)},
+    check_refusals(fx.m, fx.piece, {tensor("depth", {5793, 5793}, large)},
                    {tensor("depth", {0, 16}, std::vector<float>{})}, 96, values);
+}
+
+// The largest map of the piece, 8,192 x 4,096 u16 in millimeters with the cloud off, or its
+// 1/CALIPER_CAPACITY_FRACTION in rows. Skipped unless run with --no-skip --test-case="*at its capacity".
+TEST_CASE("depth_match: depth@1 at its capacity" * doctest::skip()) {
+    Fixture fx;
+    if (!fx.ready) CALIPER_SKIP_NO_GPU(fx.m.why);
+    const std::uint32_t w = 8192, h = 4096 / std::uint32_t(capacity_fraction());
+    std::vector<std::uint16_t> raw(std::size_t(w) * h);
+    for (std::uint32_t y = 0; y < h; ++y)
+        for (std::uint32_t x = 0; x < w; ++x) raw[std::size_t(y) * w + x] = std::uint16_t(500 + (x + y) % 2000);
+    DepthParams p;
+    p.scale = 0.001;
+    p.vmin = 0.5;
+    p.vmax = 2.5;
+    Case k;
+    k.name = case_name("depth", "capacity");
+    k.scene = flat_scene("capacity", raw, w, h, p);
+    k.tensors = {tensor("depth", {std::int64_t(h), std::int64_t(w)}, raw, CALIPER_PRODUCER_U16)};
+    k.params = {{"scale", 0.001}, {"vmin", 0.5}, {"vmax", 2.5}, {"auto_range", 0}, {"cloud", 0}};
+    k.width = w;
+    k.height = h;
+    k.min_lit = 0;
+    run_case(fx.m, fx.piece, k);
 }
 
 CALIPER_GPU_TEST_MAIN()

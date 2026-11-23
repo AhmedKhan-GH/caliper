@@ -49,6 +49,10 @@ struct Mesh {
     std::vector<float> normals;         // v * 3, or none
     std::vector<std::uint8_t> rgba;     // v * 4 or 4, or none
     std::vector<float> values;          // v or 1, or none
+    bool native_rgba = false;           // the colors reach the piece as u8 bytes, not as f32
+    std::vector<float> uvs;             // v * 2, or none
+    std::vector<std::uint8_t> tex;      // tex_w * tex_h RGBA texels, or none
+    std::uint32_t tex_w = 0, tex_h = 0;
     std::uint32_t flat = kDefaultRgba;
     std::uint32_t colormap = 0;
     float vmin = 0.0f, vmax = 1.0f;
@@ -90,7 +94,7 @@ void color_vertices(Mesh& m, std::uint8_t alpha) {
 }
 
 // The built-in's batch of the mesh, as live_scene.cpp makes it from a SCENE_UPDATE part.
-void builtin_mesh(Builtin& bt, const Mesh& m) {
+void builtin_mesh(Builtin& bt, const Mesh& m, gfx::Texture texture = {}) {
     const int v = m.v();
     sc::Batch batch;
     batch.primitive = sc::Primitive::Mesh;
@@ -110,6 +114,13 @@ void builtin_mesh(Builtin& bt, const Mesh& m) {
         for (std::size_t i = 3; i < m.rgba.size(); i += 4) batch.translucent = batch.translucent || m.rgba[i] < 255;
     }
     if (!m.values.empty()) up.add(sc::Role::Values, m.values, std::uint32_t(m.values.size()), 4, gfx::VertexFormat::F32);
+    if (!m.uvs.empty() && texture) {   // as live_scene.cpp's textured mesh
+        up.add(sc::Role::Uvs, m.uvs, std::uint32_t(v), 8, gfx::VertexFormat::F32x2);
+        batch.texture = texture;
+        batch.image_width = m.tex_w;
+        batch.image_height = m.tex_h;
+        for (std::size_t i = 3; i < m.tex.size(); i += 4) batch.translucent = batch.translucent || m.tex[i] < 255;
+    }
     for (int i = 0; i < v; ++i) {
         double p[3] = {0, 0, 0};
         for (int k = 0; k < m.dims; ++k) p[k] = m.positions[std::size_t(i * m.dims + k)];
@@ -133,11 +144,18 @@ std::vector<HostTensor> piece_tensors(const Mesh& m, caliper_net::Json* params) 
     if (!m.normals.empty()) t.push_back(HostTensor::of("normals", "f32", {v, 3}, m.normals));
     std::uint32_t mode = 0;
     if (!m.rgba.empty()) {
-        t.push_back(HostTensor::of("colors", "f32", {std::int64_t(m.rgba.size() / 4), 4}, to_unit(m.rgba)));
+        if (m.native_rgba)
+            t.push_back(HostTensor::of("colors", "u8", {std::int64_t(m.rgba.size() / 4), 4}, m.rgba));
+        else
+            t.push_back(HostTensor::of("colors", "f32", {std::int64_t(m.rgba.size() / 4), 4}, to_unit(m.rgba)));
         mode = 2;
     } else if (!m.values.empty()) {
         t.push_back(HostTensor::of("colors", "f32", {std::int64_t(m.values.size())}, m.values));
         mode = 1;
+    }
+    if (!m.uvs.empty() && !m.tex.empty()) {
+        t.push_back(HostTensor::of("uvs", "f32", {v, 2}, m.uvs));
+        t.push_back(HostTensor::of("texture", "u8", {std::int64_t(m.tex_h), std::int64_t(m.tex_w), 4}, m.tex));
     }
     *params = caliper_net::Json::object();
     params->set("color_mode", double(mode));
@@ -179,7 +197,13 @@ Outcome run(Metal& mt, const std::string& name, const Mesh& m, std::vector<int> 
     Outcome o;
     {
         Builtin bt(g, kSize, m.dims == 3 ? sc::Space::k3D : sc::Space::k2D);
-        builtin_mesh(bt, m);
+        gfx::Texture texture;
+        if (!m.tex.empty()) {
+            texture = g.create_texture({m.tex_w, m.tex_h, gfx::Format::RGBA8Unorm, gfx::kSampled | gfx::kCopyDstTex, "mesh match texture"});
+            REQUIRE_MESSAGE(bool(texture), g.last_error());
+            REQUIRE(g.write_texture(texture, m.tex.data(), m.tex_w * 4));
+        }
+        builtin_mesh(bt, m, texture);
         bt.draw();
         REQUIRE(bt.draws.size() == 1);
 
@@ -188,9 +212,12 @@ Outcome run(Metal& mt, const std::string& name, const Mesh& m, std::vector<int> 
         REQUIRE_MESSAGE(load_piece("mesh", &piece, &why), why);
         caliper_net::Json params;
         const std::vector<Published> res = run_derive(mt.device, piece, piece_tensors(m, &params), as_map(params));
-        REQUIRE(res.size() == 2);
+        REQUIRE(res.size() == 3);
         const Published& vertices = find(res, "vertices");
         const Published& faces = find(res, "faces");
+        const Published& tex = find(res, "tex");
+        CHECK(tex.width == m.tex_w);
+        CHECK(tex.height == m.tex_h);
         o.vertices = vertices.count;
         CHECK(faces.count % 3 == 0);
         o.triangles = faces.count / 3;
@@ -204,6 +231,7 @@ Outcome run(Metal& mt, const std::string& name, const Mesh& m, std::vector<int> 
         pd.install(piece, "mesh");
         pd.set("vertices", vertices.bytes, vertices.count);
         pd.set("faces", faces.bytes, faces.count);
+        pd.set("tex", tex.bytes, tex.count, &tex);
         cd::FrameInputs in = bt.frame_inputs();
         in.params = caliper_web::pack_params(piece, params);
         CHECK(pd.draw(in));
@@ -241,6 +269,7 @@ Outcome run(Metal& mt, const std::string& name, const Mesh& m, std::vector<int> 
         capture("CALIPER_MESH_MATCH_CAPTURE_DIR", "mesh-" + name + "-builtin.png", kSize, bt.image);
         capture("CALIPER_MESH_MATCH_CAPTURE_DIR", "mesh-" + name + "-piece.png", kSize, pd.color);
         capture("CALIPER_MESH_MATCH_CAPTURE_DIR", "mesh-" + name + "-diff.png", kSize, difference(pd.color, bt.image));
+        if (texture) g.release(texture);
     }
     return o;
 }
@@ -267,6 +296,56 @@ TEST_CASE("mesh_match: a lit mesh with RGBA of each vertex and a depth offset") 
     CHECK(o.c.lit >= 2000);
     CHECK(o.picks == o.asked);
     CHECK(o.asked == 3);
+}
+
+TEST_CASE("mesh_match: u8 RGBA of each vertex bound as bytes, lit, with translucent vertices") {
+    Metal mt;
+    if (!mt.backend) CALIPER_SKIP_NO_GPU(mt.why);
+    Mesh m = grid(24, 24);
+    color_vertices(m, 140);
+    m.native_rgba = true;
+    m.depth_offset = 3;
+    const Outcome o = run(mt, "u8_rgba", m, {0, m.t() / 2, m.t() - 1});
+    CHECK(o.flags == 1);
+    CHECK(o.c.lit >= 2000);
+    CHECK(o.picks == o.asked);
+}
+
+// A quad of 4 vertices with uvs over [0, 1]^2 and a texture of 8 x 8 u8 RGBA texels, with the alpha of
+// a texel at `alpha` on every fifth texel.
+Mesh textured_quad(std::uint8_t alpha) {
+    Mesh m;
+    m.positions = {-0.8f, -0.8f, 0.0f, 0.8f, -0.8f, 0.2f, 0.8f, 0.8f, 0.0f, -0.8f, 0.8f, 0.2f};
+    m.indices = {0, 1, 2, 0, 2, 3};
+    m.uvs = {0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f};
+    m.tex_w = m.tex_h = 8;
+    for (int i = 0; i < 64; ++i)
+        m.tex.insert(m.tex.end(), {std::uint8_t((i % 8) * 32 + 20), std::uint8_t((i / 8) * 30 + 15),
+                                   std::uint8_t((i * 37) % 256), i % 5 == 4 ? alpha : std::uint8_t(255)});
+    m.flat = 0xffffffffu;   // the built-in's textured mesh takes white times the texture
+    return m;
+}
+
+TEST_CASE("mesh_match: a textured quad with an 8 x 8 u8 RGBA texture") {
+    Metal mt;
+    if (!mt.backend) CALIPER_SKIP_NO_GPU(mt.why);
+    const Mesh m = textured_quad(255);
+    const Outcome o = run(mt, "textured", m, {0, 1});
+    CHECK(o.vertices == 4);
+    CHECK(o.triangles == 2);
+    CHECK(o.flags == 0);
+    CHECK(o.c.lit >= 2000);
+    CHECK(o.picks == o.asked);
+}
+
+TEST_CASE("mesh_match: a textured quad with texels of an alpha below 255") {
+    Metal mt;
+    if (!mt.backend) CALIPER_SKIP_NO_GPU(mt.why);
+    const Mesh m = textured_quad(100);
+    const Outcome o = run(mt, "textured_alpha", m, {0, 1});
+    CHECK(o.flags == 1);
+    CHECK(o.c.lit >= 2000);
+    CHECK(o.picks == o.asked);
 }
 
 TEST_CASE("mesh_match: flat faces with values through magma") {
@@ -429,8 +508,49 @@ TEST_CASE("mesh_match: the capacity of 98,304 vertices and 196,608 triangles, an
     over.indices.insert(over.indices.end(), {0, 1, int(kVertexCapacity)});
     caliper_net::Json params;
     const std::vector<Published> res = run_derive(mt.device, piece, piece_tensors(over, &params), as_map(params));
-    CHECK(find(res, "vertices").count == kVertexCapacity);
-    CHECK(find(res, "faces").count == 3 * kTriangleCapacity);
+    // The piece now holds 2,796,202 vertices and 4,194,304 triangles, thus one vertex and one triangle
+    // more than the case's mesh are all published.
+    CHECK(find(res, "vertices").count == kVertexCapacity + 1);
+    CHECK(find(res, "faces").count == 3 * (kTriangleCapacity + 1));
+}
+
+// The most that the piece publishes, 2,796,202 vertices and 4,194,304 triangles, indexed and
+// untextured, or 1/CALIPER_CAPACITY_FRACTION of each: a grid padded with unused vertices and copies of
+// one triangle, with the first and the last triangle large and in front. Skipped unless run with
+// --no-skip --test-case="*at its capacity".
+TEST_CASE("mesh_match: mesh@1 at its capacity" * doctest::skip()) {
+    Metal mt;
+    if (!mt.backend) CALIPER_SKIP_NO_GPU(mt.why);
+    const int V = 2796202 / capacity_fraction(), T = 4194304 / capacity_fraction();
+    const int s = int(std::sqrt(double(V) * 0.75));
+    Mesh m = grid(s, s);
+    while (m.v() < V) {
+        m.positions.insert(m.positions.end(), {0.0f, 0.0f, 0.0f});
+        m.normals.insert(m.normals.end(), {0.0f, 0.0f, 1.0f});
+    }
+    const int v = m.v();
+    auto place = [&](int i, float x, float y) {
+        m.positions[std::size_t(3 * i)] = x;
+        m.positions[std::size_t(3 * i + 1)] = y;
+        m.positions[std::size_t(3 * i + 2)] = 0.9f;
+    };
+    place(0, -0.9f, -0.9f);
+    place(v - 3, -0.1f, -0.9f);
+    place(v - 2, -0.9f, -0.1f);
+    place(v - 1, 0.9f, 0.9f);
+    place(v - 4, 0.1f, 0.9f);
+    place(v - 5, 0.9f, 0.1f);
+    color_vertices(m, 255);
+    m.indices[0] = 0;
+    m.indices[1] = v - 3;
+    m.indices[2] = v - 2;
+    m.indices.reserve(std::size_t(T) * 3);
+    while (m.t() < T - 1) m.indices.insert(m.indices.end(), {0, 1, s + 1});
+    m.indices.insert(m.indices.end(), {v - 1, v - 4, v - 5});
+    const Outcome o = run(mt, "at_capacity", m, {0, T - 1});
+    CHECK(o.vertices == std::uint32_t(V));
+    CHECK(o.triangles == std::uint32_t(T));
+    CHECK(o.picks == o.asked);
 }
 
 CALIPER_GPU_TEST_MAIN()

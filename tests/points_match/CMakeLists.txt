@@ -9,7 +9,7 @@
 # The draw runtime (caliper_draw) is defined with the builder after this folder, thus the target
 # is made by a call deferred to the end of the top folder.
 function(caliper_points_match_targets)
-    if(NOT APPLE OR NOT TARGET caliper_draw OR NOT TARGET caliper_draw_host OR NOT TARGET caliper_net OR NOT TARGET caliper_scene)
+    if(NOT APPLE OR NOT TARGET caliper_draw OR NOT TARGET caliper_draw_host OR NOT TARGET caliper_net OR NOT TARGET caliper_scene OR NOT TARGET caliper_producer)
         return()
     endif()
     set(_dir "${CMAKE_SOURCE_DIR}/tests/points_match")
@@ -17,7 +17,7 @@ function(caliper_points_match_targets)
         "${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp")
     target_include_directories(caliper_points_match_tests PRIVATE
         "${CMAKE_SOURCE_DIR}/src/host" "${CMAKE_SOURCE_DIR}/third_party/stb")
-    target_link_libraries(caliper_points_match_tests PRIVATE caliper_draw caliper_draw_host caliper_scene caliper_net caliper::sdk
+    target_link_libraries(caliper_points_match_tests PRIVATE caliper_draw caliper_draw_host caliper_scene caliper_net caliper_producer caliper::sdk
         doctest::doctest "-framework Metal" "-framework MetalPerformanceShaders" "-framework Foundation")
     set_source_files_properties("${_dir}/test_points_match.mm" PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_target_properties(caliper_points_match_tests PROPERTIES

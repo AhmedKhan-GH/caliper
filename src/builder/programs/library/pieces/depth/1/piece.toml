@@ -9,7 +9,8 @@ name = "depth"
 kind = "tensor"
 rank_min = 2
 rank_max = 2
-title = "Depth (H, W), times the scale in scene units"
+dtype = "f32|u16"
+title = "Depth (H, W) of f32 or u16, times the scale in scene units"
 
 [[inputs]]
 name = "pose"
@@ -111,7 +112,7 @@ id = "pixels"
 kind = "buffer"
 struct = "DepthPixel"
 fields = ["depth: f32"]
-count = 2097120   # (8 MiB - 128 bytes) / 4: 2,048 x 1,023 or 1,448 x 1,448 pixels
+count = 33554432   # 128 MiB, the most that a published resource holds: 8,192 x 4,096 or 5,792 x 5,792 pixels
 counted = true
 
 [[resources]]
@@ -125,15 +126,16 @@ count = 1
 id = "spans"
 kind = "buffer"
 element = "vec4<f32>"
-count = 4096
+count = 65536
 publish = false
 
 [derive]
-time_ms = 8
+time_ms = 50
+memory_mb = 288
 
 [[derive.passes]]
 entry = "copy_depth"
-workgroups = [16, 1, 1]
+workgroups = [256, 1, 1]
 writes = ["pixels", "spans"]
 
 [[derive.passes]]
@@ -144,6 +146,7 @@ writes = ["info"]
 camera = "orbit"
 pick = { resource = "pixels", fields = ["depth"] }
 frame_ms = 16
+memory_mb = 160
 
 [[draw.passes]]
 kind = "render"

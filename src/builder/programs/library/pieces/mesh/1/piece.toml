@@ -1,7 +1,7 @@
 # Library piece mesh@1: a triangle mesh, drawn as the built-in mesh primitive draws it.
 name = "mesh"
 version = 1
-description = "A triangle mesh from positions and indices, lit by the headlight from its normals or with flat faces, colored by one color, by a value through a colormap or by RGBA"
+description = "A triangle mesh from positions and indices, lit by the headlight from its normals or with flat faces, colored by one color, by a value through a colormap or by RGBA, and textured from uvs"
 imports = ["pick@1"]
 
 [[inputs]]
@@ -31,10 +31,28 @@ title = "Normals (V, 3), read when shading is 1"
 [[inputs]]
 name = "colors"
 kind = "tensor"
+dtype = "f32|u8"
 rank_min = 1
 rank_max = 2
 optional = true
-title = "Colors (V, 3 or 4) from 0 to 1, or values (V), or one row or value for all; unbound, the one color"
+title = "Colors (V, 3 or 4) of u8 from 0 to 255 or of f32 from 0 to 1, or f32 values (V), or one row or value for all; unbound, the one color"
+
+[[inputs]]
+name = "uvs"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+optional = true
+title = "Texture Coordinates (V, 2), read with a texture; unbound, no texture"
+
+[[inputs]]
+name = "texture"
+kind = "tensor"
+dtype = "u8|f32"
+rank_min = 2
+rank_max = 3
+optional = true
+title = "Texture (H, W, 4), (H, W, 3) or grey (H, W) of u8 from 0 to 255 or of f32 from 0 to 1, sampled at the uvs times the vertex color; unbound, no texture"
 
 [[params]]
 name = "color_mode"
@@ -96,8 +114,9 @@ title = "Depth Offset in Steps of 1/8192"
 id = "vertices"
 kind = "buffer"
 struct = "Vertex"
-fields = ["position: vec4<f32>", "normal: vec4<f32>", "rgba: u32", "index: u32"]
-count = 98304
+fields = ["position: vec4<f32>", "normal: vec4<f32>", "rgba: u32", "index: u32", "uv: vec2<f32>"]
+# 2,796,202 vertices of 48 bytes: the 128 MiB that a published resource holds.
+count = 2796202
 counted = true
 
 # The three vertex indices of each triangle, which the draw passes draw as their index buffer.
@@ -105,25 +124,48 @@ counted = true
 id = "faces"
 kind = "buffer"
 element = "u32"
-count = 589824
+# 4,194,304 triangles, 48 MiB: the most that the built-in mesh draws.
+count = 12582912
 counted = true
+
+# The texture of a textured mesh, `tex`, of its size up to 8,192 a side and 16,777,216 texels (64 MiB),
+# sampled with the hardware's bilinear filter as the built-in samples its texture. It has no texels
+# when uvs or the texture are unbound.
+[[resources]]
+id = "tex"
+kind = "texture"
+format = "rgba8unorm"
+width = 8192
+height = 8192
+texels = 16777216
+
+# The derive half holds the 240 MiB of resources and reads the inputs in place.
+[derive]
+time_ms = 50
+memory_mb = 512
 
 [[derive.passes]]
 entry = "copy_vertices"
-workgroups = [384, 1, 1]
+workgroups = [10923, 1, 1]
 writes = ["vertices"]
 
 [[derive.passes]]
 entry = "copy_triangles"
-workgroups = [768, 1, 1]
+workgroups = [16384, 1, 1]
 writes = ["faces"]
 
 [[derive.passes]]
 entry = "mark_alpha"
-workgroups = [384, 1, 1]
+workgroups = [10923, 1, 1]
 writes = ["vertices"]
 
+[[derive.passes]]
+entry = "copy_texture"
+workgroups = [64, 1, 1]
+writes = ["tex", "vertices"]
+
 [draw]
+memory_mb = 256
 camera = "orbit"
 frame_ms = 16
 pick = { resource = "vertices", fields = ["index"] }

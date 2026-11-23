@@ -64,6 +64,14 @@ namespace sh = caliper_gfx::shaders;
 namespace sr = scene_reference;
 
 inline constexpr std::uint32_t kPiecePick = 1u << 24;
+// The divisor of a capacity case's count, from CALIPER_CAPACITY_FRACTION (1 for the full count), for
+// a run at a fraction of the count that measures the memory first.
+inline int capacity_fraction() {
+    const char* e = std::getenv("CALIPER_CAPACITY_FRACTION");
+    const int f = e ? std::atoi(e) : 1;
+    return f < 1 ? 1 : f;
+}
+
 inline constexpr std::uint32_t kClear = dp::kBackground;
 
 // The device and the backend of the graphics layer on it, or nothing without a usable device.
@@ -250,7 +258,7 @@ inline std::vector<Published> run_derive(id<MTLDevice> device, const cs::Piece& 
         }
         REQUIRE_MESSAGE(t != nullptr, "no tensor for the input ", in.name);
         unbound.push_back(0);
-        id<MTLBuffer> b = [device newBufferWithLength:std::max<std::size_t>(t->bytes.size(), 16)
+        id<MTLBuffer> b = [device newBufferWithLength:std::max<std::size_t>((t->bytes.size() + 15) / 16 * 16, 16)
                                               options:MTLResourceStorageModeShared];
         if (!t->bytes.empty()) std::memcpy([b contents], t->bytes.data(), t->bytes.size());
         keep.push_back(b);
@@ -259,7 +267,11 @@ inline std::vector<Published> run_derive(id<MTLDevice> device, const cs::Piece& 
         ct.buffer = (__bridge void*)b;
         ct.byte_offset = 0;
         ct.byte_size = t->bytes.size();
-        ct.dtype = t->dtype == "i32" ? CALIPER_PRODUCER_I32 : t->dtype == "u32" ? CALIPER_PRODUCER_U32 : CALIPER_PRODUCER_F32;
+        ct.dtype = t->dtype == "i32"   ? CALIPER_PRODUCER_I32
+                   : t->dtype == "u32" ? CALIPER_PRODUCER_U32
+                   : t->dtype == "u8"  ? CALIPER_PRODUCER_U8
+                   : t->dtype == "u16" ? CALIPER_PRODUCER_U16
+                                       : CALIPER_PRODUCER_F32;
         ct.ndim = std::uint32_t(t->shape.size());
         for (std::size_t k = 0; k < t->shape.size(); ++k) ct.shape[k] = t->shape[k];
         std::uint32_t handle = 0;
@@ -336,7 +348,7 @@ inline std::vector<Published> run_derive(id<MTLDevice> device, const cs::Piece& 
     d.params = values.data();
     d.param_types = param_types.data();
     d.param_count = values.size();
-    d.time_limit_ms = piece.derive->time_ms.value_or(4.0) * 10.0;   // a test machine under load
+    d.time_limit_ms = std::min(50.0, piece.derive->time_ms.value_or(4.0) * 10.0);   // a test machine under load, within the producer's 50 ms
     d.memory_limit_bytes = std::uint64_t(piece.derive->memory_mb.value_or(64)) << 20;
     std::uint32_t prog = 0;
     REQUIRE_MESSAGE(caliper_producer_compile_derive(rt, &d, &prog, &e) == CALIPER_PRODUCER_OK,

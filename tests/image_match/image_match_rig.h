@@ -75,6 +75,14 @@ namespace sh = caliper_gfx::shaders;
 namespace wire = caliper_net::wire;
 
 constexpr std::uint32_t kSize = 256;   // the target, square
+// The divisor of a capacity case's count, from CALIPER_CAPACITY_FRACTION (1 for the full count), for
+// a run at a fraction of the count that measures the memory first.
+inline int capacity_fraction() {
+    const char* e = std::getenv("CALIPER_CAPACITY_FRACTION");
+    const int f = e ? std::atoi(e) : 1;
+    return f < 1 ? 1 : f;
+}
+
 constexpr std::uint32_t kPiecePick = 1u << 24;
 constexpr std::uint32_t kClear = dp::kBackground;
 
@@ -242,7 +250,7 @@ inline bool run_derive(id<MTLDevice> device, const cs::Piece& piece, const std::
         }
         if (t == nullptr) return failed("no tensor for the input " + in.name);
         unbound.push_back(0);
-        id<MTLBuffer> b = [device newBufferWithLength:std::max<std::size_t>(16, t->bytes.size())
+        id<MTLBuffer> b = [device newBufferWithLength:std::max<std::size_t>(16, (t->bytes.size() + 15) / 16 * 16)
                                               options:MTLResourceStorageModeShared];
         if (!t->bytes.empty()) std::memcpy([b contents], t->bytes.data(), t->bytes.size());
         buffers.push_back(b);
@@ -829,7 +837,10 @@ inline void check_refusals(Metal& m, const cs::Piece& piece, const std::vector<T
     const Version* info = find_version(versions, "info");
     REQUIRE(pixels);
     REQUIRE(info);
+    CHECK(pixels->bytes.empty());   // a version without texels, or without elements
     CHECK(pixels->count == 0);
+    CHECK(pixels->width == 0);
+    CHECK(pixels->height == 0);
     REQUIRE(info->bytes.size() == info_bytes);
     std::uint32_t size[2] = {1, 1};
     std::memcpy(size, info->bytes.data(), 8);

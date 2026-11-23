@@ -80,6 +80,14 @@ Tensor ids_tensor(const std::vector<T>& ids, std::uint32_t w, std::uint32_t h) {
     return tensor("classes", {std::int64_t(h), std::int64_t(w)}, v, CALIPER_PRODUCER_I32);
 }
 
+// The ids as they are: a u8 or u16 tensor.
+template <class T>
+Tensor native_tensor(const std::vector<T>& ids, std::uint32_t w, std::uint32_t h) {
+    static_assert(sizeof(T) == 1 || sizeof(T) == 2);
+    return tensor("classes", {std::int64_t(h), std::int64_t(w)}, ids,
+                  sizeof(T) == 1 ? CALIPER_PRODUCER_U8 : CALIPER_PRODUCER_U16);
+}
+
 struct Fixture {
     Metal m;
     cs::Piece piece;
@@ -108,7 +116,7 @@ TEST_CASE("segmentation_match: segmentation@1 passes piece.check, and each of it
         if (r.publish) bytes += std::uint64_t(r.count) * l.stride;
     }
     MESSAGE("segmentation@1 publishes at most ", bytes, " bytes");
-    CHECK(bytes <= 8388608u);
+    CHECK(bytes <= (129u << 20));   // the most that a published resource holds, 128 MiB, and the small ones
 }
 
 TEST_CASE("segmentation_match: segmentation@1 draws each mask as the built-in segmentation image draws it") {
@@ -149,6 +157,63 @@ TEST_CASE("segmentation_match: segmentation@1 draws each mask as the built-in se
         k.name = case_name("segmentation", "u16-alpha");
         k.scene = flat_scene("u16", ids, w, h, classes, 0.75);
         k.tensors = {ids_tensor(ids, w, h), classes.tensor()};
+        k.params = {{"opacity", 0.75}};
+        k.width = w;
+        k.height = h;
+        k.field = [ids](std::uint32_t i) { return double(ids[i]); };
+        run_case(fx.m, fx.piece, k);
+    }
+
+    SUBCASE("u8 ids bound as u8 over a class table") {
+        const std::uint32_t w = 16, h = 12;
+        std::vector<std::uint8_t> ids(std::size_t(w) * h);
+        for (std::uint32_t y = 0; y < h; ++y)
+            for (std::uint32_t x = 0; x < w; ++x)
+                ids[std::size_t(y) * w + x] = std::uint8_t(x < 6 ? 1 : x < 11 ? 2 : (y < 6 ? 255 : 0));
+        Classes classes;
+        classes.colors = {{1, RGBA(255, 40, 40)}, {2, RGBA(40, 255, 40)}, {255, RGBA(40, 40, 255)}};
+        Case k;
+        k.name = case_name("segmentation", "u8-native");
+        k.scene = flat_scene("u8n", ids, w, h, classes, std::nullopt);
+        k.tensors = {native_tensor(ids, w, h), classes.tensor()};
+        k.width = w;
+        k.height = h;
+        k.field = [ids](std::uint32_t i) { return double(ids[i]); };
+        const Outcome o = run_case(fx.m, fx.piece, k);
+        CHECK(o.first);
+        CHECK(o.last);
+    }
+
+    SUBCASE("u8 ids bound as u8, 7 x 5, 35 bytes, not a multiple of 4") {
+        const std::uint32_t w = 7, h = 5;
+        std::vector<std::uint8_t> ids(std::size_t(w) * h);
+        for (std::uint32_t i = 0; i < ids.size(); ++i) ids[i] = std::uint8_t(1 + i % 3);
+        Classes classes;
+        classes.colors = {{1, RGBA(255, 40, 40)}, {2, RGBA(40, 255, 40)}, {3, RGBA(40, 40, 255)}};
+        Case k;
+        k.name = case_name("segmentation", "u8-odd-size");
+        k.scene = flat_scene("u8o", ids, w, h, classes, std::nullopt);
+        k.tensors = {native_tensor(ids, w, h), classes.tensor()};
+        k.width = w;
+        k.height = h;
+        k.field = [ids](std::uint32_t i) { return double(ids[i]); };
+        run_case(fx.m, fx.piece, k);
+    }
+
+    SUBCASE("u16 ids bound as u16, a translucent class color, at an opacity of 0.75") {
+        const std::uint32_t w = 16, h = 12;
+        std::vector<std::uint16_t> ids(std::size_t(w) * h);
+        for (std::uint32_t i = 0; i < ids.size(); ++i) ids[i] = std::uint16_t((i * 7) % 20);
+        ids[0] = 65535;
+        ids[20] = 4096;
+        ids[33] = 4097;
+        ids[50] = 40000;
+        Classes classes;
+        classes.colors = {{3, RGBA(250, 250, 20, 128)}, {7, RGBA(20, 200, 250)}, {19, RGBA(90, 10, 160, 40)}};
+        Case k;
+        k.name = case_name("segmentation", "u16-native");
+        k.scene = flat_scene("u16n", ids, w, h, classes, 0.75);
+        k.tensors = {native_tensor(ids, w, h), classes.tensor()};
         k.params = {{"opacity", 0.75}};
         k.width = w;
         k.height = h;
@@ -247,12 +312,31 @@ TEST_CASE("segmentation_match: the palette holds the class colors of the input a
 TEST_CASE("segmentation_match: segmentation@1 draws nothing for a mask above its limit or an empty one") {
     Fixture fx;
     if (!fx.ready) CALIPER_SKIP_NO_GPU(fx.m.why);
-    const std::vector<std::int32_t> large(std::size_t(1447) * 1447, 1);
+    const std::vector<std::int32_t> large(std::size_t(5793) * 5793, 1);   // above 33,554,432 pixels
     check_refusals(fx.m, fx.piece,
-                   {tensor("classes", {1447, 1447}, large, CALIPER_PRODUCER_I32), Classes{}.tensor()},
+                   {tensor("classes", {5793, 5793}, large, CALIPER_PRODUCER_I32), Classes{}.tensor()},
                    {tensor("classes", {0, 16}, std::vector<std::int32_t>{}, CALIPER_PRODUCER_I32), Classes{}.tensor(),
                     pose_tensor(kIdentity)},
                    80, {});
+}
+
+// The largest mask of the piece, 8,192 x 4,096 u8 class ids, or its 1/CALIPER_CAPACITY_FRACTION in
+// rows. Skipped unless run with --no-skip --test-case="*at its capacity".
+TEST_CASE("segmentation_match: segmentation@1 at its capacity" * doctest::skip()) {
+    Fixture fx;
+    if (!fx.ready) CALIPER_SKIP_NO_GPU(fx.m.why);
+    const std::uint32_t w = 8192, h = 4096 / std::uint32_t(capacity_fraction());
+    std::vector<std::uint8_t> ids(std::size_t(w) * h);
+    for (std::uint32_t y = 0; y < h; ++y)
+        for (std::uint32_t x = 0; x < w; ++x) ids[std::size_t(y) * w + x] = std::uint8_t((x / 512) + 16 * (y / 512));
+    Case k;
+    k.name = case_name("segmentation", "capacity");
+    k.scene = flat_scene("capacity", ids, w, h, Classes{}, std::nullopt);
+    k.tensors = {native_tensor(ids, w, h), Classes{}.tensor()};
+    k.width = w;
+    k.height = h;
+    k.min_lit = 0;
+    run_case(fx.m, fx.piece, k);
 }
 
 CALIPER_GPU_TEST_MAIN()

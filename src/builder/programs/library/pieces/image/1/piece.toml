@@ -7,9 +7,10 @@ imports = ["pick@1"]
 [[inputs]]
 name = "image"
 kind = "tensor"
+dtype = "f32|u8"
 rank_min = 2
 rank_max = 3
-title = "Image (H, W) grey, or (H, W, 3) or (H, W, 4), values from 0 to 1 times the scale"
+title = "Image (H, W) grey, or (H, W, 3) or (H, W, 4): u8 channels from 0 to 255, or f32 values from 0 to 1 times the scale"
 
 [[inputs]]
 name = "pose"
@@ -29,7 +30,7 @@ title = "Opacity"
 [[params]]
 name = "scale"
 default = 1.0
-title = "Scale of the Values, 1 for 0 to 1 and 1/255 for 0 to 255"
+title = "Scale of f32 Values, 1 for 0 to 1 and 1/255 for 0 to 255; u8 channels take no scale"
 
 [[params]]
 name = "placement"
@@ -72,13 +73,16 @@ min = 0
 max = 1
 title = "Camera Axes (0 right, down, forward; 1 right, up, back)"
 
+# The pixels as an rgba8unorm texture of the image's size, which the draw half samples with the
+# hardware's bilinear filter as the built-in does: any size up to 8,192 a side and 33,554,432 pixels,
+# 128 MiB, the most that a published resource holds (8,192 x 4,096, or 5,792 x 5,792).
 [[resources]]
 id = "pixels"
-kind = "buffer"
-struct = "Pixel"
-fields = ["rgba: u32"]
-count = 2097120   # (8 MiB - 128 bytes) / 4: 2,048 x 1,023 or 1,448 x 1,448 pixels
-counted = true
+kind = "texture"
+format = "rgba8unorm"
+width = 8192
+height = 8192
+texels = 33554432
 
 [[resources]]
 id = "info"
@@ -87,9 +91,15 @@ struct = "ImageInfo"
 fields = ["size: vec4<u32>", "c0: vec4<f32>", "c1: vec4<f32>", "c2: vec4<f32>", "c3: vec4<f32>"]
 count = 1
 
+# The derive half holds the 128 MiB texture and reads the image in place: 128 MiB of u8 for the
+# largest image, or 384 MiB of f32 with the most that a derive half may hold.
+[derive]
+time_ms = 50
+memory_mb = 512
+
 [[derive.passes]]
 entry = "copy_pixels"
-workgroups = [64, 1, 1]
+workgroups = [256, 1, 1]
 writes = ["pixels"]
 
 [[derive.passes]]
@@ -97,6 +107,7 @@ entry = "place_image"
 writes = ["info"]
 
 [draw]
+memory_mb = 160
 camera = "orbit"
 pick = { resource = "pixels", fields = ["rgba"] }
 

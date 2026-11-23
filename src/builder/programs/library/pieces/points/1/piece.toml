@@ -14,9 +14,10 @@ title = "Positions (N, 3), or (N, 2) with z 0"
 [[inputs]]
 name = "values"
 kind = "tensor"
+dtype = "f32|u32|u8|i32|u16"
 rank_min = 1
-rank_max = 1
-title = "Values (N): a value for the colormap, or a packed RGBA in its bits"
+rank_max = 2
+title = "Values (N) of f32: a value for the colormap, or a packed RGBA in its bits; packed RGBA (N) of u32; colors (N, 3 or 4) of u8; or class ids (N) of i32, u16 or u8"
 
 [[params]]
 name = "size"
