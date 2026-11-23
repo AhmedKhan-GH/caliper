@@ -105,6 +105,7 @@ def test_peak_and_fallback_memory_limits():
     for options in (
         {"footprint": lambda: 1_000_000_001, "peak": lambda: 0, "driver": lambda: 0},
         {"footprint": lambda: 0, "peak": lambda: 1_000_000_001, "driver": lambda: 0},
+        {"footprint": lambda: 0, "peak": lambda: 0, "driver": lambda: 1_000_000_001},
         {"footprint": lambda: None, "peak": lambda: 0, "driver": lambda: 600_000_001},
     ):
         guard = MemoryGuard(1, "cpu", resident=lambda: 400_000_000, pressure=lambda: 50, **options)
