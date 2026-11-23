@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstring>
 #include <deque>
+#include <limits>
 #include <random>
 
 #ifdef _WIN32
@@ -689,7 +690,15 @@ public:
                 if (w < 0) {
                     const int e = cnet_errno();
                     if (CNET_WOULDBLOCK(e) || CNET_INTR(e)) return;
-                    die(ev, close_code_ ? close_code_ : kCloseAbnormal, "send: " + sock_error_text(e));
+                    // The peer is gone (a reset gives EPIPE or ECONNRESET), but what it
+                    // sent before its end can still wait in the socket: read it first,
+                    // so that its last message (an action's reply just before its
+                    // process exits) arrives before Closed and is not lost to a write
+                    // that came first. Nothing more can arrive, so the read is bounded.
+                    const std::string why = "send: " + sock_error_text(e);
+                    if (!reading_ && (phase_ == Phase::Open || phase_ == Phase::Closing))
+                        read_some(ev, std::numeric_limits<size_t>::max());
+                    die(ev, close_code_ ? close_code_ : kCloseAbnormal, why);
                     return;
                 }
                 o.sent += (size_t)w;
@@ -825,9 +834,16 @@ private:
     }
 
     // ---- reading ------------------------------------------------------------------------
-    void read_some(std::vector<Event>& ev) {
+    // Reads what the socket holds, up to `budget` bytes. A flush that fails
+    // while a read runs (from a message's handler) does not read again.
+    void read_some(std::vector<Event>& ev, size_t budget = kReadBudget) {
+        reading_ = true;
+        read_loop(ev, budget);
+        reading_ = false;
+    }
+
+    void read_loop(std::vector<Event>& ev, size_t budget) {
         uint8_t buf[kReadChunk];
-        size_t budget = kReadBudget;
         while (budget > 0 && phase_ != Phase::Dead && phase_ != Phase::Decide && phase_ != Phase::Flush) {
             const long long r = sock_recv(fd_, buf, sizeof buf);
             if (r == 0) {
@@ -1241,6 +1257,8 @@ private:
     std::deque<Out> out_;
     size_t out_bytes_ = 0;
     size_t out_msgs_ = 0;
+
+    bool reading_ = false;   // inside read_some()
 
     // close
     bool close_sent_ = false, close_received_ = false, initiated_here_ = false;
