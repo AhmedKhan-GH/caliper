@@ -29,31 +29,22 @@ entries:
   item: A program may declare the uniform caliper, which holds the step, the pass index and the output sizes.
   ids:
   - SPC-14
-- heading: Stage Declaration
-  item: A material or vertex stage replaces one function of the draw of a scene entity in the viewer.
-  ids:
-  - SPC-14
 - heading: Provenance
   item: The key provenance marks a spec from someone else, whose programs wait for a review of their hash.
   ids:
   - SPC-23
 - heading: Commands
-  item: Eleven commands for stages, programs and interventions join the command layer and the MCP tool table.
+  item: Program and intervention commands use the command layer and the MCP tool table.
   ids:
   - SPC-05
   - AGT-02
-- heading: Stage Commands
-  item: The commands stage.set and stage.remove edit the stages of the open spec, and stage.check compiles a source.
-  ids:
-  - SPC-14
-  - SPC-05
 - heading: Program Commands
   item: The commands program.create, program.patch and program.remove edit programs, and program.status reads their state.
   ids:
   - SPC-14
   - SPC-05
 - heading: Command Errors
-  item: The stage and program commands answer with fixed error codes.
+  item: Program commands answer with fixed error codes.
   ids:
   - SPC-05
 - heading: Sandbox
@@ -65,11 +56,11 @@ entries:
   ids:
   - SPC-14
 - heading: Time Watchdog
-  item: A watchdog stops a program or a stage that goes over its GPU time limit.
+  item: A watchdog stops a program that exceeds its GPU time limit.
   ids:
   - SPC-14
 - heading: Host Errors
-  item: The hosts of programs and stages report fixed error codes in the status and the events.
+  item: Program hosts report fixed error codes in status and events.
   ids:
   - SPC-14
 - heading: Cadence
@@ -105,19 +96,15 @@ entries:
   ids:
   - SPC-14
 - heading: Program Status
-  item: The command program.status and the message PROGRAM_STATE carry one status item for each program and stage.
+  item: The command program.status and the message PROGRAM_STATE carry one status item for each program.
   ids:
   - SPC-14
 - heading: Program Events
-  item: The event kind program reports a program or a stage that compiled, was refused or stopped.
+  item: The event kind program reports a program that compiled, was refused or stopped.
   ids:
   - AGT-21
 - heading: Producer Runtime Interface
   item: A C interface and two Python files fix where the producer runtime meets the native module and the wire path.
-  ids:
-  - SPC-14
-- heading: Viewer Stage Interface
-  item: The scene compiler takes the compiled stages of an entity through one interface.
   ids:
   - SPC-14
 - heading: Interventions
@@ -153,15 +140,21 @@ entries:
   ids:
   - INT-10
 - heading: Acceptance Test
-  item: A test through caliper-mcp builds a geometry program, a pixels program, a material stage and an ablation toggle on a managed run.
+  item: A test through caliper-mcp builds programs, a library piece and an ablation toggle on a managed run.
   ids:
   - SPC-14
   - INT-11
 - heading: Bounds Checks
-  item: Each program and stage of a spec is translated with bounds checks on buffer, texel and index accesses, so that it cannot read or write outside its own buffers.
+  item: The compiler adds bounds checks to buffer, texel and index accesses in each program.
   ids:
   - SPC-14
 - heading: Intervention Lifetime
   item: Interventions end when no viewer with the control permission stays connected for the linger time.
   ids:
   - INT-10
+
+- heading: Edit Rules
+  item: Program edits support dry runs, review, undo, and journal entries.
+  ids:
+  - SPC-14
+  - SPC-05

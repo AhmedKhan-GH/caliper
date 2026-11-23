@@ -136,7 +136,7 @@ features:
     title: Custom WGSL Views
     status: shipped
     scope: core
-    summary: A spec carries WGSL programs over live tensors and material or vertex stages of scene entities, which the sandbox checks and which the script and the viewer run with limits on their time and memory.
+    summary: A spec carries WGSL programs over live tensors, with sandbox checks and limits on GPU time and memory.
     depends_on: [SPC-11]
     design: design/roadmap.md#open-questions
     docs: docs/agents/gpu-programs.md#programs
@@ -466,7 +466,7 @@ features:
     title: Provenance Review State
     status: shipped
     scope: core
-    summary: A program, stage or piece instance of a spec from someone else stays in the state review, and runs neither half, until the hash of its source is in the reviewed list of the spec.
+    summary: A program or piece instance from a foreign spec waits in the review state until the reviewed list contains its source hash.
     depends_on: [SPC-50]
     docs: docs/agents/pieces.md#foreign-specs
     issue: null

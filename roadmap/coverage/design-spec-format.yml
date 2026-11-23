@@ -179,9 +179,8 @@ entries:
     older documents in their JSON form.
   ids:
   - SPC-01
-- heading: Programs, Stages and Provenance
-  item: Version 1 holds the program, stage and provenance tables of GPU programs, with their canonical
-    form and their validation with the sandbox's codes.
+- heading: Programs and Provenance
+  item: Programs and provenance remain in version 1, and library pieces replace the former stage tables.
   ids:
   - SPC-14
 - heading: Validation
