@@ -235,12 +235,21 @@ TEST_CASE("runner: a page link or a stream link of this computer becomes the str
 TEST_CASE("runner: a start that writes no link fails at the start limit, and its process ends") {
     Workspace w("runner_no_link");
     std::ofstream(w.ws + "/scripts/silent.py") << "import time\nprint('silent', flush=True)\ntime.sleep(120)\n";
+    // The runner's passes wait until the script has printed its line, so that
+    // a slow start of the interpreter cannot meet the short start limit first.
+    PassGate gate;
+    gate.close_at = 1;
     cr::ModelRunner::Options o;
     o.workspace = w.ws;
     o.python = w.python.empty() ? "python3" : w.python;
     o.start_limit_s = 1.0;
     o.kill_grace_s = 1.0;
+    o.before_pass = [&] { gate.before_pass(); };
     cr::ModelRunner runner(o);
+    struct Opener {
+        PassGate& g;
+        ~Opener() { g.open(); }   // before the runner's shutdown, also when a check fails
+    } opener{gate};
     cb::RunStartRequest r;
     r.script_path = w.ws + "/scripts/silent.py";
     r.script = "scripts/silent.py";
@@ -249,6 +258,13 @@ TEST_CASE("runner: a start that writes no link fails at the start limit, and its
     CHECK(e.id == "silent-1");
     CHECK(e.state == "starting");
     CHECK(fs::is_directory(w.ws + "/runs/silent-1"));
+    bool printed = false;
+    for (int i = 0; i < 3000 && !printed; ++i) {
+        printed = read_file(w.ws + "/runs/silent-1/output.log").find("silent\n") != std::string::npos;
+        if (!printed) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    REQUIRE(printed);
+    gate.open();
     REQUIRE(runner.wait_for(state_is("silent-1", "failed"), 20000));
     const cb::RunEntry got = runner.list().at(0);
     REQUIRE(got.error);
@@ -474,14 +490,16 @@ TEST_CASE("runner: a stop ends a fork that waits for its checkpoint, and the che
             if (f.path().filename().u8string().rfind("checkpoint-", 0) == 0) return values_of(runner, "run:base/loss").size() >= 4;
         return false;
     }, 60000));
+    CHECK(runner.running_pids().size() == 1);
+    REQUIRE(!runner.stop("base", 30, &stopped));
+    REQUIRE(runner.wait_for(state_is("base", "exited"), 60000));
+    // The parent's end read every reply that it sent, so the checkpoint's
+    // reply has been handled here, also on a slow machine: it started nothing.
     const std::vector<cb::RunEntry> runs = runner.list();
     const cb::RunEntry* after = find(runs, fork.id);
     REQUIRE(after);
     CHECK(after->state == "exited");
-    CHECK(runner.running_pids().size() == 1);
     CHECK_FALSE(fs::exists(t.w.ws + "/runs/" + fork.id + "/output.log"));
-    REQUIRE(!runner.stop("base", 30, &stopped));
-    REQUIRE(runner.wait_for(state_is("base", "exited"), 60000));
     CHECK(runner.running_pids().empty());
 }
 
