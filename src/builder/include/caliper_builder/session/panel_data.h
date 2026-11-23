@@ -95,7 +95,7 @@ struct ViewerInputs {
 // At most this many programs of one panel, and this many bytes of resources
 // in one answer, within the resource history budget.
 inline constexpr std::size_t kViewerProgramsMax = 64;
-inline constexpr std::uint64_t kViewerResourceBytesMax = 256ull << 20;
+inline constexpr std::uint64_t kViewerResourceBytesMax = spec::piece_limits::kPublishedBytesMax;
 
 // The instances of pieces whose draw half targets the scene panel
 // `panel_id`, in the spec's order: each {"id", "title", "piece": {name,

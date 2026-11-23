@@ -127,7 +127,7 @@ TEST_CASE("viewer resource versions preserve typed metadata and replacements at 
     sp::Resource texture;
     texture.id = "texture";
     texture.kind = sp::ResourceKind::texture;
-    texture.format = "r32float";
+    texture.format = "r32uint";
     texture.width = 2;
     texture.height = 2;
     piece.resources.push_back(texture);
@@ -150,7 +150,7 @@ TEST_CASE("viewer resource versions preserve typed metadata and replacements at 
     image.count = 4;
     image.stride = 4;
     image.width = image.height = 2;
-    image.format = "r32float";
+    image.format = "r32uint";
     image.bytes = std::make_shared<const std::vector<std::uint8_t>>(16, 0);
     history.append_resource("dots", "texture", 0, {}, image);
     ViewerInputs in;
@@ -160,7 +160,7 @@ TEST_CASE("viewer resource versions preserve typed metadata and replacements at 
     json out = viewer_programs(spec, "world", in, &first_digest);
     REQUIRE(out[0]["resources"].size() == 2);
     CHECK(out[0]["resources"][0]["elements"] == 3);
-    CHECK(out[0]["resources"][1]["format"] == "r32float");
+    CHECK(out[0]["resources"][1]["format"] == "r32uint");
     CHECK(out[0]["resources"][1]["width"] == 2);
     CHECK(out[0]["resources"][1]["height"] == 2);
     const auto first_version = out[0]["resources"][1]["version"];

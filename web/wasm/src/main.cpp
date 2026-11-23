@@ -1299,7 +1299,9 @@ EMSCRIPTEN_KEEPALIVE int caliper_views_feed_resource(const char* program, const 
                                                     const uint8_t* bytes, uint32_t n, const char* format, double elements) {
     if (!g.cfg.page_feed || !g.programs || !program || !resource || (!bytes && n)) return 0;
     if (!(step >= 0.0) || step > 9.007199254740992e15) return 0;
-    if ((uint64_t)count * stride != n || n > (128u << 20)) return 0;
+    const uint64_t limit = width || height ? CALIPER_NET_RESOURCE_TEXTURE_VERSION_MAX_BYTES
+                                          : CALIPER_NET_RESOURCE_VERSION_MAX_BYTES;
+    if ((uint64_t)count * stride != n || n > limit) return 0;
     if (elements != -1.0 && (!(elements >= 0.0) || elements > UINT32_MAX || elements != std::floor(elements))) return 0;
     caliper_net::wire::Resource r;
     r.program = program;

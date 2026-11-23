@@ -60,7 +60,7 @@ export interface ProgramPick { program: string; item: number; step: number; fiel
 type Ref = { state?: string; selection?: string; control?: string; field?: string; entity?: string; default?: unknown };
 
 // One resource holds at most 128 MiB before base64 encoding.
-const MAX_RESOURCE_B64 = 180 << 20;
+const MAX_RESOURCE_B64 = Math.ceil((256 * 1024 * 1024) / 3) * 4;
 
 function bytesOf(b64: string): Uint8Array | null {
   if (b64.length > MAX_RESOURCE_B64) return null;
