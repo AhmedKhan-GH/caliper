@@ -1179,7 +1179,7 @@ test('the piece form carries its golden values and round-trips', () => {
   const r = frame32('resource_scene_points') as { program: string; resource: string; step: number; count: number; stride: number; data: Uint8Array };
   expect([r.program, r.resource, r.step, r.count, r.stride, r.data.length]).toEqual(['scene.1', 'points', 7, 3, 32, 96]);
   const buf = pieceFrame('points');
-  expect(encode(decode(buf), PROTOCOL_MINOR_3_2)).toEqual(buf);
+  expect(encode(decode(buf) as Message, PROTOCOL_MINOR_3_2)).toEqual(buf);
   const hash = `sha256:${'ab'.repeat(32)}`;
   expect((decode(pieceFrame('points', { piece: { name: 'points', version: 1, hash } })) as SceneUpdateMsg).piece!.hash).toBe(hash);
   const pins: [string, string, Record<string, unknown>][] = [
