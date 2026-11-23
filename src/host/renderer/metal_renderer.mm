@@ -361,7 +361,9 @@ public:
     // with a CLEAR matching the GL backend's background, then ImGui NewFrame.
     // The clear lives here (not render()) per the C1 contract — anything the
     // app draws this frame lands on top of it.
-    void new_frame() override {
+    void new_frame() override { new_frame_with_input({}); }
+
+    void new_frame_with_input(const std::function<void()>& input) override {
         @autoreleasepool {
             int w = 0, h = 0;
             glfwGetFramebufferSize(window_, &w, &h);
@@ -387,6 +389,7 @@ public:
             }
 
             ImGui_ImplMetal_NewFrame(pass_desc_);
+            if (input) input();
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
         }

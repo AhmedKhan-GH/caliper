@@ -1415,6 +1415,73 @@ struct PanelRect {
 
 }  // namespace
 
+TEST_CASE("programs: a press and motion in one batch move and draw the camera in that frame") {
+    SpecOffscreen* c = canvas();
+    REQUIRE(c != nullptr);
+    ArcsPanel p(c, arcs_spec(false), canvas_layer(c));
+    caliper_live_views::SceneView* view = p.running();
+    REQUIRE(view != nullptr);
+    const PanelRect pr(p);
+    const PanelInput in{p};
+    for (const int button : {0, 1, 2}) {
+        CAPTURE(button);
+        in.move(pr.cx, pr.cy);
+        const auto before = orbit_numbers(*view);
+        in([&](ImGuiIO& io) {
+            io.AddMouseButtonEvent(button, true);
+            io.AddMousePosEvent(pr.cx + 1, pr.cy);
+        });
+        CHECK(orbit_numbers(*view) != before);
+        CHECK(view->drawn_camera_text() == camera_now(*view));
+        const auto after = orbit_numbers(*view);
+        in.frame();
+        CHECK(orbit_numbers(*view) == after);
+        in.button(button, false);
+        CHECK(orbit_numbers(*view) == before);
+        in.rest();
+    }
+}
+
+TEST_CASE("programs: a press and release in one batch pick the arc under the press") {
+    SpecOffscreen* c = canvas();
+    REQUIRE(c != nullptr);
+    ArcsPanel p(c, arcs_spec(false), canvas_layer(c));
+    caliper_live_views::SceneView* view = p.running();
+    REQUIRE(view != nullptr);
+    const PanelRect pr(p);
+    const PanelInput in{p};
+    const float kx = float(view->width()) / pr.r[2], ky = float(view->height()) / pr.r[3];
+    std::uint32_t tx = 0, ty = 0, item = 0;
+    bool vertical = false;
+    REQUIRE(adjacent_items(*view, view->draw_runtimes()[0]->pick_id(), std::uint32_t(std::round(kx)),
+                           &tx, &ty, &vertical, &item));
+    const float x = pr.r[0] + (float(tx) + 0.5f) / kx;
+    const float y = pr.r[1] + (float(ty) + 0.5f) / ky;
+    for (const bool wobble : {false, true}) {
+        CAPTURE(wobble);
+        p.events.got.clear();
+        in.move(x, y);
+        const auto before = orbit_numbers(*view);
+        in([&](ImGuiIO& io) {
+            io.AddMouseButtonEvent(0, true);
+            if (wobble) io.AddMousePosEvent(x + (vertical ? 0 : 1), y + (vertical ? 1 : 0));
+            io.AddMouseButtonEvent(0, false);
+        });
+        c->with_context([&] { CHECK(ImGui::IsMouseClicked(0)); });
+        CHECK(pick_events(p) == 0);
+        CHECK((orbit_numbers(*view) != before) == wobble);
+        in.frame();
+        c->with_context([&] { CHECK(ImGui::IsMouseReleased(0)); });
+        CHECK(orbit_numbers(*view) == before);
+        for (int k = 0; k < 8 && !p.pick_event(); ++k) in.frame();
+        REQUIRE(p.pick_event() != nullptr);
+        CHECK(pick_events(p) == 1);
+        CHECK(p.pick_event()->fields.value("program", std::string()) == "tower_arcs");
+        CHECK(p.pick_event()->fields.value("item", std::uint32_t(0xffffffffu)) == item);
+        in.rest();
+    }
+}
+
 TEST_CASE("programs: a slow drag in a scene panel moves the camera on its first frame of motion, by the pointer's "
           "whole way") {
     SpecOffscreen* c = canvas();

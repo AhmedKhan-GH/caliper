@@ -45,10 +45,12 @@
 // dimmed. Without a sink a selection stays in the view.
 #include "live/live_views_state.h"
 #include "live/camera_drag.h"
+#include "live/camera_input.h"
 
 #include "live/live_points.h"
 #include "live/live_scene.h"
 #include "live/live_views_scene.h"
+#include "mouse_latency.h"
 #include "live/scene_overlays.h"
 #include "embed/render_stats.h"   // copy counters
 #include "renderer/host_renderer.h"
@@ -1061,7 +1063,10 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     PointsPress press_view{*sc, v, avail.y, v.dims == 3 && !(g.button != 0 || g.alt || g.ctrl)};
     if (g.pressed && !g.selecting) camera_press_begin(g.press, press_view, g.x0, g.y0);
     if ((g.down || released) && !g.selecting) {
-        camera_press_frame(g.press, press_view, valid, io.MousePos.x, io.MousePos.y, released);
+        const auto before = caliper_host::mouse_latency_enabled()
+                                ? std::optional<caliper_scene::ViewCamera>(sc->camera()) : std::nullopt;
+        camera_press_input(g.press, press_view, g.button, released);
+        if (before && !same_camera(*before, sc->camera())) caliper_host::mouse_latency_camera(g.button);
         g.moved = !g.press.click();
     }
     // Any drag stops the slow turn, which the page hears for its header toggle.
@@ -1406,7 +1411,10 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     ScenePress press_view{*sc, avail.y, g.button != 0 || g.alt || g.ctrl};
     if (g.pressed && !g.selecting) camera_press_begin(g.press, press_view, g.x0, g.y0);
     if ((g.down || released) && !g.selecting) {
-        camera_press_frame(g.press, press_view, valid, io.MousePos.x, io.MousePos.y, released);
+        const auto before = caliper_host::mouse_latency_enabled()
+                                ? std::optional<caliper_scene::ViewCamera>(sc->camera()) : std::nullopt;
+        camera_press_input(g.press, press_view, g.button, released);
+        if (before && !same_camera(*before, sc->camera())) caliper_host::mouse_latency_camera(g.button);
         g.moved = !g.press.click();
     }
     if (hovered && io.MouseWheel != 0.0f) {

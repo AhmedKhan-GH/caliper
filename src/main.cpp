@@ -22,6 +22,7 @@
 #include "host/host_version.h"
 #include "host/renderer/host_renderer.h"
 #include "host/frame_log.h"
+#include "host/mouse_latency.h"
 #include "host/embed/embed_core.h"   // caliper_live_set_event_tap
 #include "host/live/live_attach.h"
 #include "host/live/live_controls.h"
@@ -65,6 +66,8 @@
 #include <memory>
 #include <optional>
 #include <system_error>
+#include <chrono>
+#include <thread>
 
 // The hidden window (--hidden, CALIPER_HIDDEN=1): SIGINT and SIGTERM ask for
 // the normal close of the window, which nobody can click, so the teardown runs
@@ -343,10 +346,6 @@ public:
                     frame_times_.wait = "live_page_tick";
                 }
             }
-            const double poll0 = frame_log_.on() ? frame_log_.now_ms() : 0.0;
-            glfwPollEvents();
-            if (frame_log_.on()) frame_times_.poll_ms = frame_log_.now_ms() - poll0;
-
             // An attached session: claim and apply the newest completed
             // snapshot of every view before the frame draws them (the live
             // core's order: poll, then frame). Never waits on the script. The
@@ -380,18 +379,20 @@ public:
                 capture_error(t, status, why);
             });
 
+            renderer_->new_frame_with_input([this] {
+                // The drawable wait must finish before callbacks queue this frame's input.
+                const double poll0 = frame_log_.on() ? frame_log_.now_ms() : 0.0;
+                glfwPollEvents();
+                if (frame_log_.on()) frame_times_.poll_ms = frame_log_.now_ms() - poll0;
+                // Hidden tests supply input at the same point as native callbacks.
+                if (ui_driver_ && (page_ == AppPage::Live || (page_ == AppPage::Spec && ui_driver_->spec_step())))
+                    feed_ui_driver();
+                if (spec_ui_ && (page_ == AppPage::Spec || page_ == AppPage::Live || page_ == AppPage::Landing ||
+                                 page_ == AppPage::Applet))
+                    feed_spec_ui();
+            });
             int dw, dh;
             glfwGetFramebufferSize(window_, &dw, &dh);
-
-            // CALIPER_TEST_UI with --hidden: the scripted clicks of a UI test,
-            // queued into ImGui before the frame reads its input.
-            if (ui_driver_ && (page_ == AppPage::Live || (page_ == AppPage::Spec && ui_driver_->spec_step())))
-                feed_ui_driver();
-            if (spec_ui_ && (page_ == AppPage::Spec || page_ == AppPage::Live || page_ == AppPage::Landing ||
-                             page_ == AppPage::Applet))
-                feed_spec_ui();
-
-            renderer_->new_frame();
 
             // Jobs tray (§7.5), on every page while a job runs or a failure
             // is kept (ui/applet_page.h): this frame's jobs and whether its
@@ -1004,6 +1005,7 @@ public:
         // Close the DuckDB stores NOW — leaving them to static destructors
         // races DuckDB's globals and aborts in malloc at exit.
         caliper_host::services_shutdown();
+        caliper_host::mouse_latency_stop();
         renderer_->shutdown();
         // The spec page's textures were the renderer's to destroy; their
         // records go while the UI context still exists.
@@ -1908,8 +1910,10 @@ private:
     void wait_for_live_frame() {
         constexpr double kFrame = 1.0 / 60.0;
         const double next = live_frame_t_ + kFrame;
+        // glfwWaitEventsTimeout dispatches callbacks during the wait. Leave events queued
+        // until the renderer finishes its display wait and can consume them immediately.
         for (double t = glfwGetTime(); t < next; t = glfwGetTime())
-            glfwWaitEventsTimeout(next - t);
+            std::this_thread::sleep_for(std::chrono::duration<double>(next - t));
         live_frame_t_ = glfwGetTime();
     }
 
@@ -2165,7 +2169,9 @@ private:
             ImGui::GetIO().AddMousePosEvent(float(x), float(y));
         });
 #endif
-        return renderer_->init(window_);
+        if (!renderer_->init(window_)) return false;
+        caliper_host::mouse_latency_start(window_);
+        return true;
     }
 
     std::vector<std::string> applet_dirs_;   // --applets, in order
