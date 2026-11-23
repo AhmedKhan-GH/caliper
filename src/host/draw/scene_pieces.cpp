@@ -45,7 +45,8 @@ constexpr std::uint64_t kPaletteSize = 4096;
 std::uint64_t capacity(const char* piece, const char* resource) {
     if (const cs::Piece* p = ScenePieces::library_piece(piece))
         for (const auto& r : p->resources)
-            if (r.id == resource) return r.count;
+            if (r.id == resource)   // a texture holds its most texels, image@1's pixels among them
+                return r.kind == cs::ResourceKind::texture ? cs::texture_texels(r) : std::uint64_t(r.count);
     return std::numeric_limits<std::uint64_t>::max();
 }
 
@@ -516,7 +517,6 @@ void mesh_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
     Rows pos, nrm;
     std::string why;
     Source src;
-    if (b.texture || u.array("uvs") || u.array("texture")) return void(c.fallback = Fallback::textured_mesh);
     if (!rows(u.array("positions"), &pos) || !source_of(u, &src, &why) || src.mode == 3)
         return void(c.fallback = Fallback::mesh_shape);
     const bool normals = u.array("normals") != nullptr;
@@ -550,6 +550,22 @@ void mesh_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
         put(verts, at + 16, nv, 16);
         put(verts, at + 32, &rgba, 4);
         put(verts, at + 36, &index, 4);
+        if (const wire::Section* uv = u.array("uvs"); uv && uv->dtype == CALIPER_NET_DTYPE_F32 &&
+                                                      uv->size >= uint64_t(pos.n) * 8)
+            put(verts, at + 40, uv->data + std::size_t(i) * 8, 8);   // Vertex.uv
+    }
+    // The texture of a textured mesh, as the built-in uploads it: RGBA8 texels of (H, W, 4) u8.
+    if (const wire::Section* tex = u.array("texture"); tex && u.array("uvs") && b.texture) {
+        const uint32_t tw = b.image_width, th = b.image_height;
+        if (uint64_t(tw) * th > capacity("mesh", "tex") || tex->size < uint64_t(tw) * th * 4)
+            return void(c.fallback = Fallback::mesh_shape);
+        for (uint64_t k = 0, m = uint64_t(tw) * th; k < m && !alpha; ++k) alpha = tex->data[k * 4 + 3] < 255;
+        PieceBatch::Resource r{"tex", tw * th, std::vector<std::uint8_t>(tex->data, tex->data + std::size_t(tw) * th * 4)};
+        r.width = tw;
+        r.height = th;
+        c.resources.push_back(std::move(r));
+    } else {
+        c.resources.push_back({"tex", 0, {}});   // mesh@1 waits for a version of each resource: none texels
     }
     if (pos.n > 0 && alpha) {
         const float one = 1.0f;
@@ -602,7 +618,10 @@ void image_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
         } else {
             std::memcpy(out.data(), px->data, std::size_t(n) * 4);
         }
-        c.resources.push_back({"pixels", std::uint32_t(n), std::move(out)});
+        PieceBatch::Resource texels{"pixels", std::uint32_t(n), std::move(out)};   // image@1's rgba8unorm texture
+        texels.width = c.width;
+        texels.height = c.height;
+        c.resources.push_back(std::move(texels));
         c.resources.push_back({"info", 1, image_info(c.width, c.height, grey ? 1 : 4, 80)});
     } else if (b.image_form == caliper_scene::ImageForm::Depth) {
         c.piece = "depth";
@@ -1174,6 +1193,8 @@ void ScenePieces::frame_of(Program& program, DrawRuntime& runtime, FrameInputs* 
             v.step = std::int64_t(c.generation);
             v.serial = c.generation;
             v.count = r.count;
+            v.width = r.width;
+            v.height = r.height;
             v.bytes = r.bytes.data();
             v.size = r.bytes.size();
             if (!runtime.set_resource(v).ok()) break;

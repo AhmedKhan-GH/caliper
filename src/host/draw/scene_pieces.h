@@ -48,6 +48,7 @@ struct PieceBatch {
         std::string id;
         std::uint32_t count = 0;
         std::vector<std::uint8_t> bytes;
+        std::uint32_t width = 0, height = 0;   // a texture's version: its size, count its words
     };
     std::vector<Resource> resources;
 };
