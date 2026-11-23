@@ -1850,33 +1850,39 @@ bool draw_piece_form(const primitive_fixtures::Fixture& f, SceneView& view, std:
         const bool points = cu && cu->part == CALIPER_NET_PART_POINTS && cu->array("positions");
         if (points || (cu && color_image(*cu))) {
             const std::string id = "scene." + std::to_string(++program);
-            // (resource id, stride, bytes) of each resource, in the order they go before the update.
-            std::vector<std::tuple<std::string, uint32_t, std::vector<uint8_t>>> res;
+            // (resource id, stride, bytes, width, height) of each resource, in the order they go before the
+            // update; width and height of image@1's pixels, an rgba8unorm texture, and 0 for a buffer.
+            std::vector<std::tuple<std::string, uint32_t, std::vector<uint8_t>, uint32_t, uint32_t>> res;
             wire::SceneUpdate pu = *cu;
             pu.program = id;
             pu.piece = Json::object();
             pu.piece.set("version", 1);
             pu.resources = Json::object();
             if (points) {
-                res.emplace_back("points", 32u, pack_points(*cu));
+                res.emplace_back("points", 32u, pack_points(*cu), 0u, 0u);
                 pu.piece.set("name", "points");
                 for (const char* name : {"positions", "colors", "values", "class_ids", "radii"})
                     if (cu->array(name)) pu.names.push_back(name);
             } else {
                 auto [pixels, info] = pack_image(*cu);
-                res.emplace_back("pixels", 4u, std::move(pixels));
-                res.emplace_back("info", 80u, std::move(info));
+                const wire::Section* px = cu->array("pixels");
+                res.emplace_back("pixels", 4u, std::move(pixels), uint32_t(px->shape[1]), uint32_t(px->shape[0]));
+                res.emplace_back("info", 80u, std::move(info), 0u, 0u);
                 pu.piece.set("name", "image");
                 pu.names.push_back("pixels");
             }
             pu.arrays.clear();
-            for (auto& [rid, stride, bytes] : res) {
+            for (auto& [rid, stride, bytes, width, height] : res) {
                 wire::Resource r;
                 r.program = id;
                 r.resource = rid;
                 r.step = 0;
                 r.count = uint32_t(bytes.size() / stride);
                 r.stride = stride;
+                if (width) {
+                    r.width = width;
+                    r.height = height;
+                }
                 r.data = wire::Section::make(CALIPER_NET_SECTION_RESOURCE, CALIPER_NET_DTYPE_U8, {int64_t(bytes.size())},
                                              bytes.data(), bytes.size());
                 pu.resources.set(rid, Json(uint64_t(r.count)));

@@ -3157,7 +3157,11 @@ TEST_CASE("live/net: the piece form's inbox pairs a scene program's versions wit
     auto info = std::make_shared<std::vector<uint8_t>>(80, 0);
     const uint32_t size[4] = {3, 2, 1, 0};
     std::memcpy(info->data(), size, 16);
-    CHECK(inbox.take(resource("scene.8", "pixels", 6, 4), px));
+    // The pixels travel as an rgba8unorm texture of the image's size.
+    wire::Resource texels = resource("scene.8", "pixels", 6, 4);
+    texels.width = 3;
+    texels.height = 2;
+    CHECK(inbox.take(texels, px));
     CHECK(inbox.take(resource("scene.8", "info", 1, 80), info));
     wire::SceneUpdate im;
     im.part = CALIPER_NET_PART_IMAGE;
@@ -3170,6 +3174,8 @@ TEST_CASE("live/net: the piece form's inbox pairs a scene program's versions wit
     im.resources.set("info", caliper_net::Json(uint64_t(1)));
     im.names = {"pixels"};
     REQUIRE(inbox.pair(im, nullptr, &why));
+    REQUIRE(im.paired.size() == 2);
+    CHECK(im.paired[0].shape == std::vector<int64_t>{2, 3, 4});   // the texture's rows of texels
     arrays.clear();
     owned.clear();
     REQUIRE_MESSAGE(caliper_live::scene_piece_arrays(im, 0, &arrays, &owned, &why), why);
@@ -3179,4 +3185,12 @@ TEST_CASE("live/net: the piece form's inbox pairs a scene program's versions wit
     // A piece of another version is not read.
     im.piece.set("version", 2);
     CHECK_FALSE(caliper_live::scene_piece_arrays(im, 0, &arrays, &owned, &why));
+    // Pixels sent as a buffer, without the texture's size, are of another layout.
+    im.piece.set("version", 1);
+    CHECK(inbox.take(resource("scene.8", "pixels", 6, 4), px));
+    CHECK(inbox.take(resource("scene.8", "info", 1, 80), info));
+    im.paired.clear();
+    REQUIRE(inbox.pair(im, nullptr, &why));
+    CHECK_FALSE(caliper_live::scene_piece_arrays(im, 0, &arrays, &owned, &why));
+    CHECK(why.find("another layout") != std::string::npos);
 }

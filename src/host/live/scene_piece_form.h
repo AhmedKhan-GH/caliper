@@ -34,6 +34,7 @@ public:
 private:
     struct Held {
         uint32_t count = 0, stride = 0;
+        uint32_t width = 0, height = 0;   // an rgba8unorm texture's size, 0 for a buffer
         std::shared_ptr<const std::vector<uint8_t>> bytes;
     };
     std::map<std::string, Held> held_;   // by program/resource

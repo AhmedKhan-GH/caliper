@@ -27,7 +27,7 @@ __all__ = ["enabled", "program_id", "route", "pack", "unpack_points", "PINS"]
 PINS = {"points": {"name": "points", "version": 1}, "image": {"name": "image", "version": 1}}
 POINT_STRIDE = 32           # points@1 resource "points": Point {position: vec4<f32>, bits: u32, index: u32}
 POINTS_MAX = 4194304        # its count
-PIXELS_MAX = 2097120        # image@1 resource "pixels": Pixel {rgba: u32}, its count
+PIXELS_MAX = 33554432       # image@1 resource "pixels": an rgba8unorm texture, its most texels
 INFO_STRIDE = 80            # image@1 resource "info": ImageInfo {size: vec4<u32>, c0..c3: vec4<f32>}
 NAN_BITS = 0x7FC00000       # the bits of a point without a color source, as the scene view writes them
 
@@ -61,22 +61,25 @@ def route(b) -> str | None:
     elif b.part == _wire.PART_IMAGE and b.params.get("form") == _wire.FORM_COLOR:
         px = (b.arrays or {}).get("pixels")
         if px is not None and px.dtype.itemsize == 1 and (px.ndim == 2 or (px.ndim == 3 and px.shape[2] == 4)) \
-                and 0 < px.shape[0] * px.shape[1] <= PIXELS_MAX:
+                and 0 < px.shape[0] * px.shape[1] <= PIXELS_MAX \
+                and max(px.shape[0], px.shape[1]) <= _wire.RESOURCE_SIDE_MAX:
             return "image"
     return None
 
 
 def pack(b, piece: str) -> tuple:
-    """(names, [(resource id, count, stride, bytes)]) of batch ``b`` for ``piece``, cached on the
-    batch, thus packed once for every link."""
+    """(names, [(resource id, count, stride, bytes, width, height)]) of batch ``b`` for ``piece``,
+    width and height of a texture and None for a buffer, cached on the batch, thus packed once for
+    every link."""
     got = getattr(b, "packed", None)
     if got is not None:
         return got
     if piece == "points":
-        got = (_names(b), [("points", int(b.arrays["positions"].shape[0]), POINT_STRIDE, pack_points(b))])
+        got = (_names(b), [("points", int(b.arrays["positions"].shape[0]), POINT_STRIDE, pack_points(b), None, None)])
     elif piece == "image":
         pixels, info = pack_image(b)
-        got = (_names(b), [("pixels", len(pixels) // 4, 4, pixels), ("info", 1, INFO_STRIDE, info)])
+        h, w = int(b.arrays["pixels"].shape[0]), int(b.arrays["pixels"].shape[1])
+        got = (_names(b), [("pixels", w * h, 4, pixels, w, h), ("info", 1, INFO_STRIDE, info, None, None)])
     else:
         raise ValueError(f"no piece route for {piece!r}")
     b.packed = got
@@ -122,8 +125,9 @@ def pack_points(b):
 
 def pack_image(b):
     """image@1's resources of a color image, as its derive half and the scene view write them:
-    ``pixels`` one packed RGBA (r | g << 8 | b << 16 | a << 24) a pixel, row by row, a grey image
-    (H, W) repeating its value in red, green and blue with alpha 255; ``info`` the width, the height,
+    ``pixels`` the texels of an rgba8unorm texture of the image's width and height, one word
+    (r | g << 8 | b << 16 | a << 24) a pixel, row by row, a grey image (H, W) repeating its value in
+    red, green and blue with alpha 255; ``info`` the width, the height,
     the channels (1 or 4) and 0 as u32, then the identity pose as four f32 columns (the entity's
     transform places the image)."""
     import numpy as np
@@ -175,8 +179,8 @@ def bundle(sub: int, view: str, b, state: bool) -> list:
     pid = program_id(b.scene, b.path, b.part)
     step = int(getattr(b, "step", None) or 0)
     frames, counts = [], {}
-    for rid, count, stride, data in resources:
-        r = _wire.Resource(pid, rid, step, count, stride, data)
+    for rid, count, stride, data, width, height in resources:
+        r = _wire.Resource(pid, rid, step, count, stride, data, width, height)
         frames.extend(_wire.resource_parts(r, next(_programs._VERSIONS), _programs.PART_BYTES))
         counts[rid] = count
     frames.append(_wire.SceneUpdate(sub, view, b.seq, b.stamp_ns, b.path, b.part, {}, b.params,

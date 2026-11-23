@@ -336,8 +336,9 @@ void points_received(const wire::SceneUpdate& u, const Batch& b, const std::vect
     c.received = true;
 }
 
-// image@1's resources of a color image as the piece form carried them: "pixels" one packed RGBA a
-// pixel and "info" its size, channels and the identity pose, which the piece draws as they came.
+// image@1's resources of a color image as the piece form carried them: "pixels" the texels of an
+// rgba8unorm texture of the image's size, one packed RGBA a pixel, and "info" its size, channels and
+// the identity pose, which the piece draws as they came.
 void image_received(const Batch& b, const std::vector<wire::Section>& received, Converted& c) {
     c.piece = "image";
     const wire::Section *px = nullptr, *info = nullptr;
@@ -349,9 +350,14 @@ void image_received(const Batch& b, const std::vector<wire::Section>& received, 
     c.width = std::uint32_t(w);
     c.height = std::uint32_t(h);
     c.count = n;
-    if (!px || !info || px->size != n * 4 || info->size != 80) return void(c.fallback = Fallback::image_shape);
+    if (!px || !info || px->size != n * 4 || info->size != 80 || px->shape.size() != 3 ||
+        uint64_t(px->shape[0]) != h || uint64_t(px->shape[1]) != w)
+        return void(c.fallback = Fallback::image_shape);
     if (too_many(c, n, capacity("image", "pixels"), Fallback::image_pixels_capacity)) return;
-    c.resources.push_back({"pixels", std::uint32_t(n), std::vector<std::uint8_t>(px->data, px->data + px->size)});
+    PieceBatch::Resource texels{"pixels", std::uint32_t(n), std::vector<std::uint8_t>(px->data, px->data + px->size)};
+    texels.width = c.width;
+    texels.height = c.height;
+    c.resources.push_back(std::move(texels));
     c.resources.push_back({"info", 1, std::vector<std::uint8_t>(info->data, info->data + info->size)});
     c.received = true;
 }

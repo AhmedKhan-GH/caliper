@@ -312,6 +312,7 @@ def test_color_and_grey_images_in_the_piece_form(server):
                 i = v.got.index(u)
                 info, pixels = v.got[i - 1], v.got[i - 2]
                 assert (pixels.resource, pixels.count, pixels.stride) == ("pixels", h * wd, 4)
+                assert (pixels.width, pixels.height, pixels.format) == (wd, h, None)   # rgba8unorm texels
                 assert (info.resource, info.count, info.stride) == ("info", 1, 80)
                 assert pixels.program == info.program == u.program
                 size = np.frombuffer(bytes_of(info), dtype="<u4")

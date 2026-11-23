@@ -159,7 +159,7 @@ The resources hold the bytes that the piece's derive half writes, and the produc
 | Piece | Resource | Element | Bytes of One Element |
 |---|---|---|---|
 | `points@1` | `points` | x, y and z as f32 (z is 0 in 2-D), the radius as f32 (the row's from `radii`, else `radius`, else 1), then a u32: the packed RGBA of `colors` (r, g, b and a from the low byte), else the bits of the f32 of `values`, else the class id of `class_ids`, else the bits of a NaN; then the row as u32 and 8 bytes of zero | 32 |
-| `image@1` | `pixels` | One packed RGBA a pixel, row by row; a grey image repeats its value in red, green and blue with alpha 255 | 4 |
+| `image@1` | `pixels` | The texels of an `rgba8unorm` texture whose `width` and `height` are the image's, one packed RGBA a pixel, row by row; a grey image repeats its value in red, green and blue with alpha 255 | 4 |
 | `image@1` | `info` | The width, the height, the channels (1 or 4) and 0 as u32, then the identity as four columns of four f32 | 80 |
 
 A viewer keeps the newest version of each resource of each scene program, apart from the resources of other programs, and takes them with the update that names them, when their counts match `resources`. It drops an update whose versions did not come, and notes it in the scene view. It rebuilds the arrays from the bytes in the dimension of the entity's rows, writes the class colors from the scene's class table into the bits of a class id, and draws the received bytes with its own library piece of that name and version.

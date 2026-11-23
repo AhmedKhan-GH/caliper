@@ -30,6 +30,9 @@ bool ScenePieceInbox::take(const wire::Resource& r, std::shared_ptr<const std::v
     Held& h = held_[r.program + "/" + r.resource];
     h.count = r.count;
     h.stride = r.stride;
+    const bool rgba8 = !r.format || *r.format == CALIPER_NET_TEXTURE_RGBA8;
+    h.width = r.width && rgba8 ? *r.width : 0;
+    h.height = r.height && rgba8 ? *r.height : 0;
     h.bytes = std::move(bytes);
     return true;
 }
@@ -56,7 +59,10 @@ std::shared_ptr<const void> ScenePieceInbox::pair(wire::SceneUpdate& u, std::sha
         wire::Section s;
         s.name = kv.first;
         s.dtype = CALIPER_NET_DTYPE_U8;
-        s.shape = {int64_t(h.count), int64_t(h.stride)};
+        if (h.width)   // a texture's texels: (height, width, 4) bytes
+            s.shape = {int64_t(h.height), int64_t(h.width), 4};
+        else
+            s.shape = {int64_t(h.count), int64_t(h.stride)};
         s.data = h.bytes ? h.bytes->data() : nullptr;
         s.size = h.bytes ? h.bytes->size() : 0;
         out.push_back(s);
@@ -101,17 +107,19 @@ bool scene_piece_arrays(const wire::SceneUpdate& u, uint32_t dims, std::vector<w
         return true;
     }
     if (name == "image") {
-        // image@1: "pixels" one packed RGBA a pixel, "info" the width, the height and the channels.
+        // image@1: "pixels" the texels of an rgba8unorm texture of the image's size, one packed RGBA a
+        // pixel, and "info" the width, the height and the channels.
         const wire::Section* px = paired(u, "pixels");
         const wire::Section* info = paired(u, "info");
-        if (!px || !info || px->shape.size() != 2 || px->shape[1] != 4 || info->shape.size() != 2 ||
+        if (!px || !info || px->shape.size() != 3 || px->shape[2] != 4 || info->shape.size() != 2 ||
             info->shape[0] != 1 || info->shape[1] != kSceneImageInfoStride || info->size != kSceneImageInfoStride)
             return *why = "image@1's resources of another layout", false;
         uint32_t size[4];
         std::memcpy(size, info->data, 16);
         const uint64_t w = size[0], h = size[1], n = w * h;
         if (w == 0 || h == 0 || w > CALIPER_NET_MAX_IMAGE_SIDE || h > CALIPER_NET_MAX_IMAGE_SIDE ||
-            (size[2] != 1 && size[2] != 4) || uint64_t(px->shape[0]) != n || px->size != n * 4)
+            (size[2] != 1 && size[2] != 4) || uint64_t(px->shape[0]) != h || uint64_t(px->shape[1]) != w ||
+            px->size != n * 4)
             return *why = "image@1's pixels do not fit the size in its info", false;
         if (size[2] == 4) {
             owned->emplace_back(px->data, px->data + px->size);
