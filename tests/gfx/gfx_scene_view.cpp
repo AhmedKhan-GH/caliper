@@ -1162,6 +1162,11 @@ TEST_CASE("gfx/Metal scene view: unsupported input reports the entity and reason
     CHECK(rig.view->shape_counts().pieces == 0);
     REQUIRE(rig.view->notes().size() == 1);
     CHECK(rig.view->notes().front() == "wide-line: scene.piece_input: width above 128 pixels");
+    u.params.set("width", Json(2.0));
+    REQUIRE_MESSAGE(rig.view->apply(u, &why), why);
+    REQUIRE_MESSAGE(rig.view->render(64, 64, 1.0f, 0xff000000u, &why), why);
+    CHECK(rig.view->shape_counts().pieces == 1);
+    CHECK(rig.view->notes().empty());
 }
 
 TEST_CASE("gfx/Metal scene view: an unchanged frame stays idle and a changed frame drops its pending pick") {

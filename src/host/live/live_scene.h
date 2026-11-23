@@ -352,6 +352,7 @@ private:
     std::map<Key, Slot> slots_;
     std::vector<uint8_t> scratch_;
     std::vector<std::string> notes_;
+    std::vector<std::string> piece_notes_;   // current piece errors, removed when the next sync resolves them
     uint64_t seq_ = 0;                 // the store's sequence numbers, one per applied batch
     bool fitted_ = false, moved_ = false, dirty_ = true;
     caliper_scene::StartingCamera start_;     // where the view opens and resets to

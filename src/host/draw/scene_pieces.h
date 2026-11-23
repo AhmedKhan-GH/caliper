@@ -68,7 +68,6 @@ enum class InputError : std::uint8_t {
     line_width,
     box_width,
     depth_cloud_moved,
-    mask_class,
     no_arrays,
     stopped,
     no_piece,
@@ -114,7 +113,6 @@ public:
         bool three_d = true;
     };
     void sync(const caliper_scene::SceneTree& tree, const SyncState& state);
-    bool any() const;
     // The matrices of the frame: the scene core's, with which each program gets its batch's model.
     void set_camera(const caliper_scene::CameraMatrices& cm);
     // Whether `pick_id` is one of these programs', and the hit of its item as the scene core gives

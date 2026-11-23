@@ -526,8 +526,14 @@ void SceneView::sync_shapes() {
     const ViewCamera cam = effective_camera();
     if (const ThroughPinhole* t = std::get_if<ThroughPinhole>(&cam)) st.through = t->camera;
     st.three_d = tree_.space() == Space::k3D;
+    for (const auto& message : piece_notes_)
+        notes_.erase(std::remove(notes_.begin(), notes_.end(), message), notes_.end());
+    piece_notes_.clear();
     shapes_->sync(tree_, st);
-    for (const auto& error : shapes_->errors()) note(error.path + ": " + error.code + ": " + error.message);
+    for (const auto& error : shapes_->errors()) {
+        piece_notes_.push_back(error.path + ": " + error.code + ": " + error.message);
+        note(piece_notes_.back());
+    }
     // The highlight of a selection with the pieces: the selected rows of each points and boxes batch.
     std::vector<caliper_draw::HighlightRows> rows;
     if (highlight_wanted())

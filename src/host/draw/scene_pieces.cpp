@@ -239,7 +239,7 @@ private:
 };
 
 namespace {
-const char* const kInputErrorNames[] = {"points of another shape", "lines of another shape", "arrows of another shape", "boxes of another shape", "mesh of another shape", "image of another shape", "depth image of another shape", "mask of another shape", "points above the piece's capacity", "segments above the piece's capacity", "arrows above the piece's capacity", "boxes above the piece's capacity", "mesh vertices above the piece's capacity", "mesh triangles above the piece's capacity", "image pixels above the piece's capacity", "depth pixels above the piece's capacity", "mask pixels above the piece's capacity", "point size outside 1 to 64 pixels", "width above 128 pixels", "box edge width outside 0.5 to 64 pixels", "depth cloud in a moved pixel space", "class above 4,095 in a mask", "batch without arrays to convert", "piece stopped by its runtime", "no library piece"};
+const char* const kInputErrorNames[] = {"points of another shape", "lines of another shape", "arrows of another shape", "boxes of another shape", "mesh of another shape", "image of another shape", "depth image of another shape", "mask of another shape", "points above the piece's capacity", "segments above the piece's capacity", "arrows above the piece's capacity", "boxes above the piece's capacity", "mesh vertices above the piece's capacity", "mesh triangles above the piece's capacity", "image pixels above the piece's capacity", "depth pixels above the piece's capacity", "mask pixels above the piece's capacity", "point size outside 1 to 64 pixels", "width above 128 pixels", "box edge width outside 0.5 to 64 pixels", "depth cloud in a moved pixel space", "batch without arrays to convert", "piece stopped by its runtime", "no library piece"};
 static_assert(sizeof kInputErrorNames / sizeof kInputErrorNames[0] == std::size_t(InputError::count),
               "a name for each kind of error");
 }  // namespace
@@ -1025,8 +1025,6 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
         it = live ? std::next(it) : pick_ids_.erase(it);
     }
 }
-
-bool ScenePieces::any() const { return !programs_.empty(); }
 
 void ScenePieces::set_camera(const caliper_scene::CameraMatrices& cm) { cm_ = cm; }
 
