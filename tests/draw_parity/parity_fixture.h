@@ -10,6 +10,7 @@
 #include "parity_draw.h"
 
 #include "../gfx/example_pieces.h"
+#include "boxes_mesh_fixture.h"
 
 #include <caliper_builder/programs/pieces.h>
 
@@ -205,6 +206,7 @@ inline Fixture make_fixture(std::uint32_t size = 512) {
     wp.pick_id = 3;
     wp.expect = cp::kPieceHashMismatch;
     fx.plan.programs.push_back(wp);
+    add_boxes_mesh(&fx.frames, &fx.plan, &fx.error);
     return fx;
 }
 

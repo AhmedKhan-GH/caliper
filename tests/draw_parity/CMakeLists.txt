@@ -22,7 +22,8 @@ function(caliper_draw_parity_targets)
     # graphics suite compiles them.
     add_executable(caliper_draw_parity_tests "${_dir}/test_draw_parity.cpp" "${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp")
     target_include_directories(caliper_draw_parity_tests PRIVATE "${CMAKE_SOURCE_DIR}/src/host")
-    target_link_libraries(caliper_draw_parity_tests PRIVATE caliper_draw caliper_net caliper::sdk doctest::doctest)
+    target_link_libraries(caliper_draw_parity_tests PRIVATE caliper_draw caliper_net caliper::sdk doctest::doctest
+        $<TARGET_NAME_IF_EXISTS:caliper_builder_spec>)
     set_target_properties(caliper_draw_parity_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
     add_test(NAME caliper_draw_parity_tests COMMAND caliper_draw_parity_tests)
     set_tests_properties(caliper_draw_parity_tests PROPERTIES LABELS "gfx;draw_parity")
@@ -32,7 +33,7 @@ function(caliper_draw_parity_targets)
     add_executable(caliper_draw_parity_app "${_dir}/draw_parity_app.mm" "${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp")
     target_include_directories(caliper_draw_parity_app PRIVATE
         "${CMAKE_SOURCE_DIR}/src/host" "${CMAKE_SOURCE_DIR}/third_party/stb")
-    target_link_libraries(caliper_draw_parity_app PRIVATE caliper_draw caliper_net caliper::sdk
+    target_link_libraries(caliper_draw_parity_app PRIVATE caliper_draw caliper_net caliper::sdk $<TARGET_NAME_IF_EXISTS:caliper_builder_spec>
         "-framework Metal" "-framework MetalPerformanceShaders" "-framework Foundation")
     set_source_files_properties("${_dir}/draw_parity_app.mm" PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_target_properties(caliper_draw_parity_app PROPERTIES
