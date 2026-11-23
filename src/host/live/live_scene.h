@@ -273,6 +273,8 @@ public:
     void set_draw_feed(caliper_draw::DrawFeed* feed);
     // The installed programs, in draw order.
     std::vector<const caliper_draw::DrawRuntime*> draw_runtimes() const;
+    // The frames that the installed programs encoded together, each counted since its install.
+    uint64_t program_frames() const;
     // The programs' ID target; none while the view draws no program.
     caliper_gfx::Texture id_target() const { return id_; }
     // The depth target of the view's frame (Depth32Float, with kCopySrcTex); none in 2-D. A
@@ -310,6 +312,8 @@ public:
     std::string info() const;
     // The camera in words (the UI driver's `where`; tests project with it).
     std::string camera_text() const;
+    // The camera of the last frame the view submitted, in the same words (the UI driver's drags).
+    std::string drawn_camera_text() const;
     // The draws of the last compiled frame (tests): kept only while keep_draws is on.
     void keep_draws(bool on) { keep_draws_ = on; }
     const caliper_gfx::DrawList& last_draws() const { return last_list_; }
@@ -418,6 +422,7 @@ private:
     float scale_ = 1.0f;
     uint64_t target_creates_ = 0;
     uint64_t drawn_revision_ = 0, drawn_pose_ = 0;
+    caliper_scene::ViewCamera drawn_camera_;   // the camera of the last submitted frame
 
     // The programs of pieces: their runtimes with their pending submits, the feed's revision drawn,
     // the ID target, the host's colormaps, the pointer and the polls over the panel's limit.

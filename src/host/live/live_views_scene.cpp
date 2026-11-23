@@ -431,6 +431,7 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
                                         const SceneRectSink& sink) {
     SceneView* sc = &view;
     adopt_view(view, state);
+    state.rect[0] = p0.x, state.rect[1] = p0.y, state.rect[2] = size.x, state.rect[3] = size.y;
     if (size.x < 4.0f || size.y < 4.0f) return SceneRectResult::too_small;
     constexpr int kMaxTarget = 8192, kHysteresisPx = 8;
     const float scale = pixel_scale > 0.0f ? pixel_scale : 1.0f;

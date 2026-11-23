@@ -34,6 +34,11 @@
 //                         (SpecPage::pick_scene), once the panel draws its live scene
 //   held [<kind>]         wait until a call of events.wait waits on the event ring (a long
 //                         poll), with a kind one whose filter takes events of that kind
+//   drag_panel <id> <fx0> <fy0> <fx1> <fy1> <frames>
+//                         once the panel draws its scene, a left drag across its content from
+//                         (fx0, fy0) to (fx1, fy1), fractions of it, one move each frame for
+//                         <frames> frames; each frame logs the time since the frame before and
+//                         what the panel drew: "drag <k> ms <time> <the probe of scene_probe>"
 // The app feeds the driver on the spec page only while the step is one of
 // these, `wait` or `leave`.
 // A step whose target has not been drawn waits for it, up to kPatience frames,
@@ -49,6 +54,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -74,13 +80,17 @@ public:
         // Whether a call of events.wait waits on the event ring; with a kind
         // ("pick"), one whose filter takes events of that kind ("" for any).
         std::function<bool(const std::string& kind)> long_poll_held;
+        // Where the scene panel `id` was drawn last (x, y, width, height in
+        // points) and what it drew in words (SpecPage::scene_probe); false
+        // before its first draw.
+        std::function<bool(const std::string& id, float rect[4], std::string* probe)> scene_probe;
     };
     void set_spec_hooks(SpecHooks hooks) { spec_ = std::move(hooks); }
     // Whether the current step may run on the spec page.
     bool spec_step() const {
         if (done()) return false;
         const std::string& v = steps_[at_].verb;
-        return v == "panel" || v == "pick_panel" || v == "held" || v == "wait" || v == "leave";
+        return v == "panel" || v == "pick_panel" || v == "held" || v == "drag_panel" || v == "wait" || v == "leave";
     }
 
     explicit UiDriver(const std::string& script) {
@@ -128,6 +138,10 @@ public:
             }
             if (ready && spec_.scene_pick && spec_.scene_pick(s.a, u, v)) next("pick_panel " + s.a + " " + s.b);
             else if (frames_ > kLongPatience) fail("the scene panel '" + s.a + "' never drew its scene");
+            return;
+        }
+        if (s.verb == "drag_panel") {
+            drag_panel(io, s);
             return;
         }
         if (s.verb == "held") {
@@ -323,6 +337,58 @@ private:
         std::string verb, a, b;
     };
 
+    // A left drag across a scene panel of the spec page: phase 0 places the pointer, 1 presses,
+    // 2 .. moves + 1 move it one step each frame, then the release and one frame after it. Each
+    // frame from the press on logs the probe, which tells what the frame before drew.
+    void drag_panel(ImGuiIO& io, const Step& s) {
+        float rect[4];
+        std::string probe;
+        const bool ready = spec_.scene_probe && spec_.scene_probe(s.a, rect, &probe);
+        if (phase_ == 0) {
+            float f[5] = {0, 0, 0, 0, 0};
+            if (std::sscanf(s.b.c_str(), "%f %f %f %f %f", &f[0], &f[1], &f[2], &f[3], &f[4]) != 5 || f[4] < 1) {
+                fail("drag_panel needs <id> <fx0> <fy0> <fx1> <fy1> <frames>");
+                return;
+            }
+            if (!ready || rect[2] < 8.0f || rect[3] < 8.0f) {
+                if (frames_ > kLongPatience) fail("the scene panel '" + s.a + "' never drew its scene");
+                return;
+            }
+            ax_ = rect[0] + f[0] * rect[2];
+            ay_ = rect[1] + f[1] * rect[3];
+            aw_ = rect[0] + f[2] * rect[2];   // the end of the drag
+            ah_ = rect[1] + f[3] * rect[3];
+            moves_ = int(f[4]);
+            x_ = ax_;
+            y_ = ay_;
+            io.AddMousePosEvent(x_, y_);
+            phase_ = 1;
+            return;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (phase_ > 1) {
+            char head[64];
+            std::snprintf(head, sizeof head, "drag %d ms %.3f ", phase_ - 1,
+                          std::chrono::duration<double, std::milli>(now - last_).count());
+            log_.push_back(head + (ready ? probe : std::string("no probe")));
+        }
+        last_ = now;
+        if (phase_ == 1) {
+            io.AddMouseButtonEvent(0, true);
+        } else if (phase_ < 2 + moves_) {
+            const float t = float(phase_ - 1) / float(moves_);
+            x_ = ax_ + (aw_ - ax_) * t;
+            y_ = ay_ + (ah_ - ay_) * t;
+            io.AddMousePosEvent(x_, y_);
+        } else if (phase_ == 2 + moves_) {
+            io.AddMouseButtonEvent(0, false);
+        } else {
+            next("drag_panel " + s.a + " " + s.b);
+            return;
+        }
+        ++phase_;
+    }
+
     std::string where() const {
         char buf[48];
         std::snprintf(buf, sizeof buf, "(%.0f, %.0f)", x_, y_);
@@ -341,7 +407,8 @@ private:
 
     std::vector<Step> steps_;
     size_t at_ = 0;
-    int phase_ = 0, frames_ = 0;
+    int phase_ = 0, frames_ = 0, moves_ = 0;
+    std::chrono::steady_clock::time_point last_{};
     float x_ = 0, y_ = 0, ax_ = 0, ay_ = 0, aw_ = 0, ah_ = 0;
     std::string error_;
     std::vector<std::string> log_;

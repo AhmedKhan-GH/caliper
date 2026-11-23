@@ -1145,6 +1145,14 @@ bool SpecPage::scene_ready(const std::string& panel_id) {
     return v && v->generation() > 0;
 }
 
+bool SpecPage::scene_probe(const std::string& panel_id, float rect[4], std::string* probe) {
+    const caliper_live_views::SceneView* v = impl_->runtime->scene_view_of(panel_id);
+    if (!v || v->generation() == 0 || !impl_->runtime->scene_rect(panel_id, rect)) return false;
+    *probe = "scene " + std::to_string(v->cost().frames) + " programs " + std::to_string(v->program_frames()) + " camera " +
+             v->camera_text() + " drawn " + v->drawn_camera_text();
+    return true;
+}
+
 std::string SpecPage::browser_note() const { return impl_->browser_note(); }
 
 bool SpecPage::item_rect(const std::string& name, float rect[4]) const {
@@ -1339,6 +1347,7 @@ void SpecPage::set_dim_names(std::function<std::vector<std::string>(const std::s
 void SpecPage::set_live_core(std::function<CaliperCore*()>) {}
 bool SpecPage::pick_scene(const std::string&, float, float) { return false; }
 bool SpecPage::scene_ready(const std::string&) { return false; }
+bool SpecPage::scene_probe(const std::string&, float*, std::string*) { return false; }
 bool SpecPage::item_rect(const std::string&, float*) const { return false; }
 bool SpecPage::panel_rect(const std::string&, float*) const { return false; }
 std::string SpecPage::widget_state() const { return "idle"; }

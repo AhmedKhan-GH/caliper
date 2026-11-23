@@ -1372,6 +1372,13 @@ caliper_live_views::SceneView* SpecRuntime::scene_view_of(const std::string& pan
     return name && core ? caliper_live_views::scene_view(core, name->c_str()) : nullptr;
 }
 
+bool SpecRuntime::scene_rect(const std::string& panel_id, float rect[4]) const {
+    const auto it = scenes_->by_panel.find(panel_id);
+    if (it == scenes_->by_panel.end() || !(it->second.rect[2] > 0.0f) || !(it->second.rect[3] > 0.0f)) return false;
+    for (int i = 0; i < 4; ++i) rect[i] = it->second.rect[i];
+    return true;
+}
+
 const SpecScene* SpecRuntime::entity_scene(const std::string& panel_id) const {
     auto it = scenes_->entities.find(panel_id);
     return it == scenes_->entities.end() ? nullptr : &it->second->scene;

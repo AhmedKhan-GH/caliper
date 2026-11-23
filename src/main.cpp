@@ -1688,14 +1688,17 @@ private:
     }
 
     // CALIPER_TEST_UI's steps on the spec page (live_ui_driver.h): a scene
-    // panel of the open spec that draws its live scene, a pick in it, and a
-    // long poll of events.wait that waits on the event ring.
+    // panel of the open spec that draws its live scene, a pick or a drag in
+    // it, and a long poll of events.wait that waits on the event ring.
     void give_ui_driver_spec_hooks() {
 #if CALIPER_WITH_BUILDER
         caliper_live::UiDriver::SpecHooks h;
         h.scene_ready = [this](const std::string& id) { return scene_panel_ready(id); };
         h.scene_pick = [this](const std::string& id, float u, float v) {
             return scene_panel_ready(id) && spec_page_.pick_scene(id, u, v);
+        };
+        h.scene_probe = [this](const std::string& id, float rect[4], std::string* probe) {
+            return scene_panel_ready(id) && spec_page_.scene_probe(id, rect, probe);
         };
         h.long_poll_held = [this](const std::string& kind) {
             caliper_builder::Session* s = session_.session();
