@@ -134,16 +134,20 @@ input has the keyboard.
 | Ask | Edits of the open spec and commands that delete or overwrite saved data or run a Python loader wait for your card. This is the default. |
 | Accept edits | Edits of the open spec apply at once. Everything else that asked still asks. |
 | Read only | The agent can read and propose (dry runs, edits of a preview). Every other change is refused, and the agent is told why. |
-| Allow all | Only from the last item of the menu, Allow all for this session. Nothing waits for a card, except an overwrite of a saved applet or the replacement of a spec with unsaved changes. A banner, ALLOW ALL with End, stays under the header while the mode is on. Caliper never saves it, and it ends when the session of the agent ends. |
+| Allow all | Nothing waits for a card, except an overwrite of a saved applet or the replacement of a spec with unsaved changes. Run commands, managed runs and Python loaders run without a card. You choose it from the last item of the menu or in the settings. Caliper saves it, and it stays on after a restart until you choose another mode. While it is on, a banner, ALLOW ALL with End, stays under the header, and the status bar says "allow all for side chat". End sets Ask. |
 
 A command that runs without a card because of the mode or a rule shows as an APPLIED row with what allowed it. The row
 has Undo, which takes the command back while it is the newest change. An approval card of the chat agent offers Allow
 once, Allow always for this session, Always allow `<command>` and Deny. Caliper saves Always allow for this agent.
 
-The settings (⌘,) set the saved mode of the side chat and of the clients of `caliper-mcp`. They list the saved rules
-under Permissions, each with Revoke. The rules are in `agent-permissions.json` in the app-data folder, which only you can
-read and write. An agent with its own access to your files can change this file, so it gives no protection against such
-an agent. The widget agent (⌘K) is not affected, because its changes always wait in its preview for Accept.
+The settings (⌘,) set the saved mode of the side chat and of the clients of `caliper-mcp`, Allow all included. They
+list the saved rules under Permissions, each with Revoke. The modes and the rules are in `agent-permissions.json` in the
+app-data folder, which only you can read and write. Caliper reads Allow all only from a file without errors. No command,
+endpoint, MCP tool, environment variable, command-line flag or spec sets a mode.
+
+An agent with its own access to your files can change this file, so it gives no protection against such an agent. A
+Python loader or a managed run is your own code, and it can also change this file. Under Allow all, such code runs
+without a card. The widget agent (⌘K) is not affected, because its changes always wait in its preview for Accept.
 
 ## Local Models
 

@@ -429,9 +429,20 @@ Each governed principal has a mode; both start at Ask.
 | Ask | The session's policy as before: a card for what asks. |
 | Accept edits | An edit of the open spec (`effect` `edit`) that would ask runs at once, journaled with `allowed_by` and undone like any step. Everything else that asks still asks: deleting or overwriting saved data, running a loader, replacing the open spec. |
 | Read only | Reads and proposals run: commands whose `effect` is `read`, a dry run, an edit into a stacked preview. Every other command is refused with `command.denied` and a plain message that says the agent is in Read only mode. |
-| Allow all | The side chat's agent only, for its session only. What would ask runs without a card, and nothing more. It is never saved, ends when the chat's agent ends (its token is revoked) or the app quits, and no saved setting, environment variable or test hook turns it on. |
+| Allow all | What would ask runs without a card, except a data-loss card ([Allow all](#allow-all)). It is saved like the other modes, for the side chat's agent and for `mcp` clients each, applies at launch and stays on until the person sets another mode. |
 
-Ask is the policy as it was, so a mode never makes an agent stricter than before except Read only, and only Read only can refuse what the policy allowed. The side chat's header shows the mode as a word and Shift-Tab cycles Ask, Accept edits and Read only; Allow all has its own item in the word's menu and a banner while it is on. The settings (⌘,) set the saved mode of each principal.
+Ask is the policy as it was, so a mode never makes an agent stricter than before except Read only, and only Read only can refuse what the policy allowed. The side chat's header shows the mode as a word and Shift-Tab cycles Ask, Accept edits and Read only; Allow all has its own item in the word's menu, and a banner with End, which sets Ask, while it is on. The settings (⌘,) set the mode of each principal, Allow all included, as a row of four buttons per principal, which matches the file's one mode per principal.
+
+### Allow All
+
+Allow all is one of the four values of a principal's saved mode, not a mode of a session. The person sets it in the settings or in the side chat's mode menu, Caliper saves it in `agent-permissions.json` and reads it at launch, and it stays on until the person sets another mode. The end of the chat's agent or of the app does not end it. While either principal is in Allow all, every page's status bar says so in plain words in the accent: "allow all for side chat", "allow all for MCP clients", or both. This replaced the earlier Allow all of the chat's session, which was never saved. One saved value per principal is one rule with one indicator, and a session's mode above a saved one needed a second rule for which of the two holds.
+
+Under Allow all, everything that asks runs without a card, except a data-loss card: an approval bound to the content it would lose, which only a card decides. These still ask under Allow all:
+
+- `applet.save` that overwrites a saved applet or dashboard.
+- `spec.new`, `spec.open` and `applet.open` over an open spec with unsaved changes, from an origin under review, and the `applet.open` of a launch by `app.launch` or `POST /v0/applets/{id}/launch` in that case.
+
+These run without a card under Allow all: an edit that review would show, `data.import`, `app.launch`, `loader.create`, `loader.update` and `loader.delete`, the run of a Python loader (`loader.run`, or `loader.create` and `loader.update` with `run`), `run.start` and `run.fork`, the other `run` commands (`run.set_param`, `run.action`, `run.pause`, `run.stop`, `intervene.set`, `intervene.clear`), `applet.save` of a new applet, and the replacement of a saved open spec. A command that deletes or overwrites saved work keeps its card under Allow all when the session binds its approval to that content (`content_of()` and `bind_content()` in `session.cpp`), as an overwrite of an applet is bound. A destructive command declared later, such as `piece.remove`, keeps its card by the same binding, and `decide_agent_permission()` needs no change for it.
 
 ### Rules
 
@@ -440,22 +451,26 @@ A card of a governed agent offers three answers besides Deny: Allow once (the ap
 Saved rules and the two saved modes live in `agent-permissions.json` in the app-data folder, keyed by agent: the side chat's agent id (`claude`, `codex`, `custom`, ...) or `mcp`:
 
 ```json
-{"version": 1, "modes": {"chat": "ask", "mcp": "accept_edits"},
+{"version": 1, "modes": {"chat": "allow_all", "mcp": "accept_edits"},
  "rules": [{"agent": "claude", "command": "panel.patch"}]}
 ```
 
-The file is written owner-only (0600) through a temporary file. Reading it ignores and reports a file that is not version 1 or not JSON, an unknown field, a mode that is not `ask`, `accept_edits` or `read_only` (so `allow_all` in it is ignored), and a rule for an id that is not an agent id or for a command that is not an agent's (`rule_command_allowed()`: in the table, `agents` true, not a read); on POSIX a file that others may write grants nothing. A missing file is Ask with no rules. **What this does not protect against:** an agent that has its own access to the person's files, such as a coding agent run with file-system tools, can edit this file as it can edit any of the person's files; the file stops nothing that the person's own account can do.
+The file is written owner-only (0600) through a temporary file. Reading it ignores and reports a file that is not version 1 or not JSON, an unknown field, a mode that is not `ask`, `accept_edits`, `read_only` or `allow_all`, and a rule for an id that is not an agent id or for a command that is not an agent's (`rule_command_allowed()`: in the table, `agents` true, not a read). Allow all is read only from a file without any such problem: an unknown key or a value of the wrong type leaves a mode of `allow_all` at Ask, and a malformed file is Ask with no rules. On POSIX a file that others may write, or that another user owns, grants nothing. A missing file is Ask with no rules.
+
+**What Caliper's commands cannot do.** No command takes a path to write. Every write of a command is a fixed file name in a fixed folder of the workspace (`applets/<id>/`, `loaders/`, `tensors/`, `loader-outputs/<id>/`, `runs/<id>/`, `journal/`), and the agents' paths to read are confined to the workspace. When the workspace, or one of those folders through a link, lies in the folder of the permissions file, the session refuses every change from an origin other than `ui` and `builder` with `command.denied`, in every mode. The hidden app's input driver (`CALIPER_TEST_SPEC_UI`) plays clicks as the person's own, and it runs only in a hidden run with a data folder of its own (`app_paths.h`), never on the person's file.
+
+**What this does not protect against.** Any process of the person's account can write the file, and Caliper cannot prevent that. An agent that has its own access to the person's files, such as a coding agent run with file-system tools, can turn Allow all on by writing the file, as it can edit any of the person's files. A process can also start Caliper with `CALIPER_DATA_DIR` set to a folder that holds a file of its own. The limit of the rule is the person's own code: a Python loader or a managed run runs as the person, and it can write this file as it can write any other. Allow all lets such a run start without a card, so under Allow all an agent can start code that turns Allow all on, for itself and for the other principal. The file stops nothing that the person's own account can do.
 
 ### What no mode or rule changes
 
-- Only the person's own UI sets a mode or adds or revokes a rule: there is no command and no endpoint for them, so an agent, an `mcp` client, the viewer and the `api` token cannot, by any command, endpoint, MCP tool, sidecar tool, follow-up, group or preview. The app calls `Session::set_agent_mode()`, `allow_always()` and `revoke_agent_rule()` from the chat's header, the cards and the settings only. A test sends `permissions.set` with every token and gets `command.unknown`.
+- Only the person's own UI sets a mode or adds or revokes a rule: there is no command and no endpoint for them, so an agent, an `mcp` client, the viewer and the `api` token cannot, by any command, endpoint, MCP tool, sidecar tool, follow-up, group or preview. No environment variable, command-line flag or spec sets a mode either. The only source besides the UI is the saved file. The app calls `Session::set_agent_mode()`, `allow_always()` and `revoke_agent_rule()` from the chat's header, the cards and the settings only. A test sends `permissions.set` and similar names with every token and gets `command.unknown`, and a request to `/v0/permissions` or `/v0/settings` gets 404.
 - The ceilings stand: the registry refuses a viewer's change and `history.undo` or `history.redo` from an agent before any policy runs, in every mode; an agent cannot act as `ui` or choose its origin or client.
-- An approval bound to content always asks: the overwrite of a saved applet and the replacement of an open spec with unsaved changes, whatever the mode or rule, since the card shows what is written. Running a Python loader is never covered by a rule; only a card, or Allow all, lets it run.
+- An approval bound to content always asks: the overwrite of a saved applet and the replacement of an open spec with unsaved changes, whatever the mode or rule, Allow all included, since the card shows what is lost. Running Python code (a Python loader, `run.start`, `run.fork`) is never covered by a rule; only a card, or Allow all, lets it run.
 - Read only beats every rule.
 
 ### Pending approvals and the end of a session
 
-A mode changed while an approval waits leaves it waiting: a stricter mode does not deny it and a looser one does not approve it; the person decides it on its card. When the chat's agent ends, Allow all goes off and the chat's session rules go; its pending approvals stay on their cards until they are decided or their wait runs out, as before.
+A mode changed while an approval waits leaves it waiting: a stricter mode does not deny it and a looser one does not approve it; the person decides it on its card. When the chat's agent ends, the chat's session rules go and its mode stays, Allow all included. Its pending approvals stay on their cards until they are decided or their wait runs out, as before.
 
 ### What each command does
 
@@ -531,8 +546,9 @@ These are additions to, or fixes of, sprint 3 contracts section 7, each the smal
 - **Approvals of overwrites and replacements are bound to the content shown,** and a held call gets a new card when that content changes, so the person never approves one file and gets another.
 - **The origin belongs to the token.** A header that a caller sets cannot be trusted to lower its own rights.
 - **Modes and rules in the command layer, keyed by the token.** The side chat's agent and `mcp` clients get a mode each; the token's client, which the app sets, tells the chat's agent from the widget agent, so nothing a request carries selects a mode or a rule. Ask is the policy as it was; Accept edits and the rules only turn an ask into an allow; Read only only denies.
-- **No rule for a Python run, and no mode or rule over content.** A rule allows a command by name, and `loader.run` of a CSV reader and of a Python script share it; running the person's code needs a card or Allow all. An approval bound to content always asks, since the card shows what is written.
-- **Allow all is the chat's only.** It ends with the chat's agent, which `mcp` clients have no equivalent of, and it is never saved.
+- **No rule for a Python run, and no mode or rule over content.** A rule allows a command by name, and `loader.run` of a CSV reader and of a Python script share it; running the person's code needs a card or Allow all. An approval bound to content always asks, since the card shows what is lost.
+- **No change from an agent into the settings folder.** The check is on the workspace and the folders that commands write, not on each write, because every write is a fixed name in one of those folders.
+- **Allow all is a saved mode of each principal.** It reverses the earlier rule (the chat's only, for its session, never saved). One saved mode per principal is one rule and one status bar indicator. Data-loss cards still ask, and only the person's UI sets it.
 - **Review in the command layer, not in each agent.** An agent that asks before an edit is polite; one that does not, such as an outside agent over MCP, is still reviewed, because the session computes the diff itself and the policy parks the edit.
 - **An approved edit runs only as it was shown.** Recomputing it and comparing the lines it removes and adds lets an unrelated change pass and refuses one that would make the approved change mean something else.
 - **Edits are reviewed one at a time; a stacked review is a preview.** A held call makes an agent's edits sequential, so each card shows a change against the spec the person has seen.
@@ -550,6 +566,8 @@ These are additions to, or fixes of, sprint 3 contracts section 7, each the smal
 From agent permissions (sprint 3.1):
 
 - **Deny rules and finer scopes.** Only allow rules exist, for the side chat's agent and for all `mcp` clients together; the person asked for nothing finer yet.
+- **Data-loss cards for loaders.** Under Allow all, `loader.update` and `loader.delete` run without a card, because their approval is not bound to content. Binding them, with a card that shows the loader's text before and after, would keep their card as an overwritten applet's is.
+- **Reads of the settings folder.** The settings folder check covers changes. A workspace that contains the app-data folder, such as the home folder, lets an agent's loader read `api.json` and the agent token files, and so use the token of the other principal and its mode.
 - **An `mcp` session.** A rule "for this session" of an `mcp` client lasts until the app quits, because `api.json`'s token is shared by every outside agent and has no session of its own.
 
 These were found in the review of sprint 3's first pull request and left for a later round:

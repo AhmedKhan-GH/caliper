@@ -132,9 +132,12 @@ Permissions):
 - Ask, the default, holds spec edits, run commands and destructive commands for your card.
 - Accept edits applies an edit of the open spec at once. The edit is still journaled and undoable. A run command still asks for your card.
 - Read only lets reads, dry runs and edits of a preview through. It refuses every other change with `command.denied`.
+- Allow all runs every command without a card, run commands and Python runs included. An overwrite of a saved applet and
+  the replacement of a spec with unsaved changes still wait for your card. The status bar shows "allow all for MCP
+  clients" while the mode is on.
 
-A card can also allow its command for the rest of the app's run or always, until you revoke it in the settings. The
-mode belongs to the app, and the command layer applies it to the token of the API file. Nothing a client sends can
+Caliper saves the mode, and the mode stays on after a restart until you choose another. A card can also allow its
+command for the rest of the app's run or always, until you revoke it in the settings. The mode belongs to the app, and the command layer applies it to the token of the API file. Nothing a client sends can
 choose or change it. The annotations of a tool stay as the flags of the table say.
 
 ## Resources
