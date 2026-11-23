@@ -36,41 +36,33 @@ The suite runs on the backend that the platform offers:
 
 ### Renderer Core Rows
 
-The Metal run of the suite also holds the rows of the renderer core.
+The Metal rows check the graphics layer, colormap compute programs and library scene pieces.
+The layer rows compare offscreen color, ID and depth targets with CPU expectations.
+The colormap rows run `colormap_texture` from layer buffers and imported Metal buffers.
+Each output texel must equal `map_f32_to_rgba8`.
 
-- The `gfx/Metal layer` rows draw through the graphics layer (`src/host/gfx/`) on the renderer's own device and compare each readback byte for byte with a CPU reference.
-- The `gfx/Metal colormap` rows run every boundary range of the colormap by keys through the layer, with the generated `colormap_texture` as a dispatch into an `rgba8unorm` texture and with the vertex stage of `scene_points` drawing one point a pixel wide on each pixel centre. Each runs from a layer buffer and from an imported `MTLBuffer` reported in place with zero bytes copied, and every texel and pixel is compared byte for byte with `map_f32_to_rgba8`.
-- The `gfx/Metal scene` rows draw scenes that the scene core (`src/host/scene/`) compiles, through the layer's Metal backend and the generated programs. The one-entity row, square points on pixel centres, is byte-exact. The surface row is a 3-D scene at 512 x 512 with a colormapped height field of flat-shaded faces, a line strip, a disc marker and a box of segments. It is compared with a CPU rasterisation of the same compiled draws under three rules, because the GPU lights a flat face from the screen-space derivatives of its position and rounds the interpolation in its own way:
-    - Away from edges, where the pixel and its eight neighbours show the same face, line or point in the reference, a flat color and the clear color are exact.
-    - A pixel next to an edge, the edges between a mesh's faces included, may take the color that any primitive beside it gives at that pixel.
-    - A lit face may differ by 2 levels in each channel.
+The scene view rows draw protocol fixtures at 256 by 256 pixels.
+The fixtures cover arrows, boxes, edges, lit and textured meshes, cameras, images and camera-space annotations.
+Their expected images are saved PNGs in `tests/match_references/`.
+The tests retain the pixel tolerances for edges, interpolation, transparency and lighting.
+They do not execute the removed scene compiler.
 
-The scene view's primitive rows (`gfx/Metal scene view: every primitive ...`) draw one fixture per primitive of a scene from protocol 3.2 messages, at 256 x 256, and compare each with the CPU reference of `tests/scene/draw_reference.h`. The fixtures are in `tests/scene/primitive_fixtures.h`:
+The standalone suites compare `points@1`, `lines@1`, `arrows@1`, `path@1`, `boxes@1`, `mesh@1` and `surface@1` with saved images.
+Their metadata records original camera matrices and pick identities where the fixture needs them.
+A pick check reads the piece's ID target at the saved pixel and checks the expected item.
+`tests/match_references/README.md` describes the reference source and update procedure.
+The current renderer cannot write replacement references through these tests.
 
-- arrows;
-- boxes by class, a filled box and a chain of entity transforms;
-- index-pair edges with per-edge values and a clamped index, and per-vertex colors;
-- a lit and a textured mesh;
-- two posed cameras, with a color image on one image plane and a u16 depth image with its cloud;
-- the same rigs looked through one camera, letterboxed, with its pixel space over the picture;
-- a 2-D scene of color, grey, depth and segmentation images with boxes and arrows.
-
-The reference rasterises the draws that the scene core compiled, reading their parameter blocks from the draw list's arena and their arrays from the messages themselves, so the scene view's conversions are checked too. It repeats each vertex stage of the generated programs in f32, covers pixel centres by the top-left rule, tests depth and blends as the layer does, and shades colormapped values through `map_f32_to_rgba8`, class ids through the class table over the palette, and images by nearest or bilinear lookups. The rules are those above, widened as the parity rules of web geometry widen them:
-
-- A color from a lookup is exact away from edges. This covers a flat or per-item color, a colormapped value, a class color and a texel by nearest, whose texel boundaries count as edges.
-- A blended pixel, a bilinear sample and a color interpolated between a line's two ends may differ by 1 level.
-- A lit or flat-shaded face may differ by 2 levels.
-- An edge counts under a translucent layer too.
-
-Each row prints one sentence that says how many pixels differ from the reference and why, and none may be outside the rules. `web/test/scenes.spec.ts` runs the same fixtures through the scene self-test of the WebAssembly views (`web/wasm/src/scene_selftest.cpp`). The self-test compares the module's own WebGPU readback with the same reference compiled into the module, on a default and a compatibility-mode device.
-
-A pick row draws the pick pass of the same scene and checks the entity, the primitive and the item that the picker decodes from the ID window. `caliper_scene_tests` (`tests/scene/`), which is not in the `gfx` label, checks the scene core headless and submits its draw lists to the layer's recording backend. [Rendering](../applets/rendering.md) and [Scene Rendering](../applets/scene-rendering.md) describe both suites.
+`web/test/scenes.spec.ts` checks that every scene fixture draws pieces, produces nonclear pixels and has no notes.
+`web/test/draw_parity.spec.ts` compares the same scenes between the app and browser, including color, IDs and picks.
+`caliper_scene_tests` checks the CPU scene model, camera, labels and frame-pick decode without a GPU.
+[Scene Rendering](../applets/scene-rendering.md) describes the shared view code.
 
 ### Timing Rows
 
 The suite also has a timing row on Vulkan with CUDA for the update cost by size and the cost of a create and release cycle against an update, which prints numbers and proves nothing by itself.
 
-Run them with `-s` to see their messages. The timing rows of the layer and the scene core run only when asked, with `CALIPER_GFX_LAYER_BENCH=1` and `CALIPER_GFX_SCENE_BENCH=1` ([Graphics Layer](../applets/graphics-layer.md)). The migration of the renderer core compares them before and after each step, with the benchmarks in `python/bench/`.
+Run them with `-s` to see their messages. The layer timing rows run only when requested, with `CALIPER_GFX_LAYER_BENCH=1` ([Graphics Layer](../applets/graphics-layer.md)). The migration of the renderer core compares them before and after each step, with the benchmarks in `python/bench/`.
 
 ### Shader Tests
 
@@ -102,20 +94,19 @@ The browser rows, and `web/test/colormap.spec.ts`, which checks the TypeScript c
 
 ### Views Suite
 
-`caliper_gfx_views_tests` (`tests/gfx/gfx_points_view.mm`), also under the `gfx` label, holds the rows of the live views that an offscreen core draws, and the reference mode of the suite (`tests/gfx/gfx_reference.h`).
+`caliper_gfx_views_tests` (`tests/gfx/gfx_points_view.mm`) draws the points view through an offscreen core.
+It compares `points@1` with saved scene images in `tests/match_references/points_view/`.
+The cases cover 2-D lattices, point sizes, subpixel positions, colormaps, categorical colors, selections and 3-D depth cues.
+CPU, shared-storage and private-storage payloads use the same library piece.
 
-A migration step of the renderer core that promises unchanged pixels records, at its first commit and before any code moves, what the old path draws for every case. The record holds the hash of each readback, the path label, the copies of the update and the header text of the view, one line per case in a committed file under `tests/gfx/references/`. The commits that replace the path must reproduce it, and the run writes each readback as a PNG for a later run to compare pixel by pixel.
+A pixel with a uniform 3 by 3 reference neighborhood must keep that color.
+At an edge, it can differ by one level from a color in that neighborhood.
+Lattice center pixels also retain the CPU reference colors.
+The interaction rows compare hover, click, rectangle and lasso results between CPU and device payloads.
+They require a real pick and selection events, then compare the selected pictures.
 
-The 36 cases of the points view cover 2-D lattices of every point size class at four sub-pixel phases, every colormap with fixed and automatic ranges and NaN values, the categorical palette with labels outside 0 to 255, selections, single points, 3-D clouds of up to 4,000,000 points with the depth cues of the view, and the CPU, shared-storage and private-storage routes. Its rows are:
-
-- The record: the path label, copies and header of each case, and on lattices each point's centre pixel against the CPU reference color. The readback's hash equals the record's in every 2-D case and for the single 3-D point. In a 3-D cloud, whose old record came from hardware point sprites, the readback must instead be the CPU reference rasterisation.
-- The CPU reference rasterisation: every case, byte for byte, against a CPU repetition of the draws that the scene core compiled, read from the draw list's arena, with the size and fade of the depth cues and with the vertices snapped to 1/256 of a pixel as the rasteriser does.
-- The images of the old path, with `CALIPER_GFX_REFERENCE_IMAGES` naming a folder of them from a build of the first commit of the step. The row counts and lists the differing pixels of each case in one sentence. Every 2-D case and the single 3-D point must be identical. In a 3-D cloud every differing pixel must lie within 1/32 of a pixel, plus the 1/256 snap, of an edge of one of the CPU reference's squares drawn at or in front of it, and the row fails on any other. The same cases rasterised on the CPU with the float camera of the old view differ from the old images in exactly the same pixels, which shows that the arithmetic of the camera is not the cause.
-- The point sprites: a sprite of every whole and half size from 1.5 to 14 is the exact square on the Metal device. A sprite of a fractional size differs from it only within that bound of its edge, which is what the old path drew with the depth cues.
-- The uniform bytes: the fixture of the scene core (`src/host/scene/uniform_check.h`) hashes the same on the recording and Metal backends.
-- The comparison with `points@1`: every case drawn by the library piece, the view's default, and by the built-in, held to the tolerances of the match tests. A pixel whose 3 x 3 neighbourhood in the built-in picture holds one color has that color, and any other pixel lies within 1 level of a built-in color of its neighbourhood. The lattices' centre pixels keep the CPU reference colors. The rows above draw with the built-in, whose draw list they check.
-- The picks with `points@1`: on the cases of 400 to 100,000 points that the CPU can read, the same hover, click, shift-alt rectangle and shift lasso give the same events, hovered point and selection count with either draw, and the pictures with the selection drawn match within the same tolerances.
-- The timing row, with `CALIPER_GFX_POINTS_BENCH=1`: the CPU time of the view to compile and submit a redraw and the GPU time of the draw, at 100,000, 1,000,000 and 4,000,000 points.
+A separate point-sprite test checks the edge bounds of the old Metal sprite rasterizer.
+The optional `CALIPER_GFX_POINTS_BENCH=1` row measures redraw cost by point count.
 
 ### WebAssembly Views
 
@@ -123,7 +114,6 @@ The WebAssembly views of the browser draw through the WebGPU backend of the grap
 
 - A frame of compute dispatches, a buffer-to-texture copy, an indexed quad and instanced draws with an ID target, depth and blending goes through the layer with its draw program already released. Every target read back through its asynchronous readback equals the CPU's expectation byte for byte.
 - Two more frames check the refusals. The core refuses a draw that samples its own target, and a dispatch that WebGPU refuses is reported through the error scope of its submit.
-- The same self-test compiles the uniform fixture of the scene core and reports `uniforms=same` when its arena hashes as it does natively.
 - The same spec compares the fixed heatmaps and points, byte for byte, with a set of pictures saved from an earlier build, and the module itself compares every heatmap texture with `map_f32_to_rgba8`.
 
 `web/wasm/README.md` describes these checks.
@@ -132,7 +122,7 @@ The Playwright tests of the web package run in three projects of headless Chromi
 
 - `web/test/views.spec.ts` checks every kind of the element's own views against known data, the color of every cell, pixel and point included.
 - `web/test/edges.spec.ts` checks the color of every colormap edge case in both renderers.
-- `web/test/points3d.spec.ts` checks that the WebAssembly views and the Canvas 2D view draw the same 3-D box, default camera, depth cues and rotate toggle. It also has the module draw four cases of the points view with `points@1` and with the built-in on WebGPU (`web/wasm/src/points_parity.cpp`): every case must be drawn by the piece and match the built-in within the tolerances of the match tests.
+- `web/test/points3d.spec.ts` checks the 3-D box, default camera, depth cues and rotate toggle in WebAssembly and Canvas 2D. Four WebGPU cases also compare the initial and replaced payload draws through `points@1`.
 - `web/test/renderer.spec.ts` and `web/test/fallback.spec.ts` check which renderer draws a view, with a stub of the loader of the WebAssembly views and without the loader.
 
 ### Hidden Windows
@@ -273,9 +263,9 @@ Pieces have tests at several levels. Each refusal that [Pieces](../agents/pieces
 | Draw runtime | `caliper_gfx_draw_tests` | The draw half on the recording backend of the graphics layer: install, the order of the passes, a skipped pass, the checks before anything is made, a pass that does not compile, the layout of a version, the reset rules of the draw buffers, the stop after 30 slow frames, the late frames judged by their GPU time or three in a row, the heavy frames in a row, the frame whose time the backend no longer keeps, the stop after 5 s, the copy that a pick keeps of its frame's version, the draw memory, the decode of PROGRAM with the hash, and the draw host with its camera conflict (`src/host/draw/tests/test_draw_runtime.cpp`) |
 | Metal rows | `caliper_gfx_tests` | The cases named `gfx/Metal pieces` (`tests/gfx/gfx_pieces.cpp`). The field draws as the CPU reference of its fragment, the arcs draw instanced and additive with an ID for each arc and the bloom of their glow, a slow pass stops its program while the other goes on, a compute pass of the draw half feeds an instanced draw with state, reset and depth, and the scene view draws its programs after its scene |
 | Derive half | `caliper_producer_tests` | The derive half in the producer runtime on Metal: passes in order with the contents kept, clears and counters, read-only tensors, bounds, sizes, the watchdog and the timeout without a wait, a rebind and a texture |
-| Library piece | `caliper_points_match` | The piece `points@1` against the built-in points primitive on Metal, offscreen: the interior pixels equal, the edge pixels on either side, and 16 chosen picks that return the same items, also with the depth cues of the live points view (`tests/points_match/`) |
+| Library piece | `caliper_points_match` | The piece `points@1` against saved Metal images and original pick identities, including the live points view depth cues (`tests/points_match/`) |
 | Host | `caliper_spec_runtime` | The `programs` cases: the item map gives the fields and the index of an item and refuses an item past the count, the text table gives a label at each valid anchor, and a piece in a scene panel is picked at its pixel, writes a select state and places its labels |
-| Python | `python/tests/test_programs_pieces.py` | The facade of the script: an instance installs, the derive half runs and publishes RESOURCE, a draw half relays to a viewer, the backlog of RESOURCE frames stays bounded, a viewer gets the first chunk of a pass with the pass or skips the pass, a version above 8 MiB goes in parts that come back whole, each part only while the viewer's queue has room, a piece that publishes 64 MiB at every pass keeps its overhead share, and a pass above 128 MiB of one resource or 256 MiB together stops the program with `program.resource_too_large` |
+| Python | `python/tests/test_programs_pieces.py` | The facade of the script: an instance installs, the derive half runs and publishes RESOURCE, a draw half relays to a viewer, the backlog of RESOURCE frames stays bounded, a viewer gets the first chunk of a pass with the pass or skips the pass, a version above 8 MiB goes in parts that come back whole, each part only while the viewer's queue has room, a piece that publishes 64 MiB at every pass keeps its overhead share, and a pass above 128 MiB per buffer, 256 MiB per texture or 512 MiB in total stops the program with `program.resource_too_large` |
 
 The wire frames have golden files and codec tests in all three languages, as [Wire Golden Frames](#wire-golden-frames) describes. The folder `tests/fixtures/wire_v3/v3_2` holds the frames of PROGRAM for an instance of a piece and of RESOURCE, and the invalid frames that each codec refuses.
 
@@ -310,7 +300,7 @@ The ctest entry `caliper_programmable_graphics_acceptance` (`tests/programmable_
 12. The `overhead_share` of each derive half is printed with its target of 0.02. A share above 0.02 gives a warning, and a share above 0.04 fails.
 13. After both runs stop, no process that the test started is alive, and the SHA-256 of the files has not changed.
 
-The driver waits on events and published state, never for a fixed time. The entry has the labels `programmable_graphics` and `acceptance` and a timeout of 900 seconds. It exits with code 77, which ctest reports as skipped, with the reason printed, when the app, Metal, torch, the native sender or the producer module is missing. The captures go to `tests/programmable_graphics-captures` in the build folder. The check `python3 examples/python/arc_tower_check.py` runs the same steps as one command with defaults. It prints each step as it passes and then the measured results, and it runs `caliper_points_match_tests`, the match of `points@1` with the built-in points on Metal, when the build folder holds it.
+The driver waits on events and published state, never for a fixed time. The entry has the labels `programmable_graphics` and `acceptance` and a timeout of 900 seconds. It exits with code 77, which ctest reports as skipped, with the reason printed, when the app, Metal, torch, the native sender or the producer module is missing. The captures go to `tests/programmable_graphics-captures` in the build folder. The check `python3 examples/python/arc_tower_check.py` runs the same steps as one command with defaults. It prints each step as it passes and then the measured results, and it runs `caliper_points_match_tests`, the match of `points@1` with saved Metal references, when the build folder holds it.
 
 ### Draw Parity
 

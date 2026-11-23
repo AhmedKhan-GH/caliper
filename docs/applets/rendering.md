@@ -35,6 +35,7 @@ needs no epoch bump and no applet rebuild.
 | Vulkan with CUDA interop | Default on Windows | A CUDA kernel writes the Vulkan image directly; see [the update ladder](#windows-update-ladder) | Details in [Vulkan and CUDA on Windows](../development/vulkan-and-cuda.md) |
 | WebGPU | The browser views (`web/wasm`) | A WGSL compute pass colormaps the host-memory snapshot into the texture | Browser only; see [the WebGPU backend](#webgpu-backend) |
 
+Vulkan supplies the Windows app interface and tensor textures, with no scene draw path.
 Metal is the default on macOS and Vulkan is the default on Windows, and there is no other choice:
 [No Fallback Renderer](#no-fallback-renderer) says what happens where the backend cannot start. Every backend produces
 the same pixels for the same tensor. The graphics tests compare the readback of each backend byte for byte with the CPU
@@ -80,14 +81,11 @@ the renderer makes on its own device and queue:
   frame. The pass gives exactly the bytes of the CPU reference `map_f32_to_rgba8`: the CPU derives, from that function
   itself, the value at which each of the 255 colour steps begins, and the shader only compares values with those
   thresholds, so the rounding of the GPU cannot change a colour.
-- **Points.** The points view draws through the scene core over the backend of the renderer, as natively
-  ([Points View](scene-rendering.md#points-view)). The buffers of its payload are imported with the `import_buffer` of the
-  layer. A browser cannot wrap host memory, so the layer copies them and reports the route `copied-from-host` with the
-  bytes copied, and the path label of the view reads `points-cpu-staged`. Each point is an instanced quad of the generated
-  points program, and in 3-D the points draw the depth cues of the view. The positions and values are instance-step vertex
-  buffers bound at their byte offsets, and the colormap is the uniform block of keys of the draw, so no storage buffer is
-  read in a vertex stage, which a WebGPU device in compatibility mode would refuse. The layer keeps released buffers and
-  reuses them for the next snapshot of the same capacity.
+- **Points.** The points view uses `points@1` through the graphics layer, as the native view does.
+  A browser cannot import host memory in place, so the layer copies each payload buffer and counts its bytes.
+  The path label is `points-cpu-staged`.
+  The piece draws instanced quads with the view's camera, sizes and depth cues.
+  [Points View](scene-rendering.md#points-view) describes this path.
 - **Lifetimes.** The layer destroys a released texture once the last submit that used it has completed, and keeps its
   view to the end of the frame, after the backend of ImGui has dropped the bind groups it made while recording that
   frame. Readbacks for the own checks of the module go through the asynchronous readback of the layer.
@@ -102,10 +100,9 @@ WebGPU validates shader modules and pipelines asynchronously, so their errors ar
 refused at once. Each submit runs in an error scope too, so that a frame that the core passed and WebGPU refuses is
 reported in `device_errors()` as `submit <serial>: ...` rather than lost. The colormap pass of the textures is the
 hand-written WGSL in `src/host/renderer/webgpu_programs.h`, to be replaced by the table of the shader generator. The
-points and scene views draw with the generated programs.
+points and scene views draw with library pieces.
 
-The renderer refuses the rest of the interface: device tensors and imported GPU memory (a browser has neither), geometry
-other than points, and the embed canvas. `web/wasm/README.md` gives the build of the module, its size and its checks.
+The renderer refuses device tensors and imported GPU memory, which a browser cannot access, and the embed canvas. `web/wasm/README.md` gives the build of the module, its size and its checks.
 The same backend is planned as the native fallback through Dawn, chosen only when the Metal or Vulkan renderer is
 unavailable. Until it lands there is [no fallback renderer](#no-fallback-renderer).
 

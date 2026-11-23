@@ -228,9 +228,24 @@ The piece `boxes@1` draws boxes as the built-in `boxes` primitive draws them, up
 
 The piece `frustum@1` draws the frustum of a pinhole camera as the built-in draws a camera entity. Its derive half reads a pose tensor and a pinhole tensor of seven numbers: fx, fy, cx and cy in pixels, the width and the height in pixels, and the distance of the image plane. It draws four edges from the centre of the camera to the corners of its image plane and the outline of the plane, in one color and a width in pixels, and every edge gives the pick of the camera, element 0.
 
-The scene view of the app draws every shape of its scene with these pieces: the parts of a scene that a script sends with `caliper.scene`, and the entities of a spec's scene panel. A script sends points and color images in the piece form, as the resources of `points@1` and `image@1` ([Piece Form](../reference/wire-protocol-3-2.md#piece-form)), and the scene view draws those bytes as they came. For every other part, the app writes each piece's resources from the arrays of the part, as its derive half writes them. The app binds the scene's state that a piece cannot read itself: the pose of each entity and its depth offset in the matrix of the program, the class colors of the scene, the pose and the pinhole of a camera entity, and the data box of a spec's panel. A surface entity draws with `surface@1` and a lines entity whose source holds a `path` step with `path@1`. A pick of a piece gives the same event as a pick of the built-in draw. While the view looks through a camera entity, the pieces draw inside the picture alone, as the built-in draw does, and the letterbox keeps the ground. The highlight of a selection also draws with the pieces: `image@1` dims the picture, and a second instance of `points@1` or `boxes@1` draws the selected rows over it without depth. A shape that no piece can draw yet keeps the built-in draw: a part above the capacity of its piece, a textured mesh, an input of another element type, and a param outside the range of its piece. Such a shape in the pixel space of a camera looked through draws among the pieces of that flat layer, in the order of the built-in draw. The environment variable `CALIPER_SCENE_SHAPES=builtin` makes the app draw every shape with the built-in draw, for a comparison, and `CALIPER_SCENE_FALLBACK_LOG=<file>` appends each change of the counts of the pieces, of the shapes drawn from received bytes and of each kind of fallback to that file.
+The scene view draws scene parts and spec entities with library pieces.
+Current senders supply resources in the [Piece Form](../reference/wire-protocol-3-2.md#piece-form).
+A read-only decoder preserves per-shape parts in saved recordings.
+The view binds entity poses, depth offsets, class colors, camera intrinsics and panel data boxes to the pieces.
+A surface entity uses `surface@1`, and a lines entity with a `path` source step uses `path@1`.
 
-The live points view draws its points with `points@1` too, in the app and in the browser module on WebGPU. The view writes the resource of an instance for each part of at most 4,194,304 points and for each part of a selection, in that order. Each point gets its position and its color as a packed RGBA, from the same color keys, palette and dimming as the built-in draw. The view gives the piece the matrix of its camera, the size of a point by the count and the depth cues as params. A payload that the CPU cannot read, such as a tensor in private GPU memory, comes back through textures first, and the view draws it when that readback is done. Hover, picks and selections come from the payload on the CPU under the same camera, as before, thus they are the same with either draw. The view keeps no draw budget of an agent's program on its own points. `CALIPER_SCENE_SHAPES=builtin` draws the points with the built-in draw for a comparison, and `CALIPER_SCENE_FALLBACK_LOG` counts the draws of the points view as it counts those of a scene view. The Canvas 2D points view of the browser, which draws without WebGPU, stays as it is.
+A pinhole view draws pieces within the image rectangle and preserves the letterbox.
+Selection highlights use pieces too.
+`image@1` dims the picture, and extra `points@1` or `boxes@1` instances draw selected rows without depth.
+The view reports unsupported parts and piece errors through its notes.
+
+The live points view uses `points@1` in the app and browser module.
+Each instance holds at most 4,194,304 points, with selection instances after the base points.
+The view supplies positions, packed colors, camera matrices, point sizes and depth-cue params.
+Private GPU payloads pass through textures and asynchronous readback before the view draws them.
+Hover, picks and selections use CPU-visible positions with the same camera.
+The view's own points have no agent draw budget.
+The browser's Canvas 2D points view remains available without WebGPU.
 
 A workspace piece with the name of a library piece replaces it only in a program that says `from = "workspace"`. `caliper-mcp` serves each file of the library as a read-only resource under `caliper://library/`. Thus an agent can read a piece before it pins, copies or imitates it.
 
