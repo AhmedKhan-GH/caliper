@@ -1036,7 +1036,8 @@ std::string hit_text(const SceneView& v, const caliper_scene::Hit& h) {
 void compare_fixture(const std::string& name, ViewRig& pieces, int S, int interior) {
     SceneView& pv = *pieces.view;
     const std::vector<uint8_t> p = pixels(pv);
-    const std::vector<uint8_t> b = match_reference::picture("compare", uint32_t(S), uint32_t(S), nullptr);
+    const std::vector<uint8_t> b = match_reference::picture("compare", uint32_t(S), uint32_t(S), nullptr,
+                                                         pieces.gfx->caps().adapter);
     const std::vector<uint64_t> ids = program_ids(*pieces.gfx, pv);
     const ShapeComparison c = compare_shapes(p, b, ids, S, interior);
     capture_shapes(name, p, b, S);

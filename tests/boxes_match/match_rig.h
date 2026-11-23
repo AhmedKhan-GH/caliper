@@ -391,13 +391,15 @@ struct Upload {
 // A CPU scene fixes the camera and label anchors for a saved reference image.
 struct ReferenceScene {
     std::uint32_t size;
+    std::string adapter;
     sc::SceneTree tree;
     sc::ViewCamera camera;
     std::vector<std::vector<std::uint8_t>> cpu_copies;
     std::vector<std::uint8_t> image;
     std::string reference;
 
-    ReferenceScene(gfx::Backend&, std::uint32_t side, sc::Space space) : size(side), tree(space) {
+    ReferenceScene(gfx::Backend& backend, std::uint32_t side, sc::Space space)
+        : size(side), adapter(backend.caps().adapter ? backend.caps().adapter : ""), tree(space) {
         if (space == sc::Space::k2D) camera = sc::PanZoom{};
         else camera = sc::Orbit{};
     }
@@ -421,7 +423,7 @@ struct ReferenceScene {
     void load() {
         tree.update();
         sc::fit(camera, tree.scene_bounds(), 1.0);
-        image = match_reference::picture("rig", size, size, nullptr);
+        image = match_reference::picture("rig", size, size, nullptr, adapter.c_str());
         reference = match_reference::last_name("rig");
     }
 

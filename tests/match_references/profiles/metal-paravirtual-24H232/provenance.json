@@ -1,0 +1,176 @@
+{
+  "profile": "metal-paravirtual-24H232",
+  "run_url": "https://github.com/AhmedKhan-GH/caliper/actions/runs/45192181014",
+  "environment": {
+    "backend": "Metal",
+    "adapter": "Apple Paravirtual device",
+    "os": "macOS",
+    "os_version": "15.8.2",
+    "os_build": "24H232",
+    "architecture": "arm64",
+    "xcode_version": "16.4",
+    "xcode_build": "16F6",
+    "sdk_version": "15.5",
+    "sdk_build": "24F74",
+    "clang_version": "17.0.0",
+    "clang_build": "clang-1700.0.13.5"
+  },
+  "selection": {
+    "match": [
+      "adapter",
+      "os_build"
+    ],
+    "unknown_environment": "base references",
+    "metadata": "base references",
+    "comparison_tolerances": "unchanged",
+    "unlisted_case": "base reference",
+    "missing_listed_image": "test failure"
+  },
+  "source": {
+    "renderer": "original built-in",
+    "commit": "55bb4f7a430f51dfdcbc74f5a416e902f25ce4b8",
+    "capture": "original-1/references",
+    "capture_source_patches": [],
+    "current_validation_commit": "c837784d20088402ad7e1a29046d08bb52d35c68",
+    "runner_manifest_sha256": "f050848bc07bcac019df83d0ffd031c9da8e72a1fc8399c777d6141d49418522",
+    "reference_manifest_sha256": "e31d5adf6610e7e3a1d3b43fd9dc3b557d47732e83a265dee240e2cbd78b9d3e"
+  },
+  "validation": {
+    "original_runs": 2,
+    "original_png_count": 27,
+    "original_pngs_equal_between_runs": true,
+    "current_mesh": {
+      "exit": 0,
+      "test_cases": 13,
+      "assertions": 1003
+    },
+    "current_gfx": {
+      "exit": 0,
+      "test_cases": 51,
+      "assertions": 205956
+    },
+    "current_comparison_images": 26,
+    "current_different_pixels": 0,
+    "empty_mesh": "The suite checks the empty image. It has no separate current capture.",
+    "original_mesh_exits": [
+      0,
+      0
+    ],
+    "original_gfx_exits": [
+      1,
+      1
+    ],
+    "original_gfx_failures": "The old piece path failed texture color, fallback count, and selection assertions. Built-in captures were stable in both runs.",
+    "image_source": "All profile PNGs are original-1 built-in captures. Current piece images supply validation only."
+  },
+  "cases": [
+    {
+      "file": "mesh/rig-000.png",
+      "case": "lit_rgba",
+      "width": 256,
+      "height": 256,
+      "png_sha256": "5416c84940242138470587efad9d8ebec425b95cd0364a2c6d6ecf022d9cbf41",
+      "rgba8_sha256": "ef77382ba1d17840a5127724172df06d1ad7a5532751a6f9878bbe4f60c9f0ef",
+      "base_png_sha256": "38b641babee667354f68b24aee0b0e9399ebb3bcf9e2e2874e2ac6fb28d517ba",
+      "different_pixels_from_base": 1,
+      "repeat_png_sha256": "5416c84940242138470587efad9d8ebec425b95cd0364a2c6d6ecf022d9cbf41",
+      "current_different_pixels": 0
+    },
+    {
+      "file": "mesh/rig-001.png",
+      "case": "u8_rgba",
+      "width": 256,
+      "height": 256,
+      "png_sha256": "df220c803085b9fb8d33e19851c003ade709c5d530c419eefa032bce49b164ba",
+      "rgba8_sha256": "fd983373c4f9ca16f58dbbfc5d898396cb2358d650d54f9c3dc3159903059c26",
+      "base_png_sha256": "8bdd38f9c9aeb0a1d38aa8dd4f4d43f3dbe346148a196bdb2e02e675bd697f91",
+      "different_pixels_from_base": 1,
+      "repeat_png_sha256": "df220c803085b9fb8d33e19851c003ade709c5d530c419eefa032bce49b164ba",
+      "current_different_pixels": 0
+    },
+    {
+      "file": "mesh/rig-002.png",
+      "case": "textured",
+      "width": 256,
+      "height": 256,
+      "png_sha256": "fbd8c537378506e55e3df2343bf289158ed6aad56661068d048268480be8f387",
+      "rgba8_sha256": "15281cf19bb1344a445e4cd105554d992a2c249f9e3fe4b35e75c458ec5c1370",
+      "base_png_sha256": "ec619bdd9c522c1efd563f4ffc42c51976c73dbdf63d360e3c5aff2f9acadf30",
+      "different_pixels_from_base": 1,
+      "repeat_png_sha256": "fbd8c537378506e55e3df2343bf289158ed6aad56661068d048268480be8f387",
+      "current_different_pixels": 0
+    },
+    {
+      "file": "mesh/rig-003.png",
+      "case": "textured_alpha",
+      "width": 256,
+      "height": 256,
+      "png_sha256": "21c642e9d840a50a86d992417e5774e301122e3444094ba6511026d137f8a7a7",
+      "rgba8_sha256": "86cb092441c41b431b7c2cbaea3d9d24661e590862aee80bb971e4e0fd6b28cc",
+      "base_png_sha256": "e3e9d08700b94a0df352092fd26b748c889a712bc0d1046eb139485d790f87cd",
+      "different_pixels_from_base": 1,
+      "repeat_png_sha256": "21c642e9d840a50a86d992417e5774e301122e3444094ba6511026d137f8a7a7",
+      "current_different_pixels": 0
+    },
+    {
+      "file": "mesh/rig-004.png",
+      "case": "flat_values",
+      "width": 256,
+      "height": 256,
+      "png_sha256": "2ff13e19667c4fada56152a44e31f4402cd9ee59cc218e60a678d1f425900bff",
+      "rgba8_sha256": "617ae8316d0ec29d9a1a93f11fc22720235115439a188ff702e8862bb7769c29",
+      "base_png_sha256": "a22f938c8f8718fb746ce4916595c9e39558655fe833e4e95bc7f77b3fdd45c8",
+      "different_pixels_from_base": 431,
+      "repeat_png_sha256": "2ff13e19667c4fada56152a44e31f4402cd9ee59cc218e60a678d1f425900bff",
+      "current_different_pixels": 0
+    },
+    {
+      "file": "mesh/rig-006.png",
+      "case": "flat_color",
+      "width": 256,
+      "height": 256,
+      "png_sha256": "c1c064ddfe49c0840a008038b64cd6216c0eceaa1d64274ccb7220091fa838b3",
+      "rgba8_sha256": "b1262bb864163f69f34215dd30357f9ccb2dd779a1c7f1021923ac9476e69ad5",
+      "base_png_sha256": "2790ef6abd5f12effcf67224a732ef6ceb612d5dfd897ee0c998cfc6a35129c0",
+      "different_pixels_from_base": 23,
+      "repeat_png_sha256": "c1c064ddfe49c0840a008038b64cd6216c0eceaa1d64274ccb7220091fa838b3",
+      "current_different_pixels": 0
+    },
+    {
+      "file": "mesh/rig-007.png",
+      "case": "translucent",
+      "width": 256,
+      "height": 256,
+      "png_sha256": "b42d07f24308024cf3d0fc0290f234a7b46dcac538694cd988c3e94e69b96e46",
+      "rgba8_sha256": "86749a02787a0ffc4696b036147a1f3e218182d1456281bd6e0f3bee4a8c4c3f",
+      "base_png_sha256": "4ed52b917c7ae00850d3e8dc5e45284e5f1ab2735f6326e1f41058b4a3f50f00",
+      "different_pixels_from_base": 707,
+      "repeat_png_sha256": "b42d07f24308024cf3d0fc0290f234a7b46dcac538694cd988c3e94e69b96e46",
+      "current_different_pixels": 0
+    },
+    {
+      "file": "mesh/rig-008.png",
+      "case": "flat_alpha",
+      "width": 256,
+      "height": 256,
+      "png_sha256": "7d74164bcb7abfaef5ac6b22592a9e8f7362b5e7e5a602485cba46afc3a2b325",
+      "rgba8_sha256": "9fc0aae3eff19eeb522f09579243305dee45f6a7eb5c014bc33294767868fec8",
+      "base_png_sha256": "5c55e87397b417b9cdb17dca0671f4a95b334c3ee5db1901fc2bef7084ef471e",
+      "different_pixels_from_base": 737,
+      "repeat_png_sha256": "7d74164bcb7abfaef5ac6b22592a9e8f7362b5e7e5a602485cba46afc3a2b325",
+      "current_different_pixels": 0
+    },
+    {
+      "file": "scene_view/compare-009.png",
+      "case": "demo",
+      "width": 512,
+      "height": 512,
+      "png_sha256": "f771f3fcd51ab65b09c80a6899251ace073879f3e7454835d017c3eed7cc62d8",
+      "rgba8_sha256": "420e63d133cb8eee33b713d679db9f54ca7618871325b1f90d769a852062548f",
+      "base_png_sha256": "bd63ffa5fb06b88c5b7e542a0991b34fe00e1bf96ab1933bf8aa514045995bd9",
+      "different_pixels_from_base": 215,
+      "repeat_png_sha256": "f771f3fcd51ab65b09c80a6899251ace073879f3e7454835d017c3eed7cc62d8",
+      "current_different_pixels": 0
+    }
+  ]
+}
