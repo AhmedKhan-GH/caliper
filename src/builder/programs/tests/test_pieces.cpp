@@ -8,6 +8,9 @@
 
 #include <doctest/doctest.h>
 
+#include <fstream>
+#include <iterator>
+
 #include <set>
 #include <string>
 
@@ -312,6 +315,21 @@ TEST_CASE("resolution refuses a module that is not imported, an unknown item and
     p.imports = {"colormap@1", "colormap@1"};
     CHECK(!cp::resolve_imports(p).verdict.ok());
 }
+
+#if defined(CALIPER_PROGRAMS_LIBRARY_DIR)
+TEST_CASE("the embedded library equals its files on disk, thus a changed file reached the build") {
+    std::size_t n = 0;
+    for (const cp::LibraryFile& f : cp::library_files()) {
+        const std::string path = std::string(CALIPER_PROGRAMS_LIBRARY_DIR) + "/" + std::string(f.path);
+        std::ifstream in(path, std::ios::binary);
+        REQUIRE_MESSAGE(in.good(), path);
+        const std::string disk((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        CHECK_MESSAGE(disk == f.text, f.path, " differs from its embedded copy");
+        ++n;
+    }
+    CHECK(n > 0);
+}
+#endif
 
 TEST_CASE("the canonical manifest is RFC 8785 JSON of the manifest without hash, files and defaults") {
     cs::Piece p;
