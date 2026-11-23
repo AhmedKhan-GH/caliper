@@ -156,7 +156,7 @@ TEST_CASE("the budget shortens the largest rings first") {
     CHECK(kept["big1"].note.find("big1") != std::string::npos);
 }
 
-TEST_CASE("one raw source keeps at most a quarter of the budget and says which step keeps more") {
+TEST_CASE("one raw source keeps at most 128 MiB and says which step keeps more") {
     // A raw activation of 512 by 4096 values, 8 MiB a step, which alone
     // would fill the whole budget at the default 64 steps. The views share
     // one buffer; the reduced source makes 16 KiB values.
@@ -171,7 +171,7 @@ TEST_CASE("one raw source keeps at most a quarter of the budget and says which s
     std::map<std::string, KeptSource> kept;
     for (const KeptSource& k : h.kept()) kept[k.id] = k;
     REQUIRE(kept.size() == 2);
-    CHECK(kHistorySourceBytes == kHistoryBudgetBytes / 4);
+    CHECK(kHistorySourceBytes == std::uint64_t(128) << 20);
     CHECK(kept["raw"].requested == kDefaultLiveDepth);
     CHECK(kept["raw"].steps == (std::int64_t)(kHistorySourceBytes / value.nbytes()));
     CHECK(kept["raw"].steps == 16);
@@ -358,9 +358,9 @@ TEST_CASE("the nearest kept step is exact for stamps far apart") {
 }
 
 
-TEST_CASE("resource history leaves 208 MiB for sources at the full piece budget") {
-    CHECK(kHistoryBudgetBytes == std::uint64_t(512) << 20);
-    CHECK(kHistoryResourceBytes == std::uint64_t(304) << 20);
-    CHECK(kHistoryBudgetBytes - kHistoryResourceBytes == std::uint64_t(208) << 20);
+TEST_CASE("resource history leaves 256 MiB for sources at the full piece budget") {
+    CHECK(kHistoryBudgetBytes == std::uint64_t(768) << 20);
+    CHECK(kHistoryResourceBytes == std::uint64_t(512) << 20);
+    CHECK(kHistoryBudgetBytes - kHistoryResourceBytes == std::uint64_t(256) << 20);
     CHECK(kHistorySourceBytes == std::uint64_t(128) << 20);
 }

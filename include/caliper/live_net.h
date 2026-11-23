@@ -612,8 +612,10 @@ static inline uint32_t caliper_net_align(uint32_t n) {
 #define CALIPER_NET_MAX_RESOURCES        8u           /* resources of one program           */
 /* A resource of 64 MiB less 64 KiB fits one frame of CALIPER_NET_MAX_FRAME_BYTES with its metadata. */
 #define CALIPER_NET_RESOURCE_MAX_BYTES   67043328u    /* bytes of the section "resource"    */
-/* A version in parts: 128 MiB, the largest storage binding of WebGPU's default limits. */
-#define CALIPER_NET_RESOURCE_VERSION_MAX_BYTES 134217728u /* bytes of a whole version in parts */
+/* A buffer version stays within the default WebGPU storage binding limit. */
+#define CALIPER_NET_RESOURCE_VERSION_MAX_BYTES 134217728u /* bytes of a buffer version in parts */
+#define CALIPER_NET_RESOURCE_TEXTURE_VERSION_MAX_BYTES 268435456u /* bytes of a texture version in parts */
+#define CALIPER_NET_RESOURCE_MAX_PARTS   32u          /* 8 MiB chunks of a full RGBA8 texture */
 #define CALIPER_NET_RESOURCE_PART_WAIT   256u         /* RESOURCE frames a receiver waits for the next part */
 #define CALIPER_NET_RESOURCE_STRIDE_MAX  256u         /* "stride": the bytes of one element */
 #define CALIPER_NET_RESOURCE_SIDE_MAX    8192u        /* a texture's "width" and "height": WebGPU's default largest 2-D texture */

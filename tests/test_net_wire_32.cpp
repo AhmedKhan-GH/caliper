@@ -628,6 +628,46 @@ TEST_CASE("net/wire 3.2: the parts of a resource bound every size before a produ
     CHECK(CALIPER_NET_RESOURCE_VERSION_MAX_BYTES == 128u << 20);
 }
 
+TEST_CASE("net/wire 3.2: full textures use 32 parts without widening storage buffer limits") {
+    const std::uint32_t pixel = 0;
+    Resource r;
+    r.program = "a";
+    r.resource = "pixels";
+    r.width = r.height = 8192;
+    r.format = CALIPER_NET_TEXTURE_RGBA8;
+    r.count = 8192u * 8192u;
+    r.stride = 4;
+    r.split = Resource::Split{0, 0, CALIPER_NET_RESOURCE_MAX_PARTS, 0};
+    r.data = Section::make(CALIPER_NET_SECTION_RESOURCE, CALIPER_NET_DTYPE_U8, {4}, &pixel, 4);
+    std::vector<std::uint8_t> bytes;
+    std::string err;
+    Message m;
+    // Only one pixel is present. This checks metadata without a full texture or assembly allocation.
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    REQUIRE(decode_bytes(bytes, &m).ok());
+    CHECK(CALIPER_NET_RESOURCE_TEXTURE_VERSION_MAX_BYTES == 256u << 20);
+    CHECK(CALIPER_NET_RESOURCE_MAX_PARTS == 32u);
+    CHECK(CALIPER_NET_MAX_PIECES == 16u);
+    r.format = CALIPER_NET_TEXTURE_R32UINT;
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    CHECK(decode_bytes(bytes, &m).ok());
+    r.split->parts += 1;
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    CHECK(decode_bytes(bytes, &m).status == DecodeResult::Status::BadMessage);
+    r.split->parts = CALIPER_NET_RESOURCE_MAX_PARTS;
+    r.width.reset();
+    r.height.reset();
+    r.format.reset();
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    CHECK(decode_bytes(bytes, &m).status == DecodeResult::Status::BadMessage);
+    r.count = CALIPER_NET_RESOURCE_VERSION_MAX_BYTES / r.stride;
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    CHECK(decode_bytes(bytes, &m).ok());
+    r.count += 1;
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    CHECK(decode_bytes(bytes, &m).status == DecodeResult::Status::BadMessage);
+}
+
 TEST_CASE("net/wire 3.2: decoded scene messages carry the golden values") {
     {
         const std::vector<uint8_t> bin = read_bytes(v32_dir() / "scene_update_mesh.bin");

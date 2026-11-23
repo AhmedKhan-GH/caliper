@@ -153,9 +153,9 @@ kind = "texture"
 format = "rgba8unorm"
 width = 8192
 height = 8192
-texels = 16777216
+texels = 67108864
 
-# The resources hold at most 288 MiB and one flag word. Inputs remain on their device.
+# The resources hold at most 480 MiB and one flag word. Inputs remain on their device.
 [derive]
 time_ms = 50
 memory_mb = 512
@@ -181,7 +181,7 @@ workgroups = [64, 1, 1]
 writes = ["tex", "info"]
 
 [draw]
-memory_mb = 304
+memory_mb = 512
 camera = "orbit"
 frame_ms = 16
 pick = { resource = "attributes", fields = ["index"] }

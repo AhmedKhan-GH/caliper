@@ -753,8 +753,12 @@ export const SECTION_RESOURCE = 'resource';
 export const MAX_RESOURCES = 8;
 /** Bytes of the section "resource": 64 MiB less 64 KiB, so that a resource fits one frame with its metadata. */
 export const RESOURCE_MAX_BYTES = 67043328;
-/** Bytes of a whole version of a resource in parts: 128 MiB, the largest storage binding of WebGPU's default limits. */
+/** Bytes of a buffer version in parts, within the default WebGPU storage binding limit. */
 export const RESOURCE_VERSION_MAX_BYTES = 134217728;
+/** Bytes of a full 8,192 by 8,192 RGBA8 or R32 texture version in parts. */
+export const RESOURCE_TEXTURE_VERSION_MAX_BYTES = 268435456;
+/** At most 32 chunks of 8 MiB for one texture version. */
+export const RESOURCE_MAX_PARTS = 32;
 /** RESOURCE frames a receiver waits for the next part of a version in parts before it drops the version. */
 export const RESOURCE_PART_WAIT = 256;
 /** Most bytes of one element of a resource, the "stride" (a multiple of 4). */

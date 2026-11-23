@@ -63,7 +63,9 @@ A parameter is a field of the generated struct `Params`, and both halves read it
 
 A resource is a named, typed array that the derive half writes and the viewer reads. A `buffer` holds `count` elements of one plain type or of a struct. A buffer of the narrow element `u8` or `u16` packs four or two elements into each 32-bit word, from the low bits up, and both halves bind it as `array<u32>`. The draw half reads it through the accessor `<id>_at(i: u32)`, which returns zero at or past the valid count in `counts`. A narrow buffer holds at most 134,217,728 `u8` or 67,108,864 `u16` elements, which is 33,554,432 words.
 
-A `texture` has a format and a size for each version. The derive half writes its texels as a packed `array<u32>` in row order, and it sets the size of the version in `<id>_size`, a `vec2<u32>`. The runtime sets `<id>_size` to the largest sides before each run, thus a piece that never writes it publishes the largest size. A size outside the largest sides, or with more texels than `texels`, gives a version without texels. The viewer checks the format and the size of each version against the manifest, and it makes a texture of that size, which the draw half samples. An `rgba8unorm` or `r8unorm` texture is a `texture_2d<f32>` that the samplers filter. An `r32uint` texture is a `texture_2d<u32>` that the draw half reads with `textureLoad`.
+A `texture` has a format and a size for each version. The native derive half writes its texels as a packed `array<u32>` in row order, and it sets the size of the version in `<id>_size`, a `vec2<u32>`. The runtime sets `<id>_size` to the largest sides before each run, thus a piece that never writes it publishes the largest size. A size outside the largest sides, or with more texels than `texels`, gives a version without texels. The viewer checks the format and the size of each version against the manifest, and it makes a texture of that size, which the draw half samples. An `rgba8unorm` or `r8unorm` texture is a `texture_2d<f32>` that the samplers filter.
+
+An `r32uint` texture is a `texture_2d<u32>` that the draw half reads with `textureLoad`. Its optional `fields` declares one pick field, such as `depth: f32` or `class_id: u32`. The field type is `f32`, `i32`, or `u32`. It controls pick decoding and leaves the raw texture bits unchanged. Without a field declaration, the pick field is `value: u32`.
 
 | Resource Key | Value |
 |---|---|
@@ -79,13 +81,15 @@ A `texture` has a format and a size for each version. The derive half writes its
 | `clear` | `true` zeroes the resource before each run. `false` when absent, and the contents stay from the run before. |
 | `keep` | The versions that the step history keeps, from 1 to 4,096. 256 when absent. |
 
-A field type is `f32`, `i32`, `u32`, `vec2<f32>`, `vec4<f32>`, `vec2<u32>` or `vec4<u32>`. The composer follows the WGSL storage rules. An element holds at most 256 bytes, and a struct has at most 16 fields. A published resource holds at most 128 MiB because each viewer binds it whole. This limit matches the default WebGPU storage limit.
+A field type is `f32`, `i32`, `u32`, `vec2<f32>`, `vec4<f32>`, `vec2<u32>` or `vec4<u32>`. The composer follows the WGSL storage rules. An element holds at most 256 bytes, and a struct has at most 16 fields.
 
-The published resources of a piece hold at most 304 MiB together. The history reserves that amount for resources within its 512 MiB total budget. When resources use the full budget, sources share the other 208 MiB. A single source or resource keeps at most 128 MiB.
+A published buffer holds at most 128 MiB because each viewer binds it whole. This limit matches the default WebGPU storage limit. A published texture holds at most 256 MiB, enough for 8,192 by 8,192 RGBA8 or R32 texels.
 
-The `lines@1` piece holds 4,194,304 segments in separate 32-byte endpoint rows and 8-byte pick rows. The `mesh@1` piece holds 4,194,304 vertices in separate 32-byte vertex rows and 12-byte attribute rows. Its 4,194,304 triangles, 64 MiB texture, and flag word bring the resource maximum to 288 MiB plus 4 bytes. The split retains scalar values, colors, normals, UVs, and pick indices.
+The published resources of a piece hold at most 512 MiB together. The history reserves that amount for resources within its 768 MiB total budget. When resources use the full budget, sources share the other 256 MiB. A single source keeps at most 128 MiB.
 
-A texture with `texels` 33,554,432 holds versions of up to 8,192 pixels per side and 128 MiB. An `r8unorm` texture of 8,192 by 8,192 pixels holds 64 MiB. A private resource holds at most 64 MiB.
+The `lines@1` piece holds 4,194,304 segments in separate 32-byte endpoint rows and 8-byte pick rows. The `mesh@1` piece holds 4,194,304 vertices in separate 32-byte vertex rows and 12-byte attribute rows. Its 4,194,304 triangles, 256 MiB texture, and flag word bring the resource maximum to 480 MiB plus 4 bytes. The split retains scalar values, colors, normals, UVs, and pick indices.
+
+A texture with `texels` 67,108,864 holds versions of up to 8,192 pixels per side and 256 MiB. An `r8unorm` texture of 8,192 by 8,192 pixels holds 64 MiB. A private resource holds at most 64 MiB.
 
 ## Piece Halves
 
@@ -116,7 +120,7 @@ The draw half runs in the viewer every frame, after the draws of the scene. The 
 | `pick` | The item map, with `resource` and `fields` |
 | `text` | The text table, with `anchors`, `position`, `string`, `priority`, `strings` or `strings_from`, and `align` |
 | `frame_ms` | The most GPU time of one frame in milliseconds, 4 when absent and at most 16 |
-| `memory_mb` | The budget of the resources, buffer inputs, draw buffers and targets in the viewer, 64 when absent and at most 304 |
+| `memory_mb` | The budget of the resources, buffer inputs, draw buffers and targets in the viewer, 64 when absent and at most 512 |
 
 A pass has these keys. A compute pass uses `entry`, `workgroups` and `writes`. A render pass uses the other keys.
 
@@ -128,7 +132,7 @@ A pass has these keys. A compute pass uses `entry`, `workgroups` and `writes`. A
 | `fragment` | The fragment entry point |
 | `target` | `host` (default), the color, ID and depth of the panel, or the id of an offscreen target |
 | `reads` | The offscreen targets that the pass samples |
-| `instances` | A count, or the id of a buffer resource or buffer input whose valid count at the cursor is the count. 1 when absent. |
+| `instances` | A count, a published resource, or a buffer input. Resources use their valid element count, or their texel count for textures. 1 when absent. |
 | `vertices` | The vertices of one instance, at most 65,536. It is necessary with `vertex` and without `indices`. |
 | `indices` | A published buffer resource or buffer input of `u32` elements. The pass draws its valid elements as an index buffer, and each instance draws all of them. |
 | `topology` | `triangle_list` (default), `triangle_strip`, `line_list`, `line_strip` or `point_list` |
@@ -234,7 +238,7 @@ The pieces `image@1`, `depth@1` and `segmentation@1` draw the three forms of the
 
 The piece `boxes@1` draws up to 1,048,576 boxes with optional rotations, colors, labels, and translucent faces. It supports `u8` and `f32` colors, plus `i32`, `u16`, and `u8` class IDs. Its labels contain UTF-8 bytes in 16 `u32` words per row. The piece selects at most 4,096 labels at box centers through its published `names` resource.
 
-The piece `mesh@1` draws up to 4,194,304 vertices and 4,194,304 triangles. It supports normals, flat faces, one color, RGBA, and scalar values through a colormap. Its `faces` resource holds triangle indices. Without indices, each group of three vertices forms a triangle. Without colors, the one color applies. Optional UVs and a texture add bilinear texture samples, multiplied by vertex RGB with texel alpha. The texture supports up to 8,192 pixels per side and 16,777,216 texels.
+The piece `mesh@1` draws up to 4,194,304 vertices and 4,194,304 triangles. It supports normals, flat faces, one color, RGBA, and scalar values through a colormap. Its `faces` resource holds triangle indices. Without indices, each group of three vertices forms a triangle. Without colors, the one color applies. Optional UVs and a texture add bilinear texture samples, multiplied by vertex RGB with texel alpha. The texture supports up to 8,192 pixels per side and 67,108,864 texels.
 
 The piece `frustum@1` draws the frustum of a pinhole camera.
 Its derive half reads a pose tensor and a pinhole tensor with seven numbers.
@@ -405,7 +409,7 @@ The event `program` carries the keys `half` (`derive` or `draw`) and `pass`, the
 
 The script sends each version of a published resource to a viewer as one RESOURCE message. The message needs the capability `resources` on both ends. A script that does not announce it refuses an instance with `program.resources_unavailable`. One message carries one resource, thus a small resource never waits for a large one. A version of more than 8 MiB goes as RESOURCE parts of 8 MiB, which the viewer puts together and shows only whole ([Wire Protocol 3.2](../reference/wire-protocol-3-2.md#resource-parts)).
 
-The script sends the frames of a pass to a viewer in chunks of at most 8 MiB and 64 KiB, which is half of the 16 MiB control queue of a connection. A chunk goes only when the viewer's queue then holds at most that much. This count also holds the frames that other programs gave to that viewer in the same pass and that the script has not queued yet. The first chunk goes with the pass or not at all, thus a viewer that falls behind skips whole passes and gets a later pass when it catches up. The other chunks of a pass wait for the viewer, and each step sends the chunks that then fit. A viewer takes no other pass until they went, and a pass makes no copy of its resources while every viewer waits. Two programs that publish 8 MiB each do not fit in one pass of a viewer. The program that the viewer skipped goes first at the next pass, thus the programs reach the viewer in turn. The time of the copies and of the chunks counts toward the overhead of the passes, thus the cadence stretches for a piece that publishes large versions. A pass that would send more than 128 MiB of one resource or 304 MiB together, from a manifest that did not pass the app's check, stops the program with `program.resource_too_large`.
+The script sends the frames of a pass to a viewer in chunks of at most 8 MiB and 64 KiB, which is half of the 16 MiB control queue of a connection. A chunk goes only when the viewer's queue then holds at most that much. This count also holds the frames that other programs gave to that viewer in the same pass and that the script has not queued yet. The first chunk goes with the pass or not at all, thus a viewer that falls behind skips whole passes and gets a later pass when it catches up. The other chunks of a pass wait for the viewer, and each step sends the chunks that then fit. A viewer takes no other pass until they went, and a pass makes no copy of its resources while every viewer waits. Two programs that publish 8 MiB each do not fit in one pass of a viewer. The program that the viewer skipped goes first at the next pass, thus the programs reach the viewer in turn. The time of the copies and of the chunks counts toward the overhead of the passes, thus the cadence stretches for a piece that publishes large versions. A pass that would send more than 128 MiB of one buffer, 256 MiB of one texture, or 512 MiB together, from a manifest that did not pass the app's check, stops the program with `program.resource_too_large`.
 
 The app keeps the versions of each published resource in the step history under `<program>/<resource>`, beside the kept steps of the sources. A resource keeps at most `keep` versions. When its ring is full, the history drops every second kept version. From then on it keeps a version only when its step lies far enough after the newest one. Thus the kept versions span the whole run evenly, and the step cursor scrubs the whole training. The viewer gives the draw half the newest kept version at or before the cursor. A version that replaces another at the same step, as after a fork from that step, takes its place in the history, in the draw and in picks and labels.
 
@@ -415,10 +419,10 @@ The app keeps only a version that the pinned piece declares. The program must be
 |---|---|
 | Resources of one program | 8, as many as a piece declares |
 | Resources of all programs | 128, 8 for each of the 16 programs of a script |
-| Bytes of one resource | 128 MiB, a quarter of the history budget |
-| Bytes of all resources | 304 MiB within the history budget of 512 MiB |
+| Bytes of one resource version | 128 MiB for buffers, 256 MiB for textures |
+| Bytes of all resources | 512 MiB within the history budget of 768 MiB |
 
-Over the bytes of all resources, the largest rings drop every second version first. Then the largest rings drop their oldest versions, down to one version each. A version that does not fit beside one version of each other resource is not kept. Thus the history keeps two versions of a resource of 128 MiB alone, and one version beside the small resources of its piece. Of a piece that publishes 304 MiB at each pass, it keeps one version of each resource, the newest, and the cursor finds no older pass of that piece.
+Over the bytes of all resources, the largest rings drop every second version first. Then the largest rings drop their oldest versions, down to one version each. A version that does not fit beside one version of each other resource is not kept. The history can keep two versions of a texture of 256 MiB alone. Other resources share the same budget. Of a piece that publishes 512 MiB at each pass, it keeps one version of each resource, the newest, and the cursor finds no older pass of that piece.
 
 The spec saves the pins, the bindings, the params and the inline pieces, and it never saves a resource. When an instrument opens, the app resolves each pin, checks each piece and sends each program to the attached script. The script publishes again from its next pass. Without an attached run, the state of the program is `waiting`.
 
@@ -426,7 +430,7 @@ The spec saves the pins, the bindings, the params and the inline pieces, and it 
 
 A pass with `pick = true` writes `pick::id(item)` at location 1 of the host target in every frame. The ID holds the pick ID of the program and the item. The pick ID of a program starts above the IDs of the entities of the scene. The scene view reads a 16 by 16 window around the pointer from the newest completed frame, with its ID and depth. A hit of a built-in entity wins only when its depth is nearer.
 
-The item is the index of an element of the resource that the item map names. The item map lists 1 to 8 fields of that element, and each field is an `f32`, `i32` or `u32` field. The item map of a texture names its one field: `rgba` for an `rgba8unorm` texel or `value` for an `r32uint` texel. Its item is a texel of the version in row order. An `r8unorm` texture and a narrow buffer have no item map. The host reads the element from the CPU copy of the version that the frame showed. It then makes a `pick` event with these keys beside the common ones.
+The item is the index of an element of the resource that the item map names. The item map lists 1 to 8 fields of that element, and each field is an `f32`, `i32` or `u32` field. The item map of a texture names its one field: `rgba` for an `rgba8unorm` texel or the declared scalar field for an `r32uint` texel, or `value` when absent. Its item is a texel of the version in row order. An `r8unorm` texture and a narrow buffer have no item map. The host reads the element from the CPU copy of the version that the frame showed. It then makes a `pick` event with these keys beside the common ones.
 
 | Key | Value |
 |---|---|
@@ -501,7 +505,7 @@ The editor, the script and the viewer refuse a piece with a stable code before a
 | `piece.bad_binding` | An input that is unbound and not optional, or bound to another dtype, rank or layout |
 | `piece.cycle` | A piece depends on itself, or a program binds a resource of its own |
 | `program.form_mixed` | A program has keys of the one-pass form and a pin |
-| `program.bad_resource` | A kind, count or size of a resource, a published resource above 128 MiB, published resources above 304 MiB together, or a duplicate id |
+| `program.bad_resource` | A kind, count or size of a resource, a published buffer above 128 MiB, a texture above 256 MiB, published resources above 512 MiB together, or a duplicate id |
 | `program.bad_layout` | A field name or type, or a stride over 256 bytes |
 | `program.unknown_resource` | A pass, an item map or a text table names no resource |
 | `program.bad_pass` | The kind, entry, target or values of a pass |
@@ -524,7 +528,7 @@ The manifest check holds every pass to the default limits of WebGPU, thus a piec
 
 The browser module runs the same draw half from the same WGSL and the same declaration. It receives each draw half as PROGRAM from the script, and the resources as RESOURCE. It checks the names, the files, the imports and the hash with the same code that the app compiles. A hash that differs from the pin refuses the program. It then gives each composed module to WebGPU. A compilation message or a refused pipeline refuses the program with `program.browser_refused`, and the line maps back to its file.
 
-The browser has no compiler of its own, because WebGPU keeps each draw inside its bindings. The browser's dashboard viewer gets the instances and the newest resources of a scene panel through `panel.data` and draws them with the same module. A program of a foreign spec stays in review there until the app reviews it. The browser module keeps no step history and draws the newest version of each resource. It keeps a version only of a resource that the piece of its program publishes, with at most the declared count and bytes, and it keeps at most 16 programs of a script. All its versions hold at most 304 MiB together. A version above this limit is not kept. Without timestamps, the frame time is unknown. The time from the submit until the work is seen done also holds the polling of the page, once a frame, thus it cannot judge a limit of a few milliseconds. Only 30 frames in a row over 250 ms of that time stop a program with `program.draw_over_time`, and the rules of late frames apply as in the app.
+The browser has no compiler of its own, because WebGPU keeps each draw inside its bindings. The browser's dashboard viewer gets the instances and the newest resources of a scene panel through `panel.data` and draws them with the same module. A program of a foreign spec stays in review there until the app reviews it. The browser module keeps no step history and draws the newest version of each resource. It keeps a version only of a resource that the piece of its program publishes, with at most the declared count and bytes, and it keeps at most 16 programs of a script. All its versions hold at most 512 MiB together. A version above this limit is not kept. Without timestamps, the frame time is unknown. The time from the submit until the work is seen done also holds the polling of the page, once a frame, thus it cannot judge a limit of a few milliseconds. Only 30 frames in a row over 250 ms of that time stop a program with `program.draw_over_time`, and the rules of late frames apply as in the app.
 
 ## Builder Pane
 

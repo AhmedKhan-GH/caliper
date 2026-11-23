@@ -99,6 +99,7 @@ constexpr uint32_t kTextureSideMax = 8192;   // spec/piece.h, kTextureSideMax: W
 constexpr uint32_t kStrideMax = 256;
 constexpr uint64_t kResourceBytesMax = uint64_t(64) << 20;            // a private resource
 constexpr uint64_t kPublishedResourceBytesMax = uint64_t(128) << 20;  // spec/piece.h, kPublishedResourceBytesMax
+constexpr uint64_t kPublishedTextureBytesMax = uint64_t(256) << 20;   // spec/piece.h, kPublishedTextureBytesMax
 constexpr size_t kCommonBytes = 9 * kSourceBytes;
 [[maybe_unused]] constexpr size_t kComposedBytes = 16 * kSourceBytes;   // used only with the sandbox and the compiler
 constexpr uint32_t kOverTimePasses = 3;
@@ -836,9 +837,11 @@ caliper_producer_status check_derive_desc(const caliper_producer_derive_desc* d,
         uint32_t stride = 0;
         std::string why;
         if (!element_stride(r, &stride, &why)) return refuse(kBadLayout, "The resource " + id + ": " + why + ".");
-        if (resource_bytes(r, stride) > (r.publish ? kPublishedResourceBytesMax : kResourceBytesMax))
+        const uint64_t limit = !r.publish ? kResourceBytesMax :
+            r.kind == CALIPER_PRODUCER_RESOURCE_TEXTURE ? kPublishedTextureBytesMax : kPublishedResourceBytesMax;
+        if (resource_bytes(r, stride) > limit)
             return refuse(kBadResource, "The resource " + id + " takes " + std::to_string(resource_bytes(r, stride)) +
-                                            (r.publish ? " bytes, above 128 MiB." : " bytes, above 64 MiB."));
+                                            " bytes, above " + std::to_string(limit) + ".");
         for (size_t j = 0; j < i; ++j)
             if (d->resources[j].id && id == d->resources[j].id)
                 return refuse(kBadResource, "The resource id " + id + " repeats.");

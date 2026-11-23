@@ -2077,8 +2077,8 @@ void program_instance(const Frame& f, Program* p) {
 
 // RESOURCE, in _wire.py's order: program, resource, step, count, stride, width and height, format,
 // element and elements, the keys of "split" (version, parts, part, first), the byte limit on count before any product (a version in parts
-// holds at most CALIPER_NET_RESOURCE_VERSION_MAX_BYTES), then the section. Each product below is of values
-// already bounded, thus none wraps: width and height are at most 4096, count is at most the byte limit
+// holds at most 128 MiB for buffers or 256 MiB for textures), then the section. Products use bounded
+// values, thus none wraps: width and height are at most 8192, count is at most the byte limit
 // divided by stride, and a part's first element is below the count before the count less it is taken.
 // A texture's and a narrow buffer's count is in 32-bit words, thus a part holds whole words.
 Resource resource(const Frame& f) {
@@ -2134,14 +2134,16 @@ Resource resource(const Frame& f) {
         };
         Resource::Split sl;
         sl.version = u64(need("version", is_safe_uint, "an unsigned integer"));
-        sl.parts = u32(need("parts", [](const Json& v) { return int_in(v, 2, CALIPER_NET_MAX_PIECES); },
-                            "an integer from 2 to 16"));
+        sl.parts = u32(need("parts", [](const Json& v) { return int_in(v, 2, CALIPER_NET_RESOURCE_MAX_PARTS); },
+                            "an integer from 2 to 32"));
         sl.part = u32(need("part", [&](const Json& v) { return int_in(v, 0, sl.parts - 1); },
                            "a part number below 'parts'"));
         sl.first = u32(need("first", is_u32, "a uint32"));
         r.split = sl;
     }
-    const uint32_t max_bytes = r.split ? CALIPER_NET_RESOURCE_VERSION_MAX_BYTES : CALIPER_NET_RESOURCE_MAX_BYTES;
+    const uint32_t version_max = r.width ? CALIPER_NET_RESOURCE_TEXTURE_VERSION_MAX_BYTES
+                                         : CALIPER_NET_RESOURCE_VERSION_MAX_BYTES;
+    const uint32_t max_bytes = r.split ? version_max : CALIPER_NET_RESOURCE_MAX_BYTES;
     if (r.count > max_bytes / r.stride)
         bad(std::string(r.split ? "a resource in parts" : "a resource") + " holds at most " + std::to_string(max_bytes) +
             " bytes");
@@ -3100,7 +3102,7 @@ SplitResources::Result SplitResources::add(const Resource& r, WholeResource* out
     const Resource::Split& sl = *r.split;
     const std::string name = "'" + r.program + "/" + r.resource + "'";
     // The decoder checked that the part holds whole elements from sl.first up to the count, and that the
-    // count times the stride is at most CALIPER_NET_RESOURCE_VERSION_MAX_BYTES: no product or sum wraps.
+    // count times the stride is at most 256 MiB for textures or 128 MiB for buffers: no product or sum wraps.
     const uint64_t n = r.data.size / r.stride;
     if (sl.part == 0) {
         if (open_.size() >= CALIPER_NET_MAX_INCOMPLETE_UPDATES) {

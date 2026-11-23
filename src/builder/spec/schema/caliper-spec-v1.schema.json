@@ -1287,7 +1287,7 @@
           }
         },
         "frame_ms": {"type": "number", "minimum": 0.1, "maximum": 16},
-        "memory_mb": {"type": "integer", "minimum": 1, "maximum": 304}
+        "memory_mb": {"type": "integer", "minimum": 1, "maximum": 512}
       }
     },
     "piece_draw_pass": {

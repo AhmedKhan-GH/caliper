@@ -14,7 +14,7 @@ import {
   INTERVENTION_STATES, MAX_INTERVENTIONS, MAX_POINTS_LISTED, MAX_PROGRAMS, OUTPUT_GEOMETRY, OUTPUT_PIXELS, OUTPUT_TENSOR, POINT_MAX, PROGRAM_ARRAYS,
   PROGRAM_EVERY_MAX, PROGRAM_ID_MAX, PROGRAM_MAX_COUNT, PROGRAM_MAX_INPUTS, PROGRAM_MEMORY_MB_MAX, PROGRAM_BUILTIN_MAX, PROGRAM_PARAM_NAME_MAX, PROGRAM_PARAMS, PROGRAM_PARAMS_MAX, PROGRAM_REMOVE, PROGRAM_SET, STATUS_OPERATOR, TENSOR_AXES_MAX, TENSOR_ELEMENTS_MAX,
   PROGRAM_SIDE_MAX, PROGRAM_SOURCE_MAX, PROGRAM_STATES, PROGRAM_TIME_MS_MAX, PROGRAM_WORKGROUPS_MAX, SECTION_WGSL, TENSOR_NAME_MAX,
-  PIECE_COMMON_MAX, PIECE_NAME_MAX, PIECE_SEGMENTS_MAX, PIECE_VERSION_MAX, RESOURCE_MAX_BYTES, RESOURCE_ELEMENTS, RESOURCE_PART_WAIT, RESOURCE_SIDE_MAX, RESOURCE_STRIDE_MAX, RESOURCE_VERSION_MAX_BYTES, TEXTURE_FORMATS,
+  PIECE_COMMON_MAX, PIECE_NAME_MAX, PIECE_SEGMENTS_MAX, PIECE_VERSION_MAX, RESOURCE_MAX_BYTES, RESOURCE_ELEMENTS, RESOURCE_PART_WAIT, RESOURCE_SIDE_MAX, RESOURCE_STRIDE_MAX, RESOURCE_VERSION_MAX_BYTES, RESOURCE_TEXTURE_VERSION_MAX_BYTES, RESOURCE_MAX_PARTS, TEXTURE_FORMATS,
   SECTION_COMMON, SECTION_DERIVE, SECTION_DRAW, SECTION_RESOURCE, STATUS_PIECE,
   type InterveneRequest, type InterventionsInfo, type ProgramDeclaration, type ProgramMsg, type ResourceMsg, type ResourceSplit, type ProgramStateMsg, type ProgramStatus,
 } from './messages.js';
@@ -1966,13 +1966,14 @@ export function decodeResource(f: Frame): ResourceMsg {
       return v as T;
     };
     const version = need<number>('version', isSafeUint, 'an unsigned integer');
-    const parts = need<number>('parts', intIn(2, MAX_PIECES), `an integer from 2 to ${MAX_PIECES}`);
+    const parts = need<number>('parts', intIn(2, RESOURCE_MAX_PARTS), `an integer from 2 to ${RESOURCE_MAX_PARTS}`);
     const part = need<number>('part', intIn(0, parts - 1), "a part number below 'parts'");
     const first = need<number>('first', isU32, 'a uint32');
     split = { version, part, parts, first };
   }
   // Bound count before any product of two network values: count * stride is then at most the limit.
-  const limit = split ? RESOURCE_VERSION_MAX_BYTES : RESOURCE_MAX_BYTES;
+  const versionMax = width === undefined ? RESOURCE_VERSION_MAX_BYTES : RESOURCE_TEXTURE_VERSION_MAX_BYTES;
+  const limit = split ? versionMax : RESOURCE_MAX_BYTES;
   if (count > Math.floor(limit / stride)) bad(f.type, `${split ? 'a resource in parts' : 'a resource'} holds at most ${limit} bytes`);
   const s = section(f, SECTION_RESOURCE);
   if (s === undefined || s.encoding !== 0 || s.dtype !== DTYPE.u8 || s.shape.length !== 1) bad(f.type, "a resource needs a (B,) u8 'resource' section");
@@ -1997,7 +1998,7 @@ export function decodeResource(f: Frame): ResourceMsg {
 /**
  * A receiver's versions in parts of one connection. `add` takes every RESOURCE of the connection in order and returns the
  * whole version, else null. A version in one frame comes back at once. Part 0 allocates the version's count * stride bytes,
- * which the decoder bounded by RESOURCE_VERSION_MAX_BYTES, and each part copies its elements in; the last part returns the
+ * which the decoder bounded by the buffer or texture version limit, and each part copies its elements in; the last part returns the
  * whole. A part whose version is not held is dropped and counted. A part out of order, one whose keys differ from part 0, or a
  * last part that does not end at the count throws MessageError (bad_request) and discards the version. Part 0 of a newer
  * version, or a version in one frame, of the same resource discards an incomplete one; at most MAX_INCOMPLETE_UPDATES are

@@ -29,7 +29,7 @@ import {
   PROGRAM_ID_MAX, PROGRAM_MAX_COUNT, PROGRAM_MAX_INPUTS, PROGRAM_MEMORY_MB_MAX, PROGRAM_REMOVE, PROGRAM_SET, PROGRAM_SIDE_MAX,
   PROGRAM_SOURCE_MAX, PROGRAM_STATE_RATE_HZ, PROGRAM_TIME_MS_MAX, PROGRAM_WORKGROUPS_MAX, TENSOR_NAME_MAX,
   PIECE_COMMON_MAX, PIECE_NAME_MAX, PIECE_SEGMENTS_MAX, PIECE_VERSION_MAX, RESOURCE_MAX_BYTES, RESOURCE_PART_WAIT, RESOURCE_SIDE_MAX, RESOURCE_STRIDE_MAX,
-  RESOURCE_VERSION_MAX_BYTES, STATUS_PIECE,
+  RESOURCE_VERSION_MAX_BYTES, RESOURCE_TEXTURE_VERSION_MAX_BYTES, RESOURCE_MAX_PARTS, STATUS_PIECE,
   type ControlMsg, type ControlsMsg, type Message, type ProgramMsg, type ProgramStateMsg, type ResourceMsg,
   type CursorMsg, type SceneClassesMsg, type SceneTransformsMsg, type SceneUpdateMsg, type SnapshotMsg, type TextMsg, type TimeStateMsg,
   type ViewEntry, type ViewsMsg,
@@ -1166,6 +1166,26 @@ test('the parts of a resource bound every size before a product', () => {
   const frame = encodeFrame(MSG.resource, meta, [{ name: 'resource', dtype: DTYPE.u8, shape: [256], encoding: 0, bytes: zeros }], PROTOCOL_MINOR_3_2);
   expect(() => decode(frame)).toThrow(/in parts holds at most 134217728 bytes/);
   expect(RESOURCE_VERSION_MAX_BYTES).toBe(128 * 1024 * 1024);
+});
+
+test('full textures use 32 parts while buffers retain their 128 MiB limit', () => {
+  const pixel = new Uint8Array(4);
+  const meta = { program: 'a', resource: 'pixels', step: 0, count: 8192 * 8192, stride: 4,
+    width: 8192, height: 8192, format: 'rgba8unorm',
+    split: { version: 0, part: 0, parts: RESOURCE_MAX_PARTS, first: 0 } };
+  const decodeMeta = (m: Record<string, unknown>) => decode(encodeFrame(MSG.resource, m,
+    [{ name: 'resource', dtype: DTYPE.u8, shape: [4], encoding: 0, bytes: pixel }], PROTOCOL_MINOR_3_2));
+  // Only one pixel travels. No full texture or assembly is allocated.
+  expect((decodeMeta(meta) as ResourceMsg).count).toBe(8192 * 8192);
+  expect((decodeMeta({ ...meta, format: 'r32uint' }) as ResourceMsg).count).toBe(8192 * 8192);
+  expect(() => decodeMeta({ ...meta, split: { ...meta.split, parts: 33 } })).toThrow(/split.parts/);
+  const buffer = { ...meta, width: undefined, height: undefined, format: undefined };
+  expect(() => decodeMeta(buffer)).toThrow(/134217728 bytes/);
+  expect((decodeMeta({ ...buffer, count: RESOURCE_VERSION_MAX_BYTES / 4 }) as ResourceMsg).count).toBe(33554432);
+  expect(() => decodeMeta({ ...buffer, count: RESOURCE_VERSION_MAX_BYTES / 4 + 1 })).toThrow(/134217728 bytes/);
+  expect(RESOURCE_TEXTURE_VERSION_MAX_BYTES).toBe(256 * 1024 * 1024);
+  expect(RESOURCE_MAX_PARTS).toBe(32);
+  expect(MAX_PIECES).toBe(16);
 });
 
 // --- the piece form of SCENE_UPDATE and the ids scene.<n>, mirroring python/tests/test_wire_32.py ---

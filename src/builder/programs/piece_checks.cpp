@@ -368,7 +368,7 @@ private:
                                 "A texture's texels are from 1 to its width times its height.", where + ".texels");
                 // At most 2^26 texels of 4 bytes: the product cannot wrap.
                 const std::uint64_t bytes = spec::texture_bytes(r);
-                const std::uint64_t max_bytes = r.publish ? pl::kPublishedResourceBytesMax : pl::kResourceBytesMax;
+                const std::uint64_t max_bytes = r.publish ? pl::kPublishedTextureBytesMax : pl::kResourceBytesMax;
                 if (bytes > max_bytes)
                     return fail(kProgramBadResource,
                                 "The texture " + quote(r.id) + " holds " + std::to_string(bytes) + " bytes; a " +
@@ -479,7 +479,7 @@ private:
         if (d.frame_ms && !(*d.frame_ms >= 0.1 && *d.frame_ms <= pl::kFrameMsMax))
             return fail(kPieceBadManifest, "draw.frame_ms is from 0.1 to 16.", "draw.frame_ms");
         if (d.memory_mb && (*d.memory_mb < 1 || *d.memory_mb > pl::kDrawMemoryMbMax))
-            return fail(kPieceBadManifest, "draw.memory_mb is from 1 to 304.", "draw.memory_mb");
+            return fail(kPieceBadManifest, "draw.memory_mb is from 1 to 512.", "draw.memory_mb");
         if (d.buffers.size() > pl::kDrawBuffers)
             return fail(kPieceBadManifest, "The draw half keeps at most 4 buffers.", "draw.buffers");
         if (d.targets.size() > pl::kTargets)

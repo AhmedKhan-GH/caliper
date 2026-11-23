@@ -73,7 +73,7 @@ public:
     // RESOURCE: the newest version of a resource of a program, copied, when
     // the program's piece publishes that resource and the version holds at
     // most its declared count and bytes (program_frames.h, keeps_version).
-    // The page keeps at most kKeptBytesMax of versions, 304 MiB as the app's step
+    // The page keeps at most kKeptBytesMax of versions, 512 MiB as the app's step
     // history keeps of resources; a version that would pass it is not kept. The
     // parts of a version in parts are put together first
     // (caliper_net::wire::SplitResources), which holds at most two incomplete

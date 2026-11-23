@@ -578,8 +578,8 @@ struct WholeResource {
 };
 // A receiver's versions in parts of one connection (_wire.py's SplitResources). add() takes every RESOURCE
 // of the connection in order. A version in one frame is Whole at once, with its data in the frame. Part 0
-// allocates the version's count * stride bytes (at most CALIPER_NET_RESOURCE_VERSION_MAX_BYTES, which the
-// decoder checked) and each part copies its elements in; the last part makes it Whole. A part whose
+// allocates count * stride bytes, at most 256 MiB for textures or 128 MiB for buffers, after the decoder
+// checks that bound. Each part copies its elements in; the last part makes it Whole. A part whose
 // version is not held is dropped and counted. A part out of order, or one whose keys differ from part 0,
 // or a last part that does not end at the count, is Refused and discards its version. Part 0 of a newer
 // version, or a version in one frame, of the same resource discards an incomplete one; at most

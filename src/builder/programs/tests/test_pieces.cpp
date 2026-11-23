@@ -212,10 +212,11 @@ std::string code_of(const cs::Piece& p) { return cp::check_piece_manifest(p).cod
 
 }  // namespace
 
-TEST_CASE("a published resource holds at most 128 MiB, the published resources of a piece 304 MiB, a private one 64 MiB") {
+TEST_CASE("published buffers hold 128 MiB, textures 256 MiB, and all resources 512 MiB") {
     // What the script sends at a pass (python/caliper/_programs.py, PUBLISHED_BYTES_MAX and PUBLISHED_RESOURCE_MAX).
-    CHECK(cs::piece_limits::kPublishedBytesMax == 304u << 20);
+    CHECK(cs::piece_limits::kPublishedBytesMax == 512u << 20);
     CHECK(cs::piece_limits::kPublishedResourceBytesMax == 128u << 20);   // CALIPER_NET_RESOURCE_VERSION_MAX_BYTES
+    CHECK(cs::piece_limits::kPublishedTextureBytesMax == 256u << 20);
     CHECK(cs::piece_limits::kCountMax == 33554432u);
     cs::Piece p = arcs_piece();
     std::uint64_t others = 0;   // the arcs and the labels, which stay published
@@ -239,11 +240,17 @@ TEST_CASE("a published resource holds at most 128 MiB, the published resources o
     p.resources[0].count += 1;
     CHECK(code_of(p) == cp::kProgramBadResource);
     CHECK(cp::check_piece_manifest(p).where != "resources");
-    // Buffers of 112, 72, and 120 MiB reach the aggregate limit below each binding limit.
+    // Five buffers reach 512 MiB while each remains below its 128 MiB binding limit.
     p.resources[1].count = 3145728;
     const std::uint64_t arcs_bytes = std::uint64_t(p.resources[1].count) * 24;
     p.resources[0].count = 7340032;
-    p.resources[2].count = std::uint32_t((cs::piece_limits::kPublishedBytesMax - (112u << 20) - arcs_bytes) / 32);
+    p.resources[2].count = std::uint32_t((cs::piece_limits::kPublishedBytesMax - (320u << 20) - arcs_bytes) / 32);
+    for (const char* id : {"extra_a", "extra_b"}) {
+        cs::Resource extra = p.resources[0];
+        extra.id = id;
+        extra.count = 6815744;   // 104 MiB
+        p.resources.push_back(extra);
+    }
     CHECK_MESSAGE(code_of(p).empty(), cp::check_piece_manifest(p).message);
     p.resources[2].count += 1;
     CHECK(cp::check_piece_manifest(p).code == cp::kProgramBadResource);
@@ -269,20 +276,21 @@ TEST_CASE("a published resource holds at most 128 MiB, the published resources o
     CHECK(code_of(p).empty());
     p.resources[0].width = 4097;   // a private resource holds at most 64 MiB
     CHECK(code_of(p) == cp::kProgramBadResource);
-    // A published texture of 8,192 by 8,192 rgba8unorm texels holds 256 MiB: refused, unless texels
-    // holds its versions to 128 MiB, or its format is r8unorm, one byte a texel.
+    // Full 8,192 by 8,192 textures fit at 256 MiB. Storage buffers keep the separate 128 MiB bound.
     p.resources[0].publish = true;
     p.resources[0].width = p.resources[0].height = cs::piece_limits::kTextureSideMax;
-    CHECK(code_of(p) == cp::kProgramBadResource);
+    CHECK(code_of(p).empty());
     p.resources[0].texels = 33554432u;
     CHECK(code_of(p).empty());
-    p.resources[0].texels = 33554433u;
+    p.resources[0].texels = 67108864u;
+    CHECK(code_of(p).empty());
+    p.resources[0].texels = 67108865u;
     CHECK(code_of(p) == cp::kProgramBadResource);
     p.resources[0].texels.reset();
     p.resources[0].format = "r8unorm";
     CHECK(code_of(p).empty());
     p.resources[0].format = "r32uint";
-    CHECK(code_of(p) == cp::kProgramBadResource);
+    CHECK(code_of(p).empty());
     p.resources[0].format = "rgba16float";
     CHECK(code_of(p) == cp::kProgramBadResource);
     p.resources[0].format.reset();
@@ -762,7 +770,7 @@ TEST_CASE("the lines and mesh library layouts retain full scene capacities withi
             CHECK(counts["faces"] == 3 * count);
             CHECK(strides["info"] == 4);
             CHECK(counts["info"] == 1);
-            CHECK(bytes == (std::uint64_t(288) << 20) + 4);
+            CHECK(bytes == (std::uint64_t(480) << 20) + 4);
             CHECK(piece.draw->pick->resource == "attributes");
         }
         CHECK(bytes <= cs::piece_limits::kPublishedBytesMax);
@@ -784,8 +792,8 @@ TEST_CASE("the lines and mesh library layouts retain full scene capacities withi
         }
     }
     cs::Piece p = arcs_piece();
-    p.draw->memory_mb = 304;
+    p.draw->memory_mb = 512;
     CHECK(cp::check_piece_manifest(p).ok());
-    p.draw->memory_mb = 305;
+    p.draw->memory_mb = 513;
     CHECK_FALSE(cp::check_piece_manifest(p).ok());
 }

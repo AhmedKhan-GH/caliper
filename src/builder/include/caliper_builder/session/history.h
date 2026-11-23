@@ -37,19 +37,19 @@
 namespace caliper_builder {
 
 inline constexpr std::int64_t kDefaultLiveDepth = 64;
-inline constexpr std::uint64_t kHistoryBudgetBytes = std::uint64_t(512) << 20;
-// The most that one source keeps: a quarter of the budget, 128 MiB. A raw
+inline constexpr std::uint64_t kHistoryBudgetBytes = std::uint64_t(768) << 20;
+// The most that one source keeps is 128 MiB. A raw
 // activation of 512 by 4096 values (8 MiB a step) thus keeps 16 steps and
 // leaves the rest of the budget to the other sources; a reduce step before
 // the source's history point keeps more.
-inline constexpr std::uint64_t kHistorySourceBytes = kHistoryBudgetBytes / 4;
+inline constexpr std::uint64_t kHistorySourceBytes = std::uint64_t(128) << 20;
 
 // The kept versions of one published resource: `keep` of the piece's
 // resource, 256 when absent and at most 4,096.
 inline constexpr std::uint32_t kResourceKeepDefault = 256;
 inline constexpr std::uint32_t kResourceKeepMax = 4096;
-// All resources together keep at most 304 MiB, and one resource at
-// most kHistorySourceBytes; the sources share the rest. Over that limit, the
+// All resources together keep at most 512 MiB. Sources share at least the
+// remaining 256 MiB. Over the resource limit, the
 // largest rings thin first, then rings drop their oldest versions down to
 // one each, and a version that still does not fit is not kept.
 inline constexpr std::uint64_t kHistoryResourceBytes = spec::piece_limits::kPublishedBytesMax;
