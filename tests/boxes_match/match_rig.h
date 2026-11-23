@@ -234,11 +234,19 @@ inline std::vector<Published> run_derive(id<MTLDevice> device, const cs::Piece& 
     std::vector<id<MTLBuffer>> keep;
     std::vector<caliper_producer_input> inputs;
     std::vector<const char*> input_types;
+    std::vector<std::uint8_t> unbound;
     for (const cs::PieceInput& in : piece.inputs) {
         const HostTensor* t = nullptr;
         for (const HostTensor& h : tensors)
             if (h.var == in.name) t = &h;
+        if (t == nullptr && in.optional) {   // an optional input that the case leaves unbound
+            inputs.push_back({in.name.c_str(), 0});
+            input_types.push_back(in.dtype.c_str());
+            unbound.push_back(1);
+            continue;
+        }
         REQUIRE_MESSAGE(t != nullptr, "no tensor for the input ", in.name);
+        unbound.push_back(0);
         id<MTLBuffer> b = [device newBufferWithLength:std::max<std::size_t>(t->bytes.size(), 16)
                                               options:MTLResourceStorageModeShared];
         if (!t->bytes.empty()) std::memcpy([b contents], t->bytes.data(), t->bytes.size());
@@ -307,6 +315,7 @@ inline std::vector<Published> run_derive(id<MTLDevice> device, const cs::Piece& 
     const std::string wgsl = file("derive.wgsl"), common = resolved.lib_text + file("common.wgsl");
     caliper_producer_derive_desc d{};
     d.id = piece.name.c_str();
+    d.input_unbound = unbound.data();
     d.piece_hash = piece.hash.c_str();
     d.wgsl = wgsl.c_str();
     d.wgsl_size = wgsl.size();

@@ -148,14 +148,14 @@ inline std::vector<std::uint8_t> box_rows() {
 
 // The rows of mesh@1's resources: `vertices` (48 bytes each: position with the value in w, normal
 // with the flags of vertex 0 in w, RGBA, index) of a height field of 32 by 32 vertices, and
-// `triangles` (16 bytes each: three indices).
-inline void mesh_rows(std::vector<std::uint8_t>* vertices, std::vector<std::uint8_t>* triangles, std::uint32_t* nv,
+// `faces` (the index buffer: three u32 indices for each triangle).
+inline void mesh_rows(std::vector<std::uint8_t>* vertices, std::vector<std::uint8_t>* faces, std::uint32_t* nv,
                       std::uint32_t* nt) {
     constexpr int side = 32;
     *nv = side * side;
     *nt = (side - 1) * (side - 1) * 2;
     vertices->assign(std::size_t(*nv) * 48, 0);
-    triangles->assign(std::size_t(*nt) * 16, 0);
+    faces->assign(std::size_t(*nt) * 12, 0);
     for (int j = 0; j < side; ++j)
         for (int i = 0; i < side; ++i) {
             const float x = -1.0f + 2.0f * float(i) / float(side - 1), z = -1.0f + 2.0f * float(j) / float(side - 1);
@@ -175,8 +175,8 @@ inline void mesh_rows(std::vector<std::uint8_t>* vertices, std::vector<std::uint
     for (int j = 0; j + 1 < side; ++j)
         for (int i = 0; i + 1 < side; ++i) {
             const std::uint32_t a = std::uint32_t(j * side + i), b = a + 1, c = a + side, d = c + 1;
-            const std::uint32_t two[2][4] = {{a, b, d, 0}, {a, d, c, 0}};
-            for (const auto& tri : two) put(triangles, 16 * t++, tri);
+            const std::uint32_t two[2][3] = {{a, b, d}, {a, d, c}};
+            for (const auto& tri : two) put(faces, 12 * t++, tri);
         }
 }
 
@@ -238,11 +238,11 @@ inline void add_boxes_mesh(std::vector<std::uint8_t>* frames, Plan* plan, std::s
         return;
     }
     add(m);
-    std::vector<std::uint8_t> vertices, triangles;
+    std::vector<std::uint8_t> vertices, faces;
     std::uint32_t nv = 0, nt = 0;
-    bm::mesh_rows(&vertices, &triangles, &nv, &nt);
+    bm::mesh_rows(&vertices, &faces, &nv, &nt);
     add(bm::resource("library_mesh", "vertices", vertices, nv, 48, step));
-    add(bm::resource("library_mesh", "triangles", triangles, nt, 16, step));
+    add(bm::resource("library_mesh", "faces", faces, 3 * nt, 4, step));
     ProgramPlan mp;
     mp.id = "library_mesh";
     mp.pick_id = 102;

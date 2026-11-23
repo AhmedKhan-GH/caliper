@@ -1,6 +1,8 @@
 // The derive half of mesh@1: one element of `vertices` for each row of `positions`, with its value
-// in position.w, its normal, its RGBA and its index; and one element of `triangles` for each row
-// of `indices`, or for every three vertices, with each index clamped to the last vertex. Vertex 0
+// in position.w, its normal, its RGBA and its index; and three elements of `faces`, the index
+// buffer of the draw passes, for each row of `indices`, or for every three vertices when indexed is
+// 0 or `indices` is unbound, with each index clamped to the last vertex. Unbound `normals` and
+// `colors` have the shape (0, 0, 0, 0): no normal, and the one color without a value. Vertex 0
 // also holds the flags of all vertices in normal.w: 1 when the RGBA of a vertex has an alpha below
 // 255. A tensor with one row or one value gives it to every vertex, as a stream of stride 0 does in
 // the built-in.
@@ -14,13 +16,14 @@ fn mesh_triangle_count() -> u32 {
     if (v == 0u) {
         return 0u;
     }
-    if (params.indexed == 0u) {
-        return min(v / 3u, arrayLength(&triangles));
+    let most = arrayLength(&faces) / 3u;
+    if (params.indexed == 0u || shapes.indices.w == 0u) {
+        return min(v / 3u, most);
     }
     if (shapes.indices.w < 3u) {
         return 0u;
     }
-    return min(shapes.indices.z, arrayLength(&triangles));
+    return min(shapes.indices.z, most);
 }
 
 // A channel from 0 to 1 as a byte, as the scene's Python side converts one: clamped, times 255,
@@ -51,6 +54,9 @@ fn mesh_rgba(i: u32) -> u32 {
 
 // The value of vertex i, element i of `colors`, or NaN without one.
 fn mesh_value(i: u32) -> f32 {
+    if (shapes.colors.w == 0u) {
+        return bitcast<f32>(0x7fc00000u);
+    }
     let n = arrayLength(&colors);
     if (n == 1u) {
         return colors[0];
@@ -92,15 +98,17 @@ fn copy_vertices(@builtin(global_invocation_id) id: vec3<u32>) {
 fn copy_triangles(@builtin(global_invocation_id) id: vec3<u32>) {
     let t = mesh_triangle_count();
     if (id.x == 0u) {
-        atomicStore(&triangles_count, t);
+        atomicStore(&faces_count, t * 3u);
     }
     if (id.x >= t) {
         return;
     }
     let last = mesh_vertex_count() - 1u;
-    if (params.indexed == 0u) {
-        let a = id.x * 3u;
-        triangles[id.x] = vec4<u32>(a, a + 1u, a + 2u, 0u);
+    let f = id.x * 3u;
+    if (params.indexed == 0u || shapes.indices.w == 0u) {
+        faces[f] = f;
+        faces[f + 1u] = f + 1u;
+        faces[f + 2u] = f + 2u;
         return;
     }
     // An index is read as the bits of an i32, thus a negative index is above the last vertex too.
@@ -108,7 +116,9 @@ fn copy_triangles(@builtin(global_invocation_id) id: vec3<u32>) {
     let a = min(bitcast<u32>(indices[base]), last);
     let b = min(bitcast<u32>(indices[base + 1u]), last);
     let c = min(bitcast<u32>(indices[base + 2u]), last);
-    triangles[id.x] = vec4<u32>(a, b, c, 0u);
+    faces[f] = a;
+    faces[f + 1u] = b;
+    faces[f + 2u] = c;
 }
 
 // The flags into vertex 0, after copy_vertices: every vertex with an alpha below 255 writes the
