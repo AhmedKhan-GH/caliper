@@ -356,6 +356,8 @@ jobs:
       # The host must name no applet: no applet id, name or window title may
       # appear as a string literal in src/ or include/.
       - run: python3 scripts/check_host_names_no_applet.py
+      # The theme reads its colours from the design tokens and holds no raw colour.
+      - run: python3 scripts/check_theme_colors.py
       - if: always()
         run: sccache --show-stats
 
@@ -419,5 +421,6 @@ jobs:
       # The host must name no applet, checked here as on macOS. The runner's
       # Python is `python`; `python3` is not on PATH in every Windows image.
       - run: python scripts/check_host_names_no_applet.py
+      - run: python scripts/check_theme_colors.py
       - if: always()
         run: sccache --show-stats

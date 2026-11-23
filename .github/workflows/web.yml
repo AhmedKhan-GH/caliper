@@ -6,14 +6,14 @@ on:
     # The module's sources (scripts/wasm_views.py INPUTS, which fetch_wasm.py
     # relies on), the web package, the Python package's assets and the scripts
     # and packaging that handle them, and the colormap's C++ cases.
-    paths: ['web/**', 'src/**', 'include/**', 'sdk/include/**', 'assets/fonts/**',
+    paths: ['web/**', 'src/**', 'include/**', 'sdk/include/**', 'cmake/SternbildTokens.cmake',
             'third_party/imgui', 'third_party/implot',
             'python/caliper/**', 'python/check_web_views.cmake',
             'python/tests/test_assets.py', 'python/tests/test_wasm_scripts.py',
             'scripts/build_wasm.py', 'scripts/fetch_wasm.py', 'scripts/wasm_views.py',
             'scripts/build_web.py', 'pyproject.toml', 'tests/shaders/**', '.github/workflows/web.yml']
   pull_request:
-    paths: ['web/**', 'src/**', 'include/**', 'sdk/include/**', 'assets/fonts/**',
+    paths: ['web/**', 'src/**', 'include/**', 'sdk/include/**', 'cmake/SternbildTokens.cmake',
             'third_party/imgui', 'third_party/implot',
             'python/caliper/**', 'python/check_web_views.cmake',
             'python/tests/test_assets.py', 'python/tests/test_wasm_scripts.py',

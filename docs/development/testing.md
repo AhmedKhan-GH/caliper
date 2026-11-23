@@ -200,6 +200,8 @@ The app-data guard backs this up ([Folders and environment variables](../referen
 
 `caliper_embed_install` (label `embed`) does the same for the embedding package. It installs the embed component alone and checks the installed tree. On macOS it checks that the library exports exactly the C functions that `libcaliper` defines. It builds `examples/embed_host` against the install and runs it offscreen on a copy of the `hello` fixture. Without a GPU the run is skipped, unless `CALIPER_REQUIRE_GPU=1` makes the skip a failure. `tests/embed_install/run.cmake` holds the steps, and `CALIPER_EMBED_PROBE_DIR` sets the work folder. See [Embedding Caliper](../web/embedding-api.md).
 
+`caliper_theme_colors` (label `boundary`) runs `scripts/check_theme_colors.py`. The script fails if the theme sources `src/host/ui/sternbild_theme.h`, `sternbild_theme.cpp` and `sternbild_fonts.h` hold a color written by hand, such as `IM_COL32(...)`, `ImVec4(...)` or a `0xRRGGBB` constant, outside the lines marked `colours without a token`. The theme reads every other color from the generated header of the Sternbild design tokens. `caliper_theme_colors_script` runs the tests of the script.
+
 `caliper_host_names_no_applet` (label `boundary`) runs `scripts/check_host_names_no_applet.py`. The script fails if the `[applet]` id or name of a manifest under `applets/` or `examples/`, or a window title that their sources pass to `ImGui::Begin()`, is a whole string literal in `src/` or `include/`. The script skips comments. CMake registers the test only when it finds Python 3.
 
 ## Builder Suites

@@ -11,7 +11,7 @@ order and takes the first build it finds:
 
 1. The artifact `caliper-views` of the Browser views workflow for this
    checkout's commit, or for the newest earlier commit whose sources of the
-   module (web/wasm, src, include, sdk/include, assets/fonts and the ImGui and
+   module (web/wasm, src, include, sdk/include, cmake/SternbildTokens.cmake and the ImGui and
    ImPlot submodules) are the same. GitHub lists artifacts to anyone but hands
    them out only to signed-in clients, so this step needs a token in
    GITHUB_TOKEN or GH_TOKEN, one that can read the repository's Actions.
