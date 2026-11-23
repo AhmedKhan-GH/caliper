@@ -791,6 +791,23 @@ TEST_CASE("api: the viewer token passes only the spec page and the page's reads,
     CHECK(caliper_api::route("GET", "/v0/spec").route == Route::SpecPage);
     CHECK_FALSE(caliper_api::route("POST", "/v0/spec").method_ok);
     CHECK(caliper_api::route("GET", "/v0/spec/").route == Route::None);
+    // The WebAssembly views' three files beside the page, by those names only.
+    for (const char* name : caliper_api::kSpecAssets) {
+        CAPTURE(name);
+        const caliper_api::Routed a = caliper_api::route("GET", std::string("/v0/spec/") + name);
+        CHECK(a.route == Route::SpecAsset);
+        CHECK(a.name == name);
+        CHECK(a.method_ok);
+        CHECK(check(req("GET", std::string("/v0/spec/") + name + "?token=" + vt), kToken, true, vt).status == 0);
+        CHECK(check(req("GET", std::string("/v0/spec/") + name + "?token=" + vt), kToken, true, vt).viewer);
+        CHECK(check(req("GET", std::string("/v0/spec/") + name), kToken, true, vt).status == 401);
+        CHECK_FALSE(caliper_api::route("POST", std::string("/v0/spec/") + name).method_ok);
+    }
+    for (const char* bad : {"/v0/spec/../api.json", "/v0/spec/caliper-views.js/x", "/v0/spec/spec.html", "/v0/spec/api.json",
+                            "/v0/spec/caliper-views.wasm.map", "/v0/spec//caliper-views.js", "/v0/spec/%2e%2e%2fapi.json"}) {
+        CAPTURE(bad);
+        CHECK(caliper_api::route("GET", bad).route == Route::None);
+    }
     CHECK(caliper_api::viewer_command("panel.data"));
     CHECK(caliper_api::viewer_command("spec.get"));
     CHECK(caliper_api::viewer_command("applet.list"));

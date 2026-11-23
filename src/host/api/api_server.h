@@ -118,10 +118,16 @@ constexpr size_t kMaxCommandBody = size_t(1) << 20;
 
 // ---- routing --------------------------------------------------------------------------
 
-enum class Route { None, Info, Applets, Launch, Capture, Stream, Commands, Command, Approval, SpecPage };
+enum class Route { None, Info, Applets, Launch, Capture, Stream, Commands, Command, Approval, SpecPage, SpecAsset };
 
 // The spec page's path, and the commands a request with the viewer token may run.
 inline constexpr char kSpecPagePath[] = "/v0/spec";
+// The files of the WebAssembly views that the spec page loads to draw the
+// programs of its scene panels, GET /v0/spec/<name> (Options::spec_assets_dir):
+// these three names only, never a path that the request names.
+inline constexpr char kSpecAssetHead[] = "/v0/spec/";
+inline constexpr const char* kSpecAssets[] = {"caliper-views-loader.js", "caliper-views.js", "caliper-views.wasm"};
+bool spec_asset(const std::string& name);
 inline constexpr const char* kViewerCommands[] = {"spec.get", "applet.list", "panel.data"};
 bool viewer_command(const std::string& name);
 
@@ -228,6 +234,11 @@ struct Options {
     // "" for none; and the spec page that GET /v0/spec answers, "" for a 404.
     std::string viewer_token;
     std::string spec_page_html;
+    // The folder that holds the files of kSpecAssets, which GET /v0/spec/<name>
+    // answers with either token, each at most kSpecAssetMaxBytes; "" or a
+    // missing file is a 404, and the page then shows its programs' panels
+    // without them.
+    std::string spec_assets_dir;
     // Encodes tightly packed top-down RGBA8 as a PNG (export_encode_png).
     std::function<bool(const uint8_t*, uint32_t, uint32_t, std::string*)> encode_png;
     // One line per session that starts or ends on the stream; never the token.

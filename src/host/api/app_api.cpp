@@ -2,6 +2,7 @@
 #include "api/app_api.h"
 
 #include "api/spec_page.h"
+#include "../app_paths.h"   // executable_dir, for the spec page's views
 #include "open_url.h"
 
 #include "export_service.h"
@@ -13,6 +14,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <vector>
 #ifdef _WIN32
 #include <process.h>   // _getpid
 #else
@@ -30,6 +32,34 @@ bool api_wanted(const CommandLine& cl) {
     return v && std::strcmp(v, "1") == 0;
 #endif
 }
+
+namespace {
+
+// The folder of the WebAssembly views that the spec page loads for the
+// programs of its scene panels (api_server.h, kSpecAssets): CALIPER_WEB_DIR
+// when set, else web/ in the app bundle's Resources or beside the executable,
+// else, for a build folder inside the source tree (as the CMake presets make
+// it), the Python package's _web folder of that tree, where
+// scripts/build_wasm.py puts them. The first folder that holds the loader
+// counts; "" when none does.
+std::string find_spec_assets_dir() {
+    namespace fs = std::filesystem;
+    std::vector<fs::path> tries;
+    if (const char* env = std::getenv("CALIPER_WEB_DIR"); env && *env) tries.emplace_back(fs::path(env));
+    const std::string exe = caliper::executable_dir();
+    if (!exe.empty()) {
+        tries.push_back(fs::path(exe) / ".." / "Resources" / "web");
+        tries.push_back(fs::path(exe) / "web");
+        tries.push_back(fs::path(exe) / ".." / "python" / "caliper" / "_web");
+    }
+    for (const fs::path& d : tries) {
+        std::error_code ec;
+        if (fs::is_regular_file(d / caliper_api::kSpecAssets[0], ec)) return d.lexically_normal().string();
+    }
+    return {};
+}
+
+}  // namespace
 
 bool AppApi::start(const CommandLine& cl, const std::string& capture_unavailable,
                    const std::string& data_folder, std::ostream& out, std::string* err) {
@@ -49,6 +79,7 @@ bool AppApi::start(const CommandLine& cl, const std::string& capture_unavailable
     do o.mcp_token = caliper_net::random_token();
     while (o.mcp_token == o.token || o.mcp_token == o.viewer_token);
     o.spec_page_html = caliper_api::spec_page_html();
+    o.spec_assets_dir = find_spec_assets_dir();
     o.info_json = info_json(ctx);
     o.software_version = ctx.caps.version;
     o.allow_control = cl.allow_control;

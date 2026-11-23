@@ -8,8 +8,15 @@
 //
 // One module instance draws on one canvas (Module.canvas) and shows one view,
 // or every view of the session when no view is named. The instance reads its
-// settings from Module.caliperConfig: {src, view, kind, header, compat};
-// compat "true" asks for a WebGPU device in compatibility mode.
+// settings from Module.caliperConfig: {src, view, kind, header, compat, feed,
+// scene}; compat "true" asks for a WebGPU device in compatibility mode.
+//
+// With feed "page" there is no stream: the instance opens one empty scene view
+// named `view` (with `scene`, a JSON object {space, up, units, view_camera},
+// as a VIEWS entry gives it), and the page hands it the instances of pieces and
+// their resources through caliper_views_feed_program() and
+// caliper_views_feed_resource(). The browser's spec page does this with what
+// panel.data gives a viewer, which never opens the stream.
 //
 // What a person does in a view (a selection, a pick, a hover) comes out of
 // the view layer's event sink: it goes to the producer as an EVENT through
@@ -33,6 +40,8 @@
 #include "source_poll.h"
 #include "web_input.h"
 #include "web_programs.h"
+
+#include <caliper_builder/programs/pieces.h>   // kMaxSelected
 
 #include "caliper/embed.h"
 #include "caliper/live_net.h"   // CALIPER_NET_BYE_NORMAL
@@ -79,6 +88,8 @@ struct Config {
     int32_t kind = 0;   // 0 = any
     bool header = true; // false: the page draws the view's header (no title bars)
     bool compat = false;// a compatibility-mode device
+    bool page_feed = false;   // feed "page": no stream, the page feeds the programs
+    std::string scene;        // feed "page": the scene view's description, JSON
 };
 
 struct Page {
@@ -811,7 +822,25 @@ void start() {
     caliper_live_views::set_event_sink(g.core, on_event);
     g.programs = std::make_unique<caliper_web::WebPrograms>(g.device);
 
-    if (g.cfg.src.empty()) {
+    if (g.cfg.page_feed) {
+        // One empty scene view that the page's programs draw into, described
+        // as a VIEWS entry describes it.
+        caliper_net::Json entry = caliper_net::Json::object(), scene;
+        std::string err;
+        if (!g.cfg.scene.empty() && !caliper_net::Json::parse(g.cfg.scene.data(), g.cfg.scene.size(), &scene, &err))
+            return fail("caliperConfig.scene is not JSON: " + err);
+        if (scene.is_object()) entry.set("scene", scene);
+        caliper_net::wire::SceneView info;
+        if (!caliper_net::wire::scene_view_info(entry, &info, &err)) return fail("caliperConfig.scene: " + err);
+        std::string why;
+        if (g.cfg.view.empty() || !caliper_live_views::scene_open(g.core, g.cfg.view, info, &why))
+            return fail("the scene view " + g.cfg.view + " did not open: " + why);
+        g.ready = true;
+        EM_ASM({
+            var f = Module["onReady"];
+            if (f) f();
+        });
+    } else if (g.cfg.src.empty()) {
         fail("no stream: set caliperConfig.src to the ws:// URL of a Caliper stream");
     } else {
         NetSource::Options o;
@@ -1000,6 +1029,107 @@ EMSCRIPTEN_KEEPALIVE int caliper_views_colormap_keys(float vmin, float vmax) {
 // Ends this instance: BYE to the producer, no more frames, every view, GPU
 // resource and context released, the input listeners removed. The page drops
 // the canvas and the module afterwards; an instance is not reused.
+// feed "page": one PROGRAM of an instance of a piece, as JSON {op, id, piece,
+// manifest, bind, params, panel, segments, common, derive, draw} with op
+// "set", "params" or "remove", which the module checks as it checks a relay
+// of the stream (web_programs.h: the pin's hash, the manifest, the files and
+// WebGPU's compile). 1 when it was handed on, 0 for JSON that is no object or
+// an op or id that is not a string.
+EMSCRIPTEN_KEEPALIVE int caliper_views_feed_program(const char* json) {
+    if (!g.cfg.page_feed || !g.programs || !json) return 0;
+    caliper_net::Json j;
+    std::string err;
+    const size_t n = std::strlen(json);
+    if (n > (size_t)64 << 20 || !caliper_net::Json::parse(json, n, &j, &err) || !j.is_object()) return 0;
+    const caliper_net::Json* op = j.find("op");
+    const caliper_net::Json* id = j.find("id");
+    if (!op || !op->is_string() || !id || !id->is_string()) return 0;
+    caliper_net::wire::Program m;
+    m.op = op->as_string();
+    m.id = id->as_string();
+    if (m.op != CALIPER_NET_PROGRAM_SET && m.op != CALIPER_NET_PROGRAM_PARAMS && m.op != CALIPER_NET_PROGRAM_REMOVE)
+        return 0;
+    auto obj = [&](const char* k, caliper_net::Json* out) {
+        if (const caliper_net::Json* v = j.find(k)) *out = *v;
+    };
+    auto text = [&](const char* k, std::optional<std::string>* out) {
+        if (const caliper_net::Json* v = j.find(k); v && v->is_string()) *out = v->as_string();
+    };
+    obj("piece", &m.piece);
+    obj("manifest", &m.manifest);
+    obj("bind", &m.bind);
+    obj("segments", &m.segments);
+    obj("params", &m.params);
+    text("panel", &m.panel);
+    text("common", &m.common);
+    text("derive", &m.derive);
+    text("draw", &m.draw);
+    g.programs->on_program(m);
+    return 1;
+}
+
+// feed "page": one version of a published resource: `n` bytes of `count`
+// elements of `stride` bytes, or a texture of width by height texels. The
+// module keeps it only when the piece of its program publishes that resource
+// within its declared count and bytes (web_programs.h).
+EMSCRIPTEN_KEEPALIVE int caliper_views_feed_resource(const char* program, const char* resource, double step,
+                                                    uint32_t count, uint32_t stride, uint32_t width, uint32_t height,
+                                                    const uint8_t* bytes, uint32_t n) {
+    if (!g.cfg.page_feed || !g.programs || !program || !resource || (!bytes && n)) return 0;
+    if (!(step >= 0.0) || step > 9.007199254740992e15) return 0;
+    if ((uint64_t)count * stride != n) return 0;
+    caliper_net::wire::Resource r;
+    r.program = program;
+    r.resource = resource;
+    r.step = (uint64_t)step;
+    r.count = count;
+    r.stride = stride;
+    if (width || height) {
+        r.width = width;
+        r.height = height;
+    }
+    r.data.name = "resource";
+    r.data.dtype = CALIPER_NET_DTYPE_U8;
+    r.data.shape = {(int64_t)n};
+    r.data.data = bytes;
+    r.data.size = n;
+    g.programs->on_resource(r);
+    return 1;
+}
+
+// feed "page": the linked selection of the page's picks, as JSON
+// [{program, item, index, newest}], each pick of a program of this module as
+// the app's draw host gives it to every program (at most kMaxSelected).
+EMSCRIPTEN_KEEPALIVE int caliper_views_select(const char* json) {
+    if (!g.cfg.page_feed || !g.programs || !json) return 0;
+    caliper_net::Json j;
+    std::string err;
+    const size_t n = std::strlen(json);
+    if (n > (size_t)1 << 16 || !caliper_net::Json::parse(json, n, &j, &err) || !j.is_array()) return 0;
+    std::vector<caliper_draw::Selected> sel;
+    for (size_t i = 0; i < j.size() && sel.size() < caliper_builder::programs::kMaxSelected; ++i) {
+        const caliper_net::Json& e = j.at(i);
+        const caliper_net::Json* prog = e.find("program");
+        const caliper_net::Json* item = e.find("item");
+        uint64_t it = 0;
+        if (!prog || !prog->is_string() || !item || !item->get_u64(&it) || it > 0xffffffffull) continue;
+        caliper_draw::Selected s;
+        s.pick = g.programs->pick_id_of(prog->as_string());
+        if (!s.pick) continue;
+        s.item = (uint32_t)it;
+        if (const caliper_net::Json* nw = e.find("newest"); nw && nw->is_bool() && nw->as_bool()) s.flags = 1u;
+        if (const caliper_net::Json* ix = e.find("index"); ix && ix->is_array() && ix->size() == 4)
+            for (size_t k = 0; k < 4; ++k) {
+                const caliper_net::Json& c = ix->at(k);
+                const double v = c.is_number() ? c.as_double() : 0.0;
+                if (c.is_number() && v >= -2147483648.0 && v <= 2147483647.0) s.index[k] = (int32_t)v;
+            }
+        sel.push_back(s);
+    }
+    g.programs->set_selection(std::move(sel));
+    return 1;
+}
+
 EMSCRIPTEN_KEEPALIVE void caliper_views_destroy() {
     if (g.destroyed) return;
     g.destroyed = true;
@@ -1042,6 +1172,8 @@ int main() {
     g.cfg.kind = kind_of(config_string("kind"));
     g.cfg.header = config_string("header") != "false";
     g.cfg.compat = config_string("compat") == "true";
+    g.cfg.page_feed = config_string("feed") == "page";
+    g.cfg.scene = config_string("scene");
 
     g.instance = wgpuCreateInstance(nullptr);
     if (!g.instance) {
