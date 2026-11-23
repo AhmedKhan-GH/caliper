@@ -70,9 +70,11 @@
 //                        opens the panel's menu ("menu:remove" is its Remove
 //                        panel); the page's "remove:<panel>" is the × on a
 //                        panel's strip, which a click works without hovering
-//   drag <item> [fx fy] to <item> [fx fy] [hold]
+//   drag <item> [fx fy] to <item> [fx fy] [right] [hold]
 //                        a press on the first, a move in steps to the second
-//                        and a release there, or none with `hold`
+//                        and a release there, or none with `hold`; with
+//                        `right`, of the right button (a scene panel's pan)
+//                        and released there always
 //   release              lets go of a held drag
 //   selection <path>     writes the page's selection as JSON to <path>
 //                        (SpecPage::selection_json()), once there is one
@@ -379,10 +381,15 @@ public:
             return;
         }
         if (s.verb == "drag") {
-            // drag <a> [fx fy] to <b> [fx fy] [hold]
+            // drag <a> [fx fy] to <b> [fx fy] [right] [hold]
             std::stringstream words(s.arg);
             std::vector<std::string> w;
-            for (std::string t; words >> t;) w.push_back(t);
+            bool right = false;
+            for (std::string t; words >> t;) {
+                if (t == "right") right = true;
+                else w.push_back(t);
+            }
+            const int button = right ? 1 : 0;
             size_t to = 0;
             while (to < w.size() && w[to] != "to") ++to;
             if (to == 0 || to + 1 >= w.size()) return void(error_ = "drag needs <item> to <item>");
@@ -390,14 +397,14 @@ public:
             const size_t b = to + 1;
             const bool b_frac = b + 2 < w.size() || (b + 2 == w.size() && w.back() != "hold");
             const float bfx = b_frac ? (float)std::atof(w[b + 1].c_str()) : 0.5f, bfy = b_frac ? (float)std::atof(w[b + 2].c_str()) : 0.5f;
-            const bool hold = w.back() == "hold";
+            const bool hold = w.back() == "hold" && !right;
             constexpr int kSteps = 14;
             if (drag_frame_ == 0) {
                 if (!item_point(page, w[0], afx, afy, &drag_a_[0], &drag_a_[1]) ||
                     !item_point(page, w[b], bfx, bfy, &drag_b_[0], &drag_b_[1]))
                     return patience("no builder item " + w[0] + " or " + w[b]);
                 io.AddMousePosEvent(drag_a_[0], drag_a_[1]);
-                io.AddMouseButtonEvent(0, true);
+                io.AddMouseButtonEvent(button, true);
                 drag_frame_ = 1;
             } else if (drag_frame_ <= kSteps) {
                 const float t = (float)drag_frame_ / (float)kSteps;
@@ -407,8 +414,9 @@ public:
             } else if (drag_frame_ == kSteps + 1) {
                 ++drag_frame_;   // one more frame at the target, so the drop's zone is read there
             } else {
-                if (!hold) io.AddMouseButtonEvent(0, false);
-                next(std::string(hold ? "dragged and held " : "dragged ") + w[0] + " to " + w[b]);
+                if (!hold) io.AddMouseButtonEvent(button, false);
+                next(std::string(hold ? "dragged and held " : right ? "dragged with the right button " : "dragged ") +
+                     w[0] + " to " + w[b]);
             }
             return;
         }
