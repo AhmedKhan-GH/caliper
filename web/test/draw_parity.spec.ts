@@ -454,19 +454,17 @@ test('the module draws the draw halves that PROGRAM and RESOURCE bring over its 
 // each: the picture and the pieces' IDs under the rules above, where a pixel without a piece's ID (the
 // ground, or a shape that the built-in draw keeps) counts as an edge pixel; the counts of the shapes of
 // that frame with the reason of each fallback; the program of each pick id; and the hit of a pick at
-// each of the app's points. A pick gives the hit of the pieces' IDs unless the pick pass of the
-// built-in draw found a nearer hit, by the depth of each target at its own texel. Where a shape that
-// keeps the built-in draw meets a piece's shape at the same depth (the nodes of "edges", points with
-// radii in scene units, at the ends of its edges), the two renderers' depths may decide that tie
-// either way; such a pick, whose hit in one renderer is a shape of the built-in draw, is counted and
-// printed apart, and every other pick must give the app's hit.
+// each of the app's points, with the position that the hit takes from the depth within 0.01 of the
+// app's. A pick gives the hit of the pieces' IDs unless the pick pass of the built-in draw found a
+// nearer one, by the depth of each target at its texel, so the depth decides between a piece's shape
+// and a shape that keeps the built-in draw (the nodes of "edges" at the ends of its edges).
 const SCENE = path.join(FIXTURE, 'scene');
 const SCENE_SIZE = 256;
 
 interface SceneFacts {
   frame: number; draw: string; pieces: number; builtin: number; fallbacks: Record<string, number>;
   programs: Record<string, string>; translucent: number[]; states: Record<string, string>;
-  picks: { at: [number, number]; hit?: string; result?: number; position?: number[] }[];
+  picks: { at: [number, number]; hit?: string; result?: number; position?: number[]; depth?: number }[];
 }
 interface SceneRun { report: string; facts: string; color: string; ids: string }
 
@@ -543,7 +541,7 @@ test('the browser module draws the scene fixtures with the library pieces as the
     const size = SCENE_SIZE;
     // The interior pixels of each shape's piece, by the primitive of its program, across the fixtures.
     const shapes: Record<string, { interior: number; maxDiff: number; edgeDiffer: number }> = {};
-    let asked = 0, agreed = 0, mixed = 0, positionGap = 0;
+    let asked = 0, agreed = 0, positionGap = 0;
     for (let i = 0; i < names.length; i++) {
       const name = names[i];
       const run = got.runs[i];
@@ -604,28 +602,21 @@ test('the browser module draws the scene fixtures with the library pieces as the
       }
       // The picks at the app's points.
       expect.soft(web.picks?.length, `${name}: the picks`).toBe(a.picks.length);
-      // Whether a hit is of a shape that the built-in draw drew in this frame: one without a program.
-      const drawnBy = new Set(Object.values(a.programs));
-      const builtinHit = (hit?: string) => {
-        if (!hit) return false;
-        const [where, primitive] = hit.split(' ');
-        return !drawnBy.has(`scene:${where}#${hit.includes(' frustum') ? 'camera' : primitive}`);
-      };
-      let first = '', firstMixed = '', gapHere = 0, gapAt = '';
+      let first = '', gapHere = 0, gapAt = '';
       for (let k = 0; k < a.picks.length; k++) {
         const ap = a.picks[k], wp = web.picks?.[k] ?? { at: ap.at };
         asked++;
         const same = ap.hit === wp.hit && ap.result === wp.result;
         const text = `at (${ap.at}): app ${ap.hit ?? `result ${ap.result}`}, browser ${wp.hit ?? `result ${wp.result}`}`;
         if (same) agreed++;
-        else if (builtinHit(ap.hit) || builtinHit(wp.hit)) {
-          mixed++;
-          if (!firstMixed) firstMixed = text;
-        } else if (!first) first = text;
+        else if (!first) first = text;
         if (same && ap.position && wp.position)
           for (let j = 0; j < 3; j++) {
             const g = Math.abs(ap.position[j] - wp.position[j]);
-            if (g > gapHere) { gapHere = g; gapAt = `${ap.hit} at (${ap.at}): app ${ap.position}, browser ${wp.position}`; }
+            if (g > gapHere) {
+              gapHere = g;
+              gapAt = `${ap.hit} at (${ap.at}): app ${ap.position} from depth ${ap.depth}, browser ${wp.position} from depth ${wp.depth}`;
+            }
           }
         positionGap = Math.max(positionGap, gapHere);
       }
@@ -636,7 +627,7 @@ test('the browser module draws the scene fixtures with the library pieces as the
         `differing edge pixels ${(100 * c.differShare).toFixed(3)} % of the image, other IDs ${c.idMismatch}, largest ` +
         `difference of a piece's ID pixels ${coverGap}; picks ` +
         `${(web.picks ?? []).filter((p, k) => p.hit === a.picks[k]?.hit && p.result === a.picks[k]?.result).length} of ${a.picks.length} agree` +
-        (first ? `, first other: ${first}` : '') + (firstMixed ? `, first tie with a shape of the built-in draw: ${firstMixed}` : '') +
+        (first ? `, first other: ${first}` : '') +
         (gapAt ? `, largest gap of a picked position ${gapHere.toExponential(3)} (${gapAt})` : '') +
         (c.first ? `; first over 2: ${c.first}` : ''));
       expect.soft(empty, `${name}: the pieces that drew no pixel with their ID (the app's state of each: ${JSON.stringify(a.states)})`).toEqual([]);
@@ -649,10 +640,11 @@ test('the browser module draws the scene fixtures with the library pieces as the
     for (const [key, s] of Object.entries(shapes).sort())
       console.log(`[${info.project.name}] scene shape ${key}: ${s.interior} interior pixels, largest difference ${s.maxDiff} ` +
         `levels, ${s.edgeDiffer} differing edge pixels`);
-    console.log(`[${info.project.name}] scene picks: ${agreed} of ${asked} give the app's hit, ${mixed} other where one hit ` +
-      `is a shape of the built-in draw; largest gap of a picked position ${positionGap.toExponential(3)}`);
+    console.log(`[${info.project.name}] scene picks: ${agreed} of ${asked} give the app's hit; largest gap of a picked ` +
+      `position ${positionGap.toExponential(3)}`);
     expect(asked, 'picks at the app\'s points').toBeGreaterThan(50);
-    expect(agreed + mixed).toBe(asked);
+    expect(agreed).toBe(asked);
+    expect(positionGap, 'the largest gap of a picked position to the app\'s').toBeLessThanOrEqual(0.01);
     expect(Object.keys(shapes).sort(), 'the shapes that pieces drew')
       .toEqual(expect.arrayContaining(['arrows', 'boxes', 'camera', 'image', 'lines', 'mesh', 'points']));
   } finally {

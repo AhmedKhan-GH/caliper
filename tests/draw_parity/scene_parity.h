@@ -125,6 +125,7 @@ inline nlohmann::json hit_json(const caliper_live_views::SceneView& v, caliper_s
     if (h.has_pixel) key += " px " + std::to_string(h.pixel[0]) + "," + std::to_string(h.pixel[1]);
     j["hit"] = key;
     if (h.has_position) j["position"] = {h.position.x, h.position.y, h.position.z};
+    j["depth"] = h.depth;   // the depth texel that the position comes from
     return j;
 }
 
