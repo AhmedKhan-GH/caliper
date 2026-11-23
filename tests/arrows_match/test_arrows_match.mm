@@ -181,11 +181,12 @@ Arrows ring(std::uint32_t n, float width) {
 
 }  // namespace
 
-TEST_CASE("arrows_match: arrows@1 passes piece.check") {
+TEST_CASE("arrows_match: arrows@1 passes piece.check, and the pixel comparison carries it as the library has it") {
     cs::Piece piece;
     std::string why;
     REQUIRE_MESSAGE(load_piece("arrows", &piece, &why), why);
     check_piece(piece);
+    check_pinned(piece, dp::kArrowsManifest, dp::kArrowsHash);
 }
 
 TEST_CASE("arrows_match: arrows in each color mode draw as the built-in arrows") {

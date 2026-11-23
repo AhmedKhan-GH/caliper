@@ -22,6 +22,7 @@
 #import <Metal/Metal.h>
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 
+#include "../draw_parity/line_pieces.h"
 #include "../draw_parity/parity_draw.h"
 #include "draw/draw_runtime.h"
 #include "gfx/colormap_keys.h"
@@ -258,6 +259,22 @@ inline void check_piece(const cs::Piece& piece) {
     CHECK(r["hash"] == piece.hash);
     MESSAGE("piece.check ", piece.name, "@", piece.version, ": ", derive, " derive and ", draw,
             " draw passes compiled, hash ", piece.hash);
+}
+
+// The canonical manifest and the hash that the pixel comparison of the app and the browser module
+// carries for the piece (tests/draw_parity/line_pieces.h) are those of the library's piece, and
+// they decode there as a viewer decodes PROGRAM to the same piece.
+inline void check_pinned(const cs::Piece& piece, std::string_view manifest, std::string_view hash) {
+    const std::string canonical = cp::canonical_manifest(piece);
+    CHECK_MESSAGE(canonical == manifest, "tests/draw_parity/line_pieces.h holds another manifest of ", piece.name,
+                  "@1; the library's is\n", canonical);
+    CHECK_MESSAGE(piece.hash == hash, "tests/draw_parity/line_pieces.h holds another hash of ", piece.name,
+                  "@1; the library's is ", piece.hash);
+    cs::Piece decoded;
+    std::string why;
+    REQUIRE_MESSAGE(dp::line_piece(piece.name, manifest, hash, &decoded, &why), why);
+    CHECK(cp::piece_hash(decoded) == piece.hash);
+    CHECK(cp::canonical_manifest(decoded) == canonical);
 }
 
 // ---- the derive half on the producer runtime ------------------------------------------------

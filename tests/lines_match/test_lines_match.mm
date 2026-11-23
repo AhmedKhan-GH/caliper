@@ -232,11 +232,12 @@ std::uint32_t level_value(std::uint32_t i) {
 
 }  // namespace
 
-TEST_CASE("lines_match: lines@1 passes piece.check") {
+TEST_CASE("lines_match: lines@1 passes piece.check, and the pixel comparison carries it as the library has it") {
     cs::Piece piece;
     std::string why;
     REQUIRE_MESSAGE(load_piece("lines", &piece, &why), why);
     check_piece(piece);
+    check_pinned(piece, dp::kLinesManifest, dp::kLinesHash);
 }
 
 TEST_CASE("lines_match: strips, segments and edges in each color mode draw as the built-in lines") {

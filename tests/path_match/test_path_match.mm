@@ -181,11 +181,12 @@ Path knot(std::int64_t rows, std::int64_t cols, std::uint32_t seed) {
 
 }  // namespace
 
-TEST_CASE("path_match: path@1 passes piece.check") {
+TEST_CASE("path_match: path@1 passes piece.check, and the pixel comparison carries it as the library has it") {
     cs::Piece piece;
     std::string why;
     REQUIRE_MESSAGE(load_piece("path", &piece, &why), why);
     check_piece(piece);
+    check_pinned(piece, dp::kPathManifest, dp::kPathHash);
 }
 
 TEST_CASE("path_match: the path through the rows draws as the built-in strip of the operator's output") {
