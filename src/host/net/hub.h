@@ -29,7 +29,9 @@
 // or SERIES) to the socket at a time and chooses the next once it has
 // drained; it keeps at most one pending snapshot per subscription, replaced by
 // a newer one, and serves series values from its retained history by index,
-// coalesced and never dropped while retained. Control messages go first.
+// coalesced and never dropped while retained. Scene bundles also send one
+// frame at a time. Their resources and final update stay together before
+// other data, even when the bundle exceeds the send queue. Control messages go first.
 // Each subscription gets its max_rate messages per second on average, in
 // bursts of at most two, so that a producer sending at that very rate with
 // some jitter passes through without waiting. A slow viewer therefore delays

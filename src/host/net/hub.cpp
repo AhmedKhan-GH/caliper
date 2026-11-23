@@ -417,6 +417,13 @@ struct Peer {
     std::map<uint32_t, uint64_t> pending_sub;   // sub -> ticket of its waiting SUBSCRIBE
     uint64_t tickets = 0;
     bool in_flight = false;          // a data message is in the send queue
+    // One scene bundle continues after each frame drains. No other data
+    // enters the queue before its final update. The subscription ticket
+    // prevents a replacement subscription from receiving the old bundle.
+    std::deque<ScenePtr> sending_scene;
+    uint32_t sending_scene_sub = 0;
+    uint64_t sending_scene_ticket = 0;
+    bool sending_scene_state = false;
     bool dirty = false;
     uint64_t due_us = 0;             // a rate-limited message is due then
     // 3.1: what the viewer announced, its coalesced CONTROLS and SELECTIONs
@@ -1333,6 +1340,7 @@ struct Hub::Impl {
         auto it = p.subs.find(sub);
         if (it == p.subs.end()) return;
         if (Session* s = session_of(p)) leave(*s, p, it->second);
+        if (p.sending_scene_sub == sub) p.sending_scene.clear();
         p.subs.erase(sub);
         if (p.held_controls) p.dirty = true;   // it may have waited for this one
     }
@@ -2654,22 +2662,12 @@ struct Hub::Impl {
         }
     }
 
-    bool send_scene(Peer& p, VSub& v, const ScenePtr& msg, bool state) {
+    bool send_scene_frame(Peer& p, VSub& v, const ScenePtr& msg, bool state) {
         if (msg->raw) {   // a scene program's RESOURCE, as it came
             if (!server.send(p.conn, msg->frame)) {
                 overflow(p.conn);
                 return false;
             }
-            return true;
-        }
-        if (msg->rows) {   // the entity transforms the hub keeps: SCENE_TRANSFORMS built now
-            for (const ScenePtr& t : transform_messages(v.view, *msg->rows))
-                if (!send_scene(p, v, t, state)) return false;
-            return true;
-        }
-        if (!msg->pieces.empty()) {   // a split update: its pieces in order
-            for (const ScenePtr& piece : msg->pieces)
-                if (!send_scene(p, v, piece, state)) return false;
             return true;
         }
         Json meta = msg->meta;
@@ -2695,6 +2693,36 @@ struct Hub::Impl {
         }
         ++c.scenes_out;
         return true;
+    }
+
+    // Expand only the next scene message, then send one frame. The socket's
+    // Writable event resumes this bundle after that frame drains. Pending
+    // resets and newer batches wait until the active bundle is complete.
+    bool send_scene_part(Peer& p, VSub& v) {
+        while (!p.sending_scene.empty()) {
+            ScenePtr msg = std::move(p.sending_scene.front());
+            p.sending_scene.pop_front();
+            if (msg->rows) {
+                const auto messages = transform_messages(v.view, *msg->rows);
+                for (auto it = messages.rbegin(); it != messages.rend(); ++it)
+                    p.sending_scene.push_front(*it);
+            } else if (!msg->pieces.empty()) {
+                for (auto it = msg->pieces.rbegin(); it != msg->pieces.rend(); ++it)
+                    p.sending_scene.push_front(*it);
+            } else {
+                return send_scene_frame(p, v, msg, p.sending_scene_state);
+            }
+        }
+        p.dirty = true;   // An empty transform set leaves the next data message ready.
+        return false;
+    }
+
+    bool send_scene(Peer& p, VSub& v, const ScenePtr& msg, bool state) {
+        p.sending_scene = {msg};
+        p.sending_scene_sub = v.sub;
+        p.sending_scene_ticket = v.ticket;
+        p.sending_scene_state = state;
+        return send_scene_part(p, v);
     }
 
     // Over the byte budget: ended sessions go first (the oldest), then the
@@ -2927,6 +2955,14 @@ struct Hub::Impl {
         if (p.in_flight) return;
         Session* s = session_of(p);
         if (!s) return;
+        if (!p.sending_scene.empty()) {
+            auto it = p.subs.find(p.sending_scene_sub);
+            if (it != p.subs.end() && it->second.ticket == p.sending_scene_ticket) {
+                p.in_flight = send_scene_part(p, it->second);
+                return;
+            }
+            p.sending_scene.clear();
+        }
         VSub* best = nullptr;
         bool best_series = false;
         uint64_t due_min = 0;
