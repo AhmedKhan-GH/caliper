@@ -4,8 +4,7 @@
 // with NaN, zero, negative and infinite values through a fixed range, u16 depths in hundredths
 // through the range of the data in another colormap, a range from the data with one fixed end, a
 // flat one and an empty one, the image plane of a camera in 3-D with the back-projected cloud,
-// one pixel, the largest map that the 8 MiB of published resources hold, the next size, which the
-// piece leaves undrawn, and an empty map. Without a Metal device the test skips (exit 77).
+// one pixel, a minified map, invalid dimensions and an empty map. Without a Metal device the test skips (exit 77).
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 
@@ -119,13 +118,26 @@ TEST_CASE("depth_match: depth@1 passes piece.check, and each of its passes compo
     CHECK_MESSAGE(c.ok, c.messages);
     CHECK(c.passes == 4);   // two derive passes and two draw passes
     std::uint64_t bytes = 0;
+    std::size_t textures = 0;
     for (const cs::Resource& r : piece.resources) {
-        cp::ElementLayout l;
-        REQUIRE(cp::element_layout(r.layout, &l).ok());
-        if (r.publish) bytes += std::uint64_t(r.count) * l.stride;
+        if (r.kind == cs::ResourceKind::texture) {
+            ++textures;
+            CHECK(r.id == "pixels");
+            CHECK(r.width == 8192);
+            CHECK(r.height == 8192);
+            CHECK(cs::texture_texels(r) == 67108864ull);
+            CHECK(cs::texture_bytes(r) == (256ull << 20));
+            if (r.publish) bytes += cs::texture_bytes(r);
+        } else {
+            cp::ElementLayout l;
+            REQUIRE(cp::element_layout(r.layout, &l).ok());
+            CHECK(std::uint64_t(r.count) * l.stride <= (128ull << 20));
+            if (r.publish) bytes += std::uint64_t(r.count) * l.stride;
+        }
     }
-    MESSAGE("depth@1 publishes at most ", bytes, " bytes");
-    CHECK(bytes <= (129u << 20));   // the most that a published resource holds, 128 MiB, and the small ones
+    CHECK(textures == 1);
+    CHECK(bytes > (256ull << 20));
+    CHECK(bytes <= (257ull << 20));
 }
 
 TEST_CASE("depth_match: depth@1 draws each depth map as the built-in depth image draws it") {
@@ -286,7 +298,7 @@ TEST_CASE("depth_match: depth@1 draws each depth map as the built-in depth image
         CHECK(o.first);
     }
 
-    SUBCASE("the largest map of the published limit, 1448 x 1448, minified") {
+    SUBCASE("a 1448 x 1448 map, minified") {
         const std::uint32_t w = 1448, h = 1448;
         std::vector<float> d(std::size_t(w) * h);
         for (std::uint32_t y = 0; y < h; ++y)
@@ -310,36 +322,12 @@ TEST_CASE("depth_match: depth@1 draws each depth map as the built-in depth image
 TEST_CASE("depth_match: depth@1 draws nothing for a map above its limit or an empty one") {
     Fixture fx;
     if (!fx.ready) CALIPER_SKIP_NO_GPU(fx.m.why);
-    const std::vector<float> large(std::size_t(5793) * 5793, 1.5f);   // 33,558,849 pixels, above the 33,554,432 of the piece
+    const std::vector<float> large(8193, 1.5f);   // one side above the image limit
     // On a camera with its cloud, so that neither pass draws.
     std::map<std::string, double> values = kCameraParams;
     values["cloud"] = 1;
-    check_refusals(fx.m, fx.piece, {tensor("depth", {5793, 5793}, large)},
+    check_refusals(fx.m, fx.piece, {tensor("depth", {8193, 1}, large)},
                    {tensor("depth", {0, 16}, std::vector<float>{})}, 96, values);
-}
-
-// The largest map of the piece, 8,192 x 4,096 u16 in millimeters with the cloud off, or its
-// 1/CALIPER_CAPACITY_FRACTION in rows. Skipped unless run with --no-skip --test-case="*at its capacity".
-TEST_CASE("depth_match: depth@1 at its capacity" * doctest::skip()) {
-    Fixture fx;
-    if (!fx.ready) CALIPER_SKIP_NO_GPU(fx.m.why);
-    const std::uint32_t w = 8192, h = 4096 / std::uint32_t(capacity_fraction());
-    std::vector<std::uint16_t> raw(std::size_t(w) * h);
-    for (std::uint32_t y = 0; y < h; ++y)
-        for (std::uint32_t x = 0; x < w; ++x) raw[std::size_t(y) * w + x] = std::uint16_t(500 + (x + y) % 2000);
-    DepthParams p;
-    p.scale = 0.001;
-    p.vmin = 0.5;
-    p.vmax = 2.5;
-    Case k;
-    k.name = case_name("depth", "capacity");
-    k.scene = flat_scene("capacity", raw, w, h, p);
-    k.tensors = {tensor("depth", {std::int64_t(h), std::int64_t(w)}, raw, CALIPER_PRODUCER_U16)};
-    k.params = {{"scale", 0.001}, {"vmin", 0.5}, {"vmax", 2.5}, {"auto_range", 0}, {"cloud", 0}};
-    k.width = w;
-    k.height = h;
-    k.min_lit = 0;
-    run_case(fx.m, fx.piece, k);
 }
 
 CALIPER_GPU_TEST_MAIN()

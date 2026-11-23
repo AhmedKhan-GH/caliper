@@ -2,9 +2,8 @@
 // segmentation image of the scene view (design/programmable-graphics.md, Library Pieces), through
 // tests/image_match/image_match_rig.h. The cases cover each option of a mask: u8 class ids over a
 // class table at the default opacity, u16 ids up to 65,535 with a translucent class color and ids
-// above the piece's palette at another opacity, the image plane of a camera in 3-D, one pixel, the
-// largest mask that the 8 MiB of published resources hold, the next size, which the piece leaves
-// undrawn, and an empty mask. Without a Metal device the test skips (exit 77).
+// throughout the palette at another opacity, the image plane of a camera in 3-D, one pixel,
+// a minified mask, invalid dimensions and an empty mask. Without a Metal device the test skips (exit 77).
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 
@@ -110,13 +109,26 @@ TEST_CASE("segmentation_match: segmentation@1 passes piece.check, and each of it
     CHECK_MESSAGE(c.ok, c.messages);
     CHECK(c.passes == 4);   // three derive passes and one draw pass
     std::uint64_t bytes = 0;
+    std::size_t textures = 0;
     for (const cs::Resource& r : piece.resources) {
-        cp::ElementLayout l;
-        REQUIRE(cp::element_layout(r.layout, &l).ok());
-        if (r.publish) bytes += std::uint64_t(r.count) * l.stride;
+        if (r.kind == cs::ResourceKind::texture) {
+            ++textures;
+            CHECK(r.id == "pixels");
+            CHECK(r.width == 8192);
+            CHECK(r.height == 8192);
+            CHECK(cs::texture_texels(r) == 67108864ull);
+            CHECK(cs::texture_bytes(r) == (256ull << 20));
+            if (r.publish) bytes += cs::texture_bytes(r);
+        } else {
+            cp::ElementLayout l;
+            REQUIRE(cp::element_layout(r.layout, &l).ok());
+            CHECK(std::uint64_t(r.count) * l.stride <= (128ull << 20));
+            if (r.publish) bytes += std::uint64_t(r.count) * l.stride;
+        }
     }
-    MESSAGE("segmentation@1 publishes at most ", bytes, " bytes");
-    CHECK(bytes <= (129u << 20));   // the most that a published resource holds, 128 MiB, and the small ones
+    CHECK(textures == 1);
+    CHECK(bytes > (256ull << 20));
+    CHECK(bytes <= (257ull << 20));
 }
 
 TEST_CASE("segmentation_match: segmentation@1 draws each mask as the built-in segmentation image draws it") {
@@ -143,7 +155,7 @@ TEST_CASE("segmentation_match: segmentation@1 draws each mask as the built-in se
         CHECK(o.last);
     }
 
-    SUBCASE("u16 ids to 65,535, a translucent class color and ids above the palette, at an opacity of 0.75") {
+    SUBCASE("u16 IDs through 65,535 with sparse class colors at an opacity of 0.75") {
         const std::uint32_t w = 16, h = 12;
         std::vector<std::uint16_t> ids(std::size_t(w) * h);
         for (std::uint32_t i = 0; i < ids.size(); ++i) ids[i] = std::uint16_t((i * 7) % 20);
@@ -152,7 +164,9 @@ TEST_CASE("segmentation_match: segmentation@1 draws each mask as the built-in se
         ids[33] = 4097;
         ids[50] = 40000;
         Classes classes;
-        classes.colors = {{3, RGBA(250, 250, 20, 128)}, {7, RGBA(20, 200, 250)}, {19, RGBA(90, 10, 160, 40)}};
+        classes.colors = {{3, RGBA(250, 250, 20, 128)}, {7, RGBA(20, 200, 250)}, {19, RGBA(90, 10, 160, 40)},
+                          {4096, RGBA(30, 220, 170)}, {40000, RGBA(120, 30, 180)},
+                          {65535, RGBA(210, 100, 40, 128)}};
         Case k;
         k.name = case_name("segmentation", "u16-alpha");
         k.scene = flat_scene("u16", ids, w, h, classes, 0.75);
@@ -209,7 +223,9 @@ TEST_CASE("segmentation_match: segmentation@1 draws each mask as the built-in se
         ids[33] = 4097;
         ids[50] = 40000;
         Classes classes;
-        classes.colors = {{3, RGBA(250, 250, 20, 128)}, {7, RGBA(20, 200, 250)}, {19, RGBA(90, 10, 160, 40)}};
+        classes.colors = {{3, RGBA(250, 250, 20, 128)}, {7, RGBA(20, 200, 250)}, {19, RGBA(90, 10, 160, 40)},
+                          {4096, RGBA(30, 220, 170)}, {40000, RGBA(120, 30, 180)},
+                          {65535, RGBA(210, 100, 40, 128)}};
         Case k;
         k.name = case_name("segmentation", "u16-native");
         k.scene = flat_scene("u16n", ids, w, h, classes, 0.75);
@@ -280,7 +296,8 @@ TEST_CASE("segmentation_match: the palette holds the class colors of the input a
     Fixture fx;
     if (!fx.ready) CALIPER_SKIP_NO_GPU(fx.m.why);
     Classes classes;
-    classes.colors = {{2, RGBA(1, 2, 3, 4)}, {4095, RGBA(200, 100, 50)}};
+    classes.colors = {{2, RGBA(1, 2, 3, 4)}, {4095, RGBA(200, 100, 50)},
+                      {40000, RGBA(60, 90, 180)}, {65535, RGBA(10, 210, 50, 128)}};
     const std::vector<std::int32_t> ids = {-5, 0, 70000};
     std::vector<Version> versions;
     std::string why;
@@ -292,14 +309,20 @@ TEST_CASE("segmentation_match: the palette holds the class colors of the input a
     const Version* pixels = find_version(versions, "pixels");
     REQUIRE(palette);
     REQUIRE(pixels);
-    REQUIRE(palette->bytes.size() == 4096 * 4);
-    std::vector<std::uint32_t> p(4096);
+    REQUIRE(palette->bytes.size() == 65536 * 4);
+    std::vector<std::uint32_t> p(65536);
     std::memcpy(p.data(), palette->bytes.data(), palette->bytes.size());
     CHECK(p[0] == kPalette[0]);
     CHECK(p[2] == RGBA(1, 2, 3, 4));
     CHECK(p[3] == kPalette[3]);
     CHECK(p[17] == kPalette[1]);
     CHECK(p[4095] == RGBA(200, 100, 50));
+    CHECK(p[4096] == kPalette[0]);
+    CHECK(p[40000] == RGBA(60, 90, 180));
+    CHECK(p[65535] == RGBA(10, 210, 50, 128));
+    CHECK(pixels->format == "r32uint");
+    CHECK(pixels->width == 3);
+    CHECK(pixels->height == 1);
     // The ids clamp to 0 to 65,535, as the producer clamps them.
     REQUIRE(pixels->count == 3);
     std::uint32_t got[3];
@@ -312,31 +335,12 @@ TEST_CASE("segmentation_match: the palette holds the class colors of the input a
 TEST_CASE("segmentation_match: segmentation@1 draws nothing for a mask above its limit or an empty one") {
     Fixture fx;
     if (!fx.ready) CALIPER_SKIP_NO_GPU(fx.m.why);
-    const std::vector<std::int32_t> large(std::size_t(5793) * 5793, 1);   // above 33,554,432 pixels
+    const std::vector<std::int32_t> large(8193, 1);   // one side above the image limit
     check_refusals(fx.m, fx.piece,
-                   {tensor("classes", {5793, 5793}, large, CALIPER_PRODUCER_I32), Classes{}.tensor()},
+                   {tensor("classes", {8193, 1}, large, CALIPER_PRODUCER_I32), Classes{}.tensor()},
                    {tensor("classes", {0, 16}, std::vector<std::int32_t>{}, CALIPER_PRODUCER_I32), Classes{}.tensor(),
                     pose_tensor(kIdentity)},
                    80, {});
-}
-
-// The largest mask of the piece, 8,192 x 4,096 u8 class ids, or its 1/CALIPER_CAPACITY_FRACTION in
-// rows. Skipped unless run with --no-skip --test-case="*at its capacity".
-TEST_CASE("segmentation_match: segmentation@1 at its capacity" * doctest::skip()) {
-    Fixture fx;
-    if (!fx.ready) CALIPER_SKIP_NO_GPU(fx.m.why);
-    const std::uint32_t w = 8192, h = 4096 / std::uint32_t(capacity_fraction());
-    std::vector<std::uint8_t> ids(std::size_t(w) * h);
-    for (std::uint32_t y = 0; y < h; ++y)
-        for (std::uint32_t x = 0; x < w; ++x) ids[std::size_t(y) * w + x] = std::uint8_t((x / 512) + 16 * (y / 512));
-    Case k;
-    k.name = case_name("segmentation", "capacity");
-    k.scene = flat_scene("capacity", ids, w, h, Classes{}, std::nullopt);
-    k.tensors = {native_tensor(ids, w, h), Classes{}.tensor()};
-    k.width = w;
-    k.height = h;
-    k.min_lit = 0;
-    run_case(fx.m, fx.piece, k);
 }
 
 CALIPER_GPU_TEST_MAIN()

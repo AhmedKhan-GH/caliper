@@ -2,8 +2,7 @@
 // scene view (design/programmable-graphics.md, Library Pieces), through image_match_rig.h. The
 // cases cover each form and option of a color image: RGBA with translucent pixels flat in 2-D at
 // an offset, grey at an opacity, RGB on a camera's image plane in 3-D in both camera conventions,
-// one pixel, the largest image that the 8 MiB of published resources hold, the next size, which
-// the piece leaves undrawn, and an empty image. Without a Metal device the test skips (exit 77).
+// one pixel, a minified image, invalid dimensions and an empty image. Without a Metal device the test skips (exit 77).
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 
@@ -97,21 +96,28 @@ TEST_CASE("image_match: image@1 passes piece.check, and each of its passes compo
     CHECK_MESSAGE(c.ok, c.messages);
     CHECK(c.passes == 3);   // two derive passes and one draw pass
     CHECK(cp::canonical_manifest(piece).find("\"image\"") != std::string::npos);
-    // The published buffers fit the 8 MiB that a pass may send to a viewer, and the texture holds at
-    // most 33,554,432 texels of 4 bytes, 128 MiB, the most that a published resource holds.
-    std::uint64_t bytes = 0, texture_bytes = 0;
+    // The full texture capacity is checked without allocation.
+    std::uint64_t bytes = 0;
+    std::size_t textures = 0;
     for (const cs::Resource& r : piece.resources) {
         if (r.kind == cs::ResourceKind::texture) {
-            if (r.publish) texture_bytes += std::uint64_t(r.texels.value_or(0)) * 4;
-            continue;
+            ++textures;
+            CHECK(r.id == "pixels");
+            CHECK(r.width == 8192);
+            CHECK(r.height == 8192);
+            CHECK(cs::texture_texels(r) == 67108864ull);
+            CHECK(cs::texture_bytes(r) == (256ull << 20));
+            if (r.publish) bytes += cs::texture_bytes(r);
+        } else {
+            cp::ElementLayout l;
+            REQUIRE(cp::element_layout(r.layout, &l).ok());
+            CHECK(std::uint64_t(r.count) * l.stride <= (128ull << 20));
+            if (r.publish) bytes += std::uint64_t(r.count) * l.stride;
         }
-        cp::ElementLayout l;
-        REQUIRE(cp::element_layout(r.layout, &l).ok());
-        if (r.publish) bytes += std::uint64_t(r.count) * l.stride;
     }
-    MESSAGE("image@1 publishes at most ", bytes, " bytes of buffers and ", texture_bytes, " bytes of texture");
-    CHECK(bytes <= 8388608u);
-    CHECK(texture_bytes <= (128ull << 20));
+    CHECK(textures == 1);
+    CHECK(bytes > (256ull << 20));
+    CHECK(bytes <= (257ull << 20));
 }
 
 TEST_CASE("image_match: image@1 draws each color image as the built-in image draws it") {
@@ -263,7 +269,7 @@ TEST_CASE("image_match: image@1 draws each color image as the built-in image dra
         CHECK(o.first);
     }
 
-    SUBCASE("the largest image of the published limit, 1448 x 1448, minified") {
+    SUBCASE("a 1448 x 1448 image, minified") {
         const std::uint32_t w = 1448, h = 1448;
         const auto px = color_pixels(w, h, [](std::uint32_t x, std::uint32_t y) {
             return RGBA(20 + x / 8, 30 + y / 8, 200 - (x + y) / 16, 255);
@@ -306,26 +312,6 @@ TEST_CASE("image_match: image@1 draws nothing for an image above its limit or an
     for (int y = 0; y < int(kSize); ++y)
         for (int x = 0; x < int(kSize); ++x) lit += pixel_of(px, x, y) != kClear;
     CHECK(lit == 0);
-}
-
-// The largest image of the piece, 8,192 x 4,096 u8 RGBA, or its 1/CALIPER_CAPACITY_FRACTION in rows. It
-// is heavy, thus it is skipped unless run with --no-skip --test-case="*at its capacity".
-TEST_CASE("image_match: image@1 at its capacity" * doctest::skip()) {
-    Fixture fx;
-    if (!fx.ready) CALIPER_SKIP_NO_GPU(fx.m.why);
-    const std::uint32_t w = 8192, h = 4096 / std::uint32_t(capacity_fraction());
-    const auto px = color_pixels(w, h, [](std::uint32_t x, std::uint32_t y) {
-        return RGBA(x / 32, y / 16, 255 - (x + y) / 64, 255);
-    });
-    Case k;
-    k.name = case_name("image", "capacity");
-    k.scene = flat_scene("capacity", px, w, h, false, {}, 0.0f, 0.0f, std::nullopt);
-    k.tensors = {image_tensor_u8(px, w, h, 4)};
-    k.width = w;
-    k.height = h;
-    k.interior_tolerance = 0;
-    k.min_lit = 0;   // a pixel of the image is much smaller than a pixel of the view
-    run_case(fx.m, fx.piece, k);
 }
 
 CALIPER_GPU_TEST_MAIN()

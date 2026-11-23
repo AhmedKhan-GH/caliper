@@ -10,7 +10,7 @@ const THREADS: u32 = 65536u;   // 256 workgroups of 256, one span of the range e
 fn depth_dims() -> vec2<u32> {
     let s = shapes.depth;
     let d = vec2<u32>(s.w, s.z);
-    if (d.x == 0u || d.y == 0u || d.y > arrayLength(&pixels) / d.x) {
+    if (d.x == 0u || d.y == 0u || d.x > 8192u || d.y > 8192u || d.y > arrayLength(&pixels) / d.x) {
         return vec2<u32>(0u, 0u);
     }
     return d;
@@ -44,14 +44,14 @@ fn copy_depth(@builtin(global_invocation_id) id: vec3<u32>) {
     let d = depth_dims();
     let n = d.x * d.y;
     if (id.x == 0u) {
-        atomicStore(&pixels_count, n);
+        pixels_size = d;
     }
     var lo = 0.0;
     var hi = 0.0;
     var seen = 0.0;
     for (var i = id.x; i < n; i = i + THREADS) {
         let v = depth_at(i) * params.scale;
-        pixels[i] = DepthPixel(v);
+        pixels[i] = bitcast<u32>(v);
         if (in_range(v)) {
             if (seen == 0.0) {
                 lo = v;

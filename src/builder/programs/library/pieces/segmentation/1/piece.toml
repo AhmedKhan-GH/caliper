@@ -78,18 +78,19 @@ title = "Camera Axes (0 right, down, forward; 1 right, up, back)"
 
 [[resources]]
 id = "pixels"
-kind = "buffer"
-struct = "MaskPixel"
+kind = "texture"
+format = "r32uint"
 fields = ["class_id: u32"]
-count = 33554432   # 128 MiB, the most that a published resource holds: 8,192 x 4,096 or 5,792 x 5,792 pixels
-counted = true
+width = 8192
+height = 8192
+texels = 67108864   # 256 MiB: 8,192 x 8,192 texels
 
 [[resources]]
 id = "palette"
 kind = "buffer"
 struct = "ClassColor"
 fields = ["rgba: u32"]
-count = 4096
+count = 65536
 
 [[resources]]
 id = "info"
@@ -98,10 +99,10 @@ struct = "MaskInfo"
 fields = ["size: vec4<u32>", "c0: vec4<f32>", "c1: vec4<f32>", "c2: vec4<f32>", "c3: vec4<f32>"]
 count = 1
 
-# The derive half holds the 128 MiB of pixels and reads the class ids in place.
+# The derive half reads the class IDs and writes their texture.
 [derive]
 time_ms = 50
-memory_mb = 288
+memory_mb = 512
 
 [[derive.passes]]
 entry = "copy_classes"
@@ -110,7 +111,7 @@ writes = ["pixels"]
 
 [[derive.passes]]
 entry = "fill_palette"
-workgroups = [16, 1, 1]
+workgroups = [256, 1, 1]
 writes = ["palette"]
 
 [[derive.passes]]
@@ -118,7 +119,7 @@ entry = "place_mask"
 writes = ["info"]
 
 [draw]
-memory_mb = 160
+memory_mb = 288
 camera = "orbit"
 pick = { resource = "pixels", fields = ["class_id"] }
 

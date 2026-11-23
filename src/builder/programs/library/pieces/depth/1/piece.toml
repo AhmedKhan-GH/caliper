@@ -109,11 +109,12 @@ title = "Camera Axes (0 right, down, forward; 1 right, up, back)"
 
 [[resources]]
 id = "pixels"
-kind = "buffer"
-struct = "DepthPixel"
+kind = "texture"
+format = "r32uint"
 fields = ["depth: f32"]
-count = 33554432   # 128 MiB, the most that a published resource holds: 8,192 x 4,096 or 5,792 x 5,792 pixels
-counted = true
+width = 8192
+height = 8192
+texels = 67108864   # 256 MiB: 8,192 x 8,192 texels
 
 [[resources]]
 id = "info"
@@ -131,7 +132,7 @@ publish = false
 
 [derive]
 time_ms = 50
-memory_mb = 288
+memory_mb = 512
 
 [[derive.passes]]
 entry = "copy_depth"
@@ -146,7 +147,7 @@ writes = ["info"]
 camera = "orbit"
 pick = { resource = "pixels", fields = ["depth"] }
 frame_ms = 16
-memory_mb = 160
+memory_mb = 288
 
 [[draw.passes]]
 kind = "render"

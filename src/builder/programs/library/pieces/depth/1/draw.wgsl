@@ -129,7 +129,7 @@ fn depth_fs(in: DepthOut) -> CaliperPicked {
     let size = info[0].size.xy;
     let p = min(vec2<u32>(max(in.uv, vec2<f32>(0.0)) * vec2<f32>(size)), size - vec2<u32>(1u));
     let item = p.y * size.x + p.x;
-    let c = depth_color(pixels[item].depth);
+    let c = depth_color(bitcast<f32>(textureLoad(pixels, p, 0).r));
     var out: CaliperPicked;
     out.color = vec4<f32>(c.rgb, c.a * opacity());
     out.id = pick::id(item);
@@ -166,7 +166,7 @@ fn cloud_vs(@builtin(instance_index) i: u32, @builtin(vertex_index) v: u32) -> C
     if (size.x == 0u || i >= n || counts.pixels < n) {
         return out;
     }
-    let bits = bitcast<u32>(pixels[i].depth);
+    let bits = textureLoad(pixels, vec2<u32>(i % size.x, i / size.x), 0).r;
     // Zero, negative, infinite and NaN depths stay out, decided on the bits.
     if ((bits >> 31u) != 0u || bits == 0u || (bits & 0x7fffffffu) >= 0x7f800000u) {
         return out;

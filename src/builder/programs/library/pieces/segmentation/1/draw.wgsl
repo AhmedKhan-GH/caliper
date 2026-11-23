@@ -2,7 +2,7 @@
 // pixels, flat at the pose with one world unit a pixel, or on a camera's image plane, where a pixel
 // (u, v) lies at ((u - cx) d / fx, (v - cy) d / fy, d) in the camera's axes before the pose. Each
 // fragment takes the class of its nearest pixel in the color of that class, from `palette` below
-// 4,096 and from the built-in palette above, with the alpha times the opacity in 1/255 steps,
+// 65,536, with the alpha times the opacity in 1/255 steps,
 // blended over the panel without a depth write. The ID is the index of the pixel,
 // row * width + column.
 
@@ -74,7 +74,7 @@ fn mask_fs(in: MaskOut) -> CaliperPicked {
     let size = info[0].size.xy;
     let p = min(vec2<u32>(max(in.uv, vec2<f32>(0.0)) * vec2<f32>(size)), size - vec2<u32>(1u));
     let item = p.y * size.x + p.x;
-    let c = class_color(pixels[item].class_id);
+    let c = class_color(textureLoad(pixels, p, 0).r);
     var out: CaliperPicked;
     out.color = vec4<f32>(c.rgb, c.a * opacity());
     out.id = pick::id(item);

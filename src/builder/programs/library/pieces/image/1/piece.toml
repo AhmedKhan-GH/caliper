@@ -73,16 +73,14 @@ min = 0
 max = 1
 title = "Camera Axes (0 right, down, forward; 1 right, up, back)"
 
-# The pixels as an rgba8unorm texture of the image's size, which the draw half samples with the
-# hardware's bilinear filter as the built-in does: any size up to 8,192 a side and 33,554,432 pixels,
-# 128 MiB, the most that a published resource holds (8,192 x 4,096, or 5,792 x 5,792).
+# The RGBA texture holds each image up to 8,192 pixels per side. The draw uses bilinear sampling.
 [[resources]]
 id = "pixels"
 kind = "texture"
 format = "rgba8unorm"
 width = 8192
 height = 8192
-texels = 33554432
+texels = 67108864
 
 [[resources]]
 id = "info"
@@ -91,8 +89,7 @@ struct = "ImageInfo"
 fields = ["size: vec4<u32>", "c0: vec4<f32>", "c1: vec4<f32>", "c2: vec4<f32>", "c3: vec4<f32>"]
 count = 1
 
-# The derive half holds the 128 MiB texture and reads the image in place: 128 MiB of u8 for the
-# largest image, or 384 MiB of f32 with the most that a derive half may hold.
+# The derive half reads the source image and writes packed RGBA texels.
 [derive]
 time_ms = 50
 memory_mb = 512
@@ -107,7 +104,7 @@ entry = "place_image"
 writes = ["info"]
 
 [draw]
-memory_mb = 160
+memory_mb = 288
 camera = "orbit"
 pick = { resource = "pixels", fields = ["rgba"] }
 

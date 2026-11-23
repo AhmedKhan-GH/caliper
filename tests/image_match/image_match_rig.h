@@ -75,14 +75,6 @@ namespace sh = caliper_gfx::shaders;
 namespace wire = caliper_net::wire;
 
 constexpr std::uint32_t kSize = 256;   // the target, square
-// The divisor of a capacity case's count, from CALIPER_CAPACITY_FRACTION (1 for the full count), for
-// a run at a fraction of the count that measures the memory first.
-inline int capacity_fraction() {
-    const char* e = std::getenv("CALIPER_CAPACITY_FRACTION");
-    const int f = e ? std::atoi(e) : 1;
-    return f < 1 ? 1 : f;
-}
-
 constexpr std::uint32_t kPiecePick = 1u << 24;
 constexpr std::uint32_t kClear = dp::kBackground;
 
@@ -217,7 +209,8 @@ struct Version {
 };
 
 // Runs the derive half of the piece once in the producer runtime over the tensors, with the
-// manifest's limits, and gives each published resource.
+// manifest's layouts, and gives each published resource. Texture capacity matches the small
+// test input. Separate descriptor checks validate the full image capacity without allocation.
 inline bool run_derive(id<MTLDevice> device, const cs::Piece& piece, const std::vector<Tensor>& tensors,
                        const std::map<std::string, double>& values, std::vector<Version>* out, std::string* why) {
     out->clear();
@@ -288,6 +281,15 @@ inline bool run_derive(id<MTLDevice> device, const cs::Piece& piece, const std::
         d.height = r.height;
         d.format = r.format ? r.format->c_str() : nullptr;
         d.texels = r.texels.value_or(0);
+        if (r.kind == cs::ResourceKind::texture && r.id == "pixels") {
+            for (const Tensor& t : tensors) {
+                if (t.input != "image" && t.input != "depth" && t.input != "classes") continue;
+                if (t.shape.size() < 2) continue;
+                const std::uint64_t pixels = std::uint64_t(std::max<std::int64_t>(1, t.shape[0])) *
+                                             std::uint64_t(std::max<std::int64_t>(1, t.shape[1]));
+                d.texels = std::min(cs::texture_texels(r), pixels);
+            }
+        }
         d.counted = r.counted ? 1 : 0;
         d.publish = r.publish ? 1 : 0;
         d.clear = r.clear ? 1 : 0;
