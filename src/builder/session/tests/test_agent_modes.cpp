@@ -320,3 +320,64 @@ TEST_CASE("no command reads or sets a mode or a rule, from any origin") {
     CHECK(f.s->agent_mode(AgentPrincipal::chat) == AgentMode::ask);
 }
 
+TEST_CASE("no change from an agent writes into the settings folder, whatever the mode") {
+    // A workspace inside the folder of the permissions file.
+    const std::string root = fresh_dir("modes-settings-folder");
+    const std::string settings = root + "/app-data";
+    const std::string ws = settings + "/workspace";
+    write_text(ws + "/data/metrics.csv", "step,loss\n0,1.0\n");
+    SessionOptions o;
+    o.permissions_file = settings + "/agent-permissions.json";
+    auto opened = Session::open(ws, o);
+    REQUIRE(opened.error.ok());
+    Session& s = *opened.session;
+    REQUIRE(s.set_agent_mode(AgentPrincipal::chat, AgentMode::allow_all).ok());
+    REQUIRE(s.set_agent_mode(AgentPrincipal::mcp, AgentMode::allow_all).ok());
+    const std::string before = read_text(o.permissions_file);
+    for (const auto& who : {std::pair{CommandOrigin::agent, "chat"}, std::pair{CommandOrigin::agent, "widget"},
+                            std::pair{CommandOrigin::mcp, ""}, std::pair{CommandOrigin::api, ""}}) {
+        const CommandOrigin origin = who.first;
+        const std::string client = who.second;
+        INFO(command_origin_name(origin) << " " << client);
+        for (const auto& [name, args] : std::vector<std::pair<std::string, json>>{
+                 {"data.import", {{"paths", {"data/metrics.csv"}}}},
+                 {"spec.new", {{"id", "x"}}},
+                 {"applet.save", json::object()}}) {
+            const CommandResult r = send(s, name, args, origin, client);
+            CHECK(r.error.code == "command.denied");
+            CHECK(r.error.message.find("settings folder") != std::string::npos);
+        }
+        // Reads still run.
+        CHECK(send(s, "loader.list", json::object(), origin, client).ok);
+    }
+    CHECK(s.registry().pending_approvals().empty());
+    CHECK(read_text(o.permissions_file) == before);
+    // The person's own UI is not refused.
+    ok(s, "data.import", {{"paths", {"data/metrics.csv"}}});
+}
+
+#ifndef _WIN32
+TEST_CASE("a link from a folder of the workspace into the settings folder refuses an agent's change") {
+    Fixture f("modes-settings-link");
+    REQUIRE(f.s->set_agent_mode(AgentPrincipal::chat, AgentMode::allow_all).ok());
+    const std::string settings = fs::path(f.perms).parent_path().string();
+    const std::string before = read_text(f.perms);
+    for (const char* folder : {"applets", "loaders", "runs"}) {
+        INFO(folder);
+        const fs::path link = fs::path(f.ws) / folder;
+        const fs::path aside = fs::path(f.ws) / (std::string(folder) + ".aside");
+        if (fs::exists(link)) fs::rename(link, aside);
+        fs::create_directory_symlink(settings, link);
+        const CommandResult r = chat(*f.s, "applet.save", {{"id", "agent-permissions"}});
+        CHECK(r.error.code == "command.denied");
+        CHECK(r.error.message.find("settings folder") != std::string::npos);
+        CHECK(send(*f.s, "loader.delete", {{"id", "x"}}, CommandOrigin::mcp, "").error.code == "command.denied");
+        fs::remove(link);
+        if (fs::exists(aside)) fs::rename(aside, link);
+    }
+    CHECK(read_text(f.perms) == before);
+    CHECK_FALSE(fs::exists(fs::path(f.ws) / ".." / "app-data" / "agent-permissions"));
+    // Without the link, the same change runs.
+    CHECK(chat(*f.s, "applet.save", {{"id", "copy"}}).ok);
+}
+#endif
