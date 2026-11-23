@@ -315,6 +315,17 @@ The script sends each version of a published resource to a viewer as one RESOURC
 
 The app keeps the versions of each published resource in the step history under `<program>/<resource>`, beside the kept steps of the sources. A resource keeps at most `keep` versions. When its ring is full, the history drops every second kept version. From then on it keeps a version only when its step lies far enough after the newest one. Thus the kept versions span the whole run evenly, and the step cursor scrubs the whole training. The viewer gives the draw half the newest kept version at or before the cursor. A version that replaces another at the same step, as after a fork from that step, takes its place in the history, in the draw and in picks and labels.
 
+The app keeps only a version that the pinned piece declares. The program must be in the open spec, the piece must publish a resource of that name, and the version must have the declared stride, at most the declared count and count times stride bytes. A texture version must have the declared width and height. The app refuses every other version and keeps nothing of it. These limits hold for the resources in the step history:
+
+| Limit | Value |
+|---|---|
+| Resources of one program | 8, as many as a piece declares |
+| Resources of all programs | 128, 8 for each of the 16 programs of a script |
+| Bytes of one resource | 128 MiB, a quarter of the history budget |
+| Bytes of all resources | 256 MiB, half of the history budget of 512 MiB |
+
+Over the bytes of all resources, the largest rings drop every second version first. Then the largest rings drop their oldest versions, down to one version each. A version that does not fit beside one version of each other resource is not kept.
+
 The spec saves the pins, the bindings, the params and the inline pieces, and it never saves a resource. When an instrument opens, the app resolves each pin, checks each piece and sends each program to the attached script. The script publishes again from its next pass. Without an attached run, the state of the program is `waiting`.
 
 ## Selection and Picking

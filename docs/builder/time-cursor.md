@@ -24,7 +24,7 @@ While the script calls `caliper.step()`, a live source updates only on the pass 
 | Rule | Value |
 |---|---|
 | Depth | `history` is from 0 to 65,536 steps. A source whose root is a live tensor and that has no `from` keeps 64 steps by default. Other sources keep none by default. |
-| Budget | All kept steps of the open spec share 512 MiB. One source keeps at most 128 MiB of it. |
+| Budget | All kept steps of the open spec share 512 MiB. One source keeps at most 128 MiB of it. The versions of published resources keep at most 256 MiB of it, for at most 128 resources; [Resources and Step History](../agents/pieces.md#resources-and-step-history) gives their limits. |
 | Reset | A new attachment, a changed chain and the opening of a spec clear the kept steps of the source. |
 
 When the requested steps need more than the budget, the app shortens the largest rings first. `cursor.get` gives the depth that each source keeps. A source that keeps fewer steps than requested has a `note` that names the source and the limits and suggests a reduce step before the kept value. `history` on a source whose root is not a live tensor is `spec.history_not_allowed`, and a value outside the range is `spec.out_of_range`.

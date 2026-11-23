@@ -13,6 +13,7 @@
 #include <doctest/doctest.h>
 
 #include <cstring>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -168,6 +169,51 @@ TEST_CASE("resources: one resource keeps at most a source's share of bytes, and 
     h.append_resource("tower", "heads", 1, {}, version_at(10));
     h.append_resource("tower", "heads", 1, {}, version_at(20));
     CHECK(kept_steps_of(h, "tower/heads") == std::vector<std::int64_t>{20});
+}
+
+TEST_CASE("resources: a producer cannot make the history keep more names or bytes than the budget bounds") {
+    // 20 instances; a producer sends versions of 48 MiB under many names, one buffer shared, so
+    // that the history counts the bytes and the test allocates them once.
+    spec::Spec s;
+    for (int i = 0; i < 20; ++i) {
+        spec::Spec one = instance_spec("p" + std::to_string(i));
+        s.programs.push_back(one.programs[0]);
+    }
+    StepHistory h;
+    h.configure(s);
+    auto big = std::make_shared<std::vector<std::uint8_t>>(std::size_t(48) << 20);
+    auto version = [&](std::int64_t step) {
+        ResourceVersion v;
+        v.step = step;
+        v.count = (std::uint32_t)(big->size() / 4);
+        v.stride = 4;
+        v.bytes = big;
+        return v;
+    };
+    for (int i = 0; i < 20; ++i)
+        for (int r = 0; r < 12; ++r)
+            for (std::int64_t step = 1; step <= 2; ++step)
+                h.append_resource("p" + std::to_string(i), "r" + std::to_string(r), 0, {}, version(step));
+    const std::vector<KeptResource> kept = h.kept_resources();
+    std::map<std::string, std::size_t> per_program;
+    std::uint64_t bytes = 0;
+    for (const KeptResource& k : kept) {
+        ++per_program[k.key.substr(0, k.key.find('/'))];
+        bytes += k.bytes;
+        CHECK(k.versions <= 1);
+    }
+    CHECK(kept.size() <= kResourceRingsMax);
+    for (const auto& [program, n] : per_program) CHECK(n <= kResourceRingsPerProgram);
+    CHECK(per_program["p0"] == kResourceRingsPerProgram);
+    CHECK(h.resource_at("p0/r11", 10) == std::nullopt);   // a ninth name of one program
+    MESSAGE("kept ", kept.size(), " resources of ", bytes, " bytes");
+    CHECK(bytes <= kHistoryResourceBytes);
+    // The newest version of a resource still comes in once older ones made room for it.
+    h.append_resource("p0", "r0", 0, {}, version(3));
+    CHECK(h.resource_at("p0/r0", 10)->step == 3);
+    std::uint64_t after = 0;
+    for (const KeptResource& k : h.kept_resources()) after += k.bytes;
+    CHECK(after <= kHistoryResourceBytes);
 }
 
 TEST_CASE("resources: a version that replaces another at the same step has a new serial") {
