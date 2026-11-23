@@ -124,13 +124,15 @@ using EventSink = std::function<void(const LiveEvent&)>;
 // element's rule (web/src/views/interact.ts). A shift-drag selects; a drag
 // without shift pans or orbits; a press and release that moved at most
 // kClickSlop pixels is a click (a pick), and with shift it also clears the
-// selection.
+// selection. In a view with a camera (a scene, points), a press without shift
+// stays a click only within kCameraDragStart points (camera_drag.h), and its
+// drag moves the camera by the whole way from the press.
 struct Gesture {
     bool down = false, moved = false, selecting = false;
     bool shift = false, alt = false, ctrl = false;
     int button = 0;                  // ImGuiMouseButton of the press
     float x0 = 0.0f, y0 = 0.0f;      // press position (screen)
-    float lx = 0.0f, ly = 0.0f;      // the pointer when the drag last moved the view
+    float lx = 0.0f, ly = 0.0f;      // the pointer when the drag last moved the view (a camera drag: the press, until it starts)
     double d0x = 0.0, d0y = 0.0, d1x = 0.0, d1y = 0.0;   // drag ends in data coordinates
     std::vector<float> lasso;        // points: the lasso (x, y pairs, screen)
     bool rect = false;               // points: shift + alt selects a rectangle

@@ -44,6 +44,7 @@
 // at most 30 times a second. Selected points draw over the others, which are
 // dimmed. Without a sink a selection stays in the view.
 #include "live/live_views_state.h"
+#include "live/camera_drag.h"
 
 #include "live/live_points.h"
 #include "live/live_scene.h"
@@ -216,8 +217,11 @@ bool linked_in(const View& v, int64_t a, int64_t b) {
 }
 
 // A press, the drag and the release of a gesture on the item drawn just
-// before (an InvisibleButton). Returns true on the release frame.
-bool track_gesture(View& v, ImVec2 mouse, bool may_select) {
+// before (an InvisibleButton). Returns true on the release frame. In a view
+// whose drag moves a camera (`camera`), a press that is not a selection becomes
+// a drag at kCameraDragStart points from the press (camera_drag.h) instead of
+// past kClickSlop, and the camera then moves from the press.
+bool track_gesture(View& v, ImVec2 mouse, bool may_select, bool camera = false) {
     Gesture& g = v.gesture;
     ImGuiIO& io = ImGui::GetIO();
     if (ImGui::IsItemActivated()) {
@@ -233,7 +237,10 @@ bool track_gesture(View& v, ImVec2 mouse, bool may_select) {
         g.selecting = may_select && g.shift && g.button == 0;
         g.rect = g.alt;
     }
-    if (g.down && !g.moved && std::hypot(mouse.x - g.x0, mouse.y - g.y0) > kClickSlop) g.moved = true;
+    if (g.down && !g.moved) {
+        const float ox = mouse.x - g.x0, oy = mouse.y - g.y0;
+        g.moved = camera && !g.selecting ? camera_drag_started(ox, oy) : std::hypot(ox, oy) > kClickSlop;
+    }
     if (g.down && ImGui::IsItemDeactivated()) {
         g.down = false;
         return true;
@@ -1015,7 +1022,7 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     // The browser element's gestures, in the app as in the browser; what
     // people do leaves only through an event sink (emit sends nothing without).
     Gesture& g = v.gesture;
-    const bool released = ev && track_gesture(v, io.MousePos, v.have_cur && v.cur.pos_cpu);
+    const bool released = ev && track_gesture(v, io.MousePos, v.have_cur && v.cur.pos_cpu, true);
     if (ev && g.down && g.selecting) {
         // The lasso follows the pointer; a rectangle keeps its two corners.
         if (g.rect) g.lasso = {g.x0, g.y0, io.MousePos.x, io.MousePos.y};
@@ -1024,12 +1031,15 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
                              io.MousePos.y != g.lasso.back()))
             g.lasso.insert(g.lasso.end(), {io.MousePos.x, io.MousePos.y});
     }
-    // The camera moves once a drag left the click slop, never while selecting,
-    // and follows the pointer from where it last moved the camera, so a fast
-    // drag whose movement and release land in one frame still moves it.
+    // The camera moves once the press became a camera drag, never while
+    // selecting, and follows the pointer from where it last moved the camera:
+    // from the press on the drag's first frame, so the motion inside the
+    // click's tolerance moves it too, and a fast drag whose movement and
+    // release land in one frame still moves it.
     const bool valid = ImGui::IsMousePosValid();
-    const float dx = valid ? io.MousePos.x - g.lx : 0.0f, dy = valid ? io.MousePos.y - g.ly : 0.0f;
-    if (valid) {
+    const bool drag = (g.down || released) && g.moved && !g.selecting;
+    const float dx = valid && drag ? io.MousePos.x - g.lx : 0.0f, dy = valid && drag ? io.MousePos.y - g.ly : 0.0f;
+    if (valid && drag) {
         g.lx = io.MousePos.x;
         g.ly = io.MousePos.y;
     }
@@ -1043,8 +1053,7 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         v.dirty = true;
         v.hover_dirty = true;
     }
-    const bool drag = (g.down || released) && g.moved && !g.selecting;
-    if (drag && (dx != 0.0f || dy != 0.0f)) {
+    if (dx != 0.0f || dy != 0.0f) {
         const bool pan = g.button != 0 || g.alt || g.ctrl;
         if (v.dims == 3 && !pan) sc->orbit(dx, dy);
         else sc->pan(dx, dy, avail.y);
@@ -1363,21 +1372,23 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     Gesture& g = v.gesture;
     // The points view's gestures: a shift-drag draws a lasso, with alt a rectangle; a shift-click
     // clears the selection; a click picks; a drag without shift orbits or pans.
-    const bool released = track_gesture(v, io.MousePos, true);
+    const bool released = track_gesture(v, io.MousePos, true, true);
     if (g.down && g.selecting) {
         if (g.rect) g.lasso = {g.x0, g.y0, io.MousePos.x, io.MousePos.y};
         else if (g.lasso.empty()) g.lasso = {g.x0, g.y0};
         else if (g.moved && (io.MousePos.x != g.lasso[g.lasso.size() - 2] || io.MousePos.y != g.lasso.back()))
             g.lasso.insert(g.lasso.end(), {io.MousePos.x, io.MousePos.y});
     }
+    // The camera follows the pointer from where it last moved the camera: from the press on the
+    // drag's first frame, as the points view's does.
     const bool valid = ImGui::IsMousePosValid();
-    const float dx = valid ? io.MousePos.x - g.lx : 0.0f, dy = valid ? io.MousePos.y - g.ly : 0.0f;
-    if (valid) {
+    const bool drag = (g.down || released) && g.moved && !g.selecting;
+    const float dx = valid && drag ? io.MousePos.x - g.lx : 0.0f, dy = valid && drag ? io.MousePos.y - g.ly : 0.0f;
+    if (valid && drag) {
         g.lx = io.MousePos.x;
         g.ly = io.MousePos.y;
     }
-    const bool drag = (g.down || released) && g.moved && !g.selecting;
-    if (drag && (dx != 0.0f || dy != 0.0f)) {
+    if (dx != 0.0f || dy != 0.0f) {
         const bool pan = g.button != 0 || g.alt || g.ctrl;
         if (pan) sc->pan(dx, dy, avail.y);
         else sc->orbit(dx, dy);
