@@ -16,8 +16,8 @@ Row 0 of every batch is the fixed sentence ``SENTENCE``, whose tokens 4 to 15 re
 and the training loss leaves it out. Thus the attention that a viewer shows is always that of the
 same sentence, and the model never trains on it.
 
-The script's only Caliper line is ``caliper.watch(model, optimizer)``, which publishes these
-sources for a managed run:
+The script calls ``caliper.watch(model, optimizer)``, which publishes these sources for a managed
+run:
 
 - ``live:blocks.<i>.attn.weights.act``: the attention weights of layer ``i`` after the softmax, of
   shape (64 * 4 * 32, 32): the (64, 4, 32, 32) weights of batch, head, query token and key token,
@@ -29,6 +29,12 @@ sources for a managed run:
   tokens 17 to 27 of the sentence, which only a copy from the first occurrence predicts;
 - the intervention points ``blocks.<i>.attn#<h>`` of each head, through the attention module's
   integer ``n_head`` and its output projection ``proj``.
+
+After each optimizer step, ``caliper.series`` publishes the induction score of each head of each
+layer as the series ``induction_l<i>_h<h>``: the head's mean weight of the sentence from a token of
+the second copy to the token after the same token's first occurrence. It is the score that the
+``scores`` pass of the piece ``attention_arcs`` computes. The calls pass 0-d tensors on the device,
+thus they add no wait for the GPU to a step.
 
 The script prints ``step <n> loss <value> in-context <value>`` every 50 steps.
 """
@@ -88,6 +94,7 @@ class Attention(nn.Module):
         scores = (q @ k.transpose(-2, -1)) / math.sqrt(d)
         scores = scores.masked_fill(~self.mask[:t, :t], float("-inf"))
         w = self.weights(F.softmax(scores, dim=-1).reshape(b * self.n_head * t, t)).view(b, self.n_head, t, t)
+        self.last = w[0].detach()                          # the sentence's weights, for the head scores
         y = (w @ v).transpose(1, 2).reshape(b, t, c)     # the heads side by side, head 0 first
         return self.proj(y)
 
@@ -156,6 +163,7 @@ def main() -> None:
     model = Model().to(args.device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     caliper.watch(model, optimizer)
+    second = torch.arange(4 + SEGMENT, 4 + 2 * SEGMENT, device=args.device)   # the tokens of the second copy
 
     for step in range(1, args.steps + 1):
         per_token = model(batch(gen).to(args.device))
@@ -163,6 +171,12 @@ def main() -> None:
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
+        # The induction score of each head: its mean weight from a token of the second copy to the
+        # token after the same token's first occurrence, published as one series for each head.
+        for layer, block in enumerate(model.blocks):
+            scores = block.attn.last[:, second, second - SEGMENT + 1].mean(dim=1)
+            for head in range(HEADS):
+                caliper.series(scores[head], name=f"induction_l{layer}_h{head}")
         if step % 50 == 0:
             in_context = per_token[0, 16:27].mean()
             print(f"step {step} loss {loss.item():.4f} in-context {in_context.item():.4f}", flush=True)
