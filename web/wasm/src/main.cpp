@@ -722,6 +722,8 @@ void draw_page_scene(float w, float h, float scale) {
     ImGui::SetNextWindowSize(ImVec2(w, h));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    // The scene clears to the window's colour: the ground of a spec panel, as in the app.
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, sternbild::col::ground);
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground |
                                    ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollWithMouse;
@@ -738,6 +740,7 @@ void draw_page_scene(float w, float h, float scale) {
                                                     g.page_options, g.page_state, sink);
     }
     ImGui::End();
+    ImGui::PopStyleColor();
     ImGui::PopStyleVar(2);
 }
 
@@ -868,9 +871,11 @@ void start() {
         std::string err;
         if (!g.cfg.scene.empty() && !caliper_net::Json::parse(g.cfg.scene.data(), g.cfg.scene.size(), &scene, &err))
             return fail("caliperConfig.scene is not JSON: " + err);
+        std::string up = "+z";   // the panel's option up, +z as the app's spec runtime takes it
         if (scene.is_object()) {
             if (const caliper_net::Json* l = scene.find("labels"); l && l->is_bool()) g.page_options.labels = l->as_bool();
             if (const caliper_net::Json* b = scene.find("scale_bar"); b && b->is_bool()) g.page_options.scale_bar = b->as_bool();
+            if (const caliper_net::Json* u = scene.find("up"); u && u->is_string()) up = u->as_string();
         }
         if (g.cfg.view.empty()) return fail("feed page needs caliperConfig.view, the panel's id");
         caliper_gfx::Backend* backend = nullptr;
@@ -881,6 +886,14 @@ void start() {
         auto view = std::make_unique<caliper_live_views::SceneView>(*backend, table);
         if (!view->init(&why)) return fail("the scene view did not start: " + why);
         view->set_box_fit(true);
+        // A 3-D scene with the panel's up axis, the starting camera kept, as apply_entity_scene describes it.
+        caliper_net::wire::SceneView info;
+        info.space = CALIPER_NET_SPACE_3D;
+        info.up = up;
+        info.units = "m";
+        const caliper_scene::StartingCamera keep = view->starting();
+        view->describe(info);
+        view->set_starting(keep);
         g.page_view = std::move(view);
         g.ready = true;
         EM_ASM({

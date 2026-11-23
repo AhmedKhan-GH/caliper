@@ -145,7 +145,10 @@ export class ProgramViews {
       if (!('gpu' in navigator)) throw new Error('This browser has no WebGPU.');
       const loader = await this.load();
       const o = (panel.options ?? {}) as Record<string, unknown>;
-      const scene: Record<string, unknown> = { space: '3d', units: 'm', up: typeof o.up === 'string' ? o.up : '+y' };
+      // The panel's scene options as the app's spec runtime reads them: up (+z when absent), labels, scale bar.
+      const scene: Record<string, unknown> = { space: '3d', units: 'm', up: typeof o.up === 'string' ? o.up : '+z' };
+      if (typeof o.labels === 'boolean') scene.labels = o.labels;
+      if (typeof o.scale_bar === 'boolean') scene.scale_bar = o.scale_bar;
       if (o.view_camera && typeof o.view_camera === 'object') scene.view_camera = o.view_camera;
       m.handle = await loader.mountCaliperViews(m.box, {
         view: panel.id, kind: 'scene', header: false, feed: 'page', scene,
