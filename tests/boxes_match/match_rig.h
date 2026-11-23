@@ -386,6 +386,7 @@ struct Builtin {
     std::unique_ptr<sc::BackendResources> res;
     sc::SceneTree tree;
     sc::ViewCamera camera;
+    std::vector<std::vector<std::uint8_t>> cpu_copies;   // the arrays of batches with labels, for their anchors
     sc::CompileOptions options;
     sc::SceneCompiler compiler;
     std::vector<gfx::Buffer> buffers;
@@ -418,17 +419,25 @@ struct Builtin {
     Builtin(const Builtin&) = delete;
     Builtin& operator=(const Builtin&) = delete;
 
-    // Puts the arrays of `up` into a new buffer and into the batch, and sets the batch on `path`.
+    // Puts the arrays of `up` into a new buffer and into the batch, and sets the batch on `path`. A
+    // batch with labels also keeps a CPU copy of its arrays, which project_labels() reads, as the
+    // scene view keeps one for labels.
     void set(const std::string& path, sc::Batch batch, const Upload& up) {
         gfx::Buffer b = g.create_buffer({std::max<std::size_t>(up.bytes.size(), 256),
                                          gfx::kVertex | gfx::kIndex | gfx::kStorage | gfx::kCopyDst, false, "match data"});
         REQUIRE_MESSAGE(bool(b), g.last_error());
         if (!up.bytes.empty()) REQUIRE(g.write_buffer(b, 0, up.bytes.data(), up.bytes.size()));
         buffers.push_back(b);
+        const std::uint8_t* cpu = nullptr;
+        if (!batch.labels.empty()) {
+            cpu_copies.push_back(up.bytes);
+            cpu = cpu_copies.back().data();
+        }
         for (const Upload::Part& p : up.parts) {
             sc::BatchArray a;
             a.role = p.role;
             a.buffer = b;
+            if (cpu) a.cpu = cpu + p.offset;
             a.offset = p.offset;
             a.count = p.count;
             a.stride = p.stride;

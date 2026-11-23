@@ -4,7 +4,15 @@
 // all boxes in half_size.w: bit 0 is set when the RGBA of a box has an alpha below 255. Every box
 // with such an alpha writes 1 into the private resource alpha_seen, which is zero before each run,
 // and mark_alpha copies it into box 0. A tensor with one row gives that row to every box, as a
-// stream of stride 0 does in the built-in.
+// stream of stride 0 does in the built-in. Each box also holds the index of its label string in
+// `names`, or none (4,294,967,295): as the built-in labels at most 4,096 boxes of a set, every
+// step-th box has a label, step the smallest that leaves at most 4,096, with the row of its own
+// box, or the one row of `labels` for all. Without `labels`, or with another count of rows or a
+// width other than 16, no box has a label.
+
+const BOX_CAPACITY: u32 = 126976u;
+const BOX_LABELS: u32 = 4096u;
+const BOX_NO_LABEL: u32 = 0xffffffffu;
 
 // The class colors of the scene where no class is described: id k takes entry k mod 16. An id
 // outside 0 to 65,535 takes the scene's default color.
@@ -18,6 +26,38 @@ fn box_count() -> u32 {
         n = min(n, rows);
     }
     return n;
+}
+
+// The rows of the boxes from their shapes alone, as box_count() gives them.
+fn box_rows() -> u32 {
+    var n = min(shapes.centers.z, BOX_CAPACITY);
+    let rows = shapes.half_sizes.z;
+    if (rows != 1u) {
+        n = min(n, rows);
+    }
+    return n;
+}
+
+// Every step-th box has a label.
+fn label_step(n: u32) -> u32 {
+    return max(1u, (n + BOX_LABELS - 1u) / BOX_LABELS);
+}
+
+// Whether the boxes have labels: one row for each box, or one for all, of 16 elements.
+fn has_labels(n: u32) -> bool {
+    return n > 0u && shapes.labels.w == 16u && (shapes.labels.z == n || shapes.labels.z == 1u);
+}
+
+// The label string of box i, an index into `names`, or BOX_NO_LABEL.
+fn box_label(i: u32, n: u32) -> u32 {
+    let step = label_step(n);
+    if (!has_labels(n) || i % step != 0u) {
+        return BOX_NO_LABEL;
+    }
+    if (shapes.labels.z == 1u) {
+        return 0u;
+    }
+    return i / step;
 }
 
 // The dimensions of the boxes: 3 for centers of 3 or more columns, else 2.
@@ -53,6 +93,9 @@ fn box_rgba(i: u32) -> u32 {
 
 // The class color of box i from element i of `colors`, a whole number from 0 to 65,535.
 fn box_class(i: u32) -> u32 {
+    if (shapes.colors.w == 0u) {
+        return BOX_DEFAULT;
+    }
     let n = arrayLength(&colors);
     if (n == 0u || (n != 1u && i >= n)) {
         return BOX_DEFAULT;
@@ -106,10 +149,33 @@ fn copy_boxes(@builtin(global_invocation_id) id: vec3<u32>) {
         h.z = half_sizes[hb + 2u];
     }
     let rgba = box_rgba(id.x);
-    boxes[id.x] = Box(c, h, box_rotation(id.x, dims), rgba, box_class(id.x), id.x);
+    boxes[id.x] = Box(c, h, box_rotation(id.x, dims), rgba, box_class(id.x), id.x, box_label(id.x, n));
     if ((rgba >> 24u) < 255u) {
         alpha_seen[0] = 1u;
     }
+}
+
+// The label strings: string j is the row of box j * step, or the one row for all.
+@compute @workgroup_size(256)
+fn copy_names(@builtin(global_invocation_id) id: vec3<u32>) {
+    let n = box_rows();
+    var strings = 0u;
+    if (has_labels(n)) {
+        strings = select(min((n + label_step(n) - 1u) / label_step(n), BOX_LABELS), 1u, shapes.labels.z == 1u);
+    }
+    if (id.x == 0u) {
+        atomicStore(&names_count, strings);
+    }
+    if (id.x >= strings) {
+        return;
+    }
+    let base = select(id.x * label_step(n), 0u, shapes.labels.z == 1u) * 16u;
+    var w: array<u32, 16>;
+    for (var k = 0u; k < 16u; k = k + 1u) {
+        w[k] = labels[base + k];
+    }
+    names[id.x] = Name(vec4<u32>(w[0], w[1], w[2], w[3]), vec4<u32>(w[4], w[5], w[6], w[7]),
+                       vec4<u32>(w[8], w[9], w[10], w[11]), vec4<u32>(w[12], w[13], w[14], w[15]));
 }
 
 // The flags of all boxes into box 0, after copy_boxes.

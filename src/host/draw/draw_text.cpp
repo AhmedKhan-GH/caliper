@@ -119,7 +119,7 @@ std::vector<Label> DrawRuntime::labels() const {
         const std::uint8_t* e = v.bytes.data() + i * stride;
         std::uint32_t index;
         std::memcpy(&index, e + str->offset, 4);
-        if (index >= strings || !usable[index]) continue;
+        if (index >= strings || !usable[index] || table[index].empty()) continue;   // no text, no label, as the built-in
         Label l;
         l.align = t.align;
         bool finite = true;

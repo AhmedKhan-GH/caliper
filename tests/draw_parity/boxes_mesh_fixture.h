@@ -223,6 +223,7 @@ inline void add_boxes_mesh(std::vector<std::uint8_t>* frames, Plan* plan, std::s
     add(m);
     const std::vector<std::uint8_t> box_rows = bm::box_rows();
     add(bm::resource("library_boxes", "boxes", box_rows, std::uint32_t(box_rows.size() / 64), 64, step));
+    add(bm::resource("library_boxes", "names", {}, 0, 64, step));   // no labels: the strings of the text table
     ProgramPlan bp;
     bp.id = "library_boxes";
     bp.pick_id = 101;
