@@ -85,7 +85,10 @@ def pack(b, piece: str) -> tuple:
     if got is not None:
         return got
     if piece == "points":
-        got = (_names(b), [("points", int(b.arrays["positions"].shape[0]), POINT_STRIDE, pack_points(b), None, None)])
+        resources = [("points", int(b.arrays["positions"].shape[0]), POINT_STRIDE, pack_points(b), None, None)]
+        if "class_ids" in b.arrays and ("colors" in b.arrays or "values" in b.arrays):
+            resources.append(_resource("source_class_ids", b.arrays["class_ids"]))
+        got = (_names(b), resources)
     elif piece in ("image", "depth", "segmentation"):
         got = (_names(b), pack_pixels(b, piece))
     else:
@@ -261,7 +264,7 @@ def pack_lines(b):
     # Expanded segments omit unused vertices and singleton strips. These host resources preserve
     # the source batch for bounds, selection and labels, and never enter the draw graph.
     sources = [_resource("source_" + name, a[name]) for name in _names(b)]
-    return [_resource("segments", out, 40), _info(bits), *sources]
+    return [_resource("segments", out[:, :8], 32), _resource("picks", out[:, 8:10], 8), _info(bits), *sources]
 
 
 def pack_arrows(b):
@@ -300,20 +303,21 @@ def pack_mesh(b):
     import numpy as np
     a = b.arrays
     n, d = a["positions"].shape
-    out = np.zeros((n, 12), dtype="<u4")
-    f = out.view("<f4")
+    vertices = np.zeros((n, 8), dtype="<u4")
+    f = vertices.view("<f4")
     f[:, :d] = a["positions"]
-    out[:, 3] = NAN_BITS
+    vertices[:, 3] = NAN_BITS
     if "values" in a:
         f[:, 3] = a["values"]
     if "normals" in a:
         f[:, 4:7] = a["normals"]
     if "colors" in a:
-        out[:, 8] = _bits(b)
+        vertices[:, 7] = _bits(b)
+    attributes = np.zeros((n, 3), dtype="<u4")
+    attributes[:, 0] = np.arange(n, dtype="<u4")
     if "uvs" in a:
-        f[:, 10:12] = a["uvs"]
-    out[:, 9] = np.arange(n, dtype="<u4")
-    alpha = "colors" in a and ((out[:, 8] >> 24) < 255).any()
+        attributes.view("<f4")[:, 1:3] = a["uvs"]
+    alpha = "colors" in a and ((vertices[:, 7] >> 24) < 255).any()
     if "texture" in a:
         tex = np.ascontiguousarray(a["texture"], dtype=np.uint8)
         h, w = tex.shape[:2]
@@ -321,10 +325,10 @@ def pack_mesh(b):
         alpha = alpha or (tex[..., 3] < 255).any()
     else:
         texture = _resource("tex", np.empty(0, "<u4"))
-    if n and alpha:
-        f[0, 7] = 1
+    info = np.array([int(alpha)], dtype="<u4")
     faces = np.minimum(a["indices"].astype("<u4"), max(0, n-1)) if "indices" in a else np.arange(n, dtype="<u4")
-    return [texture, _resource("vertices", out, 48), _resource("faces", faces.ravel(), 4)]
+    return [texture, _resource("vertices", vertices, 32), _resource("attributes", attributes, 12),
+            _resource("info", info), _resource("faces", faces.ravel(), 4)]
 
 
 def pack_pixels(b, piece):

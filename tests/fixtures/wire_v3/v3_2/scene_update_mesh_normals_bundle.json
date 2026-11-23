@@ -1,10 +1,10 @@
 {
   "header": {
     "flags": 0,
-    "frame_len": 264,
+    "frame_len": 288,
     "magic": 1464615235,
     "major": 3,
-    "meta_len": 240,
+    "meta_len": 264,
     "minor": 2,
     "reserved": 0,
     "section_count": 0,
@@ -24,7 +24,9 @@
     },
     "program": "scene.119",
     "resources": {
+      "attributes": 4,
       "faces": 6,
+      "info": 1,
       "tex": 0,
       "vertices": 4
     },

@@ -103,7 +103,14 @@ bool scene_piece_arrays(const wire::SceneUpdate& u, uint32_t dims, std::vector<w
             std::memcpy(pos + i * dims * 4, p, dims * 4);
             if (colors) std::memcpy(colors + i * 4, p + 16, 4);
             if (values) std::memcpy(values + i * 4, p + 16, 4);
-            if (ids) std::memcpy(ids + i * 4, p + 16, 4);
+            if (ids) {
+                const wire::Section* source = paired(u, "source_class_ids");
+                if (has(u, "colors") || has(u, "values")) {
+                    if (!source || source->shape != std::vector<int64_t>{int64_t(n), 4} || source->size != n * 4)
+                        return *why = "point class ids do not match their rows", false;
+                    std::memcpy(ids + i * 4, source->data + i * 4, 4);
+                } else std::memcpy(ids + i * 4, p + 16, 4);
+            }
             if (radii) std::memcpy(radii + i * 4, p + 12, 4);
         }
         return true;
@@ -155,9 +162,10 @@ bool scene_piece_arrays(const wire::SceneUpdate& u, uint32_t dims, std::vector<w
     };
     if (dims != 2 && dims != 3) return *why = "scene rows need two or three dimensions", false;
     if (name == "lines") {
-        const auto* segments = buffer("segments", 40, CALIPER_NET_MAX_BATCH_POINTS / 2);
+        const auto* segments = buffer("segments", 32, CALIPER_NET_MAX_BATCH_POINTS);
         const auto* info = buffer("info", 12, 1);
-        if (!segments || !info || info->shape[0] != 1)
+        const auto* picks = buffer("picks", 8, CALIPER_NET_MAX_BATCH_POINTS);
+        if (!segments || !picks || picks->shape[0] != segments->shape[0] || !info || info->shape[0] != 1)
             return *why = "lines@1 resources have another layout", false;
         const auto* positions = buffer("source_positions", dims * 4, CALIPER_NET_MAX_BATCH_POINTS);
         if (!positions) return *why = "lines@1 has no valid source positions", false;
@@ -206,7 +214,7 @@ bool scene_piece_arrays(const wire::SceneUpdate& u, uint32_t dims, std::vector<w
     }
     if (name == "arrows" || name == "boxes" || name == "mesh") {
         const bool arrow = name == "arrows", box = name == "boxes";
-        const uint32_t stride = arrow ? 32 : box ? 64 : 48;
+        const uint32_t stride = box ? 64 : 32;
         const auto* r = buffer(arrow ? "arrows" : box ? "boxes" : "vertices", stride,
                                arrow || box ? CALIPER_NET_MAX_BATCH_ITEMS : CALIPER_NET_MAX_BATCH_POINTS);
         if (!r) return *why = name + "@1 rows have another layout", false;
@@ -222,11 +230,11 @@ bool scene_piece_arrays(const wire::SceneUpdate& u, uint32_t dims, std::vector<w
         if (box) column("half_sizes", CALIPER_NET_DTYPE_F32, dims, 16);
         if (has(u, "rotations")) column("rotations", CALIPER_NET_DTYPE_F32, 4, 32);
         if (has(u, "normals")) column("normals", CALIPER_NET_DTYPE_F32, 3, 16);
-        if (has(u, "uvs")) column("uvs", CALIPER_NET_DTYPE_F32, 2, 40);
+
         if (has(u, "values")) column("values", CALIPER_NET_DTYPE_F32, 1, 12);
         if (has(u, "colors")) {
             uint8_t* to = add("colors", CALIPER_NET_DTYPE_U8, {n, 4}, size_t(n) * 4);
-            const uint32_t off = arrow ? 12 : box ? 48 : 32;
+            const uint32_t off = arrow ? 12 : box ? 48 : 28;
             for (int64_t i = 0; i < n; ++i) std::memcpy(to + i * 4, r->data + i * stride + off, 4);
         }
         if (has(u, "class_ids")) {
@@ -235,6 +243,14 @@ bool scene_piece_arrays(const wire::SceneUpdate& u, uint32_t dims, std::vector<w
             copy("class_ids", CALIPER_NET_DTYPE_I32, {n}, *ids);
         }
         if (!arrow && !box) {
+            const auto* attributes = buffer("attributes", 12, CALIPER_NET_MAX_BATCH_POINTS);
+            const auto* info = buffer("info", 4, 1);
+            if (!attributes || attributes->shape[0] != n || !info || info->shape[0] != 1)
+                return *why = "mesh attributes do not match their vertices", false;
+            if (has(u, "uvs")) {
+                auto* uv = add("uvs", CALIPER_NET_DTYPE_F32, {n, 2}, size_t(n) * 8);
+                for (int64_t i = 0; i < n; ++i) std::memcpy(uv + i * 8, attributes->data + i * 12 + 4, 8);
+            }
             const auto* faces = buffer("faces", 4, uint64_t(CALIPER_NET_MAX_BATCH_POINTS) * 3);
             if (!faces || faces->shape[0] % 3) return *why = "mesh faces have another layout", false;
             if (has(u, "indices")) copy("indices", CALIPER_NET_DTYPE_I32, {faces->shape[0] / 3, 3}, *faces);

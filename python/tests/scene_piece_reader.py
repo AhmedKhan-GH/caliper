@@ -10,7 +10,10 @@ def arrays(update, resources, dims=3):
     piece = update.piece["name"]
     names = update.names
     if piece == "points":
-        return _scene_pieces.unpack_points(resources["points"].data, names, dims)
+        out = _scene_pieces.unpack_points(resources["points"].data, names, dims)
+        if "source_class_ids" in resources:
+            out["class_ids"] = words("source_class_ids").view("<i4").copy()
+        return out
     if piece == "lines":
         out = {}
         for name in names:
@@ -24,17 +27,19 @@ def arrays(update, resources, dims=3):
         return out
     if piece in ("arrows", "boxes", "mesh"):
         arrow, box = piece == "arrows", piece == "boxes"
-        u = words("arrows" if arrow else "boxes" if box else "vertices").reshape(-1, 8 if arrow else 16 if box else 12)
+        u = words("arrows" if arrow else "boxes" if box else "vertices").reshape(-1, 16 if box else 8)
         f = u.view("<f4")
         out = {"origins" if arrow else "centers" if box else "positions": f[:, :dims].copy()}
         if arrow: out["vectors"] = f[:, 4:4+dims].copy()
         if box: out["half_sizes"] = f[:, 4:4+dims].copy()
-        for name, off, count in (("rotations", 8, 4), ("normals", 4, 3), ("uvs", 10, 2)):
+        for name, off, count in (("rotations", 8, 4), ("normals", 4, 3), ("unused_uvs", 10, 2)):
             if name in names: out[name] = f[:, off:off+count].copy()
-        if "colors" in names: out["colors"] = u[:, 3 if arrow else 12 if box else 8].copy().view(np.uint8).reshape(-1, 4)
+        if "colors" in names: out["colors"] = u[:, 3 if arrow else 12 if box else 7].copy().view(np.uint8).reshape(-1, 4)
         if "values" in names: out["values"] = f[:, 3].copy()
         if "class_ids" in names: out["class_ids"] = words("source_class_ids").view("<i4").copy()
         if "indices" in names: out["indices"] = words("faces").view("<i4").reshape(-1, 3).copy()
+        if "uvs" in names:
+            out["uvs"] = words("attributes").reshape(-1, 3).view("<f4")[:, 1:3].copy()
         if "texture" in names:
             tex = resources["tex"]
             out["texture"] = np.frombuffer(tex.data, np.uint8).reshape(tex.height, tex.width, 4).copy()

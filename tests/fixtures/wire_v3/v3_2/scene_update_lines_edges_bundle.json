@@ -1,10 +1,10 @@
 {
   "header": {
     "flags": 0,
-    "frame_len": 480,
+    "frame_len": 488,
     "magic": 1464615235,
     "major": 3,
-    "meta_len": 433,
+    "meta_len": 443,
     "minor": 2,
     "reserved": 0,
     "section_count": 1,
@@ -29,6 +29,7 @@
     "program": "scene.114",
     "resources": {
       "info": 1,
+      "picks": 3,
       "segments": 3,
       "source_indices": 3,
       "source_positions": 3,
@@ -62,14 +63,11 @@
       "encoding": 0,
       "length": 16,
       "name": "stamp",
-      "offset": 464,
+      "offset": 472,
       "shape": [
         2
       ],
-      "values": [
-        1200,
-        1763200000123456789
-      ]
+      "values": [1200, 1763200000123456789]
     }
   ],
   "type_name": "scene_update"

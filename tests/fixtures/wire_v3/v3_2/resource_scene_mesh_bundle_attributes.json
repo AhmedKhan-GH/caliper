@@ -1,0 +1,48 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 216,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 134,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 130
+  },
+  "meta": {
+    "count": 4,
+    "program": "scene.118",
+    "resource": "attributes",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "resource",
+        "shape": [
+          48
+        ]
+      }
+    ],
+    "step": 7,
+    "stride": 12
+  },
+  "meta_offset": 28,
+  "name": "v3_2/resource_scene_mesh_bundle_attributes",
+  "section_lengths": [
+    48
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 48,
+      "name": "resource",
+      "offset": 168,
+      "shape": [
+        48
+      ],
+      "values": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    }
+  ],
+  "type_name": "resource"
+}

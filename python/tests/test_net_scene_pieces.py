@@ -5,8 +5,7 @@ protocol 3.2 (draft), capability "scene_pieces", over a real loopback connection
   program, points@1's resource "points" written as the piece's derive half writes it, followed by the
   SCENE_UPDATE in the piece form that names it, and the arrays come back from the bytes exactly;
 * colors, class ids, radii, one radius and a 2-D scene each give their bytes;
-* a viewer without the capability, and every viewer under CALIPER_SCENE_SHAPES=builtin, gets the
-  per-shape part from the same call;
+* a viewer without the capability receives scene structure only;
 * a late subscriber gets each held batch as its RESOURCE and then its update, with ``state`` true;
 * a version above 8 MiB goes as RESOURCE parts that put together give the same bytes;
 * each entity part keeps its scene program."""
@@ -39,7 +38,6 @@ PIECES = (w.CAP_SCENES, w.CAP_SCENE_PIECES)
 
 @pytest.fixture(autouse=True)
 def _forget_scenes(monkeypatch):
-    monkeypatch.delenv("CALIPER_SCENE_SHAPES", raising=False)
     yield
     for name in list(_scene.SCENES):
         caliper.remove(name)
@@ -388,3 +386,20 @@ def test_encoded_images_refuse_malformed_and_oversize_headers():
                                 params={"form": "encoded", "format": "png"}, packed=None)
         with pytest.raises(ValueError):
             _scene_pieces.route(batch)
+
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_point_colors_preserve_class_ids_for_labels(server, device):
+    from test_net_scene import Viewer as ArrayViewer
+    scene = caliper.scene("labels")
+    positions = torch.tensor([[0, 1, 2], [3, 4, 5]], dtype=torch.float32, device=device)
+    colors = torch.tensor([[255, 10, 20, 255], [30, 40, 255, 255]], dtype=torch.uint8, device=device)
+    ids = torch.tensor([7, 12], dtype=torch.int32, device=device)
+    async def body():
+        async with ArrayViewer(server) as viewer:
+            await viewer.subscribe(1, "labels")
+            assert scene.points("points", positions, colors=colors, class_ids=ids)
+            update = await viewer.update("points")
+            np.testing.assert_array_equal(update.arrays["class_ids"].array(), ids.cpu().numpy())
+            np.testing.assert_array_equal(update.arrays["colors"].array(), colors.cpu().numpy())
+    run(body())
