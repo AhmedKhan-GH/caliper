@@ -928,3 +928,43 @@ def test_published_textures_have_a_separate_byte_limit(monkeypatch):
     p.resources[0]["kind"] = "buffer"
     with pytest.raises(P._Refused, match="in one resource"):
         P._resource_frames(TextureRuntime(), p)
+
+
+@pytest.mark.parametrize("delivery", ["deferred", "outbox"])
+def test_late_viewer_keeps_static_resources_when_the_draw_frame_fills_the_queue(monkeypatch, delivery):
+    """A draw frame must not consume the bytes reserved for a late viewer's static resources."""
+    ctl = FakeControls()
+    link = ctl.link
+    monkeypatch.setattr(P, "_OUTBOX", {})
+    p = _piece_program("static", ["labels"], monkeypatch)
+    resource = _resource_frame("labels", bytes(128), p.id)
+    p.static_frames["labels"] = [resource]
+    program = P._relay_frame(p)
+    budget = (len(program) + len(resource) if delivery == "deferred" else max(len(program), len(resource))) + 16
+    monkeypatch.setattr(P, "RESOURCE_BACKLOG_BYTES", budget)
+    queued = [20 if delivery == "deferred" else 0]
+    link.backlog = lambda: queued[0]
+    original_post = ctl.post
+    def post(viewer, frame, cap):
+        queued[0] += len(frame)
+        assert queued[0] <= budget
+        original_post(viewer, frame, cap)
+    ctl.post = post
+
+    P._relay_to(p, ctl, [link])
+    if delivery == "deferred":
+        assert ctl.posts == []
+        assert link not in p.relayed
+    else:
+        assert [frame.type for _, frame, _ in ctl.posts] == [w.MsgType.PROGRAM]
+        assert id(link) in P._OUTBOX
+    queued[0] = 0
+    P._relay_to(p, ctl, [link])
+    P._pump()
+    assert [frame.type for _, frame, _ in ctl.posts] == [w.MsgType.PROGRAM, P.RESOURCE_TYPE]
+    assert ctl.posts[1][1].meta["resource"] == "labels"
+    assert link in p.relayed and id(link) not in P._OUTBOX
+    queued[0] = 0
+    P._relay_to(p, ctl, [link])
+    P._pump()
+    assert len(ctl.posts) == 2

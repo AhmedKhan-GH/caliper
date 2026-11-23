@@ -1761,23 +1761,22 @@ def _backlog(ctl, ln) -> int:
 
 
 def _relay_to(p: _Program, ctl, links) -> None:
-    """The draw half and the static versions to each link that has not had them, the static versions
-    as a pass (:func:`_offer`). A link that waits for an earlier pass, or whose queue would pass
-    RESOURCE_BACKLOG_BYTES with their first chunk, gets them at a later pass."""
+    """The draw half and static versions as one pass to each link that has not had them.
+    Admission includes the draw frame. Later static chunks remain in the outbox until the queue
+    has room, and a refused first chunk leaves the link eligible for a later pass."""
     from . import _wire
     frame = None
     statics = [f for fs in p.static_frames.values() for f in fs]
-    first = _chunks(statics)[:1]
     for ln in links:
         if ln in p.relayed:
             continue
-        if first and (id(ln) in _OUTBOX or _backlog(ctl, ln) + first[0][0] > RESOURCE_BACKLOG_BYTES):
-            continue                         # the draw half and the static versions at a later pass
         if frame is None:
             frame = _relay_frame(p)
-        ctl.post(ln, frame, _wire.CAP_RESOURCES)
         if statics:
-            _offer(p, ctl, ln, statics)
+            if not _offer(p, ctl, ln, [frame, *statics]):
+                continue
+        else:
+            ctl.post(ln, frame, _wire.CAP_RESOURCES)
         p.relayed.add(ln)
 
 
