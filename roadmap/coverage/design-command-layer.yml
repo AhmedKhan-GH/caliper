@@ -228,7 +228,8 @@ entries:
   ids:
   - AGT-06
 - heading: Pending approvals and the end of a session
-  item: A mode change leaves waiting approvals waiting, and Allow all ends with the chat's agent.
+  item: A mode change leaves waiting approvals waiting, and the end of the chat's agent ends its session
+    rules and leaves its saved mode.
   ids:
   - AGT-06
 - heading: What each command does
