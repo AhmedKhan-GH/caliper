@@ -244,6 +244,8 @@ inline void add_boxes_mesh(std::vector<std::uint8_t>* frames, Plan* plan, std::s
     bm::mesh_rows(&vertices, &faces, &nv, &nt);
     add(bm::resource("library_mesh", "vertices", vertices, nv, 48, step));
     add(bm::resource("library_mesh", "faces", faces, 3 * nt, 4, step));
+    static const std::vector<std::uint8_t> kNoTexels;   // an untextured mesh: a texture without texels
+    add(bm::resource("library_mesh", "tex", kNoTexels, 0, 4, step));
     ProgramPlan mp;
     mp.id = "library_mesh";
     mp.pick_id = 102;
