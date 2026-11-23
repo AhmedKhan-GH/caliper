@@ -433,7 +433,7 @@ TEST_CASE("lines_match: one value, NaN, a pixel ratio of 2, the depth offset and
 TEST_CASE("lines_match: the most segments that the piece publishes, and the count above them") {
     Metal m;
     if (!m.backend) CALIPER_SKIP_NO_GPU(m.why);
-    constexpr std::uint32_t kMost = 209714;
+    constexpr std::uint32_t kMost = 2097152;
     // Short segments behind, and the first and the last segment long in front.
     Lines l;
     Lcg r(3);
@@ -461,9 +461,9 @@ TEST_CASE("lines_match: the most segments that the piece publishes, and the coun
         REQUIRE(find_published(p.published, "segments") != nullptr);
         CHECK(find_published(p.published, "segments")->count == kMost);
         const Drawn drawn = draw_programs(*m.backend, {&p}, mvp);
-        check_case("209,714 segments", b, builtin, drawn, p, {}, [&](std::uint32_t k) { return ends_of(l, k); }, 1);
+        check_case("2,097,152 segments", b, builtin, drawn, p, {}, [&](std::uint32_t k) { return ends_of(l, k); }, 1);
     }
-    {   // Above the published limit the piece draws its first 209,714 segments.
+    {   // Above the published limit the piece draws its first 2,097,152 segments.
         Lines more = l;
         for (int k = 0; k < 10; ++k) {
             more.positions.insert(more.positions.end(), {0, 0, 0, 0.1f, 0, 0});
@@ -472,7 +472,7 @@ TEST_CASE("lines_match: the most segments that the piece publishes, and the coun
         Program p;
         make_program(m, "lines", tensors_of(more), params_of(more), kPick, &p);
         CHECK(find_published(p.published, "segments")->count == kMost);
-        MESSAGE("209,724 segments publish ", find_published(p.published, "segments")->count);
+        MESSAGE("2,097,162 segments publish ", find_published(p.published, "segments")->count);
     }
 }
 
