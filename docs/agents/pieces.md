@@ -200,6 +200,8 @@ The piece `points@1` draws a cloud of round or square points of a size in pixels
 
 The piece `surface@1` draws a height field as a lit surface in a data box. Its derive half pools a tensor of rank 2 into at most `max_cells` cells, as the operator `surface` does, and its draw half draws the grid as the built-in `surface` draw kind draws it, with the same pixels and the same picks. The params `x_lo` to `z_hi`, `box_x` to `box_z`, `vmin` and `vmax` set the data box and the value range, and each bit of `fit` takes one of these ranges from the data instead.
 
+The pieces `lines@1` and `arrows@1` draw as the built-in `lines` and `arrows` primitives. `lines@1` reads positions, values and a topology tensor, and it draws segments, strips with their lengths, or index-pair edges. `arrows@1` reads origins, vectors and values. Both color by one color, by a value through a colormap with fixed ends or ends from the values, or by a packed RGBA, and both take the width, the depth offset and translucent colors of the built-in draw. The piece `path@1` is the drawing of the `path` operator. Its derive half keeps every s-th row of a tensor at the chosen columns, and its draw half draws one strip through the kept rows as a `lines` entity in strip mode does. A pick of any of the three returns the item of the built-in draw.
+
 A workspace piece with the name of a library piece replaces it only in a program that says `from = "workspace"`. `caliper-mcp` serves each file of the library as a read-only resource under `caliper://library/`. Thus an agent can read a piece before it pins, copies or imitates it.
 
 ## Program Instances

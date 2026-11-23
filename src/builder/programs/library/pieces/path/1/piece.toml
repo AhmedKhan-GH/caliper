@@ -1,0 +1,146 @@
+# Library piece path@1: the path operator's polyline through the rows of a tensor, drawn as a lines entity in strip mode draws it.
+name = "path"
+version = 1
+description = "A path through the rows of a tensor, every s-th row at most max_points of them, as a line strip of a width in pixels colored by the row through a colormap or by one color"
+imports = ["pick@1", "camera@1"]
+
+[[inputs]]
+name = "rows"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+title = "Rows (R, D): each kept row is a vertex at its columns"
+
+[[params]]
+name = "x"
+type = "i32"
+default = 0
+min = 0
+max = 65535
+title = "Column of x"
+
+[[params]]
+name = "y"
+type = "i32"
+default = 1
+min = 0
+max = 65535
+title = "Column of y"
+
+[[params]]
+name = "z"
+type = "i32"
+default = 2
+min = -1
+max = 65535
+title = "Column of z, or -1 or a column past the rows for z 0"
+
+[[params]]
+name = "max_points"
+type = "u32"
+default = 65536
+min = 2
+max = 1048576
+title = "Most Vertices, at most 419,430 drawn"
+
+[[params]]
+name = "width"
+default = 2.0
+min = 0.0
+max = 128.0
+title = "Width in Pixels"
+
+[[params]]
+name = "color_mode"
+type = "u32"
+default = 1
+min = 0
+max = 1
+title = "Color (0 one color, 1 the row through the colormap)"
+
+[[params]]
+name = "color"
+type = "u32"
+default = 4292664550
+title = "One Color as Packed RGBA"
+
+[[params]]
+name = "colormap"
+type = "u32"
+default = 0
+min = 0
+max = 3
+title = "Colormap (0 viridis, 1 magma, 2 rdbu, 3 greys)"
+
+[[params]]
+name = "range"
+type = "u32"
+default = 3
+min = 0
+max = 3
+title = "Ends From the Rows (0 none, 1 start, 2 end, 3 both)"
+
+[[params]]
+name = "vmin"
+default = 0.0
+title = "Value at the Colormap's Start"
+
+[[params]]
+name = "vmax"
+default = 1.0
+title = "Value at the Colormap's End"
+
+[[params]]
+name = "depth_offset"
+type = "i32"
+default = 1
+min = -8
+max = 8
+title = "Depth Offset Toward the Camera"
+
+# One element for each kept row in order: its position, its row index as the value, and the row.
+# 20 bytes, thus 419,430 fit in the 8 MiB of published resources.
+[[resources]]
+id = "vertices"
+kind = "buffer"
+struct = "Vertex"
+fields = ["x: f32", "y: f32", "z: f32", "value: f32", "row: u32"]
+count = 419430
+counted = true
+
+[derive]
+time_ms = 50
+memory_mb = 256
+
+[[derive.passes]]
+entry = "keep_rows"
+workgroups = [1639, 1, 1]
+writes = ["vertices"]
+
+[draw]
+camera = "orbit"
+pick = { resource = "vertices", fields = ["row", "value", "x", "y", "z"] }
+
+# Opaque joins write depth; joins of one color with an alpha below 255 only test it, as the
+# built-in draws translucent batches. Each pass hides the joins of the other.
+[[draw.passes]]
+kind = "render"
+vertex = "opaque_vs"
+fragment = "path_fs"
+instances = "vertices"
+vertices = 6
+topology = "triangle_list"
+blend = "alpha"
+depth = "write"
+pick = true
+
+[[draw.passes]]
+kind = "render"
+vertex = "translucent_vs"
+fragment = "path_fs"
+instances = "vertices"
+vertices = 6
+topology = "triangle_list"
+blend = "alpha"
+depth = "test"
+pick = true
