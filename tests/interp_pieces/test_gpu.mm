@@ -251,6 +251,8 @@ TEST_CASE("graph count and shape guards bound the layout and dense cells remain 
         std::memcpy(tensors[0].bytes.data(),&zero,4);
         const auto empty=mr::run_derive(metal.device,piece,tensors,{});
         CHECK(resource(empty,"nodes").count==0); CHECK(resource(empty,"curves").count==0);
+        const std::int32_t nonempty=512;
+        std::memcpy(tensors[0].bytes.data(),&nonempty,4);
         tensors[1].shape={256,8};
         const auto wrong=mr::run_derive(metal.device,piece,tensors,{});
         CHECK(resource(wrong,"nodes").count==0);
