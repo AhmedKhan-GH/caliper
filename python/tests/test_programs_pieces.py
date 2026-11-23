@@ -508,7 +508,8 @@ fn fill(@builtin(global_invocation_id) id: vec3<u32>) {
                            bind={"t": "live:attn0"}, derive=derive)
     assert item["state"] in ("compiled", "waiting"), item["error"]
     x = torch.randn(256, 64, device="mps")
-    for i in range(3000):
+    steps = 12000                                    # long enough for the cadence to settle: a step takes ~0.15 ms
+    for i in range(steps):
         loss = model(x)
         opt.zero_grad()
         loss.backward()
@@ -529,7 +530,7 @@ fn fill(@builtin(global_invocation_id) id: vec3<u32>) {
     i = np.arange(n, dtype=np.uint32)
     assert np.array_equal(words[:, 0], i) and np.array_equal(words[:, 2], i + 2) and (words[:, 3] == 7).all()
     failure = overhead_targets.overhead_share("big_words", st["overhead_share"], P.SHARE)
-    print(f"big_words: {st['runs']} runs in 3000 steps, every {st['every']}, share {st['overhead_share']:.4f}, "
+    print(f"big_words: {st['runs']} runs in {steps} steps, every {st['every']}, share {st['overhead_share']:.4f}, "
           f"step {st['step_ms']:.3f} ms, cost {st['last_cost_ms']:.3f} ms, pass {st['last_pass_ms']} ms, "
           f"passes skipped for a busy viewer {P._PROGS['big_words'].skipped}")
     assert failure is None, failure
