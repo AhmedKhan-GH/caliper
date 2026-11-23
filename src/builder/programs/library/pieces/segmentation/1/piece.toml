@@ -1,0 +1,126 @@
+# Library piece segmentation@1: a mask of class ids, drawn as the built-in segmentation image draws it.
+name = "segmentation"
+version = 1
+description = "A mask of class ids in the colors of its classes, nearest, flat at a pose or on a camera's image plane, at an opacity"
+imports = ["pick@1"]
+
+[[inputs]]
+name = "classes"
+kind = "tensor"
+dtype = "i32"
+rank_min = 2
+rank_max = 2
+title = "Class Ids (H, W), each clamped to 0 to 65,535"
+
+[[inputs]]
+name = "colors"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+title = "Class Colors (K, 3) or (K, 4) from 0 to 1, row k for class k; a row with r below 0 keeps the palette"
+
+[[inputs]]
+name = "pose"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+title = "Pose (4, 4) or (3, 4), row by row: the world from the image or from its camera"
+
+[[params]]
+name = "opacity"
+default = 0.5
+min = 0.0
+max = 1.0
+title = "Opacity"
+
+[[params]]
+name = "placement"
+type = "u32"
+default = 0
+min = 0
+max = 1
+title = "Placement (0 flat at the pose, 1 on the camera's image plane)"
+
+[[params]]
+name = "fx"
+default = 1.0
+title = "Focal Length x in Pixels"
+
+[[params]]
+name = "fy"
+default = 1.0
+title = "Focal Length y in Pixels"
+
+[[params]]
+name = "cx"
+default = 0.0
+title = "Principal Point x in Pixels"
+
+[[params]]
+name = "cy"
+default = 0.0
+title = "Principal Point y in Pixels"
+
+[[params]]
+name = "plane"
+default = 1.0
+title = "Distance of the Image Plane"
+
+[[params]]
+name = "convention"
+type = "u32"
+default = 0
+min = 0
+max = 1
+title = "Camera Axes (0 right, down, forward; 1 right, up, back)"
+
+[[resources]]
+id = "pixels"
+kind = "buffer"
+struct = "MaskPixel"
+fields = ["class_id: u32"]
+count = 2093024   # (8 MiB - 16 KiB - 128 bytes) / 4: 2,048 x 1,021 or 1,446 x 1,446 pixels
+counted = true
+
+[[resources]]
+id = "palette"
+kind = "buffer"
+struct = "ClassColor"
+fields = ["rgba: u32"]
+count = 4096
+
+[[resources]]
+id = "info"
+kind = "buffer"
+struct = "MaskInfo"
+fields = ["size: vec4<u32>", "c0: vec4<f32>", "c1: vec4<f32>", "c2: vec4<f32>", "c3: vec4<f32>"]
+count = 1
+
+[[derive.passes]]
+entry = "copy_classes"
+workgroups = [64, 1, 1]
+writes = ["pixels"]
+
+[[derive.passes]]
+entry = "fill_palette"
+workgroups = [16, 1, 1]
+writes = ["palette"]
+
+[[derive.passes]]
+entry = "place_mask"
+writes = ["info"]
+
+[draw]
+camera = "orbit"
+pick = { resource = "pixels", fields = ["class_id"] }
+
+[[draw.passes]]
+kind = "render"
+vertex = "mask_vs"
+fragment = "mask_fs"
+instances = "info"
+vertices = 6
+topology = "triangle_list"
+blend = "alpha"
+depth = "test"
+pick = true
