@@ -117,6 +117,7 @@ private:
     struct Pending {              // a readback: its staging buffer, then its tight bytes
         WGPUBuffer staging = nullptr;
         uint32_t w = 0, h = 0, bpp = 0, row_pitch = 0;
+        uint32_t x = 0, y = 0;    // the region's corner in the staging rows (a depth texture is copied whole)
         std::vector<uint8_t> bytes;
         bool ready = false;
     };
