@@ -464,6 +464,7 @@ struct Builtin {
         sc::PickResult r = sc::PickResult::Pending;
         for (int tries = 0; tries < 100 && r == sc::PickResult::Pending; ++tries) {
             g.wait(g.last_use(view->id_target()));
+            if (view->depth_target()) g.wait(g.last_use(view->depth_target()));
             g.poll();
             r = view->poll_pick(&hit);
         }
