@@ -92,6 +92,11 @@ if(NOT TARGET nlohmann_json::nlohmann_json)
     FetchContent_MakeAvailable(nlohmann_json)
 endif()
 target_link_libraries(caliper_view_layer PUBLIC nlohmann_json::nlohmann_json)
+# The theme and the fonts read the design tokens (generated header and font files) that the
+# native build uses, from the one declaration in cmake/SternbildTokens.cmake.
+include("${CALIPER_ROOT}/cmake/SternbildTokens.cmake")
+target_link_libraries(caliper_view_layer PUBLIC sternbild::tokens)
+get_target_property(_sternbild_fonts_dir sternbild::tokens STERNBILD_FONTS_DIR)
 include("${CALIPER_ROOT}/src/builder/programs/programs_text.cmake")
 caliper_programs_text_source(_caliper_programs_text_cpp)
 target_sources(caliper_view_layer PRIVATE
@@ -136,10 +141,10 @@ add_executable(caliper-views
     src/web_programs.cpp
     src/draw_parity.cpp
 )
-# fonts.cpp embeds the native app's faces from assets/fonts (C23 #embed).
+# fonts.cpp embeds the native app's faces from the design token package (C23 #embed).
 set_source_files_properties(src/fonts.cpp PROPERTIES
-    COMPILE_OPTIONS "--embed-dir=${CALIPER_ROOT}/assets/fonts;-Wno-c23-extensions"
-    OBJECT_DEPENDS "${CALIPER_ROOT}/assets/fonts/IBMPlexSansCondensed-Regular.ttf;${CALIPER_ROOT}/assets/fonts/SourceCodePro-Regular.ttf")
+    COMPILE_OPTIONS "--embed-dir=${_sternbild_fonts_dir};-Wno-c23-extensions"
+    OBJECT_DEPENDS "${_sternbild_fonts_dir}/IBMPlexSansCondensed-Regular.ttf;${_sternbild_fonts_dir}/SourceCodePro-Regular.ttf")
 target_link_libraries(caliper-views PRIVATE caliper_view_layer caliper_wire websocket.js)
 target_link_options(caliper-views PRIVATE
     --use-port=emdawnwebgpu

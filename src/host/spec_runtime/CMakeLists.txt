@@ -57,9 +57,10 @@ function(caliper_spec_runtime_fonts target)
     string(MD5 _hash "${_dir}")
     set(_copy caliper_house_fonts_${_hash})
     if(NOT TARGET ${_copy})
+        get_target_property(_fonts_dir sternbild::tokens STERNBILD_FONTS_DIR)
         add_custom_target(${_copy}
             COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${CMAKE_SOURCE_DIR}/assets/fonts" "${_dir}/assets/fonts"
+                "${_fonts_dir}" "${_dir}/assets/fonts"
             COMMENT "Copying house fonts to ${_dir}")
     endif()
     add_dependencies(${target} ${_copy})

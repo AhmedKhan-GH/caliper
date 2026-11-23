@@ -11,6 +11,7 @@
 // such as the selection count and the scale bar, are obstacles that no label
 // covers.
 #include "live/scene_overlays.h"
+#include "ui/sternbild_theme.h"
 
 #include "scene/compile.h"
 #include "spec_runtime/label_layout.h"
@@ -111,8 +112,8 @@ void draw_scene_overlays(const SceneOverlayInput& in) {
         in.draw->AddCircle(c, ring, accent, 0, 2.0f);
     }
     const ImVec2 mouse = ImGui::GetIO().MousePos;
-    const ImU32 dot = (in.ink & 0x00FFFFFFu) | (IM_COL32_A_MASK & IM_COL32(0, 0, 0, 200));
-    const ImU32 leader = (in.ink & 0x00FFFFFFu) | (IM_COL32_A_MASK & IM_COL32(0, 0, 0, 120));
+    const ImU32 dot = (in.ink & 0x00FFFFFFu) | (IM_COL32_A_MASK & sternbild::col::shade(200));
+    const ImU32 leader = (in.ink & 0x00FFFFFFu) | (IM_COL32_A_MASK & sternbild::col::shade(120));
     for (std::size_t i = 0; i < boxes.size() && i < placed.size(); ++i) {
         const LabelBox& b = boxes[i];
         const PlacedLabel& p = placed[i];

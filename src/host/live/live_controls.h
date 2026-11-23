@@ -35,6 +35,7 @@
 #include "live/live_source.h"
 
 #include <imgui.h>
+#include "ui/sternbild_theme.h"
 
 #include <cstdint>
 #include <functional>
@@ -178,9 +179,9 @@ struct ControlsLook {
     std::function<bool(const char* id, int columns)> begin_table;
     std::function<void()> end_table;
     std::function<void()> header_row;
-    ImU32 text = IM_COL32(255, 255, 255, 255);
-    ImU32 secondary = IM_COL32(190, 190, 190, 255);
-    ImU32 faint = IM_COL32(128, 128, 128, 255);
+    ImU32 text = sternbild::col::bar_text;
+    ImU32 secondary = sternbild::col::bar_secondary;
+    ImU32 faint = sternbild::col::bar_faint;
 };
 
 // The run bar on the current line of a window the host opened, at most

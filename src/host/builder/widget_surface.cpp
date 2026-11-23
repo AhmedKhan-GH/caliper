@@ -1190,11 +1190,8 @@ void WidgetSurface::draw_block(const WidgetRect& panel, float strip, const ImRec
             key_ink = L.accent;
         }
         if ((a == WidgetAction::diff || a == WidgetAction::text) && show_full_diff_) outline = L.accent;
-        if (primary) sternbild::cut_plate(dl, b.Min, b.Max, outline, fill, std::round(4.0f * s));
-        else {
-            if (fill) dl->AddRectFilled(b.Min, b.Max, fill);
-            dl->AddRect(b.Min, b.Max, outline, 0.0f, 0, 1.0f);
-        }
+        if (fill) dl->AddRectFilled(b.Min, b.Max, fill);
+        dl->AddRect(b.Min, b.Max, outline, 0.0f, 0, 1.0f);
         float x = b.Min.x + std::round(8.0f * s);
         const char* key = widget_action_key(a);
         if (lay.keys && key[0]) {

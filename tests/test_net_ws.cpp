@@ -32,6 +32,8 @@ using raw_sock = SOCKET;
 #else
 #  include <arpa/inet.h>
 #  include <netinet/in.h>
+#  include <poll.h>
+#  include <sys/ioctl.h>
 #  include <sys/socket.h>
 #  include <sys/time.h>
 #  include <unistd.h>
@@ -924,3 +926,161 @@ TEST_CASE("net/ws: a request body is read only when body_limit allows it, within
     CHECK(bodies.size() == before);
     CHECK(waited < 2.0);
 }
+
+#ifndef _WIN32
+namespace {
+
+// A peer that ends with a reset while the client has a write queued: the
+// client's next write fails with EPIPE or ECONNRESET, but what the peer sent
+// before the reset still waits in the client's socket and must arrive before
+// Closed. The model runner reads a script's last action reply this way when
+// the script's process exits right after it (design/hosted-runs.md). The peer
+// is a raw socket that answers the upgrade by hand; the test reads the state
+// of the client's own socket (POSIX poll) only to wait for the reset.
+struct ResetPeer {
+    Client& c;
+    Pump p;
+    int sfd = -1;    // the peer's end
+    int cfd = -1;    // the client's own socket, found by its port
+    explicit ResetPeer(Client& client) : c(client), p(nullptr, {&client}) {}
+    ~ResetPeer() {
+        if (sfd >= 0) ::close(sfd);
+    }
+    // Connects the client to a raw listener and answers its upgrade.
+    void open() {
+        const int lfd = ::socket(AF_INET, SOCK_STREAM, 0);
+        REQUIRE(lfd >= 0);
+        sockaddr_in la{};
+        la.sin_family = AF_INET;
+        inet_pton(AF_INET, "127.0.0.1", &la.sin_addr);
+        socklen_t len = sizeof la;
+        REQUIRE(::bind(lfd, (sockaddr*)&la, sizeof la) == 0);
+        REQUIRE(::listen(lfd, 1) == 0);
+        REQUIRE(::getsockname(lfd, (sockaddr*)&la, &len) == 0);
+        std::string err;
+        REQUIRE(c.connect(url(ntohs(la.sin_port)), &err));
+        sfd = ::accept(lfd, nullptr, nullptr);   // the system completes the TCP handshake
+        ::close(lfd);
+        REQUIRE(sfd >= 0);
+        timeval tv{0, 20000};
+        setsockopt(sfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+        std::string head;
+        REQUIRE(p.until([&] {
+            char buf[4096];
+            const ssize_t r = ::recv(sfd, buf, sizeof buf, 0);
+            if (r > 0) head.append(buf, (size_t)r);
+            return head.find("\r\n\r\n") != std::string::npos;
+        }));
+        const std::string field = "Sec-WebSocket-Key: ";
+        const size_t at = head.find(field);
+        REQUIRE(at != std::string::npos);
+        const size_t from = at + field.size();
+        const std::string key = head.substr(from, head.find("\r\n", from) - from) + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+        uint8_t digest[20];
+        sha1(key.data(), key.size(), digest);
+        const std::string upgrade = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                                    "Sec-WebSocket-Accept: " + base64_encode(digest, 20) + "\r\n\r\n";
+        REQUIRE(::send(sfd, upgrade.data(), upgrade.size(), 0) == (ssize_t)upgrade.size());
+        REQUIRE(p.until([&] { return Pump::find(p.cev[0], Type::Open) != nullptr; }));
+
+        // The client writes a message that the peer never reads, so that the
+        // peer's close is a reset.
+        REQUIRE(c.send("unread", 6, true));
+        REQUIRE(p.until([&] {
+            char peek[16];
+            return ::recv(sfd, peek, sizeof peek, MSG_PEEK) > 0;
+        }));
+        sockaddr_in remote{};
+        len = sizeof remote;
+        REQUIRE(::getpeername(sfd, (sockaddr*)&remote, &len) == 0);
+        for (int fd = 0; fd < 4096 && cfd < 0; ++fd) {
+            sockaddr_in mine{}, theirs{};
+            socklen_t ml = sizeof mine, tl = sizeof theirs;
+            if (fd == sfd || ::getsockname(fd, (sockaddr*)&mine, &ml) != 0 || mine.sin_family != AF_INET) continue;
+            if (::getpeername(fd, (sockaddr*)&theirs, &tl) != 0) continue;
+            if (mine.sin_port == remote.sin_port && theirs.sin_port == la.sin_port) cfd = fd;
+        }
+        REQUIRE(cfd >= 0);
+    }
+    // Sends `frames` as the peer's last bytes, then closes with unread input:
+    // a reset. Returns when the client's socket took it (a hang-up), without
+    // a read, so that the client's next write fails.
+    void send_and_reset(const std::string& frames) {
+        REQUIRE(::send(sfd, frames.data(), frames.size(), 0) == (ssize_t)frames.size());
+        ::close(sfd);
+        sfd = -1;
+        bool reset = false;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!reset && std::chrono::steady_clock::now() < until) {
+            pollfd pf{cfd, POLLIN | POLLOUT, 0};
+            reset = ::poll(&pf, 1, 0) == 1 && (pf.revents & POLLHUP);
+            if (!reset) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        REQUIRE(reset);
+    }
+    // Queues a write, polls until Closed and returns the client's events.
+    const std::vector<Event>& write_and_close() {
+        REQUIRE(c.send("after the reset", 15, true));
+        REQUIRE(p.until([&] { return Pump::find(p.cev[0], Type::Closed) != nullptr; }));
+        return p.cev[0];
+    }
+};
+
+// An unmasked binary frame of the server side.
+std::string server_frame(const std::string& payload) {
+    std::string f = "\x82";
+    if (payload.size() < 126) {
+        f.push_back((char)payload.size());
+    } else {
+        f.push_back((char)126);
+        f.push_back((char)(payload.size() >> 8));
+        f.push_back((char)(payload.size() & 0xff));
+    }
+    return f + payload;
+}
+
+}  // namespace
+
+TEST_CASE("net/ws: a message sent just before the peer's reset arrives, also when a write fails first") {
+    Client c;
+    ResetPeer peer(c);
+    peer.open();
+    peer.send_and_reset(server_frame("reply"));
+    const std::vector<Event>& got = peer.write_and_close();
+    size_t message_at = got.size(), closed_at = got.size();
+    for (size_t i = 0; i < got.size(); ++i) {
+        if (message_at == got.size() && got[i].type == Type::Message &&
+            std::string(got[i].data.begin(), got[i].data.end()) == "reply")
+            message_at = i;
+        if (closed_at == got.size() && got[i].type == Type::Closed) closed_at = i;
+    }
+    INFO("closed: " << Pump::find(got, Type::Closed)->reason);
+    CHECK(message_at < closed_at);
+}
+
+TEST_CASE("net/ws: the read after a failed write takes no more than one poll's read budget") {
+    Options o;
+    o.read_budget_bytes = 16 * 1024;
+    Client c(o);
+    ResetPeer peer(c);
+    peer.open();
+    // Sixteen messages of 4 KiB, 64 KiB in all, sent to the client's socket.
+    std::string frames;
+    for (int i = 0; i < 16; ++i) frames += server_frame(std::string(4096, char('a' + i)));
+    peer.send_and_reset(frames);
+    int waiting = 0;
+    REQUIRE(::ioctl(peer.cfd, FIONREAD, &waiting) == 0);
+    REQUIRE((size_t)waiting > o.read_budget_bytes);   // more than the budget is there to read
+    const std::vector<Event>& got = peer.write_and_close();
+    size_t bytes = 0, messages = 0;
+    for (const auto& e : got)
+        if (e.type == Type::Message) {
+            ++messages;
+            bytes += e.data.size();
+        }
+    INFO("messages: " << messages << ", closed: " << Pump::find(got, Type::Closed)->reason);
+    CHECK(messages >= 1);                     // what fits in the budget arrives
+    CHECK(bytes <= o.read_budget_bytes);      // and nothing past it
+    CHECK(messages < 16);
+}
+#endif

@@ -72,7 +72,7 @@ it, and [SDK package](docs/applets/sdk-package.md) describes the package.
 
 ### All platforms
 - **Git** (for submodule management)
-- **CMake 3.25 or later** and **Ninja** (the presets use the Ninja generator; configuring without a preset needs CMake 3.18)
+- **CMake 3.25 or later** and **Ninja** (the presets use the Ninja generator; configuring without a preset needs CMake 3.20)
 - **A C++20 compiler** for the host and the applets
 
 ### Windows
@@ -163,7 +163,6 @@ caliper/
 ├── python/                     # The caliper Python package and its extension
 ├── tests/                      # Test suites
 ├── scripts/                    # Helper scripts
-├── assets/fonts/               # UI fonts
 ├── docs/                       # Documentation source for the site
 ├── site/                       # The project website
 └── third_party/                # Git submodules and vendored headers
@@ -254,7 +253,7 @@ Caliper is licensed under the [Apache License 2.0](LICENSE), the host and the SD
 
 ## Third-party licenses
 
-Caliper uses the following open-source libraries. Their license texts can be found in the respective directories under `third_party/` and `assets/fonts/`, and beside the JavaScript libraries the docs site's roadmap page loads, in the `vendor/` folders under `theme/assets/` of the `sternbild-docs` package. The libraries that CMake fetches at configure time carry their own license files in their source trees.
+Caliper uses the following open-source libraries. Their license texts can be found in the respective directories under `third_party/` and, for the fonts, in the font folder of the Sternbild design token package that CMake fetches, and beside the JavaScript libraries the docs site's roadmap page loads, in the `vendor/` folders under `theme/assets/` of the `sternbild-docs` package. The libraries that CMake fetches at configure time carry their own license files in their source trees.
 
 | Library | License | Copyright | Permits |
 |---|---|---|---|

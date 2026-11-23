@@ -821,8 +821,8 @@ std::string time_text(const std::optional<std::chrono::milliseconds>& left) {
     return buf;
 }
 
-// A button in the house's look: the primary on a cut plate, the others in a
-// 1 px outline; faint while `enabled` is false.
+// A button in the house's look: every button on a square plate in a
+// 1 px outline, the primary in the text colour; faint while `enabled` is false.
 bool card_button(const SpecLook& L, ImDrawList* dl, const ImRect& b, const char* label, bool primary, bool enabled,
                  bool lit = false) {
     if (b.GetWidth() < 1.0f) return false;
@@ -839,12 +839,8 @@ bool card_button(const SpecLook& L, ImDrawList* dl, const ImRect& b, const char*
     }
     if (lit) outline = L.accent;
     const float s = L.text_scale;
-    if (primary) {
-        sternbild::cut_plate(dl, b.Min, b.Max, outline, fill, std::round(4.0f * s));
-    } else {
-        if (fill) dl->AddRectFilled(b.Min, b.Max, fill);
-        dl->AddRect(b.Min, b.Max, outline, 0.0f, 0, 1.0f);
-    }
+    if (fill) dl->AddRectFilled(b.Min, b.Max, fill);
+    dl->AddRect(b.Min, b.Max, outline, 0.0f, 0, 1.0f);
     const float ui_h = card_text_extent(L.ui, L.ui_size, "Ag").y;
     const std::string t = card_fit_text(L.ui, L.ui_size, label, b.GetWidth() - std::round(8.0f * s));
     const float tw = card_text_extent(L.ui, L.ui_size, t).x;

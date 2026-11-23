@@ -240,16 +240,18 @@ void SceneView::describe(const wire::SceneView& info) {
 
 void SceneView::set_starting(const StartingCamera& s) {
     start_ = s;
-    // A view whose camera the person has not moved takes the new starting camera at once; a
-    // moved one keeps its camera until its next reset.
-    if (!moved_) fitted_ = false;
+    // A view whose camera the person has not moved takes the new starting camera at its next frame;
+    // a moved one keeps its camera until its next reset, because a frame frames the view again only
+    // while it is not moved. Thus a starting camera that arrives during a click, whose wobble moves
+    // the camera until the release puts it back (live/camera_drag.h), applies after the release.
+    fitted_ = false;
     changed();
 }
 
 void SceneView::set_box_fit(bool on) {
     if (box_fit_ == on) return;
     box_fit_ = on;
-    if (!moved_) fitted_ = false;
+    fitted_ = false;   // as set_starting: a frame frames again only a view that is not moved
     changed();
 }
 

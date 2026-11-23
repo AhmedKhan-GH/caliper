@@ -1,10 +1,12 @@
 // live_views_scene.cpp: the scene view in the typed live views (live_views_scene.h).
 #include "live/live_views_scene.h"
+#include "ui/sternbild_theme.h"
 
 #include "caliper/live_net.h"
 #include "caliper/live_views.h"
 #include "embed/embed_core.h"
 #include "embed/render_stats.h"   // copy counters
+#include "live/camera_drag.h"
 #include "live/live_scene.h"
 #include "live/scene_overlays.h"
 #include "scene/pick.h"   // PickPass::Result
@@ -32,6 +34,14 @@
 namespace caliper_live_views {
 
 static_assert(kKindScene == CALIPER_NET_KIND_SCENE, "the scene kind of the view registry and of protocol 3.2");
+
+bool ScenePress::same(const State& a, const State& b) { return a.moved == b.moved && same_camera(a.camera, b.camera); }
+ScenePress::State ScenePress::state() const { return {view.camera(), view.moved()}; }
+void ScenePress::restore(const State& s) { view.restore_camera(s.camera, s.moved); }
+void ScenePress::move(float dx, float dy) {
+    if (pan) view.pan(dx, dy, view_height);
+    else view.orbit(dx, dy);
+}
 
 SceneHolder::~SceneHolder() {
     view.reset();   // its resources go back to the layer before the layer goes
@@ -345,9 +355,9 @@ caliper_host::LabelRect draw_axes_mark(ImDrawList* dl, const SceneView& view, Im
         const char* name;
         ImU32 color;
     };
-    Arrow arrows[3] = {{0, 0, 0, "x", IM_COL32(222, 92, 84, 255)},
-                       {0, 0, 0, "y", IM_COL32(112, 186, 104, 255)},
-                       {0, 0, 0, "z", IM_COL32(96, 146, 232, 255)}};
+    Arrow arrows[3] = {{0, 0, 0, "x", sternbild::col::axis_x},
+                       {0, 0, 0, "y", sternbild::col::axis_y},
+                       {0, 0, 0, "z", sternbild::col::axis_z}};
     for (int i = 0; i < 3; ++i) {
         // Column i of the view's rotation: where world axis i points on the screen (y down there).
         arrows[i].dx = float(m.view.at(0, i));
@@ -356,8 +366,8 @@ caliper_host::LabelRect draw_axes_mark(ImDrawList* dl, const SceneView& view, Im
         if (!std::isfinite(arrows[i].dx) || !std::isfinite(arrows[i].dy) || !std::isfinite(arrows[i].depth)) return {};
     }
     std::sort(std::begin(arrows), std::end(arrows), [](const Arrow& a, const Arrow& b) { return a.depth < b.depth; });
-    const ImU32 shade = IM_COL32(0, 0, 0, 140);
-    dl->AddCircleFilled(c, len + font * 0.5f, IM_COL32(0, 0, 0, 70));
+    const ImU32 shade = sternbild::col::shade(140);
+    dl->AddCircleFilled(c, len + font * 0.5f, sternbild::col::shade(70));
     for (const Arrow& a : arrows) {
         const ImVec2 tip(c.x + a.dx * len, c.y + a.dy * len);
         dl->AddLine(c, tip, shade, 4.0f);
@@ -481,7 +491,11 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
     sc->set_stage_source(options.stages);
     sc->poll();   // the GPU time of completed frames: the info line and the stages' time watchdog
 
-    // ---- input: an invisible button owns the rectangle, so that a drag never moves the window
+    // ---- input: an invisible button owns the rectangle, so that a drag never moves the window. A
+    // control over the picture goes in a child window of its own, as the spec's controls and a
+    // panel's × (spec_page.cpp) do: that window takes the presses over it, which then move no
+    // camera and pick nothing. (An item that allows overlap would lose a press that comes in the
+    // same frame as the pointer, as after a click into a window that saw no cursor moves.)
     ImGui::SetCursorScreenPos(p0);
     ImGui::InvisibleButton(imgui_id, size,
                            ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight |
@@ -496,31 +510,35 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
                        : ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ? 2
                                                                         : 0;
         state.selecting = io.KeyShift && state.button == 0;
-        state.x0 = state.lx = io.MousePos.x;
-        state.y0 = state.ly = io.MousePos.y;
+        state.x0 = io.MousePos.x;
+        state.y0 = io.MousePos.y;
+        state.press = {};
+        if (!state.selecting) camera_press_begin(state.press, ScenePress{*sc}, state.x0, state.y0);
     }
+    // The camera press (camera_drag.h): the motion moves the camera from the first point, and a
+    // release within the click's tolerance puts back the camera of the press, before this frame
+    // draws, so that the click's wobble is all that was seen to move. A selection's rectangle starts
+    // past ImGui's drag threshold.
+    ScenePress press_view{*sc, size.y, state.button != 0 || io.KeyAlt || io.KeyCtrl};
     bool released = false;
     if (state.down) {
-        if (valid && (std::fabs(io.MousePos.x - state.x0) > io.MouseDragThreshold ||
-                      std::fabs(io.MousePos.y - state.y0) > io.MouseDragThreshold))
-            state.moved = true;
-        const float dx = valid ? io.MousePos.x - state.lx : 0.0f, dy = valid ? io.MousePos.y - state.ly : 0.0f;
-        if (valid) {
-            state.lx = io.MousePos.x;
-            state.ly = io.MousePos.y;
-        }
-        if (state.moved && !state.selecting && (dx != 0.0f || dy != 0.0f)) {
-            if (state.button != 0 || io.KeyAlt || io.KeyCtrl) sc->pan(dx, dy, size.y);
-            else sc->orbit(dx, dy);
-        }
         released = !ImGui::IsMouseDown(state.button);
+        if (state.selecting) {
+            const float ox = io.MousePos.x - state.x0, oy = io.MousePos.y - state.y0;
+            if (valid && (std::fabs(ox) > io.MouseDragThreshold || std::fabs(oy) > io.MouseDragThreshold))
+                state.moved = true;
+        } else {
+            camera_press_frame(state.press, press_view, valid, io.MousePos.x, io.MousePos.y, released);
+            state.moved = !state.press.click();
+        }
     }
     if (hovered && io.MouseWheel != 0.0f) {
         const float mx = (io.MousePos.x - p0.x) / size.x * 2.0f - 1.0f;
         const float my = 1.0f - (io.MousePos.y - p0.y) / size.y * 2.0f;
-        sc->zoom(io.MouseWheel, mx, my, size.x, size.y);
+        camera_press_change(state.press, press_view, [&] { sc->zoom(io.MouseWheel, mx, my, size.x, size.y); });
     }
-    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) sc->fit();
+    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+        camera_press_change(state.press, press_view, [&] { sc->fit(); });   // a double click's release keeps the fit
     if (sc->width() && sc->height()) {   // the pointer of the programs' prelude, in physical pixels
         const uint32_t buttons = (io.MouseDown[0] ? 1u : 0u) | (io.MouseDown[1] ? 2u : 0u) | (io.MouseDown[2] ? 4u : 0u);
         sc->set_pointer((io.MousePos.x - p0.x) * float(sc->width()) / size.x,
@@ -538,10 +556,10 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
     if (!options.stage_message.empty()) {   // a stage's refusal or stop, over the picture's bottom
         const float pad = 4.0f, h = ImGui::GetTextLineHeight() + 2 * pad;
         const ImVec2 a(p0.x, std::max(p0.y, p1.y - h));
-        dl->AddRectFilled(a, p1, IM_COL32(0, 0, 0, 170));
+        dl->AddRectFilled(a, p1, sternbild::col::shade(170));
         keep_clear.push_back({a.x, a.y, p1.x, p1.y});
         dl->PushClipRect(a, p1, true);
-        dl->AddText(ImVec2(a.x + pad, a.y + pad), IM_COL32(255, 196, 120, 255), options.stage_message.c_str());
+        dl->AddText(ImVec2(a.x + pad, a.y + pad), sternbild::col::warning, options.stage_message.c_str());
         dl->PopClipRect();
     }
 
@@ -557,8 +575,8 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
         } else if (!state.moved && state.button == 0) {
             if (state.selecting) {
                 if (sc->clear_selection() && sink) sink("select", "{}");
-            } else if (valid) {
-                const ImVec2 t = target_px(io.MousePos.x, io.MousePos.y);
+            } else {   // the item under the press, with the camera of the press
+                const ImVec2 t = target_px(state.x0, state.y0);
                 state.click = ask_picks(*sc, state, t.x, t.y) || state.click;
             }
         }
@@ -603,10 +621,10 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
     if (state.down && state.selecting && state.moved && valid) {
         const ImVec2 a(std::min(state.x0, io.MousePos.x), std::min(state.y0, io.MousePos.y));
         const ImVec2 b(std::max(state.x0, io.MousePos.x), std::max(state.y0, io.MousePos.y));
-        dl->AddRectFilled(a, b, IM_COL32(176, 141, 87, 40));
-        dl->AddRect(a, b, IM_COL32(176, 141, 87, 220), 0.0f, 0, 1.0f);
+        dl->AddRectFilled(a, b, sternbild::with_alpha(sternbild::col::bronze, 40));
+        dl->AddRect(a, b, sternbild::with_alpha(sternbild::col::bronze, 220), 0.0f, 0, 1.0f);
     }
-    const ImU32 ink = ImGui::GetColorU32(ImGuiCol_Text), shade = IM_COL32(0, 0, 0, 160);
+    const ImU32 ink = ImGui::GetColorU32(ImGuiCol_Text), shade = sternbild::col::shade(160);
     if (options.scale_bar) {
         if (const caliper_scene::ScaleBar bar = sc->scale_bar(size.x, size.y); bar.visible) {
             const float len = float(bar.pixels), m = 12.0f;
@@ -665,7 +683,7 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
         in.annotations = &annotations;
         in.rings = &rings;
         in.priorities = &priorities;
-        in.accent = IM_COL32(176, 141, 87, 255);
+        in.accent = sternbild::col::bronze;
         in.draw = dl;
         in.origin = p0;
         in.scale_x = size.x / float(sc->width());

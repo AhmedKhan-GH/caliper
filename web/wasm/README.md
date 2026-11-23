@@ -12,7 +12,7 @@ This folder builds Caliper's own view layer (the live views, Dear ImGui and ImPl
 | `src/net_source.*` | The viewer side of wire protocol v3 on the browser's WebSocket, as a `caliper_live::Source` |
 | `src/source_poll.*` | The per-frame poll of a `Source` into the live views, in the order `live_core.cpp` uses for shared memory |
 | `src/web_input.*` | The canvas size, the device pixel ratio, pointer, wheel, keyboard and focus input, and the mouse cursor |
-| `src/fonts.*` | The native app's two faces from `assets/fonts`, embedded in the module |
+| `src/fonts.*` | The native app's two faces from the design token package, embedded in the module |
 | `src/web_services.cpp` | The tensor bridge vending that `host_services.cpp` does natively |
 | `src/gfx_selftest.*` | The graphics layer's self-test in the page, which the browser tests start ([Checking](#checking)) |
 | `src/scene_selftest.*` | The scene rows in the page: one scene per primitive drawn by the scene view and compared with the CPU reference ([Checking](#checking)) |
@@ -131,7 +131,7 @@ A notebook page imports the loader from another origin, so each of the three nee
 
 ## Input, size and look
 
-Every listener sits on the instance's own canvas: pointer events with pointer capture for drags, the wheel, keys while the canvas has focus (a click gives it focus) and focus changes. The page keeps a wheel turn or a key only when ImGui does not want it. Each frame the canvas's backing store is sized to its CSS box times the device pixel ratio, so the canvas follows its element and text is rasterised at the screen's density. The views look as they do in the native app: the module embeds the app's faces (IBM Plex Sans Condensed and Source Code Pro, unchanged from `assets/fonts`, both under the SIL Open Font License 1.1) and applies its style with `sternbild::load_fonts_from_memory` and `sternbild::apply_style`.
+Every listener sits on the instance's own canvas: pointer events with pointer capture for drags, the wheel, keys while the canvas has focus (a click gives it focus) and focus changes. The page keeps a wheel turn or a key only when ImGui does not want it. Each frame the canvas's backing store is sized to its CSS box times the device pixel ratio, so the canvas follows its element and text is rasterised at the screen's density. The views look as they do in the native app: the module embeds the app's faces (IBM Plex Sans Condensed and Source Code Pro, unchanged from the design token package, both under the SIL Open Font License 1.1) and applies its style with `sternbild::load_fonts_from_memory` and `sternbild::apply_style`.
 
 ## Shaders
 

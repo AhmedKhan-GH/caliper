@@ -17,10 +17,13 @@
 #include "embed/embed_core.h"
 #include "gfx/gfx.h"
 #include "live/live_source.h"   // PayloadMap
+#include "live/camera_drag.h"        // CameraPress
+#include "scene/camera.h"            // ViewCamera, which a press keeps
 #include "scene/camera_defaults.h"   // the 3-D views' default camera
 #include "scene/scene.h"             // kPalette
 
 #include <imgui.h>
+#include "ui/sternbild_theme.h"
 
 #include <cstdint>
 #include <functional>
@@ -63,10 +66,10 @@ struct Look {
     ImFont* mono = nullptr;
     float   mono_size = 0.0f;               // 0: the current size
     float   small_size = 0.0f;              // 0: the current size
-    ImU32   text = IM_COL32(230, 230, 235, 255);
-    ImU32   faint = IM_COL32(140, 140, 150, 255);
-    ImU32   rule = IM_COL32(90, 90, 100, 255);
-    ImU32   accent = IM_COL32(110, 170, 255, 255);   // a pressed tool, the live dot
+    ImU32   text = sternbild::col::look_text;
+    ImU32   faint = sternbild::col::look_faint;
+    ImU32   rule = sternbild::col::look_rule;
+    ImU32   accent = sternbild::col::look_accent;   // a pressed tool, the live dot
     ImU32   plot = 0;                                // a series' line and a histogram's bars (0: ImPlot's)
 };
 
@@ -121,16 +124,29 @@ struct LiveEvent {
 using EventSink = std::function<void(const LiveEvent&)>;
 
 // The pointer gesture on a view while a host listens for events: the browser
-// element's rule (web/src/views/interact.ts). A shift-drag selects; a drag
+// element's rule (web/src/views/interact.ts), except for the camera presses
+// below, which the browser element does not follow yet. A shift-drag selects; a drag
 // without shift pans or orbits; a press and release that moved at most
 // kClickSlop pixels is a click (a pick), and with shift it also clears the
-// selection.
+// selection. In a view with a camera (a scene, points), a press without shift
+// moves the camera from its first point of motion, and it is a click when the
+// pointer stayed within kCameraClickTolerance points of the press all along
+// (camera_drag.h): the camera then goes back to the camera of the press.
+// What a camera press keeps (camera_drag.h): the view's camera and its moved() (a scene view's;
+// false for the points view, which has none).
+struct SceneCameraState {
+    caliper_scene::ViewCamera camera;
+    bool moved = false;
+};
+
 struct Gesture {
     bool down = false, moved = false, selecting = false;
+    bool pressed = false;            // the press came in this frame
     bool shift = false, alt = false, ctrl = false;
     int button = 0;                  // ImGuiMouseButton of the press
     float x0 = 0.0f, y0 = 0.0f;      // press position (screen)
     float lx = 0.0f, ly = 0.0f;      // the pointer when the drag last moved the view
+    CameraPress<SceneCameraState> press;   // a camera press (a scene's, the points view's)
     double d0x = 0.0, d0y = 0.0, d1x = 0.0, d1y = 0.0;   // drag ends in data coordinates
     std::vector<float> lasso;        // points: the lasso (x, y pairs, screen)
     bool rect = false;               // points: shift + alt selects a rectangle

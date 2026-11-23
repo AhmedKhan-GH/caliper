@@ -39,6 +39,7 @@
 #include "live/live_views_state.h"   // the event sink and the payload maps of a stream's views
 
 #include <imgui.h>
+#include "ui/sternbild_theme.h"
 
 #include <algorithm>
 #include <cmath>
@@ -728,7 +729,7 @@ void draw_picker(CaliperCore* core, CaliperLiveState* L, float lw, float lh) {
     ImGui::SetNextWindowSize(ImVec2(std::min(720.0f, lw - 16.0f), 320.0f), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Live sessions###caliper.live.picker", nullptr, ImGuiWindowFlags_NoCollapse)) {
         ImGui::TextDisabled("%s/live  (refreshed every second)", root_of(L).c_str());
-        if (!L->picker_error.empty()) ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "%s", L->picker_error.c_str());
+        if (!L->picker_error.empty()) ImGui::TextColored(sternbild::to_vec4(sternbild::col::status_error), "%s", L->picker_error.c_str());
         if (L->sessions.empty()) {
             ImGui::Spacing();
             ImGui::TextWrapped("No live sessions. A script opens one on its first caliper.show(); "
@@ -786,12 +787,12 @@ void draw_status(CaliperCore* core, CaliperLiveState* L, float lw, float lh) {
         ImGui::Text("%s  pid %d  session %s", L->script.empty() ? "?" : L->script.c_str(), L->pid,
                     L->session.c_str());
         if (L->pending && L->client_alive) {
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "waiting for the session to start");
+            ImGui::TextColored(sternbild::to_vec4(sternbild::col::status_wait), "waiting for the session to start");
         } else if (!L->client_alive) {
-            ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.3f, 1.0f),
+            ImGui::TextColored(sternbild::to_vec4(sternbild::col::status_failed),
                                "SESSION ENDED: the script is gone; showing the last frames received");
         } else {
-            ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), "running");
+            ImGui::TextColored(sternbild::to_vec4(sternbild::col::status_run), "running");
         }
         if (L->net && !L->net_problem.empty()) ImGui::TextDisabled("%s", L->net_problem.c_str());
         ImGui::Text("frame %llu  %c  fps %.1f  views %d", (unsigned long long)L->frames,

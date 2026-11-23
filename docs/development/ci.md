@@ -37,7 +37,8 @@ Each lane runs these steps:
 6. **On failure,** upload `Testing/Temporary/LastTest.log` as an artifact.
 7. **Build the applets against the installed SDK** with `scripts/build_applets_against_sdk.sh`. The script installs the SDK from the core build. Then it builds `examples/hello`, `examples/sine_scope` and every scope in its own build folder, with only `-DCMAKE_PREFIX_PATH` pointing at the SDK, as a developer outside the repository would. The Windows lane skips `embed_scope` and `gpt_scope`, because they need curl and zlib, which Windows provides only inside the core build.
 8. **Check that the host names no applet** with `scripts/check_host_names_no_applet.py`, on macOS only.
-9. **Always** print `sccache --show-stats`.
+9. **Check the theme colors** with `scripts/check_theme_colors.py`, which fails when the theme holds a raw color literal outside the generated header of the design tokens.
+10. **Always** print `sccache --show-stats`.
 
 To reproduce a lane locally, run the same configure, build and test commands. The README's [Quick start](https://github.com/AhmedKhan-GH/caliper#quick-start) covers the prerequisites.
 
@@ -84,6 +85,11 @@ An object that fails to upload (a cache write error) misses once on the next run
 **Downloads.** The configure step downloads sources from GitHub without authentication:
 - Release tarballs for zlib, curl, Vulkan-Headers, volk and glslang (on Windows).
 - Git clones of tomlplusplus and doctest (both lanes).
+- A Git clone of the organization repository at the commit in `cmake/SternbildTokens.cmake`, for the design tokens. Every job that configures the app or the browser module makes this clone: both lanes, the browser views job, the wheel job and the WGSL compiler's build job.
+
+The file pins the design tokens with two lines: `STERNBILD_TOKENS_TAG` names the release, and `STERNBILD_TOKENS_COMMIT` is the commit that the clone checks out. A tag can be moved, and the package runs CMake code at configure time, thus the build takes the commit. A bump changes both lines.
+
+Before the clone, the configure asks the repository for the tag with `git ls-remote`. When git cannot reach the repository, the configure stops with a message that names the design tokens, the release, the commit and git's own error. The message also gives the way out: configure again with network, or set `FETCHCONTENT_SOURCE_DIR_STERNBILD_TOKENS` to a local checkout of the organization repository at the commit. When the tag on the repository points to a commit other than the pinned one, the configure stops with a message that names both commits. A build folder that already holds the pinned commit skips the check and needs no network.
 
 CMake retries each download several times, with a longer wait each time. During GitHub incidents, the downloads can still fail with timeouts or 504 errors and the message "Each download failed!". This is not a code failure. Re-run only the failed job:
 
