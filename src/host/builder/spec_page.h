@@ -220,6 +220,20 @@ public:
     // For the same seam: whether the scene panel `panel_id` of the open spec has drawn its scene,
     // its entities' own scene or the live scene that it binds.
     bool scene_ready(const std::string& panel_id);
+    // For the same seam and the frame log (CALIPER_FRAME_LOG): what the scene panel `panel_id`
+    // drew last. False before its first draw.
+    struct ScenePanelProbe {
+        float rect[4] = {0, 0, 0, 0};    // where it was drawn, in window points: x, y, width, height
+        std::uint64_t scene_frames = 0;  // the frames its scene view drew since it opened
+        std::uint64_t program_frames = 0;   // the frames its programs encoded together
+        std::int64_t step = -1;          // the newest step of the resources its programs drew
+        bool down = false;               // a button is held on its picture: a drag
+        bool pick_pending = false;       // a pick of it waits for its readback
+        std::string camera, drawn;       // the camera now and the camera of its last frame, in words
+    };
+    bool scene_probe(const std::string& panel_id, ScenePanelProbe* probe);
+    // The scene panel that holds a drag, else the one under (x, y) in window points; "" for none.
+    std::string scene_panel_at(float x, float y) const;
     // For the hidden app's input driver: a named rectangle of the page's own
     // ("page:browser"), in window points, as the last frame drew it.
     bool item_rect(const std::string& name, float rect[4]) const;

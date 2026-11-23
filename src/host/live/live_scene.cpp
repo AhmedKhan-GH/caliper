@@ -1004,6 +1004,22 @@ std::vector<const caliper_draw::DrawRuntime*> SceneView::draw_runtimes() const {
     return out;
 }
 
+uint64_t SceneView::program_frames() const {
+    uint64_t n = 0;
+#if defined(CALIPER_HAVE_DRAW)
+    for (const caliper_draw::DrawRuntime* rt : draw_runtimes()) n += rt->status().frames;
+#endif
+    return n;
+}
+
+int64_t SceneView::program_step() const {
+    int64_t step = -1;
+#if defined(CALIPER_HAVE_DRAW)
+    for (const caliper_draw::DrawRuntime* rt : draw_runtimes()) step = std::max<int64_t>(step, rt->status().resource_step);
+#endif
+    return step;
+}
+
 #if defined(CALIPER_HAVE_DRAW)
 namespace {
 
@@ -1929,6 +1945,7 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
     }
     ++cost_.frames;
     ++generation_;
+    drawn_camera_ = effective_camera();
     if (staged_ > 0) staged_frames_.emplace_back(s, std::chrono::steady_clock::now());
     if (with_programs) {
         draw_programs();
@@ -2022,19 +2039,29 @@ std::string SceneView::info() const {
     return s;
 }
 
-std::string SceneView::camera_text() const {
+namespace {
+
+std::string camera_words(const ViewCamera& camera) {
     char t[256];
-    if (const Orbit* o = std::get_if<Orbit>(&camera_)) {
+    if (const Orbit* o = std::get_if<Orbit>(&camera)) {
         std::snprintf(t, sizeof t, "orbit target %.9g %.9g %.9g distance %.9g azimuth %.9g elevation %.9g up %s fovy %.9g",
                       o->target[0], o->target[1], o->target[2], o->distance, o->azimuth, o->elevation, axis_name(o->up),
                       kOrbitFovY);
-    } else if (const PanZoom* p = std::get_if<PanZoom>(&camera_)) {
+    } else if (const PanZoom* p = std::get_if<PanZoom>(&camera)) {
         std::snprintf(t, sizeof t, "panzoom center %.9g %.9g half_height %.9g y_down %d", p->center[0], p->center[1],
                       p->half_height, p->y_down ? 1 : 0);
     } else {
         std::snprintf(t, sizeof t, "pinhole");
     }
-    std::string out = std::string(t) + " target_px " + std::to_string(width_) + " " + std::to_string(height_);
+    return t;
+}
+
+}  // namespace
+
+std::string SceneView::drawn_camera_text() const { return camera_words(drawn_camera_); }
+
+std::string SceneView::camera_text() const {
+    std::string out = camera_words(camera_) + " target_px " + std::to_string(width_) + " " + std::to_string(height_);
     if (!through_.empty() && std::holds_alternative<ThroughPinhole>(effective_camera())) out += " through " + through_;
     return out;
 }

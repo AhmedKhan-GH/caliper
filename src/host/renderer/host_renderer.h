@@ -68,6 +68,17 @@ public:
     virtual void shutdown() = 0;
     virtual const char* name() const = 0;           // "metal" / "vulkan" / "webgpu"
 
+    // What the last new_frame() waited for, for the app's frame log (CALIPER_FRAME_LOG): the
+    // milliseconds it waited for the window's drawable (-1 where the renderer does not measure it),
+    // whether it got one (a frame without one draws nothing), and whether the window is occluded
+    // (1), visible (0) or unknown (-1).
+    struct FrameWaits {
+        double drawable_ms = -1.0;
+        bool drawable = true;
+        int occluded = -1;
+    };
+    virtual FrameWaits frame_waits() const { return {}; }
+
     // Why the last init() or canvas_init() returned false, in a few words; empty
     // while neither has failed. There is no fallback renderer, so the app,
     // caliper shot and the embedding core refuse with this reason

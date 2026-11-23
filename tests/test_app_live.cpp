@@ -37,7 +37,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -45,6 +47,7 @@
 #include <iterator>
 #include <map>
 #include <set>
+#include <sstream>
 #include <string>
 #include <future>
 #include <thread>
@@ -1299,4 +1302,270 @@ TEST_CASE("app live: attention entropy per layer, from a live stream, on the spe
     CHECK(app.text.find("[session] command applet.open (api)") != std::string::npos);
     ::kill(producer.pid, SIGTERM);
     CHECK(producer.wait(10000) == 0);
+}
+
+// ---- A pan, then an orbit, in a scene panel of the spec page ----------------------------------
+// A right-button pan of a scene panel must open no menu, so that the orbit that follows moves the
+// camera from its first move: a menu opened by the pan's press took the next press, and that whole
+// drag moved nothing. A right click without a drag still opens the panel's menu. The frames come
+// from the app's frame log (CALIPER_FRAME_LOG): its mouse buttons, popup, panel and camera columns.
+
+namespace {
+
+struct FrameRow {
+    int down = 0, popup = 0, panel_down = 0;
+    std::string pointer, panel, camera;
+};
+
+std::vector<FrameRow> frame_rows(const std::string& path) {
+    std::vector<FrameRow> rows;
+    std::ifstream in(path);
+    std::string line;
+    std::map<std::string, size_t> col;
+    auto split = [](const std::string& s) {
+        std::vector<std::string> out;
+        size_t at = 0;
+        for (size_t tab; (tab = s.find('\t', at)) != std::string::npos; at = tab + 1) out.push_back(s.substr(at, tab - at));
+        out.push_back(s.substr(at));
+        return out;
+    };
+    if (!std::getline(in, line)) return rows;
+    const std::vector<std::string> head = split(line);
+    for (size_t i = 0; i < head.size(); ++i) col[head[i]] = i;
+    for (const char* name : {"mouse_down", "popup", "panel", "panel_down", "mouse_x", "mouse_y", "camera"})
+        if (!col.count(name)) return rows;
+    while (std::getline(in, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        const std::vector<std::string> f = split(line);
+        if (f.size() != head.size()) continue;
+        FrameRow r;
+        r.down = std::atoi(f[col["mouse_down"]].c_str());
+        r.popup = std::atoi(f[col["popup"]].c_str());
+        r.panel_down = f[col["panel_down"]] == "1" ? 1 : 0;
+        r.pointer = f[col["mouse_x"]] + " " + f[col["mouse_y"]];
+        r.panel = f[col["panel"]];
+        r.camera = f[col["camera"]];
+        rows.push_back(std::move(r));
+    }
+    return rows;
+}
+
+// The runs of consecutive frames over the panel with exactly the buttons `bits` held (1 left, 2
+// right), as [first, last] row indices.
+std::vector<std::pair<size_t, size_t>> button_runs(const std::vector<FrameRow>& rows, const std::string& panel, int bits) {
+    std::vector<std::pair<size_t, size_t>> out;
+    for (size_t i = 0; i < rows.size(); ++i) {
+        if (rows[i].down != bits || rows[i].panel != panel) continue;
+        if (!out.empty() && out.back().second + 1 == i) out.back().second = i;
+        else out.push_back({i, i});
+    }
+    return out;
+}
+
+// In a run, the frames whose pointer moved, and those of them whose camera moved too.
+std::pair<int, int> moves_in(const std::vector<FrameRow>& rows, std::pair<size_t, size_t> run) {
+    int moved = 0, camera = 0;
+    for (size_t i = run.first + 1; i <= run.second; ++i) {
+        if (rows[i].pointer == rows[i - 1].pointer) continue;
+        ++moved;
+        if (rows[i].camera != rows[i - 1].camera && rows[i].panel_down == 1) ++camera;
+    }
+    return {moved, camera};
+}
+
+}  // namespace
+
+TEST_CASE("app live: a right-button pan of a scene panel opens no menu, and the orbit after it moves the camera at "
+          "every move, with data arriving and after the stream ended; a right click opens the menu") {
+    const Env env = test_env();
+    if (!env.ok) return;
+    TempDir t("pan");
+    fs::create_directories(t.str("data"));
+    fs::create_directories(t.str("user-applets"));
+    const std::string shots = env.shots.empty() ? t.str("") : env.shots;
+    Proc producer;
+    const std::string link = start_producer(producer, env);
+    const std::string pan = "drag panel:world 0.4 0.5 to panel:world 0.6 0.55 right;";
+    const std::string orbit = "drag panel:world 0.25 0.5 to panel:world 0.75 0.6;";
+    const std::string script = "wait-file " + t.str("spec-ready") + ";page spec;wait 30;" + pan + orbit + "touch " +
+                               t.str("streaming") + ";wait-file " + t.str("ended") + ";wait 30;" + pan + orbit +
+                               "menu panel:world;wait 10;touch " + t.str("menu") + ";key escape;wait 5";
+    std::vector<std::string> e = app_env(env, t, script, shots);
+    e.push_back("CALIPER_FRAME_LOG=" + t.str("frames.tsv"));
+    Proc app;
+    REQUIRE(app.start(env.exe,
+                      {"--hidden", "--applets", env.applets, "--url", link, "--api", "--api-port", "0", "--workspace",
+                       t.str("ws")},
+                      e));
+    if (!has_metal(app)) {
+        ::kill(app.pid, SIGTERM);
+        app.wait(30000);
+        ::kill(producer.pid, SIGTERM);
+        producer.wait(10000);
+        return;
+    }
+    REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 60000), app.text);
+    const json api = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false);
+    REQUIRE(api.is_object());
+    const uint16_t port = api["port"].get<uint16_t>();
+    const std::string token = start_token(app);
+    REQUIRE(token.size() >= 22);
+    REQUIRE(eventually(app, [&] { return live_entries(port, token).count("live:attn") == 1; }, 60000));
+
+    // A scene panel of its own: the first layer's head-mean attention as a surface.
+    ok(port, token, "spec.new", {{"id", "pan"}, {"title", "Pan"}});
+    ok(port, token, "source.add",
+       {{"id", "attn"}, {"catalog", "live:attn"}, {"transform", json::array({{{"op", "slice"}, {"axis", 0}, {"index", 0}}})}});
+    ok(port, token, "panel.create",
+       {{"id", "world"}, {"primitive", "scene"}, {"title", "Attention"},
+        {"entity", json::array({{{"path", "attn"}, {"draw", "surface"}, {"bind", "attn"}}})}});
+    ok(port, token, "applet.save");
+    ok(port, token, "applet.open", {{"id", "pan"}});
+    std::ofstream(t.str("spec-ready")).put('\n');
+
+    // The first pan and orbit while the stream runs, the second after it ended.
+    REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("streaming")); }, 90000), app.text);
+    ::kill(producer.pid, SIGTERM);
+    CHECK(producer.wait(10000) == 0);
+    CHECK(app_says(app, "[live] session ended", 20000));
+    std::ofstream(t.str("ended")).put('\n');
+    REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("menu")); }, 90000), app.text);
+    REQUIRE(script_ended(app, 30000));
+    CHECK_MESSAGE(app.text.find("[ui] done") != std::string::npos, app.text);
+    ::kill(app.pid, SIGTERM);
+    CHECK_MESSAGE(app.wait(30000) == 0, app.text);
+
+    const std::vector<FrameRow> rows = frame_rows(t.str("frames.tsv"));
+    REQUIRE(rows.size() > 100);
+    const auto pans = button_runs(rows, "world", 2), orbits = button_runs(rows, "world", 1);
+    REQUIRE(pans.size() == 3);   // two pans, then the right click of the menu
+    REQUIRE(orbits.size() == 2);
+    for (size_t k = 0; k < 2; ++k) {
+        CAPTURE(k);
+        const auto [pan_moves, pan_camera] = moves_in(rows, pans[k]);
+        CHECK(pan_moves >= 10);
+        CHECK(pan_camera == pan_moves);   // the pan moves the camera at every move
+        // No menu from the pan, from its release until the orbit.
+        for (size_t i = pans[k].first; i < orbits[k].first; ++i) CHECK(rows[i].popup == 0);
+        const auto [orbit_moves, orbit_camera] = moves_in(rows, orbits[k]);
+        MESSAGE("orbit " << k << ": the camera moved at " << orbit_camera << " of " << orbit_moves << " moves");
+        CHECK(orbit_moves >= 10);
+        CHECK(orbit_camera == orbit_moves);
+    }
+    // A right click without a drag opens the panel's menu.
+    bool opened = false;
+    for (size_t i = pans[2].second; i < rows.size() && i < pans[2].second + 12; ++i) opened = opened || rows[i].popup == 1;
+    CHECK(opened);
+}
+
+// ---- A drag whose press comes before the window saw the pointer move --------------------------
+// GLFW's macOS backend gives a press without its place, and a window that got no cursor moves
+// before it (one that was not the key window) knew the pointer only where it last saw it. The app
+// gives ImGui the pointer's place with the press, so the first frame of an orbit or a pan moves
+// the camera by about as much as the frames after it, not by the whole way from the stale place.
+// The presses come through the platform's callback (the spec driver's `stale` drags).
+
+namespace {
+
+// The camera's numbers in the frame log's words: target x, y, z, azimuth and elevation.
+std::vector<double> camera_numbers(const std::string& text) {
+    std::vector<double> v;
+    std::istringstream in(text);
+    for (std::string w; in >> w;)
+        if (w == "target") {
+            double x = 0, y = 0, z = 0;
+            in >> x >> y >> z;
+            v.insert(v.end(), {x, y, z});
+        } else if (w == "azimuth" || w == "elevation") {
+            double a = 0;
+            in >> a;
+            v.push_back(a);
+        }
+    return v;
+}
+
+// The camera's steps over the frames of a run in which it moved, in order.
+std::vector<double> camera_steps(const std::vector<FrameRow>& rows, std::pair<size_t, size_t> run) {
+    std::vector<double> steps;
+    for (size_t i = run.first + 1; i <= run.second + 1 && i < rows.size(); ++i) {
+        const std::vector<double> a = camera_numbers(rows[i - 1].camera), b = camera_numbers(rows[i].camera);
+        if (a.size() != 5 || b.size() != 5) continue;
+        double d = 0;
+        for (size_t k = 0; k < 5; ++k) d += (b[k] - a[k]) * (b[k] - a[k]);
+        if (d > 0) steps.push_back(std::sqrt(d));
+    }
+    return steps;
+}
+
+}  // namespace
+
+TEST_CASE("app live: an orbit and a pan whose press comes before the pointer's moves start without a jump") {
+    const Env env = test_env();
+    if (!env.ok) return;
+    TempDir t("stale");
+    fs::create_directories(t.str("data"));
+    fs::create_directories(t.str("user-applets"));
+    const std::string shots = env.shots.empty() ? t.str("") : env.shots;
+    Proc producer;
+    const std::string link = start_producer(producer, env);
+    const std::string script = "wait-file " + t.str("spec-ready") +
+                               ";page spec;wait 30;drag panel:world 0.25 0.5 to panel:world 0.75 0.6 stale;wait 10;"
+                               "drag panel:world 0.35 0.45 to panel:world 0.65 0.55 right stale;wait 10;touch " +
+                               t.str("dragged");
+    std::vector<std::string> e = app_env(env, t, script, shots);
+    e.push_back("CALIPER_FRAME_LOG=" + t.str("frames.tsv"));
+    Proc app;
+    REQUIRE(app.start(env.exe,
+                      {"--hidden", "--applets", env.applets, "--url", link, "--api", "--api-port", "0", "--workspace",
+                       t.str("ws")},
+                      e));
+    if (!has_metal(app)) {
+        ::kill(app.pid, SIGTERM);
+        app.wait(30000);
+        ::kill(producer.pid, SIGTERM);
+        producer.wait(10000);
+        return;
+    }
+    REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 60000), app.text);
+    const json api = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false);
+    REQUIRE(api.is_object());
+    const uint16_t port = api["port"].get<uint16_t>();
+    const std::string token = start_token(app);
+    REQUIRE(token.size() >= 22);
+    REQUIRE(eventually(app, [&] { return live_entries(port, token).count("live:attn") == 1; }, 60000));
+    ok(port, token, "spec.new", {{"id", "stale"}, {"title", "Stale"}});
+    ok(port, token, "source.add",
+       {{"id", "attn"}, {"catalog", "live:attn"}, {"transform", json::array({{{"op", "slice"}, {"axis", 0}, {"index", 0}}})}});
+    ok(port, token, "panel.create",
+       {{"id", "world"}, {"primitive", "scene"}, {"title", "Attention"},
+        {"entity", json::array({{{"path", "attn"}, {"draw", "surface"}, {"bind", "attn"}}})}});
+    ok(port, token, "applet.save");
+    ok(port, token, "applet.open", {{"id", "stale"}});
+    std::ofstream(t.str("spec-ready")).put('\n');
+    REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("dragged")); }, 90000), app.text);
+    REQUIRE(script_ended(app, 30000));
+    CHECK_MESSAGE(app.text.find("[ui] done") != std::string::npos, app.text);
+    ::kill(app.pid, SIGTERM);
+    CHECK_MESSAGE(app.wait(30000) == 0, app.text);
+    ::kill(producer.pid, SIGTERM);
+    CHECK(producer.wait(10000) == 0);
+
+    const std::vector<FrameRow> rows = frame_rows(t.str("frames.tsv"));
+    REQUIRE(rows.size() > 100);
+    const auto orbits = button_runs(rows, "world", 1), pans = button_runs(rows, "world", 2);
+    REQUIRE(orbits.size() == 1);
+    REQUIRE(pans.size() == 1);
+    for (const auto& drag : {std::make_pair(std::string("orbit"), orbits[0]), std::make_pair(std::string("pan"), pans[0])}) {
+        const std::string& name = drag.first;
+        CAPTURE(name);
+        std::vector<double> steps = camera_steps(rows, drag.second);
+        REQUIRE(steps.size() >= 10);
+        std::vector<double> sorted = steps;
+        std::sort(sorted.begin(), sorted.end());
+        const double median = sorted[sorted.size() / 2];
+        double first = 0;
+        for (size_t k = 0; k < 3; ++k) first = std::max(first, steps[k]);
+        MESSAGE(name << ": the largest of the first three camera steps is " << first / median << " times the median");
+        CHECK(first <= 3.0 * median);
+    }
 }
