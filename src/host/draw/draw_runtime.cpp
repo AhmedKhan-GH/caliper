@@ -1356,7 +1356,10 @@ Verdict DrawRuntime::set_resource(const ResourceVersion& version) {
     if (s->texture) {
         // The version's format and size against the manifest, each before any product: the sides are at
         // most 8,192, thus the texels and the bytes fit 64 bits with room.
-        const std::string format = version.format.empty() ? std::string("rgba8unorm") : version.format;
+        // A version without texels carries no size and thus no format, as RESOURCE gives it.
+        const bool empty = version.width == 0 && version.height == 0;
+        const std::string format = version.format.empty() ? (empty ? s->format_name : std::string("rgba8unorm"))
+                                                          : version.format;
         if (format != s->format_name)
             return refusal(cp::kProgramBadResource,
                            "A version of the texture " + s->id + " has the format " + format + ", and the texture " +
@@ -1365,7 +1368,6 @@ Verdict DrawRuntime::set_resource(const ResourceVersion& version) {
         if (version.elements)
             return refusal(cp::kProgramBadResource, "A version of the texture " + s->id + " has narrow elements.",
                            where);
-        const bool empty = version.width == 0 && version.height == 0;
         if (!empty && (version.width < 1 || version.width > s->width || version.height < 1 ||
                        version.height > s->height))
             return refusal(cp::kProgramResourceTooLarge,

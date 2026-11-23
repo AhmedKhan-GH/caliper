@@ -629,7 +629,7 @@ TEST_CASE("sizes, layouts, passes and the memory budget are refused before alloc
     p.buffer("a", "f32", 4);
     caliper_producer_resource_desc& t = p.buffer("t", nullptr, 0);
     t.kind = CALIPER_PRODUCER_RESOURCE_TEXTURE;
-    t.width = 4097;
+    t.width = 8193;
     t.height = 1;
     CHECK(refused(f.rt, p) == "program.bad_resource");
     p = base();

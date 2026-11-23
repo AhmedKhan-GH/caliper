@@ -912,8 +912,10 @@ private:
     static bool declared(const ResourceInfo& info, const ReceivedResource& r) {
         if (info.stride == 0 || r.stride != info.stride || !r.bytes) return false;
         if (info.texture) {
-            if (r.format != info.format || r.elements) return false;
-            if (r.count == 0) return r.width == 0 && r.height == 0 && r.bytes->empty();   // no texels
+            if (r.elements) return false;
+            // A version without texels carries no size and thus no format (RESOURCE has a format only with a size).
+            if (r.count == 0) return r.width == 0 && r.height == 0 && r.format.empty() && r.bytes->empty();
+            if (r.format != info.format) return false;
             if (r.width < 1 || r.width > info.width || r.height < 1 || r.height > info.height) return false;
             const std::uint64_t texels = std::uint64_t(r.width) * r.height;
             if (texels > info.count ||

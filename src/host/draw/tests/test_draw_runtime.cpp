@@ -460,7 +460,7 @@ TEST_CASE("a texture takes the size and format of each version within its larges
         cd::ResourceVersion none;
         none.resource = "grey";
         none.step = 2;
-        none.format = "r8unorm";
+        none.format = "";   // RESOURCE gives a format only with a size
         REQUIRE(rt.set_resource(none).ok());
         CHECK(rt.internals().slots[0].count == 0);
         // The same size again reuses the texture; another size makes a new one.
