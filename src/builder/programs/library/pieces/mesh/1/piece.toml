@@ -1,0 +1,158 @@
+# Library piece mesh@1: a triangle mesh, drawn as the built-in mesh primitive draws it.
+name = "mesh"
+version = 1
+description = "A triangle mesh from positions and indices, lit by the headlight from its normals or with flat faces, colored by one color, by a value through a colormap or by RGBA"
+imports = ["pick@1"]
+
+[[inputs]]
+name = "positions"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+title = "Positions (V, 3), or (V, 2) for a mesh in 2-D"
+
+[[inputs]]
+name = "indices"
+kind = "tensor"
+dtype = "i32"
+rank_min = 1
+rank_max = 2
+title = "Indices (T, 3), read when indexed is 1; each index above the last vertex draws the last vertex"
+
+[[inputs]]
+name = "normals"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+title = "Normals (V, 3), read when shading is 1"
+
+[[inputs]]
+name = "colors"
+kind = "tensor"
+rank_min = 1
+rank_max = 2
+title = "Colors (V, 3 or 4) from 0 to 1, or values (V), or one row or value for all"
+
+[[params]]
+name = "color_mode"
+type = "u32"
+default = 0
+min = 0
+max = 2
+title = "Color (0 one color, 1 colormap of values, 2 RGBA of each vertex)"
+
+[[params]]
+name = "color"
+type = "u32"
+default = 4293319900
+title = "One Color as Packed RGBA"
+
+[[params]]
+name = "colormap"
+type = "u32"
+default = 0
+min = 0
+max = 3
+title = "Colormap (0 viridis, 1 magma, 2 rdbu, 3 greys)"
+
+[[params]]
+name = "vmin"
+default = 0.0
+title = "Value at the Colormap's Start"
+
+[[params]]
+name = "vmax"
+default = 1.0
+title = "Value at the Colormap's End"
+
+[[params]]
+name = "shading"
+type = "u32"
+default = 0
+min = 0
+max = 1
+title = "Shading (0 flat faces, 1 vertex normals)"
+
+[[params]]
+name = "indexed"
+type = "u32"
+default = 1
+min = 0
+max = 1
+title = "Triangles (0 every three vertices, 1 the rows of indices)"
+
+[[params]]
+name = "depth_offset"
+type = "i32"
+default = 0
+min = -8
+max = 8
+title = "Depth Offset in Steps of 1/8192"
+
+[[resources]]
+id = "vertices"
+kind = "buffer"
+struct = "Vertex"
+fields = ["position: vec4<f32>", "normal: vec4<f32>", "rgba: u32", "index: u32"]
+count = 98304
+counted = true
+
+[[resources]]
+id = "triangles"
+kind = "buffer"
+element = "vec4<u32>"
+count = 196608
+counted = true
+
+[[derive.passes]]
+entry = "copy_vertices"
+workgroups = [384, 1, 1]
+writes = ["vertices"]
+
+[[derive.passes]]
+entry = "copy_triangles"
+workgroups = [768, 1, 1]
+writes = ["triangles"]
+
+[[derive.passes]]
+entry = "mark_alpha"
+workgroups = [384, 1, 1]
+writes = ["vertices"]
+
+[draw]
+camera = "orbit"
+frame_ms = 16
+pick = { resource = "vertices", fields = ["index"] }
+
+# The faces of an opaque mesh: they write depth and the ID, as the built-in's opaque draw does.
+[[draw.passes]]
+kind = "render"
+vertex = "face_vs"
+fragment = "face_fs"
+instances = "triangles"
+vertices = 3
+blend = "alpha"
+depth = "write"
+pick = true
+
+# The faces of a translucent mesh: they blend and write no depth.
+[[draw.passes]]
+kind = "render"
+vertex = "face_see_vs"
+fragment = "see_fs"
+instances = "triangles"
+vertices = 3
+blend = "alpha"
+depth = "test"
+
+# The IDs of a translucent mesh, nearest first as the built-in's pick pass finds them; they leave
+# the color as it is.
+[[draw.passes]]
+kind = "render"
+vertex = "face_id_vs"
+fragment = "id_fs"
+instances = "triangles"
+vertices = 3
+blend = "alpha"
+depth = "write"
+pick = true

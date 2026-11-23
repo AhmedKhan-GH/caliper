@@ -544,15 +544,30 @@ struct PieceDraw {
 };
 
 // The comparison of the piece's image with the built-in's under the tolerances, with every
-// difference measured.
+// difference measured. With `color_edges`, a pixel whose 3 x 3 neighborhood in the built-in's
+// image holds more than one color is an edge pixel too: a mesh with flat faces lights each face
+// from the derivatives of its position, which a GPU takes over a quad of 2 x 2 pixels, thus a pixel
+// at the edge of two faces of one item may take the light of either face.
 struct Comparison {
     std::size_t interior = 0, lit_interior = 0, edge = 0, failed = 0, differ = 0;
+    std::size_t lit = 0;                  // pixels that either image draws
+    std::size_t interior_failed = 0;      // interior pixels that differ
+    std::size_t edge_far = 0;             // edge pixels over 1 level from every built-in neighbor
     int max_interior = 0, max_edge = 0;   // the largest channel gap inside, and at an edge to the nearest neighbor
     std::string first;
 };
 
+inline bool uniform_color(const std::vector<std::uint8_t>& img, std::uint32_t size, int x, int y) {
+    const std::uint32_t own = pixel_of(img, size, x, y);
+    const int s = int(size);
+    for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx)
+            if (pixel_of(img, size, std::clamp(x + dx, 0, s - 1), std::clamp(y + dy, 0, s - 1)) != own) return false;
+    return true;
+}
+
 inline Comparison compare(const std::vector<std::uint8_t>& piece, const std::vector<std::uint8_t>& ids,
-                          const std::vector<std::uint8_t>& builtin, std::uint32_t size) {
+                          const std::vector<std::uint8_t>& builtin, std::uint32_t size, bool color_edges = false) {
     REQUIRE(piece.size() == builtin.size());
     REQUIRE(ids.size() == std::size_t(size) * size * 8);
     Comparison c;
@@ -561,13 +576,15 @@ inline Comparison compare(const std::vector<std::uint8_t>& piece, const std::vec
         for (int x = 0; x < S; ++x) {
             const std::uint32_t pc = pixel_of(piece, size, x, y), bc = pixel_of(builtin, size, x, y);
             c.differ += pc != bc;
+            c.lit += pc != kClear || bc != kClear;
             bool ok;
-            const bool inside = is_interior(ids, size, x, y);
+            const bool inside = is_interior(ids, size, x, y) && (!color_edges || uniform_color(builtin, size, x, y));
             if (inside) {
                 ++c.interior;
                 c.lit_interior += pc != kClear;
                 c.max_interior = std::max(c.max_interior, channel_gap(pc, bc));
                 ok = pc == bc;
+                c.interior_failed += !ok;
             } else {
                 ++c.edge;
                 int best = 255;
@@ -576,6 +593,7 @@ inline Comparison compare(const std::vector<std::uint8_t>& piece, const std::vec
                         best = std::min(best, channel_gap(pc, pixel_of(builtin, size, std::clamp(x + dx, 0, S - 1),
                                                                        std::clamp(y + dy, 0, S - 1))));
                 c.max_edge = std::max(c.max_edge, best);
+                c.edge_far += best > 1;
                 ok = best <= 1;
             }
             if (!ok) {
