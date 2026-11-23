@@ -726,7 +726,7 @@ void SideChat::cycle_permission_mode() {
 void SideChat::set_allow_all(bool on) {
     if (!hooks_.set_permission_mode) return;
     if (on) hooks_.set_permission_mode("allow_all");
-    else if (permission_word() == "Allow all") hooks_.set_permission_mode("");
+    else if (permission_word() == "Allow all") hooks_.set_permission_mode("ask");
 }
 
 void SideChat::finish_start() {
@@ -1571,7 +1571,7 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
         dl->AddRectFilled(v2(b.Min.x, b.Max.y - 1.0f), b.Max, L.accent);
         const float x = b.Min.x + m.pad + draw_tag(dl, L, v2(b.Min.x + m.pad, b.Min.y), b.GetHeight(), L.accent, "ALLOW ALL") +
                         2.0f * m.gap;
-        const std::string what = fit(L.ui, L.ui_size, "This session only",
+        const std::string what = fit(L.ui, L.ui_size, "Saved, on until you end it",
                                      lay.banner_end.x - m.gap - x);
         draw_str(dl, L.ui, L.ui_size, v2(x, b.Min.y + (b.GetHeight() - ui_h) * 0.5f), L.secondary, what);
         if (house_button("##chat.allow_all.end", rr(lay.banner_end), "End", "", false, false, L)) set_allow_all(false);
@@ -2133,7 +2133,7 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
             const bool on = now == "Allow all";
             if (ImGui::Selectable("##mode.allow_all", on, 0, v2(cw, lh))) set_allow_all(!on);
             draw_str(ImGui::GetWindowDrawList(), L.ui, L.ui_size, v2(p.x + std::round(4.0f * s), p.y + (lh - ui_h) * 0.5f),
-                     L.accent, on ? "End Allow all" : "Allow all for this session");
+                     L.accent, on ? "End Allow all" : "Allow all");
         }
         ImGui::PopFont();
         ImGui::EndPopup();

@@ -75,10 +75,11 @@
 // the command layer applies it, never the agent). The header shows it as a
 // word after the title (Hooks::permission_mode): Ask, Accept edits, Read
 // only or Allow all. A click on it opens its menu: the three modes, and under
-// a rule, Allow all for this session, the one deliberate way to turn it on.
-// Shift-Tab cycles Ask, Accept edits and Read only while the chat's input has
-// the keyboard; it never reaches Allow all, and from Allow all it goes back
-// to Ask. While Allow all is on, a banner under the header says so with End.
+// a rule, Allow all, which is saved like the others and stays on until the
+// person ends it. Shift-Tab cycles Ask, Accept edits and Read only while the
+// chat's input has the keyboard; it never reaches Allow all, and from Allow
+// all it goes back to Ask. While Allow all is on, a banner under the header
+// says so with End, which sets Ask.
 // An edit that a mode or a rule let run without a card (the journal's
 // allowed_by) is an APPLIED row, with what allowed it and Undo, which undoes
 // it as the person while it is the newest step of the history.
@@ -379,7 +380,7 @@ public:
         // "Accept edits", "Read only", "Allow all"); "" or none hides it.
         std::function<std::string()> permission_mode;
         // Sets it: "ask", "accept_edits", "read_only", or "allow_all" from
-        // its own menu item only; "" ends Allow all, back to the saved mode.
+        // its own menu item only.
         std::function<void(const std::string& mode)> set_permission_mode;
         // Whether the command journaled under `seq` is the newest step of the
         // history, and undoing it as the person (history.undo from ui), only

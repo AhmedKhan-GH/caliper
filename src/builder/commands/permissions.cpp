@@ -26,8 +26,6 @@ namespace fs = std::filesystem;
 constexpr std::size_t kMaxFileBytes = std::size_t(1) << 20;  // far more than any person's rules
 constexpr std::size_t kMaxRules = 4096;
 
-bool saved_mode(AgentMode m) { return m != AgentMode::allow_all; }
-
 // The commands whose rule names one target: the parameter or the action of
 // the argument `name` (design/instruments.md, Run Effect Class), or the
 // intervention point of the argument `point` (design/gpu-programs.md,
@@ -130,7 +128,7 @@ PermissionVerdict decide_agent_permission(const CommandDescriptor& d, const Comm
     // Only what would ask can run without a card, and never what is bound
     // to the content its card shows.
     if (base != ApprovalDecision::ask || c.bound) return v;
-    if (c.mode == AgentMode::allow_all && agent_principal(inv) == AgentPrincipal::chat) {
+    if (c.mode == AgentMode::allow_all) {
         v.decision = ApprovalDecision::allow;
         v.allowed_by = "allow_all";
         return v;
@@ -191,6 +189,8 @@ AgentPermissionsRead read_agent_permissions(const std::string& path) {
     if (::stat(p.c_str(), &st) != 0) return give_up("The agent permissions file cannot be read, so it grants nothing.");
     if (st.st_mode & (S_IWGRP | S_IWOTH))
         return give_up("The agent permissions file may be written by others, so it grants nothing.");
+    if (st.st_uid != ::geteuid())
+        return give_up("The agent permissions file belongs to another user, so it grants nothing.");
 #endif
     const auto size = fs::file_size(p, ec);
     if (ec || size > kMaxFileBytes) return give_up("The agent permissions file is too large or unreadable, so it grants nothing.");
@@ -215,9 +215,9 @@ AgentPermissionsRead read_agent_permissions(const std::string& path) {
                                                            : std::nullopt;
                 if (!known) {
                     out.problems.push_back("Ignored the mode of " + item.key() + ", which is neither chat nor mcp.");
-                } else if (!mode || !saved_mode(*mode)) {
+                } else if (!mode) {
                     out.problems.push_back("Ignored the mode of " + item.key() +
-                                           ", which is not ask, accept_edits or read_only.");
+                                           ", which is not ask, accept_edits, read_only or allow_all.");
                 } else {
                     (item.key() == "chat" ? out.file.chat : out.file.mcp) = *mode;
                 }
@@ -260,14 +260,25 @@ AgentPermissionsRead read_agent_permissions(const std::string& path) {
             }
         }
     }
+    // Allow all only from a file read without a problem: an unknown field, a
+    // value of the wrong type or a rule ignored leaves that mode at Ask.
+    if (!out.problems.empty()) {
+        for (AgentMode* m : {&out.file.chat, &out.file.mcp}) {
+            if (*m != AgentMode::allow_all) continue;
+            *m = AgentMode::ask;
+            out.problems.push_back(std::string("Ignored Allow all of ") + (m == &out.file.chat ? "chat" : "mcp") +
+                                   ", which is read only from a file without problems.");
+        }
+    }
     return out;
 }
 
 std::string agent_permissions_text(const AgentPermissionsFile& file) {
     json rules = json::array();
     for (const auto& r : file.rules) rules.push_back({{"agent", r.agent}, {"command", r.command}});
-    auto mode = [](AgentMode m) { return agent_mode_name(saved_mode(m) ? m : AgentMode::ask); };
-    const json j = {{"version", 1}, {"modes", {{"chat", mode(file.chat)}, {"mcp", mode(file.mcp)}}}, {"rules", rules}};
+    const json j = {{"version", 1},
+                    {"modes", {{"chat", agent_mode_name(file.chat)}, {"mcp", agent_mode_name(file.mcp)}}},
+                    {"rules", rules}};
     return j.dump(2, ' ', false, json::error_handler_t::replace) + "\n";
 }
 

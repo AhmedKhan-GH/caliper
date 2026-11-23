@@ -81,21 +81,21 @@
 // - applet.save from agent, mcp or api asks only when it would overwrite a
 //   saved applet, since writing a new one destroys nothing.
 // - run.start and run.fork (runner_commands.h) start a managed run, which runs
-//   Python code: they ask for every origin, ui and builder too, in every
-//   mode, and no rule removes their card; only a request that their handler
-//   refuses anyway goes through without one.
+//   Python code: they ask for every origin, ui and builder too, and no rule
+//   removes their card; only Allow all of a governed agent, and a request
+//   that their handler refuses anyway, go through without one.
 //
 // Agent permissions (permissions.h). The policy above is the Ask mode. The
 // side chat's agent (origin agent, client "chat") and caliper-mcp's clients
 // (origin mcp) each have a mode, and rules for this session and saved ones,
 // applied after it: Read only refuses what would change something, and an
 // invocation the policy would ask about may run without a card under Accept
-// edits (an edit of the open spec), Allow all (the chat's only) or a rule,
-// unless its approval is bound to content; a rule never covers a Python
-// run. What a mode or rule allowed is journaled with "allowed_by". Modes and
-// rules change only through the functions below, which the app's own UI
-// calls; no command reads or sets them. The modes and the saved rules are
-// kept in SessionOptions::permissions_file when it is given.
+// edits (an edit of the open spec), Allow all or a rule, unless its approval
+// is bound to content (a data-loss card); a rule never covers a Python run.
+// What a mode or rule allowed is journaled with "allowed_by". Modes and rules
+// change only through the functions below, which the app's own UI calls; no
+// command reads or sets them. The modes and the saved rules are kept in
+// SessionOptions::permissions_file when it is given.
 //
 // Threads. Commands run where the registry runs them: invoke() on the calling
 // thread, or the queue's drain(). open_spec() and resolve() may be called
@@ -318,20 +318,17 @@ public:
     ReviewSettings review() const;
 
     // ---- agent permissions: the app's own UI only (see above)
-    // The mode in force: allow_all while Allow all is on for the chat.
+    // The mode of the side chat's agent or of mcp clients.
     AgentMode agent_mode(AgentPrincipal who) const;
-    // The saved mode, beneath Allow all.
-    AgentMode saved_agent_mode(AgentPrincipal who) const;
-    // Sets the mode of the side chat's agent or of mcp clients. Allow all is
-    // for the chat only (permissions.allow_all_chat_only otherwise) and is
-    // never saved; another mode turns it off and is saved.
+    // Sets it and saves it, Allow all as any other mode: it holds, across
+    // launches, until the person sets another.
     Error set_agent_mode(AgentPrincipal who, AgentMode mode);
     // The side chat's agent id, whose saved rules apply to the chat ("" for
     // none). The chat calls it when its agent starts.
     void set_chat_agent(const std::string& agent_id);
-    // The chat's agent ended: Allow all goes off and the chat's session
-    // rules go. Its pending approvals stay on their cards until they are
-    // decided or their wait runs out, as before.
+    // The chat's agent ended: the chat's session rules go; its mode stays.
+    // Its pending approvals stay on their cards until they are decided or
+    // their wait runs out, as before.
     void end_chat_session();
     // Whether a card of this parked invocation offers the rules: a governed
     // agent's command that may be allowed always, not bound to content and

@@ -212,12 +212,11 @@ struct Session::Impl {
     };
     std::deque<Bound> bound;  // under review_mutex
     // Agent permissions (permissions.h), under perm_mutex: the saved modes
-    // and rules, Allow all of the chat's session, the chat's agent id, the
-    // rules of this session by principal, and the note of the invocation the
-    // policy decided last, which the registry asks for next.
+    // and rules, the chat's agent id, the rules of this session by principal,
+    // and the note of the invocation the policy decided last, which the
+    // registry asks for next.
     mutable std::mutex perm_mutex;
     AgentPermissionsFile perms;
-    bool chat_allow_all = false;
     std::string chat_agent;
     std::set<std::string> chat_session_rules;
     std::set<std::string> mcp_session_rules;
@@ -1791,7 +1790,7 @@ struct Session::Impl {
     }
 
     AgentMode mode_of(AgentPrincipal who) const {
-        if (who == AgentPrincipal::chat) return chat_allow_all ? AgentMode::allow_all : perms.chat;
+        if (who == AgentPrincipal::chat) return perms.chat;
         if (who == AgentPrincipal::mcp) return perms.mcp;
         return AgentMode::ask;
     }
@@ -1809,10 +1808,11 @@ struct Session::Impl {
         if (who == AgentPrincipal::none) return base;
         const std::string key = invocation_key(inv);
         PermissionContext c;
-        // A start or a fork of a managed run shows its card in every mode:
-        // like a bound approval, only the card decides.
-        c.bound = base == ApprovalDecision::ask && (is_bound(key) || starts_run(inv.name));
-        c.python = base == ApprovalDecision::ask && python_pending(key);
+        // A data-loss card (bound to content) asks in every mode. A start or
+        // a fork of a managed run runs Python code, as a Python loader does:
+        // no rule covers it, and only its card or Allow all lets it run.
+        c.bound = base == ApprovalDecision::ask && is_bound(key);
+        c.python = base == ApprovalDecision::ask && (python_pending(key) || starts_run(inv.name));
         std::lock_guard<std::mutex> lock(perm_mutex);
         c.mode = mode_of(who);
         const std::string rule = permission_rule_key(inv);
@@ -2035,27 +2035,11 @@ AgentMode Session::agent_mode(AgentPrincipal who) const {
     return impl_->mode_of(who);
 }
 
-AgentMode Session::saved_agent_mode(AgentPrincipal who) const {
-    std::lock_guard<std::mutex> lock(impl_->perm_mutex);
-    return who == AgentPrincipal::chat ? impl_->perms.chat : who == AgentPrincipal::mcp ? impl_->perms.mcp : AgentMode::ask;
-}
-
 Error Session::set_agent_mode(AgentPrincipal who, AgentMode mode) {
     Impl& im = *impl_;
     std::lock_guard<std::mutex> lock(im.perm_mutex);
     if (who == AgentPrincipal::none) return Error("permissions.no_principal", "Only the side chat's agent and mcp clients have a mode.");
-    if (mode == AgentMode::allow_all) {
-        if (who != AgentPrincipal::chat)
-            return Error("permissions.allow_all_chat_only", "Allow all is only for the side chat's agent, for its session.");
-        im.chat_allow_all = true;  // never saved
-        return {};
-    }
-    if (who == AgentPrincipal::chat) {
-        im.chat_allow_all = false;
-        im.perms.chat = mode;
-    } else {
-        im.perms.mcp = mode;
-    }
+    (who == AgentPrincipal::chat ? im.perms.chat : im.perms.mcp) = mode;
     return im.save_perms();
 }
 
@@ -2071,7 +2055,6 @@ std::string Session::chat_agent() const {
 
 void Session::end_chat_session() {
     std::lock_guard<std::mutex> lock(impl_->perm_mutex);
-    impl_->chat_allow_all = false;
     impl_->chat_session_rules.clear();
 }
 

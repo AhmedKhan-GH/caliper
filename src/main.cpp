@@ -735,13 +735,12 @@ public:
             ph.mode = [this, who_of](const std::string& who) -> std::string {
                 cb::Session* s = session_.session();
                 if (!s) return "ask";
-                // The saved mode: Allow all is the chat's session's, above it, and not here.
-                return cb::agent_mode_name(s->saved_agent_mode(who_of(who)));
+                return cb::agent_mode_name(s->agent_mode(who_of(who)));
             };
             ph.set_mode = [this, who_of](const std::string& who, const std::string& mode) {
                 cb::Session* s = session_.session();
                 const auto m = cb::agent_mode_from_name(mode);
-                if (!s || !m || *m == cb::AgentMode::allow_all) return;
+                if (!s || !m) return;
                 const cb::Error e = s->set_agent_mode(who_of(who), *m);
                 landing_.log(e ? "mode not set" : (who == "mcp" ? "mcp mode" : "side chat mode"), cb::agent_mode_label(*m),
                              e ? e.code : "");

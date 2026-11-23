@@ -112,23 +112,80 @@ TEST_CASE("Read only: reads and proposals run, every change is refused with a pl
     CHECK(f.s->registry().pending_approvals().empty());
 }
 
-TEST_CASE("Allow all: no card for the chat's session, never saved, and the ceilings stand") {
+TEST_CASE("Allow all: saved for each principal, loaded at launch, no card but a data-loss card") {
     Fixture f("modes-allow-all");
     REQUIRE(f.s->set_agent_mode(AgentPrincipal::chat, AgentMode::allow_all).ok());
     CHECK(f.s->agent_mode(AgentPrincipal::chat) == AgentMode::allow_all);
-    CHECK(read_text(f.perms).find("allow_all") == std::string::npos);
-    const CommandResult del = chat(*f.s, "loader.delete", {{"id", f.loader()}});
-    REQUIRE(del.ok);
+    CHECK(read_text(f.perms).find("\"chat\": \"allow_all\"") != std::string::npos);
+    // An edit that review would show runs at once, journaled as Allow all's.
+    REQUIRE(chat(*f.s, "panel.patch", retitle("Agent")).ok);
     CHECK(f.last_event().allowed_by == "allow_all");
-    // Undo stays the person's, and an overwrite of a saved applet still shows its content.
-    CHECK(chat(*f.s, "history.undo").error.code == "command.not_allowed");
+    // The replacement of an open spec with unsaved changes still asks.
+    ok(*f.s, "panel.patch", retitle("Unsaved"));
+    CHECK(chat(*f.s, "spec.new", {{"id", "other"}}).error.code == "command.needs_approval");
+    CHECK(chat(*f.s, "applet.open", {{"id", "dash"}}).error.code == "command.needs_approval");
+    CHECK(f.title() == "Unsaved");
+    // So does an overwrite of a saved applet, and undo stays the person's.
     CHECK(chat(*f.s, "applet.save", {{"overwrite", true}}).error.code == "command.needs_approval");
-    // Not for mcp clients; and it ends with the chat's session.
-    CHECK(f.s->set_agent_mode(AgentPrincipal::mcp, AgentMode::allow_all).code == "permissions.allow_all_chat_only");
+    CHECK(chat(*f.s, "history.undo").error.code == "command.not_allowed");
+    f.s->registry().cancel_pending();
+    // A deletion runs without a card.
+    REQUIRE(chat(*f.s, "loader.delete", {{"id", f.loader()}}).ok);
+    CHECK(f.last_event().allowed_by == "allow_all");
+    // For mcp clients too.
+    REQUIRE(f.s->set_agent_mode(AgentPrincipal::mcp, AgentMode::allow_all).ok());
+    CHECK(read_text(f.perms).find("\"mcp\": \"allow_all\"") != std::string::npos);
+    write_text(f.ws + "/data/other.csv", "step,acc\n0,0.5\n");
+    ok(*f.s, "data.import", {{"paths", {"data/other.csv"}}});
+    REQUIRE(send(*f.s, "loader.delete", {{"id", f.loader()}}, CommandOrigin::mcp, "").ok);
+    CHECK(f.last_event().allowed_by == "allow_all");
+    CHECK(send(*f.s, "applet.save", {{"overwrite", true}}, CommandOrigin::mcp, "").error.code == "command.needs_approval");
+    f.s->registry().cancel_pending();
+    // The end of the chat's agent leaves it on, and a new launch loads it.
     f.s->end_chat_session();
-    CHECK(f.s->agent_mode(AgentPrincipal::chat) == AgentMode::ask);
+    CHECK(f.s->agent_mode(AgentPrincipal::chat) == AgentMode::allow_all);
+    f.reopen();
+    CHECK(f.s->permission_problems().empty());
+    CHECK(f.s->agent_mode(AgentPrincipal::chat) == AgentMode::allow_all);
+    CHECK(f.s->agent_mode(AgentPrincipal::mcp) == AgentMode::allow_all);
+    // It stays on until the person sets another mode.
+    REQUIRE(f.s->set_agent_mode(AgentPrincipal::chat, AgentMode::ask).ok());
     f.reopen();
     CHECK(f.s->agent_mode(AgentPrincipal::chat) == AgentMode::ask);
+    CHECK(f.s->agent_mode(AgentPrincipal::mcp) == AgentMode::allow_all);
+}
+
+TEST_CASE("Allow all runs a Python loader without a card, and no rule does") {
+    Fixture f("modes-allow-all-python");
+    const std::string python = CALIPER_BUILDER_TEST_PYTHON;
+    write_text(f.ws + "/scripts/s.py", "def load(path, out):\n    out.tensor('w', [1.0, 2.0, 3.0])\n");
+    write_text(f.ws + "/data/in.bin", "anything");
+    auto recipe = [&](const std::string& id) {
+        return "caliper_loader = 0\n[loader]\nid = \"" + id +
+               "\"\n[input]\npath = \"data/in.bin\"\nreader = \"python\"\n[reader]\nscript = \"scripts/s.py\"\n" +
+               (python.empty() ? std::string() : "python = \"" + python + "\"\n") + "[[output]]\nname = \"" + id +
+               "_w\"\ntensor = \"w\"\n";
+    };
+    // Ask: the run waits on a card, which offers no rule.
+    const CommandResult asked = chat(*f.s, "loader.create", {{"text", recipe("py")}, {"run", true}});
+    REQUIRE(asked.error.code == "command.needs_approval");
+    const PendingApproval p = f.s->registry().pending_approvals().at(0);
+    CHECK_FALSE(f.s->approval_offers_rules(p.invocation));
+    f.s->registry().cancel_pending();
+    // Allow all: no card, and the handler holds the permission to run it.
+    REQUIRE(f.s->set_agent_mode(AgentPrincipal::chat, AgentMode::allow_all).ok());
+    const CommandResult run = chat(*f.s, "loader.create", {{"text", recipe("py")}, {"run", true}});
+    CHECK(run.error.code != "command.needs_approval");
+    CHECK(run.error.code != "loader.python_needs_approval");
+    CHECK(f.s->registry().pending_approvals().empty());
+    CHECK(f.last_event().allowed_by == "allow_all");
+    if (python.empty()) {
+        MESSAGE("Skipped the run's result: CALIPER_BUILDER_TEST_PYTHON is not set.");
+        return;
+    }
+    INFO(run.error.code << ": " << run.error.message);
+    CHECK(run.ok);
+    CHECK(ok(*f.s, "loader.describe", {{"id", "py"}})["status"] == "ok");
 }
 
 TEST_CASE("the widget agent keeps its preview with Accept, whatever the chat's mode") {
@@ -248,11 +305,18 @@ TEST_CASE("no command reads or sets a mode or a rule, from any origin") {
         for (const char* word : {"mode", "rule", "permission", "allow"}) CHECK(d.name.find(word) == std::string::npos);
     }
     for (CommandOrigin o : {CommandOrigin::agent, CommandOrigin::mcp, CommandOrigin::api, CommandOrigin::viewer})
-        for (const char* name : {"permissions.set", "agent.set_mode", "rules.add"})
-            CHECK(send(*f.s, name, {{"mode", "allow_all"}}, o, o == CommandOrigin::agent ? "chat" : "").error.code ==
-                  "command.unknown");
+        for (const char* name : {"permissions.set", "agent.set_mode", "rules.add", "settings.set", "app.settings",
+                                 "permissions.allow_all"})
+            CHECK(send(*f.s, name, {{"mode", "allow_all"}, {"who", "mcp"}}, o, o == CommandOrigin::agent ? "chat" : "")
+                      .error.code == "command.unknown");
+    // No argument of a real command sets it either: the schemas refuse what they do not name.
+    CHECK(chat(*f.s, "panel.patch", {{"id", "loss"}, {"patch", {{"title", "X"}}}, {"mode", "allow_all"}}).error.code ==
+          "command.invalid_args");
+    CHECK(f.s->agent_mode(AgentPrincipal::mcp) == AgentMode::ask);
+    CHECK(read_text(f.perms).find("allow_all") == std::string::npos);
     // A malformed client is refused, and one that is not "chat" is not governed.
     CHECK(send(*f.s, "spec.get", json::object(), CommandOrigin::agent, "Chat!").error.code ==
           "command.invalid_invocation");
     CHECK(f.s->agent_mode(AgentPrincipal::chat) == AgentMode::ask);
 }
+
