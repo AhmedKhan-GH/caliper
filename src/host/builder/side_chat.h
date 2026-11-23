@@ -384,7 +384,7 @@ public:
         std::function<void(const std::string& mode)> set_permission_mode;
         // While the saved file still holds Allow all after a failed save of
         // another mode, what the banner says instead ("" or none otherwise);
-        // the banner then stays, and End saves Ask again.
+        // the banner then stays, and End saves the chosen mode again.
         std::function<std::string()> permission_note;
         // Whether the command journaled under `seq` is the newest step of the
         // history, and undoing it as the person (history.undo from ui), only

@@ -727,8 +727,15 @@ void SideChat::cycle_permission_mode() {
 
 void SideChat::set_allow_all(bool on) {
     if (!hooks_.set_permission_mode) return;
-    if (on) hooks_.set_permission_mode("allow_all");
-    else if (permission_word() == "Allow all" || !permission_note().empty()) hooks_.set_permission_mode("ask");
+    const std::string word = permission_word();
+    if (on) {
+        hooks_.set_permission_mode("allow_all");
+    } else if (word == "Allow all") {
+        hooks_.set_permission_mode("ask");
+    } else if (!permission_note().empty()) {
+        // After a failed save: save the mode the person chose again, never a looser one.
+        hooks_.set_permission_mode(word == "Read only" ? "read_only" : word == "Accept edits" ? "accept_edits" : "ask");
+    }
 }
 
 void SideChat::finish_start() {

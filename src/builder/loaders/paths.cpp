@@ -231,9 +231,6 @@ namespace {
 std::mutex g_protected_mutex;
 std::vector<fs::path> g_protected;
 
-// The path resolved as far as it exists (links and ".." followed, also a
-// link whose target does not exist yet), with the rest lexically normal, as a
-// string with ASCII letters in lower case.
 // The absolute path with the links of its last name followed, also a link
 // whose target does not exist yet.
 fs::path follow_links(const fs::path& p) {
@@ -256,11 +253,15 @@ std::string lower_ascii(std::string s) {
     return s;
 }
 
+// Whether both exist and are the same file by device and inode.
 bool same_file(const fs::path& a, const fs::path& b) {
     std::error_code ec;
     return fs::exists(a, ec) && fs::exists(b, ec) && fs::equivalent(a, b, ec) && !ec;
 }
 
+// The path resolved as far as it exists (links and ".." followed, also a
+// link whose target does not exist yet), with the rest lexically normal, as a
+// string with ASCII letters in lower case.
 std::string resolved_key(const fs::path& p) {
     std::error_code ec;
     const fs::path abs = follow_links(p);

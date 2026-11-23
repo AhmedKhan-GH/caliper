@@ -212,7 +212,7 @@ struct AgentSettingsLayoutInput {
     std::string cache_note;                // "Context cache about 18 GB", or ""
     bool permissions = false;              // the Permissions section
     int rules = 0;                         // its saved rules (at most kMaxRulesShown are laid out)
-    bool perm_note = false;                // the note of a failed save, two lines under the title
+    std::string perm_note;                 // the note of a failed save, wrapped under the title; "" for none
 };
 
 struct AgentSettingsLayout {

@@ -584,9 +584,13 @@ AgentSettingsLayout layout_in_window(const AgentSettingsLayoutInput& in, const A
         y += m.gap * 2;
         L.perm_title = {x0, y, pw, m.line};
         y += m.line + m.gap;
-        if (in.perm_note) {
-            L.perm_note = {x0, y, pw, 2 * m.line};
-            y += 2 * m.line + m.gap;
+        if (!in.perm_note.empty()) {
+            // Room for the wrapped note: its width over the column's, with a
+            // line to spare for the words a wrap moves down.
+            const float width = measure(in.perm_note, WidgetFont::label);
+            const float lines = std::ceil(width / std::max(1.0f, pw)) + 1.0f;
+            L.perm_note = {x0, y, pw, lines * m.line};
+            y += lines * m.line + m.gap;
         }
         const std::vector<std::string> modes = {"Ask", "Accept edits", "Read only", "Allow all"};
         auto mode_row = [&](WidgetRect* label, std::vector<WidgetRect>* buttons) {
@@ -1160,7 +1164,7 @@ AgentSettingsLayoutInput AgentSettings::layout_input(const WidgetRect& area) con
     if (has_permissions()) {
         in.permissions = true;
         in.rules = (int)permissions_.rules().size();
-        in.perm_note = permissions_.note && !permissions_.note().empty();
+        if (permissions_.note) in.perm_note = permissions_.note();
     }
     return in;
 }
@@ -1436,8 +1440,12 @@ void AgentSettings::draw(float x, float y, float w, float h, const SpecLook& L) 
         text_at(dl, L.ui, L.small_size, ImVec2(lay.perm_title.x, lay.perm_title.y), L.faint, "Permissions");
         if (!lay.perm_note.empty() && permissions_.note) {
             const std::string note = permissions_.note();
+            // Clipped to its box, so that it never draws over the mode buttons.
+            dl->PushClipRect(ImVec2(lay.perm_note.x, lay.perm_note.y), ImVec2(lay.perm_note.right(), lay.perm_note.bottom()),
+                             true);
             dl->AddText(L.ui ? L.ui : ImGui::GetFont(), L.ui_size, ImVec2(lay.perm_note.x, lay.perm_note.y), L.accent,
                         note.c_str(), nullptr, lay.perm_note.w);
+            dl->PopClipRect();
         }
         const char* names[] = {"ask", "accept_edits", "read_only", "allow_all"};
         const char* words[] = {"Ask", "Accept edits", "Read only", "Allow all"};
