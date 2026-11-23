@@ -353,18 +353,19 @@ bool make_groups(caliper_producer* rt, const Prog& p, Program program, std::vect
                 e.size = align4(im->byte_size);
             } else if (b.name == "caliper") {
                 e.buffer = kArena;
-            } else if (b.name == "count") {
-                e.buffer = p.count;
             } else if (b.name == "params" && p.params_buffer) {
                 e.buffer = p.params_buffer;
                 e.size = params_bytes(p);
             } else if (p.derive && b.name == "shapes" && p.shapes) {
                 e.buffer = p.shapes;
             } else if (p.derive) {
+                // Before the one-pass names: `count` is a valid id of a derive resource.
                 for (const ResourceSlot& r : p.resources) {
                     if (r.id == b.name) e.buffer = r.buffer;
                     else if (r.counted && r.id + "_count" == b.name) e.buffer = r.counter;
                 }
+            } else if (b.name == "count") {
+                e.buffer = p.count;
             } else {
                 for (const OutputArray& a : p.arrays)
                     if (a.name == b.name) e.buffer = a.buffer;
