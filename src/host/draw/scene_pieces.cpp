@@ -37,7 +37,7 @@ constexpr std::uint32_t kNanBits = 0x7fc00000u;
 constexpr std::uint32_t kNone = 0xffffffffu;
 
 // The capacities of the library pieces' resources (their piece.toml).
-constexpr std::uint64_t kPointsMax = 262144, kSegmentsMax = 209714, kArrowsMax = 262143, kBoxesMax = 131072,
+constexpr std::uint64_t kPointsMax = 262144, kSegmentsMax = 209714, kArrowsMax = 262143, kBoxesMax = 126976,
                         kMeshVerticesMax = 98304, kMeshTrianglesMax = 196608, kImagePixelsMax = 2097120,
                         kMaskPixelsMax = 2093024, kPaletteSize = 4096;
 
@@ -406,6 +406,7 @@ void boxes_of(const wire::SceneUpdate& u, Converted& c) {
         put(out, at + 48, &rgba, 4);
         put(out, at + 52, &klass, 4);
         put(out, at + 56, &index, 4);
+        put(out, at + 60, &kNone, 4);   // no label string: the scene view draws the labels itself
     }
     if (n > 0 && alpha) {
         const float one = 1.0f;
@@ -416,6 +417,7 @@ void boxes_of(const wire::SceneUpdate& u, Converted& c) {
         c.class_resource = 0;
     }
     c.resources.push_back({"boxes", std::uint32_t(n), std::move(out)});
+    c.resources.push_back({"names", 0, {}});
 }
 
 void mesh_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
@@ -463,17 +465,18 @@ void mesh_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
         const float one = 1.0f;
         put(verts, 28, &one, 4);   // vertex 0's normal.w: an alpha below 255
     }
-    std::vector<std::uint8_t> tris(std::size_t(t) * 16, 0);
+    // The index buffer faces, three vertex indices a triangle, each clamped to the last vertex.
+    std::vector<std::uint8_t> faces(std::size_t(t) * 12, 0);
     const std::uint32_t last = pos.n > 0 ? std::uint32_t(pos.n - 1) : 0;
     const std::int32_t* ids = indexed ? reinterpret_cast<const std::int32_t*>(ix->data) : nullptr;
     for (int64_t k = 0; k < t; ++k) {
-        std::uint32_t v[4] = {std::uint32_t(3 * k), std::uint32_t(3 * k + 1), std::uint32_t(3 * k + 2), 0};
+        std::uint32_t v[3] = {std::uint32_t(3 * k), std::uint32_t(3 * k + 1), std::uint32_t(3 * k + 2)};
         if (ids)
             for (int a = 0; a < 3; ++a) v[a] = std::min(std::uint32_t(ids[3 * k + a]), last);
-        put(tris, std::size_t(k) * 16, v, 16);
+        put(faces, std::size_t(k) * 12, v, 12);
     }
     c.resources.push_back({"vertices", std::uint32_t(pos.n), std::move(verts)});
-    c.resources.push_back({"triangles", std::uint32_t(t), std::move(tris)});
+    c.resources.push_back({"faces", std::uint32_t(t * 3), std::move(faces)});
 }
 
 // The info of an image piece: its size and the identity pose (the pose is in the matrix).
