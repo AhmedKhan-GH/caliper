@@ -11,6 +11,7 @@ viewer that keeps each raw frame.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import threading
 import time
 
@@ -691,6 +692,8 @@ class _Reader(threading.Thread):
         super().__init__(daemon=True)
         self.url = url
         self.got = []
+        self.wholes = []                             # (program, step, bytes, sha256) of each whole version
+        self.parts = w.SplitResources()
         self.closed = None
         self.stop = threading.Event()
 
@@ -712,6 +715,10 @@ class _Reader(threading.Thread):
                         continue
                     if f.type == P.RESOURCE_TYPE:
                         self.got.append((f.meta["program"], f.meta["step"]))
+                        r = self.parts.add(w.Resource.from_frame(f))
+                        if r is not None:
+                            self.wholes.append((r.program, r.step, len(r.data),
+                                                hashlib.sha256(r.data).hexdigest()))
         except ConnectionClosed as e:
             self.closed = e.rcvd.code if e.rcvd is not None else -1
 
@@ -721,6 +728,34 @@ def _wait(cond, what, timeout=60.0):
     while not cond():
         assert time.monotonic() < deadline, what
         time.sleep(0.01)
+
+
+def test_both_senders_carry_a_version_in_parts_to_a_viewer_whole(server, watching, monkeypatch):
+    """A version of 40 MiB goes in five parts of 8 MiB through either sender, one chunk while the
+    viewer's queue has room, and the viewer puts each version together whole and stays connected."""
+    reader = _Reader(server.stream_url)
+    reader.start()
+    try:
+        _wait(lambda: [ln for c in P._controls_ports() if c.server is server for ln in P._resource_links(c)],
+              "the viewer attaches")
+        monkeypatch.setattr(P, "_OUTBOX", {})
+        p = _piece_program("big", ["big"], monkeypatch)
+        p.kind = "piece"
+        data = np.arange((40 << 20) // 4, dtype=np.uint32).tobytes()
+        rt = _Runtime({"big": data}, stride=16)
+        for step in (1, 2):
+            p.last_step = step
+            P._publish_pass([(p, P._resource_frames(rt, p))])
+            _wait(lambda: P._pump() is None and (reader.closed is not None or
+                                                  any(x[1] == step for x in reader.wholes)),
+                  f"the viewer puts the version of step {step} together")
+            assert reader.closed is None, f"the server closed the viewer with {reader.closed}"
+        assert [x[:3] for x in reader.wholes] == [("big", 1, len(data)), ("big", 2, len(data))]
+        assert reader.wholes[1][3] == hashlib.sha256(data).hexdigest()
+        assert len(reader.got) == 10 and reader.parts.dropped == reader.parts.discarded == 0
+    finally:
+        reader.stop.set()
+        reader.join(10)
 
 
 def test_two_programs_of_one_chunk_each_reach_one_viewer_in_turn(server, watching, monkeypatch):
