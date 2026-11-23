@@ -1148,7 +1148,8 @@ bool SpecPage::scene_ready(const std::string& panel_id) {
 bool SpecPage::scene_probe(const std::string& panel_id, float rect[4], std::string* probe) {
     const caliper_live_views::SceneView* v = impl_->runtime->scene_view_of(panel_id);
     if (!v || v->generation() == 0 || !impl_->runtime->scene_rect(panel_id, rect)) return false;
-    *probe = "scene " + std::to_string(v->cost().frames) + " programs " + std::to_string(v->program_frames()) + " camera " +
+    *probe = "scene " + std::to_string(v->cost().frames) + " programs " + std::to_string(v->program_frames()) +
+             " step " + std::to_string(v->program_step()) + " camera " +
              v->camera_text() + " drawn " + v->drawn_camera_text();
     return true;
 }

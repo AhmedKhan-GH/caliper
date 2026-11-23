@@ -1010,6 +1010,12 @@ uint64_t SceneView::program_frames() const {
     return n;
 }
 
+int64_t SceneView::program_step() const {
+    int64_t step = -1;
+    for (const caliper_draw::DrawRuntime* rt : draw_runtimes()) step = std::max<int64_t>(step, rt->status().resource_step);
+    return step;
+}
+
 #if defined(CALIPER_HAVE_DRAW)
 namespace {
 

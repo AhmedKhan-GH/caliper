@@ -221,9 +221,10 @@ public:
     // its entities' own scene or the live scene that it binds.
     bool scene_ready(const std::string& panel_id);
     // For the same seam: where the scene panel `panel_id` was drawn last, in window points (x, y,
-    // width, height), and what its view drew in words: "scene <frames> programs <frames> camera
-    // <the camera now> drawn <the camera of its last frame>", the frames counted since the view
-    // opened. False before the panel's first draw.
+    // width, height), and what its view drew in words: "scene <frames> programs <frames> step
+    // <step> camera <the camera now> drawn <the camera of its last frame>", the frames counted
+    // since the view opened and the step the newest resources of its programs' frames. False
+    // before the panel's first draw.
     bool scene_probe(const std::string& panel_id, float rect[4], std::string* probe);
     // For the hidden app's input driver: a named rectangle of the page's own
     // ("page:browser"), in window points, as the last frame drew it.

@@ -273,8 +273,10 @@ public:
     void set_draw_feed(caliper_draw::DrawFeed* feed);
     // The installed programs, in draw order.
     std::vector<const caliper_draw::DrawRuntime*> draw_runtimes() const;
-    // The frames that the installed programs encoded together, each counted since its install.
+    // The frames that the installed programs encoded together, each counted since its install, and
+    // the newest step of the resources that their last frames showed (-1 before any).
     uint64_t program_frames() const;
+    int64_t program_step() const;
     // The programs' ID target; none while the view draws no program.
     caliper_gfx::Texture id_target() const { return id_; }
     // The depth target of the view's frame (Depth32Float, with kCopySrcTex); none in 2-D. A
