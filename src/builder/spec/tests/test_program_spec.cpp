@@ -475,6 +475,13 @@ TEST_CASE("one piece reads and writes as JSON and as piece.toml with the same ha
     REQUIRE_MESSAGE(js.ok(), dump(js.diagnostics));
     CHECK(js.piece == piece);
     CHECK(cs::to_json(piece)["files"]["draw"] == piece.files.at("draw.wgsl"));
+    // The key optional of an input survives both forms.
+    cs::Piece loose = piece;
+    loose.inputs[0].optional = true;
+    const cs::PieceParse loose_toml = cs::piece_from_toml(cs::piece_to_toml(loose));
+    REQUIRE_MESSAGE(loose_toml.ok(), dump(loose_toml.diagnostics));
+    CHECK(loose_toml.piece.inputs[0].optional);
+    CHECK(cs::piece_from_json_value(cs::to_json(loose)).piece == loose);
 
     const cs::PieceParse bad = cs::piece_from_toml("name = \"x\"\n\n[draw]\npasses = [{ kind = \"render\", colour = 1 }]\n");
     CHECK(has(bad.diagnostics, "spec.unknown_key", "draw.passes[0].colour"));

@@ -1429,7 +1429,9 @@ def _check_piece(p: _Program, values) -> None:
         src = ""
         if kind == "tensor":
             src = p.bind.get(x["name"])
-            if not isinstance(src, str) or not src.startswith("live:") or len(src) == len("live:"):
+            if src is None and x.get("optional") is True:
+                src = ""                             # an optional input left unbound
+            elif not isinstance(src, str) or not src.startswith("live:") or len(src) == len("live:"):
                 raise _Refused("piece.bad_binding",
                                f"The tensor input {x['name']} needs a binding live:<tensor>.")
         p.inputs.append((x["name"], src))
@@ -1504,11 +1506,13 @@ def _check_piece(p: _Program, values) -> None:
 
 def _compile_piece(p: _Program) -> None:
     """Import the tensor inputs and compile the derive half; raises _Refused or _Waiting."""
-    bound, inputs = {}, []
+    bound, inputs, unbound = {}, [], []
     for name, src in p.inputs:
         kind, dtype = p.types[name]
-        if kind != "tensor":
-            inputs.append((name, 0, dtype))          # the place of a buffer input
+        if kind != "tensor" or not src:
+            inputs.append((name, 0, dtype))          # the place of a buffer input, or an unbound optional one
+            if kind == "tensor":
+                unbound.append(name)
             continue
         tname = src[len("live:"):]
         t = _resolve(tname)
@@ -1523,7 +1527,7 @@ def _compile_piece(p: _Program) -> None:
     old = p.handle
     try:
         h = rt.derive(p.id, p.wgsl, p.common, inputs, resources, p.passes, params, time_ms=p.time_ms,
-                      memory_bytes=p.memory_mb << 20, piece_hash=p.piece.get("hash") or None)
+                      memory_bytes=p.memory_mb << 20, piece_hash=p.piece.get("hash") or None, unbound=unbound)
     except RuntimeError as e:
         raise _refusal(e) from e
     if old is not None:

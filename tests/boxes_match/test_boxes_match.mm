@@ -10,9 +10,11 @@
 // image shows there, with the field `index` of its item map. The cases cover the color modes (one
 // color, RGBA of each box, class ids with ids outside the table), widths and the pixel ratio,
 // faces, translucent boxes (an alpha below 255, of one color or of a box), rotations, the depth
-// offset, boxes in 2-D, a box with a NaN center, empty input, one box, and the capacity of the
-// piece, 131,072 boxes of 64 bytes in its 8 MiB of published resources (the built-in takes
-// 1,048,576). Without a Metal device the test skips (exit 77).
+// offset, boxes in 2-D, a box with a NaN center, empty input, one box, labels (of each box, one for
+// all, and of every step-th box of a large set, whose anchors and texts must equal the built-in's),
+// and the capacity of the piece, 126,976 boxes of 64 bytes beside 4,096 label strings of 64 bytes
+// in its 8 MiB of published resources (the built-in takes 1,048,576). The inputs that a case
+// lacks stay unbound. Without a Metal device the test skips (exit 77).
 //
 // With CALIPER_BOXES_MATCH_CAPTURE_DIR set, each case writes boxes-<case>-builtin.png,
 // boxes-<case>-piece.png and boxes-<case>-diff.png (the difference scaled up 32 times) there.
@@ -28,7 +30,7 @@ using namespace match_rig;
 
 constexpr std::uint32_t kSize = 256;
 constexpr std::uint32_t kDefaultRgba = 0xffe6dcdcu;   // the scene's default color
-constexpr std::uint32_t kCapacity = 131072;
+constexpr std::uint32_t kCapacity = 126976;
 
 // One set of boxes with the built-in's options.
 struct Boxes {
@@ -37,6 +39,7 @@ struct Boxes {
     std::vector<float> rot;             // n * 4, or none
     std::vector<std::uint8_t> rgba;     // n * 4, or none
     std::vector<std::int32_t> classes;  // n, or none
+    std::vector<std::string> labels;    // n, one for all, or none
     std::uint32_t flat = kDefaultRgba;
     float width = 2.0f;
     bool fill = false;
@@ -101,6 +104,7 @@ void builtin_boxes(Builtin& bt, const Boxes& b) {
     if (!b.rot.empty()) up.add(sc::Role::Rotations, b.rot, std::uint32_t(n), 16, gfx::VertexFormat::F32x4);
     if (!b.rgba.empty()) up.add(sc::Role::Colors, b.rgba, std::uint32_t(n), 4, gfx::VertexFormat::Unorm8x4);
     if (!b.classes.empty()) up.add(sc::Role::ClassIds, b.classes, std::uint32_t(n), 4, gfx::VertexFormat::S32);
+    batch.labels = b.labels;
     for (int i = 0; i < n; ++i) {
         double c[3] = {0, 0, 0}, h[3] = {0, 0, 0};
         for (int k = 0; k < b.dims; ++k) {
@@ -115,15 +119,20 @@ void builtin_boxes(Builtin& bt, const Boxes& b) {
     bt.set("boxes", batch, up);
 }
 
-// The tensors of the piece's inputs and its params. A tensor that the boxes lack binds another of
-// the same rank, as a program binds an input that its mode does not read.
+// The tensors of the piece's inputs and its params. An input that the boxes lack stays unbound.
+// Each label is 16 u32 of its UTF-8 bytes, four in each element in order, zero after its end.
 std::vector<HostTensor> piece_tensors(const Boxes& b, caliper_net::Json* params) {
     const std::int64_t n = b.n(), d = b.dims;
     std::vector<HostTensor> t;
     t.push_back(HostTensor::of("centers", "f32", {n, d}, b.centers));
     t.push_back(HostTensor::of("half_sizes", "f32", {n, d}, b.half));
     if (!b.rot.empty()) t.push_back(HostTensor::of("rotations", "f32", {n, 4}, b.rot));
-    else t.push_back(HostTensor::of("rotations", "f32", {n, d}, b.centers));
+    if (!b.labels.empty()) {
+        std::vector<std::uint32_t> words(b.labels.size() * 16, 0u);
+        for (std::size_t i = 0; i < b.labels.size(); ++i)
+            std::memcpy(words.data() + i * 16, b.labels[i].data(), std::min<std::size_t>(b.labels[i].size(), 64));
+        t.push_back(HostTensor::of("labels", "u32", {std::int64_t(b.labels.size()), 16}, words));
+    }
     std::uint32_t mode = 0;
     if (!b.rgba.empty()) {
         std::vector<float> c;
@@ -134,8 +143,6 @@ std::vector<HostTensor> piece_tensors(const Boxes& b, caliper_net::Json* params)
         std::vector<float> c(b.classes.begin(), b.classes.end());
         t.push_back(HostTensor::of("colors", "f32", {n}, c));
         mode = 2;
-    } else {
-        t.push_back(HostTensor::of("colors", "f32", {n, d}, b.half));
     }
     *params = caliper_net::Json::object();
     params->set("width", double(b.width));
@@ -157,10 +164,40 @@ struct Outcome {
     Comparison c;
     std::uint32_t published = 0;   // the valid boxes of the piece's resource
     int picks = 0, asked = 0;
+    std::size_t labels = 0;        // the built-in's labels, each matched by one of the piece
 };
 
+// The piece's labels at pixels, as the scene view projects a program's anchors (live_views_scene.cpp).
+std::vector<sc::LabelAnchor> piece_labels(const cd::DrawRuntime& rt, const cd::FrameInputs& in, std::uint32_t size) {
+    std::vector<sc::LabelAnchor> out;
+    for (const cd::Label& l : rt.labels()) {
+        double h[4];
+        for (int r = 0; r < 4; ++r)
+            h[r] = double(in.clip_from_world[std::size_t(r)]) * l.position[0] +
+                   double(in.clip_from_world[std::size_t(4 + r)]) * l.position[1] +
+                   double(in.clip_from_world[std::size_t(8 + r)]) * l.position[2] + double(in.clip_from_world[std::size_t(12 + r)]);
+        if (!(h[3] > 0)) continue;
+        const double x = h[0] / h[3], y = h[1] / h[3];
+        if (std::fabs(x) > 1 || std::fabs(y) > 1) continue;
+        sc::LabelAnchor a;
+        a.x = float((x + 1) * 0.5 * size);
+        a.y = float((1 - y) * 0.5 * size);
+        a.text = l.text;
+        out.push_back(a);
+    }
+    return out;
+}
+
+const Published& find(const std::vector<Published>& res, const char* id) {
+    for (const Published& p : res)
+        if (p.id == id) return p;
+    FAIL("no published resource ", id);
+    return res.front();
+}
+
 // Draws the boxes both ways, compares, picks `items`, and writes the captures of the case.
-Outcome run(Metal& m, const std::string& name, const Boxes& b, std::vector<std::uint64_t> items) {
+Outcome run(Metal& m, const std::string& name, const Boxes& b, std::vector<std::uint64_t> items,
+            bool same_labels = true) {
     gfx::Backend& g = *m.backend;
     Outcome o;
     Builtin bt(g, kSize, b.dims == 3 ? sc::Space::k3D : sc::Space::k2D);
@@ -178,8 +215,10 @@ Outcome run(Metal& m, const std::string& name, const Boxes& b, std::vector<std::
     REQUIRE_MESSAGE(load_piece("boxes", &piece, &why), why);
     caliper_net::Json params;
     const std::vector<HostTensor> tensors = piece_tensors(b, &params);
-    const std::vector<Published> res = run_derive(m.device, piece, tensors, as_map(params));
-    REQUIRE(res.size() == 1);
+    const std::vector<Published> all = run_derive(m.device, piece, tensors, as_map(params));
+    REQUIRE(all.size() == 2);
+    const std::vector<Published> res{find(all, "boxes")};
+    const Published& names = find(all, "names");
     o.published = res[0].count;
     if (res[0].count > 0 && !b.rgba.empty()) {
         // Box 0 holds the flags of all boxes: bit 0 when the RGBA of a box has an alpha below 255,
@@ -194,6 +233,7 @@ Outcome run(Metal& m, const std::string& name, const Boxes& b, std::vector<std::
     PieceDraw pd(g, kSize);
     pd.install(piece, "boxes");
     if (res[0].count > 0) pd.set("boxes", res[0].bytes, res[0].count);
+    pd.set("names", names.bytes, names.count);
     cd::FrameInputs in = bt.frame_inputs();
     in.pixel_ratio = b.pixel_ratio;
     in.params = caliper_web::pack_params(piece, params);
@@ -211,6 +251,28 @@ Outcome run(Metal& m, const std::string& name, const Boxes& b, std::vector<std::
         o.picks += check_picks(bt, pd, {it}, sc::Primitive::Boxes);
     }
     if (o.asked) MESSAGE("boxes ", name, ": ", o.picks, " of ", o.asked, " picks name the piece's item and field");
+
+    // The labels: each of the built-in's, at the center of its box, has one of the piece's with the
+    // same text within a tenth of a pixel, and the piece has no other.
+    const std::vector<sc::LabelAnchor> want = sc::project_labels(bt.tree, bt.camera, kSize, kSize);
+    std::vector<sc::LabelAnchor> got = piece_labels(pd.rt, in, kSize);
+    CHECK(got.size() == want.size());
+    if (!same_labels) {   // more than 512 labels: the built-in keeps the nearest, the piece the first
+        o.labels = std::min(got.size(), want.size());
+        MESSAGE("boxes ", name, ": ", got.size(), " labels of the piece and ", want.size(), " of the built-in");
+        return o;
+    }
+    for (const sc::LabelAnchor& w : want) {
+        const auto it = std::find_if(got.begin(), got.end(), [&](const sc::LabelAnchor& g) {
+            return g.text == w.text && std::fabs(g.x - w.x) <= 0.1f && std::fabs(g.y - w.y) <= 0.1f;
+        });
+        CHECK_MESSAGE(it != got.end(), name, ": the label ", w.text, " at ", w.x, ", ", w.y, " has no match");
+        if (it != got.end()) {
+            got.erase(it);
+            ++o.labels;
+        }
+    }
+    if (!want.empty()) MESSAGE("boxes ", name, ": ", o.labels, " of ", want.size(), " labels match, ", names.count, " strings published");
 
     capture("CALIPER_BOXES_MATCH_CAPTURE_DIR", "boxes-" + name + "-builtin.png", kSize, bt.image);
     capture("CALIPER_BOXES_MATCH_CAPTURE_DIR", "boxes-" + name + "-piece.png", kSize, pd.color);
@@ -355,7 +417,39 @@ TEST_CASE("boxes_match: no box draws nothing") {
     MESSAGE("boxes empty: ", c.differ, " pixels differ from the built-in's empty scene");
 }
 
-TEST_CASE("boxes_match: the capacity of 131,072 boxes, and the first boxes of a larger set") {
+TEST_CASE("boxes_match: labels of each box, one label for all, and labels of every step-th box of a large set") {
+    Metal m;
+    if (!m.backend) CALIPER_SKIP_NO_GPU(m.why);
+    Boxes b = scatter(40, 3, 777u, true);
+    for (int i = 0; i < b.n(); ++i) b.labels.push_back(i % 5 == 4 ? std::string() : "box " + std::to_string(i) + " \xC3\xA9");
+    const Outcome o = run(m, "labels", b, {0});
+    CHECK(o.labels > 20);
+    Boxes one = scatter(12, 2, 99u, false);
+    one.labels = {"all"};
+    CHECK(run(m, "labels_one", one, {}).labels == 12);
+    // 1,200 labels of 1,200 boxes in 2-D, and one label for 9,000 boxes, which the built-in and the
+    // piece give every third box, 3,000; of those both keep 512, the built-in the nearest and the
+    // piece the first, thus only the count is held here.
+    Boxes each;
+    each.dims = 2;
+    for (int i = 0; i < 1200; ++i) {
+        each.centers.insert(each.centers.end(), {float(i % 40) / 20.0f - 0.975f, float(i / 40) / 15.0f - 0.97f});
+        each.half.insert(each.half.end(), {0.005f, 0.005f});
+        each.labels.push_back(i % 3 == 0 ? "e" + std::to_string(i) : std::string());
+    }
+    CHECK(run(m, "labels_each", each, {}).labels == 400);
+    Boxes many;
+    many.dims = 2;
+    for (int i = 0; i < 9000; ++i) {
+        many.centers.insert(many.centers.end(), {float(i % 90) / 45.0f - 0.99f, float(i / 90) / 50.0f - 0.99f});
+        many.half.insert(many.half.end(), {0.002f, 0.002f});
+    }
+    many.labels = {"m"};
+    const Outcome big = run(m, "labels_step", many, {}, false);
+    CHECK(big.labels == 512);
+}
+
+TEST_CASE("boxes_match: the capacity of 126,976 boxes, and the first boxes of a larger set") {
     Metal m;
     if (!m.backend) CALIPER_SKIP_NO_GPU(m.why);
     // A grid of 64 x 64 x 32 small boxes, with the first and the last boxes large in front.
@@ -383,16 +477,17 @@ TEST_CASE("boxes_match: the capacity of 131,072 boxes, and the first boxes of a 
     CHECK(o.picks == o.asked);
     CHECK(o.asked == 2);
 
-    // One box more than the capacity: the piece publishes the first 131,072.
+    // One box more than the capacity: the piece publishes the first 126,976.
     cs::Piece piece;
     std::string why;
     REQUIRE_MESSAGE(load_piece("boxes", &piece, &why), why);
     caliper_net::Json params;
     const Boxes over = grid(int(kCapacity) + 1);
     const std::vector<Published> res = run_derive(m.device, piece, piece_tensors(over, &params), as_map(params));
-    REQUIRE(res.size() == 1);
-    CHECK(res[0].count == kCapacity);
-    CHECK(res[0].bytes.size() == std::size_t(kCapacity) * 64);
+    REQUIRE(res.size() == 2);
+    CHECK(find(res, "boxes").count == kCapacity);
+    CHECK(find(res, "boxes").bytes.size() == std::size_t(kCapacity) * 64);
+    CHECK(find(res, "names").count == 0);
 }
 
 CALIPER_GPU_TEST_MAIN()

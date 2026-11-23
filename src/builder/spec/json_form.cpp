@@ -766,7 +766,7 @@ public:
         DrawPass p;
         strict_keys(o, path,
                     {"kind", "entry", "workgroups", "writes", "vertex", "fragment", "target", "reads", "instances",
-                     "vertices", "topology", "blend", "depth", "pick"},
+                     "vertices", "topology", "blend", "depth", "pick", "indices"},
                     "a pass of the draw half");
         if (o.find("kind") == o.end()) missing(path, "kind", "A pass of the draw half");
         if (auto k = named<PassKind>(o, "kind", path, pass_kind_from_name, {"compute", "render"}, "a kind of pass"))
@@ -793,6 +793,7 @@ public:
         p.blend = named<DrawBlend>(o, "blend", path, draw_blend_from_name, {"opaque", "alpha", "additive"}, "a blend");
         p.depth = named<DrawDepth>(o, "depth", path, draw_depth_from_name, {"none", "test", "write"}, "a depth");
         if (auto b = boolean(o, "pick", path)) p.pick = *b;
+        p.indices = string(o, "indices", path);
         return p;
     }
 
@@ -846,13 +847,18 @@ public:
         if (auto it = o.find("text"); it != o.end()) {
             const std::string tp = key_path(path, "text");
             if (table(*it, tp, tp)) {
-                strict_keys(*it, tp, {"anchors", "position", "string", "priority", "strings"}, "the text table");
+                strict_keys(*it, tp, {"anchors", "position", "string", "priority", "strings", "strings_from", "align"},
+                            "the text table");
                 TextTable t;
                 t.anchors = required_string(*it, "anchors", tp, "The text table");
                 if (auto v = string(*it, "position", tp)) t.position = *v;
                 if (auto v = string(*it, "string", tp)) t.string = *v;
                 t.priority = string(*it, "priority", tp);
                 t.strings = string_list(*it, "strings", tp);
+                t.strings_from = string(*it, "strings_from", tp);
+                if (auto a = named<TextAlign>(*it, "align", tp, text_align_from_name, {"placed", "left", "right", "center"},
+                                              "an alignment"))
+                    t.align = *a;
                 d.text = std::move(t);
             }
         }
@@ -874,7 +880,9 @@ public:
         if (auto v = count(o, "version", path)) p.version = *v;
         if (auto v = string(o, "description", path)) p.description = *v;
         tables(o, "inputs", path, [&](const json& t, const std::string& ip) {
-            strict_keys(t, ip, {"name", "kind", "dtype", "rank_min", "rank_max", "element", "struct", "fields", "title"},
+            strict_keys(t, ip,
+                        {"name", "kind", "dtype", "rank_min", "rank_max", "element", "struct", "fields", "title",
+                         "optional"},
                         "an input");
             PieceInput in;
             in.name = required_string(t, "name", ip, "An input");
@@ -886,6 +894,7 @@ public:
             if (auto v = count(t, "rank_max", ip)) in.rank_max = *v;
             in.layout = piece_layout(t, ip);
             in.title = string(t, "title", ip);
+            if (auto v = boolean(t, "optional", ip)) in.optional = *v;
             p.inputs.push_back(std::move(in));
         });
         tables(o, "params", path, [&](const json& t, const std::string& pp) {

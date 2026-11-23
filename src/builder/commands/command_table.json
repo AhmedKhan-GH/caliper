@@ -12900,6 +12900,11 @@
                           "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
                           "type": "string"
                         },
+                        "indices": {
+                          "description": "render with a vertex entry and a list topology: a published buffer resource or buffer input of u32 elements, whose valid elements the pass draws as an index buffer; each index is the vertex_index of the vertex entry, whose reads are bounds-checked. vertices then counts nothing.",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                          "type": "string"
+                        },
                         "instances": {
                           "description": "render: the instance count from 1 to 4194304, or the id of a buffer resource or buffer input whose valid count at the cursor is the count; 1 when absent.",
                           "type": [
@@ -13051,6 +13056,16 @@
                     "additionalProperties": false,
                     "description": "Labels that the host draws and places.",
                     "properties": {
+                      "align": {
+                        "description": "placed: the placer chooses one of eight places around the anchor; left, right and center pin each label at its anchor with the start, the end or the middle of its text there. placed when absent.",
+                        "enum": [
+                          "placed",
+                          "left",
+                          "right",
+                          "center"
+                        ],
+                        "type": "string"
+                      },
                       "anchors": {
                         "description": "A buffer resource with a struct; one label at each valid element.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
@@ -13079,11 +13094,15 @@
                         },
                         "maxItems": 4096,
                         "type": "array"
+                      },
+                      "strings_from": {
+                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                        "type": "string"
                       }
                     },
                     "required": [
-                      "anchors",
-                      "strings"
+                      "anchors"
                     ],
                     "type": "object"
                   }
@@ -13179,6 +13198,10 @@
                       "description": "The input's name, which the WGSL reads as a generated read-only array.",
                       "pattern": "^[a-z][a-z0-9_]{0,31}$",
                       "type": "string"
+                    },
+                    "optional": {
+                      "description": "true: a program may leave the input unbound; a tensor input then has the shape (0, 0, 0, 0) and reads zero, and a buffer input has the count 0. false when absent.",
+                      "type": "boolean"
                     },
                     "rank_max": {
                       "description": "tensor: the most axes; 8 when absent.",
@@ -15528,6 +15551,11 @@
                           "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
                           "type": "string"
                         },
+                        "indices": {
+                          "description": "render with a vertex entry and a list topology: a published buffer resource or buffer input of u32 elements, whose valid elements the pass draws as an index buffer; each index is the vertex_index of the vertex entry, whose reads are bounds-checked. vertices then counts nothing.",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                          "type": "string"
+                        },
                         "instances": {
                           "description": "render: the instance count from 1 to 4194304, or the id of a buffer resource or buffer input whose valid count at the cursor is the count; 1 when absent.",
                           "type": [
@@ -15679,6 +15707,16 @@
                     "additionalProperties": false,
                     "description": "Labels that the host draws and places.",
                     "properties": {
+                      "align": {
+                        "description": "placed: the placer chooses one of eight places around the anchor; left, right and center pin each label at its anchor with the start, the end or the middle of its text there. placed when absent.",
+                        "enum": [
+                          "placed",
+                          "left",
+                          "right",
+                          "center"
+                        ],
+                        "type": "string"
+                      },
                       "anchors": {
                         "description": "A buffer resource with a struct; one label at each valid element.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
@@ -15707,11 +15745,15 @@
                         },
                         "maxItems": 4096,
                         "type": "array"
+                      },
+                      "strings_from": {
+                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                        "type": "string"
                       }
                     },
                     "required": [
-                      "anchors",
-                      "strings"
+                      "anchors"
                     ],
                     "type": "object"
                   }
@@ -15807,6 +15849,10 @@
                       "description": "The input's name, which the WGSL reads as a generated read-only array.",
                       "pattern": "^[a-z][a-z0-9_]{0,31}$",
                       "type": "string"
+                    },
+                    "optional": {
+                      "description": "true: a program may leave the input unbound; a tensor input then has the shape (0, 0, 0, 0) and reads zero, and a buffer input has the count 0. false when absent.",
+                      "type": "boolean"
                     },
                     "rank_max": {
                       "description": "tensor: the most axes; 8 when absent.",
@@ -16610,6 +16656,11 @@
                           "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
                           "type": "string"
                         },
+                        "indices": {
+                          "description": "render with a vertex entry and a list topology: a published buffer resource or buffer input of u32 elements, whose valid elements the pass draws as an index buffer; each index is the vertex_index of the vertex entry, whose reads are bounds-checked. vertices then counts nothing.",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                          "type": "string"
+                        },
                         "instances": {
                           "description": "render: the instance count from 1 to 4194304, or the id of a buffer resource or buffer input whose valid count at the cursor is the count; 1 when absent.",
                           "type": [
@@ -16761,6 +16812,16 @@
                     "additionalProperties": false,
                     "description": "Labels that the host draws and places.",
                     "properties": {
+                      "align": {
+                        "description": "placed: the placer chooses one of eight places around the anchor; left, right and center pin each label at its anchor with the start, the end or the middle of its text there. placed when absent.",
+                        "enum": [
+                          "placed",
+                          "left",
+                          "right",
+                          "center"
+                        ],
+                        "type": "string"
+                      },
                       "anchors": {
                         "description": "A buffer resource with a struct; one label at each valid element.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
@@ -16789,11 +16850,15 @@
                         },
                         "maxItems": 4096,
                         "type": "array"
+                      },
+                      "strings_from": {
+                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                        "type": "string"
                       }
                     },
                     "required": [
-                      "anchors",
-                      "strings"
+                      "anchors"
                     ],
                     "type": "object"
                   }
@@ -16889,6 +16954,10 @@
                       "description": "The input's name, which the WGSL reads as a generated read-only array.",
                       "pattern": "^[a-z][a-z0-9_]{0,31}$",
                       "type": "string"
+                    },
+                    "optional": {
+                      "description": "true: a program may leave the input unbound; a tensor input then has the shape (0, 0, 0, 0) and reads zero, and a buffer input has the count 0. false when absent.",
+                      "type": "boolean"
                     },
                     "rank_max": {
                       "description": "tensor: the most axes; 8 when absent.",
@@ -17566,6 +17635,11 @@
                           "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
                           "type": "string"
                         },
+                        "indices": {
+                          "description": "render with a vertex entry and a list topology: a published buffer resource or buffer input of u32 elements, whose valid elements the pass draws as an index buffer; each index is the vertex_index of the vertex entry, whose reads are bounds-checked. vertices then counts nothing.",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                          "type": "string"
+                        },
                         "instances": {
                           "description": "render: the instance count from 1 to 4194304, or the id of a buffer resource or buffer input whose valid count at the cursor is the count; 1 when absent.",
                           "type": [
@@ -17717,6 +17791,16 @@
                     "additionalProperties": false,
                     "description": "Labels that the host draws and places.",
                     "properties": {
+                      "align": {
+                        "description": "placed: the placer chooses one of eight places around the anchor; left, right and center pin each label at its anchor with the start, the end or the middle of its text there. placed when absent.",
+                        "enum": [
+                          "placed",
+                          "left",
+                          "right",
+                          "center"
+                        ],
+                        "type": "string"
+                      },
                       "anchors": {
                         "description": "A buffer resource with a struct; one label at each valid element.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
@@ -17745,11 +17829,15 @@
                         },
                         "maxItems": 4096,
                         "type": "array"
+                      },
+                      "strings_from": {
+                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                        "type": "string"
                       }
                     },
                     "required": [
-                      "anchors",
-                      "strings"
+                      "anchors"
                     ],
                     "type": "object"
                   }
@@ -17845,6 +17933,10 @@
                       "description": "The input's name, which the WGSL reads as a generated read-only array.",
                       "pattern": "^[a-z][a-z0-9_]{0,31}$",
                       "type": "string"
+                    },
+                    "optional": {
+                      "description": "true: a program may leave the input unbound; a tensor input then has the shape (0, 0, 0, 0) and reads zero, and a buffer input has the count 0. false when absent.",
+                      "type": "boolean"
                     },
                     "rank_max": {
                       "description": "tensor: the most axes; 8 when absent.",

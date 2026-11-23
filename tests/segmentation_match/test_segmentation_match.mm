@@ -126,7 +126,7 @@ TEST_CASE("segmentation_match: segmentation@1 draws each mask as the built-in se
         Case k;
         k.name = case_name("segmentation", "u8-table");
         k.scene = flat_scene("u8", ids, w, h, classes, std::nullopt);
-        k.tensors = {ids_tensor(ids, w, h), classes.tensor(), pose_tensor(kIdentity)};
+        k.tensors = {ids_tensor(ids, w, h), classes.tensor()};
         k.width = w;
         k.height = h;
         k.field = [ids](std::uint32_t i) { return double(ids[i]); };
@@ -148,7 +148,7 @@ TEST_CASE("segmentation_match: segmentation@1 draws each mask as the built-in se
         Case k;
         k.name = case_name("segmentation", "u16-alpha");
         k.scene = flat_scene("u16", ids, w, h, classes, 0.75);
-        k.tensors = {ids_tensor(ids, w, h), classes.tensor(), pose_tensor(kIdentity)};
+        k.tensors = {ids_tensor(ids, w, h), classes.tensor()};
         k.params = {{"opacity", 0.75}};
         k.width = w;
         k.height = h;
@@ -171,7 +171,7 @@ TEST_CASE("segmentation_match: segmentation@1 draws each mask as the built-in se
         k.name = case_name("segmentation", "camera");
         k.scene = scene(true);
         k.plain = scene(false);
-        k.tensors = {ids_tensor(ids, w, h), Classes{}.tensor(), pose_tensor(pose)};
+        k.tensors = {ids_tensor(ids, w, h), pose_tensor(pose)};
         k.params = kCameraParams;
         k.params["opacity"] = 0.9;
         k.width = w;
@@ -186,7 +186,7 @@ TEST_CASE("segmentation_match: segmentation@1 draws each mask as the built-in se
         Case k;
         k.name = case_name("segmentation", "one-pixel");
         k.scene = flat_scene("one", ids, 1, 1, Classes{}, std::nullopt);
-        k.tensors = {ids_tensor(ids, 1, 1), Classes{}.tensor(), pose_tensor(kIdentity)};
+        k.tensors = {ids_tensor(ids, 1, 1), Classes{}.tensor()};
         k.width = k.height = 1;
         k.picks = 1;
         k.field = [ids](std::uint32_t i) { return double(ids[i]); };
@@ -202,7 +202,7 @@ TEST_CASE("segmentation_match: segmentation@1 draws each mask as the built-in se
         Case k;
         k.name = case_name("segmentation", "largest");
         k.scene = flat_scene("large", ids, w, h, Classes{}, std::nullopt);
-        k.tensors = {ids_tensor(ids, w, h), Classes{}.tensor(), pose_tensor(kIdentity)};
+        k.tensors = {ids_tensor(ids, w, h), Classes{}.tensor()};
         k.width = w;
         k.height = h;
         k.min_lit = 0;
@@ -220,7 +220,7 @@ TEST_CASE("segmentation_match: the palette holds the class colors of the input a
     std::vector<Version> versions;
     std::string why;
     REQUIRE_MESSAGE(run_derive(fx.m.device, fx.piece,
-                               {tensor("classes", {1, 3}, ids, CALIPER_PRODUCER_I32), classes.tensor(), pose_tensor(kIdentity)},
+                               {tensor("classes", {1, 3}, ids, CALIPER_PRODUCER_I32), classes.tensor()},
                                {}, &versions, &why),
                     why);
     const Version* palette = find_version(versions, "palette");
@@ -249,7 +249,7 @@ TEST_CASE("segmentation_match: segmentation@1 draws nothing for a mask above its
     if (!fx.ready) CALIPER_SKIP_NO_GPU(fx.m.why);
     const std::vector<std::int32_t> large(std::size_t(1447) * 1447, 1);
     check_refusals(fx.m, fx.piece,
-                   {tensor("classes", {1447, 1447}, large, CALIPER_PRODUCER_I32), Classes{}.tensor(), pose_tensor(kIdentity)},
+                   {tensor("classes", {1447, 1447}, large, CALIPER_PRODUCER_I32), Classes{}.tensor()},
                    {tensor("classes", {0, 16}, std::vector<std::int32_t>{}, CALIPER_PRODUCER_I32), Classes{}.tensor(),
                     pose_tensor(kIdentity)},
                    80, {});

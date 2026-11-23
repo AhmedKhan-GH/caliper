@@ -544,7 +544,9 @@ Verdict check_source(std::string_view wgsl, std::size_t max_bytes) {
 
 // ---- 4. compile
 
-Compiled compile_and_reflect(std::string_view wgsl) {
+Compiled compile_and_reflect(std::string_view wgsl) { return compile_and_reflect_entry(wgsl, {}); }
+
+Compiled compile_and_reflect_entry(std::string_view wgsl, std::string_view entry) {
     Compiled out;
 #if defined(CALIPER_BUILDER_PROGRAMS_HAVE_WGSL)
     if (caliper_wgsl_abi_version() != CALIPER_WGSL_ABI_VERSION) {
@@ -555,7 +557,11 @@ Compiled compile_and_reflect(std::string_view wgsl) {
     }
     caliper_wgsl_module* module = nullptr;
     caliper_wgsl_error error{};
-    const caliper_wgsl_status st = caliper_wgsl_module_create(wgsl.data(), wgsl.size(), nullptr, &module, &error);
+    caliper_wgsl_options options;
+    caliper_wgsl_options_init(&options);
+    const std::string keep(entry);
+    if (!keep.empty()) options.entry_point = keep.c_str();
+    const caliper_wgsl_status st = caliper_wgsl_module_create(wgsl.data(), wgsl.size(), &options, &module, &error);
     if (st != CALIPER_WGSL_OK || !module) {
         std::string message = error.message ? error.message : "The compiler refused the source.";
         out.verdict = fail(st == CALIPER_WGSL_ERROR_TOO_LARGE ? kProgramTooLarge : kProgramCompileFailed,
@@ -588,6 +594,7 @@ Compiled compile_and_reflect(std::string_view wgsl) {
         r.name = e.name ? e.name : "";
         r.stage = static_cast<EntryStage>(e.stage);
         r.workgroup_size = {e.workgroup_size[0], e.workgroup_size[1], e.workgroup_size[2]};
+        r.workgroup_memory = e.workgroup_memory;
         for (std::size_t k = 0, n = caliper_wgsl_module_entry_io_count(module, i); k < n; ++k) {
             caliper_wgsl_io io{};
             if (caliper_wgsl_module_entry_io(module, i, k, &io) != CALIPER_WGSL_OK) continue;
@@ -604,6 +611,7 @@ Compiled compile_and_reflect(std::string_view wgsl) {
     caliper_wgsl_module_destroy(module);
 #else
     (void)wgsl;
+    (void)entry;
     out.verdict = fail(kProgramCompilerUnavailable,
                        "This build has no WGSL compiler, so the source cannot be checked here.");
 #endif

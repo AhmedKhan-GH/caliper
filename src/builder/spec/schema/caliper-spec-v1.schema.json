@@ -1150,7 +1150,8 @@
             "pattern": "^[a-z_][a-z0-9_]{0,31}: (f32|i32|u32|vec2<f32>|vec4<f32>|vec2<u32>|vec4<u32>)$"
           }
         },
-        "title": {"type": "string", "minLength": 1, "maxLength": 256}
+        "title": {"type": "string", "minLength": 1, "maxLength": 256},
+        "optional": {"type": "boolean"}
       }
     },
     "piece_param": {
@@ -1286,13 +1287,15 @@
         "text": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["anchors", "strings"],
+          "required": ["anchors"],
           "properties": {
             "anchors": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
             "position": {"type": "string", "pattern": "^[a-z_][a-z0-9_]{0,31}$"},
             "string": {"type": "string", "pattern": "^[a-z_][a-z0-9_]{0,31}$"},
             "priority": {"type": "string", "pattern": "^[a-z_][a-z0-9_]{0,31}$"},
-            "strings": {"type": "array", "maxItems": 4096, "items": {"type": "string", "maxLength": 64}}
+            "strings": {"type": "array", "maxItems": 4096, "items": {"type": "string", "maxLength": 64}},
+            "strings_from": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
+            "align": {"type": "string", "enum": ["placed", "left", "right", "center"]}
           }
         },
         "frame_ms": {"type": "number", "minimum": 0.1, "maximum": 16},
@@ -1314,6 +1317,7 @@
         "reads": {"type": "array", "maxItems": 4, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"}},
         "instances": {"type": ["integer", "string"]},
         "vertices": {"type": "integer", "minimum": 1, "maximum": 65536},
+        "indices": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
         "topology": {"type": "string", "enum": ["triangle_list", "triangle_strip", "line_list", "line_strip", "point_list"]},
         "blend": {"type": "string", "enum": ["opaque", "alpha", "additive"]},
         "depth": {"type": "string", "enum": ["none", "test", "write"]},

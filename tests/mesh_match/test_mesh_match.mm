@@ -7,21 +7,23 @@
 // half draws the published resources in a DrawRuntime with the camera that the scene view gives a
 // program. The two images are held to the tolerances of ../boxes_match/match_rig.h, and the picks
 // of the built-in draw at interior pixels of the first, a middle and the last triangle must name
-// the vertex that the piece's ID image shows there, with the field `index` of its item map. With
-// flat faces, a pixel whose 3 x 3 neighborhood in the built-in's picture holds two colors is an edge
-// pixel: the built-in lights the faces of its indexed draw from derivatives that come in 2 x 2
-// blocks along the edges of faces, which the piece's picture, drawn without an index buffer, does
-// not have. Those pixels may differ, at most 16 levels, on at most a tenth of the mesh's pixels,
-// and an interior pixel behind a translucent face may differ by 1 level; each case prints how many
-// do. The
+// the vertex that the piece's ID image shows there, with the field `index` of its item map. The
+// piece draws its faces through the index buffer `faces`, as the built-in's indexed draw does, and
+// leaves the inputs that a mesh lacks (indices, normals, colors) unbound. With flat faces, a pixel
+// whose 3 x 3 neighborhood in the built-in's picture holds two colors is an edge pixel. There the
+// two draws may light a pixel from the other face of a shared edge, because the camera matrix of
+// a program and the built-in's matrix differ in their last bits and the faces' colors differ;
+// such pixels may differ by at most 8 levels on at most a twentieth of the mesh's pixels (the
+// indexed draw took them from 2,341 and 2,704 differing pixels to 140 and 571), and no interior
+// pixel may differ by more than 1 level; each case prints how many do. The
 // cases cover the color modes (one color, one RGBA for all, values through a colormap, RGBA of each
 // vertex), lighting from normals and flat faces, translucency (an alpha below 255 of the one color
 // or of a vertex), indices above the last vertex and negative ones, a NaN vertex, the depth offset,
 // a mesh in 2-D, one triangle, empty input, and the capacity of the piece: 98,304 vertices of 48
-// bytes and 196,608 triangles of 16 bytes, 7.5 MiB of its 8 MiB of published resources (the
-// built-in takes 4,194,304 of each). The built-in's texture is not part of the piece: its derive
-// half would bind 11 storage buffers, and the graphics layer binds at most 8 in one stage. Without
-// a Metal device the test skips (exit 77).
+// bytes and 196,608 triangles of 12 bytes of indices, 6.75 MiB of its 8 MiB of published resources
+// (the built-in takes 4,194,304 of each). The built-in's texture is not part of the piece yet: a
+// texture resource of the piece has one fixed size and format. Without a Metal device the test
+// skips (exit 77).
 //
 // With CALIPER_MESH_MATCH_CAPTURE_DIR set, each case writes mesh-<case>-builtin.png,
 // mesh-<case>-piece.png and mesh-<case>-diff.png (the difference scaled up 32 times) there.
@@ -122,16 +124,13 @@ std::vector<float> to_unit(const std::vector<std::uint8_t>& b) {
     return f;
 }
 
-// The tensors of the piece's inputs and its params. An input that the mesh lacks binds another
-// tensor of its dtype and rank, as a program binds an input that its mode does not read.
+// The tensors of the piece's inputs and its params. An input that the mesh lacks stays unbound.
 std::vector<HostTensor> piece_tensors(const Mesh& m, caliper_net::Json* params) {
     const std::int64_t v = m.v(), d = m.dims;
     std::vector<HostTensor> t;
     t.push_back(HostTensor::of("positions", "f32", {v, d}, m.positions));
     if (!m.indices.empty()) t.push_back(HostTensor::of("indices", "i32", {std::int64_t(m.t()), 3}, m.indices));
-    else t.push_back(HostTensor::of("indices", "i32", {1, 3}, std::vector<std::int32_t>{0, 0, 0}));
     if (!m.normals.empty()) t.push_back(HostTensor::of("normals", "f32", {v, 3}, m.normals));
-    else t.push_back(HostTensor::of("normals", "f32", {v, d}, m.positions));
     std::uint32_t mode = 0;
     if (!m.rgba.empty()) {
         t.push_back(HostTensor::of("colors", "f32", {std::int64_t(m.rgba.size() / 4), 4}, to_unit(m.rgba)));
@@ -139,8 +138,6 @@ std::vector<HostTensor> piece_tensors(const Mesh& m, caliper_net::Json* params) 
     } else if (!m.values.empty()) {
         t.push_back(HostTensor::of("colors", "f32", {std::int64_t(m.values.size())}, m.values));
         mode = 1;
-    } else {
-        t.push_back(HostTensor::of("colors", "f32", {v, d}, m.positions));
     }
     *params = caliper_net::Json::object();
     params->set("color_mode", double(mode));
@@ -193,9 +190,10 @@ Outcome run(Metal& mt, const std::string& name, const Mesh& m, std::vector<int> 
         const std::vector<Published> res = run_derive(mt.device, piece, piece_tensors(m, &params), as_map(params));
         REQUIRE(res.size() == 2);
         const Published& vertices = find(res, "vertices");
-        const Published& tris = find(res, "triangles");
+        const Published& faces = find(res, "faces");
         o.vertices = vertices.count;
-        o.triangles = tris.count;
+        CHECK(faces.count % 3 == 0);
+        o.triangles = faces.count / 3;
         if (vertices.count > 0) {
             float flags = 0;   // vertex 0's normal.w
             std::memcpy(&flags, vertices.bytes.data() + 28, 4);
@@ -205,7 +203,7 @@ Outcome run(Metal& mt, const std::string& name, const Mesh& m, std::vector<int> 
         PieceDraw pd(g, kSize);
         pd.install(piece, "mesh");
         pd.set("vertices", vertices.bytes, vertices.count);
-        pd.set("triangles", tris.bytes, tris.count);
+        pd.set("faces", faces.bytes, faces.count);
         cd::FrameInputs in = bt.frame_inputs();
         in.params = caliper_web::pack_params(piece, params);
         CHECK(pd.draw(in));
@@ -220,23 +218,23 @@ Outcome run(Metal& mt, const std::string& name, const Mesh& m, std::vector<int> 
                 " outside the tolerances");
         if (flat) {
             CHECK_MESSAGE(o.c.max_interior <= 1, name, ": ", o.c.interior_failed, " interior pixels differ; ", o.c.first);
-            CHECK(o.c.max_edge <= 16);
-            CHECK(o.c.edge_far * 10 <= o.c.lit);
+            CHECK(o.c.max_edge <= 8);
+            CHECK(o.c.edge_far * 20 <= o.c.lit);
         } else {
             CHECK_MESSAGE(o.c.failed == 0, name, ": ", o.c.failed, " pixels outside the tolerances; ", o.c.first);
         }
-        std::vector<std::uint32_t> rows(std::size_t(tris.count) * 4);
-        if (!rows.empty()) std::memcpy(rows.data(), tris.bytes.data(), rows.size() * 4);
+        std::vector<std::uint32_t> rows(faces.count);
+        if (!rows.empty()) std::memcpy(rows.data(), faces.bytes.data(), rows.size() * 4);
         for (int t : triangles) {
-            if (t < 0 || std::uint32_t(t) >= tris.count) continue;
+            if (t < 0 || std::uint32_t(t) >= o.triangles) continue;
             // A triangle whose first vertex shows no interior pixel, as one on the far side, gives
             // its place to the next one that shows one.
             std::uint32_t at = std::uint32_t(t);
-            while (at + 1 < tris.count && at < std::uint32_t(t) + 64 && !pixel_of_item(pd.ids, kSize, rows[std::size_t(at) * 4]))
+            while (at + 1 < o.triangles && at < std::uint32_t(t) + 64 && !pixel_of_item(pd.ids, kSize, rows[std::size_t(at) * 3]))
                 ++at;
             if (at != std::uint32_t(t)) MESSAGE("triangle ", t, " shows no interior pixel; triangle ", at, " is picked");
             ++o.asked;
-            o.picks += check_picks(bt, pd, {rows[std::size_t(at) * 4]}, sc::Primitive::Mesh);
+            o.picks += check_picks(bt, pd, {rows[std::size_t(at) * 3]}, sc::Primitive::Mesh);
         }
         if (o.asked) MESSAGE("mesh ", name, ": ", o.picks, " of ", o.asked, " picks name the piece's item and field");
 
@@ -379,7 +377,7 @@ TEST_CASE("mesh_match: no mesh draws nothing") {
     in.params = caliper_web::pack_params(piece, caliper_net::Json::object());
     CHECK_FALSE(pd.draw(in));
     CHECK(compare(pd.color, pd.ids, bt.image, kSize).differ == 0);
-    pd.set("triangles", {}, 0);
+    pd.set("faces", {}, 0);
     CHECK_FALSE(pd.draw(in));
     const Comparison c = compare(pd.color, pd.ids, bt.image, kSize);
     CHECK(c.differ == 0);
@@ -432,7 +430,7 @@ TEST_CASE("mesh_match: the capacity of 98,304 vertices and 196,608 triangles, an
     caliper_net::Json params;
     const std::vector<Published> res = run_derive(mt.device, piece, piece_tensors(over, &params), as_map(params));
     CHECK(find(res, "vertices").count == kVertexCapacity);
-    CHECK(find(res, "triangles").count == kTriangleCapacity);
+    CHECK(find(res, "faces").count == 3 * kTriangleCapacity);
 }
 
 CALIPER_GPU_TEST_MAIN()

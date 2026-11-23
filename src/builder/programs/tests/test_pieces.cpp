@@ -8,6 +8,9 @@
 
 #include <doctest/doctest.h>
 
+#include <fstream>
+#include <iterator>
+
 #include <set>
 #include <string>
 
@@ -313,6 +316,21 @@ TEST_CASE("resolution refuses a module that is not imported, an unknown item and
     CHECK(!cp::resolve_imports(p).verdict.ok());
 }
 
+#if defined(CALIPER_PROGRAMS_LIBRARY_DIR)
+TEST_CASE("the embedded library equals its files on disk, thus a changed file reached the build") {
+    std::size_t n = 0;
+    for (const cp::LibraryFile& f : cp::library_files()) {
+        const std::string path = std::string(CALIPER_PROGRAMS_LIBRARY_DIR) + "/" + std::string(f.path);
+        std::ifstream in(path, std::ios::binary);
+        REQUIRE_MESSAGE(in.good(), path);
+        const std::string disk((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        CHECK_MESSAGE(disk == f.text, f.path, " differs from its embedded copy");
+        ++n;
+    }
+    CHECK(n > 0);
+}
+#endif
+
 TEST_CASE("the canonical manifest is RFC 8785 JSON of the manifest without hash, files and defaults") {
     cs::Piece p;
     p.name = "field";
@@ -329,6 +347,20 @@ TEST_CASE("the canonical manifest is RFC 8785 JSON of the manifest without hash,
     p.files["draw.wgsl"] = "x";
     CHECK(cp::canonical_manifest(p) ==
           R"({"description":"Quote \" back\\slash \u0001 tab\t","draw":{"camera":"none","passes":[{"fragment":"field","kind":"render"}]},"name":"field","params":[{"default":1,"max":1e+21,"min":0.1,"name":"gain"},{"default":1e-7,"max":0.05,"min":0,"name":"tiny"}],"version":1})");
+}
+
+TEST_CASE("an optional input reaches the canonical manifest only when it is optional") {
+    cs::Piece p;
+    p.name = "loose";
+    cs::PieceInput in;
+    in.name = "v";
+    p.inputs = {in};
+    CHECK(cp::canonical_manifest(p) == R"({"inputs":[{"kind":"tensor","name":"v"}],"name":"loose","version":1})");
+    const std::string before = cp::piece_hash(p);
+    p.inputs[0].optional = true;
+    CHECK(cp::canonical_manifest(p) ==
+          R"({"inputs":[{"kind":"tensor","name":"v","optional":true}],"name":"loose","version":1})");
+    CHECK(cp::piece_hash(p) != before);
 }
 
 TEST_CASE("the hash covers the canonical manifest, the imported modules and the files with LF line ends") {
@@ -405,6 +437,74 @@ TEST_CASE("the manifest check takes the arcs piece of the plan") {
     const cp::Verdict v = cp::check_piece_manifest(arcs_piece());
     INFO(v.message, " at ", v.where);
     CHECK(v.ok());
+}
+
+TEST_CASE("an indexed pass draws a u32 buffer from a vertex entry as a list, and every other form is refused") {
+    cs::Piece p = arcs_piece();
+    cs::Resource idx;
+    idx.id = "idx";
+    idx.layout.element = "u32";
+    idx.count = 96;
+    p.resources.push_back(idx);
+    cs::DrawPass& arc = p.draw->passes[0];
+    arc.indices = "idx";
+    arc.topology = cs::DrawTopology::triangle_list;
+    arc.vertices.reset();   // the index count comes from the version
+    CHECK(cp::check_piece_manifest(p).ok());
+    CHECK(cp::canonical_manifest(p).find(R"("indices":"idx")") != std::string::npos);
+    cs::Piece bad = p;
+    bad.draw->passes[0].topology = cs::DrawTopology::triangle_strip;
+    CHECK(code_of(bad) == cp::kProgramBadPass);
+    bad = p;
+    bad.draw->passes[0].indices = "missing";
+    CHECK(code_of(bad) == cp::kProgramUnknownResource);
+    bad = p;
+    bad.draw->passes[0].indices = "heads";   // f32 elements
+    CHECK(code_of(bad) == cp::kProgramBadPass);
+    bad = p;
+    bad.draw->passes[0].indices = "labels";  // a struct
+    CHECK(code_of(bad) == cp::kProgramBadPass);
+    bad = p;
+    bad.draw->passes[2].indices = "idx";     // the full-screen bloom has no vertex entry
+    CHECK(code_of(bad) == cp::kProgramBadPass);
+    bad = p;
+    bad.resources.back().publish = false;     // a private resource never reaches the viewer
+    CHECK(code_of(bad) == cp::kProgramUnknownResource);
+}
+
+TEST_CASE("a text table takes its strings from a published buffer of at most 4096 strings of 64 bytes") {
+    cs::Piece p = arcs_piece();
+    cs::Resource names;
+    names.id = "names";
+    names.layout = struct_layout("Name", {{"b0", "vec4<u32>"}, {"b1", "vec4<u32>"}, {"b2", "vec4<u32>"}, {"b3", "vec4<u32>"}});
+    names.count = 4096;
+    p.resources.push_back(names);
+    p.draw->text->strings.clear();
+    p.draw->text->strings_from = "names";
+    p.draw->text->align = cs::TextAlign::center;
+    CHECK(cp::check_piece_manifest(p).ok());
+    const std::string canon = cp::canonical_manifest(p);
+    CHECK(canon.find(R"("strings_from":"names")") != std::string::npos);
+    CHECK(canon.find(R"("align":"center")") != std::string::npos);
+    CHECK(cp::canonical_manifest(arcs_piece()).find("align") == std::string::npos);
+    cs::Piece bad = p;
+    bad.draw->text->strings = {"x"};   // two sources
+    CHECK(code_of(bad) == cp::kProgramBadText);
+    bad = p;
+    bad.draw->text->strings_from = "missing";
+    CHECK(code_of(bad) == cp::kProgramUnknownResource);
+    bad = p;
+    bad.resources.back().count = 4097;
+    CHECK(code_of(bad) == cp::kProgramBadText);
+    bad = p;
+    bad.resources.back().layout.fields.push_back({"b4", "vec4<u32>"});   // 80 bytes a string
+    CHECK(code_of(bad) == cp::kProgramBadText);
+    bad = p;
+    bad.draw->text->strings_from = "heads";   // f32 elements
+    CHECK(code_of(bad) == cp::kProgramBadText);
+    bad = p;
+    bad.resources.back().publish = false;
+    CHECK(code_of(bad) == cp::kProgramUnknownResource);
 }
 
 TEST_CASE("the manifest check refuses each breach with its code") {

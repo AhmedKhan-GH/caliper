@@ -312,6 +312,11 @@ std::vector<caliper_scene::LabelAnchor> program_labels(const SceneView& view) {
             a.y = float((1.0 - ny) * 0.5 * view.height());
             a.depth = float(h[3]);
             a.text = std::move(l.text);
+            static_assert(int(caliper_builder::spec::TextAlign::left) == 1 &&
+                              int(caliper_builder::spec::TextAlign::right) == 2 &&
+                              int(caliper_builder::spec::TextAlign::center) == 3,
+                          "LabelAnchor::pin numbers the alignments as spec::TextAlign does");
+            a.pin = uint8_t(l.align);
             all.push_back({l.priority, std::move(a)});
         }
     }

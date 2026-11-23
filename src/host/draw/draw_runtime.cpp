@@ -225,7 +225,8 @@ bool read_manifest(const json& m, cs::Piece* p, std::string* why) {
     ok = ok && r.tables(m, "inputs", &p->inputs, [&](const json& t, cs::PieceInput* in) {
         return r.str(t, "name", &in->name, true) && r.enum_of(t, "kind", cs::input_kind_from_name, &in->kind) &&
                r.str(t, "dtype", &in->dtype) && r.u32(t, "rank_min", &in->rank_min) &&
-               r.u32(t, "rank_max", &in->rank_max) && r.layout(t, &in->layout) && r.opt_str(t, "title", &in->title);
+               r.u32(t, "rank_max", &in->rank_max) && r.layout(t, &in->layout) && r.opt_str(t, "title", &in->title) &&
+               r.flag(t, "optional", &in->optional);
     });
     ok = ok && r.tables(m, "params", &p->params, [&](const json& t, cs::PieceParam* pa) {
         return r.str(t, "name", &pa->name, true) && r.enum_of(t, "type", cs::param_type_from_name, &pa->type) &&
@@ -338,7 +339,7 @@ bool read_manifest(const json& m, cs::Piece* p, std::string* why) {
                     !r.str(t, "target", &dp->target) || !r.strings(t, "reads", &dp->reads) ||
                     !r.opt_u32(t, "vertices", &dp->vertices) ||
                     !r.enum_of(t, "topology", cs::draw_topology_from_name, &dp->topology) ||
-                    !r.flag(t, "pick", &dp->pick))
+                    !r.flag(t, "pick", &dp->pick) || !r.opt_str(t, "indices", &dp->indices))
                     return false;
                 const auto inst = t.find("instances");
                 if (inst != t.end()) {
@@ -369,7 +370,9 @@ bool read_manifest(const json& m, cs::Piece* p, std::string* why) {
                 const json& t = d["text"];
                 ok = t.is_object() ? (r.str(t, "anchors", &tt.anchors, true) && r.str(t, "position", &tt.position) &&
                                       r.str(t, "string", &tt.string) && r.opt_str(t, "priority", &tt.priority) &&
-                                      r.strings(t, "strings", &tt.strings))
+                                      r.strings(t, "strings", &tt.strings) &&
+                                      r.opt_str(t, "strings_from", &tt.strings_from) &&
+                                      r.enum_of(t, "align", cs::text_align_from_name, &tt.align))
                                    : r.fail("the key text is not a table");
                 if (ok) draw.text = tt;
             }
@@ -686,6 +689,7 @@ Verdict compile_pass(DrawRuntime::Impl& m, std::size_t k, const cp::Composed& c,
         r.name = e.name ? e.name : "";
         r.stage = cp::EntryStage(e.stage);
         for (int a = 0; a < 3; ++a) r.workgroup_size[a] = e.workgroup_size[a];
+        r.workgroup_memory = e.workgroup_memory;
         // The inputs and outputs, for the check of the stage interfaces (Check Order 7).
         for (std::size_t k = 0, nio = caliper_wgsl_module_entry_io_count(module, i); k < nio; ++k) {
             caliper_wgsl_io io{};
@@ -1094,6 +1098,7 @@ Verdict DrawRuntime::install(const caliper_builder::spec::Piece& piece, const In
     std::set<std::string> cpu_ids;
     if (draw.pick) cpu_ids.insert(draw.pick->resource);
     if (draw.text) cpu_ids.insert(draw.text->anchors);
+    if (draw.text && draw.text->strings_from) cpu_ids.insert(*draw.text->strings_from);
     for (const cs::Resource& res : piece.resources) {
         if (!res.publish) continue;
         Impl::Slot s;
@@ -1117,11 +1122,15 @@ Verdict DrawRuntime::install(const caliper_builder::spec::Piece& piece, const In
         Impl::Slot s;
         s.id = in.name;
         s.keep_cpu = cpu_ids.count(in.name) != 0;
+        s.unbound = in.optional && instance.bind.find(in.name) == instance.bind.end();
         if (Verdict v = c.layout(in.layout, &s.layout); !v.ok()) return refuse(v);
         s.declared_count = pl::kCountMax;
         s.declared_bytes = std::uint64_t(pl::kCountMax) * s.layout.stride;
         m.slots.push_back(std::move(s));
     }
+    for (Impl::Slot& s : m.slots)
+        for (const cs::DrawPass& p : draw.passes)
+            if (p.indices && *p.indices == s.id) s.index = true;
     for (Impl::Slot& s : m.slots)
         if (!s.texture && (s.layout.stride == 0 || s.layout.stride % 4 != 0 || s.layout.stride > pl::kStrideMax))
             return refuse(refusal(cp::kProgramBadLayout, "The layout of " + s.id + " has no valid stride.", "resources"));
@@ -1239,10 +1248,16 @@ Verdict DrawRuntime::install(const caliper_builder::spec::Piece& piece, const In
         }
         s.capacity = std::max<std::uint64_t>(16, (s.layout.stride + 15) / 16 * 16);
         if (!account(m, 0, s.capacity, "the resource " + s.id, where)) return m.status.error;
-        s.buffer = make_buffer(g, s.capacity, gfx::kStorage | gfx::kCopyDst, s.id.c_str());
+        s.buffer = make_buffer(g, s.capacity, gfx::kStorage | gfx::kCopyDst | (s.index ? gfx::kIndex : 0u), s.id.c_str());
         if (!s.buffer || !zero_buffer(g, s.buffer, s.capacity))
             return refuse(refusal(cp::kProgramLayerRefused, "The graphics layer refused the buffer of " + s.id + ": " +
                                                                 g.last_error(), where));
+        // An unbound optional input is an empty version for good: its count is 0 in `counts`.
+        if (s.unbound) {
+            s.has_version = true;
+            s.count = 0;
+            s.serial = ++m.versions;
+        }
     }
     for (std::size_t i = 0; i < m.buffers.size(); ++i) {
         Impl::DrawBufferSlot& b = m.buffers[i];
@@ -1301,6 +1316,9 @@ Verdict DrawRuntime::set_resource(const ResourceVersion& version) {
     if (s == nullptr)
         return refusal(cp::kProgramUnknownResource,
                        "The draw half of " + m.instance.program + " reads no resource " + version.resource + ".");
+    if (s->unbound)
+        return refusal(cp::kProgramUnknownResource,
+                       "The optional input " + s->id + " of " + m.instance.program + " is unbound and takes no version.");
     const std::string where = "resources[" + s->id + "]";
     if (version.size > 0 && version.bytes == nullptr)
         return refusal(cp::kProgramBadResource, "A version of " + s->id + " has a size but no bytes.", where);
@@ -1334,7 +1352,8 @@ Verdict DrawRuntime::set_resource(const ResourceVersion& version) {
             if (!account(m, s->capacity, cap, "a version of " + s->id + " of " + std::to_string(version.size) + " bytes",
                          where))
                 return m.status.error;
-            gfx::Buffer b = make_buffer(*m.gfx, cap, gfx::kStorage | gfx::kCopyDst, s->id.c_str());
+            gfx::Buffer b =
+                make_buffer(*m.gfx, cap, gfx::kStorage | gfx::kCopyDst | (s->index ? gfx::kIndex : 0u), s->id.c_str());
             if (!b) {
                 stop(m, cp::kProgramLayerRefused,
                      "Stopped " + m.instance.program + ": the graphics layer refused a buffer of " + s->id + ": " +
@@ -1486,6 +1505,15 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
             for (const Impl::Slot& sl : m.slots)
                 if (sl.id == *p.instances_of) instances = sl.has_version ? sl.count : 0;
         }
+        // An indexed pass draws the valid indices of its version: the buffer holds at least count
+        // elements of 4 bytes (set_resource), and each index is only the vertex entry's
+        // vertex_index, whose every read of a buffer is bounds-checked; no index is read on the CPU.
+        const Impl::Slot* index_slot = nullptr;
+        if (p.indices) {
+            for (const Impl::Slot& sl : m.slots)
+                if (sl.id == *p.indices) index_slot = &sl;
+            if (!index_slot || !index_slot->has_version || index_slot->count == 0 || !index_slot->buffer) instances = 0;
+        }
         const bool host = !offscreen(p);
         const std::size_t ti = host ? m.targets.size() : target_index(p.target);
         if (!host && ti == m.targets.size()) continue;   // refused by the manifest check
@@ -1507,6 +1535,10 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
             r.pipeline = s.pipelines[host ? variant : 0u];
             for (std::size_t gi = 0; gi < 3; ++gi) r.groups[gi] = s.groups[gi];
             r.count = p.vertex ? p.vertices.value_or(3) : 3;
+            if (index_slot) {
+                r.index_buffer = index_slot->buffer;
+                r.count = index_slot->count;
+            }
             r.instance_count = instances;
             r.pick_id = p.pick ? m.pick_id : 0;
             list.draw(r);

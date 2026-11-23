@@ -9,7 +9,9 @@
 // its one color or a vertex, without depth; its pick pass draws it with depth, thus the nearest
 // face wins. Pass 0 or 1 draws by the same rule, and pass 2 writes the IDs of a
 // translucent mesh with depth and leaves the color as it is. A pass that does not apply moves each
-// vertex out of the clip volume. The item of a face is its first vertex.
+// vertex out of the clip volume. Each pass draws the index buffer `faces`, thus a vertex runs once
+// for each index and the faces share their vertices, as in the built-in's indexed draw. The item of
+// a face is its first vertex, the flat value of the face's first index.
 
 struct MeshOut {
     @builtin(position) position: vec4<f32>,
@@ -83,18 +85,11 @@ fn lambert(c: vec4<f32>, n: vec3<f32>) -> vec4<f32> {
     return vec4<f32>(c.rgb * lit, c.a);
 }
 
-// Vertex k of triangle t.
-fn face_vertex(t: u32, k: u32, shown: bool) -> MeshOut {
-    let tri = triangles[t];
-    var index = tri.x;
-    if (k == 1u) {
-        index = tri.y;
-    } else if (k >= 2u) {
-        index = tri.z;
-    }
+// Vertex `index` of the mesh, an element of the index buffer.
+fn face_vertex(index: u32, shown: bool) -> MeshOut {
     let v = vertices[index];
     var out: MeshOut;
-    out.item = tri.x;
+    out.item = index;
     out.obj = v.position.xyz;
     var c = mesh_color(v);
     if (params.shading == 1u) {
@@ -124,18 +119,18 @@ fn shade(in: MeshOut) -> vec4<f32> {
 }
 
 @vertex
-fn face_vs(@builtin(instance_index) t: u32, @builtin(vertex_index) k: u32) -> MeshOut {
-    return face_vertex(t, k, !mesh_translucent());
+fn face_vs(@builtin(vertex_index) i: u32) -> MeshOut {
+    return face_vertex(i, !mesh_translucent());
 }
 
 @vertex
-fn face_see_vs(@builtin(instance_index) t: u32, @builtin(vertex_index) k: u32) -> MeshOut {
-    return face_vertex(t, k, mesh_translucent());
+fn face_see_vs(@builtin(vertex_index) i: u32) -> MeshOut {
+    return face_vertex(i, mesh_translucent());
 }
 
 @vertex
-fn face_id_vs(@builtin(instance_index) t: u32, @builtin(vertex_index) k: u32) -> MeshOut {
-    return face_vertex(t, k, mesh_translucent());
+fn face_id_vs(@builtin(vertex_index) i: u32) -> MeshOut {
+    return face_vertex(i, mesh_translucent());
 }
 
 @fragment

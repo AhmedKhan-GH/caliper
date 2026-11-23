@@ -103,6 +103,11 @@ enum class DrawDepth { none, test, write };
 enum class CameraMode { orbit, pan_zoom, none };
 // When the draw half's buffers return to zero besides an install.
 enum class BufferReset { install, cursor, resource };
+// Where the host puts a label: `placed` lets the placer choose one of eight
+// places around the anchor, as for the other labels of the panel; `left`,
+// `right` and `center` pin the label at its anchor, with the start, the end or
+// the middle of its text there and the text centered on it vertically.
+enum class TextAlign { placed, left, right, center };
 
 inline const char* input_kind_name(InputKind k) { return k == InputKind::tensor ? "tensor" : "buffer"; }
 inline const char* param_type_name(ParamType t) { return t == ParamType::f32 ? "f32" : t == ParamType::i32 ? "i32" : "u32"; }
@@ -130,6 +135,9 @@ inline const char* camera_mode_name(CameraMode c) {
 }
 inline const char* buffer_reset_name(BufferReset r) {
     return r == BufferReset::install ? "install" : r == BufferReset::cursor ? "cursor" : "resource";
+}
+inline const char* text_align_name(TextAlign a) {
+    return a == TextAlign::placed ? "placed" : a == TextAlign::left ? "left" : a == TextAlign::right ? "right" : "center";
 }
 
 namespace detail {
@@ -182,6 +190,10 @@ inline std::optional<BufferReset> buffer_reset_from_name(std::string_view s) {
     static const BufferReset all[] = {BufferReset::install, BufferReset::cursor, BufferReset::resource};
     return detail::from_name(s, all, buffer_reset_name);
 }
+inline std::optional<TextAlign> text_align_from_name(std::string_view s) {
+    static const TextAlign all[] = {TextAlign::placed, TextAlign::left, TextAlign::right, TextAlign::center};
+    return detail::from_name(s, all, text_align_name);
+}
 
 // One field of a layout, written "name: type" in the manifest. The types are
 // f32, i32, u32, vec2<f32>, vec4<f32>, vec2<u32> and vec4<u32>; vec3 is left
@@ -208,7 +220,9 @@ inline bool operator==(const Layout& a, const Layout& b) {
 // the derive half, with its shape in the generated uniform `shapes`; its rank
 // must be from rank_min to rank_max. A buffer input is a read-only array of
 // `layout` in the draw half, bound to another program's published buffer
-// resource with the same layout.
+// resource with the same layout. An optional input may stay unbound: a tensor
+// input then reads as an empty array with the shape (0, 0, 0, 0), and a buffer
+// input as an empty array with the count 0.
 struct PieceInput {
     std::string name;                        // the WGSL name of the generated binding
     InputKind kind = InputKind::tensor;
@@ -217,10 +231,11 @@ struct PieceInput {
     std::uint32_t rank_max = 8;
     Layout layout;                           // buffer
     std::optional<std::string> title;
+    bool optional = false;                   // a program may leave it unbound
 };
 inline bool operator==(const PieceInput& a, const PieceInput& b) {
     return a.name == b.name && a.kind == b.kind && a.dtype == b.dtype && a.rank_min == b.rank_min &&
-           a.rank_max == b.rank_max && a.layout == b.layout && a.title == b.title;
+           a.rank_max == b.rank_max && a.layout == b.layout && a.title == b.title && a.optional == b.optional;
 }
 
 // One entry of `params`: a field of the generated struct Params, which both
@@ -312,6 +327,9 @@ inline bool operator==(const DrawTarget& a, const DrawTarget& b) {
 // `writes` (draw buffers). A render pass has `fragment`, and `vertex` unless
 // it is a full-screen triangle; `instances` is a count or, through
 // `instances_of`, the valid count of a buffer resource or input at the cursor.
+// With `indices`, a render pass draws the valid elements of a u32 buffer
+// resource or input as an index buffer: each index is the vertex_index of the
+// vertex entry, and each instance draws all of them.
 struct DrawPass {
     PassKind kind = PassKind::render;
     std::string entry;                                   // compute
@@ -324,6 +342,7 @@ struct DrawPass {
     std::uint32_t instances = 1;
     std::optional<std::string> instances_of;             // a buffer resource or buffer input
     std::optional<std::uint32_t> vertices;               // render: 3 for the full-screen triangle
+    std::optional<std::string> indices;                  // render: a u32 buffer resource or input of indices
     DrawTopology topology = DrawTopology::triangle_list;
     std::optional<DrawBlend> blend;                      // opaque on the host target, additive offscreen
     std::optional<DrawDepth> depth;                      // write on the host target with a vertex entry, else none
@@ -333,7 +352,8 @@ inline bool operator==(const DrawPass& a, const DrawPass& b) {
     return a.kind == b.kind && a.entry == b.entry && a.workgroups == b.workgroups && a.writes == b.writes &&
            a.vertex == b.vertex && a.fragment == b.fragment && a.target == b.target && a.reads == b.reads &&
            a.instances == b.instances && a.instances_of == b.instances_of && a.vertices == b.vertices &&
-           a.topology == b.topology && a.blend == b.blend && a.depth == b.depth && a.pick == b.pick;
+           a.topology == b.topology && a.blend == b.blend && a.depth == b.depth && a.pick == b.pick &&
+           a.indices == b.indices;
 }
 
 // The item map: a picked item is the index of an element of `resource`, and
@@ -347,17 +367,22 @@ inline bool operator==(const PickMap& a, const PickMap& b) { return a.resource =
 // Text that the host draws: one label at each valid element of `anchors`,
 // whose `position` field (vec4<f32>, world xyz) places it and whose `string`
 // field (u32) indexes `strings`. An optional `priority` field (f32) orders
-// the labels when they overlap.
+// the labels when they overlap. With `strings_from`, the strings come from a
+// published buffer resource or buffer input instead: each valid element is one
+// string of UTF-8 bytes, ended by its stride (at most kStringBytes) or its
+// first zero byte.
 struct TextTable {
     std::string anchors;                     // a buffer resource
     std::string position = "position";
     std::string string = "string";
     std::optional<std::string> priority;
     std::vector<std::string> strings;        // at most kStrings, each at most kStringBytes
+    std::optional<std::string> strings_from; // a buffer of at most kStrings elements of at most kStringBytes
+    TextAlign align = TextAlign::placed;
 };
 inline bool operator==(const TextTable& a, const TextTable& b) {
     return a.anchors == b.anchors && a.position == b.position && a.string == b.string && a.priority == b.priority &&
-           a.strings == b.strings;
+           a.strings == b.strings && a.strings_from == b.strings_from && a.align == b.align;
 }
 
 // The table `draw`; its source is draw.wgsl.

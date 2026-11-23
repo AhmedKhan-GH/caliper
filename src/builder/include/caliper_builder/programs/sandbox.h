@@ -109,6 +109,11 @@ Verdict check_source(std::string_view wgsl, std::size_t max_bytes);
 // refusal gives program.compile_failed with the compiler's one-line message,
 // line and column; without the library, program.compiler_unavailable.
 Compiled compile_and_reflect(std::string_view wgsl);
+// The same for the module that keeps only the entry point `entry`
+// (caliper_wgsl_options.entry_point): its bindings are those that the entry
+// point uses, as a host binds them for a program of that entry point alone.
+// A source without that entry point gives program.compile_failed.
+Compiled compile_and_reflect_entry(std::string_view wgsl, std::string_view entry);
 
 // 5. and 6. A program's reflection against its declaration: one compute entry
 // point (or the named one) with at most kWorkgroupInvocations invocations;

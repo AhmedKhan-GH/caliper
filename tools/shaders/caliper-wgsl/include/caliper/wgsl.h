@@ -68,7 +68,7 @@ extern "C" {
 
 /** The interface version of this header. caliper_wgsl_abi_version() returns
  *  the version the library was built with, and a host refuses a mismatch. */
-#define CALIPER_WGSL_ABI_VERSION 3u
+#define CALIPER_WGSL_ABI_VERSION 4u
 
 /** The result of a call. */
 typedef enum caliper_wgsl_status {
@@ -139,6 +139,14 @@ typedef struct caliper_wgsl_options {
     uint32_t metal_vertex_buffer_base;
     /** A caliper_wgsl_bounds_checks value. The default, 0, checks. */
     uint32_t bounds_checks;
+    /** NULL (the default), or the NUL-terminated name of the one entry point
+     *  that the module keeps. The other entry points are dropped before the
+     *  unused declarations, thus the bindings, their Metal indices and the
+     *  sizes buffer are those of that entry point alone. A host that makes a
+     *  program of each compute entry point binds only what that entry point
+     *  uses. A name that the source lacks is CALIPER_WGSL_ERROR_ARGUMENT. The
+     *  library reads the name only during caliper_wgsl_module_create(). */
+    const char* entry_point;
 } caliper_wgsl_options;
 
 /** An error. The strings are NUL-terminated and belong to the library. */
@@ -194,6 +202,11 @@ typedef struct caliper_wgsl_entry_point {
     uint32_t stage;
     /** The workgroup size of a compute entry point, else 0, 0, 0. */
     uint32_t workgroup_size[3];
+    /** The bytes of the var<workgroup> declarations that a compute entry
+     *  point uses, by the layout of WGSL, at most UINT32_MAX; else 0. The
+     *  MSL takes each such declaration as a threadgroup argument whose
+     *  memory the host gives at dispatch. */
+    uint32_t workgroup_memory;
 } caliper_wgsl_entry_point;
 
 /** The direction of an interface value (caliper_wgsl_io.direction). */

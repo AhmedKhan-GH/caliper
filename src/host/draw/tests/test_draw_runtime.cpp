@@ -17,6 +17,7 @@
 
 #include "../../../../tests/gfx/example_draw.h"
 
+#include <array>
 #include <cstring>
 
 namespace cd = caliper_draw;
@@ -198,6 +199,152 @@ TEST_CASE("a pass whose instance count is zero is skipped, and its target is sti
     CHECK(list_of(frames[0], 0).records().size == 0);   // the glow target's clear
     CHECK(list_of(frames[0], 0).target().clear);
     CHECK(list_of(frames[0], 1).records().size == 1);   // the bloom
+}
+
+// A draw-only piece with the optional buffer input `values`: a full-screen pass that shows its
+// count, then one bar for each value.
+cs::Piece optional_bars() {
+    cs::Piece p;
+    p.name = "bars";
+    cs::PieceInput in;
+    in.name = "values";
+    in.kind = cs::InputKind::buffer;
+    in.layout.element = "f32";
+    in.optional = true;
+    p.inputs = {in};
+    cs::Draw d;
+    d.camera = cs::CameraMode::none;
+    cs::DrawPass back;
+    back.fragment = "back_fs";
+    cs::DrawPass bars;
+    bars.vertex = "bar_vs";
+    bars.fragment = "bar_fs";
+    bars.instances_of = "values";
+    bars.vertices = 6;
+    d.passes = {back, bars};
+    p.draw = d;
+    p.files = {{"draw.wgsl", R"(@fragment
+fn back_fs(in: CaliperFullscreen) -> @location(0) vec4<f32> {
+    return vec4<f32>(f32(counts.values), in.uv, 1.0);
+}
+@vertex
+fn bar_vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> @builtin(position) vec4<f32> {
+    return vec4<f32>(values[i], f32(v) * 0.1, 0.0, 1.0);
+}
+@fragment
+fn bar_fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }
+)"}};
+    return p;
+}
+
+TEST_CASE("an optional buffer input left unbound has the count 0, and its passes run without a version") {
+    for (bool webgpu : modes()) {
+        CAPTURE(webgpu);
+        Host h;
+        cd::DrawRuntime rt(h.gfx, webgpu, checks());
+        cd::Instance unbound;
+        unbound.program = "bars";
+        const cp::Verdict v = rt.install(optional_bars(), unbound, 3);
+        REQUIRE_MESSAGE(v.ok(), v.message);
+        const std::vector<gfx::Frame> frames = frame(h, rt);   // no version to wait for
+        REQUIRE(frames.size() == 1);
+        auto records = [](const gfx::Frame& f) {
+            std::vector<gfx::DrawRecord> all;
+            for (std::size_t i = 0; i < f.passes().size; ++i)
+                if (const auto* rp = std::get_if<gfx::RenderPass>(&f.passes()[i]))
+                    for (std::size_t k = 0; k < rp->list.records().size; ++k) all.push_back(rp->list.records()[k]);
+            return all;
+        };
+        CHECK(records(frames[0]).size() == 1);   // the full-screen pass; the bars have 0 instances
+        const std::vector<std::uint8_t> counts = h.gfx.buffer_bytes(rt.internals().counts);
+        REQUIRE(counts.size() >= 4);
+        std::uint32_t n = 99;
+        std::memcpy(&n, counts.data(), 4);
+        CHECK(n == 0u);
+        const std::vector<float> values{0.5f, -0.5f};
+        const cp::Verdict r = rt.set_resource(version("values", values, 1));
+        CHECK(r.code == cp::kProgramUnknownResource);
+
+        // Bound, the same input waits for its version, as any buffer input does.
+        Host h2;
+        cd::DrawRuntime bound(h2.gfx, webgpu, checks());
+        cd::Instance with = unbound;
+        with.bind["values"] = "program:source/values";
+        REQUIRE(bound.install(optional_bars(), with, 4).ok());
+        std::vector<gfx::Frame> none;
+        CHECK(!bound.encode(&none, {}, h2.target));
+        REQUIRE(bound.set_resource(version("values", values, 1)).ok());
+        const std::vector<gfx::Frame> drawn = frame(h2, bound);
+        REQUIRE(drawn.size() == 1);
+        const std::vector<gfx::DrawRecord> both = records(drawn[0]);
+        REQUIRE(both.size() == 2);
+        CHECK(both[1].instance_count == 2);
+    }
+}
+
+// A draw-only piece that draws the points of `pts` through the indices of `idx`.
+cs::Piece indexed_points() {
+    cs::Piece p;
+    p.name = "indexed";
+    cs::PieceInput pts;
+    pts.name = "pts";
+    pts.kind = cs::InputKind::buffer;
+    pts.layout.element = "vec4<f32>";
+    cs::PieceInput idx = pts;
+    idx.name = "idx";
+    idx.layout.element = "u32";
+    p.inputs = {pts, idx};
+    cs::Draw d;
+    d.camera = cs::CameraMode::none;
+    cs::DrawPass tri;
+    tri.vertex = "tri_vs";
+    tri.fragment = "tri_fs";
+    tri.indices = "idx";
+    tri.instances = 2;
+    d.passes = {tri};
+    p.draw = d;
+    p.files = {{"draw.wgsl", R"(@vertex
+fn tri_vs(@builtin(vertex_index) v: u32) -> @builtin(position) vec4<f32> { return pts[v]; }
+@fragment
+fn tri_fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }
+)"}};
+    return p;
+}
+
+TEST_CASE("an indexed pass draws the valid indices of its version as an index buffer, each instance") {
+    for (bool webgpu : modes()) {
+        CAPTURE(webgpu);
+        Host h;
+        cd::DrawRuntime rt(h.gfx, webgpu, checks());
+        cd::Instance in;
+        in.program = "indexed";
+        in.bind = {{"pts", "program:src/pts"}, {"idx", "program:src/idx"}};
+        const cp::Verdict v = rt.install(indexed_points(), in, 5);
+        REQUIRE_MESSAGE(v.ok(), v.message);
+        const std::vector<std::array<float, 4>> pts{{0, 0, 0, 1}, {1, 0, 0, 1}, {0, 1, 0, 1}, {1, 1, 0, 1}};
+        REQUIRE(rt.set_resource(version("pts", pts, 2)).ok());
+        const std::vector<std::uint32_t> idx{0, 1, 2, 2, 1, 3, 3, 1, 7};   // 7 is past the four points
+        REQUIRE(rt.set_resource(version("idx", idx, 2)).ok());
+        std::vector<gfx::Frame> frames = frame(h, rt);
+        REQUIRE(frames.size() == 1);
+        const gfx::DrawList& list = list_of(frames[0], 0);
+        REQUIRE(list.records().size == 1);
+        const gfx::DrawRecord& r = list.records()[0];
+        CHECK(r.index_buffer);
+        CHECK(r.count == 9);
+        CHECK(r.instance_count == 2);
+        // A version without indices skips the pass.
+        const std::vector<std::uint32_t> none;
+        REQUIRE(rt.set_resource(version("idx", none, 3)).ok());
+        frames = frame(h, rt);
+        CHECK(frames.empty());
+        // A version over the buffer's first capacity grows it, still with the index usage.
+        std::vector<std::uint32_t> many(3000, 1u);
+        REQUIRE(rt.set_resource(version("idx", many, 4)).ok());
+        frames = frame(h, rt);
+        REQUIRE(frames.size() == 1);
+        CHECK(list_of(frames[0], 0).records()[0].count == 3000);
+    }
 }
 
 TEST_CASE("the checks run before anything is made") {
@@ -604,6 +751,81 @@ TEST_CASE("a pick keeps the version of the frame it read, and a version at the s
     // The pick of the first frame still reads its own version.
     CHECK(weight(cd::DrawRuntime::pick_shown(1, first)) == doctest::Approx(w1));
     CHECK_FALSE(cd::DrawRuntime::pick_shown(1, cd::ShownItems{}));
+}
+
+// A piece whose labels take their strings from the published buffer `names`, 32 bytes a string,
+// pinned with the end of the text at the anchor.
+cs::Piece named_tags() {
+    cs::Piece p;
+    p.name = "tags";
+    cs::Resource anchors;
+    anchors.id = "anchors";
+    anchors.layout.type_name = "Tag";
+    anchors.layout.fields = {{"position", "vec4<f32>"}, {"string", "u32"}};
+    anchors.count = 8;
+    cs::Resource names;
+    names.id = "names";
+    names.layout.type_name = "Name";
+    names.layout.fields = {{"b0", "vec4<u32>"}, {"b1", "vec4<u32>"}};
+    names.count = 8;
+    p.resources = {anchors, names};
+    cs::Derive dv;
+    dv.passes = {cs::DerivePass{"place", {1, 1, 1}, {"anchors", "names"}}};
+    p.derive = dv;
+    cs::Draw d;
+    d.camera = cs::CameraMode::none;
+    cs::DrawPass back;
+    back.fragment = "back_fs";
+    d.passes = {back};
+    cs::TextTable t;
+    t.anchors = "anchors";
+    t.strings_from = "names";
+    t.align = cs::TextAlign::right;
+    d.text = t;
+    p.draw = d;
+    p.files = {{"derive.wgsl", "@compute @workgroup_size(1)\nfn place() {}\n"},
+               {"draw.wgsl", "@fragment\nfn back_fs(in: CaliperFullscreen) -> @location(0) vec4<f32> {\n"
+                             "    return vec4<f32>(f32(counts.names), in.uv, 1.0);\n}\n"}};
+    return p;
+}
+
+TEST_CASE("labels take their strings from a published buffer, checked as UTF-8, and keep the table's alignment") {
+    REQUIRE(cp::check_piece_manifest(named_tags()).ok());
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    cd::Instance in;
+    in.program = "tags";
+    REQUIRE(rt.install(named_tags(), in, 2).ok());
+    struct Tag {
+        float position[4];
+        std::uint32_t string, pad[3];
+    };
+    struct Name {
+        char bytes[32];
+    };
+    const std::vector<Tag> tags{{{0, 0, 0, 1}, 0, {}}, {{1, 0, 0, 1}, 1, {}}, {{2, 0, 0, 1}, 2, {}},
+                                {{3, 0, 0, 1}, 3, {}}};
+    std::vector<Name> names(3);
+    std::memcpy(names[0].bytes, "cat", 3);                               // ended by a zero byte
+    std::memcpy(names[1].bytes, "d\xC3\x28g", 4);                        // not UTF-8
+    std::memcpy(names[2].bytes, "abcdefghijklmnopqrstuvwxyz\xC3\xA9-\xE2\x82\xAC", 32);   // the whole stride
+    REQUIRE(rt.set_resource(version("anchors", tags, 1)).ok());
+    CHECK(rt.labels().empty());                                         // no frame showed a version yet
+    REQUIRE(rt.set_resource(version("names", names, 1)).ok());
+    REQUIRE(frame(h, rt).size() == 1);
+    const std::vector<cd::Label> labels = rt.labels();
+    REQUIRE(labels.size() == 2);                                        // tag 1 is not UTF-8, tag 3 has no string
+    CHECK(labels[0].text == "cat");
+    CHECK(labels[0].position[0] == 0.0f);
+    CHECK(labels[0].align == cs::TextAlign::right);
+    CHECK(labels[1].text == std::string("abcdefghijklmnopqrstuvwxyz\xC3\xA9-\xE2\x82\xAC"));
+    CHECK(labels[1].position[0] == 2.0f);
+    // A newer version of the strings names the labels anew at the next frame.
+    std::memcpy(names[0].bytes, "cow", 3);
+    REQUIRE(rt.set_resource(version("names", names, 2)).ok());
+    CHECK(rt.labels()[0].text == "cat");
+    REQUIRE(frame(h, rt).size() == 1);
+    CHECK(rt.labels()[0].text == "cow");
 }
 
 TEST_CASE("a refused frame is an error of its program only") {

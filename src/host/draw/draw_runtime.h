@@ -165,6 +165,7 @@ struct Label {
     std::array<float, 3> position{};
     std::string text;
     float priority = 0;
+    caliper_builder::spec::TextAlign align = caliper_builder::spec::TextAlign::placed;   // the text table's
 };
 
 // The state of the program in this view (design/programmable-graphics.md, Status).

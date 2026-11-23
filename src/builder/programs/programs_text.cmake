@@ -6,7 +6,9 @@
 # library/pieces/<name>/<version>/, and sets <out_var> to its path. The builder's programs library and the browser module
 # (web/wasm/CMakeLists.txt) both call it, so that the app, the script and the
 # browser read one copy of each file (design/programmable-graphics.md,
-# Prelude and Imports). A change of a file runs the configure step again.
+# Prelude and Imports). Each embedded file is a dependency of the configure
+# step, thus a changed file, and an added or removed one through the globs,
+# runs it again and rebuilds what embeds the library.
 set(CALIPER_PROGRAMS_TEXT_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
 function(caliper_programs_text_source out_var)
@@ -21,7 +23,7 @@ function(caliper_programs_text_source out_var)
         file(READ "${_file}" _text)
         string(APPEND _files "    {\"${_rel}\", R\"caliper_wgsl(${_text})caliper_wgsl\"},\n")
     endforeach()
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_dir}/draw_prelude.wgsl")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_dir}/draw_prelude.wgsl" ${_lib} ${_pieces})
     file(READ "${_dir}/draw_prelude.wgsl" _prelude)
     set(_entries "")
     foreach(_file IN LISTS _lib)

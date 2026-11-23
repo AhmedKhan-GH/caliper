@@ -43,6 +43,9 @@ An input of kind `tensor` binds a tensor of the training script. The derive half
 | `rank_min`, `rank_max` | For a tensor, the fewest and the most axes, 1 and 8 when absent |
 | `element`, or `struct` with `fields` | For a buffer, the layout that the bound resource must have |
 | `title` | The label of the input in the builder |
+| `optional` | `true` when a program may leave the input unbound. `false` when absent. |
+
+A program may leave an optional input unbound, and the piece then sees a declared default instead of a tensor that it does not need. An unbound tensor input has the shape (0, 0, 0, 0) in `shapes`, and every read of its array gives zero. An unbound buffer input has the count 0 in `counts`, and a pass whose `instances` names it is skipped. A bound tensor never has an axis of 0, because the script imports no tensor without elements. Thus `shapes.<name>.w == 0u` tells a piece that the input is unbound.
 
 A parameter is a field of the generated struct `Params`, and both halves read it as `params.<name>`. A parameter without a value in the program gets a range control from `min` to `max`. Without a range it keeps its default.
 
@@ -84,6 +87,10 @@ The passes run in their order in one submit, with a barrier between two passes. 
 
 The derive half reads tensors read-only and without a copy. A pass that writes a tensor input is refused. The watchdog, the timeout and the budget of the shared cadence apply to one run of all passes.
 
+Each derive pass is a program of its entry point alone. It binds only the tensor inputs, resources and counters that its entry point uses, and one pass binds at most 8 storage buffers, the default of WebGPU. A piece can thus hold more storage buffers than one pass, such as a mesh with a texture, when it gives the work to several passes. A pass over 8 gives `program.over_web_limits`, which names the pass.
+
+No compute pass of either half may use `var<workgroup>`. The Metal hosts give a compute pass no threadgroup memory, thus such a variable would read zero in the app and hold its values in a browser. `piece.check`, the script and the app refuse a pass whose entry point uses workgroup memory with `program.workgroup_memory`. A piece keeps partial results in a private resource or a draw buffer instead.
+
 ### Draw Half
 
 The draw half runs in the viewer every frame, after the draws of the scene. The table `draw` holds the camera, `buffers`, `targets`, `passes`, `pick`, `text`, `frame_ms` and `memory_mb`.
@@ -95,7 +102,7 @@ The draw half runs in the viewer every frame, after the draws of the scene. The 
 | `targets` | At most 4 offscreen targets, each with `id`, `scale` (1, 0.5 or 0.25) and `clear` |
 | `passes` | 1 to 16 passes of one frame, in order |
 | `pick` | The item map, with `resource` and `fields` |
-| `text` | The text table, with `anchors`, `position`, `string`, `priority` and `strings` |
+| `text` | The text table, with `anchors`, `position`, `string`, `priority`, `strings` or `strings_from`, and `align` |
 | `frame_ms` | The most GPU time of one frame in milliseconds, 4 when absent and at most 16 |
 | `memory_mb` | The budget of the resources, buffer inputs, draw buffers and targets in the viewer, 64 when absent and at most 256 |
 
@@ -110,7 +117,8 @@ A pass has these keys. A compute pass uses `entry`, `workgroups` and `writes`. A
 | `target` | `host` (default), the color, ID and depth of the panel, or the id of an offscreen target |
 | `reads` | The offscreen targets that the pass samples |
 | `instances` | A count, or the id of a buffer resource or buffer input whose valid count at the cursor is the count. 1 when absent. |
-| `vertices` | The vertices of one instance, at most 65,536. It is necessary with `vertex`. |
+| `vertices` | The vertices of one instance, at most 65,536. It is necessary with `vertex` and without `indices`. |
+| `indices` | A published buffer resource or buffer input of `u32` elements. The pass draws its valid elements as an index buffer, and each instance draws all of them. |
 | `topology` | `triangle_list` (default), `triangle_strip`, `line_list`, `line_strip` or `point_list` |
 | `blend` | `opaque`, `alpha` or `additive`. The default is opaque into `host` and additive into a target. |
 | `depth` | `none`, `test` or `write`. The default is `write` with a vertex entry and `none` for a full-screen triangle. |
@@ -119,6 +127,8 @@ A pass has these keys. A compute pass uses `entry`, `workgroups` and `writes`. A
 The passes of one frame run in their declared order. A pass whose `instances` names a resource with no version yet, or with a valid count of zero, is skipped. An offscreen target is `rgba8unorm` at `scale` of the panel size, and it clears to `clear` at the start of each frame. A pass samples a target that an earlier pass of the frame wrote, and never its own target. No pass reads the host target. The ID never blends.
 
 A draw buffer keeps its contents from frame to frame, thus motion comes from the draw half. `caliper_view.frame.x` counts the frames since the last reset, and `caliper_view.frame.y` is 1 on the first frame after a reset. The host zeroes every draw buffer at an install, at a new attachment and at a new epoch. A buffer with `reset = "cursor"` also returns to zero when the cursor moves by a command, a key or the transport. A buffer with `reset = "resource"` also returns to zero when a resource of the frame changes its version. A change of a parameter never resets a buffer.
+
+An indexed pass has a vertex entry and the topology `triangle_list`, `line_list` or `point_list`, because a strip would read the index 4,294,967,295 as a restart. Each index becomes the `vertex_index` of the vertex entry. The render graph binds no vertex buffer, thus an index is only a number that the vertex entry reads, and every read of a buffer is bounds-checked. An index past the valid elements of a resource therefore reads zero or an element of the binding, and never memory outside it. The host checks no index on the CPU, which costs nothing per index. It only holds the index count to the elements of the version, which the buffer holds. A pass whose index resource has no version, or no valid element, is skipped.
 
 The render graph has no custom blend factors, no culling, no storage texture, no multisampling and no indirect draw or dispatch. A compute pass of the draw half never changes an instance count, because the count comes from the CPU copy of a resource.
 
@@ -202,9 +212,9 @@ The piece `surface@1` draws a height field as a lit surface in a data box. Its d
 
 The pieces `lines@1` and `arrows@1` draw as the built-in `lines` and `arrows` primitives. `lines@1` reads positions, values and a topology tensor, and it draws segments, strips with their lengths, or index-pair edges. `arrows@1` reads origins, vectors and values. Both color by one color, by a value through a colormap with fixed ends or ends from the values, or by a packed RGBA, and both take the width, the depth offset and translucent colors of the built-in draw. The piece `path@1` is the drawing of the `path` operator. Its derive half keeps every s-th row of a tensor at the chosen columns, and its draw half draws one strip through the kept rows as a `lines` entity in strip mode does. A pick of any of the three returns the item of the built-in draw.
 
-The pieces `image@1`, `depth@1` and `segmentation@1` draw the three forms of the built-in image. They draw a color or grey image, a depth map with its colormap and cloud, and a mask of class ids in class colors. Each one lies flat at a pose or on the image plane of a camera. With the same image, camera and options, it draws the pixels of the built-in image within the tolerances of the scene tests. A pick returns the same pixel.
+The pieces `image@1`, `depth@1` and `segmentation@1` draw the three forms of the built-in image. They draw a color or grey image, a depth map with its colormap and cloud, and a mask of class ids in class colors. Each one lies flat at a pose or on the image plane of a camera. The input `pose` is optional, and without it the pose is the identity. The class colors of `segmentation@1` are optional too, and without them each class takes its palette color. With the same image, camera and options, it draws the pixels of the built-in image within the tolerances of the scene tests. A pick returns the same pixel.
 
-The piece `boxes@1` draws boxes as the built-in `boxes` primitive draws them, up to 131,072 boxes. It draws edges of a width in pixels and optional translucent faces, and it colors a box by one color, by RGBA or by a class id. The piece `mesh@1` draws a triangle mesh as the built-in `mesh` primitive draws it, up to 98,304 vertices and 196,608 triangles. It lights the mesh from its normals or with flat faces, and it colors a vertex by one color, by RGBA or by a value through a colormap. Neither piece draws labels, and `mesh@1` takes no texture.
+The piece `boxes@1` draws boxes as the built-in `boxes` primitive draws them, up to 126,976 boxes. It draws edges of a width in pixels and optional translucent faces, and it colors a box by one color, by RGBA or by a class id. Its optional input `labels` holds the UTF-8 bytes of a label for each box, or one label for all, as 16 `u32` for each row. As the built-in does, it labels every step-th box of a set, at most 4,096, at the center of the box, through a text table whose strings come from its published resource `names`. Its inputs `rotations` and `colors` are optional too. The piece `mesh@1` draws a triangle mesh as the built-in `mesh` primitive draws it, up to 98,304 vertices and 196,608 triangles. It lights the mesh from its normals or with flat faces, and it colors a vertex by one color, by RGBA or by a value through a colormap. Its derive half writes the index buffer `faces`, and its passes draw the faces through it, as the built-in's indexed draw does. Its inputs `indices`, `normals` and `colors` are optional: without indices, every three vertices make a triangle, and without colors, the one color applies. The piece `mesh@1` takes no texture, because a texture resource has one fixed size and format.
 
 A workspace piece with the name of a library piece replaces it only in a program that says `from = "workspace"`. `caliper-mcp` serves each file of the library as a read-only resource under `caliper://library/`. Thus an agent can read a piece before it pins, copies or imitates it.
 
@@ -221,7 +231,7 @@ A program of a spec is an instance of a piece. It holds no WGSL, and none of the
 | `params` | A number, or a binding reference to a control, a selection or a state, for each parameter |
 | `panel` | The scene panel that the draw half writes. It is necessary when the piece draws. |
 
-The editor checks each binding against the catalog. It checks the dtype and rank of a tensor, and the layout of the published resource of another program. An input that is unbound, or bound to another dtype, rank or layout, gives `piece.bad_binding`. Buffer inputs that form a cycle give `piece.cycle`. A binding that names a resource that the other piece does not publish also gives `piece.bad_binding`.
+The editor checks each binding against the catalog. It checks the dtype and rank of a tensor, and the layout of the published resource of another program. An input that is unbound and not optional, or an input bound to another dtype, rank or layout, gives `piece.bad_binding`. Buffer inputs that form a cycle give `piece.cycle`. A binding that names a resource that the other piece does not publish also gives `piece.bad_binding`.
 
 A buffer input makes the programs of a spec a graph. Only the draw half reads a buffer input. The viewer gives it the version of the other resource at the cursor.
 
@@ -392,6 +402,10 @@ A pick in a panel with the option `select` writes a state variable from a field.
 
 The host owns text. A piece publishes the anchors of its labels in a buffer resource, and its text table names them. The table has `anchors`, the resource, and `position`, a `vec4<f32>` field whose xyz is the world position of the label. It has `string`, a `u32` field that indexes `strings`, and an optional `priority`, an `f32` field. The list `strings` holds at most 4,096 strings of at most 64 bytes each.
 
+The strings can also come from the run. With `strings_from`, the table names a published buffer resource or buffer input in place of `strings`, and each of its valid elements is one string. The layout of that buffer holds only `u32`, `vec2<u32>` and `vec4<u32>` fields, at most 64 bytes, and a resource of it holds at most 4,096 elements. The bytes of an element are UTF-8 text, and the first zero byte ends the string before the end of the element. The host reads the version of that buffer that the frame shows, and it checks each string again. A string that is not valid UTF-8 leaves its labels out. Thus the strings of a table are at most 4,096, each of at most 64 bytes and 256 KiB together, whichever source they come from. A derive half writes the strings of a run, such as the label of each box, from a tensor of packed bytes.
+
+The key `align` says where the host puts each label. With `placed`, the default, the placer chooses one of eight places around the anchor, as for the other labels of the panel. With `left`, `right` or `center`, the host pins each label at its anchor, with the start, the end or the middle of its text there and the text centered on the anchor vertically. A pinned label does not move away from a label that it overlaps, and the labels that the placer places after it keep clear of it. Axis labels use it.
+
 The scene view reads the anchors of the version that the frame shows and projects them with the camera. It places at most 512 labels with the overlap rule and the leader lines of the other labels of the panel. A label of a higher priority wins an overlap. When more than 512 anchors are valid, the anchors of the highest priority stay. A position or a priority that is not a finite number leaves the anchor out. A string index outside the table leaves it out too. The anchors come from a derive half only, because only the derive half output reaches the CPU. A table that breaks its limits gives `program.bad_text`.
 
 ## Camera
@@ -436,7 +450,7 @@ The editor, the script and the viewer refuse a piece with a stable code before a
 | `piece.exists` | That name and version exist in the workspace |
 | `piece.read_only` | A command would change a library piece |
 | `piece.in_use` | A program of the open spec pins that version |
-| `piece.bad_binding` | An input that is unbound, or bound to another dtype, rank or layout |
+| `piece.bad_binding` | An input that is unbound and not optional, or bound to another dtype, rank or layout |
 | `piece.cycle` | A piece depends on itself, or a program binds a resource of its own |
 | `program.form_mixed` | A program has keys of the one-pass form and a pin |
 | `program.bad_resource` | A kind, count or size of a resource, published resources above 8 MiB together, or a duplicate id |
@@ -445,17 +459,18 @@ The editor, the script and the viewer refuse a piece with a stable code before a
 | `program.bad_pass` | The kind, entry, target or values of a pass |
 | `program.target_cycle` | A pass reads its own target, or a target before a pass writes it |
 | `program.bad_pick` | The item map names no field, or the piece has no pass with `pick` |
-| `program.bad_text` | The anchors lack their fields, or the strings break their limits |
+| `program.bad_text` | The anchors lack their fields, the strings break their limits, both `strings` and `strings_from` are given, or the buffer of `strings_from` has another layout or more than 4,096 elements |
 | `program.camera_conflict` | Two programs of a panel select two cameras. The editor, `spec.validate` and the viewer give it. |
 | `program.binding_not_allowed` | A file declares a binding, or a pass writes a tensor input |
 | `program.reserved_name` | A file declares a name of the host or a name with a double underscore |
 | `program.entry_stage` | An entry point of the wrong stage, none, or the name `main` |
 | `program.interface_mismatch` | A fragment entry reads a location that the vertex entry does not write, or with another type or interpolation, or a vertex entry reads a vertex attribute |
-| `program.over_web_limits` | A pass goes over a default limit of WebGPU |
+| `program.over_web_limits` | A pass goes over a default limit of WebGPU, such as a derive pass that binds more than 8 storage buffers |
+| `program.workgroup_memory` | An entry point of a compute pass uses `var<workgroup>` |
 | `program.resources_unavailable` | The attached script takes no pieces |
 | `program.browser_refused` | WebGPU refused a module or a pipeline of the browser viewer |
 
-The manifest check holds every pass to the default limits of WebGPU, thus a piece that runs in the app also runs in a browser. One stage binds at most 8 storage buffers. As a result, the published resources, buffer inputs and draw buffers of a piece number at most 7 beside the selection.
+The manifest check holds every pass to the default limits of WebGPU, thus a piece that runs in the app also runs in a browser. One stage binds at most 8 storage buffers. As a result, the published resources, buffer inputs and draw buffers of a piece number at most 7 beside the selection. The derive half counts the storage buffers of each pass after the compile, because a pass binds only what its entry point uses.
 
 ## Browser Viewer
 

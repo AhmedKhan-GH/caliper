@@ -17,13 +17,15 @@ kind = "tensor"
 dtype = "i32"
 rank_min = 1
 rank_max = 2
-title = "Indices (T, 3), read when indexed is 1; each index above the last vertex draws the last vertex"
+optional = true
+title = "Indices (T, 3), read when indexed is 1; each index above the last vertex draws the last vertex; unbound, every three vertices"
 
 [[inputs]]
 name = "normals"
 kind = "tensor"
 rank_min = 2
 rank_max = 2
+optional = true
 title = "Normals (V, 3), read when shading is 1"
 
 [[inputs]]
@@ -31,7 +33,8 @@ name = "colors"
 kind = "tensor"
 rank_min = 1
 rank_max = 2
-title = "Colors (V, 3 or 4) from 0 to 1, or values (V), or one row or value for all"
+optional = true
+title = "Colors (V, 3 or 4) from 0 to 1, or values (V), or one row or value for all; unbound, the one color"
 
 [[params]]
 name = "color_mode"
@@ -97,11 +100,12 @@ fields = ["position: vec4<f32>", "normal: vec4<f32>", "rgba: u32", "index: u32"]
 count = 98304
 counted = true
 
+# The three vertex indices of each triangle, which the draw passes draw as their index buffer.
 [[resources]]
-id = "triangles"
+id = "faces"
 kind = "buffer"
-element = "vec4<u32>"
-count = 196608
+element = "u32"
+count = 589824
 counted = true
 
 [[derive.passes]]
@@ -112,7 +116,7 @@ writes = ["vertices"]
 [[derive.passes]]
 entry = "copy_triangles"
 workgroups = [768, 1, 1]
-writes = ["triangles"]
+writes = ["faces"]
 
 [[derive.passes]]
 entry = "mark_alpha"
@@ -129,8 +133,7 @@ pick = { resource = "vertices", fields = ["index"] }
 kind = "render"
 vertex = "face_vs"
 fragment = "face_fs"
-instances = "triangles"
-vertices = 3
+indices = "faces"
 blend = "alpha"
 depth = "write"
 pick = true
@@ -140,8 +143,7 @@ pick = true
 kind = "render"
 vertex = "face_see_vs"
 fragment = "see_fs"
-instances = "triangles"
-vertices = 3
+indices = "faces"
 blend = "alpha"
 depth = "test"
 
@@ -151,8 +153,7 @@ depth = "test"
 kind = "render"
 vertex = "face_id_vs"
 fragment = "id_fs"
-instances = "triangles"
-vertices = 3
+indices = "faces"
 blend = "alpha"
 depth = "write"
 pick = true

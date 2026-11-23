@@ -509,7 +509,7 @@ private:
                 if (Verdict v = workgroups(pass.workgroups, where + ".workgroups"); !v.ok()) return v;
                 if (pass.vertex || !pass.fragment.empty() || pass.target != "host" || pass.instances != 1 ||
                     pass.instances_of || pass.vertices || pass.topology != spec::DrawTopology::triangle_list ||
-                    pass.blend || pass.depth || pass.pick)
+                    pass.blend || pass.depth || pass.pick || pass.indices)
                     return fail(kProgramBadPass,
                                 "A compute pass has entry, workgroups, writes and reads, and none of the keys of a "
                                 "render pass.",
@@ -531,8 +531,9 @@ private:
                 if (Verdict v = entry(pass.fragment, where + ".fragment"); !v.ok()) return v;
                 if (pass.vertex) {
                     if (Verdict v = entry(*pass.vertex, where + ".vertex"); !v.ok()) return v;
-                    if (!pass.vertices)
-                        return fail(kProgramBadPass, "A pass with a vertex entry gives vertices.", where + ".vertices");
+                    if (!pass.vertices && !pass.indices)
+                        return fail(kProgramBadPass, "A pass with a vertex entry gives vertices or indices.",
+                                    where + ".vertices");
                 } else {
                     if ((pass.vertices && *pass.vertices != 3) || pass.topology != spec::DrawTopology::triangle_list ||
                         pass.instances != 1 || pass.instances_of)
@@ -544,6 +545,28 @@ private:
                 if (pass.vertices && (*pass.vertices < 1 || *pass.vertices > pl::kVerticesMax))
                     return fail(kProgramBadPass,
                                 "vertices is from 1 to " + std::to_string(pl::kVerticesMax) + ".", where + ".vertices");
+                if (pass.indices) {
+                    // An index buffer: each index becomes the vertex entry's vertex_index, whose every
+                    // read of a buffer is bounds-checked. A strip would read the restart index.
+                    if (!pass.vertex)
+                        return fail(kProgramBadPass, "A pass with indices has a vertex entry.", where + ".indices");
+                    if (pass.topology == spec::DrawTopology::triangle_strip ||
+                        pass.topology == spec::DrawTopology::line_strip)
+                        return fail(kProgramBadPass,
+                                    "A pass with indices draws a list: triangle_list, line_list or point_list.",
+                                    where + ".topology");
+                    if (!countable(*pass.indices))
+                        return fail(kProgramUnknownResource,
+                                    "indices names " + quote(*pass.indices) +
+                                        ", which is no published buffer resource or buffer input of the piece.",
+                                    where + ".indices");
+                    const spec::Resource* r = find_resource(p_, *pass.indices);
+                    const spec::PieceInput* in = r ? nullptr : find_input(p_, *pass.indices);
+                    const spec::Layout& l = r ? r->layout : in->layout;
+                    if (!l.element || *l.element != "u32" || !l.fields.empty())
+                        return fail(kProgramBadPass, "indices names " + quote(*pass.indices) + ", whose elements are not u32.",
+                                    where + ".indices");
+                }
                 if (pass.instances_of) {
                     if (!countable(*pass.instances_of))
                         return fail(kProgramUnknownResource,
@@ -640,6 +663,32 @@ private:
             }
             if (t.strings.size() > pl::kStrings)
                 return fail(kProgramBadText, "The text table has at most 4096 strings.", "draw.text.strings");
+            if (t.strings_from) {
+                // The strings of a run: each element of a published buffer is one string of at most
+                // kStringBytes UTF-8 bytes, which the host checks again when it reads them.
+                if (!t.strings.empty())
+                    return fail(kProgramBadText, "The text table takes its strings from strings or strings_from, not both.",
+                                "draw.text.strings_from");
+                if (!countable(*t.strings_from))
+                    return fail(kProgramUnknownResource,
+                                "strings_from names " + quote(*t.strings_from) +
+                                    ", which is no published buffer resource or buffer input of the piece.",
+                                "draw.text.strings_from");
+                const spec::Resource* sr = find_resource(p_, *t.strings_from);
+                const spec::Layout& l = sr ? sr->layout : find_input(p_, *t.strings_from)->layout;
+                ElementLayout el;
+                bool bytes = element_layout(l, &el).ok() && el.stride > 0 && el.stride <= pl::kStringBytes;
+                for (const FieldLayout& f : el.fields)
+                    bytes = bytes && (f.type == "u32" || f.type == "vec2<u32>" || f.type == "vec4<u32>");
+                if (!bytes)
+                    return fail(kProgramBadText,
+                                "The strings of " + quote(*t.strings_from) +
+                                    " need elements of u32, vec2<u32> or vec4<u32> fields, at most 64 bytes each.",
+                                "draw.text.strings_from");
+                if (sr && sr->count > pl::kStrings)
+                    return fail(kProgramBadText, "The strings of " + quote(*t.strings_from) + " are at most 4096.",
+                                "draw.text.strings_from");
+            }
             for (std::size_t k = 0; k < t.strings.size(); ++k)
                 if (t.strings[k].size() > pl::kStringBytes)
                     return fail(kProgramBadText, "A string of the text table has at most 64 bytes.",

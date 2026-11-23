@@ -72,6 +72,10 @@ constexpr const char* kBadPass = "program.bad_pass";
 constexpr const char* kUnknownResource = "program.unknown_resource";
 constexpr const char* kEntryStage = "program.entry_stage";
 constexpr const char* kBindingNotAllowed = "program.binding_not_allowed";
+constexpr const char* kOverWebLimits = "program.over_web_limits";
+constexpr const char* kWorkgroupMemory = "program.workgroup_memory";
+// The storage buffers that one derive pass binds, WebGPU's maxStorageBuffersPerShaderStage.
+constexpr uint32_t kPassStorageMax = 8;
 constexpr uint64_t kTensorElementsMax = 1000000;
 constexpr size_t kParamsMax = 16;
 
@@ -145,7 +149,7 @@ caliper_producer_status fail(caliper_producer_error* e, caliper_producer_status 
         kCompilerUnavailable, kUnknownInput, kImportRefused, kOverMemory, kLayerRefused, kOverTime, kTimeout,
         kDeviceLost, kUnavailable, kParamsMismatch, "program.directive_not_allowed", "program.needs_review",
         kBadManifest, kBadBinding, kBadResource, kBadLayout, kBadPass, kUnknownResource, kEntryStage,
-        kBindingNotAllowed, "program.reserved_name", "piece.unknown_import"};
+        kBindingNotAllowed, "program.reserved_name", "piece.unknown_import", kOverWebLimits, kWorkgroupMemory};
     for (const char* k : kKnown)
         if (code == k) return k;
     return "program.compile_failed";
@@ -201,14 +205,17 @@ struct ResourceSlot {
     uint32_t valid = 0;      // min(counter, count) after the last run, else count
 };
 
-// One compute pass of a derive program: a program and a pipeline for its entry point, with
-// every binding of the composed module, thus the sizes buffer and the Metal indices agree
-// between the passes.
+// One compute pass of a derive program: a program and a pipeline for its entry point, compiled
+// from the module that keeps only that entry point, thus it binds only what the entry point uses
+// (at most kPassStorageMax storage buffers), with the Metal indices and the sizes buffer of that
+// program alone.
 struct DerivePassSlot {
     std::string entry;
     Program program;
     Pipeline pipeline;
     std::vector<BindGroup> groups;
+    std::vector<Bound> bound;          // the bindings of this pass's module
+    bool frame = false;                // binds the uniform `caliper` with its dynamic offset
     uint32_t dispatch[3] = {1, 1, 1};
 };
 
@@ -234,6 +241,8 @@ struct Prog {
     std::vector<uint32_t> tensors;     // the import handles it binds
     std::vector<Bound> bound;          // the reflection's bindings, for the bind groups
     std::vector<std::pair<std::string, uint32_t>> inputs;   // WGSL variable, import handle
+    std::vector<std::string> unbound;  // derive: optional tensor inputs without a tensor
+    Buffer placeholder;                // derive: the 16 zero bytes that an unbound input binds
     double time_limit_ms = 4.0;
     uint64_t memory_bytes = 0;
     uint32_t state = CALIPER_PRODUCER_COMPILED;
@@ -313,11 +322,14 @@ uint64_t params_bytes(const Prog& p) {
 
 // The bind groups of a program from its bindings, its inputs' imports, its params and its
 // outputs. On a failure the groups made so far are released and *what names the one that failed.
+// The bind groups of `program` over `bound`, the bindings of its module: the program's own, or
+// those of one derive pass when given.
 bool make_groups(caliper_producer* rt, const Prog& p, Program program, std::vector<BindGroup>* out,
-                 std::string* what) {
+                 std::string* what, const std::vector<Bound>* pass_bound = nullptr) {
     Backend& be = *rt->be;
+    const std::vector<Bound>& bound = pass_bound ? *pass_bound : p.bound;
     uint32_t groups = 0;
-    for (const Bound& b : p.bound) groups = std::max(groups, b.group + 1);
+    for (const Bound& b : bound) groups = std::max(groups, b.group + 1);
     if (groups > kMaxBindGroups) { *what = "bind groups: a program uses groups 0 to 3"; return false; }
     std::vector<BindGroup> made(groups, BindGroup{});
     auto undo = [&] {
@@ -330,7 +342,7 @@ bool make_groups(caliper_producer* rt, const Prog& p, Program program, std::vect
         gd.program = program;
         gd.group = g;
         gd.label = label.c_str();
-        for (const Bound& b : p.bound) {
+        for (const Bound& b : bound) {
             if (b.group != g) continue;
             if (gd.entry_count >= kMaxBindingsPerGroup) {
                 undo();
@@ -341,7 +353,10 @@ bool make_groups(caliper_producer* rt, const Prog& p, Program program, std::vect
             e.binding = b.binding;
             const auto in = std::find_if(p.inputs.begin(), p.inputs.end(),
                                          [&](const auto& x) { return x.first == b.name; });
-            if (in != p.inputs.end()) {
+            if (in != p.inputs.end() && in->second == 0 && p.placeholder) {
+                e.buffer = p.placeholder;   // an optional input left unbound: 16 zero bytes
+                e.size = 16;
+            } else if (in != p.inputs.end()) {
                 const Import* im = import_of(rt, in->second);
                 if (!im) {
                     undo();
@@ -407,6 +422,8 @@ void free_prog(caliper_producer* rt, Prog& p) {
     p.resources.clear();
     if (p.shapes) rt->be->release(p.shapes);
     p.shapes = {};
+    if (p.placeholder) rt->be->release(p.placeholder);
+    p.placeholder = {};
     if (p.count) rt->be->release(p.count);
     if (p.params_buffer) rt->be->release(p.params_buffer);
     p.pipeline = {};
@@ -567,7 +584,8 @@ using ModuleOwner = std::unique_ptr<caliper_wgsl_module, void (*)(caliper_wgsl_m
 // other memory of the process, such as a training tensor. Then the compute entry point: the one
 // named `want`, or the only one.
 caliper_producer_status open_module(const std::string& wgsl, const char* want, ModuleOwner* out, std::string* entry,
-                                    uint32_t wg[3], caliper_producer_error* error, size_t max_bytes = kSourceBytes) {
+                                    uint32_t wg[3], caliper_producer_error* error, size_t max_bytes = kSourceBytes,
+                                    const char* keep = nullptr) {
     if (caliper_wgsl_abi_version() != CALIPER_WGSL_ABI_VERSION)
         return fail(error, CALIPER_PRODUCER_UNSUPPORTED, kCompilerUnavailable,
                     "The WGSL compiler library has another interface version than this runtime.");
@@ -575,6 +593,7 @@ caliper_producer_status open_module(const std::string& wgsl, const char* want, M
     caliper_wgsl_options_init(&opt);
     opt.max_source_bytes = max_bytes;
     opt.bounds_checks = CALIPER_WGSL_BOUNDS_CHECKED;
+    opt.entry_point = keep;   // NULL, or the one entry point that the module keeps
     caliper_wgsl_module* mod = nullptr;
     caliper_wgsl_error we{};
     if (caliper_wgsl_module_create(wgsl.data(), wgsl.size(), &opt, &mod, &we) != CALIPER_WGSL_OK) {
@@ -710,7 +729,11 @@ caliper_producer_status check_derive_desc(const caliper_producer_derive_desc* d,
     for (size_t i = 0; i < d->input_count; ++i) {
         if (!d->inputs[i].var) return refuse(kBadManifest, "An input has no name.");
         const char* t = d->input_types ? d->input_types[i] : "f32";
-        if (d->inputs[i].tensor && (!t || (std::strcmp(t, "f32") && std::strcmp(t, "i32") && std::strcmp(t, "u32"))))
+        const bool unbound = d->input_unbound && d->input_unbound[i];
+        if (unbound && d->inputs[i].tensor)
+            return refuse(kBadBinding, std::string("The input ") + d->inputs[i].var + " is unbound and has a tensor.");
+        if ((d->inputs[i].tensor || unbound) &&
+            (!t || (std::strcmp(t, "f32") && std::strcmp(t, "i32") && std::strcmp(t, "u32"))))
             return refuse(kBadManifest, std::string("The tensor input ") + d->inputs[i].var + " needs f32, i32 or u32.");
     }
     for (size_t i = 0; i < d->param_count; ++i) {
@@ -784,8 +807,10 @@ void write_shapes(caliper_producer* rt, const Prog& p) {
     if (!m) return;
     size_t slot = 0;
     for (const auto& in : p.inputs) {
-        if (in.second == 0) continue;   // the place of a buffer input, which the derive half does not bind
+        const bool unbound = std::find(p.unbound.begin(), p.unbound.end(), in.first) != p.unbound.end();
+        if (in.second == 0 && !unbound) continue;   // the place of a buffer input, which the derive half does not bind
         uint32_t v[4] = {1, 1, 1, 1};
+        if (unbound) v[0] = v[1] = v[2] = v[3] = 0;   // the declared default of an unbound optional input
         if (const Import* im = import_of(rt, in.second)) {
             const uint32_t n = std::min<uint32_t>(im->ndim, 4);
             for (uint32_t k = 0; k < n; ++k) {
@@ -811,7 +836,7 @@ caliper_producer_status rebind_derive(caliper_producer* rt, Prog* p, uint32_t ol
         for (const DerivePassSlot& d : p->passes) {
             std::vector<BindGroup> groups;
             std::string what;
-            if (!make_groups(rt, *p, d.program, &groups, &what)) {
+            if (!make_groups(rt, *p, d.program, &groups, &what, &d.bound)) {
                 std::swap(p->inputs, inputs);
                 for (auto& g : made)
                     for (BindGroup b : g)
@@ -846,7 +871,7 @@ sp::Piece piece_of(const caliper_producer_derive_desc* d) {
     for (size_t i = 0; i < d->input_count; ++i) {
         sp::PieceInput in;
         in.name = d->inputs[i].var;
-        if (d->inputs[i].tensor) {
+        if (d->inputs[i].tensor || (d->input_unbound && d->input_unbound[i])) {
             in.kind = sp::InputKind::tensor;
             in.dtype = d->input_types ? d->input_types[i] : "f32";
         } else {
@@ -1083,7 +1108,8 @@ caliper_producer_status caliper_producer_compile(caliper_producer* rt, const cal
                 caliper_wgsl_entry_point ep{};
                 if (caliper_wgsl_module_entry_point(mod, i, &ep) != CALIPER_WGSL_OK) continue;
                 refl.entries.push_back({ep.name, sb::EntryStage(ep.stage),
-                                        {ep.workgroup_size[0], ep.workgroup_size[1], ep.workgroup_size[2]}, {}, {}});
+                                        {ep.workgroup_size[0], ep.workgroup_size[1], ep.workgroup_size[2]},
+                                        ep.workgroup_memory, {}, {}});
             }
             if (sandbox_refused(sb::check_program(spec, refl), error, &refused)) return refused;
         }
@@ -1459,7 +1485,8 @@ caliper_producer_status caliper_producer_run(caliper_producer* rt, const uint32_
                 // that is the barrier between two passes.
                 for (const DerivePassSlot& d : p->passes)
                     f.dispatch(d.pipeline, View<BindGroup>(d.groups.data(), d.groups.size()),
-                               View<uint32_t>(offsets, offset_count), d.dispatch[0], d.dispatch[1], d.dispatch[2]);
+                               View<uint32_t>(offsets, d.frame ? offset_count : 0), d.dispatch[0], d.dispatch[1],
+                               d.dispatch[2]);
             } else {
                 f.dispatch(p->pipeline, View<BindGroup>(p->groups.data(), p->groups.size()),
                            View<uint32_t>(offsets, offset_count), p->dispatch[0], p->dispatch[1], p->dispatch[2]);
@@ -1665,40 +1692,16 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
         return s;
     };
     @autoreleasepool {
-        // 3. The compile, with every buffer index checked (Bounds Checks of design/gpu-programs.md).
-        ModuleOwner owner(nullptr, &caliper_wgsl_module_destroy);
-        std::string none;
-        uint32_t wg0[3] = {1, 1, 1};
-        if (caliper_producer_status s = open_module(composed.text, "", &owner, &none, wg0, error, kComposedBytes))
-            return in_file(s);
-        caliper_wgsl_module* mod = owner.get();
-
-        // 4. The entry point of each pass: a compute entry with at most 256 invocations.
+        // 3. The compile of each pass, with every buffer index checked (Bounds Checks of
+        // design/gpu-programs.md): the module that keeps only the pass's entry point, thus the pass
+        // binds only what that entry point uses, with Metal indices and a sizes buffer of its own.
+        std::vector<ModuleOwner> owners;
+        owners.reserve(d->pass_count);
         std::vector<std::array<uint32_t, 3>> sizes(d->pass_count);
-        for (size_t i = 0; i < d->pass_count; ++i) {
-            bool found = false;
-            for (size_t k = 0, n = caliper_wgsl_module_entry_point_count(mod); k < n && !found; ++k) {
-                caliper_wgsl_entry_point ep{};
-                if (caliper_wgsl_module_entry_point(mod, k, &ep) != CALIPER_WGSL_OK || std::strcmp(ep.name, d->passes[i].entry))
-                    continue;
-                if (ep.stage != CALIPER_WGSL_STAGE_COMPUTE)
-                    return fail(error, CALIPER_PRODUCER_REFUSED, kEntryStage,
-                                std::string("The entry point ") + ep.name + " of derive.passes[" + std::to_string(i) +
-                                    "] is not a compute entry point.");
-                sizes[i] = {ep.workgroup_size[0], ep.workgroup_size[1], ep.workgroup_size[2]};
-                found = true;
-            }
-            if (!found)
-                return fail(error, CALIPER_PRODUCER_REFUSED, kEntryStage,
-                            std::string("derive.wgsl has no compute entry point ") + d->passes[i].entry + ".");
-            if (uint64_t(sizes[i][0]) * sizes[i][1] * sizes[i][2] > kWorkgroupInvocations)
-                return fail(error, CALIPER_PRODUCER_REFUSED, kOverLimits,
-                            std::string("The workgroup of ") + d->passes[i].entry + " has more than 256 invocations.");
-        }
 
-        // 5. The bindings: each one of the reflection is a binding of the header at its place.
-        // A piece declares no binding, thus anything else is refused, and a tensor input is read
-        // only (the read-only rule; the layer's read_only flag refuses it again).
+        // 5. The bindings that the header declares: each one of a pass's reflection is one of them
+        // at its place. A piece declares no binding, thus anything else is refused, and a tensor
+        // input is read only (the read-only rule; the layer's read_only flag refuses it again).
         struct Expected {
             std::string name;
             uint32_t group, binding;
@@ -1710,7 +1713,7 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
         if (d->param_count) expected.push_back({"params", 0, 1, Kind::Uniform, false, -1});
         size_t tensor_inputs = 0;
         for (size_t i = 0; i < d->input_count; ++i)
-            if (d->inputs[i].tensor) {
+            if (d->inputs[i].tensor || (d->input_unbound && d->input_unbound[i])) {
                 expected.push_back({d->inputs[i].var, 1, uint32_t(i), Kind::Storage, false, -1});
                 ++tensor_inputs;
             }
@@ -1721,48 +1724,93 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
                 expected.push_back({std::string(d->resources[i].id) + "_count", 2, uint32_t(2 * i + 1), Kind::Storage,
                                     true, -1});
         }
-        std::vector<Bound> bound;
+        std::vector<std::vector<Bound>> pass_bound(d->pass_count);
         bool frame = false;
-        for (size_t i = 0, n = caliper_wgsl_module_binding_count(mod); i < n; ++i) {
-            caliper_wgsl_binding wb{};
-            if (caliper_wgsl_module_binding(mod, i, &wb) != CALIPER_WGSL_OK) continue;
-            Bound b;
-            b.group = wb.group;
-            b.binding = wb.binding;
-            b.msl_index = wb.metal_index;
-            b.kind = wb.kind == CALIPER_WGSL_BINDING_STORAGE_BUFFER   ? Kind::Storage
-                     : wb.kind == CALIPER_WGSL_BINDING_UNIFORM_BUFFER ? Kind::Uniform
-                                                                      : Kind::Other;
-            b.read = wb.access & CALIPER_WGSL_ACCESS_READ;
-            b.write = wb.access & CALIPER_WGSL_ACCESS_WRITE;
-            b.size = wb.size;
-            b.name = wb.name ? wb.name : "";
-            const std::string where = " (" + b.name + ", group " + std::to_string(b.group) + " binding " +
-                                      std::to_string(b.binding) + ")";
-            const auto e = std::find_if(expected.begin(), expected.end(), [&](const Expected& x) {
-                return x.name == b.name && x.group == b.group && x.binding == b.binding;
-            });
-            if (e == expected.end())
-                return fail(error, CALIPER_PRODUCER_REFUSED, kBindingNotAllowed,
-                            "The binding" + where + " is not one of the generated header; a piece declares no binding.");
-            if (e->group == 1 && (b.kind != Kind::Storage || b.write))
-                return fail(error, CALIPER_PRODUCER_REFUSED, kWritesInput,
-                            "The input " + b.name + " must be var<storage, read>, because a program never writes a "
-                            "tensor of the script" + where + ".");
-            if (b.kind != e->kind || b.write != e->write)
-                return fail(error, CALIPER_PRODUCER_REFUSED, kBindingNotAllowed,
-                            "The binding" + where + " differs from the generated header.");
-            if (e->resource >= 0) {
-                uint32_t stride = 0;
-                std::string why;
-                element_stride(d->resources[e->resource], &stride, &why);
-                if (b.size != stride)
-                    return fail(error, CALIPER_PRODUCER_REFUSED, kBadLayout,
-                                "The compiler lays out one element of " + b.name + " in " + std::to_string(b.size) +
-                                    " bytes, and the manifest in " + std::to_string(stride) + ".");
+        for (size_t i = 0; i < d->pass_count; ++i) {
+            const std::string where = "derive.passes[" + std::to_string(i) + "]";
+            owners.emplace_back(nullptr, &caliper_wgsl_module_destroy);
+            std::string none;
+            uint32_t wg0[3] = {1, 1, 1};
+            if (caliper_producer_status s = open_module(composed.text, "", &owners.back(), &none, wg0, error,
+                                                        kComposedBytes, d->passes[i].entry)) {
+                if (error && error->code == kCompileFailed && error->line == 0 && error->message &&
+                    std::strstr(error->message, "no entry point named")) {
+                    std::free(error->message);
+                    error->message = nullptr;
+                    return fail(error, CALIPER_PRODUCER_REFUSED, kEntryStage,
+                                std::string("derive.wgsl has no compute entry point ") + d->passes[i].entry + ".");
+                }
+                return in_file(s);
             }
-            frame = frame || b.name == "caliper";
-            bound.push_back(std::move(b));
+            caliper_wgsl_module* mod = owners.back().get();
+
+            // 4. The entry point of the pass: a compute entry with at most 256 invocations and no
+            // workgroup memory, which a Metal dispatch here does not give.
+            caliper_wgsl_entry_point ep{};
+            if (caliper_wgsl_module_entry_point_count(mod) != 1 ||
+                caliper_wgsl_module_entry_point(mod, 0, &ep) != CALIPER_WGSL_OK || std::strcmp(ep.name, d->passes[i].entry))
+                return fail(error, CALIPER_PRODUCER_REFUSED, kEntryStage,
+                            std::string("derive.wgsl has no compute entry point ") + d->passes[i].entry + ".");
+            if (ep.stage != CALIPER_WGSL_STAGE_COMPUTE)
+                return fail(error, CALIPER_PRODUCER_REFUSED, kEntryStage,
+                            std::string("The entry point ") + ep.name + " of " + where + " is not a compute entry point.");
+            sizes[i] = {ep.workgroup_size[0], ep.workgroup_size[1], ep.workgroup_size[2]};
+            if (uint64_t(sizes[i][0]) * sizes[i][1] * sizes[i][2] > kWorkgroupInvocations)
+                return fail(error, CALIPER_PRODUCER_REFUSED, kOverLimits,
+                            std::string("The workgroup of ") + d->passes[i].entry + " has more than 256 invocations.");
+            if (ep.workgroup_memory > 0)
+                return fail(error, CALIPER_PRODUCER_REFUSED, kWorkgroupMemory,
+                            std::string("The entry point ") + ep.name + " of " + where + " uses " +
+                                std::to_string(ep.workgroup_memory) + " bytes of var<workgroup>, which a pass of a "
+                                "piece cannot have.");
+
+            uint32_t storage = 0;
+            for (size_t k = 0, n = caliper_wgsl_module_binding_count(mod); k < n; ++k) {
+                caliper_wgsl_binding wb{};
+                if (caliper_wgsl_module_binding(mod, k, &wb) != CALIPER_WGSL_OK) continue;
+                Bound b;
+                b.group = wb.group;
+                b.binding = wb.binding;
+                b.msl_index = wb.metal_index;
+                b.kind = wb.kind == CALIPER_WGSL_BINDING_STORAGE_BUFFER   ? Kind::Storage
+                         : wb.kind == CALIPER_WGSL_BINDING_UNIFORM_BUFFER ? Kind::Uniform
+                                                                          : Kind::Other;
+                b.read = wb.access & CALIPER_WGSL_ACCESS_READ;
+                b.write = wb.access & CALIPER_WGSL_ACCESS_WRITE;
+                b.size = wb.size;
+                b.name = wb.name ? wb.name : "";
+                const std::string at = " (" + b.name + ", group " + std::to_string(b.group) + " binding " +
+                                       std::to_string(b.binding) + ")";
+                const auto e = std::find_if(expected.begin(), expected.end(), [&](const Expected& x) {
+                    return x.name == b.name && x.group == b.group && x.binding == b.binding;
+                });
+                if (e == expected.end())
+                    return fail(error, CALIPER_PRODUCER_REFUSED, kBindingNotAllowed,
+                                "The binding" + at + " is not one of the generated header; a piece declares no binding.");
+                if (e->group == 1 && (b.kind != Kind::Storage || b.write))
+                    return fail(error, CALIPER_PRODUCER_REFUSED, kWritesInput,
+                                "The input " + b.name + " must be var<storage, read>, because a program never writes a "
+                                "tensor of the script" + at + ".");
+                if (b.kind != e->kind || b.write != e->write)
+                    return fail(error, CALIPER_PRODUCER_REFUSED, kBindingNotAllowed,
+                                "The binding" + at + " differs from the generated header.");
+                if (e->resource >= 0) {
+                    uint32_t stride = 0;
+                    std::string why;
+                    element_stride(d->resources[e->resource], &stride, &why);
+                    if (b.size != stride)
+                        return fail(error, CALIPER_PRODUCER_REFUSED, kBadLayout,
+                                    "The compiler lays out one element of " + b.name + " in " + std::to_string(b.size) +
+                                        " bytes, and the manifest in " + std::to_string(stride) + ".");
+                }
+                if (b.kind == Kind::Storage) ++storage;
+                frame = frame || b.name == "caliper";
+                pass_bound[i].push_back(std::move(b));
+            }
+            if (storage > kPassStorageMax)
+                return fail(error, CALIPER_PRODUCER_REFUSED, kOverWebLimits,
+                            "The entry point " + std::string(d->passes[i].entry) + " of " + where + " binds " +
+                                std::to_string(storage) + " storage buffers; one derive pass binds at most 8.");
         }
 
         // 6. The memory: the resources, the counters and the bound tensors, each bounded before.
@@ -1803,34 +1851,38 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
             const std::string t = d->param_types[i];
             p.params.push_back({d->params[i].name, t == "i32" ? 1u : t == "u32" ? 2u : 0u, d->params[i].value});
         }
-        for (size_t i = 0; i < d->input_count; ++i) p.inputs.emplace_back(d->inputs[i].var, d->inputs[i].tensor);
-        p.bound = bound;
+        for (size_t i = 0; i < d->input_count; ++i) {
+            p.inputs.emplace_back(d->inputs[i].var, d->inputs[i].tensor);
+            if (d->input_unbound && d->input_unbound[i]) p.unbound.push_back(d->inputs[i].var);
+        }
         auto layer_fail = [&](const std::string& what) {
             const std::string why = be.last_error();
             free_prog(rt, p);
             return fail(error, CALIPER_PRODUCER_REFUSED, kLayerRefused,
                         "The graphics layer refused the " + what + (why.empty() ? std::string(".") : ": " + why));
         };
-        std::vector<BindingDesc> descs;
-        for (const Bound& b : bound) {
-            BindingDesc bd{};
-            bd.group = uint8_t(b.group);
-            bd.binding = uint8_t(b.binding);
-            bd.type = b.kind == Kind::Uniform ? BindingType::Uniform
-                      : b.write               ? BindingType::StorageReadWrite
-                                              : BindingType::Storage;
-            bd.stages = kStageCompute;
-            bd.dynamic = b.name == "caliper";
-            bd.size = uint32_t(b.name == "caliper" ? kFrameBytes : std::min<uint64_t>(b.size, UINT32_MAX));
-            bd.msl_index = uint8_t(b.msl_index);
-            descs.push_back(bd);
-        }
         for (size_t i = 0; i < d->pass_count; ++i) {
+            std::vector<BindingDesc> descs;
+            for (const Bound& b : pass_bound[i]) {
+                BindingDesc bd{};
+                bd.group = uint8_t(b.group);
+                bd.binding = uint8_t(b.binding);
+                bd.type = b.kind == Kind::Uniform ? BindingType::Uniform
+                          : b.write               ? BindingType::StorageReadWrite
+                                                  : BindingType::Storage;
+                bd.stages = kStageCompute;
+                bd.dynamic = b.name == "caliper";
+                bd.size = uint32_t(b.name == "caliper" ? kFrameBytes : std::min<uint64_t>(b.size, UINT32_MAX));
+                bd.msl_index = uint8_t(b.msl_index);
+                descs.push_back(bd);
+            }
             DerivePassSlot slot;
             slot.entry = d->passes[i].entry;
+            slot.bound = pass_bound[i];
+            slot.frame = std::any_of(slot.bound.begin(), slot.bound.end(), [](const Bound& b) { return b.name == "caliper"; });
             for (int k = 0; k < 3; ++k) slot.dispatch[k] = std::max(1u, d->passes[i].workgroups[k]);
             std::string msl_text;
-            if (caliper_producer_status s = msl_of(mod, slot.entry, &msl_text, error)) {
+            if (caliper_producer_status s = msl_of(owners[i].get(), slot.entry, &msl_text, error)) {
                 free_prog(rt, p);
                 return in_file(s);
             }
@@ -1891,6 +1943,10 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
             if (!p.params_buffer) return layer_fail("params buffer");
             write_params(be, p);
         }
+        if (!p.unbound.empty()) {
+            p.placeholder = make_zeroed(16, kStorage, "unbound input");
+            if (!p.placeholder) return layer_fail("placeholder of an unbound input");
+        }
         if (tensor_inputs) {
             p.shapes = make_zeroed(16 * tensor_inputs, kUniform, "shapes");
             if (!p.shapes) return layer_fail("shapes buffer");
@@ -1898,7 +1954,7 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
         }
         for (DerivePassSlot& slot : p.passes) {
             std::string what;
-            if (!make_groups(rt, p, slot.program, &slot.groups, &what)) return layer_fail(what);
+            if (!make_groups(rt, p, slot.program, &slot.groups, &what, &slot.bound)) return layer_fail(what);
         }
         rt->programs.push_back(std::move(p));
         *handle = uint32_t(rt->programs.size());

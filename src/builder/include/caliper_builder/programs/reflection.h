@@ -54,6 +54,7 @@ struct ReflectedEntry {
     std::string name;
     EntryStage stage = EntryStage::compute;
     std::array<std::uint32_t, 3> workgroup_size{};   // compute only; zeros otherwise
+    std::uint32_t workgroup_memory = 0;               // bytes of the var<workgroup> that a compute entry uses
     std::vector<ReflectedIo> inputs;                  // in the order of the arguments
     std::vector<ReflectedIo> outputs;                 // in the order of the result's members
 };

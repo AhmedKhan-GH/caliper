@@ -377,6 +377,53 @@ def test_the_arcs_piece_publishes_its_resources_in_the_cadence(attached):
     assert torch.equal(model.attn0, before)          # read in place, never written
 
 
+LOOK_DERIVE = """@compute @workgroup_size(1)
+fn look() {
+    shape[0] = shapes.extra;
+    shape[1] = shapes.attn0;
+    shape[2] = vec4<u32>(bitcast<u32>(extra[5u]), u32(attn0[0] >= 0.0), 0u, 0u);
+}
+"""
+LOOK = {"name": "look", "version": 1,
+        "inputs": [{"name": "attn0", "kind": "tensor", "rank_min": 4, "rank_max": 4},
+                   {"name": "extra", "kind": "tensor", "dtype": "i32", "optional": True}],
+        "resources": [{"id": "shape", "kind": "buffer", "element": "vec4<u32>", "count": 3}],
+        "derive": {"passes": [{"entry": "look", "writes": ["shape"]}]}}
+
+
+@needs_device
+def test_an_optional_tensor_input_left_unbound_reads_as_empty_and_a_required_one_is_refused(attached):
+    import copy
+    model, opt, ctl = attached
+    pin = {"name": "look", "version": 1, "hash": "sha256:" + "0" * 64, "from": "workspace"}
+
+    def install(pid, manifest):
+        return P.install_piece(pid, piece=pin, manifest=manifest, bind={"attn0": "live:attn0"}, params={},
+                               panel=None, segments=[], common="", derive=LOOK_DERIVE, draw="")
+    item = install("look", LOOK)
+    try:
+        assert item["state"] in ("compiled", "waiting"), item["error"]
+        _train(model, opt, 300)
+        st = next(x for x in P.status() if x["id"] == "look")
+        assert st["state"] == "running", st["error"]
+        frames = [f for _, f, _ in ctl.posts if f.type == P.RESOURCE_TYPE and f.meta["resource"] == "shape"]
+        assert frames
+        v = np.frombuffer(bytes(frames[-1].section(w.SECTION_RESOURCE).data), np.uint32).reshape(3, 4)
+        assert v[0].tolist() == [0, 0, 0, 0]                 # the unbound input's shape
+        assert v[1].tolist() == [1, H, T, T]                 # the bound input's shape
+        assert v[2].tolist() == [0, 1, 0, 0]                 # its reads give zero
+    finally:
+        P.remove("look")
+    required = copy.deepcopy(LOOK)
+    required["inputs"][1].pop("optional")
+    item = install("strict", required)
+    try:
+        assert item["state"] == "refused"
+        assert item["error"]["code"] == "piece.bad_binding"
+    finally:
+        P.remove("strict")
+
+
 @needs_device
 def test_two_pieces_share_the_pass_steps_and_a_new_viewer_gets_the_draw_half_first(attached):
     model, opt, ctl = attached

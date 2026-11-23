@@ -70,6 +70,7 @@ inline constexpr const char* kProgramReservedName = "program.reserved_name";    
 inline constexpr const char* kProgramEntryStage = "program.entry_stage";           // an entry point of the wrong stage, or none
 inline constexpr const char* kProgramInterfaceMismatch = "program.interface_mismatch";  // stage interfaces, or a fragment's outputs and its target, disagree
 inline constexpr const char* kProgramOverWebLimits = "program.over_web_limits";    // over a default limit of WebGPU
+inline constexpr const char* kProgramWorkgroupMemory = "program.workgroup_memory"; // a compute entry uses var<workgroup>
 // The hosts' codes.
 inline constexpr const char* kProgramResourcesUnavailable = "program.resources_unavailable";  // no capability "resources"
 inline constexpr const char* kProgramResourceTooLarge = "program.resource_too_large";        // a version over its bytes
@@ -219,9 +220,12 @@ Verdict check_piece_manifest(const spec::Piece& piece);
 //    says), no directive, no @group or @binding, and no declaration of
 //    caliper or a caliper_, Caliper or CALIPER_ name or of a name with "__".
 Verdict check_piece_source(std::string_view wgsl, std::size_t max_bytes);
-// 7. A compiled pass: its entry points and their stages, workgroup sizes, the
-//    vertex outputs against the fragment inputs, the fragment outputs against
-//    the pass's target and pick, and each binding against the header.
+// 7. A compiled pass: its entry points and their stages, workgroup sizes, no
+//    workgroup memory, the vertex outputs against the fragment inputs, the
+//    fragment outputs against the pass's target and pick, and each binding
+//    against the header. For the derive half, `reflection` is the module that
+//    keeps only the pass's entry point (compile_and_reflect_entry), and it
+//    binds at most 8 storage buffers.
 Verdict check_piece_reflection(const spec::Piece& piece, Half half, std::size_t pass, const Reflection& reflection);
 // Part of 2. The default limits of WebGPU that a pass must keep to run in a browser:
 //    storage buffers and sampled textures in one stage, bind groups,

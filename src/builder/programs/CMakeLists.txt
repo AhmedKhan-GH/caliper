@@ -30,3 +30,8 @@ caliper_builder_add_tests(programs
         tests/test_compose_derive.cpp
         tests/test_compose_draw.cpp
     LIBS caliper_builder_programs)
+# The library's source folder, for the test that the embedded files equal the files on disk.
+if(TARGET caliper_builder_programs_tests)
+    target_compile_definitions(caliper_builder_programs_tests
+                               PRIVATE CALIPER_PROGRAMS_LIBRARY_DIR="${CMAKE_CURRENT_SOURCE_DIR}/library")
+endif()
