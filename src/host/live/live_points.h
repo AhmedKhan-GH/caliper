@@ -16,6 +16,16 @@
 // points behind the camera's target dimmed towards the far side of the fitted bounding sphere, the
 // selected points of a selection at full strength.
 //
+// The library piece points@1 draws the points (draw/library_pieces.h), one instance for each part of
+// at most 4,194,304 points and one for each part of the selection, in that order: the view writes each
+// instance's resource from the payload, a point's position and its colour packed as RGBA by the same
+// colour keys, palette and dimming that the built-in uses, and gives the piece the camera's matrix,
+// the size and the depth cues as params. A payload that the CPU cannot read (an MTLBuffer in private
+// storage) comes back through a copy into textures first, and the view draws it once that readback
+// is done. CALIPER_SCENE_SHAPES=builtin draws with the scene core's built-in points program instead,
+// for a comparison, and so does a build without the draw layer or the library, or an instance that its
+// runtime refused or stopped (counted in CALIPER_SCENE_FALLBACK_LOG as the scene view counts its own).
+//
 // The camera is the scene core's: an orbit about +y in 3-D, a pan and zoom with y up in 2-D, fitted
 // by caliper_scene::fit at the default three-quarter view (camera_defaults.h), composed in double
 // and handed to the GPU as f32 once. The gestures keep the old view's rates and bounds. The scene core and the layer draw into an offscreen colour target,
@@ -45,8 +55,14 @@ struct PointsArrays {
     const void* pos_cpu = nullptr;
     caliper_gfx::Buffer aux;
     uint64_t aux_offset = 0;
+    const void* aux_cpu = nullptr;         // a CPU view of aux, or null
     uint64_t count = 0;
 };
+
+// How the view draws its points: with the library piece points@1, or with the built-in points program.
+enum class PointsDraw : uint8_t { pieces = 0, builtin = 1 };
+// pieces, unless CALIPER_SCENE_SHAPES is "builtin" or the build has no draw layer or library pieces.
+PointsDraw default_points_draw();
 
 enum class PointsColour : uint8_t { Flat, Values, Classes };
 
@@ -71,6 +87,16 @@ public:
 
     bool init(std::string* why);
     caliper_gfx::Backend& gfx() { return gfx_; }
+
+    // The draw of the points (tests compare the two); a change takes effect at the next set().
+    void set_draw(PointsDraw d);
+    PointsDraw draw() const { return draw_; }
+    // Whether points@1 drew the last frame, and else why the built-in did ("" before any frame).
+    bool drew_pieces() const;
+    const std::string& fallback() const { return fallback_; }
+    const std::string& fallback_detail() const { return fallback_detail_; }   // the layer's or runtime's words
+    // A payload that the CPU cannot read is on its way back from the GPU: render() again later.
+    bool pending() const;
 
     // The points to draw, and, with a selection, the selected points drawn over the dimmed rest.
     // A change of dims changes the camera model. False with *why when the scene store refused it.
@@ -145,6 +171,18 @@ private:
     bool keep_draws_ = false;
     caliper_gfx::DrawList last_list_;
     caliper_scene::DrawMap last_map_;
+
+    // points@1's instances, their resources and the readback of a payload (live_points.cpp).
+    struct Pieces;
+    std::unique_ptr<Pieces> pieces_;
+    PointsDraw draw_ = default_points_draw();
+    std::string fallback_;
+    std::string fallback_detail_;
+    std::string logged_;
+    void log_counts(bool pieces);
+    void set_pieces(const PointsArrays& all, const PointsArrays* selected, const PointsLook& look);
+    void add_rows(const PointsArrays& a, bool selection, bool dimmed, const PointsLook& look);
+    bool render_pieces(float pixel_scale, uint32_t clear_rgba, caliper_gfx::Serial* serial, std::string* why);
 };
 
 // The packed colour dimmed toward the ground as the points view dims the unselected points

@@ -72,6 +72,11 @@ Decoded<Control> control_from_json(const nlohmann::json& item, const std::string
 // program.patch and stage.set, with the checks of a whole document.
 Decoded<Program> program_from_json(const nlohmann::json& item, const std::string& path = "program");
 Decoded<Stage> stage_from_json(const nlohmann::json& item, const std::string& path = "stage");
+// What the reader gives for each item of the top-level array `stage` once stages are gone, because
+// pieces replaced them: the error spec.stage_replaced at the stage's path. Its message names the
+// stage's kind, entity and panel (the keys of `stage`, any of them absent) and says how to write the
+// same look as a piece program.
+Diagnostic stage_replaced(const nlohmann::json& stage, const std::string& path);
 // One state variable, one entity of a scene panel and one annotation of a
 // panel (spec version 1, state.h, entity.h and annotation.h), for the state,
 // entity and annotation commands. An entity or an annotation reads as an item

@@ -22,6 +22,10 @@ function(caliper_points_match_targets)
     set_source_files_properties("${_dir}/test_points_match.mm" PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_target_properties(caliper_points_match_tests PROPERTIES
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
+    # The depth cues of the live points view: points@1's params att_ref, fade_w0 and fade_w1 against
+    # the built-in's CompileOptions.
+    target_sources(caliper_points_match_tests PRIVATE "${_dir}/test_points_cues.mm")
+    set_source_files_properties("${_dir}/test_points_cues.mm" PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     add_test(NAME caliper_points_match COMMAND caliper_points_match_tests)
     set_tests_properties(caliper_points_match PROPERTIES LABELS "gfx;points_match" SKIP_RETURN_CODE 77 TIMEOUT 120)
 endfunction()

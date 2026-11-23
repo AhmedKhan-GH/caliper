@@ -50,6 +50,8 @@
 #include "scene/uniform_check.h"
 #include "tensor_bridge.h"          // colormap_lut
 
+#include <imgui.h>                  // the key of a modifier in an input event
+
 #define STB_IMAGE_WRITE_STATIC
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
@@ -70,6 +72,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <random>
 #include <set>
@@ -342,6 +345,15 @@ struct Result {
     bool has_draws = false;
     caliper_gfx::DrawList draws;
     std::vector<std::string> draw_paths;
+    // The draw that drew the last frame: points@1, or the built-in and why.
+    bool drew_pieces = false;
+    std::string fallback;
+    // What the gestures after the readback gave (draw_case's `after`): the events of the view's sink,
+    // the hovered point, the selection's count, and the picture with the selection.
+    std::vector<std::string> events;
+    int64_t hover = -1;
+    uint64_t sel_count = 0;
+    std::vector<uint8_t> after_rgba;
 };
 
 uint32_t pixel(const Result& r, int x, int y) {
@@ -350,8 +362,19 @@ uint32_t pixel(const Result& r, int x, int y) {
     return p;
 }
 
-// Applies the case to a fresh core and reads its view back.
-bool draw_case(const Case& c, Result* out) {
+// The draw of the points view's scene: the rows of the built-in draw hold it there, and the
+// comparison rows draw each case both ways.
+void use_draw(CaliperCore* core, const char* name, caliper_live_views::PointsDraw draw) {
+    caliper_live_views::View* v = caliper_live_views::find(core, name);
+    REQUIRE((v && v->points && v->points->scene));
+    v->points->scene->set_draw(draw);
+}
+
+// Applies the case to a fresh core and reads its view back, drawn by `draw`.
+struct Core;
+using After = std::function<void(Core& core, const char* name, Result* out)>;
+bool draw_case(const Case& c, Result* out, caliper_live_views::PointsDraw draw = caliper_live_views::PointsDraw::builtin,
+               const After& after = {}) {
     Core core;
     if (!core.gpu) return false;
     id<MTLDevice> dev = (__bridge id<MTLDevice>)core.core->renderer->native_device();
@@ -372,6 +395,7 @@ bool draw_case(const Case& c, Result* out) {
         s.stats = box;
         s.stats_count = 8;
         REQUIRE_MESSAGE(caliper_core_live_apply(core.core, &s) == 1, caliper_core_last_error(core.core));
+        use_draw(core.core, name, draw);
         core.frames(2);
         CaliperLiveViewInfo vi{};
         vi.struct_size = sizeof vi;
@@ -418,6 +442,7 @@ bool draw_case(const Case& c, Result* out) {
         std::fill(p.pos.begin(), p.pos.end(), 1e9f);
         p.pos.swap(keep);
     }
+    use_draw(core.core, name, draw);
     if (caliper_live_views::View* kv = caliper_live_views::find(core.core, name);
         kv && kv->points && kv->points->scene)
         kv->points->scene->keep_draws(true);
@@ -427,6 +452,9 @@ bool draw_case(const Case& c, Result* out) {
         REQUIRE(caliper_live_views::set_link(core.core, name, "points", items));
     }
     core.frames(3);
+    // A payload that the CPU cannot read reaches points@1 after its readback: frames until it drew.
+    if (caliper_live_views::View* kv = caliper_live_views::find(core.core, name); kv && kv->points && kv->points->scene)
+        for (int f = 0; f < 600 && kv->points->scene->pending(); ++f) core.frames(1);
     CaliperLiveViewInfo vi{};
     vi.struct_size = sizeof vi;
     REQUIRE(caliper_core_live_view_info(core.core, name, &vi) == 1);
@@ -452,11 +480,14 @@ bool draw_case(const Case& c, Result* out) {
     l.info = caliper_live_views::info_text(core.core, *v);
     if (v->points && v->points->scene) {
         const caliper_live_views::PointsScene& sc = *v->points->scene;
-        out->has_draws = sc.last_draws().records().size > 0;
+        out->drew_pieces = sc.drew_pieces();
+        out->fallback = sc.fallback() + (sc.fallback_detail().empty() ? "" : " (" + sc.fallback_detail() + ")");
+        out->has_draws = !out->drew_pieces && sc.last_draws().records().size > 0;
         out->draws = sc.last_draws();
         for (const caliper_scene::DrawMapEntry& e : sc.last_map().entries) out->draw_paths.push_back(sc.tree().path(e.entity));
     }
     out->payload = std::move(p);
+    if (after) after(core, name, out);
     return true;
 }
 
@@ -904,6 +935,221 @@ TEST_CASE("gfx/Metal points view: every case matches the CPU reference rasterisa
         const size_t bad = raster_mismatches(r, ref, &where);
         MESSAGE(c.name, ": ", bad, " of ", (size_t)r.width * r.height, " pixels differ from the CPU reference", where);
         CHECK_MESSAGE(bad == 0, c.name, ": ", bad, " pixels differ from the CPU reference rasterisation");
+    }
+}
+
+// ---- points@1 against the built-in draw ----------------------------------------------------------
+//
+// The view draws its points with the library piece points@1 by default (live_points.h). Each case is
+// drawn both ways and held to the tolerances of the match tests (tests/points_match/): a pixel whose
+// 3 x 3 neighbourhood in the built-in picture holds one colour, inside a point or on the ground, has
+// that colour in the piece's picture, and any other pixel, at a point's edge, has a colour within 1
+// level of a built-in colour of its neighbourhood. The lattices' centre pixels also keep the CPU
+// reference colours exactly.
+struct Match {
+    size_t interior = 0, edge = 0, differing = 0, failed = 0;
+    int largest = 0;
+    std::string first;
+};
+
+int channel_gap(uint32_t a, uint32_t b) {
+    int d = 0;
+    for (int k = 0; k < 4; ++k) d = std::max(d, std::abs(int((a >> (8 * k)) & 0xffu) - int((b >> (8 * k)) & 0xffu)));
+    return d;
+}
+
+Match match_pictures(int W, int H, const std::vector<uint8_t>& builtin, const std::vector<uint8_t>& piece) {
+    auto at = [&](const std::vector<uint8_t>& px, int x, int y) {
+        uint32_t v;
+        std::memcpy(&v, &px[((size_t)std::clamp(y, 0, H - 1) * W + std::clamp(x, 0, W - 1)) * 4], 4);
+        return v;
+    };
+    Match m;
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) {
+            const uint32_t b = at(builtin, x, y), p = at(piece, x, y);
+            m.differing += b != p;
+            m.largest = std::max(m.largest, channel_gap(b, p));
+            bool uniform = true;
+            for (int dy = -1; dy <= 1 && uniform; ++dy)
+                for (int dx = -1; dx <= 1 && uniform; ++dx) uniform = at(builtin, x + dx, y + dy) == b;
+            bool ok = false;
+            if (uniform) {
+                ++m.interior;
+                ok = p == b;
+            } else {
+                ++m.edge;
+                for (int dy = -1; dy <= 1 && !ok; ++dy)
+                    for (int dx = -1; dx <= 1 && !ok; ++dx) ok = channel_gap(p, at(builtin, x + dx, y + dy)) <= 1;
+            }
+            if (!ok && m.failed++ == 0) {
+                char t[160];
+                std::snprintf(t, sizeof t, "; first at (%d, %d): piece %08x, built-in %08x, %s", x, y, p, b,
+                              uniform ? "interior" : "edge");
+                m.first = t;
+            }
+        }
+    return m;
+}
+
+void capture_named(const std::string& name, int W, int H, const std::vector<uint8_t>& rgba) {
+    const char* dir = ref::env("CALIPER_GFX_CAPTURE_DIR");
+    if (!dir) return;
+    const std::string path = std::string(dir) + "/points-view-" + name + ".png";
+    CHECK(stbi_write_png(path.c_str(), W, H, 4, rgba.data(), W * 4) != 0);
+}
+
+TEST_CASE("gfx/Metal points view: points@1 draws every case as the built-in, within the match tests' tolerances") {
+    {
+        Core probe;
+        if (!probe.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU");
+    }
+    for (const Case& c : cases()) {
+        if (!selected_case(c)) continue;
+        CAPTURE(c.name);
+        Result b, p;
+        REQUIRE(draw_case(c, &b, caliper_live_views::PointsDraw::builtin));
+        REQUIRE(draw_case(c, &p, caliper_live_views::PointsDraw::pieces));
+        CHECK_MESSAGE(!b.drew_pieces, c.name, ": points@1 drew the built-in's case");
+        CHECK_MESSAGE(p.drew_pieces, c.name, ": the built-in drew the case of points@1: ", p.fallback);
+        REQUIRE(b.width == p.width);
+        REQUIRE(b.height == p.height);
+        const Match m = match_pictures(b.width, b.height, b.rgba, p.rgba);
+        MESSAGE(c.name, ": points@1 ", m.differing, " of ", (size_t)b.width * b.height, " pixels differ from the built-in (largest ",
+                m.largest, " levels); ", m.interior, " interior and ", m.edge, " edge pixels, ", m.failed,
+                " outside the tolerances", m.first);
+        CHECK_MESSAGE(m.failed == 0, c.name, ": ", m.failed, " pixels outside the tolerances", m.first);
+        if (c.layout == Layout::Lattice) {
+            std::string first;
+            const size_t bad = check_lattice_colours(c, p, &first);
+            CHECK_MESSAGE(bad == 0, c.name, ": points@1 ", bad, " centre pixels differ from the CPU reference colour; ", first);
+        }
+        capture_named(c.name + "-piece", p.width, p.height, p.rgba);
+        capture_named(c.name + "-builtin", b.width, b.height, b.rgba);
+    }
+}
+
+// The picks, hovers and selections of the view come from the CPU payload under the camera, as the
+// browser element's do, and the draw changes none of them: the same gestures on a case drawn by
+// points@1 and by the built-in give the same events, the same hovered point and the same selection
+// count, and the pictures with the selection drawn match within the tolerances above. The gestures:
+// a hover and a click at the point nearest the plot's centre, a shift-alt drag of a rectangle and a
+// shift drag of a lasso around the centre.
+void gestures(Core& core, const char* name, Result* out) {
+    caliper_live_views::set_event_sink(core.core, [out](const caliper_live_views::LiveEvent& e) {
+        if (std::string(e.type) != "hover") out->events.push_back(std::string(e.type) + " " + e.detail);
+    });
+    caliper_live_views::View* v = caliper_live_views::find(core.core, name);
+    REQUIRE(v != nullptr);
+    core.frames(2);
+    REQUIRE(v->geo_valid);
+    const float* a = v->geo_area;   // x, y, width and height of the plot
+    const float cx = a[0] + a[2] * 0.5f, cy = a[1] + a[3] * 0.5f;
+    float M[16];
+    REQUIRE(caliper_live_views::points_mvp(*v, M));
+    // The point nearest the centre, among those projected inside the plot.
+    float px = cx, py = cy, best = INFINITY;
+    const std::vector<float>& pos = out->payload.pos;
+    for (size_t i = 0; i < out->payload.pos.size() / 3 && i < 200000; ++i) {
+        const float x = pos[3 * i], y = pos[3 * i + 1], z = v->dims == 3 ? pos[3 * i + 2] : 0.0f;
+        const float w = M[3] * x + M[7] * y + M[11] * z + M[15];
+        if (!(w > 1e-6f)) continue;
+        const float sx = a[0] + ((M[0] * x + M[4] * y + M[8] * z + M[12]) / w * 0.5f + 0.5f) * a[2];
+        const float sy = a[1] + (0.5f - (M[1] * x + M[5] * y + M[9] * z + M[13]) / w * 0.5f) * a[3];
+        const float d = (sx - cx) * (sx - cx) + (sy - cy) * (sy - cy);
+        if (d < best) {
+            best = d;
+            px = sx;
+            py = sy;
+        }
+    }
+    auto mouse = [&](CaliperEventType type, float x, float y, int down) {
+        CaliperInputEvent e{};
+        e.struct_size = sizeof e;
+        e.type = type;
+        e.x = x;
+        e.y = y;
+        e.button = 0;
+        e.down = down;
+        caliper_core_event(core.core, &e);
+    };
+    auto keys = [&](int mods, bool down) {
+        CaliperInputEvent e{};
+        e.struct_size = sizeof e;
+        e.type = CALIPER_EVENT_KEY;
+        e.key = ImGuiKey_LeftShift;
+        e.down = down ? 1 : 0;
+        e.mods = mods;
+        caliper_core_event(core.core, &e);
+    };
+    auto drag = [&](const std::vector<std::pair<float, float>>& path, int mods) {
+        keys(mods, true);
+        mouse(CALIPER_EVENT_MOUSE_MOVE, path[0].first, path[0].second, 0);
+        core.frames(1);
+        mouse(CALIPER_EVENT_MOUSE_BUTTON, path[0].first, path[0].second, 1);
+        core.frames(1);
+        for (size_t k = 1; k < path.size(); ++k) {
+            mouse(CALIPER_EVENT_MOUSE_MOVE, path[k].first, path[k].second, 0);
+            core.frames(1);
+        }
+        mouse(CALIPER_EVENT_MOUSE_BUTTON, path.back().first, path.back().second, 0);
+        core.frames(2);
+        keys(0, false);
+        core.frames(1);
+    };
+    // Hover, then a click.
+    mouse(CALIPER_EVENT_MOUSE_MOVE, px, py, 0);
+    core.frames(3);
+    out->hover = v->hover_item;
+    mouse(CALIPER_EVENT_MOUSE_BUTTON, px, py, 1);
+    core.frames(1);
+    mouse(CALIPER_EVENT_MOUSE_BUTTON, px, py, 0);
+    core.frames(2);
+    // A rectangle (shift and alt), then a lasso (shift).
+    const float rw = a[2] * 0.15f, rh = a[3] * 0.15f;
+    drag({{cx - rw, cy - rh}, {cx, cy}, {cx + rw, cy + rh}}, CALIPER_MOD_SHIFT | CALIPER_MOD_ALT);
+    drag({{cx - rw, cy}, {cx, cy - rh}, {cx + rw * 1.5f, cy}, {cx, cy + rh * 0.8f}, {cx - rw, cy}}, CALIPER_MOD_SHIFT);
+    out->sel_count = v->sel_count;
+    // The picture with the selection drawn.
+    core.frames(2);
+    if (caliper_live_views::View* kv = caliper_live_views::find(core.core, name); kv && kv->points && kv->points->scene)
+        for (int f = 0; f < 600 && kv->points->scene->pending(); ++f) core.frames(1);
+    out->after_rgba.assign((size_t)out->width * out->height * 4, 0);
+    REQUIRE(caliper_core_live_view_readback(core.core, name, out->after_rgba.data(), out->after_rgba.size()) == 1);
+    caliper_live_views::set_event_sink(core.core, {});
+}
+
+TEST_CASE("gfx/Metal points view: picks, hovers and selections are the same with points@1 and with the built-in") {
+    {
+        Core probe;
+        if (!probe.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU");
+    }
+    for (const Case& c : cases()) {
+        if (!selected_case(c)) continue;
+        // A point to pick and a selection to draw, at a test's cost; a payload that the CPU cannot read
+        // has no hover, picks or selection in either draw.
+        if (c.n < 400 || c.n > 100000 || c.route == Route::Private) continue;
+        CAPTURE(c.name);
+        Result b, p;
+        REQUIRE(draw_case(c, &b, caliper_live_views::PointsDraw::builtin, gestures));
+        REQUIRE(draw_case(c, &p, caliper_live_views::PointsDraw::pieces, gestures));
+        CHECK(p.drew_pieces);
+        CHECK_MESSAGE(b.hover == p.hover, c.name, ": hovered ", b.hover, " with the built-in and ", p.hover, " with points@1");
+        CHECK_MESSAGE(b.sel_count == p.sel_count, c.name, ": selected ", b.sel_count, " and ", p.sel_count);
+        CHECK_MESSAGE(b.events == p.events, c.name, ": the events differ");
+        size_t picks = 0, selects = 0;
+        for (const std::string& e : p.events) {
+            picks += e.rfind("pick ", 0) == 0;
+            selects += e.rfind("select ", 0) == 0;
+        }
+        CHECK_MESSAGE(picks >= 1, c.name, ": the click picked nothing");
+        CHECK_MESSAGE(selects >= 2, c.name, ": the drags selected nothing");
+        const Match m = match_pictures(b.width, b.height, b.after_rgba, p.after_rgba);
+        MESSAGE(c.name, ": hover ", p.hover, ", ", p.events.size(), " events (", picks, " picks, ", selects,
+                " selections), ", p.sel_count, " selected; with the selection drawn ", m.differing,
+                " pixels differ (largest ", m.largest, " levels), ", m.failed, " outside the tolerances", m.first);
+        CHECK_MESSAGE(m.failed == 0, c.name, ": with the selection drawn ", m.failed, " pixels outside the tolerances", m.first);
+        capture_named(c.name + "-selection-piece", p.width, p.height, p.after_rgba);
     }
 }
 

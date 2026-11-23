@@ -42,9 +42,9 @@ META = {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
 # The decisions the person gives at the cards, through the app's test seam. Each line decides the oldest
 # waiting card of its command. A line that finds no card waits for one and does no harm.
 APPROVALS = (["approve spec.new mcp", "approve run.start mcp", "approve run.stop mcp",
-              "approve control.create mcp", "approve stage.set mcp"]
+              "approve control.create mcp"]
              + ["approve panel.create mcp"] * 3 + ["approve source.add mcp"] * 2
-             + ["approve program.create mcp"] * 4)
+             + ["approve piece.update mcp"] * 2 + ["approve program.create mcp"] * 5)
 LOSS = re.compile(r"step (\d+) loss ([0-9.eE+-]+)")
 
 
@@ -234,7 +234,7 @@ class Check:
 
     def status(self, pid):
         b = self.mcp.body("program_status", {})
-        for item in b.get("programs", []) + b.get("stages", []):
+        for item in b.get("programs", []):
             if item.get("id") == pid:
                 return item
         return None
@@ -294,7 +294,7 @@ class Check:
         return n
 
     def yellow(self, name):
-        """The count of pixels in the yellow and orange range that the material stage draws, in the lower left
+        """The count of pixels in the yellow and orange range that the material piece draws, in the lower left
         quarter of the frame, where the points of the geometry program are and the yellow outline of a module is
         not."""
         im = self.images[name].astype(int)
@@ -339,6 +339,17 @@ class Check:
     def with_wgsl(self, s, args):
         if "wgsl_file" in s:
             args["wgsl"] = (self.programs_dir / s["wgsl_file"]).read_text()
+        if "piece_files" in s:
+            # A piece as the agent writes it: the manifest's keys and its WGSL files, each edit of
+            # `piece_edit` (a file and an [old, new] pair) applied, as an agent's typo is.
+            files = s["piece_files"]
+            piece = json.loads((self.programs_dir / files["manifest"]).read_text())
+            piece["files"] = {k: (self.programs_dir / v).read_text() for k, v in files.items() if k != "manifest"}
+            for part, (old, new) in s.get("piece_edit", {}).items():
+                if old not in piece["files"][part]:
+                    raise Fail(f"the edit of {part} finds no {old!r}")
+                piece["files"][part] = piece["files"][part].replace(old, new)
+            args["piece"] = piece
         return args
 
     def step(self, s):
@@ -381,7 +392,40 @@ class Check:
             self.result[name] = st
             return
         if "wait_event" in s:
-            self.result[name] = self.event(name, s["wait_event"], 30)
+            try:
+                self.result[name] = self.event(name, s["wait_event"], s.get("limit_s", 30))
+            except Fail as e:
+                seen = [ev for ev in self.events if ev.get("kind") == "program"][-8:]
+                raise Fail(f"{e}; the last program events {seen}") from e
+            return
+        if "wait_draw" in s:
+            pid = s["wait_draw"]["id"]
+            self.result[name] = self.until(
+                f"the draw half of {pid} runs with a resource version",
+                lambda: (lambda d: d if d.get("state") == "running" and d.get("resource_step") is not None
+                         else None)((self.status(pid) or {}).get("draw") or {}), 60)
+            return
+        if "piece_budget" in s:
+            # Both halves of an instance inside their budgets: the derive half runs at the shared cadence
+            # within its memory, and the draw half runs within its memory. A draw over its time on 30
+            # frames in a row, or a derive pass over its time, would have stopped it.
+            pid = s["piece_budget"]["id"]
+            st = self.status(pid) or {}
+            draw = st.get("draw") or {}
+            if st.get("kind") != "piece" or st.get("host") != "script" or st.get("state") != "running":
+                raise Fail(f"{name}: {pid} is not a running piece in the script: {json.dumps(st)[:600]}")
+            if not isinstance(st.get("every"), int) or st["every"] < 1:
+                raise Fail(f"{name}: the cadence N of {pid} is {st.get('every')!r}")
+            for half, d in (("derive", st), ("draw", draw)):
+                mem, limit = d.get("memory_bytes"), d.get("memory_limit_bytes")
+                if not isinstance(mem, int) or mem <= 0 or (limit and mem > limit):
+                    raise Fail(f"{name}: the {half} half of {pid} holds {mem!r} bytes against {limit!r}")
+            if draw.get("state") != "running":
+                raise Fail(f"{name}: the draw half of {pid} is {draw.get('state')!r}: {json.dumps(draw)[:400]}")
+            self.result[name] = {"every": st.get("every"), "overhead_share": st.get("overhead_share"),
+                                 "memory_bytes": st.get("memory_bytes"), "draw_frame_ms": draw.get("frame_ms"),
+                                 "draw_frame_limit_ms": draw.get("frame_limit_ms"),
+                                 "draw_memory_bytes": draw.get("memory_bytes")}
             return
         if "passes" in s:
             self.passes(s["passes"]["id"], s["passes"]["more"])
@@ -408,7 +452,7 @@ class Check:
             before, after = self.yellow(w["before"]), self.yellow(w["after"])
             self.result[name] = {"before": before, "after": after}
             if after < w["min_after"] or before * w["ratio"] > after:
-                raise Fail(f"the material stage did not change the look: {before} yellow pixels before, "
+                raise Fail(f"the material piece did not change the look: {before} yellow pixels before, "
                            f"{after} after (at least {w['min_after']}, and {w['ratio']} times the first)")
             return
         if "expect_error" in s:
@@ -416,8 +460,12 @@ class Check:
             r = m.call(w["tool"], self.with_wgsl(w, dict(w["arguments"])))
             text = json.dumps(r)
             if not r.get("isError") or w["code"] not in text:
+                self.compiler_check(r)
                 raise Fail(f"{name}: expected the error {w['code']}, got {text[:600]}")
-            self.result[name] = w["code"]
+            for word in w.get("names", []):
+                if word not in text:
+                    raise Fail(f"{name}: the error {w['code']} does not name {word}: {text[:600]}")
+            self.result[name] = {"code": w["code"], "message": text[:400]}
             return
         if "no_status" in s:
             if self.status(s["no_status"]) is not None:

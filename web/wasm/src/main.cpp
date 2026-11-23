@@ -33,6 +33,7 @@
 #include "net_source.h"
 #include "net/json.h"
 #include "page_style.h"
+#include "points_parity.h"
 #include "source_poll.h"
 #include "web_input.h"
 #include "web_programs.h"
@@ -129,6 +130,7 @@ struct Page {
     std::string scene_selftest;           // the last scene row: "" or its report
     std::string draw_parity;              // the pixel comparison's draw: "" or its report
     std::string scene_parity;             // the scene comparison's draw: "" or its report
+    std::string points_parity;            // points@1 against the points view's built-in draw: "" or its report
 
     bool ready = false;                   // the first snapshot was applied
     bool destroyed = false;
@@ -212,6 +214,7 @@ void publish() {
     put("sceneSelftest", g.scene_selftest.c_str());
     put("drawParity", g.draw_parity.c_str());
     put("sceneParity", g.scene_parity.c_str());
+    put("pointsParity", g.points_parity.c_str());
     put("programs", g.programs ? g.programs->status_json().c_str() : "[]");
     put("state", g.net ? g.net->state_text().c_str() : "starting");
     put("messages", g.net ? (double)g.net->messages() : 0.0);
@@ -735,6 +738,10 @@ void frame() {
         publish();
     }
 
+    if (caliper_web::points_parity_running() && g.renderer && g.renderer->gfx() &&
+        caliper_web::points_parity_poll(*g.renderer->gfx(), &g.points_parity))
+        publish();
+
     if (caliper_web::draw_parity_running() && g.renderer && g.renderer->gfx() &&
         caliper_web::draw_parity_poll(*g.renderer->gfx(), g.renderer->gfx()->device_errors(), &g.draw_parity)) {
         publish_parity();
@@ -1039,6 +1046,26 @@ EMSCRIPTEN_KEEPALIVE int caliper_views_draw_parity(const uint8_t* frames, int n,
     return 1;
 }
 
+// Starts the comparison of the points view's draw by points@1 with its built-in draw
+// (points_parity.h); its report comes in caliperStats.pointsParity. 1 when it started.
+EMSCRIPTEN_KEEPALIVE int caliper_views_points_parity() {
+    if (!g.renderer || !g.renderer->gfx()) {
+        g.points_parity = "fail not started: the renderer is not up";
+        publish();
+        return 0;
+    }
+    std::string why;
+    if (!caliper_web::points_parity_start(*g.renderer->gfx(), caliper_gfx::shaders::kWebgpuPrograms, &why)) {
+        caliper_web::points_parity_stop();
+        g.points_parity = "fail not started: " + why;
+        publish();
+        return 0;
+    }
+    g.points_parity.clear();
+    publish();
+    return 1;
+}
+
 // The colormap keys that this build derives at run time for the range (vmin, vmax), from its own
 // CPU reference (src/host/gfx/colormap_keys.h), as the scene views derive them: the browser test
 // compares them with the case file that the native tool writes. Module.caliperColormapKeys =
@@ -1072,6 +1099,7 @@ EMSCRIPTEN_KEEPALIVE void caliper_views_destroy() {
     caliper_web::scene_selftest_stop();             // its scene view, before the backend
     caliper_web::draw_parity_stop();                // its runtimes and targets, before the backend
     caliper_web::scene_parity_stop();               // its scene view, before the backend
+    caliper_web::points_parity_stop();              // its scenes, before the backend
     delete g.renderer;                              // shutdown(): textures, ImGui backend, surface
     g.renderer = nullptr;
     g.net.reset();

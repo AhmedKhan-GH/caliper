@@ -192,6 +192,18 @@ page in headless Chromium.
 
 The live views' points view (`caliper.points`, kind 3) is a scene of the scene core, drawn through the graphics layer by
 the same machinery as the scene view (`src/host/live/live_points.h`), natively and in the WebAssembly views alike.
+The library piece `points@1` draws its points by default, and the built-in points program that the items below
+describe draws them with `CALIPER_SCENE_SHAPES=builtin`, for a comparison, or as a fallback.
+
+- **The draw by points@1.** The view writes the resource of one instance of `points@1` for each part of at most
+  4,194,304 points, and one for each part of a selection after them: each point's position, with z 0 in 2-D, and its
+  colour packed as RGBA from the colour keys, the palette and the dimming below. The piece gets the camera's matrix,
+  composed in double and rounded to f32 once, the size by count and the depth cues as its params, and it draws the
+  same squares (the [Pieces](../agents/pieces.md) page). A payload that the CPU cannot read, an `MTLBuffer` in private
+  storage, is copied into textures and read back without a wait, and the view draws it once the bytes are in. An
+  instance that its runtime refused or stopped, or a build without the library, draws with the built-in, and
+  `CALIPER_SCENE_FALLBACK_LOG` counts it. Hover, picks and selections read the CPU payload under the camera, thus
+  they are the same with either draw.
 
 - **The payload.** The view's points are one points batch on the scene's root entity; a payload above the scene model's
   4,194,304 points a batch continues on child entities at later offsets of the same buffers, so that it draws in the

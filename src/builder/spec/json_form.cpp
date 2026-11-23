@@ -1958,6 +1958,31 @@ Decoded<Stage> stage_from_json(const json& item, const std::string& path) {
     return decode_item<Stage>(item, path, 2, detail::decode_stage);
 }
 
+Diagnostic stage_replaced(const json& stage, const std::string& path) {
+    auto key = [&](const char* name) {
+        const auto it = stage.is_object() ? stage.find(name) : stage.end();
+        return it != stage.end() && it->is_string() ? it->get<std::string>() : std::string();
+    };
+    const std::string kind = key("kind"), entity = key("entity"), panel = key("panel");
+    std::string what = "the " + (kind.empty() ? std::string() : kind + " ") + "stage";
+    if (!entity.empty()) what += " on the entity " + detail::quote(entity);
+    if (!panel.empty()) what += " of the panel " + detail::quote(panel);
+    std::string how;
+    if (kind == "vertex")
+        how = "put the stage's change of a position into the vertex entry point of its draw.wgsl";
+    else
+        how = "put the stage's color into the color function of its draw.wgsl (point_color in points@1)";
+    Diagnostic d;
+    d.code = "spec.stage_replaced";
+    d.path = path;
+    d.message = "Stages were replaced by pieces, thus " + what +
+                " no longer runs. Write the same look as a piece program: copy points@1, or lines@1 for lines, into "
+                "the workspace with piece.copy, " + how + ", place it in " +
+                (panel.empty() ? std::string("the scene panel") : "the panel " + detail::quote(panel)) +
+                " with program.create, and remove the [[stage]] table.";
+    return d;
+}
+
 PieceParse piece_from_json_value(const json& item, const std::string& path) {
     Decoded<Piece> d = decode_item<Piece>(item, path, 2, detail::decode_piece);
     return PieceParse{std::move(d.value), std::move(d.diagnostics)};

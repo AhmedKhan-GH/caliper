@@ -515,3 +515,26 @@ TEST_CASE("the schema of version 1 takes inline pieces and instances, and refuse
     doc["piece"][0]["draw"]["passes"][0]["blend"] = "max";
     CHECK(!checker.errors(doc).empty());
 }
+
+// Once stages are gone, the reader gives spec.stage_replaced for each [[stage]] table of an old spec
+// or saved instrument (format.h): an error at the stage's path that names it and says how to write
+// the same look as a piece program.
+TEST_CASE("a spec that names a stage gets spec.stage_replaced, which says how to write the same look as a piece") {
+    const nlohmann::json material = {{"panel", "world"}, {"entity", "programs/grid"}, {"kind", "material"},
+                                     {"wgsl", "fn material(in: MaterialIn) -> vec4<f32> { return vec4<f32>(1.0); }"}};
+    const cs::Diagnostic d = cs::stage_replaced(material, "stage[0]");
+    CHECK(d.is_error());
+    CHECK(d.code == "spec.stage_replaced");
+    CHECK(d.path == "stage[0]");
+    for (const char* words : {"Stages were replaced by pieces", "the material stage on the entity \"programs/grid\" of "
+                              "the panel \"world\" no longer runs", "piece.copy", "points@1", "point_color",
+                              "program.create", "the panel \"world\"", "[[stage]]"})
+        CHECK_MESSAGE(d.message.find(words) != std::string::npos, d.message, " lacks: ", words);
+    const cs::Diagnostic v = cs::stage_replaced({{"panel", "world"}, {"entity", "e"}, {"kind", "vertex"}}, "stage[1]");
+    CHECK(v.message.find("vertex entry point") != std::string::npos);
+    // A table without its keys still gets the error, with no name to give.
+    const cs::Diagnostic bare = cs::stage_replaced(nlohmann::json::object(), "stage[2]");
+    CHECK(bare.code == "spec.stage_replaced");
+    CHECK(bare.message.find("thus the stage no longer runs") != std::string::npos);
+    CHECK(bare.message.find("the scene panel") != std::string::npos);
+}

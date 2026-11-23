@@ -153,6 +153,13 @@ set_source_files_properties(${CALIPER_ROOT}/src/host/scene/scene_tree.cpp ${CALI
     ${CALIPER_ROOT}/src/host/scene/backend_resources.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 # The WebGPU port must be named when compiling too: it provides webgpu.h.
 target_compile_options(caliper_view_layer PUBLIC --use-port=emdawnwebgpu)
+# The points view draws its points with the library piece points@1 (live_points.cpp with
+# CALIPER_HAVE_DRAW and CALIPER_HAVE_LIBRARY_PIECES), as the app's points view does. The pieces come
+# from their piece.toml through src/host/draw/library_pieces.cpp and the spec library's reader above,
+# which the scene view's converter also reads its pieces with.
+target_sources(caliper_view_layer PRIVATE ${CALIPER_ROOT}/src/host/draw/library_pieces.cpp)
+set_property(SOURCE ${CALIPER_ROOT}/src/host/live/live_points.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+    CALIPER_HAVE_DRAW=1 CALIPER_HAVE_LIBRARY_PIECES=1)
 
 # ---- the wire protocol v3 codec (shared with the native NetSource) ---------------
 add_library(caliper_wire STATIC
@@ -171,6 +178,7 @@ add_executable(caliper-views
     src/fonts.cpp
     src/gfx_selftest.cpp
     src/scene_selftest.cpp
+    src/points_parity.cpp
     src/web_programs.cpp
     src/draw_parity.cpp
     src/scene_parity.cpp
@@ -197,7 +205,7 @@ target_link_options(caliper-views PRIVATE
     -sMAXIMUM_MEMORY=512MB
     -sERROR_ON_UNDEFINED_SYMBOLS=1
     "-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$UTF8ToString,$stringToNewUTF8,$stringToUTF8OnStack,$stackSave,$stackRestore,$specialHTMLTargets"
-    "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view,_caliper_views_set_toggle,_caliper_views_set_link,_caliper_views_gfx_selftest,_caliper_views_scene_selftest,_caliper_views_draw_parity,_caliper_views_scene_parity,_caliper_views_colormap_keys,_caliper_views_destroy"
+    "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view,_caliper_views_set_toggle,_caliper_views_set_link,_caliper_views_gfx_selftest,_caliper_views_scene_selftest,_caliper_views_draw_parity,_caliper_views_scene_parity,_caliper_views_points_parity,_caliper_views_colormap_keys,_caliper_views_destroy"
     "-sEXPORTED_RUNTIME_METHODS=ccall,UTF8ToString,stringToNewUTF8,HEAPU8"
 )
 if(CALIPER_WEB_CLOSURE AND CMAKE_BUILD_TYPE STREQUAL "Release")

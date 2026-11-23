@@ -327,7 +327,9 @@ bool bind_buffer(CaliperCore* core, View& v, const CaliperTensor& t, uint64_t of
     e.kind = metal ? caliper_gfx::ExternalKind::MetalBuffer : caliper_gfx::ExternalKind::HostMemory;
     e.handle = metal ? t.data : (void*)((const uint8_t*)t.data + off);
     e.size = end;
-    e.usage = caliper_gfx::kVertex;
+    // kCopySrc: the points view copies a payload that the CPU cannot read into textures and reads it
+    // back for points@1's resource (live_points.h).
+    e.usage = caliper_gfx::kVertex | caliper_gfx::kCopySrc;
     e.transient = !metal;
     e.label = what;
     const caliper_gfx::ImportResult r = g.import_buffer(e);

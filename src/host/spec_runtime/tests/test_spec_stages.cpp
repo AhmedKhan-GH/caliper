@@ -342,6 +342,8 @@ TEST_CASE("stages: a scene view reports a frame with stages that has not complet
     caliper_live_views::SceneView v(gfx, caliper_gfx::shaders::kMetalPrograms);
     std::string why;
     REQUIRE_MESSAGE(v.init(&why), why);
+    // A stage restyles a shape of the built-in draw, which the view thus draws its shapes with.
+    v.set_shape_draw(caliper_live_views::ShapeDraw::builtin);
     v.describe(caliper_net::wire::SceneView{CALIPER_NET_SPACE_3D, "+y", ""});
     const float xyz[9] = {-1.0f, -1.0f, 0.0f, 0.0f, 0.5f, 0.0f, 1.0f, -0.5f, 0.0f};
     caliper_net::wire::SceneUpdate u;
@@ -842,6 +844,8 @@ TEST_CASE("stages: a scene view draws its panel's stages, again on a new revisio
         caliper_live_views::SceneView v(*gfx, caliper_gfx::shaders::kMetalPrograms);
         std::string why;
         REQUIRE_MESSAGE(v.init(&why), why);
+        // A stage restyles a shape of the built-in draw, which the view thus draws its shapes with.
+        v.set_shape_draw(caliper_live_views::ShapeDraw::builtin);
         v.describe(caliper_net::wire::SceneView{CALIPER_NET_SPACE_3D, "+y", ""});
         const float xyz[9] = {-1.0f, -1.0f, 0.0f, 0.0f, 0.5f, 0.0f, 1.0f, -0.5f, 0.0f};
         caliper_net::wire::SceneUpdate u;
