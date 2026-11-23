@@ -1,6 +1,8 @@
 #include <iostream>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
+#include <imgui_internal.h>   // the input events of a frame, for CALIPER_FRAME_LOG
+#include <backends/imgui_impl_glfw.h>   // the backend's mouse button callback, for the UI drivers' presses
 #include <implot.h>
 #include <implot3d.h>
 
@@ -19,6 +21,7 @@
 #include "host/job_system.h"
 #include "host/host_version.h"
 #include "host/renderer/host_renderer.h"
+#include "host/frame_log.h"
 #include "host/embed/embed_core.h"   // caliper_live_set_event_tap
 #include "host/live/live_attach.h"
 #include "host/live/live_controls.h"
@@ -298,6 +301,12 @@ public:
             if (hidden_ && *su) spec_ui_ = std::make_unique<caliper_host::SpecUiDriver>(su, dir ? dir : ".");
             else if (*su) std::cerr << "[ui] CALIPER_TEST_SPEC_UI needs --hidden; ignored" << std::endl;
         }
+        // CALIPER_FRAME_LOG=<file>: one line per frame of the visible or hidden app
+        // (host/frame_log.h, log_frame()), for a person who records a stall.
+        if (const char* fl = std::getenv("CALIPER_FRAME_LOG"); fl && *fl) {
+            if (frame_log_.open(fl, kFrameLogHeader)) std::cerr << "[frame log] " << fl << std::endl;
+            else std::cerr << "[frame log] cannot open " << fl << std::endl;
+        }
 
         return true;
     }
@@ -324,8 +333,20 @@ public:
                     std::cerr << "[hidden] the window became visible and was hidden again" << std::endl;
                 }
             }
-            if (page_ == AppPage::Live) wait_for_live_frame();
+            if (frame_log_.on()) {
+                frame_times_ = FrameTimes{};
+                frame_times_.top = frame_log_.now_ms();
+            }
+            if (page_ == AppPage::Live) {
+                wait_for_live_frame();
+                if (frame_log_.on()) {
+                    frame_times_.wait_ms = frame_log_.now_ms() - frame_times_.top;
+                    frame_times_.wait = "live_page_tick";
+                }
+            }
+            const double poll0 = frame_log_.on() ? frame_log_.now_ms() : 0.0;
             glfwPollEvents();
+            if (frame_log_.on()) frame_times_.poll_ms = frame_log_.now_ms() - poll0;
 
             // An attached session: claim and apply the newest completed
             // snapshot of every view before the frame draws them (the live
@@ -565,7 +586,73 @@ public:
                 pending_home_ = -1;
                 leave_applet_page(idx);
             }
+            log_frame();
         }
+    }
+
+    // CALIPER_FRAME_LOG: the columns of each frame's line (kFrameLogHeader), after the frame is
+    // rendered. Times are milliseconds of the monotonic clock; frame_ms is the time since the
+    // last frame began, work_ms the time this frame took after its start, wait_ms the live page's
+    // wait for its 60 Hz tick (wait names it), poll_ms the time in glfwPollEvents, drawable_ms the
+    // renderer's wait for the window's drawable and drawable 0 a frame that got none. moves,
+    // buttons, wheel and other count the input events that ImGui handled in this frame, and popup
+    // is 1 while a popup is open, which takes the press that would start a drag elsewhere. The
+    // panel columns describe the spec page's scene panel that holds a drag, else the one under
+    // the pointer: whether it holds a drag, whether a pick waits for its readback, its scene
+    // view's frame count, whether it redrew since the last line, its programs' frame count, the
+    // newest step of the resources they drew, whether its last frame drew the camera it has now,
+    // and that camera. "-" stands for a value that does not apply.
+    static constexpr const char* kFrameLogHeader =
+        "frame\tt_ms\tframe_ms\twork_ms\twait_ms\twait\tpoll_ms\tdrawable_ms\tdrawable\tpage\tfocused\toccluded\t"
+        "moves\tbuttons\twheel\tother\tmouse_x\tmouse_y\tmouse_down\tpopup\tpanel\tpanel_down\tpick_pending\t"
+        "scene_frames\tredrew\tprogram_frames\tstep\tdrawn_is_now\tcamera";
+
+    void log_frame() {
+        if (!frame_log_.on()) return;
+        const double end = frame_log_.now_ms();
+        const caliper_host::HostRenderer::FrameWaits w = renderer_->frame_waits();
+        int moves = 0, buttons = 0, wheel = 0, other = 0;
+        for (const ImGuiInputEvent& e : ImGui::GetCurrentContext()->InputEventsTrail) {
+            if (e.Type == ImGuiInputEventType_MousePos) ++moves;
+            else if (e.Type == ImGuiInputEventType_MouseButton) ++buttons;
+            else if (e.Type == ImGuiInputEventType_MouseWheel) ++wheel;
+            else ++other;
+        }
+        const ImGuiIO& io = ImGui::GetIO();
+        const unsigned down = (io.MouseDown[0] ? 1u : 0u) | (io.MouseDown[1] ? 2u : 0u) | (io.MouseDown[2] ? 4u : 0u);
+        const char* page = page_ == AppPage::Landing ? "landing"
+                           : page_ == AppPage::Applet ? "applet"
+                           : page_ == AppPage::Live   ? "live"
+                                                      : "spec";
+        char head[512];
+        std::snprintf(head, sizeof head,
+                      "%llu\t%.3f\t%.3f\t%.3f\t%.3f\t%s\t%.3f\t%.3f\t%d\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%.1f\t%.1f\t%u\t%d",
+                      (unsigned long long)++frame_no_, frame_times_.top,
+                      last_frame_top_ < 0 ? 0.0 : frame_times_.top - last_frame_top_, end - frame_times_.top,
+                      frame_times_.wait_ms, frame_times_.wait, frame_times_.poll_ms, w.drawable_ms,
+                      w.drawable ? 1 : 0, page, glfwGetWindowAttrib(window_, GLFW_FOCUSED), w.occluded, moves, buttons,
+                      wheel, other, ImGui::IsMousePosValid() ? io.MousePos.x : -1.0f,
+                      ImGui::IsMousePosValid() ? io.MousePos.y : -1.0f, down,
+                      ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) ? 1 : 0);
+        last_frame_top_ = frame_times_.top;
+        std::string line = head;
+        caliper_host::SpecPage::ScenePanelProbe p;
+        const std::string panel =
+            page_ == AppPage::Spec ? spec_page_.scene_panel_at(io.MousePos.x, io.MousePos.y) : std::string();
+        if (!panel.empty() && spec_page_.scene_probe(panel, &p)) {
+            const std::string now = p.camera.substr(0, p.camera.find(" target_px"));
+            const bool redrew = panel == log_panel_ && p.scene_frames != log_scene_frames_;
+            line += "\t" + panel + "\t" + (p.down ? "1" : "0") + "\t" + (p.pick_pending ? "1" : "0") + "\t" +
+                    std::to_string(p.scene_frames) + "\t" + (panel == log_panel_ ? (redrew ? "1" : "0") : "-") +
+                    "\t" + std::to_string(p.program_frames) + "\t" + std::to_string(p.step) + "\t" +
+                    (p.drawn == now ? "1" : "0") + "\t" + p.drawn;
+            log_panel_ = panel;
+            log_scene_frames_ = p.scene_frames;
+        } else {
+            line += "\t-\t-\t-\t-\t-\t-\t-\t-\t-";
+            log_panel_.clear();
+        }
+        frame_log_.line(line);
     }
 
     // --url: the stream to attach to once the app has started.
@@ -749,13 +836,12 @@ public:
             ph.mode = [this, who_of](const std::string& who) -> std::string {
                 cb::Session* s = session_.session();
                 if (!s) return "ask";
-                // The saved mode: Allow all is the chat's session's, above it, and not here.
-                return cb::agent_mode_name(s->saved_agent_mode(who_of(who)));
+                return cb::agent_mode_name(s->agent_mode(who_of(who)));
             };
             ph.set_mode = [this, who_of](const std::string& who, const std::string& mode) {
                 cb::Session* s = session_.session();
                 const auto m = cb::agent_mode_from_name(mode);
-                if (!s || !m || *m == cb::AgentMode::allow_all) return;
+                if (!s || !m) return;
                 const cb::Error e = s->set_agent_mode(who_of(who), *m);
                 landing_.log(e ? "mode not set" : (who == "mcp" ? "mcp mode" : "side chat mode"), cb::agent_mode_label(*m),
                              e ? e.code : "");
@@ -766,11 +852,21 @@ public:
                     for (const cb::AgentRule& r : s->saved_agent_rules()) out.push_back({r.agent, r.command});
                 return out;
             };
+            ph.note = [this]() -> std::string {
+                cb::Session* s = session_.session();
+                return s ? caliper_host::permission_save_note(*s) : std::string();
+            };
             ph.revoke = [this](const std::string& agent, const std::string& command) {
                 if (cb::Session* s = session_.session(); s && s->revoke_agent_rule({agent, command}))
                     landing_.log("rule revoked", command, agent);
             };
             agent_settings_.set_permissions(std::move(ph));
+            // Every page's status bar says so while Allow all is on, saved
+            // and set only in the settings and the side chat's mode menu.
+            set_host_status_flag([this]() -> std::string {
+                cb::Session* s = session_.session();
+                return s ? caliper_host::allow_all_status(*s) : std::string();
+            });
         }
 #endif
     }
@@ -1632,6 +1728,18 @@ private:
         for (const std::string& line : rc->take_log()) std::cerr << "[live] " << line << std::endl;
     }
 
+    // The UI drivers' presses as the platform delivers them (CALIPER_TEST_UI's and
+    // CALIPER_TEST_SPEC_UI's `stale` drags): through ImGui's GLFW callback, which runs the app's
+    // callback above, with (x, y) as the pointer's place in the window, since a hidden window's
+    // real cursor is the person's and is not read here.
+    void platform_button(int button, bool down, float x, float y) {
+        press_at_valid_ = true;
+        press_at_[0] = x;
+        press_at_[1] = y;
+        ImGui_ImplGlfw_MouseButtonCallback(window_, button, down ? GLFW_PRESS : GLFW_RELEASE, 0);
+        press_at_valid_ = false;
+    }
+
     void feed_spec_ui() {
         spec_ui_->set_page(page_ == AppPage::Spec      ? "spec"
                            : page_ == AppPage::Landing ? "landing"
@@ -1640,6 +1748,7 @@ private:
         spec_ui_->set_drop([this](std::vector<std::string> paths) { on_drop(std::move(paths)); });
         spec_ui_->set_command_line(landing_.command_text());
         spec_ui_->set_cards([this] { return approvals_.shown_waiting(); });
+        spec_ui_->set_platform_button([this](int b, bool down, float x, float y) { platform_button(b, down, x, y); });
         {
             const int sel = landing_.selected_index();
             std::vector<std::string> projects;
@@ -1688,8 +1797,8 @@ private:
     }
 
     // CALIPER_TEST_UI's steps on the spec page (live_ui_driver.h): a scene
-    // panel of the open spec that draws its live scene, a pick in it, and a
-    // long poll of events.wait that waits on the event ring.
+    // panel of the open spec that draws its live scene, a pick or a drag in
+    // it, and a long poll of events.wait that waits on the event ring.
     void give_ui_driver_spec_hooks() {
 #if CALIPER_WITH_BUILDER
         caliper_live::UiDriver::SpecHooks h;
@@ -1697,6 +1806,16 @@ private:
         h.scene_pick = [this](const std::string& id, float u, float v) {
             return scene_panel_ready(id) && spec_page_.pick_scene(id, u, v);
         };
+        h.scene_probe = [this](const std::string& id, float rect[4], std::string* probe) {
+            caliper_host::SpecPage::ScenePanelProbe p;
+            if (!scene_panel_ready(id) || !spec_page_.scene_probe(id, &p)) return false;
+            for (int i = 0; i < 4; ++i) rect[i] = p.rect[i];
+            *probe = "scene " + std::to_string(p.scene_frames) + " programs " + std::to_string(p.program_frames) +
+                     " step " + std::to_string(p.step) + " down " + (p.down ? "1" : "0") + " pick " +
+                     (p.pick_pending ? "1" : "0") + " camera " + p.camera + " drawn " + p.drawn;
+            return true;
+        };
+        h.platform_button = [this](int b, bool down, float x, float y) { platform_button(b, down, x, y); };
         h.long_poll_held = [this](const std::string& kind) {
             caliper_builder::Session* s = session_.session();
             if (!s) return false;
@@ -2026,6 +2145,27 @@ private:
         glfwSetWindowCloseCallback(window_, [](GLFWwindow* w) {
             if (auto* app = static_cast<CaliperApp*>(glfwGetWindowUserPointer(w))) app->on_close_request();
         });
+        // A press at the pointer's place, on macOS only: GLFW's macOS backend gives a mouse press without the
+        // place of its event (cocoa_window.m, mouseDown:), and the window gets no cursor moves
+        // while it is not the key window or while moves do not reach it, so ImGui would put the
+        // press at the last place it was given, often hundreds of points away, and the drag's
+        // first move would then carry that whole distance in one frame. The pointer's place goes
+        // to ImGui first: ImGui's GLFW backend (installed by the renderer below) calls the
+        // callback it finds here before it adds the button.
+#ifdef __APPLE__
+        glfwSetMouseButtonCallback(window_, [](GLFWwindow* w, int, int action, int) {
+            auto* app = static_cast<CaliperApp*>(glfwGetWindowUserPointer(w));
+            if (action != GLFW_PRESS || !app || !ImGui::GetCurrentContext()) return;
+            double x = 0.0, y = 0.0;
+            if (app->press_at_valid_) {
+                x = app->press_at_[0];
+                y = app->press_at_[1];
+            } else {
+                glfwGetCursorPos(w, &x, &y);
+            }
+            ImGui::GetIO().AddMousePosEvent(float(x), float(y));
+        });
+#endif
         return renderer_->init(window_);
     }
 
@@ -2103,6 +2243,19 @@ private:
     caliper_host::WindowCaptures captures_;   // the API's and the session's captures of the window's frame
     caliper_host::AppSession session_;        // the builder session of the workspace
     double live_frame_t_ = 0.0;       // start of the live page's current frame
+    bool press_at_valid_ = false;     // a UI driver's press gives the pointer's place (platform_button())
+    double press_at_[2] = {0.0, 0.0};
+    // CALIPER_FRAME_LOG (log_frame()): the log, this frame's measured waits, and what the last
+    // line said of its scene panel.
+    caliper_host::FrameLog frame_log_;
+    struct FrameTimes {
+        double top = 0.0, wait_ms = 0.0, poll_ms = 0.0;
+        const char* wait = "none";
+    } frame_times_;
+    double last_frame_top_ = -1.0;
+    unsigned long long frame_no_ = 0;
+    std::string log_panel_;
+    std::uint64_t log_scene_frames_ = 0;
     int autoattach_pid_ = 0;          // CALIPER_AUTOATTACH, until attached
     std::unique_ptr<caliper_live::UiDriver> ui_driver_;   // CALIPER_TEST_UI with --hidden
     std::unique_ptr<caliper_host::SpecUiDriver> spec_ui_;   // CALIPER_TEST_SPEC_UI with --hidden

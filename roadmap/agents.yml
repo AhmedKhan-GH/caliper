@@ -57,7 +57,7 @@ features:
     title: Permission Modes
     status: shipped
     scope: core
-    summary: The side chat's agent and caliper-mcp's clients run in a mode, Ask, Accept edits or Read only, that decides which commands wait for the person's approval, and the side chat's agent may also run with Allow all for its session.
+    summary: The side chat's agent and caliper-mcp's clients each run in a saved mode, Ask, Accept edits, Read only or Allow all, that decides which commands wait for the person's approval.
     depends_on: [AGT-03]
     docs: docs/agents/side-chat.md#modes
     design: design/acp-integration.md#approvals-and-diffs-for-every-agent
@@ -265,4 +265,31 @@ features:
     scope: core
     summary: Agent permissions could gain deny rules, scopes finer than a command's name and a session for outside agents.
     depends_on: [AGT-06]
+    issue: null
+
+  - id: AGT-31
+    title: Run Control Commands
+    status: shipped
+    scope: core
+    summary: The commands run.state, run.set_param, run.action and run.pause let an outside agent read and steer the script that the app is attached to, as one MCP tool each, with an approval card for an agent.
+    depends_on: [AGT-17, STR-03]
+    docs: docs/agents/run-control-and-events.md#run-commands
+    issue: null
+
+  - id: AGT-32
+    title: Event Wait
+    status: shipped
+    scope: core
+    summary: The command events.wait is a long poll that returns the events after a cursor, such as picks, control changes and run changes, from a ring of the last 1,024 events, and it can filter by kind and panel.
+    depends_on: [AGT-02]
+    docs: docs/agents/run-control-and-events.md#events
+    issue: null
+
+  - id: AGT-33
+    title: Instrument Tools
+    status: shipped
+    scope: core
+    summary: Tools for entities, cameras, state variables, selections, controls, the time cursor and annotations let an agent build an instrument and drive it through MCP.
+    depends_on: [AGT-02, SPC-11]
+    docs: docs/agents/instrument-tools.md#tool-kinds
     issue: null

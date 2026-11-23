@@ -4,14 +4,19 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <system_error>
 
+#ifdef _WIN32
+#include <process.h>
+#endif
 #ifndef _WIN32
 #include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -25,8 +30,6 @@ namespace fs = std::filesystem;
 
 constexpr std::size_t kMaxFileBytes = std::size_t(1) << 20;  // far more than any person's rules
 constexpr std::size_t kMaxRules = 4096;
-
-bool saved_mode(AgentMode m) { return m != AgentMode::allow_all; }
 
 // The commands whose rule names one target: the parameter or the action of
 // the argument `name` (design/instruments.md, Run Effect Class), or the
@@ -130,7 +133,7 @@ PermissionVerdict decide_agent_permission(const CommandDescriptor& d, const Comm
     // Only what would ask can run without a card, and never what is bound
     // to the content its card shows.
     if (base != ApprovalDecision::ask || c.bound) return v;
-    if (c.mode == AgentMode::allow_all && agent_principal(inv) == AgentPrincipal::chat) {
+    if (c.mode == AgentMode::allow_all) {
         v.decision = ApprovalDecision::allow;
         v.allowed_by = "allow_all";
         return v;
@@ -177,24 +180,43 @@ bool rule_command_allowed(std::string_view command) {
 }
 
 AgentPermissionsRead read_agent_permissions(const std::string& path) {
+#ifndef _WIN32
+    return read_agent_permissions(path, static_cast<long>(::geteuid()));
+#else
+    return read_agent_permissions(path, -1);
+#endif
+}
+
+AgentPermissionsRead read_agent_permissions(const std::string& path, long owner) {
+    (void)owner;
     AgentPermissionsRead out;
     std::error_code ec;
     const fs::path p = fs::u8path(path);
-    if (!fs::exists(p, ec)) return out;
     auto give_up = [&](std::string why) {
         out.file = {};
         out.problems.push_back(std::move(why));
         return out;
     };
+    auto unreadable = [&]() {
+        out.readable = false;
+        return give_up("The agent permissions file cannot be read, so it grants nothing.");
+    };
+    const bool exists = fs::exists(p, ec);
+    if (ec) return unreadable();
+    if (!exists) return out;
 #ifndef _WIN32
     struct stat st {};
-    if (::stat(p.c_str(), &st) != 0) return give_up("The agent permissions file cannot be read, so it grants nothing.");
+    if (::stat(p.c_str(), &st) != 0) return unreadable();
     if (st.st_mode & (S_IWGRP | S_IWOTH))
         return give_up("The agent permissions file may be written by others, so it grants nothing.");
+    if (static_cast<long>(st.st_uid) != owner)
+        return give_up("The agent permissions file belongs to another user, so it grants nothing.");
 #endif
     const auto size = fs::file_size(p, ec);
-    if (ec || size > kMaxFileBytes) return give_up("The agent permissions file is too large or unreadable, so it grants nothing.");
+    if (ec) return unreadable();
+    if (size > kMaxFileBytes) return give_up("The agent permissions file is too large, so it grants nothing.");
     std::ifstream f(p, std::ios::binary);
+    if (!f) return unreadable();
     std::stringstream ss;
     ss << f.rdbuf();
     const json j = json::parse(ss.str(), nullptr, false);
@@ -215,9 +237,9 @@ AgentPermissionsRead read_agent_permissions(const std::string& path) {
                                                            : std::nullopt;
                 if (!known) {
                     out.problems.push_back("Ignored the mode of " + item.key() + ", which is neither chat nor mcp.");
-                } else if (!mode || !saved_mode(*mode)) {
+                } else if (!mode) {
                     out.problems.push_back("Ignored the mode of " + item.key() +
-                                           ", which is not ask, accept_edits or read_only.");
+                                           ", which is not ask, accept_edits, read_only or allow_all.");
                 } else {
                     (item.key() == "chat" ? out.file.chat : out.file.mcp) = *mode;
                 }
@@ -260,14 +282,25 @@ AgentPermissionsRead read_agent_permissions(const std::string& path) {
             }
         }
     }
+    // Allow all only from a file read without a problem: an unknown field, a
+    // value of the wrong type or a rule ignored leaves that mode at Ask.
+    if (!out.problems.empty()) {
+        for (AgentMode* m : {&out.file.chat, &out.file.mcp}) {
+            if (*m != AgentMode::allow_all) continue;
+            *m = AgentMode::ask;
+            out.problems.push_back(std::string("Ignored Allow all of ") + (m == &out.file.chat ? "chat" : "mcp") +
+                                   ", which is read only from a file without problems.");
+        }
+    }
     return out;
 }
 
 std::string agent_permissions_text(const AgentPermissionsFile& file) {
     json rules = json::array();
     for (const auto& r : file.rules) rules.push_back({{"agent", r.agent}, {"command", r.command}});
-    auto mode = [](AgentMode m) { return agent_mode_name(saved_mode(m) ? m : AgentMode::ask); };
-    const json j = {{"version", 1}, {"modes", {{"chat", mode(file.chat)}, {"mcp", mode(file.mcp)}}}, {"rules", rules}};
+    const json j = {{"version", 1},
+                    {"modes", {{"chat", agent_mode_name(file.chat)}, {"mcp", agent_mode_name(file.mcp)}}},
+                    {"rules", rules}};
     return j.dump(2, ' ', false, json::error_handler_t::replace) + "\n";
 }
 
@@ -276,9 +309,15 @@ Error write_agent_permissions(const std::string& path, const AgentPermissionsFil
     const fs::path p = fs::u8path(path);
     std::error_code ec;
     if (!p.parent_path().empty()) fs::create_directories(p.parent_path(), ec);
+    // A temporary name of this process, so that two apps never share one.
+    static std::atomic<unsigned> counter{0};
+#ifndef _WIN32
+    const long pid = static_cast<long>(::getpid());
+#else
+    const long pid = static_cast<long>(_getpid());
+#endif
     fs::path tmp = p;
-    tmp += ".tmp";
-    fs::remove(tmp, ec);
+    tmp += ".tmp-" + std::to_string(pid) + "-" + std::to_string(counter++);
     auto failed = [&](const std::string& why) {
         fs::remove(tmp, ec);
         return Error("permissions.write_failed", "The agent permissions could not be saved: " + why, path);
@@ -307,6 +346,38 @@ Error write_agent_permissions(const std::string& path, const AgentPermissionsFil
     fs::rename(tmp, p, ec);
     if (ec) return failed(ec.message());
     return {};
+}
+
+AgentPermissionsLock::AgentPermissionsLock(const std::string& path) {
+#ifndef _WIN32
+    const std::string lock = path + ".lock";
+    std::error_code ec;
+    const fs::path parent = fs::u8path(path).parent_path();
+    if (!parent.empty()) fs::create_directories(parent, ec);
+    fd_ = ::open(lock.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd_ < 0) {
+        error_ = Error("permissions.lock_failed", "The agent permissions could not be saved: their lock file cannot be opened.",
+                       lock);
+        return;
+    }
+    if (::flock(fd_, LOCK_EX) != 0) {
+        ::close(fd_);
+        fd_ = -1;
+        error_ = Error("permissions.lock_failed", "The agent permissions could not be saved: their lock cannot be taken.",
+                       lock);
+    }
+#else
+    (void)path;
+#endif
+}
+
+AgentPermissionsLock::~AgentPermissionsLock() {
+#ifndef _WIN32
+    if (fd_ >= 0) {
+        ::flock(fd_, LOCK_UN);
+        ::close(fd_);
+    }
+#endif
 }
 
 }  // namespace caliper_builder

@@ -38,8 +38,8 @@
 //     running on a local model (design/widget-agent.md, GPU contention).
 //   - Caliper's mode. The header's mode word, its menu, Shift-Tab and Allow
 //     all's banner (side_chat.h) read and set the session's mode for the
-//     side chat's agent (Session::agent_mode()); the agent's session ends with
-//     its token, and Allow all and this session's rules with it
+//     side chat's agent (Session::agent_mode()), which is saved; the agent's
+//     session ends with its token, and this session's rules with it
 //     (Session::end_chat_session()). An edit a mode or a rule let run is an
 //     APPLIED row, from AppSession::take_applied(), whose Undo sends the
 //     person's history.undo while it is the newest step.

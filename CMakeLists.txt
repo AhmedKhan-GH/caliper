@@ -1067,7 +1067,8 @@ if(TARGET caliper_builder_session)
             # One entry per case: the acceptance case, F4 listing a stream of
             # caliper.serve() from its stream file, the attachment kept across
             # Home and the spec page until Detach, a second stream and a
-            # stream that ends, files dropped on the live page, and "Save
+            # stream that ends, files dropped on the live page, a pan and an orbit
+            # of a scene panel read from the frame log, and "Save
             # changes to <name>?" before F3, an open from the landing and a
             # close over unsaved changes, and an agent's launch over unsaved
             # changes held on an approval card.
@@ -1077,6 +1078,8 @@ if(TARGET caliper_builder_session)
                     "live_home_keeps|app live: the stream stays attached*"
                     "live_second_stream|app live: a second stream replaces the first*"
                     "live_drop|app live: files dropped on the live page*"
+                    "live_scene_pan|app live: a right-button pan of a scene panel*"
+                    "live_scene_stale|app live: an orbit and a pan whose press comes before*"
                     "save_new|app save: F3 New dashboard over unsaved changes*"
                     "save_open|app save: opening another dashboard*"
                     "save_close|app save: closing the window*"

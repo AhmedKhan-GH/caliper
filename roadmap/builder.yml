@@ -106,20 +106,20 @@ features:
 
   - id: SPC-11
     title: Spec Version 1 with Scenes
-    status: planned
+    status: shipped
     scope: core
-    summary: Spec version 1 adds a scene primitive, so that a panel can show a scene and, later, a recording bound to a cursor.
+    summary: Spec version 1 adds the scene panel, which draws the entities of a scene that Caliper builds from live tensors, with a camera and picking, and the top-level arrays and keys that an instrument needs.
     depends_on: [REN-12, SPC-05]
-    sprint: 5
+    docs: docs/builder/spec-version-1.md#scene-panel
     issue: null
 
   - id: SPC-12
     title: Custom Controls
-    status: planned
+    status: shipped
     scope: core
-    summary: Spec version 1 declares sliders, toggles, buttons, pickers and text fields, bound without native code to a source's parameters, to other panels' selections and to the running script's controls.
+    summary: Spec version 1 declares nine control kinds, among them slider, range, toggle, button, picker, text, segmented groups and a transport, bound without native code to script parameters and actions, state variables, intervention points and values.
     depends_on: [SPC-11]
-    sprint: 5
+    docs: docs/builder/controls.md#control-kinds
     issue: null
 
   - id: SPC-13
@@ -134,12 +134,12 @@ features:
 
   - id: SPC-14
     title: Custom WGSL Views
-    status: planned
+    status: shipped
     scope: core
-    summary: A spec carries WGSL code for a material or a compute stage of the scene primitive, checked and compiled by the scene layer, with limits on its buffers and its time per frame.
-    depends_on: [COR-24, REN-27, SPC-11, SPC-21]
-    sprint: 7
+    summary: A spec carries WGSL programs over live tensors and material or vertex stages of scene entities, which the sandbox checks and which the script and the viewer run with limits on their time and memory.
+    depends_on: [SPC-11]
     design: design/roadmap.md#open-questions
+    docs: docs/agents/gpu-programs.md#programs
     issue: null
 
   - id: SPC-15
@@ -370,4 +370,111 @@ features:
     scope: supporting
     summary: The undo history, and with it stacked previews, could be saved with the workspace so that it survives a restart.
     depends_on: [SPC-05]
+    issue: null
+
+  - id: SPC-42
+    title: Scene Entities
+    status: shipped
+    scope: core
+    summary: A scene panel draws entities that a spec builds from its sources, with an entity table, draw kinds, pick fields and a data box, so that a live tensor becomes a visual with no scene call in the script.
+    depends_on: [SPC-11]
+    docs: docs/builder/scene-entities.md#entity-table
+    issue: null
+
+  - id: SPC-43
+    title: Surface and Path Operators
+    status: shipped
+    scope: core
+    summary: The operators surface and path are steps of a source that turn a tensor into geometry, a height surface or a polyline, for the slots of an entity.
+    depends_on: [SPC-42]
+    docs: docs/builder/operators.md#surface-operator
+    issue: null
+
+  - id: SPC-44
+    title: State Variables and References
+    status: shipped
+    scope: core
+    summary: State variables that controls and picks write, and binding references that panels read to filter, highlight, recolor or retarget, change what a panel shows at once, also while the run is paused.
+    depends_on: [SPC-12]
+    docs: docs/builder/state-and-references.md#state-table
+    issue: null
+
+  - id: SPC-45
+    title: Layout Shares
+    status: shipped
+    scope: supporting
+    summary: A split of the layout gives each child a share of the space, a leaf may state a minimum size in characters and lines, and a control is a leaf of the layout as a panel is.
+    depends_on: [SPC-12]
+    docs: docs/builder/spec-version-1.md#layout-shares
+    issue: null
+
+  - id: SPC-46
+    title: Step History and Time Cursor
+    status: shipped
+    scope: core
+    summary: The app keeps the recent steps of a source with the step of each stamped snapshot, and one time cursor, moved by commands or a transport control, shows every panel at a kept step while the run goes on.
+    depends_on: [SPC-44, STR-45]
+    docs: docs/builder/time-cursor.md#step-history
+    issue: null
+
+  - id: SPC-47
+    title: Bound Text
+    status: shipped
+    scope: supporting
+    summary: A bound text formats live values and state into a short text with named fields, number formats and units, for text panels, readouts and other labels.
+    depends_on: [SPC-44]
+    docs: docs/builder/bound-text.md#format-language
+    issue: null
+
+  - id: SPC-48
+    title: Annotations and Label Placement
+    status: shipped
+    scope: supporting
+    summary: An annotation marks a value of a panel with a label, a threshold line, a band or a marker, and one placement function keeps the labels of annotations and scene items apart.
+    depends_on: [SPC-44, SPC-42]
+    docs: docs/builder/annotations.md#annotation-table
+    issue: null
+
+  - id: SPC-49
+    title: Saved Views
+    status: shipped
+    scope: supporting
+    summary: A scene panel keeps up to 16 named camera views, lists them in a menu of its header, and opens on the view that view_camera names, and the commands camera.save and camera.set write and move them.
+    depends_on: [REN-45, SPC-42]
+    docs: docs/builder/scene-entities.md#camera-and-saved-views
+    issue: null
+
+  - id: SPC-50
+    title: Pieces
+    status: shipped
+    scope: core
+    summary: A piece is a folder of a manifest and WGSL files with a derive half and a draw half, identified by a SHA-256 hash that a program pins with its name and version, and read from the library, the workspace or the open spec.
+    depends_on: [SPC-14]
+    docs: docs/agents/pieces.md#piece-folder
+    issue: null
+
+  - id: SPC-51
+    title: Piece Commands
+    status: shipped
+    scope: core
+    summary: The commands piece.check, piece.list, piece.show, piece.save, piece.copy, piece.update and piece.remove, and program.read, let an agent write, check and version pieces and read published resources through MCP.
+    depends_on: [AGT-02, SPC-50]
+    docs: docs/agents/pieces.md#piece-commands
+    issue: null
+
+  - id: SPC-52
+    title: Provenance Review State
+    status: shipped
+    scope: core
+    summary: A program, stage or piece instance of a spec from someone else stays in the state review, and runs neither half, until the hash of its source is in the reviewed list of the spec.
+    depends_on: [SPC-50]
+    docs: docs/agents/pieces.md#foreign-specs
+    issue: null
+
+  - id: SPC-53
+    title: Review Card for Foreign Pieces
+    status: planned
+    scope: core
+    summary: A card shows the source, the limits and a capture of a piece from a foreign spec, and the person's approval writes the hash into the reviewed list, where today a person edits the spec file by hand.
+    depends_on: [AGT-17, SPC-52]
     issue: null

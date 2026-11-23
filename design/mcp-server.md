@@ -364,8 +364,8 @@ applies them to the origin `mcp`; `caliper-mcp` needs no change for them, sends 
 select one, and offers no tool that reads or sets them. A call that Read only refuses is the tool error
 `command.denied` with the command layer's message. The table's `effect` (`read`, `edit`, `change`) is read with the
 other flags when `caliper-mcp` parses the app's table; its annotations stay `readOnlyHint` from `mutates` and
-`destructiveHint` from `destructive`. Allow all is the side chat's agent's only, so no `mcp` client runs without
-cards.
+`destructiveHint` from `destructive`. Under Allow all, which the person saves for `mcp` clients in the settings, an
+`mcp` client's calls run without cards except a data-loss card ([Command layer](command-layer.md), Agent permissions).
 
 ## Resources
 

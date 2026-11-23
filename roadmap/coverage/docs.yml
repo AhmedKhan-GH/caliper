@@ -1310,64 +1310,65 @@ entries:
 - page: docs/agents/pieces.md
   item: "A piece is a reusable module of graphics with a derive half in the script and a draw half in the viewer."
   ids:
-  - SPC-14
+  - SPC-50
+  - REN-77
 - page: docs/agents/pieces.md#piece-folder
   item: "A piece is a folder of piece.toml and up to three WGSL files, inside the workspace's pieces folder."
   ids:
-  - SPC-14
+  - SPC-50
 - page: docs/agents/pieces.md#piece-manifest
   item: "The manifest names the piece, its version, inputs, params, resources, imports, dependencies, halves, sample and hash."
   ids:
-  - SPC-14
+  - SPC-50
 - page: docs/agents/pieces.md#inputs-and-parameters
   item: "Inputs bind tensors or other programs' buffers, and params become controls."
   ids:
-  - SPC-14
+  - SPC-50
 - page: docs/agents/pieces.md#resources
   item: "A resource is a buffer of a layout or an rgba8unorm texture with a count, a publish flag and a kept depth."
   ids:
-  - SPC-14
+  - REN-77
 - page: docs/agents/pieces.md#derive-half
   item: "The derive half runs several compute passes in order in one submit at a pass of the shared cadence."
   ids:
-  - SPC-14
+  - REN-78
 - page: docs/agents/pieces.md#draw-half
   item: "The draw half has a camera, draw buffers, offscreen targets, passes, an item map, text and limits."
   ids:
-  - SPC-14
+  - REN-79
 - page: docs/agents/pieces.md#draw-half
   item: "A pass is compute or render, with entries, instances, vertices, topology, blend, depth and pick."
   ids:
-  - SPC-14
+  - REN-79
 - page: docs/agents/pieces.md#shader-imports
   item: "Versioned WGSL modules of helpers that pieces import by name."
   ids:
-  - SPC-14
+  - REN-80
 - page: docs/agents/pieces.md#shader-imports
   item: "Imports resolve before the compiler with a rewrite that keeps every line and column."
   ids:
-  - SPC-14
+  - SPC-50
 - page: docs/agents/pieces.md#hashes-and-pins
   item: "The hash covers the canonical manifest and the resolved WGSL, the same on every platform."
   ids:
-  - SPC-14
+  - SPC-50
   - SPC-23
 - page: docs/agents/pieces.md#piece-sources
   item: "Library, workspace and inline pieces share one format."
   ids:
-  - SPC-14
+  - SPC-50
 - page: docs/agents/pieces.md#hashes-and-pins
   item: "A program pins a piece by name, version and hash, and a missing or changed piece refuses the program."
   ids:
-  - SPC-14
+  - SPC-50
 - page: docs/agents/pieces.md#program-instances
   item: "A program of a spec is an instance of a piece with bindings, params and a panel."
   ids:
-  - SPC-14
+  - SPC-50
 - page: docs/agents/pieces.md#program-instances
   item: "A buffer input that binds another program's resource makes the programs a graph."
   ids:
-  - SPC-14
+  - SPC-50
   - SPC-10
 - page: docs/agents/pieces.md#program-instances
   item: "A worked fragment-only piece over a live tensor."
@@ -1378,118 +1379,121 @@ entries:
 - page: docs/agents/pieces.md#resources-and-step-history
   item: "Named, typed resources replace the output shapes of one-pass programs."
   ids:
-  - SPC-14
+  - REN-78
 - page: docs/agents/pieces.md#resources
   item: "Buffers and packed textures, with counted buffers."
   ids:
-  - SPC-14
+  - REN-77
 - page: docs/agents/pieces.md#derive-half
   item: "The script and the viewer allocate resources inside their budgets and keep them until removal."
   ids:
-  - SPC-14
+  - REN-78
 - page: docs/agents/pieces.md#resources-and-step-history
   item: "RESOURCE carries one version of one resource, and PROGRAM carries a piece's instance and its draw half."
   ids:
-  - SPC-14
+  - REN-78
 - page: docs/agents/pieces.md#resources-and-step-history
   item: "The step history keeps resource versions thinned evenly over the run."
   ids:
-  - SPC-14
+  - REN-78
 - page: docs/agents/pieces.md#resources-and-step-history
   item: "A reopened instrument derives its resources again from the attached run."
   ids:
-  - SPC-14
+  - REN-78
 - page: docs/agents/pieces.md#draw-prelude
   item: "One fixed WGSL prelude of group 0 for every draw pass in the app and the browser."
   ids:
-  - SPC-14
+  - REN-79
 - page: docs/agents/pieces.md#draw-prelude
   item: "The prelude file that the app and the browser module embed."
   ids:
-  - SPC-14
+  - REN-79
 - page: docs/agents/pieces.md#generated-header
   item: "The composer writes every binding of both halves from the manifest."
   ids:
-  - SPC-14
+  - REN-79
 - page: docs/agents/pieces.md#generated-header
   item: "Params come from the manifest and follow controls, selections and state."
   ids:
-  - SPC-14
+  - REN-79
 - page: docs/agents/pieces.md#selection-and-picking
   item: "The host gives every draw half the selection as a buffer."
   ids:
-  - SPC-14
+  - REN-81
 - page: docs/agents/pieces.md#draw-half
   item: "The declared passes of a draw half, which the host orders and allocates."
   ids:
-  - SPC-14
+  - REN-79
 - page: docs/agents/pieces.md#draw-half
   item: "Passes run in order after the scene's draws, with full-screen triangles by default."
   ids:
-  - SPC-14
+  - REN-79
 - page: docs/agents/pieces.md#draw-half
   item: "The host target and rgba8unorm offscreen targets, never read by the pass that writes them."
   ids:
-  - SPC-14
+  - REN-79
 - page: docs/agents/pieces.md#draw-half
   item: "The allowed topology, blend and depth values and their defaults."
   ids:
-  - SPC-14
+  - REN-79
 - page: docs/agents/pieces.md#draw-half
   item: "What the render graph leaves out."
   reason: docs
 - page: docs/agents/pieces.md#draw-half
   item: "Draw buffers keep state between frames and reset by declared rules."
   ids:
-  - SPC-14
+  - REN-79
 - page: docs/agents/pieces.md#refusals
   item: "The sandbox checks each piece in the editor, the script and the viewer."
   ids:
-  - SPC-14
+  - REN-76
   - SPC-21
 - page: docs/agents/pieces.md#refusals
   item: "The checks of both halves, in order, before anything runs."
   ids:
-  - SPC-14
+  - REN-76
 - page: docs/agents/pieces.md#refusals
   item: "The codes of the piece and program checks."
   ids:
-  - SPC-14
+  - REN-76
 - page: docs/agents/pieces.md#browser-viewer
   item: "The browser runs the checks without the compiler, verifies the hash and lets WebGPU validate."
   ids:
-  - SPC-14
+  - REN-82
 - page: docs/agents/pieces.md#draw-budget-and-removal
   item: "A draw over its budget is removed and reported by name."
   ids:
-  - SPC-14
+  - REN-79
 - page: docs/agents/pieces.md#selection-and-picking
   item: "A pick pass writes the ID in every frame, and the item map gives the pick event's fields."
   ids:
-  - SPC-14
+  - REN-81
 - page: docs/agents/pieces.md#program-text
   item: "Pieces publish label anchors and strings, and the host places and draws them."
   ids:
-  - SPC-14
+  - REN-79
 - page: docs/agents/pieces.md#camera
   item: "The host owns the camera, and a piece selects orbit, pan-zoom or none."
   ids:
-  - SPC-14
+  - REN-79
 - page: docs/agents/pieces.md#piece-commands
   item: "The piece commands and the program commands as MCP tools."
   ids:
   - SPC-05
   - AGT-02
+  - SPC-51
 - page: docs/agents/pieces.md#piece-commands
   item: "Seven commands list, show, check, save, copy, update and remove pieces."
   ids:
   - SPC-05
   - AGT-02
+  - SPC-51
 - page: docs/agents/pieces.md#piece-commands
   item: "program.create and program.patch take instances, and program.read reads resources."
   ids:
   - SPC-05
   - AGT-02
+  - SPC-51
 - page: docs/agents/pieces.md#piece-commands
   item: "Stages stay unchanged until Graphics Consolidation removes them."
   ids:
@@ -1502,7 +1506,7 @@ entries:
 - page: docs/agents/pieces.md#piece-sources
   item: "The built-in library holds the lib modules and points@1, which matches the built-in draw."
   ids:
-  - SPC-14
+  - REN-80
 - page: docs/development/testing.md#draw-parity
   item: "A test compares the app's frame with the browser module's frame."
   reason: test
@@ -1527,3 +1531,147 @@ entries:
 - page: docs/development/testing.md#programmable-graphics-acceptance
   item: "A test through caliper-mcp builds the tower on a managed run."
   reason: test
+- page: docs/agents/pieces.md#foreign-specs
+  item: "A program, stage or piece instance of a foreign spec stays in the state review until its hash is in the reviewed list."
+  ids:
+  - SPC-52
+- page: docs/agents/pieces.md#foreign-specs
+  item: "No command writes provenance and the app has no review card for pieces yet."
+  ids:
+  - SPC-53
+- page: docs/agents/pieces.md#attention-arc-tower
+  item: "The training script ablates the strongest head of layer 1 through a toggle, and the loss rises."
+  ids:
+  - INT-23
+- page: docs/agents/pieces.md#attention-arc-tower
+  item: "The Attention Arc Tower as the demo of programmable graphics."
+  ids:
+  - REN-83
+- page: docs/agents/pieces.md#piece-commands
+  item: "The commands piece.check, piece.list, piece.show, piece.save, piece.copy, piece.update, piece.remove and program.read."
+  ids:
+  - SPC-51
+- page: docs/agents/gpu-programs.md#programs
+  item: "A program declares its WGSL source, its read-only inputs, one output and its limits."
+  ids:
+  - SPC-14
+- page: docs/agents/gpu-programs.md#stages
+  item: "A stage replaces one function of the draw of a scene entity."
+  ids:
+  - SPC-14
+- page: docs/agents/gpu-programs.md#sandbox-rules
+  item: "The sandbox checks every program in the editor, the script and the viewer, in a fixed order."
+  ids:
+  - REN-76
+- page: docs/agents/gpu-programs.md#cadence
+  item: "A program runs every N steps, and the script sets N from the measured overhead."
+  ids:
+  - STR-54
+- page: docs/python/run-control-calls.md#programs-in-the-script
+  item: "The producer module loads on the first program and runs the programs after a step on the tensors in place."
+  ids:
+  - STR-53
+- page: docs/python/run-control-calls.md#watch-with-an-optimizer
+  item: "caliper.watch with an optimizer makes optimizer.step the checkpoint of the run."
+  ids:
+  - STR-55
+- page: docs/agents/managed-runs.md#tools
+  item: "The commands run.list, run.start, run.stop and run.logs, and the model runner that owns the child processes."
+  ids:
+  - RUN-14
+- page: docs/agents/managed-runs.md#fork
+  item: "run.fork starts a new run from a checkpoint with changed parameters."
+  ids:
+  - RUN-15
+- page: docs/agents/managed-runs.md#two-runs-in-one-panel
+  item: "The catalog source run:<id>/<view> draws the series of a managed run."
+  ids:
+  - RUN-16
+- page: docs/agents/run-control-and-events.md#run-commands
+  item: "The commands run.state, run.set_param, run.action and run.pause."
+  ids:
+  - AGT-31
+- page: docs/agents/run-control-and-events.md#events
+  item: "The command events.wait returns the events after a cursor from a ring."
+  ids:
+  - AGT-32
+- page: docs/agents/run-control-and-events.md#intervention-commands
+  item: "The commands intervene.points, intervene.set, intervene.clear and intervene.list."
+  ids:
+  - INT-34
+- page: docs/agents/run-control-and-events.md#toggle-control
+  item: "A toggle bound to an intervention point sets and clears the ablation of the point."
+  ids:
+  - INT-11
+- page: docs/agents/instrument-tools.md#tool-kinds
+  item: "The tools of entities, cameras, state, selections, controls, the cursor and annotations."
+  ids:
+  - AGT-33
+- page: docs/builder/spec-version-1.md#scene-panel
+  item: "The scene panel and the other keys that version 1 adds to a spec."
+  ids:
+  - SPC-11
+- page: docs/builder/controls.md#control-kinds
+  item: "The nine control kinds and their binds."
+  ids:
+  - SPC-12
+- page: docs/builder/controls.md#segmented-groups
+  item: "A segmented group is a row of 2 to 16 buttons."
+  ids:
+  - SPC-12
+- page: docs/builder/scene-entities.md#entity-table
+  item: "The keys of an entity and its draw kinds."
+  ids:
+  - SPC-42
+- page: docs/builder/operators.md#surface-operator
+  item: "The operator surface makes a height field from a tensor of rank 2."
+  ids:
+  - SPC-43
+- page: docs/builder/operators.md#path-operator
+  item: "The operator path makes a polyline through the rows of a tensor."
+  ids:
+  - SPC-43
+- page: docs/builder/state-and-references.md#state-table
+  item: "The declaration of a state variable and its writers and readers."
+  ids:
+  - SPC-44
+- page: docs/builder/state-and-references.md#reference-forms
+  item: "A binding reference stands where the spec takes a literal."
+  ids:
+  - SPC-44
+- page: docs/builder/spec-version-1.md#layout-shares
+  item: "A split takes shares for its children and a leaf takes a minimum size."
+  ids:
+  - SPC-45
+- page: docs/builder/time-cursor.md#step-history
+  item: "The app keeps the recent steps of a source, and the cursor shows a kept step."
+  ids:
+  - SPC-46
+- page: docs/builder/bound-text.md#format-language
+  item: "A bound text has named fields, number formats and literal units."
+  ids:
+  - SPC-47
+- page: docs/builder/annotations.md#annotation-table
+  item: "An annotation marks a value of a panel."
+  ids:
+  - SPC-48
+- page: docs/builder/annotations.md#label-placement
+  item: "One placement function places the labels of annotations and scene items."
+  ids:
+  - SPC-48
+- page: docs/builder/scene-entities.md#camera-and-saved-views
+  item: "A scene panel keeps up to 16 saved camera views."
+  ids:
+  - SPC-49
+- page: docs/development/testing.md#programmable-graphics-acceptance
+  item: "The acceptance test of programmable graphics."
+  ids:
+  - REN-77
+- page: docs/roadmap/milestones.md#later-milestones
+  item: "The move of every built-in shape and of the surface and path operators onto library pieces, and the removal of the per-shape drawing code."
+  ids:
+  - REN-84
+  - REN-85
+  - REN-86
+  - REN-87
+  - REN-88

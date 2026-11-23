@@ -205,6 +205,7 @@ Some environment variables exist only for tests, and the user page Folders and E
 - `CALIPER_TEST_UI` and `CALIPER_TEST_SPEC_UI` take step grammars, which `src/host/live/live_ui_driver.h` and `src/host/builder/spec_ui_driver.h` define.
 - `CALIPER_TEST_APPROVALS` takes the line forms `approve`, `deny`, `session` and `always`, which `src/host/builder/approval_cards.h` defines. `CALIPER_TEST_OPEN_URL`, `CALIPER_TEST_SPEC_UI_SHOTS` and `CALIPER_AGENT_TEST_SCRIPT` are in the same file.
 - The Python tests read `CALIPER_TEST_NO_WINDOW`, `CALIPER_REQUIRE_WEB_VIEWS`, `CALIPER_PY_LIVE_APPLY` and `CALIPER_THROWING_WHERE`.
+- `CALIPER_FRAME_LOG=<file>` records the frames of the visible or hidden app. It appends one tab-separated line for each frame, after a header line that names the columns. The columns hold the frame number, the time, the frame and work times, the waits, the focus, the input events, the pointer, and the camera and drag state of the scene panel that holds the drag or lies under the pointer. The log stops after 20,000 lines. It is off by default, and the app opens no file and measures nothing for it when the variable is not set.
 - `scripts/fetch_wasm.py` reads `GITHUB_TOKEN` or `GH_TOKEN`.
 
 ## Docs Preview

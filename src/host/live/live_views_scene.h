@@ -148,6 +148,7 @@ struct SceneRectState {
     float entity_depth = 1.0f;
     std::string program_detail;   // the programs' hit, "" for none
     float program_depth = 1.0f;
+    float rect[4] = {0, 0, 0, 0};   // where the rectangle was drawn last: x, y, width, height in points
 };
 
 // Asks for a pick at (u, v), each from 0 to 1 across the rectangle, at the next draw, as if the

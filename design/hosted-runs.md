@@ -82,7 +82,7 @@ A run that ends with the exit code 0, or that ends after a stop, is `exited`. A 
 
 ## Review Card
 
-A managed run executes Python code, thus `run.start` and `run.fork` always wait for a card. The card shows for every origin, also for `ui` and `builder`, so that the person's own runs panel shows the same card. It shows in every mode. No rule of a session and no saved rule removes it, and Allow all does not either. The mode Read only refuses the two commands. A request that the handler refuses anyway, such as a script outside the workspace, an argument past its limit or a parent that does not run, gets no card, and its error comes at once. `run.stop` is a `run` command as `run.pause` is: it asks the origins `agent` and `mcp`, and a rule can allow it.
+A managed run executes Python code, thus `run.start` and `run.fork` wait for a card. The card shows for every origin, also for `ui` and `builder`, so that the person's own runs panel shows the same card. It shows in every mode but Allow all, which runs the two commands for a governed agent without a card ([Command layer](command-layer.md), Agent permissions). No rule of a session and no saved rule removes it. The mode Read only refuses the two commands. A request that the handler refuses anyway, such as a script outside the workspace, an argument past its limit or a parent that does not run, gets no card, and its error comes at once. `run.stop` is a `run` command as `run.pause` is: it asks the origins `agent` and `mcp`, and a rule can allow it.
 
 | Command | Card Text |
 |---|---|
