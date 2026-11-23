@@ -2,12 +2,27 @@
 // as far as the spec page reads it, and the result of the panel.data command
 // (src/builder/include/caliper_builder/session/panel_data.h).
 
-export type Primitive = 'series' | 'heatmap' | 'points' | 'histogram' | 'table' | 'image' | 'text';
+export type Primitive = 'series' | 'heatmap' | 'points' | 'histogram' | 'table' | 'image' | 'text' | 'scene';
 
-/** A layout node: a panel id, a split or tabs. */
-export type LayoutNode = string | SplitNode | TabsNode;
-export interface SplitNode { split: 'horizontal' | 'vertical'; ratio?: number; children: LayoutNode[]; title?: string }
+/**
+ * A layout node: a panel or control id, a leaf table { panel, min } (spec
+ * version 1, min in characters and lines of the UI face), a split or tabs.
+ */
+export type LayoutNode = string | LeafNode | SplitNode | TabsNode;
+export interface LeafNode { panel: string; min?: [number, number] }
+export interface SplitNode { split: 'horizontal' | 'vertical'; ratio?: number; shares?: number[]; children: LayoutNode[]; title?: string }
 export interface TabsNode { tabs: LayoutNode[]; title?: string }
+
+/** The kinds of control (design/instruments.md, Control Table). */
+export type ControlKind = 'slider' | 'button' | 'range' | 'toggle' | 'picker' | 'text' | 'segmented' | 'readout' | 'transport';
+
+export interface SpecControl {
+  id: string;
+  kind: ControlKind;
+  title?: string;
+  bind?: string;
+  options?: Record<string, unknown>;
+}
 
 export interface SpecSource { id: string; catalog?: string; sql?: string; from?: string }
 
@@ -32,6 +47,7 @@ export interface Spec {
   applet: { id: string; title?: string; description?: string };
   source?: SpecSource[];
   panel?: SpecPanel[];
+  control?: SpecControl[];
   layout?: LayoutNode;
 }
 
