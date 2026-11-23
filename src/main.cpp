@@ -22,6 +22,7 @@
 #include "host/host_version.h"
 #include "host/renderer/host_renderer.h"
 #include "host/frame_log.h"
+#include "host/mouse_latency.h"
 #include "host/embed/embed_core.h"   // caliper_live_set_event_tap
 #include "host/live/live_attach.h"
 #include "host/live/live_controls.h"
@@ -1005,6 +1006,7 @@ public:
         // Close the DuckDB stores NOW — leaving them to static destructors
         // races DuckDB's globals and aborts in malloc at exit.
         caliper_host::services_shutdown();
+        caliper_host::mouse_latency_stop();
         renderer_->shutdown();
         // The spec page's textures were the renderer's to destroy; their
         // records go while the UI context still exists.
@@ -2166,7 +2168,9 @@ private:
             ImGui::GetIO().AddMousePosEvent(float(x), float(y));
         });
 #endif
-        return renderer_->init(window_);
+        if (!renderer_->init(window_)) return false;
+        caliper_host::mouse_latency_start(window_);
+        return true;
     }
 
     std::vector<std::string> applet_dirs_;   // --applets, in order

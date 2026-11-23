@@ -197,6 +197,16 @@ target_link_libraries(caliper_scene_tests PRIVATE doctest::doctest caliper_scene
 set_target_properties(caliper_scene_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 add_test(NAME caliper_scene_tests COMMAND caliper_scene_tests)
 
+if(APPLE)
+    add_executable(caliper_mouse_latency_tests test_mouse_latency_mac.mm)
+    target_link_libraries(caliper_mouse_latency_tests PRIVATE libcaliper imgui_backends glfw)
+    set_source_files_properties(test_mouse_latency_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set_target_properties(caliper_mouse_latency_tests PROPERTIES
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
+    add_test(NAME caliper_mouse_latency_tests COMMAND caliper_mouse_latency_tests)
+    set_tests_properties(caliper_mouse_latency_tests PROPERTIES TIMEOUT 30)
+endif()
+
 # The colormap by keys against map_f32_to_rgba8 for all 2^32 inputs on each boundary range,
 # label slow: it exits 77 (skipped) unless CALIPER_SLOW_TESTS=1, so the default run passes over
 # it. Run it as a heavy job: CALIPER_SLOW_TESTS=1 ctest -L slow (6 threads at most).
