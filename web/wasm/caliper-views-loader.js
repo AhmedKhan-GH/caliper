@@ -18,7 +18,7 @@
 //     onDataView,   // (dataView) => {}, every data view the producer resolved
 //     compat,       // true: a WebGPU device in compatibility mode; default globalThis.caliperViewsCompat
 //     feed,         // 'page': no stream; the page feeds the programs of one scene view named `view`
-//     scene,        // feed 'page': the scene view's {space, up, units, view_camera}, as a VIEWS entry gives it
+//     scene,        // feed 'page': the scene view's {space, up, units, labels, scale_bar, view_camera, views}
 //     assetQuery,   // a query such as '?token=<token>' for the module's two files, when their server needs one
 //   });
 //   handle.setDataView({ index: { layer: 2 } });   // a VIEW_REQUEST
@@ -32,7 +32,8 @@
 // version of a published resource ({program, resource, step, count, stride,
 // width, height} and its Uint8Array); the module checks both as it checks a
 // relay of the stream. handle.select(picks) gives its programs the linked
-// selection of the page's picks.
+// selection of the page's picks, and handle.setStarting({view_camera, views})
+// the panel's starting camera when the spec changes it.
 //
 // A selection, pick or hover goes to the producer as an EVENT on the mount's
 // own connection, with the same detail the <caliper-view> element's
@@ -199,6 +200,15 @@ export async function mountCaliperViews(container, options = {}) {
       if (destroyed || feed !== 'page') return false;
       const p = module.stringToNewUTF8(JSON.stringify(Array.from(picks || [])));
       const ok = module._caliper_views_select(p) === 1;
+      module._free(p);
+      return ok;
+    },
+    // feed 'page': the panel's starting camera changed in the spec,
+    // {view_camera, views} as the panel's options give them.
+    setStarting(scene) {
+      if (destroyed || feed !== 'page') return false;
+      const p = module.stringToNewUTF8(JSON.stringify(scene || {}));
+      const ok = module._caliper_views_set_starting(p) === 1;
       module._free(p);
       return ok;
     },

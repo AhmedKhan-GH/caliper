@@ -340,6 +340,31 @@ void publish() {
     put("events", (double)g.events_sent);
     put("pageEvents", (double)g.page_events);
     put("pageLastEvent", g.page_last_event.c_str());
+    if (g.page_view) {
+        // The page scene's orbit, [target x, y, z, distance, azimuth, elevation] (angles in radians), and
+        // the labels of its programs' text tables, for the page's tests of its camera and its labels.
+        const caliper_scene::Orbit* o = std::get_if<caliper_scene::Orbit>(&g.page_view->camera());
+        char ob[256];
+        if (o && g.page_view->fitted())
+            std::snprintf(ob, sizeof ob, "[%.17g,%.17g,%.17g,%.17g,%.17g,%.17g]", o->target[0], o->target[1], o->target[2],
+                          o->distance, o->azimuth, o->elevation);
+        else
+            std::snprintf(ob, sizeof ob, "null");
+        put("pageOrbit", ob);
+        // [[text, x0, y0, x1, y1], ...]: the labels drawn at the last frame with their text boxes, in CSS pixels
+        // of the canvas, which the page's dashboard comparison checks as text.
+        caliper_net::Json labels = caliper_net::Json::array();
+        for (const caliper_live_views::DrawnLabel& l : g.page_state.labels) {
+            caliper_net::Json e = caliper_net::Json::array();
+            e.push(l.text);
+            e.push((double)l.x0);
+            e.push((double)l.y0);
+            e.push((double)l.x1);
+            e.push((double)l.y1);
+            labels.push(std::move(e));
+        }
+        put("pageLabels", labels.dump().c_str());
+    }
     const caliper_web::InputCounts ic = caliper_web::input_counts();
     put("inputPointer", ic.pointer);
     put("inputButtons", ic.buttons);
@@ -719,6 +744,62 @@ void pump_programs() {
     }
 }
 
+// The panel's starting camera from its options `view_camera` and `views`, as the app's spec runtime
+// reads them (spec_entities.cpp, spec_starting_camera): an object is an orbit with the keys it
+// gives, a string names a saved view or else a camera entity, and anything else is the fit. A
+// camera that the checks of scenes.md refuse (not finite, a distance not above 0, an elevation
+// outside -89 to 89 degrees) is the fit too, as the spec check refuses it in the app.
+caliper_scene::StartingCamera page_starting_camera(const caliper_net::Json& scene) {
+    using caliper_scene::StartingCamera;
+    StartingCamera s;
+    const caliper_net::Json* v = scene.is_object() ? scene.find("view_camera") : nullptr;
+    auto num = [](const caliper_net::Json& o, const char* key, std::optional<double>* out) {
+        if (const caliper_net::Json* n = o.find(key); n && n->is_number()) *out = n->as_double();
+    };
+    auto vec3 = [](const caliper_net::Json* t, caliper_scene::Vec3* out) {
+        if (!t || !t->is_array() || t->size() != 3) return false;
+        for (size_t k = 0; k < 3; ++k)
+            if (!t->at(k).is_number()) return false;
+        *out = caliper_scene::Vec3{t->at(0).as_double(), t->at(1).as_double(), t->at(2).as_double()};
+        return true;
+    };
+    if (v && v->is_object() && v->size() > 0) {
+        s.form = StartingCamera::Form::Orbit;
+        caliper_scene::Vec3 t;
+        if (vec3(v->find("target"), &t)) s.target = t;
+        std::optional<double> d;
+        num(*v, "distance", &d);
+        if (d && *d > 0) s.distance = d;
+        num(*v, "azimuth", &s.azimuth_deg);
+        num(*v, "elevation", &s.elevation_deg);
+    } else if (v && v->is_string()) {
+        const std::string name = v->as_string();
+        const caliper_net::Json* views = scene.find("views");
+        for (size_t i = 0; views && views->is_array() && i < views->size() && i < 64; ++i) {
+            const caliper_net::Json& sv = views->at(i);
+            const caliper_net::Json* n = sv.is_object() ? sv.find("name") : nullptr;
+            if (!n || !n->is_string() || n->as_string() != name) continue;
+            s.form = StartingCamera::Form::Orbit;
+            caliper_scene::Vec3 t{0, 0, 0};
+            vec3(sv.find("target"), &t);
+            s.target = t;
+            s.distance = 1.0;
+            s.azimuth_deg = 0.0;
+            s.elevation_deg = 0.0;
+            num(sv, "distance", &s.distance);
+            num(sv, "azimuth", &s.azimuth_deg);
+            num(sv, "elevation", &s.elevation_deg);
+            break;
+        }
+        if (s.form != StartingCamera::Form::Orbit) {
+            s.form = StartingCamera::Form::Entity;
+            s.entity = name;
+        }
+    }
+    if (!caliper_scene::validate_starting_camera(s, caliper_scene::Space::k3D)) return StartingCamera{};
+    return s;
+}
+
 // feed "page": the panel's scene over the whole canvas, drawn as the app's spec runtime draws
 // a scene panel's content, with the page's programs. A pick or a selection goes to the page.
 void draw_page_scene(float w, float h, float scale) {
@@ -892,14 +973,14 @@ void start() {
         auto view = std::make_unique<caliper_live_views::SceneView>(*backend, table);
         if (!view->init(&why)) return fail("the scene view did not start: " + why);
         view->set_box_fit(true);
-        // A 3-D scene with the panel's up axis, the starting camera kept, as apply_entity_scene describes it.
+        // A 3-D scene with the panel's up axis and the panel's starting camera, as apply_entity_scene
+        // describes it and SpecRuntime::entity_view starts it.
         caliper_net::wire::SceneView info;
         info.space = CALIPER_NET_SPACE_3D;
         info.up = up;
         info.units = "m";
-        const caliper_scene::StartingCamera keep = view->starting();
         view->describe(info);
-        view->set_starting(keep);
+        view->set_starting(page_starting_camera(scene));
         g.page_view = std::move(view);
         g.ready = true;
         EM_ASM({
@@ -1166,6 +1247,26 @@ EMSCRIPTEN_KEEPALIVE int caliper_views_feed_resource(const char* program, const 
 // feed "page": the linked selection of the page's picks, as JSON
 // [{program, item, index, newest}], each pick of a program of this module as
 // the app's draw host gives it to every program (at most kMaxSelected).
+// feed "page": the panel's options view_camera and views changed in the spec, as JSON text
+// {view_camera, views}. A new starting camera moves a camera the person has not moved, as in
+// the app; the same one changes nothing. Returns 1 when it was read.
+EMSCRIPTEN_KEEPALIVE int caliper_views_set_starting(const char* json) {
+    if (!g.cfg.page_feed || !g.page_view || !json) return 0;
+    caliper_net::Json j;
+    std::string err;
+    const size_t n = std::strlen(json);
+    if (n > (size_t)1 << 16 || !caliper_net::Json::parse(json, n, &j, &err) || !j.is_object()) return 0;
+    const caliper_scene::StartingCamera s = page_starting_camera(j);
+    const caliper_scene::StartingCamera& now = g.page_view->starting();
+    auto same_vec = [](const std::optional<caliper_scene::Vec3>& a, const std::optional<caliper_scene::Vec3>& b) {
+        return a.has_value() == b.has_value() && (!a || (a->x == b->x && a->y == b->y && a->z == b->z));
+    };
+    if (s.form != now.form || !same_vec(s.target, now.target) || s.distance != now.distance ||
+        s.azimuth_deg != now.azimuth_deg || s.elevation_deg != now.elevation_deg || s.entity != now.entity)
+        g.page_view->set_starting(s);
+    return 1;
+}
+
 EMSCRIPTEN_KEEPALIVE int caliper_views_select(const char* json) {
     if (!g.cfg.page_feed || !g.programs || !json) return 0;
     caliper_net::Json j;

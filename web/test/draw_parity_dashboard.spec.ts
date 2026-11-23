@@ -13,19 +13,23 @@
 // WebGPU canvas keeps its texture only until the end of that task).
 //
 // The rules, as tests/draw_parity uses them, without ID targets, so a pixel's neighborhood tells
-// its kind:
+// its kind, applied to each panel, control and tab strip on its own (the app's rectangles), and to
+// the rest of the area:
 //   - an interior pixel, whose 3 by 3 neighborhood is one color (within the levels) in both
-//     pictures, differs by at most 2 levels in each channel;
+//     pictures, differs by at most 2 levels in each channel, everywhere;
 //   - an edge pixel may differ, but the edge pixels that differ beyond the levels and take neither
 //     side (their color is not within the levels of a color of the other picture's neighborhood)
-//     are at most 1.5 % of the picture (EDGE_BOUND says why it is not the 1 % of a program picture);
+//     are at most 1 % of the region, as in a program picture; the plot panels have their own bound
+//     (PLOT_EDGE_BOUND says why);
 //   - text: the app draws its text with ImGui's rasterizer and the page with the browser's, so the
 //     comparison masks the box of every string the page draws (globalThis.caliperTextLog, grown by
 //     2 pixels) in both pictures, and checks the strings and their places on their own: the
 //     layout's rectangles of every panel and control are the app's to the pixel, the tab labels are
 //     the app's, and each panel's title, the legend's names and the toggle's text are drawn by the
-//     page at the app's places. Text inside the module canvases is drawn by the same ImGui code in
-//     both and is not masked.
+//     page at the app's places. The labels that the programs' text tables give are drawn by the
+//     same ImGui code in both, over each scene; each side reports their strings and boxes (the app's
+//     report.json, the module's stats), the test checks the same strings in boxes within a pixel of
+//     the app's, and masks those boxes in both pictures, as the page's text.
 //
 // The picture of each side and their difference are saved as parity-dashboard.png under the shots
 // folder and CALIPER_DRAW_PARITY_CAPTURES. Where the app's side had no Metal device
@@ -46,14 +50,17 @@ const APP = process.env.CALIPER_DASHBOARD_PARITY_DIR ?? path.join(REPO, 'cmake-b
 const CAPTURES = process.env.CALIPER_DRAW_PARITY_CAPTURES ?? '';
 const W = 1280, H = 750;
 const LIMIT = 2;
+/** The share of a region whose edge pixels may differ and take neither side: the rule of the program pictures. */
+const EDGE_BOUND = 0.01;
 /**
- * The share of the picture whose edge pixels may differ and take neither side. The program pictures of
- * draw_parity.spec.ts keep 1 %; a whole dashboard also holds plot lines that two rasterizers draw, ImPlot's
- * anti-aliased polylines in the app and Canvas 2D strokes in the page, whose coverage of a 1.25 px line differs
- * along every line. Measured on the recording: 1.06 % on WebGPU and 1.22 % on SwiftShader, of which the chart of
- * eight lines is about half; the bound is 1.5 %.
+ * The same share in a plot panel. Its lines come from two rasterizers, ImPlot's anti-aliased polylines (triangle
+ * strips with a feathered fringe) in the app and Canvas 2D strokes in the page, whose coverage of a 1.25 px line
+ * differs along every line, so most pixels of every line are edge pixels that take neither side. The frame, the
+ * grid, the ticks, the legend and the layout keep the rule of every region (interior within the levels), and the
+ * names, places and legend entries are checked as strings. Measured on the recording: 3.22 % (WebGPU) and 3.24 %
+ * (SwiftShader) in the chart of eight lines, 1.15 % and 1.14 % in the chart of one; the bound is 4 %.
  */
-const EDGE_BOUND = 0.015;
+const PLOT_EDGE_BOUND = 0.04;
 
 test.beforeEach(({}, info) => test.skip(info.project.name === 'canvas2d', 'the programs draw with WebGPU, which the canvas2d project disables'));
 test.skip(!VIEWS_FILES.every((f) => fs.existsSync(path.join(WASM, f))), `needs the WebAssembly views in ${WASM}`);
@@ -90,7 +97,7 @@ function encodePng(width: number, height: number, rgba: Uint8Array): Buffer {
 }
 
 interface TextBox { s: string; x: number; y: number; w: number; h: number }
-interface Composite { rgba: string; texts: TextBox[]; state: Json; programs: Json; frame: number }
+interface Composite { rgba: string; texts: TextBox[]; state: Json; programs: Json; frame: number; labels: Record<string, TextBox[]>; scenes: Record<string, number[]> }
 
 /** The recording as the mock app's applets and answers. */
 function recording(): { app: MockApp; spec: Json; step: number } {
@@ -152,8 +159,25 @@ async function composite(page: Page, step: number, programs: number, consoleLine
       for (let i = 0; i < px.length; i += 0x8000) bin += String.fromCharCode(...px.subarray(i, i + 0x8000));
       return btoa(bin);
     };
+    // The labels that each module drew over its scene (its stats, CSS pixels of its canvas), in the area's pixels,
+    // and where each module's canvas lies.
+    const modules = () => {
+      const area = document.getElementById('area')!.getBoundingClientRect();
+      const labels: Record<string, { s: string; x: number; y: number; w: number; h: number }[]> = {};
+      const scenes: Record<string, number[]> = {};
+      for (const m of (w.caliperSpec.programs.mounts as Map<string, any>).values()) {
+        const mc = m.handle?.canvas as HTMLCanvasElement | undefined;
+        if (!mc || m.box.style.display === 'none') continue;
+        const r = mc.getBoundingClientRect(), x = r.left - area.left, y = r.top - area.top;
+        scenes[m.panel] = [x, y, r.width, r.height];
+        let list: [string, number, number, number, number][] = [];
+        try { list = JSON.parse(String(m.handle.stats.pageLabels ?? '[]')); } catch { /* not yet published */ }
+        labels[m.panel] = list.map(([s, x0, y0, x1, y1]) => ({ s, x: x + x0, y: y + y0, w: x1 - x0, h: y1 - y0 }));
+      }
+      return { labels, scenes };
+    };
     w.__dashboard.done = (rgba: string, frame: number) => done({ rgba, frame, texts: [...w.caliperTextLog],
-      state: w.caliperSpec.debugState(), programs: w.caliperSpec.programs.debug() });
+      state: w.caliperSpec.debugState(), programs: w.caliperSpec.programs.debug(), ...modules() });
     // The page draws once more, so the text log holds this picture's text.
     w.caliperTextLog.length = 0;
     w.caliperSpec.redraw();
@@ -161,10 +185,14 @@ async function composite(page: Page, step: number, programs: number, consoleLine
   }));
 }
 
-interface Comparison { interior: number; over: number; maxDiff: number; edge: number; edgeDiffer: number; differShare: number; masked: number; first: string; diff: Uint8Array }
+interface Counts { area: number; interior: number; over: number; maxDiff: number; edge: number; edgeDiffer: number; masked: number; first: string }
+interface Comparison extends Counts { differShare: number; diff: Uint8Array; regions: Counts[] }
 
-function compare(app: Uint8Array, web: Uint8Array, mask: Uint8Array): Comparison {
-  const c: Comparison = { interior: 0, over: 0, maxDiff: 0, edge: 0, edgeDiffer: 0, differShare: 0, masked: 0, first: '', diff: new Uint8Array(W * H * 4) };
+const counts = (): Counts => ({ area: 0, interior: 0, over: 0, maxDiff: 0, edge: 0, edgeDiffer: 0, masked: 0, first: '' });
+
+/** Compares the pictures, counting each pixel in the whole and in its region (region[p], an index into `names`). */
+function compare(app: Uint8Array, web: Uint8Array, mask: Uint8Array, region: Uint8Array, names: string[]): Comparison {
+  const c: Comparison = { ...counts(), differShare: 0, diff: new Uint8Array(W * H * 4), regions: names.map(counts) };
   const flat = (a: Uint8Array, x: number, y: number) => {
     const p = 4 * (y * W + x);
     for (let dy = -1; dy <= 1; dy++)
@@ -191,10 +219,13 @@ function compare(app: Uint8Array, web: Uint8Array, mask: Uint8Array): Comparison
   };
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
-      const p = y * W + x, o = 4 * p;
+      const p = y * W + x, o = 4 * p, r = c.regions[region[p]];
       c.diff[o + 3] = 255;
+      c.area++;
+      r.area++;
       if (mask[p]) {
         c.masked++;
+        r.masked++;
         c.diff[o + 2] = 90;   // text, masked: dark blue
         continue;
       }
@@ -202,20 +233,27 @@ function compare(app: Uint8Array, web: Uint8Array, mask: Uint8Array): Comparison
       for (let k = 0; k < 3; k++) d = Math.max(d, Math.abs(app[o + k] - web[o + k]));
       if (!(flat(app, x, y) && flat(web, x, y))) {
         c.edge++;
+        r.edge++;
         const differs = d > LIMIT && !(tookSide(web, app, x, y) || tookSide(app, web, x, y));
         if (differs) {
           c.edgeDiffer++;
+          r.edgeDiffer++;
           c.diff[o] = 255;
           c.diff[o + 1] = 220;
         } else c.diff[o] = c.diff[o + 1] = c.diff[o + 2] = d > LIMIT ? 110 : 40;
         continue;
       }
       c.interior++;
+      r.interior++;
       c.maxDiff = Math.max(c.maxDiff, d);
+      r.maxDiff = Math.max(r.maxDiff, d);
       if (d > LIMIT) {
         c.over++;
+        r.over++;
         c.diff[o] = 255;
-        if (!c.first) c.first = `(${x}, ${y}) differs by ${d} levels, app ${[...app.slice(o, o + 3)]}, browser ${[...web.slice(o, o + 3)]}`;
+        const at = `(${x}, ${y}) differs by ${d} levels, app ${[...app.slice(o, o + 3)]}, browser ${[...web.slice(o, o + 3)]}`;
+        if (!c.first) c.first = at;
+        if (!r.first) r.first = at;
       } else c.diff[o] = c.diff[o + 1] = c.diff[o + 2] = Math.min(255, d * 40);
     }
   c.differShare = c.edgeDiffer / (W * H);
@@ -322,13 +360,48 @@ test('the Arc Tower dashboard draws in the browser as in the app, on the same re
   for (const [panel, lines] of Object.entries(state.lines) as [string, { name: string }[]][])
     if (lines.length > 1) for (const l of lines) expect(drawn(l.name).length, `${panel}: the legend names ${l.name}`).toBeGreaterThan(0);
   for (const c of state.controls) expect(drawn(c.text.split('  ')[0]).length + drawn(c.text).length).toBeGreaterThan(0);
+  // The labels that the programs' text tables give, which each module draws over its scene with the app's own
+  // placement code: each scene where the app's drew, the same strings, each in a box within a pixel of the app's.
+  const appLabels: Record<string, TextBox[]> = {};
+  for (const [panel, list] of Object.entries((rep.labels ?? {}) as Record<string, Json[]>)) {
+    appLabels[panel] = list.map((l) => ({ s: l.text, x: l.x0, y: l.y0, w: l.x1 - l.x0, h: l.y1 - l.y0 }));
+    const at = (rep.scenes as Record<string, number[]>)[panel], mine = shot.scenes[panel];
+    expect(mine, `the module of ${panel} draws`).toBeDefined();
+    for (let k = 0; k < 4; k++) expect(Math.abs(mine[k] - at[k]), `${panel}: its scene on the app's rectangle`).toBeLessThanOrEqual(0.5);
+    const web = shot.labels[panel] ?? [];
+    expect(web.map((l) => l.s).sort(), `${panel}: the labels' strings`).toEqual(appLabels[panel].map((l) => l.s).sort());
+    for (const a of appLabels[panel]) {
+      const near = web.find((b) => b.s === a.s && Math.abs(b.x - a.x) <= 1 && Math.abs(b.y - a.y) <= 1 &&
+        Math.abs(b.w - a.w) <= 1 && Math.abs(b.h - a.h) <= 1);
+      expect(near, `${panel}: the label "${a.s}" at the app's (${a.x}, ${a.y})`).toBeDefined();
+    }
+    console.log(`[${info.project.name}] dashboard labels ${panel}: ${appLabels[panel].length} in the app, ${web.length} in the browser, ` +
+      'every string in a box within 1 px of the app\'s');
+  }
+  expect(Object.keys(appLabels).sort(), 'the scene panels whose labels the app reports').toEqual(
+    state.panels.filter((p: Json) => p.primitive === 'scene').map((p: Json) => p.id).sort());
 
-  // The pixels, with the text masked.
+  // The pixels, with the text masked: the page's strings and the labels over the scenes, of both sides.
   const mask = new Uint8Array(W * H);
-  for (const t of shot.texts)
+  const masked = [...shot.texts, ...Object.values(appLabels).flat(), ...Object.values(shot.labels).flat()];
+  for (const t of masked)
     for (let y = Math.max(0, Math.floor(t.y) - 2); y < Math.min(H, Math.ceil(t.y + t.h) + 2); y++)
       for (let x = Math.max(0, Math.floor(t.x) - 2); x < Math.min(W, Math.ceil(t.x + t.w) + 2); x++) mask[y * W + x] = 1;
-  const c = compare(appPx, web, mask);
+  // The regions: each panel and control on the app's rectangle, each tab strip, and the rest (the splitters).
+  const names = ['rest'], kinds = ['rest'], region = new Uint8Array(W * H);
+  const paint = (r: { x: number; y: number; w: number; h: number }, name: string, kind: string) => {
+    const i = names.length;
+    names.push(name);
+    kinds.push(kind);
+    for (let y = Math.max(0, Math.round(r.y)); y < Math.min(H, Math.round(r.y + r.h)); y++)
+      for (let x = Math.max(0, Math.round(r.x)); x < Math.min(W, Math.round(r.x + r.w)); x++) region[y * W + x] = i;
+  };
+  for (const l of rep.layout as Json[]) {
+    const primitive = l.control ? 'control' : state.panels.find((p: Json) => p.id === l.id)?.primitive;
+    paint(l.rect, l.id, primitive === 'scene' ? 'program' : primitive === 'series' ? 'plot' : String(primitive));
+  }
+  for (const t of rep.tabs as Json[]) paint(t.bar, `tabs ${t.path}`, 'tabs');
+  const c = compare(appPx, web, mask, region, names);
   const side = new Uint8Array(W * 3 * H * 4);
   for (let y = 0; y < H; y++) {
     side.set(appPx.subarray(y * W * 4, (y + 1) * W * 4), (y * 3 * W) * 4);
@@ -340,6 +413,15 @@ test('the Arc Tower dashboard draws in the browser as in the app, on the same re
     `(max ${c.maxDiff}); edge ${c.edge} px, of which ${c.edgeDiffer} took neither side ` +
     `(${(100 * c.differShare).toFixed(3)} % of the picture); text masked ${c.masked} px in ${shot.texts.length} strings; ` +
     `frame ${shot.frame}${c.first ? `; first interior difference ${c.first}` : ''}`);
-  expect(c.over, `interior pixels over ${LIMIT} levels: ${c.first}`).toBe(0);
-  expect(c.differShare, 'edge pixels that took neither side').toBeLessThanOrEqual(EDGE_BOUND);
+  // Each region on its own, with its bound.
+  const failed: string[] = [];
+  c.regions.forEach((r, i) => {
+    const bound = kinds[i] === 'plot' ? PLOT_EDGE_BOUND : EDGE_BOUND, share = r.area ? r.edgeDiffer / r.area : 0;
+    console.log(`[${info.project.name}] dashboard ${kinds[i]} ${names[i]}: ${r.area} px, interior ${r.interior}, ` +
+      `over ${LIMIT} levels ${r.over} (max ${r.maxDiff}), edge ${r.edge}, neither side ${r.edgeDiffer} ` +
+      `(${(100 * share).toFixed(3)} %, bound ${(100 * bound).toFixed(1)} %), text masked ${r.masked}`);
+    if (r.over) failed.push(`${names[i]}: ${r.over} interior pixels over ${LIMIT} levels, first ${r.first}`);
+    if (share > bound) failed.push(`${names[i]}: ${(100 * share).toFixed(3)} % of its edge pixels took neither side, above ${(100 * bound).toFixed(1)} %`);
+  });
+  expect(failed, 'every region within its rule').toEqual([]);
 });

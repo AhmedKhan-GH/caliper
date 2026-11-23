@@ -95,7 +95,7 @@ With nothing focused, Properties shows the spec's id, title and description, its
 
 ## Browser Preview
 
-⌘O Open in browser opens the saved dashboard that the page shows in your default browser. The browser uses the viewer of [Caliper API](../agents/http-api.md#get-v0spec), which draws the dashboard as the app does: its layout, its programs, the names and colors of its series and its controls. The controls are disabled, because the browser only reads. A pick of a program does not work in the browser yet, and the page keeps its selection to itself. The button works in build mode and outside it.
+⌘O Open in browser opens the saved dashboard that the page shows in your default browser. The browser uses the viewer of [Caliper API](../agents/http-api.md#get-v0spec), which draws the dashboard as the app does: its layout, its programs, the names and colors of its series and its controls. The controls are disabled, because the browser only reads. A pick of a program works in the browser, and the page keeps the pick and its selection to itself. The button works in build mode and outside it.
 
 The browser shows the dashboard as it was last saved, so save first to show a change. While the dashboard has unsaved changes, the button's tooltip says "the browser shows the saved dashboard". The button is disabled, with the reason in its tooltip, for a dashboard that was never saved and for a spec applet found outside the workspace.
 

@@ -48,6 +48,7 @@ interface Handle {
   feedProgram(p: Record<string, unknown>): boolean;
   feedResource(r: Omit<ViewerResource, 'base64'> & { program: string }, bytes: Uint8Array): boolean;
   select(picks: { program: string; item: number; index: number[]; newest: boolean }[]): boolean;
+  setStarting(scene: Record<string, unknown>): boolean;
   destroy(): void;
 }
 interface Loader { mountCaliperViews(container: HTMLElement, options: Record<string, unknown>): Promise<Handle> }
@@ -72,6 +73,15 @@ function bytesOf(b64: string): Uint8Array | null {
   }
 }
 
+/** A panel's starting camera as the app reads it: view_camera (an orbit's keys or a saved view's name) and views. */
+function startingOf(panel: SpecPanel): Record<string, unknown> {
+  const o = (panel.options ?? {}) as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  if (o.view_camera && (typeof o.view_camera === 'object' || typeof o.view_camera === 'string')) out.view_camera = o.view_camera;
+  if (Array.isArray(o.views)) out.views = o.views;
+  return out;
+}
+
 class PanelMount {
   readonly box: HTMLDivElement;
   handle: Handle | null = null;
@@ -82,6 +92,7 @@ class PanelMount {
   readonly versions = new Map<string, string>();  // program/resource -> step and length last sent
   programs: ViewerProgram[] = [];
   pick: ProgramPick | null = null;
+  camera = '';                                     // the starting camera last given, as JSON text
 
   constructor(readonly panel: string, area: HTMLElement) {
     this.box = document.createElement('div');
@@ -137,7 +148,12 @@ export class ProgramViews {
     }
     m.programs = programs;
     if (!m.handle && !m.starting && !m.failed) m.starting = this.start(m, panel);
-    if (m.handle) this.feed(m);
+    if (m.handle) {
+      // A starting camera that the spec changed moves a camera the person has not moved, as in the app.
+      const start = startingOf(panel);
+      if (JSON.stringify(start) !== m.camera && m.handle.setStarting(start)) m.camera = JSON.stringify(start);
+      this.feed(m);
+    }
   }
 
   private async start(m: PanelMount, panel: SpecPanel): Promise<void> {
@@ -145,11 +161,13 @@ export class ProgramViews {
       if (!('gpu' in navigator)) throw new Error('This browser has no WebGPU.');
       const loader = await this.load();
       const o = (panel.options ?? {}) as Record<string, unknown>;
-      // The panel's scene options as the app's spec runtime reads them: up (+z when absent), labels, scale bar.
+      // The panel's scene options as the app's spec runtime reads them: up (+z when absent), labels, scale bar
+      // and the starting camera.
       const scene: Record<string, unknown> = { space: '3d', units: 'm', up: typeof o.up === 'string' ? o.up : '+z' };
       if (typeof o.labels === 'boolean') scene.labels = o.labels;
       if (typeof o.scale_bar === 'boolean') scene.scale_bar = o.scale_bar;
-      if (o.view_camera && typeof o.view_camera === 'object') scene.view_camera = o.view_camera;
+      Object.assign(scene, startingOf(panel));
+      m.camera = JSON.stringify(startingOf(panel));
       m.handle = await loader.mountCaliperViews(m.box, {
         view: panel.id, kind: 'scene', header: false, feed: 'page', scene,
         assetBase: new URL('/v0/spec/', this.base).href,
@@ -280,7 +298,8 @@ export class ProgramViews {
 
   /** What a test reads: each panel's programs as the app gave them and as the module reports them. */
   debug(): Record<string, { mounted: boolean; failed: string;
-    programs: { id: string; state: string; code: string; module: string; step: number; frames: number }[];
+    programs: { id: string; state: string; code: string; module: string; step: number; frames: number;
+      params: Record<string, unknown> | null }[];
     pick: ProgramPick | null }> {
     const out: ReturnType<ProgramViews['debug']> = {};
     for (const [id, m] of this.mounts) {
@@ -294,8 +313,9 @@ export class ProgramViews {
         mounted: !!m.handle, failed: m.failed, pick: this.localPicks[id] ?? null,
         programs: m.programs.map((p) => {
           const s = mod.find((q) => q.id === p.id);
+          const sent = m.params.get(p.id);
           return { id: p.id, state: p.state, code: p.error?.code ?? s?.code ?? '', module: s?.state ?? '', step: s?.step ?? -1,
-            frames: s?.frames ?? 0 };
+            frames: s?.frames ?? 0, params: sent ? JSON.parse(sent) as Record<string, unknown> : null };
         }),
       };
     }
