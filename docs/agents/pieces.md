@@ -202,6 +202,8 @@ The piece `surface@1` draws a height field as a lit surface in a data box. Its d
 
 The pieces `lines@1` and `arrows@1` draw as the built-in `lines` and `arrows` primitives. `lines@1` reads positions, values and a topology tensor, and it draws segments, strips with their lengths, or index-pair edges. `arrows@1` reads origins, vectors and values. Both color by one color, by a value through a colormap with fixed ends or ends from the values, or by a packed RGBA, and both take the width, the depth offset and translucent colors of the built-in draw. The piece `path@1` is the drawing of the `path` operator. Its derive half keeps every s-th row of a tensor at the chosen columns, and its draw half draws one strip through the kept rows as a `lines` entity in strip mode does. A pick of any of the three returns the item of the built-in draw.
 
+The pieces `image@1`, `depth@1` and `segmentation@1` draw the three forms of the built-in image. They draw a color or grey image, a depth map with its colormap and cloud, and a mask of class ids in class colors. Each one lies flat at a pose or on the image plane of a camera. With the same image, camera and options, it draws the pixels of the built-in image within the tolerances of the scene tests. A pick returns the same pixel.
+
 A workspace piece with the name of a library piece replaces it only in a program that says `from = "workspace"`. `caliper-mcp` serves each file of the library as a read-only resource under `caliper://library/`. Thus an agent can read a piece before it pins, copies or imitates it.
 
 ## Program Instances
