@@ -22,7 +22,7 @@
 #include "spec_runtime/spec_layout.h"
 #include "spec_runtime/spec_offscreen.h"
 #include "spec_runtime/spec_runtime.h"
-#include "spec_runtime/spec_stage_host.h"
+#include <caliper_builder/session/program_host.h>
 
 #include "export_service.h"
 #include "live/live_views_scene.h"   // DrawnLabel
@@ -282,7 +282,7 @@ int main(int argc, char** argv) {
     std::vector<std::uint8_t> px;
     auto drawn = [&] {
         std::size_t n = 0;
-        for (const caliper_builder::ProgramStatus& st : caliper_host::app_stage_host_impl()->status())
+        for (const caliper_builder::ProgramStatus& st : caliper_host::app_draw_status_host()->status())
             if (st.draw && st.draw->state == "running" && st.draw->resource_step && *st.draw->resource_step == step) ++n;
         return n;
     };
@@ -294,7 +294,7 @@ int main(int argc, char** argv) {
         }
     if (drawn() < programs) {
         json st = json::array();
-        for (const auto& x : caliper_host::app_stage_host_impl()->status()) st.push_back(caliper_builder::program_status_json(x));
+        for (const auto& x : caliper_host::app_draw_status_host()->status()) st.push_back(caliper_builder::program_status_json(x));
         std::fprintf(stderr, "the programs did not draw step %lld in %d frames: %s\n", (long long)step, frames, st.dump().c_str());
         return 1;
     }
@@ -312,7 +312,7 @@ int main(int argc, char** argv) {
     for (const auto& t : rt.layout().tabs)
         tabs.push_back({{"path", t.path}, {"labels", t.labels}, {"active", t.active},
                         {"bar", {{"x", t.bar.x}, {"y", t.bar.y}, {"w", t.bar.w}, {"h", t.bar.h}}}});
-    for (const auto& x : caliper_host::app_stage_host_impl()->status()) progs.push_back(caliper_builder::program_status_json(x));
+    for (const auto& x : caliper_host::app_draw_status_host()->status()) progs.push_back(caliper_builder::program_status_json(x));
     // The labels that each scene panel drew over its programs, with their text boxes, and where its scene
     // drew, in the picture's pixels: the browser compares them as text, apart from the pixels.
     json labels = json::object(), scenes = json::object();
