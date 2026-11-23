@@ -36,8 +36,12 @@
 #include "gfx/recording_backend.h"
 #include "../../../../tests/gfx/example_pieces.h"   // the attention arcs piece and its resources
 
+#include <algorithm>
 #include <array>
+#include <cfloat>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <limits>
@@ -992,4 +996,147 @@ TEST_CASE("programs: a runtime that goes takes its history back from the program
     CHECK(view->draw_runtimes()[0]->status().state != caliper_draw::DrawState::running);
     CHECK(view->draw_runtimes()[0]->resource_step("arcs") == -1);
     c->with_context([&] { rt.reset(); });
+}
+
+// ---- A drag in a panel of programs (live_views_scene.cpp, draw_scene_view_in_rect) --------------
+// A drag moves the camera of a scene panel at each frame, and each frame draws the panel's scene and
+// its program with the camera of that frame: with no new version, as while the run is paused, and
+// with versions that arrive every few frames, as a slow run sends them. The counts and the cameras
+// decide; the frame time is measured beside them, against the 60 Hz budget.
+
+namespace {
+
+struct DragFrame {
+    std::uint64_t scene = 0, programs = 0;
+    std::string camera, drawn;
+    caliper_scene::Mat4 program_clip;   // the clip-from-world matrix of the programs' frame
+    double ms = 0;
+};
+
+// The camera in the words of drawn_camera_text(), without the size of the target.
+std::string camera_now(const caliper_live_views::SceneView& v) {
+    const std::string t = v.camera_text();
+    return t.substr(0, t.find(" target_px"));
+}
+
+// A left drag across the panel from 25 % to 75 % of its width, one move a frame, and what each frame
+// drew. `before` runs before each frame of the drag with its index, from 1. The frames of the drag
+// read nothing back, as the app's frames do not.
+std::vector<DragFrame> drag(ArcsPanel& p, caliper_live_views::SceneView& view, int moves,
+                            const std::function<void(int)>& before = nullptr) {
+    float r[4];
+    REQUIRE(p.rt->scene_rect("world", r));
+    auto input = [&](const std::function<void(ImGuiIO&)>& fn) { p.c->with_context([&] { fn(ImGui::GetIO()); }); };
+    auto frame = [&] {
+        std::string why;
+        REQUIRE_MESSAGE(p.c->render(1, [&](const ImRect& area) { p.rt->draw(area, p.c->look()); }, nullptr, &why),
+                        why);
+    };
+    const float y = r[1] + 0.5f * r[3];
+    auto x_at = [&](int k) { return r[0] + (0.25f + 0.5f * float(k) / float(moves)) * r[2]; };
+    input([&](ImGuiIO& io) { io.AddMousePosEvent(x_at(0), y); });
+    frame();
+    input([&](ImGuiIO& io) { io.AddMouseButtonEvent(0, true); });
+    frame();
+    std::vector<DragFrame> out;
+    for (int k = 1; k <= moves; ++k) {
+        if (before) before(k);
+        input([&](ImGuiIO& io) { io.AddMousePosEvent(x_at(k), y); });
+        const auto t0 = std::chrono::steady_clock::now();
+        frame();
+        DragFrame f;
+        f.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        f.scene = view.cost().frames;
+        f.programs = view.program_frames();
+        f.camera = camera_now(view);
+        f.drawn = view.drawn_camera_text();
+        f.program_clip = view.program_clip();
+        out.push_back(f);
+    }
+    input([&](ImGuiIO& io) { io.AddMouseButtonEvent(0, false); });
+    frame();
+    input([&](ImGuiIO& io) { io.AddMousePosEvent(-FLT_MAX, -FLT_MAX); });
+    frame();
+    return out;
+}
+
+// Each frame of the drag drew the scene and the program once, with the camera of that frame, which
+// the drag moved: the scene's camera and the programs' clip matrix change at every frame.
+void check_each_frame(const std::vector<DragFrame>& frames) {
+    REQUIRE(frames.size() > 4);
+    for (std::size_t i = 1; i < frames.size(); ++i) {
+        CAPTURE(i);
+        CHECK(frames[i].scene == frames[i - 1].scene + 1);
+        CHECK(frames[i].programs == frames[i - 1].programs + 1);
+        CHECK(frames[i].drawn == frames[i].camera);
+        CHECK(frames[i].camera != frames[i - 1].camera);
+        CHECK(std::memcmp(frames[i].program_clip.m, frames[i - 1].program_clip.m, sizeof frames[i].program_clip.m) != 0);
+    }
+}
+
+// The 95th percentile of the frame times, printed with its target. Above the target the test warns,
+// and above twice the target it fails. A machine without a usable GPU only says why it skips.
+void check_frame_time(const std::vector<DragFrame>& frames, bool usable_gpu, const char* why_not) {
+    if (!usable_gpu) {
+        std::printf("p95 frame time skipped: %s\n", why_not);
+        return;
+    }
+    std::vector<double> ms;
+    for (const DragFrame& f : frames) ms.push_back(f.ms);
+    std::sort(ms.begin(), ms.end());
+    const double p95 = ms[std::min(ms.size() - 1, std::size_t(0.95 * double(ms.size())))];
+    constexpr double kTarget = 1000.0 / 60.0;
+    std::printf("p95 frame time %.1f ms (target %.1f ms)\n", p95, kTarget);
+    if (p95 > kTarget) std::printf("warning: the p95 frame time %.1f ms is above its target %.1f ms\n", p95, kTarget);
+    CHECK_MESSAGE(p95 <= 2.0 * kTarget, "the p95 frame time " << p95 << " ms is above twice its target");
+}
+
+// A hosted runner shares a slower GPU, or has none: its frame times say nothing of a person's machine.
+bool usable_gpu(const SpecOffscreen* c, const char** why_not) {
+    if (!c || !c->native_device()) {
+        *why_not = "no Metal device";
+        return false;
+    }
+    if (const char* ci = std::getenv("CI"); ci && *ci && std::strcmp(ci, "false") != 0) {
+        *why_not = "a hosted runner (CI is set), whose GPU is shared and several times slower";
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+TEST_CASE("programs: a drag in a panel of programs draws each frame with that frame's camera, with no new version") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) {
+        std::printf("p95 frame time skipped: no Metal device\n");
+        return;
+    }
+    ArcsPanel p(c, arcs_spec(false), canvas_layer(c));
+    caliper_live_views::SceneView* view = p.running();
+    REQUIRE(view != nullptr);
+    const std::vector<DragFrame> frames = drag(p, *view, 90);
+    check_each_frame(frames);
+    CHECK(view->draw_runtimes()[0]->resource_step("arcs") == 0);
+    const char* why_not = "";
+    check_frame_time(frames, usable_gpu(c, &why_not), why_not);
+}
+
+TEST_CASE("programs: a drag in a panel of programs draws each frame with that frame's camera while versions arrive slowly") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) return;
+    ArcsPanel p(c, arcs_spec(false), canvas_layer(c));
+    caliper_live_views::SceneView* view = p.running();
+    REQUIRE(view != nullptr);
+    // A version every 20 frames: a third of a second apart at 60 Hz.
+    std::vector<ex::Arc> arcs = p.res.arcs;
+    std::int64_t step = 0;
+    const std::vector<DragFrame> frames = drag(p, *view, 90, [&](int k) {
+        if (k % 20 != 0) return;
+        for (ex::Arc& a : arcs) a.weight *= 0.99f;
+        keep_version(p.history, "arcs", arcs, ++step);
+    });
+    check_each_frame(frames);
+    CHECK(step == 4);
+    CHECK(view->draw_runtimes()[0]->resource_step("arcs") == step);
 }
