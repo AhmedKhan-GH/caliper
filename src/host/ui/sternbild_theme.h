@@ -6,7 +6,8 @@
 // tables with tabular figures, a command bar, a persistent status bar.
 //
 // Colour belongs to data. The chrome is monochrome parchment on a warm night
-// ground, and bronze is the single accent: focus, selection and keys only.
+// ground, and bronze is the single accent: focus, selection and keys only
+// (the focus role of the tokens has the accent's value).
 // Square corners everywhere. No gradients, shadows, pills, chips or cards.
 //
 // Everything here is an ImDrawList rect, line, convex polygon or text, so
@@ -33,7 +34,8 @@ namespace col {
 // rule         role rule: every 1 px rule;  rule_faint: hatching, dividers inside tables
 // parchment    role text: primary text;  secondary (text-muted): metadata, labels, status text
 // faint        role text-faint: placeholders, disabled, booktabs top and bottom rules
-// bronze       role accent: focus, selection, keys, the star
+// bronze       role accent: selection, keys, the star
+// focus        role focus: the keyboard focus ring and underline
 constexpr ImU32 deep        = tokens::role::well.imu32;
 constexpr ImU32 ground      = tokens::role::background_app.imu32;
 constexpr ImU32 plate       = tokens::role::surface.imu32;
@@ -44,6 +46,7 @@ constexpr ImU32 parchment   = tokens::role::text.imu32;
 constexpr ImU32 secondary   = tokens::role::text_muted.imu32;
 constexpr ImU32 faint       = tokens::role::text_faint.imu32;
 constexpr ImU32 bronze      = tokens::role::accent.imu32;
+constexpr ImU32 focus       = tokens::role::focus.imu32;
 
 // Plot class pigments (data colours of the tokens). Data only, never chrome; fixed order.
 constexpr ImU32 vehicle = tokens::data::smalt.imu32;
@@ -53,7 +56,7 @@ constexpr ImU32 cat     = tokens::data::madder.imu32;
 constexpr ImU32 other   = tokens::data::slate.imu32;
 
 // BEGIN colours without a token
-// Colours the app draws that the design tokens 1.1.0 do not cover. Each one is
+// Colours the app draws that the design tokens do not cover. Each one is
 // Caliper's own constant; a token that names the same role replaces it here.
 
 // The axis gizmo of a scene view: x, y and z.
@@ -168,7 +171,8 @@ void label(const char* text, ImU32 colour);
 // corners, 1 px outline, metric::key_button tall, sitting on the line's text
 // baseline like word_button. States: rest = rule outline, secondary key,
 // parchment action, no fill; hover = plate_hover fill, bronze key; keyboard
-// focus = bronze outline; pressed = parchment fill with deep ink; disabled
+// focus = a square outline 3 px outside the plate in the focus colour, as on
+// primary_button; pressed = parchment fill with deep ink; disabled
 // (`enabled` false, or inside BeginDisabled) = rule_faint outline, faint ink,
 // and `disabled_reason` in a tooltip on hover. Returns true when clicked.
 bool key_button(const char* key, const char* action, bool enabled = true,
@@ -192,8 +196,9 @@ void pane_header(const char* title, const char* subtitle, const char* shortcut,
 // 24 px unless size.y is given. A `key` is drawn before the label as in
 // key_button, in bronze (the primary's key: "⏎ Launch"). States: rest =
 // parchment outline, no fill; hover = plate_hover fill; pressed = parchment
-// fill with deep label; disabled (BeginDisabled) = rule outline, faint label
-// and key. Returns true when clicked.
+// fill with deep label; keyboard focus = a square outline 3 px outside the
+// plate in the focus colour; disabled (BeginDisabled) = rule outline, faint
+// label and key. Returns true when clicked.
 bool primary_button(const char* label, ImVec2 size = ImVec2(0, 0),
                     const char* key = nullptr);
 

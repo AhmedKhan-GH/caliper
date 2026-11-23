@@ -33,15 +33,21 @@ namespace {
 constexpr float half_floor(float v) {
     return static_cast<float>(static_cast<int>(v * 0.5f));
 }
+// BEGIN values without a token
+// Metrics the app draws that the design tokens do not cover. Each one is
+// Caliper's own constant; a token that names the same metric replaces it here.
 // The 4 px spacing scale of the tokens has no 6 px step. Caliper keeps this
 // metric: the gap of a key to its action, the side padding of cells and frames,
 // the inner item spacing and the vertical window padding.
 constexpr float kTightGap = 6.0f;
+constexpr float kPlateHeight = 24.0f;  // primary_button default height
+constexpr float kChevronW    = 8.0f;   // sort chevron: two 45° strokes,
+constexpr float kChevronH    = 4.0f;   //   8 wide × 4 tall (SPEC §6.7)
+// END values without a token
 
 constexpr ImVec2 kCellPadding(kTightGap, half_floor(metric::row - font_size::mono));
 constexpr ImVec2 kFramePadding(kTightGap, half_floor(metric::pane_header - font_size::ui));
 
-constexpr float kPlateHeight   = 24.0f;  // primary_button default height
 constexpr float kPlatePadX     = tokens::space::s3;            // primary_button label inset
 constexpr float kFocusOffset   = tokens::app::focus_offset;    // keyboard focus outline, outside the plate
 constexpr float kKeyPadX       = tokens::space::s2;            // key_button content inset
@@ -53,8 +59,6 @@ constexpr float kPaneInsetX    = tokens::space::s3;            // pane header ti
 constexpr float kMarkSize      = tokens::app::mark;            // the Caliper mark in the masthead
 constexpr float kMarkGap       = tokens::space::s2;            // mark to wordmark
 constexpr float kWordmarkTrack = tokens::tracking::app_wordmark;  // em; Display's em equals its size
-constexpr float kChevronW      = 8.0f;   // sort chevron: two 45° strokes,
-constexpr float kChevronH      = 4.0f;   //   8 wide × 4 tall (SPEC §6.7)
 
 // The strips are fixed furniture: no title, no moving, no saved position,
 // never docked into and never raised over the panes when clicked.
@@ -391,7 +395,7 @@ void apply_style() {
     set(st, ImGuiCol_DragDropTarget, col::bronze);
     set(st, ImGuiCol_DragDropTargetBg, clear);
     set(st, ImGuiCol_UnsavedMarker, col::parchment);
-    set(st, ImGuiCol_NavCursor, col::bronze);
+    set(st, ImGuiCol_NavCursor, col::focus);
     set(st, ImGuiCol_NavWindowingHighlight, with_alpha(col::bronze, 178));
     set(st, ImGuiCol_NavWindowingDimBg, with_alpha(col::deep, 153));
     set(st, ImGuiCol_ModalWindowDimBg, with_alpha(col::deep, 153));
@@ -619,8 +623,9 @@ bool key_button(const char* key, const char* action, bool enabled,
         const bool disabled = (ImGui::GetItemFlags() & ImGuiItemFlags_Disabled) != 0;
 
         // Bronze only under the pointer (the key) and on keyboard focus (the
-        // outline); at rest the key reads as secondary metadata. Disabled uses
-        // its own tokens rather than the style alpha, like primary_button.
+        // ring outside the plate); at rest the key reads as secondary
+        // metadata. Disabled uses its own tokens rather than the style alpha,
+        // like primary_button.
         ImU32 outline = styled(col::rule);
         ImU32 fill = 0;
         ImU32 key_ink = styled(col::secondary);
@@ -638,13 +643,17 @@ bool key_button(const char* key, const char* action, bool enabled,
             fill = styled(col::plate_hover);
             key_ink = styled(col::bronze);
         }
-        if (!disabled && g.NavId == id && g.NavCursorVisible)
-            outline = styled(col::bronze);
-
         ImDrawList* dl = window->DrawList;
         if (fill != 0)
             dl->AddRectFilled(bb.Min, bb.Max, fill);
         box(dl, bb, outline);
+        // Keyboard focus: a square outline 3 px outside the plate, as on
+        // primary_button. Replaces ImGui's nav rectangle.
+        if (!disabled && g.NavId == id && g.NavCursorVisible) {
+            const ImVec2 d(kFocusOffset, kFocusOffset);
+            box(dl, ImRect(ImVec2(bb.Min.x - d.x, bb.Min.y - d.y), ImVec2(bb.Max.x + d.x, bb.Max.y + d.y)),
+                styled(col::focus));
+        }
         const ImVec2 text_pos(pos.x + ImFloor((size.x - run.width) * 0.5f),
                               pos.y + text_y);
         draw_key_run(dl, text_pos, run, key, action, nullptr, font_size::ui, key_ink,
@@ -799,12 +808,12 @@ bool primary_button(const char* label, ImVec2 size_arg, const char* key) {
     if (fill != 0) dl->AddRectFilled(pmin, pmax, fill);
     dl->AddRect(pmin, pmax, outline, 0.0f, 0, tokens::rule::width);
 
-    // Keyboard focus: a square outline 3 px outside the plate, in bronze (the
-    // focus accent). Replaces ImGui's nav rectangle.
+    // Keyboard focus: a square outline 3 px outside the plate, in the focus
+    // colour. Replaces ImGui's nav rectangle.
     if (!disabled && g.NavId == id && g.NavCursorVisible) {
         const ImVec2 d(kFocusOffset, kFocusOffset);
         dl->AddRect(ImVec2(pmin.x - d.x, pmin.y - d.y), ImVec2(pmax.x + d.x, pmax.y + d.y),
-                    styled(col::bronze), 0.0f, 0, tokens::rule::width);
+                    styled(col::focus), 0.0f, 0, tokens::rule::width);
     }
 
     const ImVec2 text_pos(pos.x + ImFloor((size.x - run.width) * 0.5f), pos.y + text_y);
@@ -853,7 +862,7 @@ bool word_button(const char* label) {
     if (hovered || focused) {
         const float base = baseline_of(nullptr, font_size::ui);
         rule_h(dl, text_pos.x, text_pos.x + text.x, text_pos.y + base + 2.0f,
-               styled(focused && !hovered ? col::bronze : col::parchment));
+               styled(focused && !hovered ? col::focus : col::parchment));
     }
     ImGui::PopFont();
     return pressed;
