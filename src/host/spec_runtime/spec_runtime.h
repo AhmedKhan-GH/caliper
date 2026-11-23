@@ -84,7 +84,7 @@ struct SpecLook {
     ImFont* mono = nullptr;    // the info strings, ticks, figures
     float ui_size = sternbild::font_size::ui;
     float small_size = sternbild::font_size::ui_small;
-    float mono_size = sternbild::font_size::ui_small;
+    float mono_size = sternbild::font_size::ui_small;   // the small UI size (14): no token of its own
     float text_scale = 1.0f;   // the minimums and margins grow with it
     ImU32 ground = sternbild::col::ground;
     ImU32 deep = sternbild::col::deep;
