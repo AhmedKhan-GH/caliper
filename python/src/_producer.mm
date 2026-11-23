@@ -24,6 +24,7 @@
 #include "producer/caliper_producer.h"
 #include "producer/caliper_producer_derive.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <map>
@@ -267,7 +268,8 @@ public:
     }
 
     // Checks, composes and compiles the derive half of a piece (caliper_producer_derive.h).
-    // `inputs` holds (name, import handle or 0 for the place of a buffer input, dtype);
+    // `inputs` holds (name, import handle or 0 for the place of a buffer input, dtype), and
+    // `unbound` the names of optional tensor inputs that the program leaves unbound (handle 0);
     // `resources` (id, kind, element, struct name, fields, count, width, height, counted,
     // publish, clear); `passes` (entry, workgroups, writes); `params` (name, type, value).
     uint32_t derive(const std::string& id, const std::string& wgsl, const std::string& common,
@@ -278,13 +280,16 @@ public:
                     const std::vector<std::tuple<std::string, std::array<uint32_t, 3>, std::vector<std::string>>>&
                         passes,
                     const std::vector<std::tuple<std::string, std::string, double>>& params, double time_ms,
-                    uint64_t memory_bytes, std::optional<std::string> piece_hash) {
+                    uint64_t memory_bytes, std::optional<std::string> piece_hash,
+                    const std::vector<std::string>& unbound) {
         alive();
         std::vector<caliper_producer_input> ins;
         std::vector<const char*> types;
+        std::vector<uint8_t> loose;
         for (const auto& [name, h, dtype] : inputs) {
             ins.push_back({name.c_str(), h});
             types.push_back(dtype.c_str());
+            loose.push_back(std::find(unbound.begin(), unbound.end(), name) != unbound.end() ? 1 : 0);
         }
         std::vector<std::vector<const char*>> fields(resources.size());
         std::vector<caliper_producer_resource_desc> res;
@@ -344,6 +349,7 @@ public:
         d.param_count = values.size();
         d.time_limit_ms = time_ms;
         d.memory_limit_bytes = memory_bytes;
+        d.input_unbound = loose.empty() ? nullptr : loose.data();
         uint32_t handle = 0;
         caliper_producer_error e{};
         const caliper_producer_status s = caliper_producer_compile_derive(rt_, &d, &handle, &e);
@@ -558,7 +564,9 @@ NB_MODULE(_producer, m) {
         .def("derive", &Runtime::derive, nb::arg("id"), nb::arg("wgsl"), nb::arg("common"), nb::arg("inputs"),
              nb::arg("resources"), nb::arg("passes"), nb::arg("params"), nb::arg("time_ms") = 4.0,
              nb::arg("memory_bytes") = uint64_t(64) << 20, nb::arg("piece_hash") = nb::none(),
-             "Check, compose and compile the derive half of a piece; returns its handle or raises ProducerError.")
+             nb::arg("unbound") = std::vector<std::string>{},
+             "Check, compose and compile the derive half of a piece; returns its handle or raises ProducerError. "
+             "An input named in unbound is an optional tensor input without a tensor (handle 0).")
         .def("resource", &Runtime::resource, nb::arg("program"), nb::arg("name"),
              "A published resource after the last pass as (bytes, count, stride), copied.")
         .def("set_params", &Runtime::set_params, nb::arg("program"), nb::arg("params"),
