@@ -236,7 +236,11 @@ inline void add_image_pieces(std::vector<std::uint8_t>* frames, Plan* plan, std:
         bind.set("depth", "live:depth");
         bind.set("pose", "live:pose");
         program("depth", "depth_cloud", values, bind);
-        add(resource("depth_cloud", "pixels", depth, step));
+        caliper_net::wire::Resource texels = resource("depth_cloud", "pixels", depth, step);
+        texels.width = w;
+        texels.height = h;
+        texels.format = "r32uint";
+        add(texels);
         add(resource("depth_cloud", "info", std::vector<ip::DepthInfo>{info}, step));
         ProgramPlan p;
         p.id = "depth_cloud";
@@ -275,7 +279,11 @@ inline void add_image_pieces(std::vector<std::uint8_t>* frames, Plan* plan, std:
         bind.set("colors", "live:colors");
         bind.set("pose", "live:pose");
         program("segmentation", "mask_flat", values, bind);
-        add(resource("mask_flat", "pixels", classes, step));
+        caliper_net::wire::Resource texels = resource("mask_flat", "pixels", classes, step);
+        texels.width = w;
+        texels.height = h;
+        texels.format = "r32uint";
+        add(texels);
         add(resource("mask_flat", "palette", palette, step));
         add(resource("mask_flat", "info", std::vector<ip::Info>{info}, step));
         ProgramPlan p;

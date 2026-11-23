@@ -1052,7 +1052,18 @@ void compare_fixture(const std::string& name, ViewRig& pieces, int S, int interi
             REQUIRE_MESSAGE(pv.request_pick(x + 0.5f, y + 0.5f, &why), why);
             REQUIRE(take_any_pick(*pieces.gfx, pv, &hit) == PickResult::Hit);
             CHECK(pv.tree().valid(hit.entity));
-            CHECK(hit.item == uint32_t(own - 1));
+            uint64_t item = hit.item;
+            if (hit.primitive == Primitive::Image && hit.part == DrawPart::Batch) {
+                // An image hit names its quad and pixel, while the ID target names the pixel directly.
+                CHECK(hit.item == 0);
+                REQUIRE(hit.has_pixel);
+                const Batch* image = pv.tree().batch(hit.entity, Primitive::Image);
+                REQUIRE(image != nullptr);
+                CHECK(hit.pixel[0] < image->image_width);
+                CHECK(hit.pixel[1] < image->image_height);
+                item = uint64_t(hit.pixel[1]) * image->image_width + hit.pixel[0];
+            }
+            CHECK(item == uint32_t(own - 1));
             ++picked;
         }
     MESSAGE(name, ": ", c.differ, " pixels differ, ", c.failed, " outside tolerance; ", picked, " picks");
