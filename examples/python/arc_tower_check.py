@@ -3,12 +3,12 @@
 
 It runs the steps of the programmable graphics acceptance test (tests/programmable_graphics/driver.py): the hidden
 app with no script, and caliper-mcp as the agent's only way in. The agent starts examples/python/arc_tower_train.py
-as a managed run, writes the pieces of demos/arc_tower into the workspace and places them in two scene panels, with
-no built-in primitive in either frame. It then scrubs to the first kept step and the bump of the loss, picks an arc,
-ablates the head that formed, forks the run from a past step with that head ablated, and stops a draw that is over
-its time while training goes on. A piece of a foreign spec waits in review. The script prints each step as it
-passes, then each measured result, and then the match of the library piece points@1 with the built-in points when the
-build holds that test. No window opens.
+as a managed run, writes the pieces of demos/arc_tower into the workspace and places them in two scene panels, the
+arcs of the tower and the attention grid of one head, with no built-in primitive in either frame. It then scrubs to
+the first kept step and the bump of the loss, picks an arc, ablates the head that formed, forks the run from a past
+step with that head ablated, and stops a draw that is over its time while training goes on. A piece of a foreign
+spec waits in review. The script prints each step as it passes, then each measured result, and then the match of the
+library piece points@1 with the built-in points when the build holds that test. No window opens.
 
 usage: arc_tower_check.py [<capture folder>] [--app <caliper>] [--mcp <caliper-mcp>] [--python <python>]
 

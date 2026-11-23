@@ -1,6 +1,6 @@
 # The acceptance test of programmable graphics: the hidden app with no script, and caliper-mcp as a child.
 # tests/programmable_graphics/driver.py builds the Attention Arc Tower from the pieces of demos/arc_tower through
-# the MCP tools alone, on a managed run of examples/python/arc_tower_train.py: the arcs and the field draw in two
+# the MCP tools alone, on a managed run of examples/python/arc_tower_train.py: the arcs and the grid draw in two
 # scene panels with no built-in primitive, a pick returns the layer, the head and the token pair, the ablation of
 # the head raises the in-context loss, a fork from a past step with the head ablated never forms it, a draw over
 # its time is stopped and named while training goes on, and a piece of a foreign spec waits in review. It compares

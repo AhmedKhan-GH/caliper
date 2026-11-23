@@ -4,8 +4,8 @@
 It starts the hidden app with no script and caliper-mcp as a child over stdio, then follows the steps of
 tests/programmable_graphics/transcript.jsonl in order, each step with its own checks. An agent that holds nothing but
 the MCP tools builds the Attention Arc Tower from the pieces of demos/arc_tower: the arcs of a two-layer model's
-attention in one scene panel, and a fragment-only field of one head in another, with no built-in primitive in either
-frame. The model runner starts examples/python/arc_tower_train.py, whose only Caliper line is
+attention in one scene panel, and a fragment-only attention grid of one head in another, with no built-in primitive in
+either frame. The model runner starts examples/python/arc_tower_train.py, whose only Caliper line is
 `caliper.watch(model, optimizer)`. The driver then scrubs to the first kept step and the bump of the loss, picks an
 arc, ablates the head that formed, forks the run from a past step with the head ablated, stops a draw that is over its
 time while training goes on, and checks that a foreign spec's piece waits in review.
@@ -241,7 +241,7 @@ def steps(r):
 
     # 5. Check and write the pieces of the demo.
     r.step("check and write both pieces as version 1")
-    pieces = {n: piece_args(ROOT / "demos" / "arc_tower" / n) for n in ("attention_arcs", "attention_field")}
+    pieces = {n: piece_args(ROOT / "demos" / "arc_tower" / n) for n in ("attention_arcs", "attention_grid")}
     for n, p in pieces.items():
         ck = r.call("piece_check", {"piece": p})
         if not ck["ok"]:
@@ -255,13 +255,13 @@ def steps(r):
     # 6. The instrument: two scene panels that hold programs alone, state, sources, curves and a toggle.
     r.step("build the instrument from pieces")
     r.call("state_create", {"id": "head", "type": "integer", "default": 0, "min": 0, "max": 3, "title": "Head"})
-    for pid, title in (("tower", "Attention Arc Tower"), ("pattern", "Head Pattern")):
+    for pid, title in (("tower", "Attention Arc Tower"), ("pattern", "Attention Grid")):
         r.call("panel_create", {"id": pid, "primitive": "scene", "title": title, "bind": {"scene": "live:model"},
                                 "options": {"exclude": ["**"]}})
     binds = {"attn0": "live:blocks.0.attn.weights.act", "attn1": "live:blocks.1.attn.weights.act"}
     r.call("program_create", {"id": "tower_arcs", "title": "Tower Arcs", "piece": {"name": "attention_arcs",
            "version": 1, "from": "workspace"}, "panel": "tower", "bind": binds, "params": {"threshold": 0.05}})
-    r.call("program_create", {"id": "head_pattern", "title": "Head Pattern", "piece": {"name": "attention_field",
+    r.call("program_create", {"id": "head_pattern", "title": "Attention Grid", "piece": {"name": "attention_grid",
            "version": 1, "from": "workspace"}, "panel": "pattern", "bind": binds,
            "params": {"layer": {"selection": "tower", "field": "layer", "default": 1}, "head": {"state": "head"},
                       "gain": 2.0}})
@@ -359,7 +359,7 @@ def steps(r):
     def pattern_changed():
         cap("pick-after")
         return _differs(c, "pick-before", "pick-after", 1000)
-    c.until("the pattern panel follows the pick", pattern_changed, 30)
+    c.until("the attention grid follows the pick", pattern_changed, 30)
     r.call("run_pause", {"op": "resume", "run": c.run})
     r.result["pick"] = {"item": item, "layer": 1, "head": best, "tokens": [want[0], want[1]]}
     cap("tower-parent")
