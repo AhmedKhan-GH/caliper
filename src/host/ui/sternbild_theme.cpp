@@ -33,21 +33,26 @@ namespace {
 constexpr float half_floor(float v) {
     return static_cast<float>(static_cast<int>(v * 0.5f));
 }
-constexpr ImVec2 kCellPadding(6.0f, half_floor(metric::row - font_size::mono));
-constexpr ImVec2 kFramePadding(6.0f, half_floor(metric::pane_header - font_size::ui));
+// The 4 px spacing scale of the tokens has no 6 px step. Caliper keeps this
+// metric: the gap of a key to its action, the side padding of cells and frames,
+// the inner item spacing and the vertical window padding.
+constexpr float kTightGap = 6.0f;
+
+constexpr ImVec2 kCellPadding(kTightGap, half_floor(metric::row - font_size::mono));
+constexpr ImVec2 kFramePadding(kTightGap, half_floor(metric::pane_header - font_size::ui));
 
 constexpr float kPlateHeight   = 24.0f;  // primary_button default height
-constexpr float kPlatePadX     = 12.0f;  // primary_button label inset
-constexpr float kFocusOffset   = 3.0f;   // keyboard focus outline, outside the plate
-constexpr float kKeyPadX       = 8.0f;   // key_button content inset
-constexpr float kKeyGap        = 6.0f;   // a button's key to its action
-constexpr float kChevronGap    = 4.0f;   // header label to its sort chevron
-constexpr float kReasonGap     = 12.0f;  // disabled action to its reason
-constexpr float kStripPadX     = 12.0f;  // command bar / status bar side inset
-constexpr float kPaneInsetX    = 12.0f;  // pane header title / shortcut inset
-constexpr float kMarkSize      = 18.0f;  // the Caliper mark in the masthead
-constexpr float kMarkGap       = 8.0f;   // mark to wordmark
-constexpr float kWordmarkTrack = 0.10f;  // em; Display's em equals its size
+constexpr float kPlatePadX     = tokens::space::s3;            // primary_button label inset
+constexpr float kFocusOffset   = tokens::app::focus_offset;    // keyboard focus outline, outside the plate
+constexpr float kKeyPadX       = tokens::space::s2;            // key_button content inset
+constexpr float kKeyGap        = kTightGap;                    // a button's key to its action
+constexpr float kChevronGap    = tokens::space::s1;            // header label to its sort chevron
+constexpr float kReasonGap     = tokens::space::s3;            // disabled action to its reason
+constexpr float kStripPadX     = tokens::space::s3;            // command bar / status bar side inset
+constexpr float kPaneInsetX    = tokens::space::s3;            // pane header title / shortcut inset
+constexpr float kMarkSize      = tokens::app::mark;            // the Caliper mark in the masthead
+constexpr float kMarkGap       = tokens::space::s2;            // mark to wordmark
+constexpr float kWordmarkTrack = tokens::tracking::app_wordmark;  // em; Display's em equals its size
 constexpr float kChevronW      = 8.0f;   // sort chevron: two 45° strokes,
 constexpr float kChevronH      = 4.0f;   //   8 wide × 4 tall (SPEC §6.7)
 
@@ -260,13 +265,6 @@ void reason_tooltip(const char* reason) {
 
 // ---- Colour -------------------------------------------------------------------
 
-ImVec4 to_vec4(ImU32 c) { return ImGui::ColorConvertU32ToFloat4(c); }
-
-ImU32 with_alpha(ImU32 c, int alpha) {
-    const ImU32 a = static_cast<ImU32>(ImClamp(alpha, 0, 255));
-    return (c & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT);
-}
-
 // ---- Style --------------------------------------------------------------------
 
 void apply_style() {
@@ -282,42 +280,42 @@ void apply_style() {
 
     // Square corners everywhere (SPEC §3.5); the only cut corners are drawn
     // by cut_plate() and caliper_mark().
-    st.WindowRounding = 0.0f;
-    st.ChildRounding = 0.0f;
-    st.PopupRounding = 0.0f;
-    st.FrameRounding = 0.0f;
-    st.ScrollbarRounding = 0.0f;
-    st.GrabRounding = 0.0f;
-    st.ImageRounding = 0.0f;
-    st.TabRounding = 0.0f;
-    st.TreeLinesRounding = 0.0f;
-    st.MenuItemRounding = 0.0f;
-    st.SelectableRounding = 0.0f;
-    st.DragDropTargetRounding = 0.0f;
+    st.WindowRounding = tokens::RADIUS;
+    st.ChildRounding = tokens::RADIUS;
+    st.PopupRounding = tokens::RADIUS;
+    st.FrameRounding = tokens::RADIUS;
+    st.ScrollbarRounding = tokens::RADIUS;
+    st.GrabRounding = tokens::RADIUS;
+    st.ImageRounding = tokens::RADIUS;
+    st.TabRounding = tokens::RADIUS;
+    st.TreeLinesRounding = tokens::RADIUS;
+    st.MenuItemRounding = tokens::RADIUS;
+    st.SelectableRounding = tokens::RADIUS;
+    st.DragDropTargetRounding = tokens::RADIUS;
 
     // 1 px rules. Panes are separated by the docking separators, so child
     // windows carry no border of their own (no box inside a box).
-    st.WindowBorderSize = 1.0f;
+    st.WindowBorderSize = tokens::rule::width;
     st.ChildBorderSize = 0.0f;
-    st.PopupBorderSize = 1.0f;
+    st.PopupBorderSize = tokens::rule::width;
     st.FrameBorderSize = 0.0f;
     st.TabBorderSize = 0.0f;
-    st.TabBarBorderSize = 1.0f;
-    st.TabBarOverlineSize = 1.0f;
-    st.DockingSeparatorSize = 1.0f;
-    st.SeparatorTextBorderSize = 1.0f;
-    st.DragDropTargetBorderSize = 1.0f;
-    st.TreeLinesSize = 1.0f;
+    st.TabBarBorderSize = tokens::rule::width;
+    st.TabBarOverlineSize = tokens::rule::width;
+    st.DockingSeparatorSize = tokens::rule::width;
+    st.SeparatorTextBorderSize = tokens::rule::width;
+    st.DragDropTargetBorderSize = tokens::rule::width;
+    st.TreeLinesSize = tokens::rule::width;
 
     // Workstation density: default widgets land on metric::row and the
     // docked tab bar on metric::pane_header.
-    st.WindowPadding = ImVec2(metric::pad, 6.0f);
+    st.WindowPadding = ImVec2(metric::pad, kTightGap);
     st.FramePadding = kFramePadding;
     st.CellPadding = kCellPadding;
-    st.ItemSpacing = ImVec2(8.0f, 4.0f);
-    st.ItemInnerSpacing = ImVec2(6.0f, 4.0f);
-    st.ScrollbarSize = 8.0f;
-    st.GrabMinSize = 8.0f;
+    st.ItemSpacing = ImVec2(tokens::space::s2, tokens::space::s1);
+    st.ItemInnerSpacing = ImVec2(kTightGap, tokens::space::s1);
+    st.ScrollbarSize = tokens::app::scrollbar;
+    st.GrabMinSize = tokens::space::s2;
     st.WindowMenuButtonPosition = ImGuiDir_None;
 
     // Disabled text reads as `faint`: parchment over ground at this alpha

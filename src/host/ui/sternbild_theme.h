@@ -14,52 +14,104 @@
 // ============================================================================
 
 #include <imgui.h>
+#include <sternbild_tokens.h>
 
 namespace sternbild {
 
-// ---- Colour tokens (SPEC §5.1) -------------------------------------------
-namespace col {
-// deep         status bar, plot fields, inspector wells
-// ground       window and pane ground
-// plate        pane headers, menus, the selected row
-// plate_hover  hovered row, menu item or plate
-// rule         every 1 px rule;  rule_faint: hatching, dividers inside tables
-// parchment    primary text;  secondary: metadata, labels, status text
-// faint        placeholders, disabled, booktabs top and bottom rules
-// bronze       the accent: focus, selection, keys, the star
-constexpr ImU32 deep        = IM_COL32(0x12, 0x11, 0x0f, 255);
-constexpr ImU32 ground      = IM_COL32(0x18, 0x17, 0x15, 255);
-constexpr ImU32 plate       = IM_COL32(0x20, 0x1f, 0x1c, 255);
-constexpr ImU32 plate_hover = IM_COL32(0x2a, 0x29, 0x25, 255);
-constexpr ImU32 rule        = IM_COL32(0x4b, 0x49, 0x45, 255);
-constexpr ImU32 rule_faint  = IM_COL32(0x2c, 0x2b, 0x28, 255);
-constexpr ImU32 parchment   = IM_COL32(0xe8, 0xe0, 0xd0, 255);
-constexpr ImU32 secondary   = IM_COL32(0xc1, 0xba, 0xaa, 255);
-constexpr ImU32 faint       = IM_COL32(0x8f, 0x89, 0x7c, 255);
-constexpr ImU32 bronze      = IM_COL32(0xb3, 0x8b, 0x59, 255);
+// The values below are read from the generated header of the Sternbild design
+// tokens (cmake/SternbildTokens.cmake). The organization repository owns them:
+// change a value there, never here. scripts/check_theme_colors.py fails when a
+// raw colour literal appears in this file outside the region that is marked
+// "colours without a token". The tokens are reached as sternbild::tokens::...
 
-// Plot class pigments (SPEC §5.4). Data only, never chrome; fixed order.
-constexpr ImU32 vehicle = IM_COL32(0x46, 0x77, 0xad, 255);
-constexpr ImU32 dog     = IM_COL32(0x3c, 0xa9, 0x9c, 255);
-constexpr ImU32 bird    = IM_COL32(0x86, 0x74, 0x24, 255);
-constexpr ImU32 cat     = IM_COL32(0xa3, 0x5a, 0x74, 255);
-constexpr ImU32 other   = IM_COL32(0x55, 0x52, 0x4c, 255);
+// ---- Colour tokens (role and data colours of the design tokens) -------------
+namespace col {
+// deep         role well: status bar, plot fields, inspector wells
+// ground       role background-app: window and pane ground
+// plate        role surface: pane headers, menus, the selected row
+// plate_hover  role surface-hover: hovered row, menu item or plate
+// rule         role rule: every 1 px rule;  rule_faint: hatching, dividers inside tables
+// parchment    role text: primary text;  secondary (text-muted): metadata, labels, status text
+// faint        role text-faint: placeholders, disabled, booktabs top and bottom rules
+// bronze       role accent: focus, selection, keys, the star
+constexpr ImU32 deep        = tokens::role::well.imu32;
+constexpr ImU32 ground      = tokens::role::background_app.imu32;
+constexpr ImU32 plate       = tokens::role::surface.imu32;
+constexpr ImU32 plate_hover = tokens::role::surface_hover.imu32;
+constexpr ImU32 rule        = tokens::role::rule.imu32;
+constexpr ImU32 rule_faint  = tokens::role::rule_faint.imu32;
+constexpr ImU32 parchment   = tokens::role::text.imu32;
+constexpr ImU32 secondary   = tokens::role::text_muted.imu32;
+constexpr ImU32 faint       = tokens::role::text_faint.imu32;
+constexpr ImU32 bronze      = tokens::role::accent.imu32;
+
+// Plot class pigments (data colours of the tokens). Data only, never chrome; fixed order.
+constexpr ImU32 vehicle = tokens::data::smalt.imu32;
+constexpr ImU32 dog     = tokens::data::verdigris.imu32;
+constexpr ImU32 bird    = tokens::data::olive_ochre.imu32;
+constexpr ImU32 cat     = tokens::data::madder.imu32;
+constexpr ImU32 other   = tokens::data::slate.imu32;
+
+// BEGIN colours without a token
+// Colours the app draws that the design tokens 1.1.0 do not cover. Each one is
+// Caliper's own constant; a token that names the same role replaces it here.
+
+// The axis gizmo of a scene view: x, y and z.
+constexpr ImU32 axis_x = IM_COL32(222, 92, 84, 255);
+constexpr ImU32 axis_y = IM_COL32(112, 186, 104, 255);
+constexpr ImU32 axis_z = IM_COL32(96, 146, 232, 255);
+
+// Status words and messages. The tokens have no status colours.
+constexpr ImU32 warning       = IM_COL32(255, 196, 120, 255);  // a stage message over a scene
+constexpr ImU32 error_text    = IM_COL32(230, 120, 90, 255);   // a spec panel that failed to draw
+constexpr ImU32 status_error  = IM_COL32(255, 102, 77, 255);   // the live page: a picker error
+constexpr ImU32 status_failed = IM_COL32(255, 89, 77, 255);    // the live page: the session failed
+constexpr ImU32 status_wait   = IM_COL32(255, 204, 77, 255);   // the live page: waiting for the session
+constexpr ImU32 status_run    = IM_COL32(115, 217, 115, 255);  // the live page: running
+
+// A ring around the point under the pointer in a plot.
+constexpr ImU32 hover_ring = IM_COL32(255, 255, 255, 230);
+
+// A scrim or shadow: black at an alpha, under labels and over pictures.
+constexpr ImU32 shade(int alpha) { return IM_COL32(0, 0, 0, alpha); }
+
+// Rule and text of a plot whose host sets no look of its own, and the colour
+// of points that carry none.
+constexpr ImU32 plot_rule  = IM_COL32(0x5a, 0x57, 0x51, 255);
+constexpr ImU32 plot_faint = IM_COL32(0xa4, 0x9d, 0x8f, 255);
+constexpr ImU32 flat_point = IM_COL32(220, 220, 230, 255);
+
+// The defaults of a view window header (live_views_state.h Look) and of the
+// run bar (live_controls.h ControlsLook), for a host that sets no look.
+constexpr ImU32 look_text    = IM_COL32(230, 230, 235, 255);
+constexpr ImU32 look_faint   = IM_COL32(140, 140, 150, 255);
+constexpr ImU32 look_rule    = IM_COL32(90, 90, 100, 255);
+constexpr ImU32 look_accent  = IM_COL32(110, 170, 255, 255);
+constexpr ImU32 bar_text      = IM_COL32(255, 255, 255, 255);
+constexpr ImU32 bar_secondary = IM_COL32(190, 190, 190, 255);
+constexpr ImU32 bar_faint     = IM_COL32(128, 128, 128, 255);
+// END colours without a token
 }  // namespace col
 
-ImVec4 to_vec4(ImU32 c);
-ImU32  with_alpha(ImU32 c, int alpha);   // same rgb, alpha 0..255
+inline ImVec4 to_vec4(ImU32 c) { return ImGui::ColorConvertU32ToFloat4(c); }
+// Same rgb, alpha 0..255.
+constexpr ImU32 with_alpha(ImU32 c, int alpha) {
+    const ImU32 a = static_cast<ImU32>(alpha < 0 ? 0 : (alpha > 255 ? 255 : alpha));
+    return (c & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT);
+}
 
 // ---- Metrics (logical px at 1x; ImGui scales to the framebuffer) ----------
+// The application metrics and the spacing scale of the design tokens.
 namespace metric {
-constexpr float row         = 22.0f;  // table / list row: 15 px type + 2 × 3
-constexpr float pane_header = 24.0f;  // pane header strip (landing/final)
-constexpr float command_bar = 28.0f;  // masthead + command line strip at the top
-constexpr float status_bar  = 22.0f;  // status strip at the bottom
-constexpr float pad         = 8.0f;   // pane inner padding
-constexpr float gap         = 16.0f;  // between inline status items
-constexpr float key_button  = 20.0f;  // key_button height: the 15 px line + 5
-constexpr float cut         = 6.0f;   // 45° cut on the primary plate corners
-constexpr float tracking    = 0.08f;  // em tracking for uppercase labels
+constexpr float row         = tokens::app::row;           // table / list row: 15 px type + 2 x 3
+constexpr float pane_header = tokens::app::pane_header;   // pane header strip (landing/final)
+constexpr float command_bar = tokens::app::command_bar;   // masthead + command line strip at the top
+constexpr float status_bar  = tokens::app::status_bar;    // status strip at the bottom
+constexpr float pad         = tokens::app::pad;           // pane inner padding
+constexpr float gap         = tokens::app::gap;           // between inline status items
+constexpr float key_button  = tokens::app::key_button;    // key_button height: the 15 px line + 5
+constexpr float cut         = tokens::CUT;                // 45 degree cut on the primary plate corners
+constexpr float tracking    = tokens::tracking::ui_label; // em tracking for uppercase labels
 }  // namespace metric
 
 // ---- Style ------------------------------------------------------------------

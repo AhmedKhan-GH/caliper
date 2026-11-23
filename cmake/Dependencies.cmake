@@ -122,6 +122,12 @@ list(APPEND CALIPER_DEPENDENCY_LIBS glfw)
 list(APPEND CALIPER_CORE_LIBS glfw)
 message(STATUS "    ✓ GLFW configured")
 
+# --- Sternbild design tokens (theme values and house fonts) ---
+# The release is pinned in cmake/SternbildTokens.cmake, the only place that names it.
+message(STATUS "  Configuring Sternbild design tokens...")
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/SternbildTokens.cmake)
+message(STATUS "    ✓ Sternbild design tokens configured")
+
 # --- ImGui (UI library) ---
 message(STATUS "  Configuring ImGui...")
 set(IMGUI_SRC_DIR "${THIRD_PARTY_DIR}/imgui")

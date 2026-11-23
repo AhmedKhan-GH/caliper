@@ -282,6 +282,7 @@ target_include_directories(caliper_host_lib PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 # so the ABI seam stays clean; <duckdb.hpp> flows via duckdb_static's INTERFACE.
 target_link_libraries(caliper_host_lib
     PUBLIC caliper::sdk
+           sternbild::tokens   # src/host/ui/sternbild_theme.h reads the design tokens
     PRIVATE tomlplusplus::tomlplusplus
             ${CALIPER_DUCKDB_LIBS})
 
@@ -660,9 +661,10 @@ add_library(caliper_sternbild_ui STATIC
     src/host/ui/sternbild_theme.cpp
     src/host/ui/sternbild_fonts.cpp)
 target_include_directories(caliper_sternbild_ui PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
-target_link_libraries(caliper_sternbild_ui PUBLIC caliper::ui_stack caliper_app_paths)
-# A development build also finds the house fonts in the source tree.
-target_compile_definitions(caliper_sternbild_ui PRIVATE CALIPER_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_link_libraries(caliper_sternbild_ui PUBLIC caliper::ui_stack caliper_app_paths sternbild::tokens)
+# A development build also finds the house fonts where the token package keeps them.
+get_target_property(_sternbild_fonts_dir sternbild::tokens STERNBILD_FONTS_DIR)
+target_compile_definitions(caliper_sternbild_ui PRIVATE CALIPER_TOKEN_FONTS_DIR="${_sternbild_fonts_dir}")
 set_target_properties(caliper_sternbild_ui PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 
 add_executable(caliper
@@ -703,16 +705,11 @@ add_executable(caliper
 # ODR duplicate of that target's object.
 target_include_directories(caliper PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
 
-# House fonts (SIL OFL, in-repo under assets/fonts) ship beside the executable
-# like applets do: <exe dir>/assets/fonts. Dev builds also know the source tree
-# so a stale copy never hides a font edit. The Sternbild Display face
-# is NOT in the repo; sternbild_fonts.cpp loads it from a user path at runtime.
-add_custom_command(TARGET caliper POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_SOURCE_DIR}/assets/fonts" "$<TARGET_FILE_DIR:caliper>/assets/fonts"
-    COMMENT "Copying house fonts next to the executable")
-target_compile_definitions(caliper PRIVATE
-    CALIPER_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+# The house fonts (IBM Plex Sans Condensed and Source Code Pro under the SIL OFL,
+# and Sternbild Display) come from the design token package and ship beside the
+# executable like applets do: <exe dir>/assets/fonts. A development build also
+# reads them where the package keeps them (CALIPER_TOKEN_FONTS_DIR).
+sternbild_tokens_copy_assets(caliper FONTS_DIR "$<TARGET_FILE_DIR:caliper>/assets/fonts")
 
 # The host links the platform core (libcaliper, which PUBLIC-propagates
 # caliper_host_lib + ui_stack + the per-OS renderer backend) plus the UI/platform
@@ -909,6 +906,13 @@ if(BUILD_TESTS)
             "${CMAKE_SOURCE_DIR}/scripts/check_host_names_no_applet.py"
             --root "${CMAKE_SOURCE_DIR}")
         set_tests_properties(caliper_host_names_no_applet PROPERTIES LABELS "boundary")
+        # caliper_theme_colors: the theme holds no raw colour literal outside the generated
+        # header of the design tokens. caliper_theme_colors_script tests the check itself.
+        add_test(NAME caliper_theme_colors COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/scripts/check_theme_colors.py" --root "${CMAKE_SOURCE_DIR}")
+        add_test(NAME caliper_theme_colors_script COMMAND "${Python3_EXECUTABLE}" -m unittest
+            "${CMAKE_SOURCE_DIR}/scripts/test_check_theme_colors.py")
+        set_tests_properties(caliper_theme_colors caliper_theme_colors_script PROPERTIES LABELS "boundary")
         # caliper_example_dry_run_cleanup: the build-a-dashboard walk-through's dry
         # runs delete only the temporary folders they made, keep every folder the
         # caller names on their failure and interrupt paths, and stop what they
