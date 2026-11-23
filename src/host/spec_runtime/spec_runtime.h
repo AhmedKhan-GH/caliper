@@ -353,6 +353,15 @@ public:
     // The scene view that a scene panel shows: its entities' own view, or the live core's view
     // of the scene that it binds; null when it has none yet (camera.get and camera.set).
     caliper_live_views::SceneView* scene_view_of(const std::string& panel_id);
+    // Where the scene panel `panel_id` was drawn last, in window points: x, y, width and height.
+    // False before its first draw (the UI driver's drags).
+    bool scene_rect(const std::string& panel_id, float rect[4]) const;
+    // Whether the scene panel holds a drag (a button pressed on its picture) and whether a pick of
+    // it waits for its readback; false before its first draw (the app's frame log).
+    bool scene_gesture(const std::string& panel_id, bool* down, bool* pick_pending) const;
+    // The scene panel that holds a drag, else the one whose picture holds (x, y) in window points
+    // as the last frame drew it; "" for none (the app's frame log).
+    std::string scene_panel_at(float x, float y) const;
     // The entities of a scene panel as the runtime built them last, or null.
     const SpecScene* entity_scene(const std::string& panel_id) const;
 

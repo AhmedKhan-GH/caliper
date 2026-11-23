@@ -70,9 +70,15 @@
 //                        opens the panel's menu ("menu:remove" is its Remove
 //                        panel); the page's "remove:<panel>" is the × on a
 //                        panel's strip, which a click works without hovering
-//   drag <item> [fx fy] to <item> [fx fy] [hold]
+//   drag <item> [fx fy] to <item> [fx fy] [right] [stale] [hold]
 //                        a press on the first, a move in steps to the second
-//                        and a release there, or none with `hold`
+//                        and a release there, or none with `hold`; with
+//                        `right`, of the right button (a scene panel's pan)
+//                        and released there always; with `stale`, as a window
+//                        that got no cursor moves before the press: the
+//                        pointer was last seen at the second item, and the
+//                        press on the first comes through the platform's
+//                        callback (set_platform_button)
 //   release              lets go of a held drag
 //   selection <path>     writes the page's selection as JSON to <path>
 //                        (SpecPage::selection_json()), once there is one
@@ -245,6 +251,9 @@ public:
         landing_projects_ = std::move(projects);
     }
     void set_drop(std::function<void(std::vector<std::string>)> drop) { drop_ = std::move(drop); }
+    // A press or a release as the platform delivers it, through the app's GLFW callbacks, with
+    // (x, y) as the pointer's place, for the `stale` drags; the app sets it.
+    void set_platform_button(std::function<void(int, bool, float, float)> f) { platform_button_ = std::move(f); }
     // The waiting cards the approval strip shows (ApprovalTray::shown_waiting()), for `cards`.
     void set_cards(std::function<int()> cards) { cards_ = std::move(cards); }
     // "Save changes to <name>?" for the `save` steps, and the window's close
@@ -379,10 +388,17 @@ public:
             return;
         }
         if (s.verb == "drag") {
-            // drag <a> [fx fy] to <b> [fx fy] [hold]
+            // drag <a> [fx fy] to <b> [fx fy] [right] [hold]
             std::stringstream words(s.arg);
             std::vector<std::string> w;
-            for (std::string t; words >> t;) w.push_back(t);
+            bool right = false, stale = false;
+            for (std::string t; words >> t;) {
+                if (t == "right") right = true;
+                else if (t == "stale") stale = true;
+                else w.push_back(t);
+            }
+            if (stale && !platform_button_) return void(error_ = "drag stale: the app gave no platform press");
+            const int button = right ? 1 : 0;
             size_t to = 0;
             while (to < w.size() && w[to] != "to") ++to;
             if (to == 0 || to + 1 >= w.size()) return void(error_ = "drag needs <item> to <item>");
@@ -390,14 +406,22 @@ public:
             const size_t b = to + 1;
             const bool b_frac = b + 2 < w.size() || (b + 2 == w.size() && w.back() != "hold");
             const float bfx = b_frac ? (float)std::atof(w[b + 1].c_str()) : 0.5f, bfy = b_frac ? (float)std::atof(w[b + 2].c_str()) : 0.5f;
-            const bool hold = w.back() == "hold";
+            const bool hold = w.back() == "hold" && !right;
             constexpr int kSteps = 14;
             if (drag_frame_ == 0) {
                 if (!item_point(page, w[0], afx, afy, &drag_a_[0], &drag_a_[1]) ||
                     !item_point(page, w[b], bfx, bfy, &drag_b_[0], &drag_b_[1]))
                     return patience("no builder item " + w[0] + " or " + w[b]);
+                if (stale) {   // the pointer last seen at the far end; the press at the first item
+                    io.AddMousePosEvent(drag_b_[0], drag_b_[1]);
+                    drag_frame_ = -1;
+                    return;
+                }
                 io.AddMousePosEvent(drag_a_[0], drag_a_[1]);
-                io.AddMouseButtonEvent(0, true);
+                io.AddMouseButtonEvent(button, true);
+                drag_frame_ = 1;
+            } else if (drag_frame_ == -1) {
+                platform_button_(button, true, drag_a_[0], drag_a_[1]);
                 drag_frame_ = 1;
             } else if (drag_frame_ <= kSteps) {
                 const float t = (float)drag_frame_ / (float)kSteps;
@@ -407,8 +431,9 @@ public:
             } else if (drag_frame_ == kSteps + 1) {
                 ++drag_frame_;   // one more frame at the target, so the drop's zone is read there
             } else {
-                if (!hold) io.AddMouseButtonEvent(0, false);
-                next(std::string(hold ? "dragged and held " : "dragged ") + w[0] + " to " + w[b]);
+                if (!hold) io.AddMouseButtonEvent(button, false);
+                next(std::string(hold ? "dragged and held " : right ? "dragged with the right button " : "dragged ") +
+                     w[0] + " to " + w[b]);
             }
             return;
         }
@@ -865,6 +890,7 @@ private:
     std::string page_, command_line_, landing_selected_;
     std::vector<std::string> landing_projects_;
     std::function<void(std::vector<std::string>)> drop_;
+    std::function<void(int, bool, float, float)> platform_button_;
     std::function<int()> cards_;
     SavePrompt* save_prompt_ = nullptr;
     std::function<void()> close_;

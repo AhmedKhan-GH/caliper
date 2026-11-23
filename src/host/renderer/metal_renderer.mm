@@ -467,6 +467,17 @@ static uint64_t tensor_extent_bytes(const CaliperTensor& t, uint64_t elem_size) 
 class MetalRenderer final : public HostRenderer {
 public:
     const char* name() const override { return "metal"; }
+
+    FrameWaits frame_waits() const override {
+        FrameWaits w;
+        w.drawable_ms = drawable_wait_ms_;
+        w.drawable = had_drawable_;
+        @autoreleasepool {
+            NSWindow* win = window_ ? glfwGetCocoaWindow(window_) : nil;
+            if (win != nil) w.occluded = ([win occlusionState] & NSWindowOcclusionStateVisible) ? 0 : 1;
+        }
+        return w;
+    }
     const char* last_device_path() const override { return last_device_path_; }
     CaliperDeviceKind interop_device() const override { return CALIPER_DEV_METAL; }
 
@@ -720,7 +731,10 @@ public:
             if (w > 0 && h > 0)
                 layer_.drawableSize = CGSizeMake((CGFloat)w, (CGFloat)h);
 
+            const auto wait0 = std::chrono::steady_clock::now();
             drawable_ = [layer_ nextDrawable];   // may be nil under load
+            drawable_wait_ms_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - wait0).count();
+            had_drawable_ = drawable_ != nil;
 
             pass_desc_.colorAttachments[0].texture = drawable_ ? drawable_.texture : nil;
             pass_desc_.colorAttachments[0].loadAction = MTLLoadActionClear;
@@ -1997,6 +2011,8 @@ private:
     }
 
     GLFWwindow*                 window_ = nullptr;
+    double                      drawable_wait_ms_ = -1.0;   // the last new_frame()'s wait for its drawable
+    bool                        had_drawable_ = true;
     std::unique_ptr<caliper_gfx::Backend> gfx_;   // the graphics layer on device_ and queue_
     id<MTLDevice>               device_ = nil;
     id<MTLCommandQueue>         queue_  = nil;
