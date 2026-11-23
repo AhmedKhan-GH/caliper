@@ -30,6 +30,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -100,6 +101,9 @@ public:
         std::shared_ptr<const std::vector<std::uint8_t>> bytes;   // never null once received
         std::int64_t step = -1;
         std::uint32_t count = 0;
+        std::uint32_t width = 0, height = 0;    // a texture's size in this version
+        std::string format;                     // a texture's format; empty for rgba8unorm
+        std::optional<std::uint32_t> elements;  // a buffer of narrow elements: their count
     };
 
 private:

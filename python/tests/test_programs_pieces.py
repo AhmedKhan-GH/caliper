@@ -306,7 +306,7 @@ class _Runtime:
     def resource(self, handle, rid):
         self.calls += 1
         d = self.data[rid]
-        return d, len(d) // self.stride, self.stride
+        return d, len(d) // self.stride, self.stride, 0, 0, None
 
 
 def _piece_program(pid, ids, monkeypatch=None):
@@ -483,6 +483,77 @@ LOOK = {"name": "look", "version": 1,
                    {"name": "extra", "kind": "tensor", "dtype": "i32", "optional": True}],
         "resources": [{"id": "shape", "kind": "buffer", "element": "vec4<u32>", "count": 3}],
         "derive": {"passes": [{"entry": "look", "writes": ["shape"]}]}}
+
+
+TYPED_DERIVE = """@compute @workgroup_size(1)
+fn run() {
+    for (var i = 0u; i < 16u; i = i + 1u) {
+        out[i] = vec4<f32>(depth_at(i), f32(depth_type), f32(grey_at(i)), f32(shapes.depth__len));
+    }
+    // The grey image (H, W) as an r8unorm texture of its size, four texels a word.
+    tex_size = vec2<u32>(shapes.grey.w, shapes.grey.z);
+    for (var k = 0u; k < 4u; k = k + 1u) {
+        tex[k] = grey[k];
+    }
+    // The first 5 depths as u16 elements, two a word.
+    ids[0] = depth_at(0u) | (depth_at(1u) << 16u);
+    ids[1] = depth_at(2u) | (depth_at(3u) << 16u);
+    ids[2] = depth_at(4u);
+    atomicStore(&ids_count, 5u);
+}
+"""
+TYPED = {"name": "typed", "version": 1,
+         "inputs": [{"name": "depth", "kind": "tensor", "dtype": "u16|u8", "rank_min": 2, "rank_max": 2},
+                    {"name": "grey", "kind": "tensor", "dtype": "u8", "rank_min": 2, "rank_max": 2}],
+         "resources": [{"id": "out", "kind": "buffer", "element": "vec4<f32>", "count": 16},
+                       {"id": "tex", "kind": "texture", "format": "r8unorm", "width": 8, "height": 8,
+                        "texels": 40},
+                       {"id": "ids", "kind": "buffer", "element": "u16", "count": 16, "counted": True}],
+         "derive": {"passes": [{"entry": "run", "writes": ["out", "tex", "ids"]}]}}
+
+
+@needs_device
+def test_u8_and_u16_tensors_bind_in_place_and_a_texture_and_narrow_buffer_carry_their_size(attached):
+    """A u16 tensor from DLPack and a u8 tensor reach the derive half without a copy through their
+    checked accessors; an r8unorm texture's version carries the size that the derive half set and its
+    format, and a u16 buffer its elements, in the RESOURCE frames."""
+    model, opt, ctl = attached
+    model.register_buffer("depth16", torch.arange(1000, 1015, dtype=torch.uint16, device="mps").reshape(3, 5))
+    model.register_buffer("grey8", torch.arange(1, 7, dtype=torch.uint8, device="mps").reshape(2, 3))
+    pin = {"name": "typed", "version": 1, "hash": "sha256:" + "0" * 64, "from": "workspace"}
+    item = P.install_piece("typed", piece=pin, manifest=TYPED, bind={"depth": "live:depth16", "grey": "live:grey8"},
+                           params={}, panel=None, segments=[], common="", derive=TYPED_DERIVE, draw="")
+    try:
+        assert item["state"] in ("compiled", "waiting"), item["error"]
+        _train(model, opt, 300)
+        st = next(x for x in P.status() if x["id"] == "typed")
+        assert st["state"] == "running", st["error"]
+        out = _resources(ctl, "out")[-1]
+        v = np.frombuffer(bytes(out.section(w.SECTION_RESOURCE).data), np.float32).reshape(16, 4)
+        assert v[:15, 0].tolist() == list(range(1000, 1015))   # the u16 depths, exact
+        assert v[15, 0] == 0                                   # past the 15 elements: zero
+        assert set(v[:, 1].tolist()) == {4.0}                  # CALIPER_U16
+        assert v[:6, 2].tolist() == [1, 2, 3, 4, 5, 6] and v[6, 2] == 0
+        assert set(v[:, 3].tolist()) == {15.0}
+        tex = _resources(ctl, "tex")[-1]
+        assert (tex.meta["width"], tex.meta["height"], tex.meta["format"]) == (3, 2, "r8unorm")
+        assert tex.meta["count"] == 2 and tex.meta["stride"] == 4
+        assert bytes(tex.section(w.SECTION_RESOURCE).data)[:6] == bytes([1, 2, 3, 4, 5, 6])
+        ids = _resources(ctl, "ids")[-1]
+        assert (ids.meta["element"], ids.meta["elements"], ids.meta["count"]) == ("u16", 5, 3)
+        assert np.frombuffer(bytes(ids.section(w.SECTION_RESOURCE).data), np.uint16)[:5].tolist() == \
+            list(range(1000, 1005))
+    finally:
+        P.remove("typed")
+    # A tensor of a dtype that the input does not name is refused with piece.bad_binding.
+    model.register_buffer("depth32", torch.zeros(3, 5, dtype=torch.int32, device="mps"))
+    item = P.install_piece("typed2", piece=pin, manifest=TYPED, bind={"depth": "live:depth32", "grey": "live:grey8"},
+                           params={}, panel=None, segments=[], common="", derive=TYPED_DERIVE, draw="")
+    try:
+        assert item["state"] == "refused"
+        assert item["error"]["code"] == "piece.bad_binding"
+    finally:
+        P.remove("typed2")
 
 
 @needs_device

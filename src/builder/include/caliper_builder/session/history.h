@@ -75,6 +75,8 @@ struct ResourceVersion {
     std::uint32_t count = 0;                 // valid elements
     std::uint32_t stride = 0;                // bytes of one element
     std::uint32_t width = 0, height = 0;     // a texture's size; 0 for a buffer
+    std::string format;                      // a texture's format; empty for rgba8unorm or a buffer
+    std::optional<std::uint32_t> elements;   // a buffer of narrow elements: their count; count holds the words
     std::shared_ptr<const std::vector<std::uint8_t>> bytes;   // count * stride bytes, shared with readers
     // The history's number of the version, which differs for a version that
     // replaces another at the same step (append_resource() sets it).

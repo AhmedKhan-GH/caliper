@@ -203,6 +203,9 @@ struct Version {
     std::string resource;
     std::uint32_t count = 0;
     std::vector<std::uint8_t> bytes;
+    std::uint32_t width = 0, height = 0;    // a texture's version
+    std::string format;                     // a texture's format, empty for rgba8unorm
+    std::optional<std::uint32_t> elements;  // a buffer of narrow elements
 };
 
 // Runs the derive half of the piece once in the producer runtime over the tensors, with the
@@ -275,6 +278,8 @@ inline bool run_derive(id<MTLDevice> device, const cs::Piece& piece, const std::
         d.count = r.count;
         d.width = r.width;
         d.height = r.height;
+        d.format = r.format ? r.format->c_str() : nullptr;
+        d.texels = r.texels.value_or(0);
         d.counted = r.counted ? 1 : 0;
         d.publish = r.publish ? 1 : 0;
         d.clear = r.clear ? 1 : 0;
@@ -341,6 +346,10 @@ inline bool run_derive(id<MTLDevice> device, const cs::Piece& piece, const std::
         Version v;
         v.resource = r.id;
         v.count = o.count;
+        v.width = o.width;
+        v.height = o.height;
+        if (r.kind == cs::ResourceKind::texture && r.format && *r.format != "rgba8unorm") v.format = *r.format;
+        if (o.narrow) v.elements = o.elements;
         if (o.byte_size) {
             const auto* base = static_cast<const std::uint8_t*>([(__bridge id<MTLBuffer>)o.buffer contents]);
             v.bytes.assign(base + o.byte_offset, base + o.byte_offset + o.byte_size);
@@ -538,6 +547,10 @@ inline bool draw_piece(gfx::Backend& g, const cs::Piece& piece, const std::vecto
         rv.resource = v.resource;
         rv.step = 1;
         rv.count = v.count;
+        rv.width = v.width;
+        rv.height = v.height;
+        rv.format = v.format;
+        rv.elements = v.elements;
         rv.bytes = v.bytes.empty() ? nullptr : v.bytes.data();
         rv.size = v.bytes.size();
         const cd::Verdict s = out->rt->set_resource(rv);

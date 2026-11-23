@@ -33,6 +33,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <string>
 #include <thread>
@@ -94,7 +95,7 @@ constexpr size_t kDerivePasses = 8;
 constexpr size_t kResources = 8;
 constexpr size_t kFields = 16;
 constexpr uint32_t kResourceCountMax = 33554432;   // spec/piece.h, kCountMax
-constexpr uint32_t kTextureSideMax = 4096;
+constexpr uint32_t kTextureSideMax = 8192;   // spec/piece.h, kTextureSideMax: WebGPU's default
 constexpr uint32_t kStrideMax = 256;
 constexpr uint64_t kResourceBytesMax = uint64_t(64) << 20;            // a private resource
 constexpr uint64_t kPublishedResourceBytesMax = uint64_t(128) << 20;  // spec/piece.h, kPublishedResourceBytesMax
@@ -158,6 +159,30 @@ caliper_producer_status fail(caliper_producer_error* e, caliper_producer_status 
 
 uint64_t align4(uint64_t n) { return (n + 3) & ~uint64_t(3); }
 
+// The name of an imported tensor's dtype as a piece's dtype names it, or nullptr for a type that no
+// tensor input reads (f16, bf16, i64).
+const char* dtype_name(uint32_t dtype) {
+    switch (dtype) {
+        case CALIPER_PRODUCER_F32: return "f32";
+        case CALIPER_PRODUCER_I32: return "i32";
+        case CALIPER_PRODUCER_U32: return "u32";
+        case CALIPER_PRODUCER_U8: return "u8";
+        case CALIPER_PRODUCER_U16: return "u16";
+        default: return nullptr;
+    }
+}
+
+// The bytes of one element of an imported tensor's dtype, 0 for an unknown one.
+uint32_t dtype_bytes(uint32_t dtype) {
+    switch (dtype) {
+        case CALIPER_PRODUCER_U8: return 1;
+        case CALIPER_PRODUCER_F16: case CALIPER_PRODUCER_BF16: case CALIPER_PRODUCER_U16: return 2;
+        case CALIPER_PRODUCER_F32: case CALIPER_PRODUCER_I32: case CALIPER_PRODUCER_U32: return 4;
+        case CALIPER_PRODUCER_I64: return 8;
+        default: return 0;
+    }
+}
+
 enum class Kind { Storage, Uniform, Other };
 
 struct Bound {   // one binding of the reflection, neutral of caliper-wgsl's header
@@ -198,12 +223,19 @@ struct ParamSlot {
 struct ResourceSlot {
     std::string id;
     uint32_t kind = CALIPER_PRODUCER_RESOURCE_BUFFER;
-    uint32_t count = 0;      // elements of a buffer, texels of a texture
-    uint32_t stride = 0;     // bytes of one element; 4 for a texture
+    uint32_t count = 0;      // elements of a buffer, the most texels of a texture
+    uint32_t stride = 0;     // bytes of one element; 4 for a texture and a narrow buffer, one word
+    uint32_t per_word = 1;   // narrow elements in a word: 4 for u8, 2 for u16
     bool counted = false, publish = true, clear = false;
     Buffer buffer, counter;
     uint64_t bytes = 0;
-    uint32_t valid = 0;      // min(counter, count) after the last run, else count
+    uint32_t valid = 0;      // min(counter, count) after the last run, else count; a texture's texels
+    // A texture: its format, its largest sides, the host-visible <id>_size that the derive half writes,
+    // and the size of the last run's version (0 by 0 for a version without texels).
+    bool r8 = false;
+    uint32_t width = 0, height = 0;
+    Buffer size;
+    uint32_t version_width = 0, version_height = 0;
 };
 
 // One compute pass of a derive program: a program and a pipeline for its entry point, compiled
@@ -243,6 +275,8 @@ struct Prog {
     std::vector<Bound> bound;          // the reflection's bindings, for the bind groups
     std::vector<std::pair<std::string, uint32_t>> inputs;   // WGSL variable, import handle
     std::vector<std::string> unbound;  // derive: optional tensor inputs without a tensor
+    std::vector<std::string> typed;    // derive: the typed inputs (u8, u16 or several types), in order, whose
+                                       // element count follows the shapes of all tensor inputs in `shapes`
     Buffer placeholder;                // derive: the 16 zero bytes that an unbound input binds
     double time_limit_ms = 4.0;
     uint64_t memory_bytes = 0;
@@ -379,6 +413,7 @@ bool make_groups(caliper_producer* rt, const Prog& p, Program program, std::vect
                 for (const ResourceSlot& r : p.resources) {
                     if (r.id == b.name) e.buffer = r.buffer;
                     else if (r.counted && r.id + "_count" == b.name) e.buffer = r.counter;
+                    else if (r.size && r.id + "_size" == b.name) e.buffer = r.size;
                 }
             } else if (b.name == "count") {
                 e.buffer = p.count;
@@ -419,6 +454,7 @@ void free_prog(caliper_producer* rt, Prog& p) {
     for (ResourceSlot& r : p.resources) {
         if (r.buffer) rt->be->release(r.buffer);
         if (r.counter) rt->be->release(r.counter);
+        if (r.size) rt->be->release(r.size);
     }
     p.resources.clear();
     if (p.shapes) rt->be->release(p.shapes);
@@ -655,9 +691,31 @@ uint32_t field_size(const char* t) {
 
 // The stride of one element of a resource: the struct's size rounded up to its alignment. The
 // alignment of each field type equals its size, because vec3 is not a field type.
+// The narrow elements of a buffer in one 32-bit word: 4 for u8, 2 for u16, else 1.
+uint32_t narrow_per_word(const caliper_producer_resource_desc& r) {
+    if (r.kind != CALIPER_PRODUCER_RESOURCE_BUFFER || !r.element || r.field_count) return 1;
+    return !std::strcmp(r.element, "u8") ? 4 : !std::strcmp(r.element, "u16") ? 2 : 1;
+}
+
+// A texture's format: rgba8unorm, r8unorm or r32uint; nullptr for another text.
+const char* texture_format(const caliper_producer_resource_desc& r) {
+    if (!r.format || !std::strcmp(r.format, "rgba8unorm")) return "rgba8unorm";
+    if (!std::strcmp(r.format, "r8unorm")) return "r8unorm";
+    if (!std::strcmp(r.format, "r32uint")) return "r32uint";
+    return nullptr;
+}
+
+// The most texels of a version of a texture: `texels`, else width * height (at most 2^26).
+uint64_t texture_texels(const caliper_producer_resource_desc& r) {
+    return r.texels ? r.texels : uint64_t(r.width) * r.height;
+}
+
+// The 32-bit words of `texels` texels: four r8unorm texels a word.
+uint64_t texel_words(bool r8, uint64_t texels) { return r8 ? (texels + 3) / 4 : texels; }
+
 bool element_stride(const caliper_producer_resource_desc& r, uint32_t* stride, std::string* why) {
-    if (r.kind == CALIPER_PRODUCER_RESOURCE_TEXTURE) {
-        *stride = 4;
+    if (r.kind == CALIPER_PRODUCER_RESOURCE_TEXTURE || narrow_per_word(r) > 1) {
+        *stride = 4;   // one word: a texel, four r8unorm texels, or four u8 or two u16 elements
         return true;
     }
     if (r.element && r.field_count == 0) {
@@ -697,9 +755,15 @@ bool element_stride(const caliper_producer_resource_desc& r, uint32_t* stride, s
 
 // The bytes of a resource: count x stride, or width x height x 4. Every factor is bounded
 // before, thus the product stays far below 2^64.
+// The bytes of a resource: its largest texture version, the words of its narrow elements, or count
+// elements of `stride` bytes. Each value is bounded before: no product wraps.
 uint64_t resource_bytes(const caliper_producer_resource_desc& r, uint32_t stride) {
-    return r.kind == CALIPER_PRODUCER_RESOURCE_TEXTURE ? uint64_t(r.width) * r.height * 4
-                                                       : uint64_t(r.count) * stride;
+    if (r.kind == CALIPER_PRODUCER_RESOURCE_TEXTURE) {
+        const char* f = texture_format(r);
+        return texel_words(f && !std::strcmp(f, "r8unorm"), texture_texels(r)) * 4;
+    }
+    const uint32_t per = narrow_per_word(r);
+    return per > 1 ? (uint64_t(r.count) + per - 1) / per * 4 : uint64_t(r.count) * stride;
 }
 
 // The declaration of a derive program: its counts, sizes and limits, before anything else runs.
@@ -733,9 +797,14 @@ caliper_producer_status check_derive_desc(const caliper_producer_derive_desc* d,
         const bool unbound = d->input_unbound && d->input_unbound[i];
         if (unbound && d->inputs[i].tensor)
             return refuse(kBadBinding, std::string("The input ") + d->inputs[i].var + " is unbound and has a tensor.");
-        if ((d->inputs[i].tensor || unbound) &&
-            (!t || (std::strcmp(t, "f32") && std::strcmp(t, "i32") && std::strcmp(t, "u32"))))
-            return refuse(kBadManifest, std::string("The tensor input ") + d->inputs[i].var + " needs f32, i32 or u32.");
+#if defined(CALIPER_PRODUCER_HAVE_SANDBOX)
+        const bool known = t && !sp::tensor_dtypes(t).empty();
+#else
+        const bool known = t && (!std::strcmp(t, "f32") || !std::strcmp(t, "i32") || !std::strcmp(t, "u32"));
+#endif
+        if ((d->inputs[i].tensor || unbound) && !known)
+            return refuse(kBadManifest, std::string("The tensor input ") + d->inputs[i].var +
+                                            " needs f32, i32, u32, u8 or u16, or several of them joined by |.");
     }
     for (size_t i = 0; i < d->param_count; ++i) {
         const char* t = d->param_types[i];
@@ -749,11 +818,18 @@ caliper_producer_status check_derive_desc(const caliper_producer_derive_desc* d,
         const std::string id = r.id ? r.id : "";
         if (id.empty()) return refuse(kBadResource, "A resource has no id.");
         if (r.kind == CALIPER_PRODUCER_RESOURCE_BUFFER) {
-            if (r.count == 0 || r.count > kResourceCountMax)
-                return refuse(kBadResource, "The buffer " + id + " has a count outside 1 to 33,554,432.");
+            // kResourceCountMax words: four u8 or two u16 elements to a word.
+            const uint64_t most = uint64_t(kResourceCountMax) * narrow_per_word(r);
+            if (r.count == 0 || r.count > most)
+                return refuse(kBadResource, "The buffer " + id + " has a count outside 1 to " + std::to_string(most) + ".");
+            if (r.format || r.texels) return refuse(kBadResource, "The buffer " + id + " has no format or texels.");
         } else if (r.kind == CALIPER_PRODUCER_RESOURCE_TEXTURE) {
             if (r.width == 0 || r.height == 0 || r.width > kTextureSideMax || r.height > kTextureSideMax || r.counted)
-                return refuse(kBadResource, "The texture " + id + " needs each side from 1 to 4,096 and no counter.");
+                return refuse(kBadResource, "The texture " + id + " needs each side from 1 to 8,192 and no counter.");
+            if (!texture_format(r))
+                return refuse(kBadResource, "The texture " + id + " has a format other than rgba8unorm, r8unorm or r32uint.");
+            if (r.texels > uint64_t(r.width) * r.height)
+                return refuse(kBadResource, "The texture " + id + " has more texels than its width times its height.");
         } else {
             return refuse(kBadResource, "The resource " + id + " is neither a buffer nor a texture.");
         }
@@ -807,6 +883,7 @@ void write_shapes(caliper_producer* rt, const Prog& p) {
     auto* m = static_cast<uint32_t*>(rt->be->mapped(p.shapes));
     if (!m) return;
     size_t slot = 0;
+    std::vector<uint32_t> lens;   // the element count of each typed input, in order, after the shapes
     for (const auto& in : p.inputs) {
         const bool unbound = std::find(p.unbound.begin(), p.unbound.end(), in.first) != p.unbound.end();
         if (in.second == 0 && !unbound) continue;   // the place of a buffer input, which the derive half does not bind
@@ -821,7 +898,16 @@ void write_shapes(caliper_producer* rt, const Prog& p) {
         }
         std::memcpy(m + slot * 4, v, sizeof v);
         ++slot;
+        if (std::find(p.typed.begin(), p.typed.end(), in.first) != p.typed.end()) {
+            uint64_t n = 0;   // the elements of the bytes, 0 for an unbound input: the accessor reads zero
+            if (const Import* im = import_of(rt, in.second)) {
+                const uint32_t bytes = dtype_bytes(im->dtype);
+                n = bytes ? im->byte_size / bytes : 0;
+            }
+            lens.push_back(uint32_t(std::min<uint64_t>(n, UINT32_MAX)));
+        }
     }
+    if (!lens.empty()) std::memcpy(m + slot * 4, lens.data(), lens.size() * 4);
 }
 
 // A rebind of a derive program: the groups of every pass with the new import, made before the
@@ -905,6 +991,8 @@ sp::Piece piece_of(const caliper_producer_derive_desc* d) {
         res.count = r.count;
         res.width = r.width;
         res.height = r.height;
+        if (r.kind == CALIPER_PRODUCER_RESOURCE_TEXTURE && r.format) res.format = std::string(r.format);
+        if (r.kind == CALIPER_PRODUCER_RESOURCE_TEXTURE && r.texels) res.texels = r.texels;
         res.counted = r.counted != 0;
         res.publish = r.publish != 0;
         res.clear = r.clear != 0;
@@ -967,7 +1055,7 @@ caliper_producer_status caliper_producer_import(caliper_producer* rt, const cali
         if (b.device.registryID != rt->device.registryID)
             return fail(error, CALIPER_PRODUCER_IMPORT_REFUSED, kImportRefused,
                         "The tensor " + name + " is on another device than the runtime.");
-        if (t->ndim > CALIPER_PRODUCER_MAX_DIMS || t->dtype > CALIPER_PRODUCER_U8 || t->byte_size == 0)
+        if (t->ndim > CALIPER_PRODUCER_MAX_DIMS || t->dtype > CALIPER_PRODUCER_U16 || t->byte_size == 0)
             return fail(error, CALIPER_PRODUCER_ARGUMENT, kImportRefused,
                         "The tensor " + name + " has no bytes, too many dimensions or an unknown type.");
         const uint64_t end = t->byte_offset + t->byte_size;
@@ -1398,6 +1486,10 @@ caliper_producer_status caliper_producer_rebind(caliper_producer* rt, uint32_t p
     if (before && before->byte_size != after->byte_size)
         return fail(error, CALIPER_PRODUCER_REFUSED, kImportRefused,
                     "The new import of " + after->name + " has another size; the program must compile again.");
+    // The header of a typed input is specialised to the bound dtype, and every module reads its type.
+    if (before && before->dtype != after->dtype)
+        return fail(error, CALIPER_PRODUCER_REFUSED, kImportRefused,
+                    "The new import of " + after->name + " has another dtype; the program must compile again.");
     if (p->derive) return rebind_derive(rt, p, old_tensor, tensor, error);
     @autoreleasepool {
         Prog next;   // the bindings with the new import, made before the old groups go
@@ -1461,6 +1553,12 @@ caliper_producer_status caliper_producer_run(caliper_producer* rt, const uint32_
                 if (r.counter) {
                     if (auto* c = static_cast<uint32_t*>(be.mapped(r.counter))) *c = 0;
                 }
+                if (r.size) {   // a texture's size starts at its largest sides; the derive half may set less
+                    if (auto* z = static_cast<uint32_t*>(be.mapped(r.size))) {
+                        z[0] = r.width;
+                        z[1] = r.height;
+                    }
+                }
                 if (r.clear) {
                     if (void* m = be.mapped(r.buffer)) std::memset(m, 0, size_t(r.bytes));
                 }
@@ -1523,6 +1621,18 @@ caliper_producer_status caliper_producer_run(caliper_producer* rt, const uint32_
                 for (ResourceSlot& r : p->resources) {
                     const auto* c = r.counter ? static_cast<const uint32_t*>(be.mapped(r.counter)) : nullptr;
                     r.valid = r.counted ? (c ? std::min(*c, r.count) : 0) : r.count;
+                    if (r.size) {
+                        // The version's size from the derive half, checked against the largest sides and
+                        // the texels before its product, which is then below 2^26: a size outside them
+                        // gives a version without texels.
+                        const auto* z = static_cast<const uint32_t*>(be.mapped(r.size));
+                        const uint32_t w = z ? z[0] : 0, h = z ? z[1] : 0;
+                        const bool ok = w >= 1 && w <= r.width && h >= 1 && h <= r.height &&
+                                        uint64_t(w) * h <= r.count;
+                        r.version_width = ok ? w : 0;
+                        r.version_height = ok ? h : 0;
+                        r.valid = ok ? w * h : 0;
+                    }
                 }
             } else if (p->count) {
                 const auto* c = static_cast<const uint32_t*>(be.mapped(p->count));
@@ -1648,7 +1758,8 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
     return fail(error, CALIPER_PRODUCER_UNSUPPORTED, kCompilerUnavailable,
                 "This build of the runtime has no composer of pieces or no WGSL compiler, so a derive half cannot run.");
 #else
-    // The imports of the tensor inputs, with the dtype that the piece declares.
+    // The imports of the tensor inputs, with the dtype that the piece declares: one of its types.
+    std::map<std::string, std::string> bound_types;
     for (size_t i = 0; i < d->input_count; ++i) {
         if (!d->inputs[i].tensor) continue;
         const Import* im = import_of(rt, d->inputs[i].tensor);
@@ -1656,14 +1767,13 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
             return fail(error, CALIPER_PRODUCER_REFUSED, kUnknownInput,
                         std::string("The input ") + d->inputs[i].var + " has no imported tensor.");
         const char* want = d->input_types ? d->input_types[i] : "f32";
-        const char* have = im->dtype == CALIPER_PRODUCER_F32   ? "f32"
-                           : im->dtype == CALIPER_PRODUCER_I32 ? "i32"
-                           : im->dtype == CALIPER_PRODUCER_U32 ? "u32"
-                                                               : "another type";
-        if (std::strcmp(want, have))
+        const char* have = dtype_name(im->dtype);
+        const std::vector<std::string> types = sp::tensor_dtypes(want);
+        if (!have || std::find(types.begin(), types.end(), have) == types.end())
             return fail(error, CALIPER_PRODUCER_REFUSED, kBadBinding,
                         std::string("The input ") + d->inputs[i].var + " wants " + want + ", but the tensor " +
-                            im->name + " holds " + have + ".");
+                            im->name + " holds " + (have ? have : "another type") + ".");
+        bound_types[d->inputs[i].var] = have;   // the header that the composer specialises to it
     }
     // 2. The module: the generated header, the lib modules, common.wgsl and derive.wgsl, composed
     // here from the declaration as the app composes it.
@@ -1672,7 +1782,7 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
     // blanks the modules that read the draw prelude, as in the app.
     sb::Resolved resolved = d->common_size ? sb::split_common(std::string_view(d->common, d->common_size)) : sb::Resolved{};
     resolved.files["derive.wgsl"] = std::string(d->wgsl, d->wgsl_size);
-    const sb::Composed composed = sb::compose_derive(piece, resolved);
+    const sb::Composed composed = sb::compose_derive(piece, resolved, bound_types);
     if (!composed.verdict.ok())
         return fail(error, CALIPER_PRODUCER_REFUSED, static_code(composed.verdict.code), composed.verdict.message);
     if (composed.text.size() > kComposedBytes)
@@ -1723,6 +1833,9 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
             expected.push_back({d->resources[i].id, 2, uint32_t(2 * i), Kind::Storage, true, int(i)});
             if (d->resources[i].counted)
                 expected.push_back({std::string(d->resources[i].id) + "_count", 2, uint32_t(2 * i + 1), Kind::Storage,
+                                    true, -1});
+            if (d->resources[i].kind == CALIPER_PRODUCER_RESOURCE_TEXTURE)
+                expected.push_back({std::string(d->resources[i].id) + "_size", 2, uint32_t(2 * i + 1), Kind::Storage,
                                     true, -1});
         }
         std::vector<std::vector<Bound>> pass_bound(d->pass_count);
@@ -1825,7 +1938,8 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
         for (size_t i = 0; i < d->resource_count; ++i) {
             std::string why;
             element_stride(d->resources[i], &strides[i], &why);
-            memory += resource_bytes(d->resources[i], strides[i]) + (d->resources[i].counted ? 4 : 0);
+            memory += resource_bytes(d->resources[i], strides[i]) + (d->resources[i].counted ? 4 : 0) +
+                      (d->resources[i].kind == CALIPER_PRODUCER_RESOURCE_TEXTURE ? 8 : 0);
         }
         for (uint32_t h : tensors) memory += import_of(rt, h)->byte_size;
         if (memory > d->memory_limit_bytes)
@@ -1855,6 +1969,9 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
         for (size_t i = 0; i < d->input_count; ++i) {
             p.inputs.emplace_back(d->inputs[i].var, d->inputs[i].tensor);
             if (d->input_unbound && d->input_unbound[i]) p.unbound.push_back(d->inputs[i].var);
+            if ((d->inputs[i].tensor || (d->input_unbound && d->input_unbound[i])) &&
+                sp::typed_tensor_input(d->input_types ? d->input_types[i] : "f32"))
+                p.typed.push_back(d->inputs[i].var);
         }
         auto layer_fail = [&](const std::string& what) {
             const std::string why = be.last_error();
@@ -1924,7 +2041,14 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
             slot.id = r.id;
             slot.kind = r.kind;
             slot.stride = strides[i];
-            slot.count = r.kind == CALIPER_PRODUCER_RESOURCE_TEXTURE ? r.width * r.height : r.count;
+            slot.per_word = narrow_per_word(r);
+            const bool texture = r.kind == CALIPER_PRODUCER_RESOURCE_TEXTURE;
+            slot.count = texture ? uint32_t(texture_texels(r)) : r.count;
+            if (texture) {
+                slot.r8 = !std::strcmp(texture_format(r), "r8unorm");
+                slot.width = slot.version_width = r.width;
+                slot.height = slot.version_height = r.height;
+            }
             slot.counted = r.counted != 0;
             slot.publish = r.publish != 0;
             slot.clear = r.clear != 0;
@@ -1938,6 +2062,10 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
                 made.counter = make_zeroed(4, kStorage, "counter");
                 if (!made.counter) return layer_fail(std::string("counter of ") + r.id);
             }
+            if (texture) {
+                made.size = make_zeroed(8, kStorage, "texture size");
+                if (!made.size) return layer_fail(std::string("size of ") + r.id);
+            }
         }
         if (!p.params.empty()) {
             p.params_buffer = make_zeroed(params_bytes(p), kUniform, "params");
@@ -1949,7 +2077,8 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
             if (!p.placeholder) return layer_fail("placeholder of an unbound input");
         }
         if (tensor_inputs) {
-            p.shapes = make_zeroed(16 * tensor_inputs, kUniform, "shapes");
+            // The shapes, then a u32 element count for each typed input, to the struct's size.
+            p.shapes = make_zeroed(16 * tensor_inputs + (p.typed.size() + 3) / 4 * 16, kUniform, "shapes");
             if (!p.shapes) return layer_fail("shapes buffer");
             write_shapes(rt, p);
         }
@@ -1977,8 +2106,20 @@ caliper_producer_status caliper_producer_read_resource(caliper_producer* rt, uin
         if (!r.publish) break;   // a private resource never leaves the script
         out->buffer = metal_buffer(*rt->be, r.buffer);
         out->byte_offset = 0;
-        out->count = p->runs ? r.valid : 0;
+        const uint32_t valid = p->runs ? r.valid : 0;
+        out->count = valid;
         out->words = r.stride / 4;
+        if (r.size) {   // a texture: the words of the version's texels, and its size
+            out->count = uint32_t(texel_words(r.r8, valid));
+            out->words = 1;
+            out->width = valid ? r.version_width : 0;
+            out->height = valid ? r.version_height : 0;
+        } else if (r.per_word > 1) {   // narrow elements: their words, and their count
+            out->count = (valid + r.per_word - 1) / r.per_word;
+            out->words = 1;
+            out->elements = valid;
+            out->narrow = 1;
+        }
         out->byte_size = uint64_t(out->count) * r.stride;
         return CALIPER_PRODUCER_OK;
     }

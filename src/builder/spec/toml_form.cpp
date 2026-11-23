@@ -344,8 +344,8 @@ public:
             {"inputs", {"name", "kind", "dtype", "rank_min", "rank_max", "element", "struct", "fields", "title", "optional"}},
             {"params", {"name", "type", "default", "min", "max", "title"}},
             {"resources",
-             {"id", "kind", "element", "struct", "fields", "count", "counted", "width", "height", "publish", "clear",
-              "keep"}},
+             {"id", "kind", "element", "struct", "fields", "count", "counted", "width", "height", "format", "texels",
+              "publish", "clear", "keep"}},
             {"depends", {"name", "version"}}};
         for (const auto& [key, order] : lists) {
             auto it = j.find(key);

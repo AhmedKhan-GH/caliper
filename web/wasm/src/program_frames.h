@@ -105,14 +105,15 @@ inline std::map<std::string, PublishedSize> published_sizes(
     for (const cs::Resource& r : piece.resources) {
         if (!r.publish) continue;
         PublishedSize s;
+        // A texture's and a narrow buffer's count on the wire is in 32-bit words.
         if (r.kind == cs::ResourceKind::texture) {
-            s.count = r.width * r.height;   // each side at most 4096: no wrap
-            s.bytes = std::uint64_t(s.count) * 4;
+            s.bytes = cs::texture_bytes(r);   // at most 128 MiB, checked by the manifest
+            s.count = std::uint32_t(s.bytes / 4);
         } else {
             caliper_builder::programs::ElementLayout l;
             if (!checks.layout(r.layout, &l).ok()) return {};
-            s.count = r.count;
-            s.bytes = std::uint64_t(r.count) * l.stride;
+            s.bytes = caliper_builder::programs::layout_bytes(l, r.count);
+            s.count = l.per_word > 1 ? std::uint32_t(s.bytes / 4) : r.count;
         }
         out[r.id] = s;
     }
@@ -143,6 +144,10 @@ inline caliper_draw::ResourceVersion resource_version(const caliper_net::wire::R
     v.resource = r.resource;
     v.step = std::int64_t(std::min<std::uint64_t>(r.step, std::uint64_t(INT64_MAX)));
     v.count = r.count;
+    v.width = r.width.value_or(0);
+    v.height = r.height.value_or(0);
+    v.format = r.format.value_or(std::string());
+    v.elements = r.elements;
     v.bytes = static_cast<const std::uint8_t*>(r.data.data);
     v.size = r.data.size;
     return v;

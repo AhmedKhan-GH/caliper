@@ -211,6 +211,9 @@ struct Published {
     std::string id;
     std::vector<std::uint8_t> bytes;
     std::uint32_t count = 0;
+    std::uint32_t width = 0, height = 0;    // a texture's version
+    std::string format;                     // a texture's format, empty for rgba8unorm
+    std::optional<std::uint32_t> elements;  // a buffer of narrow elements
 };
 
 // Runs the derive half of `piece` once, as the script's producer runtime runs it, on the tensors
@@ -282,6 +285,8 @@ inline std::vector<Published> run_derive(id<MTLDevice> device, const cs::Piece& 
         d.count = r.count;
         d.width = r.width;
         d.height = r.height;
+        d.format = r.format ? r.format->c_str() : nullptr;
+        d.texels = r.texels.value_or(0);
         d.counted = r.counted;
         d.publish = r.publish;
         d.clear = r.clear;
@@ -349,6 +354,10 @@ inline std::vector<Published> run_derive(id<MTLDevice> device, const cs::Piece& 
         Published p;
         p.id = r.id;
         p.count = o.count;
+        p.width = o.width;
+        p.height = o.height;
+        if (r.kind == cs::ResourceKind::texture && r.format && *r.format != "rgba8unorm") p.format = *r.format;
+        if (o.narrow) p.elements = o.elements;
         p.bytes.resize(o.byte_size);
         if (o.byte_size) {
             const auto* base = static_cast<const std::uint8_t*>([(__bridge id<MTLBuffer>)o.buffer contents]);
@@ -535,11 +544,18 @@ struct PieceDraw {
         REQUIRE_MESSAGE(v.ok(), v.code << " " << v.message);
     }
 
-    void set(const std::string& resource, const std::vector<std::uint8_t>& bytes, std::uint32_t count) {
+    void set(const std::string& resource, const std::vector<std::uint8_t>& bytes, std::uint32_t count,
+             const Published* from = nullptr) {
         cd::ResourceVersion version;
         version.resource = resource;
         version.step = 1;
         version.count = count;
+        if (from) {
+            version.width = from->width;
+            version.height = from->height;
+            version.format = from->format;
+            version.elements = from->elements;
+        }
         version.bytes = bytes.data();
         version.size = bytes.size();
         const cd::Verdict v = rt.set_resource(version);

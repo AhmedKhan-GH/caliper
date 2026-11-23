@@ -540,6 +540,8 @@ public:
             v.stride = r.stride;
             v.width = r.width;
             v.height = r.height;
+            v.format = r.format;
+            v.elements = r.elements;
             v.bytes = std::move(r.bytes);
             history.append_resource(r.program, r.resource, keep, std::move(fields), std::move(v));
         }
@@ -897,17 +899,34 @@ private:
         std::uint32_t keep = 0;
         std::vector<caliper_builder::ResourceField> fields;
         bool texture = false;
-        std::uint32_t stride = 0;            // a buffer's element; 4 for a texel
-        std::uint32_t count = 0;             // a buffer's elements; a texture's width * height
-        std::uint32_t width = 0, height = 0; // a texture's
+        std::uint32_t stride = 0;            // a buffer's element; 4 for a texel or a word of narrow elements
+        std::uint32_t count = 0;             // a buffer's elements; a texture's most texels
+        std::uint32_t width = 0, height = 0; // a texture's largest sides
+        std::string format;                  // a texture's format as RESOURCE names it: empty for rgba8unorm
+        std::uint32_t per_word = 1;          // a buffer's narrow elements in a word
     };
 
-    // Whether a received version has the form that its resource declares.
+    // Whether a received version has the form that its resource declares: a texture's format and a size
+    // within its largest sides and texels, with the words of those texels; a buffer at most its count,
+    // narrow elements with their count and its words. Each side is checked before the product.
     static bool declared(const ResourceInfo& info, const ReceivedResource& r) {
         if (info.stride == 0 || r.stride != info.stride || !r.bytes) return false;
-        if (info.texture ? (r.width != info.width || r.height != info.height || r.count != info.count)
-                         : (r.width != 0 || r.height != 0 || r.count > info.count))
-            return false;
+        if (info.texture) {
+            if (r.format != info.format || r.elements) return false;
+            if (r.count == 0) return r.width == 0 && r.height == 0 && r.bytes->empty();   // no texels
+            if (r.width < 1 || r.width > info.width || r.height < 1 || r.height > info.height) return false;
+            const std::uint64_t texels = std::uint64_t(r.width) * r.height;
+            if (texels > info.count ||
+                r.count != caliper_builder::spec::texture_words(info.format.empty() ? "rgba8unorm" : info.format, texels))
+                return false;
+        } else {
+            if (r.width != 0 || r.height != 0 || !r.format.empty()) return false;
+            if ((info.per_word > 1) != r.elements.has_value()) return false;
+            if (r.elements ? (*r.elements > info.count ||
+                              r.count != (std::uint64_t(*r.elements) + info.per_word - 1) / info.per_word)
+                           : r.count > info.count)
+                return false;
+        }
         return r.bytes->size() == std::uint64_t(r.count) * r.stride;
     }
 
@@ -936,13 +955,15 @@ private:
                 info.stride = 4;
                 info.width = r.width;
                 info.height = r.height;
-                info.count = r.width * r.height;   // each side at most 4,096
+                info.count = std::uint32_t(sp::texture_texels(r));   // at most 8,192 * 8,192
+                info.format = sp::texture_format(r) == "rgba8unorm" ? std::string() : sp::texture_format(r);
             } else {
                 caliper_builder::programs::ElementLayout layout;
                 if (caliper_builder::programs::element_layout(r.layout, &layout).ok()) {
                     for (const auto& f : layout.fields) info.fields.push_back({f.name, f.type, f.offset});
                     info.stride = layout.stride;
                     info.count = r.count;
+                    info.per_word = layout.per_word;
                 }
             }
             out[r.id] = std::move(info);

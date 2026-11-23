@@ -214,6 +214,10 @@ public:
             r.resource = as;
             r.step = v->second.step;
             r.count = v->second.count;
+            r.width = v->second.width;
+            r.height = v->second.height;
+            r.format = v->second.format;
+            r.elements = v->second.elements;
             r.bytes = v->second.bytes->data();
             r.size = v->second.bytes->size();
             if (rt.set_resource(r).ok()) given_epoch_[p.id + "/" + as] = from.epoch;
@@ -321,6 +325,10 @@ void WebPrograms::on_resource(const caliper_net::wire::Resource& part) {
     if (v.step >= 0 && step < v.step) ++p.epoch;   // the run went back (a new attachment or a fork)
     v.step = step;
     v.count = r.count;
+    v.width = r.width.value_or(0);
+    v.height = r.height.value_or(0);
+    v.format = r.format.value_or(std::string());
+    v.elements = r.elements;
     v.bytes = whole.keep ? whole.keep
                          : std::make_shared<const std::vector<std::uint8_t>>(r.data.data, r.data.data + r.data.size);
 }

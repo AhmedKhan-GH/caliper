@@ -550,6 +550,8 @@ std::string canonical_manifest(const spec::Piece& piece) {
             if (r.counted) o.flag("counted", true);
             if (r.width) o.uint("width", r.width);
             if (r.height) o.uint("height", r.height);
+            if (r.format) o.str("format", *r.format);
+            if (r.texels) o.uint("texels", *r.texels);
             if (!r.publish) o.flag("publish", false);
             if (r.clear) o.flag("clear", true);
             if (r.keep) o.uint("keep", *r.keep);
