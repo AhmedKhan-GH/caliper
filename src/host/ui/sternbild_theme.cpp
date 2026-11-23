@@ -794,14 +794,16 @@ bool primary_button(const char* label, ImVec2 size_arg, const char* key) {
         fill = styled(col::plate_hover);
     }
     ImDrawList* dl = window->DrawList;
-    if (fill != 0) dl->AddRectFilled(bb.Min, bb.Max, fill);
-    dl->AddRect(bb.Min, bb.Max, outline, 0.0f, 0, tokens::rule::width);
+    // Whole-pixel corners: ImGui puts a 1 px outline of a rectangle on the half pixel inside them.
+    const ImVec2 pmin(ImFloor(bb.Min.x), ImFloor(bb.Min.y)), pmax(ImFloor(bb.Max.x), ImFloor(bb.Max.y));
+    if (fill != 0) dl->AddRectFilled(pmin, pmax, fill);
+    dl->AddRect(pmin, pmax, outline, 0.0f, 0, tokens::rule::width);
 
     // Keyboard focus: a square outline 3 px outside the plate, in bronze (the
     // focus accent). Replaces ImGui's nav rectangle.
     if (!disabled && g.NavId == id && g.NavCursorVisible) {
         const ImVec2 d(kFocusOffset, kFocusOffset);
-        dl->AddRect(ImVec2(bb.Min.x - d.x, bb.Min.y - d.y), ImVec2(bb.Max.x + d.x, bb.Max.y + d.y),
+        dl->AddRect(ImVec2(pmin.x - d.x, pmin.y - d.y), ImVec2(pmax.x + d.x, pmax.y + d.y),
                     styled(col::bronze), 0.0f, 0, tokens::rule::width);
     }
 
