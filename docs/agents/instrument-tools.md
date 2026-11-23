@@ -44,7 +44,7 @@ A tool is an edit, a change or a read. An edit changes the open spec. It has a d
 
 ## Selection Commands
 
-`selection_set` takes `panel` and either `entity` with `index`, or `clear`. It makes the same `pick` event, the same fields and the same state writes as a person's pick, with the origin of the caller. For a surface, `index` is `row * columns + column` in the grid of the entity. The answer holds `fields`, the [pick fields](../builder/scene-entities.md#pick-fields), or null. `selection_get` takes `panel` and answers with the fields of the last pick. A missing item fails with `selection.bad_item`.
+`selection_set` takes `panel` and one of three forms: `entity` with `index`, `program` with `item`, or `clear`. The form with `program` picks the element `item` of the item map of a program that draws a piece in the panel, at the cursor. Its answer holds `program`, `item`, `step`, `fields` and `index`, as [Pieces](pieces.md#selection-and-picking) describes. It makes the same `pick` event, the same fields and the same state writes as a person's pick, with the origin of the caller. For a surface, `index` is `row * columns + column` in the grid of the entity. The answer holds `fields`, the [pick fields](../builder/scene-entities.md#pick-fields), or null. `selection_get` takes `panel` and answers with the fields of the last pick. A missing item fails with `selection.bad_item`. A `program` that the spec lacks fails with `program.not_found`, and a piece without an item map fails with `program.bad_pick`.
 
 ## Control Set
 

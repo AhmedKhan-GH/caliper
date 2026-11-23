@@ -717,6 +717,8 @@ bool SideChat::undo_applied(std::uint64_t serial) {
 
 std::string SideChat::permission_word() const { return hooks_.permission_mode ? hooks_.permission_mode() : std::string(); }
 
+std::string SideChat::permission_note() const { return hooks_.permission_note ? hooks_.permission_note() : std::string(); }
+
 void SideChat::cycle_permission_mode() {
     if (!hooks_.set_permission_mode) return;
     const std::string now = permission_word();
@@ -725,8 +727,15 @@ void SideChat::cycle_permission_mode() {
 
 void SideChat::set_allow_all(bool on) {
     if (!hooks_.set_permission_mode) return;
-    if (on) hooks_.set_permission_mode("allow_all");
-    else if (permission_word() == "Allow all") hooks_.set_permission_mode("");
+    const std::string word = permission_word();
+    if (on) {
+        hooks_.set_permission_mode("allow_all");
+    } else if (word == "Allow all") {
+        hooks_.set_permission_mode("ask");
+    } else if (!permission_note().empty()) {
+        // After a failed save: save the mode the person chose again, never a looser one.
+        hooks_.set_permission_mode(word == "Read only" ? "read_only" : word == "Accept edits" ? "accept_edits" : "ask");
+    }
 }
 
 void SideChat::finish_start() {
@@ -1348,7 +1357,7 @@ ChatPaneInput chat_pane_input(const SideChat& chat, const WidgetRect& pane) {
     in.version = chat.agent_info().version;
     in.mode = chat.mode();
     in.permission = chat.permission_word();
-    in.allow_all = in.permission == "Allow all";
+    in.allow_all = in.permission == "Allow all" || !chat.permission_note().empty();
     in.tag = chat.tag();
     in.note = chat.gpu_note();
     in.header_actions = chat.header_actions();
@@ -1568,7 +1577,8 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
         dl->AddRectFilled(v2(b.Min.x, b.Max.y - 1.0f), b.Max, L.accent);
         const float x = b.Min.x + m.pad + draw_tag(dl, L, v2(b.Min.x + m.pad, b.Min.y), b.GetHeight(), L.accent, "ALLOW ALL") +
                         2.0f * m.gap;
-        const std::string what = fit(L.ui, L.ui_size, "This session only",
+        const std::string note = permission_note();
+        const std::string what = fit(L.ui, L.ui_size, note.empty() ? std::string("Saved, on until you end it") : note,
                                      lay.banner_end.x - m.gap - x);
         draw_str(dl, L.ui, L.ui_size, v2(x, b.Min.y + (b.GetHeight() - ui_h) * 0.5f), L.secondary, what);
         if (house_button("##chat.allow_all.end", rr(lay.banner_end), "End", "", false, false, L)) set_allow_all(false);
@@ -2130,7 +2140,7 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
             const bool on = now == "Allow all";
             if (ImGui::Selectable("##mode.allow_all", on, 0, v2(cw, lh))) set_allow_all(!on);
             draw_str(ImGui::GetWindowDrawList(), L.ui, L.ui_size, v2(p.x + std::round(4.0f * s), p.y + (lh - ui_h) * 0.5f),
-                     L.accent, on ? "End Allow all" : "Allow all for this session");
+                     L.accent, on ? "End Allow all" : "Allow all");
         }
         ImGui::PopFont();
         ImGui::EndPopup();

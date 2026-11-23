@@ -4,6 +4,9 @@ See design/instrument-interface.md, section Step History, and test_step_stamps.p
 """
 from __future__ import annotations
 
+import asyncio
+import time
+
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -37,9 +40,15 @@ def test_a_kept_value_has_the_step_it_was_taken_at(server, ctl):
                 for _ in range(6):
                     m = await v.expect(w.Snapshot, lambda m: m.view == "h")
                     step, wall = m.stamp.array().tolist()
+                    # A fast machine delivers a snapshot steps after it was taken, and a slow one can
+                    # deliver it within its own step. The run goes on in both cases, so wait for it to
+                    # pass the step: the kept value must still hold the step it was taken at.
+                    deadline = time.monotonic() + 30
+                    while ctl.n <= step and time.monotonic() < deadline:
+                        await asyncio.sleep(0.002)
                     kept.append((step, ctl.n))
                     assert set(m.data.array().ravel().tolist()) == {float(step)}, (step, m.data.array())
                     assert wall > 0
                 assert _programs._VIEWS["ring"] is server.ring    # the passes of the cadence took them
-                assert any(now > step for step, now in kept), kept
+                assert all(now > step for step, now in kept), kept
     run(go())

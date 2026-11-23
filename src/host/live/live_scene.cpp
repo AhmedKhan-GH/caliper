@@ -10,6 +10,7 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -120,8 +121,24 @@ std::string count_text(uint64_t n) {
 
 }  // namespace
 
+namespace {
+std::atomic<uint64_t> g_view_serial{0};
+}  // namespace
+
 SceneView::SceneView(caliper_gfx::Backend& backend, const caliper_gfx::ProgramDesc* programs)
-    : gfx_(backend), programs_(programs), colormaps_(std::make_shared<caliper_gfx::cmap::KeyBlockCache>()) {}
+    : gfx_(backend), programs_(programs), colormaps_(std::make_shared<caliper_gfx::cmap::KeyBlockCache>()),
+      serial_(++g_view_serial) {}
+
+// The programs' pick of the view: the readback of its ID target on its backend, the ticket of the
+// request in flight, and the version of the item map that each program showed in the frame that
+// the readback reads, by pick id.
+struct SceneView::ProgramPick {
+    std::unique_ptr<caliper_scene::FramePick> frame;
+    uint64_t ticket = 0, last_ticket = 0;
+#if defined(CALIPER_HAVE_DRAW)
+    std::vector<std::pair<uint32_t, caliper_draw::ShownItems>> shown;
+#endif
+};
 
 // One program of pieces that the view draws: its runtime, the submits of its frames that the
 // GPU has not completed with their submit time, the state last reported to the feed, and its install.
@@ -138,6 +155,7 @@ struct SceneView::ProgramSlot {
 };
 
 SceneView::~SceneView() {
+    program_pick_.reset();   // its readbacks go back to the layer with the view
     draws_.clear();
     if (id_) gfx_.release(id_);
     if (program_colormaps_) gfx_.release(program_colormaps_);
@@ -1161,13 +1179,15 @@ void SceneView::poll_programs() {
     bool completed = false;
     for (auto& d : draws_) {
         if (!d->runtime) continue;
-        // Never a wait: the completed submits give their GPU time, or without timestamps the time
-        // from the submit until the work was done, an upper bound.
+        // Never a wait: the completed submits give their GPU time, or < 0 without timestamps, for
+        // work that the driver ended, or for a submit whose time the backend no longer keeps (the
+        // panel was not drawn for a while), and the time from the submit until the work was seen
+        // done, an upper bound. A frame not done after 1 s is late, and the runtime judges it by
+        // its GPU time once it is done.
         while (!d->pending.empty()) {
             double ms = -1;
             if (!gfx_.submit_gpu_ms(d->pending.front().first, &ms)) break;
-            if (ms < 0) ms = ms_since(d->pending.front().second);
-            d->runtime->frame_done(ms);
+            d->runtime->frame_done(ms, ms_since(d->pending.front().second));
             d->pending.pop_front();
             completed = true;
         }
@@ -1210,6 +1230,65 @@ CompileOptions SceneView::stage_options(CompileOptions opt) const {
 
 PickPass::Result SceneView::poll_pick(Hit* out) {
     return pick_ ? pick_->poll(generation_, out) : PickPass::Result::None;
+}
+
+uint64_t SceneView::request_program_pick(float x, float y, std::string* why) {
+#if defined(CALIPER_HAVE_DRAW)
+    if (draws_.empty() || !id_) {
+        if (why) *why = "the view draws no program";
+        return 0;
+    }
+    if (!program_pick_) program_pick_ = std::make_unique<ProgramPick>();
+    ProgramPick& p = *program_pick_;
+    if (!p.frame) p.frame = std::make_unique<caliper_scene::FramePick>(gfx_);
+    p.ticket = 0;
+    p.shown.clear();
+    if (!p.frame->request(id_, depth_, width_, height_, x, y, why)) return 0;
+    // The readback reads the frames submitted so far, whose last one showed these versions.
+    for (const auto& d : draws_)
+        if (d->runtime) p.shown.emplace_back(d->runtime->pick_id(), d->runtime->shown_items());
+    p.ticket = ++p.last_ticket;
+    return p.ticket;
+#else
+    (void)x;
+    (void)y;
+    if (why) *why = "the build draws no program";
+    return 0;
+#endif
+}
+
+PickPass::Result SceneView::poll_program_pick(uint64_t ticket, caliper_draw::PickedItem* out, float* depth) {
+#if defined(CALIPER_HAVE_DRAW)
+    if (!program_pick_ || ticket == 0) return PickPass::Result::None;
+    ProgramPick& p = *program_pick_;
+    if (ticket != p.ticket) return ticket < p.last_ticket ? PickPass::Result::Dropped : PickPass::Result::None;
+    const auto is_program = [&p](uint32_t id) {
+        for (const auto& s : p.shown)
+            if (s.first == id) return true;
+        return false;
+    };
+    caliper_scene::FrameHit fh;
+    const PickPass::Result r = p.frame->poll(is_program, &fh);
+    if (r == PickPass::Result::Pending || r == PickPass::Result::None) return r;
+    p.ticket = 0;
+    PickPass::Result answer = PickPass::Result::Miss;
+    if (r == PickPass::Result::Hit)
+        for (const auto& s : p.shown)
+            if (s.first == fh.pick_id)
+                if (std::optional<caliper_draw::PickedItem> picked = caliper_draw::DrawRuntime::pick_shown(fh.item, s.second)) {
+                    if (out) *out = std::move(*picked);
+                    if (depth) *depth = fh.depth;
+                    answer = PickPass::Result::Hit;
+                    break;
+                }
+    p.shown.clear();
+    return answer;
+#else
+    (void)ticket;
+    (void)out;
+    (void)depth;
+    return PickPass::Result::None;
+#endif
 }
 
 int64_t SceneView::row_id(const std::string& path, Primitive p, int64_t index) const {

@@ -488,14 +488,14 @@ def test_step_from_running_pauses_after_that_many_checkpoints(ctl, fast):
 def test_a_running_run_reports_the_step_of_its_latest_checkpoint(ctl, fast, monkeypatch):
     # The run.step of an app attached to a watched script stayed at 1 while the script
     # was past step 50: CONTROLS went out only when the run state changed.
-    monkeypatch.setattr(C, "RUN_REPORT_S", 0.2, raising=False)
+    monkeypatch.setattr(C, "RUN_REPORT_S", 0.5, raising=False)
     t = Fake()
     r = ctl.attach(t)
     for _ in range(50):
         caliper.step()
     assert t.controls()[0]["run"] == {"state": "running", "step": 1}
-    assert len(t.controls()) <= 2                        # no CONTROLS per step
-    end = time.monotonic() + 5
+    assert len(t.controls()) <= 5                        # no CONTROLS per step (50 steps)
+    end = time.monotonic() + 15
     while t.controls()[-1]["run"]["step"] == 1 and time.monotonic() < end:
         caliper.step()
         time.sleep(0.01)

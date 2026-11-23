@@ -13,6 +13,7 @@
 
 #include <doctest/doctest.h>
 
+#include <fstream>
 #include <set>
 
 using namespace caliper_builder;
@@ -183,6 +184,32 @@ TEST_CASE("pieces: piece.update writes a sample whose bytes match its shape") {
     CHECK(err(*s, "piece.update", {{"piece", p}}) == "piece.bad_manifest");
     p["sample"][0]["data"] = "not base64!";
     CHECK(err(*s, "piece.update", {{"piece", p}}) == "piece.bad_manifest");
+}
+
+TEST_CASE("pieces: a write leaves the half-written versions of other processes on the workspace alone") {
+    std::string ws;
+    auto s = piece_session("piece_tmp", &ws);
+    ok(*s, "piece.update", {{"piece", uv_field()}});
+    // Another app process on the same workspace writes version 2 under every name that a counter of its own
+    // could give; a write of this process never removes one of them.
+    const fs::path dir = fs::path(ws) / "pieces" / "uv_field";
+    for (int k = 0; k <= 512; ++k) {
+        const fs::path other = dir / (".tmp-2-" + std::to_string(k));
+        REQUIRE(fs::create_directory(other));
+        std::ofstream(other / "piece.toml") << "half";
+    }
+    json next = uv_field();
+    next["params"][0]["default"] = 2.0;
+    CHECK(ok(*s, "piece.update", {{"piece", next}})["version"] == 2);
+    int left = 0;
+    for (const auto& entry : fs::directory_iterator(dir))
+        left += entry.path().filename().string().rfind(".tmp-", 0) == 0;
+    CHECK(left == 513);   // its own temporary folder became version 2, and no other one went
+    int intact = 0;
+    for (int k = 0; k <= 512; ++k)
+        intact += read_text((dir / (".tmp-2-" + std::to_string(k)) / "piece.toml").string()) == "half";
+    CHECK(intact == 513);
+    CHECK(fs::exists(dir / "2" / "piece.toml"));
 }
 
 TEST_CASE("pieces: names and versions that would leave the pieces folder are refused") {
@@ -461,6 +488,44 @@ TEST_CASE("pieces: a spec that pins a missing or changed piece opens, and its pr
     status = ok(*s, "program.status", {{"id", "field"}});
     CHECK(status["programs"][0]["error"]["code"] == "piece.missing");
     CHECK(hash.size() == 71);
+}
+
+// A pin needs its hash. The editor writes it only into the pins of
+// program.create and program.patch, thus a hand-written pin without one opens
+// and refuses its program with spec.missing_key, which is no hash mismatch;
+// program.patch with the same pin writes the hash.
+TEST_CASE("pieces: a spec file whose pin has no hash opens, and its program is refused as a missing key") {
+    std::string ws;
+    auto s = piece_session("piece_no_hash", &ws);
+    ok(*s, "piece.update", {{"piece", uv_field()}});
+    ok(*s, "program.create",
+       {{"id", "field"}, {"piece", {{"name", "uv_field"}, {"from", "workspace"}}}, {"panel", "world"}});
+    spec::Spec saved = s->open_spec()->spec;
+    REQUIRE(saved.programs.size() == 1);
+    REQUIRE(saved.programs[0].piece);
+    CHECK(!saved.programs[0].piece->hash.empty());
+    saved.programs[0].piece->hash.clear();
+    const std::string text = spec::to_toml(saved);
+    CHECK(text.find("sha256:") == std::string::npos);
+    write_text(ws + "/unhashed.spec.toml", text);
+    const std::uint64_t cursor = s->events().latest();
+    ok(*s, "spec.open", {{"path", "unhashed.spec.toml"}});
+    REQUIRE(s->open_spec());
+    std::string code;
+    for (const Event& e : s->events().read(cursor, EventFilter{}, 64).events)
+        if (e.kind == EventKind::program && e.fields.value("change", "") == "refused" &&
+            e.fields.value("program", "") == "field")
+            code = e.fields.value("code", "");
+    CHECK(code == "spec.missing_key");
+    json status = ok(*s, "program.status", {{"id", "field"}});
+    CHECK(status["programs"][0]["state"] == "refused");
+    CHECK(status["programs"][0]["error"]["code"] == "spec.missing_key");
+    ok(*s, "program.patch",
+       {{"id", "field"}, {"patch", {{"piece", {{"name", "uv_field"}, {"version", 1}, {"from", "workspace"}}}}}});
+    REQUIRE(s->open_spec()->spec.programs[0].piece);
+    CHECK(s->open_spec()->spec.programs[0].piece->hash.size() == 71);
+    status = ok(*s, "program.status", {{"id", "field"}});
+    CHECK(status["programs"][0]["state"] != "refused");
 }
 
 namespace {

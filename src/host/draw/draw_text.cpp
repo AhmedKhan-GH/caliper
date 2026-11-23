@@ -48,14 +48,14 @@ std::vector<Label> DrawRuntime::labels() const {
     const Impl::Slot* s = nullptr;
     for (const Impl::Slot& slot : m.slots)
         if (slot.id == t.anchors && !slot.texture) s = &slot;
-    if (!s || !s->keep_cpu) return out;
+    if (!s || !s->keep_cpu || !s->shown) return out;
     const std::uint64_t stride = s->layout.stride;
     const cbp::FieldLayout* pos = field_of(s->layout, t.position);
     const cbp::FieldLayout* str = field_of(s->layout, t.string);
     const cbp::FieldLayout* pri = t.priority ? field_of(s->layout, *t.priority) : nullptr;
     if (stride == 0 || !fits(pos, "vec4<f32>", 16, stride) || !fits(str, "u32", 4, stride)) return out;
     if (pri && !fits(pri, "f32", 4, stride)) pri = nullptr;
-    const Impl::Shown& v = s->shown;
+    const Impl::Shown& v = *s->shown;
     const std::uint64_t n = std::min<std::uint64_t>(v.count, v.bytes.size() / stride);
     const std::size_t strings = std::min(t.strings.size(), caliper_builder::spec::piece_limits::kStrings);
     for (std::uint64_t i = 0; i < n; ++i) {

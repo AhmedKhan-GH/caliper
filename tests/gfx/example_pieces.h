@@ -91,7 +91,7 @@ fn field(in: CaliperFullscreen) -> @location(0) vec4<f32> {
     let p = in.uv * f32(T) - 0.5;
     let a = vec2<u32>(clamp(floor(p), vec2<f32>(0.0), vec2<f32>(f32(T - 1u))));
     let b = min(a + 1u, vec2<u32>(T - 1u));
-    let f = clamp(p - floor(p), vec2<f32>(0.0), vec2<f32>(1.0));
+    let f = clamp(p - vec2<f32>(a), vec2<f32>(0.0), vec2<f32>(1.0));
     let v = mix(mix(value(layer, head, a.y, a.x), value(layer, head, a.y, b.x), f.x),
                 mix(value(layer, head, b.y, a.x), value(layer, head, b.y, b.x), f.x), f.y);
     let t = clamp(v * params.gain, 0.0, 1.0);

@@ -97,12 +97,12 @@ features:
 
   - id: INT-11
     title: Ablate
-    status: planned
+    status: shipped
     scope: core
-    summary: Ablate removes a chosen head, layer output or direction from a model's computation during a run.
-    depends_on: [INT-10]
-    sprint: 6
+    summary: Ablate sets the output of a module, or the slice of one attention head, to zero at a step boundary while the run trains, from a command or from a toggle control bound to an intervention point.
+    depends_on: [INT-34]
     design: design/roadmap.md#streaming-and-embedding
+    docs: docs/agents/run-control-and-events.md#toggle-control
     issue: null
 
   - id: INT-12
@@ -204,11 +204,11 @@ features:
 
   - id: INT-23
     title: Head Ablation Demo
-    status: planned
+    status: shipped
     scope: peripheral
-    summary: A demo finds which attention head a model relies on to find a class marker, by ablating heads live and watching the accuracy.
-    depends_on: [INT-11, INT-21]
-    sprint: 6
+    summary: A demo ablates the strongest induction head of a transformer that trains, live and with a toggle, and the loss rises while the head is out, in the Attention Arc Tower.
+    depends_on: [INT-11, REN-83]
+    docs: docs/agents/pieces.md#attention-arc-tower
     issue: null
 
   - id: INT-24
@@ -296,4 +296,13 @@ features:
     summary: The Trace pane drives the intervention API, so that a person intervenes from the trace view on any model that the API supports and compares the run before and after.
     depends_on: [INT-10, INT-15]
     sprint: 6
+    issue: null
+
+  - id: INT-34
+    title: Intervention Commands
+    status: shipped
+    scope: core
+    summary: The commands intervene.points, intervene.set, intervene.clear and intervene.list make each module and each attention head of the attached script an intervention point, and apply an ablation at the next step.
+    depends_on: [AGT-31, STR-55]
+    docs: docs/agents/run-control-and-events.md#intervention-commands
     issue: null

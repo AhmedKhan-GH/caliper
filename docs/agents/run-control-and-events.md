@@ -30,7 +30,7 @@ A run command is of the effect class `run`. It changes the running script and no
 | Ask | Asks for a card |
 | Accept edits | Asks for a card |
 | Read only | Refused with `command.denied` |
-| Allow all, in the side chat only | Runs |
+| Allow all | Runs |
 
 The card states the change and the script, such as "Set parameter lr to 0.005 in train.py. The change applies at the next step." Its buttons are Allow, Allow for this session, Always allow and Deny. For `run.set_param` and `run.action`, the two rule buttons name the target, such as "Always allow changes of lr". The rule is stored with the key `run.set_param:lr` in `agent-permissions.json`. Thus a rule allows one parameter or one action and not the whole command. The key of `run.pause` is the command name. The slider and the button of your own spec send their values directly, so they show no card.
 

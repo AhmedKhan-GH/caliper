@@ -42,6 +42,7 @@ public:
 
     void set_auto_complete(bool on) { auto_complete_ = on; }
     void finish(Serial s);                  // completes every pending serial up to s
+    void end_by_driver(Serial s);           // completes the pending serial s as work the driver ended
     // The GPU time that each submit reports on completion (< 0, the default, reports none),
     // so that a test can drive the time watchdogs of the hosts without a GPU.
     void set_gpu_ms(double ms) { gpu_ms_ = ms; }

@@ -94,7 +94,7 @@ constexpr uint32_t kTextureSideMax = 4096;
 constexpr uint32_t kStrideMax = 256;
 constexpr uint64_t kResourceBytesMax = uint64_t(64) << 20;
 constexpr size_t kCommonBytes = 9 * kSourceBytes;
-constexpr size_t kComposedBytes = 16 * kSourceBytes;
+[[maybe_unused]] constexpr size_t kComposedBytes = 16 * kSourceBytes;   // used only with the sandbox and the compiler
 constexpr uint32_t kOverTimePasses = 3;
 constexpr double kTimeoutFloorMs = 100.0;
 constexpr double kTimeoutFactor = 10.0;
@@ -353,18 +353,19 @@ bool make_groups(caliper_producer* rt, const Prog& p, Program program, std::vect
                 e.size = align4(im->byte_size);
             } else if (b.name == "caliper") {
                 e.buffer = kArena;
-            } else if (b.name == "count") {
-                e.buffer = p.count;
             } else if (b.name == "params" && p.params_buffer) {
                 e.buffer = p.params_buffer;
                 e.size = params_bytes(p);
             } else if (p.derive && b.name == "shapes" && p.shapes) {
                 e.buffer = p.shapes;
             } else if (p.derive) {
+                // Before the one-pass names: `count` is a valid id of a derive resource.
                 for (const ResourceSlot& r : p.resources) {
                     if (r.id == b.name) e.buffer = r.buffer;
                     else if (r.counted && r.id + "_count" == b.name) e.buffer = r.counter;
                 }
+            } else if (b.name == "count") {
+                e.buffer = p.count;
             } else {
                 for (const OutputArray& a : p.arrays)
                     if (a.name == b.name) e.buffer = a.buffer;
@@ -1082,7 +1083,7 @@ caliper_producer_status caliper_producer_compile(caliper_producer* rt, const cal
                 caliper_wgsl_entry_point ep{};
                 if (caliper_wgsl_module_entry_point(mod, i, &ep) != CALIPER_WGSL_OK) continue;
                 refl.entries.push_back({ep.name, sb::EntryStage(ep.stage),
-                                        {ep.workgroup_size[0], ep.workgroup_size[1], ep.workgroup_size[2]}});
+                                        {ep.workgroup_size[0], ep.workgroup_size[1], ep.workgroup_size[2]}, {}, {}});
             }
             if (sandbox_refused(sb::check_program(spec, refl), error, &refused)) return refused;
         }

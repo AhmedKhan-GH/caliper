@@ -10,10 +10,12 @@
 
 #include <caliper_builder/programs/sandbox.h>
 #include <caliper_builder/session/events.h>
+#include <caliper_builder/session/history.h>
 #include <caliper_builder/session/program_host.h>
 
 #include "gfx/example_pieces.h"
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -226,6 +228,72 @@ TEST_CASE("live/programs: a params change sends only values, and a value outside
     CHECK(sets() == 1);
 }
 
+TEST_CASE("live/programs: only a resource that the pinned piece publishes, in its declared form, reaches the history") {
+    struct ResourceLink final : caliper_live::ProgramLink {
+        std::vector<caliper_live::ReceivedResource> incoming;
+        bool ready() override { return true; }
+        uint64_t epoch() override { return 1; }
+        uint32_t send(caliper_net::wire::Program) override { return 1; }
+        std::vector<caliper_live::ProgramAnswer> take() override { return {}; }
+        bool takes_pieces() override { return true; }
+        std::vector<caliper_live::ReceivedResource> take_resources() override {
+            std::vector<caliper_live::ReceivedResource> out;
+            out.swap(incoming);
+            return out;
+        }
+    };
+    cb::spec::Spec spec;
+    cb::spec::Piece arcs = caliper_test_pieces::attention_arcs();   // heads: f32 x 8; arcs: 24 bytes x 4096
+    arcs.hash = cb::programs::piece_hash(arcs);
+    spec.pieces = {arcs};
+    cb::spec::Program instance;
+    instance.id = "tower";
+    cb::spec::PieceRef pin;
+    pin.name = arcs.name;
+    pin.version = arcs.version;
+    pin.hash = arcs.hash;
+    pin.from = cb::spec::PieceFrom::inline_piece;
+    instance.piece = pin;
+    instance.bind = {{"attn0", "live:0.attn"}, {"attn1", "live:1.attn"}};
+    spec.programs = {instance};
+    caliper_live::AppProgramHost host;
+    host.reconcile(spec);
+    cb::StepHistory history;
+    history.configure(spec);
+    auto resource = [](const std::string& program, const std::string& name, uint32_t count, uint32_t stride,
+                       int64_t step) {
+        caliper_live::ReceivedResource r;
+        r.program = program;
+        r.resource = name;
+        r.step = step;
+        r.count = count;
+        r.stride = stride;
+        r.bytes = std::make_shared<const std::vector<uint8_t>>(std::size_t(count) * stride, uint8_t(7));
+        return r;
+    };
+    ResourceLink link;
+    link.incoming = {resource("tower", "heads", 8, 4, 10),       // as declared
+                     resource("tower", "arcs", 100, 24, 10),     // fewer than its count
+                     resource("tower", "spare", 8, 4, 10),       // a name that the piece does not publish
+                     resource("tower", "heads", 9, 4, 11),       // more than its count
+                     resource("tower", "arcs", 100, 32, 11),     // another stride
+                     resource("other", "heads", 8, 4, 10)};      // a program that the spec does not have
+    caliper_live::ReceivedResource texture = resource("tower", "heads", 4, 4, 12);
+    texture.width = texture.height = 2;                          // a texture where a buffer is declared
+    link.incoming.push_back(texture);
+    caliper_live::ReceivedResource short_bytes = resource("tower", "heads", 8, 4, 13);
+    short_bytes.bytes = std::make_shared<const std::vector<uint8_t>>(std::size_t(16), uint8_t(0));
+    link.incoming.push_back(short_bytes);
+    host.deliver_resources(link, history);
+    CHECK(host.resources_received() == 8);
+    CHECK(host.resources_refused() == 6);
+    std::vector<std::string> keys;
+    for (const cb::KeptResource& k : history.kept_resources()) keys.push_back(k.key);
+    CHECK(keys == std::vector<std::string>{"tower/arcs", "tower/heads"});
+    CHECK(history.resource_at("tower/heads", 100)->step == 10);
+    CHECK(history.resource_at("tower/arcs", 100)->count == 100);
+}
+
 // A program of a foreign spec (design/gpu-programs.md, Provenance;
 // design/programmable-graphics.md, Piece Sources) never goes out to the
 // script, which would compile it and relay its draw half to the viewers,
@@ -300,4 +368,54 @@ TEST_CASE("live/programs: a foreign spec's programs and pieces wait for a review
     CHECK(host.status()[0].state == "review");
     CHECK(link.inner.sent.back().op == CALIPER_NET_PROGRAM_REMOVE);
     CHECK(link.inner.sent.back().id == "heat");
+}
+
+// A pin needs its hash (design/programmable-graphics.md, Versions and Pins).
+// The editor writes it only into the pins of program.create and
+// program.patch, thus a pin without one in a spec file is refused with
+// spec.missing_key and never goes out, and the pin with the piece's hash goes
+// out.
+TEST_CASE("live/programs: a pin without a hash is a missing key, not a hash mismatch") {
+    struct PieceLink final : caliper_live::ProgramLink {
+        Link inner;
+        bool ready() override { return true; }
+        uint64_t epoch() override { return 1; }
+        uint32_t send(caliper_net::wire::Program m) override { return inner.send(std::move(m)); }
+        std::vector<caliper_live::ProgramAnswer> take() override { return inner.take(); }
+        bool takes_pieces() override { return true; }
+    };
+    cb::spec::Spec spec;
+    cb::spec::Piece field = caliper_test_pieces::attention_field();
+    field.hash = cb::programs::piece_hash(field);
+    spec.pieces = {field};
+    cb::spec::Program instance;
+    instance.id = "field";
+    cb::spec::PieceRef pin;
+    pin.name = field.name;
+    pin.version = field.version;
+    pin.from = cb::spec::PieceFrom::inline_piece;
+    instance.piece = pin;
+    instance.panel = std::string("pattern");
+    instance.bind = {{"attn0", "live:0.attn"}, {"attn1", "live:1.attn"}};
+    spec.programs = {instance};
+
+    caliper_live::AppProgramHost host;
+    cb::EventRing ring;
+    PieceLink link;
+    host.reconcile(spec);
+    host.pump(link, &ring);
+    CHECK(link.inner.sent.empty());
+    auto st = host.status();
+    REQUIRE(st.size() == 1);
+    CHECK(st[0].state == "refused");
+    REQUIRE(st[0].error.has_value());
+    CHECK(st[0].error->code == "spec.missing_key");
+    CHECK(st[0].error->message.find("no hash") != std::string::npos);
+
+    spec.programs[0].piece->hash = field.hash;
+    host.reconcile(spec);
+    host.pump(link, &ring);
+    REQUIRE(link.inner.sent.size() == 1);
+    CHECK(link.inner.sent[0].id == "field");
+    CHECK(host.status()[0].state == "waiting");
 }

@@ -118,3 +118,30 @@ features:
     summary: Views could show the runs of a hyperparameter sweep together.
     depends_on: [RUN-05]
     issue: null
+
+  - id: RUN-14
+    title: Managed Runs
+    status: shipped
+    scope: core
+    summary: The model runner of the app starts a script of the workspace as a managed run, and the commands run.start, run.stop, run.list and run.logs control it, with a review card before every start.
+    depends_on: [AGT-17, SPC-06, STR-55]
+    docs: docs/agents/managed-runs.md#tools
+    issue: null
+
+  - id: RUN-15
+    title: Run Fork
+    status: shipped
+    scope: core
+    summary: The command run.fork starts a new run from a checkpoint of a running or paused run with changed parameters, so that the fork keeps the model and optimizer state and records its parent.
+    depends_on: [RUN-14]
+    docs: docs/agents/managed-runs.md#fork
+    issue: null
+
+  - id: RUN-16
+    title: Run Sources of Managed Runs
+    status: shipped
+    scope: peripheral
+    summary: The catalog source run:<id>/<view> draws the series of a managed run that the app does not show, so that two loss curves, such as a run and its fork, share one panel.
+    depends_on: [RUN-14]
+    docs: docs/agents/managed-runs.md#two-runs-in-one-panel
+    issue: null

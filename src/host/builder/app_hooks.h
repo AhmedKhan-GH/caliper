@@ -43,7 +43,14 @@ inline AppSession::Options app_session_options(const CommandLine& cl, bool scrip
     if (const char* s = std::getenv("CALIPER_COMMAND_SCRIPT"); s && *s) o.script = s;
     if (const char* r = std::getenv("CALIPER_COMMAND_RESULTS"); r && *r) o.results = r;
     // The person's agent permissions live beside the app's other settings.
+    // With them, no command may write the settings that set what an agent may
+    // do: the side chat's agent and its command line (side-chat.json, a
+    // program the app runs), the widget agent's provider, server and model
+    // (widget-agent.json), and the API file that tells caliper-mcp's clients
+    // where the app is (api.json).
     o.permissions_file = caliper::app_data_path("agent-permissions.json");
+    o.protected_files = {caliper::app_data_path("side-chat.json"), caliper::app_data_path("widget-agent.json"),
+                         caliper::app_data_path("api.json")};
     gate_command_script(&o, scripts_allowed, refused);
     return o;
 }

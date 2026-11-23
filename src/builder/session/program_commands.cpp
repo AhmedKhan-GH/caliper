@@ -172,12 +172,12 @@ ProgramStatus unhosted(const spec::Spec& s, std::string id, std::string kind, st
 
 // The status item of an instance of a piece (design/programmable-graphics.md,
 // Program Commands): the kind piece, the pin, and the draw half's object when
-// the piece draws. An item that no host reports is refused when its pin does
-// not resolve, in review when a foreign spec's provenance lacks the piece's
-// hash, and waiting otherwise.
+// the piece draws. An item that no host reports is refused when its pin has no
+// hash or does not resolve, in review when a foreign spec's provenance lacks
+// the piece's hash, and waiting otherwise.
 json instance_status(const spec::Spec& s, const spec::Program& p, const ProgramStatus* hosted,
                      const ProgramStatus* drawn, const std::string& workspace) {
-    const FoundPiece found = resolve_pin(PieceLibrary::builtin(), workspace, s, *p.piece);
+    const FoundPiece found = resolve_spec_pin(PieceLibrary::builtin(), workspace, s, *p.piece);
     json out;
     if (hosted) {
         out = program_status_json(*hosted);

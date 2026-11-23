@@ -984,7 +984,8 @@ endif()
 # with the training script of the GPU programs test. tests/piece_path/driver.py writes a workspace piece, creates its
 # instance in a scene panel, and checks that the script runs its derive pass on the live weight, that program_read
 # gives the published elements from the app's step history, that the draw half draws them, and that selection_set
-# marks a picked item. It exits 77 where the GPU programs test does.
+# marks a picked item. It exits 77 only when the machine has no Metal device or the Python modules caliper._netio and
+# caliper._producer are not built, and its last line names which; anything else that is missing fails it.
 if(NOT WIN32 AND CALIPER_WITH_BUILDER AND _acceptance_python)
     add_test(NAME caliper_piece_path_acceptance COMMAND "${_acceptance_python}" "${CMAKE_CURRENT_SOURCE_DIR}/piece_path/driver.py"
         --app "$<TARGET_FILE:caliper>" --mcp "$<TARGET_FILE:caliper-mcp>" --python "${_acceptance_python}"

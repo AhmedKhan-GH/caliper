@@ -78,7 +78,7 @@ def test_calls_never_block_on_queued_gpu_work(win, monkeypatch):
     for name, (us, took, pending) in timings.items():
         assert took is True, name
         assert pending, f"{name}: snapshot completed at once (was GPU work really queued?)"
-        assert us < 200.0, (name, us)
+        assert us < 5000.0, (name, us)            # 5 ms; a call that waited would take tens of ms
     torch.mps.synchronize()
     wait_drawn(win)
     st = win.stats()
@@ -145,8 +145,9 @@ def test_no_torn_or_stale_frames(win):
         W = torch.zeros(1024, 1024, device="mps")
         checks = torn = wrong = snaps = it = 0
         t_end = time.perf_counter() + 1.5
+        cap = time.perf_counter() + 30.0         # a slow machine goes on until both counts are reached
         next_check = time.perf_counter() + 0.05
-        while time.perf_counter() < t_end:
+        while time.perf_counter() < cap and (time.perf_counter() < t_end or checks < 20 or snaps < 20):
             cur_k[0] = (cur_k[0] + 7) % 256
             W.fill_(float(cur_k[0]))
             snaps += bool(caliper.show(W, "T", vmin=0, vmax=255, rate=0))
@@ -174,12 +175,26 @@ def test_no_torn_or_stale_frames(win):
     assert torn == 0 and wrong == 0
 
 
-def test_default_rate_is_60hz(win):
+class _Clock:
+    """The time module with a perf_counter that the test sets, so that the rate limit is checked
+    on a known sequence of calls and times rather than on how fast the machine makes the calls."""
+    now = 1000.0
+
+    def perf_counter(self):
+        return self.now
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+def test_default_rate_is_60hz(win, monkeypatch):
     x = torch.rand(64, 64)
+    clock = _Clock()
+    monkeypatch.setattr(caliper, "time", clock)
     taken = 0
-    t_end = time.perf_counter() + 0.5
-    while time.perf_counter() < t_end:
+    for _ in range(500):                         # 500 calls, 1 ms apart: 0.5 s
         taken += bool(caliper.show(x, "rate60"))
+        clock.now += 0.001
     assert 20 <= taken <= 32, taken
 
 

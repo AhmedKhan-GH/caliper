@@ -30,6 +30,10 @@
 #include <set>
 #include <utility>
 
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
+
 #include "applet_files.h"
 #include "util.h"
 
@@ -214,12 +218,28 @@ struct Session::Impl {
     };
     std::deque<Bound> bound;  // under review_mutex
     // Agent permissions (permissions.h), under perm_mutex: the saved modes
-    // and rules, Allow all of the chat's session, the chat's agent id, the
-    // rules of this session by principal, and the note of the invocation the
-    // policy decided last, which the registry asks for next.
+    // and rules, the chat's agent id, the rules of this session by principal,
+    // and the note of the invocation the policy decided last, which the
+    // registry asks for next.
     mutable std::mutex perm_mutex;
     AgentPermissionsFile perms;
-    bool chat_allow_all = false;
+    AgentPermissionsFile saved;   // what the file holds, as last read or written
+    std::string save_error;       // why the last save failed; "" after a successful one
+    // What the person chose in this app and no save has written yet: always
+    // written by the next save, whatever the file holds.
+    bool pending_chat = false, pending_mcp = false;
+    std::vector<AgentRule> pending_added, pending_revoked;
+    // The permissions file's size, modification time and identity at the
+    // last read or write, so that a changed file is noticed without a read.
+    struct FileStamp {
+        bool exists = false;
+        long long size = 0, mtime_ns = 0;
+        unsigned long long dev = 0, ino = 0;
+        bool operator==(const FileStamp& o) const {
+            return exists == o.exists && size == o.size && mtime_ns == o.mtime_ns && dev == o.dev && ino == o.ino;
+        }
+    };
+    FileStamp stamp;
     std::string chat_agent;
     std::set<std::string> chat_session_rules;
     std::set<std::string> mcp_session_rules;
@@ -331,13 +351,13 @@ struct Session::Impl {
     }
 
     // The event `refused` of each program whose pinned piece is missing from
-    // its source or has another hash, when a spec opens
-    // (design/programmable-graphics.md, Status and Events). The spec opens all
-    // the same, and the host never pins another version on its own.
+    // its source or has another hash, or whose pin has no hash, when a spec
+    // opens (design/programmable-graphics.md, Status and Events). The spec
+    // opens all the same, and the host never pins another version on its own.
     void refuse_unresolved_pins(const spec::Spec& s) {
         for (const spec::Program& p : s.programs) {
             if (!p.piece) continue;
-            const FoundPiece f = resolve_pin(PieceLibrary::builtin(), workspace, s, *p.piece);
+            const FoundPiece f = resolve_spec_pin(PieceLibrary::builtin(), workspace, s, *p.piece);
             if (!f.error) continue;
             ProgramStatus st;
             st.id = p.id;
@@ -1874,14 +1894,117 @@ struct Session::Impl {
     }
 
     AgentMode mode_of(AgentPrincipal who) const {
-        if (who == AgentPrincipal::chat) return chat_allow_all ? AgentMode::allow_all : perms.chat;
+        if (who == AgentPrincipal::chat) return perms.chat;
         if (who == AgentPrincipal::mcp) return perms.mcp;
         return AgentMode::ask;
     }
 
+    FileStamp file_stamp() const {
+        FileStamp out;
+        if (options.permissions_file.empty()) return out;
+#ifndef _WIN32
+        struct stat st {};
+        if (::stat(fs::u8path(options.permissions_file).c_str(), &st) != 0) return out;
+        out.exists = true;
+        out.size = static_cast<long long>(st.st_size);
+        out.dev = static_cast<unsigned long long>(st.st_dev);
+        out.ino = static_cast<unsigned long long>(st.st_ino);
+#ifdef __APPLE__
+        out.mtime_ns = static_cast<long long>(st.st_mtimespec.tv_sec) * 1000000000LL + st.st_mtimespec.tv_nsec;
+#else
+        out.mtime_ns = static_cast<long long>(st.st_mtim.tv_sec) * 1000000000LL + st.st_mtim.tv_nsec;
+#endif
+#else
+        std::error_code ec;
+        const fs::path p = fs::u8path(options.permissions_file);
+        out.exists = fs::exists(p, ec);
+        if (out.exists) {
+            out.size = static_cast<long long>(fs::file_size(p, ec));
+            out.mtime_ns = static_cast<long long>(fs::last_write_time(p, ec).time_since_epoch().count());
+        }
+#endif
+        return out;
+    }
+
+    static int strictness(AgentMode m) {
+        switch (m) {
+            case AgentMode::read_only: return 0;
+            case AgentMode::ask: return 1;
+            case AgentMode::accept_edits: return 2;
+            case AgentMode::allow_all: return 3;
+        }
+        return 1;
+    }
+    static AgentMode stricter(AgentMode a, AgentMode b) { return strictness(a) <= strictness(b) ? a : b; }
+
+    // Before a decision that Allow all would make without a card: when the
+    // file changed since the last read or write and no longer holds Allow all
+    // for the principal, its mode is lowered to the file's at once. This only
+    // ever lowers. Under perm_mutex.
+    void recheck_allow_all(AgentPrincipal who) {
+        if (options.permissions_file.empty() || mode_of(who) != AgentMode::allow_all) return;
+        const FileStamp now = file_stamp();
+        if (now == stamp) return;
+        const AgentPermissionsRead r = read_agent_permissions(options.permissions_file);
+        stamp = now;
+        const AgentMode in_file = who == AgentPrincipal::chat ? r.file.chat : r.file.mcp;
+        if (in_file == AgentMode::allow_all) return;
+        (who == AgentPrincipal::chat ? perms.chat : perms.mcp) = in_file;
+        (who == AgentPrincipal::chat ? saved.chat : saved.mcp) = in_file;
+        (who == AgentPrincipal::chat ? pending_chat : pending_mcp) = false;
+    }
+
+    Error failed_save(Error e) {
+        save_error = e.message;
+        return e;
+    }
+
+    // Saves the permissions, under a lock between apps. The file is read
+    // again first, and what the person chose in this app (the pending modes
+    // and rules) is always written into it; the rest stays as the file holds
+    // it, so a second app's change stays. A re-read only lowers: afterwards
+    // a mode in memory takes the file's mode only where that is stricter,
+    // and a rule the file no longer holds leaves memory, but nothing the
+    // file adds enters it. A file that cannot be read fails the save; one
+    // that reads with a problem is replaced with what the session holds.
     Error save_perms() {
-        if (options.permissions_file.empty()) return {};
-        return write_agent_permissions(options.permissions_file, perms);
+        if (options.permissions_file.empty()) {
+            saved = perms;
+            pending_chat = pending_mcp = false;
+            pending_added.clear();
+            pending_revoked.clear();
+            return {};
+        }
+        const AgentPermissionsLock lock(options.permissions_file);
+        if (lock.error()) return failed_save(lock.error());
+        const AgentPermissionsRead now = read_agent_permissions(options.permissions_file);
+        if (!now.readable)
+            return failed_save(Error("permissions.read_failed",
+                                     "The agent permissions could not be saved: their file cannot be read.",
+                                     options.permissions_file));
+        AgentPermissionsFile merged = now.problems.empty() ? now.file : perms;
+        if (pending_chat) merged.chat = perms.chat;
+        if (pending_mcp) merged.mcp = perms.mcp;
+        auto has = [](const std::vector<AgentRule>& v, const AgentRule& r) {
+            return std::find(v.begin(), v.end(), r) != v.end();
+        };
+        for (const AgentRule& r : pending_added)
+            if (!has(merged.rules, r)) merged.rules.push_back(r);
+        for (const AgentRule& r : pending_revoked)
+            merged.rules.erase(std::remove(merged.rules.begin(), merged.rules.end(), r), merged.rules.end());
+        if (Error e = write_agent_permissions(options.permissions_file, merged)) return failed_save(e);
+        stamp = file_stamp();
+        perms.chat = stricter(perms.chat, merged.chat);
+        perms.mcp = stricter(perms.mcp, merged.mcp);
+        perms.rules.erase(std::remove_if(perms.rules.begin(), perms.rules.end(),
+                                         [&](const AgentRule& r) { return !has(merged.rules, r); }),
+                          perms.rules.end());
+        saved = std::move(merged);
+        pending_chat = pending_mcp = false;
+        pending_added.clear();
+        pending_revoked.clear();
+        save_error.clear();
+        return {};
     }
 
     // The session's policy with the agent's mode and rules applied, and the
@@ -1892,11 +2015,13 @@ struct Session::Impl {
         if (who == AgentPrincipal::none) return base;
         const std::string key = invocation_key(inv);
         PermissionContext c;
-        // A start or a fork of a managed run shows its card in every mode:
-        // like a bound approval, only the card decides.
-        c.bound = base == ApprovalDecision::ask && (is_bound(key) || starts_run(inv.name));
-        c.python = base == ApprovalDecision::ask && python_pending(key);
+        // A data-loss card (bound to content) asks in every mode. A start or
+        // a fork of a managed run runs Python code, as a Python loader does:
+        // no rule covers it, and only its card or Allow all lets it run.
+        c.bound = base == ApprovalDecision::ask && is_bound(key);
+        c.python = base == ApprovalDecision::ask && (python_pending(key) || starts_run(inv.name));
         std::lock_guard<std::mutex> lock(perm_mutex);
+        if (base == ApprovalDecision::ask) recheck_allow_all(who);
         c.mode = mode_of(who);
         const std::string rule = permission_rule_key(inv);
         c.session_rule = (who == AgentPrincipal::chat ? chat_session_rules : mcp_session_rules).count(rule) > 0;
@@ -1975,6 +2100,10 @@ Session::Open Session::open(const std::string& workspace, SessionOptions options
         std::unique_ptr<Session> s(new Session());
         Impl& im = *s->impl_;
         im.options = std::move(options);
+        // The person's settings that set what an agent may do: no command
+        // writes, replaces or removes them (loaders/paths.h).
+        protect_file(im.options.permissions_file);
+        for (const std::string& f : im.options.protected_files) protect_file(f);
         StoreOpen opened = LoaderStore::open(workspace, im.options.store);
         if (opened.error) {
             out.error = opened.error;
@@ -2002,7 +2131,15 @@ Session::Open Session::open(const std::string& workspace, SessionOptions options
             self->reconcile_hosts();
             if (app) app(e);
         };
-        CommandJournal::Open j = CommandJournal::open((im.ws() / "journal" / "commands.jsonl").u8string(), im.options.journal);
+        const std::string journal_file = (im.ws() / "journal" / "commands.jsonl").u8string();
+        if (touches_protected_file(journal_file)) {
+            out.error = Error("session.protected_file",
+                              "The command journal would be written into a protected settings file, so the workspace "
+                              "was not opened.",
+                              journal_file);
+            return out;
+        }
+        CommandJournal::Open j = CommandJournal::open(journal_file, im.options.journal);
         if (j.error) {
             out.error = j.error;
             return out;
@@ -2030,6 +2167,8 @@ Session::Open Session::open(const std::string& workspace, SessionOptions options
         if (!im.options.permissions_file.empty()) {
             AgentPermissionsRead read = read_agent_permissions(im.options.permissions_file);
             im.perms = std::move(read.file);
+            im.saved = im.perms;
+            im.stamp = im.file_stamp();
             im.perm_problems = std::move(read.problems);
         }
         for (CommandOrigin o : {CommandOrigin::ui, CommandOrigin::builder, CommandOrigin::agent, CommandOrigin::mcp,
@@ -2118,28 +2257,36 @@ AgentMode Session::agent_mode(AgentPrincipal who) const {
     return impl_->mode_of(who);
 }
 
-AgentMode Session::saved_agent_mode(AgentPrincipal who) const {
-    std::lock_guard<std::mutex> lock(impl_->perm_mutex);
-    return who == AgentPrincipal::chat ? impl_->perms.chat : who == AgentPrincipal::mcp ? impl_->perms.mcp : AgentMode::ask;
-}
-
 Error Session::set_agent_mode(AgentPrincipal who, AgentMode mode) {
     Impl& im = *impl_;
     std::lock_guard<std::mutex> lock(im.perm_mutex);
     if (who == AgentPrincipal::none) return Error("permissions.no_principal", "Only the side chat's agent and mcp clients have a mode.");
-    if (mode == AgentMode::allow_all) {
-        if (who != AgentPrincipal::chat)
-            return Error("permissions.allow_all_chat_only", "Allow all is only for the side chat's agent, for its session.");
-        im.chat_allow_all = true;  // never saved
-        return {};
+    AgentMode& slot = who == AgentPrincipal::chat ? im.perms.chat : im.perms.mcp;
+    bool& pending = who == AgentPrincipal::chat ? im.pending_chat : im.pending_mcp;
+    const AgentMode before = slot;
+    const bool was_pending = pending;
+    // The person's choice is always written, also when memory holds it already.
+    slot = mode;
+    pending = true;
+    const Error e = im.save_perms();
+    // Allow all holds only once the file says so. Another mode holds at once
+    // even when its save failed, and saved_agent_mode() and
+    // permission_save_error() say that the file still holds the old one.
+    if (e && mode == AgentMode::allow_all) {
+        slot = before;
+        pending = was_pending;
     }
-    if (who == AgentPrincipal::chat) {
-        im.chat_allow_all = false;
-        im.perms.chat = mode;
-    } else {
-        im.perms.mcp = mode;
-    }
-    return im.save_perms();
+    return e;
+}
+
+AgentMode Session::saved_agent_mode(AgentPrincipal who) const {
+    std::lock_guard<std::mutex> lock(impl_->perm_mutex);
+    return who == AgentPrincipal::chat ? impl_->saved.chat : who == AgentPrincipal::mcp ? impl_->saved.mcp : AgentMode::ask;
+}
+
+std::string Session::permission_save_error() const {
+    std::lock_guard<std::mutex> lock(impl_->perm_mutex);
+    return impl_->save_error;
 }
 
 void Session::set_chat_agent(const std::string& agent_id) {
@@ -2154,7 +2301,6 @@ std::string Session::chat_agent() const {
 
 void Session::end_chat_session() {
     std::lock_guard<std::mutex> lock(impl_->perm_mutex);
-    impl_->chat_allow_all = false;
     impl_->chat_session_rules.clear();
 }
 
@@ -2183,6 +2329,10 @@ Error Session::allow_always(const CommandInvocation& parked, RuleScope scope) {
     }
     const AgentRule rule{im.rule_agent(who), key};
     if (std::find(im.perms.rules.begin(), im.perms.rules.end(), rule) == im.perms.rules.end()) im.perms.rules.push_back(rule);
+    // The person's choice is always written, also when memory holds it already.
+    im.pending_revoked.erase(std::remove(im.pending_revoked.begin(), im.pending_revoked.end(), rule), im.pending_revoked.end());
+    if (std::find(im.pending_added.begin(), im.pending_added.end(), rule) == im.pending_added.end())
+        im.pending_added.push_back(rule);
     return im.save_perms();
 }
 
@@ -2197,6 +2347,9 @@ bool Session::revoke_agent_rule(const AgentRule& rule) {
     const auto it = std::find(im.perms.rules.begin(), im.perms.rules.end(), rule);
     if (it == im.perms.rules.end()) return false;
     im.perms.rules.erase(it);
+    im.pending_added.erase(std::remove(im.pending_added.begin(), im.pending_added.end(), rule), im.pending_added.end());
+    if (std::find(im.pending_revoked.begin(), im.pending_revoked.end(), rule) == im.pending_revoked.end())
+        im.pending_revoked.push_back(rule);
     im.save_perms();
     return true;
 }

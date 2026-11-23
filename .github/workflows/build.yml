@@ -226,6 +226,46 @@ jobs:
             echo "::error::Instrument building acceptance: neither passed nor skipped for lack of Metal"
             exit 1
           fi
+      # The programmable graphics acceptance test on its own. The agent builds the Attention Arc Tower from
+      # pieces through caliper-mcp on a managed run of examples/python/arc_tower_train.py, with the same two build
+      # folders as the step above. It picks an arc, ablates a head, forks the run from a past step and stops a
+      # draw that is over its time. A skip because the runner has no Metal device is accepted. Any other skip,
+      # and any outcome that is neither a pass nor a Metal skip, is a setup error.
+      - name: Programmable graphics acceptance test
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/programmable-graphics-acceptance.log"
+          ctest --test-dir cmake-build-release -R caliper_programmable_graphics_acceptance --output-on-failure -V --timeout 900 | tee "$log"
+          if grep -q "caliper_programmable_graphics_acceptance passed" "$log"; then
+            echo "Programmable graphics acceptance: RAN and passed"
+          elif grep -qE "caliper_programmable_graphics_acceptance skipped: (this machine has no Metal device|the renderer is .*, not Metal)" "$log"; then
+            echo "Programmable graphics acceptance: SKIPPED because the runner has no Metal device"
+          elif grep -q "caliper_programmable_graphics_acceptance skipped" "$log"; then
+            echo "::error::Programmable graphics acceptance: SKIPPED for a reason other than a missing Metal device (CI setup error)"
+            exit 1
+          else
+            echo "::error::Programmable graphics acceptance: neither passed nor skipped for lack of Metal"
+            exit 1
+          fi
+      # The piece path acceptance test on its own: a workspace piece with both halves through the command layer,
+      # with the same two build folders as the steps above. A skip because the runner has no Metal device is
+      # accepted. Any other skip, and any outcome that is neither a pass nor a Metal skip, is a setup error.
+      - name: Piece path acceptance test
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/piece-path-acceptance.log"
+          ctest --test-dir cmake-build-release -R caliper_piece_path_acceptance --output-on-failure -V --timeout 300 | tee "$log"
+          if grep -q "caliper_piece_path_acceptance passed" "$log"; then
+            echo "Piece path acceptance: RAN and passed"
+          elif grep -qE "caliper_piece_path_acceptance skipped: (this machine has no Metal device|the renderer is .*, not Metal)" "$log"; then
+            echo "Piece path acceptance: SKIPPED because the runner has no Metal device"
+          elif grep -q "caliper_piece_path_acceptance skipped" "$log"; then
+            echo "::error::Piece path acceptance: SKIPPED for a reason other than a missing Metal device (CI setup error)"
+            exit 1
+          else
+            echo "::error::Piece path acceptance: neither passed nor skipped for lack of Metal"
+            exit 1
+          fi
       # The Python tests of managed runs, the adapter, watch and controls run with the acceptance
       # Python, which has torch, websockets and the native sender. The four tests of test_watch.py that
       # need the native core module (caliper._native, which the CMake build does not install into
@@ -242,7 +282,9 @@ jobs:
       # The tests of programmable graphics run here as well: the wire's resource message and the instance
       # form of PROGRAM (test_wire.py, numpy only), and the pieces' derive halves in the script
       # (test_programs_pieces.py), which skip themselves where torch has no MPS device or caliper._producer
-      # is older than ABI version 3, as the tensor test does.
+      # is older than ABI version 3, as the tensor test does. So do the forks of a managed run
+      # (test_managed_fork.py): the kept checkpoints on a fake clock, the interventions, and a fork that resumes
+      # from a kept checkpoint in a subprocess, which waits only on the exit of that process.
       - name: Python tests of the acceptance Python
         run: >-
           PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -m pytest -q -p no:cacheprovider
@@ -252,7 +294,7 @@ jobs:
           python/tests/test_ablate.py python/tests/test_wire_32.py python/tests/test_step_stamps.py
           python/tests/test_program_tensor.py python/tests/test_step_stamps_senders.py
           python/tests/test_cadence_views.py
-          python/tests/test_wire.py python/tests/test_programs_pieces.py
+          python/tests/test_wire.py python/tests/test_programs_pieces.py python/tests/test_managed_fork.py
           --deselect "python/tests/test_watch.py::test_watch_registers_produces_and_removes"
           --deselect "python/tests/test_watch.py::test_watch_include_and_every"
           --deselect "python/tests/test_watch.py::test_watch_is_free_when_nothing_is_attached"

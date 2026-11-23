@@ -26,9 +26,14 @@
 // reports each submit's GPU time with frame_done() and the age of the oldest
 // pending one with frame_pending(). A program over draw.frame_ms on 30 frames
 // in a row records one more frame with each pass in a submit of its own, and
-// then stops with program.draw_over_time, naming its costliest pass; a frame
-// still pending after 1 s stops it at once with program.draw_timeout; a
-// resource, draw buffer or target over draw.memory_mb stops it with
+// then stops with program.draw_over_time, naming its costliest pass. A frame
+// still pending after 1 s by the wall clock is late, and the program submits
+// no frame until it is done: a training run on the same GPU can delay a
+// correct frame that long. Frames over 250 ms of GPU time in a row stop it
+// with program.draw_timeout once their GPU time passes 1 s together, thus a
+// frame over 1 s of GPU time stops it at once. A late frame that the driver
+// ended stops it too, and where the backend gives no GPU time, 3 late frames
+// in a row do; a frame still pending after 5 s stops it at once. A resource, draw buffer or target over draw.memory_mb stops it with
 // program.draw_over_memory. A stopped program releases its objects and draws
 // nothing; the other programs of the panel keep drawing. Nothing here throws.
 #include "gfx/gfx.h"
@@ -81,6 +86,19 @@ struct ResourceVersion {
     std::uint32_t count = 0;         // valid elements; a texture's width * height
     const std::uint8_t* bytes = nullptr;
     std::size_t size = 0;            // count * stride, or width * height * 4
+    // A number that the source gives each version, which differs for a version that replaces
+    // another at the same step (the step history's ResourceVersion::serial); 0 when it has none.
+    std::uint64_t serial = 0;
+};
+
+// What one frame showed of a program's item map: the copy of the version of its resource, with
+// the program, the map and the element layout that drew it. A pick keeps it from the frame that
+// its readback reads until the readback answers, so that the item's fields come from that frame's
+// version, not from a newer one that arrived since (DrawRuntime::pick_shown). Empty when the
+// program has no item map or no frame showed a version.
+struct ShownItems {
+    std::shared_ptr<const void> state;   // draw_pick.cpp
+    explicit operator bool() const { return state != nullptr; }
 };
 
 // One entry of the linked selection (CaliperSelected of the prelude).
@@ -212,13 +230,22 @@ public:
     // installed, stopped, a resource without a version, or a refusal, which
     // stops it). Applies the reset rules of the draw buffers.
     bool encode(std::vector<caliper_gfx::Frame>* frames, const FrameInputs& in, const HostTarget& target);
-    // Reports the GPU time of one submitted frame, in the order of encode()'s
-    // frames: from the layer's timestamps, or the time from the submit until
-    // the work was done where the backend has none. Over draw.frame_ms on 30
-    // frames in a row stops the program with program.draw_over_time.
-    void frame_done(double gpu_ms);
+    // Reports one submitted frame that is done, in the order of encode()'s
+    // frames: `gpu_ms` from the layer's timestamps, < 0 where the backend gave
+    // none, and `wall_ms`, the time from the submit until the host saw the
+    // work done, which stands in for a missing GPU time as an upper bound.
+    // Over draw.frame_ms on 30 frames in a row stops the program with
+    // program.draw_over_time. Frames over 250 ms of GPU time in a row stop it
+    // with program.draw_timeout once their GPU time passes 1 s together. A
+    // late frame (frame_pending) stops it when the backend has timestamps and
+    // gave it none (the driver ended it), or, without timestamps, when it is
+    // the third late frame in a row. A frame whose time the backend no longer
+    // keeps (caliper_gfx::kGpuMsForgotten) is done and not judged.
+    void frame_done(double gpu_ms, double wall_ms = -1);
     // The oldest submitted frame of the program that is not done has waited
-    // this long; after 1 s the program stops at once with program.draw_timeout.
+    // this long by the wall clock: after 1 s the frame is late and the
+    // program submits no frame until it is done; after 5 s the program stops
+    // at once with program.draw_timeout.
     void frame_pending(double waited_ms);
     // The layer refused a submitted frame (Backend::last_error()): the program
     // stops with program.layer_refused; the panel's other programs go on.
@@ -238,6 +265,11 @@ public:
     // The item map's fields of `item` in the version of the last frame, or
     // nothing when the program has no map or no such element.
     std::optional<PickedItem> pick(std::uint32_t item) const;
+    // What the last frame showed of the item map, for a pick that reads that frame.
+    ShownItems shown_items() const;
+    // The item map's fields of `item` in the version that `shown` holds, or nothing when it is
+    // empty or holds no such element.
+    static std::optional<PickedItem> pick_shown(std::uint32_t item, const ShownItems& shown);
     // The labels of the text table in the version of the last frame.
     std::vector<Label> labels() const;
 

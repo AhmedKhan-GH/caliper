@@ -18,9 +18,10 @@
 //   - Read only: reads and proposals run (a dry run, an edit into a stacked
 //     preview, the previews' own commands); every other command that would
 //     change something is refused with command.denied and a plain message.
-//   - Allow all: only for the side chat's agent, only for its session: never
-//     saved, off when the chat's agent ends or the app quits. What would ask
-//     runs without a card.
+//   - Allow all: what would ask runs without a card, except a data-loss
+//     card (below). It is saved like the other modes, for the chat's agent
+//     and for mcp clients each, and stays on, across launches, until the
+//     person sets another mode.
 // The rules: answering a card "for this session" or "always" allows that
 // command (by its rule key, permission_rule_key()) for the chat's agent, or
 // for mcp clients, in this session or, saved, until the person revokes it. The
@@ -32,13 +33,16 @@
 // the chat's agent id, or "mcp".
 //
 // What no mode and no rule changes: the registry refuses before any policy a
-// viewer's change and history.undo or history.redo from an agent; an approval
-// bound to content (an overwrite of a saved applet, the replacement of an open
-// spec with unsaved changes) always asks, since the card shows what is
-// written; a rule never covers running a Python loader, which only a card or
-// Allow all lets run; and Read only beats every rule. Nothing an agent sends
-// sets a mode or a rule: there is no command for them, and only the app's UI
-// calls the session's functions that change them.
+// viewer's change and history.undo or history.redo from an agent; a data-loss
+// card always asks, Allow all included: an approval bound to the content it
+// would lose (an overwrite of a saved applet, the replacement of an open spec
+// with unsaved changes), since the card shows what is lost. A command that
+// deletes or overwrites saved work keeps its card under Allow all by binding
+// its approval to that content in the session, as applet.save does. A rule
+// never covers running Python code (a Python loader, a managed run's start or
+// fork), which only a card or Allow all lets run; and Read only beats every
+// rule. Nothing an agent sends sets a mode or a rule: there is no command for
+// them, and only the app's UI calls the session's functions that change them.
 //
 // The saved file (agent-permissions.json in the app-data folder), written
 // owner-only (0600) through a temporary file:
@@ -46,12 +50,13 @@
 //    "rules": [{"agent": "claude", "command": "panel.patch"},
 //              {"agent": "mcp", "command": "run.set_param:lr"}, ...]}
 // read_agent_permissions() ignores, and reports, a malformed file, an unknown
-// field, a mode it does not know or that may not be saved (allow_all), and a
-// rule for an unknown agent id, for a command that is not an agent's, or for
-// run.set_param, run.action, intervene.set or intervene.clear without its
-// target; on
-// POSIX a file that others may write grants nothing. A missing file is the
-// defaults: Ask, no rules. No function here throws.
+// field, a mode it does not know, and a rule for an unknown agent id, for a
+// command that is not an agent's, or for run.set_param, run.action,
+// intervene.set or intervene.clear without its target. Allow all is read
+// only from a file with no such problem; in any other file a mode of
+// allow_all reads as ask. On POSIX a file that others may write, or that
+// another user owns, grants nothing. A missing file is the defaults: Ask, no
+// rules. No function here throws.
 #include <caliper_builder/commands/approval.h>
 #include <caliper_builder/commands/command.h>
 #include <caliper_builder/error.h>
@@ -87,11 +92,11 @@ bool invocation_changes(const CommandDescriptor& descriptor, const CommandInvoca
 
 // What decides one governed invocation besides its command.
 struct PermissionContext {
-    AgentMode mode = AgentMode::ask;  // the principal's mode, allow_all while that is on
+    AgentMode mode = AgentMode::ask;  // the principal's mode
     bool session_rule = false;        // a rule of this session allows the command
     bool saved_rule = false;          // a saved rule of the agent allows it
-    bool bound = false;               // its approval is bound to content: only a card decides
-    bool python = false;              // it runs a Python loader: no rule covers it
+    bool bound = false;               // a data-loss card, bound to content: only a card decides, in every mode
+    bool python = false;              // it runs Python code (a loader, a run's start or fork): no rule covers it
 };
 
 struct PermissionVerdict {
@@ -102,8 +107,9 @@ struct PermissionVerdict {
 
 // The decision for an invocation whose policy, without modes, gave `base`.
 // Not governed: `base`. Read only: deny what changes something. Otherwise
-// only an ask can become an allow: never when bound; Allow all; Accept edits
-// for an edit; a session rule, then a saved rule, unless it runs Python.
+// only an ask can become an allow: never when bound; Allow all, for the chat
+// and for mcp; Accept edits for an edit; a session rule, then a saved rule,
+// unless it runs Python.
 PermissionVerdict decide_agent_permission(const CommandDescriptor& descriptor, const CommandInvocation& invocation,
                                           ApprovalDecision base, const PermissionContext& context);
 
@@ -139,19 +145,41 @@ bool valid_rule_agent(std::string_view agent);
 bool rule_command_allowed(std::string_view command);
 
 struct AgentPermissionsFile {
-    AgentMode chat = AgentMode::ask;  // never allow_all
-    AgentMode mcp = AgentMode::ask;   // never allow_all
+    AgentMode chat = AgentMode::ask;
+    AgentMode mcp = AgentMode::ask;
     std::vector<AgentRule> rules;
 };
 
 struct AgentPermissionsRead {
     AgentPermissionsFile file;
     std::vector<std::string> problems;  // one plain sentence for each thing ignored
+    bool readable = true;               // false when the file is there but could not be read
 };
 AgentPermissionsRead read_agent_permissions(const std::string& path);
-// The file's JSON text, allow_all written as ask.
+// The same, with the user id that must own the file on POSIX (the process's
+// effective user id above); a test names another to check the owner rule.
+AgentPermissionsRead read_agent_permissions(const std::string& path, long owner);
+// The file's JSON text.
 std::string agent_permissions_text(const AgentPermissionsFile& file);
-// Writes it owner-only through a temporary file in the same folder.
+// Writes it owner-only through a temporary file of this process in the same
+// folder, made with an exclusive create, and a rename.
 Error write_agent_permissions(const std::string& path, const AgentPermissionsFile& file);
+
+// An advisory lock between apps on the permissions file, taken on the
+// sibling file "<path>.lock" while the object lives, so that the read, merge
+// and write of one app's save never interleave with another's. error() says
+// why it could not be taken; a save then fails. On Windows it takes nothing.
+class AgentPermissionsLock {
+public:
+    explicit AgentPermissionsLock(const std::string& path);
+    ~AgentPermissionsLock();
+    AgentPermissionsLock(const AgentPermissionsLock&) = delete;
+    AgentPermissionsLock& operator=(const AgentPermissionsLock&) = delete;
+    const Error& error() const { return error_; }
+
+private:
+    int fd_ = -1;
+    Error error_;
+};
 
 }  // namespace caliper_builder

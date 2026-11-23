@@ -8,7 +8,7 @@
 #include "embed/render_stats.h"   // copy counters
 #include "live/live_scene.h"
 #include "live/scene_overlays.h"
-#include "scene/pick.h"   // FramePick: the programs' pick
+#include "scene/pick.h"   // PickPass::Result
 #if defined(CALIPER_HAVE_DRAW)
 #include "draw/draw_runtime.h"
 #include <nlohmann/json.hpp>
@@ -240,55 +240,51 @@ const SceneView* scene_view(const View& v) { return v.scene ? v.scene->view.get(
 
 namespace {
 
-// Asks the entities' pick pass and, while the view draws programs, the frame pick of its ID
-// target for the pixel (x, y); true when either was asked.
+// Asks the entities' pick pass and, while the view draws programs, the view's frame pick of its
+// ID target for the pixel (x, y); true when either was asked.
 bool ask_picks(SceneView& view, SceneRectState& state, float x, float y) {
     std::string why;
     state.entity_pending = view.request_pick(x, y, &why);
     state.entity_dropped = false;
     state.entity_detail.clear();
     state.program_detail.clear();
-    state.frame_pending = false;
-#if defined(CALIPER_HAVE_DRAW)
-    if (!view.draw_runtimes().empty() && view.id_target()) {
-        if (!state.frame_pick) state.frame_pick = std::make_shared<caliper_scene::FramePick>(view.backend());
-        state.frame_pending = state.frame_pick->request(view.id_target(), view.depth_target(), view.width(),
-                                                        view.height(), x, y, &why);
-    }
-#endif
+    state.program_ticket = view.request_program_pick(x, y, &why);
+    state.frame_pending = state.program_ticket != 0;
     return state.entity_pending || state.frame_pending;
 }
 
 // Takes the frame pick once it answered: the item of the program whose pick id the texel holds,
-// read from the version that the frame showed. A pick id that names no program, or an item
-// outside its item map's valid count, gives nothing.
-void poll_program_pick(const SceneView& view, SceneRectState& state) {
+// read from the version that the program showed in the frame that the readback read. A pick id
+// that names no program, or an item outside its item map's valid count, gives nothing.
+void poll_program_pick(SceneView& view, SceneRectState& state) {
 #if defined(CALIPER_HAVE_DRAW)
-    if (!state.frame_pick) {
-        state.frame_pending = false;
-        return;
-    }
-    const std::vector<const caliper_draw::DrawRuntime*> runtimes = view.draw_runtimes();
-    const auto is_program = [&](uint32_t id) {
-        for (const caliper_draw::DrawRuntime* rt : runtimes)
-            if (rt->pick_id() == id) return true;
-        return false;
-    };
-    caliper_scene::FrameHit fh;
-    const caliper_scene::PickPass::Result r = state.frame_pick->poll(is_program, &fh);
+    caliper_draw::PickedItem picked;
+    float depth = 1.0f;
+    const caliper_scene::PickPass::Result r = view.poll_program_pick(state.program_ticket, &picked, &depth);
     if (r == caliper_scene::PickPass::Result::Pending) return;
     state.frame_pending = false;
+    state.program_ticket = 0;
     if (r != caliper_scene::PickPass::Result::Hit) return;
-    for (const caliper_draw::DrawRuntime* rt : runtimes)
-        if (rt->pick_id() == fh.pick_id)
-            if (const std::optional<caliper_draw::PickedItem> picked = rt->pick(fh.item)) {
-                state.program_detail = program_pick_detail(*picked);
-                state.program_depth = fh.depth;
-            }
+    state.program_detail = program_pick_detail(picked);
+    state.program_depth = depth;
 #else
     (void)view;
     state.frame_pending = false;
+    state.program_ticket = 0;
 #endif
+}
+
+// A state whose picks in flight belong to another view, which a detach, a new attachment or a
+// patched panel replaced: they are forgotten, and a seam pick is asked again in this view.
+void adopt_view(const SceneView& view, SceneRectState& state) {
+    if (state.view == view.serial()) return;
+    state.view = view.serial();
+    state.entity_pending = state.frame_pending = state.entity_dropped = false;
+    state.program_ticket = 0;
+    state.entity_detail.clear();
+    state.program_detail.clear();
+    state.click = false;
+    state.seam_asked = false;
 }
 
 // The labels of the programs' text tables at the view's size: each anchor projected with the
@@ -435,6 +431,7 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
                                         ImVec2 size, const SceneRectOptions& options, SceneRectState& state,
                                         const SceneRectSink& sink) {
     SceneView* sc = &view;
+    adopt_view(view, state);
     if (size.x < 4.0f || size.y < 4.0f) return SceneRectResult::too_small;
     constexpr int kMaxTarget = 8192, kHysteresisPx = 8;
     const float scale = pixel_scale > 0.0f ? pixel_scale : 1.0f;

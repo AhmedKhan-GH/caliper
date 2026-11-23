@@ -15,10 +15,12 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <mutex>
+#include <random>
 #include <set>
 #include <system_error>
 #include <utility>
@@ -329,11 +331,24 @@ Error write_workspace_piece(const std::string& workspace, const spec::Piece& pie
     if (fs::exists(fs::symlink_status(final_folder, ec)))
         return fail(cp::kPieceExists, "The workspace already has " + piece.name + " version " +
                                           std::to_string(piece.version) + "; a saved version never changes.");
+    // A temporary folder that this call makes itself, under a random name: another process that writes
+    // to the same workspace has its own, and a folder that exists already is never reused or removed.
     static std::atomic<std::uint64_t> counter{0};
-    const fs::path tmp = dir / (".tmp-" + std::to_string(piece.version) + "-" + std::to_string(++counter));
-    fs::remove_all(tmp, ec);
-    if (!fs::create_directory(tmp, ec) || ec)
-        return fail(cp::kPieceBadPath, "A folder for the new version cannot be made: " + ec.message() + ".");
+    fs::path tmp;
+    {
+        std::random_device rd;
+        for (int attempt = 0; attempt < 8 && tmp.empty(); ++attempt) {
+            const std::uint64_t r = (std::uint64_t(rd()) << 32) ^ rd() ^ (++counter << 1);
+            char hex[17];
+            std::snprintf(hex, sizeof hex, "%016llx", static_cast<unsigned long long>(r));
+            const fs::path candidate = dir / (".tmp-" + std::to_string(piece.version) + "-" + hex);
+            if (fs::create_directory(candidate, ec)) tmp = candidate;   // false: it exists, or ec says why
+            else if (ec) break;
+        }
+    }
+    if (tmp.empty())
+        return fail(cp::kPieceBadPath, "A folder for the new version cannot be made" +
+                                           (ec ? ": " + ec.message() : std::string()) + ".");
     auto write = [&](const fs::path& file, const std::string& bytes) {
         std::ofstream out(file, std::ios::binary | std::ios::trunc);
         out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
@@ -836,6 +851,22 @@ FoundPiece resolve_pin(const PieceLibrary& library, const std::string& workspace
                            f.piece.hash + "; restore the folder, or pin the piece again with program.patch.",
                        "piece.hash");
     return f;
+}
+
+std::string pin_without_hash_message(const spec::PieceRef& pin) {
+    return "The pin of " + pin.name + " version " + std::to_string(pin.version) +
+           " has no hash; a pin in a spec needs the piece's hash, which piece.check gives, and program.patch "
+           "writes it into a pin without one.";
+}
+
+FoundPiece resolve_spec_pin(const PieceLibrary& library, const std::string& workspace, const spec::Spec& spec,
+                            const spec::PieceRef& pin) {
+    if (pin.hash.empty()) {
+        FoundPiece f;
+        f.error = fail("spec.missing_key", pin_without_hash_message(pin), "piece.hash");
+        return f;
+    }
+    return resolve_pin(library, workspace, spec, pin);
 }
 
 Error check_instance(const PieceLibrary& library, const std::string& workspace, const spec::Spec& spec,

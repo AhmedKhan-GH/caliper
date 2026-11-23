@@ -797,7 +797,11 @@ TEST_CASE("net/hub 3.2: class tables, entity transforms, cameras and split updat
     piece(1, 7);   // a piece of an update whose piece 0 never came: dropped
     REQUIRE(w.until([&] {
         const auto log = scene_all(*a, 5);
-        return std::count(log.begin(), log.end(), "big:points#1") == 1 && log.size() >= 7;
+        // The hub forwards the parts of a view in its own order, so wait for each part the checks
+        // below read and not only for the last one sent.
+        return std::count(log.begin(), log.end(), "big:points#1") == 1 && log.size() >= 7 &&
+               std::count(log.begin(), log.end(), "classes") == 1 &&
+               std::count(log.begin(), log.end(), "rig/cam:camera") == 1;
     }));
     {
         const auto log = scene_all(*a, 5);

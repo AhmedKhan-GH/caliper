@@ -14,11 +14,14 @@
 #include "spec_runtime/spec_runtime.h"
 
 #include "export_service.h"
+#include <caliper/embed.h>
 #if defined(__APPLE__)
 #include "gfx/metal_backend.h"
 #include "gfx/shaders/generated/programs_metal.h"
 #endif
 #include "live/live_scene.h"
+#include "live/live_views_scene.h"
+#include "net/wire.h"
 #include "scene/camera.h"
 
 #include "spec_test_canvas.h"
@@ -36,6 +39,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
@@ -571,14 +575,20 @@ TEST_CASE("programs: the item map gives an item's fields and index, and refuses 
     // An item that a fragment wrote past the valid count, or past what the copy holds.
     CHECK_FALSE(rt.pick(std::uint32_t(res.arcs.size())));
     CHECK_FALSE(rt.pick(0xffffffffu));
+    // A version whose count says one element more than its bytes hold is refused, and the copy
+    // keeps the version shown; a version of two elements then holds no third.
     std::vector<ex::Arc> fewer(res.arcs.begin(), res.arcs.begin() + 2);
     caliper_draw::ResourceVersion shortv = version_of("arcs", fewer, 1);
-    shortv.count = 3;   // one element more than its bytes hold
-    if (rt.set_resource(shortv).ok()) {
-        h.frame(rt);
-        CHECK(rt.pick(1));
-        CHECK_FALSE(rt.pick(2));
-    }
+    shortv.count = 3;
+    CHECK_FALSE(rt.set_resource(shortv).ok());
+    h.frame(rt);
+    REQUIRE(rt.pick(2));
+    CHECK(rt.pick(2)->step == 0);
+    REQUIRE(rt.set_resource(version_of("arcs", fewer, 1)).ok());
+    h.frame(rt);
+    REQUIRE(rt.pick(1));
+    CHECK(rt.pick(1)->step == 1);
+    CHECK_FALSE(rt.pick(2));
 }
 
 TEST_CASE("programs: the text table gives a label at each valid anchor and refuses a string past the table and an anchor that is not finite") {
@@ -712,5 +722,310 @@ TEST_CASE("programs: a piece in a scene panel is picked at its pixel, gives its 
     state.kind = spec::Reference::Kind::state;
     state.target = "picked_head";
     CHECK(values.value(state) == a.head);
+    c->with_context([&] { rt.reset(); });
+}
+
+// ---- The programs' pick across views (live_scene.h, SceneView::request_program_pick) ----------
+// A panel's pick state outlives the views that it drew: a detach destroys a live scene's view and
+// its backend, a new attachment makes another, and a patch that drops the scene binding draws the
+// panel's own scene on another backend. Each pick reads the view that the panel draws now, with
+// the version that its frame showed.
+
+namespace {
+
+// A source of no data: a scene panel of programs alone reads none.
+struct NoData : SpecPanelSource {
+    PanelData resolve(const spec::Spec&, std::string_view) override { return PanelData{}; }
+    uint64_t revision() const override { return 1; }
+    uint64_t generation(const spec::Spec&, std::string_view) override { return 1; }
+};
+
+// One scene panel `world` whose program tower_arcs draws the inline attention arcs: on the live
+// scene `model` when `live`, else in the panel's own scene.
+spec::Spec arcs_spec(bool live) {
+    std::string text = "caliper_spec = 1\n[applet]\nid = \"arcs\"\n[[panel]]\nid = \"world\"\nprimitive = \"scene\"\n";
+    if (live) text += "bind = { scene = \"live:model\" }\n";
+    spec::Spec s = parse(text);
+    const spec::Piece piece = hashed_arcs();
+    s.pieces.push_back(piece);
+    spec::Program prog;
+    prog.id = "tower_arcs";
+    spec::PieceRef pin;
+    pin.name = piece.name;
+    pin.version = piece.version;
+    pin.hash = piece.hash;
+    pin.from = spec::PieceFrom::inline_piece;
+    prog.piece = pin;
+    prog.panel = "world";
+    prog.bind = {{"attn0", "live:blocks.0.attn.weights"}, {"attn1", "live:blocks.1.attn.weights"}};
+    s.programs.push_back(prog);
+    return s;
+}
+
+// A core with an offscreen canvas and the live scene `model`, as an attachment opens them; a
+// close destroys the scene's view and its backend, as a detach does.
+struct LiveCore {
+    CaliperCore* core = nullptr;
+    bool open() {
+        CaliperCoreDesc cd{};
+        cd.struct_size = sizeof cd;
+        cd.renderer = CALIPER_RENDERER_DEFAULT;
+        core = caliper_core_create(&cd);
+        if (!core) return false;
+        CaliperCanvasDesc cv{};
+        cv.struct_size = sizeof cv;
+        cv.mode = CALIPER_CANVAS_OFFSCREEN;
+        cv.width = 64;
+        cv.height = 64;
+        cv.content_scale = 1.0f;
+        if (caliper_core_attach_canvas(core, nullptr, &cv) != 1) return false;
+        std::string why;
+        const bool ok = caliper_live_views::scene_open(
+            core, "model", caliper_net::wire::SceneView{CALIPER_NET_SPACE_3D, "+y", ""}, &why);
+        if (!ok) MESSAGE(why);
+        return ok && caliper_live_views::scene_view(core, "model") != nullptr;
+    }
+    void close() {
+        if (core) caliper_core_shutdown(core);
+        core = nullptr;
+    }
+    ~LiveCore() { close(); }
+};
+
+// The pixel of the view whose ID texel holds `pick_id`, from 0 to 1 across the view.
+bool arc_pixel(caliper_live_views::SceneView& view, std::uint32_t pick_id, float* u, float* v) {
+    caliper_gfx::Backend& gfx = view.backend();
+    if (!view.id_target()) return false;
+    const caliper_gfx::Readback rb = gfx.read_texture(view.id_target(), 0, 0, view.width(), view.height());
+    if (!rb) return false;
+    std::vector<std::uint8_t> ids;
+    for (int k = 0; k < 200 && !gfx.take_readback(rb, &ids); ++k) gfx.wait(gfx.last_use(view.id_target()));
+    if (ids.size() != std::size_t(view.width()) * view.height() * 8) return false;
+    for (std::uint32_t y = 0; y < view.height(); y += 3)
+        for (std::uint32_t x = 0; x < view.width(); x += 3) {
+            std::uint32_t texel[2];
+            std::memcpy(texel, ids.data() + (std::size_t(y) * view.width() + x) * 8, 8);
+            if (texel[0] != pick_id) continue;
+            *u = (float(x) + 0.5f) / float(view.width());
+            *v = (float(y) + 0.5f) / float(view.height());
+            return true;
+        }
+    return false;
+}
+
+// The runtime of an arcs spec on the canvas, with its history of the arcs at step 0.
+struct ArcsPanel {
+    SpecOffscreen* c;
+    NoData source;
+    Events events;
+    caliper_builder::StepHistory history;
+    caliper_builder::ValueStore values;
+    std::unique_ptr<SpecRuntime> rt;
+    ex::ArcResources res = ex::arc_resources();
+    ArcsPanel(SpecOffscreen* canvas, const spec::Spec& s, SpecRuntime::SceneLayer layer) : c(canvas) {
+        history.configure(s);
+        values.reset(s);
+        keep_version(history, "heads", res.heads, 0);
+        keep_version(history, "arcs", res.arcs, 0);
+        keep_version(history, "labels", res.labels, 0);
+        c->with_context([&] { rt = std::make_unique<SpecRuntime>(c->textures()); });
+        rt->set_scene_layer(std::move(layer));
+        rt->set_source(&source);
+        rt->set_instruments(&events, nullptr);
+        rt->set_instrument_state(&values, &history);
+        rt->set_spec(s);
+    }
+    ~ArcsPanel() {
+        c->with_context([&] { rt.reset(); });
+    }
+    void draw(int frames = 1) {
+        render(1200, 520, [&](const ImRect& area) { rt->draw(area, c->look()); }, frames);
+    }
+    // Draws until the view of the panel runs its program; that view, or null.
+    caliper_live_views::SceneView* running() {
+        for (int k = 0; k < 12; ++k) {
+            draw(2);
+            caliper_live_views::SceneView* v = rt->scene_view_of("world");
+            if (v && !v->draw_runtimes().empty() &&
+                v->draw_runtimes()[0]->status().state == caliper_draw::DrawState::running)
+                return v;
+        }
+        return nullptr;
+    }
+    const caliper_builder::Event* pick_event() const {
+        for (const caliper_builder::Event& e : events.got)
+            if (e.kind == caliper_builder::EventKind::pick) return &e;
+        return nullptr;
+    }
+    // Asks for a pick at an arc's pixel of the view, as a click does, and draws until the pick
+    // event; its fields, or null when none came.
+    nlohmann::json pick(caliper_live_views::SceneView& view, int frames_before_answer = 0,
+                        const std::function<void()>& meanwhile = nullptr) {
+        float u = 0, v = 0;
+        REQUIRE(arc_pixel(view, view.draw_runtimes()[0]->pick_id(), &u, &v));
+        events.got.clear();
+        REQUIRE(rt->pick_scene("world", u, v));
+        for (int k = 0; k < frames_before_answer; ++k) draw();
+        if (meanwhile) meanwhile();
+        for (int k = 0; k < 8 && !pick_event(); ++k) draw();
+        return pick_event() ? pick_event()->fields : nlohmann::json();
+    }
+};
+
+double field_of(const nlohmann::json& f, const char* name) {
+    return f.contains("fields") && f["fields"].contains(name) ? f["fields"][name].get<double>() : -1.0;
+}
+
+}  // namespace
+
+TEST_CASE("programs: a pick after a detach, a new attachment or a patch that drops the scene binding reads the view the panel draws now") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) return;
+    auto first = std::make_unique<LiveCore>();
+    if (!first->open()) {
+        MESSAGE("skipped: no offscreen canvas or scene view for the embed core");
+        return;
+    }
+    CaliperCore* attached = first->core;
+    // The panel's own scene makes one texture first on its backend, so that its handles are not
+    // those of the live scene's backend: a handle of one backend that reached another would read
+    // another texture there.
+    SpecRuntime::SceneLayer layer = [c](std::unique_ptr<caliper_gfx::Backend>* owned, caliper_gfx::Backend** gfx,
+                                        const caliper_gfx::ProgramDesc** programs, std::string* why) {
+        if (!canvas_layer(c)(owned, gfx, programs, why)) return false;
+        caliper_gfx::TextureDesc d;
+        d.width = d.height = 4;
+        d.format = caliper_gfx::Format::RGBA8Unorm;
+        d.usage = caliper_gfx::kSampled;
+        (void)(*gfx)->create_texture(d);
+        return true;
+    };
+    ArcsPanel p(c, arcs_spec(true), layer);
+    p.rt->set_live_core([&] { return attached; });
+    caliper_live_views::SceneView* live = p.running();
+    REQUIRE(live != nullptr);
+    CHECK(p.pick(*live)["program"] == "tower_arcs");
+
+    // The run detaches and the app attaches to another, while the panel is not drawn: the view
+    // and the backend of the first pick are gone.
+    first.reset();
+    attached = nullptr;
+    auto second = std::make_unique<LiveCore>();
+    REQUIRE(second->open());
+    attached = second->core;
+    live = p.running();
+    REQUIRE(live != nullptr);
+    CHECK(p.pick(*live)["program"] == "tower_arcs");
+
+    // panel.patch drops the scene binding: the panel draws its own scene, on another backend.
+    p.rt->set_spec(arcs_spec(false));
+    caliper_live_views::SceneView* own = p.running();
+    REQUIRE(own != nullptr);
+    CHECK(&own->backend() != &live->backend());
+    CHECK(p.pick(*own)["program"] == "tower_arcs");
+
+    // The run detaches while the panel draws its own scene: the live scene's backend goes.
+    second.reset();
+    attached = nullptr;
+    CHECK(p.pick(*own)["program"] == "tower_arcs");
+}
+
+TEST_CASE("programs: a pick gives the fields of the version its frame showed, and a version at the same step replaces it") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) return;
+    ArcsPanel p(c, arcs_spec(false), canvas_layer(c));
+    caliper_live_views::SceneView* own = p.running();
+    REQUIRE(own != nullptr);
+    // A newer version arrives after the frame that the pick reads and before the readback answers.
+    std::vector<ex::Arc> newer = p.res.arcs;
+    for (ex::Arc& a : newer) a.weight += 100.0f;
+    nlohmann::json f = p.pick(*own, 1, [&] { keep_version(p.history, "arcs", newer, 1); });
+    REQUIRE(f.is_object());
+    CAPTURE(f.dump());
+    REQUIRE(f["item"].get<std::uint32_t>() < p.res.arcs.size());
+    CHECK(f["step"] == 0);
+    CHECK(field_of(f, "weight") == doctest::Approx(p.res.arcs[f["item"].get<std::uint32_t>()].weight));
+    // The next pick reads the newer version, which the frames now show.
+    p.draw(2);
+    f = p.pick(*own);
+    REQUIRE(f.is_object());
+    CHECK(f["step"] == 1);
+    CHECK(field_of(f, "weight") == doctest::Approx(newer[f["item"].get<std::uint32_t>()].weight));
+    // A version that replaces the one shown at the same step, as a fork from that step sends.
+    std::vector<ex::Arc> same = p.res.arcs;
+    for (ex::Arc& a : same) a.weight += 200.0f;
+    keep_version(p.history, "arcs", same, 1);
+    p.draw(2);
+    f = p.pick(*own);
+    REQUIRE(f.is_object());
+    CHECK(f["step"] == 1);
+    CHECK(field_of(f, "weight") == doctest::Approx(same[f["item"].get<std::uint32_t>()].weight));
+}
+
+TEST_CASE("programs: a runtime that goes takes its history back from the program host of the process") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) return;
+    const spec::Spec s = arcs_spec(false);
+    auto first = std::make_unique<ArcsPanel>(c, s, canvas_layer(c));
+    REQUIRE(first->running() != nullptr);
+    // The history stays, its runtime goes; a runtime that gave no history then draws nothing of it.
+    caliper_builder::StepHistory kept;
+    kept.configure(s);
+    const ex::ArcResources res = ex::arc_resources();
+    keep_version(kept, "heads", res.heads, 0);
+    keep_version(kept, "arcs", res.arcs, 0);
+    keep_version(kept, "labels", res.labels, 0);
+    first->rt->set_instrument_state(&first->values, &kept);
+    first.reset();
+    NoData source;
+    Events events;
+    std::unique_ptr<SpecRuntime> rt;
+    c->with_context([&] { rt = std::make_unique<SpecRuntime>(c->textures()); });
+    rt->set_scene_layer(canvas_layer(c));
+    rt->set_source(&source);
+    rt->set_instruments(&events, nullptr);
+    rt->set_spec(s);
+    for (int k = 0; k < 4; ++k) render(1200, 520, [&](const ImRect& area) { rt->draw(area, c->look()); }, 2);
+    caliper_live_views::SceneView* view = rt->scene_view_of("world");
+    REQUIRE(view != nullptr);
+    REQUIRE(view->draw_runtimes().size() == 1);
+    CHECK(view->draw_runtimes()[0]->status().state != caliper_draw::DrawState::running);
+    CHECK(view->draw_runtimes()[0]->resource_step("arcs") == -1);
+    c->with_context([&] { rt.reset(); });
+}
+
+TEST_CASE("programs: a runtime that goes takes its history back also after another runtime gave the event sink") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) return;
+    const spec::Spec s = arcs_spec(false);
+    // The history and the values outlive the runtime that gave them, thus a host that still read
+    // them would draw the arcs.
+    caliper_builder::StepHistory kept;
+    kept.configure(s);
+    caliper_builder::ValueStore values;
+    values.reset(s);
+    const ex::ArcResources res = ex::arc_resources();
+    keep_version(kept, "heads", res.heads, 0);
+    keep_version(kept, "arcs", res.arcs, 0);
+    keep_version(kept, "labels", res.labels, 0);
+    auto first = std::make_unique<ArcsPanel>(c, s, canvas_layer(c));
+    REQUIRE(first->running() != nullptr);
+    first->rt->set_instrument_state(&values, &kept);
+    // A second runtime gives the host its event sink, and no values or history.
+    NoData source;
+    Events events;
+    std::unique_ptr<SpecRuntime> rt;
+    c->with_context([&] { rt = std::make_unique<SpecRuntime>(c->textures()); });
+    rt->set_scene_layer(canvas_layer(c));
+    rt->set_source(&source);
+    rt->set_instruments(&events, nullptr);
+    first.reset();   // the first runtime goes: its history and values leave the host, the sink stays
+    rt->set_spec(s);
+    for (int k = 0; k < 4; ++k) render(1200, 520, [&](const ImRect& area) { rt->draw(area, c->look()); }, 2);
+    caliper_live_views::SceneView* view = rt->scene_view_of("world");
+    REQUIRE(view != nullptr);
+    REQUIRE(view->draw_runtimes().size() == 1);
+    CHECK(view->draw_runtimes()[0]->status().state != caliper_draw::DrawState::running);
+    CHECK(view->draw_runtimes()[0]->resource_step("arcs") == -1);
     c->with_context([&] { rt.reset(); });
 }

@@ -219,7 +219,9 @@ struct SessionApp {
     std::thread frame;
     std::atomic<bool> stop{false};
 
-    explicit SessionApp(caliper_api::Options o = caliper_api::Options())
+    // `permissions`, when given, is the text of a saved agent-permissions.json
+    // that the session reads as it opens, as the app does at launch.
+    explicit SessionApp(caliper_api::Options o = caliper_api::Options(), const std::string& permissions = {})
         : root(caliper_test::unique_temp_path("caliper-api-commands")) {
         fs::create_directories(root);
         // Review of spec edits is off here, so that an agent's edit answers at
@@ -227,6 +229,13 @@ struct SessionApp {
         caliper_builder::SessionOptions session_options;
         session_options.review.agent = false;
         session_options.review.mcp = false;
+        if (!permissions.empty()) {
+            fs::create_directories(root / "app-data");
+            session_options.permissions_file = (root / "app-data" / "agent-permissions.json").string();
+            std::ofstream(session_options.permissions_file) << permissions;
+            fs::permissions(session_options.permissions_file, fs::perms::owner_read | fs::perms::owner_write,
+                            fs::perm_options::replace);
+        }
         caliper_builder::Session::Open opened =
             caliper_builder::Session::open((root / "workspace").string(), session_options);
         REQUIRE_MESSAGE(opened.error.ok(), opened.error.message);
@@ -739,4 +748,75 @@ TEST_CASE("api commands: an agent's mode follows its token's client, and no requ
     CHECK(app.session->agent_mode(caliper_builder::AgentPrincipal::chat) == caliper_builder::AgentMode::accept_edits);
     CHECK(app.session->agent_mode(caliper_builder::AgentPrincipal::mcp) == caliper_builder::AgentMode::read_only);
     CHECK(app.session->saved_agent_rules().empty());
+}
+
+TEST_CASE("api commands: a saved Allow all of mcp applies at launch, and no request widens or sets a mode") {
+    SessionApp app(caliper_api::Options(), R"({"version": 1, "modes": {"chat": "ask", "mcp": "allow_all"}, "rules": []})");
+    const uint16_t port = app.port();
+    REQUIRE(app.session->permission_problems().empty());
+    REQUIRE(app.session->agent_mode(caliper_builder::AgentPrincipal::mcp) == caliper_builder::AgentMode::allow_all);
+    app.session->set_review(caliper_builder::CommandOrigin::agent, true);
+    app.session->set_review(caliper_builder::CommandOrigin::mcp, true);
+    const std::string chat = app.server->issue_token("agent", "chat");
+    const std::string widget = app.server->issue_token("agent", "widget");
+    auto post = [&](const std::string& token, const std::string& method, const std::string& path, const json& args) {
+        const std::string body = args.dump();
+        return read_response(send_request(port, method, path,
+                                          "Authorization: Bearer " + token +
+                                              "\r\nContent-Type: application/json\r\nContent-Length: " +
+                                              std::to_string(body.size()) + "\r\n",
+                                          body));
+    };
+    // mcp: an edit that review would hold runs at once, and the overwrite of a
+    // saved applet still waits for the person.
+    save_one_applet(port);
+    const json text = {{"id", "a"}, {"primitive", "text"}, {"options", {{"text", "A"}}}};
+    CHECK(command(port, "panel.create", text, "mcp")["ok"] == true);
+    const int held = send_request(port, "POST", "/v0/commands/applet.save",
+                                  "Authorization: Bearer " + std::string(kMcpToken) +
+                                      "\r\nContent-Type: application/json\r\nContent-Length: 18\r\n",
+                                  R"({"overwrite":true})");
+    const std::string id = app.pending_approval("applet.save", "mcp");
+    REQUIRE_FALSE(id.empty());
+    app.session->queue().deny(id);
+    CHECK(error_code(read_response(held).value()) == "command.denied");
+    // The chat's agent is in Ask: its edit is held.
+    json b = text;
+    b["id"] = "b";
+    const int asked = send_request(port, "POST", "/v0/commands/panel.create",
+                                   "Authorization: Bearer " + chat + "\r\nContent-Type: application/json\r\nContent-Length: " +
+                                       std::to_string(b.dump().size()) + "\r\n",
+                                   b.dump());
+    const std::string chat_id = app.pending_approval("panel.create", "agent");
+    REQUIRE_FALSE(chat_id.empty());
+    app.session->queue().deny(chat_id);
+    CHECK(error_code(read_response(asked).value()) == "command.denied");
+
+    // No command and no endpoint sets or widens a mode, for any token: the
+    // chat's agent's, the widget agent's, mcp's, the person's api token and
+    // the viewer's.
+    const std::string viewer = app.server->issue_token("viewer");
+    std::vector<std::string> tokens = {chat, widget, kMcpToken, kToken};
+    if (!viewer.empty()) tokens.push_back(viewer);
+    for (const std::string& token : tokens) {
+        for (const char* name : {"permissions.set", "settings.set", "agent.set_mode", "permissions.allow_all"})
+            CHECK(error_code(post(token, "POST", std::string("/v0/commands/") + name,
+                                  {{"who", "chat"}, {"mode", "allow_all"}})
+                                 .value()) == "command.unknown");
+        for (const char* path : {"/v0/permissions", "/v0/settings", "/v0/agent-permissions", "/v0/modes"}) {
+            INFO(path);
+            // No such endpoint; with a body, the server refuses it before reading it.
+            CHECK(read_response(send_request(port, "POST", path,
+                                             "Authorization: Bearer " + token + "\r\nContent-Length: 0\r\n"))
+                      .status == 404);
+            for (const char* method : {"POST", "PUT"}) {
+                const int status = post(token, method, path, {{"chat", "allow_all"}}).status;
+                CHECK((status == 404 || status == 413));
+            }
+        }
+    }
+    CHECK(app.session->agent_mode(caliper_builder::AgentPrincipal::chat) == caliper_builder::AgentMode::ask);
+    CHECK(app.session->agent_mode(caliper_builder::AgentPrincipal::mcp) == caliper_builder::AgentMode::allow_all);
+    CHECK(read_response(send_request(port, "GET", "/v0/info", "Authorization: Bearer " + std::string(kToken) + "\r\n"))
+              .status == 200);
 }

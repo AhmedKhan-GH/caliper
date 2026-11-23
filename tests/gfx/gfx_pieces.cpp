@@ -102,7 +102,10 @@ struct Panel {
     }
     // One frame: the scene's clear, then the program's frames, each in a submit of its own; the
     // test waits for each and gives the runtime its GPU time, as the scene view does when polled.
-    bool frame(cd::DrawRuntime& rt, const cd::FrameInputs& in) {
+    // A device without timestamps gives none, and the runtime takes the wall time from the submit
+    // until the wait returned; `inject_ms` >= 0 gives that time in place of the measured one, for
+    // a program whose test must not depend on the speed of the runner's GPU.
+    bool frame(cd::DrawRuntime& rt, const cd::FrameInputs& in, double inject_ms = -1) {
         gfx::RenderTarget clear;
         clear.color = target.color;
         clear.id = target.id;
@@ -114,16 +117,24 @@ struct Panel {
         std::vector<gfx::Frame> frames;
         if (!rt.encode(&frames, in, target)) return false;
         for (gfx::Frame& pf : frames) {
+            const auto submitted = std::chrono::steady_clock::now();
             const gfx::Serial s = g.submit(std::move(pf));
             REQUIRE_MESSAGE(s != 0, g.last_error());
             REQUIRE(g.wait(s));
+            const double wall_ms =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - submitted).count();
+            if (inject_ms >= 0) {
+                rt.frame_done(inject_ms, wall_ms);
+                continue;
+            }
             // The time comes with the completion handler, which may run after the wait.
             double ms = -1;
-            const auto start = std::chrono::steady_clock::now();
-            while (!g.submit_gpu_ms(s, &ms) && std::chrono::steady_clock::now() - start < std::chrono::seconds(2))
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            REQUIRE(ms >= 0);
-            rt.frame_done(ms);
+            if (g.caps().has(gfx::kCapTimestamps)) {
+                const auto start = std::chrono::steady_clock::now();
+                while (!g.submit_gpu_ms(s, &ms) && std::chrono::steady_clock::now() - start < std::chrono::seconds(2))
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            rt.frame_done(ms, wall_ms);
         }
         return true;
     }
@@ -148,8 +159,8 @@ std::array<int, 4> field_reference(const std::vector<float>& pattern, int x, int
     const std::uint32_t ax = std::uint32_t(std::min(std::max(std::floor(px), 0.0f), float(T - 1)));
     const std::uint32_t ay = std::uint32_t(std::min(std::max(std::floor(py), 0.0f), float(T - 1)));
     const std::uint32_t bx = std::min(ax + 1, T - 1), by = std::min(ay + 1, T - 1);
-    const float fx = std::min(std::max(px - std::floor(px), 0.0f), 1.0f);
-    const float fy = std::min(std::max(py - std::floor(py), 0.0f), 1.0f);
+    const float fx = std::min(std::max(px - float(ax), 0.0f), 1.0f);
+    const float fy = std::min(std::max(py - float(ay), 0.0f), 1.0f);
     const float top = value(ay, ax) + (value(ay, bx) - value(ay, ax)) * fx;
     const float bottom = value(by, ax) + (value(by, bx) - value(by, ax)) * fx;
     const float t = std::min(std::max((top + (bottom - top) * fy) * gain, 0.0f), 1.0f);
@@ -312,6 +323,7 @@ TEST_CASE("gfx/Metal pieces: the arcs draw instanced and additive, with an ID fo
 TEST_CASE("gfx/Metal pieces: a pass over its frame time stops its program after 30 frames, named, and the other goes on") {
     std::unique_ptr<gfx::Backend> g = layer();
     if (!g) CALIPER_SKIP_NO_GPU("no Metal device");
+    if (!g->caps().has(gfx::kCapTimestamps)) CALIPER_SKIP_NOT_APPLICABLE("the Metal device gives no GPU timestamps");
     Panel panel(*g);
     cs::Piece slow = ex::attention_field();
     slow.name = "slow_field";
@@ -342,10 +354,12 @@ fn slow(in: CaliperFullscreen) -> @location(0) vec4<f32> {
     REQUIRE(other.set_resource(version("pattern", pattern, 1)).ok());
     cd::FrameInputs frame;
     frame.params = ex::pack({1, 2, 2.0}, slow);
+    // The slow pass loops 20,000 times in each fragment, thousands of times its 0.5 ms on any GPU;
+    // the other program gets 1 ms a frame, so that the speed of the runner's GPU decides nothing.
     int frames = 0;
     while (frames < 40 && panel.frame(rt, frame)) {
         ++frames;
-        REQUIRE(panel.frame(other, frame));
+        REQUIRE(panel.frame(other, frame, 1.0));
     }
     const cd::DrawStatus s = rt.status();
     MESSAGE("slow_pattern: stopped after ", frames, " frames: ", s.error.message);
@@ -355,7 +369,7 @@ fn slow(in: CaliperFullscreen) -> @location(0) vec4<f32> {
     CHECK(s.entry == "slow");
     CHECK(frames == 31);   // 30 frames over its limit, then one that measures each pass
     CHECK(other.status().state == cd::DrawState::running);
-    CHECK(panel.frame(other, frame));
+    CHECK(panel.frame(other, frame, 1.0));
 }
 
 TEST_CASE("gfx/Metal pieces: a draw-half compute pass feeds an instanced draw, keeps its state and resets it, and depth tests") {
@@ -584,8 +598,13 @@ fn slow(in: CaliperFullscreen) -> @location(0) vec4<f32> {
     return vec4<f32>(0.0, 0.0, 0.0, x * 0.0001);
 }
 )";
+    // The view measures real GPU times: tower_arcs keeps the largest frame budget, 16 ms, thus a
+    // slow or paravirtual GPU does not stop it, and slow_field is over its 0.5 ms by thousands
+    // of times on any GPU.
+    cs::Piece arcs = ex::attention_arcs();
+    arcs.draw->frame_ms = cs::piece_limits::kFrameMsMax;
     FixedFeed feed;
-    feed.add(ex::attention_arcs(), "tower_arcs", 1u << 24);
+    feed.add(arcs, "tower_arcs", 1u << 24);
     feed.add(slow, "slow_field", (1u << 24) + 1);
     rig.view->set_draw_feed(&feed);
     int frames = 0;

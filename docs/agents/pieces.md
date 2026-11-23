@@ -70,7 +70,7 @@ A resource is a named, typed array that the derive half writes and the viewer re
 | `clear` | `true` zeroes the resource before each run. `false` when absent, and the contents stay from the run before. |
 | `keep` | The versions that the step history keeps, from 1 to 4,096. 256 when absent. |
 
-A field type is `f32`, `i32`, `u32`, `vec2<f32>`, `vec4<f32>`, `vec2<u32>` or `vec4<u32>`. The composer lays out a struct by the storage rules of WGSL, and one element holds at most 256 bytes. A struct has at most 16 fields. A published resource holds at most 67,043,328 bytes, because then one version fits one wire frame. A private resource holds at most 64 MiB.
+A field type is `f32`, `i32`, `u32`, `vec2<f32>`, `vec4<f32>`, `vec2<u32>` or `vec4<u32>`. The composer lays out a struct by the storage rules of WGSL, and one element holds at most 256 bytes. A struct has at most 16 fields. The published resources of a piece hold at most 8 MiB together, 8,388,608 bytes, because a pass can send all of them to each viewer and the script queues at most that much for one viewer. Thus a texture of 2,048 by 1,024 pixels fits, and a texture of 2,048 by 2,048 pixels gives `program.bad_resource`. A private resource holds at most 64 MiB.
 
 ## Piece Halves
 
@@ -178,19 +178,25 @@ The hash identifies what runs. It is the SHA-256 of these bytes, in lowercase he
 2. The manifest as RFC 8785 canonical JSON, without `hash` and without the files.
 3. For each imported module in the order of `imports`, and then for each of `common.wgsl`, `derive.wgsl` and `draw.wgsl` that the piece has, a line `--- <part> <bytes>` and the text with LF line ends.
 
-The hash covers the text of the imported modules, because they run. It does not cover the samples. The canonical JSON and the LF line ends make the hash the same on every platform and in every language that computes it. The editor, the script and the browser module all compute it.
+The hash covers the text of the imported modules, because they run. It does not cover the samples. The canonical JSON and the LF line ends make the hash the same on every platform and in every language that computes it. The editor, the app and the browser module compute it.
 
-A program pins its piece by name, version, hash and source. The pin is `piece = { name = "...", version = 1, hash = "sha256:...", from = "workspace" }`. The editor writes the hash when the pin has none. A program keeps its pinned version until `program.patch` pins another one, and `piece.update` never changes a saved version.
+A program pins its piece by name, version, hash and source. The pin is `piece = { name = "...", version = 1, hash = "sha256:...", from = "workspace" }`. `program.create` and `program.patch` write the hash when the pin has none. A pin without a hash in a spec file, written by hand or with `spec.set_text`, refuses its program with `spec.missing_key`, and `program.patch` with the same pin writes the hash. A program keeps its pinned version until `program.patch` pins another one, and `piece.update` never changes a saved version.
 
-When the source of a pin lacks the piece, the state of the program is `refused` with `piece.missing`. When the piece has another hash than the pin, the state is `refused` with `piece.hash_mismatch`. In both cases the spec still opens, and the app never pins another version on its own. The person or the agent restores the folder, or pins an existing version with `program.patch`. A script and a browser viewer compute the hash again from what they receive. A hash that differs from the pin refuses the program.
+When the source of a pin lacks the piece, the state of the program is `refused` with `piece.missing`. When the piece has another hash than the pin, the state is `refused` with `piece.hash_mismatch`. In both cases the spec still opens, and the app never pins another version on its own. The person or the agent restores the folder, or pins an existing version with `program.patch`. The app computes the hash from the files that it sends, and it sends a program to the script only when that hash equals the pin. The script checks only the form of the pin's hash, because the derive half comes with its imports resolved and without the manifest. A browser viewer computes the hash again from the sections that it receives, and a hash that differs from the pin refuses the program.
+
+### Foreign Specs
+
+A spec that came from outside the workspace has a table `provenance` with `foreign = true`. A program of such a spec runs only when `provenance.reviewed` holds the hash of its source. For an instance of a piece, the target is `program:<id>` and the hash is the 64 hex digits of the piece hash. Until then, the state of the program is `review`, and nothing runs, neither the derive half nor the draw half. The `draw` object of the status shows `review` too. No command writes `provenance`, and the app has no review card for pieces yet. Thus a person adds the entry to the spec file. A spec of the person's own workspace has no `provenance`, and its pieces run at once.
 
 ## Piece Sources
 
 A program names the source of its piece with `from`.
 
-- `library` is the default. It is the built-in library of the build, which is read-only. It holds the lib modules, and its pieces live in `pieces/<name>/<version>/` in the format of a piece folder.
+- `library` is the default. It is the built-in library of the build, which is read-only. It holds the four lib modules and the piece `points@1`, and its pieces live in `pieces/<name>/<version>/` in the format of a piece folder.
 - `workspace` is the folder `<workspace>/pieces/`, which the piece commands write.
 - `inline` is the array `piece` of the open spec.
+
+The piece `points@1` draws a cloud of round or square points of a size in pixels. It colors them by one color, by a value through a colormap, or by a packed RGBA value. Its derive half reads a tensor of positions with rank 2 and an optional tensor of values with rank 1. With the same points, camera and options, it draws the same pixels as the built-in `points` primitive, within the tolerances of the scene tests, and a pick returns the same item.
 
 A workspace piece with the name of a library piece replaces it only in a program that says `from = "workspace"`. `caliper-mcp` serves each file of the library as a read-only resource under `caliper://library/`. Thus an agent can read a piece before it pins, copies or imitates it.
 
@@ -211,56 +217,84 @@ The editor checks each binding against the catalog. It checks the dtype and rank
 
 A buffer input makes the programs of a spec a graph. Only the draw half reads a buffer input. The viewer gives it the version of the other resource at the cursor.
 
-This example is the piece `attention_field`. It draws the attention pattern of one head as a field with contour lines. Its derive half copies the first batch row of two attention tensors into one resource, and its draw half has one full-screen pass.
+This example is the piece `attention_grid` of `demos/arc_tower/`. It draws the attention weights of one head as a grid with one cell for each pair of tokens. Its derive half copies the first batch row of two attention tensors into one resource. It also places one label anchor for each token at the left of its row. Its draw half has one full-screen pass, and its text table holds the words of the sentence.
 
 ```toml
-name = "attention_field"
+name = "attention_grid"
 version = 1
-description = "The attention pattern of one head of a two-layer model, as a field with contour lines"
+description = "The attention grid of one head of a two-layer model, one cell for each pair of tokens, with the words of the rows"
 imports = ["colormap@1"]
 
 [[inputs]]
 name = "attn0"
 kind = "tensor"
-rank_min = 4
-rank_max = 4
+rank_min = 2
+rank_max = 2
+title = "Attention Weights of Layer 0"
 
 [[inputs]]
 name = "attn1"
 kind = "tensor"
-rank_min = 4
-rank_max = 4
+rank_min = 2
+rank_max = 2
+title = "Attention Weights of Layer 1"
 
 [[params]]
 name = "layer"
 type = "i32"
 min = 0
 max = 1
+title = "Layer"
 
 [[params]]
 name = "head"
 type = "i32"
 min = 0
 max = 3
+title = "Head"
 
 [[params]]
 name = "gain"
 default = 1.0
 min = 0.1
 max = 10.0
+title = "Gain"
 
 [[resources]]
 id = "pattern"
 kind = "buffer"
 element = "f32"
-count = 8192
+count = 8192      # 2 layers, 4 heads, 32 by 32 tokens
 
-[derive]
-passes = [{ entry = "copy_rows", workgroups = [16, 1, 1], writes = ["pattern"] }]
+[[resources]]
+id = "labels"
+kind = "buffer"
+struct = "Label"
+fields = ["position: vec4<f32>", "string: u32"]
+count = 32
+
+[[derive.passes]]
+entry = "copy_rows"
+workgroups = [16, 1, 1]
+writes = ["pattern"]
+
+[[derive.passes]]
+entry = "place_labels"
 
 [draw]
 camera = "none"
-passes = [{ kind = "render", fragment = "field" }]
+
+[draw.text]
+anchors = "labels"
+strings = [
+  "the", "old", "map", "shows", "red", "fox", "jumps", "over", "lazy", "dogs", "near", "green",
+  "hills", "under", "blue", "skies", "red", "fox", "jumps", "over", "lazy", "dogs", "near", "green",
+  "hills", "under", "blue", "skies", "and", "then", "it", "ends",
+]
+
+[[draw.passes]]
+kind = "render"
+fragment = "grid"
 ```
 
 A program then places the piece in the panel `pattern`, and it follows the head that a pick selects through two state variables.
@@ -268,7 +302,7 @@ A program then places the piece in the panel `pattern`, and it follows the head 
 ```toml
 [[program]]
 id = "head_pattern"
-piece = { name = "attention_field", version = 1, from = "workspace", hash = "sha256:..." }
+piece = { name = "attention_grid", version = 1, from = "workspace", hash = "sha256:..." }
 panel = "pattern"
 bind = { attn0 = "live:blocks.0.attn.weights.act", attn1 = "live:blocks.1.attn.weights.act" }
 params = { layer = { state = "layer" }, head = { state = "head" }, gain = 2.0 }
@@ -299,15 +333,26 @@ Each command is one MCP tool, with the first dot of its name replaced by `_`. Th
 
 ## Program Status and Events
 
-`program.status` gives an instance the kind `piece` and its pin. The derive half reports as for any program, with `host`, `state`, `every`, `memory_bytes` and `error`. An instance that draws also has a `draw` object with `state` (`waiting`, `compiled`, `running`, `refused` or `stopped`), `frame_ms`, `frame_limit_ms`, `memory_bytes`, `memory_limit_bytes`, `resource_step` and `error`. The `error.where` of the draw half names the pass, such as `draw.passes[1]`.
+`program.status` gives an instance the kind `piece` and its pin. The derive half reports as for any program, with `host`, `state`, `every`, `memory_bytes` and `error`. An instance that draws also has a `draw` object with `state` (`waiting`, `review`, `compiled`, `running`, `refused` or `stopped`), `frame_ms`, `frame_limit_ms`, `memory_bytes`, `memory_limit_bytes`, `resource_step` and `error`. The `error.where` of the draw half names the pass, such as `draw.passes[1]`.
 
 The event `program` carries the keys `half` (`derive` or `draw`) and `pass`, the index of the pass or null. An agent waits for the event `compiled` of both halves of an instance before it reads. The changes `stopped` and `refused` carry the codes of this page. The event `pick` carries the keys of the next section. [Run Control and Events](run-control-and-events.md) lists all events.
 
 ## Resources and Step History
 
-The script sends each version of a published resource to a viewer as one RESOURCE message. The message needs the capability `resources` on both ends. A script that does not announce it refuses an instance with `program.resources_unavailable`. One message carries one resource, thus a large resource never holds a small one back. A viewer that falls behind gets the newest version of each resource and loses the older ones.
+The script sends each version of a published resource to a viewer as one RESOURCE message. The message needs the capability `resources` on both ends. A script that does not announce it refuses an instance with `program.resources_unavailable`. One message carries one resource, thus a large resource never holds a small one back. The script sends the versions of a pass to a viewer only when its queue then holds at most 8 MiB and 64 KiB, which is half of the 16 MiB control queue of a connection. This count also holds the frames that other programs gave to that viewer in the same pass and that the script has not queued yet. Thus a viewer that falls behind skips whole passes, and it gets a later pass when it catches up. Two programs that publish 8 MiB each do not fit in one pass of a viewer. The program that the viewer skipped goes first at the next pass, thus the programs reach the viewer in turn. A pass that would send more than 8 MiB, from a manifest that did not pass the app's check, stops the program with `program.resource_too_large`.
 
-The app keeps the versions of each published resource in the step history under `<program>/<resource>`, beside the kept steps of the sources. A resource keeps at most `keep` versions. When its ring is full, the history drops every second kept version. From then on it keeps a version only when its step lies far enough after the newest one. Thus the kept versions span the whole run evenly, and the step cursor scrubs the whole training. The viewer gives the draw half the newest kept version at or before the cursor.
+The app keeps the versions of each published resource in the step history under `<program>/<resource>`, beside the kept steps of the sources. A resource keeps at most `keep` versions. When its ring is full, the history drops every second kept version. From then on it keeps a version only when its step lies far enough after the newest one. Thus the kept versions span the whole run evenly, and the step cursor scrubs the whole training. The viewer gives the draw half the newest kept version at or before the cursor. A version that replaces another at the same step, as after a fork from that step, takes its place in the history, in the draw and in picks and labels.
+
+The app keeps only a version that the pinned piece declares. The program must be in the open spec, the piece must publish a resource of that name, and the version must have the declared stride, at most the declared count and count times stride bytes. A texture version must have the declared width and height. The app refuses every other version and keeps nothing of it. These limits hold for the resources in the step history:
+
+| Limit | Value |
+|---|---|
+| Resources of one program | 8, as many as a piece declares |
+| Resources of all programs | 128, 8 for each of the 16 programs of a script |
+| Bytes of one resource | 128 MiB, a quarter of the history budget |
+| Bytes of all resources | 256 MiB, half of the history budget of 512 MiB |
+
+Over the bytes of all resources, the largest rings drop every second version first. Then the largest rings drop their oldest versions, down to one version each. A version that does not fit beside one version of each other resource is not kept.
 
 The spec saves the pins, the bindings, the params and the inline pieces, and it never saves a resource. When an instrument opens, the app resolves each pin, checks each piece and sends each program to the attached script. The script publishes again from its next pass. Without an attached run, the state of the program is `waiting`.
 
@@ -343,18 +388,23 @@ The scene view reads the anchors of the version that the frame shows and project
 
 ## Camera
 
-The host owns the camera. A piece selects `orbit` for the 3-D orbit camera of the panel, `pan_zoom` for its 2-D camera, or `none`. The camera `none` gives identity matrices, for a piece that draws in clip space. The programs of one panel must agree. The first program of the panel sets the camera, and a program that selects another one is refused with `program.camera_conflict`. The saved views of the panel and the commands `camera.get`, `camera.set` and `camera.save` work as they do for entities.
+The host owns the camera. A piece selects `orbit` for the 3-D orbit camera of the panel, `pan_zoom` for its 2-D camera, or `none`. The camera `none` gives identity matrices, for a piece that draws in clip space. The programs of one panel must agree. The first program of the panel sets the camera. `program.create` and `program.patch` refuse a program that selects another one with `program.camera_conflict`, and `spec.validate` names each later program of a spec that holds such a panel. The viewer also refuses the later program with the same code. The saved views of the panel and the commands `camera.get`, `camera.set` and `camera.save` work as they do for entities.
 
 ## Draw Budget and Removal
 
 A draw half writes only the color, ID and depth of its panel and its own targets. The host records the passes of each program in a submit of its own after the frame of the scene. The GPU time of that submit is the frame time of the program. Where the backend has no timestamps, the host measures the time from the submit until the work is done, which is an upper bound.
+
+A training run on the same GPU can delay a correct frame by a second or more, thus the GPU time of a frame decides. A frame that is not done 1 s after its submit is late, and the program submits no new frame until it is done. A frame over 250 ms of GPU time is heavy, which is more than 15 times the largest `frame_ms`. Heavy frames in a row remove the program when their GPU time passes 1 s together. Thus one frame over 1 s of GPU time removes it at once. Where the backend has no timestamps, three late frames in a row remove it.
 
 The host cannot stop a pass that runs on the GPU. Thus it removes a draw that goes over its budget and reports it. The other programs of the panel keep drawing, and the derive half keeps its own limits.
 
 | Condition | Result |
 |---|---|
 | A program is over `frame_ms` on 30 frames in a row | `program.draw_over_time`, naming the costliest pass |
-| A frame of a program is not done after 1 s | `program.draw_timeout`, at once |
+| Heavy frames in a row took more than 1 s of GPU time together | `program.draw_timeout`, at once |
+| The driver ended a late frame | `program.draw_timeout` |
+| Three frames in a row are late, on a backend without timestamps | `program.draw_timeout` |
+| A frame of a program is not done after 5 s | `program.draw_timeout`, at once |
 | The programs of one panel together are over 16.7 ms on 30 frames in a row | `program.draw_over_time` for the costliest program |
 | A resource, a draw buffer or a target would pass `memory_mb` | `program.draw_over_memory` |
 | The graphics layer refuses a submitted frame | `program.layer_refused` |
@@ -381,17 +431,18 @@ The editor, the script and the viewer refuse a piece with a stable code before a
 | `piece.bad_binding` | An input that is unbound, or bound to another dtype, rank or layout |
 | `piece.cycle` | A piece depends on itself, or a program binds a resource of its own |
 | `program.form_mixed` | A program has keys of the one-pass form and a pin |
-| `program.bad_resource` | A kind, count or size of a resource, or a duplicate id |
+| `program.bad_resource` | A kind, count or size of a resource, published resources above 8 MiB together, or a duplicate id |
 | `program.bad_layout` | A field name or type, or a stride over 256 bytes |
 | `program.unknown_resource` | A pass, an item map or a text table names no resource |
 | `program.bad_pass` | The kind, entry, target or values of a pass |
 | `program.target_cycle` | A pass reads its own target, or a target before a pass writes it |
 | `program.bad_pick` | The item map names no field, or the piece has no pass with `pick` |
 | `program.bad_text` | The anchors lack their fields, or the strings break their limits |
-| `program.camera_conflict` | Two programs of a panel select two cameras |
+| `program.camera_conflict` | Two programs of a panel select two cameras. The editor, `spec.validate` and the viewer give it. |
 | `program.binding_not_allowed` | A file declares a binding, or a pass writes a tensor input |
 | `program.reserved_name` | A file declares a name of the host or a name with a double underscore |
 | `program.entry_stage` | An entry point of the wrong stage, none, or the name `main` |
+| `program.interface_mismatch` | A fragment entry reads a location that the vertex entry does not write, or with another type or interpolation, or a vertex entry reads a vertex attribute |
 | `program.over_web_limits` | A pass goes over a default limit of WebGPU |
 | `program.resources_unavailable` | The attached script takes no pieces |
 | `program.browser_refused` | WebGPU refused a module or a pipeline of the browser viewer |
@@ -402,8 +453,39 @@ The manifest check holds every pass to the default limits of WebGPU, thus a piec
 
 The browser module runs the same draw half from the same WGSL and the same declaration. It receives each draw half as PROGRAM from the script, and the resources as RESOURCE. It checks the names, the files, the imports and the hash with the same code that the app compiles. A hash that differs from the pin refuses the program. It then gives each composed module to WebGPU. A compilation message or a refused pipeline refuses the program with `program.browser_refused`, and the line maps back to its file.
 
-The browser has no compiler of its own, because WebGPU keeps each draw inside its bindings. The browser module keeps no step history and draws the newest version of each resource. Without timestamps, the frame time is the time from the submit until the work is done.
+The browser has no compiler of its own, because WebGPU keeps each draw inside its bindings. The browser module keeps no step history and draws the newest version of each resource. It keeps a version only of a resource that the piece of its program publishes, with at most the declared count and bytes, and it keeps at most 16 programs of a script. Without timestamps, the frame time is the time from the submit until the work is done.
+
+## Builder Pane
+
+The palette of the builder pane has a group Pieces. It lists one row for each entry of `piece.list`, named `<name>@<version>`, with the source of the piece and its description. The pane refreshes the list when a piece command changes the workspace.
+
+A person drags a piece row onto the middle of a scene panel, or focuses a scene panel and uses Add. The pane then sends `program.create` with the pin of the piece and that panel. The pane binds no input. A piece with inputs is refused with `piece.bad_binding`, and the message says that the program must be written in the spec text or by the agent. A drop that would make a new panel is refused with `program.bad_target`, because a piece makes no panel. A piece that only publishes needs no panel.
+
+## Attention Arc Tower
+
+The Attention Arc Tower answers one question. When and where does the model learn to copy, and is that what drops the loss? An agent builds it through `caliper-mcp` alone, on a managed run of a script that calls `caliper.watch(model, optimizer)` and `caliper.series`. The chart of the induction score of each head is the headline view. The tower of arcs is the overview, and the attention grid is the inspector of one head. No built-in primitive is in the frames of the tower and the grid. The scene panels `tower` and `pattern` hold programs only, and the chart and the loss curves are series panels.
+
+The script `examples/python/arc_tower_train.py` trains an attention-only transformer with two layers of four heads, a width of 64 and a vocabulary of 64 words. Each sequence holds 32 random tokens, and a segment of 12 of them repeats. The loss stays near ln 64 until heads of layer 1 learn to copy, and then it drops at a bump, which comes between step 600 and step 1,000 on an Apple GPU. Row 0 of every batch is a fixed sentence that the loss leaves out. Thus the attention that a viewer shows is always that of the same sentence.
+
+The watch publishes the attention weights of each layer as `live:blocks.<i>.attn.weights.act`, as rows of batch, head and query token against the key tokens. It publishes `live:token_loss.act`, the loss of each token, and one intervention point `blocks.<i>.attn#<h>` for each head. The in-context loss is the mean of the loss of row 0 over the second copy, which only a copy from the first occurrence predicts. After each optimizer step, the script publishes the induction score of each head as the series `induction_l<i>_h<h>`. The score is the mean weight of row 0 from a token of the second copy to the token after the first occurrence of the same token. The calls pass 0-d tensors on the device, thus a step does not wait for the GPU.
+
+The pieces are in `demos/arc_tower/`. The piece `attention_arcs` scores each head for induction in its derive half and publishes `heads`, one score for each head. It also publishes the arcs, one for each attention weight above the threshold, with `from_token`, `to_token`, `layer`, `head`, `weight` and `score`. Its draw half draws the arcs instanced and additive with an ID for each arc, a glow target and a bloom pass, and it labels the tokens. Its item map holds the six fields of an arc. The piece `attention_grid` is the second graphic. It is fragment-only and has the camera `none`. It draws the weights of one head as flat cells in magma, with the words of the rows in a left margin. It leaves the half above the diagonal empty, because a token never attends to a later token. It outlines the cells that an induction head fills, and it lights the row and the column under the pointer. Its parameters follow the state `head` and the layer of the last pick in `tower`.
+
+The agent starts the run, writes both pieces with `piece_check` and `piece_update`, and places them with `program_create`. It adds the loss series, the in-context loss, and a window source for each score series. The series panel `head_scores` shows one line for each head, with a legend. A toggle is bound to `intervene:blocks.1.attn#0`. In the layout, the left column holds the tower, the chart below it, and the in-context loss and the loss as tabs below the chart. The attention grid fills the right column. After the bump, `program_read` shows the head scores rise from below 0.2 at the first kept version to above 0.4. In the chart, the strongest line of layer 1 starts below 0.2 and passes 0.5, at the steps where the in-context loss falls. A pick of an arc with `selection_set` gives its layer, head and token pair, and the attention grid follows the head. The toggle raises the in-context loss at once. A fork from the first kept step with the same head ablated through `run_fork` never forms that head.
+
+## Limits
+
+These parts are not built, and the pieces do not depend on them.
+
+- Custom blend factors, targets wider than eight bits, indirect draws, storage textures, multisampling and node materials.
+- A derive half that reads the output of another derive half.
+- Kept versions in the browser viewer.
+- Resources as catalog sources, and recordings of resources.
+- The derive half on a platform other than Metal.
+- A preview of a piece from its sample.
+
+Three points need care when a piece is written. In a fork, another head may form induction arcs in place of the ablated one. Without multisampling, an arc of one pixel aliases, thus a width of at least one pixel times the pixel ratio keeps it visible. The timestamp query is optional in WebGPU, thus the frame time in a browser can be the slower upper bound.
 
 ## Tests
 
-[Testing](../development/testing.md) lists the tests of pieces. The test `tests/piece_path/driver.py` follows one piece from its command to a pick. The test `tests/draw_parity/` compares the draw of the app and of the browser module on one recorded frame. Each refusal of this page has a test in `src/builder/programs/tests/test_pieces.cpp` or in the suite of the host that gives it.
+[Testing](../development/testing.md) lists the tests of pieces. The test `tests/piece_path/driver.py` follows one piece from its command to a pick. The test `tests/draw_parity/` compares the draw of the app and of the browser module on one recorded frame. The test `caliper_programmable_graphics_acceptance` builds the Attention Arc Tower through `caliper-mcp`, and `python3 examples/python/arc_tower_check.py` runs the same steps and prints each check. Each refusal of this page has a test in `src/builder/programs/tests/test_pieces.cpp` or in the suite of the host that gives it.
