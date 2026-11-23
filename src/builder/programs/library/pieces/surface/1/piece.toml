@@ -16,7 +16,7 @@ name = "values"
 kind = "tensor"
 rank_min = 2
 rank_max = 2
-title = "Values (R, C) for the colormap, else the heights"
+title = "Values (R, C) for the colormap; a tensor of another shape colors by height"
 
 [[params]]
 name = "max_cells"

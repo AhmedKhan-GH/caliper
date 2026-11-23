@@ -30,7 +30,7 @@
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 
 #include "../../src/host/spec_runtime/tests/spec_test_data.h"
-#include "../draw_parity/parity_draw.h"
+#include "../draw_parity/parity_fixture.h"
 #include "../gfx/scene_reference.h"
 #include "draw/draw_runtime.h"
 #include "gfx/colormap_keys.h"
@@ -895,6 +895,11 @@ TEST_CASE("surface_match: surface@1 passes piece.check, its manifest and web lim
     CHECK_MESSAGE(check.value("ok", false), check["messages"].dump());
     CHECK(check["hash"] == piece.hash);
     MESSAGE("piece.check: ", check["passes"].size(), " passes, ", check["messages"].dump());
+    // The pixel comparison of the app and the browser builds the same piece without the TOML reader.
+    const cs::Piece parity = dp::surface_piece();
+    CHECK(cp::canonical_manifest(parity) == cp::canonical_manifest(piece));
+    CHECK(parity.files == piece.files);
+    CHECK(parity.hash == piece.hash);
 }
 
 TEST_CASE("surface_match: the derive half pools a tensor as the surface operator's CPU reference does") {
