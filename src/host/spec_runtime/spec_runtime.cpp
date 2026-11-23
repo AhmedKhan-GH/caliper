@@ -1288,6 +1288,30 @@ void set_program_workspace(std::function<std::string()> workspace) {
     program_host().workspace = std::move(workspace);
 }
 
+namespace {
+
+// The entities of a panel whose source, or a source it derives from, holds a path step: their
+// lines draw with path@1 (apply_entity_scene).
+std::vector<std::string> path_entities(const spec::Spec& s, const spec::Panel& panel) {
+    std::vector<std::string> out;
+    for (const spec::Entity& e : panel.entities) {
+        if (!e.source) continue;
+        const spec::Source* src = s.find_source(*e.source);
+        for (int hop = 0; src && hop < 64; ++hop) {
+            const bool path = std::any_of(src->transforms.begin(), src->transforms.end(),
+                                          [](const spec::Transform& t) { return t.op == spec::TransformOp::path; });
+            if (path) {
+                out.push_back(e.path);
+                break;
+            }
+            src = src->from ? s.find_source(*src->from) : nullptr;
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
 caliper_live_views::SceneView* SpecRuntime::entity_view(const std::string& panel_id) {
     auto it = scenes_->entities.find(panel_id);
     if (it == scenes_->entities.end()) return nullptr;
@@ -1324,7 +1348,10 @@ caliper_live_views::SceneView* SpecRuntime::entity_view(const std::string& panel
     }
     const bool rebuilt = ep.dirty;
     if (ep.dirty) {
-        apply_entity_scene(*ep.view, spec_scene_content(ep.scene), &ep.drawn);
+        std::vector<std::string> paths;
+        if (spec_)
+            if (const spec::Panel* p = spec_->find_panel(panel_id)) paths = path_entities(*spec_, *p);
+        apply_entity_scene(*ep.view, spec_scene_content(ep.scene), &ep.drawn, &paths);
         ep.dirty = false;
     }
     // The panel's annotations at the cursor, written again when they or the data box change.

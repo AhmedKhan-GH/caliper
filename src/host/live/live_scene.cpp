@@ -8,6 +8,12 @@
 #include "draw/draw_host.h"
 #include "draw/draw_runtime.h"
 #endif
+// The shapes drawn by library pieces need the draw layer and the library's manifests, which the app
+// with the builder has and the browser module does not (scene_pieces.h).
+#if defined(CALIPER_HAVE_DRAW) && defined(CALIPER_HAVE_SCENE_PIECES)
+#define CALIPER_SCENE_PIECES 1
+#include "draw/scene_pieces.h"
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -15,6 +21,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace caliper_live_views {
@@ -125,9 +132,31 @@ namespace {
 std::atomic<uint64_t> g_view_serial{0};
 }  // namespace
 
+ShapeDraw default_shape_draw() {
+#if defined(CALIPER_SCENE_PIECES)
+    const char* v = std::getenv("CALIPER_SCENE_SHAPES");
+    return v && std::strcmp(v, "builtin") == 0 ? ShapeDraw::builtin : ShapeDraw::pieces;
+#else
+    return ShapeDraw::builtin;
+#endif
+}
+
+void SceneView::ShapesDeleter::operator()(caliper_draw::ScenePieces* p) const {
+#if defined(CALIPER_SCENE_PIECES)
+    delete p;
+#else
+    (void)p;   // never made without the pieces
+#endif
+}
+
 SceneView::SceneView(caliper_gfx::Backend& backend, const caliper_gfx::ProgramDesc* programs)
     : gfx_(backend), programs_(programs), colormaps_(std::make_shared<caliper_gfx::cmap::KeyBlockCache>()),
-      serial_(++g_view_serial) {}
+      serial_(++g_view_serial) {
+    shape_draw_ = default_shape_draw();
+#if defined(CALIPER_SCENE_PIECES)
+    shapes_.reset(new caliper_draw::ScenePieces());
+#endif
+}
 
 // The programs' pick of the view: the readback of its ID target on its backend, the ticket of the
 // request in flight, and the version of the item map that each program showed in the frame that
@@ -148,6 +177,7 @@ struct SceneView::ProgramSlot {
 #endif
     std::string program;
     uint64_t revision = 0;
+    bool shape = false;   // a shape's piece (shapes_), else a program of the feed
     std::deque<std::pair<caliper_gfx::Serial, std::chrono::steady_clock::time_point>> pending;
     int reported = -1;
     int64_t reported_step = -2;   // the resource step of the last report
@@ -156,7 +186,9 @@ struct SceneView::ProgramSlot {
 
 SceneView::~SceneView() {
     program_pick_.reset();   // its readbacks go back to the layer with the view
+    shape_pick_.reset();
     draws_.clear();
+    shapes_.reset();
     if (id_) gfx_.release(id_);
     if (program_colormaps_) gfx_.release(program_colormaps_);
     stages_.reset();
@@ -373,6 +405,9 @@ void SceneView::release(Slot& s) {
 void SceneView::reset_scene() {
     for (auto& kv : slots_) release(kv.second);
     slots_.clear();
+#if defined(CALIPER_SCENE_PIECES)
+    if (shapes_) shapes_->clear();
+#endif
     tree_.reset();
     changed();
 }
@@ -464,6 +499,9 @@ bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
     const bool empty = image ? lead->count() == 0 : n == 0;
     if (empty) {   // an empty batch removes the part
         release(slot);
+#if defined(CALIPER_SCENE_PIECES)
+        if (shapes_) shapes_->drop(u.path, prim, u.is_static);
+#endif
         rebuild(u.path);
         return true;
     }
@@ -813,6 +851,10 @@ bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
     slot.cpu_ids = std::move(cpu_ids);
     slot.cpu = std::move(cpu);
     slot.present = true;
+#if defined(CALIPER_SCENE_PIECES)
+    // The part's arrays as the piece's resources, while the message's sections live.
+    if (shapes_) shapes_->take(u.path, prim, u.is_static, u, slot.batch);
+#endif
     // Buffers of roles this batch no longer has, and a texture it no longer has, go back to the layer.
     for (auto it = slot.buffers.begin(); it != slot.buffers.end();) {
         if (!b.array(Role(it->first))) {
@@ -969,7 +1011,31 @@ bool SceneView::request_pick(float x, float y, std::string* why) {
     opt.pixel_scale = scale_;
     opt.clear_rgba = clear_;
     opt = stage_options(opt);   // a moved item picks where it draws
-    return pick_->request(tree_, effective_camera(), opt, compiler_, *res_, x, y, generation_, why);
+#if defined(CALIPER_SCENE_PIECES)
+    const bool shapes = shapes_ && shape_draw_ == ShapeDraw::pieces && shapes_->any() && id_;
+    if (shapes) {
+        opt.skip = [this](EntityId e, Primitive p) { return shapes_->draws(e, p); };
+        opt.skip_frustum = [this](EntityId e) { return shapes_->draws_frustum(e); };
+    }
+#else
+    const bool shapes = false;
+#endif
+    const bool entity = pick_->request(tree_, effective_camera(), opt, compiler_, *res_, x, y, generation_, why);
+    shape_asked_ = false;
+#if defined(CALIPER_SCENE_PIECES)
+    // The shapes' pieces wrote their IDs into the programs' target: its window around the pointer,
+    // which poll_pick() reads beside the pick pass.
+    if (shapes) {
+        if (!shape_pick_) shape_pick_ = std::make_unique<caliper_scene::FramePick>(gfx_);
+        shape_asked_ = shape_pick_->request(id_, depth_, width_, height_, x, y, why);
+        shape_generation_ = generation_;
+        shape_done_ = false;
+        shape_has_hit_ = false;
+        entity_done_ = !entity;
+        entity_result_ = entity ? PickPass::Result::Pending : PickPass::Result::Miss;
+    }
+#endif
+    return entity || shape_asked_;
 }
 
 void SceneView::set_stage_source(caliper_scene::StageSource* source) {
@@ -979,6 +1045,63 @@ void SceneView::set_stage_source(caliper_scene::StageSource* source) {
         stage_revision_ = source ? source->revision() : 0;
         changed();
     }
+}
+
+void SceneView::set_shape_draw(ShapeDraw d) {
+#if !defined(CALIPER_SCENE_PIECES)
+    d = ShapeDraw::builtin;
+#endif
+    if (d == shape_draw_) return;
+    shape_draw_ = d;
+    shape_revision_ = ~0ull;
+    changed();
+}
+
+SceneShapeCounts SceneView::shape_counts() const {
+    SceneShapeCounts out;
+#if defined(CALIPER_SCENE_PIECES)
+    if (shapes_ && shape_draw_ == ShapeDraw::pieces) {
+        const caliper_draw::ShapeCounts c = shapes_->counts();
+        out.pieces = c.pieces;
+        out.builtin = c.builtin;
+        out.fallbacks = c.fallbacks;
+        return out;
+    }
+#endif
+    out.builtin = uint32_t(tree_.batch_count());
+    return out;
+}
+
+void SceneView::set_piece_batch(const std::string& path, Primitive p, const caliper_draw::PieceBatch* batch) {
+#if defined(CALIPER_SCENE_PIECES)
+    if (!shapes_) return;
+    if (batch) shapes_->set_override(path, p, *batch);
+    else shapes_->clear_override(path, p);
+    changed();
+#else
+    (void)path;
+    (void)p;
+    (void)batch;
+#endif
+}
+
+bool SceneView::external_draws() const {
+    for (const auto& d : draws_)
+        if (!d->shape) return true;
+    return false;
+}
+
+void SceneView::sync_shapes() {
+#if defined(CALIPER_SCENE_PIECES)
+    if (!shapes_ || shape_draw_ != ShapeDraw::pieces) return;
+    caliper_draw::ScenePieces::SyncState st;
+    const ViewCamera cam = effective_camera();
+    if (const ThroughPinhole* t = std::get_if<ThroughPinhole>(&cam)) st.through = t->camera;
+    st.three_d = tree_.space() == Space::k3D;
+    if (stages_ && stages_->source())
+        st.stage = [this](const std::string& path, Primitive p) { return stages_->find(path, p) != nullptr; };
+    shapes_->sync(tree_, st);
+#endif
 }
 
 void SceneView::set_draw_feed(caliper_draw::DrawFeed* feed) {
@@ -999,7 +1122,16 @@ std::vector<const caliper_draw::DrawRuntime*> SceneView::draw_runtimes() const {
     std::vector<const caliper_draw::DrawRuntime*> out;
 #if defined(CALIPER_HAVE_DRAW)
     for (const auto& d : draws_)
-        if (d->runtime) out.push_back(d->runtime.get());
+        if (d->runtime && !d->shape) out.push_back(d->runtime.get());
+#endif
+    return out;
+}
+
+std::vector<const caliper_draw::DrawRuntime*> SceneView::shape_runtimes() const {
+    std::vector<const caliper_draw::DrawRuntime*> out;
+#if defined(CALIPER_HAVE_DRAW)
+    for (const auto& d : draws_)
+        if (d->runtime && d->shape) out.push_back(d->runtime.get());
 #endif
     return out;
 }
@@ -1053,32 +1185,41 @@ void report_state(caliper_draw::DrawFeed* feed, int* reported, int64_t* reported
 
 void SceneView::reconcile_programs() {
 #if defined(CALIPER_HAVE_DRAW)
-    if (draw_feed_ == nullptr) {
-        if (!draws_.empty()) {
-            draws_.clear();
-            changed();
-        }
-        return;
-    }
-    if (draw_feed_->revision() == draw_revision_) return;
-    draw_revision_ = draw_feed_->revision();
+    // The shapes' pieces first, in the tree's order, then the feed's programs.
+    caliper_draw::DrawFeed* shapes = nullptr;
+#if defined(CALIPER_SCENE_PIECES)
+    if (shapes_ && shape_draw_ == ShapeDraw::pieces) shapes = shapes_.get();
+#endif
+    const uint64_t srev = shapes ? shapes->revision() : ~1ull, frev = draw_feed_ ? draw_feed_->revision() : ~1ull;
+    if (srev == shape_revision_ && frev == draw_revision_) return;
+    shape_revision_ = srev;
+    draw_revision_ = frev;
     const bool webgpu = std::strcmp(gfx_.caps().backend, "webgpu") == 0 || std::strcmp(gfx_.caps().backend, "dawn") == 0;
     std::vector<std::unique_ptr<ProgramSlot>> next;
-    for (const caliper_draw::PanelProgram& p : draw_feed_->programs()) {
-        if (!p.refused.ok()) continue;   // the feed reports a refusal before any runtime
-        std::unique_ptr<ProgramSlot> slot;
-        for (auto& d : draws_)
-            if (d && d->program == p.instance.program && d->revision == p.revision) slot = std::move(d);
-        if (!slot) {
-            slot = std::make_unique<ProgramSlot>();
-            slot->program = p.instance.program;
-            slot->revision = p.revision;
-            slot->runtime = std::make_unique<caliper_draw::DrawRuntime>(gfx_, webgpu, draw_feed_->checks());
-            slot->runtime->install(p.piece, p.instance, p.pick_id);
-            slot->installed = std::chrono::steady_clock::now();
-            report_state(draw_feed_, &slot->reported, &slot->reported_step, *slot->runtime);
+    for (caliper_draw::DrawFeed* feed : {shapes, draw_feed_}) {
+        if (!feed) continue;
+        const bool shape = feed == shapes;
+        for (const caliper_draw::PanelProgram& p : feed->programs()) {
+            if (!p.refused.ok()) continue;   // the feed reports a refusal before any runtime
+            std::unique_ptr<ProgramSlot> slot;
+            for (auto& d : draws_)
+                if (d && d->shape == shape && d->program == p.instance.program && d->revision == p.revision)
+                    slot = std::move(d);
+            if (!slot) {
+                slot = std::make_unique<ProgramSlot>();
+                slot->program = p.instance.program;
+                slot->revision = p.revision;
+                slot->shape = shape;
+                slot->runtime = std::make_unique<caliper_draw::DrawRuntime>(gfx_, webgpu, feed->checks());
+                slot->runtime->install(p.piece, p.instance, p.pick_id);
+                slot->installed = std::chrono::steady_clock::now();
+#if defined(CALIPER_SCENE_PIECES)
+                if (shape) shapes_->installed(p.instance.program);
+#endif
+                report_state(feed, &slot->reported, &slot->reported_step, *slot->runtime);
+            }
+            next.push_back(std::move(slot));
         }
-        next.push_back(std::move(slot));
     }
     draws_ = std::move(next);   // a program no longer in the feed releases its objects
     panel_over_ = 0;
@@ -1169,11 +1310,24 @@ void SceneView::draw_programs() {
     target.width = width_;
     target.height = height_;
     target.colormaps = program_colormaps_;
+    const caliper_scene::CameraMatrices shape_cm = caliper_scene::camera_matrices(cam, tree_, width_, height_);
+#if defined(CALIPER_SCENE_PIECES)
+    // The shapes' matrices are the scene core's, of the camera it drew with.
+    if (shapes_) shapes_->set_camera(shape_cm);
+#endif
+    bool shapes_drawn = false;
     for (auto& d : draws_) {
         if (!d->runtime) continue;
+        // After the last shape's piece, the letterbox's bars of a pinhole looked through.
+        if (!d->shape && shapes_drawn) {
+            paint_bars(shape_cm);
+            shapes_drawn = false;
+        }
+        shapes_drawn = shapes_drawn || d->shape;
+        caliper_draw::DrawFeed* feed = slot_feed(*d);
         caliper_draw::FrameInputs in = base;
         in.time_s = std::chrono::duration<double>(now - d->installed).count();
-        if (draw_feed_) draw_feed_->frame(*d->runtime, &in);
+        if (feed) feed->frame(*d->runtime, &in);
         std::vector<caliper_gfx::Frame> frames;
         if (d->runtime->encode(&frames, in, target)) {
             for (caliper_gfx::Frame& f : frames) {
@@ -1185,9 +1339,62 @@ void SceneView::draw_programs() {
                 d->pending.emplace_back(s, std::chrono::steady_clock::now());
             }
         }
-        report_state(draw_feed_, &d->reported, &d->reported_step, *d->runtime);
+        report_state(feed, &d->reported, &d->reported_step, *d->runtime);
     }
+    if (shapes_drawn) paint_bars(shape_cm);
 #endif
+}
+
+void SceneView::paint_bars(const caliper_scene::CameraMatrices& cm) {
+    const uint32_t x0 = cm.scissor[0], y0 = cm.scissor[1];
+    const uint32_t x1 = std::min<uint32_t>(width_, x0 + cm.scissor[2]), y1 = std::min<uint32_t>(height_, y0 + cm.scissor[3]);
+    if (!cm.through || (x0 == 0 && y0 == 0 && x1 >= width_ && y1 >= height_)) return;
+    if (!dim_texture_ || dim_rgba_ != clear_) {
+        if (!dim_texture_)
+            dim_texture_ = gfx_.create_texture({1, 1, caliper_gfx::Format::RGBA8Unorm,
+                                                caliper_gfx::kSampled | caliper_gfx::kCopyDstTex, "scene dim"});
+        const uint32_t ground = clear_ | 0xff000000u;
+        if (dim_texture_ && gfx_.write_texture(dim_texture_, &ground, 4)) dim_rgba_ = clear_;
+    }
+    if (!dim_texture_) return;
+    // The scene core scissors its draws to the picture and a piece draws the whole target, thus the
+    // bars take the ground again: the rectangles above, below, left of and right of the picture.
+    const uint32_t rects[4][4] = {{0, 0, width_, y0}, {0, y1, width_, height_ - std::min(height_, y1)},
+                                  {0, y0, x0, y1 - std::min(y1, y0)}, {x1, y0, width_ - std::min(width_, x1), y1 - std::min(y1, y0)}};
+    SceneTree bars(Space::k2D);
+    std::string err;
+    for (int k = 0; k < 4; ++k) {
+        if (rects[k][2] == 0 || rects[k][3] == 0) continue;
+        const EntityId e = bars.ensure("bar" + std::to_string(k), &err);
+        if (!e) continue;
+        bars.set_transform(e, caliper_scene::translation({double(rects[k][0]), double(rects[k][1]), 0.0}), false, &err);
+        Batch q;
+        q.primitive = Primitive::Image;
+        q.texture = dim_texture_;
+        q.image_width = rects[k][2];
+        q.image_height = rects[k][3];
+        q.opacity = 1.0f;
+        bars.set_batch(e, q, false, &err);
+    }
+    bars.update();
+    PanZoom pz;
+    pz.center[0] = width_ * 0.5;
+    pz.center[1] = height_ * 0.5;
+    pz.half_height = height_ * 0.5;
+    pz.y_down = true;
+    caliper_gfx::RenderTarget over;
+    over.color = color_;
+    over.clear = false;
+    caliper_gfx::DrawList dl(over);
+    CompileOptions o;
+    o.width = width_;
+    o.height = height_;
+    o.pixel_scale = scale_;
+    o.clear_rgba = clear_;
+    if (!bar_compiler_.compile(bars, pz, o, *res_, dl, nullptr).ok) return;
+    caliper_gfx::Frame f;
+    f.render(std::move(dl));
+    if (gfx_.submit(std::move(f)) == 0) note("the layer refused the letterbox: " + gfx_.last_error());
 }
 
 void SceneView::poll_programs() {
@@ -1208,7 +1415,7 @@ void SceneView::poll_programs() {
             completed = true;
         }
         if (!d->pending.empty()) d->runtime->frame_pending(ms_since(d->pending.front().second));
-        report_state(draw_feed_, &d->reported, &d->reported_step, *d->runtime);
+        report_state(slot_feed(*d), &d->reported, &d->reported_step, *d->runtime);
     }
     // The programs of the panel together: over 16.7 ms a frame on 30 polls in a row stops the
     // costliest one, which names its costliest pass after one more measured frame.
@@ -1235,6 +1442,13 @@ void SceneView::poll_programs() {
 #endif
 }
 
+caliper_draw::DrawFeed* SceneView::slot_feed(const ProgramSlot& slot) const {
+#if defined(CALIPER_SCENE_PIECES)
+    if (slot.shape) return shapes_.get();
+#endif
+    return slot.shape ? nullptr : draw_feed_;
+}
+
 CompileOptions SceneView::stage_options(CompileOptions opt) const {
     if (stages_ && stages_->source()) {
         opt.stages = stages_.get();
@@ -1245,12 +1459,45 @@ CompileOptions SceneView::stage_options(CompileOptions opt) const {
 }
 
 PickPass::Result SceneView::poll_pick(Hit* out) {
+#if defined(CALIPER_SCENE_PIECES)
+    if (shape_asked_) {
+        // The pick pass and the pieces' IDs answer apart; the hit goes out once both did, the
+        // piece's unless the pass's hit is nearer, as for the feed's programs.
+        if (!entity_done_ && pick_) {
+            const PickPass::Result r = pick_->poll(generation_, &entity_hit_);
+            if (r == PickPass::Result::Pending) return r;
+            entity_result_ = r == PickPass::Result::None ? PickPass::Result::Miss : r;
+            entity_done_ = true;
+        }
+        if (!shape_done_) {
+            caliper_scene::FrameHit fh;
+            const PickPass::Result r = shape_pick_->poll([this](uint32_t id) { return shapes_ && shapes_->owns(id); }, &fh);
+            if (r == PickPass::Result::Pending) return r;
+            shape_has_hit_ = r == PickPass::Result::Hit && shapes_->hit(fh, shape_pick_->window(), &shape_hit_);
+            shape_done_ = true;
+        }
+        shape_asked_ = false;
+        // A result whose frame the view replaced since is dropped, as the pick pass drops one.
+        if (entity_result_ == PickPass::Result::Dropped || shape_generation_ != generation_)
+            return PickPass::Result::Dropped;
+        const bool entity = entity_result_ == PickPass::Result::Hit;
+        if (shape_has_hit_ && (!entity || !(entity_hit_.depth < shape_hit_.depth))) {
+            if (out) *out = shape_hit_;
+            return PickPass::Result::Hit;
+        }
+        if (entity) {
+            if (out) *out = entity_hit_;
+            return PickPass::Result::Hit;
+        }
+        return PickPass::Result::Miss;
+    }
+#endif
     return pick_ ? pick_->poll(generation_, out) : PickPass::Result::None;
 }
 
 uint64_t SceneView::request_program_pick(float x, float y, std::string* why) {
 #if defined(CALIPER_HAVE_DRAW)
-    if (draws_.empty() || !id_) {
+    if (!external_draws() || !id_) {
         if (why) *why = "the view draws no program";
         return 0;
     }
@@ -1262,7 +1509,7 @@ uint64_t SceneView::request_program_pick(float x, float y, std::string* why) {
     if (!p.frame->request(id_, depth_, width_, height_, x, y, why)) return 0;
     // The readback reads the frames submitted so far, whose last one showed these versions.
     for (const auto& d : draws_)
-        if (d->runtime) p.shown.emplace_back(d->runtime->pick_id(), d->runtime->shown_items());
+        if (d->runtime && !d->shape) p.shown.emplace_back(d->runtime->pick_id(), d->runtime->shown_items());
     p.ticket = ++p.last_ticket;
     return p.ticket;
 #else
@@ -1787,9 +2034,10 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
         changed();
     }
     if (tree_.revision() != drawn_revision_ || tree_.pose_revision() != drawn_pose_) changed();
-    // Programs draw in every frame: their time, their draw state and their resources move.
+    // The feed's programs draw in every frame: their time, their draw state and their resources
+    // move. The shapes' pieces draw when the scene changed, as the built-in draw does.
     reconcile_programs();
-    if (!draws_.empty()) changed();
+    if (external_draws()) changed();
     if (stages_ && stages_->source() &&
         (stages_->source()->revision() != stage_revision_ || (staged_ > 0 && stages_->animated())))
         changed();
@@ -1833,6 +2081,9 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
             fitted_aspect_ = aspect;
         }
     }
+    // The shapes' pieces from the updated tree, before the scene core leaves their batches out.
+    sync_shapes();
+    reconcile_programs();
     if (res_->update_class_table(tree_)) {   // 65,536 texels from the host
         counts_.bytes_last += 65536u * 4u;
         counts_.bytes_total += 65536u * 4u;
@@ -1857,7 +2108,14 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
         if (stages_->source()) stage_revision_ = stages_->source()->revision();
         stages_->begin_frame();
     }
-    const CompileResult r = compiler_.compile(tree_, effective_camera(), stage_options(opt), *res_, list, &map);
+    CompileOptions main_opt = stage_options(opt);
+#if defined(CALIPER_SCENE_PIECES)
+    if (shapes_ && shape_draw_ == ShapeDraw::pieces && shapes_->any()) {
+        main_opt.skip = [this](EntityId e, Primitive p) { return shapes_->draws(e, p); };
+        main_opt.skip_frustum = [this](EntityId e) { return shapes_->draws_frustum(e); };
+    }
+#endif
+    const CompileResult r = compiler_.compile(tree_, effective_camera(), main_opt, *res_, list, &map);
     if (stages_) stages_->end_frame();   // programs no draw used go back to the layer
     staged_ = r.staged;
     for (const std::string& n : r.notes) note(n);

@@ -64,6 +64,7 @@ namespace wire = caliper_net::wire;
 namespace fs = std::filesystem;
 using caliper_net::Json;
 using caliper_live_views::SceneView;
+using caliper_live_views::SceneShapeCounts;
 using namespace scene_reference;
 
 std::unique_ptr<Backend> view_layer() {
@@ -84,10 +85,16 @@ void capture_png(const char* name, const std::vector<uint8_t>& rgba, int w, int 
 struct ViewRig {
     std::unique_ptr<Backend> gfx;
     std::unique_ptr<SceneView> view;
-    bool init(const char* space = CALIPER_NET_SPACE_3D, const char* up = "+z", const char* units = "") {
+    bool init(const char* space = CALIPER_NET_SPACE_3D, const char* up = "+z", const char* units = "",
+              caliper_live_views::ShapeDraw shapes = caliper_live_views::ShapeDraw::builtin) {
         gfx = view_layer();
         if (!gfx) return false;
         view = std::make_unique<SceneView>(*gfx, sh::kMetalPrograms);
+        // These rows check the scene core's own draw list, its pick pass and its counters against
+        // their CPU references, thus they draw every shape with the built-in draw; the rows of
+        // "Shapes Drawn by Library Pieces" at the end of this file draw the same fixtures with the
+        // pieces and compare them with the built-in.
+        view->set_shape_draw(shapes);
         std::string err;
         REQUIRE_MESSAGE(view->init(&err), err);
         view->describe(wire::SceneView{space, up, units});
@@ -1398,5 +1405,267 @@ TEST_CASE("gfx/Metal scene view: timing — the demo scene's cost per frame and 
     MESSAGE("[scene-view-bench] demo scene at 512 x 512, median of ", kRuns, ": compile ", median(compile),
             " ms, submit ", median(submit), " ms, gpu ", median(gpu), " ms; one mesh update of 1,681 vertices and 3,200 "
             "triangles applied in ", median(apply_ms), " ms");
+}
+// ---- Shapes drawn by library pieces (draw/scene_pieces.h) ------------------------------------------
+
+namespace {
+
+int channel_gap(uint32_t a, uint32_t b) {
+    int g = 0;
+    for (int k = 0; k < 4; ++k) g = std::max(g, std::abs(int((a >> (8 * k)) & 0xffu) - int((b >> (8 * k)) & 0xffu)));
+    return g;
+}
+
+// The view's programs' ID target as (pick id, item) pairs, top row first.
+std::vector<uint64_t> program_ids(Backend& gfx, SceneView& v) {
+    std::vector<uint64_t> ids(size_t(v.width()) * v.height(), 0);
+    if (!v.id_target()) return ids;
+    const caliper_gfx::Readback rb = gfx.read_texture(v.id_target(), 0, 0, v.width(), v.height());
+    std::vector<uint8_t> bytes;
+    REQUIRE(rb);
+    REQUIRE(gfx.wait(gfx.last_use(v.id_target())));
+    REQUIRE(gfx.take_readback(rb, &bytes));
+    REQUIRE(bytes.size() >= ids.size() * 8);
+    for (size_t i = 0; i < ids.size(); ++i) {
+        uint32_t pair[2];
+        std::memcpy(pair, bytes.data() + i * 8, 8);
+        ids[i] = pair[0] == 0 ? 0 : (uint64_t(pair[0]) << 32 | pair[1]) + 1;
+    }
+    return ids;
+}
+
+// The comparison of a picture drawn by the pieces with the built-in's, under the rules of the
+// match tests (tests/points_match/): a pixel whose 3 x 3 neighbourhood shows one identity in the
+// pieces' ID target is interior and lies within `interior` levels of the built-in pixel; every other
+// pixel lies within 1 level of a built-in pixel of its 3 x 3 neighbourhood.
+struct ShapeComparison {
+    size_t differ = 0, interior = 0, failed = 0;
+    int max_interior = 0, max_edge = 0;
+    std::string first;
+};
+ShapeComparison compare_shapes(const std::vector<uint8_t>& piece, const std::vector<uint8_t>& builtin,
+                               const std::vector<uint64_t>& ids, int S, int interior) {
+    ShapeComparison c;
+    auto px = [&](const std::vector<uint8_t>& img, int x, int y) {
+        uint32_t v;
+        std::memcpy(&v, img.data() + (size_t(y) * S + x) * 4, 4);
+        return v;
+    };
+    for (int y = 0; y < S; ++y)
+        for (int x = 0; x < S; ++x) {
+            const uint32_t p = px(piece, x, y), b = px(builtin, x, y);
+            if (p != b) ++c.differ;
+            const uint64_t own = ids[size_t(y) * S + x];
+            bool inside = own != 0;
+            for (int dy = -1; dy <= 1 && inside; ++dy)
+                for (int dx = -1; dx <= 1 && inside; ++dx)
+                    inside = ids[size_t(std::clamp(y + dy, 0, S - 1)) * S + std::clamp(x + dx, 0, S - 1)] == own;
+            int g = channel_gap(p, b);
+            if (inside) {
+                ++c.interior;
+                c.max_interior = std::max(c.max_interior, g);
+                if (g <= interior) continue;
+            } else {
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx)
+                        g = std::min(g, channel_gap(p, px(builtin, std::clamp(x + dx, 0, S - 1), std::clamp(y + dy, 0, S - 1))));
+                c.max_edge = std::max(c.max_edge, g);
+                if (g <= 1) continue;
+            }
+            if (c.failed++ == 0) {
+                char b2[160];
+                std::snprintf(b2, sizeof b2, "pixel (%d, %d): pieces %08x, built-in %08x, %s, gap %d", x, y, p, b,
+                              inside ? "interior" : "edge", g);
+                c.first = b2;
+            }
+        }
+    return c;
+}
+
+// The answer to a pick that the view asked, once its readbacks are in.
+caliper_scene::PickPass::Result take_any_pick(Backend& gfx, SceneView& v, caliper_scene::Hit* hit) {
+    caliper_scene::PickPass::Result r = caliper_scene::PickPass::Result::Pending;
+    for (int tries = 0; tries < 10000 && r == caliper_scene::PickPass::Result::Pending; ++tries) {
+        gfx.wait(v.pick_pass()->last_use());
+        // The pieces' pick reads the ID target and the depth: each readback is a use of its texture.
+        if (v.id_target()) gfx.wait(gfx.last_use(v.id_target()));
+        if (v.depth_target()) gfx.wait(gfx.last_use(v.depth_target()));
+        gfx.poll();
+        r = v.poll_pick(hit);
+    }
+    return r;
+}
+
+void capture_shapes(const std::string& name, const std::vector<uint8_t>& piece, const std::vector<uint8_t>& builtin, int S) {
+    std::vector<uint8_t> diff(piece.size(), 255);
+    for (size_t i = 0; i < piece.size(); i += 4)
+        for (int k = 0; k < 3; ++k) diff[i + size_t(k)] = uint8_t(std::min(255, 32 * std::abs(int(piece[i + size_t(k)]) - int(builtin[i + size_t(k)]))));
+    capture_png(("scene-pieces-" + name + "-builtin.png").c_str(), builtin, S, S);
+    capture_png(("scene-pieces-" + name + "-pieces.png").c_str(), piece, S, S);
+    capture_png(("scene-pieces-" + name + "-diff.png").c_str(), diff, S, S);
+}
+
+std::string hit_text(const SceneView& v, const caliper_scene::Hit& h) {
+    return v.tree().path(h.entity) + " " + caliper_scene::primitive_name(h.primitive) + " " + std::to_string(h.item) +
+           (h.has_pixel ? " px " + std::to_string(h.pixel[0]) + "," + std::to_string(h.pixel[1]) : std::string());
+}
+
+// One fixture drawn twice, by the pieces and by the built-in: the pictures under the rules above,
+// the counts of the shapes, and the picks at interior pixels of the pieces' IDs on a grid, which
+// give the same entity, primitive, item and pixel in both views.
+void compare_fixture(const std::string& name, ViewRig& pieces, ViewRig& builtin, int S, int interior) {
+    SceneView& pv = *pieces.view;
+    SceneView& bv = *builtin.view;
+    const std::vector<uint8_t> p = pixels(pv), b = pixels(bv);
+    const std::vector<uint64_t> ids = program_ids(*pieces.gfx, pv);
+    const ShapeComparison c = compare_shapes(p, b, ids, S, interior);
+    const SceneShapeCounts counts = pv.shape_counts();
+    std::string falls;
+    for (const auto& [kind, n] : counts.fallbacks) falls += " " + kind + " " + std::to_string(n) + ";";
+    capture_shapes(name, p, b, S);
+    // Picks on a grid, at interior pixels of the pieces' IDs.
+    size_t asked = 0, agreed = 0;
+    std::string first_pick;
+    for (int y = 4; y < S; y += 9)
+        for (int x = 4; x < S; x += 9) {
+            const uint64_t own = ids[size_t(y) * S + x];
+            bool inside = own != 0;
+            for (int dy = -2; dy <= 2 && inside; ++dy)
+                for (int dx = -2; dx <= 2 && inside; ++dx)
+                    inside = ids[size_t(std::clamp(y + dy, 0, S - 1)) * S + std::clamp(x + dx, 0, S - 1)] == own;
+            if (!inside) continue;
+            std::string why;
+            caliper_scene::Hit hp, hb;
+            REQUIRE_MESSAGE(pv.request_pick(x + 0.5f, y + 0.5f, &why), why);
+            const auto rp = take_any_pick(*pieces.gfx, pv, &hp);
+            REQUIRE_MESSAGE(bv.request_pick(x + 0.5f, y + 0.5f, &why), why);
+            const auto rb = take_any_pick(*builtin.gfx, bv, &hb);
+            ++asked;
+            // The same event: entity, primitive and index (an image's pixel, row by row), as
+            // pick_detail() gives it; a box's faces and edges are one item of one piece, and so are a
+            // depth image's quad and its cloud.
+            auto index_of = [](const SceneView& v, const caliper_scene::Hit& h) -> int64_t {
+                if (h.primitive == caliper_scene::Primitive::Image && h.part == caliper_scene::DrawPart::Batch) {
+                    const caliper_scene::Batch* b = v.tree().batch(h.entity, caliper_scene::Primitive::Image);
+                    return h.has_pixel && b ? int64_t(h.pixel[1]) * b->image_width + h.pixel[0] : -1;
+                }
+                return int64_t(h.item);
+            };
+            const bool same = rp == rb && (rp != caliper_scene::PickPass::Result::Hit ||
+                                           (pv.tree().path(hp.entity) == bv.tree().path(hb.entity) &&
+                                            hp.primitive == hb.primitive && index_of(pv, hp) == index_of(bv, hb) &&
+                                            pv.pick_detail(hp).empty() == bv.pick_detail(hb).empty()));
+            if (same) {
+                ++agreed;
+            } else if (first_pick.empty()) {
+                first_pick = "at (" + std::to_string(x) + ", " + std::to_string(y) + "): pieces " +
+                             (rp == caliper_scene::PickPass::Result::Hit ? hit_text(pv, hp)
+                                                                         : "result " + std::to_string(int(rp))) +
+                             ", built-in " +
+                             (rb == caliper_scene::PickPass::Result::Hit ? hit_text(bv, hb)
+                                                                         : "result " + std::to_string(int(rb)));
+            }
+        }
+    MESSAGE("[scene-pieces] ", name, ": ", counts.pieces, " shapes by pieces, ", counts.builtin, " by the built-in (",
+            falls, " ); ", c.differ, " of ", S * S, " pixels differ, ", c.interior, " interior pixels with a largest gap of ",
+            c.max_interior, ", largest edge gap ", c.max_edge, " to a neighbour, ", c.failed, " outside the rules; picks ",
+            agreed, " of ", asked, " agree");
+    CHECK_MESSAGE(c.failed == 0, name, ": ", c.first);
+    CHECK_MESSAGE(agreed == asked, name, ": ", first_pick);
+}
+
+}  // namespace
+
+// Every fixture of the primitive rows and the demo's scene, drawn by the library pieces and by the
+// built-in draw through the switch of the scene view (ShapeDraw), compare under the rules of the
+// pieces' match tests, and their picks agree. Images take 1 level inside, as image@1's match does
+// (its bilinear filter is written in WGSL). The fixture "through" looks through a camera entity
+// whose pixel space holds points of radii in scene units, which no piece draws, thus every shape
+// keeps the built-in draw; "through-pieces" is the same view without them. CALIPER_GFX_CAPTURE_DIR=<folder> writes each pair and its
+// difference times 32 there.
+TEST_CASE("gfx/Metal scene view: shapes drawn by the library pieces match the built-in draw, with the same picks") {
+    ViewRig probe;
+    if (!probe.init()) CALIPER_SKIP_NO_GPU("no Metal device");
+    std::vector<primitive_fixtures::Fixture> fixtures = primitive_fixtures::all();
+    // The view through a camera with its points sized in pixels, not by radii in scene units,
+    // which keep the built-in draw and with it every shape of the view: the pinhole frames the
+    // pieces, the camera's pixel space lies flat over the picture, and the bars keep the ground.
+    primitive_fixtures::Fixture flat = primitive_fixtures::through();
+    flat.name = "through-pieces";
+    for (wire::Message& m : flat.messages)
+        if (auto* u = std::get_if<wire::SceneUpdate>(&m)) u->params.erase("radius");
+    fixtures.push_back(flat);
+    for (const primitive_fixtures::Fixture& f : fixtures) {
+        CAPTURE(f.name);
+        ViewRig pr, br;
+        REQUIRE(pr.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str(), caliper_live_views::ShapeDraw::pieces));
+        REQUIRE(br.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str(), caliper_live_views::ShapeDraw::builtin));
+        primitive_rows::Row rp, rb;
+        rp.fixture = f;
+        rb.fixture = f;
+        REQUIRE_MESSAGE(rp.draw(*pr.view), rp.error);
+        REQUIRE_MESSAGE(rb.draw(*br.view), rb.error);
+        const SceneShapeCounts counts = pr.view->shape_counts();
+        if (f.name == "through") CHECK(counts.fallbacks.count("view through a camera with a built-in overlay") == 1);
+        else CHECK_MESSAGE(counts.pieces > 0, f.name, " draws no shape with a piece");
+        compare_fixture(f.name, pr, br, int(primitive_fixtures::kSize), f.name == "images" ? 1 : 0);
+    }
+    {
+        ViewRig pr, br;
+        REQUIRE(pr.init(CALIPER_NET_SPACE_3D, "+z", "", caliper_live_views::ShapeDraw::pieces));
+        REQUIRE(br.init());
+        const scene_fixtures::SurfaceRowFixture fx;
+        const DemoMessages dm(fx);
+        Wire wp, wb;
+        draw_demo(pr, wp, dm);
+        draw_demo(br, wb, dm);
+        // The demo's mesh has flat faces and indices, which mesh@1 does not draw yet.
+        const SceneShapeCounts counts = pr.view->shape_counts();
+        CHECK(counts.pieces == 3);
+        CHECK(counts.fallbacks.count("indexed mesh with flat faces") == 1);
+        compare_fixture("demo", pr, br, int(scene_fixtures::SurfaceRowFixture::kSize), 0);
+    }
+}
+
+// The switch: one view drawn with the pieces, then with the built-in, then with the pieces again,
+// gives each time the picture of a view that drew that way from the start; nothing draws while
+// nothing changes; and a pick whose frame the view replaced is dropped, as the pick pass drops one.
+TEST_CASE("gfx/Metal scene view: the switch between the pieces and the built-in draw, and a stale pick of a piece") {
+    ViewRig pr, br;
+    if (!pr.init(CALIPER_NET_SPACE_3D, "+z", "", caliper_live_views::ShapeDraw::pieces)) CALIPER_SKIP_NO_GPU("no Metal device");
+    REQUIRE(br.init());
+    const scene_fixtures::SurfaceRowFixture fx;
+    const DemoMessages dm(fx);
+    Wire wp, wb;
+    draw_demo(pr, wp, dm);
+    draw_demo(br, wb, dm);
+    SceneView& v = *pr.view;
+    const uint32_t S = scene_fixtures::SurfaceRowFixture::kSize;
+    const std::vector<uint8_t> with_pieces = pixels(v), builtin = pixels(*br.view);
+    CHECK(v.shape_runtimes().size() == 3);
+    CHECK(v.draw_runtimes().empty());
+    std::string why;
+    v.set_shape_draw(caliper_live_views::ShapeDraw::builtin);
+    REQUIRE_MESSAGE(v.render(S, S, 1.0f, scene_fixtures::SurfaceRowFixture::kClear, &why), why);
+    CHECK(v.shape_runtimes().empty());
+    CHECK(pixels(v) == builtin);
+    v.set_shape_draw(caliper_live_views::ShapeDraw::pieces);
+    REQUIRE_MESSAGE(v.render(S, S, 1.0f, scene_fixtures::SurfaceRowFixture::kClear, &why), why);
+    CHECK(v.shape_runtimes().size() == 3);
+    const std::vector<uint8_t> again = pixels(v);
+    size_t changed = 0;
+    for (size_t i = 0; i + 4 <= again.size(); i += 4) changed += std::memcmp(&again[i], &with_pieces[i], 4) != 0;
+    CHECK_MESSAGE(changed == 0, changed, " pixels differ after the switch back");
+    capture_png("scene-pieces-switch-back.png", again, int(S), int(S));
+    // Nothing changes: nothing is compiled or submitted.
+    const uint64_t frames = v.cost().frames;
+    REQUIRE_MESSAGE(v.render(S, S, 1.0f, scene_fixtures::SurfaceRowFixture::kClear, &why), why);
+    CHECK(v.cost().frames == frames);
+    // A stale pick of a piece.
+    REQUIRE(v.request_pick(S * 0.5f, S * 0.5f, &why));
+    v.orbit(2.0f, 0.0f);
+    REQUIRE_MESSAGE(v.render(S, S, 1.0f, scene_fixtures::SurfaceRowFixture::kClear, &why), why);
+    caliper_scene::Hit hit;
+    CHECK(take_any_pick(*pr.gfx, v, &hit) == caliper_scene::PickPass::Result::Dropped);
 }
 #endif

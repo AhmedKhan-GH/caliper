@@ -949,8 +949,12 @@ if(CALIPER_WITH_BUILDER)
     # The app's host of draw halves (src/host/draw/draw_host.h): the programs of a spec for the
     # scene views, their resources, params and events. The scene view of the live views draws
     # programs where the build has it (CALIPER_HAVE_DRAW).
-    add_library(caliper_draw_host STATIC src/host/draw/draw_host.cpp)
-    target_link_libraries(caliper_draw_host PUBLIC caliper_draw caliper_builder_spec)
+    add_library(caliper_draw_host STATIC src/host/draw/draw_host.cpp src/host/draw/scene_pieces.cpp)
+    target_link_libraries(caliper_draw_host PUBLIC caliper_draw caliper_builder_spec caliper_scene caliper_net)
+    # The scene view draws its shapes with the library pieces (draw/scene_pieces.h) wherever it is
+    # compiled with the draw layer and linked with this library; the browser module does not link it
+    # and keeps the built-in draw.
+    target_compile_definitions(caliper_draw_host PUBLIC CALIPER_HAVE_SCENE_PIECES=1)
     set_target_properties(caliper_draw_host PROPERTIES
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
     target_link_libraries(libcaliper PUBLIC caliper_draw_host)
