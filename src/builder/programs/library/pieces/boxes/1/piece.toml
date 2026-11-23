@@ -1,0 +1,154 @@
+# Library piece boxes@1: boxes in 3-D or in 2-D, drawn as the built-in boxes primitive draws them.
+name = "boxes"
+version = 1
+description = "Boxes from centers, half sizes and rotations, as wire edges of a width in pixels with optional translucent faces, colored by one color, by RGBA or by class id"
+imports = ["pick@1"]
+
+[[inputs]]
+name = "centers"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+title = "Centers (N, 3), or (N, 2) for boxes in 2-D"
+
+[[inputs]]
+name = "half_sizes"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+title = "Half Sizes (N, 3) or (N, 2), or one row for all"
+
+[[inputs]]
+name = "rotations"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+title = "Rotations (N, 4) as quaternions (x, y, z, w) in 3-D; a tensor of another width rotates nothing"
+
+[[inputs]]
+name = "colors"
+kind = "tensor"
+rank_min = 1
+rank_max = 2
+title = "Colors (N, 3 or 4) from 0 to 1, or class ids (N)"
+
+[[params]]
+name = "width"
+default = 2.0
+min = 0.5
+max = 64.0
+title = "Edge Width in Pixels"
+
+[[params]]
+name = "fill"
+type = "u32"
+default = 0
+min = 0
+max = 1
+title = "Faces (0 none, 1 translucent faces)"
+
+[[params]]
+name = "color_mode"
+type = "u32"
+default = 0
+min = 0
+max = 2
+title = "Color (0 one color, 1 RGBA of each box, 2 class id of each box)"
+
+[[params]]
+name = "color"
+type = "u32"
+default = 4293319900
+title = "One Color as Packed RGBA"
+
+[[params]]
+name = "depth_offset"
+type = "i32"
+default = 0
+min = -8
+max = 8
+title = "Depth Offset of the Edges in Steps of 1/8192"
+
+[[resources]]
+id = "boxes"
+kind = "buffer"
+struct = "Box"
+fields = ["center: vec4<f32>", "half_size: vec4<f32>", "rotation: vec4<f32>", "rgba: u32", "class_rgba: u32", "index: u32"]
+count = 131072
+counted = true
+
+# 1 when a box has an alpha below 255; zero before each run, and never sent.
+[[resources]]
+id = "alpha_seen"
+kind = "buffer"
+element = "u32"
+count = 1
+publish = false
+clear = true
+
+[[derive.passes]]
+entry = "copy_boxes"
+workgroups = [512, 1, 1]
+writes = ["boxes"]
+
+[[derive.passes]]
+entry = "mark_alpha"
+writes = ["boxes"]
+
+[draw]
+camera = "orbit"
+frame_ms = 16
+pick = { resource = "boxes", fields = ["index"] }
+
+# The edges of opaque boxes: they write depth and the ID, as the built-in's opaque draw does.
+[[draw.passes]]
+kind = "render"
+vertex = "wire_vs"
+fragment = "wire_fs"
+instances = "boxes"
+vertices = 72
+blend = "alpha"
+depth = "write"
+pick = true
+
+# The edges of translucent boxes: they blend and write no depth.
+[[draw.passes]]
+kind = "render"
+vertex = "wire_see_vs"
+fragment = "see_fs"
+instances = "boxes"
+vertices = 72
+blend = "alpha"
+depth = "test"
+
+# The translucent faces, after every edge.
+[[draw.passes]]
+kind = "render"
+vertex = "face_vs"
+fragment = "see_fs"
+instances = "boxes"
+vertices = 36
+blend = "alpha"
+depth = "test"
+
+# The IDs of translucent edges and of faces, nearest first as the built-in's pick pass finds them;
+# they leave the color as it is.
+[[draw.passes]]
+kind = "render"
+vertex = "wire_id_vs"
+fragment = "id_fs"
+instances = "boxes"
+vertices = 72
+blend = "alpha"
+depth = "write"
+pick = true
+
+[[draw.passes]]
+kind = "render"
+vertex = "face_id_vs"
+fragment = "id_fs"
+instances = "boxes"
+vertices = 36
+blend = "alpha"
+depth = "write"
+pick = true
