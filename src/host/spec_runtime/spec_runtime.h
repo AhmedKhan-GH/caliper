@@ -241,6 +241,16 @@ struct SpecPanelView {
     // panel draws inside its plot. Null: none drawn.
     const caliper_builder::spec::Panel* spec_panel = nullptr;
     const SpecInstrumentHost* instruments = nullptr;
+    // A 3-D points panel's box (draw_points3d): where it was drawn last, in window points (x, y,
+    // width, height), and its turn after the last frame, as a quaternion (x, y, z, w). A right press
+    // on the box turns it from the first point of motion, and a release within the click's tolerance
+    // (live/camera_drag.h) puts back the turn of the press: the turn of the press, the largest
+    // squared distance from the press, and whether the turn is still the one the press left.
+    float box_rect[4] = {0, 0, 0, 0};
+    double box_turn[4] = {0, 0, 0, 1};
+    bool turn_down = false, turn_restorable = false;
+    float turn_max_d2 = 0.0f;
+    double turn_press[4] = {0, 0, 0, 1};
 };
 
 // Draws one prepared panel into `rect` of the current window: the title
@@ -356,6 +366,13 @@ public:
     // Where the scene panel `panel_id` was drawn last, in window points: x, y, width and height.
     // False before its first draw (the UI driver's drags).
     bool scene_rect(const std::string& panel_id, float rect[4]) const;
+    // Whether (x, y), in window points, lies on what a right drag of the panel `panel_id` turns as
+    // a camera, as the last frame drew it: a scene panel's picture or a 3-D points panel's box.
+    // There a right click is a click as the camera decides it (live/camera_drag.h).
+    bool camera_area(const std::string& panel_id, float x, float y) const;
+    // The turn of a 3-D points panel's box after the last frame, as a quaternion (x, y, z, w);
+    // false for another panel (tests).
+    bool points_turn(const std::string& panel_id, double q[4]) const;
     // Whether the scene panel holds a drag (a button pressed on its picture) and whether a pick of
     // it waits for its readback; false before its first draw (the app's frame log).
     bool scene_gesture(const std::string& panel_id, bool* down, bool* pick_pending) const;

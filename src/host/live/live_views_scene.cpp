@@ -6,6 +6,7 @@
 #include "caliper/live_views.h"
 #include "embed/embed_core.h"
 #include "embed/render_stats.h"   // copy counters
+#include "live/camera_drag.h"
 #include "live/live_scene.h"
 #include "live/scene_overlays.h"
 #include "scene/pick.h"   // PickPass::Result
@@ -33,6 +34,14 @@
 namespace caliper_live_views {
 
 static_assert(kKindScene == CALIPER_NET_KIND_SCENE, "the scene kind of the view registry and of protocol 3.2");
+
+bool ScenePress::same(const State& a, const State& b) { return a.moved == b.moved && same_camera(a.camera, b.camera); }
+ScenePress::State ScenePress::state() const { return {view.camera(), view.moved()}; }
+void ScenePress::restore(const State& s) { view.restore_camera(s.camera, s.moved); }
+void ScenePress::move(float dx, float dy) {
+    if (pan) view.pan(dx, dy, view_height);
+    else view.orbit(dx, dy);
+}
 
 SceneHolder::~SceneHolder() {
     view.reset();   // its resources go back to the layer before the layer goes
@@ -477,7 +486,11 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
     sc->set_stage_source(options.stages);
     sc->poll();   // the GPU time of completed frames: the info line and the stages' time watchdog
 
-    // ---- input: an invisible button owns the rectangle, so that a drag never moves the window
+    // ---- input: an invisible button owns the rectangle, so that a drag never moves the window. A
+    // control over the picture goes in a child window of its own, as the spec's controls and a
+    // panel's × (spec_page.cpp) do: that window takes the presses over it, which then move no
+    // camera and pick nothing. (An item that allows overlap would lose a press that comes in the
+    // same frame as the pointer, as after a click into a window that saw no cursor moves.)
     ImGui::SetCursorScreenPos(p0);
     ImGui::InvisibleButton(imgui_id, size,
                            ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight |
@@ -492,31 +505,35 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
                        : ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ? 2
                                                                         : 0;
         state.selecting = io.KeyShift && state.button == 0;
-        state.x0 = state.lx = io.MousePos.x;
-        state.y0 = state.ly = io.MousePos.y;
+        state.x0 = io.MousePos.x;
+        state.y0 = io.MousePos.y;
+        state.press = {};
+        if (!state.selecting) camera_press_begin(state.press, ScenePress{*sc}, state.x0, state.y0);
     }
+    // The camera press (camera_drag.h): the motion moves the camera from the first point, and a
+    // release within the click's tolerance puts back the camera of the press, before this frame
+    // draws, so that the click's wobble is all that was seen to move. A selection's rectangle starts
+    // past ImGui's drag threshold.
+    ScenePress press_view{*sc, size.y, state.button != 0 || io.KeyAlt || io.KeyCtrl};
     bool released = false;
     if (state.down) {
-        if (valid && (std::fabs(io.MousePos.x - state.x0) > io.MouseDragThreshold ||
-                      std::fabs(io.MousePos.y - state.y0) > io.MouseDragThreshold))
-            state.moved = true;
-        const float dx = valid ? io.MousePos.x - state.lx : 0.0f, dy = valid ? io.MousePos.y - state.ly : 0.0f;
-        if (valid) {
-            state.lx = io.MousePos.x;
-            state.ly = io.MousePos.y;
-        }
-        if (state.moved && !state.selecting && (dx != 0.0f || dy != 0.0f)) {
-            if (state.button != 0 || io.KeyAlt || io.KeyCtrl) sc->pan(dx, dy, size.y);
-            else sc->orbit(dx, dy);
-        }
         released = !ImGui::IsMouseDown(state.button);
+        if (state.selecting) {
+            const float ox = io.MousePos.x - state.x0, oy = io.MousePos.y - state.y0;
+            if (valid && (std::fabs(ox) > io.MouseDragThreshold || std::fabs(oy) > io.MouseDragThreshold))
+                state.moved = true;
+        } else {
+            camera_press_frame(state.press, press_view, valid, io.MousePos.x, io.MousePos.y, released);
+            state.moved = !state.press.click();
+        }
     }
     if (hovered && io.MouseWheel != 0.0f) {
         const float mx = (io.MousePos.x - p0.x) / size.x * 2.0f - 1.0f;
         const float my = 1.0f - (io.MousePos.y - p0.y) / size.y * 2.0f;
-        sc->zoom(io.MouseWheel, mx, my, size.x, size.y);
+        camera_press_change(state.press, press_view, [&] { sc->zoom(io.MouseWheel, mx, my, size.x, size.y); });
     }
-    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) sc->fit();
+    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+        camera_press_change(state.press, press_view, [&] { sc->fit(); });   // a double click's release keeps the fit
     if (sc->width() && sc->height()) {   // the pointer of the programs' prelude, in physical pixels
         const uint32_t buttons = (io.MouseDown[0] ? 1u : 0u) | (io.MouseDown[1] ? 2u : 0u) | (io.MouseDown[2] ? 4u : 0u);
         sc->set_pointer((io.MousePos.x - p0.x) * float(sc->width()) / size.x,
@@ -553,8 +570,8 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
         } else if (!state.moved && state.button == 0) {
             if (state.selecting) {
                 if (sc->clear_selection() && sink) sink("select", "{}");
-            } else if (valid) {
-                const ImVec2 t = target_px(io.MousePos.x, io.MousePos.y);
+            } else {   // the item under the press, with the camera of the press
+                const ImVec2 t = target_px(state.x0, state.y0);
                 state.click = ask_picks(*sc, state, t.x, t.y) || state.click;
             }
         }

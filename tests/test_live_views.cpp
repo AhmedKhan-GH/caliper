@@ -53,6 +53,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -1189,6 +1190,75 @@ TEST_CASE("live_views/points: a drag whose movement and release land in one fram
     c.frames(3);
     // The points followed the pointer 80 px right: the window moved left by as much.
     CHECK(pv->geo_window[0] == doctest::Approx(x0 - span * 80.0 / pv->geo_area[2]).epsilon(0.02));
+}
+
+// The points view's camera follows the pointer from the first point of motion after a press
+// (live/camera_drag.h): a drag of a point a frame orbits or pans on its first frame of motion and
+// as far as the pointer went, and a click that wobbles a point puts the camera back exactly.
+TEST_CASE("live_views/points: a slow drag moves the camera on its first frame of motion; a wobbling click puts it back") {
+    Core c(800, 600);
+    if (!c.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU: " << c.err());
+    std::vector<float> pts = {0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1};
+    CaliperTensor tp = tensor(pts.data(), CALIPER_DT_F32, {8, 3}, CALIPER_DEV_CPU);
+    CaliperLiveSnapshot sp = snap("pts3", CALIPER_LIVE_KIND_POINTS, &tp);
+    sp.points_dims = 3;
+    REQUIRE(caliper_core_live_apply(c.core, &sp) == 1);
+    c.frames(4);
+    auto send = [&](CaliperEventType type, float x, float y, int button, int down) {
+        CaliperInputEvent e{};
+        e.struct_size = sizeof e;
+        e.type = type;
+        e.x = x;
+        e.y = y;
+        e.button = button;
+        e.down = down;
+        caliper_core_event(c.core, &e);
+        c.frames(1);
+    };
+    caliper_live_views::View* pv = caliper_live_views::find(c.core, "pts3");
+    REQUIRE(pv != nullptr);
+    REQUIRE(pv->geo_valid);
+    caliper_live_views::PointsScene* sc = caliper_live_views::points_scene(c.core, *pv, nullptr);
+    REQUIRE(sc != nullptr);
+    auto numbers = [&] {
+        const caliper_scene::Orbit* o = std::get_if<caliper_scene::Orbit>(&sc->camera());
+        REQUIRE(o != nullptr);
+        return std::vector<double>{o->target[0], o->target[1], o->target[2], o->distance, o->azimuth, o->elevation};
+    };
+    const float cx = std::round(pv->geo_area[0] + pv->geo_area[2] * 0.5f);
+    const float cy = std::round(pv->geo_area[1] + pv->geo_area[3] * 0.5f);
+    for (const int button : {0, 1}) {
+        CAPTURE(button);
+        send(CALIPER_EVENT_MOUSE_MOVE, cx, cy, button, 0);
+        send(CALIPER_EVENT_MOUSE_BUTTON, cx, cy, button, 1);
+        std::vector<std::vector<double>> cams = {numbers()};
+        for (int k = 1; k <= 30; ++k) {
+            send(CALIPER_EVENT_MOUSE_MOVE, cx + float(k), cy, button, 0);
+            cams.push_back(numbers());
+        }
+        send(CALIPER_EVENT_MOUSE_BUTTON, cx + 30.0f, cy, button, 0);
+        CHECK(numbers() == cams.back());   // a drag: the release keeps the camera
+        int first = 0, moved = 0;
+        for (int k = 1; k <= 30; ++k)
+            if (cams[size_t(k)] != cams[size_t(k) - 1]) {
+                if (!first) first = k;
+                ++moved;
+            }
+        MESSAGE("button " << button << ": the camera first moved " << first - 1 << " frames after the first move");
+        CHECK(first == 1);
+        CHECK(moved == 30);
+        // A click with a point of wobble, 20 points from the drag's press so that it is no second
+        // click of a double click (the frames here are quicker than the double-click time): the
+        // camera of its press comes back.
+        send(CALIPER_EVENT_MOUSE_MOVE, cx - 20.0f, cy, button, 0);
+        const std::vector<double> press = numbers();
+        send(CALIPER_EVENT_MOUSE_BUTTON, cx - 20.0f, cy, button, 1);
+        send(CALIPER_EVENT_MOUSE_MOVE, cx - 19.0f, cy, button, 0);
+        CHECK(numbers() != press);
+        send(CALIPER_EVENT_MOUSE_BUTTON, cx - 19.0f, cy, button, 0);
+        CHECK(numbers() == press);
+        send(CALIPER_EVENT_MOUSE_MOVE, cx + 200.0f, cy, button, 0);
+    }
 }
 
 TEST_CASE("live_views/gates: every refusal is specific; nothing is created") {

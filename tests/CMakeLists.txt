@@ -177,7 +177,8 @@ set_tests_properties(caliper_tests PROPERTIES ENVIRONMENT
     "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_tests")
 
 # The scene core (src/host/scene): the store, matrices, cameras, fits, compiled draw lists
-# and picks, headless and with no GPU, and the fixture draw lists through the graphics
+# and picks, and the camera press of a scene's picture (src/host/live/camera_drag.h),
+# headless and with no GPU, and the fixture draw lists through the graphics
 # layer's validation on its recording backend (caliper_gfx, which caliper_scene links).
 add_executable(caliper_scene_tests
     scene/scene_main.cpp
@@ -190,6 +191,7 @@ add_executable(caliper_scene_tests
     scene/test_scene_layer.cpp
     scene/test_scene_scale_bar.cpp
     scene/test_scene_surface.cpp
+    scene/test_camera_press.cpp
 )
 target_link_libraries(caliper_scene_tests PRIVATE doctest::doctest caliper_scene)
 set_target_properties(caliper_scene_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)

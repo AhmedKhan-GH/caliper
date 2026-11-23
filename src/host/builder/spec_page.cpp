@@ -16,6 +16,7 @@
 #include "spec_runtime/spec_annotations.h"
 #include "spec_runtime/spec_offscreen.h"
 #include "spec_runtime/spec_runtime.h"
+#include "live/camera_drag.h"   // a right click on a camera's picture is a click as the camera decides it
 #include "live/live_scene.h"   // camera.get and camera.set read and move a panel's scene view
 #include "export_service.h"     // export_encode_png
 #if defined(__APPLE__)
@@ -418,11 +419,22 @@ struct SpecPage::Impl {
         items["remove:" + f.id] = x;
         if (building()) builder->claim_canvas(SpecRect{x.Min.x, x.Min.y, x.GetWidth(), x.GetHeight()});
         // The cursor stays after the button: moving it back past the panel's
-        // content with nothing submitted there is an error in ImGui.
+        // content with nothing submitted there is an error in ImGui. The button
+        // is in a child window of its own, which takes the presses over it: the
+        // × of a panel without a title strip lies over the content, where a
+        // scene's picture, drawn before it, would take them otherwise.
         ImGui::SetCursorScreenPos(x.Min);
         ImGui::PushID(f.id.c_str());
-        const bool clicked = ImGui::InvisibleButton("##panel.remove", x.GetSize());
-        const bool on_x = ImGui::IsItemHovered();
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        bool clicked = false, on_x = false;
+        if (ImGui::BeginChild("##panel.remove.child", x.GetSize(), ImGuiChildFlags_None,
+                              ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+                                  ImGuiWindowFlags_NoBackground)) {
+            clicked = ImGui::InvisibleButton("##panel.remove", x.GetSize());
+            on_x = ImGui::IsItemHovered();
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
         ImGui::PopID();
         const bool menu = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
         const bool over = !menu && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
@@ -441,13 +453,24 @@ struct SpecPage::Impl {
         // A right click opens the menu when it is released without a drag, as the live scene's
         // camera menu does: a right press on a scene panel starts a pan, and a menu opened by that
         // press would take the next press, which then moves no camera.
+        // On a picture whose right drag turns a camera (a scene panel's picture, a 3-D points box),
+        // without a drag means as the camera decides that its press was a click, which then puts the
+        // camera back (live/camera_drag.h): the pointer stayed within the click's tolerance of the
+        // press all along, so a right drag that went farther opens no menu, also when it came back.
+        // Elsewhere (a chart, a table, the title strip) it means within ImGui's drag threshold.
         // The release frame's own move is not in ImGui's drag distance yet, so the distance from the
         // press to the pointer is checked too: a quick flick that ends in its last move is a drag.
-        if (over && ImGui::IsMouseReleased(ImGuiMouseButton_Right) && !ImGui::IsMouseDragPastThreshold(ImGuiMouseButton_Right)) {
+        if (over && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
             const ImGuiIO& io = ImGui::GetIO();
-            const float dx = io.MousePos.x - io.MouseClickedPos[ImGuiMouseButton_Right].x;
-            const float dy = io.MousePos.y - io.MouseClickedPos[ImGuiMouseButton_Right].y;
-            if (dx * dx + dy * dy <= io.MouseDragThreshold * io.MouseDragThreshold) menu_request = f.id;
+            const ImVec2 press = io.MouseClickedPos[ImGuiMouseButton_Right];
+            const float dx = io.MousePos.x - press.x, dy = io.MousePos.y - press.y;
+            const bool camera = runtime && runtime->camera_area(f.id, press.x, press.y);
+            const bool click =
+                camera ? caliper_live_views::camera_press_is_click(
+                             std::max(io.MouseDragMaxDistanceSqr[ImGuiMouseButton_Right], dx * dx + dy * dy))
+                       : !ImGui::IsMouseDragPastThreshold(ImGuiMouseButton_Right) &&
+                             dx * dx + dy * dy <= io.MouseDragThreshold * io.MouseDragThreshold;
+            if (click) menu_request = f.id;
         }
     }
 

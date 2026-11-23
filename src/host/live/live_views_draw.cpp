@@ -44,6 +44,7 @@
 // at most 30 times a second. Selected points draw over the others, which are
 // dimmed. Without a sink a selection stays in the view.
 #include "live/live_views_state.h"
+#include "live/camera_drag.h"
 
 #include "live/live_points.h"
 #include "live/live_scene.h"
@@ -216,13 +217,18 @@ bool linked_in(const View& v, int64_t a, int64_t b) {
 }
 
 // A press, the drag and the release of a gesture on the item drawn just
-// before (an InvisibleButton). Returns true on the release frame.
-bool track_gesture(View& v, ImVec2 mouse, bool may_select) {
+// before (an InvisibleButton). Returns true on the release frame. In a view
+// whose drag moves a camera (`camera`), a press that is not a selection is a
+// camera press (camera_drag.h), which the view drives and which says whether
+// it was a drag; others are drags past kClickSlop.
+bool track_gesture(View& v, ImVec2 mouse, bool may_select, bool camera = false) {
     Gesture& g = v.gesture;
     ImGuiIO& io = ImGui::GetIO();
+    g.pressed = false;
     if (ImGui::IsItemActivated()) {
         g = Gesture{};
         g.down = true;
+        g.pressed = true;
         g.button = ImGui::IsMouseClicked(ImGuiMouseButton_Right) ? 1
                    : ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ? 2 : 0;
         g.shift = io.KeyShift;
@@ -233,13 +239,35 @@ bool track_gesture(View& v, ImVec2 mouse, bool may_select) {
         g.selecting = may_select && g.shift && g.button == 0;
         g.rect = g.alt;
     }
-    if (g.down && !g.moved && std::hypot(mouse.x - g.x0, mouse.y - g.y0) > kClickSlop) g.moved = true;
+    if (g.down && !(camera && !g.selecting) && !g.moved && std::hypot(mouse.x - g.x0, mouse.y - g.y0) > kClickSlop)
+        g.moved = true;
     if (g.down && ImGui::IsItemDeactivated()) {
         g.down = false;
         return true;
     }
     return false;
 }
+
+// The points view as a camera press drives it (camera_drag.h): an orbit in 3-D, else a pan of a
+// picture `view_height` points tall. The points view has no moved state.
+struct PointsPress {
+    using State = SceneCameraState;
+    PointsScene& sc;
+    View& v;
+    float view_height = 1.0f;
+    bool orbit = false;
+    static bool same(const State& a, const State& b) { return same_camera(a.camera, b.camera); }
+    State state() const { return {sc.camera(), false}; }
+    void restore(const State& s) {
+        sc.set_camera(s.camera);
+        v.dirty = v.hover_dirty = true;
+    }
+    void move(float dx, float dy) {
+        if (orbit) sc.orbit(dx, dy);
+        else sc.pan(dx, dy, view_height);
+        v.dirty = v.hover_dirty = true;
+    }
+};
 
 // First placement, tiled with the v1.2 views' cursor (core->tile_*): the same
 // wrap rules as embed_core.cpp's place_view, for a content area `content`.
@@ -1015,7 +1043,7 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     // The browser element's gestures, in the app as in the browser; what
     // people do leaves only through an event sink (emit sends nothing without).
     Gesture& g = v.gesture;
-    const bool released = ev && track_gesture(v, io.MousePos, v.have_cur && v.cur.pos_cpu);
+    const bool released = ev && track_gesture(v, io.MousePos, v.have_cur && v.cur.pos_cpu, true);
     if (ev && g.down && g.selecting) {
         // The lasso follows the pointer; a rectangle keeps its two corners.
         if (g.rect) g.lasso = {g.x0, g.y0, io.MousePos.x, io.MousePos.y};
@@ -1024,44 +1052,42 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
                              io.MousePos.y != g.lasso.back()))
             g.lasso.insert(g.lasso.end(), {io.MousePos.x, io.MousePos.y});
     }
-    // The camera moves once a drag left the click slop, never while selecting,
-    // and follows the pointer from where it last moved the camera, so a fast
-    // drag whose movement and release land in one frame still moves it.
+    // The camera follows the pointer from the first point of motion after
+    // the press, never while selecting, so a fast drag whose movement and
+    // release land in one frame still moves it, and a press that ends as a
+    // click puts back the camera of the press (camera_drag.h).
     const bool valid = ImGui::IsMousePosValid();
-    const float dx = valid ? io.MousePos.x - g.lx : 0.0f, dy = valid ? io.MousePos.y - g.ly : 0.0f;
-    if (valid) {
-        g.lx = io.MousePos.x;
-        g.ly = io.MousePos.y;
+    PointsPress press_view{*sc, v, avail.y, v.dims == 3 && !(g.button != 0 || g.alt || g.ctrl)};
+    if (g.pressed && !g.selecting) camera_press_begin(g.press, press_view, g.x0, g.y0);
+    if ((g.down || released) && !g.selecting) {
+        camera_press_frame(g.press, press_view, valid, io.MousePos.x, io.MousePos.y, released);
+        g.moved = !g.press.click();
     }
     // Any drag stops the slow turn, which the page hears for its header toggle.
     if (v.auto_rotate && (g.down || released) && g.moved) {
         v.auto_rotate = false;
         emit(S, v, "toggle", Detail().text("name", "rotate").flag("on", false).str());
     }
-    if (v.auto_rotate && v.dims == 3 && v.have_cur) {
+    // The slow turn waits while a button is held, so that a click's camera comes back as it was.
+    if (v.auto_rotate && v.dims == 3 && v.have_cur && !g.down && !released) {
         sc->turn(double(std::min(io.DeltaTime, 0.1f) * kRotateRate));
-        v.dirty = true;
-        v.hover_dirty = true;
-    }
-    const bool drag = (g.down || released) && g.moved && !g.selecting;
-    if (drag && (dx != 0.0f || dy != 0.0f)) {
-        const bool pan = g.button != 0 || g.alt || g.ctrl;
-        if (v.dims == 3 && !pan) sc->orbit(dx, dy);
-        else sc->pan(dx, dy, avail.y);
         v.dirty = true;
         v.hover_dirty = true;
     }
     if (hovered && io.MouseWheel != 0.0f) {
         const float mx = (io.MousePos.x - p0.x) / avail.x * 2.0f - 1.0f;
         const float my = 1.0f - (io.MousePos.y - p0.y) / avail.y * 2.0f;
-        sc->zoom(io.MouseWheel, mx, my, aspect);
-        v.dirty = true;
-        v.hover_dirty = true;
+        camera_press_change(g.press, press_view, [&] {
+            sc->zoom(io.MouseWheel, mx, my, aspect);
+            v.dirty = true;
+            v.hover_dirty = true;
+        });
     }
-    // F, or a double click on the points, fits the camera to them again.
+    // F, or a double click on the points, fits the camera to them again; a click's release keeps
+    // the fit (camera_press_change).
     if ((((hovered || ImGui::IsWindowFocused()) && ImGui::IsKeyPressed(ImGuiKey_F, false)) ||
          (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))) && v.have_cur)
-        fit_points(v, aspect);
+        camera_press_change(g.press, press_view, [&] { fit_points(v, aspect); });
 
     float mvp[16];
     if (!sc->mvp((uint32_t)v.tex_w, (uint32_t)v.tex_h, mvp)) std::fill(mvp, mvp + 16, 0.0f);
@@ -1091,9 +1117,9 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
                 v.sel_count = 0;
                 v.dirty = true;
             }
-            if (!g.moved) {
+            if (!g.moved) {   // the point under the press, with the camera of the press
                 uint64_t stride = 1;
-                const Pick pk = pick_point(v, mvp, p0, avail, io.MousePos, half_px, att_ref, 8.0f, &stride);
+                const Pick pk = pick_point(v, mvp, p0, avail, ImVec2(g.x0, g.y0), half_px, att_ref, 8.0f, &stride);
                 if (pk.idx >= 0) emit(S, v, "pick", point_detail(v, pk.idx));
             }
         }
@@ -1363,39 +1389,38 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     Gesture& g = v.gesture;
     // The points view's gestures: a shift-drag draws a lasso, with alt a rectangle; a shift-click
     // clears the selection; a click picks; a drag without shift orbits or pans.
-    const bool released = track_gesture(v, io.MousePos, true);
+    const bool released = track_gesture(v, io.MousePos, true, true);
     if (g.down && g.selecting) {
         if (g.rect) g.lasso = {g.x0, g.y0, io.MousePos.x, io.MousePos.y};
         else if (g.lasso.empty()) g.lasso = {g.x0, g.y0};
         else if (g.moved && (io.MousePos.x != g.lasso[g.lasso.size() - 2] || io.MousePos.y != g.lasso.back()))
             g.lasso.insert(g.lasso.end(), {io.MousePos.x, io.MousePos.y});
     }
+    // The camera follows the pointer from the first point of motion after the press, as the points
+    // view's does, and a press that ends as a click puts back the camera of the press before the
+    // frame draws (camera_drag.h). The view's own fits, zooms and up switches during a press stay.
     const bool valid = ImGui::IsMousePosValid();
-    const float dx = valid ? io.MousePos.x - g.lx : 0.0f, dy = valid ? io.MousePos.y - g.ly : 0.0f;
-    if (valid) {
-        g.lx = io.MousePos.x;
-        g.ly = io.MousePos.y;
-    }
-    const bool drag = (g.down || released) && g.moved && !g.selecting;
-    if (drag && (dx != 0.0f || dy != 0.0f)) {
-        const bool pan = g.button != 0 || g.alt || g.ctrl;
-        if (pan) sc->pan(dx, dy, avail.y);
-        else sc->orbit(dx, dy);
+    ScenePress press_view{*sc, avail.y, g.button != 0 || g.alt || g.ctrl};
+    if (g.pressed && !g.selecting) camera_press_begin(g.press, press_view, g.x0, g.y0);
+    if ((g.down || released) && !g.selecting) {
+        camera_press_frame(g.press, press_view, valid, io.MousePos.x, io.MousePos.y, released);
+        g.moved = !g.press.click();
     }
     if (hovered && io.MouseWheel != 0.0f) {
         const float mx = (io.MousePos.x - p0.x) / avail.x * 2.0f - 1.0f;
         const float my = 1.0f - (io.MousePos.y - p0.y) / avail.y * 2.0f;
-        sc->zoom(io.MouseWheel, mx, my, avail.x, avail.y);
+        camera_press_change(g.press, press_view, [&] { sc->zoom(io.MouseWheel, mx, my, avail.x, avail.y); });
     }
     if (((hovered || ImGui::IsWindowFocused()) && ImGui::IsKeyPressed(ImGuiKey_F, false)) ||
         (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)))
-        sc->fit();
+        camera_press_change(g.press, press_view, [&] { sc->fit(); });
     // U steps through the header's up-axis segments.
     if ((hovered || ImGui::IsWindowFocused()) && ImGui::IsKeyPressed(ImGuiKey_U, false)) {
         const std::vector<caliper_scene::Axis> c = sc->up_choices();
         if (!c.empty()) {
             auto at = std::find(c.begin(), c.end(), sc->up_mode());
-            sc->switch_up(at == c.end() || at + 1 == c.end() ? c.front() : *(at + 1));
+            camera_press_change(g.press, press_view,
+                                [&] { sc->switch_up(at == c.end() || at + 1 == c.end() ? c.front() : *(at + 1)); });
         }
     }
 
@@ -1443,8 +1468,8 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
             emit(S, v, "select", sc->select_polygon(poly));
         } else if (!g.moved && g.button == 0) {
             if (g.selecting && sc->clear_selection()) emit(S, v, "select", "{}");
-            if (!g.selecting) {
-                const ImVec2 t = target_px(io.MousePos.x, io.MousePos.y);
+            if (!g.selecting) {   // the item under the press, with the camera of the press
+                const ImVec2 t = target_px(g.x0, g.y0);
                 std::string why;
                 v.scene_click = sc->request_pick(t.x, t.y, &why);
             }

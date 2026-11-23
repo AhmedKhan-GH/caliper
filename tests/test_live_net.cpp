@@ -35,6 +35,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cfloat>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -51,6 +52,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <variant>
 #include <vector>
 
 namespace wire = caliper_net::wire;
@@ -2058,6 +2060,38 @@ TEST_CASE("live/app: clicks on the run bar and a shift-drag in a view reach the 
     a.detach();
 }
 
+namespace {
+// Three points on the x axis of the scene view "world", a tenth of a unit wide, the middle one at the
+// bounds' centre, which the fitted orbit puts at the picture's centre; the producer sampled them, every
+// tenth of 30 units.
+void send_three_points(FakeProducer& p) {
+    const std::vector<float> pos = {-1, 0, 0, 0, 0, 0, 1, 0, 0};
+    p.call([&](FakeProducer& f) {
+        wire::SceneClear reset;
+        reset.sub = f.sub_of.at("world");
+        reset.view = "world";
+        reset.seq = ++f.seq;
+        reset.reset = true;
+        reset.state = true;
+        f.send(reset);
+        wire::SceneUpdate u = f.scene_update("cloud", CALIPER_NET_PART_POINTS, pos, false);
+        u.params.set("radius", Json(0.12));
+        u.items = std::string("units");
+        Json ax = Json::object();
+        ax.set("dim", "unit");
+        ax.set("start", 0);
+        ax.set("step", 1);
+        ax.set("count", 30);
+        ax.set("size", 3);
+        Json axes = Json::array();
+        axes.push(ax);
+        u.axes = axes;
+        f.send(u);
+        return 0;
+    });
+}
+}  // namespace
+
 // A scene view picks, hovers and selects through ImGui's input queue: a click on the point at the
 // picture's centre reaches the script as a pick with its entity, index, row id through the batch's
 // payload axes and world position; resting the pointer there sends a hover; a shift+alt drag around it
@@ -2083,32 +2117,7 @@ TEST_CASE("live/app: a scene view's picks, hovers and selections reach the scrip
         return false;
     };
     REQUIRE(frames_until([&] { return p.call([](FakeProducer& f) { return f.sub_of.count("world"); }) == 1; }));
-    // Three points on the x axis, a tenth of a unit wide, the middle one at the bounds' centre, which
-    // the fitted orbit puts at the picture's centre; the producer sampled them, every tenth of 30 units.
-    const std::vector<float> pos = {-1, 0, 0, 0, 0, 0, 1, 0, 0};
-    p.call([&](FakeProducer& f) {
-        wire::SceneClear reset;
-        reset.sub = f.sub_of.at("world");
-        reset.view = "world";
-        reset.seq = ++f.seq;
-        reset.reset = true;
-        reset.state = true;
-        f.send(reset);
-        wire::SceneUpdate u = f.scene_update("cloud", CALIPER_NET_PART_POINTS, pos, false);
-        u.params.set("radius", Json(0.12));
-        u.items = std::string("units");
-        Json ax = Json::object();
-        ax.set("dim", "unit");
-        ax.set("start", 0);
-        ax.set("step", 1);
-        ax.set("count", 30);
-        ax.set("size", 3);
-        Json axes = Json::array();
-        axes.push(ax);
-        u.axes = axes;
-        f.send(u);
-        return 0;
-    });
+    send_three_points(p);
     caliper_live_views::SceneView* sv = nullptr;
     REQUIRE(frames_until([&] {
         sv = caliper_live_views::scene_view(a.core(), "world");
@@ -2170,6 +2179,291 @@ TEST_CASE("live/app: a scene view's picks, hovers and selections reach the scrip
     const uint64_t submits = sv->pick_pass()->submits();
     for (int i = 0; i < 20; ++i) host.frame(a, nullptr);
     CHECK(sv->pick_pass()->submits() == submits);
+    a.detach();
+}
+
+// A scene view's camera follows the pointer from the first point of motion after a press
+// (live/camera_drag.h), so a drag of a point a frame moves the camera on its first frame of motion
+// and as far as the pointer went. A click, and a press that wobbles one point before its release,
+// pick and put the camera back exactly; a drag that goes 30 points out and comes back within a
+// point stays a drag.
+namespace {
+// The numbers of the view's orbit: target x, y, z, distance, azimuth and elevation.
+std::vector<double> orbit_numbers(const caliper_live_views::SceneView& sv) {
+    const caliper_scene::Orbit* o = std::get_if<caliper_scene::Orbit>(&sv.camera());
+    if (!o) return {};
+    return {o->target[0], o->target[1], o->target[2], o->distance, o->azimuth, o->elevation};
+}
+double camera_distance(const std::vector<double>& a, const std::vector<double>& b) {
+    double d = 0;
+    for (size_t k = 0; k < a.size() && k < b.size(); ++k) d += (a[k] - b[k]) * (a[k] - b[k]);
+    return std::sqrt(d);
+}
+}  // namespace
+
+TEST_CASE("live/app: a scene view's slow orbit and pans move the camera on their first frame of motion by the "
+          "pointer's whole way; a click and a press that wobbles one point pick and put the camera back") {
+    HostFrame host;
+    if (!host.ok) CALIPER_SKIP_NO_GPU("no Metal device for the host's offscreen canvas");
+    FakeProducer p;
+    p.welcome_caps = {CALIPER_NET_CAP_SELECTION};
+    p.script31 = true;
+    p.add_scene();
+    p.start();
+    caliper_live::Attachment a;
+    std::string err;
+    REQUIRE_MESSAGE(a.attach_url(host.renderer.get(), p.url(), &err), err);
+    auto frames_until = [&](const std::function<bool()>& done) {
+        for (int i = 0; i < 3000; ++i) {
+            host.frame(a, nullptr);
+            if (done()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return false;
+    };
+    REQUIRE(frames_until([&] { return p.call([](FakeProducer& f) { return f.sub_of.count("world"); }) == 1; }));
+    send_three_points(p);
+    caliper_live_views::SceneView* sv = nullptr;
+    REQUIRE(frames_until([&] {
+        sv = caliper_live_views::scene_view(a.core(), "world");
+        return sv && sv->counts().batches == 1 && sv->has_target();
+    }));
+    const caliper_live_views::View* v = caliper_live_views::find(a.core(), "world");
+    REQUIRE(v != nullptr);
+    REQUIRE(v->geo_valid);
+    const float cx = std::round(v->geo_area[0] + 0.5f * v->geo_area[2]);
+    const float cy = std::round(v->geo_area[1] + 0.5f * v->geo_area[3]);
+    const float view_h = v->geo_area[3];
+    REQUIRE(!orbit_numbers(*sv).empty());
+    ImGuiIO& io = ImGui::GetIO();
+    auto frame = [&] { host.frame(a, nullptr); };
+
+    // A click, then a press that moves one point before its release: each picks the middle point at the
+    // picture's centre and leaves the camera.
+    auto picks = [&] {
+        int n = 0;
+        for (const wire::Event& e : p.call([](FakeProducer& f) { return f.events; }))
+            if (e.type == "pick" && e.view == "world") ++n;
+        return n;
+    };
+    for (const int moved : {0, 1}) {
+        CAPTURE(moved);
+        const int before = picks();
+        io.AddMousePosEvent(cx, cy);
+        frame();
+        const std::vector<double> cam = orbit_numbers(*sv);
+        io.AddMouseButtonEvent(0, true);
+        frame();
+        if (moved) {
+            io.AddMousePosEvent(cx + 1.0f, cy);
+            frame();
+            CHECK(orbit_numbers(*sv) != cam);   // the wobble turned the camera on its first point
+        }
+        io.AddMouseButtonEvent(0, false);
+        frame();
+        CHECK(orbit_numbers(*sv) == cam);   // and the click put it back exactly
+        CHECK(frames_until([&] { return picks() == before + 1; }));
+        // Past the double-click time, so that the next press is a click of its own.
+        io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+        for (int k = 0; k < 40; ++k) frame();
+    }
+
+    // A drag with each button from the centre, one point to the right each frame.
+    constexpr int kMoves = 30;
+    for (const int button : {0, 1, 2}) {
+        CAPTURE(button);
+        io.AddMousePosEvent(cx, cy);
+        frame();
+        const caliper_scene::ViewCamera before = sv->camera();
+        io.AddMouseButtonEvent(button, true);
+        frame();
+        std::vector<std::vector<double>> cams = {orbit_numbers(*sv)};
+        for (int k = 1; k <= kMoves; ++k) {
+            io.AddMousePosEvent(cx + float(k), cy);
+            frame();
+            cams.push_back(orbit_numbers(*sv));
+        }
+        io.AddMouseButtonEvent(button, false);
+        frame();
+        int first = 0;
+        std::vector<double> steps;
+        for (int k = 1; k <= kMoves; ++k) {
+            const double d = camera_distance(cams[size_t(k)], cams[size_t(k) - 1]);
+            if (d > 0 && !first) first = k;
+            if (d > 0) steps.push_back(d);
+        }
+        MESSAGE("button " << button << ": the camera first moved " << first - 1 << " frames after the first move");
+        CHECK(first == 1);
+        REQUIRE(steps.size() == std::size_t(kMoves));
+        std::vector<double> sorted = steps;
+        std::sort(sorted.begin(), sorted.end());
+        CHECK(steps[0] <= 3.0 * sorted[sorted.size() / 2]);
+        // The same drag with no tolerance: a step of one point at each move.
+        const caliper_scene::ViewCamera after = sv->camera();
+        sv->camera() = before;
+        for (int k = 0; k < kMoves; ++k) {
+            if (button == 0) sv->orbit(1.0f, 0.0f);
+            else sv->pan(1.0f, 0.0f, view_h);
+        }
+        const std::vector<double> want = orbit_numbers(*sv);
+        sv->camera() = after;
+        REQUIRE(want.size() == 6);
+        for (size_t k = 0; k < 6; ++k) {
+            CAPTURE(k);
+            CHECK(cams.back()[k] == doctest::Approx(want[k]).epsilon(1e-6));
+        }
+        CHECK(orbit_numbers(*sv) == cams.back());   // a drag: the release keeps the camera
+        io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+        for (int k = 0; k < 40; ++k) frame();
+    }
+
+    // A drag 30 points out and 29 back: a drag, which picks nothing and keeps its camera.
+    const int picked = picks();
+    io.AddMousePosEvent(cx, cy);
+    frame();
+    const std::vector<double> out_from = orbit_numbers(*sv);
+    io.AddMouseButtonEvent(0, true);
+    frame();
+    for (int k = 1; k <= 30; ++k) {
+        io.AddMousePosEvent(cx + float(k), cy);
+        frame();
+    }
+    for (int k = 29; k >= 1; --k) {
+        io.AddMousePosEvent(cx + float(k), cy);
+        frame();
+    }
+    io.AddMouseButtonEvent(0, false);
+    for (int k = 0; k < 20; ++k) frame();
+    CHECK(picks() == picked);
+    CHECK(orbit_numbers(*sv) != out_from);
+    CHECK(orbit_numbers(*sv)[4] == doctest::Approx(out_from[4] + 0.01).epsilon(1e-9));   // one point of orbit
+    a.detach();
+}
+
+// New data that reframes a live scene during a click stays: the click undoes only its own wobble,
+// leaves moved() false and the view following its data. Before the first motion the view frames
+// the new data at once; after it the wobble holds the framing until the release, which puts the
+// camera of the press back and frames the new data in the same frame.
+namespace {
+// The scene's points cloud again, wider: an update without a reset, which grows the bounds.
+void send_wider_cloud(FakeProducer& p, float half_width) {
+    const std::vector<float> pos = {-half_width, 0, 0, 0, 0, 0, half_width, 0, 0};
+    p.call([&](FakeProducer& f) {
+        wire::SceneUpdate u = f.scene_update("cloud", CALIPER_NET_PART_POINTS, pos, false);
+        u.params.set("radius", Json(0.12));
+        f.send(u);
+        return 0;
+    });
+}
+}  // namespace
+
+TEST_CASE("live/app: new data that reframes a live scene during a click stays, and the view keeps following its data; "
+          "a starting camera that arrives during a click applies") {
+    HostFrame host;
+    if (!host.ok) CALIPER_SKIP_NO_GPU("no Metal device for the host's offscreen canvas");
+    FakeProducer p;
+    p.welcome_caps = {CALIPER_NET_CAP_SELECTION};
+    p.script31 = true;
+    p.add_scene();
+    p.start();
+    caliper_live::Attachment a;
+    std::string err;
+    REQUIRE_MESSAGE(a.attach_url(host.renderer.get(), p.url(), &err), err);
+    auto frames_until = [&](const std::function<bool()>& done) {
+        for (int i = 0; i < 3000; ++i) {
+            host.frame(a, nullptr);
+            if (done()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return false;
+    };
+    REQUIRE(frames_until([&] { return p.call([](FakeProducer& f) { return f.sub_of.count("world"); }) == 1; }));
+    send_three_points(p);
+    caliper_live_views::SceneView* sv = nullptr;
+    REQUIRE(frames_until([&] {
+        sv = caliper_live_views::scene_view(a.core(), "world");
+        return sv && sv->counts().batches == 1 && sv->has_target();
+    }));
+    REQUIRE_FALSE(sv->moved());
+    const caliper_live_views::View* v = caliper_live_views::find(a.core(), "world");
+    REQUIRE(v != nullptr);
+    const float cx = std::round(v->geo_area[0] + 0.5f * v->geo_area[2]);
+    const float cy = std::round(v->geo_area[1] + 0.5f * v->geo_area[3]);
+    ImGuiIO& io = ImGui::GetIO();
+    auto frame = [&] { host.frame(a, nullptr); };
+    auto angles = [&] {
+        const std::vector<double> n = orbit_numbers(*sv);
+        return std::vector<double>{n[4], n[5]};
+    };
+    auto distance = [&] { return orbit_numbers(*sv)[3]; };
+    float half_width = 1.0f;
+    for (const bool before_motion : {true, false}) {
+        CAPTURE(before_motion);
+        io.AddMousePosEvent(cx, cy);
+        frame();
+        const std::vector<double> press_angles = angles();
+        const double press_distance = distance();
+        io.AddMouseButtonEvent(0, true);
+        frame();
+        if (!before_motion) {
+            io.AddMousePosEvent(cx + 1.0f, cy);
+            frame();
+        }
+        half_width *= 2.0f;
+        send_wider_cloud(p, half_width);
+        if (before_motion) {
+            REQUIRE(frames_until([&] { return distance() > press_distance * 1.2; }));   // framed at once
+            io.AddMousePosEvent(cx + 1.0f, cy);
+            frame();
+        } else {
+            for (int k = 0; k < 20; ++k) frame();
+            CHECK(distance() < press_distance * 1.2);   // the wobble holds the framing
+        }
+        CHECK(angles() != press_angles);
+        io.AddMouseButtonEvent(0, false);
+        frame();
+        REQUIRE(frames_until([&] { return distance() > press_distance * 1.2; }));
+        CHECK(angles() == press_angles);
+        CHECK_FALSE(sv->moved());
+        io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+        for (int k = 0; k < 40; ++k) frame();
+    }
+    // The view still follows its data.
+    const double followed = distance();
+    send_wider_cloud(p, half_width * 2.0f);
+    CHECK(frames_until([&] { return distance() > followed * 1.2; }));
+    CHECK_FALSE(sv->moved());
+    // A starting camera that arrives during a click applies: before the first motion at once, after
+    // it at the release, which a view that the wobble left moved would not do.
+    for (const bool before_motion : {true, false}) {
+        CAPTURE(before_motion);
+        caliper_scene::StartingCamera start;
+        start.form = caliper_scene::StartingCamera::Form::Orbit;
+        start.azimuth_deg = before_motion ? 30.0 : -40.0;
+        start.elevation_deg = before_motion ? 20.0 : 35.0;
+        io.AddMousePosEvent(cx, cy);
+        frame();
+        io.AddMouseButtonEvent(0, true);
+        frame();
+        if (before_motion) {
+            sv->set_starting(start);
+            frame();
+        }
+        io.AddMousePosEvent(cx + 1.0f, cy);
+        frame();
+        if (!before_motion) {
+            sv->set_starting(start);
+            frame();
+        }
+        io.AddMouseButtonEvent(0, false);
+        frame();
+        const std::vector<double> got = angles();
+        CHECK(got[0] == doctest::Approx(*start.azimuth_deg * caliper_scene::kPi / 180.0).epsilon(1e-9));
+        CHECK(got[1] == doctest::Approx(*start.elevation_deg * caliper_scene::kPi / 180.0).epsilon(1e-9));
+        CHECK_FALSE(sv->moved());
+        io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+        for (int k = 0; k < 40; ++k) frame();
+    }
     a.detach();
 }
 
