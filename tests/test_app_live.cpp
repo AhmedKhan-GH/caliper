@@ -37,7 +37,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -45,6 +47,7 @@
 #include <iterator>
 #include <map>
 #include <set>
+#include <sstream>
 #include <string>
 #include <future>
 #include <thread>
@@ -1453,4 +1456,116 @@ TEST_CASE("app live: a right-button pan of a scene panel opens no menu, and the 
     bool opened = false;
     for (size_t i = pans[2].second; i < rows.size() && i < pans[2].second + 12; ++i) opened = opened || rows[i].popup == 1;
     CHECK(opened);
+}
+
+// ---- A drag whose press comes before the window saw the pointer move --------------------------
+// GLFW's macOS backend gives a press without its place, and a window that got no cursor moves
+// before it (one that was not the key window) knew the pointer only where it last saw it. The app
+// gives ImGui the pointer's place with the press, so the first frame of an orbit or a pan moves
+// the camera by about as much as the frames after it, not by the whole way from the stale place.
+// The presses come through the platform's callback (the spec driver's `stale` drags).
+
+namespace {
+
+// The camera's numbers in the frame log's words: target x, y, z, azimuth and elevation.
+std::vector<double> camera_numbers(const std::string& text) {
+    std::vector<double> v;
+    std::istringstream in(text);
+    for (std::string w; in >> w;)
+        if (w == "target") {
+            double x = 0, y = 0, z = 0;
+            in >> x >> y >> z;
+            v.insert(v.end(), {x, y, z});
+        } else if (w == "azimuth" || w == "elevation") {
+            double a = 0;
+            in >> a;
+            v.push_back(a);
+        }
+    return v;
+}
+
+// The camera's steps over the frames of a run in which it moved, in order.
+std::vector<double> camera_steps(const std::vector<FrameRow>& rows, std::pair<size_t, size_t> run) {
+    std::vector<double> steps;
+    for (size_t i = run.first + 1; i <= run.second + 1 && i < rows.size(); ++i) {
+        const std::vector<double> a = camera_numbers(rows[i - 1].camera), b = camera_numbers(rows[i].camera);
+        if (a.size() != 5 || b.size() != 5) continue;
+        double d = 0;
+        for (size_t k = 0; k < 5; ++k) d += (b[k] - a[k]) * (b[k] - a[k]);
+        if (d > 0) steps.push_back(std::sqrt(d));
+    }
+    return steps;
+}
+
+}  // namespace
+
+TEST_CASE("app live: an orbit and a pan whose press comes before the pointer's moves start without a jump") {
+    const Env env = test_env();
+    if (!env.ok) return;
+    TempDir t("stale");
+    fs::create_directories(t.str("data"));
+    fs::create_directories(t.str("user-applets"));
+    const std::string shots = env.shots.empty() ? t.str("") : env.shots;
+    Proc producer;
+    const std::string link = start_producer(producer, env);
+    const std::string script = "wait-file " + t.str("spec-ready") +
+                               ";page spec;wait 30;drag panel:world 0.25 0.5 to panel:world 0.75 0.6 stale;wait 10;"
+                               "drag panel:world 0.35 0.45 to panel:world 0.65 0.55 right stale;wait 10;touch " +
+                               t.str("dragged");
+    std::vector<std::string> e = app_env(env, t, script, shots);
+    e.push_back("CALIPER_FRAME_LOG=" + t.str("frames.tsv"));
+    Proc app;
+    REQUIRE(app.start(env.exe,
+                      {"--hidden", "--applets", env.applets, "--url", link, "--api", "--api-port", "0", "--workspace",
+                       t.str("ws")},
+                      e));
+    if (!has_metal(app)) {
+        ::kill(app.pid, SIGTERM);
+        app.wait(30000);
+        ::kill(producer.pid, SIGTERM);
+        producer.wait(10000);
+        return;
+    }
+    REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 60000), app.text);
+    const json api = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false);
+    REQUIRE(api.is_object());
+    const uint16_t port = api["port"].get<uint16_t>();
+    const std::string token = start_token(app);
+    REQUIRE(token.size() >= 22);
+    REQUIRE(eventually(app, [&] { return live_entries(port, token).count("live:attn") == 1; }, 60000));
+    ok(port, token, "spec.new", {{"id", "stale"}, {"title", "Stale"}});
+    ok(port, token, "source.add",
+       {{"id", "attn"}, {"catalog", "live:attn"}, {"transform", json::array({{{"op", "slice"}, {"axis", 0}, {"index", 0}}})}});
+    ok(port, token, "panel.create",
+       {{"id", "world"}, {"primitive", "scene"}, {"title", "Attention"},
+        {"entity", json::array({{{"path", "attn"}, {"draw", "surface"}, {"bind", "attn"}}})}});
+    ok(port, token, "applet.save");
+    ok(port, token, "applet.open", {{"id", "stale"}});
+    std::ofstream(t.str("spec-ready")).put('\n');
+    REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("dragged")); }, 90000), app.text);
+    REQUIRE(script_ended(app, 30000));
+    CHECK_MESSAGE(app.text.find("[ui] done") != std::string::npos, app.text);
+    ::kill(app.pid, SIGTERM);
+    CHECK_MESSAGE(app.wait(30000) == 0, app.text);
+    ::kill(producer.pid, SIGTERM);
+    CHECK(producer.wait(10000) == 0);
+
+    const std::vector<FrameRow> rows = frame_rows(t.str("frames.tsv"));
+    REQUIRE(rows.size() > 100);
+    const auto orbits = button_runs(rows, "world", 1), pans = button_runs(rows, "world", 2);
+    REQUIRE(orbits.size() == 1);
+    REQUIRE(pans.size() == 1);
+    for (const auto& drag : {std::make_pair(std::string("orbit"), orbits[0]), std::make_pair(std::string("pan"), pans[0])}) {
+        const std::string& name = drag.first;
+        CAPTURE(name);
+        std::vector<double> steps = camera_steps(rows, drag.second);
+        REQUIRE(steps.size() >= 10);
+        std::vector<double> sorted = steps;
+        std::sort(sorted.begin(), sorted.end());
+        const double median = sorted[sorted.size() / 2];
+        double first = 0;
+        for (size_t k = 0; k < 3; ++k) first = std::max(first, steps[k]);
+        MESSAGE(name << ": the largest of the first three camera steps is " << first / median << " times the median");
+        CHECK(first <= 3.0 * median);
+    }
 }

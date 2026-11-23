@@ -1079,6 +1079,7 @@ if(TARGET caliper_builder_session)
                     "live_second_stream|app live: a second stream replaces the first*"
                     "live_drop|app live: files dropped on the live page*"
                     "live_scene_pan|app live: a right-button pan of a scene panel*"
+                    "live_scene_stale|app live: an orbit and a pan whose press comes before*"
                     "save_new|app save: F3 New dashboard over unsaved changes*"
                     "save_open|app save: opening another dashboard*"
                     "save_close|app save: closing the window*"

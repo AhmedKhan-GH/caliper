@@ -2,6 +2,7 @@
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_internal.h>   // the input events of a frame, for CALIPER_FRAME_LOG
+#include <backends/imgui_impl_glfw.h>   // the backend's mouse button callback, for the UI drivers' presses
 #include <implot.h>
 #include <implot3d.h>
 
@@ -1718,6 +1719,18 @@ private:
         for (const std::string& line : rc->take_log()) std::cerr << "[live] " << line << std::endl;
     }
 
+    // The UI drivers' presses as the platform delivers them (CALIPER_TEST_UI's and
+    // CALIPER_TEST_SPEC_UI's `stale` drags): through ImGui's GLFW callback, which runs the app's
+    // callback above, with (x, y) as the pointer's place in the window, since a hidden window's
+    // real cursor is the person's and is not read here.
+    void platform_button(int button, bool down, float x, float y) {
+        press_at_valid_ = true;
+        press_at_[0] = x;
+        press_at_[1] = y;
+        ImGui_ImplGlfw_MouseButtonCallback(window_, button, down ? GLFW_PRESS : GLFW_RELEASE, 0);
+        press_at_valid_ = false;
+    }
+
     void feed_spec_ui() {
         spec_ui_->set_page(page_ == AppPage::Spec      ? "spec"
                            : page_ == AppPage::Landing ? "landing"
@@ -1726,6 +1739,7 @@ private:
         spec_ui_->set_drop([this](std::vector<std::string> paths) { on_drop(std::move(paths)); });
         spec_ui_->set_command_line(landing_.command_text());
         spec_ui_->set_cards([this] { return approvals_.shown_waiting(); });
+        spec_ui_->set_platform_button([this](int b, bool down, float x, float y) { platform_button(b, down, x, y); });
         {
             const int sel = landing_.selected_index();
             std::vector<std::string> projects;
@@ -1792,6 +1806,7 @@ private:
                      (p.pick_pending ? "1" : "0") + " camera " + p.camera + " drawn " + p.drawn;
             return true;
         };
+        h.platform_button = [this](int b, bool down, float x, float y) { platform_button(b, down, x, y); };
         h.long_poll_held = [this](const std::string& kind) {
             caliper_builder::Session* s = session_.session();
             if (!s) return false;
@@ -2129,9 +2144,15 @@ private:
         // to ImGui first: ImGui's GLFW backend (installed by the renderer below) calls the
         // callback it finds here before it adds the button.
         glfwSetMouseButtonCallback(window_, [](GLFWwindow* w, int, int action, int) {
-            if (action != GLFW_PRESS || !ImGui::GetCurrentContext()) return;
+            auto* app = static_cast<CaliperApp*>(glfwGetWindowUserPointer(w));
+            if (action != GLFW_PRESS || !app || !ImGui::GetCurrentContext()) return;
             double x = 0.0, y = 0.0;
-            glfwGetCursorPos(w, &x, &y);
+            if (app->press_at_valid_) {
+                x = app->press_at_[0];
+                y = app->press_at_[1];
+            } else {
+                glfwGetCursorPos(w, &x, &y);
+            }
             ImGui::GetIO().AddMousePosEvent(float(x), float(y));
         });
         return renderer_->init(window_);
@@ -2211,6 +2232,8 @@ private:
     caliper_host::WindowCaptures captures_;   // the API's and the session's captures of the window's frame
     caliper_host::AppSession session_;        // the builder session of the workspace
     double live_frame_t_ = 0.0;       // start of the live page's current frame
+    bool press_at_valid_ = false;     // a UI driver's press gives the pointer's place (platform_button())
+    double press_at_[2] = {0.0, 0.0};
     // CALIPER_FRAME_LOG (log_frame()): the log, this frame's measured waits, and what the last
     // line said of its scene panel.
     caliper_host::FrameLog frame_log_;
