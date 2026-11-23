@@ -188,6 +188,8 @@ struct PointsScene::Pieces {
     bool failed = false;   // the last frame could not draw
 };
 
+#else
+struct PointsScene::Pieces {};
 #endif  // CALIPER_POINTS_PIECES
 
 PointsScene::PointsScene(gfx::Backend& backend, const gfx::ProgramDesc* programs)
