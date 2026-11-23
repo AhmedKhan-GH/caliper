@@ -1417,7 +1417,7 @@ int resize_callback(ImGuiInputTextCallbackData* data) {
     return 0;
 }
 
-// The house's buttons: an outlined key button, or the cut plate of a primary.
+// The house's buttons: an outlined key button on a square plate, the primary in the text colour.
 bool house_button(const char* id, ImRect b, const std::string& label, const char* key, bool primary, bool keys,
                   const SpecLook& L, bool enabled = true) {
     const float s = L.text_scale;
@@ -1437,11 +1437,8 @@ bool house_button(const char* id, ImRect b, const std::string& label, const char
         fill = L.plate_hover;
         key_ink = L.accent;
     }
-    if (primary) sternbild::cut_plate(dl, b.Min, b.Max, outline, fill, std::round(4.0f * s));
-    else {
-        if (fill) dl->AddRectFilled(b.Min, b.Max, fill);
-        dl->AddRect(b.Min, b.Max, outline, 0.0f, 0, 1.0f);
-    }
+    if (fill) dl->AddRectFilled(b.Min, b.Max, fill);
+    dl->AddRect(b.Min, b.Max, outline, 0.0f, 0, 1.0f);
     const float ui_h = extent(L.ui, L.ui_size, "Ag").y, mono_h = extent(L.mono, L.mono_size, "Ag").y;
     float x = b.Min.x + std::round(8.0f * s);
     if (keys && key && key[0]) {

@@ -41,6 +41,8 @@
 #include <caliper_builder/spec/spec.h>
 
 #include <imgui.h>
+#include "ui/sternbild_fonts.h"
+#include "ui/sternbild_theme.h"
 #include <imgui_internal.h>   // ImRect
 
 #include <cstdint>
@@ -80,22 +82,22 @@ struct SpecInstrumentHost;   // spec_instruments.h
 struct SpecLook {
     ImFont* ui = nullptr;      // titles, tabs, labels, states
     ImFont* mono = nullptr;    // the info strings, ticks, figures
-    float ui_size = 15.0f;
-    float small_size = 14.0f;
-    float mono_size = 14.0f;
+    float ui_size = sternbild::font_size::ui;
+    float small_size = sternbild::font_size::ui_small;
+    float mono_size = sternbild::font_size::ui_small;   // the small UI size (14): no token of its own
     float text_scale = 1.0f;   // the minimums and margins grow with it
-    ImU32 ground = IM_COL32(0x18, 0x17, 0x15, 255);
-    ImU32 deep = IM_COL32(0x12, 0x11, 0x0f, 255);
-    ImU32 plate = IM_COL32(0x20, 0x1f, 0x1c, 255);
-    ImU32 plate_hover = IM_COL32(0x2a, 0x29, 0x25, 255);
-    ImU32 rule = IM_COL32(0x4b, 0x49, 0x45, 255);
-    ImU32 rule_faint = IM_COL32(0x2c, 0x2b, 0x28, 255);
-    ImU32 text = IM_COL32(0xe8, 0xe0, 0xd0, 255);
-    ImU32 secondary = IM_COL32(0xc1, 0xba, 0xaa, 255);
-    ImU32 faint = IM_COL32(0x8f, 0x89, 0x7c, 255);
-    ImU32 accent = IM_COL32(0xb3, 0x8b, 0x59, 255);
-    ImU32 line = IM_COL32(0xe8, 0xe0, 0xd0, 255);        // one series line, histogram bars (the live views' look.plot)
-    ImU32 flat_point = IM_COL32(220, 220, 230, 255);     // points without colour (the live views' kFlat)
+    ImU32 ground = sternbild::col::ground;
+    ImU32 deep = sternbild::col::deep;
+    ImU32 plate = sternbild::col::plate;
+    ImU32 plate_hover = sternbild::col::plate_hover;
+    ImU32 rule = sternbild::col::rule;
+    ImU32 rule_faint = sternbild::col::rule_faint;
+    ImU32 text = sternbild::col::parchment;
+    ImU32 secondary = sternbild::col::secondary;
+    ImU32 faint = sternbild::col::faint;
+    ImU32 accent = sternbild::col::bronze;
+    ImU32 line = sternbild::col::parchment;      // one series line, histogram bars (the live views' look.plot)
+    ImU32 flat_point = sternbild::col::flat_point;  // points without colour (the live views' kFlat)
 };
 
 // The house look: the Sternbild faces from sternbild::fonts() and its tokens.

@@ -25,7 +25,7 @@ FILES = ("caliper-views-loader.js", "caliper-views.js", "caliper-views.wasm")
 # Everything the module is compiled from. A build of one commit serves every
 # later commit that changes none of these paths. The Browser views workflow
 # runs when any of them changes, and fetch_wasm.py relies on that.
-INPUTS = ("web/wasm", "src", "include", "sdk/include", "assets/fonts",
+INPUTS = ("web/wasm", "src", "include", "sdk/include", "cmake/SternbildTokens.cmake",
           "third_party/imgui", "third_party/implot")
 # Far above the real sizes (about 1.4 MB for the module), and a bound on what
 # a download may write.

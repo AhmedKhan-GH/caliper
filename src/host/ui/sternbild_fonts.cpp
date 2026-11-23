@@ -1,11 +1,9 @@
 // ============================================================================
 // Font loading for the Sternbild chrome. The faces, their licences and where
-// each one lives are listed in sternbild_fonts.h and assets/fonts/README.md.
+// each one lives are listed in sternbild_fonts.h.
 // ============================================================================
 
 #include "ui/sternbild_fonts.h"
-
-#include "app_paths.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>   // ImFileLoadToMemory: IM_ALLOC'd bytes the atlas can own
@@ -35,6 +33,7 @@ namespace {
 
 constexpr const char* k_ui_file   = "IBMPlexSansCondensed-Regular.ttf";
 constexpr const char* k_mono_file = "SourceCodePro-Regular.ttf";
+constexpr const char* k_display_file = "SternbildDisplay-Regular.otf";
 
 Fonts g_fonts;
 
@@ -206,8 +205,8 @@ FontPaths default_font_paths() {
         candidates.emplace_back(env);
     if (const std::string dir = exe_dir(); !dir.empty())
         candidates.push_back((fs::path(dir) / "assets" / "fonts").string());
-#ifdef CALIPER_SOURCE_DIR
-    candidates.emplace_back(CALIPER_SOURCE_DIR "/assets/fonts");
+#ifdef CALIPER_TOKEN_FONTS_DIR
+    candidates.emplace_back(CALIPER_TOKEN_FONTS_DIR);
 #endif
 
     // First directory that really holds the UI face: a stale or half-copied
@@ -226,9 +225,8 @@ FontPaths default_font_paths() {
 
     if (const char* env = std::getenv("CALIPER_DISPLAY_FONT"); env && *env)
         paths.display_font = env;
-    else
-        paths.display_font =
-            caliper::app_data_path("fonts/SternbildDisplay-Regular.otf");
+    else if (!paths.assets_dir.empty())
+        paths.display_font = (fs::path(paths.assets_dir) / k_display_file).string();
     return paths;
 }
 
