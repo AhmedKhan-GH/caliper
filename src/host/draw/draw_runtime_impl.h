@@ -5,12 +5,14 @@
 //
 // The item map and the text table read `slots`: the slot of a resource that
 // the piece's pick or text names keeps a CPU copy of the version that the
-// last frame showed (`shown`), with its element layout.
+// last frame showed (`shown`), with its element layout. The copy of a shown
+// version never changes, thus a pick that read an earlier frame keeps it.
 #include "draw/draw_runtime.h"
 
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -28,7 +30,8 @@ struct DrawRuntime::Impl {
     Instance instance;
     std::uint32_t pick_id = 0;
 
-    // A version of a resource as one frame showed it, for the item map and the text table.
+    // A version of a resource as one frame showed it, for the item map and the text table. It
+    // never changes once made: a newer version makes a new one.
     struct Shown {
         std::int64_t step = -1;
         std::uint32_t count = 0;
@@ -48,12 +51,16 @@ struct DrawRuntime::Impl {
         bool has_version = false;
         std::int64_t step = -1;                      // the version that the next frame shows
         std::uint32_t count = 0;
+        // The number of that version among all that set_resource() took, which differs for a
+        // version that replaces another at the same step; 0 before the first.
+        std::uint64_t serial = 0;
         bool keep_cpu = false;                       // the item map or the text table reads it
         std::vector<std::uint8_t> cpu;               // the bytes of that version, when keep_cpu
-        std::int64_t drawn_step = -1;                // the version that the last frame showed
-        Shown shown;
+        std::uint64_t drawn_serial = 0;              // the version that the last frame showed
+        std::shared_ptr<const Shown> shown;          // its copy; null before a frame showed one
     };
     std::vector<Slot> slots;                         // published resources in order, then buffer inputs
+    std::uint64_t versions = 0;                      // the versions set_resource() took, for Slot::serial
 
     // One draw buffer (`draw.buffers`), kept between frames.
     struct DrawBufferSlot {
@@ -121,6 +128,11 @@ struct DrawRuntime::Impl {
     std::string measure_code;                        // what a measured frame stops with
     std::string measure_message;
     std::vector<double> measured;                    // per pass of the measuring frame; < 0 none
+    // A frame that is not done after kTimeoutMs by the wall clock is late: the program submits
+    // no frame until it is done, and is then judged by its GPU time, or, where the backend gives
+    // none, by kLateFrames late frames in a row (draw_runtime.cpp).
+    bool late = false;
+    std::uint32_t late_frames = 0;
 };
 
 }  // namespace caliper_draw

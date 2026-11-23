@@ -49,8 +49,15 @@ inline constexpr std::uint64_t kHistorySourceBytes = kHistoryBudgetBytes / 4;
 inline constexpr std::uint32_t kResourceKeepDefault = 256;
 inline constexpr std::uint32_t kResourceKeepMax = 4096;
 // All resources together keep at most half the budget, and one resource at
-// most kHistorySourceBytes; the sources share the rest.
+// most kHistorySourceBytes; the sources share the rest. Over that half, the
+// largest rings thin first, then rings drop their oldest versions down to
+// one each, and a version that still does not fit is not kept.
 inline constexpr std::uint64_t kHistoryResourceBytes = kHistoryBudgetBytes / 2;
+// The resources that the history keeps for one program, as many as a piece
+// has, and for all programs together, as many as 16 programs of a producer
+// (CALIPER_NET_MAX_PROGRAMS) publish. A version of another resource is not kept.
+inline constexpr std::size_t kResourceRingsPerProgram = spec::piece_limits::kResources;
+inline constexpr std::size_t kResourceRingsMax = 16 * kResourceRingsPerProgram;
 
 // One field of a resource's element as program.read gives it: its WGSL type
 // (f32, i32, u32, vec2<f32>, vec4<f32>, vec2<u32> or vec4<u32>) and its byte
@@ -69,6 +76,9 @@ struct ResourceVersion {
     std::uint32_t stride = 0;                // bytes of one element
     std::uint32_t width = 0, height = 0;     // a texture's size; 0 for a buffer
     std::shared_ptr<const std::vector<std::uint8_t>> bytes;   // count * stride bytes, shared with readers
+    // The history's number of the version, which differs for a version that
+    // replaces another at the same step (append_resource() sets it).
+    std::uint64_t serial = 0;
     std::uint64_t nbytes() const { return bytes ? bytes->size() : 0; }
 };
 
@@ -135,7 +145,9 @@ public:
     void append_series(const std::string& catalog_id, std::int64_t step, double value);
 
     // A new version of the resource `resource` of the program `program`, an
-    // instance of a piece in the open spec (else the version is not kept).
+    // instance of a piece in the open spec (else the version is not kept), up
+    // to kResourceRingsPerProgram resources of a program and kResourceRingsMax
+    // of all programs; the version gets a new serial.
     // `keep` is the piece's `keep` for it (0: kResourceKeepDefault), and
     // `fields` its element's fields. A version at a step below the newest
     // step of the same resource starts a new epoch, as append() does. When

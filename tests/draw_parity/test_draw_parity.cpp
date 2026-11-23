@@ -10,6 +10,7 @@
 
 #include "gfx/recording_backend.h"
 
+#include <algorithm>
 #include <map>
 
 namespace {
@@ -115,6 +116,52 @@ TEST_CASE("a PROGRAM without its draw half, or with another file, is refused bef
     wire::Program no_derive = d.programs.at("tower_arcs");
     no_derive.derive.reset();   // the pin's hash covers derive.wgsl: without it the hash cannot hold
     CHECK(caliper_web::decode_program(no_derive, &piece, &instance).code == cp::kPieceHashMismatch);
+}
+
+TEST_CASE("a viewer keeps only versions of published resources at their declared sizes, and at most 16 programs") {
+    const dp::Fixture fx = dp::make_fixture(64);
+    REQUIRE_MESSAGE(fx.error.empty(), fx.error);
+    const Decoded d = decode(fx);
+    cs::Piece piece;
+    cd::Instance instance;
+    REQUIRE(caliper_web::decode_program(d.programs.at("tower_arcs"), &piece, &instance).ok());
+    const auto published = caliper_web::published_sizes(piece);
+    CHECK(published.size() == 3);   // heads, arcs and labels
+    for (const wire::Resource& r : d.resources.at("tower_arcs")) CHECK(caliper_web::keeps_version(published, r));
+
+    const std::vector<wire::Resource>& versions = d.resources.at("tower_arcs");
+    const auto found =
+        std::find_if(versions.begin(), versions.end(), [](const wire::Resource& r) { return r.resource == "arcs"; });
+    REQUIRE(found != versions.end());
+    const wire::Resource arcs = *found;
+    wire::Resource other = arcs;
+    other.resource = "arcs2";   // a name that the piece does not publish
+    CHECK_FALSE(caliper_web::keeps_version(published, other));
+    std::vector<std::uint8_t> big((published.at("arcs").count + 1) * std::size_t(arcs.stride));
+    wire::Resource over = arcs;
+    over.count = published.at("arcs").count + 1;   // one element above the declared count
+    over.data.data = big.data();
+    over.data.size = big.size();
+    CHECK_FALSE(caliper_web::keeps_version(published, over));
+    over.count = arcs.count;   // the bytes alone above the declared bytes
+    CHECK_FALSE(caliper_web::keeps_version(published, over));
+
+    // A private resource, or a manifest that fails its checks, gives nothing to keep.
+    cs::Piece private_arcs = piece;
+    for (cs::Resource& r : private_arcs.resources) r.publish = r.id != "arcs";
+    CHECK(caliper_web::published_sizes(private_arcs).count("arcs") == 0);
+    cs::Piece too_big = piece;
+    for (cs::Resource& r : too_big.resources)
+        if (r.id == "arcs") r.count = cs::piece_limits::kCountMax;
+    if (cp::check_piece_manifest(too_big).code != cp::kProgramNotBuilt) CHECK(caliper_web::published_sizes(too_big).empty());
+
+    std::map<std::string, int> programs;
+    for (unsigned k = 0; k < CALIPER_NET_MAX_PROGRAMS; ++k) {
+        CHECK(caliper_web::takes_program(programs, "p" + std::to_string(k)));
+        programs["p" + std::to_string(k)] = 1;
+    }
+    CHECK_FALSE(caliper_web::takes_program(programs, "one_more"));
+    CHECK(caliper_web::takes_program(programs, "p3"));   // a program set again
 }
 
 TEST_CASE("params pack in the manifest's order with their defaults and ranges") {

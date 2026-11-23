@@ -50,9 +50,12 @@ inline constexpr std::uint32_t kStrideMax = 256;                 // bytes of one
 inline constexpr std::uint32_t kCountMax = 4'194'304;            // elements of one buffer
 inline constexpr std::uint32_t kTextureSideMax = 4096;           // pixels of one texture side
 inline constexpr std::uint64_t kResourceBytesMax = 64ull << 20;  // bytes of one private resource or draw buffer
-// Bytes of one published resource: CALIPER_NET_RESOURCE_MAX_BYTES, 64 MiB less 64 KiB, thus each
-// version fits one RESOURCE frame with its metadata.
-inline constexpr std::uint64_t kPublishedBytesMax = 67'043'328;
+// Bytes of all published resources of a piece together, 8 MiB: what one pass sends to a viewer. The
+// script queues at most these bytes and 64 KiB of message headers for one viewer, half of the 16 MiB
+// control queue of either sender, and a viewer with more waiting skips the pass and gets a later one
+// (python/caliper/_programs.py, PUBLISHED_BYTES_MAX and RESOURCE_BACKLOG_BYTES). Below the wire's
+// bound of one RESOURCE, CALIPER_NET_RESOURCE_MAX_BYTES.
+inline constexpr std::uint64_t kPublishedBytesMax = 8ull << 20;
 inline constexpr std::uint32_t kKeepDefault = 256;               // kept versions of a resource in the step history
 inline constexpr std::uint32_t kKeepMax = 4096;
 inline constexpr std::size_t kDerivePasses = 8;

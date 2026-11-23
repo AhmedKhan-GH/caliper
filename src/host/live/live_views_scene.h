@@ -28,7 +28,6 @@ struct SceneClasses;
 }  // namespace caliper_net::wire
 namespace caliper_scene {
 class StageSource;
-class FramePick;
 }  // namespace caliper_scene
 namespace caliper_draw {
 class DrawFeed;
@@ -138,8 +137,12 @@ struct SceneRectState {
     std::string up_applied;  // the option `up` that was applied, so that it is applied once
     std::string camera_applied;   // the key of the option `view_camera` that was applied, the same way
     // A click's pick of the programs, read from the frame's ID target beside the entities' pick
-    // pass (scene/pick.h FramePick), and what each of the two answered so far.
-    std::shared_ptr<caliper_scene::FramePick> frame_pick;
+    // pass, and what each of the two answered so far. The view owns both readbacks on its own
+    // backend (SceneView::request_program_pick); the state keeps only the view's serial and the
+    // ticket, thus it holds nothing of a view or a backend that is gone, and a pick in flight
+    // in another view is forgotten.
+    uint64_t view = 0;
+    uint64_t program_ticket = 0;
     bool entity_pending = false, frame_pending = false, entity_dropped = false;
     std::string entity_detail;    // the entities' hit, "" for none
     float entity_depth = 1.0f;

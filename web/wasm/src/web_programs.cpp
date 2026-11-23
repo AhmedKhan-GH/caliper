@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 
 namespace caliper_web {
 
@@ -172,6 +173,7 @@ struct WebPrograms::Program {
     bool checked = false;             // the browser check finished
     cd::Verdict refused;              // the decode, the browser check or a refused pipeline
     std::map<std::string, Version> versions;   // resource id: the newest version
+    std::map<std::string, PublishedSize> published;   // the resources it keeps versions of
     std::uint64_t epoch = 0;          // a version at an earlier step than the newest starts a new epoch
     cd::DrawStatus shown;             // the scene view's last report
     bool reported = false;
@@ -269,6 +271,7 @@ void WebPrograms::on_program(const caliper_net::wire::Program& m) {
         return;
     }
     if (m.op != CALIPER_NET_PROGRAM_SET || !m.piece.is_object()) return;   // the one-pass form draws no piece
+    if (!takes_program(programs_, m.id)) return;   // past the most programs of one producer
     auto p = std::make_unique<Program>();
     p->id = m.id;
     p->panel = m.panel.value_or("");
@@ -283,6 +286,14 @@ void WebPrograms::on_program(const caliper_net::wire::Program& m) {
     }
     p->revision = ++revision_;
     p->refused = decode_program(m, &p->piece, &p->instance);
+    if (p->refused.ok()) p->published = published_sizes(p->piece);
+    // The kept versions of a program set again: only those that its new piece publishes, within their sizes.
+    for (auto v = p->versions.begin(); v != p->versions.end();) {
+        const auto d = p->published.find(v->first);
+        const bool fits = d != p->published.end() && v->second.count <= d->second.count &&
+                          v->second.bytes.size() <= d->second.bytes;
+        v = fits ? std::next(v) : p->versions.erase(v);
+    }
     if (p->refused.ok()) p->refused = p->check.start(device_, p->piece);
     if (!p->refused.ok()) p->checked = true;
     programs_[m.id] = std::move(p);
@@ -292,6 +303,7 @@ void WebPrograms::on_resource(const caliper_net::wire::Resource& r) {
     auto it = programs_.find(r.program);
     if (it == programs_.end()) return;   // a resource before its program: the next version follows it
     Program& p = *it->second;
+    if (!keeps_version(p.published, r)) return;   // no resource that the piece publishes, or above its size
     Version& v = p.versions[r.resource];
     const std::int64_t step = std::int64_t(std::min<std::uint64_t>(r.step, std::uint64_t(INT64_MAX)));
     if (v.step >= 0 && step < v.step) ++p.epoch;   // the run went back (a new attachment or a fork)

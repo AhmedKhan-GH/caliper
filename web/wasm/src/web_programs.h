@@ -67,8 +67,12 @@ public:
 
     // PROGRAM from the script: set (the instance form; a program of the
     // one-pass form is not a draw half and is ignored), remove, and params.
+    // A new program past CALIPER_NET_MAX_PROGRAMS is ignored.
     void on_program(const caliper_net::wire::Program& m);
-    // RESOURCE: the newest version of a resource of a program, copied.
+    // RESOURCE: the newest version of a resource of a program, copied, when
+    // the program's piece publishes that resource and the version holds at
+    // most its declared count and bytes (program_frames.h, keeps_version).
+    // Thus the page keeps at most the published bytes of 16 pieces.
     void on_resource(const caliper_net::wire::Resource& r);
     // Once a frame: takes the browser checks that finished, and refuses a
     // program whose module or pipeline WebGPU refused since the last call

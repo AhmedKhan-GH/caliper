@@ -37,10 +37,18 @@ std::vector<bool> modes() {
     return m;
 }
 
+// The recording backend's capabilities with GPU timestamps, as Metal has them.
+gfx::Caps timed_caps() {
+    gfx::Caps c = gfx::RecordingBackend::default_caps();
+    c.bits |= gfx::kCapTimestamps;
+    return c;
+}
+
 struct Host {
     gfx::RecordingBackend gfx;
     cd::HostTarget target;
-    explicit Host(std::uint32_t w = 64, std::uint32_t h = 48) {
+    explicit Host(std::uint32_t w = 64, std::uint32_t h = 48, const gfx::Caps& caps = gfx::RecordingBackend::default_caps())
+        : gfx(caps) {
         gfx::TextureDesc c;
         c.width = w;
         c.height = h;
@@ -375,7 +383,7 @@ TEST_CASE("a measured frame back under the limit keeps the program") {
     CHECK(frame(h, rt).size() == 1);
 }
 
-TEST_CASE("a frame not done after 1 s stops its program at once, and the other program of the panel goes on") {
+TEST_CASE("a frame still pending after 5 s stops its program at once, and the other program of the panel goes on") {
     Host h;
     h.gfx.set_auto_complete(false);
     cd::DrawRuntime slow(h.gfx, true, checks()), other(h.gfx, true, checks());
@@ -391,12 +399,137 @@ TEST_CASE("a frame not done after 1 s stops its program at once, and the other p
     REQUIRE(frame(h, other).size() == 1);
     slow.frame_pending(400.0);
     CHECK(slow.status().state == cd::DrawState::running);
-    slow.frame_pending(1000.5);
+    slow.frame_pending(1000.5);   // late, not stopped
+    CHECK(slow.status().state == cd::DrawState::running);
+    slow.frame_pending(5000.5);
     CHECK(slow.status().state == cd::DrawState::stopped);
     CHECK(slow.status().error.code == cp::kProgramDrawTimeout);
     CHECK(slow.status().error.message.find("Stopped slow:") == 0);
+    CHECK(slow.status().error.message.find("5 s") != std::string::npos);
     CHECK(frame(h, other).size() == 1);
     CHECK(other.status().state == cd::DrawState::running);
+}
+
+TEST_CASE("a late frame waits for its GPU time: a busy GPU keeps the program, over 1 s of GPU time stops it") {
+    Host h(64, 48, timed_caps());
+    h.gfx.set_auto_complete(false);
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    cd::Instance a;
+    a.program = "arcs";
+    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    give_arcs(rt, ex::arc_resources(), 1);
+    REQUIRE(frame(h, rt).size() == 1);
+    // A training run holds the GPU: the frame waits 1.5 s by the wall clock but took 2 ms on it.
+    rt.frame_pending(1500.0);
+    CHECK(rt.status().state == cd::DrawState::running);
+    CHECK(frame(h, rt).empty());   // nothing more is submitted while the frame is late
+    rt.frame_done(2.0, 1600.0);
+    CHECK(rt.status().state == cd::DrawState::running);
+    CHECK(rt.status().frame_ms == doctest::Approx(2.0));
+    // Late again and again under the same load: each frame is judged by its own GPU time.
+    for (int k = 0; k < 4; ++k) {
+        REQUIRE(frame(h, rt).size() == 1);
+        rt.frame_pending(1200.0);
+        rt.frame_done(2.0, 1300.0);
+    }
+    CHECK(rt.status().state == cd::DrawState::running);
+    // A frame whose own GPU time is over 1 s stops the program.
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_pending(1100.0);
+    rt.frame_done(1250.0, 1300.0);
+    CHECK(rt.status().state == cd::DrawState::stopped);
+    CHECK(rt.status().error.code == cp::kProgramDrawTimeout);
+    CHECK(rt.status().error.message.find("of GPU time") != std::string::npos);
+    // A late frame that the driver ended gives no GPU time on a device that has timestamps.
+    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    give_arcs(rt, ex::arc_resources(), 1);
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_pending(1500.0);
+    rt.frame_done(-1.0, 2500.0);
+    CHECK(rt.status().state == cd::DrawState::stopped);
+    CHECK(rt.status().error.code == cp::kProgramDrawTimeout);
+}
+
+TEST_CASE("without GPU time, three late frames in a row stop the program, and a frame in time ends the row") {
+    Host h;
+    h.gfx.set_auto_complete(false);
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    cd::Instance a;
+    a.program = "arcs";
+    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    give_arcs(rt, ex::arc_resources(), 1);
+    const auto late = [&] {
+        REQUIRE(frame(h, rt).size() == 1);
+        rt.frame_pending(1100.0);
+        rt.frame_done(-1.0, 1200.0);
+    };
+    late();
+    late();
+    CHECK(rt.status().state == cd::DrawState::running);
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_done(-1.0, 3.0);   // in time: the row starts again
+    late();
+    late();
+    CHECK(rt.status().state == cd::DrawState::running);
+    // A frame that waited behind a late one, and was never seen late, neither counts nor ends the row.
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_done(-1.0, 1100.0);
+    CHECK(rt.status().state == cd::DrawState::running);
+    late();
+    CHECK(rt.status().state == cd::DrawState::stopped);
+    CHECK(rt.status().error.code == cp::kProgramDrawTimeout);
+    CHECK(rt.status().error.message.find("3 frames") != std::string::npos);
+}
+
+TEST_CASE("a pick keeps the version of the frame it read, and a version at the same step replaces the copy") {
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    cd::Instance a;
+    a.program = "tower_arcs";
+    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    ex::ArcResources res = ex::arc_resources();
+    REQUIRE(res.arcs.size() > 2);
+    REQUIRE(res.labels.size() > 1);
+    give_arcs(rt, res, 1);
+    REQUIRE(frame(h, rt).size() == 1);
+    const cd::ShownItems first = rt.shown_items();
+    REQUIRE(first);
+    const float w1 = res.arcs[1].weight;
+    // A newer version arrives while a pick of the first frame waits for its readback.
+    std::vector<ex::Arc> arcs2 = res.arcs;
+    for (ex::Arc& arc : arcs2) arc.weight += 100.0f;
+    REQUIRE(rt.set_resource(version("arcs", arcs2, 2)).ok());
+    REQUIRE(frame(h, rt).size() == 1);
+    auto weight = [](const std::optional<cd::PickedItem>& p) {
+        for (const auto& [name, value] : p->fields)
+            if (name == "weight") return value;
+        return -1.0;
+    };
+    const std::optional<cd::PickedItem> old = cd::DrawRuntime::pick_shown(1, first);
+    REQUIRE(old);
+    CHECK(old->step == 1);
+    CHECK(weight(old) == doctest::Approx(w1));
+    const std::optional<cd::PickedItem> now = rt.pick(1);
+    REQUIRE(now);
+    CHECK(now->step == 2);
+    CHECK(weight(now) == doctest::Approx(w1 + 100.0f));
+    // A version that replaces another at the same step, as after a fork from the shown step: the
+    // pick and the labels read the new bytes.
+    std::vector<ex::Arc> arcs3 = res.arcs;
+    for (ex::Arc& arc : arcs3) arc.weight += 200.0f;
+    std::vector<ex::Label> labels3 = res.labels;
+    labels3[0].string = res.labels[1].string;
+    labels3[0].position[0] += 1.0f;
+    REQUIRE(rt.set_resource(version("arcs", arcs3, 2)).ok());
+    REQUIRE(rt.set_resource(version("labels", labels3, 1)).ok());
+    REQUIRE(frame(h, rt).size() == 1);
+    CHECK(weight(rt.pick(1)) == doctest::Approx(w1 + 200.0f));
+    const std::vector<cd::Label> labels = rt.labels();
+    REQUIRE(!labels.empty());
+    CHECK(labels[0].position[0] == doctest::Approx(res.labels[0].position[0] + 1.0f));
+    // The pick of the first frame still reads its own version.
+    CHECK(weight(cd::DrawRuntime::pick_shown(1, first)) == doctest::Approx(w1));
+    CHECK_FALSE(cd::DrawRuntime::pick_shown(1, cd::ShownItems{}));
 }
 
 TEST_CASE("a refused frame is an error of its program only") {
@@ -532,6 +665,37 @@ TEST_CASE("decode reads a PROGRAM's declaration and checks the hash against the 
     REQUIRE_MESSAGE(installed.ok(), installed.message);
 }
 
+TEST_CASE("decode reads the sample of the canonical manifest that the app sends") {
+    cs::Piece field = ex::attention_field();
+    if (cp::piece_hash(field).empty()) { MESSAGE("the checks of pieces are not built"); return; }
+    field.sample["attn0"] = cs::SampleInput{"sample/attn0.bin", {1, 4, 32, 32}};
+    field.sample["attn1"] = cs::SampleInput{"sample/attn1.bin", {1, 4, 32, 32}};
+    const cd::DrawChecks c = checks();
+    const std::string pin = c.hash(field);
+    const std::string manifest = cp::canonical_manifest(field);
+    REQUIRE(manifest.find(R"("sample":[{)") != std::string::npos);   // an array of {input, shape}
+    auto declaration = [&](const std::string& m) {
+        return R"({"id": "head_pattern", "panel": "pattern",
+            "piece": {"name": "attention_field", "version": 1, "hash": ")" + pin + R"("}, "manifest": )" + m + "}";
+    };
+    cs::Piece piece;
+    cd::Instance instance;
+    const cp::Verdict v = cd::DrawRuntime::decode(declaration(manifest), ex::kFieldCommon, ex::kFieldDraw, &piece,
+                                                  &instance, c, ex::kFieldDerive);
+    REQUIRE_MESSAGE(v.ok(), v.message);
+    CHECK(piece.sample == field.sample);
+    CHECK(piece.hash == pin);
+
+    // A sample in another form, or a broken one, is refused.
+    for (const std::string& bad : {std::string(R"({"name": "f", "version": 1, "sample": {"x": {"shape": [1]}}})"),
+                                   std::string(R"({"name": "f", "version": 1, "sample": [{"input": "x"}]})"),
+                                   std::string(R"({"name": "f", "version": 1, "sample": [{"input": "x", "shape": [-1]}]})"),
+                                   std::string(R"({"name": "f", "version": 1, "sample": [{"shape": [1]}]})")})
+        CHECK(cd::DrawRuntime::decode(declaration(bad), ex::kFieldCommon, ex::kFieldDraw, &piece, &instance, c,
+                                      ex::kFieldDerive)
+                  .code == cp::kPieceBadManifest);
+}
+
 TEST_CASE("remove releases the program and returns to waiting") {
     Host h;
     cd::DrawRuntime rt(h.gfx, true, checks());
@@ -649,7 +813,7 @@ TEST_CASE("the draw host gives each panel its programs, packs params and refuses
     host.feed("pattern")->status(rt);
     host.feed("pattern")->status(rt);
     REQUIRE(frame(h, rt).size() == 1);
-    rt.frame_pending(1500);
+    rt.frame_pending(5000.5);
     host.feed("pattern")->status(rt);
     REQUIRE(sink.events.size() == 3);
     CHECK(sink.events[1].fields["change"] == "compiled");

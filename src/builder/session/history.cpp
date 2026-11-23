@@ -229,6 +229,7 @@ struct StepHistory::Impl {
     std::map<std::string, ResourceRing> resources;   // by "<program>/<resource>"
     std::map<std::string, std::string> pins;  // the open spec's instances of pieces: id to piece hash
     std::uint64_t resource_bytes = 0;
+    std::uint64_t resource_serial = 0;        // the serial of the newest version kept
     CursorState cursor;
     std::optional<double> spec_speed;         // the transport's speed at the last configure
     double play = 0;                          // the fraction of a step that play has moved
@@ -338,6 +339,7 @@ struct StepHistory::Impl {
             r.bytes = r.bytes - same->second.nbytes() + v.nbytes();
             resource_bytes = resource_bytes - same->second.nbytes() + v.nbytes();
             same->second = std::move(v);
+            fit_budget(r, step);
             return;
         }
         if (r.provisional && !r.versions.empty()) drop_version(r, std::prev(r.versions.end()));
@@ -354,11 +356,29 @@ struct StepHistory::Impl {
         r.provisional = !due;
         while (r.committed() > capacity(r))
             if (!thin(r)) drop_version(r, r.versions.begin());   // a keep of 1 or 2
+        fit_budget(r, step);
+    }
+
+    // Holds all resources to kHistoryResourceBytes after `r` kept a version at
+    // `step`: the largest ring with three or more versions thins first, then
+    // the largest ring with two or more drops its oldest, and when every ring
+    // keeps one version, the version at `step` is not kept.
+    void fit_budget(ResourceRing& r, std::int64_t step) {
         while (resource_bytes > kHistoryResourceBytes) {
             ResourceRing* largest = nullptr;
             for (auto& [key, other] : resources)
                 if (other.committed() >= 3 && (!largest || other.bytes > largest->bytes)) largest = &other;
-            if (!largest || !thin(*largest)) break;
+            if (largest && thin(*largest)) continue;
+            largest = nullptr;
+            for (auto& [key, other] : resources)
+                if (other.versions.size() >= 2 && (!largest || other.bytes > largest->bytes)) largest = &other;
+            if (largest) {
+                drop_version(*largest, largest->versions.begin());
+                continue;
+            }
+            if (auto it = r.versions.find(step); it != r.versions.end()) drop_version(r, it);
+            r.provisional = false;
+            break;
         }
     }
 
@@ -581,6 +601,10 @@ void StepHistory::append_resource(const std::string& program, const std::string&
         it = impl_->resources.end();
     }
     if (it == impl_->resources.end()) {
+        // A resource name that no piece could publish this many of is not kept.
+        std::size_t of_program = 0;
+        for (const auto& [k, ring] : impl_->resources) of_program += ring.program == program ? 1 : 0;
+        if (of_program >= kResourceRingsPerProgram || impl_->resources.size() >= kResourceRingsMax) return;
         Impl::ResourceRing ring;
         ring.program = program;
         ring.pin = pin->second;
@@ -595,6 +619,7 @@ void StepHistory::append_resource(const std::string& program, const std::string&
     const auto seen = impl_->newest.find(seen_key);
     if (seen != impl_->newest.end() && step < seen->second) impl_->new_epoch(step);
     impl_->newest[seen_key] = step;
+    version.serial = ++impl_->resource_serial;
     impl_->keep_version(r, std::move(version));
     std::uint64_t source_bytes = 0;
     for (const auto& [id, ring] : impl_->rings) source_bytes += ring.bytes;

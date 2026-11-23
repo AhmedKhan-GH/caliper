@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -81,6 +82,58 @@ inline std::vector<std::uint8_t> pack_params(const caliper_builder::spec::Piece&
         std::memcpy(out.data() + 4 * i, &bits, 4);
     }
     return out;
+}
+
+// The declared size of a resource that a viewer keeps versions of: its
+// elements and its bytes.
+struct PublishedSize {
+    std::uint32_t count = 0;
+    std::uint64_t bytes = 0;
+};
+
+// The resources of a program that a viewer keeps versions of: each resource
+// that its piece publishes, with its declared count and bytes. None when the
+// manifest fails check 2, whose limits bound the published bytes of a piece.
+// Thus a producer cannot make a page keep more than the published resources
+// of the programs it declared, at their declared sizes.
+inline std::map<std::string, PublishedSize> published_sizes(
+    const caliper_builder::spec::Piece& piece,
+    const caliper_draw::DrawChecks& checks = caliper_draw::DrawChecks::pieces()) {
+    namespace cs = caliper_builder::spec;
+    std::map<std::string, PublishedSize> out;
+    if (!checks.manifest || !checks.layout || !checks.manifest(piece).ok()) return out;
+    for (const cs::Resource& r : piece.resources) {
+        if (!r.publish) continue;
+        PublishedSize s;
+        if (r.kind == cs::ResourceKind::texture) {
+            s.count = r.width * r.height;   // each side at most 4096: no wrap
+            s.bytes = std::uint64_t(s.count) * 4;
+        } else {
+            caliper_builder::programs::ElementLayout l;
+            if (!checks.layout(r.layout, &l).ok()) return {};
+            s.count = r.count;
+            s.bytes = std::uint64_t(r.count) * l.stride;
+        }
+        out[r.id] = s;
+    }
+    return out;
+}
+
+// Whether a viewer keeps the version `r` of a program whose published
+// resources are `published`: a resource of that name, with at most its
+// declared count and bytes.
+inline bool keeps_version(const std::map<std::string, PublishedSize>& published,
+                          const caliper_net::wire::Resource& r) {
+    const auto it = published.find(r.resource);
+    return it != published.end() && r.count <= it->second.count && r.data.size <= it->second.bytes;
+}
+
+// Whether a viewer that keeps `programs` takes a PROGRAM set of `id`: a
+// program it has, or a new one while it keeps fewer than
+// CALIPER_NET_MAX_PROGRAMS, the most programs of one producer.
+template <typename Programs>
+bool takes_program(const Programs& programs, const std::string& id) {
+    return programs.count(id) > 0 || programs.size() < CALIPER_NET_MAX_PROGRAMS;
 }
 
 // A version of a resource over the section of a RESOURCE message; the bytes

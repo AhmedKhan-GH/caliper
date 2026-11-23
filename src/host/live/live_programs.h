@@ -516,18 +516,24 @@ public:
 
     // Moves each RESOURCE version that `link` received into `history`, with
     // the `keep` and the element's fields of its resource in the piece of its
-    // program; the history keeps only the versions of the open spec's
-    // instances. Frame thread.
+    // program. Only a resource that the pinned piece publishes is kept, with
+    // the declared stride (4 for a texel) and size, at most the declared
+    // count, and count * stride bytes; another version is refused and
+    // counted, thus a producer cannot make the history keep names or bytes
+    // that no piece declared. The history keeps only the versions of the
+    // open spec's instances. Frame thread.
     void deliver_resources(ProgramLink& link, caliper_builder::StepHistory& history) {
         for (ReceivedResource& r : link.take_resources()) {
             ++resources_received_;
-            std::uint32_t keep = 0;
-            std::vector<caliper_builder::ResourceField> fields;
+            const ResourceInfo* info = nullptr;
             if (auto p = resource_info_.find(r.program); p != resource_info_.end())
-                if (auto q = p->second.find(r.resource); q != p->second.end()) {
-                    keep = q->second.keep;
-                    fields = q->second.fields;
-                }
+                if (auto q = p->second.find(r.resource); q != p->second.end()) info = &q->second;
+            if (!info || !declared(*info, r)) {
+                ++resources_refused_;
+                continue;
+            }
+            const std::uint32_t keep = info->keep;
+            std::vector<caliper_builder::ResourceField> fields = info->fields;
             caliper_builder::ResourceVersion v;
             v.step = r.step;
             v.count = r.count;
@@ -538,8 +544,10 @@ public:
             history.append_resource(r.program, r.resource, keep, std::move(fields), std::move(v));
         }
     }
-    // The RESOURCE versions moved into the history so far.
+    // The RESOURCE versions received so far, and those of them that no
+    // published resource of the program's piece declares.
     std::uint64_t resources_received() const { return resources_received_; }
+    std::uint64_t resources_refused() const { return resources_refused_; }
 
     std::vector<caliper_builder::ProgramStatus> status() const override {
         std::vector<caliper_builder::ProgramStatus> out;
@@ -884,11 +892,24 @@ private:
         std::optional<caliper_builder::programs::ParamType> type;
     };
 
-    // The keep and the element's fields of one published resource.
+    // The keep, the element's fields and the declared form of one published resource.
     struct ResourceInfo {
         std::uint32_t keep = 0;
         std::vector<caliper_builder::ResourceField> fields;
+        bool texture = false;
+        std::uint32_t stride = 0;            // a buffer's element; 4 for a texel
+        std::uint32_t count = 0;             // a buffer's elements; a texture's width * height
+        std::uint32_t width = 0, height = 0; // a texture's
     };
+
+    // Whether a received version has the form that its resource declares.
+    static bool declared(const ResourceInfo& info, const ReceivedResource& r) {
+        if (info.stride == 0 || r.stride != info.stride || !r.bytes) return false;
+        if (info.texture ? (r.width != info.width || r.height != info.height || r.count != info.count)
+                         : (r.width != 0 || r.height != 0 || r.count > info.count))
+            return false;
+        return r.bytes->size() == std::uint64_t(r.count) * r.stride;
+    }
 
     // The piece that `ref` pins: an inline piece of the open spec, or one of
     // the lookup's.
@@ -911,10 +932,18 @@ private:
             info.keep = r.keep.value_or(0);
             if (r.kind == sp::ResourceKind::texture) {
                 info.fields.push_back({"texel", "u32", 0});
+                info.texture = true;
+                info.stride = 4;
+                info.width = r.width;
+                info.height = r.height;
+                info.count = r.width * r.height;   // each side at most 4,096
             } else {
                 caliper_builder::programs::ElementLayout layout;
-                if (caliper_builder::programs::element_layout(r.layout, &layout).ok())
+                if (caliper_builder::programs::element_layout(r.layout, &layout).ok()) {
                     for (const auto& f : layout.fields) info.fields.push_back({f.name, f.type, f.offset});
+                    info.stride = layout.stride;
+                    info.count = r.count;
+                }
             }
             out[r.id] = std::move(info);
         }
@@ -999,6 +1028,7 @@ private:
     PieceLookup pieces_;                 // the library's and the workspace's pieces
     std::map<std::string, std::map<std::string, ResourceInfo>> resource_info_;   // by program id, then resource id
     std::uint64_t resources_received_ = 0;
+    std::uint64_t resources_refused_ = 0;
 };
 
 }  // namespace caliper_live

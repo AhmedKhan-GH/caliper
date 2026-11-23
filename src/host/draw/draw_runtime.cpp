@@ -31,7 +31,13 @@ namespace gfx = caliper_gfx;
 namespace {
 
 constexpr std::uint32_t kWindowFrames = 30;      // frames in a row over draw.frame_ms before a stop
-constexpr double kTimeoutMs = 1000.0;            // a frame not done after this stops at once
+// A frame not done after kTimeoutMs by the wall clock is late. A training run on the same GPU can
+// delay a correct frame that long, thus a late frame stops its program only when its GPU time is
+// over kTimeoutMs too, or where the backend gives no GPU time, when kLateFrames frames in a row are
+// late. A frame not done after kHangMs stops it at once: its pass may never end.
+constexpr double kTimeoutMs = 1000.0;
+constexpr std::uint32_t kLateFrames = 3;
+constexpr double kHangMs = 5000.0;
 constexpr std::uint64_t kMiB = 1ull << 20;
 constexpr std::uint32_t kFallbackColormaps = 4;   // the rows of colormap@1: viridis, magma, rdbu, greys
 
@@ -251,27 +257,33 @@ bool read_manifest(const json& m, cs::Piece* p, std::string* why) {
         }
     }
     if (ok) {
+        // The canonical form (programs/pieces.cpp, canonical_manifest): an array of {input, shape}, whose
+        // file is sample/<input>.bin, as the JSON form of a piece reads it.
         const auto it = m.find("sample");
         if (it != m.end()) {
-            if (!it->is_object()) ok = r.fail("the key sample is not a table");
-            for (auto s = it->begin(); ok && s != it->end(); ++s) {
+            if (!it->is_array()) ok = r.fail("the key sample is not an array");
+            for (std::size_t k = 0; ok && k < it->size(); ++k) {
+                const json& s = (*it)[k];
                 cs::SampleInput in;
-                if (s->is_string()) {
-                    in.file = s->get<std::string>();
-                } else if (s->is_object()) {
-                    ok = r.str(*s, "file", &in.file);
-                    const auto shape = s->find("shape");
-                    if (ok && shape != s->end()) {
-                        if (!shape->is_array()) ok = r.fail("a sample's shape is not an array");
-                        for (std::size_t i = 0; ok && i < shape->size(); ++i) {
-                            if (!(*shape)[i].is_number_integer()) ok = r.fail("a sample's shape is not integers");
-                            else in.shape.push_back(std::uint32_t((*shape)[i].get<std::int64_t>()));
-                        }
-                    }
-                } else {
-                    ok = r.fail("a sample is neither a string nor a table");
+                std::string input;
+                if (!s.is_object()) {
+                    ok = r.fail("a sample is not a table");
+                    break;
                 }
-                if (ok) p->sample[s.key()] = in;
+                ok = r.str(s, "input", &input, true);
+                const auto shape = s.find("shape");
+                if (ok && shape == s.end()) ok = r.fail("a sample has no shape");
+                if (ok && !shape->is_array()) ok = r.fail("a sample's shape is not an array");
+                for (std::size_t i = 0; ok && i < shape->size(); ++i) {
+                    const json& v = (*shape)[i];
+                    if (!v.is_number_integer() || v.get<std::int64_t>() < 0 || v.get<std::int64_t>() > 0xFFFFFFFFll)
+                        ok = r.fail("a sample's shape is not axis lengths");
+                    else
+                        in.shape.push_back(std::uint32_t(v.get<std::int64_t>()));
+                }
+                if (ok && p->sample.count(input)) ok = r.fail("two samples name the input " + input);
+                in.file = "sample/" + input + ".bin";
+                if (ok) p->sample[input] = std::move(in);
             }
         }
     }
@@ -1264,6 +1276,8 @@ void DrawRuntime::remove() {
     m.measure = false;
     m.measured.clear();
     m.epoch_known = false;
+    m.late = false;
+    m.late_frames = 0;
 }
 
 // ---- resources ---------------------------------------------------------------------------
@@ -1336,6 +1350,7 @@ Verdict DrawRuntime::set_resource(const ResourceVersion& version) {
     s->has_version = true;
     s->step = version.step;
     s->count = version.count;
+    s->serial = ++m.versions;   // a version at the same step is another version
     return {};
 }
 
@@ -1345,6 +1360,7 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
     Impl& m = *impl_;
     if (!m.installed || frames == nullptr) return false;
     if (m.status.state != DrawState::compiled && m.status.state != DrawState::running) return false;
+    if (m.late) return false;   // nothing piles up behind a frame that is not done
     if (!target.color || target.width == 0 || target.height == 0) return false;
     for (const Impl::Slot& s : m.slots)
         if (!s.has_version) return false;   // waiting for the run's resources
@@ -1362,7 +1378,7 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
     m.epoch_known = true;
     bool changed = false;
     for (const Impl::Slot& s : m.slots)
-        if (s.drawn_step != -1 && s.step != s.drawn_step) changed = true;
+        if (s.drawn_serial != 0 && s.serial != s.drawn_serial) changed = true;
     bool reset = false;
     for (Impl::DrawBufferSlot& b : m.buffers) {
         const bool zero = all || (b.reset == cs::BufferReset::cursor && in.cursor_moved) ||
@@ -1495,13 +1511,18 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
     }
     if (frames->size() == first_frame) return false;
 
-    // What the frame shows, for the item map, the text table and the reset rules.
+    // What the frame shows, for the item map, the text table and the reset rules: a new copy for
+    // each new version, also one at the same step, and the copy a pick of an earlier frame holds
+    // stays as it was.
     for (Impl::Slot& s : m.slots) {
-        if (s.drawn_step == s.step && s.shown.step == s.step) continue;
-        s.drawn_step = s.step;
-        s.shown.step = s.step;
-        s.shown.count = s.count;
-        if (s.keep_cpu) s.shown.bytes = s.cpu;
+        if (s.drawn_serial == s.serial && s.shown) continue;
+        s.drawn_serial = s.serial;
+        auto shown = std::make_shared<Impl::Shown>();
+        shown->step = s.step;
+        shown->count = s.count;
+        if (s.keep_cpu) shown->bytes = std::move(s.cpu);
+        s.cpu.clear();
+        s.shown = std::move(shown);
     }
     m.status.resource_step = resource_step;
     ++m.frame_no;
@@ -1522,12 +1543,39 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
 
 // ---- timing and removal ------------------------------------------------------------------
 
-void DrawRuntime::frame_done(double gpu_ms) {
+void DrawRuntime::frame_done(double gpu_ms, double wall_ms) {
     Impl& m = *impl_;
     if (m.expected.empty()) return;
     const Impl::Expected e = m.expected.front();
     m.expected.pop_front();
+    const bool late = m.late;   // the oldest frame, which this is, was late
+    m.late = false;
     if (m.status.state != DrawState::running) return;
+    // A late frame: its GPU time judges it where the backend gives one, and a backend with
+    // timestamps that gives none for it reports work that the driver ended. Without timestamps,
+    // late frames in a row stop it, and a frame done in time ends the row.
+    const bool timed = m.gfx->caps().has(gfx::kCapTimestamps);
+    if (late && ((gpu_ms >= 0 && gpu_ms > kTimeoutMs) || (gpu_ms < 0 && timed))) {
+        stop(m, cp::kProgramDrawTimeout,
+             "Stopped " + m.instance.program + ": " +
+                 (e.pass >= 0 ? pass_name(m, e.pass) : std::string("a frame of its draw passes")) +
+                 (gpu_ms >= 0 ? " took " + fmt_ms(gpu_ms) + " ms of GPU time, above 1 s"
+                              : " did not finish, and the driver ended it"),
+             e.pass);
+        return;
+    }
+    if (late && gpu_ms < 0) {
+        if (++m.late_frames >= kLateFrames) {
+            stop(m, cp::kProgramDrawTimeout,
+                 "Stopped " + m.instance.program + ": " + std::to_string(kLateFrames) +
+                     " frames of its draw passes in a row did not finish in 1 s",
+                 e.pass);
+            return;
+        }
+    } else if (late || (gpu_ms >= 0 ? gpu_ms : wall_ms) <= kTimeoutMs) {
+        m.late_frames = 0;
+    }
+    if (gpu_ms < 0) gpu_ms = wall_ms;   // the upper bound, where the backend gives no GPU time
     const double limit = m.status.frame_limit_ms;
     if (e.pass < 0) {
         if (gpu_ms < 0) return;
@@ -1569,11 +1617,13 @@ void DrawRuntime::frame_done(double gpu_ms) {
 void DrawRuntime::frame_pending(double waited_ms) {
     Impl& m = *impl_;
     if (m.status.state != DrawState::running || waited_ms <= kTimeoutMs) return;
+    m.late = true;
+    if (waited_ms <= kHangMs) return;
     const int pass = m.expected.empty() ? -1 : m.expected.front().pass;
     stop(m, cp::kProgramDrawTimeout,
          "Stopped " + m.instance.program + ": " +
              (pass >= 0 ? pass_name(m, pass) : std::string("a frame of its draw passes")) +
-             " did not finish in 1 s; the GPU runs it until the driver ends it",
+             " did not finish in 5 s; the GPU runs it until the driver ends it",
          pass);
 }
 

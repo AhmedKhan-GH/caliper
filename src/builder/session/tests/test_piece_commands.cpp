@@ -13,6 +13,7 @@
 
 #include <doctest/doctest.h>
 
+#include <fstream>
 #include <set>
 
 using namespace caliper_builder;
@@ -183,6 +184,32 @@ TEST_CASE("pieces: piece.update writes a sample whose bytes match its shape") {
     CHECK(err(*s, "piece.update", {{"piece", p}}) == "piece.bad_manifest");
     p["sample"][0]["data"] = "not base64!";
     CHECK(err(*s, "piece.update", {{"piece", p}}) == "piece.bad_manifest");
+}
+
+TEST_CASE("pieces: a write leaves the half-written versions of other processes on the workspace alone") {
+    std::string ws;
+    auto s = piece_session("piece_tmp", &ws);
+    ok(*s, "piece.update", {{"piece", uv_field()}});
+    // Another app process on the same workspace writes version 2 under every name that a counter of its own
+    // could give; a write of this process never removes one of them.
+    const fs::path dir = fs::path(ws) / "pieces" / "uv_field";
+    for (int k = 0; k <= 512; ++k) {
+        const fs::path other = dir / (".tmp-2-" + std::to_string(k));
+        REQUIRE(fs::create_directory(other));
+        std::ofstream(other / "piece.toml") << "half";
+    }
+    json next = uv_field();
+    next["params"][0]["default"] = 2.0;
+    CHECK(ok(*s, "piece.update", {{"piece", next}})["version"] == 2);
+    int left = 0;
+    for (const auto& entry : fs::directory_iterator(dir))
+        left += entry.path().filename().string().rfind(".tmp-", 0) == 0;
+    CHECK(left == 513);   // its own temporary folder became version 2, and no other one went
+    int intact = 0;
+    for (int k = 0; k <= 512; ++k)
+        intact += read_text((dir / (".tmp-2-" + std::to_string(k)) / "piece.toml").string()) == "half";
+    CHECK(intact == 513);
+    CHECK(fs::exists(dir / "2" / "piece.toml"));
 }
 
 TEST_CASE("pieces: names and versions that would leave the pieces folder are refused") {
