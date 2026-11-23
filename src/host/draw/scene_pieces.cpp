@@ -36,10 +36,17 @@ namespace {
 constexpr std::uint32_t kNanBits = 0x7fc00000u;
 constexpr std::uint32_t kNone = 0xffffffffu;
 
-// The capacities of the library pieces' resources (their piece.toml).
-constexpr std::uint64_t kPointsMax = 262144, kSegmentsMax = 209714, kArrowsMax = 262143, kBoxesMax = 126976,
-                        kMeshVerticesMax = 98304, kMeshTrianglesMax = 196608, kImagePixelsMax = 2097120,
-                        kMaskPixelsMax = 2093024, kPaletteSize = 4096;
+constexpr std::uint64_t kPaletteSize = 4096;
+
+// The capacity of a library piece's resource, its elements in the piece's piece.toml, so that a part
+// keeps the built-in draw only above the capacity that the piece has. Without the piece no part is
+// above it, and the part keeps the built-in draw as one without a library piece.
+std::uint64_t capacity(const char* piece, const char* resource) {
+    if (const cs::Piece* p = ScenePieces::library_piece(piece))
+        for (const auto& r : p->resources)
+            if (r.id == resource) return r.count;
+    return std::numeric_limits<std::uint64_t>::max();
+}
 
 std::uint32_t bits_of(float f) {
     std::uint32_t u;
@@ -293,7 +300,7 @@ void points_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
     std::string why;
     Source src;
     if (!rows(u.array("positions"), &pos) || !source_of(u, &src, &why)) return void(c.fallback = Fallback::points_shape);
-    if (too_many(c, uint64_t(pos.n), kPointsMax, Fallback::points_capacity)) return;
+    if (too_many(c, uint64_t(pos.n), capacity("points", "points"), Fallback::points_capacity)) return;
     // Radii in scene units (radius_mode 1), in position.w as the derive half writes them: one for
     // each point from `radii`, or the one `radius` for all, as the scene view's batch holds them.
     const float* radii = nullptr;
@@ -368,7 +375,7 @@ void lines_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
         count = n > 0 ? uint64_t(e) : 0;
         c.color_per = b.per_edge ? 1u : 0u;
     }
-    if (too_many(c, count, kSegmentsMax, Fallback::segments_capacity)) return;
+    if (too_many(c, count, capacity("lines", "segments"), Fallback::segments_capacity)) return;
     c.count = count;
     std::vector<std::uint8_t> out(std::size_t(count) * 40, 0);
     for (uint64_t i = 0; i < count; ++i) {
@@ -409,7 +416,7 @@ void arrows_of(const wire::SceneUpdate& u, Converted& c) {
     Source src;
     if (!rows(u.array("origins"), &o) || !rows(u.array("vectors"), &v) || !source_of(u, &src, &why) || src.mode == 3)
         return void(c.fallback = Fallback::arrows_shape);
-    if (too_many(c, uint64_t(o.n), kArrowsMax, Fallback::arrows_capacity)) return;
+    if (too_many(c, uint64_t(o.n), capacity("arrows", "arrows"), Fallback::arrows_capacity)) return;
     c.count = uint64_t(o.n);
     c.color_mode = src.mode;
     std::vector<std::uint8_t> out(std::size_t(o.n) * 32, 0);
@@ -446,7 +453,7 @@ void boxes_of(const wire::SceneUpdate& u, Converted& c) {
     if (has_rot && (!rows(u.array("rotations"), &rot) || rot.d != 4)) return void(c.fallback = Fallback::boxes_shape);
     int64_t n = ctr.n;
     if (half.n != 1) n = std::min(n, half.n);
-    if (too_many(c, uint64_t(n), kBoxesMax, Fallback::boxes_capacity)) return;
+    if (too_many(c, uint64_t(n), capacity("boxes", "boxes"), Fallback::boxes_capacity)) return;
     c.count = uint64_t(n);
     c.color_mode = src.mode == 2 ? 1u : src.mode == 3 ? 2u : 0u;
     const float dims = ctr.d >= 3 ? 3.0f : 2.0f;
@@ -499,8 +506,8 @@ void mesh_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
         t = rows_of(ix, CALIPER_NET_DTYPE_I32, 4, 3);
         if (t < 0) return void(c.fallback = Fallback::mesh_shape);
     }
-    if (too_many(c, uint64_t(pos.n), kMeshVerticesMax, Fallback::mesh_vertices_capacity) ||
-        too_many(c, uint64_t(t), kMeshTrianglesMax, Fallback::mesh_triangles_capacity))
+    if (too_many(c, uint64_t(pos.n), capacity("mesh", "vertices"), Fallback::mesh_vertices_capacity) ||
+        too_many(c, uint64_t(t), capacity("mesh", "faces") / 3, Fallback::mesh_triangles_capacity))
         return;
     c.count = uint64_t(pos.n);
     c.color_mode = src.mode;
@@ -563,7 +570,7 @@ void image_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
         const bool grey = b.image_form == caliper_scene::ImageForm::Grey;
         if (!px || px->dtype != CALIPER_NET_DTYPE_U8 || px->size < n * (grey ? 1 : 4))
             return void(c.fallback = Fallback::image_shape);
-        if (too_many(c, n, kImagePixelsMax, Fallback::image_pixels_capacity)) return;
+        if (too_many(c, n, capacity("image", "pixels"), Fallback::image_pixels_capacity)) return;
         std::vector<std::uint8_t> out(std::size_t(n) * 4);
         if (grey) {
             for (uint64_t i = 0; i < n; ++i) {
@@ -580,7 +587,7 @@ void image_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
         const bool u16 = px && px->dtype == CALIPER_NET_DTYPE_U16;
         if (!px || (!u16 && px->dtype != CALIPER_NET_DTYPE_F32) || px->size < n * (u16 ? 2 : 4))
             return void(c.fallback = Fallback::depth_shape);
-        if (too_many(c, n, kImagePixelsMax, Fallback::depth_pixels_capacity)) return;
+        if (too_many(c, n, capacity("depth", "pixels"), Fallback::depth_pixels_capacity)) return;
         const caliper_net::Json* sp = u.params.find("scale");
         const float scale = float(sp && sp->is_number() ? sp->as_double() : (u16 ? 0.001 : 1.0));
         std::vector<std::uint8_t> out(std::size_t(n) * 4);
@@ -612,7 +619,7 @@ void image_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
         c.piece = "segmentation";
         const bool u16 = px && px->dtype == CALIPER_NET_DTYPE_U16;
         if (!px || px->size < n * (u16 ? 2 : 1)) return void(c.fallback = Fallback::mask_shape);
-        if (too_many(c, n, kMaskPixelsMax, Fallback::mask_pixels_capacity)) return;
+        if (too_many(c, n, capacity("segmentation", "pixels"), Fallback::mask_pixels_capacity)) return;
         std::vector<std::uint8_t> out(std::size_t(n) * 4);
         for (uint64_t i = 0; i < n; ++i) {
             std::uint32_t id = 0;
