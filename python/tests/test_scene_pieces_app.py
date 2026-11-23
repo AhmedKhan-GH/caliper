@@ -60,7 +60,12 @@ def attach(url, tmp, name, log):
         lines = [l for l in app.lines if l.startswith(f"[ui] where {SCENE} ")]
         time.sleep(0.05)
     assert len(lines) == 2, "\n".join(app.lines[-40:])
-    return app, Where(lines[1])
+    where = Where(lines[1])
+    fields = lines[1].split()
+    assert "scale_bar" in fields, lines[1]
+    start = fields.index("scale_bar") + 1
+    where.scale_bar = tuple(float(v) for v in fields[start:start + 4])
+    return app, where
 
 
 def area_of(png, where):
@@ -121,8 +126,17 @@ def test_the_piece_form_draws_as_the_per_shape_parts(monkeypatch):
         assert (wa.target_px, wa.distance, wa.azimuth, wa.elevation) == (wb.target_px, wb.distance, wb.azimuth,
                                                                          wb.elevation)
         assert a.shape == b.shape and len({tuple(c) for c in a[::5, ::5].reshape(-1, 3)}) > 20, "the scene is blank"
-        differ = int(np.any(a != b, axis=-1).sum())
-        print(f"[scene-pieces-app] {differ} of {a.shape[0] * a.shape[1]} pixels of the scene view differ")
+        assert (wa.area, wa.scale, wa.scale_bar) == (wb.area, wb.scale, wb.scale_bar)
+        origin = np.rint(np.asarray(wa.area[:2]) * wa.scale).astype(int)
+        band = np.rint(np.asarray(wa.scale_bar) * wa.scale).astype(int) - np.tile(origin, 2)
+        x0, y0, x1, y1 = band
+        assert 0 <= x0 < x1 <= a.shape[1] and 0 <= y0 < y1 <= a.shape[0]
+        # ImGui draws this UI overlay after the scene. Its font atlas can differ between attachments.
+        different = np.any(a != b, axis=-1)
+        different[y0:y1, x0:x1] = False
+        differ = int(different.sum())
+        compared = a.shape[0] * a.shape[1] - (x1 - x0) * (y1 - y0)
+        print(f"[scene-pieces-app] {differ} of {compared} scene pixels outside the scale-bar overlay differ")
         assert differ == 0
     finally:
         if sub:
