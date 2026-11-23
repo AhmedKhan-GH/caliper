@@ -1379,6 +1379,23 @@ bool SpecRuntime::scene_rect(const std::string& panel_id, float rect[4]) const {
     return true;
 }
 
+bool SpecRuntime::scene_gesture(const std::string& panel_id, bool* down, bool* pick_pending) const {
+    const auto it = scenes_->by_panel.find(panel_id);
+    if (it == scenes_->by_panel.end()) return false;
+    const caliper_live_views::SceneRectState& st = it->second;
+    if (down) *down = st.down;
+    if (pick_pending) *pick_pending = st.click || st.entity_pending || st.frame_pending;
+    return true;
+}
+
+std::string SpecRuntime::scene_panel_at(float x, float y) const {
+    for (const auto& [id, st] : scenes_->by_panel)
+        if (st.down) return id;
+    for (const auto& [id, st] : scenes_->by_panel)
+        if (x >= st.rect[0] && y >= st.rect[1] && x < st.rect[0] + st.rect[2] && y < st.rect[1] + st.rect[3]) return id;
+    return {};
+}
+
 const SpecScene* SpecRuntime::entity_scene(const std::string& panel_id) const {
     auto it = scenes_->entities.find(panel_id);
     return it == scenes_->entities.end() ? nullptr : &it->second->scene;
