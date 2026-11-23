@@ -12,7 +12,7 @@ This page lists the milestones of Caliper's current trajectory, Agent-Built Play
 | M3, Instrument Building | Entities from tensors, operators, shared state, time transport, annotations, all control kinds | Done | [#28](https://github.com/AhmedKhan-GH/caliper/pull/28) |
 | M4, Hosted Runs | Start, fork and stop a model's run from Caliper and over MCP | Done | [#26](https://github.com/AhmedKhan-GH/caliper/pull/26) |
 | M5, Programmable Graphics | Pieces with a derive half in the run and a draw half in the viewer, written by the agent, in the app and the browser | Done | [#34](https://github.com/AhmedKhan-GH/caliper/pull/34) |
-| M6, Graphics Consolidation | Every built-in shape and operator as a library piece, and the old per-shape code removed | In progress | |
+| M6, Graphics Consolidation | Every built-in shape and operator as a library piece, and the old per-shape code removed, and the browser's dashboard viewer as the app shows it | In progress | |
 | M7, Derivation Catalog | Projections, layouts, overlays and model probes as library pieces | Planned | |
 | M8, Steering and Intervention | Steer, scale and patch | Planned | |
 | M9, Saved and Editable Instruments | Saved instruments with their pieces, and the node editor | Planned | |
@@ -58,4 +58,4 @@ The built-in primitives stay as the standard library and as the Python logging A
 
 ## Later Milestones
 
-M6 moves every built-in shape and the `surface` and `path` operators onto the programmable layer as library pieces, moves the earlier demos onto them, and removes the per-shape drawing code, so that one rendering path remains. M7 adds projections and layouts of high-dimensional data, overlays and model probes as library pieces. M8 adds steering, scaling and patching, the core of interpretability work. M9 to M16 complete saved and editable instruments, browser parity, the two acceptance demos, image data, vector drawing, recordings and WebAssembly views.
+M6 moves every built-in shape and the `surface` and `path` operators onto the programmable layer as library pieces, moves the earlier demos onto them, and removes the per-shape drawing code, so that one rendering path remains. The dashboard viewer of the browser shows a dashboard as the app does: its programs, the colors and names of its series, its controls and its layout. M7 adds projections and layouts of high-dimensional data, overlays and model probes as library pieces. M8 adds steering, scaling and patching, the core of interpretability work. M9 to M16 complete saved and editable instruments, browser parity, the two acceptance demos, image data, vector drawing, recordings and WebAssembly views.

@@ -64,7 +64,7 @@ options = { up = "+z", axes = true }
 
 An orbit table has the keys `target`, `distance`, `azimuth` and `elevation`. In a pattern, `*` matches one path segment and `**` matches any number of segments. A scene that the script does not send shows "Source offline", and the validator warns with `spec.unresolved_source`, because a live scene can come later.
 
-In the app, the spec page draws the panel from the live scene of the attached script. A drag orbits the view, the wheel zooms, a click picks and a shift-drag selects. The panel sends its picks and selections to the event ring as `pick` and `select` events that carry its panel id. [Run Control and Events](../agents/run-control-and-events.md) lists their keys. The command `panel.data` of a scene panel gives `{"scene": "<name>"}` and, for each entity, the shape, the minimum, the maximum and the values of its arrays.
+In the app, the spec page draws the panel from the live scene of the attached script. A drag orbits the view, the wheel zooms, a click picks and a shift-drag selects. The panel sends its picks and selections to the event ring as `pick` and `select` events that carry its panel id. [Run Control and Events](../agents/run-control-and-events.md) lists their keys. The command `panel.data` of a scene panel gives `{"scene": "<name>"}` and, for each entity, the shape, the minimum, the maximum and the values of its arrays. It also gives the programs of the panel ([Caliper API](../agents/http-api.md#get-v0spec)).
 
 ## Controls
 

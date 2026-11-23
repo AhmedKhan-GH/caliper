@@ -16,6 +16,7 @@ A capture works in the app's window on Metal and in the windowless mode, `calipe
 | `POST /v0/commands/{name}` | Runs one command, with its arguments as a JSON body, and answers its result |
 | `GET /v0/approvals/{id}` | What became of a command that needed the person's approval |
 | `GET /v0/spec` | The browser viewer of spec applets, a page |
+| `GET /v0/spec/{file}` | One of the three files of the WebAssembly views that the page loads |
 
 ## Startup
 
@@ -66,7 +67,7 @@ http://127.0.0.1:<port>/v0/spec?token=<viewer token>&applet=<id>
 
 The link carries the viewer token, never your session token or the API file's token, and the app refuses to open it otherwise. The app also refuses, before it starts the API, in a build without the browser viewer and for a dashboard id that is not a workspace's applet id. That id is a lower-case letter, then at most 63 lower-case letters, digits, `_` or `-`. If the browser does not start, an API started for this request alone stops again.
 
-Anyone who has the link can read what the [spec page](#get-v0spec) reads, from the origin `viewer`: the list of applets, the saved spec of every spec applet of the open workspace, and the panel data. The link opens no other endpoint, no command that changes anything and not the stream. It works only on this machine, but any program or person that has it can read that data, and a browser may keep it in its history.
+Anyone who has the link can read what the [spec page](#get-v0spec) reads, from the origin `viewer`: the list of applets, the saved spec of every spec applet of the open workspace, and the panel data and the three files of the views. The link opens no other endpoint, no command that changes anything and not the stream. It works only on this machine, but any program or person that has it can read that data, and a browser may keep it in its history.
 
 The viewer token ends when the API that made it stops, and the API answers an old link with 401. An API started for Open in browser runs until the app quits, because a page open in a browser keeps reading.
 
@@ -87,11 +88,11 @@ Every request gets the checks of the stream ([The upgrade request](../reference/
 
 A request carries the token in an `Authorization: Bearer <token>` header. A GET may carry it as the query parameter `token` instead. The WebSocket and a link opened in a browser use that form. A POST takes the header only, so a state-changing request never has the token in its address. The API compares the token in constant time with every token it holds. It refuses a missing, wrong or revoked token with 401 and `WWW-Authenticate: Bearer`. On the stream it answers 403, as the protocol says, and the viewer token does not open the stream.
 
-The API serves no files and cannot run code. The spec page is one page built into the executable. The commands of the command layer change specs, loaders and sources, which are data. A command that deletes or overwrites saved data, or runs a Python loader, waits for the person's approval in the app, and no endpoint approves or denies.
+The API serves no file that a request names. It serves the spec page, which is built into the executable, and the three fixed files of the views, and it cannot run code. The commands of the command layer change specs, loaders and sources, which are data. A command that deletes or overwrites saved data, or runs a Python loader, waits for the person's approval in the app, and no endpoint approves or denies.
 
 Only `POST /v0/commands/{name}` takes a body, and the API refuses any other request with a body with 413. Launch takes only an applet id in its path that the app's loader lists. A command request is built from its path, its body, the origin of its token and the headers `X-Caliper-Group` and `X-Caliper-Preview`. No other header value reaches the command layer or its journal, and the API never logs a token. Every response carries `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`, and the connection closes after it.
 
-**The viewer token.** A request with the viewer token may only `GET /v0/spec` and `POST /v0/commands/{name}` for the three commands the page reads with: `spec.get`, `applet.list` and `panel.data`. The API refuses everything else with 403, including the stream. Its commands run from the origin `viewer`, and the API refuses an `X-Caliper-Origin` other than `viewer` with 400. The command layer runs only commands that change nothing from that origin, and it refuses any other with `command.not_allowed`.
+**The viewer token.** A request with the viewer token may only `GET /v0/spec`, `GET` the three files of the views, and `POST /v0/commands/{name}` for the three commands the page reads with: `spec.get`, `applet.list` and `panel.data`. The API refuses everything else with 403, including the stream. Its commands run from the origin `viewer`, and the API refuses an `X-Caliper-Origin` other than `viewer` with 400. The command layer runs only commands that change nothing from that origin, and it refuses any other with `command.not_allowed`.
 
 ### Command Origin
 
@@ -257,20 +258,44 @@ An id is 1 to 128 characters of `A-Z`, `a-z`, `0-9`, `.`, `_`, `:` and `-`. The 
 
 ### `GET /v0/spec`
 
-The browser viewer of spec applets. It is one HTML page that draws a saved spec applet of the open workspace with the layout and the look of the app's spec page. It takes the token and the applet's workspace id from its address, `/v0/spec?token=<token>&applet=<id>`. Without `applet`, it lists the saved spec applets as links. The page answers with a `Content-Security-Policy` that lets it reach only its own origin, and with `Referrer-Policy: no-referrer`, so the token in its address never goes elsewhere.
+The browser viewer of spec applets. It is one HTML page that draws a saved spec applet of the open workspace with the layout and the look of the app's spec page. It takes the token and the applet's workspace id from its address, `/v0/spec?token=<token>&applet=<id>`. Without `applet`, it lists the saved spec applets as links. The page answers with a `Content-Security-Policy` that lets it reach only its own origin, and with `Referrer-Policy: no-referrer`, so the token in its address never goes elsewhere. The policy allows scripts from its own origin and WebAssembly compilation (`'self' 'unsafe-inline' 'wasm-unsafe-eval'`).
+
+The page shows a dashboard as the app does. It uses the layout rules of spec version 1. A layout leaf that names a control takes one control row of 30 px in a vertical split, and the other children share the rest. The split `shares` and the `min` of a leaf work as in the app. The page names each series line and the legend with the name that `panel.data` gives, and it colors the lines with the color key and the palette of the app, in the app's order. The web build generates the palette from the app's C++ constants in `web/src/render/palette.gen.ts`, thus no second list exists.
+
+A control is drawn with its state and the look of a disabled widget. The viewer origin may not run `control.set`, `state.set`, `cursor.*`, `intervene.*` or `run.*`, because they change the app's state or act on the run. A hover shows why: "The browser viewer only reads: use the app to change this control." or "No script is attached." A readout shows its text, and no control is hidden.
+
+The page draws the programs of a scene panel with the WebAssembly views of Caliper, one module instance for each scene panel. The module runs in a mode that the page feeds, with no stream, thus the viewer token still opens no stream. It checks each instance as it checks a relay of the stream: the hash of the pin over the files, the manifest, the imports and the compile of WebGPU (`program.browser_refused`). The app serves the three files of the module beside the page, with the session token or the viewer token in the query:
+
+- `GET /v0/spec/caliper-views-loader.js`
+- `GET /v0/spec/caliper-views.js`
+- `GET /v0/spec/caliper-views.wasm`
+
+The API serves only these three names, from one folder, and never a path from the request. Each file is at most 64 MiB. The folder is `CALIPER_WEB_DIR` when it is set. Otherwise it is `web/` in the Resources of the app bundle or beside the executable, or else `python/caliper/_web` of the source tree that holds the build folder, where `scripts/build_wasm.py` puts the files. Without the files, the routes answer 404, and the page shows "No program views" with the reason over each scene panel that holds programs.
+
+A click on the item of a program gives the fields of the item, as the pick event does (program, item, step, fields, index). The page applies the `select` option of the panel and the pick to its own copy of the state and the selection. As a result, a program whose params read that state or selection gets the new values, and the picked item is the linked selection of the programs of the panel. `state.set` and `selection.set` change the session of the app, which the viewer origin may not do. Thus the selection stays in the page and never reaches the app.
+
+Three parts are not in the browser. A live scene that a scene panel binds comes over the stream, which the viewer token does not open, and the panel shows "Live scene" and "<name> shows in the app". The tooltips and the zoom of plots are also not in the browser.
+
+The live data of a dashboard reaches the page only while the app has that dashboard open: its live sources, the values of its state and controls, and the resources of its programs. The viewer cannot open it, because the viewer origin runs no command that changes the app. When the app does not have the dashboard open, a banner under the bar says: "The app does not have this dashboard open. It shows data when the dashboard is open in the app." Each panel whose source is offline, and each scene panel with programs, shows "Dashboard not open in the app". While the dashboard is open, a source that is offline shows "Source offline".
 
 The page reads through three commands, from the origin `viewer`:
 
-- `spec.get` with `applet` gives the saved spec's canonical JSON, read from its files without opening it. The page asks again once a second.
+- `spec.get` with `applet` gives the saved spec's canonical JSON, read from its files without opening it, and `open_in_app`, which is true when the app has that applet open. The page asks again once a second.
 - `panel.data` with `applet` and `panel` gives that panel's data after its sources' transforms, as the app resolves it, within the limits below.
 - `applet.list` gives the list of applets.
 
-`panel.data` limits what it returns. A line of more than 8,192 points becomes a min/max envelope of 2,048 buckets. A grid or image is sampled to at most 2,048 on a side and 100,000 points. A histogram gives its bin counts, not its values. A table gives at most 1,000 rows, with each text cell cut at 256 characters. A text panel gives its one value.
+`panel.data` of a scene panel gives its programs, and `panel.data` with the id of a control of the layout gives the control. Both are described below. `panel.data` limits what it returns. A line of more than 8,192 points becomes a min/max envelope of 2,048 buckets. A grid or image is sampled to at most 2,048 on a side and 100,000 points. A histogram gives its bin counts, not its values. A table gives at most 1,000 rows, with each text cell cut at 256 characters. A text panel gives its one value.
+
+Each series line has a `name`, which is the name that the app draws the line under. A column has the name of its column, and a window or live source has the name of its source, with `[row]` for a row of a matrix. The series data has an `x_name`.
+
+A control answers `primitive: "control"` with `data` that holds `id`, `kind`, `title`, `bind`, `value`, `text`, `enabled` and `why`, and `min`, `max` and `choices` when the control has them. This is the state that the control shows in the app. A toggle of `intervene:<point>` is on while the run has an ablation of the point that has not ended, and its text is "ablate <point> · since step N".
+
+A scene panel also gives `programs`, one entry for each instance of a piece whose draw half targets the panel. An entry holds `id`, `title`, `piece` (`name`, `version`, `from`), `state`, `error`, `instance` and `params`, and `resources`. With the state `ready`, `instance` is the instance form of PROGRAM as the app sends it to a script: the pin with its hash, the manifest, `bind`, the params with their values of now, the panel, the segments, `common`, `derive` and `draw`. `resources` holds the newest kept version of each published resource at the cursor of the session, as `{resource, step, count, stride, width, height, base64}`. The page of a saved applet that is not the open spec gets no resources. A library, workspace or inline piece comes the same way, and the page never names a file. A program of a foreign spec whose hash nobody reviewed has the state `review` and the error `program.needs_review`, with no files, thus it stays in review in the browser. A missing piece, or a hash other than the pin's, gives the state `refused` with its code and no files. One answer holds at most 64 programs and 32 MiB of resources. The `version` of a scene panel changes with its programs and their newest resources, thus `known` still answers `unchanged` while nothing moves.
 
 Arrays of numbers travel as `{"dtype": "f32" | "f64", "shape", "base64"}`, the little-endian bytes in base64. Tables, cells and counts travel as JSON. With the `version` of an earlier answer as `known`, the answer is `unchanged` and carries no data until the panel's sources, the spec or the catalog change. Thus the page asks once a second for every panel, and the app resolves a panel only when its data moved.
 
 ```json
-{"id":"api-12","ok":true,"result":{"bounds":[],"data":{"lines":[{"binding":"metrics.loss","count":200,"last":0.12,"row":null,"x":{"base64":"...","dtype":"f64","shape":[200]},"y":{"base64":"...","dtype":"f64","shape":[200]}}],"steps":200,"x_index":false},"error":null,"panel":"curves","primitive":"series","state":null,"unchanged":false,"version":"3f2a9c0b5d17e640"}}
+{"id":"api-12","ok":true,"result":{"bounds":[],"data":{"lines":[{"binding":"metrics.loss","count":200,"name":"loss","last":0.12,"row":null,"x":{"base64":"...","dtype":"f64","shape":[200]},"y":{"base64":"...","dtype":"f64","shape":[200]}}],"steps":200,"x_index":false,"x_name":"step"},"error":null,"panel":"curves","primitive":"series","state":null,"unchanged":false,"version":"3f2a9c0b5d17e640"}}
 ```
 
 A panel whose data cannot be read answers with the resolver's `error`, such as `resolve.unavailable` for a live source that is not attached. A panel whose data does not fit, or holds nothing, answers with a `state`, `mismatch` or `empty`.
@@ -301,7 +326,7 @@ The API answers an error with a JSON object `{"error": "<what went wrong>"}`.
 |---|---|
 | 400 | An applet id or approval id is malformed. For a command: `X-Caliper-Origin` is not `viewer` with the viewer token, a header that the checks read is repeated, `Content-Length` is not a number, or the body is not JSON. |
 | 401 | The token is missing, wrong or revoked. |
-| 403 | The `Host` or `Origin` header is refused, or the viewer token asks for more than the spec page and its three commands. |
+| 403 | The `Host` or `Origin` header is refused, or the viewer token asks for more than the spec page, its three files and its three commands. |
 | 404 | No such endpoint or applet, or a command endpoint in an app with no command layer. |
 | 405 | The endpoint takes another method. `Allow` names it. |
 | 408 | A command's body did not arrive within 10 s of its head. |
