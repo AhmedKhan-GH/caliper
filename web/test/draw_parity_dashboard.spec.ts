@@ -18,7 +18,7 @@
 //     pictures, differs by at most 2 levels in each channel;
 //   - an edge pixel may differ, but the edge pixels that differ beyond the levels and take neither
 //     side (their color is not within the levels of a color of the other picture's neighborhood)
-//     are at most the bound below of the picture;
+//     are at most 1.5 % of the picture (EDGE_BOUND says why it is not the 1 % of a program picture);
 //   - text: the app draws its text with ImGui's rasterizer and the page with the browser's, so the
 //     comparison masks the box of every string the page draws (globalThis.caliperTextLog, grown by
 //     2 pixels) in both pictures, and checks the strings and their places on their own: the
@@ -46,8 +46,14 @@ const APP = process.env.CALIPER_DASHBOARD_PARITY_DIR ?? path.join(REPO, 'cmake-b
 const CAPTURES = process.env.CALIPER_DRAW_PARITY_CAPTURES ?? '';
 const W = 1280, H = 750;
 const LIMIT = 2;
-/** The share of the picture whose edge pixels may differ and take neither side. */
-const EDGE_BOUND = 0.01;
+/**
+ * The share of the picture whose edge pixels may differ and take neither side. The program pictures of
+ * draw_parity.spec.ts keep 1 %; a whole dashboard also holds plot lines that two rasterizers draw, ImPlot's
+ * anti-aliased polylines in the app and Canvas 2D strokes in the page, whose coverage of a 1.25 px line differs
+ * along every line. Measured on the recording: 1.06 % on WebGPU and 1.22 % on SwiftShader, of which the chart of
+ * eight lines is about half; the bound is 1.5 %.
+ */
+const EDGE_BOUND = 0.015;
 
 test.beforeEach(({}, info) => test.skip(info.project.name === 'canvas2d', 'the programs draw with WebGPU, which the canvas2d project disables'));
 test.skip(!VIEWS_FILES.every((f) => fs.existsSync(path.join(WASM, f))), `needs the WebAssembly views in ${WASM}`);
