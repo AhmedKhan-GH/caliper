@@ -396,7 +396,7 @@ The scene view reads the anchors of the version that the frame shows and project
 
 ## Camera
 
-The host owns the camera. A piece selects `orbit` for the 3-D orbit camera of the panel, `pan_zoom` for its 2-D camera, or `none`. The camera `none` gives identity matrices, for a piece that draws in clip space. The programs of one panel must agree. The first program of the panel sets the camera. `program.create` and `program.patch` refuse a program that selects another one with `program.camera_conflict`, and `spec.validate` names each later program of a spec that holds such a panel. The viewer also refuses the later program with the same code. The saved views of the panel and the commands `camera.get`, `camera.set` and `camera.save` work as they do for entities.
+The host owns the camera. A piece selects `orbit` for the 3-D orbit camera of the panel, `pan_zoom` for its 2-D camera, or `none`. The camera `none` gives identity matrices, for a piece that draws in clip space. The programs of one panel must agree. The first program of the panel sets the camera. `program.create` and `program.patch` refuse a program that selects another one with `program.camera_conflict`, and `spec.validate` names each later program of a spec that holds such a panel. The viewer also refuses the later program with the same code. The saved views of the panel and the commands `camera.get`, `camera.set` and `camera.save` work as they do for entities. A panel that holds programs alone frames their box, -1 to 1 on each axis, and opens at its `view_camera`: the angles of an orbit with the fit of the box at those angles, and its target and distance when it gives them.
 
 ## Draw Budget and Removal
 

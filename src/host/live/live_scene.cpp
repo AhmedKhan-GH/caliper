@@ -1826,8 +1826,33 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
         const bool stale = !fitted_ || !caliper_scene::aabb_contains(fitted_bounds_, bounds, 0.01) ||
                            std::fabs(aspect - fitted_aspect_) > 0.01 * fitted_aspect_;
         if (!moved_ && can && stale) {
-            if (box) caliper_scene::fit(camera_, bounds, aspect);
-            else apply_start(aspect);
+            if (box) {
+                // The starting camera over the box of the programs, as apply_start() gives it over the
+                // scene's bounds: an orbit's angles, the fit at them, then its target and distance.
+                const bool orbit_form = start_.form == StartingCamera::Form::Orbit;
+                if (std::holds_alternative<Orbit>(camera_)) {
+                    Orbit next;
+                    next.up = tree_.up();
+                    if (orbit_form && start_.azimuth_deg) next.azimuth = *start_.azimuth_deg * kPi / 180.0;
+                    if (orbit_form && start_.elevation_deg) next.elevation = *start_.elevation_deg * kPi / 180.0;
+                    ViewCamera v = next;
+                    caliper_scene::fit(v, bounds, aspect);
+                    Orbit& f = std::get<Orbit>(v);
+                    if (orbit_form && start_.target) {
+                        f.target[0] = start_.target->x;
+                        f.target[1] = start_.target->y;
+                        f.target[2] = start_.target->z;
+                    }
+                    if (orbit_form && start_.distance) f.distance = *start_.distance;
+                    // A mode the person chose stays, as in apply_start().
+                    if (up_chosen_ && f.up != up_mode_) caliper_scene::switch_up(f, up_mode_);
+                    camera_ = v;
+                } else {
+                    caliper_scene::fit(camera_, bounds, aspect);
+                }
+            } else {
+                apply_start(aspect);
+            }
             fitted_ = true;
             fitted_bounds_ = bounds;
             fitted_aspect_ = aspect;

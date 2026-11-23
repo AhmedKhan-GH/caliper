@@ -576,6 +576,49 @@ TEST_CASE("gfx/Metal pieces: the scene view draws its programs after its scene, 
     rig.view->set_draw_feed(nullptr);
 }
 
+TEST_CASE("gfx/Metal pieces: a scene view of programs alone opens at its starting camera over the fit of their box") {
+    namespace sc = caliper_scene;
+    ViewRig rig;
+    if (!rig.init()) CALIPER_SKIP_NO_GPU("no Metal device");
+    FixedFeed feed;
+    feed.add(ex::attention_arcs(), "tower_arcs", 1u << 24);
+    rig.view->set_draw_feed(&feed);
+    rig.frame();
+    // No starting camera: the fit of the box at the default angles.
+    const sc::Orbit* o = std::get_if<sc::Orbit>(&rig.view->camera());
+    REQUIRE(o);
+    CHECK(o->azimuth == doctest::Approx(sc::kDefaultAzimuth));
+    CHECK(o->elevation == doctest::Approx(sc::kDefaultElevation));
+    const double fit_distance = o->distance;
+    CHECK(fit_distance > 0.0);
+    // The angles of view_camera alone: the fit of the box at those angles.
+    sc::StartingCamera angles;
+    angles.form = sc::StartingCamera::Form::Orbit;
+    angles.azimuth_deg = 40.0;
+    angles.elevation_deg = 25.0;
+    rig.view->set_starting(angles);
+    rig.frame();
+    o = std::get_if<sc::Orbit>(&rig.view->camera());
+    REQUIRE(o);
+    CHECK(o->azimuth == doctest::Approx(40.0 * sc::kPi / 180.0));
+    CHECK(o->elevation == doctest::Approx(25.0 * sc::kPi / 180.0));
+    CHECK(o->distance == doctest::Approx(fit_distance));
+    // A whole orbit: its target and distance as given.
+    sc::StartingCamera whole = angles;
+    whole.target = sc::Vec3{0.5, 1.0, -0.5};
+    whole.distance = 7.0;
+    rig.view->set_starting(whole);
+    rig.frame();
+    o = std::get_if<sc::Orbit>(&rig.view->camera());
+    REQUIRE(o);
+    CHECK(o->target[0] == 0.5);
+    CHECK(o->target[1] == 1.0);
+    CHECK(o->target[2] == -0.5);
+    CHECK(o->distance == 7.0);
+    CHECK(o->azimuth == doctest::Approx(40.0 * sc::kPi / 180.0));
+    rig.view->set_draw_feed(nullptr);
+}
+
 TEST_CASE("gfx/Metal pieces: the scene view stops a program over its time and the other program draws on") {
     ViewRig rig;
     if (!rig.init()) CALIPER_SKIP_NO_GPU("no Metal device");
