@@ -145,7 +145,8 @@ def test_the_sidecar_refuses_a_bad_choice():
 def test_a_preset_reaches_initialize_with_its_warnings(caliper):
     server = FakeOpenAI([{"text": "Hello."}])
     agent = AgentProcess(script=None, api_file=caliper.api_file, key=None,
-                         extra_args=["--preset", "ollama", "--base-url", server.base_url, "--model", "fake-model"])
+                         extra_args=["--preset", "ollama", "--base-url", server.base_url, "--model", "fake-model",
+                                     "--tools", "catalog.list"])
     try:
         response, _ = agent.request("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
         provider = response["result"]["_meta"]["caliper"]["provider"]
