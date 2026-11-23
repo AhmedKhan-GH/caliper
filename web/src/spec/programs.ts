@@ -25,7 +25,7 @@ import type { Rect } from './layout.js';
 import type { Spec, SpecPanel } from './types.js';
 
 export interface ViewerResource {
-  resource: string; step: number; count: number; stride: number; width: number; height: number; base64: string;
+  resource: string; version?: string; format?: string; elements?: number | null; step: number; count: number; stride: number; width: number; height: number; base64: string;
 }
 export interface ViewerProgram {
   id: string;
@@ -59,7 +59,8 @@ export interface ProgramPick { program: string; item: number; step: number; fiel
 /** A reference in a program's params (spec version 1): state, selection or control. */
 type Ref = { state?: string; selection?: string; control?: string; field?: string; entity?: string; default?: unknown };
 
-const MAX_RESOURCE_B64 = 48 << 20;
+// One resource holds at most 128 MiB before base64 encoding.
+const MAX_RESOURCE_B64 = 180 << 20;
 
 function bytesOf(b64: string): Uint8Array | null {
   if (b64.length > MAX_RESOURCE_B64) return null;
@@ -211,7 +212,7 @@ export class ProgramViews {
         if (h.feedProgram({ op: 'params', id: p.id, params })) m.params.set(p.id, JSON.stringify(params));
       }
       for (const r of p.resources) {
-        const key = `${p.id}/${r.resource}`, v = `${r.step} ${r.base64.length} ${r.base64.slice(-16)}`;
+        const key = `${p.id}/${r.resource}`, v = r.version ?? `${r.step} ${r.base64}`;
         if (m.versions.get(key) === v) continue;
         const bytes = bytesOf(r.base64);
         if (!bytes || bytes.length !== r.count * r.stride) continue;

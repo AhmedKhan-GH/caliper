@@ -113,6 +113,67 @@ TEST_CASE("a scene panel's library piece goes to the viewer in its instance form
     CHECK(d1 != d0);
 }
 
+TEST_CASE("viewer resource versions preserve typed metadata and replacements at the same step") {
+    const FoundPiece found = find_piece(PieceLibrary::builtin(), "", sp::Spec{}, sp::PieceFrom::library, "points", 1);
+    REQUIRE_FALSE(found.error);
+    sp::Piece piece = found.piece;
+    piece.name = "typed_points";
+    sp::Resource narrow;
+    narrow.id = "narrow";
+    narrow.kind = sp::ResourceKind::buffer;
+    narrow.layout.element = "u16";
+    narrow.count = 8;
+    piece.resources.push_back(narrow);
+    sp::Resource texture;
+    texture.id = "texture";
+    texture.kind = sp::ResourceKind::texture;
+    texture.format = "r32float";
+    texture.width = 2;
+    texture.height = 2;
+    piece.resources.push_back(texture);
+    piece.hash.clear();
+    piece.hash = programs::piece_hash(piece);
+    sp::Spec spec = points_spec(piece.hash);
+    spec.pieces.push_back(piece);
+    spec.programs[0].piece = sp::PieceRef{piece.name, 1, piece.hash, sp::PieceFrom::inline_piece};
+    StepHistory history;
+    history.configure(spec);
+    ResourceVersion n;
+    n.step = 9;
+    n.count = 2;
+    n.stride = 4;
+    n.elements = 3;
+    n.bytes = std::make_shared<const std::vector<std::uint8_t>>(8, 1);
+    history.append_resource("dots", "narrow", 0, {}, n);
+    ResourceVersion image;
+    image.step = 9;
+    image.count = 4;
+    image.stride = 4;
+    image.width = image.height = 2;
+    image.format = "r32float";
+    image.bytes = std::make_shared<const std::vector<std::uint8_t>>(16, 0);
+    history.append_resource("dots", "texture", 0, {}, image);
+    ViewerInputs in;
+    in.library = &PieceLibrary::builtin();
+    in.history = &history;
+    std::string first_digest;
+    json out = viewer_programs(spec, "world", in, &first_digest);
+    REQUIRE(out[0]["resources"].size() == 2);
+    CHECK(out[0]["resources"][0]["elements"] == 3);
+    CHECK(out[0]["resources"][1]["format"] == "r32float");
+    CHECK(out[0]["resources"][1]["width"] == 2);
+    CHECK(out[0]["resources"][1]["height"] == 2);
+    const auto first_version = out[0]["resources"][1]["version"];
+    auto changed = std::make_shared<std::vector<std::uint8_t>>(16, 0);
+    (*changed)[0] = 1; // The unchanged tail cannot identify this replacement.
+    image.bytes = changed;
+    history.append_resource("dots", "texture", 0, {}, image);
+    std::string next_digest;
+    out = viewer_programs(spec, "world", in, &next_digest);
+    CHECK(out[0]["resources"][1]["version"] != first_version);
+    CHECK(next_digest != first_digest);
+}
+
 TEST_CASE("a foreign spec's program stays in review for the viewer, and a wrong pin is refused, without files") {
     const std::string hash = library_hash();
     ViewerInputs in;

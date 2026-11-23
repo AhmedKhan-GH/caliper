@@ -220,10 +220,13 @@ json viewer_programs(const spec::Spec& spec, const std::string& panel_id, const 
                 bytes += v->nbytes();
                 item["resources"].push_back({{"resource", r.id},
                                              {"step", v->step},
+                                             {"version", std::to_string(v->serial)},
                                              {"count", v->count},
                                              {"stride", v->stride},
                                              {"width", v->width},
                                              {"height", v->height},
+                                             {"format", v->format},
+                                             {"elements", v->elements ? json(*v->elements) : json(nullptr)},
                                              {"base64", base64(v->bytes->data(), v->bytes->size())}});
                 mix(&h, r.id + " " + std::to_string(v->step) + " " + std::to_string(v->serial));
             }

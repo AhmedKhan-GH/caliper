@@ -1302,10 +1302,11 @@ EMSCRIPTEN_KEEPALIVE int caliper_views_feed_program(const char* json) {
 // within its declared count and bytes (web_programs.h).
 EMSCRIPTEN_KEEPALIVE int caliper_views_feed_resource(const char* program, const char* resource, double step,
                                                     uint32_t count, uint32_t stride, uint32_t width, uint32_t height,
-                                                    const uint8_t* bytes, uint32_t n) {
+                                                    const uint8_t* bytes, uint32_t n, const char* format, double elements) {
     if (!g.cfg.page_feed || !g.programs || !program || !resource || (!bytes && n)) return 0;
     if (!(step >= 0.0) || step > 9.007199254740992e15) return 0;
-    if ((uint64_t)count * stride != n) return 0;
+    if ((uint64_t)count * stride != n || n > (128u << 20)) return 0;
+    if (elements != -1.0 && (!(elements >= 0.0) || elements > UINT32_MAX || elements != std::floor(elements))) return 0;
     caliper_net::wire::Resource r;
     r.program = program;
     r.resource = resource;
@@ -1316,6 +1317,8 @@ EMSCRIPTEN_KEEPALIVE int caliper_views_feed_resource(const char* program, const 
         r.width = width;
         r.height = height;
     }
+    if (format && *format) r.format = format;
+    if (elements >= 0.0) r.elements = uint32_t(elements);
     r.data.name = "resource";
     r.data.dtype = CALIPER_NET_DTYPE_U8;
     r.data.shape = {(int64_t)n};

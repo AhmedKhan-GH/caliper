@@ -180,20 +180,27 @@ export async function mountCaliperViews(container, options = {}) {
     // Uint8Array of count * stride bytes).
     feedResource(r, bytes) {
       if (destroyed || feed !== 'page' || !(bytes instanceof Uint8Array)) return false;
+      const uint32 = (n) => Number.isInteger(n) && n >= 0 && n <= 0xffffffff;
+      if (!uint32(r.count) || !uint32(r.stride) || !uint32(r.width || 0) || !uint32(r.height || 0) ||
+          !Number.isSafeInteger(r.step) || r.step < 0 || r.count * r.stride !== bytes.length ||
+          (r.elements != null && !uint32(r.elements))) return false;
       const prog = module.stringToNewUTF8(String(r.program));
       const res = module.stringToNewUTF8(String(r.resource));
+      const format = module.stringToNewUTF8(r.format || '');
       const at = bytes.length ? module._malloc(bytes.length) : 0;
       if (bytes.length && !at) {
         module._free(prog);
         module._free(res);
+        module._free(format);
         return false;
       }
       if (bytes.length) module.HEAPU8.set(bytes, at);
       const ok = module._caliper_views_feed_resource(prog, res, Number(r.step) || 0, r.count >>> 0, r.stride >>> 0,
-        (r.width || 0) >>> 0, (r.height || 0) >>> 0, at, bytes.length >>> 0) === 1;
+        (r.width || 0) >>> 0, (r.height || 0) >>> 0, at, bytes.length >>> 0, format, r.elements ?? -1) === 1;
       if (at) module._free(at);
       module._free(prog);
       module._free(res);
+      module._free(format);
       return ok;
     },
     // feed 'page': the linked selection that every program reads, from the
