@@ -204,11 +204,11 @@ features:
 
   - id: INT-23
     title: Head Ablation Demo
-    status: built
+    status: shipped
     scope: peripheral
     summary: A demo ablates the strongest induction head of a transformer that trains, live and with a toggle, and the loss rises while the head is out, in the Attention Arc Tower.
     depends_on: [INT-11, REN-83]
-    branches: [playground]
+    docs: docs/agents/pieces.md#attention-arc-tower
     issue: null
 
   - id: INT-24
