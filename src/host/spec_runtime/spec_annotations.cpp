@@ -22,6 +22,7 @@
 // that the text panel and the readout can share them once spec_annotations.h
 // declares them.
 #include "spec_runtime/spec_annotations.h"
+#include "ui/sternbild_theme.h"
 
 #include "spec_runtime/label_layout.h"
 
@@ -141,7 +142,7 @@ namespace {
 // ---- Annotations of a series panel --------------------------------------
 
 struct Ink {
-    ImU32 mark = 0, fill = 0, edge = 0, text = 0, shade = IM_COL32(0, 0, 0, 170);
+    ImU32 mark = 0, fill = 0, edge = 0, text = 0, shade = sternbild::col::shade(170);
 };
 
 Ink ink_of(const spec::Annotation& a) {
@@ -150,8 +151,8 @@ Ink ink_of(const spec::Annotation& a) {
     const ImU32 base = muted ? look.secondary : look.accent;
     Ink k;
     k.mark = base;
-    k.fill = (base & 0x00FFFFFFu) | (IM_COL32_A_MASK & IM_COL32(0, 0, 0, 30));
-    k.edge = (base & 0x00FFFFFFu) | (IM_COL32_A_MASK & IM_COL32(0, 0, 0, 150));
+    k.fill = sternbild::with_alpha(base, 30);
+    k.edge = sternbild::with_alpha(base, 150);
     k.text = muted ? look.secondary : look.text;
     return k;
 }
