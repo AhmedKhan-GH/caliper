@@ -14,9 +14,9 @@ import {
   INTERVENTION_STATES, MAX_INTERVENTIONS, MAX_POINTS_LISTED, MAX_PROGRAMS, OUTPUT_GEOMETRY, OUTPUT_PIXELS, OUTPUT_TENSOR, POINT_MAX, PROGRAM_ARRAYS,
   PROGRAM_EVERY_MAX, PROGRAM_ID_MAX, PROGRAM_MAX_COUNT, PROGRAM_MAX_INPUTS, PROGRAM_MEMORY_MB_MAX, PROGRAM_BUILTIN_MAX, PROGRAM_PARAM_NAME_MAX, PROGRAM_PARAMS, PROGRAM_PARAMS_MAX, PROGRAM_REMOVE, PROGRAM_SET, STATUS_OPERATOR, TENSOR_AXES_MAX, TENSOR_ELEMENTS_MAX,
   PROGRAM_SIDE_MAX, PROGRAM_SOURCE_MAX, PROGRAM_STATES, PROGRAM_TIME_MS_MAX, PROGRAM_WORKGROUPS_MAX, SECTION_WGSL, TENSOR_NAME_MAX,
-  PIECE_COMMON_MAX, PIECE_NAME_MAX, PIECE_SEGMENTS_MAX, PIECE_VERSION_MAX, RESOURCE_MAX_BYTES, RESOURCE_SIDE_MAX, RESOURCE_STRIDE_MAX,
+  PIECE_COMMON_MAX, PIECE_NAME_MAX, PIECE_SEGMENTS_MAX, PIECE_VERSION_MAX, RESOURCE_MAX_BYTES, RESOURCE_PART_WAIT, RESOURCE_SIDE_MAX, RESOURCE_STRIDE_MAX, RESOURCE_VERSION_MAX_BYTES,
   SECTION_COMMON, SECTION_DERIVE, SECTION_DRAW, SECTION_RESOURCE, STATUS_PIECE,
-  type InterveneRequest, type InterventionsInfo, type ProgramDeclaration, type ProgramMsg, type ResourceMsg, type ProgramStateMsg, type ProgramStatus,
+  type InterveneRequest, type InterventionsInfo, type ProgramDeclaration, type ProgramMsg, type ResourceMsg, type ResourceSplit, type ProgramStateMsg, type ProgramStatus,
 } from './messages.js';
 
 export const MAGIC = 0x574c4143; // "CALW" read as a little-endian uint32
@@ -1905,19 +1905,119 @@ export function decodeResource(f: Frame): ResourceMsg {
   const height = opt<number | undefined>(f, 'height', side, `an integer from 1 to ${RESOURCE_SIDE_MAX}`, undefined);
   if ((width === undefined) !== (height === undefined)) bad(f.type, "a texture holds both 'width' and 'height'");
   if (width !== undefined && (stride !== 4 || count !== width * height!)) bad(f.type, 'a texture has a stride of 4 and width * height elements');
-  // Bound count before any product of two network values: count * stride is then at most RESOURCE_MAX_BYTES.
-  if (count > Math.floor(RESOURCE_MAX_BYTES / stride)) bad(f.type, `a resource holds at most ${RESOURCE_MAX_BYTES} bytes`);
+  const raw = opt<Raw | undefined>(f, 'split', isObj, 'an object', undefined);
+  let split: ResourceSplit | undefined;
+  if (raw !== undefined) {
+    const need = <T>(key: string, ok: (v: unknown) => boolean, what: string): T => {
+      const v = raw[key];
+      if (v === undefined || v === null || !ok(v)) bad(f.type, `'split.${key}' must be ${what}, got ${JSON.stringify(v)}`);
+      return v as T;
+    };
+    const version = need<number>('version', isSafeUint, 'an unsigned integer');
+    const parts = need<number>('parts', intIn(2, MAX_PIECES), `an integer from 2 to ${MAX_PIECES}`);
+    const part = need<number>('part', intIn(0, parts - 1), "a part number below 'parts'");
+    const first = need<number>('first', isU32, 'a uint32');
+    split = { version, part, parts, first };
+  }
+  // Bound count before any product of two network values: count * stride is then at most the limit.
+  const limit = split ? RESOURCE_VERSION_MAX_BYTES : RESOURCE_MAX_BYTES;
+  if (count > Math.floor(limit / stride)) bad(f.type, `${split ? 'a resource in parts' : 'a resource'} holds at most ${limit} bytes`);
   const s = section(f, SECTION_RESOURCE);
   if (s === undefined || s.encoding !== 0 || s.dtype !== DTYPE.u8 || s.shape.length !== 1) bad(f.type, "a resource needs a (B,) u8 'resource' section");
-  if (s.shape[0] !== count * stride) bad(f.type, `'resource' holds count * stride = ${count * stride} bytes, got ${s.shape[0]}`);
+  if (split) {
+    const b = s.shape[0];
+    if (split.part === 0 && split.first !== 0) bad(f.type, 'part 0 of a resource starts at element 0');
+    if (split.first >= count) bad(f.type, "'split.first' must lie below the count");
+    if (b <= 0 || b % stride !== 0 || b / stride > count - split.first) bad(f.type, "a part of a resource holds whole elements from 'split.first' up to the count");
+  } else if (s.shape[0] !== count * stride) {
+    bad(f.type, `'resource' holds count * stride = ${count * stride} bytes, got ${s.shape[0]}`);
+  }
   const m: ResourceMsg = { type: 'resource', program, resource, step, count, stride, data: s.bytes };
   if (width !== undefined) m.width = width;
   if (height !== undefined) m.height = height;
+  if (split) m.split = split;
   return m;
 }
 
+/**
+ * A receiver's versions in parts of one connection. `add` takes every RESOURCE of the connection in order and returns the
+ * whole version, else null. A version in one frame comes back at once. Part 0 allocates the version's count * stride bytes,
+ * which the decoder bounded by RESOURCE_VERSION_MAX_BYTES, and each part copies its elements in; the last part returns the
+ * whole. A part whose version is not held is dropped and counted. A part out of order, one whose keys differ from part 0, or a
+ * last part that does not end at the count throws MessageError (bad_request) and discards the version. Part 0 of a newer
+ * version, or a version in one frame, of the same resource discards an incomplete one; at most MAX_INCOMPLETE_UPDATES are
+ * held, the oldest going first; and one whose next part has not come after RESOURCE_PART_WAIT further RESOURCE frames expires.
+ */
+export class SplitResources {
+  /** "program/resource" -> the version being put together, oldest first. */
+  readonly open = new Map<string, { head: ResourceMsg; nextPart: number; nextFirst: number; last: number; bytes: Uint8Array }>();
+  frames = 0;
+  dropped = 0;
+  discarded = 0;
+  expired = 0;
+
+  add(r: ResourceMsg): ResourceMsg | null {
+    this.frames++;
+    for (const [k, a] of [...this.open]) {
+      if (this.frames - a.last > RESOURCE_PART_WAIT) {
+        this.open.delete(k);
+        this.expired++;
+      }
+    }
+    const key = `${r.program}/${r.resource}`;
+    const sp = r.split;
+    if ((!sp || sp.part === 0) && this.open.delete(key)) this.discarded++;
+    if (!sp) return r;
+    const n = r.data.length / r.stride;
+    if (sp.part === 0) {
+      while (this.open.size >= MAX_INCOMPLETE_UPDATES) {
+        this.open.delete(this.open.keys().next().value as string);
+        this.discarded++;
+      }
+      const bytes = new Uint8Array(r.count * r.stride);
+      bytes.set(r.data, 0);
+      this.open.set(key, { head: r, nextPart: 1, nextFirst: n, last: this.frames, bytes });
+      return null;
+    }
+    const a = this.open.get(key);
+    if (a === undefined || a.head.split!.version !== sp.version) {
+      this.dropped++;
+      return null;
+    }
+    const h = a.head;
+    const refuse = (why: string): never => {
+      this.open.delete(key);
+      this.discarded++;
+      throw new MessageError('bad_request', why, MSG.resource);
+    };
+    const name = `'${key}'`;
+    if (r.step !== h.step || r.count !== h.count || r.stride !== h.stride || r.width !== h.width || r.height !== h.height || sp.parts !== h.split!.parts) {
+      refuse(`a part of the resource ${name} differs from its part 0`);
+    }
+    if (sp.part !== a.nextPart || sp.first !== a.nextFirst) refuse(`a part of the resource ${name} comes out of order`);
+    const end = a.nextFirst + n;
+    const last = sp.part + 1 === sp.parts;
+    if (last !== (end === h.count)) {
+      refuse(last ? `the parts of the resource ${name} end before its count` : `a part of the resource ${name} before the last reaches its count`);
+    }
+    a.bytes.set(r.data, a.nextFirst * h.stride);
+    a.nextPart++;
+    a.nextFirst = end;
+    a.last = this.frames;
+    if (!last) return null;
+    this.open.delete(key);
+    const whole: ResourceMsg = { type: 'resource', program: h.program, resource: h.resource, step: h.step, count: h.count, stride: h.stride, data: a.bytes };
+    if (h.width !== undefined) whole.width = h.width;
+    if (h.height !== undefined) whole.height = h.height;
+    return whole;
+  }
+}
+
 export function encodeResource(m: ResourceMsg, minor: number = PROTOCOL_MINOR): Uint8Array {
-  const meta = drop({ program: m.program, resource: m.resource, step: m.step, count: m.count, stride: m.stride, width: m.width, height: m.height });
+  const meta = drop({
+    program: m.program, resource: m.resource, step: m.step, count: m.count, stride: m.stride, width: m.width, height: m.height,
+    split: m.split ? { version: m.split.version, part: m.split.part, parts: m.split.parts, first: m.split.first } : undefined,
+  });
   return frameAt(MSG.resource, meta, [{ name: SECTION_RESOURCE, dtype: DTYPE.u8, shape: [m.data.length], encoding: 0, bytes: m.data }], minor);
 }
 

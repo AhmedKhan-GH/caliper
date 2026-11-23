@@ -744,6 +744,10 @@ export const SECTION_RESOURCE = 'resource';
 export const MAX_RESOURCES = 8;
 /** Bytes of the section "resource": 64 MiB less 64 KiB, so that a resource fits one frame with its metadata. */
 export const RESOURCE_MAX_BYTES = 67043328;
+/** Bytes of a whole version of a resource in parts: 128 MiB, the largest storage binding of WebGPU's default limits. */
+export const RESOURCE_VERSION_MAX_BYTES = 134217728;
+/** RESOURCE frames a receiver waits for the next part of a version in parts before it drops the version. */
+export const RESOURCE_PART_WAIT = 256;
 /** Most bytes of one element of a resource, the "stride" (a multiple of 4). */
 export const RESOURCE_STRIDE_MAX = 256;
 /** Most texels of the "width" and of the "height" of a texture resource. */
@@ -846,6 +850,16 @@ export interface ResourceMsg {
   width?: number;
   /** A texture's height in texels. */
   height?: number;
+  /** A part of a version in parts: the sender's counter of such versions, this part's number from 0, the number of parts (2 to MAX_PIECES), and the first element that `data` holds. */
+  split?: ResourceSplit;
+}
+
+/** The key "split" of a RESOURCE part. */
+export interface ResourceSplit {
+  version: number;
+  part: number;
+  parts: number;
+  first: number;
 }
 
 /** Producer to viewer: the status items of the programs in order of installation. It answers each PROGRAM with its request_id and goes out without one after a state change. */

@@ -72,7 +72,9 @@ public:
     // RESOURCE: the newest version of a resource of a program, copied, when
     // the program's piece publishes that resource and the version holds at
     // most its declared count and bytes (program_frames.h, keeps_version).
-    // Thus the page keeps at most the published bytes of 16 pieces.
+    // Thus the page keeps at most the published bytes of 16 pieces. The parts of
+    // a version in parts are put together first (caliper_net::wire::SplitResources),
+    // which holds at most two incomplete versions.
     void on_resource(const caliper_net::wire::Resource& r);
     // Once a frame: takes the browser checks that finished, and refuses a
     // program whose module or pipeline WebGPU refused since the last call
@@ -91,7 +93,7 @@ public:
 
     struct Program;
     struct Version {
-        std::vector<std::uint8_t> bytes;
+        std::shared_ptr<const std::vector<std::uint8_t>> bytes;   // never null once received
         std::int64_t step = -1;
         std::uint32_t count = 0;
     };
@@ -101,6 +103,7 @@ private:
     WGPUDevice device_ = nullptr;
     std::map<std::string, std::unique_ptr<Program>> programs_;
     std::map<std::string, std::unique_ptr<PanelFeed>> feeds_;
+    caliper_net::wire::SplitResources parts_;   // versions in parts being put together
     std::uint64_t revision_ = 1;
     std::uint32_t next_pick_ = 1u << 24;   // above the entities' ids, as the app's draw host gives them
     std::size_t errors_seen_ = 0;

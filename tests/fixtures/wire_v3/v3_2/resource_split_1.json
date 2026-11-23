@@ -1,0 +1,87 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 248,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 182,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 130
+  },
+  "meta": {
+    "count": 10,
+    "program": "lines",
+    "resource": "segments",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "resource",
+        "shape": [
+          32
+        ]
+      }
+    ],
+    "split": {
+      "first": 4,
+      "part": 1,
+      "parts": 3,
+      "version": 5
+    },
+    "step": 1300,
+    "stride": 8
+  },
+  "meta_offset": 28,
+  "name": "v3_2/resource_split_1",
+  "section_lengths": [
+    32
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 32,
+      "name": "resource",
+      "offset": 216,
+      "shape": [
+        32
+      ],
+      "values": [
+        0,
+        0,
+        128,
+        64,
+        0,
+        0,
+        128,
+        192,
+        0,
+        0,
+        160,
+        64,
+        0,
+        0,
+        160,
+        192,
+        0,
+        0,
+        192,
+        64,
+        0,
+        0,
+        192,
+        192,
+        0,
+        0,
+        224,
+        64,
+        0,
+        0,
+        224,
+        192
+      ]
+    }
+  ],
+  "type_name": "resource"
+}

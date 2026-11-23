@@ -496,7 +496,14 @@ struct Resource {                    // producer to viewer or hub, hub to viewer
     uint32_t count = 0;              // valid elements
     uint32_t stride = 0;             // bytes of one element: a multiple of 4 from 4 to CALIPER_NET_RESOURCE_STRIDE_MAX
     std::optional<uint32_t> width, height;   // a texture: count == width * height and stride 4
-    Section data;                    // "resource": u8 (count * stride,), inside the frame on decode
+    // A part of a version in parts: the sender's counter of such versions, this part's number from 0, the
+    // number of parts (2 to CALIPER_NET_MAX_PIECES) and the first element that `data` holds.
+    struct Split {
+        uint64_t version = 0;
+        uint32_t part = 0, parts = 0, first = 0;
+    };
+    std::optional<Split> split;
+    Section data;                    // "resource": u8 (count * stride,), or a part's elements; inside the frame on decode
 };
 // Stamp text: decimal digits with an optional leading minus, at most 20 characters, a signed 64-bit value.
 bool stamp_text_ok(const std::string& v);
@@ -539,6 +546,46 @@ private:
     };
     std::vector<Assembly> open_;     // oldest first
     uint64_t dropped_ = 0, discarded_ = 0;
+};
+
+// A whole version put together from the parts of a version in parts; its data points into `keep`.
+struct WholeResource {
+    Resource resource;
+    std::shared_ptr<const std::vector<uint8_t>> keep;
+};
+// A receiver's versions in parts of one connection (_wire.py's SplitResources). add() takes every RESOURCE
+// of the connection in order. A version in one frame is Whole at once, with its data in the frame. Part 0
+// allocates the version's count * stride bytes (at most CALIPER_NET_RESOURCE_VERSION_MAX_BYTES, which the
+// decoder checked) and each part copies its elements in; the last part makes it Whole. A part whose
+// version is not held is dropped and counted. A part out of order, or one whose keys differ from part 0,
+// or a last part that does not end at the count, is Refused and discards its version. Part 0 of a newer
+// version, or a version in one frame, of the same resource discards an incomplete one; at most
+// CALIPER_NET_MAX_INCOMPLETE_UPDATES are held (the oldest goes first); and one whose next part has not come
+// after CALIPER_NET_RESOURCE_PART_WAIT further RESOURCE frames is dropped (expired). With `copy` false the
+// receiver keeps no bytes and checks the order alone, as the hub does, which keeps the frames themselves.
+class SplitResources {
+public:
+    enum class Result { Pending, Whole, Dropped, Refused };
+    explicit SplitResources(bool copy = true) : copy_(copy) {}
+    Result add(const Resource& part, WholeResource* out, std::string* err);
+    size_t held() const { return open_.size(); }
+    bool holds(const std::string& program, const std::string& resource) const;
+    uint64_t held_bytes() const;
+    uint64_t dropped() const { return dropped_; }
+    uint64_t discarded() const { return discarded_; }
+    uint64_t expired() const { return expired_; }
+
+private:
+    struct Assembly {
+        Resource head;               // part 0's keys, without data
+        uint32_t next_part = 1;
+        uint64_t next_first = 0;
+        uint64_t last_frame = 0;     // frames_ at its last part
+        std::shared_ptr<std::vector<uint8_t>> bytes;
+    };
+    bool copy_;
+    std::vector<Assembly> open_;     // oldest first
+    uint64_t frames_ = 0, dropped_ = 0, discarded_ = 0, expired_ = 0;
 };
 
 // The key "scene" of a VIEWS entry. view_camera: null when absent, unreadable or in a 2-D scene; else the

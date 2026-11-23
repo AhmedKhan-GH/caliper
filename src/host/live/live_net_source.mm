@@ -436,8 +436,19 @@ public:
     static constexpr size_t kMaxWaitingResources = size_t(CALIPER_NET_MAX_PROGRAMS) * CALIPER_NET_MAX_RESOURCES;
 
     // A RESOURCE (network thread): its valid bytes are copied out of the frame, and the newest
-    // version of each resource waits for the frame thread, in the place of an older one.
-    void on_resource(const wire::Resource& r) {
+    // version of each resource waits for the frame thread, in the place of an older one. The parts
+    // of a version in parts are put together first (wire::SplitResources), so that only a whole
+    // version waits; a part that is dropped or refused is counted, and nothing of it is shown.
+    void on_resource(const wire::Resource& part) {
+        wire::WholeResource whole;
+        std::string err;
+        const wire::SplitResources::Result got = resource_parts_.add(part, &whole, &err);
+        if (got != wire::SplitResources::Result::Whole) {
+            if (got == wire::SplitResources::Result::Dropped || got == wire::SplitResources::Result::Refused)
+                resource_parts_refused_.fetch_add(1);
+            return;
+        }
+        const wire::Resource& r = whole.resource;
         ReceivedResource out;
         out.program = r.program;
         out.resource = r.resource;
@@ -446,7 +457,8 @@ public:
         out.stride = r.stride;
         out.width = r.width.value_or(0);
         out.height = r.height.value_or(0);
-        out.bytes = std::make_shared<const std::vector<uint8_t>>(r.data.data, r.data.data + r.data.size);
+        out.bytes = whole.keep ? whole.keep
+                               : std::make_shared<const std::vector<uint8_t>>(r.data.data, r.data.data + r.data.size);
         const std::string key = r.program + "/" + r.resource;
         std::lock_guard<std::mutex> g(mu_);
         auto it = resources_.find(key);
@@ -1011,6 +1023,7 @@ private:
         server_selection_ = has_cap(w.capabilities, CALIPER_NET_CAP_SELECTION);
         server_programs_ = has_cap(w.capabilities, CALIPER_NET_CAP_PROGRAMS);
         server_resources_ = has_cap(w.capabilities, CALIPER_NET_CAP_RESOURCES);
+        resource_parts_ = wire::SplitResources();   // a new connection holds no part of a version
         program_fresh_ = true;   // a new connection: the next attachment is a new epoch
         welcome_control_ = w.control.value_or(false);
         // A server that is itself the producer (caliper.serve()) names its own
@@ -1626,6 +1639,8 @@ private:
     bool server_resources_ = false;
     std::map<std::string, std::pair<uint64_t, ReceivedResource>> resources_;
     uint64_t resource_order_ = 0;
+    wire::SplitResources resource_parts_;   // versions in parts being put together (network thread)
+    std::atomic<uint64_t> resource_parts_refused_{0};
     Controls controls_;
     std::deque<ControlReply> replies_;
     std::map<std::string, LinkedSelection> selections_;

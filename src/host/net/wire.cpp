@@ -1982,9 +1982,11 @@ void program_instance(const Frame& f, Program* p) {
     if (!p->derive && !p->draw) bad("an instance of a piece carries the section 'derive' or 'draw'");
 }
 
-// RESOURCE, in _wire.py's order: program, resource, step, count, stride, width and height, the byte limit
-// on count before any product, then the section. Each product below is of values already bounded, thus
-// none wraps: width and height are at most 4096, and count is at most RESOURCE_MAX_BYTES / stride.
+// RESOURCE, in _wire.py's order: program, resource, step, count, stride, width and height, the keys of
+// "split" (version, parts, part, first), the byte limit on count before any product (a version in parts
+// holds at most CALIPER_NET_RESOURCE_VERSION_MAX_BYTES), then the section. Each product below is of values
+// already bounded, thus none wraps: width and height are at most 4096, count is at most the byte limit
+// divided by stride, and a part's first element is below the count before the count less it is taken.
 Resource resource(const Frame& f) {
     const Json& m = f.meta;
     Resource r;
@@ -2007,13 +2009,40 @@ Resource resource(const Frame& f) {
         r.width = u32(*width);
         r.height = u32(*height);
     }
-    if (r.count > CALIPER_NET_RESOURCE_MAX_BYTES / r.stride)
-        bad("a resource holds at most " + std::to_string(CALIPER_NET_RESOURCE_MAX_BYTES) + " bytes");
+    if (const Json* sp = opt(m, "split", is_obj, "an object")) {
+        auto need = [&](const char* key, auto ok, const char* what) -> const Json& {
+            const Json* v = sp->find(key);
+            if (!v || v->is_null() || !ok(*v)) bad(std::string("'split.") + key + "' must be " + what);
+            return *v;
+        };
+        Resource::Split sl;
+        sl.version = u64(need("version", is_safe_uint, "an unsigned integer"));
+        sl.parts = u32(need("parts", [](const Json& v) { return int_in(v, 2, CALIPER_NET_MAX_PIECES); },
+                            "an integer from 2 to 16"));
+        sl.part = u32(need("part", [&](const Json& v) { return int_in(v, 0, sl.parts - 1); },
+                           "a part number below 'parts'"));
+        sl.first = u32(need("first", is_u32, "a uint32"));
+        r.split = sl;
+    }
+    const uint32_t max_bytes = r.split ? CALIPER_NET_RESOURCE_VERSION_MAX_BYTES : CALIPER_NET_RESOURCE_MAX_BYTES;
+    if (r.count > max_bytes / r.stride)
+        bad(std::string(r.split ? "a resource in parts" : "a resource") + " holds at most " + std::to_string(max_bytes) +
+            " bytes");
     const Section* s = f.section(CALIPER_NET_SECTION_RESOURCE);
     if (!s || !s->is(CALIPER_NET_DTYPE_U8, 1)) bad("a resource needs a (B,) u8 'resource' section");
-    const uint64_t want = (uint64_t)r.count * r.stride;
-    if (s->shape[0] < 0 || (uint64_t)s->shape[0] != want)
-        bad("'resource' holds count * stride = " + std::to_string(want) + " bytes, got " + std::to_string(s->shape[0]));
+    if (r.split) {
+        const Resource::Split& sl = *r.split;
+        if (sl.part == 0 && sl.first != 0) bad("part 0 of a resource starts at element 0");
+        if (sl.first >= r.count) bad("'split.first' must lie below the count");
+        const int64_t b = s->shape[0];
+        if (b <= 0 || (uint64_t)b % r.stride != 0 || (uint64_t)b / r.stride > (uint64_t)r.count - sl.first)
+            bad("a part of a resource holds whole elements from 'split.first' up to the count");
+    } else {
+        const uint64_t want = (uint64_t)r.count * r.stride;
+        if (s->shape[0] < 0 || (uint64_t)s->shape[0] != want)
+            bad("'resource' holds count * stride = " + std::to_string(want) + " bytes, got " +
+                std::to_string(s->shape[0]));
+    }
     r.data = *s;
     return r;
 }
@@ -2026,6 +2055,14 @@ void resource_to_meta(const Resource& r, Json& m, std::vector<Section>& sections
     m.set("stride", r.stride);
     if (r.width) m.set("width", *r.width);
     if (r.height) m.set("height", *r.height);
+    if (r.split) {
+        Json sp = Json::object();
+        sp.set("version", r.split->version);
+        sp.set("part", r.split->part);
+        sp.set("parts", r.split->parts);
+        sp.set("first", r.split->first);
+        m.set("split", sp);
+    }
     sections.push_back(Section::make(CALIPER_NET_SECTION_RESOURCE, CALIPER_NET_DTYPE_U8, {(int64_t)r.data.size},
                                      r.data.data, r.data.size));
 }
@@ -2900,6 +2937,105 @@ SplitUpdates::Result SplitUpdates::add(const SceneUpdate& piece, WholeUpdate* ou
         ++discarded_;
         return fail(e.message);
     }
+}
+
+bool SplitResources::holds(const std::string& program, const std::string& resource) const {
+    for (const Assembly& a : open_)
+        if (a.head.program == program && a.head.resource == resource) return true;
+    return false;
+}
+
+uint64_t SplitResources::held_bytes() const {
+    uint64_t n = 0;
+    for (const Assembly& a : open_) n += a.bytes ? a.bytes->size() : 0;
+    return n;
+}
+
+SplitResources::Result SplitResources::add(const Resource& r, WholeResource* out, std::string* err) {
+    ++frames_;
+    for (auto it = open_.begin(); it != open_.end();) {   // the next part did not come in time
+        if (frames_ - it->last_frame > CALIPER_NET_RESOURCE_PART_WAIT) {
+            ++expired_;
+            it = open_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    auto held = std::find_if(open_.begin(), open_.end(), [&](const Assembly& a) {
+        return a.head.program == r.program && a.head.resource == r.resource;
+    });
+    if (!r.split || r.split->part == 0) {   // a newer version of the resource
+        if (held != open_.end()) {
+            ++discarded_;
+            open_.erase(held);
+        }
+    }
+    if (!r.split) {
+        if (out) {
+            out->resource = r;
+            out->keep.reset();
+        }
+        return Result::Whole;
+    }
+    const Resource::Split& sl = *r.split;
+    const std::string name = "'" + r.program + "/" + r.resource + "'";
+    // The decoder checked that the part holds whole elements from sl.first up to the count, and that the
+    // count times the stride is at most CALIPER_NET_RESOURCE_VERSION_MAX_BYTES: no product or sum wraps.
+    const uint64_t n = r.data.size / r.stride;
+    if (sl.part == 0) {
+        if (open_.size() >= CALIPER_NET_MAX_INCOMPLETE_UPDATES) {
+            ++discarded_;
+            open_.erase(open_.begin());
+        }
+        Assembly a;
+        a.head = r;
+        a.head.data = Section();
+        a.next_first = n;
+        a.last_frame = frames_;
+        if (copy_) {
+            a.bytes = std::make_shared<std::vector<uint8_t>>((size_t)r.count * r.stride);
+            std::memcpy(a.bytes->data(), r.data.data, r.data.size);
+        }
+        open_.push_back(std::move(a));
+        return Result::Pending;
+    }
+    if (held == open_.end() || held->head.split->version != sl.version) {
+        ++dropped_;   // a part of a version whose part 0 is not held
+        return Result::Dropped;
+    }
+    auto refuse = [&](const std::string& why) {
+        ++discarded_;
+        open_.erase(held);
+        if (err) *err = why;
+        return Result::Refused;
+    };
+    const Resource& h = held->head;
+    if (r.step != h.step || r.count != h.count || r.stride != h.stride || r.width != h.width ||
+        r.height != h.height || sl.parts != h.split->parts)
+        return refuse("a part of the resource " + name + " differs from its part 0");
+    if (sl.part != held->next_part || sl.first != held->next_first)
+        return refuse("a part of the resource " + name + " comes out of order");
+    const uint64_t end = held->next_first + n;
+    const bool last = sl.part + 1 == sl.parts;
+    if (last != (end == h.count))
+        return refuse(last ? "the parts of the resource " + name + " end before its count"
+                           : "a part of the resource " + name + " before the last reaches its count");
+    if (copy_) std::memcpy(held->bytes->data() + held->next_first * h.stride, r.data.data, r.data.size);
+    held->next_part += 1;
+    held->next_first = end;
+    held->last_frame = frames_;
+    if (!last) return Result::Pending;
+    if (out) {
+        out->resource = h;
+        out->resource.split.reset();
+        out->keep = held->bytes;
+        if (held->bytes)
+            out->resource.data = Section::make(CALIPER_NET_SECTION_RESOURCE, CALIPER_NET_DTYPE_U8,
+                                               {(int64_t)held->bytes->size()}, held->bytes->data(),
+                                               held->bytes->size());
+    }
+    open_.erase(held);
+    return Result::Whole;
 }
 
 }  // namespace wire

@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  canonicalJson, decode, decodeFrame, encode, encodeFrame, entityPathOk, MessageError, resolveSceneDataView, sceneViewInfo, SplitUpdates,
+  canonicalJson, decode, decodeFrame, encode, encodeFrame, entityPathOk, MessageError, resolveSceneDataView, sceneViewInfo, SplitResources, SplitUpdates,
   stampTextOk, textFromLines, textLines, WireError,
   type Section,
 } from '../src/protocol/codec.js';
@@ -28,7 +28,8 @@ import {
   CAP_INTERVENTIONS, CAP_PROGRAMS, INTERVENE_ABLATE, MAX_INTERVENTIONS, MAX_POINTS_LISTED, MAX_PROGRAMS, POINT_MAX, PROGRAM_EVERY_MAX,
   PROGRAM_ID_MAX, PROGRAM_MAX_COUNT, PROGRAM_MAX_INPUTS, PROGRAM_MEMORY_MB_MAX, PROGRAM_REMOVE, PROGRAM_SET, PROGRAM_SIDE_MAX,
   PROGRAM_SOURCE_MAX, PROGRAM_STATE_RATE_HZ, PROGRAM_TIME_MS_MAX, PROGRAM_WORKGROUPS_MAX, TENSOR_NAME_MAX,
-  PIECE_COMMON_MAX, PIECE_NAME_MAX, PIECE_SEGMENTS_MAX, PIECE_VERSION_MAX, RESOURCE_MAX_BYTES, RESOURCE_SIDE_MAX, RESOURCE_STRIDE_MAX, STATUS_PIECE,
+  PIECE_COMMON_MAX, PIECE_NAME_MAX, PIECE_SEGMENTS_MAX, PIECE_VERSION_MAX, RESOURCE_MAX_BYTES, RESOURCE_PART_WAIT, RESOURCE_SIDE_MAX, RESOURCE_STRIDE_MAX,
+  RESOURCE_VERSION_MAX_BYTES, STATUS_PIECE,
   type ControlMsg, type ControlsMsg, type Message, type ProgramMsg, type ProgramStateMsg, type ResourceMsg,
   type CursorMsg, type SceneClassesMsg, type SceneTransformsMsg, type SceneUpdateMsg, type SnapshotMsg, type TextMsg, type TimeStateMsg,
   type ViewEntry, type ViewsMsg,
@@ -339,6 +340,8 @@ test('the 3.2 constants agree with include/caliper/live_net.h', () => {
     CALIPER_NET_PROGRAM_SOURCE_MAX: PROGRAM_SOURCE_MAX,
     CALIPER_NET_MSG_RESOURCE: MSG.resource,
     CALIPER_NET_RESOURCE_MAX_BYTES: RESOURCE_MAX_BYTES,
+    CALIPER_NET_RESOURCE_VERSION_MAX_BYTES: RESOURCE_VERSION_MAX_BYTES,
+    CALIPER_NET_RESOURCE_PART_WAIT: RESOURCE_PART_WAIT,
     CALIPER_NET_RESOURCE_STRIDE_MAX: RESOURCE_STRIDE_MAX,
     CALIPER_NET_RESOURCE_SIDE_MAX: RESOURCE_SIDE_MAX,
     CALIPER_NET_PIECE_NAME_MAX: PIECE_NAME_MAX,
@@ -1067,4 +1070,84 @@ test('golden values of instances of pieces and resources', () => {
     const raw = read(`${n}.bin`);
     expect(Array.from(encode(decode(raw) as Message, PROTOCOL_MINOR_3_2)), n).toEqual(Array.from(raw));
   }
+});
+
+/** 10 segments (k, -k) of two f32: the version that resource_split_0 to _2 carry. */
+function wholeSegments(): Uint8Array {
+  const v = new Float32Array(20);
+  for (let k = 0; k < 10; k++) [v[2 * k], v[2 * k + 1]] = [k, 0 - k];   // 0 - 0 is +0, as in the generator
+  return new Uint8Array(v.buffer);
+}
+
+test('a resource in parts carries its golden values and is put together whole', () => {
+  const parts = [0, 1, 2].map((k) => frame32(`resource_split_${k}`) as ResourceMsg);
+  expect(parts.map((p) => p.split)).toEqual([0, 1, 2].map((k) => ({ version: 5, part: k, parts: 3, first: 4 * k })));
+  const sr = new SplitResources();
+  expect(sr.add(parts[0])).toBeNull();
+  expect(sr.add(parts[1])).toBeNull();
+  const whole = sr.add(parts[2])!;
+  expect([whole.program, whole.resource, whole.step, whole.count, whole.stride, whole.split]).toEqual(['lines', 'segments', 1300, 10, 8, undefined]);
+  expect(Array.from(whole.data)).toEqual(Array.from(wholeSegments()));
+  expect(sr.open.size).toBe(0);
+  const again = decode(encode(whole, PROTOCOL_MINOR_3_2)) as ResourceMsg;
+  expect(new SplitResources().add(again)!.count).toBe(10);
+  for (const k of [0, 1, 2]) {
+    const raw = read(`resource_split_${k}.bin`);
+    expect(Array.from(encode(parts[k], PROTOCOL_MINOR_3_2))).toEqual(Array.from(raw));
+  }
+});
+
+test('a receiver drops or refuses the parts of a resource that break the order', () => {
+  const [p0, p1, p2] = [0, 1, 2].map((k) => frame32(`resource_split_${k}`) as ResourceMsg);
+  const orphan = frame32('resource_split_orphan') as ResourceMsg;
+  const refused = (sr: SplitResources, r: ResourceMsg, why: RegExp) => {
+    let err: unknown;
+    try {
+      sr.add(r);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(MessageError);
+    expect((err as MessageError).message).toMatch(why);
+  };
+  let sr = new SplitResources();
+  expect(sr.add(orphan)).toBeNull();
+  sr.add(p0);
+  expect(sr.add(orphan)).toBeNull();
+  expect([sr.dropped, sr.open.size]).toEqual([2, 1]);
+  refused(sr, p2, /out of order/);
+  expect(sr.open.size).toBe(0);
+  sr.add(p0);
+  sr.add(p1);
+  refused(sr, frame32('resource_split_short') as ResourceMsg, /end before its count/);
+  sr.add(p0);
+  refused(sr, frame32('resource_split_differs') as ResourceMsg, /differs from its part 0/);
+  // A version that never completes expires after RESOURCE_PART_WAIT further frames.
+  sr = new SplitResources();
+  sr.add(p0);
+  const other = frame32('resource_buffer') as ResourceMsg;
+  for (let k = 0; k + 1 < RESOURCE_PART_WAIT; k++) expect(sr.add(other)).not.toBeNull();
+  expect(sr.add(p1)).toBeNull();
+  for (let k = 0; k < RESOURCE_PART_WAIT; k++) sr.add(other);
+  expect(sr.open.size).toBe(1);
+  sr.add(other);
+  expect([sr.open.size, sr.expired]).toEqual([0, 1]);
+  expect(sr.add(p2)).toBeNull();
+  expect(sr.dropped).toBe(1);
+  // A newer version discards an incomplete one; at most MAX_INCOMPLETE_UPDATES are held.
+  sr = new SplitResources();
+  sr.add(p0);
+  sr.add(p0);
+  expect([sr.open.size, sr.discarded]).toEqual([1, 1]);
+  for (const name of ['a', 'b', 'c']) sr.add({ ...p0, resource: name });
+  expect([...sr.open.keys()]).toEqual(['lines/b', 'lines/c']);
+  expect(MAX_INCOMPLETE_UPDATES).toBe(2);
+});
+
+test('the parts of a resource bound every size before a product', () => {
+  const zeros = new Uint8Array(256);
+  const meta = { program: 'a', resource: 'r', step: 0, count: 2 ** 32 - 1, stride: 256, split: { version: 0, part: 0, parts: 2, first: 0 } };
+  const frame = encodeFrame(MSG.resource, meta, [{ name: 'resource', dtype: DTYPE.u8, shape: [256], encoding: 0, bytes: zeros }], PROTOCOL_MINOR_3_2);
+  expect(() => decode(frame)).toThrow(/in parts holds at most 134217728 bytes/);
+  expect(RESOURCE_VERSION_MAX_BYTES).toBe(128 * 1024 * 1024);
 });
