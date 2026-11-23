@@ -61,6 +61,7 @@
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #include <stb_image.h>
 #include <stb_image_write.h>
+#include "../match_reference.h"
 #pragma clang diagnostic pop
 
 #import <Metal/Metal.h>
@@ -1009,6 +1010,7 @@ TEST_CASE("gfx/Metal points view: points@1 draws every case as the built-in, wit
         CAPTURE(c.name);
         Result b, p;
         REQUIRE(draw_case(c, &b, caliper_live_views::PointsDraw::builtin));
+        b.rgba = match_reference::picture("compare", uint32_t(b.width), uint32_t(b.height), &b.rgba);
         REQUIRE(draw_case(c, &p, caliper_live_views::PointsDraw::pieces));
         CHECK_MESSAGE(!b.drew_pieces, c.name, ": points@1 drew the built-in's case");
         CHECK_MESSAGE(p.drew_pieces, c.name, ": the built-in drew the case of points@1: ", p.fallback);

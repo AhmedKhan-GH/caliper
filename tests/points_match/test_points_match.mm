@@ -335,7 +335,8 @@ void run_points_case(int n, Values kind = Values::f32, const char* name = "") {
         const gfx::Serial s = g.submit(std::move(frame));
         REQUIRE_MESSAGE(s != 0, g.last_error());
         REQUIRE(g.wait(s));
-        builtin_color = read_back(g, color, kSize, kSize);
+        const std::vector<std::uint8_t> px = read_back(g, color, kSize, kSize);
+        builtin_color = match_reference::picture("color", kSize, kSize, &px);
     }
     std::array<float, 16> mvp{};
     std::memcpy(mvp.data(), builtin_params.mvp, sizeof(float) * 16);   // column-major, as the runtime's clip_from_world
@@ -687,7 +688,8 @@ TEST_CASE("points_match: points@1 with radii in scene units draws as the built-i
         const gfx::Serial s = g.submit(std::move(frame));
         REQUIRE_MESSAGE(s != 0, g.last_error());
         REQUIRE(g.wait(s));
-        builtin_color = read_back(g, color, kSize, kSize);
+        const std::vector<std::uint8_t> px = read_back(g, color, kSize, kSize);
+        builtin_color = match_reference::picture("color", kSize, kSize, &px);
     }
     std::array<float, 16> mvp{};
     std::memcpy(mvp.data(), builtin_params.mvp, sizeof(float) * 16);

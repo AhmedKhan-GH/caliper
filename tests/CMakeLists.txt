@@ -545,7 +545,7 @@ if(APPLE)
     target_link_libraries(caliper_gfx_tests PRIVATE caliper_net)
     target_compile_definitions(caliper_gfx_tests PRIVATE CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
     set_source_files_properties(gfx/gfx_scene_view.cpp PROPERTIES
-        COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
+        COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc" COMPILE_DEFINITIONS "CALIPER_MATCH_SUITE=\"scene_view\"")
     # The colormap by keys through the layer: the texture path's compute form and the points'
     # vertex stage, from layer and imported buffers, against map_f32_to_rgba8.
     target_sources(caliper_gfx_tests PRIVATE gfx/gfx_colormap.cpp)
@@ -564,7 +564,8 @@ if(WIN32)
 endif()
 
 add_test(NAME caliper_gfx_tests COMMAND caliper_gfx_tests)
-set_tests_properties(caliper_gfx_tests PROPERTIES LABELS "gfx" SKIP_RETURN_CODE 77)
+set_tests_properties(caliper_gfx_tests PROPERTIES LABELS "gfx" SKIP_RETURN_CODE 77
+    ENVIRONMENT "CALIPER_MATCH_REFERENCES=${CMAKE_SOURCE_DIR}/tests/match_references")
 
 # caliper_shader_tests: the generated shader programs (src/host/gfx/shaders/generated) on
 # Metal, headless. Every MSL program compiles and every entry and checked pair becomes a
@@ -805,12 +806,13 @@ add_executable(caliper_gfx_views_tests gfx/gfx_points_view.mm)
 target_link_libraries(caliper_gfx_views_tests PRIVATE doctest::doctest libcaliper caliper::sdk)
 target_include_directories(caliper_gfx_views_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host
     ${CMAKE_SOURCE_DIR}/third_party/stb)
-target_compile_definitions(caliper_gfx_views_tests PRIVATE CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+target_compile_definitions(caliper_gfx_views_tests PRIVATE CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
+    CALIPER_MATCH_SUITE="points_view")
 set_target_properties(caliper_gfx_views_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 set_source_files_properties(gfx/gfx_points_view.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 add_test(NAME caliper_gfx_views_tests COMMAND caliper_gfx_views_tests)
 set_tests_properties(caliper_gfx_views_tests PROPERTIES LABELS "gfx" SKIP_RETURN_CODE 77 ENVIRONMENT
-    "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_gfx_views_tests")
+    "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_gfx_views_tests;CALIPER_MATCH_REFERENCES=${CMAKE_SOURCE_DIR}/tests/match_references")
 endif()  # APPLE (live tests)
 
 if(CALIPER_WITH_TORCH)

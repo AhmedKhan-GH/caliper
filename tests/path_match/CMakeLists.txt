@@ -27,6 +27,10 @@ function(caliper_path_match_targets)
     set_target_properties(caliper_path_match_tests PROPERTIES
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
     add_test(NAME caliper_path_match COMMAND caliper_path_match_tests)
+    # The reference pictures of the built-in draw (tests/match_reference.h).
+    target_compile_definitions(caliper_path_match_tests PRIVATE CALIPER_MATCH_SUITE="path")
+    set_property(TEST caliper_path_match APPEND PROPERTY ENVIRONMENT
+        "CALIPER_MATCH_REFERENCES=${CMAKE_SOURCE_DIR}/tests/match_references")
     set_tests_properties(caliper_path_match PROPERTIES LABELS "gfx;path_match" SKIP_RETURN_CODE 77 TIMEOUT 300)
 endfunction()
 

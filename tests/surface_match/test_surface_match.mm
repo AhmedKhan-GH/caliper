@@ -55,6 +55,7 @@
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #pragma clang diagnostic ignored "-Wunused-function"
 #include <stb_image_write.h>
+#include "../match_reference.h"
 #pragma clang diagnostic pop
 
 #include <algorithm>
@@ -575,8 +576,12 @@ void run_case(Metal& m, const Case& k, Outcome* out) {
         const gfx::Serial s = g.submit(std::move(frame));
         REQUIRE_MESSAGE(s != 0, g.last_error());
         REQUIRE(g.wait(s));
-        builtin_color = read_back(g, color, kSize, kSize);
-        if (k.depth) builtin_depth = read_back(g, depth, kSize, kSize);
+        const std::vector<std::uint8_t> px = read_back(g, color, kSize, kSize);
+        builtin_color = match_reference::picture("color", kSize, kSize, &px);
+        if (k.depth) {
+            const std::vector<std::uint8_t> dz = read_back(g, depth, kSize, kSize);
+            builtin_depth = match_reference::picture("depth", kSize, kSize, &dz);
+        }
     }
 
     // ---- The piece's draw ------------------------------------------------------------------------

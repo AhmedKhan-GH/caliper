@@ -25,6 +25,10 @@ function(caliper_mesh_match_targets)
     set_target_properties(caliper_mesh_match_tests PROPERTIES
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
     add_test(NAME caliper_mesh_match COMMAND caliper_mesh_match_tests)
+    # The reference pictures of the built-in draw (tests/match_reference.h).
+    target_compile_definitions(caliper_mesh_match_tests PRIVATE CALIPER_MATCH_SUITE="mesh")
+    set_property(TEST caliper_mesh_match APPEND PROPERTY ENVIRONMENT
+        "CALIPER_MATCH_REFERENCES=${CMAKE_SOURCE_DIR}/tests/match_references")
     set_tests_properties(caliper_mesh_match PROPERTIES LABELS "gfx;mesh_match" SKIP_RETURN_CODE 77 TIMEOUT 180)
 endfunction()
 

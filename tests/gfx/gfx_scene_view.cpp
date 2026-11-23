@@ -45,6 +45,7 @@
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #pragma clang diagnostic ignored "-Wunused-function"
 #include <stb_image_write.h>
+#include "../match_reference.h"
 #pragma clang diagnostic pop
 
 #include <algorithm>
@@ -1521,7 +1522,8 @@ std::string hit_text(const SceneView& v, const caliper_scene::Hit& h) {
 void compare_fixture(const std::string& name, ViewRig& pieces, ViewRig& builtin, int S, int interior) {
     SceneView& pv = *pieces.view;
     SceneView& bv = *builtin.view;
-    const std::vector<uint8_t> p = pixels(pv), b = pixels(bv);
+    const std::vector<uint8_t> p = pixels(pv), drawn = pixels(bv);
+    const std::vector<uint8_t> b = match_reference::picture("compare", uint32_t(S), uint32_t(S), &drawn);
     const std::vector<uint64_t> ids = program_ids(*pieces.gfx, pv);
     const ShapeComparison c = compare_shapes(p, b, ids, S, interior);
     const SceneShapeCounts counts = pv.shape_counts();

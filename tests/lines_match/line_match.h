@@ -46,6 +46,7 @@
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #pragma clang diagnostic ignored "-Wunused-function"
 #include <stb_image_write.h>
+#include "../match_reference.h"
 #pragma clang diagnostic pop
 
 #include <algorithm>
@@ -580,7 +581,8 @@ struct Builtin {
             REQUIRE_MESSAGE(s != 0, g.last_error());
             REQUIRE(g.wait(s));
         }
-        return read_back(g, color, kSize, kSize);
+        const std::vector<std::uint8_t> px = read_back(g, color, kSize, kSize);
+        return match_reference::picture("color", kSize, kSize, &px);
     }
 
     // The built-in pick at pixel (x, y), through the scene's pick pass and the picker.

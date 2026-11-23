@@ -37,6 +37,7 @@
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #pragma clang diagnostic ignored "-Wunused-function"
 #include <stb_image_write.h>
+#include "../match_reference.h"
 #pragma clang diagnostic pop
 
 #include <algorithm>
@@ -494,7 +495,8 @@ struct Builtin {
             REQUIRE(g.wait(s));
             if (r.skipped == 0) break;
         }
-        image = read_back(g, color, size, size);
+        const std::vector<std::uint8_t> px = read_back(g, color, size, size);
+        image = match_reference::picture("rig", size, size, &px);
     }
 
     // The camera's matrices as the scene view gives them to a program (live_scene.cpp, draw_programs).
