@@ -910,7 +910,7 @@ if(BUILD_TESTS)
         # header of the design tokens. caliper_theme_colors_script tests the check itself.
         add_test(NAME caliper_theme_colors COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_SOURCE_DIR}/scripts/check_theme_colors.py" --root "${CMAKE_SOURCE_DIR}")
-        add_test(NAME caliper_theme_colors_script COMMAND "${Python3_EXECUTABLE}" -m unittest
+        add_test(NAME caliper_theme_colors_script COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_SOURCE_DIR}/scripts/test_check_theme_colors.py")
         set_tests_properties(caliper_theme_colors caliper_theme_colors_script PROPERTIES LABELS "boundary")
         # caliper_example_dry_run_cleanup: the build-a-dashboard walk-through's dry
