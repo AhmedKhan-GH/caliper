@@ -225,7 +225,8 @@ bool read_manifest(const json& m, cs::Piece* p, std::string* why) {
     ok = ok && r.tables(m, "inputs", &p->inputs, [&](const json& t, cs::PieceInput* in) {
         return r.str(t, "name", &in->name, true) && r.enum_of(t, "kind", cs::input_kind_from_name, &in->kind) &&
                r.str(t, "dtype", &in->dtype) && r.u32(t, "rank_min", &in->rank_min) &&
-               r.u32(t, "rank_max", &in->rank_max) && r.layout(t, &in->layout) && r.opt_str(t, "title", &in->title);
+               r.u32(t, "rank_max", &in->rank_max) && r.layout(t, &in->layout) && r.opt_str(t, "title", &in->title) &&
+               r.flag(t, "optional", &in->optional);
     });
     ok = ok && r.tables(m, "params", &p->params, [&](const json& t, cs::PieceParam* pa) {
         return r.str(t, "name", &pa->name, true) && r.enum_of(t, "type", cs::param_type_from_name, &pa->type) &&
@@ -1118,6 +1119,7 @@ Verdict DrawRuntime::install(const caliper_builder::spec::Piece& piece, const In
         Impl::Slot s;
         s.id = in.name;
         s.keep_cpu = cpu_ids.count(in.name) != 0;
+        s.unbound = in.optional && instance.bind.find(in.name) == instance.bind.end();
         if (Verdict v = c.layout(in.layout, &s.layout); !v.ok()) return refuse(v);
         s.declared_count = pl::kCountMax;
         s.declared_bytes = std::uint64_t(pl::kCountMax) * s.layout.stride;
@@ -1244,6 +1246,12 @@ Verdict DrawRuntime::install(const caliper_builder::spec::Piece& piece, const In
         if (!s.buffer || !zero_buffer(g, s.buffer, s.capacity))
             return refuse(refusal(cp::kProgramLayerRefused, "The graphics layer refused the buffer of " + s.id + ": " +
                                                                 g.last_error(), where));
+        // An unbound optional input is an empty version for good: its count is 0 in `counts`.
+        if (s.unbound) {
+            s.has_version = true;
+            s.count = 0;
+            s.serial = ++m.versions;
+        }
     }
     for (std::size_t i = 0; i < m.buffers.size(); ++i) {
         Impl::DrawBufferSlot& b = m.buffers[i];
@@ -1302,6 +1310,9 @@ Verdict DrawRuntime::set_resource(const ResourceVersion& version) {
     if (s == nullptr)
         return refusal(cp::kProgramUnknownResource,
                        "The draw half of " + m.instance.program + " reads no resource " + version.resource + ".");
+    if (s->unbound)
+        return refusal(cp::kProgramUnknownResource,
+                       "The optional input " + s->id + " of " + m.instance.program + " is unbound and takes no version.");
     const std::string where = "resources[" + s->id + "]";
     if (version.size > 0 && version.bytes == nullptr)
         return refusal(cp::kProgramBadResource, "A version of " + s->id + " has a size but no bytes.", where);

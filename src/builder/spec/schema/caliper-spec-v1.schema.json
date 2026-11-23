@@ -1150,7 +1150,8 @@
             "pattern": "^[a-z_][a-z0-9_]{0,31}: (f32|i32|u32|vec2<f32>|vec4<f32>|vec2<u32>|vec4<u32>)$"
           }
         },
-        "title": {"type": "string", "minLength": 1, "maxLength": 256}
+        "title": {"type": "string", "minLength": 1, "maxLength": 256},
+        "optional": {"type": "boolean"}
       }
     },
     "piece_param": {

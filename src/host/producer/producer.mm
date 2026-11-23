@@ -241,6 +241,8 @@ struct Prog {
     std::vector<uint32_t> tensors;     // the import handles it binds
     std::vector<Bound> bound;          // the reflection's bindings, for the bind groups
     std::vector<std::pair<std::string, uint32_t>> inputs;   // WGSL variable, import handle
+    std::vector<std::string> unbound;  // derive: optional tensor inputs without a tensor
+    Buffer placeholder;                // derive: the 16 zero bytes that an unbound input binds
     double time_limit_ms = 4.0;
     uint64_t memory_bytes = 0;
     uint32_t state = CALIPER_PRODUCER_COMPILED;
@@ -351,7 +353,10 @@ bool make_groups(caliper_producer* rt, const Prog& p, Program program, std::vect
             e.binding = b.binding;
             const auto in = std::find_if(p.inputs.begin(), p.inputs.end(),
                                          [&](const auto& x) { return x.first == b.name; });
-            if (in != p.inputs.end()) {
+            if (in != p.inputs.end() && in->second == 0 && p.placeholder) {
+                e.buffer = p.placeholder;   // an optional input left unbound: 16 zero bytes
+                e.size = 16;
+            } else if (in != p.inputs.end()) {
                 const Import* im = import_of(rt, in->second);
                 if (!im) {
                     undo();
@@ -417,6 +422,8 @@ void free_prog(caliper_producer* rt, Prog& p) {
     p.resources.clear();
     if (p.shapes) rt->be->release(p.shapes);
     p.shapes = {};
+    if (p.placeholder) rt->be->release(p.placeholder);
+    p.placeholder = {};
     if (p.count) rt->be->release(p.count);
     if (p.params_buffer) rt->be->release(p.params_buffer);
     p.pipeline = {};
@@ -722,7 +729,11 @@ caliper_producer_status check_derive_desc(const caliper_producer_derive_desc* d,
     for (size_t i = 0; i < d->input_count; ++i) {
         if (!d->inputs[i].var) return refuse(kBadManifest, "An input has no name.");
         const char* t = d->input_types ? d->input_types[i] : "f32";
-        if (d->inputs[i].tensor && (!t || (std::strcmp(t, "f32") && std::strcmp(t, "i32") && std::strcmp(t, "u32"))))
+        const bool unbound = d->input_unbound && d->input_unbound[i];
+        if (unbound && d->inputs[i].tensor)
+            return refuse(kBadBinding, std::string("The input ") + d->inputs[i].var + " is unbound and has a tensor.");
+        if ((d->inputs[i].tensor || unbound) &&
+            (!t || (std::strcmp(t, "f32") && std::strcmp(t, "i32") && std::strcmp(t, "u32"))))
             return refuse(kBadManifest, std::string("The tensor input ") + d->inputs[i].var + " needs f32, i32 or u32.");
     }
     for (size_t i = 0; i < d->param_count; ++i) {
@@ -796,8 +807,10 @@ void write_shapes(caliper_producer* rt, const Prog& p) {
     if (!m) return;
     size_t slot = 0;
     for (const auto& in : p.inputs) {
-        if (in.second == 0) continue;   // the place of a buffer input, which the derive half does not bind
+        const bool unbound = std::find(p.unbound.begin(), p.unbound.end(), in.first) != p.unbound.end();
+        if (in.second == 0 && !unbound) continue;   // the place of a buffer input, which the derive half does not bind
         uint32_t v[4] = {1, 1, 1, 1};
+        if (unbound) v[0] = v[1] = v[2] = v[3] = 0;   // the declared default of an unbound optional input
         if (const Import* im = import_of(rt, in.second)) {
             const uint32_t n = std::min<uint32_t>(im->ndim, 4);
             for (uint32_t k = 0; k < n; ++k) {
@@ -858,7 +871,7 @@ sp::Piece piece_of(const caliper_producer_derive_desc* d) {
     for (size_t i = 0; i < d->input_count; ++i) {
         sp::PieceInput in;
         in.name = d->inputs[i].var;
-        if (d->inputs[i].tensor) {
+        if (d->inputs[i].tensor || (d->input_unbound && d->input_unbound[i])) {
             in.kind = sp::InputKind::tensor;
             in.dtype = d->input_types ? d->input_types[i] : "f32";
         } else {
@@ -1700,7 +1713,7 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
         if (d->param_count) expected.push_back({"params", 0, 1, Kind::Uniform, false, -1});
         size_t tensor_inputs = 0;
         for (size_t i = 0; i < d->input_count; ++i)
-            if (d->inputs[i].tensor) {
+            if (d->inputs[i].tensor || (d->input_unbound && d->input_unbound[i])) {
                 expected.push_back({d->inputs[i].var, 1, uint32_t(i), Kind::Storage, false, -1});
                 ++tensor_inputs;
             }
@@ -1838,7 +1851,10 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
             const std::string t = d->param_types[i];
             p.params.push_back({d->params[i].name, t == "i32" ? 1u : t == "u32" ? 2u : 0u, d->params[i].value});
         }
-        for (size_t i = 0; i < d->input_count; ++i) p.inputs.emplace_back(d->inputs[i].var, d->inputs[i].tensor);
+        for (size_t i = 0; i < d->input_count; ++i) {
+            p.inputs.emplace_back(d->inputs[i].var, d->inputs[i].tensor);
+            if (d->input_unbound && d->input_unbound[i]) p.unbound.push_back(d->inputs[i].var);
+        }
         auto layer_fail = [&](const std::string& what) {
             const std::string why = be.last_error();
             free_prog(rt, p);
@@ -1926,6 +1942,10 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* rt, co
             p.params_buffer = make_zeroed(params_bytes(p), kUniform, "params");
             if (!p.params_buffer) return layer_fail("params buffer");
             write_params(be, p);
+        }
+        if (!p.unbound.empty()) {
+            p.placeholder = make_zeroed(16, kStorage, "unbound input");
+            if (!p.placeholder) return layer_fail("placeholder of an unbound input");
         }
         if (tensor_inputs) {
             p.shapes = make_zeroed(16 * tensor_inputs, kUniform, "shapes");

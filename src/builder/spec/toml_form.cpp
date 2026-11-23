@@ -341,7 +341,7 @@ public:
         for (const char* k : {"name", "version", "description", "imports", "hash"})
             if (auto it = j.find(k); it != j.end()) wrapped(k, *it);
         const std::pair<const char*, std::vector<std::string>> lists[] = {
-            {"inputs", {"name", "kind", "dtype", "rank_min", "rank_max", "element", "struct", "fields", "title"}},
+            {"inputs", {"name", "kind", "dtype", "rank_min", "rank_max", "element", "struct", "fields", "title", "optional"}},
             {"params", {"name", "type", "default", "min", "max", "title"}},
             {"resources",
              {"id", "kind", "element", "struct", "fields", "count", "counted", "width", "height", "publish", "clear",

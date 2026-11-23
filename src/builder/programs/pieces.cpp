@@ -520,6 +520,7 @@ std::string canonical_manifest(const spec::Piece& piece) {
             if (in.rank_max != 8) o.uint("rank_max", in.rank_max);
             layout_into(o, in.layout);
             if (in.title) o.str("title", *in.title);
+            if (in.optional) o.flag("optional", true);
             list.push_back(o.text());
         }
         m.set("inputs", array_of(list));

@@ -331,6 +331,20 @@ TEST_CASE("the canonical manifest is RFC 8785 JSON of the manifest without hash,
           R"({"description":"Quote \" back\\slash \u0001 tab\t","draw":{"camera":"none","passes":[{"fragment":"field","kind":"render"}]},"name":"field","params":[{"default":1,"max":1e+21,"min":0.1,"name":"gain"},{"default":1e-7,"max":0.05,"min":0,"name":"tiny"}],"version":1})");
 }
 
+TEST_CASE("an optional input reaches the canonical manifest only when it is optional") {
+    cs::Piece p;
+    p.name = "loose";
+    cs::PieceInput in;
+    in.name = "v";
+    p.inputs = {in};
+    CHECK(cp::canonical_manifest(p) == R"({"inputs":[{"kind":"tensor","name":"v"}],"name":"loose","version":1})");
+    const std::string before = cp::piece_hash(p);
+    p.inputs[0].optional = true;
+    CHECK(cp::canonical_manifest(p) ==
+          R"({"inputs":[{"kind":"tensor","name":"v","optional":true}],"name":"loose","version":1})");
+    CHECK(cp::piece_hash(p) != before);
+}
+
 TEST_CASE("the hash covers the canonical manifest, the imported modules and the files with LF line ends") {
     cs::Piece p;
     p.name = "uv";

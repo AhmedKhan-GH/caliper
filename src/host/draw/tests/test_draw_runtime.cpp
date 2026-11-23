@@ -200,6 +200,87 @@ TEST_CASE("a pass whose instance count is zero is skipped, and its target is sti
     CHECK(list_of(frames[0], 1).records().size == 1);   // the bloom
 }
 
+// A draw-only piece with the optional buffer input `values`: a full-screen pass that shows its
+// count, then one bar for each value.
+cs::Piece optional_bars() {
+    cs::Piece p;
+    p.name = "bars";
+    cs::PieceInput in;
+    in.name = "values";
+    in.kind = cs::InputKind::buffer;
+    in.layout.element = "f32";
+    in.optional = true;
+    p.inputs = {in};
+    cs::Draw d;
+    d.camera = cs::CameraMode::none;
+    cs::DrawPass back;
+    back.fragment = "back_fs";
+    cs::DrawPass bars;
+    bars.vertex = "bar_vs";
+    bars.fragment = "bar_fs";
+    bars.instances_of = "values";
+    bars.vertices = 6;
+    d.passes = {back, bars};
+    p.draw = d;
+    p.files = {{"draw.wgsl", R"(@fragment
+fn back_fs(in: CaliperFullscreen) -> @location(0) vec4<f32> {
+    return vec4<f32>(f32(counts.values), in.uv, 1.0);
+}
+@vertex
+fn bar_vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> @builtin(position) vec4<f32> {
+    return vec4<f32>(values[i], f32(v) * 0.1, 0.0, 1.0);
+}
+@fragment
+fn bar_fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }
+)"}};
+    return p;
+}
+
+TEST_CASE("an optional buffer input left unbound has the count 0, and its passes run without a version") {
+    for (bool webgpu : modes()) {
+        CAPTURE(webgpu);
+        Host h;
+        cd::DrawRuntime rt(h.gfx, webgpu, checks());
+        cd::Instance unbound;
+        unbound.program = "bars";
+        const cp::Verdict v = rt.install(optional_bars(), unbound, 3);
+        REQUIRE_MESSAGE(v.ok(), v.message);
+        const std::vector<gfx::Frame> frames = frame(h, rt);   // no version to wait for
+        REQUIRE(frames.size() == 1);
+        auto records = [](const gfx::Frame& f) {
+            std::vector<gfx::DrawRecord> all;
+            for (std::size_t i = 0; i < f.passes().size; ++i)
+                if (const auto* rp = std::get_if<gfx::RenderPass>(&f.passes()[i]))
+                    for (std::size_t k = 0; k < rp->list.records().size; ++k) all.push_back(rp->list.records()[k]);
+            return all;
+        };
+        CHECK(records(frames[0]).size() == 1);   // the full-screen pass; the bars have 0 instances
+        const std::vector<std::uint8_t> counts = h.gfx.buffer_bytes(rt.internals().counts);
+        REQUIRE(counts.size() >= 4);
+        std::uint32_t n = 99;
+        std::memcpy(&n, counts.data(), 4);
+        CHECK(n == 0u);
+        const std::vector<float> values{0.5f, -0.5f};
+        const cp::Verdict r = rt.set_resource(version("values", values, 1));
+        CHECK(r.code == cp::kProgramUnknownResource);
+
+        // Bound, the same input waits for its version, as any buffer input does.
+        Host h2;
+        cd::DrawRuntime bound(h2.gfx, webgpu, checks());
+        cd::Instance with = unbound;
+        with.bind["values"] = "program:source/values";
+        REQUIRE(bound.install(optional_bars(), with, 4).ok());
+        std::vector<gfx::Frame> none;
+        CHECK(!bound.encode(&none, {}, h2.target));
+        REQUIRE(bound.set_resource(version("values", values, 1)).ok());
+        const std::vector<gfx::Frame> drawn = frame(h2, bound);
+        REQUIRE(drawn.size() == 1);
+        const std::vector<gfx::DrawRecord> both = records(drawn[0]);
+        REQUIRE(both.size() == 2);
+        CHECK(both[1].instance_count == 2);
+    }
+}
+
 TEST_CASE("the checks run before anything is made") {
     Host h;
     const std::size_t before = h.gfx.ops().size();

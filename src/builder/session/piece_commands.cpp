@@ -884,6 +884,7 @@ Error check_instance(const PieceLibrary& library, const std::string& workspace, 
     for (const spec::PieceInput& in : piece.inputs) {
         const std::string where = "bind." + in.name;
         auto it = program.bind.find(in.name);
+        if (it == program.bind.end() && in.optional) continue;   // the piece reads it as empty
         if (it == program.bind.end())
             return fail(cp::kPieceBadBinding,
                         "The input " + quote(in.name) + " of the piece " + piece.name + " is unbound; bind it to " +

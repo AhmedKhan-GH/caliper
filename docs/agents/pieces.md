@@ -43,6 +43,9 @@ An input of kind `tensor` binds a tensor of the training script. The derive half
 | `rank_min`, `rank_max` | For a tensor, the fewest and the most axes, 1 and 8 when absent |
 | `element`, or `struct` with `fields` | For a buffer, the layout that the bound resource must have |
 | `title` | The label of the input in the builder |
+| `optional` | `true` when a program may leave the input unbound. `false` when absent. |
+
+A program may leave an optional input unbound, and the piece then sees a declared default instead of a tensor that it does not need. An unbound tensor input has the shape (0, 0, 0, 0) in `shapes`, and every read of its array gives zero. An unbound buffer input has the count 0 in `counts`, and a pass whose `instances` names it is skipped. A bound tensor never has an axis of 0, because the script imports no tensor without elements. Thus `shapes.<name>.w == 0u` tells a piece that the input is unbound.
 
 A parameter is a field of the generated struct `Params`, and both halves read it as `params.<name>`. A parameter without a value in the program gets a range control from `min` to `max`. Without a range it keeps its default.
 
@@ -225,7 +228,7 @@ A program of a spec is an instance of a piece. It holds no WGSL, and none of the
 | `params` | A number, or a binding reference to a control, a selection or a state, for each parameter |
 | `panel` | The scene panel that the draw half writes. It is necessary when the piece draws. |
 
-The editor checks each binding against the catalog. It checks the dtype and rank of a tensor, and the layout of the published resource of another program. An input that is unbound, or bound to another dtype, rank or layout, gives `piece.bad_binding`. Buffer inputs that form a cycle give `piece.cycle`. A binding that names a resource that the other piece does not publish also gives `piece.bad_binding`.
+The editor checks each binding against the catalog. It checks the dtype and rank of a tensor, and the layout of the published resource of another program. An input that is unbound and not optional, or an input bound to another dtype, rank or layout, gives `piece.bad_binding`. Buffer inputs that form a cycle give `piece.cycle`. A binding that names a resource that the other piece does not publish also gives `piece.bad_binding`.
 
 A buffer input makes the programs of a spec a graph. Only the draw half reads a buffer input. The viewer gives it the version of the other resource at the cursor.
 
@@ -440,7 +443,7 @@ The editor, the script and the viewer refuse a piece with a stable code before a
 | `piece.exists` | That name and version exist in the workspace |
 | `piece.read_only` | A command would change a library piece |
 | `piece.in_use` | A program of the open spec pins that version |
-| `piece.bad_binding` | An input that is unbound, or bound to another dtype, rank or layout |
+| `piece.bad_binding` | An input that is unbound and not optional, or bound to another dtype, rank or layout |
 | `piece.cycle` | A piece depends on itself, or a program binds a resource of its own |
 | `program.form_mixed` | A program has keys of the one-pass form and a pin |
 | `program.bad_resource` | A kind, count or size of a resource, published resources above 8 MiB together, or a duplicate id |

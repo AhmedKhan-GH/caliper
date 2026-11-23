@@ -98,6 +98,11 @@ typedef struct caliper_producer_derive_desc {
     size_t param_count;               /* at most 16                                           */
     double time_limit_ms;             /* all passes of one run                                */
     uint64_t memory_limit_bytes;      /* resources and bound tensors                          */
+    const uint8_t* input_unbound;     /* NULL, or a flag for each input: 1 for an optional    */
+                                      /* tensor input that the program leaves unbound, with   */
+                                      /* tensor 0 and its dtype; it binds 16 zero bytes, its  */
+                                      /* shape in `shapes` is (0, 0, 0, 0), and every read of */
+                                      /* it gives zero                                        */
 } caliper_producer_derive_desc;
 
 /* Checks, composes and compiles a derive program, allocates its resources

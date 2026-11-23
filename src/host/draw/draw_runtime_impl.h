@@ -55,6 +55,7 @@ struct DrawRuntime::Impl {
         // version that replaces another at the same step; 0 before the first.
         std::uint64_t serial = 0;
         bool keep_cpu = false;                       // the item map or the text table reads it
+        bool unbound = false;                        // an optional buffer input left unbound: count 0
         std::vector<std::uint8_t> cpu;               // the bytes of that version, when keep_cpu
         std::uint64_t drawn_serial = 0;              // the version that the last frame showed
         std::shared_ptr<const Shown> shown;          // its copy; null before a frame showed one

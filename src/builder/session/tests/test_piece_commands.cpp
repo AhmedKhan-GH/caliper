@@ -461,6 +461,25 @@ TEST_CASE("pieces: program.create pins a workspace piece with its hash and check
     ok(*s, "program.create",
        {{"id", "bars"}, {"piece", {{"name", "bars"}, {"from", "workspace"}}}, {"panel", "world"},
         {"bind", {{"values", "program:rows/row"}}}});
+    // An optional input may stay unbound; the hash covers the key, and a bound optional input
+    // is still checked. (The draw runtime's tests cover an unbound buffer input.)
+    json loose = rows_piece();
+    loose["name"] = "loose_rows";
+    loose["inputs"].push_back({{"name", "v"}, {"kind", "tensor"}, {"dtype", "i32"}, {"optional", true}});
+    const std::string loose_hash = ok(*s, "piece.update", {{"piece", loose}})["hash"];
+    json strict = loose;
+    strict["name"] = "strict_rows";
+    strict["inputs"][1].erase("optional");
+    ok(*s, "piece.update", {{"piece", strict}});
+    ok(*s, "program.create",
+       {{"id", "loose"}, {"piece", {{"name", "loose_rows"}, {"from", "workspace"}}}, {"bind", {{"w", "live:w"}}}});
+    CHECK(s->open_spec()->spec.find_program("loose")->piece->hash == loose_hash);
+    CHECK(err(*s, "program.create",
+              {{"id", "strict"}, {"piece", {{"name", "strict_rows"}, {"from", "workspace"}}}, {"bind", {{"w", "live:w"}}}}) ==
+          "piece.bad_binding");
+    CHECK(err(*s, "program.create",
+              {{"id", "loose2"}, {"piece", {{"name", "loose_rows"}, {"from", "workspace"}}},
+               {"bind", {{"w", "live:w"}, {"v", "program:rows/row"}}}}) == "piece.bad_binding");
 
     // program.patch pins the next version, with its hash.
     json next = uv_field();

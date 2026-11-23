@@ -208,7 +208,9 @@ inline bool operator==(const Layout& a, const Layout& b) {
 // the derive half, with its shape in the generated uniform `shapes`; its rank
 // must be from rank_min to rank_max. A buffer input is a read-only array of
 // `layout` in the draw half, bound to another program's published buffer
-// resource with the same layout.
+// resource with the same layout. An optional input may stay unbound: a tensor
+// input then reads as an empty array with the shape (0, 0, 0, 0), and a buffer
+// input as an empty array with the count 0.
 struct PieceInput {
     std::string name;                        // the WGSL name of the generated binding
     InputKind kind = InputKind::tensor;
@@ -217,10 +219,11 @@ struct PieceInput {
     std::uint32_t rank_max = 8;
     Layout layout;                           // buffer
     std::optional<std::string> title;
+    bool optional = false;                   // a program may leave it unbound
 };
 inline bool operator==(const PieceInput& a, const PieceInput& b) {
     return a.name == b.name && a.kind == b.kind && a.dtype == b.dtype && a.rank_min == b.rank_min &&
-           a.rank_max == b.rank_max && a.layout == b.layout && a.title == b.title;
+           a.rank_max == b.rank_max && a.layout == b.layout && a.title == b.title && a.optional == b.optional;
 }
 
 // One entry of `params`: a field of the generated struct Params, which both

@@ -494,6 +494,58 @@ fn run(@builtin(local_invocation_index) i: u32) {
     CHECK(refused(f.rt, shared) == "program.workgroup_memory");
 }
 
+TEST_CASE("an optional tensor input left unbound reads as an empty array with the shape (0, 0, 0, 0)") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    // extra is optional and unbound: shapes.extra is zero and every read of it gives zero.
+    Piece p = f.piece(R"(@compute @workgroup_size(4)
+fn look(@builtin(global_invocation_id) id: vec3<u32>) {
+    out[id.x] = vec4<u32>(shapes.extra[id.x], bitcast<u32>(extra[id.x * 9u]), shapes.attn0.w, 7u);
+}
+)");
+    p.inputs.push_back({"extra", 0});
+    p.input_types.push_back("i32");
+    p.buffer("out", "vec4<u32>", 4);
+    p.pass("look", 1, {"out"});
+    std::vector<uint8_t> unbound{0, 1};
+    caliper_producer_derive_desc d = p.desc();
+    d.input_unbound = unbound.data();
+    uint32_t prog = 0;
+    caliper_producer_error e{};
+    if (!compile_or_skip(f.rt, d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+    caliper_producer_frame frame{1, 0.0, 1};
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+    caliper_producer_output out{};
+    const std::vector<uint32_t> v = read<uint32_t>(f.rt, prog, "out", &out);
+    REQUIRE(v.size() == 16);
+    for (int i = 0; i < 4; ++i) {
+        CHECK(v[4 * i + 0] == 0u);       // the shape of the unbound input
+        CHECK(v[4 * i + 1] == 0u);       // its reads, also past its 16 bytes
+        CHECK(v[4 * i + 2] == kT);       // the bound input keeps its shape
+        CHECK(v[4 * i + 3] == 7u);
+    }
+    caliper_producer_error_free(&e);
+
+    // Without the flag, a tensor 0 is the place of a buffer input, which the derive half does
+    // not declare: the source does not compile.
+    caliper_producer_derive_desc plain = p.desc();
+    plain.input_unbound = nullptr;
+    uint32_t none = 9;
+    CHECK(caliper_producer_compile_derive(f.rt, &plain, &none, &e) == CALIPER_PRODUCER_REFUSED);
+    CHECK(none == 0);
+    caliper_producer_error_free(&e);
+    // An input marked unbound that has a tensor is refused before the compile.
+    Piece both = f.piece("@compute @workgroup_size(1)\nfn run() { a[0] = attn0[0]; }\n");
+    both.buffer("a", "f32", 4);
+    both.pass("run", 1, {"a"});
+    std::vector<uint8_t> flag{1};
+    caliper_producer_derive_desc bd = both.desc();
+    bd.input_unbound = flag.data();
+    CHECK(caliper_producer_compile_derive(f.rt, &bd, &none, &e) == CALIPER_PRODUCER_REFUSED);
+    CHECK(std::string(e.code) == "piece.bad_binding");
+    caliper_producer_error_free(&e);
+}
+
 TEST_CASE("the compile refuses a store into a tensor and a binding of a derive pass's own") {
     Fixture f;
     if (f.device == nil) { MESSAGE("no Metal device"); return; }

@@ -874,7 +874,9 @@ public:
         if (auto v = count(o, "version", path)) p.version = *v;
         if (auto v = string(o, "description", path)) p.description = *v;
         tables(o, "inputs", path, [&](const json& t, const std::string& ip) {
-            strict_keys(t, ip, {"name", "kind", "dtype", "rank_min", "rank_max", "element", "struct", "fields", "title"},
+            strict_keys(t, ip,
+                        {"name", "kind", "dtype", "rank_min", "rank_max", "element", "struct", "fields", "title",
+                         "optional"},
                         "an input");
             PieceInput in;
             in.name = required_string(t, "name", ip, "An input");
@@ -886,6 +888,7 @@ public:
             if (auto v = count(t, "rank_max", ip)) in.rank_max = *v;
             in.layout = piece_layout(t, ip);
             in.title = string(t, "title", ip);
+            if (auto v = boolean(t, "optional", ip)) in.optional = *v;
             p.inputs.push_back(std::move(in));
         });
         tables(o, "params", path, [&](const json& t, const std::string& pp) {
