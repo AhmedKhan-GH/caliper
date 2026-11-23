@@ -83,23 +83,28 @@ test('a pick of an arc gives its fields, writes the page own state, highlights t
   await expect.poll(async () => (await labels('pattern')).length, { timeout: 10_000 }).toBeGreaterThan(0);
   expect(await labels('tower')).toContain('fox');
 
+  // Wait for arc pixels as well as the program state, then keep that image as the baseline.
   // Coloured pixels of the arcs (not the white token labels), at most 24 at least 12 pixels apart.
-  const before = await pixels(page, 'tower');
-  const all: [number, number, number][] = [];
-  for (let y = 0; y < before.h; y += 2)
-    for (let x = 0; x < before.w; x += 2) {
-      const i = 4 * (y * before.w + x), d = before.px;
-      const mx = Math.max(d[i], d[i + 1], d[i + 2]), mn = Math.min(d[i], d[i + 1], d[i + 2]);
-      if (mx - mn > 50 && mx > 120) all.push([2 * mx - mn, x, y]);
-    }
-  all.sort((a, b) => b[0] - a[0]);
+  let before!: Awaited<ReturnType<typeof pixels>>;
   const chosen: [number, number][] = [];
-  for (const [, x, y] of all) {
-    if (chosen.some((q) => Math.abs(q[0] - x) < 12 && Math.abs(q[1] - y) < 12)) continue;
-    chosen.push([x, y]);
-    if (chosen.length >= 24) break;
-  }
-  expect(chosen.length).toBeGreaterThan(0);
+  await expect.poll(async () => {
+    before = await pixels(page, 'tower');
+    const all: [number, number, number][] = [];
+    for (let y = 0; y < before.h; y += 2)
+      for (let x = 0; x < before.w; x += 2) {
+        const i = 4 * (y * before.w + x), d = before.px;
+        const mx = Math.max(d[i], d[i + 1], d[i + 2]), mn = Math.min(d[i], d[i + 1], d[i + 2]);
+        if (mx - mn > 50 && mx > 120) all.push([2 * mx - mn, x, y]);
+      }
+    all.sort((a, b) => b[0] - a[0]);
+    chosen.length = 0;
+    for (const [, x, y] of all) {
+      if (chosen.some((q) => Math.abs(q[0] - x) < 12 && Math.abs(q[1] - y) < 12)) continue;
+      chosen.push([x, y]);
+      if (chosen.length >= 24) break;
+    }
+    return chosen.length;
+  }, { timeout: 10_000, message: 'the tower canvas contains its rendered arcs' }).toBeGreaterThan(0);
   // From the canvas's pixels to the page's CSS pixels, through the device pixel ratio of the canvas.
   const box = await page.evaluate(() => {
     const r = ((window as any).caliperSpec.programs.canvasOf('tower') as HTMLCanvasElement).getBoundingClientRect();
