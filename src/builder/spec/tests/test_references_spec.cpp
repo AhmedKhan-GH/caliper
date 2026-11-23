@@ -200,6 +200,25 @@ TEST_CASE("references spec: select option") {
     CHECK_MESSAGE(has(heatmap.diagnostics, "spec.unknown_option"), dump(heatmap.diagnostics));
 }
 
+// A pick in a scene panel where an instance of a piece draws also gives the fields of the piece's item map, which
+// the spec does not list: select writes one into a state, and a selection reference reads one as a number.
+TEST_CASE("references spec: item map fields of a panel's piece programs") {
+    const std::string program =
+        "[[program]]\nid = \"arcs\"\npanel = \"world\"\nbind = { attn = \"live:attn\" }\n"
+        "piece = { name = \"arcs\", version = 1, from = \"workspace\", hash = \"sha256:" +
+        std::string(64, 'a') + "\" }\n"
+        "[[program]]\nid = \"field\"\npanel = \"world\"\nbind = { attn = \"live:attn\" }\n"
+        "params = { layer = { selection = \"world\", field = \"layer\", default = 1 } }\n"
+        "piece = { name = \"field\", version = 1, from = \"workspace\", hash = \"sha256:" +
+        std::string(64, 'b') + "\" }\n";
+    auto good = check(std::string(kToken) + scene_select("{ state = \"token\", field = \"head\" }") + program);
+    CHECK_MESSAGE(!has(good.diagnostics, "spec.unknown_field"), dump(good.diagnostics));
+    CHECK_MESSAGE(!has(good.diagnostics, "spec.reference_type"), dump(good.diagnostics));
+    // Without a program in the panel, the name is no pick field.
+    auto alone = check(std::string(kToken) + scene_select("{ state = \"token\", field = \"head\" }"));
+    CHECK_MESSAGE(has(alone.diagnostics, "spec.unknown_field", "panel[0].options.select.field"), dump(alone.diagnostics));
+}
+
 // Each reference rule reports its code at the path of the reference, and the path maps to the TOML line.
 TEST_CASE("references spec: reference codes") {
     const std::string states = std::string(kToken) + kMeasure + kScenePanel;

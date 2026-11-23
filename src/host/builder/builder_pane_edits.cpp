@@ -576,6 +576,10 @@ std::string pane_panel_id(Primitive p, const spec::Spec& s) {
     return unique_id(spec::to_string(p), [&](const std::string& c) { return s.find_panel(c) != nullptr; });
 }
 
+std::string pane_program_id(const std::string& piece_name, const spec::Spec& s) {
+    return unique_id(piece_name, [&](const std::string& c) { return s.find_program(c) != nullptr; });
+}
+
 spec::Spec pane_rename_panel(const spec::Spec& s, const std::string& from, const std::string& to) {
     spec::Spec out = s;
     for (auto& p : out.panels)

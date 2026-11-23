@@ -189,6 +189,9 @@ struct Run {
     // A fork that waits for its parent's checkpoint.
     std::string waits_for;                   // the parent's id; "" when not waiting
     std::uint32_t checkpoint_request = 0;
+    // A fork's interventions as a JSON array, which its script applies before
+    // its first step (CALIPER_RUN_INTERVENTIONS); "" when it has none.
+    std::string interventions;
     // A fork's series start at its parent's checkpoint step: the run sources
     // put this many NaN values first, so that the fork's curve continues its
     // parent's on one step axis.
@@ -576,11 +579,58 @@ ChildSpec run_spec(const ModelRunner::Options& o, const std::string& python, con
     spec.env.emplace_back("CALIPER_RUN_LINK_FILE", r.link_file);
     spec.env.emplace_back("CALIPER_RUN_APP_PID", std::to_string(current_process_id()));
     if (!r.entry.params.empty()) spec.env.emplace_back("CALIPER_RUN_PARAMS", r.entry.params.dump());
+    if (!r.interventions.empty()) spec.env.emplace_back("CALIPER_RUN_INTERVENTIONS", r.interventions);
     spec.env.insert(spec.env.end(), extra.begin(), extra.end());
     spec.env.emplace_back("PYTHONUNBUFFERED", "1");
     spec.cwd = o.workspace;
     spec.output = r.output;
     return spec;
+}
+
+// The step of a kept checkpoint's file name, checkpoint-<step>.<ext> (the
+// process contract): 1 to 15 digits, then a dot and 1 to 8 characters of
+// a-z and 0-9. False for any other name.
+bool kept_checkpoint_step(const std::string& name, std::uint64_t* step, std::string* ext) {
+    const std::string prefix = "checkpoint-";
+    if (name.rfind(prefix, 0) != 0) return false;
+    std::size_t k = prefix.size();
+    std::uint64_t v = 0;
+    for (; k < name.size() && name[k] >= '0' && name[k] <= '9' && k - prefix.size() < 15; ++k)
+        v = v * 10 + static_cast<std::uint64_t>(name[k] - '0');
+    if (k == prefix.size() || k >= name.size() || name[k] != '.') return false;
+    const std::string e = name.substr(k + 1);
+    if (e.empty() || e.size() > 8) return false;
+    for (const char ch : e)
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9'))) return false;
+    *step = v;
+    *ext = e;
+    return true;
+}
+
+// The newest kept checkpoint of the run folder `run_dir` at or before
+// `step`, from <run dir>/kept/ (the process contract), as its path, step and
+// extension; false when there is none. *oldest gets the step of the oldest
+// kept checkpoint when there is one. Only a regular file counts, never a link.
+bool newest_kept_checkpoint(const std::string& run_dir, std::uint64_t step, fs::path* path, std::uint64_t* found,
+                            std::string* ext, std::optional<std::uint64_t>* oldest) {
+    std::error_code ec;
+    bool any = false;
+    fs::directory_iterator it(fs::u8path(run_dir) / "kept", ec);
+    for (const fs::directory_iterator end; !ec && it != end; it.increment(ec)) {
+        std::error_code sec;
+        if (!fs::is_regular_file(it->symlink_status(sec)) || sec) continue;
+        std::uint64_t k = 0;
+        std::string e;
+        if (!kept_checkpoint_step(it->path().filename().u8string(), &k, &e)) continue;
+        if (!*oldest || k < **oldest) *oldest = k;
+        if (k <= step && (!any || k > *found)) {
+            any = true;
+            *found = k;
+            *path = it->path();
+            *ext = e;
+        }
+    }
+    return any;
 }
 
 }  // namespace
@@ -707,12 +757,22 @@ cb::Error ModelRunner::start(const cb::RunStartRequest& request, cb::RunEntry* o
 
 cb::Error ModelRunner::fork(const cb::RunForkRequest& request, cb::RunEntry* out) {
     RunnerState& s = *state_;
+    // A fork from a kept checkpoint starts at once, thus it needs the interpreter now.
+    std::string python;
+    if (request.step) {
+        std::string py_error;
+        python = runner_python(s.options, &py_error);
+        if (python.empty())
+            return fail(cb::kRunStartFailed, py_error.empty() ? "No Python interpreter was found." : py_error);
+    }
     std::vector<cb::Event> events;
     {
         std::lock_guard<std::mutex> lock(s.m);
+        if (s.shut) return fail(cb::kRunStartFailed, "The model runner has shut down.");
         Run* parent = s.find(request.parent);
         if (!parent) return fail(cb::kRunNotFound, "There is no managed run " + request.parent + "; run.list lists the runs.", "args.run");
-        if (finished(parent->entry.state) || !parent->conn || parent->conn->state() != RunConnection::State::open)
+        const bool open = parent->conn && parent->conn->state() == RunConnection::State::open;
+        if (finished(parent->entry.state) || (!request.step && !open))
             return fail(cb::kRunNotReady,
                         "The run " + request.parent + " is " + parent->entry.state +
                             ", and a fork needs a run that runs or is paused, with its stream connected.",
@@ -732,12 +792,67 @@ cb::Error ModelRunner::fork(const cb::RunForkRequest& request, cb::RunEntry* out
             return fail(cb::kRunExists, "A run " + id + " exists in this workspace (runs/" + id + "); choose another id.",
                         "args.id");
         }
-        std::string err;
-        const std::uint32_t rid = parent->conn->send_control("run", kCheckpointAction, json(), 1, &err);
-        if (!rid) return fail(cb::kRunNotReady, "The checkpoint request could not be sent to " + request.parent + ": " + err);
+        // A fork from a past step: the newest kept checkpoint at or before it,
+        // which no until_step of an intervention may reach.
+        fs::path kept;
+        std::uint64_t kept_step = 0;
+        std::string kept_ext;
+        if (request.step) {
+            std::optional<std::uint64_t> oldest;
+            if (!newest_kept_checkpoint(parent->dir, *request.step, &kept, &kept_step, &kept_ext, &oldest))
+                return fail(cb::kRunNotReady,
+                            "The run " + request.parent + " kept no checkpoint at or before step " +
+                                std::to_string(*request.step) +
+                                (oldest ? "; its oldest kept checkpoint is at step " + std::to_string(*oldest) + "."
+                                        : "; it keeps checkpoints from its first training step on."),
+                            "args.step");
+            for (std::size_t i = 0; i < request.interventions.size(); ++i) {
+                const json& iv = request.interventions[i];
+                const auto u = iv.find("until_step");
+                if (u == iv.end() || !u->is_number_integer()) continue;
+                const std::uint64_t until = u->is_number_unsigned() ? u->get<std::uint64_t>()
+                                            : u->get<std::int64_t>() < 0 ? 0
+                                                                         : static_cast<std::uint64_t>(u->get<std::int64_t>());
+                if (until <= kept_step)
+                    return fail(cb::kInterveneBadRange,
+                                "until_step " + std::to_string(until) +
+                                    " is not above the step " + std::to_string(kept_step) +
+                                    " of the kept checkpoint, where the fork starts.",
+                                "args.interventions[" + std::to_string(i) + "].until_step");
+            }
+        }
+        std::uint32_t rid = 0;
+        if (!request.step) {
+            std::string err;
+            rid = parent->conn->send_control("run", kCheckpointAction, json(), 1, &err);
+            if (!rid) return fail(cb::kRunNotReady, "The checkpoint request could not be sent to " + request.parent + ": " + err);
+        }
         const fs::path dir = runs / id;
         fs::create_directories(dir, ec);
         if (ec) return fail(cb::kRunStartFailed, "The run's folder runs/" + id + " could not be made: " + ec.message() + ".");
+        // The fork reads its own link of the kept checkpoint, or a copy, so that
+        // the parent's thinning of its kept checkpoints cannot remove it. A
+        // checkpoint that the thinning removed in between gives the next newest.
+        fs::path resume;
+        for (int attempt = 0; request.step && resume.empty(); ++attempt) {
+            const fs::path target = dir / ("resume-" + std::to_string(kept_step) + "." + kept_ext);
+            std::error_code lec;
+            fs::create_hard_link(kept, target, lec);
+            if (lec) {
+                lec.clear();
+                fs::copy_file(kept, target, fs::copy_options::overwrite_existing, lec);
+            }
+            if (!lec) {
+                resume = target;
+                break;
+            }
+            std::optional<std::uint64_t> oldest;
+            if (attempt >= 2 || !newest_kept_checkpoint(parent->dir, *request.step, &kept, &kept_step, &kept_ext, &oldest)) {
+                fs::remove_all(dir, ec);
+                return fail(cb::kRunStartFailed, "The kept checkpoint " + kept.filename().u8string() + " of " +
+                                                     request.parent + " could not be read: " + lec.message() + ".");
+            }
+        }
 
         auto run = std::make_unique<Run>();
         run->entry.id = id;
@@ -749,8 +864,21 @@ cb::Error ModelRunner::fork(const cb::RunForkRequest& request, cb::RunEntry* out
         run->dir = dir.u8string();
         run->link_file = (dir / "link.txt").u8string();
         run->output = (dir / "output.log").u8string();
-        run->waits_for = request.parent;
-        run->checkpoint_request = rid;
+        if (!request.interventions.empty()) run->interventions = request.interventions.dump();
+        if (request.step) {
+            run->offset = std::min<std::uint64_t>(kept_step, s.options.max_series_values);
+            std::string err;
+            run->proc = start_child(
+                run_spec(s.options, python, *run, {{"CALIPER_RUN_RESUME", resume.u8string()}, {"CALIPER_RUN_PARENT", request.parent}}),
+                &err);
+            if (!run->proc) {
+                fs::remove_all(dir, ec);
+                return fail(cb::kRunStartFailed, err);
+            }
+        } else {
+            run->waits_for = request.parent;
+            run->checkpoint_request = rid;
+        }
         run->started = Clock::now();
         run->control = std::make_unique<ConnectionControl>(state_.get(), id);
         *out = s.entry_of(*run);
@@ -841,6 +969,15 @@ cb::RunControl* ModelRunner::control_of(const std::string& id, cb::Error* error)
     if (s.attached && r->link == s.attached_link && s.app_control) return s.app_control;
     s.attach_next = r->link;   // the app switches to it at its next frame
     return r->control.get();
+}
+
+std::vector<cb::InterventionPoint> ModelRunner::intervention_points(const std::string& id) {
+    ConnectionControl* control = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(state_->m);
+        if (Run* r = state_->find(id)) control = r->control.get();   // a run stays in the table
+    }
+    return control ? control->intervention_points() : std::vector<cb::InterventionPoint>();
 }
 
 void ModelRunner::shutdown() {

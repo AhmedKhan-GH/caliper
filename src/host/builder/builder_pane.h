@@ -18,6 +18,11 @@
 //     opening to its metrics, the newest kPaneRunsShown runs until Show all;
 //     the filter searches every run. The catalog is listed per kind, so that
 //     metrics never crowd the other kinds out of a list cut at its limit.
+//     The group Pieces lists every piece of piece.list (the library, the
+//     workspace and the open spec's inline pieces), each as <name>@<version>
+//     with its source and its one line; dragging one onto a scene panel, or
+//     selecting it and Add with a scene panel focused, makes a program that
+//     is an instance of it drawing in that panel (program.create).
 //     Dragging a source or a column onto the canvas or
 //     onto a panel's slot is the main gesture; select, then Add (⏎) is the
 //     other way.
@@ -156,10 +161,11 @@ private:
 
 // ---- what the pane shows ----------------------------------------------------------------
 
-// One row of the Sources palette: a catalog source, or a source of the open
-// spec (the group "Spec"), which carries its transforms.
+// One row of the Sources palette: a catalog source, a source of the open
+// spec (the group "Spec"), which carries its transforms, or a piece (the
+// group "Pieces"), whose key is "piece:<from>/<name>@<version>".
 struct PaneSource {
-    enum class Group { spec, table, tensor, live, feed, metric };
+    enum class Group { spec, table, tensor, live, feed, piece, metric };
     Group group = Group::table;
     std::string key;          // the catalog id ("table:run42_metrics"), or "spec:<id>"
     std::string name;         // the catalog name, or the spec source's id
@@ -171,8 +177,20 @@ struct PaneSource {
     // A metric's run and tag, from its catalog origin; run -1 for other rows.
     std::int64_t run = -1;
     std::string run_name, experiment, tag;
+    // A piece's pin without its hash ({name, version, from}), which its
+    // program takes and the session completes with the hash; null for other
+    // rows. Its inputs' names, which a program binds, and whether it draws.
+    nlohmann::json piece;
+    std::vector<std::string> inputs;
+    bool draws = false;
 };
-const char* pane_group_label(PaneSource::Group g);   // "Spec", "Tables", "Tensors", "Live", "Feeds", "Metrics"
+// "Spec", "Tables", "Tensors", "Live", "Feeds", "Pieces", "Metrics"
+const char* pane_group_label(PaneSource::Group g);
+// The rows of the group Pieces from a piece.list result, in its order (the
+// library, then the workspace and the inline pieces, by name and version):
+// the name <name>@<version>, the shape text "<from> · <description>". An
+// entry without a name is left out; nothing throws on a malformed result.
+std::vector<PaneSource> pane_piece_rows(const nlohmann::json& piece_list_result);
 
 // One line of the Sources list as it is drawn. Metrics are grouped by run:
 // a run's line, newest run (highest id) first, opens to its metrics; only
@@ -291,7 +309,8 @@ public:
         show_all_runs_ = on;
     }
     // The selection: one row, or one column of a tabular row. Selecting a
-    // row focuses it in Properties.
+    // row focuses it in Properties; a piece row keeps the focus, so that Add
+    // puts the piece into the focused scene panel.
     const std::string& selected() const { return selected_; }
     const std::string& selected_column() const { return selected_column_; }
     void select(const std::string& key, const std::string& column = {});
@@ -524,6 +543,8 @@ private:
     // catalog.list of one kind into catalog_; for metrics, a list that is cut
     // at the limit is listed again by the next digit of the name.
     void list_kind(const std::string& kind, const std::string& prefix, int depth);
+    // piece.list into pieces_; true when its answer changed.
+    bool list_pieces();
     void rebuild_rows();
     void invalidate_caches();
     std::string next_group();
@@ -538,6 +559,12 @@ private:
     Resolved resolve_row(const std::string& key) const;
     PanePlan plan_new_panel(const std::string& key, const std::string& column,
                             std::optional<caliper_builder::spec::Primitive> primitive, const DropHit& hit) const;
+    // A piece row added or dropped: program.create of an instance of it in
+    // the scene panel under the drop (its centre or a slot), or the focused
+    // one for an Add. A piece with inputs, a primitive, an edge or the whole
+    // layout as the target, and a panel that is no scene panel are refused.
+    PanePlan plan_piece(const PaneSource& row, std::optional<caliper_builder::spec::Primitive> primitive,
+                        const DropHit& hit) const;
     PanePlan plan_spec_text(const caliper_builder::spec::Spec& spec) const;
     const caliper_builder::spec::Panel* panel() const;          // the focused panel
     const caliper_builder::spec::Source* spec_source() const;   // the focused spec source
@@ -555,6 +582,7 @@ private:
     uint64_t seen_version_ = ~uint64_t(0);
     uint64_t seen_catalog_ = ~uint64_t(0);
     nlohmann::json catalog_ = nlohmann::json::array();   // catalog.list's entries
+    nlohmann::json pieces_;                              // piece.list's result; null when it failed
     std::vector<PaneSource> rows_;
     std::string filter_;
     std::set<std::string> expanded_;

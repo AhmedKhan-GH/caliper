@@ -1150,6 +1150,11 @@ bool SpecPage::pick_scene(const std::string& panel_id, float u, float v) {
     return impl_->runtime->pick_scene(panel_id, u, v);
 }
 
+bool SpecPage::scene_ready(const std::string& panel_id) {
+    const caliper_live_views::SceneView* v = impl_->runtime->scene_view_of(panel_id);
+    return v && v->generation() > 0;
+}
+
 std::string SpecPage::browser_note() const { return impl_->browser_note(); }
 
 bool SpecPage::item_rect(const std::string& name, float rect[4]) const {
@@ -1343,6 +1348,7 @@ void SpecPage::set_open_in_browser(std::function<std::string(const std::string&)
 void SpecPage::set_dim_names(std::function<std::vector<std::string>(const std::string&)>) {}
 void SpecPage::set_live_core(std::function<CaliperCore*()>) {}
 bool SpecPage::pick_scene(const std::string&, float, float) { return false; }
+bool SpecPage::scene_ready(const std::string&) { return false; }
 bool SpecPage::item_rect(const std::string&, float*) const { return false; }
 bool SpecPage::panel_rect(const std::string&, float*) const { return false; }
 std::string SpecPage::widget_state() const { return "idle"; }

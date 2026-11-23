@@ -8,9 +8,15 @@
 // clears the panel's selection and pushes a `select` event that names no
 // entity. selection.get gives the fields of the panel's last pick.
 #include <caliper_builder/session/instrument_commands.h>
+#include <caliper_builder/session/history.h>
+#include <caliper_builder/session/piece_commands.h>
+#include <caliper_builder/programs/pieces.h>
+#include <caliper_builder/programs/sandbox.h>   // program.not_found
 
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 
 namespace caliper_builder {
@@ -121,6 +127,95 @@ Error item_fields(const EntityData& e, std::int64_t index, PickFields* out) {
     return {};
 }
 
+// A pick of a program's item (design/programmable-graphics.md, Picking): the element `item` of
+// the item map's resource in the version at the cursor, with the map's fields by name, as a
+// person's pick in the panel gives them. The program must draw in the panel and pin a piece
+// with an item map; the item must lie within the version's valid count and its bytes.
+CommandOutput program_pick(const CommandContext& ctx, InstrumentContext& ic, const std::string& panel_id) {
+    const json& args = ctx.invocation.args;
+    const std::string id = str_arg(args, "program");
+    const spec::Program* program = nullptr;
+    for (const spec::Program& p : ic.spec.programs)
+        if (p.id == id) program = &p;
+    if (!program)
+        return CommandOutput::fail(Error(programs::kProgramNotFound, "The open spec has no program " + id + ".", "args.program"));
+    if (!program->piece || program->panel.value_or("") != panel_id)
+        return CommandOutput::fail(bad_item("The program " + id + " draws no piece in the panel " + panel_id + "."));
+    // A whole number from 0 to 2^32 - 1: a negative one, or one that would wrap, is refused.
+    const json given = args.value("item", json());
+    const bool whole = given.is_number_unsigned() || (given.is_number_integer() && given.get<std::int64_t>() >= 0);
+    if (!whole || given.get<std::uint64_t>() > 0xffffffffull)
+        return CommandOutput::fail(Error("selection.bad_item", "The item of a program is a whole number from 0 to 4294967295.",
+                                         "args.item"));
+    const std::uint64_t item = given.get<std::uint64_t>();
+    const FoundPiece found = resolve_pin(PieceLibrary::builtin(), ic.workspace, ic.spec, *program->piece);
+    if (found.error) return CommandOutput::fail(found.error);
+    const spec::Piece& piece = found.piece;
+    if (!piece.draw || !piece.draw->pick)
+        return CommandOutput::fail(Error(programs::kProgramBadPick, "The piece " + piece.name + " has no item map.", "args.program"));
+    const spec::PickMap& map = *piece.draw->pick;
+    const spec::Resource* resource = nullptr;
+    for (const spec::Resource& r : piece.resources)
+        if (r.id == map.resource) resource = &r;
+    programs::ElementLayout layout;
+    if (!resource || resource->kind != spec::ResourceKind::buffer || !programs::element_layout(resource->layout, &layout).ok() ||
+        layout.stride == 0)
+        return CommandOutput::fail(Error(programs::kProgramBadPick, "The item map of " + piece.name + " names no buffer.",
+                                         "args.program"));
+    const std::optional<ResourceVersion> version = ic.history.resource_at(id + "/" + map.resource, ic.history.cursor().step);
+    if (!version || !version->bytes)
+        return CommandOutput::fail(bad_item("The program " + id + " has no version of " + map.resource + " at the cursor yet."));
+    // The item against the valid count and the bytes that the version holds, without a wrap.
+    if (item >= version->count || item >= version->bytes->size() / layout.stride)
+        return CommandOutput::fail(Error("selection.bad_item",
+                                         "The program " + id + " has " + std::to_string(version->count) + " items in " +
+                                             map.resource + " at step " + std::to_string(version->step) + ", and item " +
+                                             std::to_string(item) + " is not one of them.",
+                                         "args.item"));
+    const std::uint8_t* e = version->bytes->data() + item * layout.stride;
+    PickFields fields;
+    fields.entity = id;
+    fields.program = id;
+    fields.item = std::int64_t(item);
+    fields.step = version->step;
+    std::array<std::int64_t, 4> index{-1, -1, -1, -1};
+    std::size_t integers = 0;
+    for (const std::string& name : map.fields) {
+        const programs::FieldLayout* f = nullptr;
+        for (const programs::FieldLayout& l : layout.fields)
+            if (l.name == name) f = &l;
+        if (!f || f->size != 4 || std::uint64_t(f->offset) + 4 > layout.stride) continue;   // scalars only
+        std::uint32_t raw;
+        std::memcpy(&raw, e + f->offset, 4);
+        double value;
+        if (f->type == "f32") {
+            float x;
+            std::memcpy(&x, &raw, 4);
+            value = x;
+        } else if (f->type == "i32") {
+            value = double(std::int32_t(raw));
+        } else {
+            value = double(raw);
+        }
+        if (!std::isfinite(value)) continue;
+        fields.program_fields.emplace_back(name, value);
+        if (f->type != "f32" && integers < index.size()) index[integers++] = value <= 2147483647.0 ? std::int64_t(value) : -1;
+    }
+    fields.tensor_index = index;
+    const json all = pick_fields_json(fields);
+    if (ic.events) {
+        Event ev;
+        ev.kind = EventKind::pick;
+        ev.panel = panel_id;
+        ev.origin = command_origin_name(ctx.invocation.origin);
+        ev.fields = json{{"program", id}, {"item", item}, {"step", version->step}, {"fields", all["fields"]},
+                         {"index", index}};
+        ic.events->push(std::move(ev));
+    }
+    ic.values.record_pick(panel_id, fields, ctx.invocation.origin, ic.events);
+    return CommandOutput::ok(json{{"fields", all}});
+}
+
 CommandOutput selection_set(const CommandContext& ctx, InstrumentContext& ic) {
     const json& args = ctx.invocation.args;
     const std::string panel_id = str_arg(args, "panel");
@@ -138,6 +233,7 @@ CommandOutput selection_set(const CommandContext& ctx, InstrumentContext& ic) {
         }
         return CommandOutput::ok(json{{"fields", nullptr}});
     }
+    if (panel->primitive == spec::Primitive::scene && args.contains("program")) return program_pick(ctx, ic, panel_id);
     if (panel->primitive != spec::Primitive::scene)
         return CommandOutput::fail(bad_item("The panel " + panel_id + " is a " + spec::to_string(panel->primitive) +
                                             " panel; only the items of a scene panel's entities are picked."));

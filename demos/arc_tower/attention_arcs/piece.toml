@@ -1,0 +1,104 @@
+name = "attention_arcs"
+version = 1
+description = "Arcs between the tokens of one sentence, one ring for each layer, from the attention weights"
+imports = ["colormap@1", "pick@1", "camera@1"]
+
+[[inputs]]
+name = "attn0"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+title = "Attention Weights of Layer 0"
+
+[[inputs]]
+name = "attn1"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+title = "Attention Weights of Layer 1"
+
+[[params]]
+name = "threshold"
+default = 0.05
+min = 0.0
+max = 0.5
+title = "Weight Threshold"
+
+[[params]]
+name = "glow"
+default = 1.0
+min = 0.0
+max = 4.0
+title = "Glow"
+
+[[resources]]
+id = "heads"
+kind = "buffer"
+element = "f32"
+count = 8
+
+[[resources]]
+id = "arcs"
+kind = "buffer"
+struct = "Arc"
+fields = ["from_token: u32", "to_token: u32", "layer: u32", "head: u32", "weight: f32", "score: f32"]
+count = 4096
+counted = true
+
+[[resources]]
+id = "labels"
+kind = "buffer"
+struct = "Label"
+fields = ["position: vec4<f32>", "string: u32"]
+count = 32
+
+[[derive.passes]]
+entry = "scores"
+writes = ["heads"]
+
+[[derive.passes]]
+entry = "build"
+workgroups = [128, 1, 1]
+writes = ["arcs"]
+
+[[derive.passes]]
+entry = "place_labels"
+
+[draw]
+camera = "orbit"
+targets = [{ id = "glow", scale = 0.5 }]
+pick = { resource = "arcs", fields = ["layer", "head", "from_token", "to_token", "weight", "score"] }
+
+[draw.text]
+anchors = "labels"
+strings = [
+  "the", "old", "map", "shows", "red", "fox", "jumps", "over", "lazy", "dogs", "near", "green",
+  "hills", "under", "blue", "skies", "red", "fox", "jumps", "over", "lazy", "dogs", "near", "green",
+  "hills", "under", "blue", "skies", "and", "then", "it", "ends",
+]
+
+[[draw.passes]]
+kind = "render"
+vertex = "arc_vs"
+fragment = "arc_fs"
+instances = "arcs"
+vertices = 64
+topology = "triangle_strip"
+blend = "additive"
+depth = "none"
+pick = true
+
+[[draw.passes]]
+kind = "render"
+vertex = "arc_vs"
+fragment = "arc_glow"
+instances = "arcs"
+vertices = 64
+topology = "triangle_strip"
+target = "glow"
+
+[[draw.passes]]
+kind = "render"
+fragment = "bloom"
+reads = ["glow"]
+blend = "additive"

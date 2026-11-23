@@ -563,6 +563,69 @@ TEST_CASE("gfx layer: release is deferred until the last submit that used it com
     CHECK(s.gfx.count(RecordingBackend::OpKind::Destroy, HandleKind::Buffer) == destroyed + 2);
 }
 
+TEST_CASE("gfx layer: each submit's GPU time is known once it completed, and never before") {
+    Scene s;
+    s.gfx.set_auto_complete(false);
+    s.gfx.set_gpu_ms(2.5);
+    auto submit = [&] {
+        DrawList list(s.target());
+        list.draw(s.draw(list, 4));
+        Frame f;
+        f.render(std::move(list));
+        return s.gfx.submit(std::move(f));
+    };
+    const Serial first = submit(), second = submit();
+    REQUIRE(first != 0);
+    REQUIRE(second == first + 1);
+    double ms = -2;
+    CHECK_FALSE(s.gfx.submit_gpu_ms(first, &ms));   // pending: no time, no wait
+    CHECK(ms == -2);
+    s.gfx.finish(first);
+    CHECK(s.gfx.submit_gpu_ms(first, &ms));
+    CHECK(ms == doctest::Approx(2.5));
+    CHECK_FALSE(s.gfx.submit_gpu_ms(second, &ms));
+    CHECK_FALSE(s.gfx.submit_gpu_ms(0, &ms));
+    // A backend without timestamps answers -1 for a completed submit that reported no time.
+    s.gfx.set_gpu_ms(-1);
+    s.gfx.finish(second);
+    CHECK(s.gfx.submit_gpu_ms(second, &ms));
+    CHECK(ms < 0);
+}
+
+TEST_CASE("gfx layer: with timestamps, a submit that the driver ended and a submit past the kept times are done") {
+    Caps caps = RecordingBackend::default_caps();
+    caps.bits |= kCapTimestamps;
+    Scene s(caps);
+    s.gfx.set_auto_complete(false);
+    s.gfx.set_gpu_ms(-1);   // what a wait reports: no time yet
+    auto submit = [&] {
+        DrawList list(s.target());
+        list.draw(s.draw(list, 4));
+        Frame f;
+        f.render(std::move(list));
+        return s.gfx.submit(std::move(f));
+    };
+    const Serial ended = submit(), waited = submit();
+    REQUIRE(ended != 0);
+    s.gfx.end_by_driver(ended);
+    double ms = 0;
+    CHECK(s.gfx.submit_gpu_ms(ended, &ms));   // done, and no time comes for it
+    CHECK(ms == kGpuMsNone);
+    s.gfx.finish(waited);
+    CHECK_FALSE(s.gfx.submit_gpu_ms(waited, &ms));   // its time may still come
+    // The times of the last 1,024 completions are kept; an older submit's time is forgotten.
+    s.gfx.set_gpu_ms(2.0);
+    s.gfx.set_auto_complete(true);
+    Serial last = 0;
+    for (int k = 0; k < 1024; ++k) last = submit();
+    CHECK(s.gfx.submit_gpu_ms(last, &ms));
+    CHECK(ms == doctest::Approx(2.0));
+    CHECK(s.gfx.submit_gpu_ms(ended, &ms));
+    CHECK(ms == kGpuMsForgotten);
+    CHECK(s.gfx.submit_gpu_ms(waited, &ms));
+    CHECK(ms == kGpuMsForgotten);
+}
+
 TEST_CASE("gfx layer: readback is asynchronous and taken once") {
     Scene s;
     s.gfx.set_auto_complete(false);

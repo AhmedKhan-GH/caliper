@@ -132,7 +132,9 @@ std::optional<EventKind> event_kind_from_name(std::string_view name) {
 // event_json() keeps only these, so that a producer's extra detail, such as
 // the item space of a scene's selection, never leaves the schema.
 const std::vector<const char*>& kind_keys(EventKind kind) {
-    static const std::vector<const char*> pick = {"entity", "primitive", "index", "row_id", "position", "pixel", "fields", "annotation"};
+    // A pick of a piece's item adds program and item (design/programmable-graphics.md, Picking).
+    static const std::vector<const char*> pick = {"entity", "primitive", "index",   "row_id", "position",
+                                                  "pixel",  "fields",    "program", "item",   "annotation"};
     static const std::vector<const char*> select = {"entities", "truncated"};
     static const std::vector<const char*> control = {"control", "bind", "value", "key"};
     // The runner's change (design/hosted-runs.md, Runner Events) adds run,
@@ -143,8 +145,10 @@ const std::vector<const char*>& kind_keys(EventKind kind) {
                                                  "point", "op"};
     static const std::vector<const char*> spec = {"command", "event", "applet"};
     static const std::vector<const char*> approval = {"approval", "command", "state", "target"};
-    // design/gpu-programs.md, Program Events.
-    static const std::vector<const char*> program = {"program", "change", "host", "code", "message", "line", "column"};
+    // design/gpu-programs.md, Program Events; an instance of a piece adds
+    // half and pass (design/programmable-graphics.md, Status and Events).
+    static const std::vector<const char*> program = {"program", "change", "host", "half", "pass",
+                                                     "code",    "message", "line", "column"};
     // design/instrument-interface.md, Events.
     static const std::vector<const char*> state = {"state", "value", "previous", "writer"};
     static const std::vector<const char*> cursor = {"change", "step", "first", "latest", "playing", "speed"};

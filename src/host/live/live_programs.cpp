@@ -39,4 +39,14 @@ std::vector<ProgramAnswer> AttachmentProgramLink::take() {
     return s ? s->take_program_answers() : std::vector<ProgramAnswer>{};
 }
 
+bool AttachmentProgramLink::takes_pieces() {
+    NetSource* s = source();
+    return s && s->takes_pieces();
+}
+
+std::vector<ReceivedResource> AttachmentProgramLink::take_resources() {
+    NetSource* s = source();
+    return s ? s->take_resources() : std::vector<ReceivedResource>{};
+}
+
 }  // namespace caliper_live

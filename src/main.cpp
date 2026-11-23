@@ -40,6 +40,7 @@
 #include "host/builder/runs_panel.h"
 #include "host/builder/widget_app.h"
 #include "host/runner/model_runner.h"
+#include <caliper_builder/session/piece_commands.h>
 #include <caliper_builder/session/session.h>
 #include "host/spec_runtime/spec_runtime.h"
 #include "host/spec_runtime/spec_stages.h"
@@ -623,7 +624,20 @@ public:
         // The hosts of GPU programs: the programs run in the attached script,
         // the stages in the spec runtime's scene panels.
         session_.set_program_host(&program_host_);
+        // The library's and the workspace's pieces that the programs pin. The
+        // host checks the hash against the pin itself, thus the lookup takes
+        // the pinned version as its source holds it.
+        program_host_.set_pieces([this](const caliper_builder::spec::PieceRef& ref)
+                                     -> std::optional<caliper_builder::spec::Piece> {
+            const caliper_builder::FoundPiece f =
+                caliper_builder::find_piece(caliper_builder::PieceLibrary::builtin(), session_.workspace(), caliper_builder::spec::Spec{},
+                                            ref.from, ref.name, ref.version);
+            if (f.error) return std::nullopt;
+            return f.piece;
+        });
         session_.set_stage_host(caliper_host::app_stage_host());
+        // The scene panels' programs draw workspace pieces too.
+        caliper_host::set_program_workspace([this] { return session_.workspace(); });
         // The model runner of Hosted Runs (design/hosted-runs.md): its runs
         // live in the workspace's runs folder, and run.list, run.start,
         // run.fork, run.stop and run.logs act through it.
@@ -1712,12 +1726,8 @@ private:
         const std::optional<caliper_builder::OpenSpec> open = s->open_spec();
         const spec::Panel* p = open ? open->spec.find_panel(id) : nullptr;
         if (!p || p->primitive != spec::Primitive::scene) return false;
-        const auto b = p->bind.find("scene");
-        if (b == p->bind.end() || b->second.bindings.size() != 1) return false;
-        const std::string& ref = b->second.bindings[0];
-        if (ref.rfind("live:", 0) != 0) return false;
-        const caliper_live_views::SceneView* v = caliper_live_views::scene_view(core, ref.substr(5).c_str());
-        return v && v->generation() > 0;
+        // A panel of entities draws its own scene, and another one the live scene that it binds.
+        return spec_page_.scene_ready(id);
     }
 #endif
 

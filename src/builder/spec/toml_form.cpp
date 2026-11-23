@@ -303,13 +303,24 @@ public:
         if (auto programs = j.find("program"); programs != j.end()) {
             for (const json& p : *programs) {
                 out_ += "\n[[program]]\n";
-                table(p, {"id", "title", "entry", "inputs", "output", "limits", "workgroups", "params", "x", "wgsl"}, false, "");
+                table(p,
+                      {"id", "title", "piece", "panel", "bind", "entry", "inputs", "output", "limits", "workgroups",
+                       "params", "x", "wgsl"},
+                      false, "");
             }
         }
         if (auto stages = j.find("stage"); stages != j.end()) {
             for (const json& s : *stages) {
                 out_ += "\n[[stage]]\n";
                 table(s, {"panel", "entity", "kind", "params", "x", "wgsl"}, false, "");
+            }
+        }
+        // Inline pieces (design/programmable-graphics.md, Piece Files): the
+        // manifest's tables under piece., and the WGSL last in [piece.files].
+        if (auto pieces = j.find("piece"); pieces != j.end()) {
+            for (const json& p : *pieces) {
+                out_ += "\n[[piece]]\n";
+                piece(p, "piece.");
             }
         }
         if (auto provenance = j.find("provenance"); provenance != j.end()) {
@@ -323,7 +334,64 @@ public:
         return out_;
     }
 
+    // A piece's keys and tables, with its tables' names under `prefix`: ""
+    // in a piece.toml, "piece." in a spec. Its files come last, as
+    // multi-line strings, when the JSON has them.
+    std::string piece(const json& j, const std::string& prefix) {
+        for (const char* k : {"name", "version", "description", "imports", "hash"})
+            if (auto it = j.find(k); it != j.end()) wrapped(k, *it);
+        const std::pair<const char*, std::vector<std::string>> lists[] = {
+            {"inputs", {"name", "kind", "dtype", "rank_min", "rank_max", "element", "struct", "fields", "title"}},
+            {"params", {"name", "type", "default", "min", "max", "title"}},
+            {"resources",
+             {"id", "kind", "element", "struct", "fields", "count", "counted", "width", "height", "publish", "clear",
+              "keep"}},
+            {"depends", {"name", "version"}}};
+        for (const auto& [key, order] : lists) {
+            auto it = j.find(key);
+            if (it == j.end()) continue;
+            for (const json& t : *it) {
+                out_ += "\n[[" + prefix + key + "]]\n";
+                table(t, order, false, "");
+            }
+        }
+        const std::pair<const char*, std::vector<std::string>> halves[] = {
+            {"derive", {"time_ms", "memory_mb", "every", "passes"}},
+            {"draw", {"camera", "frame_ms", "memory_mb", "buffers", "targets", "passes", "pick", "text"}}};
+        for (const auto& [key, order] : halves) {
+            auto it = j.find(key);
+            if (it == j.end()) continue;
+            out_ += "\n[" + prefix + key + "]\n";
+            for (const std::string& k : order)
+                if (auto e = it->find(k); e != it->end()) wrapped(k, *e);
+        }
+        if (auto it = j.find("sample"); it != j.end()) {
+            for (const json& t : *it) {
+                out_ += "\n[[" + prefix + "sample]]\n";
+                table(t, {"input", "shape"}, false, "");
+            }
+        }
+        if (auto it = j.find("files"); it != j.end()) {
+            out_ += "\n[" + prefix + "files]\n";
+            table(*it, {"common", "derive", "draw"}, false, "");
+        }
+        return out_;
+    }
+
 private:
+    // A key whose array, when its inline text is long, takes one element a
+    // line.
+    void wrapped(const std::string& key, const json& v) {
+        const std::string inline_text = value(v, false);
+        if (!v.is_array() || v.empty() || inline_text.size() + key.size() <= 96) {
+            out_ += key_text(key) + " = " + inline_text + "\n";
+            return;
+        }
+        out_ += key_text(key) + " = [\n";
+        for (const json& e : v) out_ += "  " + value(e, false) + ",\n";
+        out_ += "]\n";
+    }
+
     void line(const std::string& key, const json& v, bool in_layout, const std::string& indent = "") {
         out_ += indent + key_text(key) + " = " + value(v, in_layout) + "\n";
     }
@@ -460,6 +528,78 @@ ParseResult parse_toml(std::string_view text) {
 std::string to_toml(const Spec& spec) {
     try {
         return Writer().document(to_json(spec));
+    } catch (...) {
+        return std::string();
+    }
+}
+
+PieceParse piece_from_toml(std::string_view text) {
+    PieceParse r;
+    try {
+        if (text.size() > limits::kTextBytes) {
+            r.diagnostics.push_back({Severity::error, "spec.too_large",
+                                     "The manifest is " + std::to_string(text.size()) + " bytes long; the limit is " +
+                                         std::to_string(limits::kTextBytes) + " bytes.",
+                                     ""});
+            return r;
+        }
+        const Chain chain = longest_dotted_chain(text);
+        if (chain.length >= static_cast<std::size_t>(limits::kDepth)) {
+            Diagnostic d{Severity::error, "spec.too_deep",
+                         "A dotted key has more than " + std::to_string(limits::kDepth) + " parts.", ""};
+            d.line = chain.at.line;
+            d.column = chain.at.column;
+            r.diagnostics.push_back(d);
+            return r;
+        }
+        toml::table root;
+#if TOML_EXCEPTIONS
+        try {
+            root = toml::parse(text);
+        } catch (const toml::parse_error& e) {
+            Diagnostic d{Severity::error, "spec.syntax", "The text is not valid TOML: " + std::string(e.description()) + ".",
+                         ""};
+            d.line = static_cast<int>(e.source().begin.line);
+            d.column = static_cast<int>(e.source().begin.column);
+            r.diagnostics.push_back(d);
+            return r;
+        }
+#else
+        toml::parse_result parsed = toml::parse(text);
+        if (!parsed) {
+            const auto& e = parsed.error();
+            Diagnostic d{Severity::error, "spec.syntax", "The text is not valid TOML: " + std::string(e.description()) + ".",
+                         ""};
+            d.line = static_cast<int>(e.source().begin.line);
+            d.column = static_cast<int>(e.source().begin.column);
+            r.diagnostics.push_back(d);
+            return r;
+        }
+        root = std::move(parsed).table();
+#endif
+        json doc;
+        SourceMap positions;
+        detail::Sink sink(r.diagnostics);
+        Reader reader(positions, sink);
+        if (reader.convert(root, "", 0, doc)) {
+            PieceParse decoded = piece_from_json_value(doc, "");
+            r.piece = std::move(decoded.piece);
+            for (Diagnostic& d : decoded.diagnostics) r.diagnostics.push_back(std::move(d));
+        }
+        positions[""] = {1, 1};
+        locate(r.diagnostics, positions);
+    } catch (...) {
+        r.diagnostics.push_back({Severity::error, "spec.internal", "The spec library failed unexpectedly.", ""});
+    }
+    if (!r.ok()) r.piece = Piece{};
+    return r;
+}
+
+std::string piece_to_toml(const Piece& piece) {
+    try {
+        json j = to_json(piece);
+        j.erase("files");
+        return Writer().piece(j, "");
     } catch (...) {
         return std::string();
     }

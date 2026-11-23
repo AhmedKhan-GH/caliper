@@ -77,6 +77,13 @@ class _NativeLink(Link):
     def queue_views(self) -> None:
         pass                                      # the native side sends VIEWS
 
+    def backlog(self) -> int:
+        """The bytes of the control frames that the native side still has to send here."""
+        try:
+            return int(self.p.nio.control_bytes(self.conn))
+        except Exception:                         # an older module: no bound
+            return 0
+
 
 class _NativeProducer(_Producer):
     def __init__(self, ring: NetRing, identity: dict, transport: NetTransport, nio):
@@ -346,7 +353,8 @@ class NativeServer(NetServer):
                 info = json.loads(frame)
                 link.caps = frozenset(c for c in (_wire.CAP_CONTROLS, _wire.CAP_SELECTION,
                                                   _wire.CAP_SCENES, _wire.CAP_PROGRAMS,
-                                                  _wire.CAP_INTERVENTIONS) if info.get(c))
+                                                  _wire.CAP_INTERVENTIONS, _wire.CAP_RESOURCES)
+                                      if info.get(c))
                 link.may_control = bool(info.get("control"))
             p.by_conn[conn] = link
             p.links.add(link)

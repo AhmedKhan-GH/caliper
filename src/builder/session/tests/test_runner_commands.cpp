@@ -49,6 +49,8 @@ struct FakeRunner final : ModelRunner {
     std::vector<std::pair<std::string, int>> log_calls;
     std::vector<std::string> controls_asked;
     FakeControl control;   // the control of the run "train-1"
+    std::vector<InterventionPoint> points;   // what intervention_points() lists for every run
+    std::vector<std::string> points_asked;
 
     std::vector<RunEntry> list() override { return runs; }
     Error start(const RunStartRequest& r, RunEntry* out) override {
@@ -72,6 +74,10 @@ struct FakeRunner final : ModelRunner {
         e.params = r.params;
         *out = e;
         return {};
+    }
+    std::vector<InterventionPoint> intervention_points(const std::string& run) override {
+        points_asked.push_back(run);
+        return points;
     }
     Error stop(const std::string& run, double after, RunEntry* out) override {
         stops.emplace_back(run, after);
@@ -447,4 +453,116 @@ TEST_CASE("runner commands: a start past the limits gets no card, and the card s
     CHECK(run_card_text(inv, "a\nb.py") ==
           "Fork the run train-1 at its next checkpoint, with no changed parameters. The fork runs \"a\\nb.py\" as "
           "Python code beside its parent.");
+}
+
+namespace {
+
+json iv(const std::string& point, const std::string& op = "ablate") {
+    return json{{"point", point}, {"op", op}};
+}
+
+InterventionPoint point_named(const std::string& name) {
+    InterventionPoint p;
+    p.point = name;
+    p.module = name;
+    return p;
+}
+
+}  // namespace
+
+TEST_CASE("runner commands: run.fork passes its step and its interventions to the runner") {
+    Fixture f("runner_fork_interventions");
+    f.runner.runs.push_back(running("train-1"));
+    json both = iv("blocks.1.attn#2");
+    both["from_step"] = std::uint64_t(5);
+    both["until_step"] = std::uint64_t(9);
+    approved(*f.s, "run.fork",
+             {{"run", "train-1"}, {"step", std::uint64_t(17)}, {"interventions", json::array({iv("blocks.0.mlp"), both})}});
+    REQUIRE(f.runner.forks.size() == 1);
+    REQUIRE(f.runner.forks[0].step);
+    CHECK(*f.runner.forks[0].step == 17);
+    const json& given = f.runner.forks[0].interventions;
+    REQUIRE(given.size() == 2);
+    CHECK(given[0] == json{{"point", "blocks.0.mlp"}, {"op", "ablate"}});
+    CHECK_FALSE(given[0].contains("from_step"));
+    CHECK_FALSE(given[0].contains("until_step"));
+    CHECK(given[1] == json{{"point", "blocks.1.attn#2"}, {"op", "ablate"}, {"from_step", 5}, {"until_step", 9}});
+
+    // Without a step and interventions, the runner gets none of them.
+    approved(*f.s, "run.fork", {{"run", "train-1"}});
+    REQUIRE(f.runner.forks.size() == 2);
+    CHECK_FALSE(f.runner.forks[1].step);
+    CHECK(f.runner.forks[1].interventions.empty());
+}
+
+TEST_CASE("runner commands: a fork with a refused intervention gets no card and reaches no runner") {
+    Fixture f("runner_fork_refusals");
+    f.runner.runs.push_back(running("train-1"));
+    const auto fork_error = [&f](json interventions) {
+        const CommandResult r =
+            send(*f.s, "run.fork", {{"run", "train-1"}, {"interventions", std::move(interventions)}}, CommandOrigin::mcp, "");
+        INFO("run.fork answered " << r.error.code << ": " << r.error.message);
+        return r.error.code;
+    };
+    CHECK(fork_error(json::array({iv("blocks.1.attn#2", "scale")})) == kInterveneOpReserved);
+    json same = iv("a");
+    same["from_step"] = std::uint64_t(5);
+    same["until_step"] = std::uint64_t(5);
+    CHECK(fork_error(json::array({same})) == kInterveneBadRange);
+    same["until_step"] = std::uint64_t(3);
+    CHECK(fork_error(json::array({same})) == kInterveneBadRange);
+
+    // The points together hold at most 1024 bytes.
+    CHECK(fork_error(json::array({iv(std::string(1024, 'p')), iv("q")})) == "command.invalid_args");
+    CHECK(fork_error(json::array({iv(std::string(600, 'p')), iv(std::string(425, 'q'))})) == "command.invalid_args");
+    CHECK(f.s->registry().pending_approvals().empty());
+    CHECK(f.runner.forks.empty());
+
+    // The precheck gives the same refusals directly, before any card.
+    CommandInvocation inv;
+    inv.name = "run.fork";
+    inv.args = {{"run", "train-1"}, {"interventions", json::array({iv("a", "scale")})}};
+    CHECK(runner_precheck(inv, &f.runner, f.ws).code == kInterveneOpReserved);
+    inv.args = {{"run", "train-1"}, {"interventions", json::array({same})}};
+    CHECK(runner_precheck(inv, &f.runner, f.ws).code == kInterveneBadRange);
+    inv.args = {{"run", "train-1"}, {"interventions", json::array({iv(std::string(600, 'p')), iv(std::string(425, 'q'))})}};
+    CHECK(runner_precheck(inv, &f.runner, f.ws).code == "command.invalid_args");
+
+    // The points that the runner lists decide: an unlisted point is refused,
+    // and an empty list accepts any point.
+    f.runner.points = {point_named("blocks.0.mlp"), point_named("blocks.1.attn#2")};
+    CHECK(fork_error(json::array({iv("blocks.9.mlp")})) == kInterveneUnknownPoint);
+    CHECK(fork_error(json::array({iv("blocks.0.mlp"), iv("blocks.9.mlp")})) == kInterveneUnknownPoint);
+    inv.args = {{"run", "train-1"}, {"interventions", json::array({iv("blocks.9.mlp")})}};
+    CHECK(runner_precheck(inv, &f.runner, f.ws).code == kInterveneUnknownPoint);
+    CHECK(f.runner.points_asked.size() > 0);
+    CHECK(f.runner.points_asked.back() == "train-1");
+    CHECK(f.runner.forks.empty());
+    approved(*f.s, "run.fork", {{"run", "train-1"}, {"interventions", json::array({iv("blocks.1.attn#2")})}});
+    CHECK(f.runner.forks.size() == 1);
+
+    f.runner.points.clear();
+    CHECK(runner_precheck(inv, &f.runner, f.ws).code.empty());
+    approved(*f.s, "run.fork", {{"run", "train-1"}, {"interventions", json::array({iv("blocks.9.mlp")})}});
+    CHECK(f.runner.forks.size() == 2);
+}
+
+TEST_CASE("runner commands: the card of a fork shows its step and each intervention in full") {
+    CommandInvocation inv;
+    inv.name = "run.fork";
+    inv.args = {{"run", "train-1"}, {"step", std::uint64_t(120)}, {"interventions", json::array({iv("blocks.1.attn#2")})}};
+    std::string card = run_card_text(inv, "");
+    CHECK(card.find("from its newest kept checkpoint at or before step 120") != std::string::npos);
+    CHECK(card.find("ablate blocks.1.attn#2 from its first step") != std::string::npos);
+    CHECK(card.find("at its next checkpoint") == std::string::npos);
+
+    json ranged = iv("blocks.1.attn#2");
+    ranged["from_step"] = std::uint64_t(5);
+    ranged["until_step"] = std::uint64_t(9);
+    inv.args = {{"run", "train-1"}, {"interventions", json::array({ranged})}};
+    card = run_card_text(inv, "");
+    CHECK(card.find("from step 5 until step 9") != std::string::npos);
+    // Without a step the fork still waits for the next checkpoint.
+    CHECK(card.find("at its next checkpoint") != std::string::npos);
+    CHECK(card.find("newest kept checkpoint") == std::string::npos);
 }

@@ -236,7 +236,7 @@ bool operator==(const Applet& a, const Applet& b) {
 
 bool operator==(const Spec& a, const Spec& b) {
     return a.version == b.version && a.applet == b.applet && a.sources == b.sources && a.panels == b.panels &&
-           a.layout == b.layout && a.controls == b.controls && a.programs == b.programs && a.stages == b.stages &&
+           a.layout == b.layout && a.controls == b.controls && a.programs == b.programs && a.stages == b.stages && a.pieces == b.pieces &&
            a.states == b.states && a.provenance == b.provenance && a.x == b.x;
 }
 
@@ -272,7 +272,7 @@ bool panel_needs_version_1(const Panel& p) {
 
 std::int64_t required_version(const Spec& spec) {
     if (!spec.controls.empty() || !spec.programs.empty() || !spec.stages.empty() || !spec.provenance.empty() ||
-        !spec.states.empty())
+        !spec.states.empty() || !spec.pieces.empty())
         return kInstrumentVersion;
     for (const Source& s : spec.sources) {
         if (s.history) return kInstrumentVersion;

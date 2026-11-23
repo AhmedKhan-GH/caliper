@@ -28,6 +28,13 @@
 namespace caliper_live {
 namespace {
 
+// The program epochs of every stream of this process, so that an attachment to
+// another stream is a new epoch for the app's sync of programs
+// (live_programs.h) even when that stream's own count would repeat the last
+// stream's: a switch back to a run that the app showed before sends its
+// programs again.
+std::atomic<uint64_t> g_program_epochs{0};
+
 namespace wire = caliper_net::wire;
 using caliper_net::Bytes;
 using caliper_net::Client;
@@ -405,6 +412,51 @@ public:
         return enqueue(std::move(o)) ? id : 0;
     }
 
+    // ---- 3.2 draft: resources ------------------------------------------------------------
+    bool takes_pieces() override {
+        if (!programs_ready(nullptr)) return false;
+        std::lock_guard<std::mutex> g(mu_);
+        return server_resources_ && has_cap(session_caps_, CALIPER_NET_CAP_RESOURCES);
+    }
+
+    std::vector<ReceivedResource> take_resources() override {
+        std::lock_guard<std::mutex> g(mu_);
+        std::vector<std::pair<uint64_t, ReceivedResource>> waiting;
+        waiting.reserve(resources_.size());
+        for (auto& kv : resources_) waiting.push_back(std::move(kv.second));
+        resources_.clear();
+        std::sort(waiting.begin(), waiting.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        std::vector<ReceivedResource> out;
+        out.reserve(waiting.size());
+        for (auto& w : waiting) out.push_back(std::move(w.second));
+        return out;
+    }
+
+    // The resources of every program, at most: a new resource past it waits for the next take.
+    static constexpr size_t kMaxWaitingResources = size_t(CALIPER_NET_MAX_PROGRAMS) * CALIPER_NET_MAX_RESOURCES;
+
+    // A RESOURCE (network thread): its valid bytes are copied out of the frame, and the newest
+    // version of each resource waits for the frame thread, in the place of an older one.
+    void on_resource(const wire::Resource& r) {
+        ReceivedResource out;
+        out.program = r.program;
+        out.resource = r.resource;
+        out.step = (int64_t)r.step;   // at most 2^53 - 1 on the wire
+        out.count = r.count;
+        out.stride = r.stride;
+        out.width = r.width.value_or(0);
+        out.height = r.height.value_or(0);
+        out.bytes = std::make_shared<const std::vector<uint8_t>>(r.data.data, r.data.data + r.data.size);
+        const std::string key = r.program + "/" + r.resource;
+        std::lock_guard<std::mutex> g(mu_);
+        auto it = resources_.find(key);
+        if (it != resources_.end()) {
+            it->second.second = std::move(out);
+        } else if (resources_.size() < kMaxWaitingResources) {
+            resources_.emplace(key, std::make_pair(++resource_order_, std::move(out)));
+        }
+    }
+
     std::vector<ProgramAnswer> take_program_answers() override {
         std::lock_guard<std::mutex> g(mu_);
         std::vector<ProgramAnswer> out(program_answers_.begin(), program_answers_.end());
@@ -682,7 +734,7 @@ private:
                         h.role = CALIPER_NET_ROLE_VIEWER;
                         h.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_SCENES,
                                           CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS,
-                                          CALIPER_NET_CAP_TIMELINES};
+                                          CALIPER_NET_CAP_TIMELINES, CALIPER_NET_CAP_RESOURCES};
                         Json sw = Json::object();
                         sw.set("name", "caliper-app");
                         sw.set("version", caliper_host::kHostVersionStr);
@@ -837,6 +889,9 @@ private:
         else if (auto* cr = std::get_if<wire::ControlReply>(&m)) on_control_reply(*cr);
         else if (auto* sel = std::get_if<wire::Selection>(&m)) on_selection(*sel);
         else if (auto* ps = std::get_if<wire::ProgramState>(&m)) on_program_state(*ps);
+        else if (auto* rs = std::get_if<wire::Resource>(&m)) on_resource(*rs);
+        // A relayed draw half: the app composes each draw half from its own spec, and reads none.
+        else if (std::holds_alternative<wire::Program>(m)) {}
         else if (auto* su = std::get_if<wire::SceneUpdate>(&m)) {
             if (!su->split.is_null()) {
                 on_piece(r.frame.meta, r.type, *su);
@@ -955,6 +1010,7 @@ private:
         server_controls_ = has_cap(w.capabilities, CALIPER_NET_CAP_CONTROLS);
         server_selection_ = has_cap(w.capabilities, CALIPER_NET_CAP_SELECTION);
         server_programs_ = has_cap(w.capabilities, CALIPER_NET_CAP_PROGRAMS);
+        server_resources_ = has_cap(w.capabilities, CALIPER_NET_CAP_RESOURCES);
         program_fresh_ = true;   // a new connection: the next attachment is a new epoch
         welcome_control_ = w.control.value_or(false);
         // A server that is itself the producer (caliper.serve()) names its own
@@ -1347,7 +1403,7 @@ private:
             views_ = next;
             ++views_gen_;
             if (program_fresh_ || program_session_ != session_id_) {
-                ++program_epoch_;   // the script may hold none of the programs sent before
+                program_epoch_ = ++g_program_epochs;   // the script may hold none of the programs sent before
                 program_fresh_ = false;
                 program_session_ = session_id_;
             }
@@ -1565,6 +1621,11 @@ private:
     uint64_t program_epoch_ = 0;
     std::string program_session_;
     std::deque<ProgramAnswer> program_answers_;
+    // 3.2 draft, resources; guarded by mu_: the server announced `resources`, and the newest
+    // received version of each "<program>/<resource>" with the order in which it began to wait.
+    bool server_resources_ = false;
+    std::map<std::string, std::pair<uint64_t, ReceivedResource>> resources_;
+    uint64_t resource_order_ = 0;
     Controls controls_;
     std::deque<ControlReply> replies_;
     std::map<std::string, LinkedSelection> selections_;

@@ -302,3 +302,68 @@ def test_the_params_op_is_applied_and_answered(mode, watching, facade, server):
             st = await v.expect(w.ProgramState, lambda m: m.request_id == 3)
             assert [x["id"] for x in st.programs] == ["operator.t.0"]
     run(go())
+
+
+PIN = {"name": "arcs", "version": 1, "hash": "sha256:" + "b" * 64}
+
+
+def _instance(rid=9, pid="arcs", pin=PIN):
+    return w.Program(rid, w.PROGRAM_SET, pid, piece=pin, manifest={"name": "arcs"},
+                     bind={"a": "live:x"}, params={"k": 1.0}, panel="p1", segments=None,
+                     common="fn c() {}", derive="fn d() {}", draw="fn r() {}")
+
+
+class _PieceFacade:
+    def __init__(self, error=None):
+        self.error, self.calls = error, []
+
+    def install_piece(self, program_id, **kw):
+        if self.error:
+            raise self.error
+        self.calls.append((program_id, kw))
+
+
+class _Link:
+    caps = frozenset({w.CAP_PROGRAMS, w.CAP_RESOURCES})
+    queued: list
+
+    def __init__(self):
+        self.queued = []
+
+    def queue(self, m):
+        self.queued.append(m)
+
+
+class _Controls:
+    def may_control(self, link):
+        return True
+
+
+def test_an_instance_reaches_install_piece_with_its_fields(monkeypatch):
+    f = _PieceFacade()
+    monkeypatch.setattr(NP, "_facade", lambda: f)
+    port = NP.ProgramsPort(_Controls())
+    port._apply(_instance())
+    assert f.calls == [("arcs", {"piece": PIN, "manifest": {"name": "arcs"}, "bind": {"a": "live:x"},
+                                 "params": {"k": 1.0}, "panel": "p1", "segments": None,
+                                 "common": "fn c() {}", "derive": "fn d() {}", "draw": "fn r() {}"})]
+    assert "arcs" in port._installed and "arcs" not in port._local
+
+
+@pytest.mark.parametrize("pin_hash,shown", [("sha256:" + "b" * 64, "b" * 64), ("sha256:nothex", "")])
+def test_an_instance_that_the_script_cannot_run_gives_a_refused_piece_item(monkeypatch, pin_hash, shown):
+    monkeypatch.setattr(NP, "_facade", lambda: _PieceFacade(NotImplementedError("no runtime")))
+    port = NP.ProgramsPort(_Controls())
+    port._apply(_instance(pin=dict(PIN, hash=pin_hash)))
+    item = port._local["arcs"]
+    assert item["kind"] == w.STATUS_PIECE and item["state"] == "refused"
+    assert item["error"]["code"] == NP.UNAVAILABLE and item["sha256"] == shown
+    assert w._status_item(item) and "arcs" not in port._installed
+
+
+def test_on_program_queues_an_instance_without_a_hash_check(monkeypatch, watching):
+    port = NP.ProgramsPort(_Controls())
+    monkeypatch.setattr(port, "_start", lambda: None)
+    link = _Link()
+    port.on_program(link, _instance())
+    assert link.queued == [] and port._jobs.qsize() == 1

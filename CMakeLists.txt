@@ -930,6 +930,44 @@ endif()
 # do not change.
 if(CALIPER_WITH_BUILDER)
     add_subdirectory(src/builder)
+    # The draw half of programs in a viewer (src/host/draw/draw_runtime.h,
+    # design/programmable-graphics.md): the render graph on the graphics
+    # layer, over the composer of the builder's programs library. The browser
+    # module compiles the same source (web/wasm/CMakeLists.txt).
+    add_library(caliper_draw STATIC src/host/draw/draw_runtime.cpp src/host/draw/draw_pick.cpp
+                src/host/draw/draw_text.cpp)
+    target_include_directories(caliper_draw PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
+    target_link_libraries(caliper_draw PUBLIC caliper_gfx caliper_builder_programs)
+    # On Metal the runtime translates each composed pass with caliper-wgsl and its bounds
+    # checks (CALIPER_HAS_WGSL); without the library a program is refused with
+    # program.compiler_unavailable, and the browser module takes the WGSL as it is.
+    if(TARGET caliper::wgsl)
+        target_link_libraries(caliper_draw PRIVATE caliper::wgsl)
+    endif()
+    set_target_properties(caliper_draw PROPERTIES
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+    # The app's host of draw halves (src/host/draw/draw_host.h): the programs of a spec for the
+    # scene views, their resources, params and events. The scene view of the live views draws
+    # programs where the build has it (CALIPER_HAVE_DRAW).
+    add_library(caliper_draw_host STATIC src/host/draw/draw_host.cpp)
+    target_link_libraries(caliper_draw_host PUBLIC caliper_draw caliper_builder_spec)
+    set_target_properties(caliper_draw_host PROPERTIES
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+    target_link_libraries(libcaliper PUBLIC caliper_draw_host)
+    target_compile_definitions(libcaliper PRIVATE CALIPER_HAVE_DRAW=1)
+    if(BUILD_TESTS)
+        add_executable(caliper_gfx_draw_tests src/host/draw/tests/test_draw_runtime.cpp)
+        target_link_libraries(caliper_gfx_draw_tests PRIVATE caliper_draw_host doctest::doctest)
+        add_test(NAME caliper_gfx_draw_tests COMMAND caliper_gfx_draw_tests)
+        set_tests_properties(caliper_gfx_draw_tests PROPERTIES LABELS "gfx")
+        # The graphics suite draws the two worked examples of pieces on Metal
+        # (tests/gfx/gfx_pieces.cpp) in caliper_gfx_tests, which tests/ defines.
+        if(APPLE AND TARGET caliper_gfx_tests)
+            target_sources(caliper_gfx_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests/gfx/gfx_pieces.cpp)
+            target_link_libraries(caliper_gfx_tests PRIVATE caliper_draw_host)
+            target_compile_definitions(caliper_gfx_tests PRIVATE CALIPER_HAVE_DRAW=1)
+        endif()
+    endif()
     # The spec applet kind in the loader (src/host/applet_spec.h): with the
     # builder, caliper_host_lib validates a spec applet's spec with the spec
     # library and lists it Ready; without it the loader lists every spec

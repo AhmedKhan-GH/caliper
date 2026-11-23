@@ -62,9 +62,41 @@ const char* pane_group_label(PaneSource::Group g) {
         case PaneSource::Group::tensor: return "Tensors";
         case PaneSource::Group::live: return "Live";
         case PaneSource::Group::feed: return "Feeds";
+        case PaneSource::Group::piece: return "Pieces";
         case PaneSource::Group::metric: return "Metrics";
     }
     return "";
+}
+
+std::vector<PaneSource> pane_piece_rows(const json& result) {
+    std::vector<PaneSource> out;
+    if (!result.is_object() || !result.contains("pieces") || !result["pieces"].is_array()) return out;
+    auto text = [](const json& o, const char* k) {
+        const auto it = o.find(k);
+        return it != o.end() && it->is_string() ? it->get<std::string>() : std::string();
+    };
+    for (const json& p : result["pieces"]) {
+        if (!p.is_object()) continue;
+        const std::string name = text(p, "name");
+        if (name.empty()) continue;
+        std::string from = text(p, "from");
+        if (from.empty()) from = "library";
+        const auto v = p.find("version");
+        const std::int64_t version = v != p.end() && v->is_number_integer() ? v->get<std::int64_t>() : 1;
+        PaneSource r;
+        r.group = PaneSource::Group::piece;
+        r.name = name + "@" + std::to_string(version);
+        r.key = "piece:" + from + "/" + r.name;
+        const std::string description = text(p, "description");
+        r.shape_text = description.empty() ? from : from + " \xc2\xb7 " + description;   // "workspace · Bars of ..."
+        r.piece = {{"name", name}, {"version", version}, {"from", from}};
+        if (const auto in = p.find("inputs"); in != p.end() && in->is_array())
+            for (const json& n : *in)
+                if (n.is_string()) r.inputs.push_back(n.get<std::string>());
+        if (const auto d = p.find("draws"); d != p.end() && d->is_boolean()) r.draws = d->get<bool>();
+        out.push_back(std::move(r));
+    }
+    return out;
 }
 
 namespace {
@@ -203,7 +235,13 @@ void BuilderPane::update() {
     const uint64_t v = port_->version();
     if (v != seen_version_) {
         seen_version_ = v;
+        // A piece written or removed moves the version, as does any command.
+        const bool pieces = list_pieces();
         reread();
+        if (pieces) {
+            rebuild_rows();
+            invalidate_caches();
+        }
     }
 }
 
@@ -228,6 +266,7 @@ void BuilderPane::refresh_catalog() {
     // and tensors out of one list cut at its limit.
     catalog_ = json::array();
     for (const char* kind : {"table", "tensor", "live", "feed", "metric", "run"}) list_kind(kind, "", 0);
+    list_pieces();
     rebuild_rows();
     invalidate_caches();
 }
@@ -247,6 +286,14 @@ void BuilderPane::list_kind(const std::string& kind, const std::string& prefix, 
         return;
     }
     for (auto& e : r.result.value("entries", json::array())) catalog_.push_back(std::move(e));
+}
+
+bool BuilderPane::list_pieces() {
+    const CommandResult r = port_->run(invocation("piece.list", json::object()));
+    json next = r.ok ? r.result : json();
+    if (next == pieces_) return false;
+    pieces_ = std::move(next);
+    return true;
 }
 
 void BuilderPane::reread() {
@@ -321,9 +368,11 @@ void BuilderPane::rebuild_rows() {
                 }
         cat.push_back(std::move(r));
     }
-    // Metrics newest run first, then by tag; the rest by name.
+    for (auto& r : pane_piece_rows(pieces_)) cat.push_back(std::move(r));
+    // Metrics newest run first, then by tag; pieces in piece.list's order; the rest by name.
     std::stable_sort(cat.begin(), cat.end(), [](const PaneSource& a, const PaneSource& b) {
         if (a.group != b.group) return a.group < b.group;
+        if (a.group == PaneSource::Group::piece) return false;
         if (a.group == PaneSource::Group::metric && a.run != b.run) return a.run > b.run;
         if (a.group == PaneSource::Group::metric) return a.tag != b.tag ? a.tag < b.tag : a.name < b.name;
         return a.name < b.name;
@@ -426,7 +475,7 @@ void BuilderPane::select(const std::string& key, const std::string& column) {
     if (key != selected_ || column != selected_column_) primitive_plans_.clear();
     selected_ = key;
     selected_column_ = column;
-    if (!key.empty()) focus_source(key);
+    if (!key.empty() && key.rfind("piece:", 0) != 0) focus_source(key);
 }
 
 void BuilderPane::focus_panel(const std::string& id) {
@@ -587,6 +636,9 @@ BuilderPane::Resolved BuilderPane::resolve_row(const std::string& key) const {
 
 PanePlan BuilderPane::plan_new_panel(const std::string& key, const std::string& column,
                                      std::optional<Primitive> primitive, const DropHit& hit) const {
+    if (const PaneSource* row = key.empty() ? nullptr : find_source(key);
+        row && row->group == PaneSource::Group::piece)
+        return plan_piece(*row, primitive, hit);
     PanePlan plan;
     if (!open_) {
         plan.refusal = Error("spec.no_open_spec", "No spec is open.", "");
@@ -654,6 +706,50 @@ PanePlan BuilderPane::plan_new_panel(const std::string& key, const std::string& 
     return plan;
 }
 
+PanePlan BuilderPane::plan_piece(const PaneSource& row, std::optional<Primitive> primitive, const DropHit& hit) const {
+    PanePlan plan;
+    if (!open_) {
+        plan.refusal = Error("spec.no_open_spec", "No spec is open.", "");
+        return plan;
+    }
+    // The pane binds no input: a tensor or a buffer to bind is the person's
+    // choice, which the spec text or the agent makes.
+    if (!row.inputs.empty()) {
+        std::string names;
+        for (const auto& n : row.inputs) names += (names.empty() ? "" : ", ") + n;
+        plan.refusal = Error("piece.bad_binding",
+                             "The piece " + row.name + " reads the input" + (row.inputs.size() > 1 ? "s " : " ") +
+                                 names + ", which its program binds; write that program in the spec text.",
+                             "bind");
+        return plan;
+    }
+    if (primitive) {
+        plan.refusal = Error("program.bad_target",
+                             "A piece makes no panel; drag it onto a scene panel, or focus one and use Add.", "panel");
+        return plan;
+    }
+    const spec::Spec& s = open_->spec;
+    json create = {{"id", pane_program_id(row.piece.value("name", std::string("program")), s)}, {"piece", row.piece}};
+    std::string panel;
+    if (row.draws) {
+        if (hit.zone == DropZone::centre || hit.zone == DropZone::slot) panel = hit.panel;
+        else if (hit.zone == DropZone::none) panel = focus_panel_;
+        if (panel.empty()) {
+            plan.refusal = Error("program.bad_target",
+                                 hit.zone == DropZone::none
+                                     ? "Focus a scene panel first; the piece draws in it."
+                                     : "Drop the piece in the middle of a scene panel; it draws there.",
+                                 "panel");
+            return plan;
+        }
+        create["panel"] = panel;
+    }
+    plan = simulate({invocation("program.create", create)});
+    plan.placed = panel;
+    plan.focus_panel = panel;
+    return plan;
+}
+
 const PanePlan& BuilderPane::primitive_plan(Primitive p) {
     const std::string k = std::string(spec::to_string(p)) + "|" + selected_ + "|" + selected_column_ + "|" +
                           focus_panel_;
@@ -698,7 +794,8 @@ PanePlan BuilderPane::plan_drop(const DragPayload& payload, const DropHit& hit) 
             return plan;
         case DragPayload::Kind::source:
         case DragPayload::Kind::column: {
-            if (hit.zone != DropZone::slot) return plan_new_panel(payload.source, payload.column, std::nullopt, hit);
+            if (hit.zone != DropZone::slot || payload.source.rfind("piece:", 0) == 0)
+                return plan_new_panel(payload.source, payload.column, std::nullopt, hit);
             const spec::Panel* p = s.find_panel(hit.panel);
             const std::vector<PaneSlot> slots = drop_slots(hit.panel);
             if (!p || hit.slot < 0 || hit.slot >= (int)slots.size()) {

@@ -14,6 +14,7 @@
 // `where` (args.wgsl:<line>:<column>). Without the compiler library an edit
 // applies with the warning program.not_checked, in `messages` and in
 // `warnings`, because the hosts check each source again before it runs.
+#include <caliper_builder/programs/pieces.h>
 #include "program_checks.h"
 
 #include <caliper_builder/session/program_commands.h>
@@ -291,6 +292,13 @@ json program_result_json(const spec::Program& p) {
 // The editor's checks of a program before it enters the spec: the
 // declaration, the target panel and the source.
 Error check_program_edit(const spec::Spec& s, const spec::Program& p, const std::string& base, bool* checked) {
+    // An instance of a piece: its piece is checked alone, and the session
+    // resolves its pin and its bindings after the edit (piece_commands.h).
+    if (spec::is_piece_instance(p)) {
+        *checked = true;
+        if (p.panel) return scene_panel(s, *p.panel, programs::kProgramBadTarget, base + ".panel");
+        return {};
+    }
     if (Verdict v = programs::check_declaration(p); !v.ok()) return verdict_error(v, base);
     if (p.output.kind == spec::OutputKind::geometry)
         if (Error e = scene_panel(s, p.output.panel, programs::kProgramBadTarget, base + ".output.panel")) return e;
@@ -349,9 +357,40 @@ SpecEdit stage_remove(const spec::Spec& s, const json& args, const spec::SourceR
     return finish(std::move(next), resolver, std::move(result), true, "");
 }
 
+// The inline piece of program.create's `inline`: it joins the spec's array
+// `piece` in the same step, and a program without `piece` pins it. The same
+// name and version with other contents is piece.exists.
+Error add_inline_piece(spec::Spec& next, const json& args, json& item) {
+    const auto it = args.find("inline");
+    if (it == args.end()) return {};
+    spec::PieceParse parsed = spec::piece_from_json_value(*it, "args.inline");
+    if (Error e = first_spec_error(parsed.diagnostics)) return e;
+    spec::Piece piece = std::move(parsed.piece);
+    if (!item.contains("piece"))
+        item["piece"] = {{"name", piece.name}, {"version", piece.version}, {"from", "inline"}};
+    const json& pin = item["piece"];
+    if (!pin.is_object() || pin.value("name", "") != piece.name || pin.value("version", std::int64_t(1)) != std::int64_t(piece.version) ||
+        pin.value("from", "library") != "inline")
+        return fail("spec.bad_value", "A program with inline pins that piece: from inline, with its name and version.",
+                    "args.piece");
+    for (const spec::Piece& p : next.pieces) {
+        if (p.name != piece.name || p.version != piece.version) continue;
+        if (p == piece) return {};
+        return fail(programs::kPieceExists,
+                    "The spec already has the inline piece " + piece.name + " version " +
+                        std::to_string(piece.version) + " with other contents; give the new one another version.",
+                    "args.inline.version");
+    }
+    next.pieces.push_back(std::move(piece));
+    return {};
+}
+
 SpecEdit program_create(const spec::Spec& s, const json& args, const spec::SourceResolver& resolver) {
     json item = args;
     item.erase("dry_run");
+    item.erase("inline");
+    spec::Spec with_inline = s;
+    if (Error e = add_inline_piece(with_inline, args, item)) return refuse(std::move(e));
     spec::Decoded<spec::Program> d = spec::program_from_json(item, "args");
     if (Error e = first_spec_error(d.diagnostics)) return refuse(std::move(e));
     spec::Program p = std::move(d.value);
@@ -365,7 +404,7 @@ SpecEdit program_create(const spec::Spec& s, const json& args, const spec::Sourc
                            "args"));
     bool checked = false;
     if (Error e = check_program_edit(s, p, "args", &checked)) return refuse(std::move(e));
-    spec::Spec next = s;
+    spec::Spec next = std::move(with_inline);
     raise_version(next);
     const std::string id = p.id;
     next.programs.push_back(std::move(p));
@@ -390,6 +429,9 @@ SpecEdit program_patch(const spec::Spec& s, const json& args, const spec::Source
     if (patch.contains("output") && patch["output"].is_object() && patch["output"].contains("kind") &&
         patch["output"]["kind"] != current["output"]["kind"])
         current.erase("output");
+    // A patch that pins a piece replaces the pin, so that an old hash never
+    // stays beside a new version; the session writes the new hash.
+    if (patch.contains("piece") && patch["piece"].is_object()) current.erase("piece");
     spec::Decoded<spec::Program> d = spec::program_from_json(spec::merge_patch(current, effective), "args.patch");
     if (Error e = first_spec_error(d.diagnostics)) return refuse(std::move(e));
     spec::Program p = std::move(d.value);

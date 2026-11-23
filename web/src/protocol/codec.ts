@@ -14,7 +14,9 @@ import {
   INTERVENTION_STATES, MAX_INTERVENTIONS, MAX_POINTS_LISTED, MAX_PROGRAMS, OUTPUT_GEOMETRY, OUTPUT_PIXELS, OUTPUT_TENSOR, POINT_MAX, PROGRAM_ARRAYS,
   PROGRAM_EVERY_MAX, PROGRAM_ID_MAX, PROGRAM_MAX_COUNT, PROGRAM_MAX_INPUTS, PROGRAM_MEMORY_MB_MAX, PROGRAM_BUILTIN_MAX, PROGRAM_PARAM_NAME_MAX, PROGRAM_PARAMS, PROGRAM_PARAMS_MAX, PROGRAM_REMOVE, PROGRAM_SET, STATUS_OPERATOR, TENSOR_AXES_MAX, TENSOR_ELEMENTS_MAX,
   PROGRAM_SIDE_MAX, PROGRAM_SOURCE_MAX, PROGRAM_STATES, PROGRAM_TIME_MS_MAX, PROGRAM_WORKGROUPS_MAX, SECTION_WGSL, TENSOR_NAME_MAX,
-  type InterveneRequest, type InterventionsInfo, type ProgramDeclaration, type ProgramMsg, type ProgramStateMsg, type ProgramStatus,
+  PIECE_COMMON_MAX, PIECE_NAME_MAX, PIECE_SEGMENTS_MAX, PIECE_VERSION_MAX, RESOURCE_MAX_BYTES, RESOURCE_SIDE_MAX, RESOURCE_STRIDE_MAX,
+  SECTION_COMMON, SECTION_DERIVE, SECTION_DRAW, SECTION_RESOURCE, STATUS_PIECE,
+  type InterveneRequest, type InterventionsInfo, type ProgramDeclaration, type ProgramMsg, type ResourceMsg, type ProgramStateMsg, type ProgramStatus,
 } from './messages.js';
 
 export const MAGIC = 0x574c4143; // "CALW" read as a little-endian uint32
@@ -610,6 +612,8 @@ export function decode(buf: ArrayBuffer | Uint8Array): Message | UnknownMsg {
       return decodeProgram(f);
     case MSG.program_state:
       return decodeProgramState(f);
+    case MSG.resource:
+      return decodeResource(f);
     default:
       return { type: 'unknown', id: t, meta: f.meta };
   }
@@ -725,6 +729,8 @@ export function encode(msg: Message, minor: number = PROTOCOL_MINOR): Uint8Array
       return encodeProgram(msg, minor);
     case 'program_state':
       return encodeFrame(id, drop({ request_id: msg.request_id, step: msg.step, step_ms: msg.step_ms, programs: msg.programs }));
+    case 'resource':
+      return encodeResource(msg, minor);
     case 'time_state':
       return encodeFrame(id, { ...drop({
         request_id: msg.request_id, session: msg.session, generation: msg.generation, state: msg.state, timeline: msg.timeline,
@@ -1740,6 +1746,7 @@ export function decodeProgram(f: Frame): ProgramMsg {
     const params = req<Record<string, number>>(f, 'params', isParams, `1 to ${PROGRAM_PARAMS_MAX} names of a WGSL field with finite numbers`);
     return { type: 'program', request_id, op, id, params };
   }
+  if ('piece' in f.meta) return decodeProgramInstance(f, request_id, id);
   const declaration = req<ProgramDeclaration>(f, 'declaration', isObj, 'an object');
   checkDeclaration(f.type, declaration);
   const geometry = (declaration.output as Record<string, unknown>).kind === OUTPUT_GEOMETRY;
@@ -1762,11 +1769,15 @@ export function decodeProgram(f: Frame): ProgramMsg {
 }
 
 export function encodeProgram(m: ProgramMsg, minor: number = PROTOCOL_MINOR): Uint8Array {
-  const meta = drop({ request_id: m.request_id, op: m.op, id: m.id, declaration: m.declaration, scene: m.scene, sha256: m.sha256, params: m.params });
+  const meta = drop({
+    request_id: m.request_id, op: m.op, id: m.id, declaration: m.declaration, scene: m.scene, sha256: m.sha256, params: m.params,
+    piece: m.piece, manifest: m.manifest, bind: m.bind, panel: m.panel, segments: m.segments,
+  });
   const sections: Section[] = [];
-  if (m.wgsl !== undefined) {
-    const b = utf8.encode(m.wgsl);
-    sections.push({ name: SECTION_WGSL, dtype: DTYPE.u8, shape: [b.length], encoding: 0, bytes: b });
+  for (const [name, text] of [[SECTION_WGSL, m.wgsl], [SECTION_COMMON, m.common], [SECTION_DERIVE, m.derive], [SECTION_DRAW, m.draw]] as const) {
+    if (text === undefined) continue;
+    const b = utf8.encode(text);
+    sections.push({ name, dtype: DTYPE.u8, shape: [b.length], encoding: 0, bytes: b });
   }
   return frameAt(MSG.program, meta, sections, minor);
 }
@@ -1788,7 +1799,7 @@ const STATUS_KEYS: [string, (v: unknown) => boolean][] = [
 const isStatusItem = (v: unknown) => {
   if (!isObj(v)) return false;
   const o = v as Record<string, unknown>;
-  if (!(isProgramId(o.id) && (o.kind === OUTPUT_GEOMETRY || o.kind === OUTPUT_PIXELS || o.kind === OUTPUT_TENSOR || o.kind === STATUS_OPERATOR) && typeof o.state === 'string' && PROGRAM_STATES.includes(o.state))) return false;
+  if (!(isProgramId(o.id) && (o.kind === OUTPUT_GEOMETRY || o.kind === OUTPUT_PIXELS || o.kind === OUTPUT_TENSOR || o.kind === STATUS_OPERATOR || o.kind === STATUS_PIECE) && typeof o.state === 'string' && PROGRAM_STATES.includes(o.state))) return false;
   if (!STATUS_KEYS.every(([k, ok]) => !present(o[k]) || ok(o[k]))) return false;
   return !present(o.sha256) || o.sha256 === '' || isSha256(o.sha256);
 };
@@ -1807,6 +1818,107 @@ export function decodeProgramState(f: Frame): ProgramStateMsg {
   if (step !== undefined) m.step = step;
   if (step_ms !== undefined) m.step_ms = step_ms;
   return m;
+}
+
+// --- 3.2 draft: instances of pieces and RESOURCE (python: _program_instance, Resource) ---
+
+const PIECE_NAME_RE = /^[a-z][a-z0-9_]*$/;
+const PIECE_HASH_RE = /^sha256:[0-9a-f]{64}$/;
+/** The pin of a piece: name ([a-z][a-z0-9_]*, at most PIECE_NAME_MAX bytes), version (1 to PIECE_VERSION_MAX) and hash ("sha256:" and 64 lowercase hex digits). */
+const isPiecePin = (v: unknown) => {
+  if (!isObj(v)) return false;
+  const o = v as Record<string, unknown>;
+  return typeof o.name === 'string' && o.name.length > 0 && o.name.length <= PIECE_NAME_MAX && PIECE_NAME_RE.test(o.name)
+    && intIn(1, PIECE_VERSION_MAX)(o.version) && typeof o.hash === 'string' && PIECE_HASH_RE.test(o.hash);
+};
+/** One value of "bind": "live:<tensor>" (a tensor name of 1 to TENSOR_NAME_MAX bytes) or "program:<id>/<resource>". */
+const isBinding = (v: unknown) => {
+  if (typeof v !== 'string') return false;
+  if (v.startsWith('live:')) return boundedText(TENSOR_NAME_MAX)(v.slice('live:'.length));
+  if (v.startsWith('program:')) {
+    const rest = v.slice('program:'.length);
+    const slash = rest.indexOf('/');
+    return slash >= 0 && isProgramId(rest.slice(0, slash)) && isParamName(rest.slice(slash + 1));
+  }
+  return false;
+};
+const isBind = (v: unknown) => isObj(v) && Object.keys(v as object).length <= PROGRAM_MAX_INPUTS
+  && Object.entries(v as Record<string, unknown>).every(([k, x]) => isParamName(k) && isBinding(x));
+const isSegment = (v: unknown) => {
+  if (!isObj(v)) return false;
+  const o = v as Record<string, unknown>;
+  return isName(o.part) && isU32(o.first_line) && (o.first_line as number) >= 1 && isU32(o.lines);
+};
+
+/** An optional (B,) u8 section of 1 to `most` bytes of strict UTF-8, as text. */
+function textSection(f: Frame, name: string, most: number): string | undefined {
+  const s = section(f, name);
+  if (s === undefined) return undefined;
+  if (s.encoding !== 0 || s.dtype !== DTYPE.u8 || s.shape.length !== 1) bad(f.type, `'${name}' must be a (B,) u8 section`);
+  if (s.shape[0] < 1 || s.shape[0] > most) bad(f.type, `'${name}' holds 1 to ${most} bytes, got ${s.shape[0]}`);
+  try {
+    return utf8Strict.decode(s.bytes);
+  } catch {
+    bad(f.type, `'${name}' is not UTF-8`);
+  }
+}
+
+/** The set of an instance of a piece, checked in the order of _program_instance of _wire.py. */
+function decodeProgramInstance(f: Frame, request_id: number, id: string): ProgramMsg {
+  const m = f.meta;
+  if (['declaration', 'scene', 'sha256'].some((k) => k in m) || section(f, SECTION_WGSL) !== undefined) {
+    bad(f.type, "an instance of a piece carries no 'declaration', 'scene', 'sha256' or 'wgsl'");
+  }
+  const piece = req<NonNullable<ProgramMsg['piece']>>(f, 'piece', isPiecePin, 'a pin {name, version, hash}');
+  const manifest = req<Record<string, unknown>>(f, 'manifest', isObj, 'an object');
+  const bind = opt<Record<string, string> | undefined>(f, 'bind', isBind, `at most ${PROGRAM_MAX_INPUTS} inputs bound to live:<tensor> or program:<id>/<resource>`, undefined);
+  const params = opt<Record<string, number> | undefined>(f, 'params', isParams, `1 to ${PROGRAM_PARAMS_MAX} names of a WGSL field with finite numbers`, undefined);
+  const panel = opt<string | undefined>(f, 'panel', isName, 'a panel id', undefined);
+  const segments = opt<NonNullable<ProgramMsg['segments']> | undefined>(f, 'segments', listOf(isSegment, PIECE_SEGMENTS_MAX),
+    `at most ${PIECE_SEGMENTS_MAX} segments {part, first_line, lines}`, undefined);
+  const common = textSection(f, SECTION_COMMON, PIECE_COMMON_MAX);
+  const derive = textSection(f, SECTION_DERIVE, PROGRAM_SOURCE_MAX);
+  const draw = textSection(f, SECTION_DRAW, PROGRAM_SOURCE_MAX);
+  if (derive === undefined && draw === undefined) bad(f.type, "an instance of a piece carries the section 'derive' or 'draw'");
+  const out: ProgramMsg = { type: 'program', request_id, op: PROGRAM_SET, id, piece, manifest };
+  if (params !== undefined) out.params = params;
+  if (bind !== undefined) out.bind = bind;
+  if (panel !== undefined) out.panel = panel;
+  if (segments !== undefined) out.segments = segments;
+  if (common !== undefined) out.common = common;
+  if (derive !== undefined) out.derive = derive;
+  if (draw !== undefined) out.draw = draw;
+  return out;
+}
+
+const isStride = (v: unknown) => intIn(4, RESOURCE_STRIDE_MAX)(v) && (v as number) % 4 === 0;
+
+/** RESOURCE: producer to viewer, one version of one published resource (capability "resources"). The data is a view of the frame. */
+export function decodeResource(f: Frame): ResourceMsg {
+  const program = req<string>(f, 'program', isProgramId, `a program id of at most ${PROGRAM_ID_MAX} bytes`);
+  const resource = req<string>(f, 'resource', isParamName, 'a WGSL name of 1 to 63 bytes');
+  const step = req<number>(f, 'step', isSafeUint, 'an unsigned integer');
+  const count = req<number>(f, 'count', isU32, 'a uint32');
+  const stride = req<number>(f, 'stride', isStride, `a multiple of 4 from 4 to ${RESOURCE_STRIDE_MAX}`);
+  const side = intIn(1, RESOURCE_SIDE_MAX);
+  const width = opt<number | undefined>(f, 'width', side, `an integer from 1 to ${RESOURCE_SIDE_MAX}`, undefined);
+  const height = opt<number | undefined>(f, 'height', side, `an integer from 1 to ${RESOURCE_SIDE_MAX}`, undefined);
+  if ((width === undefined) !== (height === undefined)) bad(f.type, "a texture holds both 'width' and 'height'");
+  if (width !== undefined && (stride !== 4 || count !== width * height!)) bad(f.type, 'a texture has a stride of 4 and width * height elements');
+  // Bound count before any product of two network values: count * stride is then at most RESOURCE_MAX_BYTES.
+  if (count > Math.floor(RESOURCE_MAX_BYTES / stride)) bad(f.type, `a resource holds at most ${RESOURCE_MAX_BYTES} bytes`);
+  const s = section(f, SECTION_RESOURCE);
+  if (s === undefined || s.encoding !== 0 || s.dtype !== DTYPE.u8 || s.shape.length !== 1) bad(f.type, "a resource needs a (B,) u8 'resource' section");
+  if (s.shape[0] !== count * stride) bad(f.type, `'resource' holds count * stride = ${count * stride} bytes, got ${s.shape[0]}`);
+  const m: ResourceMsg = { type: 'resource', program, resource, step, count, stride, data: s.bytes };
+  if (width !== undefined) m.width = width;
+  if (height !== undefined) m.height = height;
+  return m;
+}
+
+export function encodeResource(m: ResourceMsg, minor: number = PROTOCOL_MINOR): Uint8Array {
+  const meta = drop({ program: m.program, resource: m.resource, step: m.step, count: m.count, stride: m.stride, width: m.width, height: m.height });
+  return frameAt(MSG.resource, meta, [{ name: SECTION_RESOURCE, dtype: DTYPE.u8, shape: [m.data.length], encoding: 0, bytes: m.data }], minor);
 }
 
 /** CONTROL's intervene: exactly one of set, clear and clear_all. */

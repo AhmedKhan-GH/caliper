@@ -82,6 +82,7 @@ class MsgType(enum.IntEnum):
     TIME_STATE = 0x007B
     PROGRAM = 0x0080               # 3.2 draft, capability "programs"
     PROGRAM_STATE = 0x0081
+    RESOURCE = 0x0082              # 3.2 draft, capability "resources"
 
 
 class Kind(enum.IntEnum):          # CaliperLiveKind
@@ -2976,6 +2977,19 @@ PROGRAM_PARAM_NAME_MAX = 63
 PROGRAM_BUILTIN_MAX = 32
 TENSOR_AXES_MAX = 4
 TENSOR_ELEMENTS_MAX = 1000000
+# 3.2 draft, programmable graphics (design/programmable-graphics.md, Resource Message):
+# the capability "resources", RESOURCE and the instance form of PROGRAM.
+CAP_RESOURCES = "resources"
+SECTION_DERIVE, SECTION_DRAW, SECTION_COMMON, SECTION_RESOURCE = "derive", "draw", "common", "resource"
+MAX_RESOURCES = 8
+RESOURCE_MAX_BYTES = 67043328      # 64 MiB less 64 KiB: the section fits one frame with its metadata
+RESOURCE_STRIDE_MAX = 256
+RESOURCE_SIDE_MAX = 4096
+PIECE_NAME_MAX = 32
+PIECE_VERSION_MAX = 1000000
+PIECE_COMMON_MAX = 589824          # 8 lib modules and common.wgsl of 64 KiB each
+PIECE_SEGMENTS_MAX = 16
+STATUS_PIECE = "piece"
 OUTPUT_GEOMETRY, OUTPUT_PIXELS, OUTPUT_TENSOR = "geometry", "pixels", "tensor"
 STATUS_OPERATOR = "operator"
 PROGRAM_STATES = ("waiting", "review", "compiled", "running", "refused", "stopped")
@@ -3112,7 +3126,14 @@ class Program(_Msg):
     the declaration without its source, the scene of a geometry output's panel,
     the SHA-256 of the source and the section ``wgsl`` (the source as UTF-8).
     The producer runs the source only on the GPU, after the sandbox checks, and
-    answers with PROGRAM_STATE (``design/gpu-programs.md``, Wire Path)."""
+    answers with PROGRAM_STATE (``design/gpu-programs.md``, Wire Path).
+
+    Under the capability "resources", a set may instead install an instance of a
+    piece (``design/programmable-graphics.md``, Resource Message): ``piece`` (the
+    pin, ``{name, version, hash}``), ``manifest``, and optionally ``bind``, ``params``,
+    ``panel`` and ``segments``, with the sections ``common``, ``derive`` and ``draw``
+    in place of ``wgsl``. A producer also sends this form, with ``request_id`` 0 and
+    with all three sections, to each viewer that announced "resources"."""
     TYPE: ClassVar[MsgType] = MsgType.PROGRAM
     request_id: int
     op: str                                      # "set" or "remove"
@@ -3121,18 +3142,28 @@ class Program(_Msg):
     wgsl: str | None = None                      # set: the section "wgsl"
     sha256: str | None = None                    # set: of wgsl, in lowercase hex
     scene: str | None = None                     # set: a geometry output's scene
-    params: dict | None = None                   # params: the names and their numbers
+    params: dict | None = None                   # params, or an instance's: the names and their numbers
+    piece: dict | None = None                    # instance: {name, version, hash}
+    manifest: dict | None = None                 # instance: the piece's manifest
+    bind: dict | None = None                     # instance: input name to live:<tensor> or program:<id>/<resource>
+    panel: str | None = None                     # instance: the scene panel of the draw half
+    segments: list | None = None                 # instance: [{part, first_line, lines}] of ``common``
+    common: str | None = None                    # instance: the section "common"
+    derive: str | None = None                    # instance: the section "derive"
+    draw: str | None = None                      # instance: the section "draw"
 
     def to_meta(self):
         return _drop_none({"request_id": self.request_id, "op": self.op, "id": self.id,
                            "declaration": self.declaration, "scene": self.scene,
-                           "sha256": self.sha256, "params": self.params})
+                           "sha256": self.sha256, "params": self.params, "piece": self.piece,
+                           "manifest": self.manifest, "bind": self.bind, "panel": self.panel,
+                           "segments": self.segments})
 
     def to_sections(self):
-        if self.wgsl is None:
-            return []
-        return [Section.from_array(SECTION_WGSL,
-                                   np.frombuffer(self.wgsl.encode("utf-8"), dtype=np.uint8))]
+        texts = ((SECTION_WGSL, self.wgsl), (SECTION_COMMON, self.common),
+                 (SECTION_DERIVE, self.derive), (SECTION_DRAW, self.draw))
+        return [Section.from_array(name, np.frombuffer(text.encode("utf-8"), dtype=np.uint8))
+                for name, text in texts if text is not None]
 
     @classmethod
     def from_frame(cls, f):
@@ -3152,6 +3183,8 @@ class Program(_Msg):
             ps = _req(m, "params", _params_ok, f"1 to {PROGRAM_PARAMS_MAX} names of a WGSL field "
                       "with finite numbers")
             return cls(rid, op, pid, params=ps)
+        if "piece" in m:
+            return _program_instance(cls, f, rid, pid)
         d = _req(m, "declaration", _obj, "an object")
         _check_declaration(d)
         geometry = d["output"]["kind"] == OUTPUT_GEOMETRY
@@ -3186,7 +3219,8 @@ def _status_item(v) -> bool:
     optional keys of ``_STATUS_KEYS`` and ``sha256``, null or absent when
     unknown. ``host`` is the app's and is ignored here."""
     if not (_obj(v) and _program_id(v.get("id"))
-            and v.get("kind") in (OUTPUT_GEOMETRY, OUTPUT_PIXELS, OUTPUT_TENSOR, STATUS_OPERATOR)
+            and v.get("kind") in (OUTPUT_GEOMETRY, OUTPUT_PIXELS, OUTPUT_TENSOR, STATUS_OPERATOR,
+                                  STATUS_PIECE)
             and v.get("state") in PROGRAM_STATES):
         return False
     if not all(v.get(k) is None or check(v[k]) for k, check in _STATUS_KEYS):
@@ -3270,6 +3304,144 @@ def _interventions(v) -> bool:
             and _list_of(_active_entry, MAX_INTERVENTIONS)(v.get("active")))
 
 
-for _cls in (Program, ProgramState):
+_PIECE_HEAD = frozenset("abcdefghijklmnopqrstuvwxyz")
+_PIECE_TAIL = _PIECE_HEAD | _DIGITS | {"_"}
+
+
+def _piece_pin(v) -> bool:
+    """The pin of a piece: ``name`` ([a-z][a-z0-9_]*, at most 32 bytes), ``version`` (1 to
+    1,000,000) and ``hash`` ("sha256:" and 64 lowercase hex digits)."""
+    if not _obj(v):
+        return False
+    name, h = v.get("name"), v.get("hash")
+    return (isinstance(name, str) and 0 < len(name) <= PIECE_NAME_MAX and name.isascii()
+            and name[0] in _PIECE_HEAD and all(c in _PIECE_TAIL for c in name)
+            and _int_in(1, PIECE_VERSION_MAX)(v.get("version"))
+            and isinstance(h, str) and h.startswith("sha256:") and _sha256_hex(h[len("sha256:"):]))
+
+
+def _binding(v) -> bool:
+    """One value of ``bind``: ``live:<tensor>`` (a tensor name of 1 to 255 bytes) or
+    ``program:<id>/<resource>`` (a program id and a resource's WGSL name)."""
+    if not isinstance(v, str):
+        return False
+    if v.startswith("live:"):
+        return _bounded_text(TENSOR_NAME_MAX)(v[len("live:"):])
+    if v.startswith("program:"):
+        pid, slash, res = v[len("program:"):].partition("/")
+        return bool(slash) and _program_id(pid) and _param_name(res)
+    return False
+
+
+def _bind_ok(v) -> bool:
+    return (_obj(v) and len(v) <= PROGRAM_MAX_INPUTS
+            and all(_param_name(k) and _binding(x) for k, x in v.items()))
+
+
+def _segment(v) -> bool:
+    return (_obj(v) and _name(v.get("part")) and _u32(v.get("first_line")) and v["first_line"] >= 1
+            and _u32(v.get("lines")))
+
+
+def _text_section(f, name: str, most: int) -> str | None:
+    """An optional (B,) u8 section of 1 to ``most`` bytes of UTF-8, as text."""
+    s = f.section(name)
+    if s is None:
+        return None
+    if s.encoding != Encoding.RAW or s.dtype != DType.U8 or len(s.shape) != 1:
+        _bad(f"{name!r} must be a (B,) u8 section")
+    if not 1 <= s.shape[0] <= most:
+        _bad(f"{name!r} holds 1 to {most} bytes, got {s.shape[0]}")
+    try:
+        return bytes(s.data).decode("utf-8")
+    except UnicodeDecodeError:
+        _bad(f"{name!r} is not UTF-8")
+
+
+def _program_instance(cls, f, rid: int, pid: str):
+    """The set of an instance of a piece, in this order: no key or section of the
+    one-pass form, ``piece``, ``manifest``, ``bind``, ``params``, ``panel``,
+    ``segments``, then the sections ``common``, ``derive`` and ``draw``, of which
+    ``derive`` or ``draw`` is present."""
+    m = f.meta
+    if any(k in m for k in ("declaration", "scene", "sha256")) or f.section(SECTION_WGSL):
+        _bad("an instance of a piece carries no 'declaration', 'scene', 'sha256' or 'wgsl'")
+    piece = _req(m, "piece", _piece_pin, "a pin {name, version, hash}")
+    manifest = _req(m, "manifest", _obj, "an object")
+    bind = _opt(m, "bind", _bind_ok, f"at most {PROGRAM_MAX_INPUTS} inputs bound to live:<tensor> "
+                "or program:<id>/<resource>")
+    ps = _opt(m, "params", _params_ok, f"1 to {PROGRAM_PARAMS_MAX} names of a WGSL field with "
+              "finite numbers")
+    panel = _opt(m, "panel", _name, "a panel id")
+    segments = _opt(m, "segments", _list_of(_segment, PIECE_SEGMENTS_MAX),
+                    f"at most {PIECE_SEGMENTS_MAX} segments {{part, first_line, lines}}")
+    common = _text_section(f, SECTION_COMMON, PIECE_COMMON_MAX)
+    derive = _text_section(f, SECTION_DERIVE, PROGRAM_SOURCE_MAX)
+    draw = _text_section(f, SECTION_DRAW, PROGRAM_SOURCE_MAX)
+    if derive is None and draw is None:
+        _bad("an instance of a piece carries the section 'derive' or 'draw'")
+    return cls(rid, PROGRAM_SET, pid, params=ps, piece=piece, manifest=manifest, bind=bind,
+               panel=panel, segments=segments, common=common, derive=derive, draw=draw)
+
+
+def _stride_ok(v) -> bool:
+    return _int_in(4, RESOURCE_STRIDE_MAX)(v) and v % 4 == 0
+
+
+@dataclass
+class Resource(_Msg):
+    """Producer to viewer, under the capability "resources": one version of one
+    published resource of a program, the valid elements that a derive pass wrote
+    (``design/programmable-graphics.md``, Resource Message). ``step`` is the run's
+    step at the pass, ``count`` the valid elements and ``stride`` the bytes of one;
+    a texture also has ``width`` and ``height``, with a stride of 4 and ``count``
+    their product. The section ``resource`` holds exactly count * stride bytes,
+    and ``data`` is a view of them."""
+    TYPE: ClassVar[MsgType] = MsgType.RESOURCE
+    program: str
+    resource: str
+    step: int
+    count: int
+    stride: int
+    data: Any = b""
+    width: int | None = None
+    height: int | None = None
+
+    def to_meta(self):
+        return _drop_none({"program": self.program, "resource": self.resource, "step": self.step,
+                           "count": self.count, "stride": self.stride, "width": self.width,
+                           "height": self.height})
+
+    def to_sections(self):
+        mv = memoryview(self.data)
+        mv = mv.cast("B") if mv.nbytes else memoryview(b"")
+        return [Section(SECTION_RESOURCE, int(DType.U8), (mv.nbytes,), mv)]
+
+    @classmethod
+    def from_frame(cls, f):
+        m = f.meta
+        program = _req(m, "program", _program_id, f"a program id of at most {PROGRAM_ID_MAX} bytes")
+        resource = _req(m, "resource", _param_name, "a WGSL name of 1 to 63 bytes")
+        step = _req(m, "step", _safe_uint, "an unsigned integer")
+        count = _req(m, "count", _u32, "a uint32")
+        stride = _req(m, "stride", _stride_ok, f"a multiple of 4 from 4 to {RESOURCE_STRIDE_MAX}")
+        side = _int_in(1, RESOURCE_SIDE_MAX)
+        width = _opt(m, "width", side, f"an integer from 1 to {RESOURCE_SIDE_MAX}")
+        height = _opt(m, "height", side, f"an integer from 1 to {RESOURCE_SIDE_MAX}")
+        if (width is None) != (height is None):
+            _bad("a texture holds both 'width' and 'height'")
+        if width is not None and (stride != 4 or count != width * height):
+            _bad("a texture has a stride of 4 and width * height elements")
+        if count > RESOURCE_MAX_BYTES // stride:
+            _bad(f"a resource holds at most {RESOURCE_MAX_BYTES} bytes")
+        s = f.section(SECTION_RESOURCE)
+        if s is None or s.encoding != Encoding.RAW or s.dtype != DType.U8 or len(s.shape) != 1:
+            _bad("a resource needs a (B,) u8 'resource' section")
+        if s.shape[0] != count * stride:
+            _bad(f"'resource' holds count * stride = {count * stride} bytes, got {s.shape[0]}")
+        return cls(program, resource, step, count, stride, s.data, width, height)
+
+
+for _cls in (Program, ProgramState, Resource):
     MESSAGES[_cls.TYPE] = _cls
-__all__ += ["Program", "ProgramState"]
+__all__ += ["Program", "ProgramState", "Resource"]

@@ -35,6 +35,20 @@ struct ProgramError {
     std::uint32_t column = 0;
 };
 
+// The draw half of an instance of a piece in the viewer
+// (design/programmable-graphics.md, Program Commands): program.status's
+// `draw` object.
+struct DrawStatus {
+    std::string state = "waiting";                // "waiting", "review", "compiled", "running", "refused" or "stopped"
+    std::optional<double> frame_ms;               // GPU time of the last frame; null when unknown
+    double frame_limit_ms = 4;                    // the piece's draw.frame_ms
+    std::uint64_t memory_bytes = 0;               // resources, buffer inputs, draw buffers and targets
+    std::uint64_t memory_limit_bytes = 0;         // the piece's draw.memory_mb in bytes
+    std::optional<std::int64_t> resource_step;    // the step of the newest resource version that a frame drew
+    std::optional<ProgramError> error;            // the last refusal or stop
+    std::string error_where;                      // the pass of the error, such as "draw.passes[1]"; empty when none
+};
+
 // One status item (the command table's program_status, and PROGRAM_STATE's
 // programs).
 struct ProgramStatus {
@@ -58,6 +72,13 @@ struct ProgramStatus {
     std::uint64_t memory_limit_bytes = 0;         // from limits.memory_mb; 0 for a stage
     std::optional<ProgramError> error;            // the last error
     std::string sha256;                           // of the source the host runs; empty when none
+    // An instance of a piece (design/programmable-graphics.md, Status and
+    // Events). The item's `piece` and `draw` keys, and the event's `half` and
+    // `pass`, come from these; each stays absent for another program.
+    std::optional<spec::PieceRef> piece;          // the pin
+    std::string half;                             // "derive" or "draw": the half that the host runs; empty otherwise
+    std::optional<std::uint32_t> pass;            // the pass that the error names; null for the whole half
+    std::optional<DrawStatus> draw;               // the draw half, when a viewer's host reports it
 };
 
 // The status item in the command table's form (program_status).
@@ -90,7 +111,9 @@ public:
     // ones. Frame thread.
     virtual void reconcile(const spec::Spec& spec) = 0;
     // One item for each stage of the last reconciled spec, in its order. Any
-    // thread.
+    // thread. A host that also draws instances of pieces in the viewer adds
+    // one item for each, with the program's id, half "draw" and `draw` set;
+    // program.status takes the instance's draw object from it.
     virtual std::vector<ProgramStatus> status() const = 0;
 };
 

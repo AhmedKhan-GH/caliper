@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <set>
 #include <string>
@@ -75,11 +76,21 @@ struct TextureInfo {
 class CompletionSink {
 public:
     void complete(Serial s, double gpu_ms);
+    void ended(Serial s);                              // the driver ended its work: no time comes
     Serial completed_through() const { return through_.load(std::memory_order_acquire); }
     double take_gpu_ms(uint32_t* submits = nullptr);   // the sum since the last take; < 0 none
+    // The GPU time of one completed submit among the last kSubmitTimes: true with *gpu_ms once
+    // serial s completed with a time, with kGpuMsNone once the driver ended it, and with
+    // kGpuMsForgotten when it is older than the times kept; false before and while its time is
+    // still to come.
+    bool submit_gpu_ms(Serial s, double* gpu_ms) const;
+    static constexpr size_t kSubmitTimes = 1024;
 
 private:
+    void keep(Serial s, double ms);                    // under mu_
+    void advance(Serial s);                            // under mu_
     mutable std::mutex mu_;
+    std::map<Serial, double> times_;               // the last kSubmitTimes completions with a time or ended
     std::set<Serial> early_;                        // completed ahead of an earlier serial
     std::atomic<Serial> through_{0};
     double gpu_ms_ = 0;

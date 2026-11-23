@@ -1,6 +1,7 @@
 // The canonical JSON form of a spec: decoding a JSON tree into a Spec (the
 // one decoder, which parse_toml also uses after it turns TOML into JSON) and
 // writing a Spec back as JSON.
+#include <caliper_builder/programs/pieces.h>
 #include <caliper_builder/spec/format.h>
 
 #include <algorithm>
@@ -339,7 +340,7 @@ public:
         if (version_ >= kInstrumentVersion) {
             keys(root, "",
                  {"caliper_spec", "applet", "source", "panel", "control", "state", "program", "stage", "provenance",
-                  "layout"},
+                  "layout", kPiecesKey},
                  "a spec");
         } else {
             keys(root, "", {"caliper_spec", "applet", "source", "panel", "layout"}, "a spec");
@@ -407,6 +408,16 @@ public:
                         s.programs.push_back(program((*it)[i], index_path("program", i)));
                 }
             }
+            // Inline pieces (design/programmable-graphics.md, Piece Files).
+            if (auto it = root.find(kPiecesKey); it != root.end()) {
+                if (!it->is_array()) {
+                    sink_.error("spec.wrong_type", "piece must be an array of tables; write each one as [[piece]].",
+                                kPiecesKey);
+                } else {
+                    for (std::size_t i = 0; i < it->size(); ++i)
+                        s.pieces.push_back(piece((*it)[i], index_path(kPiecesKey, i)));
+                }
+            }
             if (auto it = root.find("stage"); it != root.end()) {
                 if (!it->is_array()) {
                     sink_.error("spec.wrong_type", "stage must be an array of tables; write each one as [[stage]].",
@@ -460,6 +471,11 @@ public:
     Program program(const json& o, const std::string& path) {
         Program p;
         if (!table(o, path, path)) return p;
+        // An instance of a piece (design/programmable-graphics.md, Program
+        // Instances) holds a pin and none of the keys of the one-pass form.
+        bool instance = false;
+        for (const char* k : kInstanceKeys) instance = instance || o.find(k) != o.end();
+        if (instance) return instance_program(o, path);
         keys(o, path, {"id", "title", "wgsl", "entry", "inputs", "output", "limits", "workgroups", "params"},
              "a program");
         p.id = required_string(o, "id", path, "A program");
@@ -613,6 +629,362 @@ public:
             }
         }
         return out;
+    }
+
+    // ---- pieces and their instances (design/programmable-graphics.md) ----------
+    // The types, the keys, the required keys and the enumerations are checked
+    // here; the names, the limits and the layouts are the checks of
+    // programs/pieces.h, which the validator runs.
+
+    Program instance_program(const json& o, const std::string& path) {
+        Program p;
+        static const std::vector<std::string> one_pass = {"wgsl", "entry", "inputs", "output", "limits", "workgroups"};
+        for (const std::string& k : one_pass)
+            if (o.find(k) != o.end())
+                sink_.error("program.form_mixed",
+                            "A program that pins a piece holds none of the keys of the one-pass form; " + quote(k) +
+                                " belongs to that form.",
+                            key_path(path, k));
+        std::vector<std::string> allowed = {"id", "title", "piece", "bind", "panel", "params"};
+        allowed.insert(allowed.end(), one_pass.begin(), one_pass.end());
+        keys(o, path, allowed, "a program");
+        p.id = required_string(o, "id", path, "A program");
+        p.title = string(o, "title", path);
+        if (auto it = o.find("piece"); it == o.end()) {
+            missing(path, "piece", "A program with bind or panel");
+        } else {
+            p.piece = pin(*it, key_path(path, "piece"));
+        }
+        if (auto it = o.find("bind"); it != o.end()) {
+            const std::string bp = key_path(path, "bind");
+            if (table(*it, bp, bp)) {
+                for (auto b = it->begin(); b != it->end(); ++b) {
+                    if (b->is_string()) {
+                        p.bind[b.key()] = b->get<std::string>();
+                    } else {
+                        wrong(key_path(bp, b.key()), *b, "a string, live:<tensor> or program:<id>/<resource>");
+                    }
+                }
+            }
+        }
+        p.panel = string(o, "panel", path);
+        p.params = params(o, path);
+        p.x = extension(o, path);
+        return p;
+    }
+
+    PieceRef pin(const json& o, const std::string& path) {
+        PieceRef r;
+        if (!table(o, path, path)) return r;
+        strict_keys(o, path, {"name", "version", "hash", "from"}, "a pin");
+        r.name = required_string(o, "name", path, "A pin");
+        if (auto v = count(o, "version", path)) r.version = *v;
+        if (auto h = string(o, "hash", path)) r.hash = *h;
+        if (auto f = enumerated(o, "from", path, {"library", "workspace", "inline"}, "a source of pieces"))
+            r.from = *piece_from_from_name(*f);
+        return r;
+    }
+
+    // A list of strings at `key`, or nothing.
+    std::vector<std::string> string_list(const json& o, const char* key, const std::string& path) {
+        std::vector<std::string> out;
+        auto it = o.find(key);
+        if (it == o.end()) return out;
+        if (!it->is_array()) {
+            wrong(key_path(path, key), *it, "a list of strings");
+            return out;
+        }
+        for (std::size_t i = 0; i < it->size(); ++i) {
+            if ((*it)[i].is_string()) {
+                out.push_back((*it)[i].get<std::string>());
+            } else {
+                wrong(index_path(key_path(path, key), i), (*it)[i], "a string");
+            }
+        }
+        return out;
+    }
+
+    // The tables of the array at `key`, each decoded by `one`.
+    template <class F>
+    void tables(const json& o, const char* key, const std::string& path, F one) {
+        auto it = o.find(key);
+        if (it == o.end()) return;
+        const std::string kp = key_path(path, key);
+        if (!it->is_array()) {
+            wrong(kp, *it, "a list of tables");
+            return;
+        }
+        for (std::size_t i = 0; i < it->size(); ++i) {
+            const std::string ip = index_path(kp, i);
+            if (table((*it)[i], ip, ip)) one((*it)[i], ip);
+        }
+    }
+
+    // `element`, or `struct` with `fields` written "name: type".
+    Layout piece_layout(const json& o, const std::string& path) {
+        Layout l;
+        l.element = string(o, "element", path);
+        l.type_name = string(o, "struct", path);
+        const std::vector<std::string> fields = string_list(o, "fields", path);
+        for (std::size_t i = 0; i < fields.size(); ++i) {
+            const std::size_t colon = fields[i].find(": ");
+            if (colon == std::string::npos) {
+                sink_.error("spec.bad_value", "A field is written name: type, as \"weight: f32\".",
+                            index_path(key_path(path, "fields"), i));
+                continue;
+            }
+            l.fields.push_back(Field{fields[i].substr(0, colon), fields[i].substr(colon + 2)});
+        }
+        return l;
+    }
+
+    std::array<std::uint32_t, 3> workgroup_counts(const json& o, const std::string& path) {
+        std::array<std::uint32_t, 3> w{1, 1, 1};
+        auto it = o.find("workgroups");
+        if (it == o.end()) return w;
+        bool ok = it->is_array() && it->size() == 3;
+        for (std::size_t i = 0; ok && i < 3; ++i) {
+            std::int64_t v = 0;
+            ok = as_integer((*it)[i], v) && v >= 0 && v <= 0xFFFFFFFFll;
+            if (ok) w[i] = static_cast<std::uint32_t>(v);
+        }
+        if (!ok)
+            sink_.error("spec.wrong_type", key_path(path, "workgroups") + " must be [x, y, z], three workgroup counts.",
+                        key_path(path, "workgroups"));
+        return w;
+    }
+
+    template <class E>
+    std::optional<E> named(const json& o, const char* key, const std::string& path,
+                           std::optional<E> (*from)(std::string_view), const std::vector<std::string>& values,
+                           const char* what) {
+        auto s = enumerated(o, key, path, values, what);
+        return s ? from(*s) : std::nullopt;
+    }
+
+    DrawPass draw_pass(const json& o, const std::string& path) {
+        DrawPass p;
+        strict_keys(o, path,
+                    {"kind", "entry", "workgroups", "writes", "vertex", "fragment", "target", "reads", "instances",
+                     "vertices", "topology", "blend", "depth", "pick"},
+                    "a pass of the draw half");
+        if (o.find("kind") == o.end()) missing(path, "kind", "A pass of the draw half");
+        if (auto k = named<PassKind>(o, "kind", path, pass_kind_from_name, {"compute", "render"}, "a kind of pass"))
+            p.kind = *k;
+        if (auto e = string(o, "entry", path)) p.entry = *e;
+        p.workgroups = workgroup_counts(o, path);
+        p.writes = string_list(o, "writes", path);
+        p.vertex = string(o, "vertex", path);
+        if (auto f = string(o, "fragment", path)) p.fragment = *f;
+        if (auto t = string(o, "target", path)) p.target = *t;
+        p.reads = string_list(o, "reads", path);
+        if (auto it = o.find("instances"); it != o.end()) {
+            if (it->is_string()) {
+                p.instances_of = it->get<std::string>();
+            } else if (auto n = count(o, "instances", path)) {
+                p.instances = *n;
+            }
+        }
+        p.vertices = count(o, "vertices", path);
+        if (auto t = named<DrawTopology>(o, "topology", path, draw_topology_from_name,
+                                         {"triangle_list", "triangle_strip", "line_list", "line_strip", "point_list"},
+                                         "a topology"))
+            p.topology = *t;
+        p.blend = named<DrawBlend>(o, "blend", path, draw_blend_from_name, {"opaque", "alpha", "additive"}, "a blend");
+        p.depth = named<DrawDepth>(o, "depth", path, draw_depth_from_name, {"none", "test", "write"}, "a depth");
+        if (auto b = boolean(o, "pick", path)) p.pick = *b;
+        return p;
+    }
+
+    Draw draw_half(const json& o, const std::string& path) {
+        Draw d;
+        strict_keys(o, path, {"camera", "buffers", "targets", "passes", "pick", "text", "frame_ms", "memory_mb"},
+                    "the draw table");
+        if (auto c = named<CameraMode>(o, "camera", path, camera_mode_from_name, {"orbit", "pan_zoom", "none"},
+                                       "a camera"))
+            d.camera = *c;
+        tables(o, "buffers", path, [&](const json& b, const std::string& bp) {
+            strict_keys(b, bp, {"id", "element", "struct", "fields", "count", "reset"}, "a draw buffer");
+            DrawBuffer buf;
+            buf.id = required_string(b, "id", bp, "A draw buffer");
+            buf.layout = piece_layout(b, bp);
+            if (auto n = count(b, "count", bp)) buf.count = *n;
+            if (auto r = named<BufferReset>(b, "reset", bp, buffer_reset_from_name, {"install", "cursor", "resource"},
+                                            "a reset"))
+                buf.reset = *r;
+            d.buffers.push_back(std::move(buf));
+        });
+        tables(o, "targets", path, [&](const json& t, const std::string& tp) {
+            strict_keys(t, tp, {"id", "scale", "clear"}, "a target");
+            DrawTarget target;
+            target.id = required_string(t, "id", tp, "A target");
+            if (auto s = number(t, "scale", tp)) target.scale = static_cast<float>(*s);
+            if (auto it = t.find("clear"); it != t.end()) {
+                bool ok = it->is_array() && it->size() == 4;
+                for (std::size_t i = 0; ok && i < 4; ++i) {
+                    ok = (*it)[i].is_number();
+                    if (ok) target.clear[i] = (*it)[i].get<float>();
+                }
+                if (!ok)
+                    sink_.error("spec.wrong_type", key_path(tp, "clear") + " must be [r, g, b, a], four numbers.",
+                                key_path(tp, "clear"));
+            }
+            d.targets.push_back(std::move(target));
+        });
+        if (o.find("passes") == o.end()) missing(path, "passes", "The draw table");
+        tables(o, "passes", path, [&](const json& p, const std::string& pp) { d.passes.push_back(draw_pass(p, pp)); });
+        if (auto it = o.find("pick"); it != o.end()) {
+            const std::string pp = key_path(path, "pick");
+            if (table(*it, pp, pp)) {
+                strict_keys(*it, pp, {"resource", "fields"}, "the item map");
+                PickMap m;
+                m.resource = required_string(*it, "resource", pp, "The item map");
+                m.fields = string_list(*it, "fields", pp);
+                d.pick = std::move(m);
+            }
+        }
+        if (auto it = o.find("text"); it != o.end()) {
+            const std::string tp = key_path(path, "text");
+            if (table(*it, tp, tp)) {
+                strict_keys(*it, tp, {"anchors", "position", "string", "priority", "strings"}, "the text table");
+                TextTable t;
+                t.anchors = required_string(*it, "anchors", tp, "The text table");
+                if (auto v = string(*it, "position", tp)) t.position = *v;
+                if (auto v = string(*it, "string", tp)) t.string = *v;
+                t.priority = string(*it, "priority", tp);
+                t.strings = string_list(*it, "strings", tp);
+                d.text = std::move(t);
+            }
+        }
+        d.frame_ms = number(o, "frame_ms", path);
+        d.memory_mb = count(o, "memory_mb", path);
+        return d;
+    }
+
+    // One piece: the keys of piece.toml, and for an inline piece and the
+    // commands its WGSL in `files` under common, derive and draw.
+    Piece piece(const json& o, const std::string& path) {
+        Piece p;
+        if (!table(o, path, path)) return p;
+        strict_keys(o, path,
+                    {"name", "version", "description", "inputs", "params", "resources", "imports", "depends", "derive",
+                     "draw", "sample", "hash", "files"},
+                    "a piece");
+        p.name = required_string(o, "name", path, "A piece");
+        if (auto v = count(o, "version", path)) p.version = *v;
+        if (auto v = string(o, "description", path)) p.description = *v;
+        tables(o, "inputs", path, [&](const json& t, const std::string& ip) {
+            strict_keys(t, ip, {"name", "kind", "dtype", "rank_min", "rank_max", "element", "struct", "fields", "title"},
+                        "an input");
+            PieceInput in;
+            in.name = required_string(t, "name", ip, "An input");
+            if (t.find("kind") == t.end()) missing(ip, "kind", "An input");
+            if (auto k = named<InputKind>(t, "kind", ip, input_kind_from_name, {"tensor", "buffer"}, "a kind of input"))
+                in.kind = *k;
+            if (auto d = enumerated(t, "dtype", ip, {"f32", "i32", "u32"}, "a dtype")) in.dtype = *d;
+            if (auto v = count(t, "rank_min", ip)) in.rank_min = *v;
+            if (auto v = count(t, "rank_max", ip)) in.rank_max = *v;
+            in.layout = piece_layout(t, ip);
+            in.title = string(t, "title", ip);
+            p.inputs.push_back(std::move(in));
+        });
+        tables(o, "params", path, [&](const json& t, const std::string& pp) {
+            strict_keys(t, pp, {"name", "type", "default", "min", "max", "title"}, "a parameter");
+            PieceParam param;
+            param.name = required_string(t, "name", pp, "A parameter");
+            if (auto ty = named<ParamType>(t, "type", pp, param_type_from_name, {"f32", "i32", "u32"}, "a type"))
+                param.type = *ty;
+            if (auto v = number(t, "default", pp)) param.default_value = *v;
+            param.min = number(t, "min", pp);
+            param.max = number(t, "max", pp);
+            param.title = string(t, "title", pp);
+            p.params.push_back(std::move(param));
+        });
+        tables(o, "resources", path, [&](const json& t, const std::string& rp) {
+            strict_keys(t, rp,
+                        {"id", "kind", "element", "struct", "fields", "count", "counted", "width", "height", "publish",
+                         "clear", "keep"},
+                        "a resource");
+            Resource r;
+            r.id = required_string(t, "id", rp, "A resource");
+            if (t.find("kind") == t.end()) missing(rp, "kind", "A resource");
+            if (auto k = named<ResourceKind>(t, "kind", rp, resource_kind_from_name, {"buffer", "texture"},
+                                             "a kind of resource"))
+                r.kind = *k;
+            r.layout = piece_layout(t, rp);
+            if (auto v = count(t, "count", rp)) r.count = *v;
+            if (auto v = boolean(t, "counted", rp)) r.counted = *v;
+            if (auto v = count(t, "width", rp)) r.width = *v;
+            if (auto v = count(t, "height", rp)) r.height = *v;
+            if (auto v = boolean(t, "publish", rp)) r.publish = *v;
+            if (auto v = boolean(t, "clear", rp)) r.clear = *v;
+            r.keep = count(t, "keep", rp);
+            p.resources.push_back(std::move(r));
+        });
+        p.imports = string_list(o, "imports", path);
+        tables(o, "depends", path, [&](const json& t, const std::string& dp) {
+            strict_keys(t, dp, {"name", "version"}, "a dependency");
+            PieceDependency d;
+            d.name = required_string(t, "name", dp, "A dependency");
+            if (auto v = count(t, "version", dp)) d.version = *v;
+            p.depends.push_back(std::move(d));
+        });
+        if (auto it = o.find("derive"); it != o.end()) {
+            const std::string dp = key_path(path, "derive");
+            if (table(*it, dp, dp)) {
+                strict_keys(*it, dp, {"passes", "time_ms", "memory_mb", "every"}, "the derive table");
+                Derive d;
+                if (it->find("passes") == it->end()) missing(dp, "passes", "The derive table");
+                tables(*it, "passes", dp, [&](const json& t, const std::string& pp) {
+                    strict_keys(t, pp, {"entry", "workgroups", "writes"}, "a pass of the derive half");
+                    DerivePass pass;
+                    pass.entry = required_string(t, "entry", pp, "A pass of the derive half");
+                    pass.workgroups = workgroup_counts(t, pp);
+                    pass.writes = string_list(t, "writes", pp);
+                    d.passes.push_back(std::move(pass));
+                });
+                d.time_ms = number(*it, "time_ms", dp);
+                d.memory_mb = count(*it, "memory_mb", dp);
+                d.every = count(*it, "every", dp);
+                p.derive = std::move(d);
+            }
+        }
+        if (auto it = o.find("draw"); it != o.end()) {
+            const std::string dp = key_path(path, "draw");
+            if (table(*it, dp, dp)) p.draw = draw_half(*it, dp);
+        }
+        tables(o, "sample", path, [&](const json& t, const std::string& sp) {
+            strict_keys(t, sp, {"input", "shape"}, "a sample");
+            const std::string input = required_string(t, "input", sp, "A sample");
+            SampleInput s;
+            s.file = "sample/" + input + ".bin";
+            if (auto it = t.find("shape"); it == t.end()) {
+                missing(sp, "shape", "A sample");
+            } else if (!it->is_array()) {
+                wrong(key_path(sp, "shape"), *it, "a list of axis lengths");
+            } else {
+                for (std::size_t i = 0; i < it->size(); ++i) {
+                    std::int64_t v = 0;
+                    if (as_integer((*it)[i], v) && v >= 0 && v <= 0xFFFFFFFFll) {
+                        s.shape.push_back(static_cast<std::uint32_t>(v));
+                    } else {
+                        wrong(index_path(key_path(sp, "shape"), i), (*it)[i], "an axis length");
+                    }
+                }
+            }
+            if (!p.sample.emplace(input, std::move(s)).second)
+                sink_.error("spec.duplicate_id", "Two samples name the input " + quote(input) + ".", sp);
+        });
+        if (auto v = string(o, "hash", path)) p.hash = *v;
+        if (auto it = o.find("files"); it != o.end()) {
+            const std::string fp = key_path(path, "files");
+            if (table(*it, fp, fp)) {
+                strict_keys(*it, fp, {"common", "derive", "draw"}, "the files of a piece");
+                for (const char* part : {"common", "derive", "draw"})
+                    if (auto text = string(*it, part, fp)) p.files[std::string(part) + ".wgsl"] = *text;
+            }
+        }
+        return p;
     }
 
     Stage stage(const json& o, const std::string& path) {
@@ -1420,6 +1792,8 @@ Program decode_program(const json& item, const std::string& path, Sink& sink) {
 
 Stage decode_stage(const json& item, const std::string& path, Sink& sink) { return Decoder(sink).stage(item, path); }
 
+Piece decode_piece(const json& item, const std::string& path, Sink& sink) { return Decoder(sink).piece(item, path); }
+
 StateVar decode_state(const json& item, const std::string& path, Sink& sink) {
     return Decoder(sink).state(item, path);
 }
@@ -1573,6 +1947,11 @@ Decoded<Program> program_from_json(const json& item, const std::string& path) {
 
 Decoded<Stage> stage_from_json(const json& item, const std::string& path) {
     return decode_item<Stage>(item, path, 2, detail::decode_stage);
+}
+
+PieceParse piece_from_json_value(const json& item, const std::string& path) {
+    Decoded<Piece> d = decode_item<Piece>(item, path, 2, detail::decode_piece);
+    return PieceParse{std::move(d.value), std::move(d.diagnostics)};
 }
 
 Decoded<StateVar> state_from_json(const json& item, const std::string& path) {
@@ -1854,10 +2233,34 @@ json to_json(const Control& c) {
     return j;
 }
 
+json to_json(const PieceRef& r) {
+    json j = {{"name", r.name}, {"version", r.version}, {"from", piece_from_name(r.from)}};
+    if (!r.hash.empty()) j["hash"] = r.hash;
+    return j;
+}
+
+json to_json(const Piece& piece) {
+    json j = json::parse(programs::canonical_manifest(piece));
+    if (!piece.hash.empty()) j["hash"] = piece.hash;
+    json files = json::object();
+    for (const char* part : {"common", "derive", "draw"})
+        if (auto it = piece.files.find(std::string(part) + ".wgsl"); it != piece.files.end()) files[part] = it->second;
+    if (!files.empty()) j["files"] = std::move(files);
+    return j;
+}
+
 json to_json(const Program& p) {
     json j = json::object();
     j["id"] = p.id;
     if (p.title) j["title"] = *p.title;
+    if (p.piece) {
+        j["piece"] = to_json(*p.piece);
+        if (p.panel) j["panel"] = *p.panel;
+        if (!p.bind.empty()) j["bind"] = p.bind;
+        if (!p.params.empty()) j["params"] = params_json(p.params);
+        if (!p.x.is_null()) j["x"] = p.x;
+        return j;
+    }
     j["wgsl"] = p.wgsl;
     if (p.entry) j["entry"] = *p.entry;
     json inputs = json::array();
@@ -1985,6 +2388,11 @@ json to_json(const Spec& spec) {
         json list = json::array();
         for (const Stage& s : spec.stages) list.push_back(to_json(s));
         j["stage"] = std::move(list);
+    }
+    if (!spec.pieces.empty()) {
+        json list = json::array();
+        for (const Piece& p : spec.pieces) list.push_back(to_json(p));
+        j[kPiecesKey] = std::move(list);
     }
     if (!spec.provenance.empty()) j["provenance"] = to_json(spec.provenance);
     if (spec.layout) j["layout"] = to_json(*spec.layout);

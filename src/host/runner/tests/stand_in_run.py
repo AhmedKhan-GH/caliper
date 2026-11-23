@@ -7,6 +7,12 @@ and registers the actions caliper.checkpoint (writes checkpoint-<step>.json and 
 caliper.stop (ends the script with exit code 0 at its next step). Each step publishes the series
 loss, which falls by the factor (1 - lr) at each step, and prints one line.
 
+It also keeps checkpoints as a parent of a fork from a past step: after the state of step 1 and of
+each step that is a multiple of 5, it writes <run dir>/kept/checkpoint-<step>.json (the same JSON
+as the action caliper.checkpoint) atomically, with a temporary file in the same folder and
+os.replace. When CALIPER_RUN_INTERVENTIONS is set, it prints one line, interventions <the value as
+given>, at its start.
+
 Arguments: the number of steps (default: run until stopped), then the seconds of each step, then
 optionally exit-after-checkpoint, which ends the process with exit code 0 at once after the step
 whose checkpoint it saved, as soon as the reply is out, so that the runner can see the reply and the
@@ -46,6 +52,14 @@ def main() -> None:
         state["saved"] = True
         return path
 
+    def keep_checkpoint() -> None:
+        kept_dir = os.path.join(run_dir, "kept")
+        os.makedirs(kept_dir, exist_ok=True)
+        path = os.path.join(kept_dir, f"checkpoint-{state['step']}.json")
+        with open(path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump({"step": state["step"], "loss": state["loss"], "params": {"lr": lr.value}}, f)
+        os.replace(path + ".tmp", path)
+
     def stop() -> str:
         state["stop"] = True
         return "stopping at the next step"
@@ -58,6 +72,10 @@ def main() -> None:
     os.replace(link_file + ".tmp", link_file)
     print(f"serving {os.environ.get('CALIPER_RUN_ID')} with lr {lr.value} for the app "
           f"{os.environ.get('CALIPER_RUN_APP_PID')}", flush=True)
+
+    interventions = os.environ.get("CALIPER_RUN_INTERVENTIONS")
+    if interventions:
+        print(f"interventions {interventions}", flush=True)
 
     for _ in range(steps):
         state["step"] += 1
@@ -72,6 +90,8 @@ def main() -> None:
             os._exit(0)
         state["loss"] *= 1.0 - lr.value
         caliper.series(state["loss"], name="loss")
+        if state["step"] == 1 or state["step"] % 5 == 0:
+            keep_checkpoint()
         print(f"step {state['step']} loss {state['loss']:.6f}", flush=True)
         time.sleep(pace)
 

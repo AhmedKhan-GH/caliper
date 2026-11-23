@@ -230,6 +230,7 @@ struct Link {
     bool cap_scenes = false;                  // 3.2 draft: the peer announced "scenes"
     bool cap_timelines = false;               // 3.2 draft: the peer announced "timelines"
     bool cap_programs = false;                // 3.2 draft: both sides announced "programs"
+    bool cap_resources = false;               // 3.2 draft: "resources" beside "programs" (pieces)
     bool cap_interventions = false;           // 3.2 draft: both sides announced "interventions"
     bool may_control = false;                 // 3.1: a CONTROL from it is accepted
     std::deque<SharedBytes> after_views;      // 3.1: frames that follow the next VIEWS
@@ -457,6 +458,14 @@ public:
         std::lock_guard<std::mutex> g(mu_);
         auto it = links_.find(c);
         return it == links_.end() ? 0 : it->second.control.size() + it->second.after_views.size();
+    }
+
+    // 3.2 draft: the bytes of the control frames that a connection still has waiting, which
+    // bound the RESOURCE frames that Python gives a viewer that falls behind.
+    size_t control_bytes(ConnId c) {
+        std::lock_guard<std::mutex> g(mu_);
+        auto it = links_.find(c);
+        return it == links_.end() ? 0 : it->second.control_bytes;
     }
 
     static Json without_scenes(const Json& views) {
@@ -901,9 +910,9 @@ private:
     std::vector<std::string> capabilities() const {
         if (!controls_) return {CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_TIMELINES};
         if (g_watch_caps.load())
-            return {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_EVENTS,   CALIPER_NET_CAP_INTERVENTIONS,
-                    CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_SCENES,   CALIPER_NET_CAP_SELECTION,
-                    CALIPER_NET_CAP_TIMELINES};
+            return {CALIPER_NET_CAP_CONTROLS,  CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_INTERVENTIONS,
+                    CALIPER_NET_CAP_PROGRAMS,  CALIPER_NET_CAP_RESOURCES, CALIPER_NET_CAP_SCENES,
+                    CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_TIMELINES};
         return {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_SCENES,
                 CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_TIMELINES};
     }
@@ -929,6 +938,7 @@ private:
         o.set("selection", l.cap_selection);
         o.set("scenes", l.cap_scenes);
         o.set("programs", l.cap_programs);
+        o.set("resources", l.cap_resources);
         o.set("interventions", l.cap_interventions);
         o.set("control", l.may_control);
         o.set("upstream", l.upstream);
@@ -1093,6 +1103,7 @@ private:
             l.cap_scenes = announces(h->capabilities, CALIPER_NET_CAP_SCENES);
             l.cap_timelines = announces(h->capabilities, CALIPER_NET_CAP_TIMELINES);
             l.cap_programs = controls_ && g_watch_caps.load() && announces(h->capabilities, CALIPER_NET_CAP_PROGRAMS);
+            l.cap_resources = l.cap_programs && announces(h->capabilities, CALIPER_NET_CAP_RESOURCES);
             l.cap_interventions =
                 controls_ && g_watch_caps.load() && announces(h->capabilities, CALIPER_NET_CAP_INTERVENTIONS);
             l.may_control = l.cap_controls && allow_control_;
@@ -1427,6 +1438,7 @@ private:
                         l.cap_timelines = announces(w->capabilities, CALIPER_NET_CAP_TIMELINES);
                         l.cap_programs = controls_ && g_watch_caps.load() &&
                                          announces(w->capabilities, CALIPER_NET_CAP_PROGRAMS);
+                        l.cap_resources = l.cap_programs && announces(w->capabilities, CALIPER_NET_CAP_RESOURCES);
                         l.cap_interventions = controls_ && g_watch_caps.load() &&
                                               announces(w->capabilities, CALIPER_NET_CAP_INTERVENTIONS);
                         l.may_control = l.cap_controls && w->control.value_or(false);
@@ -1614,6 +1626,7 @@ NB_MODULE(_netio, m) {
         .def("enable_controls", &NetIO::enable_controls, nb::arg("allow"), R())
         .def("data_pending", &NetIO::data_pending, R())
         .def("queued", &NetIO::queued, R())
+        .def("control_bytes", &NetIO::control_bytes, nb::arg("conn"), R())
         .def("sub_open", &NetIO::sub_open, nb::arg("conn"), nb::arg("sub"), nb::arg("view"), nb::arg("kind"),
              nb::arg("group"), nb::arg("data_view"), nb::arg("max_rate"), nb::arg("backfill"), R())
         .def("sub_close", &NetIO::sub_close, R())

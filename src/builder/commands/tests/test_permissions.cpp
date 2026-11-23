@@ -96,8 +96,13 @@ TEST_CASE("every command of the table says what it does, and the classes agree w
     // and an intervention acts on the running script.
     for (const char* name : {"stage.set", "stage.remove", "program.create", "program.patch", "program.remove"})
         CHECK(cmd(name).effect == CommandEffect::edit);
-    for (const char* name : {"stage.check", "program.status", "intervene.points", "intervene.list"})
+    for (const char* name : {"stage.check", "program.status", "piece.check", "piece.list", "piece.show", "program.read",
+                             "intervene.points", "intervene.list"})
         CHECK(cmd(name).effect == CommandEffect::read);
+    // design/programmable-graphics.md: the piece commands that write the
+    // workspace's pieces/ folder change it as the loader commands do.
+    for (const char* name : {"piece.save", "piece.copy", "piece.update", "piece.remove"})
+        CHECK(cmd(name).effect == CommandEffect::change);
     for (const char* name : {"intervene.set", "intervene.clear"}) CHECK(cmd(name).effect == CommandEffect::run);
     CHECK(command_effect_from_name("run") == CommandEffect::run);
     // Replacing the open spec is not a plain edit.

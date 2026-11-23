@@ -8,6 +8,12 @@
 // keeps more than kHistorySourceBytes, then the largest rings shorten first
 // (water filling), and a ring whose value size is not known yet counts as
 // empty.
+//
+// Each published resource of a program has a ring of versions by step
+// (design/programmable-graphics.md, Kept Versions), thinned evenly: when it
+// is full, every second version goes and the stride between kept versions
+// doubles. The rings of resources share kHistoryResourceBytes, and the
+// sources' water filling gets the budget less what the resources hold.
 #include <caliper_builder/session/history.h>
 
 #include <caliper_builder/loaders/tensor_ops.h>
@@ -27,6 +33,10 @@ namespace caliper_builder {
 namespace {
 
 using json = nlohmann::json;
+
+// The largest stride between kept versions of a resource, in steps: the
+// steps of the wire, 2^53 - 1, so that doubling never overflows.
+constexpr std::int64_t kStrideMax = (std::int64_t(1) << 53) - 1;
 
 bool is_live_catalog(const std::optional<std::string>& catalog) {
     return catalog && catalog->rfind("live:", 0) == 0;
@@ -201,8 +211,25 @@ struct StepHistory::Impl {
         DType dtype = DType::f32;
     };
 
+    // The versions of one published resource.
+    struct ResourceRing {
+        std::string program;
+        std::string pin;                      // the piece hash of the program when the ring began
+        std::uint32_t keep = kResourceKeepDefault;
+        std::vector<ResourceField> fields;
+        std::int64_t stride = 0;              // steps between kept versions; 0 keeps every version
+        bool provisional = false;             // the newest version is kept only until a later one comes
+        std::map<std::int64_t, ResourceVersion> versions;
+        std::uint64_t bytes = 0;
+        std::size_t committed() const { return versions.size() - (provisional && !versions.empty() ? 1 : 0); }
+    };
+
     mutable std::mutex mutex;
     std::map<std::string, Ring> rings;        // by source id
+    std::map<std::string, ResourceRing> resources;   // by "<program>/<resource>"
+    std::map<std::string, std::string> pins;  // the open spec's instances of pieces: id to piece hash
+    std::uint64_t resource_bytes = 0;
+    std::uint64_t resource_serial = 0;        // the serial of the newest version kept
     CursorState cursor;
     std::optional<double> spec_speed;         // the transport's speed at the last configure
     double play = 0;                          // the fraction of a step that play has moved
@@ -236,7 +263,8 @@ struct StepHistory::Impl {
             requested.push_back(want);
             step_bytes.push_back(r.step_bytes);
         }
-        const std::vector<std::int64_t> depth = budget_depths(requested, step_bytes, kHistoryBudgetBytes);
+        const std::uint64_t budget = kHistoryBudgetBytes - std::min(resource_bytes, kHistoryResourceBytes);
+        const std::vector<std::int64_t> depth = budget_depths(requested, step_bytes, budget);
         std::size_t i = 0;
         for (auto& [id, r] : rings) {
             r.depth = depth[i++];
@@ -249,7 +277,109 @@ struct StepHistory::Impl {
         std::set<std::int64_t> all;
         for (const auto& [id, r] : rings)
             for (const auto& [step, v] : r.values) all.insert(step);
+        for (const auto& [key, r] : resources)
+            for (const auto& [step, v] : r.versions) all.insert(step);
         return {all.begin(), all.end()};
+    }
+
+    void drop_version(ResourceRing& r, std::map<std::int64_t, ResourceVersion>::iterator it) {
+        r.bytes -= it->second.nbytes();
+        resource_bytes -= it->second.nbytes();
+        r.versions.erase(it);
+    }
+
+    // Drops a ring and its newest step, so that the next ring of the key
+    // starts no epoch against the versions of the one dropped.
+    void drop_ring(std::map<std::string, ResourceRing>::iterator it) {
+        resource_bytes -= it->second.bytes;
+        newest.erase("resource:" + it->first);
+        resources.erase(it);
+    }
+
+    // Drops every second kept version, the oldest and the newest kept ones
+    // excepted, and doubles the stride; false when fewer than three are kept.
+    bool thin(ResourceRing& r) {
+        const std::size_t n = r.committed();
+        if (n < 3) return false;
+        auto last = r.versions.begin();
+        std::advance(last, (std::ptrdiff_t)(n - 1));
+        const std::uint64_t span = static_cast<std::uint64_t>(last->first) - static_cast<std::uint64_t>(r.versions.begin()->first);
+        const std::int64_t gap = (std::int64_t)std::max<std::uint64_t>(1, std::min<std::uint64_t>(span / (n - 1), kStrideMax));
+        std::size_t i = 0;
+        for (auto it = r.versions.begin(); i < n; ++i) {
+            if (i % 2 == 1 && i != n - 1) {
+                auto next = std::next(it);
+                drop_version(r, it);
+                it = next;
+            } else {
+                ++it;
+            }
+        }
+        r.stride = r.stride == 0 ? 2 * gap : std::min<std::int64_t>(2 * r.stride, kStrideMax);
+        return true;
+    }
+
+    // The versions one ring keeps at most: its `keep`, and what fits one
+    // source's share at the size of its newest version, at least 3, besides
+    // a provisional newest one.
+    static std::size_t capacity(const ResourceRing& r) {
+        const std::uint64_t one = r.versions.empty() ? 0 : r.versions.rbegin()->second.nbytes();
+        const std::uint64_t by_bytes = one == 0 ? r.keep : std::max<std::uint64_t>(3, kHistorySourceBytes / one);
+        return (std::size_t)std::min<std::uint64_t>(r.keep, by_bytes);
+    }
+
+    // Keeps one version: the same step again replaces it in its place; else
+    // the provisional newest gives way, and the version is kept for good when
+    // it is at least the stride after the newest kept one, else provisionally.
+    // Then the ring thins while over its capacity, and the largest rings thin
+    // while all resources pass their share.
+    void keep_version(ResourceRing& r, ResourceVersion v) {
+        const std::int64_t step = v.step;
+        if (auto same = r.versions.find(step); same != r.versions.end()) {
+            r.bytes = r.bytes - same->second.nbytes() + v.nbytes();
+            resource_bytes = resource_bytes - same->second.nbytes() + v.nbytes();
+            same->second = std::move(v);
+            fit_budget(r, step);
+            return;
+        }
+        if (r.provisional && !r.versions.empty()) drop_version(r, std::prev(r.versions.end()));
+        r.provisional = false;
+        bool due = r.stride == 0 || r.versions.empty();
+        if (!due) {
+            const std::int64_t newest = r.versions.rbegin()->first;
+            due = step > newest &&
+                  static_cast<std::uint64_t>(step) - static_cast<std::uint64_t>(newest) >= static_cast<std::uint64_t>(r.stride);
+        }
+        r.bytes += v.nbytes();
+        resource_bytes += v.nbytes();
+        r.versions[step] = std::move(v);
+        r.provisional = !due;
+        while (r.committed() > capacity(r))
+            if (!thin(r)) drop_version(r, r.versions.begin());   // a keep of 1 or 2
+        fit_budget(r, step);
+    }
+
+    // Holds all resources to kHistoryResourceBytes after `r` kept a version at
+    // `step`: the largest ring with three or more versions thins first, then
+    // the largest ring with two or more drops its oldest, and when every ring
+    // keeps one version, the version at `step` is not kept.
+    void fit_budget(ResourceRing& r, std::int64_t step) {
+        while (resource_bytes > kHistoryResourceBytes) {
+            ResourceRing* largest = nullptr;
+            for (auto& [key, other] : resources)
+                if (other.committed() >= 3 && (!largest || other.bytes > largest->bytes)) largest = &other;
+            if (largest && thin(*largest)) continue;
+            largest = nullptr;
+            for (auto& [key, other] : resources)
+                if (other.versions.size() >= 2 && (!largest || other.bytes > largest->bytes)) largest = &other;
+            if (largest) {
+                drop_version(*largest, largest->versions.begin());
+                continue;
+            }
+            if (auto it = r.versions.find(step); it != r.versions.end()) drop_version(r, it);
+            r.provisional = false;
+            break;
+        }
     }
 
     // Updates `first` and clamps a held cursor that fell out of every source.
@@ -257,6 +387,9 @@ struct StepHistory::Impl {
         std::optional<std::int64_t> first;
         for (const auto& [id, r] : rings)
             if (!r.values.empty()) first = first ? std::min(*first, r.values.begin()->first) : r.values.begin()->first;
+        for (const auto& [key, r] : resources)
+            if (!r.versions.empty())
+                first = first ? std::min(*first, r.versions.begin()->first) : r.versions.begin()->first;
         cursor.first = first.value_or(cursor.latest);
         if (cursor.live) {
             cursor.step = cursor.latest;
@@ -287,6 +420,13 @@ struct StepHistory::Impl {
             r.values.clear();
             r.bytes = 0;
         }
+        for (auto& [key, r] : resources) {
+            r.versions.clear();
+            r.bytes = 0;
+            r.stride = 0;
+            r.provisional = false;
+        }
+        resource_bytes = 0;
         newest.clear();
         cursor.step = cursor.first = cursor.latest = 0;
         cursor.live = true;
@@ -305,6 +445,15 @@ struct StepHistory::Impl {
                 r.bytes -= it->second.nbytes();
                 it = r.values.erase(it);
             }
+        for (auto& [key, r] : resources) {
+            // A provisional newest version after `step` goes with the others.
+            if (r.provisional && !r.versions.empty() && r.versions.rbegin()->first > step) r.provisional = false;
+            for (auto it = r.versions.upper_bound(step); it != r.versions.end();) {
+                auto next = std::next(it);
+                drop_version(r, it);
+                it = next;
+            }
+        }
         for (auto& [id, n] : newest) n = std::min(n, step);
         if (!cursor.live && cursor.step > step) {
             cursor.live = true;
@@ -347,6 +496,17 @@ void StepHistory::configure(const spec::Spec& spec) {
         next[source.id] = std::move(ring);
     }
     impl_->rings = std::move(next);
+    // The open spec's instances of pieces, and the resource rings that still
+    // belong to them: a removed program or another pinned piece drops a ring.
+    impl_->pins.clear();
+    for (const spec::Program& program : spec.programs)
+        if (program.piece) impl_->pins[program.id] = program.piece->hash;
+    for (auto it = impl_->resources.begin(); it != impl_->resources.end();) {
+        const auto pin = impl_->pins.find(it->second.program);
+        auto next = std::next(it);
+        if (pin == impl_->pins.end() || pin->second != it->second.pin) impl_->drop_ring(it);
+        it = next;
+    }
     impl_->apply_budget();
     // The transport's speed applies when the spec opens or the option changes.
     std::optional<double> speed;
@@ -354,9 +514,10 @@ void StepHistory::configure(const spec::Spec& spec) {
         if (c.kind == spec::ControlKind::transport) speed = c.options.speed.value_or(10.0);
     if (speed && speed != impl_->spec_speed) impl_->cursor.speed = std::clamp(*speed, 0.1, 1000.0);
     impl_->spec_speed = speed;
-    // A spec whose sources keep nothing any more starts live.
+    // A spec whose sources and resources keep nothing any more starts live.
     bool any = false;
     for (const auto& [id, r] : impl_->rings) any = any || !r.values.empty();
+    for (const auto& [key, r] : impl_->resources) any = any || !r.versions.empty();
     if (!any) {
         impl_->cursor.live = true;
         impl_->cursor.playing = false;
@@ -425,6 +586,76 @@ void StepHistory::append_to(const std::string& catalog_id, std::int64_t step, co
     if (resized) impl_->apply_budget();
     impl_->cursor.latest = std::max(impl_->cursor.latest, step);
     impl_->bounds();
+}
+
+void StepHistory::append_resource(const std::string& program, const std::string& resource, std::uint32_t keep,
+                                  std::vector<ResourceField> fields, ResourceVersion version) {
+    if (!version.bytes) return;
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    const auto pin = impl_->pins.find(program);
+    if (pin == impl_->pins.end()) return;   // not an instance of a piece in the open spec
+    const std::string key = program + "/" + resource;
+    auto it = impl_->resources.find(key);
+    if (it != impl_->resources.end() && it->second.pin != pin->second) {
+        impl_->drop_ring(it);
+        it = impl_->resources.end();
+    }
+    if (it == impl_->resources.end()) {
+        // A resource name that no piece could publish this many of is not kept.
+        std::size_t of_program = 0;
+        for (const auto& [k, ring] : impl_->resources) of_program += ring.program == program ? 1 : 0;
+        if (of_program >= kResourceRingsPerProgram || impl_->resources.size() >= kResourceRingsMax) return;
+        Impl::ResourceRing ring;
+        ring.program = program;
+        ring.pin = pin->second;
+        it = impl_->resources.emplace(key, std::move(ring)).first;
+    }
+    Impl::ResourceRing& r = it->second;
+    r.keep = keep == 0 ? kResourceKeepDefault : std::min(keep, kResourceKeepMax);
+    r.fields = std::move(fields);
+    // A step below the newest of the same resource: a new epoch, as for a view.
+    const std::string seen_key = "resource:" + key;
+    const std::int64_t step = version.step;
+    const auto seen = impl_->newest.find(seen_key);
+    if (seen != impl_->newest.end() && step < seen->second) impl_->new_epoch(step);
+    impl_->newest[seen_key] = step;
+    version.serial = ++impl_->resource_serial;
+    impl_->keep_version(r, std::move(version));
+    std::uint64_t source_bytes = 0;
+    for (const auto& [id, ring] : impl_->rings) source_bytes += ring.bytes;
+    if (source_bytes + impl_->resource_bytes > kHistoryBudgetBytes) impl_->apply_budget();
+    impl_->cursor.latest = std::max(impl_->cursor.latest, step);
+    impl_->bounds();
+}
+
+std::optional<ResourceVersion> StepHistory::resource_at(const std::string& key, std::int64_t step) const {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    const auto it = impl_->resources.find(key);
+    if (it == impl_->resources.end()) return std::nullopt;
+    const auto& versions = it->second.versions;
+    auto v = versions.upper_bound(step);
+    if (v == versions.begin()) return std::nullopt;
+    return std::prev(v)->second;
+}
+
+std::vector<KeptResource> StepHistory::kept_resources() const {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    std::vector<KeptResource> out;
+    for (const auto& [key, r] : impl_->resources) {
+        KeptResource k;
+        k.key = key;
+        if (!r.versions.empty()) {
+            k.first = r.versions.begin()->first;
+            k.last = r.versions.rbegin()->first;
+        }
+        k.versions = (std::int64_t)r.versions.size();
+        k.keep = r.keep;
+        k.stride = r.stride;
+        k.bytes = r.bytes;
+        k.fields = r.fields;
+        out.push_back(std::move(k));
+    }
+    return out;
 }
 
 std::optional<std::pair<std::int64_t, TensorData>> StepHistory::at(const std::string& source,

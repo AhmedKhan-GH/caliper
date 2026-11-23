@@ -588,3 +588,133 @@ TEST_CASE("runner: output.log moves to output.log.1 at its size limit, and run.l
     }, 20000));
     CHECK(runner.running_pids().empty());
 }
+
+namespace {
+
+// Starts the stand-in `base` at a pace of 0.02 seconds and waits until its step is at least `step`.
+void start_parent_at(StandIn& t, std::uint64_t step) {
+    cb::RunEntry base;
+    REQUIRE(!t.runner.start(t.w.start({"100000", "0.02"}, json::object(), "base"), &base));
+    REQUIRE(t.runner.wait_for(state_is("base", "running"), 60000));
+    REQUIRE(t.runner.wait_for([&](const std::vector<cb::RunEntry>& runs) {
+        const cb::RunEntry* e = find(runs, "base");
+        return e && e->step && *e->step >= step;
+    }, 60000));
+}
+
+json one_ablate() {
+    return json::array({json{{"point", "blocks.1.attn#2"}, {"op", "ablate"}}});
+}
+
+bool has_line(const std::vector<std::string>& lines, const std::string& part) {
+    return std::any_of(lines.begin(), lines.end(), [&](const std::string& l) { return l.find(part) != std::string::npos; });
+}
+
+}  // namespace
+
+TEST_CASE("runner: a fork with a step starts at once from the newest kept checkpoint at or before it") {
+    if (std::string(CALIPER_RUNNER_TEST_PYTHON).empty()) {
+        MESSAGE("skipped: the build names no Python that imports Caliper LIB");
+        return;
+    }
+    StandIn t("runner_fork_at_step");
+    cr::ModelRunner& runner = t.runner;
+    start_parent_at(t, 30);
+    cb::RunForkRequest fr;
+    fr.parent = "base";
+    fr.step = 17;
+    fr.interventions = one_ablate();
+    cb::RunEntry fork;
+    REQUIRE(!runner.fork(fr, &fork));
+    CHECK(fork.parent == std::optional<std::string>("base"));
+    REQUIRE(runner.wait_for(state_is(fork.id, "running"), 60000));
+    CHECK(fs::is_regular_file(t.w.ws + "/runs/" + fork.id + "/resume-15.json"));
+    // The loss source starts after 15 NaN values, as the step of the kept checkpoint.
+    REQUIRE(runner.wait_for([&](const auto&) {
+        std::size_t real = 0;
+        for (float v : values_of(runner, "run:" + fork.id + "/loss")) real += std::isnan(v) ? 0 : 1;
+        return real >= 3;
+    }, 60000));
+    const std::vector<float> forked = values_of(runner, "run:" + fork.id + "/loss");
+    REQUIRE(forked.size() > 15);
+    for (std::size_t i = 0; i < 15; ++i) CHECK(std::isnan(forked[i]));
+    CHECK_FALSE(std::isnan(forked[15]));
+    std::vector<std::string> lines;
+    REQUIRE(!runner.logs(fork.id, 200, &lines));
+    CHECK(has_line(lines, "resumed from resume-15.json at step 15"));
+    CHECK(has_line(lines, "interventions [{\"op\":\"ablate\",\"point\":\"blocks.1.attn#2\"}]"));
+    cb::RunEntry stopped;
+    REQUIRE(!runner.stop(fork.id, 30, &stopped));
+    REQUIRE(!runner.stop("base", 30, &stopped));
+    REQUIRE(runner.wait_for(state_is(fork.id, "exited"), 60000));
+    REQUIRE(runner.wait_for(state_is("base", "exited"), 60000));
+    CHECK(runner.running_pids().empty());
+}
+
+TEST_CASE("runner: a fork before the oldest kept checkpoint or with an until_step that it reaches is refused") {
+    if (std::string(CALIPER_RUNNER_TEST_PYTHON).empty()) {
+        MESSAGE("skipped: the build names no Python that imports Caliper LIB");
+        return;
+    }
+    StandIn t("runner_fork_refused");
+    cr::ModelRunner& runner = t.runner;
+    start_parent_at(t, 30);
+    cb::RunEntry out;
+    cb::RunForkRequest fr;
+    fr.parent = "base";
+    fr.step = 0;
+    cb::Error e = runner.fork(fr, &out);
+    CHECK(e.code == cb::kRunNotReady);
+    CHECK(e.message.find("oldest kept checkpoint is at step 1") != std::string::npos);
+    CHECK_FALSE(fs::exists(t.w.ws + "/runs/stand-in-run-1"));
+    std::size_t folders = 0;
+    for (const auto& f : fs::directory_iterator(t.w.ws + "/runs")) folders += f.is_directory() ? 1 : 0;
+    CHECK(folders == 1);   // only the parent's
+
+    fr.step = 17;
+    fr.interventions = json::array({json{{"point", "blocks.1.attn#2"}, {"op", "ablate"}, {"until_step", std::uint64_t(15)}}});
+    e = runner.fork(fr, &out);
+    CHECK(e.code == cb::kInterveneBadRange);
+    folders = 0;
+    for (const auto& f : fs::directory_iterator(t.w.ws + "/runs")) folders += f.is_directory() ? 1 : 0;
+    CHECK(folders == 1);
+    cb::RunEntry stopped;
+    REQUIRE(!runner.stop("base", 30, &stopped));
+    REQUIRE(runner.wait_for(state_is("base", "exited"), 60000));
+    CHECK(runner.running_pids().empty());
+}
+
+TEST_CASE("runner: a symbolic link among the kept checkpoints is never used for a fork") {
+    if (std::string(CALIPER_RUNNER_TEST_PYTHON).empty()) {
+        MESSAGE("skipped: the build names no Python that imports Caliper LIB");
+        return;
+    }
+    StandIn t("runner_fork_symlink");
+    cr::ModelRunner& runner = t.runner;
+    start_parent_at(t, 30);
+    const std::string real = t.w.ws + "/runs/base/other-checkpoint.json";
+    {
+        std::ofstream f(real);
+        f << R"({"step": 16, "loss": 1.0, "params": {"lr": 0.05}})";
+    }
+    std::error_code ec;
+    fs::create_symlink(real, t.w.ws + "/runs/base/kept/checkpoint-16.json", ec);
+    REQUIRE_MESSAGE(!ec, ec.message());
+    cb::RunForkRequest fr;
+    fr.parent = "base";
+    fr.step = 17;
+    cb::RunEntry fork;
+    REQUIRE(!runner.fork(fr, &fork));
+    REQUIRE(runner.wait_for(state_is(fork.id, "running"), 60000));
+    CHECK(fs::is_regular_file(t.w.ws + "/runs/" + fork.id + "/resume-15.json"));
+    CHECK_FALSE(fs::exists(t.w.ws + "/runs/" + fork.id + "/resume-16.json"));
+    std::vector<std::string> lines;
+    REQUIRE(!runner.logs(fork.id, 200, &lines));
+    CHECK(has_line(lines, "resumed from resume-15.json at step 15"));
+    cb::RunEntry stopped;
+    REQUIRE(!runner.stop(fork.id, 30, &stopped));
+    REQUIRE(!runner.stop("base", 30, &stopped));
+    REQUIRE(runner.wait_for(state_is(fork.id, "exited"), 60000));
+    REQUIRE(runner.wait_for(state_is("base", "exited"), 60000));
+    CHECK(runner.running_pids().empty());
+}
