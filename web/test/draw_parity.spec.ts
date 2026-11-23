@@ -109,8 +109,9 @@ interface Comparison {
 // The rules of the plan over two pictures and their ID targets; `bloom` marks the pixels that the
 // glow lights (3 levels in place of 2). With `noIdIsEdge`, a pixel without an ID in either picture is
 // an edge pixel: in a scene, the ground and the shapes that the built-in draw draws write no ID. A
-// pixel inside the ID of a program in `translucent` shows the shapes beneath it, whose edges its ID
-// hides: over the levels, it is an edge pixel when it took a side.
+// pixel inside the ID of a program in `translucent` shows the shapes beneath it, or the edges of a box
+// over its translucent faces, whose edges that ID hides: over the levels, it is an edge pixel when it
+// took a side.
 function compare(size: number, app: Uint8Array, appIds: Uint32Array, web: Uint8Array, webIds: Uint32Array,
   bloom: Uint8Array, noIdIsEdge = false, translucent: Set<number> = new Set()): Comparison {
   const c: Comparison = { interior: 0, edge: 0, edgeShare: 0, edgeOver: 0, edgeDiffer: 0, differShare: 0, over: 0, overBloom: 0,
@@ -547,16 +548,16 @@ test('the browser module draws the scene fixtures with the library pieces as the
       const name = names[i];
       const run = got.runs[i];
       const a = app[name];
-      expect(run.report, `${name}: the module's report`).toMatch(/^ok /);
+      expect.soft(run.report, `${name}: the module's report`).toMatch(/^ok /);
       const web = JSON.parse(run.facts) as SceneFacts;
       // The counts of the same frame.
-      expect(web.frame, `${name}: the frame of the facts`).toBe(a.frame);
-      expect(web.draw, name).toBe('pieces');
-      expect({ pieces: web.pieces, builtin: web.builtin, fallbacks: web.fallbacks }, `${name}: the shapes of frame ${a.frame}`)
+      expect.soft(web.frame, `${name}: the frame of the facts`).toBe(a.frame);
+      expect.soft(web.draw, name).toBe('pieces');
+      expect.soft({ pieces: web.pieces, builtin: web.builtin, fallbacks: web.fallbacks }, `${name}: the shapes of frame ${a.frame}`)
         .toEqual({ pieces: a.pieces, builtin: a.builtin, fallbacks: a.fallbacks });
-      expect(web.programs, `${name}: the program of each pick id`).toEqual(a.programs);
-      expect(web.translucent, `${name}: the translucent programs`).toEqual(a.translucent);
-      expect(web.states, `${name}: the state of each piece's runtime after the frame`).toEqual(a.states);
+      expect.soft(web.programs, `${name}: the program of each pick id`).toEqual(a.programs);
+      expect.soft(web.translucent, `${name}: the translucent programs`).toEqual(a.translucent);
+      expect.soft(web.states, `${name}: the state of each piece's runtime after the frame`).toEqual(a.states);
       // The pictures and the IDs of the pieces.
       const webColor = new Uint8Array(Buffer.from(run.color, 'base64'));
       const webIdBytes = Buffer.from(run.ids, 'base64');
@@ -602,7 +603,7 @@ test('the browser module draws the scene fixtures with the library pieces as the
         fs.writeFileSync(path.join(CAPTURES, `scene-parity-${name}-${info.project.name}.png`), png);
       }
       // The picks at the app's points.
-      expect(web.picks.length, `${name}: the picks`).toBe(a.picks.length);
+      expect.soft(web.picks?.length, `${name}: the picks`).toBe(a.picks.length);
       // Whether a hit is of a shape that the built-in draw drew in this frame: one without a program.
       const drawnBy = new Set(Object.values(a.programs));
       const builtinHit = (hit?: string) => {
@@ -610,9 +611,9 @@ test('the browser module draws the scene fixtures with the library pieces as the
         const [where, primitive] = hit.split(' ');
         return !drawnBy.has(`scene:${where}#${hit.includes(' frustum') ? 'camera' : primitive}`);
       };
-      let first = '', firstMixed = '';
+      let first = '', firstMixed = '', gapHere = 0, gapAt = '';
       for (let k = 0; k < a.picks.length; k++) {
-        const ap = a.picks[k], wp = web.picks[k];
+        const ap = a.picks[k], wp = web.picks?.[k] ?? { at: ap.at };
         asked++;
         const same = ap.hit === wp.hit && ap.result === wp.result;
         const text = `at (${ap.at}): app ${ap.hit ?? `result ${ap.result}`}, browser ${wp.hit ?? `result ${wp.result}`}`;
@@ -621,8 +622,12 @@ test('the browser module draws the scene fixtures with the library pieces as the
           mixed++;
           if (!firstMixed) firstMixed = text;
         } else if (!first) first = text;
-        if (ap.position && wp.position)
-          for (let j = 0; j < 3; j++) positionGap = Math.max(positionGap, Math.abs(ap.position[j] - wp.position[j]));
+        if (same && ap.position && wp.position)
+          for (let j = 0; j < 3; j++) {
+            const g = Math.abs(ap.position[j] - wp.position[j]);
+            if (g > gapHere) { gapHere = g; gapAt = `${ap.hit} at (${ap.at}): app ${ap.position}, browser ${wp.position}`; }
+          }
+        positionGap = Math.max(positionGap, gapHere);
       }
       console.log(`[${info.project.name}] scene ${name}: frame ${web.frame}, ${web.pieces} shapes by pieces, ${web.builtin} by the ` +
         `built-in ${JSON.stringify(web.fallbacks)}; interior ${c.interior}, edge ${c.edge} (${c.edgeOver} over the levels, ` +
@@ -630,15 +635,16 @@ test('the browser module draws the scene fixtures with the library pieces as the
         `has an edge), largest interior difference ${c.maxDiff} levels (${c.over} over 2), ` +
         `differing edge pixels ${(100 * c.differShare).toFixed(3)} % of the image, other IDs ${c.idMismatch}, largest ` +
         `difference of a piece's ID pixels ${coverGap}; picks ` +
-        `${web.picks.filter((p, k) => p.hit === a.picks[k].hit && p.result === a.picks[k].result).length} of ${a.picks.length} agree` +
+        `${(web.picks ?? []).filter((p, k) => p.hit === a.picks[k]?.hit && p.result === a.picks[k]?.result).length} of ${a.picks.length} agree` +
         (first ? `, first other: ${first}` : '') + (firstMixed ? `, first tie with a shape of the built-in draw: ${firstMixed}` : '') +
+        (gapAt ? `, largest gap of a picked position ${gapHere.toExponential(3)} (${gapAt})` : '') +
         (c.first ? `; first over 2: ${c.first}` : ''));
-      expect(empty, `${name}: the pieces that drew no pixel with their ID (the app's state of each: ${JSON.stringify(a.states)})`).toEqual([]);
-      expect(coverGap, `${name}: the largest difference of a piece's ID pixels`).toBeLessThanOrEqual(0.01 * size * size);
-      expect(c.over, `${name}: interior pixels over 2 levels; first ${c.first}`).toBe(0);
-      expect(c.differShare, `${name}: the share of edge pixels that differ`).toBeLessThanOrEqual(0.01);
-      expect(c.idMismatch, `${name}: interior pixels with another ID`).toBe(0);
-      expect(first, `${name}: every pick gives the app's hit`).toBe('');
+      expect.soft(empty, `${name}: the pieces that drew no pixel with their ID (the app's state of each: ${JSON.stringify(a.states)})`).toEqual([]);
+      expect.soft(coverGap, `${name}: the largest difference of a piece's ID pixels`).toBeLessThanOrEqual(0.01 * size * size);
+      expect.soft(c.over, `${name}: interior pixels over 2 levels; first ${c.first}`).toBe(0);
+      expect.soft(c.differShare, `${name}: the share of edge pixels that differ`).toBeLessThanOrEqual(0.01);
+      expect.soft(c.idMismatch, `${name}: interior pixels with another ID`).toBe(0);
+      expect.soft(first, `${name}: every pick gives the app's hit`).toBe('');
     }
     for (const [key, s] of Object.entries(shapes).sort())
       console.log(`[${info.project.name}] scene shape ${key}: ${s.interior} interior pixels, largest difference ${s.maxDiff} ` +

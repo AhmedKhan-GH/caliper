@@ -129,9 +129,10 @@ inline nlohmann::json hit_json(const caliper_live_views::SceneView& v, caliper_s
 }
 
 // The facts of the frame that the view drew last: its frame count, what drew its shapes, the program
-// of each pick id of the pieces, and the pick ids of the programs whose batch draws translucent (an
-// image below full opacity, a colour or colours with alpha below 255), through which the shapes
-// beneath show while their IDs do not.
+// of each pick id of the pieces, the state of each piece's runtime, and the pick ids of the programs
+// whose one ID covers what it does not draw alone: a batch that draws translucent (an image below
+// full opacity, a colour or colours with alpha below 255), through which the shapes beneath show,
+// and boxes with fill, whose translucent faces share the ID of their edges.
 inline nlohmann::json frame_json(const caliper_live_views::SceneView& v) {
     nlohmann::json j = nlohmann::json::object();
     j["frame"] = v.cost().frames;
@@ -160,7 +161,9 @@ inline nlohmann::json frame_json(const caliper_live_views::SceneView& v) {
             if (id.compare(hash + 1, std::string::npos, caliper_scene::primitive_name(caliper_scene::Primitive(k))) != 0)
                 continue;
             const caliper_scene::Batch* b = v.tree().batch(e, caliper_scene::Primitive(k));
-            if (b && (b->translucent || b->opacity < 1.0f || (b->flat_rgba >> 24) < 255u)) j["translucent"].push_back(rt->pick_id());
+            const bool fill = caliper_scene::Primitive(k) == caliper_scene::Primitive::Boxes && b && b->fill;
+            if (b && (b->translucent || b->opacity < 1.0f || (b->flat_rgba >> 24) < 255u || fill))
+                j["translucent"].push_back(rt->pick_id());
         }
     }
     return j;
