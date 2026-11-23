@@ -447,6 +447,7 @@ if(APPLE)
     add_library(caliper_metal_backend STATIC
         src/host/renderer/metal_renderer.mm
         src/host/background_process_mac.mm
+        src/host/mouse_latency_mac.mm
         ${THIRD_PARTY_DIR}/imgui/backends/imgui_impl_metal.mm
     )
     target_include_directories(caliper_metal_backend PRIVATE
@@ -459,6 +460,7 @@ if(APPLE)
     set_source_files_properties(
         src/host/renderer/metal_renderer.mm
         src/host/background_process_mac.mm
+        src/host/mouse_latency_mac.mm
         ${THIRD_PARTY_DIR}/imgui/backends/imgui_impl_metal.mm
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_target_properties(caliper_metal_backend PROPERTIES

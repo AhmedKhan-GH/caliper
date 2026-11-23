@@ -39,6 +39,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <stdexcept>
 #include <future>
 #include <thread>
 #include <vector>
@@ -56,13 +57,14 @@ namespace {
 struct DataRoot {
     std::string dir;
     DataRoot() {
-        char t[] = "/tmp/clp-live-tests-XXXXXX";
-        dir = mkdtemp(t) ? t : "/tmp";
+        std::string t = (std::filesystem::temp_directory_path() / "clp-live-tests-XXXXXX").string();
+        if (!mkdtemp(t.data())) throw std::runtime_error("Cannot create the live test directory");
+        dir = t;
         setenv("CALIPER_DATA_DIR", dir.c_str(), 1);
     }
     ~DataRoot() {
         std::error_code ec;
-        if (dir != "/tmp") std::filesystem::remove_all(dir, ec);
+        std::filesystem::remove_all(dir, ec);
     }
 } g_root;
 

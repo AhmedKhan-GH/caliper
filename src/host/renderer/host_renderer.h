@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -64,6 +65,11 @@ public:
     virtual ~HostRenderer() = default;
     virtual bool init(GLFWwindow* window) = 0;      // after glfwCreateWindow
     virtual void new_frame() = 0;                   // frame CLEAR + backend NewFrame
+    // Desktop renderers call input after their display wait, just before ImGui reads it.
+    virtual void new_frame_with_input(const std::function<void()>& input) {
+        if (input) input();
+        new_frame();
+    }
     virtual void render(int fb_w, int fb_h) = 0;    // RenderDrawData + present
     virtual void shutdown() = 0;
     virtual const char* name() const = 0;           // "metal" / "vulkan" / "webgpu"

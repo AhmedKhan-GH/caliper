@@ -339,7 +339,9 @@ public:
     // stream handoff only when pipelining is actually live.
     bool honors_stream_ordered_handoff() const override { return pipelined_ok_; }
 
-    void new_frame() override {
+    void new_frame() override { new_frame_with_input({}); }
+
+    void new_frame_with_input(const std::function<void()>& input) override {
         int w = 0, h = 0;
         glfwGetFramebufferSize(window_, &w, &h);
         if (w > 0 && h > 0 &&
@@ -352,6 +354,7 @@ public:
             rebuild_swapchain_ = false;
         }
         ImGui_ImplVulkan_NewFrame();
+        if (input) input();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
     }

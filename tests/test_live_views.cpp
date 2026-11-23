@@ -1195,7 +1195,7 @@ TEST_CASE("live_views/points: a drag whose movement and release land in one fram
 // The points view's camera follows the pointer from the first point of motion after a press
 // (live/camera_drag.h): a drag of a point a frame orbits or pans on its first frame of motion and
 // as far as the pointer went, and a click that wobbles a point puts the camera back exactly.
-TEST_CASE("live_views/points: a slow drag moves the camera on its first frame of motion; a wobbling click puts it back") {
+TEST_CASE("live_views/points: slow and batched drags move the camera immediately and a click restores it") {
     Core c(800, 600);
     if (!c.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU: " << c.err());
     std::vector<float> pts = {0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1};
@@ -1204,7 +1204,7 @@ TEST_CASE("live_views/points: a slow drag moves the camera on its first frame of
     sp.points_dims = 3;
     REQUIRE(caliper_core_live_apply(c.core, &sp) == 1);
     c.frames(4);
-    auto send = [&](CaliperEventType type, float x, float y, int button, int down) {
+    auto send = [&](CaliperEventType type, float x, float y, int button, int down, bool advance = true) {
         CaliperInputEvent e{};
         e.struct_size = sizeof e;
         e.type = type;
@@ -1213,7 +1213,7 @@ TEST_CASE("live_views/points: a slow drag moves the camera on its first frame of
         e.button = button;
         e.down = down;
         caliper_core_event(c.core, &e);
-        c.frames(1);
+        if (advance) c.frames(1);
     };
     caliper_live_views::View* pv = caliper_live_views::find(c.core, "pts3");
     REQUIRE(pv != nullptr);
@@ -1257,6 +1257,17 @@ TEST_CASE("live_views/points: a slow drag moves the camera on its first frame of
         CHECK(numbers() != press);
         send(CALIPER_EVENT_MOUSE_BUTTON, cx - 19.0f, cy, button, 0);
         CHECK(numbers() == press);
+        send(CALIPER_EVENT_MOUSE_MOVE, cx - 40.0f, cy, button, 0);
+        const auto batched_press = numbers();
+        send(CALIPER_EVENT_MOUSE_BUTTON, cx - 40.0f, cy, button, 1, false);
+        send(CALIPER_EVENT_MOUSE_MOVE, cx - 39.0f, cy, button, 0, false);
+        c.frames(1);
+        CHECK(numbers() != batched_press);
+        const auto batched_motion = numbers();
+        c.frames(1);
+        CHECK(numbers() == batched_motion);
+        send(CALIPER_EVENT_MOUSE_BUTTON, cx - 39.0f, cy, button, 0);
+        CHECK(numbers() == batched_press);
         send(CALIPER_EVENT_MOUSE_MOVE, cx + 200.0f, cy, button, 0);
     }
 }
