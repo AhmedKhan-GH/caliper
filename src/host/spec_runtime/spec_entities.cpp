@@ -10,6 +10,7 @@
 #include "spec_runtime/spec_prepare.h"
 #include "spec_runtime/spec_runtime.h"   // house_spec_look
 
+#include "draw/scene_pieces.h"
 #include "live/live_scene.h"
 #include "net/wire.h"
 #include "scene/camera.h"
@@ -19,6 +20,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <map>
 #include <unordered_map>
@@ -567,8 +569,79 @@ std::vector<float> wall_segments(const EntityBox& box, caliper_scene::Axis up_ax
 
 }  // namespace
 
+namespace {
+
+// The piece of a surface: surface@1 over the cells of its grid, one 32-byte row a vertex in data
+// units (x, y, z, value, row, column, step, cols), with the row, column and step that
+// entity_pick_fields() gives, in the panel's data box.
+caliper_draw::PieceBatch surface_piece(const EntityDraw& d, const EntityBox& box) {
+    caliper_draw::PieceBatch b;
+    b.piece = "surface";
+    const int64_t R = d.rows, C = d.cols;
+    caliper_draw::PieceBatch::Resource cells;
+    cells.id = "cells";
+    cells.count = uint32_t(R * C);
+    cells.bytes.resize(size_t(R * C) * 32);
+    for (int64_t r = 0; r < R; ++r)
+        for (int64_t c = 0; c < C; ++c) {
+            const size_t i = size_t(r * C + c);
+            const float f[4] = {float(d.data[0][i]), float(d.data[1][i]), float(d.data[2][i]),
+                                i < d.values.size() ? float(d.values[i]) : std::numeric_limits<float>::quiet_NaN()};
+            const int32_t n[3] = {int32_t(d.row_from_x && d.steps.empty() ? std::llround(d.row_coord[size_t(r)]) : r),
+                                  int32_t(d.column_from_y ? std::llround(d.col_coord[size_t(c)]) : c),
+                                  int32_t(size_t(r) < d.steps.size() ? d.steps[size_t(r)] : -1)};
+            const uint32_t cols = uint32_t(C);
+            std::memcpy(cells.bytes.data() + i * 32, f, 16);
+            std::memcpy(cells.bytes.data() + i * 32 + 16, n, 12);
+            std::memcpy(cells.bytes.data() + i * 32 + 28, &cols, 4);
+        }
+    b.resources.push_back(std::move(cells));
+    b.params = {{"max_cells", 262144.0}, {"pool", 0.0},       {"colormap", double(d.colormap)},
+                {"vmin", d.vmin},        {"vmax", d.vmax},    {"x_lo", box.lo[0]},
+                {"x_hi", box.hi[0]},     {"y_lo", box.lo[1]}, {"y_hi", box.hi[1]},
+                {"z_lo", box.lo[2]},     {"z_hi", box.hi[2]}, {"box_x", box.half[0]},
+                {"box_y", box.half[1]},  {"box_z", box.half[2]}, {"depth_offset", 0.0},
+                {"fit", 0.0}};
+    return b;
+}
+
+// The piece of a path: path@1 over its vertices in the box's units, each with its value and its
+// index, which entity_pick_fields() reads as the item; its style as the lines entity's.
+caliper_draw::PieceBatch path_piece(const EntityDraw& d) {
+    caliper_draw::PieceBatch b;
+    b.piece = "path";
+    const size_t n = d.positions.size() / 3;
+    caliper_draw::PieceBatch::Resource v;
+    v.id = "vertices";
+    v.count = uint32_t(n);
+    v.bytes.resize(n * 20);
+    for (size_t i = 0; i < n; ++i) {
+        const float f[4] = {d.positions[i * 3], d.positions[i * 3 + 1], d.positions[i * 3 + 2],
+                            i < d.values.size() ? float(d.values[i]) : std::numeric_limits<float>::quiet_NaN()};
+        const uint32_t row = uint32_t(i);
+        std::memcpy(v.bytes.data() + i * 20, f, 16);
+        std::memcpy(v.bytes.data() + i * 20 + 16, &row, 4);
+    }
+    b.resources.push_back(std::move(v));
+    const bool mapped = !d.values.empty() && d.colors.empty();
+    b.params = {{"width", double(d.width_px)},
+                {"color_mode", mapped ? 1.0 : 0.0},
+                {"color", double(d.flat_rgba != 0 ? d.flat_rgba : caliper_scene::kDefaultRgba)},
+                {"colormap", double(d.colormap)},
+                {"range", 0.0},
+                {"vmin", d.vmin},
+                {"vmax", d.vmax},
+                {"depth_offset", 0.0}};
+    return b;
+}
+
+// The most vertices that path@1 publishes (its piece.toml).
+constexpr size_t kPathVerticesMax = 419430;
+
+}  // namespace
+
 void apply_entity_scene(caliper_live_views::SceneView& view, const EntityScene& scene,
-                        std::vector<std::string>* drawn) {
+                        std::vector<std::string>* drawn, const std::vector<std::string>* paths) {
     if (view.tree().space() != caliper_scene::Space::k3D || caliper_scene::axis_name(view.tree().up()) != scene.up) {
         wire::SceneView info;
         info.space = CALIPER_NET_SPACE_3D;
@@ -643,6 +716,19 @@ void apply_entity_scene(caliper_live_views::SceneView& view, const EntityScene& 
         if (d.draw == spec::DrawKind::points)
             style.point_shape = d.square ? caliper_scene::PointShape::Square : caliper_scene::PointShape::Disc;
         view.set_style(d.path, style);
+        // The surface and a path draw with their own pieces where the view draws with pieces.
+        const bool path = d.draw == spec::DrawKind::lines && d.strip && paths && d.colors.empty() &&
+                          size_t(n) <= kPathVerticesMax &&
+                          std::find(paths->begin(), paths->end(), d.entity) != paths->end();
+        if (d.draw == spec::DrawKind::surface) {
+            const caliper_draw::PieceBatch b = surface_piece(d, box);
+            view.set_piece_batch(d.path, caliper_scene::Primitive::Mesh, &b);
+        } else if (path) {
+            const caliper_draw::PieceBatch b = path_piece(d);
+            view.set_piece_batch(d.path, caliper_scene::Primitive::Lines, &b);
+        } else {
+            view.set_piece_batch(d.path, caliper_scene::Primitive::Lines, nullptr);
+        }
         now.push_back(d.path);
     }
     if (scene.walls) {
@@ -667,6 +753,8 @@ void apply_entity_scene(caliper_live_views::SceneView& view, const EntityScene& 
             c.recursive = true;
             std::string why;
             view.apply(c, &why);
+            view.set_piece_batch(old, caliper_scene::Primitive::Mesh, nullptr);
+            view.set_piece_batch(old, caliper_scene::Primitive::Lines, nullptr);
         }
     *drawn = std::move(now);
 }

@@ -433,6 +433,162 @@ TEST_CASE("entities: a line that lies on the surface wins by its depth offset, a
     CHECK(seen[0] > 3 * seen[1]);
 }
 
+// The entities drawn by the library pieces against the built-in draw through the scene view's switch
+// (live_scene.h, ShapeDraw): the surface with its hole and its window's steps by surface@1 over its
+// grid, the strip of the loss by path@1, the points by points@1 and the walls of the box by lines@1.
+// The pictures agree under the rules of the pieces' match tests (an interior pixel of the pieces'
+// IDs within 1 level, as surface@1's match allows, every other pixel within 1 level of a built-in
+// pixel of its 3 x 3 neighbourhood), and a pick at an interior pixel gives the same entity, item and
+// pick fields in both views.
+TEST_CASE("entities: the library pieces draw the surface, the path, the points and the walls as the built-in does") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) return;
+    const spec::Spec s = parse(kSpec);
+    const EntityScene scene = caliper_host::build_entity_scene(s.panels[0], world_data());
+    const int W = 640, H = 400;
+    struct Drawn {
+        std::unique_ptr<caliper_gfx::Backend> gfx;
+        caliper_gfx::Backend* backend = nullptr;
+        std::unique_ptr<caliper_live_views::SceneView> view;
+        Image img;
+        std::vector<uint64_t> ids;
+    };
+    auto draw = [&](caliper_live_views::ShapeDraw shapes, Drawn* d) {
+        const caliper_gfx::ProgramDesc* programs = nullptr;
+        std::string why;
+        REQUIRE_MESSAGE(canvas_layer(c)(&d->gfx, &d->backend, &programs, &why), why);
+        d->view = std::make_unique<caliper_live_views::SceneView>(*d->backend, programs);
+        d->view->set_shape_draw(shapes);
+        REQUIRE_MESSAGE(d->view->init(&why), why);
+        d->view->set_box_fit(true);
+        std::vector<std::string> drawn_paths;
+        const std::vector<std::string> paths = {"loss"};
+        caliper_host::apply_entity_scene(*d->view, scene, &drawn_paths, &paths);
+        REQUIRE_MESSAGE(d->view->render(W, H, 1.0f, 0xff161616u, &why), why);
+        d->img.w = W;
+        d->img.h = H;
+        REQUIRE_MESSAGE(d->view->read_pixels(&d->img.px, &why), why);
+        d->ids.assign(size_t(W) * H, 0);
+        if (d->view->id_target()) {
+            const caliper_gfx::Readback rb = d->backend->read_texture(d->view->id_target(), 0, 0, W, H);
+            std::vector<uint8_t> bytes;
+            REQUIRE(rb);
+            REQUIRE(d->backend->wait(d->backend->last_use(d->view->id_target())));
+            REQUIRE(d->backend->take_readback(rb, &bytes));
+            for (size_t i = 0; i < d->ids.size() && i * 8 + 8 <= bytes.size(); ++i) {
+                uint32_t pair[2];
+                std::memcpy(pair, bytes.data() + i * 8, 8);
+                d->ids[i] = pair[0] == 0 ? 0 : (uint64_t(pair[0]) << 32 | pair[1]) + 1;
+            }
+        }
+    };
+    Drawn pieces, builtin;
+    draw(caliper_live_views::ShapeDraw::pieces, &pieces);
+    draw(caliper_live_views::ShapeDraw::builtin, &builtin);
+    const caliper_live_views::SceneShapeCounts counts = pieces.view->shape_counts();
+    CHECK(counts.pieces == 4);
+    CHECK(counts.builtin == 0);
+    dump(pieces.img, "entities-pieces.png");
+    dump(builtin.img, "entities-builtin.png");
+
+    auto px = [&](const Image& img, int x, int y) {
+        uint32_t v;
+        std::memcpy(&v, img.px.data() + (size_t(y) * W + x) * 4, 4);
+        return v;
+    };
+    auto gap = [](uint32_t a, uint32_t b) {
+        int g = 0;
+        for (int k = 0; k < 4; ++k) g = std::max(g, std::abs(int((a >> (8 * k)) & 0xffu) - int((b >> (8 * k)) & 0xffu)));
+        return g;
+    };
+    auto interior = [&](int x, int y, int r) {
+        const uint64_t own = pieces.ids[size_t(y) * W + x];
+        if (own == 0) return false;
+        for (int dy = -r; dy <= r; ++dy)
+            for (int dx = -r; dx <= r; ++dx)
+                if (pieces.ids[size_t(std::clamp(y + dy, 0, H - 1)) * W + std::clamp(x + dx, 0, W - 1)] != own) return false;
+        return true;
+    };
+    size_t differ = 0, failed = 0, inside = 0;
+    int max_in = 0, max_edge = 0;
+    std::string first;
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) {
+            const uint32_t p = px(pieces.img, x, y), b = px(builtin.img, x, y);
+            if (p != b) ++differ;
+            int g = gap(p, b);
+            const bool in = interior(x, y, 1);
+            if (in) {
+                ++inside;
+                max_in = std::max(max_in, g);
+            } else {
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx)
+                        g = std::min(g, gap(p, px(builtin.img, std::clamp(x + dx, 0, W - 1), std::clamp(y + dy, 0, H - 1))));
+                max_edge = std::max(max_edge, g);
+            }
+            if (g > 1 && failed++ == 0)
+                first = "pixel (" + std::to_string(x) + ", " + std::to_string(y) + ") " + (in ? "interior" : "edge") +
+                        " gap " + std::to_string(g);
+        }
+    MESSAGE("entities on pieces: " << differ << " of " << W * H << " pixels differ, " << inside
+                                   << " interior pixels with a largest gap of " << max_in << ", largest edge gap "
+                                   << max_edge << ", " << failed << " outside the rules");
+    CHECK_MESSAGE(failed == 0, first);
+    CHECK(inside > 4000);   // the surface's IDs change from vertex to vertex
+
+    // Picks at interior pixels on a grid: the same hit, and the same pick fields of the entity.
+    const EntityScene& sc = scene;
+    size_t asked = 0, agreed = 0;
+    std::string first_pick;
+    auto take = [](caliper_gfx::Backend& g, caliper_live_views::SceneView& v, caliper_scene::Hit* hit) {
+        caliper_scene::PickPass::Result r = caliper_scene::PickPass::Result::Pending;
+        for (int k = 0; k < 10000 && r == caliper_scene::PickPass::Result::Pending; ++k) {
+            if (v.pick_pass()) g.wait(v.pick_pass()->last_use());
+            // The pieces' pick reads the ID target and the depth: each readback is a use of its texture.
+            if (v.id_target()) g.wait(g.last_use(v.id_target()));
+            if (v.depth_target()) g.wait(g.last_use(v.depth_target()));
+            g.poll();
+            r = v.poll_pick(hit);
+        }
+        return r;
+    };
+    for (int y = 3; y < H; y += 5)
+        for (int x = 3; x < W; x += 5) {
+            if (!interior(x, y, 1)) continue;
+            std::string why;
+            caliper_scene::Hit hp, hb;
+            REQUIRE(pieces.view->request_pick(x + 0.5f, y + 0.5f, &why));
+            const auto rp = take(*pieces.backend, *pieces.view, &hp);
+            REQUIRE(builtin.view->request_pick(x + 0.5f, y + 0.5f, &why));
+            const auto rb = take(*builtin.backend, *builtin.view, &hb);
+            ++asked;
+            bool same = rp == caliper_scene::PickPass::Result::Hit && rb == rp;
+            if (same) {
+                const std::string path = pieces.view->tree().path(hp.entity);
+                same = path == builtin.view->tree().path(hb.entity) && hp.item == hb.item && hp.primitive == hb.primitive;
+                const auto fp = caliper_host::entity_pick_fields(sc, path, hp.item);
+                const auto fb = caliper_host::entity_pick_fields(sc, path, hb.item);
+                same = same && fp.has_value() == fb.has_value();
+            }
+            if (same) ++agreed;
+            else if (first_pick.empty())
+                first_pick = "at (" + std::to_string(x) + ", " + std::to_string(y) + "): pieces " +
+                             (rp == caliper_scene::PickPass::Result::Hit
+                                  ? pieces.view->tree().path(hp.entity) + " " + std::to_string(hp.item)
+                                  : "result " + std::to_string(int(rp))) +
+                             ", built-in " +
+                             (rb == caliper_scene::PickPass::Result::Hit
+                                  ? builtin.view->tree().path(hb.entity) + " " + std::to_string(hb.item)
+                                  : std::string("no hit"));
+        }
+    MESSAGE("entities on pieces: picks " << agreed << " of " << asked << " agree");
+    CHECK(asked > 20);
+    CHECK_MESSAGE(agreed == asked, first_pick);
+    pieces.view.reset();
+    builtin.view.reset();
+}
+
 TEST_CASE("entities: view_camera angles open the panel at those angles with its box framed") {
     SpecOffscreen* c = canvas();
     if (!c || !c->native_device()) return;
