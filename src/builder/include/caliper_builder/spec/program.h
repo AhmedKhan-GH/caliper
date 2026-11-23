@@ -1,18 +1,16 @@
 #pragma once
 // caliper_builder::spec: the value types that spec version 1 adds for GPU
 // programs (design/gpu-programs.md, Spec Additions): the top-level arrays
-// `program` and `stage`, and the object `provenance`.
+// `program`, and the object `provenance`.
 //
 // A program is WGSL compute source with a declaration of its inputs (live
 // tensors of the script by name, read-only), its one output (geometry that a
 // scene panel draws as one entity, or pixels that the live view
 // program.<id> carries) and its limits. It runs in the script's process on
-// the producer runtime. A stage is WGSL that replaces the material or the
-// vertex function of one entity of a scene panel, in the viewer. Provenance
-// marks a spec from someone else, whose programs and stages run only after a
-// person reviewed their source.
+// the producer runtime. Provenance marks a spec from someone else, whose
+// programs run only after a person reviewed their source.
 //
-// Spec::programs, Spec::stages and Spec::provenance hold them (spec.h). The
+// Spec::programs and Spec::provenance hold them (spec.h). The
 // spec library reads, writes and validates them; the sandbox
 // (caliper_builder/programs/sandbox.h), the producer runtime and the viewer
 // check and run them. Everything here is a plain value with inline helpers,
@@ -40,9 +38,7 @@ inline constexpr std::size_t kPrograms = 16;                    // `program` ite
 // holds at most 63 bytes (CALIPER_NET_NAME_MAX), thus the wire's PROGRAM takes
 // an id of at most 55 bytes (CALIPER_NET_PROGRAM_ID_MAX); spec.bad_value.
 inline constexpr std::size_t kProgramIdChars = 55;
-inline constexpr std::size_t kStages = 32;                      // `stage` items; spec.too_many
 inline constexpr std::size_t kProgramSourceBytes = 64 * 1024;   // a program's `wgsl`
-inline constexpr std::size_t kStageSourceBytes = 16 * 1024;     // a stage's `wgsl`
 inline constexpr std::size_t kInputs = 8;                       // a program's `inputs`
 inline constexpr std::uint32_t kMaxCount = 1000000;             // geometry `max_count`
 inline constexpr std::uint32_t kPixelsSide = 2048;              // pixels `width` and `height`
@@ -78,9 +74,6 @@ enum class GeometryPart { points, lines };
 enum class GeometryArray { positions, colors, values, radii };
 // The pixel formats of a pixels output.
 enum class PixelFormat { rgba8unorm };
-// The kinds of a stage. The `compute` kind of earlier plans is a program with
-// a geometry output.
-enum class StageKind { material, vertex };
 
 inline const char* output_kind_name(OutputKind k) {
     return k == OutputKind::pixels ? "pixels" : k == OutputKind::tensor ? "tensor" : "geometry";
@@ -116,12 +109,6 @@ inline std::uint32_t geometry_array_words(GeometryArray a) { return a == Geometr
 inline const char* pixel_format_name(PixelFormat) { return "rgba8unorm"; }
 inline std::optional<PixelFormat> pixel_format_from_name(std::string_view n) {
     if (n == "rgba8unorm") return PixelFormat::rgba8unorm;
-    return std::nullopt;
-}
-inline const char* stage_kind_name(StageKind k) { return k == StageKind::vertex ? "vertex" : "material"; }
-inline std::optional<StageKind> stage_kind_from_name(std::string_view n) {
-    if (n == "material") return StageKind::material;
-    if (n == "vertex") return StageKind::vertex;
     return std::nullopt;
 }
 
@@ -167,7 +154,7 @@ inline bool operator==(const ProgramOutput& a, const ProgramOutput& b) {
            a.height == b.height && a.format == b.format && a.shape == b.shape;
 }
 
-// The named numbers of a program or a stage (`params`): at most kParams
+// The named numbers of a program (`params`): at most kParams
 // names, each a number or a reference. The WGSL reads them in the uniform
 // struct `Params` (design/instrument-interface.md, Program Parameters).
 using Params = std::map<std::string, ValueOr<double>>;
@@ -224,23 +211,7 @@ inline bool operator==(const Program& a, const Program& b) {
 inline bool is_piece_instance(const Program& p) { return p.piece.has_value(); }
 inline bool operator!=(const Program& a, const Program& b) { return !(a == b); }
 
-// One entry of the `stage` array. The triple panel, entity and kind is unique.
-struct Stage {
-    std::string panel;                  // a scene panel's id
-    std::string entity;                 // an entity path of the panel's scene
-    StageKind kind = StageKind::material;
-    std::string wgsl;                   // at most kStageSourceBytes: functions and constants only
-    Params params;                      // version 1: `params`, in the stage's uniform
-    nlohmann::json x;                   // the extension table, null when absent
-};
-inline bool operator==(const Stage& a, const Stage& b) {
-    return a.panel == b.panel && a.entity == b.entity && a.kind == b.kind && a.wgsl == b.wgsl && a.params == b.params &&
-           a.x == b.x;
-}
-inline bool operator!=(const Stage& a, const Stage& b) { return !(a == b); }
-
-// A reviewed source of a foreign spec: the target "program:<id>" or
-// "stage:<panel>/<entity>/<kind>", and the SHA-256 of its WGSL in lowercase hex.
+// A reviewed source of a foreign spec: the target "program:<id>" and the SHA-256 of its WGSL in lowercase hex.
 struct ReviewedSource {
     std::string target;
     std::string sha256;
@@ -268,10 +239,7 @@ inline bool operator==(const Provenance& a, const Provenance& b) {
 inline std::string default_entity(std::string_view program_id) { return "programs/" + std::string(program_id); }
 // The live view that carries a pixels output: "program.<id>".
 inline std::string program_view_name(std::string_view program_id) { return "program." + std::string(program_id); }
-// The id of a stage in program.status and in program events: "<panel>/<entity>/<kind>".
-inline std::string stage_id(const Stage& s) { return s.panel + "/" + s.entity + "/" + stage_kind_name(s.kind); }
 // The targets of provenance.reviewed.
 inline std::string program_target(const Program& p) { return "program:" + p.id; }
-inline std::string stage_target(const Stage& s) { return "stage:" + stage_id(s); }
 
 }  // namespace caliper_builder::spec

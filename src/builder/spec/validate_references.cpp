@@ -450,7 +450,6 @@ private:
         };
         for (std::size_t i = 0; i < c_.spec.programs.size(); ++i)
             each(c_.spec.programs[i].params, index_path("program", i));
-        for (std::size_t i = 0; i < c_.spec.stages.size(); ++i) each(c_.spec.stages[i].params, index_path("stage", i));
     }
 
     // ---- spec.reference_cycle -------------------------------------------------

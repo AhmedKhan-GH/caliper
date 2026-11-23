@@ -374,7 +374,7 @@ TEST_CASE("layout.place and the flat layout accept control ids") {
           "panel.not_found");
 }
 
-TEST_CASE("spec edits: panel.remove takes the panel's stages along and keeps a program that draws in it") {
+TEST_CASE("spec edits: panel.remove is refused while a program draws in the panel") {
     spec::Spec s = session_test::parse_fixture("programs.spec.toml");
     s.provenance = {};
     // The program rows draws in world: the removal is refused until it moves.
@@ -382,11 +382,9 @@ TEST_CASE("spec edits: panel.remove takes the panel's stages along and keeps a p
     CHECK(refused.error.code == "spec.unknown_panel");
     CHECK(refused.error.where == "program[0].output.panel");
     s.programs.erase(s.programs.begin());
-    REQUIRE(s.stages.size() == 1);
     SpecEdit removed = apply_spec_edit(s, "panel.remove", {{"id", "world"}});
     REQUIRE_MESSAGE(removed.error.ok(), removed.error.message);
     CHECK(removed.spec.panels.empty());
-    CHECK(removed.spec.stages.empty());
     CHECK(removed.spec.programs.size() == 1);
 }
 

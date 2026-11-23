@@ -68,7 +68,7 @@ struct InputKey {
 };
 
 // One reader of references: a source step, a panel's options or slot, an
-// entity, an annotation, a bound text, or the params of a program or a stage.
+// entity, an annotation, a bound text, or the params of a program.
 // `path` is its document path ("source[2].transform[0]", "panel[1].options").
 struct ReaderId {
     std::string path;

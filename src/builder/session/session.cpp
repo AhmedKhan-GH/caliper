@@ -154,12 +154,11 @@ struct Session::Impl {
     std::atomic<RunControl*> run_control{nullptr};
     std::atomic<ModelRunner*> model_runner{nullptr};
     std::atomic<ProgramHost*> program_host{nullptr};
-    std::atomic<StageHost*> stage_host{nullptr};
-    // What the program and stage hosts were last given (reconcile_hosts()).
+    std::atomic<DrawStatusHost*> draw_host{nullptr};
+    // What the program host was last given (reconcile_hosts()).
     std::mutex reconcile_mutex;
     std::optional<spec::Spec> reconciled;
     ProgramHost* reconciled_program_host = nullptr;
-    StageHost* reconciled_stage_host = nullptr;
     std::string workspace;
     SessionOptions options;
     std::unique_ptr<LoaderStore> store;
@@ -1665,7 +1664,7 @@ struct Session::Impl {
         return runner_command(ctx, model_runner.load(), workspace, approved);
     }
     CommandOutput events_wait(const CommandContext& ctx) { return events_wait_command(ctx, *events); }
-    // stage.check and program.status (design/gpu-programs.md).
+    // program.status (design/gpu-programs.md).
     // The hosts' status() runs without the document's lock, so that a host
     // may read the open spec.
     // The piece commands and program.read (design/programmable-graphics.md),
@@ -1698,7 +1697,7 @@ struct Session::Impl {
             std::lock_guard<std::mutex> lock(doc_mutex);
             if (doc) open = doc->spec;
         }
-        return program_command(ctx, open, program_host.load(), stage_host.load(), workspace);
+        return program_command(ctx, open, program_host.load(), draw_host.load(), workspace);
     }
     // The commands of design/instrument-interface.md that change or read
     // session state (instrument_commands.h). They run on a copy of the open
@@ -1770,7 +1769,7 @@ struct Session::Impl {
         return doc ? doc->spec.applet.id : std::string();
     }
 
-    // Makes the hosts of GPU programs and stages run what the open spec holds
+    // Makes the host of GPU programs run what the open spec holds
     // (program_host.h, design/gpu-programs.md, Attachment): after each
     // journaled command (an edit, an undo, a redo, an open), each host's
     // reconcile() gets the open spec when it differs from what the hosts got
@@ -1779,22 +1778,19 @@ struct Session::Impl {
     void reconcile_hosts() {
         reset_instruments();
         ProgramHost* programs = program_host.load();
-        StageHost* stages = stage_host.load();
         std::lock_guard<std::mutex> lock(reconcile_mutex);
-        if (!programs && !stages && !reconciled) return;
+        if (!programs && !reconciled) return;
         spec::Spec now;
         {
             std::lock_guard<std::mutex> doc_lock(doc_mutex);
             if (doc) now = doc->spec;
         }
         const bool changed = !reconciled || !(*reconciled == now);
-        const bool new_hosts = programs != reconciled_program_host || stages != reconciled_stage_host;
+        const bool new_hosts = programs != reconciled_program_host;
         if (!changed && !new_hosts) return;
         reconciled = now;
         reconciled_program_host = programs;
-        reconciled_stage_host = stages;
         if (programs) programs->reconcile(now);
-        if (stages) stages->reconcile(now);
     }
 
     void bind_all() {
@@ -1832,7 +1828,7 @@ struct Session::Impl {
         bind("spec.validate", &Impl::spec_validate);
         for (const char* name : {"spec.set_text", "source.add", "source.patch", "source.remove", "panel.create",
                                  "panel.patch", "panel.remove", "layout.place", "layout.set", "control.create",
-                                 "control.patch", "control.remove", "stage.set", "stage.remove", "program.create",
+                                 "control.patch", "control.remove", "program.create",
                                  "program.patch", "program.remove", "state.create", "state.patch", "state.remove",
                                  "entity.set", "entity.remove", "annotation.set", "annotation.remove", "camera.save"})
             bind(name, &Impl::spec_edit);
@@ -1840,8 +1836,8 @@ struct Session::Impl {
         for (const char* name : {"state.set", "state.get", "control.set", "selection.set", "selection.get",
                                  "cursor.get", "cursor.set", "cursor.step"})
             bind(name, &Impl::instrument_cmd);
-        // The stages, programs and interventions (design/gpu-programs.md).
-        for (const char* name : {"stage.check", "program.status"}) bind(name, &Impl::program_cmd);
+        // The programs and interventions (design/gpu-programs.md).
+        bind("program.status", &Impl::program_cmd);
         for (const char* name : {"piece.check", "piece.list", "piece.show", "piece.copy", "piece.update",
                                  "piece.remove"})
             bind(name, &Impl::piece_cmd);
@@ -2246,8 +2242,8 @@ void Session::set_model_runner(ModelRunner* runner) { impl_->model_runner.store(
 ModelRunner* Session::model_runner() const { return impl_->model_runner.load(); }
 void Session::set_program_host(ProgramHost* host) { impl_->program_host.store(host); }
 ProgramHost* Session::program_host() const { return impl_->program_host.load(); }
-void Session::set_stage_host(StageHost* host) { impl_->stage_host.store(host); }
-StageHost* Session::stage_host() const { return impl_->stage_host.load(); }
+void Session::set_draw_host(DrawStatusHost* host) { impl_->draw_host.store(host); }
+DrawStatusHost* Session::draw_host() const { return impl_->draw_host.load(); }
 RunControl* Session::run_control() const { return impl_->run_control.load(); }
 EventRing& Session::events() { return *impl_->events; }
 ValueStore& Session::values() { return impl_->values; }

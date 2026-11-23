@@ -1,22 +1,23 @@
 # GPU Programs
 
-This page defines the interfaces of GPU programs. An agent that uses only `caliper-mcp` writes a WGSL compute program over a live training tensor, and the program draws new geometry in a scene panel or new pixels in an image panel. The agent also changes how a scene entity draws with a material stage or a vertex stage. The same work adds the first intervention: a toggle that ablates a module of the model while the run trains.
+This page defines the interfaces of GPU programs. An agent that uses only `caliper-mcp` writes a WGSL compute program over a live training tensor, and the program draws new geometry in a scene panel or new pixels in an image panel. The same work adds the first intervention: a toggle that ablates a module of the model while the run trains.
 
-The page states the spec additions, the eleven new commands, the program declaration, the sandbox, the cadence of a program, the wire path between the app and the script, the status of a program, the program events and the intervention commands. The design of the runtime in the script's process and its measurements are in `design/producer-runtime.md`. The conventions of commands, events and the effect `run` are in `design/instruments.md`.
+The page states the spec additions, the eight new commands, the program declaration, the sandbox, the cadence of a program, the wire path between the app and the script, the status of a program, the program events and the intervention commands. The design of the runtime in the script's process and its measurements are in `design/producer-runtime.md`. The conventions of commands, events and the effect `run` are in `design/instruments.md`.
 
 ## Status
 
-The features of this page are built. The eleven commands edit the spec and read the hosts, the sandbox checks each program and stage, the producer runtime runs programs in the script on Metal, the app runs stages in its scene panels, and the toggle and the intervention commands ablate points of the watched model. A program runs only in a build with the WGSL compiler (Open Points, Wheel). The acceptance test is in `tests/gpu_programs/` as the ctest entry `caliper_gpu_programs_acceptance`, and Acceptance Test lists its steps. `docs/development/testing.md` describes it in GPU Programs Acceptance.
+The features of this page are built. The eight commands edit the spec and read the hosts, the sandbox checks each program, the producer runtime runs programs in the script on Metal, and the toggle and the intervention commands ablate points of the watched model. A program runs only in a build with the WGSL compiler (Open Points, Wheel). The acceptance test is in `tests/gpu_programs/` as the ctest entry `caliper_gpu_programs_acceptance`, and Acceptance Test lists its steps. `docs/development/testing.md` describes it in GPU Programs Acceptance.
 
 ## Spec Additions
 
-Programs and stages join spec version 1, as `design/instruments.md` planned. A program and a stage are spec content: WGSL source with a declaration. They have a diff, an undo step and a journal entry like each other edit. Spec version 1 gains three top-level keys:
+Programs join spec version 1, as `design/instruments.md` planned. A program is spec content: WGSL source with a declaration. It has a diff, an undo step and a journal entry like each other edit. Spec version 1 gains two top-level keys:
 
 - **`program`** is an array of program declarations, at most 16.
-- **`stage`** is an array of stages, at most 32.
 - **`provenance`** is an object that marks a spec from someone else.
 
-The value types are in `src/builder/include/caliper_builder/spec/program.h`, and `Spec` holds them as `programs`, `stages` and `provenance`. The reader refuses the three keys with `spec.unknown_key` until the codec reads them. The argument schemas of `program.create` and `stage.set` in `src/builder/commands/command_table.cpp` are the reference for the JSON form. The schema of version 1 copies them as `$defs/program`, `$defs/stage` and `$defs/provenance`.
+The value types are in `src/builder/include/caliper_builder/spec/program.h`, and `Spec` holds them as `programs` and `provenance`. The reader refuses both keys in a version 0 spec with `spec.unknown_key`. The argument schema of `program.create` in `src/builder/commands/command_table.cpp` is the reference for the JSON form. The schema of version 1 copies it as `$defs/program` and `$defs/provenance`.
+
+Earlier specs used the `stage` key for changes to an entity's color or vertex function. Library pieces replace that key. An old `[[stage]]` table produces the warning `spec.stage_replaced` at `stage[<index>]`. The message explains the replacement piece. The spec opens without the stage or its review hash.
 
 ### Program Declaration
 
@@ -83,46 +84,22 @@ struct CaliperFrame {
 }
 ```
 
-### Stage Declaration
-
-A stage replaces one function of the draw of one scene entity in the viewer. A stage item holds `panel` (a scene panel's id), `entity` (an entity path), `kind` (`material` or `vertex`) and `wgsl` (at most 16 KiB). The triple of panel, entity and kind is unique. A panel removal also removes the stages of that panel in the same undo step.
-
-The source of a stage holds functions and constants only. It declares no binding, no entry point and no directive. The viewer puts a fixed prelude before the source and its own entry points after it, and the entry points call the stage's function. Thus the scene keeps its camera, depth, pick pass and selection.
-
-| Kind | Function |
-|---|---|
-| `material` | `fn material(in: MaterialIn) -> vec4<f32>` gives the color of a fragment |
-| `vertex` | `fn vertex(in: VertexIn) -> VertexOut` gives the position and the radius of an item |
-
-The prelude declares these structs:
-
-```wgsl
-struct MaterialIn { color: vec4<f32>, value: f32, item: u32, position: vec3<f32>, normal: vec3<f32>, time_s: f32, step: u32 }
-struct VertexIn { position: vec3<f32>, value: f32, radius: f32, item: u32, time_s: f32, step: u32 }
-struct VertexOut { position: vec3<f32>, radius: f32 }
-```
-
-The positions are in the coordinates of the scene. A vertex stage also runs in the pick pass, thus a moved item picks where it draws. The kind `compute` of earlier plans is a program with a geometry output.
-
 ### Provenance
 
-The object `provenance` marks a spec from someone else, such as a shared or downloaded spec. Its keys are `foreign` (true), `from` (a free text that names the origin) and `reviewed`, a list of `{target, sha256}`. A target is `program:<id>` or `stage:<panel>/<entity>/<kind>`, and the hash is the SHA-256 of its WGSL.
+The object `provenance` marks a spec from someone else, such as a shared or downloaded spec. Its keys are `foreign` (true), `from` (a free text that names the origin) and `reviewed`, a list of `{target, sha256}`. A target is `program:<id>`, and the hash is the SHA-256 of its WGSL.
 
-No command writes `provenance`. The app writes it when it opens a spec from outside the workspace, and the edits of a command keep it. In a foreign spec, a program or a stage runs only when its hash is in `reviewed`. Else its state is `review`, and it does not run. The review card that adds a hash comes in a later task. A spec without `provenance` is the person's own, and its programs run at once.
+No command writes `provenance`. The app writes it when it opens a spec from outside the workspace, and the edits of a command keep it. In a foreign spec, a program runs only when its hash is in `reviewed`. Else its state is `review`, and it does not run. The review card that adds a hash comes in a later task. A spec without `provenance` is the person's own, and its programs run at once.
 
 ## Commands
 
-Eleven commands join the command table. Each one becomes an MCP tool with the dot replaced by `_`, such as `program_create`. The descriptors in `src/builder/commands/command_table.cpp` hold the argument schemas, the result schemas and one example for each command.
+Eight commands join the command table. Each one becomes an MCP tool with the dot replaced by `_`, such as `program_create`. The descriptors in `src/builder/commands/command_table.cpp` hold the argument schemas, the result schemas and one example for each command.
 
 | Command | Effect | Mutates | Frame Thread | Function |
 |---|---|---|---|---|
-| `stage.set` | `edit` | Yes | Yes | Sets the material or vertex stage of one entity of a scene panel |
-| `stage.remove` | `edit` | Yes | Yes | Removes one stage |
-| `stage.check` | `read` | No | No | Compiles a stage or a program source and returns the compiler's messages |
 | `program.create` | `edit` | Yes | Yes | Adds a program to the open spec |
 | `program.patch` | `edit` | Yes | Yes | Changes a program with a JSON merge patch |
 | `program.remove` | `edit` | Yes | Yes | Removes a program |
-| `program.status` | `read` | No | Yes | Returns the state of each program and stage |
+| `program.status` | `read` | No | Yes | Returns the state of each program |
 | `intervene.points` | `read` | No | Yes | Lists the intervention points of the attached model |
 | `intervene.set` | `run` | No | Yes | Sets one intervention, applied at the next step |
 | `intervene.clear` | `run` | No | Yes | Clears one point's interventions or all of them |
@@ -130,13 +107,9 @@ Eleven commands join the command table. Each one becomes an MCP tool with the do
 
 The `events.wait` kinds gain `program`, and its event schema gains the program keys of Program Events.
 
-### Stage Commands
+### Edit Rules
 
-The stage commands are edits of the open spec. They follow the rules of the panel commands: a dry run, a diff, review for the origins that have review on, one undo step and a journal entry. `apply_spec_edit()` gives them to `apply_program_edit()` in `src/builder/session/program_edit.cpp`.
-
-`stage.set` takes `panel`, `entity`, `kind` and `wgsl`, and optionally `dry_run`. It replaces the stage of the same panel, entity and kind. Before the edit, it runs the sandbox checks of the editor on the stage. The result holds `panel`, `entity`, `kind`, `messages`, `warnings`, `diff` and `applied`. `stage.remove` takes `panel`, `entity` and `kind`.
-
-`stage.check` takes `kind` (`material`, `vertex` or `compute`) and `wgsl`, and optionally `entry`. It changes nothing. It compiles the source as the viewer or the runtime does and returns `ok`, `messages`, `entry_points` and `bindings`. Each message has `severity`, `code`, `message`, `line` and `column`, with the line and column in the given source.
+The program edits are edits of the open spec. They follow the rules of the panel commands: a dry run, a diff, review for the origins that have review on, one undo step and a journal entry. `apply_spec_edit()` gives them to `apply_program_edit()` in `src/builder/session/program_edit.cpp`.
 
 ### Program Commands
 
@@ -144,7 +117,7 @@ The stage commands are edits of the open spec. They follow the rules of the pane
 
 `program.patch` takes `id` and a merge patch of `title`, `wgsl`, `entry`, `inputs`, `output`, `limits` and `workgroups`, and optionally `dry_run`. It checks the program again as `program.create` does. Its result holds the program after the patch. `program.remove` takes `id`.
 
-`program.status` takes an optional `id`. It returns `programs` and `stages`, each a list of the status items of Program Status. It reads the state that the program hosts of the app report, and it answers with `host` set to `none` for an item that no host runs.
+`program.status` takes an optional `id`. It returns `programs`, a list of the status items of Program Status. It reads the state that the program hosts of the app report, and it answers with `host` set to `none` for an item that no host runs.
 
 The person's own agent needs no review card for a program. The sandbox is always on, and the panel shows the source. The review settings of spec edits apply as for each other edit.
 
@@ -156,8 +129,6 @@ Each error has a code and one plain sentence. The codes are constants in `src/bu
 |---|---|
 | `program.exists` | A program with this id is in the spec |
 | `program.not_found` | The spec has no program with this id |
-| `stage.not_found` | The panel has no stage of this kind on this entity |
-| `stage.not_scene_panel` | The panel is not a scene panel, or `stage.set` names a panel that the spec does not have |
 | `program.bad_target` | The output names a panel that is not a scene panel, or `program.create` names a panel that the spec does not have |
 | `spec.provenance_locked` | `spec.set_text` gives a provenance table that differs from the open spec's |
 | `program.too_large` | The source is above its size limit |
@@ -169,26 +140,23 @@ Each error has a code and one plain sentence. The codes are constants in `src/bu
 | `program.output_mismatch` | An output binding has the wrong kind or access, or a necessary one is missing |
 | `program.over_limits` | A count, a size, a workgroup or a limit is above its maximum |
 | `program.compiler_unavailable` | The build has no WGSL compiler; a dry run cannot check the source |
-| `stage.binding_not_allowed` | A stage declares a binding |
-| `stage.entry_not_allowed` | A stage declares an entry point |
-| `stage.compile_failed` | The viewer's composed shader does not compile; the line and the column are in the stage's source |
 
-The validator of a spec reports a target panel that the spec does not have as `spec.unknown_panel`. Without the compiler library, `program.create` and `stage.set` apply the edit with the warning `program.not_checked`. The hosts check each program and each stage again before a backend sees it, thus the editor's check gives early messages and is not the guard.
+The validator of a spec reports a target panel that the spec does not have as `spec.unknown_panel`. Without the compiler library, `program.create` applies the edit with the warning `program.not_checked`. The hosts check each program again before a backend sees it, thus the editor's check gives early messages and is not the guard.
 
 ## Sandbox
 
-The sandbox is automatic and always on. The same checks run in the editor before an edit, in the producer runtime before a program runs, and in the viewer before a stage draws. The interface is `src/builder/include/caliper_builder/programs/sandbox.h`: a declaration and the compiler's reflection go in, and a verdict comes out. The library `caliper_builder_programs` holds it, without dependencies, thus the app, the session and the native module of the script link the same code.
+The sandbox is automatic and always on. The same checks run in the editor before an edit, and in the producer runtime before a program runs. The interface is `src/builder/include/caliper_builder/programs/sandbox.h`: a declaration and the compiler's reflection go in, and a verdict comes out. The library `caliper_builder_programs` holds it, without dependencies, thus the app, the session and the native module of the script link the same code.
 
 ### Check Order
 
 The checks run in this order, and the first failure stops the program with its code:
 
 1. **Declaration.** The ids, the counts, the sizes and the limits are inside their maximums (`check_declaration()`).
-2. **Provenance.** A program or a stage of a foreign spec has its hash in `reviewed`, else its state is `review`.
+2. **Provenance.** A program of a foreign spec has its hash in `reviewed`, else its state is `review`.
 3. **Source.** The source is inside its size limit, and it has no directive (`check_source()`).
 4. **Compile.** `caliper-wgsl` parses and validates the source (`compile_and_reflect()`). Naga refuses a store to a `var<storage, read>` binding. The hosts translate the source with bounds checks (Bounds Checks below).
-5. **Entry point.** A program has the compute entry point, with at most 256 invocations in a workgroup. A stage has no entry point.
-6. **Bindings.** Each binding of the reflection is declared, each input is a storage buffer with read access only, and each output has its kind and access (`check_program()` or `check_stage()`).
+5. **Entry point.** A program has the compute entry point, with at most 256 invocations in a workgroup.
+6. **Bindings.** Each binding of the reflection is declared, each input is a storage buffer with read access only, and each output has its kind and access (`check_program()`).
 7. **Import.** The runtime imports each input in place on its device with the layer's `read_only` flag, and never copies a training tensor.
 8. **Memory.** The output buffers and the bound tensors are inside `memory_mb`.
 9. **Layer.** The frame validation of the graphics layer checks the bind groups and the dispatch. The layer refuses a read-only import in a `StorageReadWrite` binding.
@@ -197,7 +165,7 @@ A program has no file access, no network access and no access to a tensor that i
 
 ### Bounds Checks
 
-The producer runtime and the viewer translate each program and each stage with bounds checks, because Metal has no robust buffer access. Without a check, an index past a binding reads or writes other memory of the process, such as a training tensor. The read-only flag of an import and the binding checks control which bindings a program has, but not which addresses it reaches. The option `bounds_checks` of `include/caliper/wgsl.h` selects the policies of Naga, and its default checks:
+The producer runtime translates each program with bounds checks, because Metal has no robust buffer access. Without a check, an index past a binding reads or writes other memory of the process, such as a training tensor. The read-only flag of an import and the binding checks control which bindings a program has, but not which addresses it reaches. The option `bounds_checks` of `include/caliper/wgsl.h` selects the policies of Naga, and its default checks:
 
 | Access | Policy | Access Out of Range |
 |---|---|---|
@@ -207,9 +175,9 @@ The producer runtime and the viewer translate each program and each stage with b
 | Texel store (`textureStore`) | None in Naga | Metal and Vulkan discard the store |
 | Binding array | None | The compiler library refuses a binding array |
 
-`ReadZeroSkipWrite` is the sound choice for buffers, because `Restrict` would put a store past an output into the output's last element and change a valid result. `Restrict` stays for values in function, private and workgroup memory, because WGSL specifies it and a clamped index cannot leave the value. No program or stage binds a storage texture today, because the binders refuse each other binding. SPIR-V gets the same policies, with the length of a runtime-sized array from `OpArrayLength`.
+`ReadZeroSkipWrite` is the sound choice for buffers, because `Restrict` would put a store past an output into the output's last element and change a valid result. `Restrict` stays for values in function, private and workgroup memory, because WGSL specifies it and a clamped index cannot leave the value. No program binds a storage texture today, because the binders refuse each other binding. SPIR-V gets the same policies, with the length of a runtime-sized array from `OpArrayLength`.
 
-A runtime-sized array is checked against the byte size of its binding's range. The Metal backend binds one size for each storage binding, in (group, binding) order, at buffer index 15 for every compute and render pipeline. Naga's MSL gives a size only to a binding that ends in a runtime-sized array, in the order of the declarations. Thus the compiler library lays out the struct of sizes in the backend's order, with an unused member for each fixed-size storage binding. The layer refuses a range smaller than the binding's block, and that block holds at least one element, thus a check never sees a size of zero. Stages bind no storage buffer, thus their checks need no sizes. The uniform `params` of a program or of a stage (`design/instrument-interface.md`, Program Parameters) is a struct of fixed size, which Naga checks against its layout, and neither the backend nor the compiler library counts a uniform in the sizes. The built-in programs of the operators come in the message `PROGRAM` like an agent's program, thus the runtime translates them with the same checks, and a parameter that names more rows than the tensor holds reads zero. Only the test that compares a translation with the generated bytes of a built-in shader asks for unchecked buffers, because the developer-time driver generated those bytes without checks. The project's test programs write only inside their outputs, thus the checks do not change their results.
+A runtime-sized array is checked against the byte size of its binding's range. The Metal backend binds one size for each storage binding, in (group, binding) order, at buffer index 15 for every compute and render pipeline. Naga's MSL gives a size only to a binding that ends in a runtime-sized array, in the order of the declarations. Thus the compiler library lays out the struct of sizes in the backend's order, with an unused member for each fixed-size storage binding. The layer refuses a range smaller than the binding's block, and that block holds at least one element, thus a check never sees a size of zero. The uniform `params` of a program (`design/instrument-interface.md`, Program Parameters) is a struct of fixed size, which Naga checks against its layout, and neither the backend nor the compiler library counts a uniform in the sizes. The built-in programs of the operators come in the message `PROGRAM` like an agent's program, thus the runtime translates them with the same checks, and a parameter that names more rows than the tensor holds reads zero. Only the test that compares a translation with the generated bytes of a built-in shader asks for unchecked buffers, because the developer-time driver generated those bytes without checks. The project's test programs write only inside their outputs, thus the checks do not change their results.
 
 ### Time Watchdog
 
@@ -219,7 +187,6 @@ Caliper cannot stop a pass that runs on the GPU. After a timeout it stops waitin
 
 The sandbox bounds no loop statically, and the timeouts are the only bound. A limit on loop nesting and on literal loop bounds does not bound the cost of a pass, because that cost is the product of the invocation count, the iterations and the memory traffic of each iteration. A loop over the length of an input is also the usual case, and a rule of literal bounds would refuse it. The time watchdog, the timeout and the driver's limit on a command buffer bound the cost instead.
 
-The viewer measures the GPU time of each frame of a scene panel with stages. When it is above 16.7 ms for 30 frames in a row, and above the same panel's time without its stages, the panel draws without its stages, and each one stops with `stage.over_time`. The view never waits for a frame. When a frame with the stages has not completed after 1 s, the panel draws without its stages at once, and each one stops with `stage.over_time`. The GPU runs that frame until the driver ends it. A scene view that closes meanwhile still waits for that frame in its backend's destructor, because the renderer's teardown needs that order.
 
 ### Host Errors
 
@@ -236,7 +203,6 @@ The hosts report these codes in a status item and in a `program` event. The cons
 | `program.timeout` | A pass did not finish in time: every program stopped, and the GPU runs the pass until the driver ends it |
 | `program.device_lost` | The device was lost, and every program stopped |
 | `program.unavailable` | The script cannot load the runtime, such as a torch without DLPack export on MPS |
-| `stage.over_time` | The panel's frame time went over its limit with the stages, or a frame with the stages did not finish in 1 s |
 
 ## Cadence
 
@@ -321,17 +287,17 @@ The facade in the script gives each output to the publish path of a `caliper.sce
 
 | Key | Value |
 |---|---|
-| `id` | The program's id, or the stage as `<panel>/<entity>/<kind>` |
-| `kind` | `geometry`, `pixels`, `material` or `vertex` |
+| `id` | The program's id |
+| `kind` | `geometry`, `pixels`, `tensor`, `operator` or `piece` |
 | `host` | `script`, `viewer` or `none` |
 | `state` | `waiting`, `review`, `compiled`, `running`, `refused` or `stopped` |
-| `every` | The steps between two passes of the program: N, or a multiple of N for a larger declared `every`; null for a stage or before the first pass |
-| `every_min` | The declared `every`; null for a stage |
+| `every` | The steps between two passes of the program: N, or a multiple of N for a larger declared `every`; null before the first pass |
+| `every_min` | The declared `every`, or null |
 | `last_pass_ms` | The GPU time of the last pass, or null |
 | `last_cost_ms` | The overhead `D` of a pass in Cadence, shared by all programs, or null before it is measured |
 | `step_ms` | The base step time `b` in Cadence, or null before it is measured |
-| `overhead_share` | `D / (N × b)`, the measured share of the training time that the passes take; null for a stage or before it is measured |
-| `passes_per_s` | The passes of the program a second on the run's wall clock, over its last 8 passes; null for a stage, before its second pass and while the program does not run |
+| `overhead_share` | `D / (N × b)`, the measured share of the training time that the passes take; null before it is measured |
+| `passes_per_s` | The passes of the program a second on the run's wall clock, over its last 8 passes; null before its second pass and while the program does not run |
 | `last_step` | The step of the last pass, or null |
 | `runs` | The count of passes |
 | `memory_bytes` | The bytes of the output buffers and the bound tensors |
@@ -339,15 +305,15 @@ The facade in the script gives each output to the publish path of a `caliper.sce
 | `error` | `{code, message, line, column}` of the last error, or null |
 | `sha256` | The SHA-256 of the source the host runs |
 
-The interfaces of the hosts are in `src/builder/include/caliper_builder/session/program_host.h`. The app gives the session a `ProgramHost` for the programs in the script and a `StageHost` for the stages in the viewer, as it gives its `RunControl`.
+The interfaces of the hosts are in `src/builder/include/caliper_builder/session/program_host.h`. The app gives the session a `ProgramHost` for the programs in the script and a `DrawStatusHost` that reports the draw halves of the pieces in the viewer, as it gives its `RunControl`.
 
 ## Program Events
 
-Programs add the event kind `program` to the ring of `events.wait`. The hosts push it. Its keys are `program` (the id of Program Status), `change`, `host`, `code`, `message`, `line` and `column`. The common key `panel` holds the target scene panel of a geometry output or a stage, else null.
+Programs add the event kind `program` to the ring of `events.wait`. The hosts push it. Its keys are `program` (the id of Program Status), `change`, `host`, `code`, `message`, `line` and `column`. The common key `panel` holds the target scene panel of a geometry output, else null.
 
 | Change | When |
 |---|---|
-| `compiled` | A host compiled the program or the stage, and it runs from the next pass or frame |
+| `compiled` | A host compiled the program, and it runs from the next pass or frame |
 | `refused` | A check refused it; `code`, `message`, `line` and `column` say why |
 | `stopped` | The watchdog, the memory budget, the budget of the cadence or a lost device stopped it |
 
@@ -358,10 +324,6 @@ The native module `caliper._producer` calls the C interface `src/host/producer/c
 `caliper_producer_prepare()` compiles a program for the device without a runtime, thus the facade calls it before it takes its lock, and the compile under the lock takes the compiled library and pipeline. In a measurement on the development machine, the compile of a new source under the lock took 12 to 123 ms before and about 0.2 ms after, and the longest training step during five installs fell from 14 to 124 ms to 4 to 9 ms. `caliper_producer_rebind()` binds a new import of the same size in place of an input's old one without a compile. A gradient that comes back in new storage at each step thus keeps its program, its counts and its time watchdog. In the same measurement, such a program compiled again at each of 100 passes before, at about 0.07 ms each because Metal keeps the library of the same source, and never after.
 
 The Python side has two files with final signatures. `python/caliper/_programs.py` is the facade that the wire path calls: `install()`, `remove()`, `status()` and `at_step()`. `python/caliper/_adapter.py` holds the framework adapter: `export()`, `framework_done()`, `before_write()`, `hooks()` and `probe()` for the runtime, and `points()` and `ablate()` for the interventions. It also holds `StepMarks`, the marks of the cadence on torch's queue.
-
-## Viewer Stage Interface
-
-The scene compiler takes the stages through `src/host/scene/stages.h`. The app's stage host runs the sandbox checks on each stage of a scene panel and composes the entity's shader with the prelude of `stage_prelude()` and the entry points of `stage_entries()`. Each scene view has its own Metal backend, thus the view's stage cache makes the `StageProgram` from that shader on its backend. The compiler asks a `StageLookup` for each entity's program and uses it in place of the built-in program of the primitive, in the draw pass and in the pick pass.
 
 ## Interventions
 
@@ -422,7 +384,7 @@ The acceptance test drives `caliper-mcp` against the hidden app with `CALIPER_AG
 2. It starts a managed training run with `run.start`, and the run's script has only `caliper.watch(model, optimizer)`.
 3. It adds a geometry program over a live weight tensor, one point for each of the first 512 values of the first layer's weight with the value as its height, which no primitive call draws. The capture differs from the empty scene in at least 300 pixels.
 4. It adds a pixels program that writes an image of the second layer's weight, and an image panel shows `live:program.<id>`.
-5. It sets a material stage on the program's entity and sees at least 50 yellow pixels in the capture, and ten times the count before it.
+5. It changes the geometry's look with a piece based on `points@1`. The capture has at least 50 yellow pixels and ten times the previous count.
 6. It sends a program that declares an input `read_write`, and sees `program.writes_input` with no item of that program in `program.status`.
 7. It sends a program with a loop that goes over `time_ms`, and sees the event `stopped` with `program.over_time` while the run's step keeps growing.
 8. It reads `program.status` and sees `every` of at least 1, the time of the last pass and the memory in use. It then waits until the measured `overhead_share` is at most 0.04, and it does not assert a value of N.
@@ -436,9 +398,7 @@ The test measures no throughput, because a timing on a shared machine varies by 
 
 Each decision below has its reason in one line.
 
-- **Stage storage.** Stages are the top-level array `stage`, because then only the stage commands edit their code past the compiler, and the node editor gets one node kind for each array.
-- **Stage kinds.** `stage.set` takes `material` and `vertex` only, because compute over a training tensor has one path, a program in the script.
-- **Stage source.** A stage holds functions only, and the viewer adds the prelude and the entry points, because the scene then keeps its camera, pick pass and selection.
+- **Stage Removal.** Library pieces replace the stage key and its commands because a piece controls the complete draw half.
 - **Pixels buffer.** A pixels output is a packed `array<u32>`, not a storage texture, because the layer exports buffers through DLPack and fills an image from an RGBA8 buffer, but has no copy from a texture to a buffer.
 - **Pixels view.** A pixels output is the live view `program.<id>`, because the image view, the shared-memory slot and the network snapshot then carry it unchanged.
 - **Binding by name.** Inputs and outputs bind by their WGSL variable names in any group, because the reflection gives the names and the agent writes plain WGSL.
@@ -450,7 +410,7 @@ Each decision below has its reason in one line.
 - **Toggle now.** The toggle control is built with the interventions, because the acceptance test needs it. The picker and the text control stay for the interface layer.
 - **Sandbox library.** The sandbox is the builder module `caliper_builder_programs` without dependencies, because the builder configures on its own and all three hosts must run the same checks.
 - **Unchecked edits.** Without the compiler library, an edit applies with `program.not_checked`, because the hosts check again before any run.
-- **Bounds checks.** Every program and stage from a spec compiles with `ReadZeroSkipWrite` on buffers and texel loads, because a store past an output landed in a training tensor on Metal.
+- **Bounds checks.** Every program from a spec compiles with `ReadZeroSkipWrite` on buffers and texel loads, because a store past an output landed in a training tensor on Metal.
 - **No wait after a timeout.** The runtime's backend gives its Metal objects to a reaper, because a wait on the GPU on the training thread froze training while a pass ran.
 - **Timeouts only.** The sandbox has no static loop limit, because literal bounds bound neither the invocation count nor the work of an iteration, and they refuse loops over an input's length.
 - **Interventions linger.** An intervention ends after the same 5 s without a controlling connection as a program, because nobody can see or clear an ablation that stays on.
@@ -477,7 +437,6 @@ Each decision below has its reason in one line.
 ## Open Points
 
 - **Mesh output.** The part `mesh` needs a second counter for indices. It comes with the multi-pass programs.
-- **Browser stages.** The browser gives the WGSL of a stage to WebGPU directly, and the prelude must match. This comes with browser parity.
 - **Deferred wait.** The producer runtime keeps the wait at once, as `design/producer-runtime.md` decides.
 - **Review card.** The card that adds a hash to `provenance.reviewed` comes with saved instruments.
 - **Sync on the GPU.** A sync that orders the pass after torch's work on the GPU, and torch's next writes after the pass, needs torch's command queue. Only torch's C++ API gives it, and Cadence Measurement in `design/producer-runtime.md` gives the reasons to wait.

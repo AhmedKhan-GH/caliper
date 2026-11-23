@@ -79,7 +79,7 @@ std::optional<std::string> bound_state_id(const spec::Control& c) {
 
 // Every reference of `s` with the document path of its reader: a source
 // step, a panel's options or slot, an entity, an annotation, a control's
-// options, or the params of a program or a stage.
+// options, or the params of a program.
 void each_reference(const spec::Spec& s,
                     const std::function<void(const std::string& reader, const spec::Reference& ref)>& f) {
     auto json_ref = [&](const std::string& reader, const json& v) {
@@ -130,9 +130,6 @@ void each_reference(const spec::Spec& s,
     for (std::size_t i = 0; i < s.programs.size(); ++i)
         for (const auto& [name, value] : s.programs[i].params)
             if (spec::is_reference(value)) f(index("program", i) + ".params", std::get<spec::Reference>(value));
-    for (std::size_t i = 0; i < s.stages.size(); ++i)
-        for (const auto& [name, value] : s.stages[i].params)
-            if (spec::is_reference(value)) f(index("stage", i) + ".params", std::get<spec::Reference>(value));
 }
 
 // The input that `ref` reads: a reference to a control bound to a state

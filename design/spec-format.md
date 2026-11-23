@@ -335,15 +335,15 @@ A later reader keeps reading version 0. It migrates an older document in its JSO
 
 Version 1 adds the primitive `scene` and the array `control`, and [Instruments](instruments.md) defines both. The library reads the versions 0 and 1. Version 1 is a strict superset of version 0, so the migration changes only the number, and the canonical writers write the version that the spec holds. A version 0 document that uses a key of version 1 gets the errors of version 0, `spec.unknown_primitive` or `spec.unknown_key`. An edit that adds a scene panel or a control to a version 0 spec raises its version to 1 in the same step (`required_version()` in `spec.h`). The schema of version 1 is `src/builder/spec/schema/caliper-spec-v1.schema.json`, and `caliper-mcp` serves it as a second resource.
 
-### Programs, Stages and Provenance
+### Programs and Provenance
 
-Version 1 also holds the array `program`, the array `stage` and the table `provenance`, and [GPU Programs](gpu-programs.md) defines them. The reader takes the three keys only in version 1, and a version 0 document that holds one of them gets `spec.unknown_key`. An edit that adds a program or a stage to a version 0 spec raises its version to 1 in the same step.
+Version 1 also holds the array `program` and the table `provenance`, and [GPU Programs](gpu-programs.md) defines them. The reader takes both keys only in version 1, and a version 0 document that holds one of them gets `spec.unknown_key`. An edit that adds a program to a version 0 spec raises its version to 1 in the same step. The array `stage` of earlier versions is gone, because library pieces replaced it. The reader still takes the key in version 1: each `[[stage]]` table gives the warning `spec.stage_replaced` and is dropped, so that an old spec opens.
 
-The canonical writers put `[[program]]`, `[[stage]]` and `[provenance]` after `[[control]]` and before `[layout]`. Each program and each stage writes its WGSL last, as a multi-line string. A geometry output always holds `part`, and a pixels output always holds `format`. The writers write only the keys of the output's kind, and the reader refuses a key of the other kind with `spec.unknown_key`. A program and a stage may hold an extension table `x`, but their inputs, their output, its style, their limits and the reviewed sources may not.
+The canonical writers put `[[program]]` and `[provenance]` after `[[control]]` and before `[layout]`. Each program writes its WGSL last, as a multi-line string. A geometry output always holds `part`, and a pixels output always holds `format`. The writers write only the keys of the output's kind, and the reader refuses a key of the other kind with `spec.unknown_key`. A program may hold an extension table `x`, but its inputs, its output, the output's style, its limits and the reviewed sources may not.
 
-The validator runs the declaration checks of the sandbox, `check_declaration()` and `check_stage_declaration()` in `programs/sandbox.h`, on each program and each stage, and it keeps their codes. Thus the spec library, the editor and the hosts hold a program to the same limits. The validator also checks the text of each title and source, the uniqueness of the program ids and of the panel, entity and kind of each stage, and the target panel. A missing panel is `spec.unknown_panel`. A panel of another primitive is `program.bad_target` for a program and `stage.not_scene_panel` for a stage. The validator does not compile WGSL, because the editor and the hosts compile it.
+The validator runs the declaration checks of the sandbox, `check_declaration()` in `programs/sandbox.h`, on each program, and it keeps its codes. Thus the spec library, the editor and the hosts hold a program to the same limits. The validator also checks the text of each title and source, the uniqueness of the program ids, and the target panel. A missing panel is `spec.unknown_panel`. A panel of another primitive is `program.bad_target`. The validator does not compile WGSL, because the editor and the hosts compile it.
 
-The table `provenance` holds `foreign`, which is necessary, `from` and `reviewed`. `from` has at most 4,096 characters. `reviewed` has at most 48 items of `{target, sha256}`, where a target is `program:<id>` or `stage:<panel>/<entity>/<kind>` and the hash has 64 lower-case hexadecimal digits. No command writes the table. Thus `spec.set_text` refuses a text whose table differs from the open spec's table with `spec.provenance_locked`.
+The table `provenance` holds `foreign`, which is necessary, `from` and `reviewed`. `from` has at most 4,096 characters. `reviewed` has at most 16 items of `{target, sha256}`, where a target is `program:<id>` and the hash has 64 lower-case hexadecimal digits. No command writes the table. Thus `spec.set_text` refuses a text whose table differs from the open spec's table with `spec.provenance_locked`.
 
 Version 1 also builds the toggle control. A toggle binds `intervene:<point>`, whose point name has 1 to 255 bytes, or `param:<name>` of a boolean parameter, and it takes no options. The kinds `range`, `picker` and `text` stay refused with `spec.unsupported_control`.
 
@@ -369,6 +369,7 @@ A spec is valid when parsing succeeds and validation reports no error. Warnings 
 | `spec.out_of_range` | error | parse, validate | A number is outside its range, not finite, not a safe integer, or a `[min, max]` pair has `min >= max`. |
 | `spec.bad_value` | error | parse, validate | A string is not one of its allowed values, holds control characters, is empty where it may not be, is not valid UTF-8, or repeats in `columns`; or a catalog id is not `<kind>:<name>`. |
 | `spec.unknown_key` | error | parse, validate | A key the format does not have at that place. |
+| `spec.stage_replaced` | warning | parse | A `[[stage]]` table of an old spec. Library pieces replaced stages, and the spec opens without it. |
 | `spec.missing_key` | error | parse, validate | A required key is missing. |
 | `spec.unsupported_version` | error | parse, validate | `caliper_spec` is not a version this reader knows. |
 | `spec.unknown_primitive` | error | parse | `primitive` is not one of the seven. |
@@ -395,11 +396,10 @@ A spec is valid when parsing succeeds and validation reports no error. Warnings 
 | `spec.unresolved_source` | warning | validate | The resolver does not know a catalog source. |
 | `spec.unused_source` | warning | validate | No panel binds a source, directly or through `from`. |
 | `spec.unplaced_panel` | warning | validate | The layout does not place a panel. |
-| `program.over_limits` | error | validate | An id, a name, a count, a size or a limit of a program or a stage is outside its form or its maximum. |
-| `program.too_large` | error | validate | The source of a program is above 64 KiB, or the source of a stage is above 16 KiB. |
+| `program.over_limits` | error | validate | An id, a name, a count, a size or a limit of a program is outside its form or its maximum. |
+| `program.too_large` | error | validate | The source of a program is above 64 KiB. |
 | `program.output_mismatch` | error | validate | The keys or the arrays of a program's output do not fit its kind and its part. |
-| `program.bad_target` | error | validate | A program's output names a panel of another primitive, or an entity path that is not valid; or a stage names an entity path that is not valid. |
-| `stage.not_scene_panel` | error | validate | A stage names a panel of another primitive. |
+| `program.bad_target` | error | validate | A program's output names a panel of another primitive, or an entity path that is not valid. |
 
 ### The source resolver
 
@@ -517,11 +517,9 @@ Every size is bounded, and each limit has its error code:
 | Any other string, such as one inside `x` | 65,536 characters | `spec.string_too_long` |
 | An integer | ±(2^53 − 1) | `spec.out_of_range` |
 | Programs, in version 1 | 16 | `spec.too_many` |
-| Stages, in version 1 | 32 | `spec.too_many` |
 | The source of a program | 64 KiB | `program.too_large` |
-| The source of a stage | 16 KiB | `program.too_large` |
 | The inputs of a program | 8 | `program.over_limits` |
-| `provenance.reviewed` | 48 items | `spec.too_many` |
+| `provenance.reviewed` | 16 items | `spec.too_many` |
 | Diagnostics in one report | 256; errors are kept before warnings, and the rest are dropped | |
 
 The parser checks the text size and the length of dotted TOML keys before it parses, and the value count and nesting before it decodes, so a hostile document costs a bounded amount of work. TOML's dotted keys need the early check because each part is a nested table, which the TOML library would otherwise build and free recursively. Validation follows chains of `from` without recursion and stops walking the layout at its limits.
@@ -583,7 +581,7 @@ The schema test reads the schema through a test-only checker, `tests/schema_chec
 - **The loader reads the version line, not the TOML, when it lists a spec applet,** so listing never parses a spec; the full parse and validation run at launch and in `caliper check`.
 - **No symbolic link for a spec,** wherever it points: a plain file name keeps the spec in its folder, and refusing every link is simpler than resolving one.
 - **A workspace holds spec applets only,** because a workspace is data that anyone may hand to a person; compiled applets run only from folders a person installs into or names.
-- **The validator keeps the sandbox's codes for programs and stages,** because one declaration check then holds the spec library, the editor and the hosts to the same limits.
+- **The validator keeps the sandbox's codes for programs,** because one declaration check then holds the spec library, the editor and the hosts to the same limits.
 - **The text limit of a spec stays at 512 KiB with programs,** because a request of Caliper API carries the whole text; a spec with several large programs reaches it before 16 programs.
 - **`spec.set_text` keeps the provenance table,** because a mark that an agent can clear protects nothing.
 - **The workspace's folder comes after the development folders and before the user applets folder,** so a development build named on the command line wins a tie, and the open workspace's copy wins a tie with an installed one.

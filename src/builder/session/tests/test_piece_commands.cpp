@@ -640,9 +640,8 @@ TEST_CASE("pieces: a spec file whose pin has no hash opens, and its program is r
 
 namespace {
 
-struct ViewerHost : StageHost {
+struct ViewerHost : DrawStatusHost {
     std::vector<ProgramStatus> items;
-    void reconcile(const spec::Spec&) override {}
     std::vector<ProgramStatus> status() const override { return items; }
 };
 
@@ -656,7 +655,7 @@ struct Events : EventSink {
 
 }  // namespace
 
-TEST_CASE("pieces: program.status takes an instance's draw object from the viewer's host, and events name the half") {
+TEST_CASE("pieces: program.status takes an instance's draw object from the viewer's draw host, and events name the half") {
     auto s = piece_session("piece_draw_status");
     ok(*s, "piece.update", {{"piece", uv_field()}});
     ok(*s, "program.create", {{"id", "field"}, {"piece", {{"name", "uv_field"}, {"from", "workspace"}}}, {"panel", "world"}});
@@ -682,7 +681,7 @@ TEST_CASE("pieces: program.status takes an instance's draw object from the viewe
     d.error_where = "draw.passes[0]";
     item.draw = d;
     viewer.items = {item};
-    s->set_stage_host(&viewer);
+    s->set_draw_host(&viewer);
     status = ok(*s, "program.status", {{"id", "field"}});
     const json& draw = status["programs"][0]["draw"];
     CHECK(draw["state"] == "stopped");
@@ -691,8 +690,7 @@ TEST_CASE("pieces: program.status takes an instance's draw object from the viewe
     CHECK(draw["resource_step"] == 120);
     CHECK(draw["error"]["code"] == "program.draw_over_time");
     CHECK(draw["error"]["where"] == "draw.passes[0]");
-    CHECK(status["stages"].empty());
-    s->set_stage_host(nullptr);
+    s->set_draw_host(nullptr);
 
     // The event of an instance's half names the half and its pass; another program's has neither.
     Events events;

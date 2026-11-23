@@ -286,7 +286,7 @@ TEST_CASE("documents the schema of version 1 refuses are refused by the library 
     }
 }
 
-TEST_CASE("the schema of version 1 takes programs, stages and provenance, and refuses what the library refuses") {
+TEST_CASE("the schema of version 1 takes programs and provenance, and refuses what the library refuses") {
     auto parsed = cs::parse_toml(fixture("programs.spec.toml"));
     REQUIRE(parsed.ok());
     const json canonical = cs::to_json(parsed.spec);
@@ -312,8 +312,6 @@ TEST_CASE("the schema of version 1 takes programs, stages and provenance, and re
         doc(program(geometry, R"(, "workgroups": [1, 2])")),
         doc(program(geometry, R"(, "runs": true)")),
         doc(R"("program": [{"id": "p", "wgsl": "x", "inputs": [{"var": "v", "source": "w"}], "output": )" + geometry + "}]"),
-        doc(R"("stage": [{"panel": "w", "entity": "e", "kind": "compute", "wgsl": "x"}])"),
-        doc(R"("stage": [{"panel": "w", "entity": "a//b", "kind": "material", "wgsl": "x"}])"),
         doc(R"("provenance": {"from": "x"})"),
         doc(R"("provenance": {"foreign": true, "reviewed": [{"target": "program:p", "sha256": "abc"}]})"),
         doc(R"("control": [{"id": "k", "kind": "toggle", "bind": "action:save"}])"),
@@ -327,8 +325,7 @@ TEST_CASE("the schema of version 1 takes programs, stages and provenance, and re
     const std::vector<json> accepted = {
         doc(program(geometry)),
         doc(program(R"({"kind": "pixels", "width": 4, "height": 4})", R"(, "limits": {"every": 5, "memory_mb": 8})")),
-        doc(R"("stage": [{"panel": "w", "entity": "programs/p", "kind": "vertex", "wgsl": "x"}])"),
-        doc(R"("provenance": {"foreign": true, "from": "a download", "reviewed": [{"target": "stage:w/programs/p/vertex", "sha256": ")" +
+        doc(R"("provenance": {"foreign": true, "from": "a download", "reviewed": [{"target": "program:p", "sha256": ")" +
             std::string(64, 'f') + R"("}]})"),
         doc(R"("control": [{"id": "k", "kind": "toggle", "bind": "intervene:blocks.0.attn#3"}])"),
     };

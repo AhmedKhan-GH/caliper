@@ -1,5 +1,5 @@
-// Tests of the sandbox of GPU programs and stages (sandbox.h,
-// design/gpu-programs.md, Sandbox): the value types and the stage contract,
+// Tests of the sandbox of GPU programs (sandbox.h,
+// design/gpu-programs.md, Sandbox): the value types,
 // the declaration limits, provenance, the source scan, the binding checks
 // against a reflection made by hand (which need no compiler), and, when the
 // build has caliper-wgsl, the same checks on reflections of real sources.
@@ -92,28 +92,12 @@ TEST_CASE("the program value types name their kinds and fixed bindings") {
     CHECK_FALSE(cs::geometry_part_from_name("mesh"));
     CHECK(cs::geometry_array_from_name("radii") == cs::GeometryArray::radii);
     CHECK(cs::geometry_array_words(cs::GeometryArray::positions) == 3);
-    CHECK(cs::stage_kind_from_name("vertex") == cs::StageKind::vertex);
-    CHECK_FALSE(cs::stage_kind_from_name("compute"));
     CHECK(cs::default_entity("rows") == "programs/rows");
     CHECK(cs::program_view_name("rows") == "program.rows");
-    cs::Stage s;
-    s.panel = "world";
-    s.entity = "programs/rows";
-    CHECK(cs::stage_id(s) == "world/programs/rows/material");
-    CHECK(cs::stage_target(s) == "stage:world/programs/rows/material");
     cs::ProgramLimits limits;
     CHECK(limits.time_ms_or_default() == cs::program_limits::kTimeMsDefault);
     CHECK(limits.memory_bytes_or_default() == (std::uint64_t(64) << 20));
     CHECK(cs::Provenance{}.empty());
-}
-
-TEST_CASE("the stage prelude declares the three structs of the contract on its stated lines") {
-    const std::string_view p = cp::stage_prelude();
-    std::uint32_t lines = 0;
-    for (char c : p) lines += c == '\n';
-    CHECK(lines == cp::stage_prelude_lines());
-    for (const char* name : {"struct MaterialIn", "struct VertexIn", "struct VertexOut"})
-        CHECK(p.find(name) != std::string_view::npos);
 }
 
 TEST_CASE("sha256_hex gives the FIPS 180-4 digests") {
@@ -189,23 +173,6 @@ TEST_CASE("the declaration check passes a geometry and a pixels program and refu
     cs::Program mixed = pixels_program();
     mixed.output.panel = "world";
     CHECK(cp::check_declaration(mixed).code == cp::kProgramOutputMismatch);
-}
-
-TEST_CASE("the declaration of a stage checks its panel, its entity and its size") {
-    cs::Stage s;
-    s.panel = "world";
-    s.entity = "programs/rows";
-    s.wgsl = "fn material(in: MaterialIn) -> vec4<f32> { return in.color; }\n";
-    CHECK(cp::check_stage_declaration(s).ok());
-    cs::Stage bad = s;
-    bad.panel = "World";
-    CHECK(cp::check_stage_declaration(bad).code == cp::kStageNotScenePanel);
-    bad = s;
-    bad.entity = "programs/";
-    CHECK(cp::check_stage_declaration(bad).code == cp::kProgramBadTarget);
-    bad = s;
-    bad.wgsl = std::string(16 * 1024 + 1, ' ');
-    CHECK(cp::check_stage_declaration(bad).code == cp::kProgramTooLarge);
 }
 
 TEST_CASE("a foreign spec runs a source only when its hash is reviewed") {
@@ -333,33 +300,6 @@ TEST_CASE("the dispatch size and the output bytes follow the declaration") {
     CHECK(cp::output_bytes(pixels_program()) == 64u * 32u * 4u);
 }
 
-TEST_CASE("the binding check of a stage refuses a binding and an entry point") {
-    cs::Stage s;
-    s.panel = "world";
-    s.entity = "programs/rows";
-    s.wgsl = "const k = 0.5;\nfn material(in: MaterialIn) -> vec4<f32> { return in.color * k; }\n";
-    CHECK(cp::check_stage(s, {}).ok());
-    cp::Reflection r;
-    r.bindings = {binding("tex", cp::BindingKind::texture, false)};
-    CHECK(cp::check_stage(s, r).code == cp::kStageBindingNotAllowed);
-    // A binding no entry point uses leaves the reflection; the source shows it.
-    cs::Stage declared = s;
-    declared.wgsl = "fn material(in: MaterialIn) -> vec4<f32> { return in.color; }\n"
-                    "@group(0) @binding(0) var<uniform> u: vec4<f32>;\n";
-    cp::Verdict v = cp::check_stage(declared, {});
-    CHECK(v.code == cp::kStageBindingNotAllowed);
-    CHECK(v.line == 2);
-    CHECK(v.column == 1);
-    r = {};
-    r.entries = {{"fs", cp::EntryStage::fragment, {0, 0, 0}}};
-    CHECK(cp::check_stage(s, r).code == cp::kStageEntryNotAllowed);
-    cs::Stage entry = s;
-    entry.wgsl = "// no entry here: @fragment\n@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }\n";
-    v = cp::check_stage(entry, {});
-    CHECK(v.code == cp::kStageEntryNotAllowed);
-    CHECK(v.line == 2);
-}
-
 TEST_CASE("without the compiler library the compile answers program.compiler_unavailable") {
     if (cp::compiler_available()) return;
     CHECK(cp::compile_and_reflect("fn f() {}").verdict.code == cp::kProgramCompilerUnavailable);
@@ -412,15 +352,6 @@ TEST_CASE("with the compiler library the sandbox checks real sources") {
     const cp::Verdict pok = cp::check_program(pixels_program(), px.reflection);
     CHECK_MESSAGE(pok.ok(), pok.code << ": " << pok.message);
     CHECK(cp::dispatch_size(pixels_program(), px.reflection) == std::array<std::uint32_t, 3>{8, 4, 1});
-
-    // A stage compiles with the prelude before it and has no entry point.
-    cs::Stage s;
-    s.panel = "world";
-    s.entity = "programs/rows";
-    s.wgsl = "fn material(in: MaterialIn) -> vec4<f32> { return vec4<f32>(in.color.rgb * in.value, 1.0); }\n";
-    const cp::Compiled st = cp::compile_and_reflect(std::string(cp::stage_prelude()) + s.wgsl);
-    REQUIRE(st.verdict.ok());
-    CHECK(cp::check_stage(s, st.reflection).ok());
 }
 
 TEST_CASE("sandbox: params of a program follow its struct Params, and pack into the uniform by name") {
@@ -460,34 +391,6 @@ TEST_CASE("sandbox: params of a program follow its struct Params, and pack into 
     caliper_builder::spec::Program bare;
     bare.wgsl = "@group(0) @binding(0) var<uniform> params: vec4<f32>;\n";
     CHECK(caliper_builder::programs::check_params(bare).code == "program.params_mismatch");
-}
-
-TEST_CASE("sandbox: a stage reads its params by name, and the viewer declares them after its source") {
-    caliper_builder::spec::Stage s;
-    s.panel = "world";
-    s.entity = "spec/terrain";
-    s.params = {{"level", 0.25}, {"band", 0.01}};
-    s.wgsl = "fn material(in: MaterialIn) -> vec4<f32> {\n"
-             "  if (abs(in.value - params.level) < params.band) { return vec4<f32>(1.0); }\n"
-             "  return in.color;\n}\n";
-    CHECK(caliper_builder::programs::check_stage_params(s).ok());
-    const std::string uniform = caliper_builder::programs::stage_params_declaration(s, true);
-    CHECK(uniform == "\nstruct Params { band: f32, level: f32 }\n@group(3) @binding(0) var<uniform> params: Params;\n");
-    CHECK(caliper_builder::programs::stage_params_declaration(s, false).find("var<private> params") != std::string::npos);
-    if (caliper_builder::programs::compiler_available()) {
-        const std::string composed = std::string(caliper_builder::programs::stage_prelude()) + s.wgsl +
-                                     caliper_builder::programs::stage_params_declaration(s, false);
-        const caliper_builder::programs::Compiled c = caliper_builder::programs::compile_and_reflect(composed);
-        INFO(c.verdict.message);
-        CHECK(c.verdict.ok());
-        CHECK(caliper_builder::programs::check_stage(s, c.reflection).ok());
-    }
-    s.wgsl = "fn material(in: MaterialIn) -> vec4<f32> {\n  return in.color * params.gain;\n}\n";
-    caliper_builder::programs::Verdict v = caliper_builder::programs::check_stage_params(s);
-    CHECK(v.code == "stage.params_mismatch");
-    CHECK(v.line == 2);
-    s.wgsl = "struct Params { level: f32 }\nfn material(in: MaterialIn) -> vec4<f32> { return in.color; }\n";
-    CHECK(caliper_builder::programs::check_stage_params(s).code == "stage.params_mismatch");
 }
 
 TEST_CASE("sandbox: a tensor output writes out, and an operator's id holds dots") {

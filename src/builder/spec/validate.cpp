@@ -137,7 +137,6 @@ public:
         for (std::size_t i = 0; i < spec_.controls.size() && i < limits::kControls; ++i) control(i);
         for (std::size_t i = 0; i < spec_.programs.size() && i < program_limits::kPrograms; ++i) program(i);
         pieces();
-        stages();
         provenance();
         layout();
         usage();
@@ -231,7 +230,6 @@ private:
         const Table tables[] = {{"control", !spec_.controls.empty()},
                                 {"state", !spec_.states.empty()},
                                 {"program", !spec_.programs.empty()},
-                                {"stage", !spec_.stages.empty()},
                                 {"provenance", !spec_.provenance.empty()}};
         for (const Table& t : tables)
             if (t.second && spec_.version < kInstrumentVersion)
@@ -378,7 +376,7 @@ private:
             sink_.error("spec.out_of_range", "A log slider needs " + op + ".min above 0.", op + ".min");
     }
 
-    // ---- programs, stages and provenance (spec version 1, program.h) --------------
+    // ---- programs and provenance (spec version 1, program.h) --------------
     // The declaration of each item is the sandbox's own check
     // (programs/sandbox.h), with its codes, so that the editor, the script and
     // the viewer hold a spec to the same limits; the validator adds the text
@@ -389,7 +387,7 @@ private:
         sink_.error(v.code, v.message, v.where.empty() ? path : path + "." + v.where);
     }
 
-    // The panel a program's output or a stage draws in: a scene panel of the
+    // The panel a program's output draws in: a scene panel of the
     // spec. `code` is the item's code for a panel of another primitive.
     void scene_target(const std::string& panel, const std::string& path, const char* code, const char* what) {
         const Panel* p = spec_.find_panel(panel);
@@ -529,35 +527,12 @@ private:
             scene_target(p.output.panel, path + ".output.panel", programs::kProgramBadTarget, "The program's output");
     }
 
-    void stages() {
-        if (spec_.stages.size() > program_limits::kStages)
-            sink_.error("spec.too_many",
-                        "The spec has " + std::to_string(spec_.stages.size()) + " stages; the limit is " +
-                            std::to_string(program_limits::kStages) + ".",
-                        "stage");
-        std::set<std::string> seen;
-        for (std::size_t i = 0; i < spec_.stages.size() && i < program_limits::kStages; ++i) {
-            const Stage& st = spec_.stages[i];
-            const std::string path = index_path("stage", i);
-            text(st.wgsl, path + ".wgsl", limits::kStringChars, TextKind::long_text, false);
-            extension(st.x, path + ".x");
-            verdict(programs::check_stage_declaration(st), path);
-            if (!seen.insert(stage_id(st)).second)
-                sink_.error("spec.duplicate_id",
-                            "Two stages are the " + std::string(stage_kind_name(st.kind)) + " stage of the entity " +
-                                quote(st.entity) + " of the panel " + quote(st.panel) + "; keep one.",
-                            path);
-            if (!st.panel.empty())
-                scene_target(st.panel, path + ".panel", programs::kStageNotScenePanel, "The stage");
-        }
-    }
-
     void provenance() {
         const Provenance& pv = spec_.provenance;
         if (pv.empty()) return;
         if (pv.from) text(*pv.from, "provenance.from", limits::kDescriptionChars, TextKind::line, false);
         extension(pv.x, "provenance.x");
-        const std::size_t most = program_limits::kPrograms + program_limits::kStages;
+        const std::size_t most = program_limits::kPrograms;
         if (pv.reviewed.size() > most)
             sink_.error("spec.too_many",
                         "provenance.reviewed lists " + std::to_string(pv.reviewed.size()) + " sources; the limit is " +
@@ -567,18 +542,9 @@ private:
             const ReviewedSource& r = pv.reviewed[i];
             const std::string path = index_path("provenance.reviewed", i);
             const bool program_target = r.target.rfind("program:", 0) == 0 && valid_id(r.target.substr(8));
-            auto ends_with = [&](std::string_view tail) {
-                return r.target.size() >= tail.size() &&
-                       r.target.compare(r.target.size() - tail.size(), tail.size(), tail) == 0;
-            };
-            const bool stage_target = r.target.rfind("stage:", 0) == 0 &&
-                                      r.target.size() <= 6 + 64 + 1 + 255 + 1 + 8 &&
-                                      (ends_with("/material") || ends_with("/vertex")) &&
-                                      r.target.size() > 6 + 9 && !has_control(r.target, TextKind::line);
-            if (!program_target && !stage_target)
+            if (!program_target)
                 sink_.error("spec.bad_value",
-                            quote(r.target) + " is not a reviewed target; a target is program:<id> or "
-                                              "stage:<panel>/<entity>/<kind>.",
+                            quote(r.target) + " is not a reviewed target; a target is program:<id>.",
                             path + ".target");
             bool hex = r.sha256.size() == 64;
             for (char c : r.sha256) hex = hex && ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'));

@@ -197,7 +197,7 @@ std::vector<ResourceEntry> ResourceStore::list(bool* truncated) const {
         r.name = "caliper-spec-v1.schema.json";
         r.title = "Spec format v1 JSON Schema";
         r.description = "The JSON Schema of the canonical JSON form of a spec, format version 1: version 0 with the "
-                        "scene primitive, the control table, the GPU programs and stages, and the provenance table.";
+                        "scene primitive, the control table, the GPU programs, and the provenance table.";
         r.mime_type = "application/schema+json";
         r.size = options_.spec_schema_v1_text.size();
         out.push_back(std::move(r));

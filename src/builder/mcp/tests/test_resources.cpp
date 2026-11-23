@@ -204,8 +204,8 @@ TEST_CASE("the schema of spec version 1 is a second resource beside version 0's"
     CHECK(schema.at("properties").at("caliper_spec").at("const") == 1);
     CHECK(schema.at("$defs").contains("panel_scene"));
     CHECK(schema.at("$defs").contains("control"));
-    // The GPU programs, the stages and the provenance table (design/gpu-programs.md).
-    for (const char* key : {"program", "stage", "provenance"}) {
+    // The GPU programs and the provenance table (design/gpu-programs.md).
+    for (const char* key : {"program", "provenance"}) {
         CAPTURE(key);
         CHECK(schema.at("properties").contains(key));
         CHECK(schema.at("$defs").contains(key));

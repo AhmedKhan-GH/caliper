@@ -4,7 +4,7 @@
 //
 // An entity is a batch that a scene panel builds from the spec's own
 // sources: points, lines or a surface. The app writes it under the reserved
-// root `spec/` of the panel's scene, so that a stage names it as
+// root `spec/` of the panel's scene, so that a program names it as
 // "spec/<path>". A scene panel with at least one entity needs no `scene`
 // slot.
 //

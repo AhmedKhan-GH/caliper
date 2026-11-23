@@ -36,7 +36,7 @@ A source chain runs in two places. An operator that is the first step of a sourc
 
 In the script, the operator is a built-in program with the id `operator.<source>.<step index>`. It reads the live tensor on the device of the script, under the same sandbox, the same cadence and the same time watchdog as the program of an agent. Only its pooled result travels to the app. The app sends the program again when the shape of the input changes. The built-in program is never reviewed, because Caliper knows its hash.
 
-`program.status` lists the operator with `kind` set to `operator` and the id of its source. The `program` events report it as they report any program. [GPU Programs and Stages](../agents/gpu-programs.md) describes status and events.
+`program.status` lists the operator with `kind` set to `operator` and the id of its source. The `program` events report it as they report any program. [GPU Programs](../agents/gpu-programs.md) describes status and events.
 
 ## Tensor Output
 
@@ -44,7 +44,7 @@ A program may declare the output kind `tensor`: `output = { kind = "tensor", sha
 
 ## Program Parameters
 
-A program and a stage take the key `params`: at most 16 names, each a number or a [reference](state-and-references.md#reference-places).
+A program takes the key `params`: at most 16 names, each a number or a [reference](state-and-references.md#reference-places).
 
 An instance of a piece takes the params of its manifest by name. This instance of the library piece `points@1` draws a cloud in the panel `world` and takes the upper end of its colormap from the control `level`:
 
@@ -57,6 +57,4 @@ bind = { positions = "live:cloud.positions", values = "live:cloud.values" }
 params = { vmax = { control = "level" } }
 ```
 
-A one-pass program declares `var<uniform> params: Params`, where `Params` is a struct with one `f32`, `i32` or `u32` field for each name. The viewer adds the same declaration for a stage, with `f32` fields in the order of the names. A struct whose fields differ from the names is `program.params_mismatch` or `stage.params_mismatch`. A new value needs no compile and no new review, because the hash covers the WGSL only. The script applies it at the next pass of that program, and the viewer applies it at the next frame.
-
-A stage works on the entities of the draw kinds `points` and `lines`. A stage on a `surface` entity is not built.
+A one-pass program declares `var<uniform> params: Params`, where `Params` is a struct with one `f32`, `i32` or `u32` field for each name. A struct whose fields differ from the names is `program.params_mismatch`. A new value needs no compile and no new review, because the hash covers the WGSL only. The script applies it at the next pass of that program.

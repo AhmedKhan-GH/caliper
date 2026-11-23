@@ -238,7 +238,7 @@ TEST_CASE("command_table.json carries the aligned schemas") {
     CHECK((*create)["result"]["required"] == json({"id", "warnings", "diff", "applied"}));
 }
 
-TEST_CASE("every program and stage of the programs fixture passes the table's schemas") {
+TEST_CASE("every program of the programs fixture passes the table's schemas") {
     const spec::Spec s = parse_fixture("programs.spec.toml");
     REQUIRE(spec::validate(s).ok());
     REQUIRE_FALSE(s.programs.empty());
@@ -260,16 +260,8 @@ TEST_CASE("every program and stage of the programs fixture passes the table's sc
         plain.x = nullptr;
         CHECK(back.value == plain);
     }
-    for (const spec::Stage& st : s.stages) {
-        json args = spec::to_json(st);
-        args.erase("x");
-        check_passes("stage.set", args);
-        check_passes("stage.remove", json{{"panel", st.panel}, {"entity", st.entity}, {"kind", args["kind"]}});
-    }
     // What the program table refuses, the spec refuses too.
     check_refused("program.create",
                   json::parse(R"({"id": "p", "wgsl": "x", "inputs": [], "output": {"kind": "geometry", "panel": "w", "max_count": 0, "arrays": ["positions"]}})"),
                   "args.output.max_count");
-    check_refused("stage.set", json::parse(R"({"panel": "w", "entity": "e", "kind": "compute", "wgsl": "x"})"),
-                  "args.kind");
 }

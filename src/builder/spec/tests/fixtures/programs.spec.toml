@@ -1,4 +1,4 @@
-# Spec version 1 with GPU programs, a stage and a provenance table, as
+# Spec version 1 with GPU programs and a provenance table, as
 # design/gpu-programs.md describes them.
 caliper_spec = 1
 
@@ -49,16 +49,6 @@ struct CaliperFrame { step: u32, pass_index: u32, max_count: u32, width: u32, he
   if (id.x >= caliper.width || id.y >= caliper.height) { return; }
   let v = clamp(abs(g[id.y * caliper.width + id.x]) * 100.0, 0.0, 1.0);
   pixels[id.y * caliper.width + id.x] = pack4x8unorm(vec4<f32>(v, v, v, 1.0));
-}
-"""
-
-[[stage]]
-panel = "world"
-entity = "programs/rows"
-kind = "material"
-wgsl = """
-fn material(in: MaterialIn) -> vec4<f32> {
-  return vec4<f32>(in.color.rgb * (0.5 + 0.5 * in.value), 1.0);
 }
 """
 

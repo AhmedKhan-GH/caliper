@@ -1,15 +1,13 @@
-// The stage and program edits of the open spec (design/gpu-programs.md, Stage
-// Commands and Program Commands): stage.set, stage.remove, program.create,
-// program.patch and program.remove, and the editor's sandbox checks that they
-// and stage.check share (program_checks.h).
+// The program edits of the open spec (design/gpu-programs.md, Program
+// Commands): program.create, program.patch and program.remove, and the
+// editor's sandbox checks that they use (program_checks.h).
 //
 // The edits follow the rules of the panel and control edits: they work on a
 // copy of the spec, refuse an edit whose own rule fails with the codes of
-// programs/sandbox.h (program.exists, program.not_found, stage.not_found,
-// stage.not_scene_panel, program.bad_target, program.over_limits and the
+// programs/sandbox.h (program.exists, program.not_found, program.bad_target, program.over_limits and the
 // sandbox's checks), then hand the result to the validator, whose first error
 // refuses the edit and whose warnings are kept. An edit that adds a program
-// or a stage to a version 0 spec raises the version to 1 in the same edit.
+// to a version 0 spec raises the version to 1 in the same edit.
 // A refusal of the sandbox carries its line and column in the message and in
 // `where` (args.wgsl:<line>:<column>). Without the compiler library an edit
 // applies with the warning program.not_checked, in `messages` and in
@@ -21,7 +19,6 @@
 #include <caliper_builder/spec/format.h>
 #include <caliper_builder/spec/patch.h>
 
-#include <algorithm>
 #include <utility>
 
 namespace caliper_builder {
@@ -30,43 +27,8 @@ namespace caliper_builder {
 
 namespace program_checks {
 
-namespace {
-
 namespace lim = spec::program_limits;
 using programs::Verdict;
-
-// The entry point the editor appends to a stage to check its function's
-// signature; it calls the function with the contract's input struct.
-std::string check_entry(spec::StageKind kind) {
-    if (kind == spec::StageKind::material)
-        return "@fragment fn caliper_stage_check() -> @location(0) vec4<f32> {\n"
-               "    return material(MaterialIn(vec4<f32>(0.0), 0.0, 0u, vec3<f32>(0.0), vec3<f32>(0.0), 0.0, 0u));\n"
-               "}\n";
-    return "@vertex fn caliper_stage_check() -> @builtin(position) vec4<f32> {\n"
-           "    let o: VertexOut = vertex(VertexIn(vec3<f32>(0.0), 0.0, 0.0, 0u, 0.0, 0u));\n"
-           "    return vec4<f32>(o.position, o.radius);\n"
-           "}\n";
-}
-
-std::uint32_t line_count(std::string_view s) {
-    return static_cast<std::uint32_t>(std::count(s.begin(), s.end(), '\n')) + 1;
-}
-
-// A compiler verdict of a composed stage, moved to the lines of the stage's
-// own source: a place in the prelude or after the source has none.
-Verdict in_stage_source(Verdict v, std::uint32_t source_lines) {
-    if (v.code == programs::kProgramCompileFailed) v.code = programs::kStageCompileFailed;
-    const std::uint32_t first = programs::stage_prelude_lines() + 1;
-    if (v.line >= first && v.line < first + source_lines) {
-        v.line -= programs::stage_prelude_lines();
-    } else {
-        v.line = 0;
-        v.column = 0;
-    }
-    return v;
-}
-
-}  // namespace
 
 Verdict not_checked_warning() {
     Verdict v;
@@ -98,83 +60,6 @@ Outcome check_program_source(const spec::Program& p) {
     out.reflection = std::move(c.reflection);
     out.error = programs::check_program(p, out.reflection);
     out.checked = out.error.ok();
-    return out;
-}
-
-Outcome check_stage_source(const spec::Stage& s) {
-    Outcome out;
-    out.error = programs::check_source(s.wgsl, lim::kStageSourceBytes);
-    if (!out.error.ok()) return out;
-    // Without the compiler, the scan of the source for a binding or an entry
-    // point still runs.
-    if (!programs::compiler_available()) {
-        out.error = programs::check_stage(s, programs::Reflection{});
-        return out;
-    }
-    const std::uint32_t lines = line_count(s.wgsl);
-    std::string composed(programs::stage_prelude());
-    composed += s.wgsl;
-    programs::Compiled c = programs::compile_and_reflect(composed);
-    if (!c.verdict.ok()) {
-        out.error = in_stage_source(std::move(c.verdict), lines);
-        return out;
-    }
-    out.compiled = true;
-    out.reflection = std::move(c.reflection);
-    out.error = programs::check_stage(s, out.reflection);
-    if (!out.error.ok()) return out;
-    composed += "\n";
-    composed += check_entry(s.kind);
-    programs::Compiled call = programs::compile_and_reflect(composed);
-    if (!call.verdict.ok()) {
-        Verdict v = in_stage_source(std::move(call.verdict), lines);
-        if (v.line == 0)
-            v.message = std::string("The stage must define ") +
-                        (s.kind == spec::StageKind::material ? "fn material(in: MaterialIn) -> vec4<f32>"
-                                                             : "fn vertex(in: VertexIn) -> VertexOut") +
-                        ", and the call of it does not compile: " + v.message;
-        out.error = std::move(v);
-        return out;
-    }
-    out.checked = true;
-    return out;
-}
-
-Outcome check_compute_source(std::string_view wgsl, const std::optional<std::string>& entry) {
-    Outcome out;
-    out.error = programs::check_source(wgsl, lim::kProgramSourceBytes);
-    if (!out.error.ok() || !programs::compiler_available()) return out;
-    programs::Compiled c = programs::compile_and_reflect(wgsl);
-    if (!c.verdict.ok()) {
-        out.error = std::move(c.verdict);
-        return out;
-    }
-    out.compiled = true;
-    out.reflection = std::move(c.reflection);
-    std::vector<const programs::ReflectedEntry*> compute;
-    for (const programs::ReflectedEntry& e : out.reflection.entries)
-        if (e.stage == programs::EntryStage::compute && (!entry || e.name == *entry)) compute.push_back(&e);
-    if (compute.size() != 1) {
-        out.error.code = programs::kProgramNoEntry;
-        out.error.where = "entry";
-        out.error.message = entry ? "The source has no compute entry point " + *entry + "."
-                            : compute.empty()
-                                ? std::string("The source has no compute entry point; add a function with "
-                                              "@compute @workgroup_size(...).")
-                                : "The source has " + std::to_string(compute.size()) +
-                                      " compute entry points; name the one to check with entry.";
-        return out;
-    }
-    const auto& ws = compute.front()->workgroup_size;
-    const std::uint64_t n = std::uint64_t(ws[0]) * ws[1] * ws[2];
-    if (n == 0 || n > lim::kWorkgroupInvocations) {
-        out.error.code = programs::kProgramOverLimits;
-        out.error.where = "entry";
-        out.error.message = "The entry point " + compute.front()->name + " has a workgroup of " + std::to_string(n) +
-                            " invocations; the limit is " + std::to_string(lim::kWorkgroupInvocations) + ".";
-        return out;
-    }
-    out.checked = true;
     return out;
 }
 
@@ -262,13 +147,6 @@ std::size_t program_index(const spec::Spec& s, const std::string& id) {
     return s.programs.size();
 }
 
-std::size_t stage_index(const spec::Spec& s, const std::string& panel, const std::string& entity,
-                        spec::StageKind kind) {
-    for (std::size_t i = 0; i < s.stages.size(); ++i)
-        if (s.stages[i].panel == panel && s.stages[i].entity == entity && s.stages[i].kind == kind) return i;
-    return s.stages.size();
-}
-
 // The scene panel an item draws in: an error with the item's code when the
 // spec has no such panel or it is of another primitive.
 Error scene_panel(const spec::Spec& s, const std::string& panel, const char* code, const std::string& where) {
@@ -306,55 +184,6 @@ Error check_program_edit(const spec::Spec& s, const spec::Program& p, const std:
     if (!o.error.ok()) return verdict_error(o.error, base);
     *checked = o.checked;
     return {};
-}
-
-SpecEdit stage_set(const spec::Spec& s, const json& args, const spec::SourceResolver& resolver) {
-    spec::Stage st;
-    st.panel = str_arg(args, "panel");
-    st.entity = str_arg(args, "entity");
-    const auto kind = spec::stage_kind_from_name(str_arg(args, "kind"));
-    if (!kind) return refuse(fail("spec.bad_value", "A stage's kind is material or vertex.", "args.kind"));
-    st.kind = *kind;
-    st.wgsl = str_arg(args, "wgsl");
-    if (Verdict v = programs::check_stage_declaration(st); !v.ok()) return refuse(verdict_error(v, "args"));
-    if (Error e = scene_panel(s, st.panel, programs::kStageNotScenePanel, "args.panel")) return refuse(std::move(e));
-    const std::size_t index = stage_index(s, st.panel, st.entity, st.kind);
-    if (index == s.stages.size() && s.stages.size() >= lim::kStages)
-        return refuse(fail(programs::kProgramOverLimits,
-                           "The spec has " + std::to_string(s.stages.size()) + " stages, the most it holds; remove "
-                           "one first.",
-                           "args"));
-    program_checks::Outcome o = program_checks::check_stage_source(st);
-    if (!o.error.ok()) return refuse(verdict_error(o.error, "args"));
-
-    spec::Spec next = s;
-    raise_version(next);
-    if (index < next.stages.size()) {
-        st.x = next.stages[index].x;
-        next.stages[index] = std::move(st);
-    } else {
-        next.stages.push_back(std::move(st));
-    }
-    const std::size_t at = index < s.stages.size() ? index : next.stages.size() - 1;
-    const spec::Stage& kept = next.stages[at];
-    json result{{"panel", kept.panel}, {"entity", kept.entity}, {"kind", spec::stage_kind_name(kept.kind)}};
-    return finish(std::move(next), resolver, std::move(result), o.checked, "stage[" + std::to_string(at) + "].wgsl");
-}
-
-SpecEdit stage_remove(const spec::Spec& s, const json& args, const spec::SourceResolver& resolver) {
-    const std::string panel = str_arg(args, "panel");
-    const std::string entity = str_arg(args, "entity");
-    const auto kind = spec::stage_kind_from_name(str_arg(args, "kind"));
-    const std::size_t index = kind ? stage_index(s, panel, entity, *kind) : s.stages.size();
-    if (index == s.stages.size())
-        return refuse(fail(programs::kStageNotFound,
-                           "The panel " + panel + " has no " + str_arg(args, "kind") + " stage on the entity " +
-                               entity + ".",
-                           "args"));
-    spec::Spec next = s;
-    next.stages.erase(next.stages.begin() + static_cast<std::ptrdiff_t>(index));
-    json result{{"panel", panel}, {"entity", entity}, {"kind", spec::stage_kind_name(*kind)}};
-    return finish(std::move(next), resolver, std::move(result), true, "");
 }
 
 // The inline piece of program.create's `inline`: it joins the spec's array
@@ -461,12 +290,10 @@ SpecEdit program_remove(const spec::Spec& s, const json& args, const spec::Sourc
 
 SpecEdit apply_program_edit(const spec::Spec& spec, std::string_view name, const nlohmann::json& args,
                             const spec::SourceResolver& resolver) {
-    if (name == "stage.set") return stage_set(spec, args, resolver);
-    if (name == "stage.remove") return stage_remove(spec, args, resolver);
     if (name == "program.create") return program_create(spec, args, resolver);
     if (name == "program.patch") return program_patch(spec, args, resolver);
     if (name == "program.remove") return program_remove(spec, args, resolver);
-    return refuse(fail("command.unknown", "This is not a command that edits the spec's programs or stages.",
+    return refuse(fail("command.unknown", "This is not a command that edits the spec's programs.",
                        std::string(name)));
 }
 

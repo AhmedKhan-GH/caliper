@@ -643,15 +643,10 @@ TEST_CASE("a dry run and an edit that changes nothing leave no trace in the hist
 
 namespace {
 
-// A program host and a stage host that record what the session gives them.
+// A program host that records what the session gives it.
 struct RecordingProgramHost : ProgramHost {
     std::vector<std::size_t> programs;   // the program count of each reconciled spec
     void reconcile(const spec::Spec& s) override { programs.push_back(s.programs.size()); }
-    std::vector<ProgramStatus> status() const override { return {}; }
-};
-struct RecordingStageHost : StageHost {
-    std::vector<std::size_t> stages;
-    void reconcile(const spec::Spec& s) override { stages.push_back(s.stages.size()); }
     std::vector<ProgramStatus> status() const override { return {}; }
 };
 
@@ -663,15 +658,12 @@ const char* const kPixels =
 
 }  // namespace
 
-TEST_CASE("session: both hosts reconcile after each change of the open spec, and not after a read or a refusal") {
+TEST_CASE("session: the program host reconciles after each change of the open spec, and not after a read or a refusal") {
     auto s = open_session(fresh_dir("session_reconcile") + "/workspace");
     RecordingProgramHost programs;
-    RecordingStageHost stages;
     s->set_program_host(&programs);
-    s->set_stage_host(&stages);
     ok(*s, "spec.new", {{"id", "gpu"}});
     CHECK(programs.programs == std::vector<std::size_t>{0});
-    CHECK(stages.stages == std::vector<std::size_t>{0});
     ok(*s, "panel.create", {{"id", "world"}, {"primitive", "scene"}, {"bind", {{"scene", "live:model"}}}});
     const json image = {{"id", "image"},
                         {"wgsl", kPixels},
@@ -688,18 +680,12 @@ TEST_CASE("session: both hosts reconcile after each change of the open spec, and
     ok(*s, "spec.get");
     CHECK(err(*s, "program.create", image) == "program.exists");
     CHECK(programs.programs.size() == 3);
-    ok(*s, "stage.set", {{"panel", "world"}, {"entity", "e"}, {"kind", "material"},
-                         {"wgsl", "fn material(in: MaterialIn) -> vec4<f32> {\n  return in.color;\n}\n"}});
-    CHECK(stages.stages.back() == 1);
     // Undo and redo are changes too.
-    ok(*s, "history.undo");
-    CHECK(stages.stages.back() == 0);
     ok(*s, "history.undo");
     CHECK(programs.programs.back() == 0);
     ok(*s, "history.redo");
     CHECK(programs.programs.back() == 1);
     s->set_program_host(nullptr);
-    s->set_stage_host(nullptr);
     ok(*s, "program.remove", {{"id", "image"}});
     CHECK(programs.programs.back() == 1);   // no host, no call
 }

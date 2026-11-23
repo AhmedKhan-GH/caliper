@@ -1,4 +1,4 @@
-// Tests of the programs, stages and provenance of spec version 1 (program.h,
+// Tests of the programs and provenance of spec version 1 (program.h,
 // design/gpu-programs.md, Spec Additions) and of the toggle control: the
 // codecs read and write them canonically, the validator holds them to the
 // limits of program.h with the sandbox's codes, and an older document reads
@@ -39,7 +39,7 @@ const char* const kProgram =
 
 }  // namespace
 
-TEST_CASE("a version 1 spec with programs, a stage and provenance parses into the expected spec") {
+TEST_CASE("a version 1 spec with programs and provenance parses into the expected spec") {
     const cs::Spec s = programs_fixture().spec;
     CHECK(s.version == 1);
     REQUIRE(s.programs.size() == 2);
@@ -65,9 +65,6 @@ TEST_CASE("a version 1 spec with programs, a stage and provenance parses into th
     CHECK(image.output.width == 64);
     CHECK(image.output.height == 32);
     CHECK(image.workgroups == std::optional<std::array<std::uint32_t, 3>>(std::array<std::uint32_t, 3>{8, 4, 1}));
-    REQUIRE(s.stages.size() == 1);
-    CHECK(s.stages[0].kind == cs::StageKind::material);
-    CHECK(cs::stage_id(s.stages[0]) == "world/programs/rows/material");
     CHECK(s.provenance.foreign);
     REQUIRE(s.provenance.reviewed.size() == 1);
     CHECK(s.provenance.reviewed[0].target == "program:rows");
@@ -77,12 +74,11 @@ TEST_CASE("a version 1 spec with programs, a stage and provenance parses into th
     CHECK_MESSAGE(report.ok(), dump(report.diagnostics));
 }
 
-TEST_CASE("programs, stages and provenance round trip through canonical TOML and canonical JSON") {
+TEST_CASE("programs and provenance round trip through canonical TOML and canonical JSON") {
     const cs::Spec first = programs_fixture().spec;
     const std::string toml = cs::to_toml(first);
     CHECK(toml.find("\n[[program]]\nid = \"rows\"\n") != std::string::npos);
-    CHECK(toml.find("[[program]]") < toml.find("[[stage]]"));
-    CHECK(toml.find("[[stage]]") < toml.find("[provenance]"));
+    CHECK(toml.find("[[program]]") < toml.find("[provenance]"));
     CHECK(toml.find("wgsl = \"\"\"\n@group(0)") != std::string::npos);
     auto second = cs::parse_toml(toml);
     REQUIRE_MESSAGE(second.ok(), dump(second.diagnostics));
@@ -104,9 +100,6 @@ TEST_CASE("programs, stages and provenance round trip through canonical TOML and
     auto one = cs::program_from_json(j.at("program")[0]);
     REQUIRE_MESSAGE(one.ok(), dump(one.diagnostics));
     CHECK(one.value == first.programs[0]);
-    auto st = cs::stage_from_json(j.at("stage")[0]);
-    REQUIRE(st.ok());
-    CHECK(st.value == first.stages[0]);
 }
 
 TEST_CASE("the reader refuses the keys of programs in version 0 and the wrong keys in version 1") {
@@ -139,8 +132,6 @@ TEST_CASE("the reader refuses the keys of programs in version 0 and the wrong ke
         {"[[program]]\nid = \"p\"\ninputs = []\noutput = { kind = \"pixels\", width = 4, height = 4 }\n"
          "workgroups = [1, 2]\nwgsl = \"x\"\n",
          "spec.wrong_type", "program[0].workgroups"},
-        {"[[stage]]\npanel = \"world\"\nentity = \"e\"\nkind = \"compute\"\nwgsl = \"x\"\n", "spec.bad_value",
-         "stage[0].kind"},
         {"[provenance]\nfrom = \"x\"\n", "spec.missing_key", "provenance.foreign"},
     };
     for (const Case& c : cases) {
@@ -150,7 +141,7 @@ TEST_CASE("the reader refuses the keys of programs in version 0 and the wrong ke
     }
 }
 
-TEST_CASE("the validator holds programs and stages to the limits of program.h and to the spec's panels") {
+TEST_CASE("the validator holds programs to the limits of program.h and to the spec's panels") {
     struct Case {
         std::string toml;
         const char* code;
@@ -175,13 +166,6 @@ TEST_CASE("the validator holds programs and stages to the limits of program.h an
          "program[0].id"},
         {"[[program]]\nid = \"p\"\ninputs = [{ var = \"w\", source = \"w\" }]\n" + pixels, "program.over_limits",
          "program[0].inputs[0].source"},
-        {"[[stage]]\npanel = \"chart\"\nentity = \"e\"\nkind = \"material\"\nwgsl = \"x\"\n", "stage.not_scene_panel",
-         "stage[0].panel"},
-        {"[[stage]]\npanel = \"world\"\nentity = \"e\"\nkind = \"vertex\"\nwgsl = \"x\"\n"
-         "[[stage]]\npanel = \"world\"\nentity = \"e\"\nkind = \"vertex\"\nwgsl = \"y\"\n",
-         "spec.duplicate_id", "stage[1]"},
-        {"[[stage]]\npanel = \"world\"\nentity = \"a//b\"\nkind = \"vertex\"\nwgsl = \"x\"\n", "program.bad_target",
-         "stage[0].entity"},
         {"[provenance]\nforeign = true\nreviewed = [{ target = \"panel:world\", sha256 = \"" + std::string(64, 'a') +
              "\" }]\n",
          "spec.bad_value", "provenance.reviewed[0].target"},
@@ -198,11 +182,6 @@ TEST_CASE("the validator holds programs and stages to the limits of program.h an
     for (int i = 0; i < 17; ++i)
         many += "[[program]]\nid = \"p" + std::to_string(i) + "\"\ninputs = []\n" + pixels;
     CHECK(has(cs::check_toml(with_panels(many)).diagnostics, "spec.too_many", "program"));
-    // A stage of another kind on the same entity is a second stage.
-    const std::string two = "[[stage]]\npanel = \"world\"\nentity = \"e\"\nkind = \"vertex\"\nwgsl = \"x\"\n"
-                            "[[stage]]\npanel = \"world\"\nentity = \"e\"\nkind = \"material\"\nwgsl = \"y\"\n";
-    const cs::ValidationReport ok = cs::check_toml(with_panels(two));
-    CHECK_MESSAGE(ok.ok(), dump(ok.diagnostics));
 }
 
 TEST_CASE("a toggle binds an intervention point or a parameter, and takes no options") {
@@ -246,7 +225,6 @@ TEST_CASE("every older fixture reads as before and has no programs") {
         const auto r = cs::parse_toml(fixture(name));
         REQUIRE(r.ok());
         CHECK(r.spec.programs.empty());
-        CHECK(r.spec.stages.empty());
         CHECK(r.spec.provenance.empty());
         CHECK(cs::to_json(r.spec).count("program") == 0);
     }
@@ -516,14 +494,14 @@ TEST_CASE("the schema of version 1 takes inline pieces and instances, and refuse
     CHECK(!checker.errors(doc).empty());
 }
 
-// Once stages are gone, the reader gives spec.stage_replaced for each [[stage]] table of an old spec
-// or saved instrument (format.h): an error at the stage's path that names it and says how to write
+// The reader gives spec.stage_replaced for each [[stage]] table of an old spec or saved
+// instrument (format.h): a warning at the stage's path that names it and says how to write
 // the same look as a piece program.
 TEST_CASE("a spec that names a stage gets spec.stage_replaced, which says how to write the same look as a piece") {
     const nlohmann::json material = {{"panel", "world"}, {"entity", "programs/grid"}, {"kind", "material"},
                                      {"wgsl", "fn material(in: MaterialIn) -> vec4<f32> { return vec4<f32>(1.0); }"}};
     const cs::Diagnostic d = cs::stage_replaced(material, "stage[0]");
-    CHECK(d.is_error());
+    CHECK_FALSE(d.is_error());
     CHECK(d.code == "spec.stage_replaced");
     CHECK(d.path == "stage[0]");
     for (const char* words : {"Stages were replaced by pieces", "the material stage on the entity \"programs/grid\" of "
@@ -537,4 +515,44 @@ TEST_CASE("a spec that names a stage gets spec.stage_replaced, which says how to
     CHECK(bare.code == "spec.stage_replaced");
     CHECK(bare.message.find("thus the stage no longer runs") != std::string::npos);
     CHECK(bare.message.find("the scene panel") != std::string::npos);
+}
+
+TEST_CASE("a spec that still holds a stage table opens, with spec.stage_replaced as a warning and without the stage") {
+    const std::string stage = "[[stage]]\npanel = \"world\"\nentity = \"e\"\nkind = \"vertex\"\nwgsl = \"x\"\n";
+    const std::string head = "caliper_spec = 1\n[applet]\nid = \"a\"\n";
+    const auto r = cs::parse_toml(head + stage + stage);
+    REQUIRE_MESSAGE(r.ok(), dump(r.diagnostics));
+    int warnings = 0;
+    for (const cs::Diagnostic& d : r.diagnostics)
+        if (d.code == "spec.stage_replaced") {
+            CHECK_FALSE(d.is_error());
+            ++warnings;
+        }
+    CHECK(warnings == 2);
+    CHECK(has(r.diagnostics, "spec.stage_replaced", "stage[1]"));
+    CHECK(cs::to_toml(r.spec).find("[[stage]]") == std::string::npos);
+
+    const auto j = cs::from_json(json::parse(R"({"caliper_spec": 1, "applet": {"id": "a"},
+                                                  "stage": [{"panel": "w", "entity": "e", "kind": "material", "wgsl": "x"}]})"));
+    REQUIRE_MESSAGE(j.ok(), dump(j.diagnostics));
+    CHECK(has(j.diagnostics, "spec.stage_replaced", "stage[0]"));
+}
+
+TEST_CASE("old stage review hashes do not prevent a spec from opening") {
+    const std::string hash(64, 'a');
+    const json document = {{"caliper_spec", 1}, {"applet", {{"id", "a"}}},
+                           {"stage", {{{"panel", "world"}, {"entity", "e"}, {"kind", "material"}, {"wgsl", "x"}}}},
+                           {"provenance", {{"foreign", true},
+                                           {"reviewed", {{{"target", "stage:world/e/material"}, {"sha256", hash}},
+                                                         {{"target", "program:kept"}, {"sha256", hash}}}}}}};
+    const auto parsed = cs::from_json(document);
+    REQUIRE_MESSAGE(parsed.ok(), dump(parsed.diagnostics));
+    CHECK(has(parsed.diagnostics, "spec.stage_replaced", "stage[0]"));
+    REQUIRE(parsed.spec.provenance.reviewed.size() == 1);
+    CHECK(parsed.spec.provenance.reviewed[0].target == "program:kept");
+    CHECK(parsed.spec.provenance.reviewed[0].sha256 == hash);
+    CHECK(parsed.spec.provenance.foreign);
+    const auto checked = cs::validate(parsed.spec);
+    CHECK_MESSAGE(checked.ok(), dump(checked.diagnostics));
+    CHECK(cs::to_json(parsed.spec).dump().find("stage:") == std::string::npos);
 }
