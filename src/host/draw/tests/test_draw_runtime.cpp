@@ -532,6 +532,37 @@ TEST_CASE("decode reads a PROGRAM's declaration and checks the hash against the 
     REQUIRE_MESSAGE(installed.ok(), installed.message);
 }
 
+TEST_CASE("decode reads the sample of the canonical manifest that the app sends") {
+    cs::Piece field = ex::attention_field();
+    if (cp::piece_hash(field).empty()) { MESSAGE("the checks of pieces are not built"); return; }
+    field.sample["attn0"] = cs::SampleInput{"sample/attn0.bin", {1, 4, 32, 32}};
+    field.sample["attn1"] = cs::SampleInput{"sample/attn1.bin", {1, 4, 32, 32}};
+    const cd::DrawChecks c = checks();
+    const std::string pin = c.hash(field);
+    const std::string manifest = cp::canonical_manifest(field);
+    REQUIRE(manifest.find(R"("sample":[{)") != std::string::npos);   // an array of {input, shape}
+    auto declaration = [&](const std::string& m) {
+        return R"({"id": "head_pattern", "panel": "pattern",
+            "piece": {"name": "attention_field", "version": 1, "hash": ")" + pin + R"("}, "manifest": )" + m + "}";
+    };
+    cs::Piece piece;
+    cd::Instance instance;
+    const cp::Verdict v = cd::DrawRuntime::decode(declaration(manifest), ex::kFieldCommon, ex::kFieldDraw, &piece,
+                                                  &instance, c, ex::kFieldDerive);
+    REQUIRE_MESSAGE(v.ok(), v.message);
+    CHECK(piece.sample == field.sample);
+    CHECK(piece.hash == pin);
+
+    // A sample in another form, or a broken one, is refused.
+    for (const std::string& bad : {std::string(R"({"name": "f", "version": 1, "sample": {"x": {"shape": [1]}}})"),
+                                   std::string(R"({"name": "f", "version": 1, "sample": [{"input": "x"}]})"),
+                                   std::string(R"({"name": "f", "version": 1, "sample": [{"input": "x", "shape": [-1]}]})"),
+                                   std::string(R"({"name": "f", "version": 1, "sample": [{"shape": [1]}]})")})
+        CHECK(cd::DrawRuntime::decode(declaration(bad), ex::kFieldCommon, ex::kFieldDraw, &piece, &instance, c,
+                                      ex::kFieldDerive)
+                  .code == cp::kPieceBadManifest);
+}
+
 TEST_CASE("remove releases the program and returns to waiting") {
     Host h;
     cd::DrawRuntime rt(h.gfx, true, checks());

@@ -680,6 +680,26 @@ TEST_CASE("a resource and an input that no pass uses still compile, and a privat
     caliper_producer_error_free(&e);
 }
 
+TEST_CASE("a derive resource named count binds its own buffer, not the count of a one-pass program") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    Piece p = f.piece("@compute @workgroup_size(4)\nfn run(@builtin(global_invocation_id) id: vec3<u32>) {\n"
+                      "    count[id.x] = 10u + id.x;\n}\n");
+    p.buffer("count", "u32", 4);
+    p.pass("run", 1, {"count"});
+    const caliper_producer_derive_desc d = p.desc();
+    uint32_t prog = 0;
+    caliper_producer_error e{};
+    if (!compile_or_skip(f.rt, d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+    caliper_producer_frame frame{1, 0.0, 3};
+    const caliper_producer_status ran = caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e);
+    const std::string why = std::string(e.code ? e.code : "") + " " + (e.message ? e.message : "");
+    REQUIRE_MESSAGE(ran == CALIPER_PRODUCER_OK, why);
+    caliper_producer_output out{};
+    CHECK(read<uint32_t>(f.rt, prog, "count", &out) == std::vector<uint32_t>{10, 11, 12, 13});
+    caliper_producer_error_free(&e);
+}
+
 #if CALIPER_PRODUCER_HAVE_LIB_MODULES
 TEST_CASE("a derive half compiles when common carries lib modules that read the draw prelude") {
     Fixture f;

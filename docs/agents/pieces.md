@@ -70,7 +70,7 @@ A resource is a named, typed array that the derive half writes and the viewer re
 | `clear` | `true` zeroes the resource before each run. `false` when absent, and the contents stay from the run before. |
 | `keep` | The versions that the step history keeps, from 1 to 4,096. 256 when absent. |
 
-A field type is `f32`, `i32`, `u32`, `vec2<f32>`, `vec4<f32>`, `vec2<u32>` or `vec4<u32>`. The composer lays out a struct by the storage rules of WGSL, and one element holds at most 256 bytes. A struct has at most 16 fields. A published resource holds at most 67,043,328 bytes, because then one version fits one wire frame. A private resource holds at most 64 MiB.
+A field type is `f32`, `i32`, `u32`, `vec2<f32>`, `vec4<f32>`, `vec2<u32>` or `vec4<u32>`. The composer lays out a struct by the storage rules of WGSL, and one element holds at most 256 bytes. A struct has at most 16 fields. The published resources of a piece hold at most 8 MiB together, 8,388,608 bytes, because a pass can send all of them to each viewer and the script queues at most that much for one viewer. Thus a texture of 2,048 by 1,024 pixels fits, and a texture of 2,048 by 2,048 pixels gives `program.bad_resource`. A private resource holds at most 64 MiB.
 
 ## Piece Halves
 
@@ -178,11 +178,11 @@ The hash identifies what runs. It is the SHA-256 of these bytes, in lowercase he
 2. The manifest as RFC 8785 canonical JSON, without `hash` and without the files.
 3. For each imported module in the order of `imports`, and then for each of `common.wgsl`, `derive.wgsl` and `draw.wgsl` that the piece has, a line `--- <part> <bytes>` and the text with LF line ends.
 
-The hash covers the text of the imported modules, because they run. It does not cover the samples. The canonical JSON and the LF line ends make the hash the same on every platform and in every language that computes it. The editor, the script and the browser module all compute it.
+The hash covers the text of the imported modules, because they run. It does not cover the samples. The canonical JSON and the LF line ends make the hash the same on every platform and in every language that computes it. The editor, the app and the browser module compute it.
 
 A program pins its piece by name, version, hash and source. The pin is `piece = { name = "...", version = 1, hash = "sha256:...", from = "workspace" }`. The editor writes the hash when the pin has none. A program keeps its pinned version until `program.patch` pins another one, and `piece.update` never changes a saved version.
 
-When the source of a pin lacks the piece, the state of the program is `refused` with `piece.missing`. When the piece has another hash than the pin, the state is `refused` with `piece.hash_mismatch`. In both cases the spec still opens, and the app never pins another version on its own. The person or the agent restores the folder, or pins an existing version with `program.patch`. A script and a browser viewer compute the hash again from what they receive. A hash that differs from the pin refuses the program.
+When the source of a pin lacks the piece, the state of the program is `refused` with `piece.missing`. When the piece has another hash than the pin, the state is `refused` with `piece.hash_mismatch`. In both cases the spec still opens, and the app never pins another version on its own. The person or the agent restores the folder, or pins an existing version with `program.patch`. The app computes the hash from the files that it sends, and it sends a program to the script only when that hash equals the pin. The script checks only the form of the pin's hash, because the derive half comes with its imports resolved and without the manifest. A browser viewer computes the hash again from the sections that it receives, and a hash that differs from the pin refuses the program.
 
 ### Foreign Specs
 
@@ -311,7 +311,7 @@ The event `program` carries the keys `half` (`derive` or `draw`) and `pass`, the
 
 ## Resources and Step History
 
-The script sends each version of a published resource to a viewer as one RESOURCE message. The message needs the capability `resources` on both ends. A script that does not announce it refuses an instance with `program.resources_unavailable`. One message carries one resource, thus a large resource never holds a small one back. A viewer that falls behind gets the newest version of each resource and loses the older ones.
+The script sends each version of a published resource to a viewer as one RESOURCE message. The message needs the capability `resources` on both ends. A script that does not announce it refuses an instance with `program.resources_unavailable`. One message carries one resource, thus a large resource never holds a small one back. The script sends the versions of a pass to a viewer only when its queue then holds at most 8 MiB and 64 KiB, which is half of the 16 MiB control queue of a connection. Thus a viewer that falls behind skips whole passes, and it gets a later pass when it catches up. A pass that would send more than 8 MiB, from a manifest that did not pass the app's check, stops the program with `program.resource_too_large`.
 
 The app keeps the versions of each published resource in the step history under `<program>/<resource>`, beside the kept steps of the sources. A resource keeps at most `keep` versions. When its ring is full, the history drops every second kept version. From then on it keeps a version only when its step lies far enough after the newest one. Thus the kept versions span the whole run evenly, and the step cursor scrubs the whole training. The viewer gives the draw half the newest kept version at or before the cursor.
 
@@ -387,7 +387,7 @@ The editor, the script and the viewer refuse a piece with a stable code before a
 | `piece.bad_binding` | An input that is unbound, or bound to another dtype, rank or layout |
 | `piece.cycle` | A piece depends on itself, or a program binds a resource of its own |
 | `program.form_mixed` | A program has keys of the one-pass form and a pin |
-| `program.bad_resource` | A kind, count or size of a resource, or a duplicate id |
+| `program.bad_resource` | A kind, count or size of a resource, published resources above 8 MiB together, or a duplicate id |
 | `program.bad_layout` | A field name or type, or a stride over 256 bytes |
 | `program.unknown_resource` | A pass, an item map or a text table names no resource |
 | `program.bad_pass` | The kind, entry, target or values of a pass |
@@ -409,7 +409,7 @@ The manifest check holds every pass to the default limits of WebGPU, thus a piec
 
 The browser module runs the same draw half from the same WGSL and the same declaration. It receives each draw half as PROGRAM from the script, and the resources as RESOURCE. It checks the names, the files, the imports and the hash with the same code that the app compiles. A hash that differs from the pin refuses the program. It then gives each composed module to WebGPU. A compilation message or a refused pipeline refuses the program with `program.browser_refused`, and the line maps back to its file.
 
-The browser has no compiler of its own, because WebGPU keeps each draw inside its bindings. The browser module keeps no step history and draws the newest version of each resource. Without timestamps, the frame time is the time from the submit until the work is done.
+The browser has no compiler of its own, because WebGPU keeps each draw inside its bindings. The browser module keeps no step history and draws the newest version of each resource. It keeps a version only of a resource that the piece of its program publishes, with at most the declared count and bytes, and it keeps at most 16 programs of a script. Without timestamps, the frame time is the time from the submit until the work is done.
 
 ## Builder Pane
 
