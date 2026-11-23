@@ -575,14 +575,20 @@ TEST_CASE("programs: the item map gives an item's fields and index, and refuses 
     // An item that a fragment wrote past the valid count, or past what the copy holds.
     CHECK_FALSE(rt.pick(std::uint32_t(res.arcs.size())));
     CHECK_FALSE(rt.pick(0xffffffffu));
+    // A version whose count says one element more than its bytes hold is refused, and the copy
+    // keeps the version shown; a version of two elements then holds no third.
     std::vector<ex::Arc> fewer(res.arcs.begin(), res.arcs.begin() + 2);
     caliper_draw::ResourceVersion shortv = version_of("arcs", fewer, 1);
-    shortv.count = 3;   // one element more than its bytes hold
-    if (rt.set_resource(shortv).ok()) {
-        h.frame(rt);
-        CHECK(rt.pick(1));
-        CHECK_FALSE(rt.pick(2));
-    }
+    shortv.count = 3;
+    CHECK_FALSE(rt.set_resource(shortv).ok());
+    h.frame(rt);
+    REQUIRE(rt.pick(2));
+    CHECK(rt.pick(2)->step == 0);
+    REQUIRE(rt.set_resource(version_of("arcs", fewer, 1)).ok());
+    h.frame(rt);
+    REQUIRE(rt.pick(1));
+    CHECK(rt.pick(1)->step == 1);
+    CHECK_FALSE(rt.pick(2));
 }
 
 TEST_CASE("programs: the text table gives a label at each valid anchor and refuses a string past the table and an anchor that is not finite") {
