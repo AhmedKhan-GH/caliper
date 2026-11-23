@@ -488,7 +488,7 @@ LOOK = {"name": "look", "version": 1,
 TYPED_DERIVE = """@compute @workgroup_size(1)
 fn run() {
     for (var i = 0u; i < 16u; i = i + 1u) {
-        out[i] = vec4<f32>(depth_at(i), f32(depth_type), f32(grey_at(i)), f32(shapes.depth__len));
+        out[i] = vec4<f32>(f32(depth_at(i)), f32(depth_type), f32(grey_at(i)), f32(shapes.depth__len));
     }
     // The grey image (H, W) as an r8unorm texture of its size, four texels a word.
     tex_size = vec2<u32>(shapes.grey.w, shapes.grey.z);
@@ -518,8 +518,9 @@ def test_u8_and_u16_tensors_bind_in_place_and_a_texture_and_narrow_buffer_carry_
     checked accessors; an r8unorm texture's version carries the size that the derive half set and its
     format, and a u16 buffer its elements, in the RESOURCE frames."""
     model, opt, ctl = attached
-    model.register_buffer("depth16", torch.arange(1000, 1015, dtype=torch.uint16, device="mps").reshape(3, 5))
-    model.register_buffer("grey8", torch.arange(1, 7, dtype=torch.uint8, device="mps").reshape(2, 3))
+    # Made on the CPU, because MPS has no arange of u16, and moved to the device as a training tensor is.
+    model.register_buffer("depth16", torch.arange(1000, 1015, dtype=torch.int32).to(torch.uint16).reshape(3, 5).to("mps"))
+    model.register_buffer("grey8", torch.arange(1, 7, dtype=torch.uint8).reshape(2, 3).to("mps"))
     pin = {"name": "typed", "version": 1, "hash": "sha256:" + "0" * 64, "from": "workspace"}
     item = P.install_piece("typed", piece=pin, manifest=TYPED, bind={"depth": "live:depth16", "grey": "live:grey8"},
                            params={}, panel=None, segments=[], common="", derive=TYPED_DERIVE, draw="")

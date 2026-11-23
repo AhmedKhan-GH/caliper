@@ -983,6 +983,22 @@ fn look(@builtin(global_invocation_id) id: vec3<u32>) {
         caliper_producer_remove(f.rt, prog);
     }
 
+    // A u8 tensor that ends inside the last word of its buffer cannot be bound in whole words.
+    {
+        id<MTLBuffer> tight = [f.device newBufferWithLength:7 options:MTLResourceStorageModeShared];
+        caliper_producer_tensor t{};
+        t.name = "tight";
+        t.buffer = (__bridge void*)tight;
+        t.byte_size = 7;
+        t.dtype = CALIPER_PRODUCER_U8;
+        t.ndim = 1;
+        t.shape[0] = 7;
+        uint32_t h = 0;
+        CHECK(caliper_producer_import(f.rt, &t, &h, &e) == CALIPER_PRODUCER_IMPORT_REFUSED);
+        CHECK(h == 0);
+        caliper_producer_error_free(&e);
+    }
+
     // Refusals: a tensor whose dtype the input does not name, and a dtype that names no type.
     {
         Piece p = f.piece("@compute @workgroup_size(1)\nfn run() { a[0] = f32(x_at(0u)); }\n", 0);

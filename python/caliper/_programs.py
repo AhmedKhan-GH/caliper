@@ -1614,8 +1614,8 @@ def _resource_frames(rt, p: _Program) -> list:
         # for rgba8unorm as before; a buffer of narrow elements carries the element and their count.
         texture = r["kind"] == "texture"
         width, height = (int(vw), int(vh)) if texture and count else (None, None)
-        fmt = r["format"] if texture and count and r["format"] != "rgba8unorm" else None
-        narrow = r["narrow"] or None
+        fmt = r.get("format") if texture and count and r.get("format", "rgba8unorm") != "rgba8unorm" else None
+        narrow = r.get("narrow") or None
         msg = _wire.Resource(p.id, r["id"], int(p.last_step or 0), int(count), int(stride), memoryview(data),
                              width=width, height=height, format=fmt, element=narrow,
                              elements=int(elements) if narrow else None)

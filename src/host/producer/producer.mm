@@ -1062,6 +1062,12 @@ caliper_producer_status caliper_producer_import(caliper_producer* rt, const cali
         if (end < t->byte_offset || end > (uint64_t)b.length)
             return fail(error, CALIPER_PRODUCER_IMPORT_REFUSED, kImportRefused,
                         "The buffer of the tensor " + name + " is shorter than the tensor.");
+        // A derive half binds a tensor of u8 or u16 elements in whole words: its bytes rounded up to a
+        // word must lie in its buffer, as they do in a framework's storage, whose sizes are rounded.
+        if (align4(end) > (uint64_t)b.length)
+            return fail(error, CALIPER_PRODUCER_IMPORT_REFUSED, kImportRefused,
+                        "The tensor " + name + " ends inside the last word of its buffer, thus it cannot be bound "
+                        "in whole words.");
         const uint32_t align = rt->be->caps().limits.min_storage_buffer_offset_alignment;
         if (align && t->byte_offset % align)
             return fail(error, CALIPER_PRODUCER_IMPORT_REFUSED, kImportRefused,
