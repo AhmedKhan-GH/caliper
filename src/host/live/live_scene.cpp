@@ -4,7 +4,6 @@
 
 #include "gfx/colormap_keys.h"
 #include "gfx/colormap_tables.h"
-#include "scene/backend_resources.h"
 #if defined(CALIPER_HAVE_DRAW)
 #include "draw/draw_host.h"
 #include "draw/draw_runtime.h"
@@ -33,6 +32,18 @@ using caliper_gfx::VertexFormat;
 namespace wire = caliper_net::wire;
 
 namespace {
+
+bool class_color(const caliper_net::Json& params, uint32_t* out) {
+    const caliper_net::Json* c = params.find("color");
+    if (!c || !c->is_array() || c->size() != 4) return false;
+    uint32_t rgba = 0;
+    for (size_t k = 0; k < 4; ++k) {
+        const double v = c->at(k).as_double();
+        rgba |= uint32_t(std::clamp(v, 0.0, 255.0)) << (8 * k);
+    }
+    *out = rgba;
+    return true;
+}
 
 // A VIEWS entry's view_camera, as wire.cpp normalised it: null for the fit, a camera entity's
 // path, or an orbit object with any of target, distance, azimuth and elevation (degrees).
@@ -69,49 +80,11 @@ bool same_start(const StartingCamera& a, const StartingCamera& b) {
 }
 
 constexpr size_t kMaxNotes = 8;
-constexpr uint64_t kMinCapacity = 4096;
-constexpr uint32_t kUsage = caliper_gfx::kVertex | caliper_gfx::kStorage | caliper_gfx::kCopyDst;
 
 double ms_since(std::chrono::steady_clock::time_point t0) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
-uint64_t capacity_for(uint64_t bytes) {
-    uint64_t c = kMinCapacity;
-    while (c < bytes) c <<= 1;
-    return c;
-}
-
-double num(const caliper_net::Json& params, const char* key, double fallback) {
-    const caliper_net::Json* v = params.find(key);
-    return v && v->is_number() ? v->as_double() : fallback;
-}
-
-// The integer keys, read as the integers they are (the decoder takes any integer): a colormap
-// id outside 0 to INT32_MAX is no colormap, and flags keep every bit of a uint64.
-uint32_t colormap_id(const caliper_net::Json& params) {
-    const caliper_net::Json* v = params.find("colormap");
-    int64_t id = 0;
-    return v && v->get_i64(&id) && id >= 0 && id <= INT32_MAX ? uint32_t(id) : 0u;
-}
-uint64_t flag_bits(const caliper_net::Json& params) {
-    const caliper_net::Json* v = params.find("flags");
-    uint64_t f = 0;
-    return v && v->get_u64(&f) ? f : 0u;
-}
-
-// The `color` key, [r, g, b, a] from 0 to 255, packed r | g << 8 | b << 16 | a << 24.
-bool flat_color(const caliper_net::Json& params, uint32_t* out) {
-    const caliper_net::Json* c = params.find("color");
-    if (!c || !c->is_array() || c->size() != 4) return false;
-    uint32_t rgba = 0;
-    for (size_t k = 0; k < 4; ++k) {
-        const double v = c->at(k).as_double();
-        rgba |= uint32_t(std::clamp(v, 0.0, 255.0)) << (8 * k);
-    }
-    *out = rgba;
-    return true;
-}
 
 std::string bytes_text(uint64_t b) {
     char t[32];
@@ -133,14 +106,6 @@ namespace {
 std::atomic<uint64_t> g_view_serial{0};
 }  // namespace
 
-ShapeDraw default_shape_draw() {
-#if defined(CALIPER_SCENE_PIECES)
-    const char* v = std::getenv("CALIPER_SCENE_SHAPES");
-    return v && std::strcmp(v, "builtin") == 0 ? ShapeDraw::builtin : ShapeDraw::pieces;
-#else
-    return ShapeDraw::builtin;
-#endif
-}
 
 void SceneView::ShapesDeleter::operator()(caliper_draw::ScenePieces* p) const {
 #if defined(CALIPER_SCENE_PIECES)
@@ -151,9 +116,8 @@ void SceneView::ShapesDeleter::operator()(caliper_draw::ScenePieces* p) const {
 }
 
 SceneView::SceneView(caliper_gfx::Backend& backend, const caliper_gfx::ProgramDesc* programs)
-    : gfx_(backend), programs_(programs), colormaps_(std::make_shared<caliper_gfx::cmap::KeyBlockCache>()),
-      serial_(++g_view_serial) {
-    shape_draw_ = default_shape_draw();
+    : gfx_(backend), serial_(++g_view_serial) {
+    (void)programs;
 #if defined(CALIPER_SCENE_PIECES)
     shapes_.reset(new caliper_draw::ScenePieces());
 #endif
@@ -193,25 +157,20 @@ SceneView::~SceneView() {
     shapes_.reset();
     if (id_) gfx_.release(id_);
     if (program_colormaps_) gfx_.release(program_colormaps_);
-    stages_.reset();
     for (auto& kv : slots_) release(kv.second);
     slots_.clear();
-    for (const Buffer b : hl_buffers_) gfx_.release(b);
-    hl_buffers_.clear();
-    if (dim_texture_) gfx_.release(dim_texture_);
-    pick_.reset();
-    res_.reset();
     if (color_) gfx_.release(color_);
     if (depth_) gfx_.release(depth_);
 }
 
 bool SceneView::init(std::string* why) {
-    res_ = std::make_unique<BackendResources>(gfx_, programs_, caliper_gfx::cmap::colormap_source(colormaps_));
-    pick_ = std::make_unique<PickPass>(gfx_);
-    stages_ = std::make_unique<caliper_scene::StageCache>(gfx_);
-    // The draw records bind a stage's params at group 3 (compile.cpp, BackendResources).
-    stages_->set_params_bound(true);
-    return res_->init(why);
+#if defined(CALIPER_SCENE_PIECES)
+    (void)why;
+    return true;
+#else
+    if (why) *why = "scene.pieces_unavailable: this build has no library pieces";
+    return false;
+#endif
 }
 
 void SceneView::describe(const wire::SceneView& info) {
@@ -322,89 +281,7 @@ void SceneView::note(const std::string& text) {
 
 void SceneView::begin_round() { counts_.bytes_last = 0; }
 
-// ---- buffers ---------------------------------------------------------------------------------
-
-bool SceneView::upload(Slot& s, Role role, const void* bytes, uint64_t size, Buffer* out, std::string* why) {
-    Upload& u = s.buffers[int(role)];
-    if (!u.buffer || u.capacity < size) {
-        if (u.buffer) gfx_.release(u.buffer);   // the layer keeps it until its last frame completed
-        caliper_gfx::BufferDesc d;
-        d.size = capacity_for(size);
-        d.usage = kUsage;
-        d.label = role_name(role);
-        u.buffer = gfx_.create_buffer(d);
-        u.capacity = u.buffer ? d.size : 0;
-        if (!u.buffer) {
-            if (why) *why = std::string(role_name(role)) + ": no buffer of " + std::to_string(d.size) +
-                            " bytes (" + gfx_.last_error() + ")";
-            return false;
-        }
-        ++counts_.buffers_created;
-    } else {
-        ++counts_.buffers_reused;
-    }
-    if (!gfx_.write_buffer(u.buffer, 0, bytes, size)) {
-        if (why) *why = std::string(role_name(role)) + ": " + gfx_.last_error();
-        return false;
-    }
-    counts_.bytes_last += size;
-    counts_.bytes_total += size;
-    ++counts_.copies_total;
-    *out = u.buffer;
-    return true;
-}
-
-// An image's or a textured mesh's pixels into the slot's texture, which is kept while the size
-// and format stay: one copy from the host, counted with the buffers' uploads.
-bool SceneView::upload_texture(Slot& s, caliper_gfx::Format f, uint32_t w, uint32_t h, const void* data,
-                               uint32_t row_pitch, std::string* why) {
-    if (!s.texture || s.tex_w != w || s.tex_h != h || s.tex_format != f) {
-        release_texture(s);
-        caliper_gfx::TextureDesc d;
-        d.width = w;
-        d.height = h;
-        d.format = f;
-        d.usage = caliper_gfx::kSampled | caliper_gfx::kCopyDstTex;
-        d.label = "scene image";
-        s.texture = gfx_.create_texture(d);
-        if (!s.texture) {
-            if (why) *why = "no texture of " + std::to_string(w) + " x " + std::to_string(h) + " (" + gfx_.last_error() + ")";
-            return false;
-        }
-        s.tex_w = w;
-        s.tex_h = h;
-        s.tex_format = f;
-        ++counts_.textures_created;
-    } else {
-        ++counts_.textures_reused;
-    }
-    if (!gfx_.write_texture(s.texture, data, row_pitch)) {
-        if (why) *why = "the image: " + gfx_.last_error();
-        return false;
-    }
-    const uint64_t bytes = uint64_t(w) * h * caliper_gfx::format_bytes(f);
-    counts_.bytes_last += bytes;
-    counts_.bytes_total += bytes;
-    ++counts_.copies_total;
-    return true;
-}
-
-void SceneView::release_texture(Slot& s) {
-    if (s.texture) gfx_.release(s.texture);   // the layer keeps it until its last frame completed
-    s.texture = {};
-    s.tex_w = s.tex_h = 0;
-}
-
-void SceneView::release(Slot& s) {
-    for (auto& kv : s.buffers)
-        if (kv.second.buffer) gfx_.release(kv.second.buffer);
-    s.buffers.clear();
-    release_texture(s);
-    s.cpu_rows.clear();
-    s.cpu_ids.clear();
-    s.cpu.clear();
-    s.present = false;
-}
+void SceneView::release(Slot& s) { s = Slot{}; }
 
 void SceneView::reset_scene() {
     for (auto& kv : slots_) release(kv.second);
@@ -442,7 +319,7 @@ void SceneView::rebuild(const std::string& path) {
 // ---- messages ------------------------------------------------------------------------------------
 
 bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
-    if (!u.program) return apply_update(u, nullptr, why);
+    if (!u.program) return decode_scene_update(u, nullptr, why);
     // The piece form: the arrays come back from the paired resources in the rows' dimension of the
     // entity, and the scene view's pieces draw the received bytes.
     const std::string where = (u.path.empty() ? std::string("the root") : u.path) + " " + u.part;
@@ -461,441 +338,9 @@ bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
     wire::SceneUpdate cu = u;
     cu.arrays = std::move(arrays);
     cu.program.reset();
-    return apply_update(cu, &u.paired, why);
+    return decode_scene_update(cu, &u.paired, why);
 }
 
-bool SceneView::apply_update(const wire::SceneUpdate& u, const std::vector<wire::Section>* received,
-                             std::string* why) {
-    ++counts_.messages;
-    // The stages' step: the first timeline of the update's stamp, the producer's step.
-    if (u.stamp && u.stamp->is(CALIPER_NET_DTYPE_I64, 1) && u.stamp->size >= 8 && u.stamp->data) {
-        int64_t step = 0;
-        std::memcpy(&step, u.stamp->data, sizeof step);
-        stamp_step_ = step;
-    }
-    const caliper_net::Json& params = u.params;
-    const int part = wire::scene_part_index(u.part);
-    const std::string where = (u.path.empty() ? std::string("the root") : u.path) + " " + u.part;
-    auto refuse = [&](const std::string& text) {
-        const std::string t = where + ": " + text;
-        note(t);
-        if (why) *why = t;
-        return false;
-    };
-    if (part < 0) return refuse("an unknown part");
-    std::string err;
-    const EntityId e = tree_.ensure(u.path, &err);
-    if (!e) return refuse(err);
-
-    // A camera is no batch: it goes to the store's camera layers, which a clear of the part
-    // "camera" empties.
-    if (u.part == CALIPER_NET_PART_CAMERA) {
-        Pinhole c;
-        c.fx = num(params, "fx", 0.0);
-        c.fy = num(params, "fy", 0.0);
-        c.cx = num(params, "cx", 0.0);
-        c.cy = num(params, "cy", 0.0);
-        c.width = uint32_t(std::clamp(num(params, "width", 0.0), 0.0, double(kMaxImageSide)));
-        c.height = uint32_t(std::clamp(num(params, "height", 0.0), 0.0, double(kMaxImageSide)));
-        const caliper_net::Json* conv = params.find("convention");
-        c.convention = conv && conv->is_string() && conv->as_string() == CALIPER_NET_CONVENTION_RUB ? Convention::Rub
-                                                                                                     : Convention::Rdf;
-        c.plane_distance = num(params, "plane_distance", 0.0);
-        if (!tree_.set_camera(e, c, u.is_static, &err)) return refuse(err);
-        changed();
-        return true;
-    }
-
-    const Primitive prim = Primitive(part + 1);   // points, lines, arrows, boxes, mesh, image
-    const char* first = u.part == CALIPER_NET_PART_ARROWS  ? "origins"
-                        : u.part == CALIPER_NET_PART_BOXES ? "centers"
-                        : u.part == CALIPER_NET_PART_IMAGE ? "pixels"
-                                                           : "positions";
-    const wire::Section* lead = u.array(first);
-    if (!lead || lead->shape.empty()) return refuse(std::string("no ") + first);
-    const bool image = prim == Primitive::Image;
-    // Rows and their dimension: 2 in a 2-D scene and under a camera, 3 elsewhere.
-    const uint64_t n = image ? 0 : uint64_t(lead->shape[0]);
-    const uint32_t dims = image ? 0 : (lead->shape.size() == 2 ? uint32_t(lead->shape[1]) : 0);
-    if (!image) {
-        const uint32_t want = (tree_.space() == Space::k2D || in_pixel_space(e)) ? 2u : 3u;
-        if (dims != want)
-            return refuse(std::to_string(dims) + "-D " + first + " where " + std::to_string(want) + "-D data is needed");
-    }
-
-    Slot& slot = slots_[Key{u.path, int(prim), u.is_static}];
-    const bool empty = image ? lead->count() == 0 : n == 0;
-    if (empty) {   // an empty batch removes the part
-        release(slot);
-#if defined(CALIPER_SCENE_PIECES)
-        if (shapes_) shapes_->drop(u.path, prim, u.is_static);
-#endif
-        rebuild(u.path);
-        return true;
-    }
-
-    Batch b;
-    b.primitive = prim;
-    b.seq = ++seq_;
-    uint32_t rgba = 0;
-    const bool has_flat = flat_color(params, &rgba);
-    if (has_flat) b.flat_rgba = rgba;
-    b.colormap = colormap_id(params);
-    if (!caliper_gfx::cmap::builtin_lut(int32_t(b.colormap))) b.colormap = 0;
-
-    // The colormap's range: the fixed ends, or the producer's stats for the AUTO ones, as in
-    // SNAPSHOT; a flat AUTO range widens by 0.5 on each side, as a heatmap's does.
-    std::vector<double> stats;
-    if (const caliper_net::Json* st = params.find("stats"); st && st->is_array())
-        for (const caliper_net::Json& x : st->items()) stats.push_back(x.as_double());
-    const uint64_t flags = flag_bits(params);
-    double vmin = num(params, "vmin", 0.0), vmax = num(params, "vmax", 1.0);
-    const bool amin = (flags & CALIPER_NET_SNAP_AUTO_VMIN) != 0, amax = (flags & CALIPER_NET_SNAP_AUTO_VMAX) != 0;
-    if (amin) vmin = stats.size() > 0 ? stats[0] : NAN;
-    if (amax) vmax = stats.size() > 1 ? stats[1] : NAN;
-    if (amin || amax) {
-        if (!std::isfinite(vmin) || !std::isfinite(vmax)) {
-            vmin = 0.0;
-            vmax = 1.0;
-        } else if (vmin == vmax) {
-            vmin -= 0.5;
-            vmax += 0.5;
-        }
-    }
-    b.vmin = float(vmin);
-    b.vmax = float(vmax);
-    if (const caliper_net::Json* w = params.find("width"); w && w->is_number() && w->as_double() > 0)
-        b.width_px = float(w->as_double());
-    if (const caliper_net::Json* f = params.find("fill"); f && f->is_bool()) b.fill = f->as_bool();
-    if (const caliper_net::Json* l = params.find("labels"); l && l->is_array())
-        for (const caliper_net::Json& s : l->items()) b.labels.push_back(s.as_string());
-
-    // Bounds: the producer's for points, lines and meshes, else a scan of the rows as they arrived;
-    // arrows add their tips and boxes their half sizes (the store's rule for its CPU views).
-    auto rows_of = [&](const char* name) -> const float* {
-        const wire::Section* s = u.array(name);
-        return s ? reinterpret_cast<const float*>(s->data) : nullptr;
-    };
-    auto add_row = [&](const float* p, uint64_t i, double k, const float* d, const float* h) {
-        double v[3] = {p[i * dims], p[i * dims + 1], dims == 3 ? p[i * dims + 2] : 0.0};
-        if (d)
-            for (uint32_t c = 0; c < dims; ++c) v[c] += k * d[i * dims + c];
-        if (h) {
-            double r[3] = {std::fabs(h[i * dims]), std::fabs(h[i * dims + 1]), dims == 3 ? std::fabs(h[i * dims + 2]) : 0.0};
-            if (u.array("rotations")) {
-                const double l = std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
-                r[0] = r[1] = l;
-                r[2] = dims == 3 ? l : 0.0;
-            }
-            for (int c = 0; c < 3; ++c) v[c] += k * r[c];
-        }
-        if (std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2])) b.bounds.add({v[0], v[1], v[2]});
-    };
-    bool have = !image && prim != Primitive::Arrows && prim != Primitive::Boxes && stats.size() >= 8;
-    for (size_t k = 2; have && k < 8; ++k) have = std::isfinite(stats[k]);
-    if (have) {
-        b.bounds.add({stats[2], stats[4], dims == 3 ? stats[6] : 0.0});
-        b.bounds.add({stats[3], stats[5], dims == 3 ? stats[7] : 0.0});
-    } else if (!image) {
-        const float* p = rows_of(first);
-        const float* vec = prim == Primitive::Arrows ? rows_of("vectors") : nullptr;
-        const float* half = prim == Primitive::Boxes ? rows_of("half_sizes") : nullptr;
-        for (uint64_t i = 0; i < n; ++i) {
-            if (half) {
-                add_row(p, i, -1.0, nullptr, half);
-                add_row(p, i, 1.0, nullptr, half);
-            } else {
-                add_row(p, i, 0.0, nullptr, nullptr);
-                if (vec) add_row(p, i, 1.0, vec, nullptr);
-            }
-        }
-    }
-
-    std::string problem;
-    std::map<int, std::vector<uint8_t>> cpu;   // points and boxes: every array, for selections
-    auto add = [&](Role role, const void* bytes, uint64_t rows, uint32_t stride, VertexFormat fmt) {
-        Buffer buf;
-        const uint64_t size = rows * (stride ? stride : vertex_format_bytes(fmt));
-        if (!upload(slot, role, bytes, size, &buf, &problem)) return false;
-        if (prim == Primitive::Points || prim == Primitive::Boxes)
-            cpu[int(role)].assign(static_cast<const uint8_t*>(bytes), static_cast<const uint8_t*>(bytes) + size);
-        BatchArray a;
-        a.role = role;
-        a.buffer = buf;
-        a.count = rows;
-        a.stride = stride;
-        a.format = fmt;
-        b.arrays.push_back(a);
-        return true;
-    };
-    const VertexFormat rowf = dims == 2 ? VertexFormat::F32x2 : VertexFormat::F32x3;
-    auto add_rows = [&](Role role, const char* name) {
-        const wire::Section* s = u.array(name);
-        return !s || add(role, s->data, uint64_t(s->shape[0]), dims * 4, rowf);
-    };
-    // A refusal after the first upload drops the part: its buffers no longer hold what the store's
-    // batch describes.
-    auto failed = [&]() {
-        note(where + ": " + problem);
-        if (why) *why = where + ": " + problem;
-        release(slot);
-        rebuild(u.path);
-        return false;
-    };
-    // CPU copies for the labels: the rows the anchors are projected from and the class ids that
-    // name the items without a label of their own.
-    std::vector<uint8_t> cpu_rows, cpu_ids;
-    auto keep_cpu = [&](const char* rows_name) {
-        const bool ids = u.array("class_ids") != nullptr;
-        if (b.labels.empty() && !ids) return;
-        const wire::Section* s = u.array(rows_name);
-        cpu_rows.assign(s->data, s->data + s->size);
-        if (const wire::Section* c = u.array("class_ids")) cpu_ids.assign(c->data, c->data + c->size);
-    };
-
-    const wire::Section* colors = u.array("colors");
-    const wire::Section* values = u.array("values");
-    bool translucent = has_flat && (rgba >> 24) < 255;
-    auto add_colours = [&]() {
-        if (colors) {
-            const uint32_t* rows = reinterpret_cast<const uint32_t*>(colors->data);
-            const uint64_t m = uint64_t(colors->shape[0]);
-            for (uint64_t i = 0; i < m && !translucent; ++i) translucent = (rows[i] >> 24) < 255;
-            return add(Role::Colors, colors->data, m, 4, VertexFormat::Unorm8x4);
-        }
-        if (values) return add(Role::Values, values->data, uint64_t(values->shape[0]), 4, VertexFormat::F32);
-        return true;
-    };
-    auto add_class_ids = [&]() {
-        const wire::Section* c = u.array("class_ids");
-        return !c || add(Role::ClassIds, c->data, uint64_t(c->shape[0]), 4, VertexFormat::S32);
-    };
-
-    switch (prim) {
-        case Primitive::Points: {
-            if (!add_rows(Role::Positions, "positions") || !add_colours() || !add_class_ids()) return failed();
-            if (const wire::Section* radii = u.array("radii")) {
-                if (!add(Role::Radii, radii->data, n, 4, VertexFormat::F32)) return failed();
-            } else if (const caliper_net::Json* r = params.find("radius"); r && r->is_number()) {
-                const float one = float(r->as_double());
-                if (!add(Role::Radii, &one, 1, 0, VertexFormat::F32)) return failed();
-            }
-            keep_cpu("positions");
-            break;
-        }
-        case Primitive::Lines: {
-            if (!add_rows(Role::Positions, "positions")) return failed();
-            const caliper_net::Json* mode = params.find("mode");
-            const std::string md = mode && mode->is_string() ? mode->as_string() : std::string(CALIPER_NET_LINES_SEGMENTS);
-            const caliper_net::Json* cp = params.find("color_per");
-            const std::string per = cp && cp->is_string() ? cp->as_string() : std::string(CALIPER_NET_COLOR_PER_VERTEX);
-            if (md == CALIPER_NET_LINES_STRIPS) {
-                b.line_mode = LineMode::Strips;
-                // The break mask from the strip lengths, and per-strip colours or values expanded to
-                // their vertices: the scene core reads both per vertex.
-                const wire::Section* sl = u.array("strip_lengths");
-                if (!sl) {
-                    problem = "strips without strip_lengths";
-                    return failed();
-                }
-                const int32_t* len = reinterpret_cast<const int32_t*>(sl->data);
-                const uint64_t strips_n = uint64_t(sl->shape[0]);
-                const bool per_strip = per == CALIPER_NET_COLOR_PER_STRIP;
-                scratch_.assign(n * 4, 0);
-                uint32_t* mask = reinterpret_cast<uint32_t*>(scratch_.data());
-                std::vector<uint32_t> strip_of;
-                if (per_strip) strip_of.resize(n);
-                uint64_t v = 0;
-                for (uint64_t s = 0; s < strips_n && v < n; ++s) {
-                    const uint64_t l = uint64_t(std::max(len[s], 0));
-                    for (uint64_t k = 0; k < l && v < n; ++k, ++v) {
-                        mask[v] = k + 1 < l ? 1u : 0u;
-                        if (per_strip) strip_of[v] = uint32_t(s);
-                    }
-                }
-                if (!add(Role::BreakMask, mask, n, 4, VertexFormat::U8)) return failed();
-                const wire::Section* src = colors ? colors : values;
-                if (src && per_strip) {
-                    std::vector<uint32_t> expanded(n);
-                    const uint32_t* rows = reinterpret_cast<const uint32_t*>(src->data);
-                    for (uint64_t i = 0; i < n; ++i) expanded[i] = rows[strip_of[i]];
-                    if (colors) {
-                        for (uint64_t s = 0; s < strips_n; ++s) translucent = translucent || (rows[s] >> 24) < 255;
-                        if (!add(Role::Colors, expanded.data(), n, 4, VertexFormat::Unorm8x4)) return failed();
-                    } else if (!add(Role::Values, expanded.data(), n, 4, VertexFormat::F32)) {
-                        return failed();
-                    }
-                    colors = values = nullptr;
-                }
-            } else if (md == CALIPER_NET_LINES_EDGES) {
-                // Index-pair edges: the scene core's edge gather clamps each pair and gathers its two
-                // ends; colours and values belong to the vertices or, with color_per "edge", to the edges.
-                b.line_mode = LineMode::Edges;
-                b.per_edge = per == CALIPER_NET_COLOR_PER_EDGE;
-                const wire::Section* idx = u.array("indices");
-                if (!idx) {
-                    problem = "edges without indices";
-                    return failed();
-                }
-                if (!add(Role::Indices, idx->data, uint64_t(idx->shape[0]), 8, VertexFormat::S32)) return failed();
-            } else {
-                b.line_mode = LineMode::Segments;
-            }
-            if (!add_colours()) return failed();
-            break;
-        }
-        case Primitive::Arrows:
-            if (!add_rows(Role::Origins, "origins") || !add_rows(Role::Vectors, "vectors") || !add_colours())
-                return failed();
-            break;
-        case Primitive::Boxes: {
-            if (!add_rows(Role::Centers, "centers") || !add_rows(Role::HalfSizes, "half_sizes")) return failed();
-            if (const wire::Section* r = u.array("rotations"))
-                if (!add(Role::Rotations, r->data, n, 16, VertexFormat::F32x4)) return failed();
-            if (!add_colours() || !add_class_ids()) return failed();
-            keep_cpu("centers");
-            break;
-        }
-        case Primitive::Mesh: {
-            if (!add_rows(Role::Positions, "positions")) return failed();
-            if (const wire::Section* idx = u.array("indices"))
-                if (!add(Role::Indices, idx->data, uint64_t(idx->shape[0]), 12, VertexFormat::S32)) return failed();
-            if (const wire::Section* nrm = u.array("normals"))
-                if (!add(Role::Normals, nrm->data, n, 12, VertexFormat::F32x3)) return failed();
-            if (!add_colours()) return failed();
-            const wire::Section* uvs = u.array("uvs");
-            const wire::Section* tex = u.array("texture");
-            if (uvs && tex) {
-                if (!add(Role::Uvs, uvs->data, n, 8, VertexFormat::F32x2)) return failed();
-                const uint32_t tw = uint32_t(tex->shape[1]), th = uint32_t(tex->shape[0]);
-                if (!upload_texture(slot, caliper_gfx::Format::RGBA8Unorm, tw, th, tex->data, tw * 4, &problem))
-                    return failed();
-                b.texture = slot.texture;
-                b.image_width = tw;
-                b.image_height = th;
-                const uint32_t* px = reinterpret_cast<const uint32_t*>(tex->data);
-                for (uint64_t i = 0, m = uint64_t(tw) * th; i < m && !translucent; ++i) translucent = (px[i] >> 24) < 255;
-            }
-            break;
-        }
-        case Primitive::Image: {
-            const caliper_net::Json* fm = params.find("form");
-            const std::string form = fm && fm->is_string() ? fm->as_string() : std::string();
-            const uint32_t h = uint32_t(lead->shape[0]);
-            const uint32_t w = lead->shape.size() >= 2 ? uint32_t(lead->shape[1]) : 0;
-            const uint32_t side = gfx_.caps().limits.max_texture_dimension_2d;
-            if (form == CALIPER_NET_FORM_ENCODED) return refuse("encoded images are not drawn yet");
-            if (w == 0 || h == 0) return refuse("an image without pixels");
-            if (w > side || h > side)
-                return refuse(std::to_string(w) + " x " + std::to_string(h) + " pixels, past this device's " +
-                              std::to_string(side) + " on a side");
-            b.image_width = w;
-            b.image_height = h;
-            if (const caliper_net::Json* o = params.find("opacity"); o && o->is_number())
-                b.opacity = float(std::clamp(o->as_double(), 0.0, 1.0));
-            else
-                b.opacity = form == CALIPER_NET_FORM_SEGMENTATION ? 0.5f : 1.0f;
-            bool ok = false;
-            if (form == CALIPER_NET_FORM_COLOR) {
-                const bool grey = lead->shape.size() == 2;
-                b.image_form = grey ? ImageForm::Grey : ImageForm::Color;
-                ok = upload_texture(slot, grey ? caliper_gfx::Format::R8Unorm : caliper_gfx::Format::RGBA8Unorm, w, h,
-                                    lead->data, w * (grey ? 1 : 4), &problem);
-                if (!grey) {
-                    const uint32_t* px = reinterpret_cast<const uint32_t*>(lead->data);
-                    for (uint64_t i = 0, m = uint64_t(w) * h; i < m && !translucent; ++i) translucent = (px[i] >> 24) < 255;
-                }
-            } else if (form == CALIPER_NET_FORM_DEPTH || form == CALIPER_NET_FORM_SEGMENTATION) {
-                // Bits in an r32uint texture: f32 depths in scene units (a u16 depth scaled to them), or
-                // class ids, so that the colormap and the class table decide on the values as they are.
-                std::vector<uint32_t> bits(size_t(w) * h);
-                if (form == CALIPER_NET_FORM_DEPTH) {
-                    b.image_form = ImageForm::Depth;
-                    const bool u16 = lead->dtype == CALIPER_NET_DTYPE_U16;
-                    const float scale = float(num(params, "scale", u16 ? 0.001 : 1.0));
-                    if (u16) {
-                        const uint16_t* src = reinterpret_cast<const uint16_t*>(lead->data);
-                        for (size_t i = 0; i < bits.size(); ++i) {
-                            const float d = float(src[i]) * scale;
-                            std::memcpy(&bits[i], &d, 4);
-                        }
-                    } else {
-                        const float* src = reinterpret_cast<const float*>(lead->data);
-                        for (size_t i = 0; i < bits.size(); ++i) {
-                            const float d = scale == 1.0f ? src[i] : src[i] * scale;
-                            std::memcpy(&bits[i], &d, 4);
-                        }
-                    }
-                    const caliper_net::Json* cl = params.find("cloud");
-                    b.cloud = cl && cl->is_bool() ? cl->as_bool() : in_pixel_space(e);   // the model's default
-                } else {
-                    b.image_form = ImageForm::Segmentation;
-                    if (lead->dtype == CALIPER_NET_DTYPE_U16) {
-                        const uint16_t* src = reinterpret_cast<const uint16_t*>(lead->data);
-                        for (size_t i = 0; i < bits.size(); ++i) bits[i] = src[i];
-                    } else {
-                        for (size_t i = 0; i < bits.size(); ++i) bits[i] = lead->data[i];
-                    }
-                }
-                ok = upload_texture(slot, caliper_gfx::Format::R32Uint, w, h, bits.data(), w * 4, &problem);
-            } else {
-                return refuse("an image of form '" + form + "'");
-            }
-            if (!ok) return failed();
-            b.texture = slot.texture;
-            b.translucent = translucent;
-            break;
-        }
-    }
-    b.translucent = b.translucent || translucent;
-    for (BatchArray& a : b.arrays) {   // the CPU views of the labels' rows and ids
-        if ((a.role == Role::Positions || a.role == Role::Centers) && !cpu_rows.empty()) a.cpu = cpu_rows.data();
-        if (a.role == Role::ClassIds && !cpu_ids.empty()) a.cpu = cpu_ids.data();
-    }
-
-    // Every upload above is in the slot's buffers; the store takes the batch now.
-    if (!tree_.set_batch(e, b, u.is_static, &problem)) return failed();
-    slot.batch = b;
-    slot.items = u.items ? *u.items : std::string();
-    slot.ax_start = 0, slot.ax_step = 1, slot.ax_count = 0, slot.ax_size = 0;
-    if (u.axes.is_array() && u.axes.size() > 0 && u.axes.at(u.axes.size() - 1).is_object()) {
-        const caliper_net::Json& ax = u.axes.at(u.axes.size() - 1);   // the item dim's
-        auto get = [&](const char* k, int64_t d) {
-            int64_t v = d;
-            const caliper_net::Json* j = ax.find(k);
-            return j && j->get_i64(&v) ? v : d;
-        };
-        // The producer's values: an axis with a negative start or count, a step below 1 or no size maps
-        // nothing (row_id gives the batch index), and row_id checks its products against these.
-        const int64_t start = get("start", 0), step = get("step", 1), count = get("count", 0), size = get("size", 0);
-        if (start >= 0 && step >= 1 && count >= 0 && size >= 1) {
-            slot.ax_start = start;
-            slot.ax_step = step;
-            slot.ax_count = count;
-            slot.ax_size = size;
-        }
-    }
-    slot.cpu_rows = std::move(cpu_rows);   // the batch's CPU views point into these buffers
-    slot.cpu_ids = std::move(cpu_ids);
-    slot.cpu = std::move(cpu);
-    slot.present = true;
-#if defined(CALIPER_SCENE_PIECES)
-    // The part's arrays as the piece's resources, while the message's sections live.
-    if (shapes_) shapes_->take(u.path, prim, u.is_static, u, slot.batch, received);
-#endif
-    // Buffers of roles this batch no longer has, and a texture it no longer has, go back to the layer.
-    for (auto it = slot.buffers.begin(); it != slot.buffers.end();) {
-        if (!b.array(Role(it->first))) {
-            if (it->second.buffer) gfx_.release(it->second.buffer);
-            it = slot.buffers.erase(it);
-        } else {
-            ++it;
-        }
-    }
-    if (slot.texture && !b.texture) release_texture(slot);
-    changed();
-    return true;
-}
 
 bool SceneView::apply(const wire::SceneTransforms& t, std::string* why) {
     ++counts_.messages;
@@ -932,7 +377,7 @@ bool SceneView::apply(const wire::SceneClasses& c, std::string* why) {
         if (!id || !id->get_i64(&v) || v < 0 || v > int64_t(kMaxClassId)) continue;
         ce.id = uint32_t(v);
         if (const caliper_net::Json* l = x.find("label"); l && l->is_string()) ce.label = l->as_string();
-        if (!flat_color(x, &ce.rgba)) ce.rgba = kPalette[ce.id % 16];
+        if (!class_color(x, &ce.rgba)) ce.rgba = kPalette[ce.id % 16];
         table.push_back(std::move(ce));
     }
     std::string err;
@@ -1029,76 +474,28 @@ std::vector<LabelAnchor> SceneView::labels() const {
 // ---- picking ---------------------------------------------------------------------------------------
 
 bool SceneView::request_pick(float x, float y, std::string* why) {
-    if (!pick_ || !res_ || !width_ || !height_) {
+    if (!width_ || !height_ || !id_) {
         if (why) *why = "the scene view has not drawn yet";
         return false;
     }
-    CompileOptions opt;
-    opt.width = width_;
-    opt.height = height_;
-    opt.pixel_scale = scale_;
-    opt.clear_rgba = clear_;
-    opt = stage_options(opt);   // a moved item picks where it draws
-#if defined(CALIPER_SCENE_PIECES)
-    const bool shapes = shapes_ && shape_draw_ == ShapeDraw::pieces && shapes_->any() && id_;
-    if (shapes) {
-        opt.skip = [this](EntityId e, Primitive p) { return shapes_->draws(e, p); };
-        opt.skip_frustum = [this](EntityId e) { return shapes_->draws_frustum(e); };
-    }
-#else
-    const bool shapes = false;
-#endif
-    const bool entity = pick_->request(tree_, effective_camera(), opt, compiler_, *res_, x, y, generation_, why);
-    shape_asked_ = false;
-#if defined(CALIPER_SCENE_PIECES)
-    // The shapes' pieces wrote their IDs into the programs' target: its window around the pointer,
-    // which poll_pick() reads beside the pick pass.
-    if (shapes) {
-        if (!shape_pick_) shape_pick_ = std::make_unique<caliper_scene::FramePick>(gfx_);
-        shape_asked_ = shape_pick_->request(id_, depth_, width_, height_, x, y, why);
-        shape_generation_ = generation_;
-        shape_done_ = false;
-        shape_has_hit_ = false;
-        entity_done_ = !entity;
-        entity_result_ = entity ? PickPass::Result::Pending : PickPass::Result::Miss;
-    }
-#endif
-    return entity || shape_asked_;
+    if (!shape_pick_) shape_pick_ = std::make_unique<caliper_scene::FramePick>(gfx_);
+    shape_asked_ = shape_pick_->request(id_, depth_, width_, height_, x, y, why);
+    shape_generation_ = generation_;
+    return shape_asked_;
 }
 
-void SceneView::set_stage_source(caliper_scene::StageSource* source) {
-    if (!stages_) return;
-    if (source != stages_->source()) {
-        stages_->set_source(source);
-        stage_revision_ = source ? source->revision() : 0;
-        changed();
-    }
-}
-
-void SceneView::set_shape_draw(ShapeDraw d) {
-#if !defined(CALIPER_SCENE_PIECES)
-    d = ShapeDraw::builtin;
-#endif
-    if (d == shape_draw_) return;
-    shape_draw_ = d;
-    shape_revision_ = ~0ull;
-    changed();
-}
 
 SceneShapeCounts SceneView::shape_counts() const {
     SceneShapeCounts out;
 #if defined(CALIPER_SCENE_PIECES)
-    if (shapes_ && shape_draw_ == ShapeDraw::pieces) {
+    if (shapes_) {
         const caliper_draw::ShapeCounts c = shapes_->counts();
         out.pieces = c.pieces;
-        out.builtin = c.builtin;
-        out.fallbacks = c.fallbacks;
         out.marks = c.marks;
         out.received = c.received;
         return out;
     }
 #endif
-    out.builtin = uint32_t(tree_.batch_count());
     return out;
 }
 
@@ -1124,14 +521,13 @@ bool SceneView::external_draws() const {
 void SceneView::sync_shapes() {
     piece_highlight_ = false;
 #if defined(CALIPER_SCENE_PIECES)
-    if (!shapes_ || shape_draw_ != ShapeDraw::pieces) return;
+    if (!shapes_) return;
     caliper_draw::ScenePieces::SyncState st;
     const ViewCamera cam = effective_camera();
     if (const ThroughPinhole* t = std::get_if<ThroughPinhole>(&cam)) st.through = t->camera;
     st.three_d = tree_.space() == Space::k3D;
-    if (stages_ && stages_->source())
-        st.stage = [this](const std::string& path, Primitive p) { return stages_->find(path, p) != nullptr; };
     shapes_->sync(tree_, st);
+    for (const auto& error : shapes_->errors()) note(error.path + ": " + error.code + ": " + error.message);
     // The highlight of a selection with the pieces: the selected rows of each points and boxes batch.
     std::vector<caliper_draw::HighlightRows> rows;
     if (highlight_wanted())
@@ -1147,22 +543,6 @@ void SceneView::sync_shapes() {
     piece_highlight_ = !rows.empty() && shapes_->set_highlight(rows, clear_, width_, height_, &lit);
     if (!piece_highlight_) shapes_->set_highlight({}, clear_, width_, height_, nullptr);
     highlighted_ = piece_highlight_ ? lit : 0;
-    // CALIPER_SCENE_FALLBACK_LOG=<file>: each change of what the pieces draw, as one line
-    // "pieces <n> builtin <n>" and a line "fallback <count> <kind>" for each kind, appended, so that
-    // a run of tests can count the fallbacks of every scene view it opened.
-    if (const char* log = std::getenv("CALIPER_SCENE_FALLBACK_LOG"); log && *log) {
-        const caliper_draw::ShapeCounts c = shapes_->counts();
-        std::string text = "pieces " + std::to_string(c.pieces) + " builtin " + std::to_string(c.builtin) + "\n";
-        for (const auto& [kind, n] : c.fallbacks) text += "fallback " + std::to_string(n) + " " + kind + "\n";
-        if (c.received) text += "received " + std::to_string(c.received) + "\n";
-        if (text != logged_shapes_) {
-            logged_shapes_ = text;
-            if (FILE* f = std::fopen(log, "a")) {
-                std::fputs(text.c_str(), f);
-                std::fclose(f);
-            }
-        }
-    }
 #endif
 }
 
@@ -1251,7 +631,7 @@ void SceneView::reconcile_programs() {
     caliper_draw::DrawFeed* shapes = nullptr;
     caliper_draw::DrawFeed* marks = nullptr;
 #if defined(CALIPER_SCENE_PIECES)
-    if (shapes_ && shape_draw_ == ShapeDraw::pieces) {
+    if (shapes_) {
         shapes = shapes_.get();
         marks = &shapes_->marks();
     }
@@ -1385,19 +765,8 @@ void SceneView::draw_programs() {
     // The shapes' matrices are the scene core's, of the camera it drew with.
     if (shapes_) shapes_->set_camera(shape_cm);
 #endif
-    // The built-in batches of a looked-through camera's pixel space: each segment before its next
-    // shape's program, and what remains after the last one.
-    auto late = [&](const std::string* program) {
-        while (!late_lists_.empty() && (!program || late_lists_.front().first == *program)) {
-            caliper_gfx::Frame f;
-            f.render(std::move(late_lists_.front().second));
-            late_lists_.erase(late_lists_.begin());
-            if (gfx_.submit(std::move(f)) == 0) note("the layer refused the camera's pixel space: " + gfx_.last_error());
-        }
-    };
     for (auto& d : draws_) {
         if (!d->runtime) continue;
-        late(d->shape ? &d->program : nullptr);
         caliper_draw::DrawFeed* feed = slot_feed(*d);
         caliper_draw::FrameInputs in = base;
         in.time_s = std::chrono::duration<double>(now - d->installed).count();
@@ -1420,7 +789,6 @@ void SceneView::draw_programs() {
         }
         report_state(feed, &d->reported, &d->reported_step, *d->runtime);
     }
-    late(nullptr);
 #endif
 }
 
@@ -1477,56 +845,25 @@ caliper_draw::DrawFeed* SceneView::slot_feed(const ProgramSlot& slot) const {
     return slot.shape || slot.marks ? nullptr : draw_feed_;
 }
 
-CompileOptions SceneView::stage_options(CompileOptions opt) const {
-    if (stages_ && stages_->source()) {
-        opt.stages = stages_.get();
-        opt.stage_time_s = stages_->source()->time_s();
-        opt.stage_step = uint32_t(std::max<int64_t>(0, stamp_step_));
-    }
-    return opt;
-}
 
-PickPass::Result SceneView::poll_pick(Hit* out) {
+PickResult SceneView::poll_pick(Hit* out) {
+    if (!shape_asked_ || !shape_pick_) return PickResult::None;
+    FrameHit frame;
+    const auto result = shape_pick_->poll([this](uint32_t id) {
 #if defined(CALIPER_SCENE_PIECES)
-    if (shape_asked_) {
-        // The pick pass and the pieces' IDs answer apart; the hit goes out once both did, the
-        // piece's unless the pass's hit is nearer, as for the feed's programs.
-        if (!entity_done_ && pick_) {
-            const PickPass::Result r = pick_->poll(generation_, &entity_hit_);
-            if (r == PickPass::Result::Pending) return r;
-            entity_result_ = r == PickPass::Result::None ? PickPass::Result::Miss : r;
-            entity_done_ = true;
-        }
-        if (!shape_done_) {
-            caliper_scene::FrameHit fh;
-            const PickPass::Result r = shape_pick_->poll([this](uint32_t id) { return shapes_ && shapes_->owns(id); }, &fh);
-            if (r == PickPass::Result::Pending) return r;
-            shape_has_hit_ = r == PickPass::Result::Hit && shapes_->hit(fh, shape_pick_->window(), &shape_hit_);
-            shape_done_ = true;
-        }
-        shape_asked_ = false;
-        // A result whose frame the view replaced since is dropped, as the pick pass drops one.
-        if (entity_result_ == PickPass::Result::Dropped || shape_generation_ != generation_)
-            return PickPass::Result::Dropped;
-        const bool entity = entity_result_ == PickPass::Result::Hit;
-        // The flat layer of a camera looked through lies over everything else, in its draw order: a
-        // built-in batch there wins over a piece below it, and a piece there over any built-in hit
-        // below it; elsewhere the nearer hit wins.
-        bool shape_wins = shape_has_hit_ && (!entity || !(entity_hit_.depth < shape_hit_.depth));
-        if (shape_has_hit_ && entity && (entity_hit_.overlay || shape_hit_.overlay))
-            shape_wins = !entity_hit_.overlay || (shape_hit_.overlay && !shapes_->late_over(entity_hit_, shape_hit_));
-        if (shape_wins) {
-            if (out) *out = shape_hit_;
-            return PickPass::Result::Hit;
-        }
-        if (entity) {
-            if (out) *out = entity_hit_;
-            return PickPass::Result::Hit;
-        }
-        return PickPass::Result::Miss;
-    }
+        return shapes_ && shapes_->owns(id);
+#else
+        (void)id;
+        return false;
 #endif
-    return pick_ ? pick_->poll(generation_, out) : PickPass::Result::None;
+    }, &frame);
+    if (result == PickResult::Pending) return result;
+    shape_asked_ = false;
+    if (shape_generation_ != generation_) return PickResult::Dropped;
+#if defined(CALIPER_SCENE_PIECES)
+    if (result == PickResult::Hit && shapes_ && shapes_->hit(frame, shape_pick_->window(), out)) return PickResult::Hit;
+#endif
+    return PickResult::Miss;
 }
 
 uint64_t SceneView::request_program_pick(float x, float y, std::string* why) {
@@ -1554,28 +891,28 @@ uint64_t SceneView::request_program_pick(float x, float y, std::string* why) {
 #endif
 }
 
-PickPass::Result SceneView::poll_program_pick(uint64_t ticket, caliper_draw::PickedItem* out, float* depth) {
+PickResult SceneView::poll_program_pick(uint64_t ticket, caliper_draw::PickedItem* out, float* depth) {
 #if defined(CALIPER_HAVE_DRAW)
-    if (!program_pick_ || ticket == 0) return PickPass::Result::None;
+    if (!program_pick_ || ticket == 0) return PickResult::None;
     ProgramPick& p = *program_pick_;
-    if (ticket != p.ticket) return ticket < p.last_ticket ? PickPass::Result::Dropped : PickPass::Result::None;
+    if (ticket != p.ticket) return ticket < p.last_ticket ? PickResult::Dropped : PickResult::None;
     const auto is_program = [&p](uint32_t id) {
         for (const auto& s : p.shown)
             if (s.first == id) return true;
         return false;
     };
     caliper_scene::FrameHit fh;
-    const PickPass::Result r = p.frame->poll(is_program, &fh);
-    if (r == PickPass::Result::Pending || r == PickPass::Result::None) return r;
+    const PickResult r = p.frame->poll(is_program, &fh);
+    if (r == PickResult::Pending || r == PickResult::None) return r;
     p.ticket = 0;
-    PickPass::Result answer = PickPass::Result::Miss;
-    if (r == PickPass::Result::Hit)
+    PickResult answer = PickResult::Miss;
+    if (r == PickResult::Hit)
         for (const auto& s : p.shown)
             if (s.first == fh.pick_id)
                 if (std::optional<caliper_draw::PickedItem> picked = caliper_draw::DrawRuntime::pick_shown(fh.item, s.second)) {
                     if (out) *out = std::move(*picked);
                     if (depth) *depth = fh.depth;
-                    answer = PickPass::Result::Hit;
+                    answer = PickResult::Hit;
                     break;
                 }
     p.shown.clear();
@@ -1584,7 +921,7 @@ PickPass::Result SceneView::poll_program_pick(uint64_t ticket, caliper_draw::Pic
     (void)ticket;
     (void)out;
     (void)depth;
-    return PickPass::Result::None;
+    return PickResult::None;
 #endif
 }
 
@@ -1772,95 +1109,7 @@ uint64_t SceneView::selected_count() const {
 // The highlight: a scene of the selected points and boxes alone, each entity with the poses and
 // cameras of its path in the view's scene, so that the view's camera draws them where they are. Their
 // arrays are the selected rows of the CPU copies, uploaded into buffers the view owns (copies, counted).
-bool SceneView::build_highlight(SceneTree* hl, ViewCamera* cam, std::string* why) {
-    for (const Buffer b : hl_buffers_) gfx_.release(b);
-    hl_buffers_.clear();
-    highlighted_ = 0;
-    *hl = SceneTree(tree_.space(), tree_.up(), tree_.units());
-    *cam = camera_;
-    // The entity and the poses and cameras of its ancestors, copied.
-    auto chain = [&](EntityId e) {
-        std::vector<EntityId> up;
-        for (EntityId a = e; a && a.index != 0; a = tree_.parent(a)) up.push_back(a);
-        EntityId out;
-        for (auto it = up.rbegin(); it != up.rend(); ++it) {
-            out = hl->ensure(tree_.path(*it));
-            if (const Mat4* m = tree_.transform(*it)) hl->set_transform(out, *m);
-            if (const Pinhole* c = tree_.camera(*it)) {
-                Pinhole pin = *c;
-                pin.plane_distance = tree_.plane_distance(*it);   // the view's, which follows its bounds
-                hl->set_camera(out, pin);
-            }
-        }
-        return e.index == 0 ? hl->root() : out;
-    };
-    if (!through_.empty()) {
-        const EntityId c = tree_.find(through_);
-        if (c && tree_.camera(c)) {
-            ThroughPinhole t;
-            t.camera = chain(c);
-            *cam = t;
-        }
-    }
-    for (uint32_t idx : tree_.path_order()) {
-        const EntityId e = tree_.entity_at(idx);
-        if (!tree_.drawable(e)) continue;
-        for (const Primitive p : {Primitive::Points, Primitive::Boxes}) {
-            const Batch* b = tree_.batch(e, p);
-            if (!b) continue;
-            const std::string& path = tree_.path(e);
-            const auto it = slots_.find(Key{path, int(p), tree_.batch_static(e, p)});
-            if (it == slots_.end()) continue;
-            const Slot& slot = it->second;
-            const std::vector<int64_t> pick = highlight_rows(e, p);
-            if (pick.empty()) continue;
-            Batch h = *b;
-            h.labels.clear();
-            for (BatchArray& a : h.arrays) {
-                const auto src = slot.cpu.find(int(a.role));
-                if (src == slot.cpu.end()) {
-                    if (why) *why = path + ": no CPU copy of its " + role_name(a.role);
-                    return false;
-                }
-                const uint32_t row = a.stride ? a.stride : vertex_format_bytes(a.format);
-                std::vector<uint8_t> bytes;
-                if (a.count == 1) {
-                    bytes = src->second;   // one value for all
-                } else {
-                    bytes.resize(pick.size() * row);
-                    for (size_t k = 0; k < pick.size(); ++k)
-                        std::memcpy(bytes.data() + k * row, src->second.data() + size_t(pick[k]) * row, row);
-                    a.count = pick.size();
-                }
-                caliper_gfx::BufferDesc d;
-                d.size = (bytes.size() + 3) / 4 * 4;
-                d.usage = caliper_gfx::kVertex | caliper_gfx::kCopyDst;
-                d.label = "scene highlight";
-                const Buffer buf = gfx_.create_buffer(d);
-                if (!buf || !gfx_.write_buffer(buf, 0, bytes.data(), bytes.size())) {
-                    if (why) *why = "the highlight: " + gfx_.last_error();
-                    if (buf) gfx_.release(buf);
-                    return false;
-                }
-                hl_buffers_.push_back(buf);
-                counts_.bytes_last += bytes.size();
-                counts_.bytes_total += bytes.size();
-                ++counts_.copies_total;
-                a.buffer = buf;
-                a.offset = 0;
-                a.cpu = nullptr;
-            }
-            std::string err;
-            if (!hl->set_batch(chain(e), h, false, &err)) {
-                if (why) *why = path + ": the highlight: " + err;
-                return false;
-            }
-            highlighted_ += pick.size();
-        }
-    }
-    hl->update();
-    return true;
-}
+
 
 std::vector<int64_t> SceneView::highlight_rows(EntityId e, Primitive p) const {
     std::vector<int64_t> pick;
@@ -2040,10 +1289,6 @@ void SceneView::apply_entity_filter() {
 bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint32_t clear_rgba, std::string* why) {
     if (width == 0 || height == 0) return true;
     apply_entity_filter();
-    if (!res_) {
-        if (why) *why = "the scene view has no resources";
-        return false;
-    }
     const bool depth = tree_.space() == Space::k3D;
     if (!color_ || width != width_ || height != height_ || bool(depth_) != depth) {
         if (color_) gfx_.release(color_);
@@ -2080,12 +1325,9 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
     }
     if (tree_.revision() != drawn_revision_ || tree_.pose_revision() != drawn_pose_) changed();
     // The feed's programs draw in every frame: their time, their draw state and their resources
-    // move. The shapes' pieces draw when the scene changed, as the built-in draw does.
+    // move. Scene pieces draw when the scene changes.
     reconcile_programs();
     if (external_draws()) changed();
-    if (stages_ && stages_->source() &&
-        (stages_->source()->revision() != stage_revision_ || (staged_ > 0 && stages_->animated())))
-        changed();
     // Back on the orbit after looking through a pinhole (the view's own camera, or a camera entity
     // looked through): the mode chosen meanwhile applies.
     const bool through_now = std::holds_alternative<ThroughPinhole>(effective_camera());
@@ -2151,143 +1393,23 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
             fitted_aspect_ = aspect;
         }
     }
-    // The shapes' pieces from the updated tree, before the scene core leaves their batches out.
+    // Reconcile library pieces with the updated scene tree.
     sync_shapes();
     reconcile_programs();
-    if (res_->update_class_table(tree_)) {   // 65,536 texels from the host
-        counts_.bytes_last += 65536u * 4u;
-        counts_.bytes_total += 65536u * 4u;
-        ++counts_.copies_total;
-    }
+    cost_.compile_ms = ms_since(t0);
+    cost_.draws = uint32_t(draws_.size());
     caliper_gfx::Frame frame;
-    compiler_.prepare(tree_, *res_, frame);
     caliper_gfx::RenderTarget target;
     target.color = color_;
     target.depth = depth_;
     target.clear_rgba = clear_;
-    caliper_gfx::DrawList list(target);
-    CompileOptions opt;
-    opt.width = width_;
-    opt.height = height_;
-    opt.pixel_scale = scale_;
-    opt.clear_rgba = clear_;
-    DrawMap map;
-    if (!through_.empty() && !std::holds_alternative<ThroughPinhole>(effective_camera()))
-        note(through_ + " holds no camera now; the view shows the orbit");
-    if (stages_) {
-        if (stages_->source()) stage_revision_ = stages_->source()->revision();
-        stages_->begin_frame();
-    }
-    CompileOptions main_opt = stage_options(opt);
-    late_lists_.clear();
-#if defined(CALIPER_SCENE_PIECES)
-    bool late = false;
-    if (shapes_ && shape_draw_ == ShapeDraw::pieces && shapes_->any()) {
-        late = !shapes_->late_segments().empty();
-        main_opt.skip = [this](EntityId e, Primitive p) { return shapes_->draws(e, p) || shapes_->late(e, p); };
-        main_opt.skip_frustum = [this](EntityId e) { return shapes_->draws_frustum(e); };
-    }
-#endif
-    const CompileResult r = compiler_.compile(tree_, effective_camera(), main_opt, *res_, list, &map);
-#if defined(CALIPER_SCENE_PIECES)
-    // The batches of a looked-through camera's pixel space that keep the built-in draw: one list
-    // of each segment, which draw_programs() submits among the shapes' pieces in the scene core's
-    // order of that flat layer.
-    if (r.ok && late) {
-        const std::vector<std::string>& before = shapes_->late_segments();
-        for (size_t k = 0; k < before.size(); ++k) {
-            CompileOptions late_opt = stage_options(opt);
-            late_opt.skip = [this, k](EntityId e, Primitive p) { return !shapes_->late(e, p) || shapes_->late_segment(e, p) != k; };
-            late_opt.skip_frustum = [](EntityId) { return true; };
-            caliper_gfx::RenderTarget lt;
-            lt.color = color_;
-            lt.depth = depth_;
-            lt.clear = false;
-            caliper_gfx::DrawList ll(lt);
-            const CompileResult lr = compiler_.compile(tree_, effective_camera(), late_opt, *res_, ll, nullptr);
-            for (const std::string& n : lr.notes) note(n);
-            if (lr.ok) late_lists_.emplace_back(before[k], std::move(ll));
-        }
-    }
-#endif
-    if (stages_) stages_->end_frame();   // programs no draw used go back to the layer
-    staged_ = r.staged;
-    for (const std::string& n : r.notes) note(n);
-    cost_.compile_ms = ms_since(t0);
-    if (!r.ok) {
-        if (why) *why = r.notes.empty() ? std::string("the scene did not compile") : r.notes[0];
-        compiler_.discard_prepared();   // the frame with its clamps is dropped
-        dirty_ = false;   // not retried every frame; the next change tries again
-        return false;
-    }
-    if (keep_draws_) {
-        last_list_ = list;
-        last_map_ = map;
-    }
-    cost_.draws = r.draws;
-    frame.render(std::move(list));
-    // With programs, the scene's frame also clears their ID target, the programs draw in submits
-    // of their own, and the highlight follows in a frame after them.
-    std::string program_why;
-    const bool with_programs = !draws_.empty() && prepare_program_targets(&program_why);
-    if (!program_why.empty()) note(program_why);
-    caliper_gfx::Frame after;
-    caliper_gfx::Frame& hl_frame = with_programs ? after : frame;
-    if (!with_programs) {
-        for (auto& [next, ll] : late_lists_) frame.render(std::move(ll));
-        late_lists_.clear();
-    }
-    if (with_programs) {
-        caliper_gfx::RenderTarget ids;
-        ids.color = id_;
-        ids.clear = true;
-        ids.clear_rgba = 0;
-        frame.render(caliper_gfx::DrawList(ids));
-    }
-    // A selection: the picture dimmed towards the background, as the points view dims, then the
-    // selected items over it in their own colours, without depth so that none is hidden.
-    if (!piece_highlight_) highlighted_ = 0;
-    if (highlight_wanted() && !piece_highlight_) {
-        SceneTree hl(tree_.space());
-        ViewCamera hl_cam;
-        std::string err;
-        if (!build_highlight(&hl, &hl_cam, &err)) {
-            note(err);
-        } else if (highlighted_ > 0) {
-            if (!dim_texture_ || dim_rgba_ != clear_) {
-                if (!dim_texture_)
-                    dim_texture_ = gfx_.create_texture({1, 1, caliper_gfx::Format::RGBA8Unorm,
-                                                        caliper_gfx::kSampled | caliper_gfx::kCopyDstTex, "scene dim"});
-                const uint32_t ground = clear_ | 0xff000000u;
-                if (dim_texture_ && gfx_.write_texture(dim_texture_, &ground, 4)) dim_rgba_ = clear_;
-            }
-            caliper_gfx::RenderTarget over;
-            over.color = color_;
-            over.clear = false;
-            SceneTree dim(Space::k2D);
-            Batch q;
-            q.primitive = Primitive::Image;
-            q.texture = dim_texture_;
-            q.image_width = width_;
-            q.image_height = height_;
-            q.opacity = 0.72f;   // the points view's dimming: 0.28 of the colour, 0.72 of the ground
-            PanZoom pz;
-            pz.center[0] = width_ * 0.5;
-            pz.center[1] = height_ * 0.5;
-            pz.half_height = height_ * 0.5;
-            pz.y_down = true;
-            caliper_gfx::DrawList dl(over), hll(over);
-            if (dim_texture_ && dim.set_batch(dim.root(), q, false, &err)) {
-                dim.update();
-                CompileOptions dopt = opt;
-                if (dim_compiler_.compile(dim, pz, dopt, *res_, dl, nullptr).ok) hl_frame.render(std::move(dl));
-            }
-            // The selected items draw with their entity's stages, where and as the picture draws them.
-            const CompileResult hr = hl_compiler_.compile(hl, hl_cam, stage_options(opt), *res_, hll, nullptr);
-            if (hr.ok) hl_frame.render(std::move(hll));
-            else if (!hr.notes.empty()) note("the highlight: " + hr.notes[0]);
-        }
-    }
+    frame.render(caliper_gfx::DrawList(target));
+    if (!prepare_program_targets(why)) return false;
+    caliper_gfx::RenderTarget ids;
+    ids.color = id_;
+    ids.clear = true;
+    ids.clear_rgba = 0;
+    frame.render(caliper_gfx::DrawList(ids));
     const auto t1 = std::chrono::steady_clock::now();
     const caliper_gfx::Serial s = gfx_.submit(std::move(frame));
     cost_.submit_ms = ms_since(t1);
@@ -2295,19 +1417,13 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
     drawn_revision_ = tree_.revision();
     drawn_pose_ = tree_.pose_revision();
     if (s == 0) {
-        compiler_.discard_prepared();
         if (why) *why = "the layer refused the frame: " + gfx_.last_error();
         return false;
     }
     ++cost_.frames;
     ++generation_;
     drawn_camera_ = effective_camera();
-    if (staged_ > 0) staged_frames_.emplace_back(s, std::chrono::steady_clock::now());
-    if (with_programs) {
-        draw_programs();
-        if (!after.passes().empty() && gfx_.submit(std::move(after)) == 0)
-            note("the layer refused the highlight: " + gfx_.last_error());
-    }
+    draw_programs();
     return true;
 }
 
@@ -2316,14 +1432,7 @@ void SceneView::poll() {
     poll_programs();
     const caliper_gfx::Stats st = gfx_.take_stats();
     if (st.gpu_ms >= 0) cost_.gpu_ms = st.gpu_ms;
-    // The stages' time watchdog reads the mean GPU time of the frames completed since the last poll.
-    if (st.gpu_ms >= 0 && st.gpu_submits > 0 && stages_ && stages_->source())
-        stages_->source()->frames_done(st.gpu_ms / double(st.gpu_submits), st.gpu_submits, staged_ > 0);
-    // A frame with stages that has not completed: the source learns how long it waits, without a
-    // wait here, and may turn the stages off.
-    while (!staged_frames_.empty() && gfx_.completed(staged_frames_.front().first)) staged_frames_.pop_front();
-    if (!staged_frames_.empty() && stages_ && stages_->source())
-        stages_->source()->frame_pending(ms_since(staged_frames_.front().second));
+
 }
 
 uint64_t SceneView::imgui_texture() const { return color_ ? gfx_.imgui_texture_id(color_) : 0; }
@@ -2348,11 +1457,10 @@ SceneCounts SceneView::counts() const {
     std::vector<std::string> seen;
     c.batches = 0;
     c.items = 0;
-    c.buffers_live = 0;
-    c.textures_live = 0;
+    c.arrays_live = 0;
     for (const auto& kv : slots_) {
-        c.buffers_live += kv.second.buffers.size();
-        c.textures_live += kv.second.texture ? 1 : 0;
+        c.arrays_live += kv.second.cpu.size();
+
     }
     for (size_t i = 0; i < tree_.entity_count(); ++i) {
         const EntityId e = tree_.entity_at(uint32_t(i));

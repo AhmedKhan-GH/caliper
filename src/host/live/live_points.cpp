@@ -2,7 +2,6 @@
 #include "live/live_points.h"
 
 #include "gfx/colormap_keys.h"
-#include "scene/backend_resources.h"
 #include "scene/scene_math.h"
 
 #if defined(CALIPER_HAVE_DRAW) && defined(CALIPER_HAVE_LIBRARY_PIECES)
@@ -27,7 +26,7 @@ namespace caliper_live_views {
 using namespace caliper_scene;
 namespace gfx = caliper_gfx;
 
-// The colormap source of the view's BackendResources: the keys of a range from the shared cache,
+// The colormap source: the keys of a range from the shared cache,
 // with the colours of a built-in colormap, or of the palette at every level, dimmed toward the
 // ground for the rest of a selection.
 struct PointsScene::Tables {
@@ -59,14 +58,6 @@ std::string chunk_path(const char* base, uint64_t k) {
 
 }  // namespace
 
-PointsDraw default_points_draw() {
-#if defined(CALIPER_POINTS_PIECES)
-    const char* v = std::getenv("CALIPER_SCENE_SHAPES");
-    return v && std::strcmp(v, "builtin") == 0 ? PointsDraw::builtin : PointsDraw::pieces;
-#else
-    return PointsDraw::builtin;
-#endif
-}
 
 // ---- points@1 -------------------------------------------------------------------------------------
 
@@ -79,8 +70,7 @@ namespace cs = caliper_builder::spec;
 
 // points@1's element Point: position vec4<f32> (x, y, z, radius), bits u32, index u32, two pad words.
 constexpr uint64_t kPointBytes = 32;
-// The kinds of fallback of the scene view's log (draw/scene_pieces.cpp, kFallbackNames) that the
-// points view can give.
+// Errors from the points runtime.
 constexpr const char* kNoPiece = "no library piece";
 constexpr const char* kStopped = "piece stopped by its runtime";
 
@@ -195,13 +185,14 @@ struct PointsScene::Pieces {
     };
     std::unique_ptr<Wait> wait;
     float size = 0.0f;     // logical pixels of a point's side
-    bool failed = false;   // the last frame kept the built-in draw
+    bool failed = false;   // the last frame could not draw
 };
 
 #endif  // CALIPER_POINTS_PIECES
 
 PointsScene::PointsScene(gfx::Backend& backend, const gfx::ProgramDesc* programs)
-    : gfx_(backend), programs_(programs), tables_(std::make_shared<Tables>()) {
+    : gfx_(backend), tables_(std::make_shared<Tables>()) {
+    (void)programs;
     for (int i = 0; i < 256; ++i) tables_->palette[i] = kPalette[i % 16];
 }
 
@@ -215,23 +206,18 @@ PointsScene::~PointsScene() {
         pieces_.reset();
     }
 #endif
-    res_.reset();
     if (color_) gfx_.release(color_);
     if (depth_) gfx_.release(depth_);
 }
 
 bool PointsScene::init(std::string* why) {
-    std::shared_ptr<Tables> t = tables_;
-    auto source = [t](uint32_t colormap, float vmin, float vmax, gfx::shaders::Cmap* out) {
-        const uint32_t base = colormap & ~kDimmed;
-        t->cache->fill(base == kPaletteTable ? 0 : int32_t(base), vmin, vmax, out);   // the keys depend on the range only
-        if (base == kPaletteTable)
-            for (int l = 0; l < 256; ++l) out->levels[l][2] = t->palette[l];
-        if (colormap & kDimmed)
-            for (int l = 0; l < 256; ++l) out->levels[l][2] = dimmed_rgba(out->levels[l][2], t->ground);
-    };
-    res_ = std::make_unique<BackendResources>(gfx_, programs_, source);
-    return res_->init(why);
+#if defined(CALIPER_POINTS_PIECES)
+    (void)why;
+    return true;
+#else
+    if (why) *why = "scene.pieces_unavailable: this build has no library pieces";
+    return false;
+#endif
 }
 
 // ---- content ---------------------------------------------------------------------------------------
@@ -301,23 +287,17 @@ bool PointsScene::set(const PointsArrays& all, const PointsArrays* selected, con
     if (selected && selected->count && !add(*selected, "selection", false)) return false;
     tree_.update();
 #if defined(CALIPER_POINTS_PIECES)
-    if (draw_ == PointsDraw::pieces) set_pieces(all, selected, look);
+    set_pieces(all, selected, look);
 #endif
     return true;
 }
 
 // ---- points@1 -----------------------------------------------------------------------------------------
 
-void PointsScene::set_draw(PointsDraw d) {
-#if !defined(CALIPER_POINTS_PIECES)
-    d = PointsDraw::builtin;
-#endif
-    draw_ = d;
-}
 
 bool PointsScene::drew_pieces() const {
 #if defined(CALIPER_POINTS_PIECES)
-    return draw_ == PointsDraw::pieces && pieces_ && !pieces_->failed;
+    return pieces_ && !pieces_->failed;
 #else
     return false;
 #endif
@@ -325,30 +305,10 @@ bool PointsScene::drew_pieces() const {
 
 bool PointsScene::pending() const {
 #if defined(CALIPER_POINTS_PIECES)
-    return draw_ == PointsDraw::pieces && pieces_ && pieces_->wait != nullptr;
+    return pieces_ && pieces_->wait != nullptr;
 #else
     return false;
 #endif
-}
-
-// CALIPER_SCENE_FALLBACK_LOG=<file>: each change of what drew the points, in the lines of the scene
-// view's log (live_scene.cpp): "pieces <n> builtin <n>", and "fallback <n> <kind>" for a fallback.
-void PointsScene::log_counts(bool pieces) {
-    const char* log = std::getenv("CALIPER_SCENE_FALLBACK_LOG");
-    if (!log || !*log || draw_ != PointsDraw::pieces) return;
-    uint32_t sets = 0;
-#if defined(CALIPER_POINTS_PIECES)
-    if (pieces_) sets = uint32_t(pieces_->active);
-#endif
-    if (!pieces) sets = std::max<uint32_t>(sets, 1);
-    std::string text = "pieces " + std::to_string(pieces ? sets : 0) + " builtin " + std::to_string(pieces ? 0 : sets) + "\n";
-    if (!pieces) text += "fallback " + std::to_string(sets) + " " + fallback_ + "\n";
-    if (text == logged_) return;
-    logged_ = text;
-    if (FILE* f = std::fopen(log, "a")) {
-        std::fputs(text.c_str(), f);
-        std::fclose(f);
-    }
 }
 
 #if defined(CALIPER_POINTS_PIECES)
@@ -409,11 +369,11 @@ void PointsScene::set_pieces(const PointsArrays& all, const PointsArrays* select
             w->aux.read(gfx_);
             P.wait = std::move(w);
         } else {
-            fallback_detail_ = "the copy of the payload for its readback was refused: " + gfx_.last_error();
+            error_detail_ = "the copy of the payload for its readback was refused: " + gfx_.last_error();
             w->pos.release(gfx_);
             w->aux.release(gfx_);
             P.failed = true;
-            fallback_ = "batch without arrays to convert";
+            error_ = "batch without arrays to convert";
         }
         return;
     }
@@ -424,7 +384,7 @@ void PointsScene::set_pieces(const PointsArrays& all, const PointsArrays* select
 
 // The rows of one set of points for points@1's resource, one program for each part of at most
 // kMaxItems points: the position (x, y, z, 0), with z 0 in 2-D, the colour packed as RGBA as the
-// built-in's tables give it (the flat grey, the colormap's level by the colour keys, or the palette
+// shared tables give it (the flat grey, the colormap's level by the colour keys, or the palette
 // at every level, dimmed toward the ground for the rest of a selection), and the index in the set.
 void PointsScene::add_rows(const PointsArrays& a, bool selection, bool dimmed, const PointsLook& look) {
     Pieces& P = *pieces_;
@@ -476,7 +436,7 @@ bool PointsScene::render_pieces(float pixel_scale, uint32_t clear_rgba, gfx::Ser
     if (!pieces_) set_pieces(PointsArrays{}, nullptr, PointsLook{});
     Pieces& P = *pieces_;
     if (!P.piece) {
-        fallback_ = kNoPiece;
+        error_ = kNoPiece;
         P.failed = true;
         return false;
     }
@@ -484,8 +444,8 @@ bool PointsScene::render_pieces(float pixel_scale, uint32_t clear_rgba, gfx::Ser
         std::unique_ptr<Pieces::Wait> w = std::move(P.wait);
         if (w->pos.failed || w->aux.failed) {
             P.failed = true;
-            fallback_ = "batch without arrays to convert";
-            fallback_detail_ = "the readback of the payload failed: " + gfx_.last_error();
+            error_ = "batch without arrays to convert";
+            error_detail_ = "the readback of the payload failed: " + gfx_.last_error();
         } else {
             PointsArrays all = w->all;
             if (!w->pos.bytes.empty()) all.pos_cpu = w->pos.bytes.data();
@@ -496,7 +456,7 @@ bool PointsScene::render_pieces(float pixel_scale, uint32_t clear_rgba, gfx::Ser
         }
     }
     if (P.failed) return false;
-    // Every program of the frame must be able to draw, else the built-in draws the whole frame.
+    // A frame requires every piece runtime to be ready.
     const bool webgpu = std::strcmp(gfx_.caps().backend, "webgpu") == 0 || std::strcmp(gfx_.caps().backend, "dawn") == 0;
     for (size_t i = 0; i < P.active; ++i) {
         Pieces::Program& pr = P.programs[i];
@@ -525,8 +485,8 @@ bool PointsScene::render_pieces(float pixel_scale, uint32_t clear_rgba, gfx::Ser
         if (st == cd::DrawState::refused || st == cd::DrawState::stopped) {
             const cd::DrawStatus status = pr.runtime->status();
             if (why && why->empty()) *why = "points@1: " + status.error.code + " " + status.error.message;
-            fallback_ = kStopped;
-            fallback_detail_ = status.error.code + " " + status.error.message;
+            error_ = kStopped;
+            error_detail_ = status.error.code + " " + status.error.message;
             P.failed = true;
             return false;
         }
@@ -574,7 +534,7 @@ bool PointsScene::render_pieces(float pixel_scale, uint32_t clear_rgba, gfx::Ser
         for (size_t i = 0; i < P.active; ++i) {
             Pieces::Program& pr = P.programs[i];
             cd::FrameInputs in = base;
-            // The selected points keep their colour at every distance, as the built-in's full strength.
+            // The selected points keep their colour at every distance, as the full strength.
             in.params = pack_params(*P.piece, {{"size", P.size},
                                                {"shape", 0},
                                                {"color_mode", 2},
@@ -696,10 +656,6 @@ bool PointsScene::render(uint32_t width, uint32_t height, float pixel_scale, uin
                          std::string* why) {
     if (serial) *serial = 0;
     if (width == 0 || height == 0) return true;
-    if (!res_) {
-        if (why) *why = "the points view has no resources";
-        return false;
-    }
     const bool depth = dims_ == 3;
     if (!color_ || width != width_ || height != height_ || bool(depth_) != depth) {
         if (color_) gfx_.release(color_);
@@ -728,50 +684,15 @@ bool PointsScene::render(uint32_t width, uint32_t height, float pixel_scale, uin
         height_ = height;
     }
 #if defined(CALIPER_POINTS_PIECES)
-    if (draw_ == PointsDraw::pieces) {
-        std::string err;
-        const bool drawn = render_pieces(pixel_scale, clear_rgba, serial, &err);
-        log_counts(drawn);
-        if (drawn) {
-            if (!err.empty() && why) *why = err;
-            return err.empty();
-        }
-        // A fallback: the built-in draws this frame (fallback_ says why).
-    }
+    std::string err;
+    const bool drawn = render_pieces(pixel_scale, clear_rgba, serial, &err);
+    if (!drawn && err.empty()) err = "scene.piece_input: " + error_ + " " + error_detail_;
+    if (!err.empty() && why) *why = err;
+    return drawn && err.empty();
+#else
+    if (why) *why = "scene.pieces_unavailable: this build has no library pieces";
+    return false;
 #endif
-    tree_.update();
-    res_->update_class_table(tree_);
-    gfx::Frame frame;
-    compiler_.prepare(tree_, *res_, frame);
-    gfx::RenderTarget target;
-    target.color = color_;
-    target.depth = depth_;
-    target.clear_rgba = clear_rgba;
-    gfx::DrawList list(target);
-    CompileOptions opt;
-    opt.width = width_;
-    opt.height = height_;
-    opt.pixel_scale = pixel_scale;
-    opt.clear_rgba = clear_rgba;
-    cue_values(&opt.point_att_ref, &opt.point_fade_w0, &opt.point_fade_w1);
-    DrawMap map;
-    const CompileResult r = compiler_.compile(tree_, camera_, opt, *res_, list, &map);
-    if (!r.ok) {
-        if (why) *why = r.notes.empty() ? std::string("the points did not compile") : r.notes[0];
-        return false;
-    }
-    if (keep_draws_) {
-        last_list_ = list;
-        last_map_ = map;
-    }
-    frame.render(std::move(list));
-    const gfx::Serial s = gfx_.submit(std::move(frame));
-    if (s == 0) {
-        if (why) *why = "the layer refused the frame: " + gfx_.last_error();
-        return false;
-    }
-    if (serial) *serial = s;
-    return true;
 }
 
 uint64_t PointsScene::imgui_texture() const { return color_ ? gfx_.imgui_texture_id(color_) : 0; }

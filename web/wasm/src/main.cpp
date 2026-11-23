@@ -149,7 +149,7 @@ struct Page {
     std::string scene_selftest;           // the last scene row: "" or its report
     std::string draw_parity;              // the pixel comparison's draw: "" or its report
     std::string scene_parity;             // the scene comparison's draw: "" or its report
-    std::string points_parity;            // points@1 against the points view's built-in draw: "" or its report
+    std::string points_parity;            // points@1 initial and replacement payloads: "" or its report
 
     bool ready = false;                   // the first snapshot was applied
     bool destroyed = false;
@@ -342,9 +342,7 @@ void publish() {
         }
     geo += "}";
     put("geometry", geo.c_str());
-    // What drew the shapes of each scene view in its last frame: the library pieces, the built-in
-    // draw, and why each shape that the built-in drew fell back, by kind, as JSON {"view": {"draw":
-    // "pieces" or "builtin", "pieces": n, "builtin": n, "fallbacks": {kind: n}}}.
+    // Library pieces in each scene view, as JSON keyed by view id.
     caliper_net::Json shapes = caliper_net::Json::object();
     for (const auto& pv : g.poll.views) {
         if (!pv.shown) continue;
@@ -352,13 +350,9 @@ void publish() {
         const caliper_live_views::SceneView* sv = v ? caliper_live_views::scene_view(*v) : nullptr;
         if (!sv) continue;
         const caliper_live_views::SceneShapeCounts c = sv->shape_counts();
-        caliper_net::Json falls = caliper_net::Json::object();
-        for (const auto& [kind, n] : c.fallbacks) falls.set(kind, double(n));
         caliper_net::Json one = caliper_net::Json::object();
-        one.set("draw", sv->shape_draw() == caliper_live_views::ShapeDraw::pieces ? "pieces" : "builtin");
+        one.set("draw", "pieces");
         one.set("pieces", double(c.pieces));
-        one.set("builtin", double(c.builtin));
-        one.set("fallbacks", falls);
         shapes.set(pv.name, one);
     }
     put("sceneShapes", shapes.dump().c_str());
@@ -1220,7 +1214,7 @@ EMSCRIPTEN_KEEPALIVE int caliper_views_draw_parity(const uint8_t* frames, int n,
     return 1;
 }
 
-// Starts the comparison of the points view's draw by points@1 with its built-in draw
+// Starts the comparison of initial and replacement points@1 payloads
 // (points_parity.h); its report comes in caliperStats.pointsParity. 1 when it started.
 EMSCRIPTEN_KEEPALIVE int caliper_views_points_parity() {
     if (!g.renderer || !g.renderer->gfx()) {
@@ -1427,9 +1421,6 @@ int main() {
     g.cfg.kind = kind_of(config_string("kind"));
     g.cfg.header = config_string("header") != "false";
     g.cfg.compat = config_string("compat") == "true";
-    // The scene views read the switch of their shapes from the environment when they are made
-    // (live_scene.h, default_shape_draw), thus it is set before any view exists.
-    if (config_string("shapes") == "builtin") setenv("CALIPER_SCENE_SHAPES", "builtin", 1);
     g.cfg.page_feed = config_string("feed") == "page";
     g.cfg.scene = config_string("scene");
 

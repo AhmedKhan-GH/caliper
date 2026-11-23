@@ -369,29 +369,21 @@ if(APPLE)
     target_link_libraries(caliper_gfx PUBLIC "-framework Metal" "-framework Foundation")
 endif()
 
-# The scene core of the renderer core (design/renderer-core.md, "The scene core"): the scene
-# store, world matrices, cameras, bounds and fitting, compiling scenes into draw lists of the
-# graphics layer (src/host/gfx/gfx.h), picking, and BackendResources, its handles over a backend
-# of the layer. Plain C++17 that never calls a GPU itself; the live views' scene view
-# (src/host/live/live_scene.h) draws through it, the graphics suite's scene rows draw it on Metal,
-# and caliper_scene_tests (tests/scene) checks it headless.
+# The scene store, transforms, cameras, labels, and frame picks. Library pieces draw the batches.
 add_library(caliper_scene STATIC
     src/host/scene/path.cpp
     src/host/scene/scene_tree.cpp
     src/host/scene/camera.cpp
-    src/host/scene/compile.cpp
+    src/host/scene/labels.cpp
     src/host/scene/pick.cpp
-    src/host/scene/scale_bar.cpp
-    src/host/scene/backend_resources.cpp
-    src/host/scene/stages.cpp
-)
+    src/host/scene/scale_bar.cpp)
 target_include_directories(caliper_scene PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_scene PUBLIC caliper_gfx caliper::sdk)
 set_target_properties(caliper_scene PROPERTIES
     CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
 # No floating-point contraction: the scene core composes cameras and normal matrices in double, and
 # without fused multiply-adds its arithmetic is the same IEEE sequence natively as in WebAssembly,
-# which has none, so every backend draws from the same uniform bytes (src/host/scene/uniform_check.h).
+# which has none. Camera matrices use the same floating-point rules on each backend.
 if(NOT MSVC)
     target_compile_options(caliper_scene PRIVATE -ffp-contract=off)
 endif()

@@ -14,7 +14,7 @@
 #include "ui/sternbild_theme.h"
 
 #include "live/live_views_scene.h"   // DrawnLabel
-#include "scene/compile.h"
+#include "scene/labels.h"
 #include "spec_runtime/label_layout.h"
 
 #include <algorithm>

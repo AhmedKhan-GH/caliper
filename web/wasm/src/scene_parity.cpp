@@ -57,10 +57,6 @@ bool scene_parity_start(caliper_gfx::Backend& b, const caliper_gfx::ProgramDesc*
     }
     if (!found) return (*why = "no fixture '" + name + "' (" + names + ")", false);
     r.view = std::make_unique<caliper_live_views::SceneView>(b, programs);
-    // Without "shapes", the view keeps the module's switch (caliperConfig.shapes, main.cpp).
-    if (c.contains("shapes"))
-        r.view->set_shape_draw(c["shapes"] == "builtin" ? caliper_live_views::ShapeDraw::builtin
-                                                        : caliper_live_views::ShapeDraw::pieces);
     if (!r.view->init(why)) return false;
     if (!r.row.draw(*r.view)) return (*why = r.row.error, false);
     // The facts of the frame whose targets the readbacks below read.
@@ -102,8 +98,8 @@ bool scene_parity_poll(caliper_gfx::Backend& b, std::string* report) {
             r.asked = true;
         }
         caliper_scene::Hit hit;
-        const caliper_scene::PickPass::Result res = r.view->poll_pick(&hit);
-        if (res == caliper_scene::PickPass::Result::Pending) return false;   // next frame
+        const caliper_scene::PickResult res = r.view->poll_pick(&hit);
+        if (res == caliper_scene::PickResult::Pending) return false;   // next frame
         nlohmann::json j = scene_parity::hit_json(*r.view, res, hit);
         j["at"] = {p[0], p[1]};
         r.picks.push_back(j);
@@ -116,8 +112,7 @@ bool scene_parity_poll(caliper_gfx::Backend& b, std::string* report) {
     r.running = false;
     const bool ok = r.result.color.size() == px * 4;
     *report = std::string(ok ? "ok " : "fail ") + r.row.fixture.name + ": frame " + r.facts["frame"].dump() + ", " +
-              r.facts["pieces"].dump() + " shapes by pieces, " + r.facts["builtin"].dump() + " by the built-in " +
-              r.facts["fallbacks"].dump() + ", " + std::to_string(r.picks.size()) + " picks";
+              r.facts["pieces"].dump() + " shapes by pieces, " + std::to_string(r.picks.size()) + " picks";
     return true;
 }
 

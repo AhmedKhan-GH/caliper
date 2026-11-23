@@ -5,15 +5,12 @@
 // - The compute form that the texture path uses (the program colormap_texture): the boundary
 //   inputs of every range of tests/shaders/colormap_cases.h as an f32 image, from a layer buffer
 //   and from an imported MTLBuffer at an element offset, stored to an rgba8unorm texture.
-// - The vertex-stage colormap of a points draw (scene_points with color_mode 1): one point a
-//   pixel wide on each pixel centre, one per input, its value from a layer buffer and from an
-//   imported MTLBuffer at a byte offset.
+// The library point match suite checks point colors.
 //
 // Each target is read back through the layer and compared byte for byte with map_f32_to_rgba8
 // through the test table, and each import must report the in-place route with zero bytes
 // copied. A last case draws viridis over a ramp and rows of NaN and infinities, which
-// CALIPER_GFX_CAPTURE_DIR=<folder> writes as colormap-keys-texture-ramp.png and
-// colormap-keys-points-ramp.png, scaled up four times.
+// CALIPER_GFX_CAPTURE_DIR=<folder> writes as colormap-keys-texture-ramp.png.
 //
 // CALIPER_GFX_CMAP_BENCH=1 runs the timing row: the GPU time of the integer-decision pass (the
 // generated colormap_texture, compiled as the layer compiles it) against the float pass of the
@@ -450,138 +447,6 @@ TEST_CASE("gfx/Metal texture path: a METAL tensor's stream orders the update aft
     CHECK_FALSE(gfx->update_texture_from_tensor(img, bad, TextureMapping{}).ok);
     CHECK(gfx->last_error().find("cannot be read in place") != std::string::npos);
     gfx->release(img);
-}
-
-TEST_CASE("gfx/Metal colormap: the vertex-stage colormap of a points draw matches map_f32_to_rgba8 byte for byte, "
-          "from a layer buffer and from an imported buffer") {
-    using namespace caliper_gfx::shaders;
-    std::unique_ptr<Backend> gfx = metal_layer();
-    if (!gfx) CALIPER_SKIP_NO_GPU("no Metal device");
-    Program program = gfx->create_program(kMetalPrograms[uint32_t(ProgramId::scene_points)]);
-    REQUIRE_MESSAGE(bool(program), gfx->last_error());
-    RenderPipelineDesc pd;
-    pd.program = program;
-    pd.vertex_entry = "vs_points";
-    pd.fragment_entry = "fs_points";
-    pd.vertex_layout_count = 3;
-    pd.vertex_layouts[0].stride = 12;                   // the centre, per instance
-    pd.vertex_layouts[0].step = Step::Instance;
-    pd.vertex_layouts[0].attribute_count = 1;
-    pd.vertex_layouts[0].attributes[0] = {0, VertexFormat::F32x3, 0};
-    pd.vertex_layouts[1].stride = 4;                    // the value's bits, per instance
-    pd.vertex_layouts[1].step = Step::Instance;
-    pd.vertex_layouts[1].attribute_count = 1;
-    pd.vertex_layouts[1].attributes[0] = {1, VertexFormat::U32, 0};
-    pd.vertex_layouts[2].stride = 0;                    // one radius, unused with size_px
-    pd.vertex_layouts[2].attribute_count = 1;
-    pd.vertex_layouts[2].attributes[0] = {2, VertexFormat::F32, 0};
-    Pipeline pipe = gfx->create_render_pipeline(pd);
-    REQUIRE_MESSAGE(bool(pipe), gfx->last_error());
-    Texture class_table = gfx->create_texture({1, 1, Format::RGBA8Unorm, kSampled, "class table"});
-    Texture no_image = gfx->create_texture({1, 1, Format::R32Uint, kSampled, "no image"});
-    BindGroupDesc g0;
-    g0.program = program;
-    g0.group = 0;
-    g0.entry_count = 2;
-    g0.entries[0].binding = 0;
-    g0.entries[0].buffer = kArena;
-    g0.entries[1].binding = 1;
-    g0.entries[1].texture = class_table;
-    BindGroupDesc g1;
-    g1.program = program;
-    g1.group = 1;
-    g1.entry_count = 2;
-    g1.entries[0].binding = 0;
-    g1.entries[0].buffer = kArena;
-    g1.entries[1].binding = 1;
-    g1.entries[1].buffer = kArena;
-    BindGroupDesc g2;
-    g2.program = program;
-    g2.group = 2;
-    g2.entry_count = 1;
-    g2.entries[0].binding = 3;
-    g2.entries[0].texture = no_image;
-    BindGroup group0 = gfx->create_bind_group(g0), group1 = gfx->create_bind_group(g1), group2 = gfx->create_bind_group(g2);
-    REQUIRE_MESSAGE((group0 && group1 && group2), gfx->last_error());
-    const float radius[4] = {1.0f, 0, 0, 0};
-    Buffer constant = gfx->create_buffer({sizeof radius, kVertex | kCopyDst, false, "radius"});
-    REQUIRE(gfx->write_buffer(constant, 0, radius, sizeof radius));
-
-    size_t compared = 0;
-    const std::vector<Case> all = cases();
-    for (const Case& c : all) {
-        const uint32_t n = uint32_t(c.in.size()), H = c.rows;
-        // Point i on the centre of pixel (i % kWidth, i / kWidth), one pixel wide.
-        std::vector<float> centres(size_t(n) * 3);
-        for (uint32_t i = 0; i < n; ++i) {
-            centres[3 * i + 0] = 2.0f * (float(i % kWidth) + 0.5f) / float(kWidth) - 1.0f;
-            centres[3 * i + 1] = 1.0f - 2.0f * (float(i / kWidth) + 0.5f) / float(H);
-            centres[3 * i + 2] = 0.5f;
-        }
-        Buffer pos = gfx->create_buffer({centres.size() * 4, kVertex | kCopyDst, false, "centres"});
-        REQUIRE(gfx->write_buffer(pos, 0, centres.data(), centres.size() * 4));
-        Buffer layer_vals = gfx->create_buffer({c.in.size() * 4, kVertex | kCopyDst, false, "values"});
-        REQUIRE(gfx->write_buffer(layer_vals, 0, c.in.data(), c.in.size() * 4));
-        const uint64_t kOffset = 20;   // the producer's values start at byte 20
-        id<MTLBuffer> producer = producer_buffer(c.in, kOffset);
-        gfx->take_stats();
-        const Buffer imported = import_in_place(*gfx, producer, kVertex);
-        Texture color = gfx->create_texture({kWidth, H, Format::RGBA8Unorm, kRenderTarget | kCopySrcTex, "points"});
-        REQUIRE(bool(color));
-        for (int from_import = 0; from_import < 2; ++from_import) {
-            INFO("range " << c.range.name << (from_import ? ", imported buffer" : ", layer buffer"));
-            RenderTarget tg;
-            tg.color = color;
-            tg.clear_rgba = 0;   // no reference colour is 0: every alpha of the test table is at least 128
-            DrawList list(tg);
-            sh::Frame fb{};
-            fb.viewport[0] = float(kWidth);
-            fb.viewport[1] = float(H);
-            fb.proj_scale[0] = fb.proj_scale[1] = 1.0f;
-            fb.ndc_scale[0] = fb.ndc_scale[1] = 1.0f;
-            PrimParams pp{};
-            pp.mvp[0] = pp.mvp[5] = pp.mvp[10] = pp.mvp[15] = 1.0f;
-            pp.color_mode = 1;                          // values through the colormap
-            pp.size_px = 1.0f;
-            pp.vmin = c.block.vmin;
-            pp.vmax = c.block.vmax;
-            DrawRecord r;
-            r.pipeline = pipe;
-            r.groups[0] = group0;
-            r.groups[1] = group1;
-            r.groups[2] = group2;
-            r.dynamic_offsets[0] = list.uniform(&fb, sizeof fb);
-            r.dynamic_offsets[1] = list.uniform(&pp, sizeof pp);
-            r.dynamic_offsets[2] = list.uniform(&c.block, sizeof c.block);
-            r.vertex[0] = {pos, 0};
-            r.vertex[1] = from_import ? VertexBinding{imported, kOffset} : VertexBinding{layer_vals, 0};
-            r.vertex[2] = {constant, 0};
-            r.count = 6;
-            r.instance_count = n;
-            list.draw(r);
-            caliper_gfx::Frame f;
-            f.render(std::move(list));
-            const Serial s = gfx->submit(std::move(f));
-            REQUIRE_MESSAGE(s != 0, gfx->last_error());
-            const std::vector<uint8_t> got = read_back(*gfx, color, kWidth, H);
-            size_t first = 0;
-            const size_t bad = differ(got, c.want, &first);
-            CHECK_MESSAGE(bad == 0, bad, " of ", c.want.size(), " pixels differ, first input 0x", std::hex,
-                          c.in[first < c.in.size() ? first : 0]);
-            compared += c.want.size();
-            if (&c == &all.back() && from_import) capture("colormap-keys-points-ramp.png", got, int(kWidth), int(H));
-        }
-        const Stats st = gfx->take_stats();
-        CHECK(st.imports_in_place == 1);
-        CHECK(st.copies == 0);
-        CHECK(st.bytes_copied_on_gpu == 0);
-        CHECK(st.draws == 2);
-        gfx->release(color);
-        gfx->release(imported);
-        gfx->release(layer_vals);
-        gfx->release(pos);
-    }
-    MESSAGE(compared, " points compared over ", all.size(), " cases, from a layer buffer and an imported one");
 }
 
 // ---- The timing row --------------------------------------------------------------------------

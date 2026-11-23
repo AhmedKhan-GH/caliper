@@ -5,7 +5,7 @@
 // the box with its ticks, the default camera, the depth cues and the rotate
 // toggle, so the WebAssembly views are compared with the Canvas 2D view.
 // web/wasm/README.md and web/src/views/box3d.ts describe them. The last test holds the
-// WebAssembly points view's draw by the library piece points@1 to its built-in draw.
+// WebAssembly points view's draw by the library piece points@1 to its initial payload draw.
 
 import { test, type Page } from '@playwright/test';
 import fs from 'node:fs';
@@ -180,9 +180,9 @@ test('a 2-D points view has no rotate toggle and no box', async ({ page }, info)
 // of class labels with labels outside 0 to 255 and NaN, 3-D values through viridis with NaN values
 // and the depth cues, a 3-D selection over the dimmed rest, and 20,000 flat 2-D points. It holds the
 // piece's picture to the native match tests' tolerances: a pixel whose 3 x 3 neighbourhood in the
-// built-in picture holds one colour has that colour, and any other pixel lies within 1 level of a
-// built-in colour of its neighbourhood. Every case must be drawn by points@1, with none outside.
-test('the WebAssembly points view draws with points@1 as with its built-in draw, within the match tolerances', async ({ page }, info) => {
+// initial payload picture holds one colour has that colour, and any other pixel lies within 1 level of a
+// initial payload colour of its neighbourhood. Every case must be drawn by points@1, with none outside.
+test('the WebAssembly points view draws with points@1 as with its initial payload draw, within the match tolerances', async ({ page }, info) => {
   test.skip(info.project.name === 'canvas2d' || !HAVE_WASM, 'the WebAssembly views need a WebGPU adapter');
   const files = ['caliper-views-loader.js', 'caliper-views.js', 'caliper-views.wasm'];
   const site = await serve(WEB, (name) => (files.includes(name.slice(1)) ? path.join(WASM, name.slice(1)) : null));

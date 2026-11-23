@@ -459,13 +459,13 @@ struct Builtin {
         sc::Hit hit;
         std::string why;
         REQUIRE_MESSAGE(view->request_pick(float(x) + 0.5f, float(y) + 0.5f, &why), why);
-        sc::PickPass::Result r = sc::PickPass::Result::Pending;
-        for (int tries = 0; tries < 100 && r == sc::PickPass::Result::Pending; ++tries) {
-            g.wait(view->pick_pass()->last_use());
+        sc::PickResult r = sc::PickResult::Pending;
+        for (int tries = 0; tries < 100 && r == sc::PickResult::Pending; ++tries) {
+            g.wait(g.last_use(view->id_target()));
             g.poll();
             r = view->poll_pick(&hit);
         }
-        if (r != sc::PickPass::Result::Hit) return std::nullopt;
+        if (r != sc::PickResult::Hit) return std::nullopt;
         return hit;
     }
 };

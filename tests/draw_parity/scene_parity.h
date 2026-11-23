@@ -106,10 +106,10 @@ inline std::vector<std::array<int, 2>> pick_points(const std::vector<std::uint64
 // The hit of a pick as the event that it gives: the entity, the primitive, the index (an image's
 // pixel row by row, as pick_detail() gives it), the source row and the pixel. The position from the
 // depth goes apart, because it comes from each renderer's depth.
-inline nlohmann::json hit_json(const caliper_live_views::SceneView& v, caliper_scene::PickPass::Result r,
+inline nlohmann::json hit_json(const caliper_live_views::SceneView& v, caliper_scene::PickResult r,
                                const caliper_scene::Hit& h) {
     nlohmann::json j = nlohmann::json::object();
-    if (r != caliper_scene::PickPass::Result::Hit) {
+    if (r != caliper_scene::PickResult::Hit) {
         j["result"] = int(r);
         return j;
     }
@@ -137,12 +137,9 @@ inline nlohmann::json hit_json(const caliper_live_views::SceneView& v, caliper_s
 inline nlohmann::json frame_json(const caliper_live_views::SceneView& v) {
     nlohmann::json j = nlohmann::json::object();
     j["frame"] = v.cost().frames;
-    j["draw"] = v.shape_draw() == caliper_live_views::ShapeDraw::pieces ? "pieces" : "builtin";
+    j["draw"] = "pieces";
     const caliper_live_views::SceneShapeCounts c = v.shape_counts();
     j["pieces"] = c.pieces;
-    j["builtin"] = c.builtin;
-    j["fallbacks"] = nlohmann::json::object();
-    for (const auto& [kind, n] : c.fallbacks) j["fallbacks"][kind] = n;
     j["programs"] = nlohmann::json::object();
     j["translucent"] = nlohmann::json::array();
     j["states"] = nlohmann::json::object();

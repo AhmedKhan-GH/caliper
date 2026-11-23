@@ -61,25 +61,21 @@ target_include_directories(caliper_view_layer PUBLIC
 # and what they draw through: the scene core over the graphics layer's WebGPU backend, which the
 # renderer owns.
 #
-# stages.cpp holds the scene view's stage cache (scene/stage_cache.h) and the stage entry points as
-# text. It needs no WGSL translator: the app's stage host (src/host/spec_runtime) translates the
-# stages, and the browser module does not have that host. Thus no browser view gets a stage source,
-# the cache stays empty, and an entity with a stage draws with its built-in program in the browser.
 target_sources(caliper_view_layer PRIVATE
     ${CALIPER_ROOT}/src/host/live/live_views_scene.cpp
     ${CALIPER_ROOT}/src/host/live/scene_overlays.cpp
     ${CALIPER_ROOT}/src/host/spec_runtime/label_layout.cpp
-    ${CALIPER_ROOT}/src/host/live/live_scene.cpp
+    ${CALIPER_ROOT}/src/host/live/live_scene.cpp ${CALIPER_ROOT}/src/host/live/scene_legacy.cpp
     ${CALIPER_ROOT}/src/host/live/scene_piece_form.cpp
     ${CALIPER_ROOT}/src/host/live/live_points.cpp
-    ${CALIPER_ROOT}/src/host/scene/stages.cpp
+
     ${CALIPER_ROOT}/src/host/scene/path.cpp
     ${CALIPER_ROOT}/src/host/scene/scene_tree.cpp
     ${CALIPER_ROOT}/src/host/scene/camera.cpp
-    ${CALIPER_ROOT}/src/host/scene/compile.cpp
+    ${CALIPER_ROOT}/src/host/scene/labels.cpp
     ${CALIPER_ROOT}/src/host/scene/pick.cpp
-    ${CALIPER_ROOT}/src/host/scene/scale_bar.cpp
-    ${CALIPER_ROOT}/src/host/scene/backend_resources.cpp)
+    ${CALIPER_ROOT}/src/host/scene/scale_bar.cpp)
+
 # The draw half of pieces (design/programmable-graphics.md): the same render
 # graph, composer, prelude and lib modules as the app, from one source each.
 # The runtime reads a PROGRAM's declaration with nlohmann/json, the release
@@ -113,12 +109,11 @@ target_include_directories(caliper_view_layer PUBLIC ${CALIPER_ROOT}/src/builder
 # feeds of the module's programs (src/web_programs.cpp), as the app's scene view does. The scene's
 # rectangle (live_views_scene.cpp) needs the same definition: without it, a click's frame pick gives
 # no item and the programs' text tables give no labels.
-set_property(SOURCE ${CALIPER_ROOT}/src/host/live/live_scene.cpp ${CALIPER_ROOT}/src/host/live/live_views_scene.cpp
+set_property(SOURCE ${CALIPER_ROOT}/src/host/live/live_scene.cpp ${CALIPER_ROOT}/src/host/live/scene_legacy.cpp ${CALIPER_ROOT}/src/host/live/live_views_scene.cpp
     APPEND PROPERTY COMPILE_DEFINITIONS CALIPER_HAVE_DRAW=1)
 # The scene view also draws every shape of its scene with the library pieces, through the app's
 # converter (src/host/draw/scene_pieces.cpp, CALIPER_HAVE_SCENE_PIECES as the app's caliper_draw_host
-# defines it), and keeps the built-in draw for the fallbacks that converter counts. caliperConfig.shapes
-# "builtin" selects the built-in draw for every view (src/main.cpp), as CALIPER_SCENE_SHAPES does in the app.
+# defines it). Unsupported input reports a scene error.
 #
 # The converter reads each library piece from its piece.toml with the spec library's reader
 # (piece_from_toml), thus the module compiles the sources of the spec library that the reader needs,
@@ -144,7 +139,7 @@ add_library(caliper_spec_reader STATIC
 target_include_directories(caliper_spec_reader PUBLIC ${CALIPER_ROOT}/src/builder/include)
 target_link_libraries(caliper_spec_reader PUBLIC nlohmann_json::nlohmann_json PRIVATE tomlplusplus::tomlplusplus)
 target_sources(caliper_view_layer PRIVATE ${CALIPER_ROOT}/src/host/draw/scene_pieces.cpp)
-set_property(SOURCE ${CALIPER_ROOT}/src/host/live/live_scene.cpp ${CALIPER_ROOT}/src/host/draw/scene_pieces.cpp
+set_property(SOURCE ${CALIPER_ROOT}/src/host/live/live_scene.cpp ${CALIPER_ROOT}/src/host/live/scene_legacy.cpp ${CALIPER_ROOT}/src/host/draw/scene_pieces.cpp
     APPEND PROPERTY COMPILE_DEFINITIONS CALIPER_HAVE_SCENE_PIECES=1)
 target_link_libraries(caliper_view_layer PUBLIC caliper_spec_reader)
 target_compile_definitions(caliper_view_layer PUBLIC IMGUI_IMPL_WEBGPU_BACKEND_DAWN)
@@ -152,8 +147,7 @@ target_compile_definitions(caliper_view_layer PUBLIC IMGUI_IMPL_WEBGPU_BACKEND_D
 # so that both compute the same uniform bytes; WebAssembly has no fused multiply-add, so this only
 # states it.
 set_source_files_properties(${CALIPER_ROOT}/src/host/scene/scene_tree.cpp ${CALIPER_ROOT}/src/host/scene/camera.cpp
-    ${CALIPER_ROOT}/src/host/scene/compile.cpp ${CALIPER_ROOT}/src/host/scene/pick.cpp
-    ${CALIPER_ROOT}/src/host/scene/backend_resources.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+    ${CALIPER_ROOT}/src/host/scene/labels.cpp ${CALIPER_ROOT}/src/host/scene/pick.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 # The WebGPU port must be named when compiling too: it provides webgpu.h.
 target_compile_options(caliper_view_layer PUBLIC --use-port=emdawnwebgpu)
 # The points view draws its points with the library piece points@1 (live_points.cpp with

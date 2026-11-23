@@ -177,10 +177,7 @@ add_executable(caliper_scene_tests
     scene/test_scene_store.cpp
     scene/test_scene_matrices.cpp
     scene/test_scene_cameras.cpp
-    scene/test_scene_compile.cpp
     scene/test_scene_pick.cpp
-    scene/test_scene_row.cpp
-    scene/test_scene_layer.cpp
     scene/test_scene_scale_bar.cpp
     scene/test_scene_surface.cpp
     scene/test_camera_press.cpp
@@ -533,15 +530,11 @@ if(APPLE)
     target_include_directories(caliper_gfx_tests PRIVATE ${CMAKE_SOURCE_DIR}/third_party/stb)
     set_source_files_properties(gfx/gfx_layer.cpp PROPERTIES
         COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
-    # The scene core's rows: scenes compiled by caliper_scene and drawn through the layer on Metal.
-    target_sources(caliper_gfx_tests PRIVATE gfx/gfx_scene.cpp)
     target_link_libraries(caliper_gfx_tests PRIVATE caliper_scene)
-    set_source_files_properties(gfx/gfx_scene.cpp PROPERTIES
-        COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
     # The scene view's rows: scenes from wire protocol 3.2 messages, applied to the live views'
     # scene view (src/host/live/live_scene.cpp, compiled in here as libcaliper compiles it).
     target_sources(caliper_gfx_tests PRIVATE gfx/gfx_scene_view.cpp
-        ${CMAKE_SOURCE_DIR}/src/host/live/live_scene.cpp ${CMAKE_SOURCE_DIR}/src/host/live/scene_piece_form.cpp)
+        ${CMAKE_SOURCE_DIR}/src/host/live/live_scene.cpp ${CMAKE_SOURCE_DIR}/src/host/live/scene_legacy.cpp ${CMAKE_SOURCE_DIR}/src/host/live/scene_piece_form.cpp)
     target_link_libraries(caliper_gfx_tests PRIVATE caliper_net)
     target_compile_definitions(caliper_gfx_tests PRIVATE CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
     set_source_files_properties(gfx/gfx_scene_view.cpp PROPERTIES

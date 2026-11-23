@@ -1,12 +1,7 @@
 // scene_selftest.h: the scene rows in the page, for the browser tests (web/test/scenes.spec.ts).
 //
-// A fixture of tests/scene/primitive_fixtures.h (one scene per primitive) goes through a scene view on
-// the module's WebGPU backend exactly as the graphics suite's Metal rows send it through one: each
-// message encoded with the C++ codec, decoded again and applied, the view drawn at 256 x 256. The
-// target comes back through the layer's asynchronous readback a frame or two later, and the module
-// compares it with the CPU reference of tests/scene/draw_reference.h, rasterised from the parameter
-// blocks the module itself compiled, under web geometry's parity rules. The row's view draws every
-// shape with the scene core's built-in draw, whose draw list the reference reads.
+// Each fixture draws through library pieces. The asynchronous readback checks that the
+// scene has pixels, pieces, and no error notes. App/browser parity tests compare the targets.
 #pragma once
 
 #include "gfx/gfx.h"

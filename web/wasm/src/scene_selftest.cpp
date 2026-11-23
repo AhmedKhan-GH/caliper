@@ -1,15 +1,13 @@
 // scene_selftest.cpp: the scene rows in the page (scene_selftest.h).
 //
-// The report is "ok" or "fail", the fixture's name and a colon, then the comparison's sentence (how
-// many pixels differ from the CPU reference and why), then: draws, the draws the view compiled;
-// clipped, triangles the reference would have had to clip (none in a fixture); notes, what the view
-// noted; problems, what the reference could not rasterise; and level, the device's feature level.
+// The report holds the fixture name, piece count, nonempty pixels, notes, and device level.
 #include "scene_selftest.h"
 
 #include "../../../tests/scene/primitive_rows.h"
 #include "renderer/webgpu_backend.h"
 
 #include <memory>
+#include <cstring>
 
 namespace caliper_web {
 
@@ -55,10 +53,6 @@ bool scene_selftest_start(caliper_gfx::Backend& b, const caliper_gfx::ProgramDes
         return false;
     }
     r.view = std::make_unique<caliper_live_views::SceneView>(b, programs);
-    // The row checks the scene core's own draw list against its CPU reference, thus it draws every
-    // shape with the built-in draw, as the graphics suite's rows do (tests/gfx/gfx_scene_view.cpp);
-    // the scene comparison with the app (scene_parity.h) draws the same fixtures with the pieces.
-    r.view->set_shape_draw(caliper_live_views::ShapeDraw::builtin);
     if (!r.view->init(why)) return false;
     if (!r.row.draw(*r.view)) {
         *why = r.row.error;
@@ -83,18 +77,17 @@ bool scene_selftest_poll(caliper_gfx::Backend& b, std::string* report) {
         *report = "fail " + r.row.fixture.name + ": the readback has " + std::to_string(r.pixels.size()) + " bytes";
         return true;
     }
-    const primitive_rows::Row::Result res = r.row.compare(*r.view, r.pixels);
-    size_t uncovered = 0;
-    for (const size_t c : res.covered) uncovered += c == 0 ? 1 : 0;
-    const bool ok = res.c.failed == 0 && res.clipped == 0 && res.problems.empty() && r.view->notes().empty() &&
-                    uncovered == 0;
-    *report = std::string(ok ? "ok " : "fail ") + res.sentence + "; draws=" + std::to_string(res.draws) +
-              " uncovered=" + std::to_string(uncovered) + " clipped=" + std::to_string(res.clipped) +
-              " notes=" + std::to_string(r.view->notes().size()) + " problems=" + std::to_string(res.problems.size()) +
-              " level=" + level;
-    if (!res.c.first.empty()) *report += " first=" + res.c.first;
+    const auto count = r.view->shape_counts();
+    size_t colored = 0;
+    for (size_t at = 0; at + 4 <= r.pixels.size(); at += 4) {
+        uint32_t pixel = 0;
+        std::memcpy(&pixel, r.pixels.data() + at, 4);
+        colored += pixel != primitive_fixtures::kClear;
+    }
+    const bool ok = count.pieces > 0 && colored > 0 && r.view->notes().empty();
+    *report = std::string(ok ? "ok " : "fail ") + r.row.fixture.name + ": pieces=" + std::to_string(count.pieces) +
+              " pixels=" + std::to_string(colored) + " notes=" + std::to_string(r.view->notes().size()) + " level=" + level;
     if (!r.view->notes().empty()) *report += " note=" + r.view->notes().back();
-    if (!res.problems.empty()) *report += " problem=" + res.problems.front();
     return true;
 }
 

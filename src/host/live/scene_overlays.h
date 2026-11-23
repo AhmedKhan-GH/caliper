@@ -12,7 +12,7 @@
 #include <vector>
 
 namespace caliper_scene {
-struct LabelAnchor;  // scene/compile.h
+struct LabelAnchor;  // scene/labels.h
 }
 
 namespace caliper_live_views {

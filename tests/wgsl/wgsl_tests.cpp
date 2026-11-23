@@ -11,9 +11,6 @@
 
 #include "caliper/wgsl.h"
 
-#include "gfx/shaders/generated/edge_gather_msl.h"
-#include "gfx/shaders/generated/edge_gather_spv.h"
-#include "gfx/shaders/generated/edge_gather_wgsl.h"
 #include "gfx/shaders/generated/fill_texture_msl.h"
 #include "gfx/shaders/generated/fill_texture_spv.h"
 #include "gfx/shaders/generated/fill_texture_wgsl.h"
@@ -278,7 +275,6 @@ TEST_CASE("built-in programs translate as the developer-time driver translated t
     using namespace caliper_gfx::shaders;
     const Builtin programs[] = {
         {kFillTextureWgsl, kFillTextureMsl, kFillTextureSpirv, sizeof(kFillTextureSpirv) / 4},
-        {kEdgeGatherWgsl, kEdgeGatherMsl, kEdgeGatherSpirv, sizeof(kEdgeGatherSpirv) / 4},
     };
     caliper_wgsl_options unchecked{};
     caliper_wgsl_options_init(&unchecked);

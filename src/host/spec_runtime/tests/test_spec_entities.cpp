@@ -445,7 +445,7 @@ TEST_CASE("entities: a line that lies on the surface wins by its depth offset, a
 // IDs within 1 level, as surface@1's match allows, every other pixel within 1 level of a built-in
 // pixel of its 3 x 3 neighbourhood), and a pick at an interior pixel gives the same entity, item and
 // pick fields in both views.
-TEST_CASE("entities: the library pieces draw the surface, the path, the points and the walls as the built-in does") {
+TEST_CASE("entities: the library pieces draw the surface, the path, the points and the walls as generic scene pieces do") {
     SpecOffscreen* c = canvas();
     if (!c || !c->native_device()) return;
     const spec::Spec s = parse(kSpec);
@@ -458,17 +458,24 @@ TEST_CASE("entities: the library pieces draw the surface, the path, the points a
         Image img;
         std::vector<uint64_t> ids;
     };
-    auto draw = [&](caliper_live_views::ShapeDraw shapes, Drawn* d) {
+    auto draw = [&](bool specialized, Drawn* d) {
         const caliper_gfx::ProgramDesc* programs = nullptr;
         std::string why;
         REQUIRE_MESSAGE(canvas_layer(c)(&d->gfx, &d->backend, &programs, &why), why);
         d->view = std::make_unique<caliper_live_views::SceneView>(*d->backend, programs);
-        d->view->set_shape_draw(shapes);
         REQUIRE_MESSAGE(d->view->init(&why), why);
         d->view->set_box_fit(true);
         std::vector<std::string> drawn_paths;
         const std::vector<std::string> paths = {"loss"};
         caliper_host::apply_entity_scene(*d->view, scene, &drawn_paths, &paths);
+        if (!specialized) {
+            for (auto index : d->view->tree().path_order()) {
+                const auto entity = d->view->tree().entity_at(index);
+                const auto path = d->view->tree().path(entity);
+                for (int part = 1; part <= caliper_scene::kPrimitiveCount; ++part)
+                    d->view->set_piece_batch(path, caliper_scene::Primitive(part), nullptr);
+            }
+        }
         REQUIRE_MESSAGE(d->view->render(W, H, 1.0f, 0xff161616u, &why), why);
         d->img.w = W;
         d->img.h = H;
@@ -488,11 +495,10 @@ TEST_CASE("entities: the library pieces draw the surface, the path, the points a
         }
     };
     Drawn pieces, builtin;
-    draw(caliper_live_views::ShapeDraw::pieces, &pieces);
-    draw(caliper_live_views::ShapeDraw::builtin, &builtin);
+    draw(true, &pieces);
+    draw(false, &builtin);
     const caliper_live_views::SceneShapeCounts counts = pieces.view->shape_counts();
     CHECK(counts.pieces == 4);
-    CHECK(counts.builtin == 0);
     dump(pieces.img, "entities-pieces.png");
     dump(builtin.img, "entities-builtin.png");
 
@@ -547,9 +553,8 @@ TEST_CASE("entities: the library pieces draw the surface, the path, the points a
     size_t asked = 0, agreed = 0;
     std::string first_pick;
     auto take = [](caliper_gfx::Backend& g, caliper_live_views::SceneView& v, caliper_scene::Hit* hit) {
-        caliper_scene::PickPass::Result r = caliper_scene::PickPass::Result::Pending;
-        for (int k = 0; k < 10000 && r == caliper_scene::PickPass::Result::Pending; ++k) {
-            if (v.pick_pass()) g.wait(v.pick_pass()->last_use());
+        caliper_scene::PickResult r = caliper_scene::PickResult::Pending;
+        for (int k = 0; k < 10000 && r == caliper_scene::PickResult::Pending; ++k) {
             // The pieces' pick reads the ID target and the depth: each readback is a use of its texture.
             if (v.id_target()) g.wait(g.last_use(v.id_target()));
             if (v.depth_target()) g.wait(g.last_use(v.depth_target()));
@@ -568,7 +573,7 @@ TEST_CASE("entities: the library pieces draw the surface, the path, the points a
             REQUIRE(builtin.view->request_pick(x + 0.5f, y + 0.5f, &why));
             const auto rb = take(*builtin.backend, *builtin.view, &hb);
             ++asked;
-            bool same = rp == caliper_scene::PickPass::Result::Hit && rb == rp;
+            bool same = rp == caliper_scene::PickResult::Hit && rb == rp;
             if (same) {
                 const std::string path = pieces.view->tree().path(hp.entity);
                 same = path == builtin.view->tree().path(hb.entity) && hp.item == hb.item && hp.primitive == hb.primitive;
@@ -579,11 +584,11 @@ TEST_CASE("entities: the library pieces draw the surface, the path, the points a
             if (same) ++agreed;
             else if (first_pick.empty())
                 first_pick = "at (" + std::to_string(x) + ", " + std::to_string(y) + "): pieces " +
-                             (rp == caliper_scene::PickPass::Result::Hit
+                             (rp == caliper_scene::PickResult::Hit
                                   ? pieces.view->tree().path(hp.entity) + " " + std::to_string(hp.item)
                                   : "result " + std::to_string(int(rp))) +
                              ", built-in " +
-                             (rb == caliper_scene::PickPass::Result::Hit
+                             (rb == caliper_scene::PickResult::Hit
                                   ? builtin.view->tree().path(hb.entity) + " " + std::to_string(hb.item)
                                   : std::string("no hit"));
         }

@@ -7,13 +7,6 @@
 #pragma once
 
 #include "gfx/shaders/generated/programs.h"
-#include "gfx/shaders/generated/scene_points_wgsl.h"
-#include "gfx/shaders/generated/scene_lines_wgsl.h"
-#include "gfx/shaders/generated/scene_mesh_wgsl.h"
-#include "gfx/shaders/generated/index_clamp_wgsl.h"
-#include "gfx/shaders/generated/edge_gather_wgsl.h"
-#include "gfx/shaders/generated/scene_boxes_wgsl.h"
-#include "gfx/shaders/generated/scene_image_wgsl.h"
 #include "gfx/shaders/generated/colormap_probe_wgsl.h"
 #include "gfx/shaders/generated/colormap_texture_wgsl.h"
 #include "gfx/shaders/generated/fill_texture_wgsl.h"
@@ -21,26 +14,12 @@
 namespace caliper_gfx::shaders {
 
 inline constexpr ProgramDesc kWebgpuPrograms[kProgramCount] = {
-    {"scene_points", kProgramDescriptions[0].entries, kProgramDescriptions[0].entry_count,
-     kProgramDescriptions[0].bindings, kProgramDescriptions[0].binding_count, kScenePointsWgsl, nullptr, nullptr, 0, false},
-    {"scene_lines", kProgramDescriptions[1].entries, kProgramDescriptions[1].entry_count,
-     kProgramDescriptions[1].bindings, kProgramDescriptions[1].binding_count, kSceneLinesWgsl, nullptr, nullptr, 0, false},
-    {"scene_mesh", kProgramDescriptions[2].entries, kProgramDescriptions[2].entry_count,
-     kProgramDescriptions[2].bindings, kProgramDescriptions[2].binding_count, kSceneMeshWgsl, nullptr, nullptr, 0, false},
-    {"index_clamp", kProgramDescriptions[3].entries, kProgramDescriptions[3].entry_count,
-     kProgramDescriptions[3].bindings, kProgramDescriptions[3].binding_count, kIndexClampWgsl, nullptr, nullptr, 0, false},
-    {"edge_gather", kProgramDescriptions[4].entries, kProgramDescriptions[4].entry_count,
-     kProgramDescriptions[4].bindings, kProgramDescriptions[4].binding_count, kEdgeGatherWgsl, nullptr, nullptr, 0, false},
-    {"scene_boxes", kProgramDescriptions[5].entries, kProgramDescriptions[5].entry_count,
-     kProgramDescriptions[5].bindings, kProgramDescriptions[5].binding_count, kSceneBoxesWgsl, nullptr, nullptr, 0, false},
-    {"scene_image", kProgramDescriptions[6].entries, kProgramDescriptions[6].entry_count,
-     kProgramDescriptions[6].bindings, kProgramDescriptions[6].binding_count, kSceneImageWgsl, nullptr, nullptr, 0, false},
-    {"colormap_probe", kProgramDescriptions[7].entries, kProgramDescriptions[7].entry_count,
-     kProgramDescriptions[7].bindings, kProgramDescriptions[7].binding_count, kColormapProbeWgsl, nullptr, nullptr, 0, false},
-    {"colormap_texture", kProgramDescriptions[8].entries, kProgramDescriptions[8].entry_count,
-     kProgramDescriptions[8].bindings, kProgramDescriptions[8].binding_count, kColormapTextureWgsl, nullptr, nullptr, 0, true},
-    {"fill_texture", kProgramDescriptions[9].entries, kProgramDescriptions[9].entry_count,
-     kProgramDescriptions[9].bindings, kProgramDescriptions[9].binding_count, kFillTextureWgsl, nullptr, nullptr, 0, false},
+    {"colormap_probe", kProgramDescriptions[0].entries, kProgramDescriptions[0].entry_count,
+     kProgramDescriptions[0].bindings, kProgramDescriptions[0].binding_count, kColormapProbeWgsl, nullptr, nullptr, 0, false},
+    {"colormap_texture", kProgramDescriptions[1].entries, kProgramDescriptions[1].entry_count,
+     kProgramDescriptions[1].bindings, kProgramDescriptions[1].binding_count, kColormapTextureWgsl, nullptr, nullptr, 0, true},
+    {"fill_texture", kProgramDescriptions[2].entries, kProgramDescriptions[2].entry_count,
+     kProgramDescriptions[2].bindings, kProgramDescriptions[2].binding_count, kFillTextureWgsl, nullptr, nullptr, 0, false},
 };
 
 }  // namespace caliper_gfx::shaders

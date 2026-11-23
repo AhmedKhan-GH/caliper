@@ -453,7 +453,7 @@ test('the module draws the draw halves that PROGRAM and RESOURCE bring over its 
 // draws each fixture through its own scene view on WebGPU, and the test compares the first frame of
 // each: the picture and the pieces' IDs under the rules above, where a pixel without a piece's ID (the
 // ground, or a shape that the built-in draw keeps) counts as an edge pixel; the counts of the shapes of
-// that frame with the reason of each fallback; the program of each pick id; and the hit of a pick at
+// that frame ; the program of each pick id; and the hit of a pick at
 // each of the app's points, with the position that the hit takes from the depth within 0.01 of the
 // app's. A pick gives the hit of the pieces' IDs unless the pick pass of the built-in draw found a
 // nearer one, by the depth of each target at its texel, so the depth decides between a piece's shape
@@ -462,7 +462,7 @@ const SCENE = path.join(FIXTURE, 'scene');
 const SCENE_SIZE = 256;
 
 interface SceneFacts {
-  frame: number; draw: string; pieces: number; builtin: number; fallbacks: Record<string, number>;
+  frame: number; draw: string; pieces: number;
   programs: Record<string, string>; translucent: number[]; states: Record<string, string>;
   picks: { at: [number, number]; hit?: string; result?: number; position?: number[]; depth?: number }[];
 }
@@ -551,8 +551,8 @@ test('the browser module draws the scene fixtures with the library pieces as the
       // The counts of the same frame.
       expect.soft(web.frame, `${name}: the frame of the facts`).toBe(a.frame);
       expect.soft(web.draw, name).toBe('pieces');
-      expect.soft({ pieces: web.pieces, builtin: web.builtin, fallbacks: web.fallbacks }, `${name}: the shapes of frame ${a.frame}`)
-        .toEqual({ pieces: a.pieces, builtin: a.builtin, fallbacks: a.fallbacks });
+      expect.soft({ pieces: web.pieces }, `${name}: the shapes of frame ${a.frame}`)
+        .toEqual({ pieces: a.pieces });
       expect.soft(web.programs, `${name}: the program of each pick id`).toEqual(a.programs);
       expect.soft(web.translucent, `${name}: the translucent programs`).toEqual(a.translucent);
       expect.soft(web.states, `${name}: the state of each piece's runtime after the frame`).toEqual(a.states);
@@ -620,8 +620,7 @@ test('the browser module draws the scene fixtures with the library pieces as the
           }
         positionGap = Math.max(positionGap, gapHere);
       }
-      console.log(`[${info.project.name}] scene ${name}: frame ${web.frame}, ${web.pieces} shapes by pieces, ${web.builtin} by the ` +
-        `built-in ${JSON.stringify(web.fallbacks)}; interior ${c.interior}, edge ${c.edge} (${c.edgeOver} over the levels, ` +
+      console.log(`[${info.project.name}] scene ${name}: frame ${web.frame}, ${web.pieces} shapes by pieces; interior ${c.interior}, edge ${c.edge} (${c.edgeOver} over the levels, ` +
         `${c.edgeDiffer} of those on neither side; ${c.beneath} of them under a translucent piece, where a shape beneath ` +
         `has an edge), largest interior difference ${c.maxDiff} levels (${c.over} over 2), ` +
         `differing edge pixels ${(100 * c.differShare).toFixed(3)} % of the image, other IDs ${c.idMismatch}, largest ` +

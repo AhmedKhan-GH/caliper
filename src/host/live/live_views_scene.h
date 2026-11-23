@@ -27,7 +27,6 @@ struct SceneTransforms;
 struct SceneClasses;
 }  // namespace caliper_net::wire
 namespace caliper_scene {
-class StageSource;
 }  // namespace caliper_scene
 namespace caliper_draw {
 class DrawFeed;
@@ -115,10 +114,6 @@ struct SceneRectOptions {
     // The panel's programs (draw/draw_host.h), which the view draws after the scene, picks
     // through its ID target and labels with their text tables; null: none.
     caliper_draw::DrawFeed* draw_feed = nullptr;
-    // The panel's stages (scene/stage_cache.h), or null for the built-in programs, and a line that
-    // the picture shows at its bottom, such as a stage's refusal with its line and column.
-    caliper_scene::StageSource* stages = nullptr;
-    std::string stage_message;
 };
 
 // A scene view as a camera press drives it (camera_drag.h): an orbit, or a pan of a picture

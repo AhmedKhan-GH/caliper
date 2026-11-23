@@ -4,9 +4,8 @@
 // for byte with a CPU reference built the way the suite's geometry rows build theirs (the
 // clear everywhere, each quad's colour on the pixels it covers, quads edged on pixel
 // boundaries). The test program is hand-written MSL that lives only here; production
-// programs come from the shader generator, and the other rows use those: scene_points for the
-// instanced draw from an imported buffer, the index clamp for a dispatch, and every generated
-// program for its pipelines. Compiled as Objective-C++ with ARC on Apple.
+// programs come from the shader generator. The pipeline checks cover each generated program.
+// Compiled as Objective-C++ with ARC on Apple.
 //
 // CALIPER_GFX_CAPTURE_DIR=<folder> writes PNG captures of the rows' readbacks there.
 // CALIPER_GFX_LAYER_BENCH=1 runs the encode-time row (1,000 draws a frame, recording backend
@@ -316,10 +315,7 @@ TEST_CASE("gfx/Metal layer: a quad drawn through the layer reads back byte-exact
 }
 
 TEST_CASE("gfx/Metal layer: an instanced draw from an imported MTLBuffer is in place, with zero bytes copied") {
-    // The generated scene_points program: each point an instanced square around its centre,
-    // its colour from a per-instance RGBA stream and its size from a constant radius stream,
-    // drawn once for colour and once, with the pick variant, into an RG32Uint pick target.
-    using namespace caliper_gfx::shaders;
+    // The test shader reads each imported instance without a resource copy.
     caliper_host::HostRenderer* renderer = gfx_metal_renderer();
     std::unique_ptr<Backend> gfx = metal_layer();
     if (!gfx || renderer == nullptr) CALIPER_SKIP_NO_GPU("no Metal device");
@@ -327,15 +323,36 @@ TEST_CASE("gfx/Metal layer: an instanced draw from an imported MTLBuffer is in p
     const uint32_t clear = 0xff000000u;
     Texture color = gfx->create_texture({W, H, Format::RGBA8Unorm, kRenderTarget | kCopySrcTex, "color"});
     Texture picks = gfx->create_texture({W, H, Format::RG32Uint, kRenderTarget | kCopySrcTex, "picks"});
-    Texture class_table = gfx->create_texture({1, 1, Format::RGBA8Unorm, kSampled, "class table"});
-    Texture no_image = gfx->create_texture({1, 1, Format::R32Uint, kSampled, "no image"});
-    const ProgramDescription& desc = kProgramDescriptions[uint32_t(ProgramId::scene_points)];
-    Program program = gfx->create_program(kMetalPrograms[uint32_t(ProgramId::scene_points)]);
+    const char* source = R"metal(
+#include <metal_stdlib>
+using namespace metal;
+struct Input { float3 pos [[attribute(0)]]; uint rgba [[attribute(1)]]; float radius [[attribute(2)]]; };
+struct Output { float4 pos [[position]]; float4 color; uint2 id [[flat]]; };
+vertex Output vs_instance(Input in [[stage_in]], uint vertex [[vertex_id]], uint instance [[instance_id]]) {
+    const float2 corners[6] = {float2(-1,-1),float2(1,-1),float2(-1,1),float2(1,-1),float2(1,1),float2(-1,1)};
+    Output o;
+    o.pos = float4(in.pos.xy + corners[vertex] * in.radius, in.pos.z, 1);
+    o.color = float4(in.rgba & 255u,(in.rgba >> 8u) & 255u,(in.rgba >> 16u) & 255u,in.rgba >> 24u) / 255.0f;
+    o.id = uint2(9, 10 + instance);
+    return o;
+}
+fragment float4 fs_instance(Output in [[stage_in]]) { return in.color; }
+fragment uint2 fs_instance_pick(Output in [[stage_in]]) { return in.id; }
+)metal";
+    const EntryDesc entries[] = {{"vs_instance", kStageVertex, {1,1,1}},
+                                 {"fs_instance", kStageFragment, {1,1,1}},
+                                 {"fs_instance_pick", kStageFragment, {1,1,1}}};
+    ProgramDesc description;
+    description.label = "imported-instance-test";
+    description.entries = entries;
+    description.entry_count = 3;
+    description.msl = source;
+    Program program = gfx->create_program(description);
     REQUIRE_MESSAGE(bool(program), gfx->last_error());
     RenderPipelineDesc pd;
     pd.program = program;
-    pd.vertex_entry = "vs_points";
-    pd.fragment_entry = "fs_points";
+    pd.vertex_entry = "vs_instance";
+    pd.fragment_entry = "fs_instance";
     pd.vertex_layout_count = 2;
     pd.vertex_layouts[0].stride = 16;                    // centre and colour, per instance
     pd.vertex_layouts[0].step = Step::Instance;
@@ -347,35 +364,10 @@ TEST_CASE("gfx/Metal layer: an instanced draw from an imported MTLBuffer is in p
     pd.vertex_layouts[1].attributes[0] = {2, VertexFormat::F32, 0};
     Pipeline draw_pipe = gfx->create_render_pipeline(pd);
     REQUIRE_MESSAGE(bool(draw_pipe), gfx->last_error());
-    pd.fragment_entry = "fs_points_pick";
+    pd.fragment_entry = "fs_instance_pick";
     pd.color_format = Format::RG32Uint;
     Pipeline pick_pipe = gfx->create_render_pipeline(pd);
     REQUIRE_MESSAGE(bool(pick_pipe), gfx->last_error());
-    (void)desc;
-    BindGroupDesc g0;
-    g0.program = program;
-    g0.group = 0;
-    g0.entry_count = 2;
-    g0.entries[0].binding = 0;
-    g0.entries[0].buffer = kArena;
-    g0.entries[1].binding = 1;
-    g0.entries[1].texture = class_table;
-    BindGroupDesc g1;
-    g1.program = program;
-    g1.group = 1;
-    g1.entry_count = 2;
-    g1.entries[0].binding = 0;
-    g1.entries[0].buffer = kArena;
-    g1.entries[1].binding = 1;
-    g1.entries[1].buffer = kArena;
-    BindGroupDesc g2;
-    g2.program = program;
-    g2.group = 2;
-    g2.entry_count = 1;
-    g2.entries[0].binding = 3;
-    g2.entries[0].texture = no_image;
-    BindGroup group0 = gfx->create_bind_group(g0), group1 = gfx->create_bind_group(g1), group2 = gfx->create_bind_group(g2);
-    REQUIRE_MESSAGE((group0 && group1 && group2), gfx->last_error());
     const float radius[4] = {0.25f, 0, 0, 0};            // a quarter of the view's half height: 4 pixels
     Buffer constant = gfx->create_buffer({sizeof radius, kVertex | kCopyDst, false, "radius"});
     REQUIRE(gfx->write_buffer(constant, 0, radius, sizeof radius));
@@ -414,27 +406,8 @@ TEST_CASE("gfx/Metal layer: an instanced draw from an imported MTLBuffer is in p
             tg.color = pass == 0 ? color : picks;
             tg.clear_rgba = pass == 0 ? clear : 0;
             DrawList list(tg);
-            caliper_gfx::shaders::Frame fb{};
-            fb.viewport[0] = float(W);
-            fb.viewport[1] = float(H);
-            fb.proj_scale[0] = fb.proj_scale[1] = 1.0f;
-            fb.ndc_scale[0] = fb.ndc_scale[1] = 1.0f;
-            PrimParams pp{};
-            pp.mvp[0] = pp.mvp[5] = pp.mvp[10] = pp.mvp[15] = 1.0f;
-            pp.pick_id = 9;
-            pp.item_base = 10;
-            pp.radius_mode = 1;                          // the constant radius stream, in scene units
-            pp.radius_scale = 1.0f;
-            pp.color_mode = 2;                           // packed RGBA per item
-            static const Cmap cmap{};
             DrawRecord r;
             r.pipeline = pass == 0 ? draw_pipe : pick_pipe;
-            r.groups[0] = group0;
-            r.groups[1] = group1;
-            r.groups[2] = group2;
-            r.dynamic_offsets[0] = list.uniform(&fb, sizeof fb);
-            r.dynamic_offsets[1] = list.uniform(&pp, sizeof pp);
-            r.dynamic_offsets[2] = list.uniform(&cmap, sizeof cmap);
             r.vertex[0] = {instances, kOffset};
             r.vertex[1] = {constant, 0};
             r.count = 6;
@@ -578,73 +551,6 @@ TEST_CASE("gfx/Metal layer: an instanced draw from an imported MTLBuffer is in p
     CHECK(gfx->imgui_texture_id(ti.texture) == (uint64_t)(__bridge void*)mt);
     et.width = 8;                                        // a description that does not match
     CHECK(gfx->import_texture(et).route == Route::Refused);
-}
-
-TEST_CASE("gfx/Metal layer: the generated index clamp runs as a dispatch, with Naga's sizes buffer") {
-    // The index clamp of the shader generator, from an imported MTLBuffer of indices into a
-    // host-visible layer buffer, each index clamped to the last vertex. Its storage bindings
-    // make Naga's MSL read the sizes buffer at Metal index 15.
-    using namespace caliper_gfx::shaders;
-    caliper_host::HostRenderer* renderer = gfx_metal_renderer();
-    std::unique_ptr<Backend> gfx = metal_layer();
-    if (!gfx || renderer == nullptr) CALIPER_SKIP_NO_GPU("no Metal device");
-    const uint32_t kCount = 1000, kLast = 499;
-    Program program = gfx->create_program(kMetalPrograms[uint32_t(ProgramId::index_clamp)]);
-    REQUIRE_MESSAGE(bool(program), gfx->last_error());
-    ComputePipelineDesc cd;
-    cd.program = program;
-    cd.entry = "cs_clamp_indices";
-    Pipeline pipe = gfx->create_compute_pipeline(cd);
-    REQUIRE_MESSAGE(bool(pipe), gfx->last_error());
-
-    id<MTLDevice> device = (__bridge id<MTLDevice>)renderer->native_device();
-    id<MTLBuffer> producer = [device newBufferWithLength:kCount * 4 options:MTLResourceStorageModeShared];
-    uint32_t* in = static_cast<uint32_t*>(producer.contents);
-    for (uint32_t i = 0; i < kCount; ++i) in[i] = (i * 2654435761u) % 1200u;   // some past the last vertex
-    in[0] = 0xffffffffu;
-    ExternalBuffer ext;
-    ext.kind = ExternalKind::MetalBuffer;
-    ext.handle = (__bridge void*)producer;
-    ext.size = kCount * 4;
-    ext.usage = kStorage;
-    ImportResult imp = gfx->import_buffer(ext);
-    REQUIRE_MESSAGE(bool(imp.buffer), imp.reason);
-    CHECK(imp.route == Route::InPlace);
-    Buffer out = gfx->create_buffer({kCount * 4, kStorage | kIndex, true, "clamped indices"});
-    REQUIRE(bool(out));
-    REQUIRE(gfx->mapped(out) != nullptr);
-    std::memset(gfx->mapped(out), 0xab, kCount * 4);
-
-    BindGroupDesc bd;
-    bd.program = program;
-    bd.group = 0;
-    bd.entry_count = 3;
-    bd.entries[0].binding = 0;
-    bd.entries[0].buffer = kArena;
-    bd.entries[1].binding = 1;
-    bd.entries[1].buffer = imp.buffer;                   // size 0: the whole buffer
-    bd.entries[2].binding = 2;
-    bd.entries[2].buffer = out;
-    BindGroup group = gfx->create_bind_group(bd);
-    REQUIRE_MESSAGE(bool(group), gfx->last_error());
-
-    caliper_gfx::Frame f;
-    ClampParams cp{};
-    cp.count = kCount;
-    cp.last = kLast;
-    const uint32_t offsets[1] = {f.uniform(&cp, sizeof cp)};
-    const BindGroup groups[1] = {group};
-    f.dispatch(pipe, groups, offsets, 4, 1, 1);          // 256 threads: the grid-stride loop covers 1,000
-    const Serial s = gfx->submit(std::move(f));
-    REQUIRE_MESSAGE(s != 0, gfx->last_error());
-    REQUIRE(gfx->wait(s));
-    const uint32_t* got = static_cast<const uint32_t*>(gfx->mapped(out));
-    size_t bad = 0;
-    for (uint32_t i = 0; i < kCount; ++i)
-        if (got[i] != std::min(in[i], kLast)) ++bad;
-    CHECK_MESSAGE(bad == 0, bad, " of ", kCount, " indices differ from min(index, last)");
-    const Stats st = gfx->take_stats();
-    CHECK(st.dispatches == 1);
 }
 
 TEST_CASE("gfx/Metal layer: every generated program compiles and makes its pipelines through the layer") {

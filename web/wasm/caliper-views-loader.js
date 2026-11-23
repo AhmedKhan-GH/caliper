@@ -17,7 +17,6 @@
 //     augment,      // (detail, view) => detail, adds to a selection's detail before it is sent (3.1 item space)
 //     onDataView,   // (dataView) => {}, every data view the producer resolved
 //     compat,       // true: a WebGPU device in compatibility mode; default globalThis.caliperViewsCompat
-//     shapes,       // 'builtin': a scene's shapes drawn by the built-in draw in place of the library
 //                   // pieces, for a comparison; default globalThis.caliperViewsShapes, else 'pieces'
 //     feed,         // 'page': no stream; the page feeds the programs of one scene view named `view`
 //     scene,        // feed 'page': the scene view's {space, up, units, labels, scale_bar, view_camera, views}
@@ -88,7 +87,7 @@ export function preloadCaliperViews(assetBase, assetQuery = '') {
 
 export async function mountCaliperViews(container, options = {}) {
   const { src = '', view = '', kind = '', height, header = true, assetBase, onSelect, onEvent, onInfo, onToggle, augment, onDataView,
-          compat = globalThis.caliperViewsCompat ?? false, shapes = globalThis.caliperViewsShapes ?? 'pieces', feed = '', scene, assetQuery = '' } = options;
+          compat = globalThis.caliperViewsCompat ?? false, feed = '', scene, assetQuery = '' } = options;
   if (!container) throw new Error('caliper-views: no container element');
   if (!navigator.gpu) throw new Error('caliper-views: this browser has no WebGPU');
 
@@ -107,7 +106,7 @@ export async function mountCaliperViews(container, options = {}) {
     module = await factory({
       canvas,
       caliperConfig: { src, view, kind, header: header ? 'true' : 'false', compat: compat ? 'true' : 'false',
-                       shapes: String(shapes), feed, scene: scene ? JSON.stringify(scene) : '' },
+                       feed, scene: scene ? JSON.stringify(scene) : '' },
       instantiateWasm: (imports, receive) => {
         WebAssembly.instantiate(wasm, imports).then((instance) => receive(instance, wasm));
         return {};

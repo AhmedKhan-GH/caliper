@@ -292,10 +292,8 @@ test('the graphics layer draws an indexed quad and instanced draws, dispatches a
       if (!got.report.startsWith('ok')) console.log(consoleErrors.join('\n'));
       for (const [name, url] of Object.entries(got.images))
         fs.writeFileSync(shotPath(info, `${name}-${compat ? 'compat' : 'core'}`), Buffer.from(url.split(',')[1], 'base64'));
-      // uniforms=same: the scene core's fixture (src/host/scene/uniform_check.h) compiles here to the
-      // arena bytes it compiles to natively, so the browser draws from the same f32 matrices as Metal.
       expect(got.report).toBe('ok color=0 id=0 depth=0 fill=0 copy=0 import=copied-from-host:24 own-target=refused '
-                              + `submit-error=reported level=${compat ? 'compatibility' : 'core'} uniforms=same`);
+                              + `submit-error=reported level=${compat ? 'compatibility' : 'core'}`);
       expect(Object.keys(got.images).sort()).toEqual(['layer-compute', 'layer-copy', 'layer-draws', 'layer-ids']);
     }
   } finally {

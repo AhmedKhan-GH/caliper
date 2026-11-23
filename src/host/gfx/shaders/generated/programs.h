@@ -16,18 +16,11 @@ namespace caliper_gfx::shaders {
 // A program's id is its index in the tables of programs_metal.h, programs_vulkan.h and
 // programs_webgpu.h.
 enum class ProgramId : uint32_t {
-    scene_points = 0,
-    scene_lines = 1,
-    scene_mesh = 2,
-    index_clamp = 3,
-    edge_gather = 4,
-    scene_boxes = 5,
-    scene_image = 6,
-    colormap_probe = 7,  // test only
-    colormap_texture = 8,
-    fill_texture = 9,
+    colormap_probe = 0,  // test only
+    colormap_texture = 1,
+    fill_texture = 2,
 };
-inline constexpr uint32_t kProgramCount = 10;
+inline constexpr uint32_t kProgramCount = 3;
 
 // Naga's MSL gives every entry that uses a Storage or StorageReadWrite binding one more
 // argument: a buffer at this Metal index holding one u32 per such binding of the program,
@@ -43,194 +36,6 @@ struct VertexInputDesc { const char* entry; uint8_t location; VertexFormat forma
 struct FragmentOutputDesc { const char* entry; uint8_t location; Format format; };
 // A vertex and fragment entry that the compile checks pair into a pipeline.
 struct PairDesc { const char* vertex; const char* fragment; };
-
-// ---- scene_points
-inline constexpr EntryDesc kScenePointsEntries[] = {
-    {"vs_points", kStageVertex, {1, 1, 1}},
-    {"vs_depth_points", kStageVertex, {1, 1, 1}},
-    {"fs_points", kStageFragment, {1, 1, 1}},
-    {"fs_points_pick", kStageFragment, {1, 1, 1}},
-};
-inline constexpr BindingDesc kScenePointsBindings[] = {
-    {0, 0, BindingType::Uniform, uint8_t(kStageVertex), true, 48, Format::RGBA8Unorm, 0},  // frame
-    {0, 1, BindingType::Texture, uint8_t(kStageVertex), false, 0, Format::RGBA8Unorm, 0},  // class_table
-    {1, 0, BindingType::Uniform, uint8_t(kStageVertex | kStageFragment), true, 192, Format::RGBA8Unorm, 1},  // p
-    {1, 1, BindingType::Uniform, uint8_t(kStageVertex), true, 4112, Format::RGBA8Unorm, 2},  // m
-    {2, 3, BindingType::UintTexture, uint8_t(kStageVertex), false, 0, Format::RGBA8Unorm, 1},  // img_value
-};
-inline constexpr VertexInputDesc kScenePointsVertexInputs[] = {
-    {"vs_points", 0, VertexFormat::F32x3},  // vec3<f32>
-    {"vs_points", 1, VertexFormat::U32},  // u32
-    {"vs_points", 2, VertexFormat::F32},  // f32
-};
-inline constexpr FragmentOutputDesc kScenePointsFragmentOutputs[] = {
-    {"fs_points", 0, Format::RGBA8Unorm},  // vec4<f32>
-    {"fs_points_pick", 0, Format::RG32Uint},  // vec2<u32>
-};
-inline constexpr PairDesc kScenePointsPairs[] = {
-    {"vs_points", "fs_points"},
-    {"vs_points", "fs_points_pick"},
-    {"vs_depth_points", "fs_points"},
-    {"vs_depth_points", "fs_points_pick"},
-};
-
-// ---- scene_lines
-inline constexpr EntryDesc kSceneLinesEntries[] = {
-    {"fs_color", kStageFragment, {1, 1, 1}},
-    {"fs_pick", kStageFragment, {1, 1, 1}},
-    {"vs_lines", kStageVertex, {1, 1, 1}},
-};
-inline constexpr BindingDesc kSceneLinesBindings[] = {
-    {0, 0, BindingType::Uniform, uint8_t(kStageVertex), true, 48, Format::RGBA8Unorm, 0},  // frame
-    {0, 1, BindingType::Texture, uint8_t(kStageVertex), false, 0, Format::RGBA8Unorm, 0},  // class_table
-    {1, 0, BindingType::Uniform, uint8_t(kStageVertex), true, 192, Format::RGBA8Unorm, 1},  // p
-    {1, 1, BindingType::Uniform, uint8_t(kStageVertex), true, 4112, Format::RGBA8Unorm, 2},  // m
-};
-inline constexpr VertexInputDesc kSceneLinesVertexInputs[] = {
-    {"vs_lines", 0, VertexFormat::F32x3},  // vec3<f32>
-    {"vs_lines", 1, VertexFormat::F32x3},  // vec3<f32>
-    {"vs_lines", 2, VertexFormat::U32},  // u32
-    {"vs_lines", 3, VertexFormat::U32},  // u32
-    {"vs_lines", 4, VertexFormat::U32},  // u32
-};
-inline constexpr FragmentOutputDesc kSceneLinesFragmentOutputs[] = {
-    {"fs_color", 0, Format::RGBA8Unorm},  // vec4<f32>
-    {"fs_pick", 0, Format::RG32Uint},  // vec2<u32>
-};
-inline constexpr PairDesc kSceneLinesPairs[] = {
-    {"vs_lines", "fs_color"},
-    {"vs_lines", "fs_pick"},
-};
-
-// ---- scene_mesh
-inline constexpr EntryDesc kSceneMeshEntries[] = {
-    {"fs_color", kStageFragment, {1, 1, 1}},
-    {"fs_pick", kStageFragment, {1, 1, 1}},
-    {"vs_mesh", kStageVertex, {1, 1, 1}},
-    {"fs_mesh_flat", kStageFragment, {1, 1, 1}},
-    {"fs_mesh_tex", kStageFragment, {1, 1, 1}},
-};
-inline constexpr BindingDesc kSceneMeshBindings[] = {
-    {0, 0, BindingType::Uniform, uint8_t(kStageVertex), true, 48, Format::RGBA8Unorm, 0},  // frame
-    {0, 1, BindingType::Texture, uint8_t(kStageVertex), false, 0, Format::RGBA8Unorm, 0},  // class_table
-    {1, 0, BindingType::Uniform, uint8_t(kStageVertex | kStageFragment), true, 192, Format::RGBA8Unorm, 1},  // p
-    {1, 1, BindingType::Uniform, uint8_t(kStageVertex), true, 4112, Format::RGBA8Unorm, 2},  // m
-    {2, 0, BindingType::Texture, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 1},  // img_rgba
-    {2, 1, BindingType::Sampler, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 0},  // img_sampler
-};
-inline constexpr VertexInputDesc kSceneMeshVertexInputs[] = {
-    {"vs_mesh", 0, VertexFormat::F32x3},  // vec3<f32>
-    {"vs_mesh", 1, VertexFormat::F32x3},  // vec3<f32>
-    {"vs_mesh", 2, VertexFormat::U32},  // u32
-    {"vs_mesh", 3, VertexFormat::F32x2},  // vec2<f32>
-    {"vs_mesh", 4, VertexFormat::F32x4},  // vec4<f32>
-    {"vs_mesh", 5, VertexFormat::F32x4},  // vec4<f32>
-    {"vs_mesh", 6, VertexFormat::F32x4},  // vec4<f32>
-    {"vs_mesh", 7, VertexFormat::F32x4},  // vec4<f32>
-    {"vs_mesh", 8, VertexFormat::U32},  // u32
-};
-inline constexpr FragmentOutputDesc kSceneMeshFragmentOutputs[] = {
-    {"fs_color", 0, Format::RGBA8Unorm},  // vec4<f32>
-    {"fs_pick", 0, Format::RG32Uint},  // vec2<u32>
-    {"fs_mesh_flat", 0, Format::RGBA8Unorm},  // vec4<f32>
-    {"fs_mesh_tex", 0, Format::RGBA8Unorm},  // vec4<f32>
-};
-inline constexpr PairDesc kSceneMeshPairs[] = {
-    {"vs_mesh", "fs_color"},
-    {"vs_mesh", "fs_mesh_flat"},
-    {"vs_mesh", "fs_mesh_tex"},
-    {"vs_mesh", "fs_pick"},
-};
-
-// ---- index_clamp
-inline constexpr EntryDesc kIndexClampEntries[] = {
-    {"cs_clamp_indices", kStageCompute, {64, 1, 1}},
-};
-inline constexpr BindingDesc kIndexClampBindings[] = {
-    {0, 0, BindingType::Uniform, uint8_t(kStageCompute), true, 16, Format::RGBA8Unorm, 0},  // cp
-    {0, 1, BindingType::Storage, uint8_t(kStageCompute), false, 4, Format::RGBA8Unorm, 1},  // idx_in
-    {0, 2, BindingType::StorageReadWrite, uint8_t(kStageCompute), false, 4, Format::RGBA8Unorm, 2},  // idx_out
-};
-
-// ---- edge_gather
-inline constexpr EntryDesc kEdgeGatherEntries[] = {
-    {"cs_gather_edges", kStageCompute, {64, 1, 1}},
-};
-inline constexpr BindingDesc kEdgeGatherBindings[] = {
-    {0, 0, BindingType::Uniform, uint8_t(kStageCompute), true, 16, Format::RGBA8Unorm, 0},  // gp
-    {0, 1, BindingType::Storage, uint8_t(kStageCompute), false, 4, Format::RGBA8Unorm, 1},  // pairs
-    {0, 2, BindingType::Storage, uint8_t(kStageCompute), false, 4, Format::RGBA8Unorm, 2},  // vert_pos
-    {0, 3, BindingType::Storage, uint8_t(kStageCompute), false, 4, Format::RGBA8Unorm, 3},  // vert_src
-    {0, 4, BindingType::StorageReadWrite, uint8_t(kStageCompute), false, 4, Format::RGBA8Unorm, 4},  // seg_pos
-    {0, 5, BindingType::StorageReadWrite, uint8_t(kStageCompute), false, 4, Format::RGBA8Unorm, 5},  // seg_src
-};
-
-// ---- scene_boxes
-inline constexpr EntryDesc kSceneBoxesEntries[] = {
-    {"fs_color", kStageFragment, {1, 1, 1}},
-    {"fs_pick", kStageFragment, {1, 1, 1}},
-    {"vs_box_wire", kStageVertex, {1, 1, 1}},
-    {"vs_box_solid", kStageVertex, {1, 1, 1}},
-};
-inline constexpr BindingDesc kSceneBoxesBindings[] = {
-    {0, 0, BindingType::Uniform, uint8_t(kStageVertex), true, 48, Format::RGBA8Unorm, 0},  // frame
-    {0, 1, BindingType::Texture, uint8_t(kStageVertex), false, 0, Format::RGBA8Unorm, 0},  // class_table
-    {1, 0, BindingType::Uniform, uint8_t(kStageVertex), true, 192, Format::RGBA8Unorm, 1},  // p
-    {1, 1, BindingType::Uniform, uint8_t(kStageVertex), true, 4112, Format::RGBA8Unorm, 2},  // m
-};
-inline constexpr VertexInputDesc kSceneBoxesVertexInputs[] = {
-    {"vs_box_wire", 0, VertexFormat::F32x3},  // vec3<f32>
-    {"vs_box_wire", 1, VertexFormat::F32x3},  // vec3<f32>
-    {"vs_box_wire", 2, VertexFormat::F32x4},  // vec4<f32>
-    {"vs_box_wire", 3, VertexFormat::U32},  // u32
-    {"vs_box_solid", 0, VertexFormat::F32x3},  // vec3<f32>
-    {"vs_box_solid", 1, VertexFormat::F32x3},  // vec3<f32>
-    {"vs_box_solid", 2, VertexFormat::F32x4},  // vec4<f32>
-    {"vs_box_solid", 3, VertexFormat::U32},  // u32
-};
-inline constexpr FragmentOutputDesc kSceneBoxesFragmentOutputs[] = {
-    {"fs_color", 0, Format::RGBA8Unorm},  // vec4<f32>
-    {"fs_pick", 0, Format::RG32Uint},  // vec2<u32>
-};
-inline constexpr PairDesc kSceneBoxesPairs[] = {
-    {"vs_box_wire", "fs_color"},
-    {"vs_box_wire", "fs_pick"},
-    {"vs_box_solid", "fs_color"},
-    {"vs_box_solid", "fs_pick"},
-};
-
-// ---- scene_image
-inline constexpr EntryDesc kSceneImageEntries[] = {
-    {"fs_color", kStageFragment, {1, 1, 1}},
-    {"fs_pick", kStageFragment, {1, 1, 1}},
-    {"vs_image", kStageVertex, {1, 1, 1}},
-    {"fs_image_rgba", kStageFragment, {1, 1, 1}},
-    {"fs_image_class", kStageFragment, {1, 1, 1}},
-    {"fs_image_value", kStageFragment, {1, 1, 1}},
-};
-inline constexpr BindingDesc kSceneImageBindings[] = {
-    {0, 0, BindingType::Uniform, uint8_t(kStageVertex | kStageFragment), true, 48, Format::RGBA8Unorm, 0},  // frame
-    {0, 1, BindingType::Texture, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 0},  // class_table
-    {1, 0, BindingType::Uniform, uint8_t(kStageVertex | kStageFragment), true, 192, Format::RGBA8Unorm, 1},  // p
-    {1, 1, BindingType::Uniform, uint8_t(kStageFragment), true, 4112, Format::RGBA8Unorm, 2},  // m
-    {2, 0, BindingType::Texture, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 1},  // img_rgba
-    {2, 1, BindingType::Sampler, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 0},  // img_sampler
-    {2, 2, BindingType::UintTexture, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 2},  // img_class
-    {2, 3, BindingType::UintTexture, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 3},  // img_value
-};
-inline constexpr FragmentOutputDesc kSceneImageFragmentOutputs[] = {
-    {"fs_color", 0, Format::RGBA8Unorm},  // vec4<f32>
-    {"fs_pick", 0, Format::RG32Uint},  // vec2<u32>
-    {"fs_image_rgba", 0, Format::RGBA8Unorm},  // vec4<f32>
-    {"fs_image_class", 0, Format::RGBA8Unorm},  // vec4<f32>
-    {"fs_image_value", 0, Format::RGBA8Unorm},  // vec4<f32>
-};
-inline constexpr PairDesc kSceneImagePairs[] = {
-    {"vs_image", "fs_image_rgba"},
-    {"vs_image", "fs_image_value"},
-    {"vs_image", "fs_image_class"},
-    {"vs_image", "fs_pick"},
-};
 
 // ---- colormap_probe
 inline constexpr EntryDesc kColormapProbeEntries[] = {
@@ -273,13 +78,6 @@ struct ProgramDescription {
     bool fast_math;   // the Metal backend compiles the program with fast math (ProgramDesc::fast_math)
 };
 inline constexpr ProgramDescription kProgramDescriptions[kProgramCount] = {
-    {"scene_points", kScenePointsEntries, 4, kScenePointsBindings, 5, kScenePointsVertexInputs, 3, kScenePointsFragmentOutputs, 2, kScenePointsPairs, 4, false, false},
-    {"scene_lines", kSceneLinesEntries, 3, kSceneLinesBindings, 4, kSceneLinesVertexInputs, 5, kSceneLinesFragmentOutputs, 2, kSceneLinesPairs, 2, false, false},
-    {"scene_mesh", kSceneMeshEntries, 5, kSceneMeshBindings, 6, kSceneMeshVertexInputs, 9, kSceneMeshFragmentOutputs, 4, kSceneMeshPairs, 4, false, false},
-    {"index_clamp", kIndexClampEntries, 1, kIndexClampBindings, 3, nullptr, 0, nullptr, 0, nullptr, 0, false, false},
-    {"edge_gather", kEdgeGatherEntries, 1, kEdgeGatherBindings, 6, nullptr, 0, nullptr, 0, nullptr, 0, false, false},
-    {"scene_boxes", kSceneBoxesEntries, 4, kSceneBoxesBindings, 4, kSceneBoxesVertexInputs, 8, kSceneBoxesFragmentOutputs, 2, kSceneBoxesPairs, 4, false, false},
-    {"scene_image", kSceneImageEntries, 6, kSceneImageBindings, 8, nullptr, 0, kSceneImageFragmentOutputs, 5, kSceneImagePairs, 4, false, false},
     {"colormap_probe", kColormapProbeEntries, 1, kColormapProbeBindings, 3, nullptr, 0, nullptr, 0, nullptr, 0, true, false},
     {"colormap_texture", kColormapTextureEntries, 1, kColormapTextureBindings, 4, nullptr, 0, nullptr, 0, nullptr, 0, false, true},
     {"fill_texture", kFillTextureEntries, 1, kFillTextureBindings, 3, nullptr, 0, nullptr, 0, nullptr, 0, false, false},

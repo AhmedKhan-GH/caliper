@@ -60,9 +60,9 @@ std::vector<std::uint8_t> read(gfx::Backend& g, gfx::Texture t, std::uint32_t si
 
 // The answer to a pick that the view asked, once its readbacks are in: the pick pass's and the
 // pieces' window of the ID and depth targets.
-caliper_scene::PickPass::Result take_pick(gfx::Backend& g, caliper_live_views::SceneView& v, caliper_scene::Hit* hit) {
-    caliper_scene::PickPass::Result r = caliper_scene::PickPass::Result::Pending;
-    for (int tries = 0; tries < 10000 && r == caliper_scene::PickPass::Result::Pending; ++tries) {
+caliper_scene::PickResult take_pick(gfx::Backend& g, caliper_live_views::SceneView& v, caliper_scene::Hit* hit) {
+    caliper_scene::PickResult r = caliper_scene::PickResult::Pending;
+    for (int tries = 0; tries < 10000 && r == caliper_scene::PickResult::Pending; ++tries) {
         @autoreleasepool {
             g.wait(v.pick_pass()->last_use());
             if (v.id_target()) g.wait(g.last_use(v.id_target()));
@@ -78,7 +78,6 @@ caliper_scene::PickPass::Result take_pick(gfx::Backend& g, caliper_live_views::S
 bool one(gfx::Backend& g, const primitive_fixtures::Fixture& f, const fs::path& dir, std::string* line) {
     const std::uint32_t S = primitive_fixtures::kSize;
     caliper_live_views::SceneView view(g, caliper_gfx::shaders::kMetalPrograms);
-    view.set_shape_draw(caliper_live_views::ShapeDraw::pieces);
     std::string why;
     if (!view.init(&why)) return (*line = f.name + ": init: " + why, false);
     primitive_rows::Row row;
@@ -98,7 +97,7 @@ bool one(gfx::Backend& g, const primitive_fixtures::Fixture& f, const fs::path& 
         if (!view.request_pick(float(p[0]) + 0.5f, float(p[1]) + 0.5f, &why))
             return (*line = f.name + ": pick: " + why, false);
         caliper_scene::Hit hit;
-        const caliper_scene::PickPass::Result r = take_pick(g, view, &hit);
+        const caliper_scene::PickResult r = take_pick(g, view, &hit);
         nlohmann::json j = scene_parity::hit_json(view, r, hit);
         j["at"] = {p[0], p[1]};
         picks.push_back(j);

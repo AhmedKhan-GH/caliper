@@ -13,9 +13,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import zlib from 'node:zlib';
 import { type ColormapCase, readColormapCases } from './colormap_cases.js';
-import { expect, REPO, serve, SHOTS, test } from './util.js';
+import { expect, REPO, serve, test } from './util.js';
 
 const GEN = path.join(REPO, 'src', 'host', 'gfx', 'shaders', 'generated');
 type Prog = { name: string; test_only: boolean; pairs: [string, string][]; bindings: unknown[]; entries: { name: string; stage: string }[] };
@@ -41,96 +40,6 @@ function rows256(c: ColormapCase): { inputs: Buffer; expected: Uint32Array; rows
   const expected = new Uint32Array(n).fill(c.expected[0]);
   expected.set(c.expected);
   return { inputs, expected, rows: n / 256 };
-}
-
-const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
-const asBits = (f: number) => { f32[0] = f; return u32[0]; };
-
-// ---- PNG -----------------------------------------------------------------------------------
-
-function png(rgba: Buffer, w: number, h: number): Buffer {
-  const chunk = (type: string, data: Buffer) => {
-    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
-    const td = Buffer.concat([Buffer.from(type, 'latin1'), data]);
-    const crc = Buffer.alloc(4); crc.writeUInt32BE(zlib.crc32(td) >>> 0);
-    return Buffer.concat([len, td, crc]);
-  };
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 6;
-  const raw = Buffer.alloc(h * (w * 4 + 1));
-  for (let y = 0; y < h; y++) rgba.copy(raw, y * (w * 4 + 1) + 1, y * w * 4, (y + 1) * w * 4);
-  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr),
-                        chunk('IDAT', zlib.deflateSync(raw, { level: 9 })), chunk('IEND', Buffer.alloc(0))]);
-}
-
-// ---- the fixture of the capture ------------------------------------------------------------
-
-function fixture() {
-  const points = { pos: [] as number[], values: [] as number[], size_px: 7 };
-  for (let i = 0; i < 160; i++) {
-    const t = i / 159, a = t * 5.5 * Math.PI, r = 0.12 + 0.78 * t;
-    points.pos.push(r * Math.cos(a), r * Math.sin(a), 0);
-    points.values.push(asBits(t));
-  }
-  points.pos.push(NaN, 0, 0); points.values.push(asBits(0.5));   // a NaN position: hidden
-  const rgba = (r: number, g: number, b: number) => (r | (g << 8) | (b << 16) | (255 << 24)) >>> 0;
-  const lines = { strip: [] as number[], strip_rgba: [] as number[], spokes: [] as number[], spoke_values: [] as number[] };
-  for (let i = 0; i <= 10; i++) {
-    const a = Math.PI / 2 + i * Math.PI / 5, r = i % 2 ? 0.34 : 0.82;
-    lines.strip.push(r * Math.cos(a), r * Math.sin(a), 0);
-    lines.strip_rgba.push(i % 2 ? rgba(240, 240, 235) : rgba(232, 112, 64));
-  }
-  for (let i = 0; i < 24; i++) {
-    const a = i * Math.PI / 12;
-    lines.spokes.push(0.86 * Math.cos(a), 0.86 * Math.sin(a), 0, 0.95 * Math.cos(a), 0.95 * Math.sin(a), 0);
-    lines.spoke_values.push(asBits(i / 23), asBits(i / 23));
-  }
-  // A height field over [-1, 1]^2, z up, seen from above at an angle.
-  const N = 28, pos: number[] = [], values: number[] = [], indices: number[] = [];
-  let zmin = Infinity, zmax = -Infinity;
-  const zs: number[] = [];
-  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-    const x = -1 + 2 * i / (N - 1), y = -1 + 2 * j / (N - 1);
-    const z = 0.35 * Math.sin(2.2 * x) * Math.cos(1.8 * y) + 0.15 * Math.exp(-4 * (x * x + y * y));
-    pos.push(x, y, z); zs.push(z); zmin = Math.min(zmin, z); zmax = Math.max(zmax, z);
-  }
-  for (const z of zs) values.push(asBits((z - zmin) / (zmax - zmin)));
-  for (let j = 0; j < N - 1; j++) for (let i = 0; i < N - 1; i++) {
-    const a = j * N + i;
-    indices.push(a, a + 1, a + N, a + N, a + 1, a + N + 1);
-  }
-  const drawn = indices.length;
-  indices.push(N * N, 0xffffffff, 123456);   // past the last vertex: the clamp maps them to it
-  const sub = (a: number[], b: number[]) => a.map((v, i) => v - b[i]);
-  const norm = (a: number[]) => { const l = Math.hypot(...a); return a.map((v) => v / l); };
-  const cross = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-  const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-  const eye = [1.9, -2.5, 2.1], target = [0, 0, -0.05], up = [0, 0, 1];
-  const fwd = norm(sub(target, eye)), s = norm(cross(fwd, up)), u = cross(s, fwd);
-  const view = [s[0], u[0], -fwd[0], 0, s[1], u[1], -fwd[1], 0, s[2], u[2], -fwd[2], 0, -dot(s, eye), -dot(u, eye), dot(fwd, eye), 1];
-  const fy = 1 / Math.tan((38 * Math.PI / 180) / 2), near = 0.1, far = 10;
-  const proj = [fy, 0, 0, 0, 0, fy, 0, 0, 0, 0, far / (near - far), -1, 0, 0, near * far / (near - far), 0];
-  const mvp = new Array(16).fill(0);
-  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) for (let k = 0; k < 4; k++) mvp[c * 4 + r] += proj[k * 4 + r] * view[c * 4 + k];
-  const mesh = { pos, values, indices, drawn, vertex_count: N * N, mvp,
-                 nmat0: [s[0], u[0], -fwd[0], 0], nmat1: [s[1], u[1], -fwd[1], 0], nmat2: [s[2], u[2], -fwd[2], 0] };
-  return { points, lines, mesh };
-}
-
-/**
- * A colormap block for the captures: the C++ keys of the range [0, 1] (the first case) and a
- * table from dark violet to yellow.
- */
-function captureBlock(): Buffer {
-  const stops = [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]];
-  const block = Buffer.from(cases[0].block);
-  if (block.readFloatLE(0) !== 0 || block.readFloatLE(4) !== 1) throw new Error('the first case is not the range [0, 1]');
-  for (let k = 0; k < 256; k++) {
-    const x = (k / 255) * (stops.length - 1), i = Math.min(Math.floor(x), stops.length - 2), f = x - i;
-    const c = stops[i].map((v, j) => Math.round(v + (stops[i + 1][j] - v) * f));
-    block.writeUInt32LE((c[0] | (c[1] << 8) | (c[2] << 16) | (255 << 24)) >>> 0, 16 + 16 * k + 8);   // level k's colour
-  }
-  return block;
 }
 
 // ---- the tests -----------------------------------------------------------------------------
@@ -169,7 +78,7 @@ test.describe('generated shader programs', () => {
     // The three forms of the colormap by keys: the probe (a storage buffer), the texture path's
     // compute form (an rgba8unorm storage texture) and the vertex stage of a points draw (one
     // point a pixel wide on each pixel centre), each against the C++ byte for byte.
-    for (const form of ['probe', 'texture', 'points'] as const) {
+    for (const form of ['probe', 'texture'] as const) {
       test(`the colormap by keys matches the C++ byte for byte through the ${form} on a ${level} device`, async ({ page }, info) => {
         test.skip(!CASES, NO_CASES);
         test.setTimeout(240_000);
@@ -181,10 +90,9 @@ test.describe('generated shader programs', () => {
             const s = (window as any).shaderCheck;
             const d = await s.device(level);
             if (form === 'probe') return s.colormap(d.dev, progs.colormap_probe, codes.colormap_probe, block, inputs);
-            if (form === 'texture') return s.colormapTexture(d.dev, progs.colormap_texture, codes.colormap_texture, block, inputs);
-            return s.colormapPoints(d.dev, progs.scene_points, codes.scene_points, block, inputs);
-          }, { level, form, progs: { colormap_probe: programs.colormap_probe, colormap_texture: programs.colormap_texture, scene_points: programs.scene_points },
-               codes: { colormap_probe: codes.colormap_probe, colormap_texture: codes.colormap_texture, scene_points: codes.scene_points },
+            return s.colormapTexture(d.dev, progs.colormap_texture, codes.colormap_texture, block, inputs);
+          }, { level, form, progs: { colormap_probe: programs.colormap_probe, colormap_texture: programs.colormap_texture },
+               codes: { colormap_probe: codes.colormap_probe, colormap_texture: codes.colormap_texture },
                block: c.block.toString('base64'), inputs: inputs.toString('base64') });
           const g = Buffer.from(got64, 'base64');
           const got = new Uint32Array(g.buffer, g.byteOffset, g.length / 4);
@@ -203,25 +111,4 @@ test.describe('generated shader programs', () => {
     }
   }
 
-  test('the points, segment and mesh programs draw their fixture', async ({ page }, info) => {
-    test.skip(!CASES, NO_CASES);
-    const fx = fixture();
-    const r = await page.evaluate(async ({ programs, codes, block, fx }) => {
-      const s = (window as any).shaderCheck;
-      const d = await s.device('default');
-      return s.capture(d.dev, programs, codes, block, fx);
-    }, { programs, codes, block: captureBlock().toString('base64'), fx });
-    expect(r.errors).toEqual([]);
-    expect(r.clamp.same).toBe(true);
-    expect(r.clamp.tail).toEqual([fx.mesh.vertex_count - 1, fx.mesh.vertex_count - 1, fx.mesh.vertex_count - 1]);
-    fs.mkdirSync(SHOTS, { recursive: true });
-    for (const name of ['points', 'lines', 'mesh']) {
-      const px = Buffer.from(r[name], 'base64');
-      // Something other than the clear colour was drawn.
-      let drawn = 0;
-      for (let i = 0; i < px.length; i += 4) if (px[i] !== px[0] || px[i + 1] !== px[1] || px[i + 2] !== px[2]) drawn++;
-      expect(drawn, name).toBeGreaterThan(500);
-      fs.writeFileSync(path.join(SHOTS, `shaders-${name}-${info.project.name}.png`), png(px, 256, 256));
-    }
-  });
 });

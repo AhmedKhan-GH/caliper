@@ -1,15 +1,6 @@
-// The scene rows in the browser: every fixture of tests/scene/primitive_fixtures.h (one scene per
-// primitive: arrows, boxes, index-pair edges, meshes, cameras with their images and depth cloud, a
-// pinhole looked through, 2-D images) drawn by the WebAssembly views' scene view on the graphics
-// layer's WebGPU backend, on a default and on a compatibility-mode device, and compared inside the
-// module with the CPU reference of tests/scene/draw_reference.h under web geometry's parity rules:
-// colours from a lookup exact away from edges, a pixel next to an edge taking a side's colour, lit
-// faces within 2 levels, blended, bilinear and interpolated pixels within 1. The module reports, per
-// fixture, how many pixels differ and why (web/wasm/src/scene_selftest.cpp); every report must say
-// "ok" and that none is outside the rules. Each picture is saved as scene-<fixture>-<level>.png
-// under the shots folder. These rows draw every shape with the scene core's built-in draw, whose draw
-// list the reference reads; the module's scene views draw them with the library pieces by default,
-// which the last test here checks, and draw_parity.spec.ts compares those pictures with the app's.
+// Each scene fixture draws through library pieces on core and compatibility WebGPU devices.
+// The report checks piece count, nonempty pixels, and scene errors. draw_parity.spec.ts compares
+// the app and browser color, ID, and depth targets for the same fixtures.
 //
 // The files come from CALIPER_WASM_DIR, else from python/caliper/_web, where scripts/build_wasm.py
 // puts them; without them these tests are skipped.
@@ -27,7 +18,7 @@ test.skip(!FILES.every((f) => fs.existsSync(path.join(WASM, f))), `needs the Web
 
 for (const compat of [false, true]) {
   const level = compat ? 'compatibility' : 'core';
-  test(`every primitive drawn by the scene view matches the CPU reference on a ${level} device`, async ({ page }, info) => {
+  test(`every primitive drawn by the scene view draws with library pieces on a ${level} device`, async ({ page }, info) => {
     test.skip(info.project.name === 'canvas2d', 'the WebAssembly views need a WebGPU adapter');
     const site = await serve(WEB, (name) => (FILES.includes(name.slice(1)) ? path.join(WASM, name.slice(1)) : null));
     try {
@@ -89,7 +80,7 @@ for (const compat of [false, true]) {
         const r = got.reports[name] ?? 'fail no report';
         console.log(`[${info.project.name}] ${level}: ${r}`);
         expect(r, name).toMatch(/^ok /);
-        expect(r, name).toContain('and 0 are outside the parity rules');
+        expect(r, name).toContain('notes=0');
         expect(r, name).toContain(`level=${level}`);
       }
     } finally {
@@ -98,16 +89,13 @@ for (const compat of [false, true]) {
   });
 }
 
-// The module's scene views draw their shapes with the library pieces by default, and a module made
-// with caliperConfig.shapes "builtin" draws every shape with the built-in draw, as
-// CALIPER_SCENE_SHAPES=builtin does in the app: the facts of the first frame of the fixture "boxes"
-// (web/wasm/src/scene_parity.h) in each module.
-test('the scene views draw their shapes with the library pieces, and caliperConfig.shapes "builtin" switches to the built-in draw', async ({ page }, info) => {
+// The scene fixture exposes its library pieces and program identities.
+test('the scene views draw their shapes with the library pieces', async ({ page }, info) => {
   test.skip(info.project.name === 'canvas2d', 'the WebAssembly views need a WebGPU adapter');
   const site = await serve(WEB, (name) => (FILES.includes(name.slice(1)) ? path.join(WASM, name.slice(1)) : null));
   try {
     await page.goto(`${site.origin}/test/blank.html`);
-    const facts = async (shapes: string | null) => page.evaluate(async ({ base, shapes }) => {
+    const facts = async () => page.evaluate(async ({ base }) => {
       type M = { caliperStats?: Record<string, string>; caliperSceneParity?: { facts: string };
                  _caliper_views_scene_parity(config: number): number; _caliper_views_destroy(): void;
                  _free(p: number): void; stringToNewUTF8(s: string): number };
@@ -118,7 +106,7 @@ test('the scene views draw their shapes with the library pieces, and caliperConf
       canvas.style.height = '64px';
       document.body.append(canvas);
       const m: M = await factory({
-        canvas, caliperConfig: shapes ? { src: '', shapes } : { src: '' },
+        canvas, caliperConfig: { src: '' },
         instantiateWasm: (imports: WebAssembly.Imports, receive: (i: WebAssembly.Instance, m: WebAssembly.Module) => void) => {
           WebAssembly.instantiate(wasm as WebAssembly.Module, imports).then((i) => receive(i, wasm));
           return {};
@@ -139,21 +127,13 @@ test('the scene views draw their shapes with the library pieces, and caliperConf
       m._caliper_views_destroy();
       canvas.remove();
       return out;
-    }, { base: `${site.origin}/`, shapes });
-    const byDefault = await facts(null);
-    const builtin = await facts('builtin');
-    console.log(`[${info.project.name}] boxes by default: ${byDefault.report}; with shapes "builtin": ${builtin.report}`);
+    }, { base: `${site.origin}/` });
+    const byDefault = await facts();
     expect(byDefault.report).toMatch(/^ok /);
-    expect(builtin.report).toMatch(/^ok /);
-    const p = JSON.parse(byDefault.facts) as { draw: string; pieces: number; builtin: number; programs: object };
-    const b = JSON.parse(builtin.facts) as { draw: string; pieces: number; builtin: number; programs: object };
+    const p = JSON.parse(byDefault.facts) as { draw: string; pieces: number; programs: object };
     expect(p.draw).toBe('pieces');
     expect(p.pieces, 'the shapes that pieces drew').toBeGreaterThan(0);
     expect(Object.keys(p.programs).length).toBe(p.pieces);
-    expect(b.draw).toBe('builtin');
-    expect(b.pieces).toBe(0);
-    expect(b.builtin).toBe(p.pieces + p.builtin);
-    expect(Object.keys(b.programs)).toEqual([]);
   } finally {
     site.close();
   }

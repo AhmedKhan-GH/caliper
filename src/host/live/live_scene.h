@@ -1,33 +1,11 @@
 // live_scene.h: the scene view of the shared view layer (kind 6, scene; design/sprint-4.md,
 // increment 1; design/scenes.md, "Drawing a scene natively").
 //
-// A scene view owns one scene of the scene core (src/host/scene) and applies to it the decoded
-// scene messages of wire protocol 3.2 (docs/reference/wire-protocol-3-2.md): SCENE_UPDATE with the
-// parts points, lines (segments, strips and index-pair edges), arrows, boxes, mesh (with normals,
-// or UVs and a texture), image (colour, grey, depth and segmentation) and camera; SCENE_TRANSFORMS;
-// SCENE_CLASSES; SCENE_CLEAR of named parts or all, static items, and the reset that opens a scene's
-// state for a new subscription. The arrays of a network message arrive as host bytes, so every
-// array is uploaded into a buffer of the graphics layer that the view owns, and every image into a
-// texture it owns (a u16 depth scaled to f32 scene units and class ids widened to u32 on the way,
-// as the texture's format needs), which is one copy, reported as such: the info line says
-// "copied" and the bytes, and each upload counts in the view's copy counters
-// (embed/render_stats.h); so does the class table texture, 256 KiB each time the table changes. A
-// batch replaced by one of the same or a smaller size is written into the buffers it already has;
-// a larger one gets new buffers, with a capacity rounded up to a power of two of at least 4 KiB,
-// as web geometry's "Uploads and reuse" sets out, and an image keeps its texture while its size
-// and format stay. Encoded (JPEG or PNG) images are not drawn yet.
-//
-// When something changed, or the camera moved, the view compiles the scene into a draw list of the
-// graphics layer and submits it to an offscreen colour target with depth, which the view's window
-// shows as an ImGui image; nothing is compiled or submitted while nothing changes. The camera is
-// the scene core's orbit about the scene's up axis (pan and zoom in a 2-D scene), fitted once when
-// the scene first has bounds and again when the person asks. In 3-D the person can switch the
-// orbit between Y up and Z up (design/scenes.md, "The up-axis switch"), which changes only the
-// camera, and the view measures the scale bar that the view layer draws over its picture
-// (scene/scale_bar.h). The mode the person chose and the scale bar option are the settings the
-// view layer keeps when the view closes and gives back when it opens again. A colormapped batch takes its
-// colormap block from the view's own cache of key blocks (src/host/gfx/colormap_keys.h), derived
-// from the CPU reference once per colormap and range.
+// A scene view keeps the entity tree, camera, CPU arrays, and library piece resources.
+// Scene messages update that state. The read-only decoder in scene_legacy.cpp also accepts
+// saved per-shape streams. DrawRuntime draws each piece into color, ID, and depth targets.
+// A frame changes when data, camera, styles, or piece output changes. Otherwise the view keeps
+// its previous targets. Camera input, labels, selections, and pick events use the scene tree.
 //
 // Every method runs on the frame thread. The view never waits for the GPU except in
 // read_pixels(), which tests call.
@@ -36,11 +14,10 @@
 #include "gfx/gfx.h"
 #include "net/wire.h"
 #include "scene/camera.h"
-#include "scene/compile.h"
+#include "scene/labels.h"
 #include "scene/pick.h"
 #include "scene/scale_bar.h"
 #include "scene/scene.h"
-#include "scene/stage_cache.h"
 
 #include <chrono>
 #include <cstdint>
@@ -51,15 +28,13 @@
 #include <string>
 #include <vector>
 
-namespace caliper_scene { class BackendResources; }
 namespace caliper_draw { class DrawFeed; class DrawRuntime; struct PickedItem; class ScenePieces; struct PieceBatch; }
-namespace caliper_gfx { namespace cmap { class KeyBlockCache; } }
 
 namespace caliper_live_views {
 
 // What the last drawn frame of a scene view cost.
 struct SceneCost {
-    double compile_ms = 0;     // the scene core's prepare and compile, CPU
+    double compile_ms = 0;     // piece reconciliation, CPU
     double submit_ms = 0;      // the layer's validation and encode of the submit, CPU
     double gpu_ms = -1;        // GPU time of the latest completed frames; < 0 when unknown
     uint32_t draws = 0;
@@ -74,27 +49,11 @@ struct SceneCounts {
     uint64_t messages = 0;            // messages applied
     uint64_t bytes_last = 0;          // bytes copied by the latest round of updates
     uint64_t bytes_total = 0, copies_total = 0;
-    uint64_t buffers_created = 0, buffers_reused = 0;
-    uint64_t buffers_live = 0;
-    uint64_t textures_created = 0, textures_reused = 0;   // images and textured meshes
-    uint64_t textures_live = 0;
+    uint64_t arrays_live = 0;    // CPU arrays for metadata, selections, and saved streams
 };
 
-// What draws the shapes of a scene view (draw/scene_pieces.h): the library pieces, or the scene
-// core's built-in draw. The pieces are the default where the build has them (the app with the
-// builder, and the browser module); CALIPER_SCENE_SHAPES=builtin in the environment selects the
-// built-in for every view (the browser module sets it from caliperConfig.shapes), and
-// set_shape_draw() for one view, as the comparison tests do. A build without the pieces (a build
-// without the builder) always draws the built-in.
-enum class ShapeDraw : uint8_t { pieces = 0, builtin = 1 };
-ShapeDraw default_shape_draw();
-
-// The shapes of the last frame that pieces drew, those that the built-in drew, and why each of
-// those fell back, by kind.
 struct SceneShapeCounts {
     uint32_t pieces = 0;
-    uint32_t builtin = 0;
-    std::map<std::string, uint32_t> fallbacks;
     uint32_t marks = 0;   // the programs of the highlight of a selection, drawn by the pieces
     uint32_t received = 0;   // the shapes drawn from resources that came in the piece form
 };
@@ -146,14 +105,11 @@ public:
     std::vector<caliper_scene::LabelAnchor> labels() const;
 
     // ---- picking (design/scenes.md, "Picking, hover and selection") --------------------------------
-    // Asks for a pick at (x, y), in physical pixels of the view's target, through the scene core's
-    // pick pass: the pick variants of the drawn scene into a 16 x 16 window around the pointer. The
-    // answer comes from poll_pick a frame or two later; a result whose frame the view replaced since,
-    // or that a newer request superseded, is dropped. Nothing is submitted while nobody asks.
+    // Reads a window from the frame's ID and depth targets. A newer request supersedes the
+    // current request. A result from an older scene generation is dropped.
     bool request_pick(float x, float y, std::string* why);
-    caliper_scene::PickPass::Result poll_pick(caliper_scene::Hit* out);
-    bool pick_pending() const { return (pick_ && pick_->pending()) || shape_asked_; }
-    const caliper_scene::PickPass* pick_pass() const { return pick_.get(); }
+    caliper_scene::PickResult poll_pick(caliper_scene::Hit* out);
+    bool pick_pending() const { return shape_asked_; }
     // The frames the view has drawn: the generation a pick belongs to.
     uint64_t generation() const { return generation_; }
     // The detail of a pick or hover event for a hit, as protocol 3.2 gives it: entity, primitive,
@@ -174,7 +130,7 @@ public:
     // the readback read, not from a newer one; Miss when no program's texel lies within the
     // radius or that version holds no such item; Pending; Dropped when a newer request superseded
     // it; None when nothing is asked.
-    caliper_scene::PickPass::Result poll_program_pick(uint64_t ticket, caliper_draw::PickedItem* out, float* depth);
+    caliper_scene::PickResult poll_program_pick(uint64_t ticket, caliper_draw::PickedItem* out, float* depth);
     // A number that no other view of the process has. A panel's pick state holds it beside its
     // tickets, thus a request made in one view is never polled in another, whose backend may be
     // another, after a detach, a new attachment or a panel that now draws its own scene.
@@ -272,18 +228,6 @@ public:
     // After describe(): a remembered mode wins over the scene's up.
     void restore(const Settings& s);
 
-    // The stages of the panel that shows the view (scene/stage_cache.h, design/gpu-programs.md):
-    // the points and lines of an entity with a stage draw its program, in the colour pass and the
-    // pick pass, and the highlight of a selection draws the selected items with them. Null draws
-    // the built-in programs. The panel sets it before each render; a new source, a new revision of
-    // it, or a stage that reads the time draws the view again. A rectangle selection projects the
-    // batches' own positions on the CPU, which a vertex stage does not move.
-    void set_stage_source(caliper_scene::StageSource* source);
-    // The draws of the last frame that used a stage program.
-    uint32_t staged_draws() const { return staged_; }
-    // The step the stages read: the first stamp of the latest scene update that carried one.
-    int64_t stage_step() const { return stamp_step_; }
-
     // ---- programs of pieces (design/programmable-graphics.md, Render Graph, Draw State and Safety
     // of Draws) ------------------------------------------------------------------------------------
     // The draw halves of the programs that the panel shows. The view installs one runtime of the
@@ -308,13 +252,7 @@ public:
     std::vector<const caliper_draw::DrawRuntime*> shape_runtimes() const;
 
     // ---- shapes drawn by library pieces (draw/scene_pieces.h) ---------------------------------------
-    // Draws the shapes with the pieces or with the built-in draw; a change draws the view again.
-    // The pieces draw each batch that one can draw in submits of their own after the scene's frame,
-    // before the feed's programs, with the batch's pose and depth offset in their matrix; the
-    // scene core leaves those batches out of its colour pass and its pick pass, and request_pick()
-    // also reads the pieces' IDs, so that poll_pick() gives the same hit for a batch either way.
-    void set_shape_draw(ShapeDraw d);
-    ShapeDraw shape_draw() const { return shape_draw_; }
+    // The library pieces and selection marks of the current frame.
     SceneShapeCounts shape_counts() const;
     // A piece that draws the batch (path, p) with resources that the caller writes, in place of the
     // converter's (the spec's surface@1 and path@1); null removes it. Nothing without the pieces.
@@ -358,21 +296,12 @@ public:
     std::string camera_text() const;
     // The camera of the last frame the view submitted, in the same words (the UI driver's drags).
     std::string drawn_camera_text() const;
-    // The draws of the last compiled frame (tests): kept only while keep_draws is on.
-    void keep_draws(bool on) { keep_draws_ = on; }
-    const caliper_gfx::DrawList& last_draws() const { return last_list_; }
-    const caliper_scene::DrawMap& last_map() const { return last_map_; }
     caliper_gfx::Backend& backend() { return gfx_; }
 
 private:
-    struct Upload { caliper_gfx::Buffer buffer; uint64_t capacity = 0; };
-    // One layer (stamped or static) of one part of one entity: its batch and its buffers by role.
+    // One layer of one part: its batch and CPU arrays by role.
     struct Slot {
         caliper_scene::Batch batch;
-        std::map<int, Upload> buffers;
-        caliper_gfx::Texture texture;   // an image's, or a textured mesh's
-        uint32_t tex_w = 0, tex_h = 0;
-        caliper_gfx::Format tex_format = caliper_gfx::Format::RGBA8Unorm;
         std::vector<uint8_t> cpu_rows, cpu_ids;   // CPU views for the labels: positions or centres, class ids
         std::map<int, std::vector<uint8_t>> cpu;    // points and boxes: every array as it arrived, by role
         // The payload axis of the batch's item dim, when the producer sampled it (the update's `axes`),
@@ -392,11 +321,6 @@ private:
         }
     };
 
-    bool upload(Slot& s, caliper_scene::Role role, const void* bytes, uint64_t size, caliper_gfx::Buffer* out,
-                std::string* why);
-    bool upload_texture(Slot& s, caliper_gfx::Format f, uint32_t w, uint32_t h, const void* data,
-                        uint32_t row_pitch, std::string* why);
-    void release_texture(Slot& s);
     void release(Slot& s);
     bool in_pixel_space(caliper_scene::EntityId e) const;   // under a camera, from the parts now
     void rebuild(const std::string& path);    // the entity's batches again from the slots
@@ -406,46 +330,24 @@ private:
     void changed() { dirty_ = true; }
 
     caliper_gfx::Backend& gfx_;
-    const caliper_gfx::ProgramDesc* programs_;
-    std::shared_ptr<caliper_gfx::cmap::KeyBlockCache> colormaps_;   // the view's key blocks
-    std::unique_ptr<caliper_scene::BackendResources> res_;
     caliper_scene::SceneTree tree_;
-    caliper_scene::SceneCompiler compiler_;
     caliper_scene::ViewCamera camera_ = caliper_scene::Orbit{};
     std::string through_;              // the camera entity looked through, or ""
-    std::unique_ptr<caliper_scene::PickPass> pick_;
     // The programs' pick: its readback, its ticket and what each program showed (live_scene.cpp).
     struct ProgramPick;
     std::unique_ptr<ProgramPick> program_pick_;
     uint64_t serial_ = 0;
     uint64_t generation_ = 0;          // colour frames submitted
-    // The panel's stages: the programs on this view's backend, the source's revision drawn last,
-    // the stage draws of the last frame and the step from the stamps.
-    std::unique_ptr<caliper_scene::StageCache> stages_;
-    uint64_t stage_revision_ = 0;
-    uint32_t staged_ = 0;
-    // The frames with stage draws that the GPU has not completed, oldest first, with their submit
-    // time: poll() tells the stage source how long the oldest one waits.
-    std::deque<std::pair<caliper_gfx::Serial, std::chrono::steady_clock::time_point>> staged_frames_;
-    int64_t stamp_step_ = 0;
-    caliper_scene::CompileOptions stage_options(caliper_scene::CompileOptions opt) const;
-
     // Selections and their highlight: the view's own (entity path and primitive to sorted indices),
     // the linked ones (item space to sorted items), and what draws them: a 2-D scene of one quad that
     // dims the picture, and a scene of the selected items alone with the same poses and camera.
     std::map<std::pair<std::string, int>, std::vector<int64_t>> selected_;
     std::map<std::string, std::vector<int64_t>> linked_;
     uint64_t highlighted_ = 0;
-    caliper_gfx::Texture dim_texture_;
-    uint32_t dim_rgba_ = 0;
-    std::vector<caliper_gfx::Buffer> hl_buffers_;
-    caliper_scene::SceneCompiler hl_compiler_, dim_compiler_;
-    bool build_highlight(caliper_scene::SceneTree* hl, caliper_scene::ViewCamera* cam, std::string* why);
     // The selected rows of a batch, by the view's selection and the linked one: sorted, unique and
     // below the batch's count; empty when none is selected or the batch has no slot.
     std::vector<int64_t> highlight_rows(caliper_scene::EntityId e, caliper_scene::Primitive p) const;
     bool piece_highlight_ = false;   // the shapes' pieces draw this frame's highlight
-    std::string logged_shapes_;      // the last lines of CALIPER_SCENE_FALLBACK_LOG
     bool highlight_wanted() const { return !selected_.empty() || !linked_.empty(); }
     std::map<Key, Slot> slots_;
     std::vector<uint8_t> scratch_;
@@ -466,7 +368,7 @@ private:
     uint64_t filtered_rev_ = ~0ull;   // the tree's revision after the filter was applied
     void apply_entity_filter();
     // The update in the per-shape form; `received` holds the piece form's resources, which the pieces draw.
-    bool apply_update(const caliper_net::wire::SceneUpdate& u, const std::vector<caliper_net::wire::Section>* received,
+    bool decode_scene_update(const caliper_net::wire::SceneUpdate& u, const std::vector<caliper_net::wire::Section>* received,
                       std::string* why);
 
     caliper_gfx::Texture color_, depth_;
@@ -482,21 +384,14 @@ private:
     std::vector<std::unique_ptr<ProgramSlot>> draws_;
     // The shapes' pieces, their revision drawn, and the pick of their IDs that request_pick() asks
     // beside the pick pass: its readback, whether it and the pass answered, and their hits.
-    ShapeDraw shape_draw_ = ShapeDraw::builtin;
     // Deleted in live_scene.cpp, which knows the type only where the build has the pieces.
     struct ShapesDeleter {
         void operator()(caliper_draw::ScenePieces* p) const;
     };
     std::unique_ptr<caliper_draw::ScenePieces, ShapesDeleter> shapes_;
     uint64_t shape_revision_ = ~0ull, marks_revision_ = ~0ull;
-    // The built-in batches of a looked-through camera's pixel space, each list with the shape's
-    // program it draws before ("" after the last one).
-    std::vector<std::pair<std::string, caliper_gfx::DrawList>> late_lists_;
     std::unique_ptr<caliper_scene::FramePick> shape_pick_;
-    bool shape_asked_ = false, shape_done_ = false, entity_done_ = false;
-    caliper_scene::PickPass::Result entity_result_ = caliper_scene::PickPass::Result::None;
-    caliper_scene::Hit entity_hit_, shape_hit_;
-    bool shape_has_hit_ = false;
+    bool shape_asked_ = false;
     uint64_t shape_generation_ = 0;   // the frame the shapes' pick reads; a newer one drops it
     void sync_shapes();
     bool external_draws() const;
@@ -516,9 +411,6 @@ private:
 
     SceneCounts counts_;
     SceneCost cost_;
-    bool keep_draws_ = false;
-    caliper_gfx::DrawList last_list_;
-    caliper_scene::DrawMap last_map_;
 };
 
 }  // namespace caliper_live_views

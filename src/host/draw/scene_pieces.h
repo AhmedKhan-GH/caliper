@@ -2,29 +2,14 @@
 // caliper_draw: the shapes of a scene view drawn by the library pieces
 // (design/programmable-graphics.md, Library Pieces).
 //
-// ScenePieces is the scene view's own feed of draw halves (live/live_scene.h): one program for
-// each batch of the scene tree that a library piece can draw, an instance of points@1, lines@1,
-// arrows@1, boxes@1, mesh@1, image@1, depth@1 or segmentation@1, whose resources the host writes
-// from the part's arrays as the piece's derive half would write them. A spec can give a batch
-// another piece (surface@1 over a surface's grid, path@1 over the rows of a path), with its own
-// resources and params. The scene core then leaves those batches out of its colour pass and its
-// pick pass, and a pick of a piece's ID maps back to the batch's entity, primitive and item, so
-// that the pick's event is the one the built-in draw gives.
+// ScenePieces gives DrawRuntime one library piece for each scene batch. It receives piece
+// resources directly, or converts arrays from a saved stream. A spec can supply another
+// library piece for a batch, such as surface@1 or path@1. Picks map back to entity and item.
+// Invalid input and stopped pieces produce explicit scene errors.
 //
-// The view keeps the built-in draw of every batch beside it: a batch that no piece can draw yet,
-// such as one above the piece's capacity, a textured mesh or the overlay of a camera looked
-// through, a piece that its runtime refused or stopped, and every batch while the view draws
-// with ShapeDraw::builtin, draws with the scene core as before. Each such fallback is counted by
-// its kind.
-//
-// The params of a batch, its styles, its pose and the scene's class table are read at each sync
-// from the scene tree; the arrays are read once, when the part arrives, and every size of a
-// part's array is checked against its shape and dtype before a byte is read. Everything runs on
-// the scene view's frame thread.
 #include "draw/draw_host.h"
 #include "net/wire.h"
 #include "scene/camera.h"
-#include "scene/compile.h"
 #include "scene/pick.h"
 #include "scene/scene.h"
 
@@ -60,12 +45,8 @@ struct HighlightRows {
     std::vector<std::int64_t> rows;   // sorted, unique, each below the batch's count
 };
 
-// Why a shape keeps the built-in draw: an input that the piece does not take (another dtype or
-// shape), a part above the piece's capacity, a textured mesh, a stage program, a param outside
-// the piece's range, a pixel space the piece cannot place, or a piece that is missing or stopped.
-// A test holds this list (tests/gfx/gfx_scene_view.cpp), thus a new kind fails it until it is
-// listed there.
-enum class Fallback : std::uint8_t {
+// The input or runtime condition that prevents a piece from drawing its batch.
+enum class InputError : std::uint8_t {
     points_shape,
     lines_shape,
     arrows_shape,
@@ -83,8 +64,6 @@ enum class Fallback : std::uint8_t {
     image_pixels_capacity,
     depth_pixels_capacity,
     mask_pixels_capacity,
-    textured_mesh,
-    stage,
     point_size,
     line_width,
     box_width,
@@ -96,17 +75,19 @@ enum class Fallback : std::uint8_t {
     count,
     none = 255,
 };
-const char* fallback_name(Fallback kind);
-// The names of every kind, in the order of Fallback; ShapeCounts::fallbacks counts by these names.
-std::vector<std::string> fallback_kinds();
+const char* input_error_message(InputError kind);
 
-// The shapes that pieces draw and those that fall back to the built-in draw, by kind.
+// The programs in the current scene frame.
 struct ShapeCounts {
     std::uint32_t pieces = 0;
-    std::uint32_t builtin = 0;
-    std::map<std::string, std::uint32_t> fallbacks;
     std::uint32_t marks = 0;   // the highlight's programs
     std::uint32_t received = 0;   // the shapes whose resources came in the piece form, drawn as they came
+};
+
+struct SceneInputError {
+    std::string path;
+    std::string code;
+    std::string message;
 };
 
 class ScenePieces final : public DrawFeed {
@@ -127,29 +108,12 @@ public:
     void clear_override(const std::string& path, caliper_scene::Primitive p);
 
     // Before a frame, after the tree's update(): the programs from the tree's effective batches,
-    // with each batch's params and pose. `through` is the camera looked through, `stage` whether a
-    // batch draws a stage program, and `three_d` whether the scene has depth.
+    // with each batch's params and pose. `through` is the camera looked through.
     struct SyncState {
         caliper_scene::EntityId through;
         bool three_d = true;
-        std::function<bool(const std::string& path, caliper_scene::Primitive p)> stage;
     };
     void sync(const caliper_scene::SceneTree& tree, const SyncState& state);
-    // Whether a piece draws the batch (e, p) in this frame; the scene core leaves it out.
-    bool draws(caliper_scene::EntityId e, caliper_scene::Primitive p) const;
-    // Whether the batch (e, p) lies in the pixel space of the camera looked through and keeps the
-    // built-in draw: the view leaves it out of its first frame and draws it with the scene core
-    // among the shapes' pieces, in the scene core's order of that flat layer. The batches of one
-    // segment draw together just before the program late_segments()[segment] ("" after the last
-    // shape's program).
-    bool late(caliper_scene::EntityId e, caliper_scene::Primitive p) const;
-    std::size_t late_segment(caliper_scene::EntityId e, caliper_scene::Primitive p) const;
-    const std::vector<std::string>& late_segments() const { return late_before_; }
-    // Whether the built-in batch of the flat layer that `builtin` hit draws over the piece that
-    // `piece` hit, both in that layer.
-    bool late_over(const caliper_scene::Hit& builtin, const caliper_scene::Hit& piece) const;
-    // Whether frustum@1 draws the frustum of the camera entity e in this frame.
-    bool draws_frustum(caliper_scene::EntityId e) const;
     bool any() const;
     // The matrices of the frame: the scene core's, with which each program gets its batch's model.
     void set_camera(const caliper_scene::CameraMatrices& cm);
@@ -159,6 +123,7 @@ public:
     bool owns(std::uint32_t pick_id) const;
     bool hit(const caliper_scene::FrameHit& fh, const caliper_scene::PickWindow& w, caliper_scene::Hit* out) const;
     ShapeCounts counts() const;
+    const std::vector<SceneInputError>& errors() const { return errors_; }
     // The view installed a new runtime for `program`: the next frame gives it every resource.
     void installed(const std::string& program);
 
@@ -167,8 +132,8 @@ public:
     // view dims), then the selected rows of each batch in a second instance of its piece, with
     // the batch's params and matrix. marks() draws them into the colour alone, without depth and
     // ID, so that none is hidden and a pick reads the shapes under them. False, with no marks,
-    // when a selected batch has no piece in this frame: the view then keeps the built-in
-    // highlight. No rows clear the marks. The rows drawn are counted in `highlighted`.
+    // when a selected batch has no piece in this frame. No rows clear the marks.
+    // The rows drawn are counted in `highlighted`.
     bool set_highlight(const std::vector<HighlightRows>& rows, std::uint32_t ground, std::uint32_t width,
                        std::uint32_t height, std::uint64_t* highlighted);
     // The feed of the highlight's programs, which the view draws after every other program.
@@ -192,8 +157,6 @@ private:
     const caliper_scene::SceneTree* tree_ = nullptr;
     std::map<std::pair<Key, bool>, std::shared_ptr<Converted>> parts_;   // by (path, primitive), layer
     std::map<Key, std::shared_ptr<Converted>> overrides_;
-    std::map<Key, std::size_t> late_;      // overlay batches that keep the built-in, by segment
-    std::vector<std::string> late_before_;   // each segment's next program, "" for none
     std::shared_ptr<Converted> frustum_;   // frustum@1's resource: the identity, element 0
     std::vector<std::unique_ptr<Program>> programs_;     // in the tree's path order
     std::map<std::string, std::uint32_t> pick_ids_;      // by program id, stable while it lives
@@ -203,6 +166,7 @@ private:
     std::uint64_t generation_ = 0;
     caliper_scene::CameraMatrices cm_;
     ShapeCounts counts_;
+    std::vector<SceneInputError> errors_;
     // The highlight's programs (marks()): the dim, then the selected rows of each batch.
     std::unique_ptr<Marks> marks_feed_;
     std::vector<std::unique_ptr<Program>> marks_;

@@ -1494,15 +1494,15 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     }
     if (!hovered && !v.scene_hover.empty()) v.scene_hover.clear();
     caliper_scene::Hit hit;
-    const caliper_scene::PickPass::Result pr = sc->poll_pick(&hit);
-    if (pr == caliper_scene::PickPass::Result::Hit || pr == caliper_scene::PickPass::Result::Miss ||
-        pr == caliper_scene::PickPass::Result::Dropped) {
+    const caliper_scene::PickResult pr = sc->poll_pick(&hit);
+    if (pr == caliper_scene::PickResult::Hit || pr == caliper_scene::PickResult::Miss ||
+        pr == caliper_scene::PickResult::Dropped) {
         const bool click = v.scene_click;
         v.scene_click = false;
-        const std::string detail = pr == caliper_scene::PickPass::Result::Hit ? sc->pick_detail(hit) : std::string();
+        const std::string detail = pr == caliper_scene::PickResult::Hit ? sc->pick_detail(hit) : std::string();
         if (click) {
             if (!detail.empty()) emit(S, v, "pick", detail);
-        } else if (pr != caliper_scene::PickPass::Result::Dropped) {
+        } else if (pr != caliper_scene::PickResult::Dropped) {
             const int64_t key = detail.empty() ? -1
                                                : (int64_t(hit.entity.index) << 40) ^ (int64_t(hit.primitive) << 36) ^
                                                      (int64_t(hit.part) << 33) ^ int64_t(hit.item);

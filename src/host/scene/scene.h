@@ -7,8 +7,7 @@
 // byte offset, count, stride and format, by role) and never copies their data. Every part has a
 // stamped layer and a static layer, so that a clear removes stamped parts and keeps the scene's
 // setup. update() recomputes, in one forward pass over the dirty subtrees, the world matrices
-// (composed in double) and the bounds. Nothing draws here: compile.h turns a tree into a draw
-// list of the graphics layer.
+// (composed in double) and the bounds. Library pieces draw each batch.
 //
 // Decisions where the design was incomplete (each is in the step's report):
 //  - The root takes one of the 1,024 entity rows, because it may hold primitives and a batch
@@ -22,12 +21,6 @@
 //  - The world bounds of a scene cover its 3-D batches and its cameras' centres. Batches in a
 //    camera's pixel space are left out, because their place depends on the plane distance,
 //    which depends on the bounds.
-//  - Arrays that the index clamp and the edge gather read through storage bindings (a mesh's
-//    indices; an edge batch's pairs, positions and per-vertex colours) sit at byte offsets that
-//    are multiples of 256, WebGPU's storage offset alignment, and the gather's rows are packed.
-//  - An image batch carries the layer texture that the view filled from its buffer with
-//    fill_texture_from_buffer, since filling is the view's work on the layer; the store keeps
-//    only the handle and the size.
 #pragma once
 
 #include "gfx/gfx.h"

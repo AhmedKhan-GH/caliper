@@ -1,4 +1,4 @@
-// points_parity.cpp: points@1 against the built-in draw of the points view (points_parity.h).
+// points_parity.cpp: points@1 against the initial payload draw of the points view (points_parity.h).
 #include "points_parity.h"
 
 #include "live/live_points.h"
@@ -29,7 +29,7 @@ struct Side {
     std::vector<uint8_t> pixels;
     bool done = false;
     bool pieces = false;
-    std::string fallback;
+    std::string error;
 };
 
 struct Case {
@@ -37,7 +37,7 @@ struct Case {
     std::vector<float> pos, aux, sel_pos, sel_aux;
     lv::PointsLook look;
     gfx::Buffer bufs[4];
-    Side side[2];   // 0: the built-in, 1: points@1
+    Side side[2];   // 0: initial data, 1: replacement data
 };
 
 struct Run {
@@ -166,7 +166,7 @@ int gap(uint32_t a, uint32_t b) {
     return d;
 }
 
-// The piece's picture against the built-in's under the match tests' tolerances.
+// The piece's picture against the initial payload's under the match tests' tolerances.
 std::string compare(const Case& c) {
     const std::vector<uint8_t>& b = c.side[0].pixels;
     const std::vector<uint8_t>& p = c.side[1].pixels;
@@ -192,12 +192,12 @@ std::string compare(const Case& c) {
             for (int dy = -1; dy <= 1 && !ok && !uniform; ++dy)
                 for (int dx = -1; dx <= 1 && !ok; ++dx) ok = gap(pc, at(b, x + dx, y + dy)) <= 1;
             if (!ok && failed++ == 0)
-                std::snprintf(first, sizeof first, " first=(%d,%d) piece=%08x builtin=%08x", x, y, pc, bc);
+                std::snprintf(first, sizeof first, " first=(%d,%d) piece=%08x initial=%08x", x, y, pc, bc);
         }
     char t[320];
     std::snprintf(t, sizeof t, "%s pieces=%d differing=%zu lit=%zu largest=%d failed=%zu%s%s%s", c.name.c_str(),
                   c.side[1].pieces ? 1 : 0, differing, lit, largest, failed, first,
-                  c.side[1].pieces ? "" : " fallback=", c.side[1].pieces ? "" : c.side[1].fallback.c_str());
+                  c.side[1].pieces ? "" : " error=", c.side[1].pieces ? "" : c.side[1].error.c_str());
     return t;
 }
 
@@ -220,14 +220,17 @@ bool points_parity_start(gfx::Backend& b, const gfx::ProgramDesc* programs, std:
             Side& s = c.side[k];
             s.scene = std::make_unique<lv::PointsScene>(b, programs);
             if (!s.scene->init(why)) return false;
-            s.scene->set_draw(k == 0 ? lv::PointsDraw::builtin : lv::PointsDraw::pieces);
+            if (k == 1) {
+                lv::PointsArrays empty;
+                if (!s.scene->set(empty, nullptr, c.look, why)) return false;
+            }
             if (!s.scene->set(all, c.sel_pos.empty() ? nullptr : &sel, c.look, why)) return false;
             s.scene->fit(double(kW) / double(kH));
             const uint32_t clear = c.look.dims == 3 ? (kGround & 0x00ffffffu) : kGround;
             gfx::Serial serial = 0;
             if (!s.scene->render(kW, kH, 1.0f, clear, &serial, why)) return false;
             s.pieces = s.scene->drew_pieces();
-            s.fallback = s.scene->fallback();
+            s.error = s.scene->error();
             s.rb = b.read_texture(s.scene->color(), 0, 0, kW, kH);
             if (!s.rb) {
                 if (why) *why = "no readback: " + b.last_error();
@@ -254,10 +257,10 @@ bool points_parity_poll(gfx::Backend& b, std::string* report) {
     std::string text;
     for (auto& cp : r.cases) {
         const std::string clause = compare(*cp);
-        ok = ok && cp->side[1].pieces && !cp->side[0].pieces && clause.find(" failed=0") != std::string::npos;
+        ok = ok && cp->side[1].pieces && cp->side[0].pieces && clause.find(" failed=0") != std::string::npos;
         text += "; " + clause;
     }
-    *report = std::string(ok ? "ok" : "fail") + " points@1 against the built-in in " + std::to_string(r.cases.size()) +
+    *report = std::string(ok ? "ok" : "fail") + " points@1 against the initial payload in " + std::to_string(r.cases.size()) +
               " cases" + text;
     points_parity_stop();
     return true;

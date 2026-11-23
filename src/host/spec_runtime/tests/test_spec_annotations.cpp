@@ -11,7 +11,7 @@
 #include "spec_runtime/label_layout.h"
 #include "spec_runtime/spec_layout.h"
 #include "live/scene_overlays.h"
-#include "scene/compile.h"
+#include "scene/labels.h"
 
 #include "export_service.h"
 
