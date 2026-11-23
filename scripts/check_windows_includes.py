@@ -109,7 +109,7 @@ WINDOWS_ONLY = {
 # (an applet that includes <caliper/embed.h> must not compile).
 # The applets the Windows lane builds against the installed SDK
 # (scripts/build_applets_against_sdk.sh with no folder: every scope but these).
-APPLETS_SKIPPED_ON_WINDOWS = {"embed_scope", "gpt_scope", "legacy", "legacy-dev", "common"}
+APPLETS_SKIPPED_ON_WINDOWS = {"embed_scope", "gpt_scope", "common"}
 # An applet gets the SDK, UI-stack and export definitions of examples/hello and the libtorch
 # include paths of tests/test_sculpt.cpp.
 APPLET_DONORS = ["examples/hello/hello.cpp", "tests/test_sculpt.cpp"]

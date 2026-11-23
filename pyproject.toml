@@ -43,9 +43,8 @@ CALIPER_BUILD_APPLETS = "OFF"
 CALIPER_BUILD_EXAMPLES = "OFF"
 BUILD_TESTS = "OFF"
 USE_CUDA = "OFF"
-# Drop the chrome-only deps (slang, llama.cpp) from the wheel configure.
+# Drop the chrome-only deps (slang) from the wheel configure.
 CALIPER_WITH_SLANG = "OFF"
-CALIPER_WITH_LLAMA = "OFF"
 # macOS 14.0 (Sonoma) or later, as cmake/CaliperMacOSTarget.cmake explains:
 # scikit-build-core also takes the wheel's platform tag from this define, so
 # the tag is macosx_14_0_arm64 on any build machine (it is ignored elsewhere).
