@@ -145,9 +145,10 @@ fn build_segments(@builtin(global_invocation_id) id: vec3<u32>) {
     } else if (params.mode == 2u) {
         count = select(0u, arrayLength(&topology) / 2u, n > 0u);
     }
-    count = min(count, arrayLength(&segments));
+    count = min(count, min(arrayLength(&segments), arrayLength(&picks)));
     if (id.x == 0u) {
         atomicStore(&segments_count, count);
+        atomicStore(&picks_count, count);
     }
     let i = id.x;
     if (i >= count) {
@@ -183,7 +184,8 @@ fn build_segments(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let pa = position(a);
     let pb = position(b);
-    segments[i] = Segment(pa.x, pa.y, pa.z, ca, pb.x, pb.y, pb.z, cb, a, select(NONE, b, keep));
+    segments[i] = Segment(pa.x, pa.y, pa.z, ca, pb.x, pb.y, pb.z, cb);
+    picks[i] = PickIndices(a, select(NONE, b, keep));
 }
 
 // Floats in their numeric order as keys above 0: -inf lowest, +inf highest.

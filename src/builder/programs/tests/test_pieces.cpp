@@ -5,6 +5,7 @@
 // and the checks of a piece alone, with a test for each refusal.
 #include <caliper_builder/programs/pieces.h>
 #include <caliper_builder/programs/sandbox.h>
+#include <caliper_builder/spec/spec.h>
 
 #include <doctest/doctest.h>
 
@@ -211,9 +212,9 @@ std::string code_of(const cs::Piece& p) { return cp::check_piece_manifest(p).cod
 
 }  // namespace
 
-TEST_CASE("a published resource holds at most 128 MiB, the published resources of a piece 256 MiB, a private one 64 MiB") {
+TEST_CASE("a published resource holds at most 128 MiB, the published resources of a piece 304 MiB, a private one 64 MiB") {
     // What the script sends at a pass (python/caliper/_programs.py, PUBLISHED_BYTES_MAX and PUBLISHED_RESOURCE_MAX).
-    CHECK(cs::piece_limits::kPublishedBytesMax == 256u << 20);
+    CHECK(cs::piece_limits::kPublishedBytesMax == 304u << 20);
     CHECK(cs::piece_limits::kPublishedResourceBytesMax == 128u << 20);   // CALIPER_NET_RESOURCE_VERSION_MAX_BYTES
     CHECK(cs::piece_limits::kCountMax == 33554432u);
     cs::Piece p = arcs_piece();
@@ -238,10 +239,11 @@ TEST_CASE("a published resource holds at most 128 MiB, the published resources o
     p.resources[0].count += 1;
     CHECK(code_of(p) == cp::kProgramBadResource);
     CHECK(cp::check_piece_manifest(p).where != "resources");
-    // With the labels of 32 bytes the three hold exactly 256 MiB together; one label more is refused for the sum.
+    // Buffers of 112, 72, and 120 MiB reach the aggregate limit below each binding limit.
+    p.resources[1].count = 3145728;
     const std::uint64_t arcs_bytes = std::uint64_t(p.resources[1].count) * 24;
-    p.resources[0].count = 8388608;
-    p.resources[2].count = std::uint32_t((cs::piece_limits::kPublishedBytesMax - (128u << 20) - arcs_bytes) / 32);
+    p.resources[0].count = 7340032;
+    p.resources[2].count = std::uint32_t((cs::piece_limits::kPublishedBytesMax - (112u << 20) - arcs_bytes) / 32);
     CHECK_MESSAGE(code_of(p).empty(), cp::check_piece_manifest(p).message);
     p.resources[2].count += 1;
     CHECK(cp::check_piece_manifest(p).code == cp::kProgramBadResource);
@@ -703,4 +705,87 @@ TEST_CASE("a binding checks the tensor's dtype and rank, or the published buffer
     CHECK(cp::check_buffer_binding(in, p.resources[2].layout).code == cp::kPieceBadBinding);
     CHECK(cp::check_tensor_binding(in, "f32", 1).code == cp::kPieceBadBinding);
     CHECK(cp::check_buffer_binding(p.inputs[0], p.resources[1].layout).code == cp::kPieceBadBinding);
+}
+
+
+TEST_CASE("the lines and mesh library layouts retain full scene capacities within WebGPU limits") {
+    constexpr std::uint32_t count = 4194304;
+    for (const std::string name : {"lines", "mesh"}) {
+        CAPTURE(name);
+        cs::Piece piece;
+        const std::string prefix = "pieces/" + name + "/1/";
+        for (const auto& file : cp::library_files()) {
+            if (file.path.substr(0, prefix.size()) != prefix) continue;
+            const std::string leaf(file.path.substr(prefix.size()));
+            if (leaf == "piece.toml") {
+                const auto parsed = cs::piece_from_toml(file.text);
+                REQUIRE(parsed.ok());
+                piece = parsed.piece;
+            }
+        }
+        for (const auto& file : cp::library_files())
+            if (file.path.substr(0, prefix.size()) == prefix && file.path.substr(prefix.size()) != "piece.toml")
+                piece.files[std::string(file.path.substr(prefix.size()))] = file.text;
+        REQUIRE(piece.name == name);
+        const auto verdict = cp::check_piece_manifest(piece);
+        REQUIRE_MESSAGE(verdict.ok(), verdict.message);
+        std::uint64_t bytes = 0;
+        std::map<std::string, std::uint32_t> strides;
+        std::map<std::string, std::uint32_t> counts;
+        for (const auto& resource : piece.resources) {
+            if (!resource.publish) continue;
+            std::uint64_t size = 0;
+            if (resource.kind == cs::ResourceKind::buffer) {
+                cp::ElementLayout layout;
+                REQUIRE(cp::element_layout(resource.layout, &layout).ok());
+                strides[resource.id] = layout.stride;
+                counts[resource.id] = resource.count;
+                size = cp::layout_bytes(layout, resource.count);
+                CHECK(size <= cs::piece_limits::kPublishedResourceBytesMax);
+            } else {
+                size = cs::texture_bytes(resource);
+            }
+            bytes += size;
+        }
+        if (name == "lines") {
+            CHECK(strides["segments"] == 32);
+            CHECK(strides["picks"] == 8);
+            CHECK(counts["segments"] == count);
+            CHECK(counts["picks"] == count);
+            CHECK(bytes == (std::uint64_t(160) << 20) + 12);
+            CHECK(piece.draw->pick->resource == "picks");
+        } else {
+            CHECK(strides["vertices"] == 32);
+            CHECK(strides["attributes"] == 12);
+            CHECK(counts["vertices"] == count);
+            CHECK(counts["attributes"] == count);
+            CHECK(counts["faces"] == 3 * count);
+            CHECK(strides["info"] == 4);
+            CHECK(counts["info"] == 1);
+            CHECK(bytes == (std::uint64_t(288) << 20) + 4);
+            CHECK(piece.draw->pick->resource == "attributes");
+        }
+        CHECK(bytes <= cs::piece_limits::kPublishedBytesMax);
+        CHECK(bytes <= std::uint64_t(piece.draw->memory_mb.value()) << 20);
+        if (!cp::compiler_available()) continue;
+        const auto resolved = cp::resolve_imports(piece);
+        REQUIRE(resolved.verdict.ok());
+        const auto composed = cp::compose_derive(piece, resolved);
+        REQUIRE(composed.verdict.ok());
+        for (const auto& pass : piece.derive->passes) {
+            CAPTURE(pass.entry);
+            const auto compiled = cp::compile_and_reflect_entry(composed.text, pass.entry);
+            REQUIRE_MESSAGE(compiled.verdict.ok(), compiled.verdict.message);
+            std::size_t storage = 0;
+            for (const auto& binding : compiled.reflection.bindings)
+                storage += binding.kind == cp::BindingKind::storage_buffer;
+            CHECK(storage <= 8);
+            if (name == "mesh" && pass.entry == "copy_vertices") CHECK(storage == 8);
+        }
+    }
+    cs::Piece p = arcs_piece();
+    p.draw->memory_mb = 304;
+    CHECK(cp::check_piece_manifest(p).ok());
+    p.draw->memory_mb = 305;
+    CHECK_FALSE(cp::check_piece_manifest(p).ok());
 }

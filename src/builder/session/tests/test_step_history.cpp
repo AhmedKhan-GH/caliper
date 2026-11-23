@@ -356,3 +356,11 @@ TEST_CASE("the nearest kept step is exact for stamps far apart") {
     want.step = -100;
     CHECK(h.set_cursor(want).step == low);
 }
+
+
+TEST_CASE("resource history leaves 208 MiB for sources at the full piece budget") {
+    CHECK(kHistoryBudgetBytes == std::uint64_t(512) << 20);
+    CHECK(kHistoryResourceBytes == std::uint64_t(304) << 20);
+    CHECK(kHistoryBudgetBytes - kHistoryResourceBytes == std::uint64_t(208) << 20);
+    CHECK(kHistorySourceBytes == std::uint64_t(128) << 20);
+}

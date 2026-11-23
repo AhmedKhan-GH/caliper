@@ -48,11 +48,11 @@ inline constexpr std::uint64_t kHistorySourceBytes = kHistoryBudgetBytes / 4;
 // resource, 256 when absent and at most 4,096.
 inline constexpr std::uint32_t kResourceKeepDefault = 256;
 inline constexpr std::uint32_t kResourceKeepMax = 4096;
-// All resources together keep at most half the budget, and one resource at
-// most kHistorySourceBytes; the sources share the rest. Over that half, the
+// All resources together keep at most 304 MiB, and one resource at
+// most kHistorySourceBytes; the sources share the rest. Over that limit, the
 // largest rings thin first, then rings drop their oldest versions down to
 // one each, and a version that still does not fit is not kept.
-inline constexpr std::uint64_t kHistoryResourceBytes = kHistoryBudgetBytes / 2;
+inline constexpr std::uint64_t kHistoryResourceBytes = spec::piece_limits::kPublishedBytesMax;
 // The resources that the history keeps for one program, as many as a piece
 // has, and for all programs together, as many as 16 programs of a producer
 // (CALIPER_NET_MAX_PROGRAMS) publish. A version of another resource is not kept.

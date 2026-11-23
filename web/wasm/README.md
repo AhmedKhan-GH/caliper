@@ -164,7 +164,7 @@ In 3-D the shared view code draws a box around the data with ImGui, its back edg
 
 ## Memory
 
-The heap is capped: it starts at 16 MB and may grow to 512 MB, which holds the protocol's largest frame (64 MB) about four times over, the most one snapshot needs while it is applied. Nothing grows with the length of a run. The latest snapshot of a view replaces the one before in two buffers that keep their capacity, a series keeps its newest 65,536 values in a fixed ring, and the socket's per-message buffer is freed after each message. The module reports `heapSize` and `heapUsed` (the bytes malloc has handed out) in its counters.
+The heap starts at 16 MiB and can grow to 1 GiB. Growth allocates memory only when needed. The ceiling covers 304 MiB of retained resources and two resource assemblies of up to 128 MiB each. Pick copies, scene arrays, and frame decode also use the heap. The module keeps the newest resource versions and no step history. A series keeps its newest 65,536 values in a fixed ring. The module reports `heapSize` and `heapUsed` in its counters.
 
 Measured headless (SwiftShader) over 7 minutes of streaming at 60 snapshots per second, with all four views on one page and a 512 × 512 heatmap and image (46.6 GB received): the heap never grew from its 16 MB, and the bytes in use rose from 11.8 MB to 12.3 MB in the first two and a half minutes, while the series filled its plot buffers, and then stayed at exactly 12,287,952 bytes for the last four minutes. A page with only the heatmap view stayed at 5,320,656 bytes from the first sample to the last. The frame rate stayed at 60 per second throughout.
 

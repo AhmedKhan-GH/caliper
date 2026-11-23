@@ -146,15 +146,15 @@ inline std::vector<std::uint8_t> box_rows() {
     return rows;
 }
 
-// The rows of mesh@1's resources: `vertices` (48 bytes each: position with the value in w, normal
-// with the flags of vertex 0 in w, RGBA, index) of a height field of 32 by 32 vertices, and
-// `faces` (the index buffer: three u32 indices for each triangle).
-inline void mesh_rows(std::vector<std::uint8_t>* vertices, std::vector<std::uint8_t>* faces, std::uint32_t* nv,
+// A height field uses 32-byte vertices, 12-byte attributes, and three u32 indices per face.
+inline void mesh_rows(std::vector<std::uint8_t>* vertices, std::vector<std::uint8_t>* attributes,
+                      std::vector<std::uint8_t>* faces, std::uint32_t* nv,
                       std::uint32_t* nt) {
     constexpr int side = 32;
     *nv = side * side;
     *nt = (side - 1) * (side - 1) * 2;
-    vertices->assign(std::size_t(*nv) * 48, 0);
+    vertices->assign(std::size_t(*nv) * 32, 0);
+    attributes->assign(std::size_t(*nv) * 12, 0);
     faces->assign(std::size_t(*nt) * 12, 0);
     for (int j = 0; j < side; ++j)
         for (int i = 0; i < side; ++i) {
@@ -164,12 +164,12 @@ inline void mesh_rows(std::vector<std::uint8_t>* vertices, std::vector<std::uint
             const float len = std::sqrt(dx * dx + dz * dz + 1.0f);
             const int k = j * side + i;
             const float p[4] = {x, y, z, float((k * 37) % 256) / 255.0f};
-            const float nrm[4] = {-dx / len, 1.0f / len, -dz / len, 0.0f};
-            const std::size_t at = std::size_t(k) * 48;
+            const float nrm[3] = {-dx / len, 1.0f / len, -dz / len};
+            const std::size_t at = std::size_t(k) * 32;
             put(vertices, at, p);
             put(vertices, at + 16, nrm);
-            put(vertices, at + 32, 0xffe6dcdcu);
-            put(vertices, at + 36, std::uint32_t(k));
+            put(vertices, at + 28, 0xffe6dcdcu);
+            put(attributes, std::size_t(k) * 12, std::uint32_t(k));
         }
     std::size_t t = 0;
     for (int j = 0; j + 1 < side; ++j)
@@ -239,10 +239,13 @@ inline void add_boxes_mesh(std::vector<std::uint8_t>* frames, Plan* plan, std::s
         return;
     }
     add(m);
-    std::vector<std::uint8_t> vertices, faces;
+    std::vector<std::uint8_t> vertices, attributes, faces;
     std::uint32_t nv = 0, nt = 0;
-    bm::mesh_rows(&vertices, &faces, &nv, &nt);
-    add(bm::resource("library_mesh", "vertices", vertices, nv, 48, step));
+    bm::mesh_rows(&vertices, &attributes, &faces, &nv, &nt);
+    add(bm::resource("library_mesh", "vertices", vertices, nv, 32, step));
+    add(bm::resource("library_mesh", "attributes", attributes, nv, 12, step));
+    const std::vector<std::uint8_t> info(4, 0);
+    add(bm::resource("library_mesh", "info", info, 1, 4, step));
     add(bm::resource("library_mesh", "faces", faces, 3 * nt, 4, step));
     static const std::vector<std::uint8_t> kNoTexels;   // an untextured mesh: a texture without texels
     add(bm::resource("library_mesh", "tex", kNoTexels, 0, 4, step));

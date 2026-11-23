@@ -97,18 +97,22 @@ min = -8
 max = 8
 title = "Depth Offset Toward the Camera"
 
-# One element for each segment that the built-in draw instances, in its order: segment k of
-# vertices 2k and 2k + 1, the join of vertex i and i + 1 of strips, or edge e. A join across two
-# strips has `index_b` 0xffffffff and is not drawn. 40 bytes, thus 2,097,152 fit beside `info` in the
-# 80 MiB that they take of the published resources.
+# Endpoint data and pick indices use separate buffers. Each buffer stays within
+# WebGPU's 128 MiB storage limit at 4,194,304 segments.
 [[resources]]
 id = "segments"
 kind = "buffer"
 struct = "Segment"
-fields = ["ax: f32", "ay: f32", "az: f32", "color_a: u32", "bx: f32", "by: f32", "bz: f32", "color_b: u32",
-          "index_a: u32", "index_b: u32"]
-# 2,097,152 segments of 40 bytes: 80 MiB, the most that the built-in draws.
-count = 2097152
+fields = ["ax: f32", "ay: f32", "az: f32", "color_a: u32", "bx: f32", "by: f32", "bz: f32", "color_b: u32"]
+count = 4194304
+counted = true
+
+[[resources]]
+id = "picks"
+kind = "buffer"
+struct = "PickIndices"
+fields = ["index_a: u32", "index_b: u32"]
+count = 4194304
 counted = true
 
 # The finite range of the values and two flags: bit 0 a NaN or no value, bit 1 a packed RGBA with
@@ -151,8 +155,8 @@ writes = ["scratch"]
 
 [[derive.passes]]
 entry = "build_segments"
-workgroups = [8192, 1, 1]
-writes = ["segments"]
+workgroups = [16384, 1, 1]
+writes = ["segments", "picks"]
 
 [[derive.passes]]
 entry = "scan_values"
@@ -164,9 +168,9 @@ entry = "finish_info"
 writes = ["info"]
 
 [draw]
-memory_mb = 96
+memory_mb = 176
 camera = "orbit"
-pick = { resource = "segments", fields = ["index_a", "index_b"] }
+pick = { resource = "picks", fields = ["index_a", "index_b"] }
 
 # Opaque segments write depth; segments of a color with an alpha below 255 only test it, as the
 # built-in draws translucent batches. Each pass hides the segments of the other.

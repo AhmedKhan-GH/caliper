@@ -1,19 +1,13 @@
-// The derive half of mesh@1: one element of `vertices` for each row of `positions`, with its value
-// in position.w, its normal, its RGBA and its index; and three elements of `faces`, the index
-// buffer of the draw passes, for each row of `indices`, or for every three vertices when indexed is
-// 0 or `indices` is unbound, with each index clamped to the last vertex. Unbound `normals` and
-// `colors` have the shape (0, 0, 0, 0): no normal, and the one color without a value. Vertex 0
-// also holds the flags of all vertices in normal.w: 1 when the RGBA of a vertex has an alpha below
-// 255. A tensor with one row or one value gives it to every vertex, as a stream of stride 0 does in
-// the built-in. With `uvs` and `texture` bound, each vertex takes its uv, the texture resource `tex` takes
-// the pixels of `texture` as packed RGBA8 the way the producer converts them, and a texel with an
-// alpha below 255 sets the flag too, as it makes the built-in's textured mesh translucent; without
-// them the texture has no texels.
+// Mesh vertices retain position, scalar value, normal, and RGBA in 32-byte rows.
+// A separate 12-byte row retains each pick index and UV pair. Both buffers use
+// the same count. The info word holds bit 0 when a vertex or texel has alpha below 255.
+// Faces retain the original index order and clamp indices to the last vertex.
+// The texture remains RGBA8, with the original channel conversion and bilinear sampling.
 
 const TEXTURE_THREADS: u32 = 16384u;   // 64 workgroups of 256
 
 fn mesh_vertex_count() -> u32 {
-    return min(shapes.positions.z, arrayLength(&vertices));
+    return min(shapes.positions.z, min(arrayLength(&vertices), arrayLength(&attributes)));
 }
 
 fn mesh_triangle_count() -> u32 {
@@ -85,6 +79,7 @@ fn copy_vertices(@builtin(global_invocation_id) id: vec3<u32>) {
     let n = mesh_vertex_count();
     if (id.x == 0u) {
         atomicStore(&vertices_count, n);
+        atomicStore(&attributes_count, n);
     }
     if (id.x >= n) {
         return;
@@ -109,7 +104,8 @@ fn copy_vertices(@builtin(global_invocation_id) id: vec3<u32>) {
     if (uw >= 2u && i < shapes.uvs.z) {
         uv = vec2<f32>(uvs[i * uw], uvs[i * uw + 1u]);
     }
-    vertices[i] = Vertex(p, normal, mesh_rgba(i), i, uv);
+    vertices[i] = Vertex(p.x, p.y, p.z, p.w, normal.x, normal.y, normal.z, mesh_rgba(i));
+    attributes[i] = Attributes(i, uv.x, uv.y);
 }
 
 // The width, the height and the channels of `texture`, with a size of 0 when there is no texture:
@@ -166,7 +162,7 @@ fn copy_texture(@builtin(global_invocation_id) id: vec3<u32>) {
         see = see || (rgba >> 24u) < 255u;
     }
     if (see) {
-        vertices[0].normal.w = 1.0;
+        info[0] = 1u;
     }
 }
 
@@ -175,6 +171,7 @@ fn copy_triangles(@builtin(global_invocation_id) id: vec3<u32>) {
     let t = mesh_triangle_count();
     if (id.x == 0u) {
         atomicStore(&faces_count, t * 3u);
+        info[0] = 0u;
     }
     if (id.x >= t) {
         return;
@@ -197,11 +194,10 @@ fn copy_triangles(@builtin(global_invocation_id) id: vec3<u32>) {
     faces[f + 2u] = c;
 }
 
-// The flags into vertex 0, after copy_vertices: every vertex with an alpha below 255 writes the
-// same 1, thus the order of the writes does not matter.
+// After copy_vertices, each translucent vertex sets the shared flag to 1.
 @compute @workgroup_size(256)
 fn mark_alpha(@builtin(global_invocation_id) id: vec3<u32>) {
     if (id.x < mesh_vertex_count() && (vertices[id.x].rgba >> 24u) < 255u) {
-        vertices[0].normal.w = 1.0;
+        info[0] = 1u;
     }
 }

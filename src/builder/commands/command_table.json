@@ -12373,7 +12373,7 @@
                   },
                   "memory_mb": {
                     "description": "The budget of the resources, buffer inputs, draw buffers and targets in the viewer, in MiB; 64 when absent.",
-                    "maximum": 256,
+                    "maximum": 304,
                     "minimum": 1,
                     "type": "integer"
                   },
@@ -14736,7 +14736,7 @@
                   },
                   "memory_mb": {
                     "description": "The budget of the resources, buffer inputs, draw buffers and targets in the viewer, in MiB; 64 when absent.",
-                    "maximum": 256,
+                    "maximum": 304,
                     "minimum": 1,
                     "type": "integer"
                   },
@@ -15856,7 +15856,7 @@
                   },
                   "memory_mb": {
                     "description": "The budget of the resources, buffer inputs, draw buffers and targets in the viewer, in MiB; 64 when absent.",
-                    "maximum": 256,
+                    "maximum": 304,
                     "minimum": 1,
                     "type": "integer"
                   },
@@ -16850,7 +16850,7 @@
                   },
                   "memory_mb": {
                     "description": "The budget of the resources, buffer inputs, draw buffers and targets in the viewer, in MiB; 64 when absent.",
-                    "maximum": 256,
+                    "maximum": 304,
                     "minimum": 1,
                     "type": "integer"
                   },

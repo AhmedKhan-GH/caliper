@@ -479,7 +479,7 @@ private:
         if (d.frame_ms && !(*d.frame_ms >= 0.1 && *d.frame_ms <= pl::kFrameMsMax))
             return fail(kPieceBadManifest, "draw.frame_ms is from 0.1 to 16.", "draw.frame_ms");
         if (d.memory_mb && (*d.memory_mb < 1 || *d.memory_mb > pl::kDrawMemoryMbMax))
-            return fail(kPieceBadManifest, "draw.memory_mb is from 1 to 256.", "draw.memory_mb");
+            return fail(kPieceBadManifest, "draw.memory_mb is from 1 to 304.", "draw.memory_mb");
         if (d.buffers.size() > pl::kDrawBuffers)
             return fail(kPieceBadManifest, "The draw half keeps at most 4 buffers.", "draw.buffers");
         if (d.targets.size() > pl::kTargets)

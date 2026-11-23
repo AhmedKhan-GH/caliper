@@ -158,7 +158,7 @@ fn line_vertex(i: u32, v: u32, want_translucent: bool) -> LineOut {
     out.color = end_color(select(s.color_a, s.color_b, quad_corner(c).x > 0.5), value_range());
     let a = vec3<f32>(s.ax, s.ay, s.az);
     let b = vec3<f32>(s.bx, s.by, s.bz);
-    if (translucent() != want_translucent || s.index_b == 0xffffffffu || any_nan3(a) || any_nan3(b)) {
+    if (translucent() != want_translucent || picks[i].index_b == 0xffffffffu || any_nan3(a) || any_nan3(b)) {
         out.position = hidden();
         return out;
     }

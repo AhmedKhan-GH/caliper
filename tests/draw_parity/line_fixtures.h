@@ -23,11 +23,13 @@ namespace draw_parity {
 
 namespace line_fixture {
 
-struct Segment {   // the element of lines@1's `segments`, 40 bytes
+struct Segment {   // the element of lines@1's `segments`, 32 bytes
     float ax, ay, az;
     std::uint32_t color_a;
     float bx, by, bz;
     std::uint32_t color_b;
+};
+struct PickIndices {
     std::uint32_t index_a, index_b;
 };
 struct Info {      // the element of `info`, 12 bytes
@@ -44,7 +46,7 @@ struct Vertex {    // the element of path@1's `vertices`, 20 bytes
     float x, y, z, value;
     std::uint32_t row;
 };
-static_assert(sizeof(Segment) == 40 && sizeof(Info) == 12 && sizeof(Arrow) == 32 && sizeof(Vertex) == 20,
+static_assert(sizeof(Segment) == 32 && sizeof(PickIndices) == 8 && sizeof(Info) == 12 && sizeof(Arrow) == 32 && sizeof(Vertex) == 20,
               "the layouts of the pieces' resources");
 
 inline std::uint32_t bits_of(float f) {
@@ -122,13 +124,15 @@ void add_line_pieces(Fixture& fx, const Add& add, const Message& message) {
             v.push_back({r * std::cos(11.0f * t), 0.2f + 0.4f * t, r * std::sin(11.0f * t)});
         }
         std::vector<lf::Segment> seg;
+        std::vector<lf::PickIndices> picks;
         for (std::uint32_t i = 0; i + 1 < 64; ++i) {
             const std::uint32_t a = lf::bits_of(float((i * 37u) % 256u) / 255.0f);
             const std::uint32_t b = lf::bits_of(float(((i + 1) * 37u) % 256u) / 255.0f);
-            seg.push_back({v[i][0], v[i][1], v[i][2], a, v[i + 1][0], v[i + 1][1], v[i + 1][2], b, i,
-                           i == 29 ? 0xffffffffu : i + 1});
+            seg.push_back({v[i][0], v[i][1], v[i][2], a, v[i + 1][0], v[i + 1][1], v[i + 1][2], b});
+            picks.push_back({i, i == 29 ? 0xffffffffu : i + 1});
         }
         add(lf::version("lines_strips", "segments", seg, std::uint64_t(fx.plan.step)));
+        add(lf::version("lines_strips", "picks", picks, std::uint64_t(fx.plan.step)));
         add(lf::version("lines_strips", "info", std::vector<lf::Info>{{0.0f, 1.0f, 0u}}, std::uint64_t(fx.plan.step)));
         ProgramPlan p = plan;
         p.id = "lines_strips";

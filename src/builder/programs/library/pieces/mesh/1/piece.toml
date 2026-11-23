@@ -114,10 +114,26 @@ title = "Depth Offset in Steps of 1/8192"
 id = "vertices"
 kind = "buffer"
 struct = "Vertex"
-fields = ["position: vec4<f32>", "normal: vec4<f32>", "rgba: u32", "index: u32", "uv: vec2<f32>"]
-# 2,796,202 vertices of 48 bytes: the 128 MiB that a published resource holds.
-count = 2796202
+fields = ["px: f32", "py: f32", "pz: f32", "value: f32", "nx: f32", "ny: f32", "nz: f32", "rgba: u32"]
+# 4,194,304 vertices of 32 bytes fill one 128 MiB storage binding.
+count = 4194304
 counted = true
+
+# Pick indices and texture coordinates use 12 bytes per vertex, without vector padding.
+[[resources]]
+id = "attributes"
+kind = "buffer"
+struct = "Attributes"
+fields = ["index: u32", "u: f32", "v: f32"]
+count = 4194304
+counted = true
+
+# Bit 0 marks any vertex color or texture texel with alpha below 255.
+[[resources]]
+id = "info"
+kind = "buffer"
+element = "u32"
+count = 1
 
 # The three vertex indices of each triangle, which the draw passes draw as their index buffer.
 [[resources]]
@@ -139,36 +155,36 @@ width = 8192
 height = 8192
 texels = 16777216
 
-# The derive half holds the 240 MiB of resources and reads the inputs in place.
+# The resources hold at most 288 MiB and one flag word. Inputs remain on their device.
 [derive]
 time_ms = 50
 memory_mb = 512
 
 [[derive.passes]]
 entry = "copy_vertices"
-workgroups = [10923, 1, 1]
-writes = ["vertices"]
+workgroups = [16384, 1, 1]
+writes = ["vertices", "attributes"]
 
 [[derive.passes]]
 entry = "copy_triangles"
 workgroups = [16384, 1, 1]
-writes = ["faces"]
+writes = ["faces", "info"]
 
 [[derive.passes]]
 entry = "mark_alpha"
-workgroups = [10923, 1, 1]
-writes = ["vertices"]
+workgroups = [16384, 1, 1]
+writes = ["info"]
 
 [[derive.passes]]
 entry = "copy_texture"
 workgroups = [64, 1, 1]
-writes = ["tex", "vertices"]
+writes = ["tex", "info"]
 
 [draw]
-memory_mb = 256
+memory_mb = 304
 camera = "orbit"
 frame_ms = 16
-pick = { resource = "vertices", fields = ["index"] }
+pick = { resource = "attributes", fields = ["index"] }
 
 # The faces of an opaque mesh: they write the color and depth alone, as the built-in's opaque draw
 # does; the IDs follow in the last pass.

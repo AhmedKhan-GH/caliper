@@ -55,11 +55,11 @@ inline constexpr std::uint64_t kResourceBytesMax = 64ull << 20;  // bytes of one
 // viewer in RESOURCE parts (CALIPER_NET_RESOURCE_VERSION_MAX_BYTES). The step history keeps at most this
 // much of one resource as well.
 inline constexpr std::uint64_t kPublishedResourceBytesMax = 128ull << 20;
-// Bytes of all published resources of a piece together, 256 MiB: one version of each fits the step
-// history's 256 MiB of resources. A version above 8 MiB goes to a viewer in parts of 8 MiB, each while
+// Bytes of all published resources of a piece together, 304 MiB: one version of each fits the step
+// history's resource budget. A version above 8 MiB goes to a viewer in parts of 8 MiB, each while
 // the viewer's queue holds at most 8 MiB and 64 KiB, half of the 16 MiB control queue of either sender
 // (python/caliper/_programs.py, PUBLISHED_BYTES_MAX, PART_BYTES and RESOURCE_BACKLOG_BYTES).
-inline constexpr std::uint64_t kPublishedBytesMax = 256ull << 20;
+inline constexpr std::uint64_t kPublishedBytesMax = 304ull << 20;
 inline constexpr std::uint32_t kKeepDefault = 256;               // kept versions of a resource in the step history
 inline constexpr std::uint32_t kKeepMax = 4096;
 inline constexpr std::size_t kDerivePasses = 8;
@@ -74,7 +74,7 @@ inline constexpr std::uint32_t kWorkgroupsMax = 65'535;          // each of thre
 inline constexpr double kFrameMsDefault = 4.0;                   // GPU time of the draw half in one frame
 inline constexpr double kFrameMsMax = 16.0;
 inline constexpr std::uint32_t kDrawMemoryMbDefault = 64;        // resources, draw buffers and targets in the viewer
-inline constexpr std::uint32_t kDrawMemoryMbMax = 256;
+inline constexpr std::uint32_t kDrawMemoryMbMax = 304;
 inline constexpr std::size_t kPickFields = 8;
 inline constexpr std::size_t kStrings = 4096;                    // strings of the text table
 inline constexpr std::size_t kStringBytes = 64;

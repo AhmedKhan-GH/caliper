@@ -192,14 +192,12 @@ target_link_options(caliper-views PRIVATE
     -sEXPORT_NAME=createCaliperViews
     -sENVIRONMENT=web
     -sFILESYSTEM=0
-    # A capped heap: 16 MB to start (one view uses about 2 MB, a page of four
-    # about 12 MB), growing to at most 512 MB. One snapshot costs about four
-    # times its payload while it is applied (the socket's copy, the source's
-    # two buffers, the hover copy), so the cap holds a 64 MB frame, the
-    # protocol's largest.
+    # The heap starts at 16 MiB and grows as needed. Its 1 GiB ceiling covers
+    # 304 MiB of kept resources, two 128 MiB assemblies, pick copies, scene
+    # arrays, and frame decoding. This ceiling allocates no memory at startup.
     -sINITIAL_MEMORY=16MB
     -sALLOW_MEMORY_GROWTH=1
-    -sMAXIMUM_MEMORY=512MB
+    -sMAXIMUM_MEMORY=1024MB
     -sERROR_ON_UNDEFINED_SYMBOLS=1
     "-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$UTF8ToString,$stringToNewUTF8,$stringToUTF8OnStack,$stackSave,$stackRestore,$specialHTMLTargets"
     "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view,_caliper_views_set_toggle,_caliper_views_set_link,_caliper_views_gfx_selftest,_caliper_views_scene_selftest,_caliper_views_draw_parity,_caliper_views_scene_parity,_caliper_views_points_parity,_caliper_views_colormap_keys,_caliper_views_feed_program,_caliper_views_feed_resource,_caliper_views_select,_caliper_views_set_starting,_caliper_views_destroy"

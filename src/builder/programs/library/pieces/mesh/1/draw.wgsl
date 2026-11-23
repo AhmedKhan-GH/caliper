@@ -59,7 +59,7 @@ fn mesh_level(v: f32) -> u32 {
 fn mesh_color(v: Vertex) -> vec4<f32> {
     if (params.color_mode == 1u) {
         let size = textureDimensions(caliper_colormaps);
-        let x = min(mesh_level(v.position.w) * (size.x - 1u) / 255u, size.x - 1u);
+        let x = min(mesh_level(v.value) * (size.x - 1u) / 255u, size.x - 1u);
         return textureLoad(caliper_colormaps, vec2<u32>(x, min(params.colormap, size.y - 1u)), 0);
     }
     if (params.color_mode == 2u) {
@@ -73,8 +73,8 @@ fn mesh_translucent() -> bool {
     if ((params.color >> 24u) < 255u) {
         return true;
     }
-    // The flag of vertex 0: a vertex RGBA, or a texel of a textured mesh, with an alpha below 255.
-    return (params.color_mode == 2u || counts.tex > 0u) && vertices[0].normal.w != 0.0;
+    // A vertex RGBA or texture texel has alpha below 255.
+    return (params.color_mode == 2u || counts.tex > 0u) && info[0] != 0u;
 }
 
 // A normal in view space through the rotation of the view, normalized.
@@ -94,18 +94,18 @@ fn face_vertex(index: u32, shown: bool) -> MeshOut {
     let v = vertices[index];
     var out: MeshOut;
     out.item = index;
-    out.obj = v.position.xyz;
-    out.uv = v.uv;
+    out.obj = vec3<f32>(v.px, v.py, v.pz);
+    out.uv = vec2<f32>(attributes[index].u, attributes[index].v);
     var c = mesh_color(v);
     if (params.shading == 1u) {
-        c = lambert(c, normalize(v.normal.xyz));
+        c = lambert(c, normalize(vec3<f32>(v.nx, v.ny, v.nz)));
     }
     out.color = c;
-    if (!shown || is_nan(v.position.x) || is_nan(v.position.y) || is_nan(v.position.z)) {
+    if (!shown || is_nan(v.px) || is_nan(v.py) || is_nan(v.pz)) {
         out.position = mesh_hidden();
         return out;
     }
-    var p = caliper_view.clip_from_world * vec4<f32>(v.position.xyz, 1.0);
+    var p = caliper_view.clip_from_world * vec4<f32>(v.px, v.py, v.pz, 1.0);
     if (params.depth_offset != 0) {
         p.z = p.z - f32(params.depth_offset) * MESH_DEPTH_UNIT * p.w;
     }
