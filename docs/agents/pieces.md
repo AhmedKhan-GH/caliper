@@ -63,14 +63,14 @@ A resource is a named, typed array that the derive half writes and the viewer re
 | `id` | A WGSL name, unique among the inputs, resources and draw buffers of the piece |
 | `kind` | `buffer` or `texture` |
 | `element`, or `struct` with `fields` | For a buffer, one plain type, or a struct whose fields are written `name: type` in order |
-| `count` | For a buffer, the elements, at most 4,194,304 |
+| `count` | For a buffer, the elements, at most 33,554,432 |
 | `counted` | For a buffer, the derive half also gets the counter `<id>_count`. The valid elements are the first min(counter, count). |
 | `width`, `height` | For a texture, the size in pixels, at most 4,096 each |
 | `publish` | `false` for a private resource that never leaves the script. `true` when absent. |
 | `clear` | `true` zeroes the resource before each run. `false` when absent, and the contents stay from the run before. |
 | `keep` | The versions that the step history keeps, from 1 to 4,096. 256 when absent. |
 
-A field type is `f32`, `i32`, `u32`, `vec2<f32>`, `vec4<f32>`, `vec2<u32>` or `vec4<u32>`. The composer lays out a struct by the storage rules of WGSL, and one element holds at most 256 bytes. A struct has at most 16 fields. The published resources of a piece hold at most 8 MiB together, 8,388,608 bytes, because a pass can send all of them to each viewer and the script queues at most that much for one viewer. Thus a texture of 2,048 by 1,024 pixels fits, and a texture of 2,048 by 2,048 pixels gives `program.bad_resource`. A private resource holds at most 64 MiB.
+A field type is `f32`, `i32`, `u32`, `vec2<f32>`, `vec4<f32>`, `vec2<u32>` or `vec4<u32>`. The composer lays out a struct by the storage rules of WGSL, and one element holds at most 256 bytes. A struct has at most 16 fields. A published resource holds at most 128 MiB, 134,217,728 bytes, because each viewer binds it whole, and 128 MiB is the largest storage binding of the default limits of WebGPU. The published resources of a piece hold at most 256 MiB together, because the step history keeps one version of each of them in its 256 MiB of resources. Thus 2,097,152 segments of 40 bytes fit, and an image of 8,192 by 8,192 pixels of 4 bytes, 256 MiB in one buffer, gives `program.bad_resource`. A private resource holds at most 64 MiB.
 
 ## Piece Halves
 
@@ -345,7 +345,9 @@ The event `program` carries the keys `half` (`derive` or `draw`) and `pass`, the
 
 ## Resources and Step History
 
-The script sends each version of a published resource to a viewer as one RESOURCE message. The message needs the capability `resources` on both ends. A script that does not announce it refuses an instance with `program.resources_unavailable`. One message carries one resource, thus a large resource never holds a small one back. The script sends the versions of a pass to a viewer only when its queue then holds at most 8 MiB and 64 KiB, which is half of the 16 MiB control queue of a connection. This count also holds the frames that other programs gave to that viewer in the same pass and that the script has not queued yet. Thus a viewer that falls behind skips whole passes, and it gets a later pass when it catches up. Two programs that publish 8 MiB each do not fit in one pass of a viewer. The program that the viewer skipped goes first at the next pass, thus the programs reach the viewer in turn. A pass that would send more than 8 MiB, from a manifest that did not pass the app's check, stops the program with `program.resource_too_large`.
+The script sends each version of a published resource to a viewer as one RESOURCE message. The message needs the capability `resources` on both ends. A script that does not announce it refuses an instance with `program.resources_unavailable`. One message carries one resource, thus a small resource never waits for a large one. A version of more than 8 MiB goes as RESOURCE parts of 8 MiB, which the viewer puts together and shows only whole ([Wire Protocol 3.2](../reference/wire-protocol-3-2.md#resource-parts)).
+
+The script sends the frames of a pass to a viewer in chunks of at most 8 MiB and 64 KiB, which is half of the 16 MiB control queue of a connection. A chunk goes only when the viewer's queue then holds at most that much. This count also holds the frames that other programs gave to that viewer in the same pass and that the script has not queued yet. The first chunk goes with the pass or not at all, thus a viewer that falls behind skips whole passes and gets a later pass when it catches up. The other chunks of a pass wait for the viewer, and each step sends the chunks that then fit. A viewer takes no other pass until they went, and a pass makes no copy of its resources while every viewer waits. Two programs that publish 8 MiB each do not fit in one pass of a viewer. The program that the viewer skipped goes first at the next pass, thus the programs reach the viewer in turn. The time of the copies and of the chunks counts toward the overhead of the passes, thus the cadence stretches for a piece that publishes large versions. A pass that would send more than 128 MiB of one resource or 256 MiB together, from a manifest that did not pass the app's check, stops the program with `program.resource_too_large`.
 
 The app keeps the versions of each published resource in the step history under `<program>/<resource>`, beside the kept steps of the sources. A resource keeps at most `keep` versions. When its ring is full, the history drops every second kept version. From then on it keeps a version only when its step lies far enough after the newest one. Thus the kept versions span the whole run evenly, and the step cursor scrubs the whole training. The viewer gives the draw half the newest kept version at or before the cursor. A version that replaces another at the same step, as after a fork from that step, takes its place in the history, in the draw and in picks and labels.
 
@@ -358,7 +360,7 @@ The app keeps only a version that the pinned piece declares. The program must be
 | Bytes of one resource | 128 MiB, a quarter of the history budget |
 | Bytes of all resources | 256 MiB, half of the history budget of 512 MiB |
 
-Over the bytes of all resources, the largest rings drop every second version first. Then the largest rings drop their oldest versions, down to one version each. A version that does not fit beside one version of each other resource is not kept.
+Over the bytes of all resources, the largest rings drop every second version first. Then the largest rings drop their oldest versions, down to one version each. A version that does not fit beside one version of each other resource is not kept. Thus the history keeps two versions of a resource of 128 MiB alone, and one version beside the small resources of its piece. Of a piece that publishes 256 MiB at each pass, it keeps one version of each resource, the newest, and the cursor finds no older pass of that piece.
 
 The spec saves the pins, the bindings, the params and the inline pieces, and it never saves a resource. When an instrument opens, the app resolves each pin, checks each piece and sends each program to the attached script. The script publishes again from its next pass. Without an attached run, the state of the program is `waiting`.
 
@@ -437,7 +439,7 @@ The editor, the script and the viewer refuse a piece with a stable code before a
 | `piece.bad_binding` | An input that is unbound, or bound to another dtype, rank or layout |
 | `piece.cycle` | A piece depends on itself, or a program binds a resource of its own |
 | `program.form_mixed` | A program has keys of the one-pass form and a pin |
-| `program.bad_resource` | A kind, count or size of a resource, published resources above 8 MiB together, or a duplicate id |
+| `program.bad_resource` | A kind, count or size of a resource, a published resource above 128 MiB, published resources above 256 MiB together, or a duplicate id |
 | `program.bad_layout` | A field name or type, or a stride over 256 bytes |
 | `program.unknown_resource` | A pass, an item map or a text table names no resource |
 | `program.bad_pass` | The kind, entry, target or values of a pass |
@@ -459,7 +461,7 @@ The manifest check holds every pass to the default limits of WebGPU, thus a piec
 
 The browser module runs the same draw half from the same WGSL and the same declaration. It receives each draw half as PROGRAM from the script, and the resources as RESOURCE. It checks the names, the files, the imports and the hash with the same code that the app compiles. A hash that differs from the pin refuses the program. It then gives each composed module to WebGPU. A compilation message or a refused pipeline refuses the program with `program.browser_refused`, and the line maps back to its file.
 
-The browser has no compiler of its own, because WebGPU keeps each draw inside its bindings. The browser module keeps no step history and draws the newest version of each resource. It keeps a version only of a resource that the piece of its program publishes, with at most the declared count and bytes, and it keeps at most 16 programs of a script. Without timestamps, the frame time is the time from the submit until the work is done.
+The browser has no compiler of its own, because WebGPU keeps each draw inside its bindings. The browser module keeps no step history and draws the newest version of each resource. It keeps a version only of a resource that the piece of its program publishes, with at most the declared count and bytes, and it keeps at most 16 programs of a script. All its versions hold at most 256 MiB together, as the app's step history keeps of resources. A version that would pass it is not kept, and the program draws the version that it has. Without timestamps, the frame time is the time from the submit until the work is done.
 
 ## Builder Pane
 
