@@ -227,7 +227,7 @@ class InterventionService:
             if point.endswith(".attn_pattern"):
                 raise InterventionError("attention patterns are read-only points")
             return spec
-        _, _, width, probe = self._target(point)
+        module, _, width, probe = self._target(point)
         if "positions" in spec:
             spec["positions"] = list(_indices(spec["positions"], "positions", limit=MAX_POSITIONS))
         if kind == "add":
@@ -257,7 +257,32 @@ class InterventionService:
                 raise InterventionError("patch requires a configured tokenizer")
             if "source_position" in spec:
                 _indices([spec["source_position"]], "source_position", limit=MAX_POSITIONS)
+            self._source_inputs(spec)
+        parameter = next(module.parameters(), next(self.model.parameters(), None))
+        if parameter is not None and parameter.is_floating_point():
+            maximum = torch.finfo(parameter.dtype).max
+            values = ([*spec["vector"], spec["coefficient"],
+                       *(v * spec["coefficient"] for v in spec["vector"])] if kind == "add" else
+                      [spec["multiplier"]] if kind == "scale" else
+                      [spec["value"]] if kind == "clamp" else [])
+            if any(abs(v) > maximum for v in values):
+                raise InterventionError("intervention value exceeds the model dtype range")
         return spec
+
+    def _source_inputs(self, spec):
+        try:
+            inputs = self.tokenizer(spec["source_prompt"], return_tensors="pt")
+            ids = inputs.get("input_ids")
+        except Exception as error:
+            raise InterventionError("source prompt tokenization failed") from error
+        if not isinstance(ids, torch.Tensor) or ids.ndim != 2 or ids.shape[0] != 1 or not 0 < ids.shape[1] <= MAX_POSITIONS:
+            raise InterventionError("patch source must contain 1 to 32 tokens in one row")
+        positions = [spec["source_position"]] if "source_position" in spec else spec.get("positions", [])
+        if positions and max(positions) >= ids.shape[1]:
+            raise InterventionError("source position is outside the clean prompt")
+        if not all(isinstance(value, torch.Tensor) for value in inputs.values()):
+            raise InterventionError("tokenizer output values must be tensors")
+        return inputs
 
     def _identity(self, prompt):
         # Version counters detect optimizer steps and normal in-place weight updates.
@@ -278,10 +303,7 @@ class InterventionService:
             self._cache_identity = identity
         point = spec["point"]
         if point not in self._cache:
-            inputs = self.tokenizer(spec["source_prompt"], return_tensors="pt")
-            ids = inputs.get("input_ids")
-            if not isinstance(ids, torch.Tensor) or ids.ndim != 2 or ids.shape[0] != 1 or not 0 < ids.shape[1] <= MAX_POSITIONS:
-                raise InterventionError("patch source must contain 1 to 32 tokens in one row")
+            inputs = self._source_inputs(spec)
             device = next(self.model.parameters()).device
             inputs = {k: v.to(device) for k, v in inputs.items()}
             self.preparing_source = True

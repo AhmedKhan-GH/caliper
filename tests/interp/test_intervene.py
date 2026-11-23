@@ -230,3 +230,217 @@ def test_legacy_ablation_obeys_rows_and_suspension(case, point):
     with service.suspend():
         torch.testing.assert_close(model(ids).logits, expected, rtol=0, atol=0)
     hook()
+
+
+@pytest.fixture
+def controlled():
+    from caliper._controls import Controls
+    model, tokenizer = make_fixture()
+    ctl = Controls()
+    service = ctl.interventions_on(model)
+    service.configure(dictionary=dictionary_for(model), tokenizer=tokenizer, dictionary_id="fixture")
+    yield model, tokenizer, ctl, service
+    service.remove()
+
+
+def add_spec(**fields):
+    return dict({"kind": "add", "point": "layers.0.mlp_out", "vector": [0.1] * 64,
+                 "coefficient": 1.0}, **fields)
+
+
+def test_scheduled_activation_and_clear_follow_old_step_semantics(controlled):
+    model, tokenizer, ctl, service = controlled
+    ids = tokenizer("abc")["input_ids"]
+    baseline = model(ids).logits
+    ctl.step()
+    service.set(add_spec(from_step=4, until_step=6))
+    assert not service.specifications()
+    ctl.step()  # Latest checkpoint 2, next forward belongs to step 3.
+    assert ctl.summary()["interventions"][0]["state"] == "pending"
+    torch.testing.assert_close(model(ids).logits, baseline, rtol=0, atol=0)
+    ctl.step()
+    assert ctl.summary()["interventions"][0]["since_step"] == 4
+    changed = model(ids).logits
+    assert not torch.equal(changed, baseline)
+    service.clear("layers.0.mlp_out")
+    torch.testing.assert_close(model(ids).logits, changed, rtol=0, atol=0)
+    assert service.specifications()  # Clear takes effect only at the boundary.
+    ctl.step()
+    assert not ctl.summary()["interventions"] and not service.specifications()
+    torch.testing.assert_close(model(ids).logits, baseline, rtol=0, atol=0)
+
+
+def test_replacement_waits_for_boundary_and_releases_old_handle(controlled):
+    model, tokenizer, ctl, service = controlled
+    ids = tokenizer("abc")["input_ids"]
+    service.set(add_spec())
+    ctl.step()
+    first = next(iter(ctl._ivs.values())).hook
+    prior = model(ids).logits
+    service.set(add_spec(coefficient=0))
+    assert service.specifications()[0]["coefficient"] == 1
+    assert service.specifications(active_only=False)[0]["coefficient"] == 0
+    torch.testing.assert_close(model(ids).logits, prior, rtol=0, atol=0)
+    ctl.step()
+    assert first.removed and not first.handles
+    assert service.specifications()[0]["coefficient"] == 0
+    with service.suspend():
+        expected = model(ids).logits
+    torch.testing.assert_close(model(ids).logits, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("bad", [
+    add_spec(coefficient=float("nan")), add_spec(vector=[1.0]), add_spec(positions=[-1]),
+    add_spec(op="clamp"), add_spec(kind="unknown"), add_spec(point="missing"),
+    {"kind": "clamp", "point": "layers.0.mlp_out", "feature": 0, "value": 0, "dictionary": "missing"},
+    {"kind": "scale", "point": "layers.0.mlp_out", "feature": 256, "multiplier": 1},
+    {"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "abc", "source_position": 9},
+    {"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "x" * 32},
+])
+def test_invalid_request_preserves_complete_prior_state(controlled, bad):
+    model, tokenizer, ctl, service = controlled
+    service.set(add_spec())
+    ctl.step()
+    ids = tokenizer("abc")["input_ids"]
+    prior = model(ids).logits
+    state = service.state_dict()
+    hook = next(iter(ctl._ivs.values())).hook
+    with pytest.raises(InterventionError):
+        service.set(bad)
+    assert service.state_dict() == state and not hook.removed
+    torch.testing.assert_close(model(ids).logits, prior, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("payload", [None, [], {"set": []}, {"set": {}},
+                                     {"clear": []}, {"set": add_spec(), "clear_all": True}])
+def test_malformed_controls_refuse_without_state_change(controlled, payload):
+    _, _, ctl, service = controlled
+    state = service.state_dict()
+    with ctl.lock:
+        assert ctl._intervene(payload) is not None
+    assert service.state_dict() == state
+
+
+def test_failed_hook_ends_before_second_forward_and_reports_structured_error(controlled):
+    model, tokenizer, ctl, service = controlled
+    ids = tokenizer("abc")["input_ids"]
+    baseline = model(ids).logits
+    service.set(add_spec(positions=[31]))
+    ctl.step()
+    hook = next(iter(ctl._ivs.values())).hook
+    torch.testing.assert_close(model(ids).logits, baseline, rtol=0, atol=0)
+    entry = ctl.controls_meta()["interventions"]["active"][0]
+    assert entry["state"] == "ended" and entry["error_code"] == "intervene.hook_failed"
+    assert entry["error"] and hook.removed and not service.specifications()
+    torch.testing.assert_close(model(ids).logits, baseline, rtol=0, atol=0)
+    assert hook.calls == 1
+    with pytest.warns(RuntimeWarning, match="failed and ended"):
+        ctl.step()
+    assert ctl.summary()["interventions"][0]["state"] == "ended"
+
+
+def test_fork_state_is_plain_and_preserves_schedule_and_ended_records(controlled):
+    from caliper._controls import Controls
+    model, tokenizer, ctl, service = controlled
+    service.set(add_spec(until_step=3))
+    service.set({"kind": "clamp", "point": "layers.1.mlp_out", "feature": 7, "value": 1.2,
+                 "positions": [1], "from_step": 6, "until_step": 8})
+    service.set({"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "abc"})
+    ctl.step()
+    ctl.step()
+    records = service.state_dict()
+    assert [r["state"] for r in records["interventions"]] == ["ended", "pending", "active"]
+    encoded = json.dumps(records, allow_nan=False)
+    other, other_tokenizer = make_fixture()
+    fork = Controls()
+    fork.n = ctl.n
+    restored = fork.interventions_on(other)
+    restored.configure(dictionary=dictionary_for(other), tokenizer=other_tokenizer, dictionary_id="fixture")
+    try:
+        restored.load_state_dict(json.loads(encoded))
+        assert restored.state_dict() == records
+        ctl.step()
+        fork.step()
+        ids = tokenizer("xyz")["input_ids"]
+        torch.testing.assert_close(other(ids).logits, model(ids).logits, rtol=0, atol=0)
+        assert restored.state_dict() == service.state_dict()
+        assert fork.summary()["interventions"][0]["state"] == "ended"
+        # A later absolute schedule starts at the same step in the fork.
+        ctl.step(5)
+        fork.step(5)
+        assert restored.state_dict() == service.state_dict()
+        assert fork.summary()["interventions"][1]["since_step"] == 6
+        torch.testing.assert_close(other(ids).logits, model(ids).logits, rtol=0, atol=0)
+    finally:
+        restored.remove()
+
+
+def test_invalid_fork_restore_is_atomic_and_snapshots_do_not_alias(controlled):
+    _, _, ctl, service = controlled
+    service.set(add_spec())
+    ctl.step()
+    prior = service.state_dict()
+    state = deepcopy(prior)
+    state["interventions"].append({**deepcopy(state["interventions"][0]),
+                                  "specification": add_spec(point="missing")})
+    hook = next(iter(ctl._ivs.values())).hook
+    with pytest.raises(InterventionError):
+        service.load_state_dict(state)
+    assert service.state_dict() == prior and not hook.removed
+    specs = service.specifications()
+    specs[0]["vector"][0] = 999
+    assert service.specifications()[0]["vector"][0] == 0.1
+
+
+def test_clean_patch_forward_does_not_advance_managed_step(controlled):
+    model, tokenizer, ctl, service = controlled
+    callback = model.register_forward_hook(lambda *_: ctl.step())
+    try:
+        service.set({"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "abc"})
+        ctl.step()
+        assert ctl.n == 1 and not service.executor.preparing_source
+        model(**tokenizer("xyz"))
+        assert ctl.n == 2
+    finally:
+        callback.remove()
+
+
+def test_reconfiguration_validates_first_and_ends_old_effects(controlled):
+    model, tokenizer, ctl, service = controlled
+    service.set(add_spec())
+    ctl.step()
+    hook = next(iter(ctl._ivs.values())).hook
+    state = service.state_dict()
+    bad = dictionary_for(model)
+    bad.metadata["model_hash"] = "unknown"
+    with pytest.raises(InterventionError):
+        service.configure(dictionary=bad, tokenizer=tokenizer)
+    assert service.state_dict() == state and not hook.removed
+    service.configure(dictionary=dictionary_for(model), tokenizer=tokenizer)
+    assert hook.removed and not service.specifications()
+    assert ctl.summary()["interventions"][0]["state"] == "ended"
+
+
+def test_watch_replacement_releases_patch_sources_and_old_handles(controlled):
+    model, _, ctl, service = controlled
+    service.set({"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "abc"})
+    ctl.step()
+    source = weakref.ref(service.executor._cache["layers.0.resid_pre"])
+    hook = next(iter(ctl._ivs.values())).hook
+    next_model, _ = make_fixture()
+    replacement = ctl.interventions_on(next_model)
+    try:
+        assert source() is None and hook.removed
+        assert service.dictionary is None
+        service.remove()  # A stale handle cannot remove the replacement.
+        assert ctl.intervention_service is replacement
+    finally:
+        replacement.remove()
+
+
+def test_dtype_overflow_refuses_before_hook_install():
+    model, tokenizer = make_fixture(dtype=torch.float32)
+    service = InterventionService(model)
+    with pytest.raises(InterventionError, match="dtype range"):
+        service.install(add_spec(vector=[1e100] * 64))
+    assert not any(m._forward_hooks for m in model.modules())

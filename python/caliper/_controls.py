@@ -143,8 +143,8 @@ LINGER_CHECK_S = 0.25                  # while an intervention acts or waits, th
 # The interventions (design/gpu-programs.md, Interventions): CONTROL op "intervene" and the
 # CONTROLS key "interventions" of capability "interventions" (3.2 draft).
 OP_INTERVENE = "intervene"
-INTERVENE_OPS = ("ablate",)
-INTERVENE_RESERVED = ("scale", "steer", "patch")
+INTERVENE_OPS = ("ablate", "add", "scale", "clamp", "patch")
+INTERVENE_RESERVED = ("steer",)
 MAX_POINTS_LISTED = 4096               # CALIPER_NET_MAX_POINTS_LISTED
 MAX_INTERVENTIONS = 64                 # CALIPER_NET_MAX_INTERVENTIONS
 POINT_MAX = 255                        # CALIPER_NET_POINT_MAX
@@ -683,9 +683,9 @@ class _Intervention:
     """One intervention of the watched model, keyed by its point and its op."""
 
     __slots__ = ("point", "op", "from_step", "until_step", "since_step", "state", "hook",
-                 "clear", "error")
+                 "clear", "error", "error_code", "spec", "applied_spec", "replace", "report")
 
-    def __init__(self, point: str, op: str, from_step, until_step):
+    def __init__(self, point: str, op: str, from_step, until_step, spec=None):
         self.point, self.op = point, op
         self.from_step, self.until_step = from_step, until_step
         self.since_step = None
@@ -693,11 +693,22 @@ class _Intervention:
         self.hook = None                  # the adapter's remover while the hook is on the model
         self.clear = False                # intervene.clear asked for it; gone at the next step
         self.error = None                 # why the script ended it, or None
+        self.error_code = None
+        self.spec = spec or {"point": point, "op": op, "kind": op,
+                             "from_step": from_step, "until_step": until_step}
+        self.applied_spec = None
+        self.replace = False
+        self.report = False
 
     def entry(self) -> dict:
-        return {"point": self.point, "op": self.op, "from_step": self.from_step,
-                "until_step": self.until_step, "since_step": self.since_step,
-                "state": self.state}
+        from copy import deepcopy
+        entry = dict(deepcopy(self.spec), from_step=self.from_step, until_step=self.until_step,
+                     since_step=self.since_step, state=self.state)
+        if self.op == "ablate":
+            entry.pop("kind", None)  # Preserve the original ablation CONTROLS entry.
+        if self.error is not None:
+            entry.update(error=self.error, error_code=self.error_code)
+        return entry
 
 
 class Interventions:
@@ -715,6 +726,127 @@ class Interventions:
         self.points: list = []            # the CONTROLS items, at most MAX_POINTS_LISTED
         self.names: frozenset = frozenset()
         self._shapes_off = None           # removes the shape hooks at the next step
+        from .interp._intervene import InterventionService
+        self.executor = InterventionService(model)
+
+    @property
+    def dictionary(self):
+        return self.executor.dictionary
+
+    @property
+    def suspended(self):
+        return self.executor.suspended
+
+    def suspend(self):
+        return self.executor.suspend()
+
+    def rows(self, indices):
+        return self.executor.rows(indices)
+
+    def invalidate_source_cache(self):
+        """Release clean patch sources after an external prompt or model change."""
+        self.executor.invalidate_cache()
+
+    def configure(self, *, dictionary=None, tokenizer=None, dictionary_id=None):
+        """Bind resources and end prior interventions after validation succeeds."""
+        with self._ctl.lock:
+            if self._ctl._iv_model is not self:
+                raise ValueError("the intervention service is no longer attached")
+            self.executor.configure(dictionary=dictionary, tokenizer=tokenizer,
+                                    dictionary_id=dictionary_id)
+            for iv in self._ctl._ivs.values():
+                self._ctl._unhook(iv)
+                if iv.state != IV_ENDED:
+                    iv.state = IV_ENDED
+                    iv.error = "intervention resources changed"
+                    iv.error_code = "intervene.configuration_changed"
+            self._ctl._iv_due = True
+            self._ctl._update_busy()
+        self._ctl._publish()
+        return self
+
+    def set(self, specification):
+        """Queue one specification for the next step boundary, or raise a refusal."""
+        self._request({"set": specification})
+
+    def clear(self, point=None):
+        """Queue removal at the next step boundary."""
+        self._request({"clear_all": True} if point is None else {"clear": point})
+
+    def _request(self, request):
+        from .interp._intervene import InterventionError
+        with self._ctl.lock:
+            if self._ctl._iv_model is not self:
+                raise InterventionError("the intervention service is no longer attached")
+            refused = self._ctl._intervene(request)
+            self._ctl._update_busy()
+        if refused is not None:
+            raise InterventionError(refused[1], refused[0])
+
+    def specifications(self, *, active_only=True):
+        """Return independent JSON specifications for the current effects.
+
+        With active_only=False, include queued specifications and pending schedules.
+        Ended records remain available through state_dict().
+        """
+        from copy import deepcopy
+        with self._ctl.lock:
+            if self._ctl._iv_model is not self:
+                return []
+            if active_only:
+                return [deepcopy(iv.applied_spec) for iv in self._ctl._ivs.values()
+                        if iv.state == IV_ACTIVE and iv.applied_spec is not None]
+            return [deepcopy(iv.spec) for iv in self._ctl._ivs.values()
+                    if iv.state != IV_ENDED and not iv.clear]
+
+    def state_dict(self):
+        """Return complete JSON state. The run checkpoint owns the step counter."""
+        from copy import deepcopy
+        with self._ctl.lock:
+            if self._ctl._iv_model is not self:
+                raise ValueError("the intervention service is no longer attached")
+            return {"version": 1, "interventions": [
+                {"specification": deepcopy(iv.spec), "state": iv.state,
+                 "since_step": iv.since_step, "clear": iv.clear,
+                 "error": iv.error, "error_code": iv.error_code}
+                for iv in self._ctl._ivs.values()]}
+
+    def load_state_dict(self, state):
+        """Validate all fork records before replacement. Hooks resume at a boundary."""
+        from .interp._intervene import InterventionError
+        if not isinstance(state, dict) or state.get("version") != 1 or set(state) != {"version", "interventions"}:
+            raise InterventionError("unsupported intervention state")
+        records = state["interventions"]
+        if not isinstance(records, list) or len(records) > MAX_INTERVENTIONS:
+            raise InterventionError("invalid intervention records")
+        with self._ctl.lock:
+            if self._ctl._iv_model is not self:
+                raise InterventionError("the intervention service is no longer attached")
+            restored = {}
+            for record in records:
+                if not isinstance(record, dict) or set(record) != {
+                    "specification", "state", "since_step", "clear", "error", "error_code"
+                }:
+                    raise InterventionError("invalid intervention record")
+                spec = self.executor.validate(record["specification"])
+                if (record["state"] not in (IV_PENDING, IV_ACTIVE, IV_ENDED)
+                        or not _step_ok(record["since_step"]) or type(record["clear"]) is not bool
+                        or any(value is not None and (not isinstance(value, str) or len(value) > TEXT_MAX)
+                               for value in (record["error"], record["error_code"]))):
+                    raise InterventionError("invalid intervention lifecycle state")
+                key = spec["point"], spec["op"]
+                if key in restored:
+                    raise InterventionError("duplicate intervention record")
+                iv = _Intervention(*key, spec.get("from_step"), spec.get("until_step"), spec)
+                iv.state, iv.since_step = record["state"], record["since_step"]
+                iv.clear, iv.error, iv.error_code = record["clear"], record["error"], record["error_code"]
+                restored[key] = iv
+            for iv in self._ctl._ivs.values():
+                self._ctl._unhook(iv)
+            self.invalidate_source_cache()
+            self._ctl._ivs = restored
+            self._ctl._iv_due = True
+            self._ctl._update_busy()
 
     def remove(self) -> None:
         self._ctl._interventions_off(self)
@@ -819,6 +951,8 @@ class Controls:
     # -- the checkpoint (the training thread) ----------------------------------
     def step(self, step=None) -> None:
         """caliper.step(); see there."""
+        if self._iv_model is not None and self._iv_model.executor.preparing_source:
+            return  # A clean patch-source forward is internal to the current boundary.
         if step is None:
             self.n += 1
         else:
@@ -1343,6 +1477,11 @@ class Controls:
         self._publish_selection(sp)
 
     # -- interventions (design/gpu-programs.md, Interventions) -----------------------
+    @property
+    def intervention_service(self):
+        """The intervention handle for the current watch, or None."""
+        return self._iv_model
+
     def interventions_on(self, model, handle=None, adapter=None) -> Interventions:
         """Take interventions on ``model`` from now on (the training thread).
 
@@ -1397,6 +1536,8 @@ class Controls:
             self._update_busy()
         for iv in ivs:
             self._unhook(iv)
+        m.executor.close()
+        m.executor.dictionary = m.executor.tokenizer = None
         if shapes_off is not None:
             shapes_off()
         self._publish()
@@ -1404,6 +1545,7 @@ class Controls:
     @staticmethod
     def _unhook(iv: _Intervention) -> None:
         hook, iv.hook = iv.hook, None
+        iv.applied_spec = None
         if hook is not None:
             try:
                 hook()
@@ -1416,22 +1558,19 @@ class Controls:
         m = self._iv_model
         if m is None:
             return (ERR_NOT_SUPPORTED, "the script takes no interventions: it watches no model "
-                                       "with caliper.watch(model, optimizer)")
-        if not isinstance(req, dict):
-            return (_w().ERR_BAD_REQUEST, "intervene holds set, clear or clear_all")
+                                       "with caliper.watch(model)")
+        if (not isinstance(req, dict) or set(req) - {"set", "clear", "clear_all"}
+                or sum(req.get(k) is not None for k in ("set", "clear", "clear_all")) != 1):
+            return (_w().ERR_BAD_REQUEST, "intervene holds exactly one of set, clear or clear_all")
         nxt = self._next_step()
         if req.get("set") is not None:
-            st = req["set"]
-            point, op = st.get("point"), st.get("op")
-            frm, until = st.get("from_step"), st.get("until_step")
-            if op in INTERVENE_RESERVED or op not in INTERVENE_OPS:
-                return (ERR_OP_RESERVED, f"the op {op!r} is not built; ablate is the only op")
-            if point not in m.names:
-                return (ERR_UNKNOWN_POINT, f"the model has no point {point!r}")
-            if not (_step_ok(frm) and _step_ok(until)):
-                return (ERR_BAD_RANGE, "from_step and until_step are steps")
-            if until is not None and frm is not None and until <= frm:
-                return (ERR_BAD_RANGE, f"until_step {until} is not above from_step {frm}")
+            from .interp._intervene import InterventionError
+            try:
+                spec = m.executor.validate(req["set"])
+            except InterventionError as error:
+                return error.code, str(error)
+            point, op = spec["point"], spec["op"]
+            frm, until = spec.get("from_step"), spec.get("until_step")
             if until is not None and until <= nxt:
                 return (ERR_BAD_RANGE, f"until_step {until} is in the past: the next step is {nxt}")
             key = (point, op)
@@ -1440,19 +1579,21 @@ class Controls:
                 live = sum(1 for x in self._ivs.values() if x.state != IV_ENDED)
                 if live >= MAX_INTERVENTIONS:
                     return (_w().ERR_LIMIT, f"the script holds {MAX_INTERVENTIONS} interventions")
-                while len(self._ivs) >= MAX_INTERVENTIONS:      # the oldest ended one goes
+                while len(self._ivs) >= MAX_INTERVENTIONS:
                     old = next(k for k, x in self._ivs.items() if x.state == IV_ENDED)
                     del self._ivs[old]
-                self._ivs[key] = _Intervention(point, op, frm, until)
+                self._ivs[key] = _Intervention(point, op, frm, until, spec)
             else:
+                iv.replace = iv.replace or spec != iv.spec
+                iv.spec = spec
                 iv.from_step, iv.until_step = frm, until
-                iv.clear, iv.error = False, None
+                iv.clear, iv.error, iv.error_code = False, None, None
                 if iv.state == IV_ENDED:
                     iv.state, iv.since_step = IV_PENDING, None
         elif req.get("clear") is not None:
             point = req["clear"]
-            if point not in m.names:
-                return (ERR_UNKNOWN_POINT, f"the model has no point {point!r}")
+            if not isinstance(point, str) or point not in m.names:
+                return (ERR_UNKNOWN_POINT, "the model has no such point")
             for iv in self._ivs.values():
                 if iv.point == point:
                     iv.clear = True
@@ -1514,6 +1655,17 @@ class Controls:
                           stacklevel=2)
         return bool(ended)
 
+    def _intervention_failed(self, iv, message):
+        """End a failed hook now and publish its error at the next boundary."""
+        with self.lock:
+            if self._ivs.get((iv.point, iv.op)) is not iv:
+                return
+            self._unhook(iv)
+            iv.state, iv.error = IV_ENDED, message
+            iv.error_code, iv.report = "intervene.hook_failed", True
+            self._iv_due = True
+            self._update_busy()
+
     def _apply_interventions(self, controllers=None) -> bool:
         """At a checkpoint (the training thread, lock held): put on or take off the hooks so that
         each intervention acts from its first step until the step it ends before, end one whose
@@ -1538,6 +1690,15 @@ class Controls:
         s = self._next_step()
         for key in list(self._ivs):
             iv = self._ivs[key]
+            if iv.report:
+                iv.report = False
+                changed = True
+                warnings.warn(f"caliper: the intervention at {iv.point!r} failed and ended: {iv.error}",
+                              RuntimeWarning, stacklevel=2)
+            if iv.replace:
+                self._unhook(iv)
+                iv.replace = False
+                changed = True
             if iv.clear:
                 self._unhook(iv)
                 del self._ivs[key]
@@ -1552,11 +1713,20 @@ class Controls:
             on = not ended and (iv.from_step is None or iv.from_step <= s)
             if on and iv.hook is None:
                 try:
-                    iv.hook = m.adapter.ablate(m.model, iv.point)
+                    callback = lambda message, iv=iv: self._intervention_failed(iv, message)
+                    if iv.op == "ablate":
+                        iv.hook = m.adapter.ablate(m.model, iv.point)
+                        if hasattr(iv.hook, "on_error"):
+                            iv.hook.on_error = callback
+                    else:
+                        iv.hook = m.executor.install(iv.spec, on_error=callback)
+                    from copy import deepcopy
+                    iv.applied_spec = deepcopy(iv.spec)
                 except Exception as e:
                     iv.error = f"{type(e).__name__}: {e}"[:TEXT_MAX]
+                    iv.error_code = "intervene.hook_failed"
                     ended, on = True, False
-                    warnings.warn(f"caliper: the ablation of {iv.point!r} failed: {iv.error}",
+                    warnings.warn(f"caliper: the intervention at {iv.point!r} failed: {iv.error}",
                                   RuntimeWarning, stacklevel=2)
             if not on:
                 self._unhook(iv)
@@ -1566,7 +1736,7 @@ class Controls:
                 iv.since_step = s if on else iv.since_step if ended else None
                 changed = True
                 if failed:
-                    warnings.warn(f"caliper: the ablation of {iv.point!r} failed and ended: "
+                    warnings.warn(f"caliper: the intervention at {iv.point!r} failed and ended: "
                                   f"{iv.error}", RuntimeWarning, stacklevel=2)
         self._iv_due = m._shapes_off is not None or any(
             iv.clear or iv.state != IV_ENDED for iv in self._ivs.values())
@@ -1590,7 +1760,7 @@ class Controls:
     def _controls_meta(self) -> dict:
         w = _w()
         extra = {}
-        if self._iv_model is not None:   # only under caliper.watch(model, optimizer)
+        if self._iv_model is not None:   # a training or inference watch
             extra["interventions"] = self._interventions_obj()
         return w.Controls(self._run_obj(), [p.entry() for p in self.params.values()],
                           [a.entry() for a in self.actions.values()], **extra).to_meta()
