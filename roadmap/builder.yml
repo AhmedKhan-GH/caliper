@@ -109,7 +109,7 @@ features:
     status: shipped
     scope: core
     summary: Spec version 1 adds the scene panel, which draws the entities of a scene that Caliper builds from live tensors, with a camera and picking, and the top-level arrays and keys that an instrument needs.
-    depends_on: [SPC-05]
+    depends_on: [REN-12, SPC-05]
     docs: docs/builder/spec-version-1.md#scene-panel
     issue: null
 
@@ -440,38 +440,35 @@ features:
     status: shipped
     scope: supporting
     summary: A scene panel keeps up to 16 named camera views, lists them in a menu of its header, and opens on the view that view_camera names, and the commands camera.save and camera.set write and move them.
-    depends_on: [SPC-42]
+    depends_on: [REN-45, SPC-42]
     docs: docs/builder/scene-entities.md#camera-and-saved-views
     issue: null
 
   - id: SPC-50
     title: Pieces
-    status: built
+    status: shipped
     scope: core
     summary: A piece is a folder of a manifest and WGSL files with a derive half and a draw half, identified by a SHA-256 hash that a program pins with its name and version, and read from the library, the workspace or the open spec.
     depends_on: [SPC-14]
     docs: docs/agents/pieces.md#piece-folder
-    branches: [playground]
     issue: null
 
   - id: SPC-51
     title: Piece Commands
-    status: built
+    status: shipped
     scope: core
     summary: The commands piece.check, piece.list, piece.show, piece.save, piece.copy, piece.update and piece.remove, and program.read, let an agent write, check and version pieces and read published resources through MCP.
     depends_on: [AGT-02, SPC-50]
     docs: docs/agents/pieces.md#piece-commands
-    branches: [playground]
     issue: null
 
   - id: SPC-52
     title: Provenance Review State
-    status: built
+    status: shipped
     scope: core
     summary: A program, stage or piece instance of a spec from someone else stays in the state review, and runs neither half, until the hash of its source is in the reviewed list of the spec.
     depends_on: [SPC-50]
     docs: docs/agents/pieces.md#foreign-specs
-    branches: [playground]
     issue: null
 
   - id: SPC-53
