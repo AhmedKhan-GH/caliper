@@ -61,24 +61,21 @@ target_include_directories(caliper_view_layer PUBLIC
 # and what they draw through: the scene core over the graphics layer's WebGPU backend, which the
 # renderer owns.
 #
-# stages.cpp holds the scene view's stage cache (scene/stage_cache.h) and the stage entry points as
-# text. It needs no WGSL translator: the app's stage host (src/host/spec_runtime) translates the
-# stages, and the browser module does not have that host. Thus no browser view gets a stage source,
-# the cache stays empty, and an entity with a stage draws with its built-in program in the browser.
 target_sources(caliper_view_layer PRIVATE
     ${CALIPER_ROOT}/src/host/live/live_views_scene.cpp
     ${CALIPER_ROOT}/src/host/live/scene_overlays.cpp
     ${CALIPER_ROOT}/src/host/spec_runtime/label_layout.cpp
-    ${CALIPER_ROOT}/src/host/live/live_scene.cpp
+    ${CALIPER_ROOT}/src/host/live/live_scene.cpp ${CALIPER_ROOT}/src/host/live/scene_legacy.cpp
+    ${CALIPER_ROOT}/src/host/live/scene_piece_form.cpp
     ${CALIPER_ROOT}/src/host/live/live_points.cpp
-    ${CALIPER_ROOT}/src/host/scene/stages.cpp
+
     ${CALIPER_ROOT}/src/host/scene/path.cpp
     ${CALIPER_ROOT}/src/host/scene/scene_tree.cpp
     ${CALIPER_ROOT}/src/host/scene/camera.cpp
-    ${CALIPER_ROOT}/src/host/scene/compile.cpp
+    ${CALIPER_ROOT}/src/host/scene/labels.cpp
     ${CALIPER_ROOT}/src/host/scene/pick.cpp
-    ${CALIPER_ROOT}/src/host/scene/scale_bar.cpp
-    ${CALIPER_ROOT}/src/host/scene/backend_resources.cpp)
+    ${CALIPER_ROOT}/src/host/scene/scale_bar.cpp)
+
 # The draw half of pieces (design/programmable-graphics.md): the same render
 # graph, composer, prelude and lib modules as the app, from one source each.
 # The runtime reads a PROGRAM's declaration with nlohmann/json, the release
@@ -109,17 +106,57 @@ target_sources(caliper_view_layer PRIVATE
     ${_caliper_programs_text_cpp})
 target_include_directories(caliper_view_layer PUBLIC ${CALIPER_ROOT}/src/builder/include)
 # The scene view draws the programs of its panel (live_scene.cpp with CALIPER_HAVE_DRAW), from the
-# feeds of the module's programs (src/web_programs.cpp), as the app's scene view does.
-set_property(SOURCE ${CALIPER_ROOT}/src/host/live/live_scene.cpp APPEND PROPERTY COMPILE_DEFINITIONS CALIPER_HAVE_DRAW=1)
+# feeds of the module's programs (src/web_programs.cpp), as the app's scene view does. The scene's
+# rectangle (live_views_scene.cpp) needs the same definition: without it, a click's frame pick gives
+# no item and the programs' text tables give no labels.
+set_property(SOURCE ${CALIPER_ROOT}/src/host/live/live_scene.cpp ${CALIPER_ROOT}/src/host/live/scene_legacy.cpp ${CALIPER_ROOT}/src/host/live/live_views_scene.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS CALIPER_HAVE_DRAW=1)
+# The scene view also draws every shape of its scene with the library pieces, through the app's
+# converter (src/host/draw/scene_pieces.cpp, CALIPER_HAVE_SCENE_PIECES as the app's caliper_draw_host
+# defines it). Unsupported input reports a scene error.
+#
+# The converter reads each library piece from its piece.toml with the spec library's reader
+# (piece_from_toml), thus the module compiles the sources of the spec library that the reader needs,
+# with toml++ at the native build's pin. The linker keeps only what the reader reaches.
+if(NOT TARGET tomlplusplus::tomlplusplus)
+    FetchContent_Declare(tomlplusplus
+        GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
+        GIT_TAG v3.4.0 GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(tomlplusplus)
+endif()
+set(_spec "${CALIPER_ROOT}/src/builder/spec")
+add_library(caliper_spec_reader STATIC
+    ${_spec}/annotation.cpp
+    ${_spec}/colormaps.cpp
+    ${_spec}/common.cpp
+    ${_spec}/entity.cpp
+    ${_spec}/instrument.cpp
+    ${_spec}/json_form.cpp
+    ${_spec}/reference.cpp
+    ${_spec}/spec.cpp
+    ${_spec}/state.cpp
+    ${_spec}/toml_form.cpp)
+target_include_directories(caliper_spec_reader PUBLIC ${CALIPER_ROOT}/src/builder/include)
+target_link_libraries(caliper_spec_reader PUBLIC nlohmann_json::nlohmann_json PRIVATE tomlplusplus::tomlplusplus)
+target_sources(caliper_view_layer PRIVATE ${CALIPER_ROOT}/src/host/draw/scene_pieces.cpp)
+set_property(SOURCE ${CALIPER_ROOT}/src/host/live/live_scene.cpp ${CALIPER_ROOT}/src/host/live/scene_legacy.cpp ${CALIPER_ROOT}/src/host/draw/scene_pieces.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS CALIPER_HAVE_SCENE_PIECES=1)
+target_link_libraries(caliper_view_layer PUBLIC caliper_spec_reader)
 target_compile_definitions(caliper_view_layer PUBLIC IMGUI_IMPL_WEBGPU_BACKEND_DAWN)
 # The scene core's arithmetic without contraction, as natively (the root CMakeLists.txt's caliper_scene),
 # so that both compute the same uniform bytes; WebAssembly has no fused multiply-add, so this only
 # states it.
 set_source_files_properties(${CALIPER_ROOT}/src/host/scene/scene_tree.cpp ${CALIPER_ROOT}/src/host/scene/camera.cpp
-    ${CALIPER_ROOT}/src/host/scene/compile.cpp ${CALIPER_ROOT}/src/host/scene/pick.cpp
-    ${CALIPER_ROOT}/src/host/scene/backend_resources.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+    ${CALIPER_ROOT}/src/host/scene/labels.cpp ${CALIPER_ROOT}/src/host/scene/pick.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 # The WebGPU port must be named when compiling too: it provides webgpu.h.
 target_compile_options(caliper_view_layer PUBLIC --use-port=emdawnwebgpu)
+# The points view draws its points with the library piece points@1 (live_points.cpp with
+# CALIPER_HAVE_DRAW and CALIPER_HAVE_LIBRARY_PIECES), as the app's points view does. The pieces come
+# from their piece.toml through src/host/draw/library_pieces.cpp and the spec library's reader above,
+# which the scene view's converter also reads its pieces with.
+target_sources(caliper_view_layer PRIVATE ${CALIPER_ROOT}/src/host/draw/library_pieces.cpp)
+set_property(SOURCE ${CALIPER_ROOT}/src/host/live/live_points.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+    CALIPER_HAVE_DRAW=1 CALIPER_HAVE_LIBRARY_PIECES=1)
 
 # ---- the wire protocol v3 codec (shared with the native NetSource) ---------------
 add_library(caliper_wire STATIC
@@ -138,8 +175,10 @@ add_executable(caliper-views
     src/fonts.cpp
     src/gfx_selftest.cpp
     src/scene_selftest.cpp
+    src/points_parity.cpp
     src/web_programs.cpp
     src/draw_parity.cpp
+    src/scene_parity.cpp
 )
 # fonts.cpp embeds the native app's faces from the design token package (C23 #embed).
 set_source_files_properties(src/fonts.cpp PROPERTIES
@@ -153,17 +192,15 @@ target_link_options(caliper-views PRIVATE
     -sEXPORT_NAME=createCaliperViews
     -sENVIRONMENT=web
     -sFILESYSTEM=0
-    # A capped heap: 16 MB to start (one view uses about 2 MB, a page of four
-    # about 12 MB), growing to at most 512 MB. One snapshot costs about four
-    # times its payload while it is applied (the socket's copy, the source's
-    # two buffers, the hover copy), so the cap holds a 64 MB frame, the
-    # protocol's largest.
+    # The heap starts at 16 MiB and grows as needed. Its 2 GiB ceiling covers
+    # 512 MiB of kept resources, two 256 MiB assemblies, pick copies, scene
+    # arrays, and frame decoding. This ceiling allocates no memory at startup.
     -sINITIAL_MEMORY=16MB
     -sALLOW_MEMORY_GROWTH=1
-    -sMAXIMUM_MEMORY=512MB
+    -sMAXIMUM_MEMORY=2048MB
     -sERROR_ON_UNDEFINED_SYMBOLS=1
     "-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$UTF8ToString,$stringToNewUTF8,$stringToUTF8OnStack,$stackSave,$stackRestore,$specialHTMLTargets"
-    "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view,_caliper_views_set_toggle,_caliper_views_set_link,_caliper_views_gfx_selftest,_caliper_views_scene_selftest,_caliper_views_draw_parity,_caliper_views_colormap_keys,_caliper_views_destroy"
+    "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view,_caliper_views_set_toggle,_caliper_views_set_link,_caliper_views_gfx_selftest,_caliper_views_scene_selftest,_caliper_views_draw_parity,_caliper_views_scene_parity,_caliper_views_points_parity,_caliper_views_colormap_keys,_caliper_views_feed_program,_caliper_views_feed_resource,_caliper_views_select,_caliper_views_set_starting,_caliper_views_destroy"
     "-sEXPORTED_RUNTIME_METHODS=ccall,UTF8ToString,stringToNewUTF8,HEAPU8"
 )
 if(CALIPER_WEB_CLOSURE AND CMAKE_BUILD_TYPE STREQUAL "Release")

@@ -19,6 +19,7 @@ naming rule, never a particular command's schema.
   a single type. The meaning is the same.
 - A tool can be strict when every object in its schema is closed
   (`additionalProperties: false`) and lists `required`, and has no `$ref`.
+  Each schema node must declare a type, alternatives, or literal values.
   Otherwise it is sent without `strict`, so one open schema cannot make the
   whole request fail.
 - The Claude API compiles all strict schemas of a request together and refuses
@@ -97,7 +98,7 @@ class Command:
     frame_thread: bool
     agents: bool = True   # false: the person's own command, which no agent runs
     # What it does, by which the app's mode for an agent decides it: "read",
-    # "edit" (of the open spec) or "change". A table without it reads as change.
+    # "edit" (of the open spec), "run" (script control) or "change". An absent effect reads as change.
     effect: str = "change"
 
     @property
@@ -243,9 +244,11 @@ def split_type_lists(schema: Any) -> Any:
 
 
 def is_strict_compatible(schema: Any) -> bool:
-    """Every object is closed and lists `required`, and nothing is referenced."""
+    """Every node has a type, alternatives, or literals. Objects are closed and have `required`."""
     if not isinstance(schema, dict):
-        return True
+        return False
+    if not any(key in schema for key in ("type", "anyOf", "oneOf", "allOf", "const", "enum")):
+        return False
     if "$ref" in schema:
         return False
     types = schema.get("type")
@@ -291,8 +294,8 @@ def _command_from_json(item: Any, index: int) -> Command:
             raise TableError(f"{name}: {flag} is not a boolean.")
         flags[flag] = value
     effect = item.get("effect", "change")
-    if effect not in ("read", "edit", "change"):
-        raise TableError(f"{name}: effect is not read, edit or change.")
+    if effect not in ("read", "edit", "run", "change"):
+        raise TableError(f"{name}: effect is not read, edit, run or change.")
     return Command(name=name, summary=summary, args=args, result=result, effect=effect, **flags)
 
 

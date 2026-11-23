@@ -1346,7 +1346,7 @@ const std::vector<std::string> kCaps31 = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_
 // The hub forwards controls, scenes and selections, and the 3.2 draft's programs and interventions.
 const std::vector<std::string> kHubCaps = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_SELECTION,
                                            CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS,
-                                           CALIPER_NET_CAP_RESOURCES};
+                                           CALIPER_NET_CAP_RESOURCES, CALIPER_NET_CAP_SCENE_PIECES};
 const std::vector<std::string> kProducer31 = {CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_CONTROLS,
                                               CALIPER_NET_CAP_SELECTION};
 

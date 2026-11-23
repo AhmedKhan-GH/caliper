@@ -1,0 +1,60 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 423,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 399,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 112
+  },
+  "meta": {
+    "arrays": [
+      "positions",
+      "strip_lengths"
+    ],
+    "color": [
+      235,
+      235,
+      235,
+      255
+    ],
+    "mode": "strips",
+    "part": "lines",
+    "path": "path",
+    "piece": {
+      "name": "lines",
+      "version": 1
+    },
+    "program": "scene.112",
+    "resources": {
+      "info": 1,
+      "picks": 3,
+      "segments": 3,
+      "source_positions": 4,
+      "source_strip_lengths": 1
+    },
+    "seq": 40,
+    "stamp_ns": 81234567893423,
+    "stats": [
+      0.0,
+      0.0,
+      -0.5,
+      0.0,
+      -0.5,
+      0.0,
+      -0.25,
+      -0.10000000149011612
+    ],
+    "sub": 2,
+    "view": "landscape",
+    "width": 2.0
+  },
+  "meta_offset": 24,
+  "name": "v3_2/scene_update_lines_strip_bundle",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "scene_update"
+}

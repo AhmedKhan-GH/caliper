@@ -9,8 +9,21 @@
 // Refresh: once a second the page asks for the spec again and, for each panel
 // it shows, for its data with the version it has; the app answers "unchanged"
 // without resolving until the panel's sources, the spec or the catalog change.
+// A round draws once, after every answer, so that the colour key gives the
+// lines their colours in the layout's order, as the app's first frame does.
+//
+// Programs: a scene panel's instances of pieces come with its panel.data and
+// draw in the WebAssembly views over the panel's content (programs.ts); a
+// pick there stays local to the page.
+//
+// Controls: a control leaf of the layout takes one control row, and the page
+// shows each control with its state from panel.data, disabled, because every
+// control changes the run or the app's values and the viewer origin only
+// reads (controls.ts).
 
-import { computeLayout, effectiveLayout, findPanel, metricsForTextScale, panelTitle, type SpecLayout, type TabChoice } from './layout.js';
+import { computeLayout, effectiveLayout, findControl, findPanel, metricsForTextScale, panelTitle, type SpecLayout, type TabChoice } from './layout.js';
+import { drawControl, type ControlData } from './controls.js';
+import { ProgramViews, type ProgramPick } from './programs.js';
 import { COL, ColorKey } from './look.js';
 import { drawPanel, drawState, drawTabs, type PanelView } from './draw.js';
 import { preparePanel, type PreparedPanel } from './prepare.js';
@@ -36,19 +49,40 @@ export async function command(base: URL, token: string, name: string, args: Reco
   return (await res.json()) as CommandEnvelope;
 }
 
-export interface PageParts { title: HTMLElement; area: HTMLElement; canvas: HTMLCanvasElement; status: HTMLElement; list: HTMLElement }
+export interface PageParts {
+  title: HTMLElement; area: HTMLElement; canvas: HTMLCanvasElement; status: HTMLElement; list: HTMLElement;
+  /** The line under the bar that says why no live data shows (a dashboard the app does not have open). */
+  banner?: HTMLElement;
+}
 
-interface PanelEntry { version: string; prepared: PreparedPanel | null; busy: boolean; view: PanelView }
+/** What the page says when the app does not have the dashboard open: no live source, value or kept step reaches it. */
+export const NOT_OPEN_BANNER = 'The app does not have this dashboard open. It shows data when the dashboard is open in the app.';
+export const NOT_OPEN_STATE = { label: 'Dashboard not open in the app', detail: 'shows data when it is open in the app' };
+
+interface PanelEntry { version: string; prepared: PreparedPanel | null; busy: boolean; view: PanelView; control: ControlData | null }
 
 /** What a test reads of the page. */
 export interface SpecPageState {
   status: string;
   /** The state the whole page shows in place of the applet, or null. */
   state: string | null;
+  /** The app does not have this dashboard open (spec.get's open_in_app), and the banner that says so. */
+  notOpen: boolean;
+  banner: string;
   applet: string;
   title: string;
   panels: { id: string; title: string; primitive: string; drawn: boolean; state: string | null; info: string;
             rect: { x: number; y: number; w: number; h: number } }[];
+  /** The control leaves shown, with the state each shows. */
+  controls: { id: string; kind: string; title: string; value: unknown; text: string; enabled: boolean; why: string;
+              rect: { x: number; y: number; w: number; h: number } }[];
+  /** The series lines drawn, by panel: each line's name and colour. */
+  lines: Record<string, { name: string; color: string }[]>;
+  /** The scene panels' programs (programs.ts, ProgramViews.debug). */
+  programs: ReturnType<ProgramViews['debug']>;
+  /** The page's own state and the picks it saw, which never reach the app. */
+  localState: Record<string, unknown>;
+  picks: { panel: string; detail: ProgramPick }[];
   tabs: { path: string; labels: string[]; active: number }[];
   requests: number;
 }
@@ -65,11 +99,15 @@ export class SpecPage {
   private whole: { label: string; detail: string } | null = null;
   private requests = 0;
   private timer = 0;
+  private notOpen = false;
+  readonly programs: ProgramViews;
 
   constructor(private readonly parts: PageParts, private readonly base: URL, private readonly token: string,
               private readonly applet: string, private readonly period = 1000) {
+    this.programs = new ProgramViews(parts.area, base, token, () => this.redraw());
     new ResizeObserver(() => this.redraw()).observe(parts.area);
     parts.canvas.addEventListener('click', (e) => this.onClick(e));
+    parts.canvas.addEventListener('mousemove', (e) => this.onMove(e));
     parts.canvas.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
   }
 
@@ -146,52 +184,85 @@ export class SpecPage {
       return;
     }
     this.whole = null;
+    // A saved dashboard that the app does not have open gets no live data: the page says so, and asks
+    // for every panel again when that changes.
+    const notOpen = env.result.open_in_app === false;
+    if (notOpen !== this.notOpen) {
+      this.notOpen = notOpen;
+      for (const e of this.panels.values()) e.version = '';
+      const b = this.parts.banner;
+      if (b) {
+        b.textContent = notOpen ? NOT_OPEN_BANNER : '';
+        b.hidden = !notOpen;
+      }
+    }
     if (env.result.text !== this.specText) {
       this.specText = env.result.text;
       this.spec = env.result.json as Spec;
       this.key = new ColorKey(this.spec);
-      for (const id of [...this.panels.keys()]) if (!findPanel(this.spec, id)) this.panels.delete(id);
+      this.programs.setSpec(this.spec);
+      for (const id of [...this.panels.keys()]) if (!findPanel(this.spec, id) && !findControl(this.spec, id)) this.panels.delete(id);
       const t = this.spec.applet.title ?? this.spec.applet.id;
       this.parts.title.textContent = t;
       document.title = `${t} · Caliper`;
     }
     this.setStatus('connected');
+    this.draw();   // the layout of this spec, whose leaves the round fetches
+    await Promise.all(this.layout.panels.map((lp) => this.fetchPanel(lp.id, false)));
     this.redraw();
-    await Promise.all(this.layout.panels.map((lp) => this.fetchPanel(lp.id)));
   }
 
-  private async fetchPanel(id: string): Promise<void> {
+  private entry(id: string): PanelEntry {
+    let e = this.panels.get(id);
+    if (!e) {
+      e = { version: '', prepared: null, busy: false, view: { scroll: 0 }, control: null };
+      this.panels.set(id, e);
+    }
+    return e;
+  }
+
+  /** The data of one leaf, a panel or a control; `redraw` false when the caller draws after a round. */
+  private async fetchPanel(id: string, redraw = true): Promise<void> {
     const spec = this.spec;
     if (!spec) return;
     const panel = findPanel(spec, id);
-    if (!panel) return;
-    let e = this.panels.get(id);
-    if (!e) {
-      e = { version: '', prepared: null, busy: false, view: { scroll: 0 } };
-      this.panels.set(id, e);
-    }
+    const control = panel ? undefined : findControl(spec, id);
+    if (!panel && !control) return;
+    const e = this.entry(id);
     if (e.busy) return;
     e.busy = true;
     try {
       this.requests++;
       const env = await command(this.base, this.token, 'panel.data', { applet: this.applet, panel: id, known: e.version });
-      if (!env.ok) {
-        e.prepared = preparePanel(spec, panel, { panel: id, primitive: panel.primitive, version: '', unchanged: false,
+      if (this.spec !== spec) return;
+      if (control) {
+        if (env.ok && !env.result.unchanged && env.result.data) {
+          e.control = env.result.data as ControlData;
+          e.version = env.result.version;
+        } else if (!env.ok) {
+          e.control = null;
+          e.version = '';
+        }
+      } else if (!env.ok) {
+        e.prepared = preparePanel(spec, panel!, { panel: id, primitive: panel!.primitive, version: '', unchanged: false,
           error: env.error!, state: null, bounds: [], data: null });
         e.version = '';
       } else {
         const r = env.result as PanelDataResult;
-        if (!r.unchanged && this.spec === spec) {
-          e.prepared = preparePanel(spec, panel, r);
+        if (!r.unchanged) {
+          e.prepared = preparePanel(spec, panel!, r);
+          // An offline source of a dashboard that the app does not have open: say that, not "Source offline".
+          if (this.notOpen && e.prepared.state?.label === 'Source offline') e.prepared.state = { ...NOT_OPEN_STATE };
           e.version = r.version;
-            }
+          if (e.prepared.programs) this.programs.update(panel!, e.prepared.programs);
+        }
       }
     } catch {
       this.setStatus('offline');
     } finally {
       e.busy = false;
     }
-    this.redraw();
+    if (redraw) this.redraw();
   }
 
   private redrawQueued = false;
@@ -226,6 +297,7 @@ export class SpecPage {
     const before = this.layout.panels.map((p) => p.id).join(' ');
     this.layout = spec && root ? computeLayout(root, spec, { x: 0, y: 0, w, h }, metricsForTextScale(1), this.tabs) : { panels: [], tabs: [] };
     if (!spec || !root) {
+      this.programs.hideAll(new Set());
       ctx.fillStyle = COL.ground;
       ctx.fillRect(0, 0, w, h);
       const st = this.whole ?? (spec ? { label: 'No panels', detail: spec.applet.id } : { label: this.status === 'offline' ? 'Offline' : 'Connecting', detail: this.applet });
@@ -240,18 +312,29 @@ export class SpecPage {
         drawTabs(ctx, t, info).forEach((rect, index) => this.tabHits.push({ path: t.path, index, rect }));
       }
       for (const lp of this.layout.panels) {
-        const panel = findPanel(spec, lp.id);
-        if (!panel || lp.rect.w < 1 || lp.rect.h < 1) continue;
-        let e = this.panels.get(lp.id);
-        if (!e) {
-          e = { version: '', prepared: null, busy: false, view: { scroll: 0 } };
-          this.panels.set(lp.id, e);
+        if (lp.rect.w < 1 || lp.rect.h < 1) continue;
+        const e = this.entry(lp.id);
+        if (lp.control) {
+          const c = findControl(spec, lp.id)!;
+          drawControl(ctx, e.control, c.title ?? c.id, c.kind, lp.rect);
+          continue;
         }
-        drawPanel(ctx, e.prepared, panelTitle(spec, panel), lp.rect, !lp.tab, this.key!, e.view);
+        const panel = findPanel(spec, lp.id);
+        if (!panel) continue;
+        const frame = drawPanel(ctx, e.prepared, panelTitle(spec, panel), lp.rect, !lp.tab, this.key!, e.view);
+        if (panel.primitive === 'scene' && this.programs.has(panel.id)) {
+          const st = this.notOpen ? NOT_OPEN_STATE : this.programs.stateOf(panel.id);
+          if (st) drawState(ctx, st, frame.content);
+          this.programs.place(panel.id, st ? null : frame.content);
+        }
       }
+      this.programs.hideAll(new Set(this.layout.panels.map((p) => p.id)));
       // A panel that a tab has just shown is fetched at once.
       if (this.layout.panels.map((p) => p.id).join(' ') !== before)
-        for (const lp of this.layout.panels) if (!this.panels.get(lp.id)?.prepared) void this.fetchPanel(lp.id);
+        for (const lp of this.layout.panels) {
+          const e = this.panels.get(lp.id);
+          if (!e?.prepared && !e?.control) void this.fetchPanel(lp.id);
+        }
     }
     const nPanels = spec?.panel?.length ?? 0, nSources = spec?.source?.length ?? 0;
     const items = [this.status, ...(spec ? [`applet ${spec.applet.id}`, `${nPanels} panel${nPanels === 1 ? '' : 's'}`,
@@ -271,6 +354,20 @@ export class SpecPage {
         return;
       }
     }
+  }
+
+  /** A hover over a control that the viewer cannot change says why, as the app's tooltip does. */
+  private onMove(e: MouseEvent): void {
+    const r = this.parts.canvas.getBoundingClientRect();
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    let tip = '';
+    for (const lp of this.layout.panels) {
+      const q = lp.rect;
+      if (!lp.control || x < q.x || x >= q.x + q.w || y < q.y || y >= q.y + q.h) continue;
+      const c = this.panels.get(lp.id)?.control;
+      if (c && !c.enabled) tip = c.why;
+    }
+    if (this.parts.canvas.title !== tip) this.parts.canvas.title = tip;
   }
 
   private onWheel(e: WheelEvent): void {
@@ -293,16 +390,32 @@ export class SpecPage {
     return {
       status: this.status,
       state: this.whole?.label ?? null,
+      notOpen: this.notOpen,
+      banner: this.parts.banner && !this.parts.banner.hidden ? this.parts.banner.textContent ?? '' : '',
       applet: this.applet,
       title: spec ? spec.applet.title ?? spec.applet.id : '',
-      panels: this.layout.panels.map((lp) => {
+      controls: this.layout.panels.filter((lp) => lp.control).map((lp) => {
+        const c = this.panels.get(lp.id)?.control ?? null;
+        const sc = spec ? findControl(spec, lp.id) : undefined;
+        return { id: lp.id, kind: sc?.kind ?? '', title: sc?.title ?? lp.id, value: c?.value ?? null, text: c?.text ?? '',
+          enabled: c?.enabled ?? false, why: c?.why ?? '', rect: { ...lp.rect } };
+      }),
+      lines: Object.fromEntries(this.layout.panels.filter((lp) => this.panels.get(lp.id)?.prepared?.series).map((lp) => [lp.id,
+        this.panels.get(lp.id)!.prepared!.series!.lines.map((l) => ({ name: l.name, color: this.key!.find(l.name) ?? '' }))])),
+      panels: this.layout.panels.filter((lp) => !lp.control).map((lp) => {
         const e = this.panels.get(lp.id);
         const p = e?.prepared ?? null;
         const panel = spec ? findPanel(spec, lp.id) : undefined;
+        // A scene panel's programs may show a state over it: the dashboard not open, or no program views.
+        const over = panel?.primitive === 'scene' && this.programs.has(lp.id)
+          ? (this.notOpen ? NOT_OPEN_STATE : this.programs.stateOf(lp.id)) : null;
         return { id: lp.id, title: p?.title ?? (spec && panel ? panelTitle(spec, panel) : lp.id), primitive: panel?.primitive ?? '',
-          drawn: !!p && !p.state, state: p?.state?.label ?? null, info: p?.info ?? '', rect: { ...lp.rect } };
+          drawn: !!p && !p.state && !over, state: over?.label ?? p?.state?.label ?? null, info: p?.info ?? '', rect: { ...lp.rect } };
       }),
       tabs: this.layout.tabs.map((t) => ({ path: t.path, labels: [...t.labels], active: t.active })),
+      programs: this.programs.debug(),
+      localState: { ...this.programs.localState },
+      picks: [...this.programs.picks],
       requests: this.requests,
     };
   }

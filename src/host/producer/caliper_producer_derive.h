@@ -46,7 +46,8 @@ extern "C" {
 
 typedef enum caliper_producer_resource_kind {
     CALIPER_PRODUCER_RESOURCE_BUFFER = 1,   /* array<T> of `count` elements                     */
-    CALIPER_PRODUCER_RESOURCE_TEXTURE = 2   /* array<u32> of width*height packed rgba8unorm texels */
+    CALIPER_PRODUCER_RESOURCE_TEXTURE = 2   /* array<u32> of packed texels of its format, with the */
+                                            /* version's size in <id>_size                        */
 } caliper_producer_resource_kind;
 
 /* One entry of `resources` (spec/piece.h, Resource). */
@@ -57,12 +58,16 @@ typedef struct caliper_producer_resource_desc {
     const char* struct_name;          /* buffer: the struct's name when `fields` is given     */
     const char* const* fields;        /* buffer: "name: type", in order                      */
     size_t field_count;               /* at most 16                                           */
-    uint32_t count;                   /* buffer: elements, at most 4,194,304                  */
+    uint32_t count;                   /* buffer: elements, at most 33,554,432                 */
     uint32_t width;                   /* texture                                              */
     uint32_t height;
     uint32_t counted;                 /* 1: the counter <id>_count bounds the valid elements  */
     uint32_t publish;                 /* 1: read after a pass and sent; 0: private            */
     uint32_t clear;                   /* 1: zeroed before each run of the passes              */
+    const char* format;               /* texture: "rgba8unorm" (also NULL), "r8unorm" or      */
+                                      /* "r32uint"; width and height are the largest sides of */
+                                      /* a version, at most 8,192 each                        */
+    uint32_t texels;                  /* texture: the most texels of a version; 0: width*height */
 } caliper_producer_resource_desc;
 
 /* One compute pass of the derive half. */
@@ -88,7 +93,10 @@ typedef struct caliper_producer_derive_desc {
                                             /* tensor 0 holds the place of a buffer input, which */
                                             /* the derive half does not bind                     */
     size_t input_count;               /* at most 8                                            */
-    const char* const* input_types;   /* "f32", "i32" or "u32" for each input; NULL: all f32  */
+    const char* const* input_types;   /* each input's dtype: "f32", "i32", "u32", "u8" or     */
+                                      /* "u16", or several joined by "|", of which the bound  */
+                                      /* tensor holds one; the composed header is typed by    */
+                                      /* it (programs/pieces.h, compose_derive); NULL: all f32 */
     const caliper_producer_resource_desc* resources;
     size_t resource_count;            /* at most 8                                            */
     const caliper_producer_derive_pass* passes;
@@ -98,6 +106,11 @@ typedef struct caliper_producer_derive_desc {
     size_t param_count;               /* at most 16                                           */
     double time_limit_ms;             /* all passes of one run                                */
     uint64_t memory_limit_bytes;      /* resources and bound tensors                          */
+    const uint8_t* input_unbound;     /* NULL, or a flag for each input: 1 for an optional    */
+                                      /* tensor input that the program leaves unbound, with   */
+                                      /* tensor 0 and its dtype; it binds 16 zero bytes, its  */
+                                      /* shape in `shapes` is (0, 0, 0, 0), and every read of */
+                                      /* it gives zero                                        */
 } caliper_producer_derive_desc;
 
 /* Checks, composes and compiles a derive program, allocates its resources
@@ -108,7 +121,12 @@ caliper_producer_status caliper_producer_compile_derive(caliper_producer* runtim
 
 /* The valid bytes of one published resource after the last pass: `count` is
  * the valid elements (min(counter, count) for a counted buffer), `words` the
- * 32-bit words of one element. The buffer stays valid until the next
+ * 32-bit words of one element. A texture gives the words of its texels as
+ * `count` (words 1) and the version's size as `width` and `height`, which the
+ * derive half wrote into <id>_size: a size outside 1 to the largest sides, or
+ * above the texels, gives a version without texels (count 0, sides 0). A
+ * buffer of narrow elements (u8, u16) gives its words as `count` (words 1)
+ * and its valid elements as `elements`, with `narrow` 1. The buffer stays valid until the next
  * caliper_producer_run(), caliper_producer_remove() or caliper_producer_destroy(). */
 caliper_producer_status caliper_producer_read_resource(caliper_producer* runtime, uint32_t program, const char* resource,
                                                        caliper_producer_output* out, caliper_producer_error* error);

@@ -1,0 +1,165 @@
+# Library piece surface@1: a height field drawn as the built-in surface draw kind draws it.
+name = "surface"
+version = 1
+description = "A height field of R by C cells as a lit surface in a data box, colored by height or by a value through a colormap, with each cell that has a NaN corner as a hole"
+imports = ["pick@1"]
+
+[[inputs]]
+name = "height"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+title = "Heights (R, C)"
+
+[[inputs]]
+name = "values"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+title = "Values (R, C) for the colormap; a tensor of another shape colors by height"
+
+[[params]]
+name = "max_cells"
+type = "u32"
+default = 32768
+min = 1
+max = 262144
+title = "Most Cells, Pooled Above"
+
+[[params]]
+name = "pool"
+type = "u32"
+default = 0
+min = 0
+max = 2
+title = "Pool (0 mean, 1 max, 2 min)"
+
+[[params]]
+name = "colormap"
+type = "u32"
+default = 0
+min = 0
+max = 15
+title = "Colormap (an id of the host's colormaps, 0 viridis)"
+
+[[params]]
+name = "vmin"
+default = 0.0
+title = "Value at the Colormap's Start"
+
+[[params]]
+name = "vmax"
+default = 1.0
+title = "Value at the Colormap's End"
+
+[[params]]
+name = "x_lo"
+default = 0.0
+title = "Data Box Start along the Rows"
+
+[[params]]
+name = "x_hi"
+default = 1.0
+title = "Data Box End along the Rows"
+
+[[params]]
+name = "y_lo"
+default = 0.0
+title = "Data Box Start along the Columns"
+
+[[params]]
+name = "y_hi"
+default = 1.0
+title = "Data Box End along the Columns"
+
+[[params]]
+name = "z_lo"
+default = 0.0
+title = "Data Box Start along the Heights"
+
+[[params]]
+name = "z_hi"
+default = 1.0
+title = "Data Box End along the Heights"
+
+[[params]]
+name = "box_x"
+default = 0.0
+title = "Box Side along the Rows (0 for the data's proportions)"
+
+[[params]]
+name = "box_y"
+default = 0.0
+title = "Box Side along the Columns"
+
+[[params]]
+name = "box_z"
+default = 0.0
+title = "Box Side along the Heights"
+
+[[params]]
+name = "depth_offset"
+type = "i32"
+default = 0
+min = -8
+max = 8
+title = "Depth Offset toward the Camera"
+
+[[params]]
+name = "fit"
+type = "u32"
+default = 31
+min = 0
+max = 31
+title = "Ranges from the Data (1 vmin, 2 vmax, 4 rows, 8 columns, 16 heights)"
+
+[[resources]]
+id = "cells"
+kind = "buffer"
+struct = "Cell"
+fields = ["x: f32", "y: f32", "z: f32", "value: f32", "row: i32", "column: i32", "step: i32", "cols: u32"]
+count = 262144
+counted = true
+
+[[derive.passes]]
+entry = "pool_cells"
+workgroups = [1024, 1, 1]
+writes = ["cells"]
+
+[draw]
+camera = "orbit"
+pick = { resource = "cells", fields = ["x", "y", "z", "value", "row", "column", "step"] }
+
+[[draw.buffers]]
+id = "fit"
+element = "vec4<f32>"
+count = 8322
+
+[[draw.passes]]
+kind = "compute"
+entry = "fit_threads"
+workgroups = [16, 1, 1]
+writes = ["fit"]
+
+[[draw.passes]]
+kind = "compute"
+entry = "fit_groups"
+workgroups = [1, 1, 1]
+writes = ["fit"]
+
+[[draw.passes]]
+kind = "compute"
+entry = "fit_total"
+workgroups = [1, 1, 1]
+writes = ["fit"]
+
+[[draw.passes]]
+kind = "render"
+vertex = "cell_vs"
+fragment = "cell_fs"
+instances = "cells"
+vertices = 6
+topology = "triangle_list"
+blend = "opaque"
+depth = "write"
+pick = true

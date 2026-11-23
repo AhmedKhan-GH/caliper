@@ -1,0 +1,120 @@
+# Library piece image@1: a color or grey image, drawn as the built-in image draws it.
+name = "image"
+version = 1
+description = "A color or grey image, sampled bilinearly, flat at a pose or on the image plane of a camera, with an opacity"
+imports = ["pick@1"]
+
+[[inputs]]
+name = "image"
+kind = "tensor"
+dtype = "f32|u8"
+rank_min = 2
+rank_max = 3
+title = "Image (H, W) grey, or (H, W, 3) or (H, W, 4): u8 channels from 0 to 255, or f32 values from 0 to 1 times the scale"
+
+[[inputs]]
+name = "pose"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+optional = true
+title = "Pose (4, 4) or (3, 4), row by row: the world from the image or from its camera; unbound, the identity"
+
+[[params]]
+name = "opacity"
+default = 1.0
+min = 0.0
+max = 1.0
+title = "Opacity"
+
+[[params]]
+name = "scale"
+default = 1.0
+title = "Scale of f32 Values, 1 for 0 to 1 and 1/255 for 0 to 255; u8 channels take no scale"
+
+[[params]]
+name = "placement"
+type = "u32"
+default = 0
+min = 0
+max = 1
+title = "Placement (0 flat at the pose, 1 on the camera's image plane)"
+
+[[params]]
+name = "fx"
+default = 1.0
+title = "Focal Length x in Pixels"
+
+[[params]]
+name = "fy"
+default = 1.0
+title = "Focal Length y in Pixels"
+
+[[params]]
+name = "cx"
+default = 0.0
+title = "Principal Point x in Pixels"
+
+[[params]]
+name = "cy"
+default = 0.0
+title = "Principal Point y in Pixels"
+
+[[params]]
+name = "plane"
+default = 1.0
+title = "Distance of the Image Plane"
+
+[[params]]
+name = "convention"
+type = "u32"
+default = 0
+min = 0
+max = 1
+title = "Camera Axes (0 right, down, forward; 1 right, up, back)"
+
+# The RGBA texture holds each image up to 8,192 pixels per side. The draw uses bilinear sampling.
+[[resources]]
+id = "pixels"
+kind = "texture"
+format = "rgba8unorm"
+width = 8192
+height = 8192
+texels = 67108864
+
+[[resources]]
+id = "info"
+kind = "buffer"
+struct = "ImageInfo"
+fields = ["size: vec4<u32>", "c0: vec4<f32>", "c1: vec4<f32>", "c2: vec4<f32>", "c3: vec4<f32>"]
+count = 1
+
+# The derive half reads the source image and writes packed RGBA texels.
+[derive]
+time_ms = 50
+memory_mb = 512
+
+[[derive.passes]]
+entry = "copy_pixels"
+workgroups = [256, 1, 1]
+writes = ["pixels"]
+
+[[derive.passes]]
+entry = "place_image"
+writes = ["info"]
+
+[draw]
+memory_mb = 288
+camera = "orbit"
+pick = { resource = "pixels", fields = ["rgba"] }
+
+[[draw.passes]]
+kind = "render"
+vertex = "image_vs"
+fragment = "image_fs"
+instances = "info"
+vertices = 6
+topology = "triangle_list"
+blend = "alpha"
+depth = "write"
+pick = true

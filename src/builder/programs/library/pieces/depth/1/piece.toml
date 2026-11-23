@@ -1,0 +1,172 @@
+# Library piece depth@1: a depth map, drawn as the built-in depth image draws it, with its cloud.
+name = "depth"
+version = 1
+description = "A depth map through a colormap, nearest, flat at a pose or on a camera's image plane, with its back-projected cloud"
+imports = ["pick@1"]
+
+[[inputs]]
+name = "depth"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+dtype = "f32|u16"
+title = "Depth (H, W) of f32 or u16, times the scale in scene units"
+
+[[inputs]]
+name = "pose"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+optional = true
+title = "Pose (4, 4) or (3, 4), row by row: the world from the image or from its camera; unbound, the identity"
+
+[[params]]
+name = "opacity"
+default = 1.0
+min = 0.0
+max = 1.0
+title = "Opacity"
+
+[[params]]
+name = "scale"
+default = 1.0
+title = "Scene Units of One Value, such as 0.001 for millimetres"
+
+[[params]]
+name = "colormap"
+type = "u32"
+default = 0
+min = 0
+max = 3
+title = "Colormap (0 viridis, 1 magma, 2 rdbu, 3 greys)"
+
+[[params]]
+name = "vmin"
+default = 0.0
+title = "Depth at the Colormap's Start"
+
+[[params]]
+name = "vmax"
+default = 1.0
+title = "Depth at the Colormap's End"
+
+[[params]]
+name = "auto_range"
+type = "u32"
+default = 3
+min = 0
+max = 3
+title = "Range from the Data (bit 0 the start, bit 1 the end)"
+
+[[params]]
+name = "cloud"
+type = "u32"
+default = 1
+min = 0
+max = 1
+title = "Back-Projected Cloud on a Camera (0 off, 1 on)"
+
+[[params]]
+name = "placement"
+type = "u32"
+default = 0
+min = 0
+max = 1
+title = "Placement (0 flat at the pose, 1 on the camera's image plane)"
+
+[[params]]
+name = "fx"
+default = 1.0
+title = "Focal Length x in Pixels"
+
+[[params]]
+name = "fy"
+default = 1.0
+title = "Focal Length y in Pixels"
+
+[[params]]
+name = "cx"
+default = 0.0
+title = "Principal Point x in Pixels"
+
+[[params]]
+name = "cy"
+default = 0.0
+title = "Principal Point y in Pixels"
+
+[[params]]
+name = "plane"
+default = 1.0
+title = "Distance of the Image Plane"
+
+[[params]]
+name = "convention"
+type = "u32"
+default = 0
+min = 0
+max = 1
+title = "Camera Axes (0 right, down, forward; 1 right, up, back)"
+
+[[resources]]
+id = "pixels"
+kind = "texture"
+format = "r32uint"
+fields = ["depth: f32"]
+width = 8192
+height = 8192
+texels = 67108864   # 256 MiB: 8,192 x 8,192 texels
+
+[[resources]]
+id = "info"
+kind = "buffer"
+struct = "DepthInfo"
+fields = ["size: vec4<u32>", "c0: vec4<f32>", "c1: vec4<f32>", "c2: vec4<f32>", "c3: vec4<f32>", "range: vec4<f32>"]
+count = 1
+
+[[resources]]
+id = "spans"
+kind = "buffer"
+element = "vec4<f32>"
+count = 65536
+publish = false
+
+[derive]
+time_ms = 50
+memory_mb = 512
+
+[[derive.passes]]
+entry = "copy_depth"
+workgroups = [256, 1, 1]
+writes = ["pixels", "spans"]
+
+[[derive.passes]]
+entry = "place_depth"
+writes = ["info"]
+
+[draw]
+camera = "orbit"
+pick = { resource = "pixels", fields = ["depth"] }
+frame_ms = 16
+memory_mb = 288
+
+[[draw.passes]]
+kind = "render"
+vertex = "depth_vs"
+fragment = "depth_fs"
+instances = "info"
+vertices = 6
+topology = "triangle_list"
+blend = "alpha"
+depth = "write"
+pick = true
+
+[[draw.passes]]
+kind = "render"
+vertex = "cloud_vs"
+fragment = "cloud_fs"
+instances = "pixels"
+vertices = 6
+topology = "triangle_list"
+blend = "alpha"
+depth = "write"
+pick = true

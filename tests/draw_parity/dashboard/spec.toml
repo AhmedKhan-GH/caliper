@@ -1,0 +1,205 @@
+caliper_spec = 1
+
+[applet]
+id = "arc_tower"
+title = "Attention Arc Tower"
+
+[[source]]
+id = "loss"
+catalog = "live:loss"
+history = 4096
+
+[[source]]
+id = "loss_window"
+from = "loss"
+  [[source.transform]]
+  op = "window"
+  steps = 4096
+
+[[source]]
+id = "icl"
+catalog = "live:token_loss.act"
+history = 4096
+  [[source.transform]]
+  op = "slice"
+  axis = 0
+  index = 0
+  [[source.transform]]
+  op = "slice"
+  axis = 0
+  start = 16
+  stop = 27
+  [[source.transform]]
+  op = "reduce"
+  axis = 0
+  fn = "mean"
+
+[[source]]
+id = "icl_window"
+from = "icl"
+  [[source.transform]]
+  op = "window"
+  steps = 4096
+
+[[source]]
+id = "l1_h0_raw"
+catalog = "live:induction_l1_h0"
+history = 4096
+
+[[source]]
+id = "l1_h0"
+from = "l1_h0_raw"
+  [[source.transform]]
+  op = "window"
+  steps = 4096
+
+[[source]]
+id = "l1_h1_raw"
+catalog = "live:induction_l1_h1"
+history = 4096
+
+[[source]]
+id = "l1_h1"
+from = "l1_h1_raw"
+  [[source.transform]]
+  op = "window"
+  steps = 4096
+
+[[source]]
+id = "l1_h2_raw"
+catalog = "live:induction_l1_h2"
+history = 4096
+
+[[source]]
+id = "l1_h2"
+from = "l1_h2_raw"
+  [[source.transform]]
+  op = "window"
+  steps = 4096
+
+[[source]]
+id = "l1_h3_raw"
+catalog = "live:induction_l1_h3"
+history = 4096
+
+[[source]]
+id = "l1_h3"
+from = "l1_h3_raw"
+  [[source.transform]]
+  op = "window"
+  steps = 4096
+
+[[source]]
+id = "l0_h0_raw"
+catalog = "live:induction_l0_h0"
+history = 4096
+
+[[source]]
+id = "l0_h0"
+from = "l0_h0_raw"
+  [[source.transform]]
+  op = "window"
+  steps = 4096
+
+[[source]]
+id = "l0_h1_raw"
+catalog = "live:induction_l0_h1"
+history = 4096
+
+[[source]]
+id = "l0_h1"
+from = "l0_h1_raw"
+  [[source.transform]]
+  op = "window"
+  steps = 4096
+
+[[source]]
+id = "l0_h2_raw"
+catalog = "live:induction_l0_h2"
+history = 4096
+
+[[source]]
+id = "l0_h2"
+from = "l0_h2_raw"
+  [[source.transform]]
+  op = "window"
+  steps = 4096
+
+[[source]]
+id = "l0_h3_raw"
+catalog = "live:induction_l0_h3"
+history = 4096
+
+[[source]]
+id = "l0_h3"
+from = "l0_h3_raw"
+  [[source.transform]]
+  op = "window"
+  steps = 4096
+
+[[state]]
+id = "head"
+title = "Head"
+type = "integer"
+default = 0
+min = 0.0
+max = 3.0
+
+[[panel]]
+id = "tower"
+primitive = "scene"
+title = "Attention Arc Tower"
+options = { axes = false, select = { field = "head", state = "head" }, up = "+y" }
+
+[[panel]]
+id = "pattern"
+primitive = "scene"
+title = "Attention Grid"
+
+[[panel]]
+id = "loss_curve"
+primitive = "series"
+title = "Loss"
+bind = { x = "loss_window.step", y = "loss_window.value" }
+options = { x_label = "Step", y_label = "Loss" }
+
+[[panel]]
+id = "icl_curve"
+primitive = "series"
+title = "In-Context Loss"
+bind = { x = "icl_window.step", y = "icl_window.value" }
+options = { x_label = "Step", y_label = "Loss" }
+
+[[panel]]
+id = "head_scores"
+primitive = "series"
+title = "Induction Score of Each Head"
+bind = { x = "l1_h0.step", y = ["l1_h0.value", "l1_h1.value", "l1_h2.value", "l1_h3.value", "l0_h0.value", "l0_h1.value", "l0_h2.value", "l0_h3.value"] }
+options = { legend = true, x_label = "Step", y_label = "Induction Score" }
+
+[[control]]
+id = "ablate"
+kind = "toggle"
+title = "Ablate Head 0 of Layer 1"
+bind = "intervene:blocks.1.attn#0"
+options = { value = false }
+
+[[program]]
+id = "tower_arcs"
+title = "Tower Arcs"
+piece = { from = "workspace", hash = "sha256:1e756ab85923595b6d1e61cdbf0828a4d6a27683b4bb5536e88386479daa7ad0", name = "attention_arcs", version = 1 }
+panel = "tower"
+bind = { attn0 = "live:blocks.0.attn.weights.act", attn1 = "live:blocks.1.attn.weights.act" }
+params = { threshold = 0.05 }
+
+[[program]]
+id = "head_pattern"
+title = "Attention Grid"
+piece = { from = "workspace", hash = "sha256:5921f3d466542b0aa7b841050d7c908ec7fcad3cf6379f4ce304aeb205256e22", name = "attention_grid", version = 1 }
+panel = "pattern"
+bind = { attn0 = "live:blocks.0.attn.weights.act", attn1 = "live:blocks.1.attn.weights.act" }
+params = { gain = 2.0, head = { state = "head" }, layer = { default = 1, field = "layer", selection = "tower" } }
+
+[layout]
+split = "vertical"
+children = [{ split = "horizontal", ratio = 0.5, children = [{ split = "vertical", ratio = 0.45, children = ["tower", { split = "vertical", ratio = 0.62, children = ["head_scores", { tabs = ["icl_curve", "loss_curve"] }] }] }, "pattern"] }, "ablate"]

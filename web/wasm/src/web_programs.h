@@ -30,6 +30,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -72,7 +73,11 @@ public:
     // RESOURCE: the newest version of a resource of a program, copied, when
     // the program's piece publishes that resource and the version holds at
     // most its declared count and bytes (program_frames.h, keeps_version).
-    // Thus the page keeps at most the published bytes of 16 pieces.
+    // The page keeps at most kKeptBytesMax of versions, 512 MiB as the app's step
+    // history keeps of resources; a version that would pass it is not kept. The
+    // parts of a version in parts are put together first
+    // (caliper_net::wire::SplitResources), which holds at most two incomplete
+    // versions of at most 128 MiB.
     void on_resource(const caliper_net::wire::Resource& r);
     // Once a frame: takes the browser checks that finished, and refuses a
     // program whose module or pipeline WebGPU refused since the last call
@@ -88,12 +93,23 @@ public:
     std::string status_json() const;
     // Changes whenever a program is added, replaced, refused or removed.
     std::uint64_t revision() const { return revision_; }
+    // The linked selection that every program reads (CaliperSelected), as the
+    // app's draw host gives it from the panels' picks; and the pick id of a
+    // program, 0 when there is none.
+    void set_selection(std::vector<caliper_draw::Selected> selection) { selection_ = std::move(selection); }
+    std::uint32_t pick_id_of(const std::string& program) const;
+
+    static constexpr std::uint64_t kKeptBytesMax = caliper_builder::spec::piece_limits::kPublishedBytesMax;
 
     struct Program;
     struct Version {
-        std::vector<std::uint8_t> bytes;
+        std::shared_ptr<const std::vector<std::uint8_t>> bytes;   // never null once received
         std::int64_t step = -1;
+        std::uint64_t serial = 0;
         std::uint32_t count = 0;
+        std::uint32_t width = 0, height = 0;    // a texture's size in this version
+        std::string format;                     // a texture's format; empty for rgba8unorm
+        std::optional<std::uint32_t> elements;  // a buffer of narrow elements: their count
     };
 
 private:
@@ -101,9 +117,12 @@ private:
     WGPUDevice device_ = nullptr;
     std::map<std::string, std::unique_ptr<Program>> programs_;
     std::map<std::string, std::unique_ptr<PanelFeed>> feeds_;
+    caliper_net::wire::SplitResources parts_;   // versions in parts being put together
     std::uint64_t revision_ = 1;
+    std::uint64_t resource_serial_ = 0;
     std::uint32_t next_pick_ = 1u << 24;   // above the entities' ids, as the app's draw host gives them
     std::size_t errors_seen_ = 0;
+    std::vector<caliper_draw::Selected> selection_;
 };
 
 }  // namespace caliper_web

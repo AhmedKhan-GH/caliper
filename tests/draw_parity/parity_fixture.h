@@ -10,6 +10,10 @@
 #include "parity_draw.h"
 
 #include "../gfx/example_pieces.h"
+#include "line_fixtures.h"
+#include "image_fixture.h"
+#include "boxes_mesh_fixture.h"
+#include "frustum_fixture.h"
 
 #include <caliper_builder/programs/pieces.h>
 
@@ -114,6 +118,8 @@ inline std::string broken_field_draw(std::uint32_t* line) {
     return text;
 }
 
+inline void add_surface_program(Fixture* fx);   // surface_fixture.h
+
 inline Fixture make_fixture(std::uint32_t size = 512) {
     namespace cp = caliper_builder::programs;
     namespace cs = caliper_builder::spec;
@@ -205,7 +211,14 @@ inline Fixture make_fixture(std::uint32_t size = 512) {
     wp.pick_id = 3;
     wp.expect = cp::kPieceHashMismatch;
     fx.plan.programs.push_back(wp);
+    add_surface_program(&fx);
+    add_line_pieces(fx, add, instance_message);
+    add_image_pieces(&fx.frames, &fx.plan, &fx.error);
+    add_boxes_mesh(&fx.frames, &fx.plan, &fx.error);
+    add_frustum_piece(&fx.frames, &fx.plan, &fx.error);
     return fx;
 }
 
 }  // namespace draw_parity
+
+#include "surface_fixture.h"

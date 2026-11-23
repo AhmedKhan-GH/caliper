@@ -185,6 +185,16 @@ export class PointsView implements LiveView {
         } else this.plot.pan(dx, dy);
         this.host.request('data');
       },
+      press: () => {
+        const o = this.orbit, cam = { az: o.az, el: o.el, dist: o.dist, target: [...o.target] as typeof o.target };
+        const plot = this.plot.keep(), rotating = this.rotating;
+        return () => {
+          Object.assign(o, cam);
+          plot();
+          this.setRotate(rotating);
+          this.host.request('data');
+        };
+      },
       wheel: (x, y, k) => {
         if (this.dims === 3) this.orbit.zoom(k);
         else {

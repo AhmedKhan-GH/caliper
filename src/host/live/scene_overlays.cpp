@@ -13,7 +13,8 @@
 #include "live/scene_overlays.h"
 #include "ui/sternbild_theme.h"
 
-#include "scene/compile.h"
+#include "live/live_views_scene.h"   // DrawnLabel
+#include "scene/labels.h"
 #include "spec_runtime/label_layout.h"
 
 #include <algorithm>
@@ -66,6 +67,7 @@ const std::vector<PlacedLabel>& placed_for(const std::vector<LabelBox>& boxes, c
 }  // namespace
 
 void draw_scene_overlays(const SceneOverlayInput& in) {
+    if (in.drawn) in.drawn->clear();
     if (!in.draw || !in.labels || in.labels->empty()) return;
     const ImVec2 clip0 = in.draw->GetClipRectMin(), clip1 = in.draw->GetClipRectMax();
     const LabelRect panel{clip0.x, clip0.y, clip1.x, clip1.y};
@@ -83,6 +85,15 @@ void draw_scene_overlays(const SceneOverlayInput& in) {
         // An annotation's text first, then the item labels, nearest first.
         const bool first = in.annotations && i < in.annotations->size() && (*in.annotations)[i];
         b.priority = in.priorities && i < in.priorities->size() ? (*in.priorities)[i] : (first ? 0 : 1000) + (int)i;
+        // A label pinned at its anchor (a text table's align): the start, the end or the middle of
+        // its text there, centered on it vertically; the placer moves it nowhere else.
+        if (a.pin >= 1 && a.pin <= 3) {
+            b.pinned = true;
+            b.anchor_y = std::round(b.anchor_y - 0.5f * b.height);
+            b.anchor_x = a.pin == 1   ? b.anchor_x - pad
+                         : a.pin == 2 ? b.anchor_x - b.width + pad
+                                      : std::round(b.anchor_x - 0.5f * b.width);
+        }
         boxes.push_back(b);
     }
     // The markers' rings: drawn at their anchors over the picture, and kept free of labels.
@@ -123,6 +134,10 @@ void draw_scene_overlays(const SceneOverlayInput& in) {
         const ImVec2 at(p.x + pad, p.y + pad);
         in.draw->AddText(ImVec2(at.x + 1.0f, at.y + 1.0f), in.shade, text.c_str());
         in.draw->AddText(at, in.ink, text.c_str());
+        if (in.drawn) {
+            const ImVec2 size = ImGui::CalcTextSize(text.c_str());
+            in.drawn->push_back({text, at.x, at.y, at.x + size.x + 1.0f, at.y + size.y + 1.0f});
+        }
     }
 }
 

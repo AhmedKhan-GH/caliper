@@ -10,6 +10,7 @@
 #include <cstring>
 #include <condition_variable>
 #include <deque>
+#include <fstream>
 #include <map>
 #include <mutex>
 #include <thread>
@@ -59,6 +60,20 @@ bool tail_after(const std::string& path, const char* head, std::string* tail) {
     if (path.size() == a || path.size() - a > 128 || path.find('/', a) != std::string::npos) return false;
     *tail = path.substr(a);
     return true;
+}
+
+// The bytes of the spec asset `name` (one of kSpecAssets) in `dir`, at most
+// kSpecAssetMaxBytes; false when it is missing, unreadable or larger.
+constexpr std::streamoff kSpecAssetMaxBytes = std::streamoff(64) << 20;
+bool read_spec_asset(const std::string& dir, const std::string& name, std::string* out) {
+    if (!spec_asset(name)) return false;
+    std::ifstream f(dir + "/" + name, std::ios::binary | std::ios::ate);
+    if (!f) return false;
+    const std::streamoff n = f.tellg();
+    if (n < 0 || n > kSpecAssetMaxBytes) return false;
+    out->assign(static_cast<size_t>(n), '\0');
+    f.seekg(0);
+    return static_cast<bool>(f.read(out->data(), n));
 }
 
 size_t header_count(const HttpRequest& r, const char* name) {
@@ -208,6 +223,8 @@ Routed route(const std::string& method, const std::string& path) {
         r.route = Route::Commands;
     } else if (path == kSpecPagePath) {
         r.route = Route::SpecPage;
+    } else if (tail_after(path, kSpecAssetHead, &r.name) && spec_asset(r.name)) {
+        r.route = Route::SpecAsset;
     } else if (tail_after(path, kCommandHead, &r.name)) {
         r.route = Route::Command;
     } else if (tail_after(path, kApprovalHead, &r.name)) {
@@ -224,6 +241,12 @@ Routed route(const std::string& method, const std::string& path) {
     r.allow = r.route == Route::Launch || r.route == Route::Command ? "POST" : "GET";
     r.method_ok = method == r.allow;
     return r;
+}
+
+bool spec_asset(const std::string& name) {
+    for (const char* n : kSpecAssets)
+        if (name == n) return true;
+    return false;
 }
 
 bool viewer_command(const std::string& name) {
@@ -340,10 +363,10 @@ Verdict check(const HttpRequest& r, const TokenTable& tokens, bool command_layer
     if (token_origin == "viewer") {
         // The viewer token opens the spec page and its read-only commands only.
         v.viewer = true;
-        if (rt != Route::SpecPage && !(rt == Route::Command && viewer_command(v.routed.name))) {
+        if (rt != Route::SpecPage && rt != Route::SpecAsset && !(rt == Route::Command && viewer_command(v.routed.name))) {
             v.status = 403;
-            v.message = "the viewer token opens only the spec page and the commands spec.get, applet.list and "
-                        "panel.data";
+            v.message = "the viewer token opens only the spec page, its views' files and the commands spec.get, "
+                        "applet.list and panel.data";
             return v;
         }
     }
@@ -578,13 +601,28 @@ struct Server::Impl {
                 }
                 // The page reaches nothing but its own origin, and its address,
                 // which holds a token, is never sent as a referrer.
+                // It loads the WebAssembly views from its own origin
+                // (GET /v0/spec/<name>), which compile under wasm-unsafe-eval.
                 answer(c, 200, "text/html; charset=utf-8", opt.spec_page_html,
                        {{"Content-Security-Policy",
-                         "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
-                         "font-src data:; img-src data: blob:; connect-src 'self'; base-uri 'none'; "
-                         "form-action 'none'; frame-ancestors 'none'"},
+                         "default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; "
+                         "style-src 'unsafe-inline'; font-src data:; img-src data: blob:; connect-src 'self'; "
+                         "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"},
                         {"Referrer-Policy", "no-referrer"}});
                 return;
+            case Route::SpecAsset: {
+                // One of three fixed names in one folder: the request picks the
+                // name from kSpecAssets, never a path.
+                std::string body;
+                if (opt.spec_assets_dir.empty() || !read_spec_asset(opt.spec_assets_dir, v.routed.name, &body)) {
+                    answer_error(c, 404, "this build has no " + v.routed.name);
+                    return;
+                }
+                const bool wasm = ends_with(v.routed.name, ".wasm");
+                answer(c, 200, wasm ? "application/wasm" : "text/javascript; charset=utf-8", std::move(body),
+                       {{"Cache-Control", "no-store"}, {"Referrer-Policy", "no-referrer"}});
+                return;
+            }
             case Route::Commands:
                 // An agent's token is not shown the person's own commands.
                 answer(c, 200, "application/json",

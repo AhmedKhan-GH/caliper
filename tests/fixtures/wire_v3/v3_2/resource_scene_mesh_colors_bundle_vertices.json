@@ -1,0 +1,48 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 256,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 132,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 130
+  },
+  "meta": {
+    "count": 3,
+    "program": "scene.121",
+    "resource": "vertices",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "resource",
+        "shape": [
+          96
+        ]
+      }
+    ],
+    "step": 7,
+    "stride": 32
+  },
+  "meta_offset": 28,
+  "name": "v3_2/resource_scene_mesh_colors_bundle_vertices",
+  "section_lengths": [
+    96
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 96,
+      "name": "resource",
+      "offset": 160,
+      "shape": [
+        96
+      ],
+      "values": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 192, 127, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 255, 0, 0, 128, 63, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 192, 127, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 255, 0, 0, 0, 0, 0, 0, 128, 63, 0, 0, 0, 0, 0, 0, 192, 127, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255]
+    }
+  ],
+  "type_name": "resource"
+}

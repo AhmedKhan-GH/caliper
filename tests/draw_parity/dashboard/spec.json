@@ -1,0 +1,346 @@
+{
+ "applet": {
+  "id": "arc_tower",
+  "title": "Attention Arc Tower"
+ },
+ "caliper_spec": 1,
+ "control": [
+  {
+   "bind": "intervene:blocks.1.attn#0",
+   "id": "ablate",
+   "kind": "toggle",
+   "options": {
+    "value": false
+   },
+   "title": "Ablate Head 0 of Layer 1"
+  }
+ ],
+ "layout": {
+  "children": [
+   {
+    "children": [
+     {
+      "children": [
+       "tower",
+       {
+        "children": [
+         "head_scores",
+         {
+          "tabs": [
+           "icl_curve",
+           "loss_curve"
+          ]
+         }
+        ],
+        "ratio": 0.62,
+        "split": "vertical"
+       }
+      ],
+      "ratio": 0.45,
+      "split": "vertical"
+     },
+     "pattern"
+    ],
+    "ratio": 0.5,
+    "split": "horizontal"
+   },
+   "ablate"
+  ],
+  "split": "vertical"
+ },
+ "panel": [
+  {
+   "id": "tower",
+   "options": {
+    "axes": false,
+    "select": {
+     "field": "head",
+     "state": "head"
+    },
+    "up": "+y"
+   },
+   "primitive": "scene",
+   "title": "Attention Arc Tower"
+  },
+  {
+   "id": "pattern",
+   "primitive": "scene",
+   "title": "Attention Grid"
+  },
+  {
+   "bind": {
+    "x": "loss_window.step",
+    "y": "loss_window.value"
+   },
+   "id": "loss_curve",
+   "options": {
+    "x_label": "Step",
+    "y_label": "Loss"
+   },
+   "primitive": "series",
+   "title": "Loss"
+  },
+  {
+   "bind": {
+    "x": "icl_window.step",
+    "y": "icl_window.value"
+   },
+   "id": "icl_curve",
+   "options": {
+    "x_label": "Step",
+    "y_label": "Loss"
+   },
+   "primitive": "series",
+   "title": "In-Context Loss"
+  },
+  {
+   "bind": {
+    "x": "l1_h0.step",
+    "y": [
+     "l1_h0.value",
+     "l1_h1.value",
+     "l1_h2.value",
+     "l1_h3.value",
+     "l0_h0.value",
+     "l0_h1.value",
+     "l0_h2.value",
+     "l0_h3.value"
+    ]
+   },
+   "id": "head_scores",
+   "options": {
+    "legend": true,
+    "x_label": "Step",
+    "y_label": "Induction Score"
+   },
+   "primitive": "series",
+   "title": "Induction Score of Each Head"
+  }
+ ],
+ "program": [
+  {
+   "bind": {
+    "attn0": "live:blocks.0.attn.weights.act",
+    "attn1": "live:blocks.1.attn.weights.act"
+   },
+   "id": "tower_arcs",
+   "panel": "tower",
+   "params": {
+    "threshold": 0.05
+   },
+   "piece": {
+    "from": "workspace",
+    "hash": "sha256:1e756ab85923595b6d1e61cdbf0828a4d6a27683b4bb5536e88386479daa7ad0",
+    "name": "attention_arcs",
+    "version": 1
+   },
+   "title": "Tower Arcs"
+  },
+  {
+   "bind": {
+    "attn0": "live:blocks.0.attn.weights.act",
+    "attn1": "live:blocks.1.attn.weights.act"
+   },
+   "id": "head_pattern",
+   "panel": "pattern",
+   "params": {
+    "gain": 2.0,
+    "head": {
+     "state": "head"
+    },
+    "layer": {
+     "default": 1,
+     "field": "layer",
+     "selection": "tower"
+    }
+   },
+   "piece": {
+    "from": "workspace",
+    "hash": "sha256:5921f3d466542b0aa7b841050d7c908ec7fcad3cf6379f4ce304aeb205256e22",
+    "name": "attention_grid",
+    "version": 1
+   },
+   "title": "Attention Grid"
+  }
+ ],
+ "source": [
+  {
+   "catalog": "live:loss",
+   "history": 4096,
+   "id": "loss"
+  },
+  {
+   "from": "loss",
+   "id": "loss_window",
+   "transform": [
+    {
+     "op": "window",
+     "steps": 4096
+    }
+   ]
+  },
+  {
+   "catalog": "live:token_loss.act",
+   "history": 4096,
+   "id": "icl",
+   "transform": [
+    {
+     "axis": 0,
+     "index": 0,
+     "op": "slice"
+    },
+    {
+     "axis": 0,
+     "op": "slice",
+     "start": 16,
+     "stop": 27
+    },
+    {
+     "axis": 0,
+     "fn": "mean",
+     "op": "reduce"
+    }
+   ]
+  },
+  {
+   "from": "icl",
+   "id": "icl_window",
+   "transform": [
+    {
+     "op": "window",
+     "steps": 4096
+    }
+   ]
+  },
+  {
+   "catalog": "live:induction_l1_h0",
+   "history": 4096,
+   "id": "l1_h0_raw"
+  },
+  {
+   "from": "l1_h0_raw",
+   "id": "l1_h0",
+   "transform": [
+    {
+     "op": "window",
+     "steps": 4096
+    }
+   ]
+  },
+  {
+   "catalog": "live:induction_l1_h1",
+   "history": 4096,
+   "id": "l1_h1_raw"
+  },
+  {
+   "from": "l1_h1_raw",
+   "id": "l1_h1",
+   "transform": [
+    {
+     "op": "window",
+     "steps": 4096
+    }
+   ]
+  },
+  {
+   "catalog": "live:induction_l1_h2",
+   "history": 4096,
+   "id": "l1_h2_raw"
+  },
+  {
+   "from": "l1_h2_raw",
+   "id": "l1_h2",
+   "transform": [
+    {
+     "op": "window",
+     "steps": 4096
+    }
+   ]
+  },
+  {
+   "catalog": "live:induction_l1_h3",
+   "history": 4096,
+   "id": "l1_h3_raw"
+  },
+  {
+   "from": "l1_h3_raw",
+   "id": "l1_h3",
+   "transform": [
+    {
+     "op": "window",
+     "steps": 4096
+    }
+   ]
+  },
+  {
+   "catalog": "live:induction_l0_h0",
+   "history": 4096,
+   "id": "l0_h0_raw"
+  },
+  {
+   "from": "l0_h0_raw",
+   "id": "l0_h0",
+   "transform": [
+    {
+     "op": "window",
+     "steps": 4096
+    }
+   ]
+  },
+  {
+   "catalog": "live:induction_l0_h1",
+   "history": 4096,
+   "id": "l0_h1_raw"
+  },
+  {
+   "from": "l0_h1_raw",
+   "id": "l0_h1",
+   "transform": [
+    {
+     "op": "window",
+     "steps": 4096
+    }
+   ]
+  },
+  {
+   "catalog": "live:induction_l0_h2",
+   "history": 4096,
+   "id": "l0_h2_raw"
+  },
+  {
+   "from": "l0_h2_raw",
+   "id": "l0_h2",
+   "transform": [
+    {
+     "op": "window",
+     "steps": 4096
+    }
+   ]
+  },
+  {
+   "catalog": "live:induction_l0_h3",
+   "history": 4096,
+   "id": "l0_h3_raw"
+  },
+  {
+   "from": "l0_h3_raw",
+   "id": "l0_h3",
+   "transform": [
+    {
+     "op": "window",
+     "steps": 4096
+    }
+   ]
+  }
+ ],
+ "state": [
+  {
+   "default": 0,
+   "id": "head",
+   "max": 3.0,
+   "min": 0.0,
+   "title": "Head",
+   "type": "integer"
+  }
+ ]
+}

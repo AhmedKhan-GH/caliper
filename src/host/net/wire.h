@@ -352,6 +352,9 @@ struct Unknown {   // a type this version does not know; receivers ignore it
 
 // ---- protocol 3.2 draft: the scenes subset (proposals: minor 2, capability "scenes", kind 6, 0x0070 to 0x0073, dtype u16 6; the 3.2 block of caliper/live_net.h) ----
 // The rules of the block at the end of _wire.py, checked in the same order. A
+// Whether `id` is the id of a scene program, "scene.<n>" with 1 to 9 digits.
+bool scene_program_id(const std::string& id);
+
 // SceneUpdate's `arrays` hold the sections of its part in the part's order
 // (PART_SECTIONS); decoded, only the known ones, pointing into the frame like
 // every decoded Section. Every scene message may carry a stamp section, i64
@@ -376,6 +379,18 @@ struct SceneUpdate {                 // 3.2 draft: one part of one entity of a s
                                      // when whole. A piece's arrays are its rows, unchecked against the part
                                      // until SplitUpdates puts the update together; its params are empty
                                      // but in piece 0
+    // The piece form (capability "scene_pieces"): the scene program "scene.<n>" whose RESOURCE versions,
+    // sent just before, hold the batch's arrays as the resources of the library piece `piece` (the pin:
+    // name, version, hash); `resources` maps each resource id to the count of that version, and `names`
+    // lists the part's arrays the batch held (the key "arrays"). Such an update carries no array section.
+    std::optional<std::string> program;
+    Json piece;                      // null unless the piece form
+    Json resources;                  // null unless the piece form
+    std::vector<std::string> names;
+    // Receiver side, never on the wire: the RESOURCE versions that the receiver paired with a piece-form
+    // update (caliper_live::ScenePieceInbox), one section each, named by its resource id, u8 of the shape
+    // (count, stride), over bytes that the queued item keeps alive.
+    std::vector<Section> paired;
     const Section* array(const std::string& name) const;
 };
 struct SceneTransforms {             // 3.2 draft: entity transforms, (K, 16) f32 column-major matrices
@@ -495,8 +510,23 @@ struct Resource {                    // producer to viewer or hub, hub to viewer
     uint64_t step = 0;               // the run's step at the pass: the version's step stamp
     uint32_t count = 0;              // valid elements
     uint32_t stride = 0;             // bytes of one element: a multiple of 4 from 4 to CALIPER_NET_RESOURCE_STRIDE_MAX
-    std::optional<uint32_t> width, height;   // a texture: count == width * height and stride 4
-    Section data;                    // "resource": u8 (count * stride,), inside the frame on decode
+    // A texture: its size in this version, each side from 1 to CALIPER_NET_RESOURCE_SIDE_MAX, and its
+    // format, rgba8unorm when absent; stride 4 and count the 32-bit words of its texels in row order,
+    // width * height for rgba8unorm and r32uint and (width * height + 3) / 4 for r8unorm.
+    std::optional<uint32_t> width, height;
+    std::optional<std::string> format;   // CALIPER_NET_TEXTURE_RGBA8, _R8 or _R32UINT
+    // A buffer of narrow elements: "u8" or "u16", packed into 32-bit words from the low bits up, and the
+    // exact count of elements; stride 4 and count the words, (elements * bytes + 3) / 4.
+    std::optional<std::string> element;
+    std::optional<uint32_t> elements;
+    // A part of a version in parts: the sender's counter of such versions, this part's number from 0, the
+    // number of parts (2 to CALIPER_NET_MAX_PIECES) and the first element that `data` holds.
+    struct Split {
+        uint64_t version = 0;
+        uint32_t part = 0, parts = 0, first = 0;
+    };
+    std::optional<Split> split;
+    Section data;                    // "resource": u8 (count * stride,), or a part's elements; inside the frame on decode
 };
 // Stamp text: decimal digits with an optional leading minus, at most 20 characters, a signed 64-bit value.
 bool stamp_text_ok(const std::string& v);
@@ -539,6 +569,46 @@ private:
     };
     std::vector<Assembly> open_;     // oldest first
     uint64_t dropped_ = 0, discarded_ = 0;
+};
+
+// A whole version put together from the parts of a version in parts; its data points into `keep`.
+struct WholeResource {
+    Resource resource;
+    std::shared_ptr<const std::vector<uint8_t>> keep;
+};
+// A receiver's versions in parts of one connection (_wire.py's SplitResources). add() takes every RESOURCE
+// of the connection in order. A version in one frame is Whole at once, with its data in the frame. Part 0
+// allocates count * stride bytes, at most 256 MiB for textures or 128 MiB for buffers, after the decoder
+// checks that bound. Each part copies its elements in; the last part makes it Whole. A part whose
+// version is not held is dropped and counted. A part out of order, or one whose keys differ from part 0,
+// or a last part that does not end at the count, is Refused and discards its version. Part 0 of a newer
+// version, or a version in one frame, of the same resource discards an incomplete one; at most
+// CALIPER_NET_MAX_INCOMPLETE_UPDATES are held (the oldest goes first); and one whose next part has not come
+// after CALIPER_NET_RESOURCE_PART_WAIT further RESOURCE frames is dropped (expired). With `copy` false the
+// receiver keeps no bytes and checks the order alone, as the hub does, which keeps the frames themselves.
+class SplitResources {
+public:
+    enum class Result { Pending, Whole, Dropped, Refused };
+    explicit SplitResources(bool copy = true) : copy_(copy) {}
+    Result add(const Resource& part, WholeResource* out, std::string* err);
+    size_t held() const { return open_.size(); }
+    bool holds(const std::string& program, const std::string& resource) const;
+    uint64_t held_bytes() const;
+    uint64_t dropped() const { return dropped_; }
+    uint64_t discarded() const { return discarded_; }
+    uint64_t expired() const { return expired_; }
+
+private:
+    struct Assembly {
+        Resource head;               // part 0's keys, without data
+        uint32_t next_part = 1;
+        uint64_t next_first = 0;
+        uint64_t last_frame = 0;     // frames_ at its last part
+        std::shared_ptr<std::vector<uint8_t>> bytes;
+    };
+    bool copy_;
+    std::vector<Assembly> open_;     // oldest first
+    uint64_t frames_ = 0, dropped_ = 0, discarded_ = 0, expired_ = 0;
 };
 
 // The key "scene" of a VIEWS entry. view_camera: null when absent, unreadable or in a 2-D scene; else the

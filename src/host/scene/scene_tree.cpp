@@ -271,7 +271,7 @@ static bool validate_batch(const Batch& b, uint32_t want_dims, std::string* erro
         if (rule == rules.end()) return fail(error, std::string(prim) + " takes no " + role_name(a.role));
         if (seen[int(a.role)]) return fail(error, name + " is given twice");
         seen[int(a.role)] = true;
-        if (!a.buffer) return fail(error, name + " has no buffer");
+        if (!a.buffer && !a.cpu) return fail(error, name + " has no data");
         if (a.offset % 4 != 0) return fail(error, name + ": the byte offset must be a multiple of 4");
         if (a.stride % 4 != 0 || a.stride > 2048)
             return fail(error, name + ": the stride must be a multiple of 4 and at most 2,048 bytes");
@@ -346,13 +346,12 @@ static bool validate_batch(const Batch& b, uint32_t want_dims, std::string* erro
             int sources = (b.array(Role::Colors) ? 1 : 0) + (b.array(Role::Values) ? 1 : 0) +
                           (b.array(Role::Uvs) ? 1 : 0);
             if (sources > 1) return fail(error, "mesh: one of colors, values and uvs");
-            if (b.array(Role::Uvs) && !b.texture) return fail(error, "mesh: uvs need a texture");
+            if (b.array(Role::Uvs) && !b.texture && (!b.image_width || !b.image_height)) return fail(error, "mesh: uvs need a texture");
             for (Role r : {Role::Normals, Role::Colors, Role::Values, Role::Uvs})
                 if (!per_item(r, n, "one per vertex")) return false;
             break;
         }
         case Primitive::Image:
-            if (!b.texture) return fail(error, "image: no texture");
             if (b.image_width < 1 || b.image_height < 1 || b.image_width > kMaxImageSide ||
                 b.image_height > kMaxImageSide)
                 return fail(error, "image: each side is 1 to 8,192 pixels");

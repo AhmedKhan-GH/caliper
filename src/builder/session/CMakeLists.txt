@@ -25,6 +25,7 @@ add_library(caliper_builder_session STATIC
     line_diff.cpp
     loader_catalog.cpp
     panel_data.cpp
+    panel_data_viewer.cpp
     program_commands.cpp
     piece_commands.cpp
     resource_commands.cpp
@@ -96,6 +97,7 @@ caliper_builder_add_tests(session
         tests/test_history_refusal.cpp
         tests/test_resolve.cpp
         tests/test_panel_data.cpp
+        tests/test_panel_data_viewer.cpp
         tests/test_served_sources.cpp
         tests/test_command_server.cpp
         tests/test_acceptance.cpp

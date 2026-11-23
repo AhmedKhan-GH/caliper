@@ -68,10 +68,15 @@ Decoded<LayoutNode> layout_from_json(const nlohmann::json& item, const std::stri
 // version; an edit that adds a scene panel or a control to a version 0 spec
 // raises its version (required_version() in spec.h).
 Decoded<Control> control_from_json(const nlohmann::json& item, const std::string& path = "control");
-// One program and one stage (spec version 1, program.h), for program.create,
-// program.patch and stage.set, with the checks of a whole document.
+// One program (spec version 1, program.h), for program.create and
+// program.patch, with the checks of a whole document.
 Decoded<Program> program_from_json(const nlohmann::json& item, const std::string& path = "program");
-Decoded<Stage> stage_from_json(const nlohmann::json& item, const std::string& path = "stage");
+// What the reader gives for each item of the top-level array `stage` of an old spec, because
+// pieces replaced stages: the warning spec.stage_replaced at the stage's path. The spec still
+// opens, without the stage. Its message names the
+// stage's kind, entity and panel (the keys of `stage`, any of them absent) and says how to write the
+// same look as a piece program.
+Diagnostic stage_replaced(const nlohmann::json& stage, const std::string& path);
 // One state variable, one entity of a scene panel and one annotation of a
 // panel (spec version 1, state.h, entity.h and annotation.h), for the state,
 // entity and annotation commands. An entity or an annotation reads as an item
@@ -86,9 +91,8 @@ nlohmann::json to_json(const LayoutNode& node);
 nlohmann::json to_json(const Control& control);
 // The canonical JSON of a program: geometry outputs always carry part and
 // pixels outputs always carry format, and only the keys of the output's kind
-// are written. A stage, and the provenance table of a spec that is not empty.
+// are written. The provenance table of a spec that is not empty.
 nlohmann::json to_json(const Program& program);
-nlohmann::json to_json(const Stage& stage);
 nlohmann::json to_json(const Provenance& provenance);
 // The canonical JSON of a state variable, an entity and an annotation.
 nlohmann::json to_json(const StateVar& state);

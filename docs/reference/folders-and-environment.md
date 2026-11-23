@@ -86,8 +86,6 @@ On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shor
 | Variable | What it does |
 |---|---|
 | `CALIPER_SINE_AUTOTRAIN`, `CALIPER_EMBED_AUTOTRAIN`, `CALIPER_GPT_AUTOTRAIN` | SineScope, EmbedScope or GPTScope starts training on its first frame. |
-| `CALIPER_EXPORT_SELFTEST` | MeshScope and TwinScope request one figure export and one recording, to exercise `export.v1`. |
-| `FS_FIELD=<n>` | FieldScope starts in field mode `n`. |
 | `CALIPER_HELLO_CRASH` | The hello applet faults in its frame function, to exercise quarantine. |
 | `CALIPER_HELLO_INIT_FAIL` | The `on_init` function of the hello applet returns false. |
 | `CALIPER_EMBED_APPLETS` | The applets folder the `embed_host` example passes in `CaliperCoreDesc.applets_dir`. |
@@ -102,15 +100,13 @@ On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shor
 | `CALIPER_TEST_FORCE_NO_GPU=1` | The device suites behave as if there were no GPU. |
 | `CALIPER_TEST_RENDERER_FAIL=1` | The Metal or Vulkan renderer's start fails before it touches a device, with the reason `CALIPER_TEST_RENDERER_FAIL=1 made its start fail`, so the refusals of the app, `caliper shot` and Caliper Embed can be tested on a machine whose GPU works. |
 | `CALIPER_TEST_APPLET_DIR=<folder>` | Runs the headless acceptance case of `caliper_tests` on the applets in that folder. Without it the case is skipped. |
-| `CALIPER_GFX_CAPTURE_DIR=<folder>` | `caliper_gfx_tests` writes PNG captures of the graphics layer's rows, the colormap rows, the scene core's rows and the scene view's rows to that folder, and `caliper_gfx_views_tests` each points view case's readback as `points-view-<case>.png`. Without it nothing is written. |
-| `CALIPER_GFX_RECORD=<file>` | `caliper_gfx_views_tests` records each case's line of the graphics suite's reference mode (its readback's hash, path label, copies and header) into that file instead of comparing. |
-| `CALIPER_GFX_REFERENCES=<file>` | `caliper_gfx_views_tests` compares with the references in that file instead of the committed `tests/gfx/references/points_view.txt`. |
-| `CALIPER_GFX_REFERENCE_IMAGES=<folder>` | `caliper_gfx_views_tests` compares each case's readback pixel by pixel with its image in that folder, written by an earlier build with `CALIPER_GFX_CAPTURE_DIR`, and lists the differing pixels. Without it that row returns at once. |
+| `CALIPER_GFX_RECORD=<file>` | `caliper_gfx_texture_tests` writes texture reference hashes and transfer facts to this file. |
+| `CALIPER_GFX_REFERENCES=<file>` | `caliper_gfx_texture_tests` reads this reference file instead of `tests/gfx/references/texture_path.txt`. |
+| `CALIPER_GFX_CAPTURE_DIR=<folder>` | `caliper_gfx_tests` writes PNG captures of the graphics layer, colormap and scene-view rows to that folder, and `caliper_gfx_views_tests` each points view case's readback as `points-view-<case>.png`. Without it nothing is written. |
 | `CALIPER_GFX_POINTS_CASES=<text>` | `caliper_gfx_views_tests` runs only the points view's cases whose names contain the text. |
 | `CALIPER_GFX_POINTS_BENCH=1` | `caliper_gfx_views_tests` runs the points view's timing row: the CPU time to compile and submit a redraw and the GPU time of the draw at 100,000, 1,000,000 and 4,000,000 points, with the load average. Without it the row returns at once. |
 | `CALIPER_TEST_SHOTS=<folder>` | `caliper_live_views_tests` writes PNG screenshots of its offscreen canvas to that folder: a 3-D points scene from three angles and the scene view with its header and scale bar in Y up, in Z up and in 2-D. Without it nothing is written. |
 | `CALIPER_GFX_LAYER_BENCH=1` | `caliper_gfx_tests` runs the graphics layer's timing row: the CPU time to build and submit 1,000 draws a frame on the recording backend and on Metal, printed with the load average. Without it the row returns at once. |
-| `CALIPER_GFX_SCENE_BENCH=1` | `caliper_gfx_tests` runs the scene core's timing row: the compile time and the layer's submit time of the surface scene and of a scene of 1,000 entities. Without it the row returns at once. |
 | `CALIPER_GFX_SCENE_VIEW_BENCH=1` | `caliper_gfx_tests` runs the scene view's timing row: the view's compile, submit and GPU times for the demo scene at 512 x 512 and the time to apply one mesh update. Without it the row returns at once. |
 | `CALIPER_GFX_CMAP_BENCH=1` | `caliper_gfx_tests` runs the colormap's timing row: the GPU time of the generated `colormap_texture` against the Metal renderer's float pass on 1,024 by 1,024 and 2,048 by 2,048 heatmaps, with the load average. `CALIPER_GFX_CMAP_BENCH_SAMPLES=<n>` sets the samples of each pass, 40 by default. Without it the row returns at once. |
 | `CALIPER_CMAP_BENCH=1` | `caliper_tests` runs the timing row of the colormap keys: the time to derive one range's keys and to find a block in the cache. Without it the row returns at once. |
@@ -135,7 +131,7 @@ ctest runs every test binary that opens the stores, and every command-line test,
 | `CALIPER_VIEWER` | The path of the `caliper-viewer` executable, in place of the one inside the package. |
 | `CALIPER_DATA_DIR` | The data folder that an in-process window or offscreen canvas uses when no `data_dir` argument is given. Without either, it uses a private temporary folder. |
 | `CALIPER_PY_LOG` | Any value other than `0` echoes the diagnostic lines of the host from the in-process core to stderr. |
-| `CALIPER_WEB_DIR` | The folder of the browser files that `serve()` and the widgets hand out, in place of `caliper/_web/` in the package. |
+| `CALIPER_WEB_DIR` | The folder of the browser files that `serve()` and the widgets hand out, in place of `caliper/_web/` in the package. It is also the folder from which the app serves the WebAssembly views to the browser's dashboard viewer. |
 
 See [Caliper LIB](../python/caliper-lib-api.md) for the calls themselves.
 
@@ -155,7 +151,6 @@ On Windows the Vulkan renderer reports how each tensor update travelled. Each di
 |---|---|
 | `CUDA interop OK — zero-copy (kernel reads the tensor, writes the image)` | The CUDA kernel wrote the update straight into the Vulkan image. |
 | `import path OK — zero-copy (imported allocation in place)` | The renderer used an imported allocation in place, with no copy. |
-| `geometry path OK — points drawn from imported allocation in place` | `geometry.v1` drew points from an imported allocation. |
 | `tensor not CUDA-resident`, `external-memory interop unavailable`, `dtype not f32/u8`, `CUDA context init failed` and similar | The update took the CPU-staged or buffer path, and the message gives the reason. The fallback is not an error. See [Platform rules](../introduction/architecture.md#design-decisions). |
 | `direct image: exportable image failed, using the buffer path` | The direct path could not be set up, and updates use the buffer path. |
 

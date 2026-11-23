@@ -29,6 +29,12 @@ import struct
 import numpy as np
 
 from caliper import _wire as w
+# Per-shape encoders exist only in the test tree.
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "python/tests"))
+import legacy_scene_encoder
+legacy_scene_encoder.install()
 
 SESSION = {"id": "clp-4242-a1b2c3", "script": "train.py", "pid": 4242,
            "start_unix_ms": 1763200000000}
@@ -324,13 +330,26 @@ def valid_vectors() -> dict[str, bytes]:
                                             parts=[w.PART_TRANSFORM, w.PART_BOXES],
                                             stamp=STAMP_T),
     }
+    msgs["scene_update_lines_unused"] = _update(
+        2, "world", 40, STAMP + 3900, "unused", w.PART_LINES,
+        {"positions": CLOUD, "indices": np.array([[0, 1]], i32)}, {"mode": w.LINES_EDGES})
+    msgs["scene_update_lines_singletons"] = _update(
+        2, "world", 41, STAMP + 3901, "singleton", w.PART_LINES,
+        {"positions": CLOUD, "strip_lengths": np.array([1, 1, 1], i32)}, {"mode": w.LINES_STRIPS})
     msgs.update(_timeline_vectors())
     msgs.update(_program_vectors())
     msgs.update(_resource_vectors())
+    msgs.update(_scene_piece_vectors())
+    msgs.update(_scene_bundles(msgs))
     out = {f"v3_2/{name}": w.encode(m, minor=M) for name, m in msgs.items()}
     # A split update: 20 coloured points in five pieces of at most 600 bytes, with a stamp.
     for k, piece in enumerate(w.split_update(SPLIT, update=4, max_frame=600)):
         out[f"v3_2/scene_update_split_{k}"] = w.encode(piece, minor=M)
+    # A version in parts: 10 segments of 8 bytes in three parts of at most 32 bytes, and the parts that
+    # a receiver drops or refuses in a sequence (_resource_split_vectors).
+    for k, part in enumerate(w.resource_parts(RESOURCE_SPLIT, version=5, part_bytes=32)):
+        out[f"v3_2/resource_split_{k}"] = w.encode(part, minor=M)
+    out.update({f"v3_2/{name}": w.encode(m, minor=M) for name, m in _resource_split_vectors().items()})
     # Decode only: a section that no part has, which decoders ignore.
     out["v3_2/scene_update_points_future"] = w.encode_frame(
         w.MsgType.SCENE_UPDATE,
@@ -513,6 +532,7 @@ def invalid_vectors(valid: dict[str, bytes]) -> dict[str, tuple[bytes, dict]]:
         **_timeline_invalid(valid),
         **_program_invalid(),
         **_resource_invalid(),
+        **_scene_piece_invalid(),
     }
 
 
@@ -850,6 +870,52 @@ def _instance(request_id: int, derive: bool) -> "w.Program":
                      derive=PIECE_DERIVE if derive else None, draw=PIECE_DRAW)
 
 
+# The piece form of SCENE_UPDATE: three points whose arrays travel as the resource "points" of the scene
+# program "scene.1", an instance of the library piece "points".
+SCENE_PIECE_VALUES = _f32([0.25, 0.5, 1.0])
+SCENE_PIECE_PIN = {"name": "points", "version": 1}
+SCENE_PIECE_KEYS = {"program": "scene.1", "piece": SCENE_PIECE_PIN, "resources": {"points": 3},
+                    "arrays": ["positions", "values"], "colormap": w.COLORMAP_MAGMA,
+                    "flags": w.SNAP_AUTO_VMIN | w.SNAP_AUTO_VMAX, "vmin": 0.0, "vmax": 1.0,
+                    "stats": _stats(SCENE_PIECE_VALUES, CLOUD)}
+
+
+def _scene_piece_vectors() -> dict:
+    # struct Point { position: vec4<f32>, bits: u32, index: u32 } and 8 bytes of padding: 32 bytes.
+    rows = np.zeros(3, dtype=[("position", "<f4", 4), ("bits", "<u4"), ("index", "<u4"), ("pad", "V8")])
+    rows["position"][:, :3] = CLOUD
+    rows["position"][:, 3] = 1.0
+    rows["bits"] = SCENE_PIECE_VALUES.view(np.uint32)
+    rows["index"] = np.arange(3)
+    return {
+        "scene_update_points_piece": _update(
+            2, "world", 14, STAMP + 1400, "world/cloud", w.PART_POINTS, {},
+            {k: SCENE_PIECE_KEYS[k] for k in ("colormap", "flags", "vmin", "vmax", "stats")},
+            stamp=STAMP_T, program="scene.1", piece=SCENE_PIECE_PIN, resources={"points": 3},
+            names=["positions", "values"]),
+        "resource_scene_points": w.Resource("scene.1", "points", 7, 3, 32, rows.tobytes()),
+    }
+
+
+def _scene_piece_invalid() -> dict:
+    bad = {"error": w.ERR_BAD_REQUEST}
+    key = SCENE_PIECE_KEYS
+    stamp = {"stamp": STAMP_T}
+    RS = w.MsgType.RESOURCE
+    return {
+        "scene_update_piece_section": (_frame("points", "p", {"positions": CLOUD, **stamp}, **key), bad),
+        "scene_update_piece_wrong": (_frame("points", "p", stamp, **dict(
+            key, piece=dict(SCENE_PIECE_PIN, name="lines"))), bad),
+        "scene_update_piece_arrays": (_frame("points", "p", stamp, **dict(key, arrays=["values"])), bad),
+        "scene_update_piece_split": (_frame("points", "p", stamp, **dict(
+            key, split={"update": 1, "piece": 0, "pieces": 2, "rows": {"positions": 3},
+                        "first": {"positions": 0}})), bad),
+        "resource_scene_id": (_meta_frame(RS, {"program": "scene.0123456789", "resource": "points",
+                                               "step": 7, "count": 3, "stride": 32},
+                                          {"resource": np.zeros(96, np.uint8)}), bad),
+    }
+
+
 def _resource_vectors() -> dict:
     heads = np.array([0.5, 0.25, 0.125, 0.0625], np.float32)
     # Two elements of struct Arc { from_token: u32, to_token: u32, layer: u32, head: u32,
@@ -870,6 +936,42 @@ def _resource_vectors() -> dict:
         "resource_struct": w.Resource("arcs", "arcs", 1200, 2, 24, arcs.tobytes()),
         "resource_texture": w.Resource("arcs", "glow", 1210, 4, 4, texels, width=2, height=2),
         "resource_empty": w.Resource("arcs", "arcs", 1220, 0, 24, b""),
+        # A 3 by 3 r8unorm texture: nine texels, four to a word, three words.
+        "resource_texture_r8": w.Resource("arcs", "mask", 1230, 3, 4, bytes(range(1, 10)) + bytes(3),
+                                          width=3, height=3, format=w.TEXTURE_R8),
+        "resource_texture_r32": w.Resource("arcs", "ids", 1240, 4, 4,
+                                           np.array([1, 2, 3, 4000000000], np.uint32),
+                                           width=2, height=2, format=w.TEXTURE_R32UINT),
+        "resource_texture_wide": w.Resource("arcs", "strip", 1250, 2048, 4,
+                                            (np.arange(8192) % 251).astype(np.uint8),
+                                            width=8192, height=1, format=w.TEXTURE_R8),
+        # Seven u8 elements in two words, five u16 elements in three.
+        "resource_narrow_u8": w.Resource("heads", "bytes", 1260, 2, 4, bytes(range(1, 8)) + bytes(1),
+                                         element=w.ELEMENT_U8, elements=7),
+        "resource_narrow_u16": w.Resource("heads", "halves", 1270, 3, 4,
+                                          np.array([1, 2, 3, 4, 5, 0], np.uint16),
+                                          element=w.ELEMENT_U16, elements=5),
+    }
+
+
+# 10 segments of two f32 each, (k, -k), 80 bytes: the version that resource_split_0 to _2 carry.
+RESOURCE_SPLIT = w.Resource("lines", "segments", 1300, 10, 8,
+                            np.array([[k, -k] for k in range(10)], np.float32).tobytes())
+
+
+def _resource_split_vectors() -> dict:
+    """Parts that are valid frames on their own, for the sequences that the receivers' tests play:
+    a part 1 of a version whose part 0 never came (dropped), a last part that ends before the count
+    (refused after parts 0 and 1), and a part 1 whose step differs from part 0 (refused)."""
+    data = memoryview(RESOURCE_SPLIT.data)
+
+    def part(k, first, n, step=1300, version=5):
+        return w.Resource("lines", "segments", step, 10, 8, data[first * 8:(first + n) * 8],
+                          split={"version": version, "part": k, "parts": 3, "first": first})
+    return {
+        "resource_split_orphan": part(1, 4, 4, version=6),
+        "resource_split_short": part(2, 8, 1),
+        "resource_split_differs": part(1, 4, 4, step=1301),
     }
 
 
@@ -950,8 +1052,22 @@ def _resource_invalid() -> dict:
         "resource_texture_stride": (resource(count=2, stride=8, **texture), bad),
         "resource_texture_count": (resource(count=3, **texture,
                                             section={"resource": data[:12]}), bad),
-        "resource_texture_side": (resource(width=4097, height=1, count=4097,
-                                           section={"resource": np.zeros(16388, np.uint8)}), bad),
+        "resource_texture_side": (resource(width=8193, height=1, count=8193,
+                                           section={"resource": np.zeros(32772, np.uint8)}), bad),
+        "resource_texture_side_big": (resource(width=8193, height=1, count=2049, format="r8unorm",
+                                               section={"resource": np.zeros(8196, np.uint8)}), bad),
+        "resource_format_unknown": (resource(format="bgra8unorm", **texture), bad),
+        "resource_format_alone": (resource(format="r8unorm"), bad),
+        "resource_format_count": (resource(count=9, format="r8unorm", width=3, height=3,
+                                           section={"resource": np.zeros(36, np.uint8)}), bad),
+        "resource_element_unknown": (resource(element="u32", elements=4), bad),
+        "resource_element_texture": (resource(element="u8", elements=4, **texture), bad),
+        "resource_element_stride": (resource(count=1, stride=8, element="u8", elements=4,
+                                             section={"resource": data[:8]}), bad),
+        "resource_elements_missing": (resource(element="u8"), bad),
+        "resource_elements_alone": (resource(elements=4), bad),
+        "resource_elements_count": (resource(count=2, element="u16", elements=5,
+                                             section={"resource": data[:8]}), bad),
         # count * stride is 2^32 + 256, which wraps to the section's 256 bytes in 32 bits.
         "resource_count_wrap": (resource(count=16777217, stride=256,
                                          section={"resource": np.zeros(256, np.uint8)}), bad),
@@ -960,4 +1076,62 @@ def _resource_invalid() -> dict:
         "resource_section_short": (resource(section={"resource": data[:15]}), bad),
         "resource_section_dtype": (resource(section={"resource": data.view(np.float32)}), bad),
         "resource_section_2d": (resource(section={"resource": data.reshape(4, 4)}), bad),
+        **_resource_split_invalid(resource, bad),
     }
+
+
+def _resource_split_invalid(resource, bad) -> dict:
+    """Parts of a version in parts that every decoder refuses on their own: the keys of split, the
+    bound of a version in parts before any product, and a section of whole elements within the count."""
+    sp = {"version": 5, "part": 1, "parts": 3, "first": 4}
+    data = np.arange(16, dtype=np.uint8)            # 4 elements of 4 bytes
+
+    def part(section=None, count=10, **change):
+        split = {k: v for k, v in dict(sp, **change).items() if v is not None}
+        return resource(count=count, split=split, section=section)
+    return {
+        "resource_split_list": (resource(count=10, split=[5, 1, 3, 4]), bad),
+        "resource_split_version": (part(version=-1), bad),
+        "resource_split_version_missing": (part(version=None), bad),
+        "resource_split_parts_one": (part(parts=1, part=0, first=0), bad),
+        "resource_split_parts_many": (part(parts=33), bad),
+        "resource_split_part_past": (part(part=3), bad),
+        "resource_split_first_missing": (part(first=None), bad),
+        "resource_split_first_u32": (part(first=2**32), bad),
+        "resource_split_part0_first": (part(part=0), bad),
+        "resource_split_first_past": (part(first=10), bad),
+        # first near 2^32: first + elements wraps in 32 bits back below the count.
+        "resource_split_first_wraps": (part(first=2**32 - 2), bad),
+        # count * stride is 2^40 less 256, which wraps in 32 bits; refused by the bound of a version in parts.
+        "resource_split_count_wrap": (part(count=2**32 - 1, stride=256,
+                                           section={"resource": np.zeros(256, np.uint8)}), bad),
+        "resource_split_over_max": (part(count=w.RESOURCE_VERSION_MAX_BYTES // 4 + 1), bad),
+        "resource_split_section_empty": (part(section={"resource": np.zeros(0, np.uint8)}), bad),
+        "resource_split_section_partial": (part(section={"resource": data[:14]}), bad),
+        "resource_split_section_past": (part(first=8, section={"resource": np.zeros(12, np.uint8)}), bad),
+    }
+
+
+def _scene_bundles(messages):
+    """Each scene part in the same layout that the Python network sender writes."""
+    from types import SimpleNamespace
+    from dataclasses import replace
+    from caliper import _scene_pieces
+    out = {}
+    for index, (name, message) in enumerate(list(messages.items()), 100):
+        if not isinstance(message, w.SceneUpdate) or not message.arrays or message.program or message.part == "camera":
+            continue
+        if message.params.get("form") == "encoded":
+            continue
+        batch = SimpleNamespace(part=message.part, arrays=message.arrays, params=message.params, packed=None)
+        piece = _scene_pieces.route(batch)
+        names, resources = _scene_pieces.pack(batch, piece)
+        program = f"scene.{index}"
+        counts = {}
+        for rid, count, stride, data, width, height in resources:
+            out[name.replace("scene_update_", "resource_scene_", 1) + "_bundle_" + rid] = _scene_pieces.resource_message(piece, program, rid, 7, count, stride, data, width, height)
+            counts[rid] = count
+        params = dict(message.params, scale=1.0) if piece == "depth" else message.params
+        out[name + "_bundle"] = replace(message, arrays={}, params=params, program=program, piece=_scene_pieces.PINS[piece],
+                                         resources=counts, names=names)
+    return out

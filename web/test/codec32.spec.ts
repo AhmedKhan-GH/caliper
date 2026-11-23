@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  canonicalJson, decode, decodeFrame, encode, encodeFrame, entityPathOk, MessageError, resolveSceneDataView, sceneViewInfo, SplitUpdates,
+  canonicalJson, decode, decodeFrame, encode, encodeFrame, entityPathOk, MessageError, resolveSceneDataView, sceneViewInfo, SplitResources, SplitUpdates,
   stampTextOk, textFromLines, textLines, WireError,
   type Section,
 } from '../src/protocol/codec.js';
@@ -28,7 +28,8 @@ import {
   CAP_INTERVENTIONS, CAP_PROGRAMS, INTERVENE_ABLATE, MAX_INTERVENTIONS, MAX_POINTS_LISTED, MAX_PROGRAMS, POINT_MAX, PROGRAM_EVERY_MAX,
   PROGRAM_ID_MAX, PROGRAM_MAX_COUNT, PROGRAM_MAX_INPUTS, PROGRAM_MEMORY_MB_MAX, PROGRAM_REMOVE, PROGRAM_SET, PROGRAM_SIDE_MAX,
   PROGRAM_SOURCE_MAX, PROGRAM_STATE_RATE_HZ, PROGRAM_TIME_MS_MAX, PROGRAM_WORKGROUPS_MAX, TENSOR_NAME_MAX,
-  PIECE_COMMON_MAX, PIECE_NAME_MAX, PIECE_SEGMENTS_MAX, PIECE_VERSION_MAX, RESOURCE_MAX_BYTES, RESOURCE_SIDE_MAX, RESOURCE_STRIDE_MAX, STATUS_PIECE,
+  PIECE_COMMON_MAX, PIECE_NAME_MAX, PIECE_SEGMENTS_MAX, PIECE_VERSION_MAX, RESOURCE_MAX_BYTES, RESOURCE_PART_WAIT, RESOURCE_SIDE_MAX, RESOURCE_STRIDE_MAX,
+  RESOURCE_VERSION_MAX_BYTES, RESOURCE_TEXTURE_VERSION_MAX_BYTES, RESOURCE_MAX_PARTS, STATUS_PIECE,
   type ControlMsg, type ControlsMsg, type Message, type ProgramMsg, type ProgramStateMsg, type ResourceMsg,
   type CursorMsg, type SceneClassesMsg, type SceneTransformsMsg, type SceneUpdateMsg, type SnapshotMsg, type TextMsg, type TimeStateMsg,
   type ViewEntry, type ViewsMsg,
@@ -339,6 +340,8 @@ test('the 3.2 constants agree with include/caliper/live_net.h', () => {
     CALIPER_NET_PROGRAM_SOURCE_MAX: PROGRAM_SOURCE_MAX,
     CALIPER_NET_MSG_RESOURCE: MSG.resource,
     CALIPER_NET_RESOURCE_MAX_BYTES: RESOURCE_MAX_BYTES,
+    CALIPER_NET_RESOURCE_VERSION_MAX_BYTES: RESOURCE_VERSION_MAX_BYTES,
+    CALIPER_NET_RESOURCE_PART_WAIT: RESOURCE_PART_WAIT,
     CALIPER_NET_RESOURCE_STRIDE_MAX: RESOURCE_STRIDE_MAX,
     CALIPER_NET_RESOURCE_SIDE_MAX: RESOURCE_SIDE_MAX,
     CALIPER_NET_PIECE_NAME_MAX: PIECE_NAME_MAX,
@@ -1067,4 +1070,191 @@ test('golden values of instances of pieces and resources', () => {
     const raw = read(`${n}.bin`);
     expect(Array.from(encode(decode(raw) as Message, PROTOCOL_MINOR_3_2)), n).toEqual(Array.from(raw));
   }
+});
+
+/** 10 segments (k, -k) of two f32: the version that resource_split_0 to _2 carry. */
+function wholeSegments(): Uint8Array {
+  const v = new Float32Array(20);
+  for (let k = 0; k < 10; k++) [v[2 * k], v[2 * k + 1]] = [k, 0 - k];   // 0 - 0 is +0, as in the generator
+  return new Uint8Array(v.buffer);
+}
+
+test('a resource in parts carries its golden values and is put together whole', () => {
+  const parts = [0, 1, 2].map((k) => frame32(`resource_split_${k}`) as ResourceMsg);
+  expect(parts.map((p) => p.split)).toEqual([0, 1, 2].map((k) => ({ version: 5, part: k, parts: 3, first: 4 * k })));
+  const sr = new SplitResources();
+  expect(sr.add(parts[0])).toBeNull();
+  expect(sr.add(parts[1])).toBeNull();
+  const whole = sr.add(parts[2])!;
+  expect([whole.program, whole.resource, whole.step, whole.count, whole.stride, whole.split]).toEqual(['lines', 'segments', 1300, 10, 8, undefined]);
+  expect(Array.from(whole.data)).toEqual(Array.from(wholeSegments()));
+  expect(sr.open.size).toBe(0);
+  const again = decode(encode(whole, PROTOCOL_MINOR_3_2)) as ResourceMsg;
+  expect(new SplitResources().add(again)!.count).toBe(10);
+  for (const k of [0, 1, 2]) {
+    const raw = read(`resource_split_${k}.bin`);
+    expect(Array.from(encode(parts[k], PROTOCOL_MINOR_3_2))).toEqual(Array.from(raw));
+  }
+});
+
+test('a resource carries its texture format and narrow elements', () => {
+  const n = frame32('resource_narrow_u16') as ResourceMsg;
+  expect([n.element, n.elements, n.count, n.stride, n.width, n.format]).toEqual(['u16', 5, 3, 4, undefined, undefined]);
+  expect(Array.from(new Uint16Array(n.data.slice().buffer))).toEqual([1, 2, 3, 4, 5, 0]);
+  const t = frame32('resource_texture_r8') as ResourceMsg;
+  expect([t.format, t.width, t.height, t.count, t.stride, t.element]).toEqual(['r8unorm', 3, 3, 3, 4, undefined]);
+  expect(Array.from(t.data.slice(0, 9))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+});
+
+test('a resource part with another format than its part 0 is refused', () => {
+  const [p0, p1] = [0, 1].map((k) => frame32(`resource_split_${k}`) as ResourceMsg);
+  const sr = new SplitResources();
+  expect(sr.add(p0)).toBeNull();
+  expect(() => sr.add({ ...p1, format: 'r8unorm' })).toThrow(/differs from its part 0/);
+});
+
+test('a receiver drops or refuses the parts of a resource that break the order', () => {
+  const [p0, p1, p2] = [0, 1, 2].map((k) => frame32(`resource_split_${k}`) as ResourceMsg);
+  const orphan = frame32('resource_split_orphan') as ResourceMsg;
+  const refused = (sr: SplitResources, r: ResourceMsg, why: RegExp) => {
+    let err: unknown;
+    try {
+      sr.add(r);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(MessageError);
+    expect((err as MessageError).message).toMatch(why);
+  };
+  let sr = new SplitResources();
+  expect(sr.add(orphan)).toBeNull();
+  sr.add(p0);
+  expect(sr.add(orphan)).toBeNull();
+  expect([sr.dropped, sr.open.size]).toEqual([2, 1]);
+  refused(sr, p2, /out of order/);
+  expect(sr.open.size).toBe(0);
+  sr.add(p0);
+  sr.add(p1);
+  refused(sr, frame32('resource_split_short') as ResourceMsg, /end before its count/);
+  sr.add(p0);
+  refused(sr, frame32('resource_split_differs') as ResourceMsg, /differs from its part 0/);
+  // A version that never completes expires after RESOURCE_PART_WAIT further frames.
+  sr = new SplitResources();
+  sr.add(p0);
+  const other = frame32('resource_buffer') as ResourceMsg;
+  for (let k = 0; k + 1 < RESOURCE_PART_WAIT; k++) expect(sr.add(other)).not.toBeNull();
+  expect(sr.add(p1)).toBeNull();
+  for (let k = 0; k < RESOURCE_PART_WAIT; k++) sr.add(other);
+  expect(sr.open.size).toBe(1);
+  sr.add(other);
+  expect([sr.open.size, sr.expired]).toEqual([0, 1]);
+  expect(sr.add(p2)).toBeNull();
+  expect(sr.dropped).toBe(1);
+  // A newer version discards an incomplete one; at most MAX_INCOMPLETE_UPDATES are held.
+  sr = new SplitResources();
+  sr.add(p0);
+  sr.add(p0);
+  expect([sr.open.size, sr.discarded]).toEqual([1, 1]);
+  for (const name of ['a', 'b', 'c']) sr.add({ ...p0, resource: name });
+  expect([...sr.open.keys()]).toEqual(['lines/b', 'lines/c']);
+  expect(MAX_INCOMPLETE_UPDATES).toBe(2);
+});
+
+test('the parts of a resource bound every size before a product', () => {
+  const zeros = new Uint8Array(256);
+  const meta = { program: 'a', resource: 'r', step: 0, count: 2 ** 32 - 1, stride: 256, split: { version: 0, part: 0, parts: 2, first: 0 } };
+  const frame = encodeFrame(MSG.resource, meta, [{ name: 'resource', dtype: DTYPE.u8, shape: [256], encoding: 0, bytes: zeros }], PROTOCOL_MINOR_3_2);
+  expect(() => decode(frame)).toThrow(/in parts holds at most 134217728 bytes/);
+  expect(RESOURCE_VERSION_MAX_BYTES).toBe(128 * 1024 * 1024);
+});
+
+test('full textures use 32 parts while buffers retain their 128 MiB limit', () => {
+  const pixel = new Uint8Array(4);
+  const meta = { program: 'a', resource: 'pixels', step: 0, count: 8192 * 8192, stride: 4,
+    width: 8192, height: 8192, format: 'rgba8unorm',
+    split: { version: 0, part: 0, parts: RESOURCE_MAX_PARTS, first: 0 } };
+  const decodeMeta = (m: Record<string, unknown>) => decode(encodeFrame(MSG.resource, m,
+    [{ name: 'resource', dtype: DTYPE.u8, shape: [4], encoding: 0, bytes: pixel }], PROTOCOL_MINOR_3_2));
+  // Only one pixel travels. No full texture or assembly is allocated.
+  expect((decodeMeta(meta) as ResourceMsg).count).toBe(8192 * 8192);
+  expect((decodeMeta({ ...meta, format: 'r32uint' }) as ResourceMsg).count).toBe(8192 * 8192);
+  expect(() => decodeMeta({ ...meta, split: { ...meta.split, parts: 33 } })).toThrow(/split.parts/);
+  const buffer = { ...meta, width: undefined, height: undefined, format: undefined };
+  expect(() => decodeMeta(buffer)).toThrow(/134217728 bytes/);
+  expect((decodeMeta({ ...buffer, count: RESOURCE_VERSION_MAX_BYTES / 4 }) as ResourceMsg).count).toBe(33554432);
+  expect(() => decodeMeta({ ...buffer, count: RESOURCE_VERSION_MAX_BYTES / 4 + 1 })).toThrow(/134217728 bytes/);
+  expect(RESOURCE_TEXTURE_VERSION_MAX_BYTES).toBe(256 * 1024 * 1024);
+  expect(RESOURCE_MAX_PARTS).toBe(32);
+  expect(MAX_PIECES).toBe(16);
+});
+
+// --- the piece form of SCENE_UPDATE and the ids scene.<n>, mirroring python/tests/test_wire_32.py ---
+
+const PIECE_BASE = { sub: 2, view: 's', seq: 1, stamp_ns: 1, path: 'p' };
+const PIECE_KEYS = { program: 'scene.1', piece: { name: 'points', version: 1 }, resources: { points: 3 }, arrays: ['positions', 'values'] };
+const pieceFrame = (part: string, change: Record<string, unknown> = {}, sections: Section[] = []) => {
+  const meta: Record<string, unknown> = { ...PIECE_BASE, part, ...PIECE_KEYS, ...change };
+  for (const k of Object.keys(meta)) if (meta[k] === undefined) delete meta[k];
+  return encodeFrame(MSG.scene_update, meta, sections, PROTOCOL_MINOR_3_2);
+};
+const pieceRefused = (buf: Uint8Array) => {
+  const err = catchError(() => decode(buf));
+  expect(err).toBeInstanceOf(MessageError);
+  expect((err as MessageError).code).toBe('bad_request');
+};
+
+test('the piece form carries its golden values and round-trips', () => {
+  const m = upd('scene_update_points_piece');
+  expect(m.program).toBe('scene.1');
+  expect(m.arrays).toEqual({});
+  expect(m.split).toBeUndefined();
+  expect(m.piece).toEqual({ name: 'points', version: 1 });
+  expect(m.resources).toEqual({ points: 3 });
+  expect(m.names).toEqual(['positions', 'values']);
+  expect(m.stamp).toBeDefined();
+  const r = frame32('resource_scene_points') as { program: string; resource: string; step: number; count: number; stride: number; data: Uint8Array };
+  expect([r.program, r.resource, r.step, r.count, r.stride, r.data.length]).toEqual(['scene.1', 'points', 7, 3, 32, 96]);
+  const buf = pieceFrame('points');
+  expect(encode(decode(buf) as Message, PROTOCOL_MINOR_3_2)).toEqual(buf);
+  const hash = `sha256:${'ab'.repeat(32)}`;
+  expect((decode(pieceFrame('points', { piece: { name: 'points', version: 1, hash } })) as SceneUpdateMsg).piece!.hash).toBe(hash);
+  const pins: [string, string, Record<string, unknown>][] = [
+    ['lines', 'lines', { mode: 'segments' }], ['arrows', 'arrows', { arrays: ['origins', 'vectors'] }], ['boxes', 'boxes', { arrays: ['centers'] }],
+    ['mesh', 'mesh', { arrays: ['positions', 'indices'] }],
+  ];
+  for (const [part, name, extra] of pins) expect(() => decode(pieceFrame(part, { piece: { name, version: 1 }, ...extra }))).not.toThrow();
+  for (const [form, name] of [['color', 'image'], ['depth', 'depth'], ['segmentation', 'segmentation']]) {
+    expect(() => decode(pieceFrame('image', { piece: { name, version: 1 }, arrays: ['pixels'], form }))).not.toThrow();
+  }
+});
+
+test('the piece form refuses what the rules refuse', () => {
+  const pin = (o: Record<string, unknown>) => ({ piece: { name: 'points', version: 1, ...o } });
+  const cases: [string, Record<string, unknown>][] = [
+    ['points', { program: 'scene.0123456789' }], ['points', { program: 'scene.x' }], ['points', { program: 5 }],
+    ['points', { piece: undefined }], ['points', pin({ hash: 'sha256:xyz' })], ['points', pin({ hash: `sha256:${'AB'.repeat(32)}` })],
+    ['points', pin({ version: 0 })], ['points', { piece: { name: 'lines', version: 1 } }],
+    ['camera', { piece: { name: 'camera', version: 1 }, arrays: ['x'] }],
+    ['points', { resources: undefined }], ['points', { resources: {} }],
+    ['points', { resources: Object.fromEntries('abcdefghi'.split('').map((k) => [k, 1])) }],
+    ['points', { resources: { __x: 1 } }], ['points', { resources: { points: -1 } }], ['points', { resources: { points: 2 ** 32 } }],
+    ['points', { arrays: undefined }], ['points', { arrays: [] }], ['points', { arrays: ['values'] }],
+    ['points', { arrays: ['positions', 'positions'] }], ['points', { arrays: ['values', 'positions'] }],
+    ['points', { arrays: ['positions', 'nope'] }], ['points', { arrays: ['positions', 3] }],
+    ['points', { split: { update: 1, piece: 0, pieces: 2 } }], ['points', { colormap: 'x' }],
+    ['image', { piece: { name: 'depth', version: 1 }, arrays: ['pixels'], form: 'color' }],
+    ['image', { piece: { name: 'image', version: 1 }, arrays: ['pixels'], form: 'encoded' }],
+  ];
+  for (const [part, change] of cases) pieceRefused(pieceFrame(part, change));
+  const f32 = new Float32Array(9);
+  pieceRefused(pieceFrame('points', {}, [{ name: 'positions', dtype: DTYPE.f32, shape: [3, 3], encoding: 0, bytes: new Uint8Array(f32.buffer) }]));
+});
+
+test('RESOURCE and PROGRAM take the ids scene.<n>', () => {
+  const resource = (program: string) => encodeFrame(MSG.resource, { program, resource: 'points', step: 1, count: 1, stride: 4 },
+    [{ name: 'resource', dtype: DTYPE.u8, shape: [4], encoding: 0, bytes: new Uint8Array(4) }], PROTOCOL_MINOR_3_2);
+  for (const ok of ['scene.0', 'scene.1', 'scene.123456789']) expect((decode(resource(ok)) as { program: string }).program).toBe(ok);
+  for (const bad of ['scene.', 'scene.x', 'scene.0123456789', 'scene.1a', 'scene.-1', 'scene.1.2']) pieceRefused(resource(bad));
+  expect((decode(encodeFrame(MSG.program, { request_id: 0, op: 'remove', id: 'scene.7' }, [], PROTOCOL_MINOR_3_2)) as { id: string }).id).toBe('scene.7');
+  pieceRefused(encodeFrame(MSG.program, { request_id: 0, op: 'remove', id: 'scene.x' }, [], PROTOCOL_MINOR_3_2));
 });

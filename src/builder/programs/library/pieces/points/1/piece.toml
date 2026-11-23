@@ -1,7 +1,7 @@
 # Library piece points@1: a cloud of points, drawn as the built-in points primitive draws it.
 name = "points"
 version = 1
-description = "A cloud of round or square points of a size in pixels, colored by one color, by a value through a colormap, or by a packed RGBA"
+description = "A cloud of round or square points of a size in pixels or of radii in scene units, colored by one color, by a value through a colormap, or by a packed RGBA"
 imports = ["pick@1", "camera@1"]
 
 [[inputs]]
@@ -14,9 +14,18 @@ title = "Positions (N, 3), or (N, 2) with z 0"
 [[inputs]]
 name = "values"
 kind = "tensor"
+dtype = "f32|u32|u8|i32|u16"
+rank_min = 1
+rank_max = 2
+title = "Values (N) of f32: a value for the colormap, or a packed RGBA in its bits; packed RGBA (N) of u32; colors (N, 3 or 4) of u8; or class ids (N) of i32, u16 or u8"
+
+[[inputs]]
+name = "radii"
+kind = "tensor"
 rank_min = 1
 rank_max = 1
-title = "Values (N): a value for the colormap, or a packed RGBA in its bits"
+optional = true
+title = "Radii (N) in scene units, or one for all, read when radius_mode is 1; unbound, a radius of 1"
 
 [[params]]
 name = "size"
@@ -65,20 +74,70 @@ name = "vmax"
 default = 1.0
 title = "Value at the Colormap's End"
 
+[[params]]
+name = "radius_mode"
+type = "u32"
+default = 0
+min = 0
+max = 1
+title = "Size (0 size in pixels, 1 radius in scene units)"
+
+# A radius r in scene units is r * radius_scale * (proj_x, proj_y) in clip units, at least half a
+# pixel, as the built-in computes it: radius_scale is the longest column of the model-view's
+# rotation part, and proj_x and proj_y are the projection's scales |proj[0][0]| and |proj[1][1]|.
+[[params]]
+name = "radius_scale"
+default = 1.0
+title = "Scene Units to View Units"
+
+[[params]]
+name = "proj_x"
+default = 1.0
+title = "Projection's Horizontal Scale"
+
+[[params]]
+name = "proj_y"
+default = 1.0
+title = "Projection's Vertical Scale"
+
+# The depth cues of the live points view, off at 0: with att_ref above 0 a point's size is its size times
+# clamp(att_ref / w, 0.5, 2), w being its clip-space w, and past fade_w0 its color falls linearly to half at
+# fade_w1, its hue and alpha kept, as the built-in computes them.
+[[params]]
+name = "att_ref"
+default = 0.0
+title = "Clip W of the Size in Pixels"
+
+[[params]]
+name = "fade_w0"
+default = 0.0
+title = "Clip W of the Fade Start"
+
+[[params]]
+name = "fade_w1"
+default = 0.0
+title = "Clip W of the Fade End"
+
 [[resources]]
 id = "points"
 kind = "buffer"
 struct = "Point"
 fields = ["position: vec4<f32>", "bits: u32", "index: u32"]
-count = 262144
+# 4,194,304 points of 32 bytes: 128 MiB, the most that a published resource holds.
+count = 4194304
 counted = true
+
+# The derive half holds the 128 MiB buffer and the positions (48 MiB) and values (16 MiB) of the most points.
+[derive]
+memory_mb = 256
 
 [[derive.passes]]
 entry = "copy_points"
-workgroups = [1024, 1, 1]
+workgroups = [16384, 1, 1]
 writes = ["points"]
 
 [draw]
+memory_mb = 160
 camera = "orbit"
 pick = { resource = "points", fields = ["index"] }
 

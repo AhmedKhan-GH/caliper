@@ -46,11 +46,13 @@ uint64_t mono_ns32() {
 struct Runner {
     std::unique_ptr<Hub> hub;
     std::thread thread;
-    explicit Runner(size_t max_retained_bytes = size_t(1) << 30, bool allow_control = false) {
+    explicit Runner(size_t max_retained_bytes = size_t(1) << 30, bool allow_control = false,
+                    size_t max_queued_bytes = size_t(160) << 20) {
         HubOptions o;
         o.token = kToken32;
         o.allow_control = allow_control;
         o.max_retained_bytes = max_retained_bytes;
+        o.max_queued_bytes = max_queued_bytes;
         hub = std::make_unique<Hub>(std::move(o));
         std::string err;
         REQUIRE_MESSAGE(hub->listen(&err), err);
@@ -1044,4 +1046,171 @@ TEST_CASE("net/hub 3.2: CONTROL intervene to a producer without interventions ge
     CHECK(r->error.find("code")->as_string() == CALIPER_NET_ERR_UNSUPPORTED);
     w.spin(50);
     CHECK(p->controls.empty());
+}
+
+// The piece form (capability "scene_pieces"): the producer sends a scene program's RESOURCE and then the
+// update that names it; the hub forwards both, in that order, to a viewer that announced the capability,
+// keeps them as one bundle for a late viewer, gives a viewer without it the structure alone, and drops an
+// update whose version did not come.
+TEST_CASE("net/hub 3.2: a scene program's RESOURCE travels with the update in the piece form that names it") {
+    Runner h;
+    World32 w;
+    auto p = std::make_unique<SceneProducer>();
+    REQUIRE(p->connect(h.url()));
+    w.peers.push_back(p.get());
+    REQUIRE(w.until([&] { return p->welcomed; }));
+    CHECK(std::find(p->hub_caps.begin(), p->hub_caps.end(), CALIPER_NET_CAP_SCENE_PIECES) != p->hub_caps.end());
+    auto a = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_SCENE_PIECES});
+    auto old = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
+    REQUIRE(w.until([&] { return has_view(*a, "world") && has_view(*old, "world"); }));
+    subscribe(*a, 5, "world");
+    subscribe(*old, 6, "world");
+    REQUIRE(w.until([&] { return a->scene_log(5).size() == 2 && old->scene_log(6).size() == 2; }));
+    std::vector<uint8_t> bytes(2 * 32, 0);
+    for (uint32_t i = 0; i < 2; ++i) {
+        const float pt[4] = {float(i), 0, 0, 1};
+        std::memcpy(bytes.data() + i * 32, pt, 16);
+        std::memcpy(bytes.data() + i * 32 + 20, &i, 4);
+    }
+    auto send_piece = [&](bool with_resource, uint32_t count) {
+        if (with_resource) {
+            wire::Resource r;
+            r.program = "scene.1";
+            r.resource = "points";
+            r.step = 3;
+            r.count = 2;
+            r.stride = 32;
+            r.data = wire::Section::make(CALIPER_NET_SECTION_RESOURCE, CALIPER_NET_DTYPE_U8, {64}, bytes.data(), bytes.size());
+            p->send(r);
+        }
+        for (uint32_t sub : p->scene_subs()) {
+            wire::SceneUpdate u;
+            u.sub = sub;
+            u.view = "world";
+            u.seq = ++p->seq;
+            u.stamp_ns = mono_ns32();
+            u.path = "world/piece";
+            u.part = CALIPER_NET_PART_POINTS;
+            u.program = std::string("scene.1");
+            u.piece = Json::object();
+            u.piece.set("name", "points");
+            u.piece.set("version", 1);
+            u.resources = Json::object();
+            u.resources.set("points", Json(uint64_t(count)));
+            u.names = {"positions"};
+            p->send(u);
+        }
+    };
+    send_piece(true, 2);
+    REQUIRE(w.until([&] { return a->scene_log(5).size() == 3; }));
+    CHECK(a->scene_log(5).back() == "world/piece:points");
+    // The RESOURCE came right before its update, as it came from the producer.
+    {
+        const auto& in = a->inbox;
+        size_t at = 0;
+        for (size_t i = 0; i < in.size(); ++i)
+            if (auto* u = std::get_if<wire::SceneUpdate>(&in[i].m); u && u->program) at = i;
+        REQUIRE(at > 0);
+        const auto* r = std::get_if<wire::Resource>(&in[at - 1].m);
+        REQUIRE(r);
+        CHECK(r->program == "scene.1");
+        CHECK(r->count == 2);
+        CHECK(std::memcmp(r->data.data, bytes.data(), 64) == 0);
+    }
+    // The viewer of the per-shape parts gets neither; a batch with its arrays still reaches both.
+    p->points("world/cloud", {1, 2, 3});
+    REQUIRE(w.until([&] { return old->scene_log(6).size() == 3 && a->scene_log(5).size() == 4; }));
+    CHECK(old->scene_log(6).back() == "world/cloud:points");
+    CHECK(old->all<wire::Resource>().empty());
+    // A late viewer gets the bundle in the hub's state.
+    auto b = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_SCENE_PIECES});
+    subscribe(*b, 9, "world");
+    REQUIRE(w.until([&] { return b->scene_log(9).size() == 4; }));
+    CHECK(b->scene_log(9) == std::vector<std::string>{"reset", ":lines", "world/cloud:points", "world/piece:points"});
+    CHECK(b->all<wire::Resource>().size() == 1);
+    // An update whose version did not come, or with another count, is dropped.
+    send_piece(false, 2);
+    send_piece(true, 5);
+    p->points("world/cloud", {4, 5, 6});
+    REQUIRE(w.until([&] { return a->scene_log(5).size() == 5; }));
+    CHECK(a->scene_log(5).back() == "world/cloud:points");
+    REQUIRE(w.until([&] { return h.hub->stats().scene_pieces_dropped >= 2; }));
+}
+
+
+TEST_CASE("net/hub 3.2: scene bundles larger than the send queue drain in order for live and late viewers") {
+    constexpr std::uint32_t parts = 8, part_bytes = 4096, stride = 32;
+    Runner h(size_t(1) << 20, false, 16 * 1024);
+    World32 w;
+    auto p = std::make_unique<SceneProducer>();
+    REQUIRE(p->connect(h.url()));
+    w.peers.push_back(p.get());
+    REQUIRE(w.until([&] { return p->welcomed; }));
+    auto a = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_SCENE_PIECES});
+    subscribe(*a, 5, "world");
+    REQUIRE(w.until([&] { return a->scene_log(5).size() == 2; }));
+
+    for (std::uint32_t part = 0; part < parts; ++part) {
+        const std::vector<std::uint8_t> bytes(part_bytes, std::uint8_t(part));
+        wire::Resource r;
+        r.program = "scene.1";
+        r.resource = "points";
+        r.step = 3;
+        r.count = parts * part_bytes / stride;
+        r.stride = stride;
+        r.split = wire::Resource::Split{3, part, parts, part * part_bytes / stride};
+        r.data = wire::Section::make(CALIPER_NET_SECTION_RESOURCE, CALIPER_NET_DTYPE_U8,
+                                    {part_bytes}, bytes.data(), bytes.size());
+        p->send(r);
+    }
+    for (std::uint32_t sub : p->scene_subs()) {
+        wire::SceneUpdate u;
+        u.sub = sub;
+        u.view = "world";
+        u.seq = ++p->seq;
+        u.stamp_ns = mono_ns32();
+        u.path = "bundle";
+        u.part = CALIPER_NET_PART_POINTS;
+        u.program = "scene.1";
+        u.piece = Json::object();
+        u.piece.set("name", "points");
+        u.piece.set("version", 1);
+        u.resources = Json::object();
+        u.resources.set("points", parts * part_bytes / stride);
+        u.names = {"positions"};
+        p->send(u);
+    }
+    p->points("later", {1, 2, 3});
+    REQUIRE(w.until([&] { return a->scene_log(5).size() == 4; }));
+
+    auto check_bundle = [&](const Client& viewer, std::uint32_t sub, bool state) {
+        std::size_t at = 0;
+        for (; at < viewer.inbox.size(); ++at)
+            if (const auto* u = std::get_if<wire::SceneUpdate>(&viewer.inbox[at].m); u && u->program) break;
+        REQUIRE(at < viewer.inbox.size());
+        REQUIRE(at >= parts);
+        const auto& update = std::get<wire::SceneUpdate>(viewer.inbox[at].m);
+        CHECK(update.sub == sub);
+        CHECK(update.state == state);
+        CHECK(update.path == "bundle");
+        for (std::uint32_t part = 0; part < parts; ++part) {
+            const auto* r = std::get_if<wire::Resource>(&viewer.inbox[at - parts + part].m);
+            REQUIRE(r);
+            REQUIRE(r->split);
+            CHECK(r->program == "scene.1");
+            CHECK(r->split->part == part);
+            CHECK(r->split->parts == parts);
+            REQUIRE(r->data.size == part_bytes);
+            CHECK(r->data.data[0] == part);
+            CHECK(r->data.data[part_bytes - 1] == part);
+        }
+        CHECK(viewer.all<wire::Resource>().size() == parts);
+        CHECK(viewer.scene_log(sub).back() == "later:points");
+    };
+    check_bundle(*a, 5, false);
+    auto b = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_SCENE_PIECES});
+    subscribe(*b, 9, "world");
+    REQUIRE(w.until([&] { return b->scene_log(9).size() == 4; }));
+    check_bundle(*b, 9, true);
+    CHECK(h.hub->stats().viewers == 2);
 }

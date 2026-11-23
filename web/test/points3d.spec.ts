@@ -4,7 +4,8 @@
 // that have an adapter), fed the same fixed scene by mock_server.py --scene:
 // the box with its ticks, the default camera, the depth cues and the rotate
 // toggle, so the WebAssembly views are compared with the Canvas 2D view.
-// web/wasm/README.md and web/src/views/box3d.ts describe them.
+// web/wasm/README.md and web/src/views/box3d.ts describe them. The last test holds the
+// WebAssembly points view's draw by the library piece points@1 to its initial payload draw.
 
 import { test, type Page } from '@playwright/test';
 import fs from 'node:fs';
@@ -12,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { CAMERA } from '../src/views/camera.js';
 import { PALETTE } from '../src/render/colormap.js';
-import { bodyPixels, drawn, expect, shotPath, WEB } from './util.js';
+import { bodyPixels, drawn, expect, serve, shotPath, WEB } from './util.js';
 import { HAVE_PYTHON, startProducer, WASM, type Producer } from './producer.js';
 
 test.skip(!HAVE_PYTHON, 'needs a Python with numpy and websockets (CALIPER_PYTHON)');
@@ -171,5 +172,55 @@ test('a 2-D points view has no rotate toggle and no box', async ({ page }, info)
     }
   } finally {
     flat.stop();
+  }
+});
+
+// The WebAssembly points view draws its points with the library piece points@1 on WebGPU, as the
+// app does. The module draws four cases both ways (web/wasm/src/points_parity.cpp): a 2-D lattice
+// of class labels with labels outside 0 to 255 and NaN, 3-D values through viridis with NaN values
+// and the depth cues, a 3-D selection over the dimmed rest, and 20,000 flat 2-D points. It holds the
+// piece's picture to the native match tests' tolerances: a pixel whose 3 x 3 neighbourhood in the
+// initial payload picture holds one colour has that colour, and any other pixel lies within 1 level of a
+// initial payload colour of its neighbourhood. Every case must be drawn by points@1, with none outside.
+test('the WebAssembly points view draws with points@1 as with its initial payload draw, within the match tolerances', async ({ page }, info) => {
+  test.skip(info.project.name === 'canvas2d' || !HAVE_WASM, 'the WebAssembly views need a WebGPU adapter');
+  const files = ['caliper-views-loader.js', 'caliper-views.js', 'caliper-views.wasm'];
+  const site = await serve(WEB, (name) => (files.includes(name.slice(1)) ? path.join(WASM, name.slice(1)) : null));
+  try {
+    await page.goto(`${site.origin}/test/blank.html`);
+    const report = await page.evaluate(async ({ base }) => {
+      type M = { caliperStats?: Record<string, string>; _caliper_views_points_parity(): number; _caliper_views_destroy(): void };
+      const { preloadCaliperViews } = await import(base + 'caliper-views-loader.js');
+      const { factory, wasm } = await preloadCaliperViews(base);
+      const canvas = document.createElement('canvas');
+      canvas.style.width = '64px';
+      canvas.style.height = '64px';
+      document.body.append(canvas);
+      const m: M = await factory({
+        canvas, caliperConfig: { src: '' },
+        instantiateWasm: (imports: WebAssembly.Imports, receive: (i: WebAssembly.Instance, m: WebAssembly.Module) => void) => {
+          WebAssembly.instantiate(wasm as WebAssembly.Module, imports).then((i) => receive(i, wasm));
+          return {};
+        },
+        print: () => {}, printErr: () => {},
+      });
+      // Waits on what the module publishes each frame, never on a fixed time.
+      const until = async (f: () => boolean) => {
+        for (let i = 0; i < 2400 && !f(); i++) await new Promise((ok) => requestAnimationFrame(() => ok(null)));
+        return f();
+      };
+      if (!(await until(() => Number(m.caliperStats?.gfxReady) === 1))) return `fail no layer: ${JSON.stringify(m.caliperStats ?? {})}`;
+      if (m._caliper_views_points_parity()) await until(() => !!m.caliperStats?.pointsParity);
+      const out = m.caliperStats?.pointsParity ?? 'fail no report';
+      m._caliper_views_destroy();
+      canvas.remove();
+      return out;
+    }, { base: `${site.origin}/` });
+    console.log(`[${info.project.name}] ${report}`);
+    expect(report).toMatch(/^ok /);
+    for (const name of ['2d-classes', '3d-values-cues', '3d-selection', '2d-flat-20000'])
+      expect(report, name).toMatch(new RegExp(`${name} pieces=1 differing=\\d+ lit=\\d+ largest=\\d+ failed=0`));
+  } finally {
+    site.close();
   }
 });

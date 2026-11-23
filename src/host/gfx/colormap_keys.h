@@ -295,8 +295,7 @@ private:
     Stats stats_;
 };
 
-// A colormap source for the scene core's BackendResources (src/host/scene/backend_resources.h),
-// which a view builds with the cache it owns: each block from the cache.
+// A colormap callback backed by the shared key cache.
 inline std::function<void(uint32_t, float, float, shaders::Cmap*)> colormap_source(std::shared_ptr<KeyBlockCache> cache) {
     return [cache = std::move(cache)](uint32_t colormap, float vmin, float vmax, shaders::Cmap* out) {
         cache->fill(int32_t(colormap), vmin, vmax, out);

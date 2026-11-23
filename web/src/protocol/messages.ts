@@ -504,6 +504,11 @@ export interface SceneUpdateMsg {
   cursor?: number;
   axes?: PayloadAxis[];
   items?: string;
+  /** The piece form (capability "scene_pieces"): the scene program, the library piece pin, the count of each resource, and the arrays the batch held (the wire key is "arrays"). No section, no split, so `arrays` is empty. */
+  program?: string;
+  piece?: { name: string; version: number; hash?: string };
+  resources?: Record<string, number>;
+  names?: string[];
   /** The key of a piece of a split update; its `arrays` then hold the piece's rows, and `params` the part's keys in piece 0 only. */
   split?: SplitKey;
   /** The i64 (T,) stamp section. */
@@ -735,6 +740,10 @@ export const PROGRAM_WORKGROUPS_MAX = 65535;
 
 /** Capability: RESOURCE, and PROGRAM of an instance of a piece with the sections "derive", "draw" and "common". */
 export const CAP_RESOURCES = 'resources';
+/** Capability: the piece form of SCENE_UPDATE, whose arrays travel as RESOURCE versions of a scene program "scene.<n>". */
+export const CAP_SCENE_PIECES = 'scene_pieces';
+/** The prefix of the id of a scene program: "scene." and 1 to 9 decimal digits. */
+export const SCENE_PROGRAM_PREFIX = 'scene.';
 /** PROGRAM sections of an instance of a piece, and the section of RESOURCE. */
 export const SECTION_DERIVE = 'derive';
 export const SECTION_DRAW = 'draw';
@@ -744,10 +753,22 @@ export const SECTION_RESOURCE = 'resource';
 export const MAX_RESOURCES = 8;
 /** Bytes of the section "resource": 64 MiB less 64 KiB, so that a resource fits one frame with its metadata. */
 export const RESOURCE_MAX_BYTES = 67043328;
+/** Bytes of a buffer version in parts, within the default WebGPU storage binding limit. */
+export const RESOURCE_VERSION_MAX_BYTES = 134217728;
+/** Bytes of a full 8,192 by 8,192 RGBA8 or R32 texture version in parts. */
+export const RESOURCE_TEXTURE_VERSION_MAX_BYTES = 268435456;
+/** At most 32 chunks of 8 MiB for one texture version. */
+export const RESOURCE_MAX_PARTS = 32;
+/** RESOURCE frames a receiver waits for the next part of a version in parts before it drops the version. */
+export const RESOURCE_PART_WAIT = 256;
 /** Most bytes of one element of a resource, the "stride" (a multiple of 4). */
 export const RESOURCE_STRIDE_MAX = 256;
 /** Most texels of the "width" and of the "height" of a texture resource. */
-export const RESOURCE_SIDE_MAX = 4096;
+export const RESOURCE_SIDE_MAX = 8192;
+/** The values of the key "format" of a texture resource. */
+export const TEXTURE_FORMATS = ['rgba8unorm', 'r8unorm', 'r32uint'] as const;
+/** The values of the key "element" of a buffer of narrow elements. */
+export const RESOURCE_ELEMENTS = ['u8', 'u16'] as const;
 /** Most bytes of the "name" of a piece pin, [a-z][a-z0-9_]*. */
 export const PIECE_NAME_MAX = 32;
 /** Most of the "version" of a piece pin, counted from 1. */
@@ -810,7 +831,7 @@ export interface ProgramMsg {
   /** set: the scene of a geometry output's panel. */
   scene?: string;
   /** Instance of a piece, set: the pin {name, version, hash}, where the hash is "sha256:" and 64 lowercase hex digits. */
-  piece?: { name: string; version: number; hash: string };
+  piece?: { name: string; version: number; hash?: string };
   /** Instance of a piece, set: the piece's manifest. */
   manifest?: Record<string, unknown>;
   /** Instance of a piece, set: an input name to "live:<tensor>" or "program:<id>/<resource>". */
@@ -827,7 +848,7 @@ export interface ProgramMsg {
   draw?: string;
 }
 
-/** Producer to viewer or hub: one version of one published resource of a program, the valid elements that a derive pass wrote. A texture also has width and height, with a stride of 4 and a count of their product. */
+/** Producer to viewer or hub: one version of one published resource of a program, the valid elements that a derive pass wrote. A texture also has width and height, with a stride of 4 and a count of the 32-bit words of their texels. */
 export interface ResourceMsg {
   type: 'resource';
   /** The id of the program. */
@@ -846,6 +867,22 @@ export interface ResourceMsg {
   width?: number;
   /** A texture's height in texels. */
   height?: number;
+  /** A texture's format, rgba8unorm when absent: the count is the 32-bit words of its texels, (width * height + 3) / 4 for r8unorm. */
+  format?: 'rgba8unorm' | 'r8unorm' | 'r32uint';
+  /** A buffer of narrow elements: "u8" or "u16", packed into 32-bit words from the low bits up, with a stride of 4 and a count of (elements * bytes + 3) / 4. */
+  element?: 'u8' | 'u16';
+  /** The exact count of narrow elements, with `element`. */
+  elements?: number;
+  /** A part of a version in parts: the sender's counter of such versions, this part's number from 0, the number of parts (2 to MAX_PIECES), and the first element that `data` holds. */
+  split?: ResourceSplit;
+}
+
+/** The key "split" of a RESOURCE part. */
+export interface ResourceSplit {
+  version: number;
+  part: number;
+  parts: number;
+  first: number;
 }
 
 /** Producer to viewer: the status items of the programs in order of installation. It answers each PROGRAM with its request_id and goes out without one after a state change. */

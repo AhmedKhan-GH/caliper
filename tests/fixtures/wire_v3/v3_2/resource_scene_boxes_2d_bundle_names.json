@@ -1,0 +1,48 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 160,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 128,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 130
+  },
+  "meta": {
+    "count": 0,
+    "program": "scene.117",
+    "resource": "names",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "resource",
+        "shape": [
+          0
+        ]
+      }
+    ],
+    "step": 7,
+    "stride": 64
+  },
+  "meta_offset": 28,
+  "name": "v3_2/resource_scene_boxes_2d_bundle_names",
+  "section_lengths": [
+    0
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 0,
+      "name": "resource",
+      "offset": 160,
+      "shape": [
+        0
+      ],
+      "values": []
+    }
+  ],
+  "type_name": "resource"
+}

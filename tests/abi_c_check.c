@@ -2,14 +2,9 @@
  * order so a header missing its own includes can't hide behind a sibling
  * that pulled them earlier (caught the tensor_bridge stdbool gap, C3 review). */
 #include <caliper/services/ui_v1_1.h>
-#include <caliper/services/export_v1_1.h>
-#include <caliper/services/export_v1.h>
 #include <caliper/services/feed_v1.h>
 #include <caliper/services/data_v1.h>
 #include <caliper/services/artifacts_v1.h>
-#include <caliper/services/geometry_v1_1.h>
-#include <caliper/services/geometry_v1_2.h>
-#include <caliper/services/geometry_v1.h>
 #include <caliper/services/tensor_bridge_v1_2.h>
 #include <caliper/services/tensor_bridge_v1_1.h>
 #include <caliper/services/tensor_bridge_v1.h>

@@ -162,7 +162,7 @@ TEST_CASE("ui recovery: an applet's half-finished UI is unwound and the next "
     fx.provide(CALIPER_UI_V1, &kTestUi);
     CaliperFrameInfo fi{};
     fi.struct_size = sizeof fi;
-    const HostCaps caps{2, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}};
+    const HostCaps caps{3, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}};
     ImGuiContext& g = *ui.imgui;
 
     // One frame as main.cpp runs it: checkpoint, the applet's guarded

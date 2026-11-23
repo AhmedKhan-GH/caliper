@@ -23,22 +23,6 @@ if(NOT N EQUAL 0)
 endif()
 
 # ============================================================================
-# Git commit stamp (caliper.export.v1 sidecar — docs/applets/services/caliper-export-v1.md). Regenerated
-# at BUILD time (cmake/git_commit_stamp.cmake writes a generated header, only
-# on change) so exported sidecars track the bytes being built, not the last
-# configure — the export-branch final review caught configure-time stamps
-# going stale across commits. Dirty trees stamp "<hash>-dirty" honestly.
-# ============================================================================
-set(CALIPER_GIT_STAMP_H "${CMAKE_BINARY_DIR}/generated/caliper_git_commit.h")
-add_custom_target(caliper_git_stamp
-    COMMAND ${CMAKE_COMMAND}
-        -DSRC_DIR=${CMAKE_SOURCE_DIR}
-        -DOUT_FILE=${CALIPER_GIT_STAMP_H}
-        -P ${CMAKE_SOURCE_DIR}/cmake/git_commit_stamp.cmake
-    BYPRODUCTS ${CALIPER_GIT_STAMP_H}
-    COMMENT "Stamping git commit for export.v1 sidecars")
-
-# ============================================================================
 # Build Options (PyTorch-style)
 # ============================================================================
 
@@ -106,12 +90,10 @@ option(CALIPER_WITH_TORCH   "Download/link the vendored libtorch for torch apple
 # through the same caliper_add_applet() that builds them against the installed SDK.
 option(CALIPER_BUILD_APPLETS "Also build the applets/* tree in the core build" OFF)
 option(CALIPER_BUILD_PYTHON  "Build the caliper Python extension (python/, nanobind)" OFF)
-# slang + llama.cpp are configured EXCLUDE_FROM_ALL and linked by nothing that
-# libcaliper / the caliper exe / the tests need (only the opt-in opengllama
-# applet links llama). OFF skips their configure (~2/3 of a fresh configure,
-# plus slang's boost_regex/mimalloc network clones).
+# slang is configured EXCLUDE_FROM_ALL and linked by nothing that
+# libcaliper / the caliper exe / the tests need. OFF skips its configure
+# (slang's boost_regex/mimalloc network clones).
 option(CALIPER_WITH_SLANG "Configure the vendored slang (SystemVerilog) library" ON)
-option(CALIPER_WITH_LLAMA "Configure the vendored llama.cpp (+ apply its local patches)" ON)
 # The builder (src/builder, design/builder-overview.md): the spec, catalog,
 # command, loaders, ACP, session, MCP and agent libraries, caliper-mcp,
 # caliper-acp-harness, caliper-builder-host and their tests. ON also links
@@ -387,29 +369,21 @@ if(APPLE)
     target_link_libraries(caliper_gfx PUBLIC "-framework Metal" "-framework Foundation")
 endif()
 
-# The scene core of the renderer core (design/renderer-core.md, "The scene core"): the scene
-# store, world matrices, cameras, bounds and fitting, compiling scenes into draw lists of the
-# graphics layer (src/host/gfx/gfx.h), picking, and BackendResources, its handles over a backend
-# of the layer. Plain C++17 that never calls a GPU itself; the live views' scene view
-# (src/host/live/live_scene.h) draws through it, the graphics suite's scene rows draw it on Metal,
-# and caliper_scene_tests (tests/scene) checks it headless.
+# The scene store, transforms, cameras, labels, and frame picks. Library pieces draw the batches.
 add_library(caliper_scene STATIC
     src/host/scene/path.cpp
     src/host/scene/scene_tree.cpp
     src/host/scene/camera.cpp
-    src/host/scene/compile.cpp
+    src/host/scene/labels.cpp
     src/host/scene/pick.cpp
-    src/host/scene/scale_bar.cpp
-    src/host/scene/backend_resources.cpp
-    src/host/scene/stages.cpp
-)
+    src/host/scene/scale_bar.cpp)
 target_include_directories(caliper_scene PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_scene PUBLIC caliper_gfx caliper::sdk)
 set_target_properties(caliper_scene PROPERTIES
     CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
 # No floating-point contraction: the scene core composes cameras and normal matrices in double, and
 # without fused multiply-adds its arithmetic is the same IEEE sequence natively as in WebAssembly,
-# which has none, so every backend draws from the same uniform bytes (src/host/scene/uniform_check.h).
+# which has none. Camera matrices use the same floating-point rules on each backend.
 if(NOT MSVC)
     target_compile_options(caliper_scene PRIVATE -ffp-contract=off)
 endif()
@@ -481,7 +455,7 @@ if(WIN32)
 
     # One glslang invocation, captured once. NAME is the output header basename,
     # SRC the shader file under src/host/renderer/shaders, VN the emitted C var.
-    # The flags here are load-bearing: geometry.v1_2's byte-exact contract (§16)
+    # The flags here are load-bearing: the colormap's byte-exact contract (§16)
     # means the generated headers must stay bit-identical, so every shader rule
     # MUST route through this one function — never a hand-tuned add_custom_command.
     function(caliper_compile_shader NAME SRC VN)
@@ -497,18 +471,8 @@ if(WIN32)
     endfunction()
 
     caliper_compile_shader(colormap_spv.h    colormap.comp kColormapSpv)
-    caliper_compile_shader(points_vert_spv.h points.vert   kPointsVertSpv)
-    caliper_compile_shader(points_frag_spv.h points.frag   kPointsFragSpv)
-    caliper_compile_shader(geom_vert_spv.h   geom.vert     kGeomVertSpv)
-    caliper_compile_shader(geom_frag_spv.h   geom.frag     kGeomFragSpv)
-    caliper_compile_shader(geom_tex_frag_spv.h geom_tex.frag kGeomTexFragSpv)
     add_custom_target(caliper_shaders DEPENDS
-        "${CALIPER_SPV_DIR}/colormap_spv.h"
-        "${CALIPER_SPV_DIR}/points_vert_spv.h"
-        "${CALIPER_SPV_DIR}/points_frag_spv.h"
-        "${CALIPER_SPV_DIR}/geom_vert_spv.h"
-        "${CALIPER_SPV_DIR}/geom_frag_spv.h"
-        "${CALIPER_SPV_DIR}/geom_tex_frag_spv.h")
+        "${CALIPER_SPV_DIR}/colormap_spv.h")
 
     # The direct-image kernels ship as checked-in PTX, embedded here so
     # no build needs the CUDA toolkit. See kernels/cmap_direct.cu.
@@ -545,7 +509,7 @@ endif()
 # The successor of caliper_host_lib for embedders: it aggregates the inner
 # headless layer (caliper_host_lib) with the renderer/bridge/service-vending
 # layer that used to be pinned in the caliper exe — host_services (service
-# registry + vending), tensor_bridge (bridge v1–v1.2 + geometry v1–v1_3) — plus
+# registry + vending), tensor_bridge (bridge v1–v1.2) — plus
 # the ordered core lifecycle (core_lifecycle: renderer selection + applet-canvas
 # ImGui context). The caliper exe is now its first embedder.
 #
@@ -585,12 +549,11 @@ if(APPLE)
         endif()
     endforeach()
 endif()
-# stb_image_write (vendored, third_party/stb) backs the export.v1 PNG encode;
-# host_services.cpp includes the BUILD-time git stamp header for the sidecar
-# (§3) — generated into ${CMAKE_BINARY_DIR}/generated by caliper_git_stamp.
+# stb_image_write (vendored, third_party/stb) backs the host's PNG writers
+# (export_service.cpp); build-time generated sources live in
+# ${CMAKE_BINARY_DIR}/generated.
 target_include_directories(libcaliper PRIVATE ${THIRD_PARTY_DIR}/stb
     ${CMAKE_BINARY_DIR}/generated)
-add_dependencies(libcaliper caliper_git_stamp)
 # Namespaced alias for the inner headless layer, kept so any consumer can name
 # it as caliper::host_lib (test CMake still links the raw caliper_host_lib).
 add_library(caliper::host_lib ALIAS caliper_host_lib)
@@ -763,9 +726,7 @@ endif()
 # Applets build in their own repositories against the installed SDK with
 # caliper_add_applet(), and every folder under applets/ and examples/ builds
 # standalone the same way (cmake -S <folder> -DCMAKE_PREFIX_PATH=<sdk prefix>).
-# CALIPER_BUILD_APPLETS=ON also builds the applets/* tree here. Archived applets
-# live under applets/legacy/ and applets/legacy-dev/; neither has a top-level
-# CMakeLists, so the glob below never descends into them.
+# CALIPER_BUILD_APPLETS=ON also builds the applets/* tree here.
 if(CALIPER_BUILD_APPLETS)
     file(GLOB applet_dirs LIST_DIRECTORIES true CONFIGURE_DEPENDS applets/*)
     foreach(dir ${applet_dirs})
@@ -794,20 +755,6 @@ endif()
 option(CALIPER_BUILD_EXAMPLES "Build the embedder example (examples/embed_host)" ON)
 if(CALIPER_BUILD_EXAMPLES)
     add_subdirectory(examples/embed_host)
-endif()
-
-# Opt-in resurrection of the archived GGUF-inference applet (applets/legacy/):
-# needs the patched llama.cpp submodule (caliper-patches: Qwen3.5/3.6 loading,
-# GPT-OSS). OFF by default — legacy stays archived; flip for inference testing.
-option(CALIPER_BUILD_OPENGLLAMA "Build the archived opengllama applet (GGUF inference via llama.cpp)" OFF)
-if(CALIPER_BUILD_OPENGLLAMA)
-    if(NOT CALIPER_WITH_LLAMA)
-        message(FATAL_ERROR "CALIPER_BUILD_OPENGLLAMA=ON needs llama.cpp: set CALIPER_WITH_LLAMA=ON")
-    endif()
-    add_subdirectory(applets/legacy/opengllama)
-    add_dependencies(caliper opengllama)
-    list(APPEND _active_applet_libs
-        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}opengllama${CMAKE_SHARED_LIBRARY_SUFFIX}")
 endif()
 
 # ============================================================================
@@ -955,10 +902,18 @@ if(CALIPER_WITH_BUILDER)
     # The app's host of draw halves (src/host/draw/draw_host.h): the programs of a spec for the
     # scene views, their resources, params and events. The scene view of the live views draws
     # programs where the build has it (CALIPER_HAVE_DRAW).
-    add_library(caliper_draw_host STATIC src/host/draw/draw_host.cpp)
-    target_link_libraries(caliper_draw_host PUBLIC caliper_draw caliper_builder_spec)
+    add_library(caliper_draw_host STATIC src/host/draw/draw_host.cpp src/host/draw/scene_pieces.cpp)
+    target_link_libraries(caliper_draw_host PUBLIC caliper_draw caliper_builder_spec caliper_scene caliper_net)
+    # The scene view draws its shapes with the library pieces (draw/scene_pieces.h) wherever it is
+    # compiled with the draw layer and linked with this library; the browser module compiles the same
+    # converter (web/wasm/CMakeLists.txt).
+    target_compile_definitions(caliper_draw_host PUBLIC CALIPER_HAVE_SCENE_PIECES=1)
     set_target_properties(caliper_draw_host PROPERTIES
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+    # The library pieces of version 1 (draw/library_pieces.h), which the scene view and the live points
+    # view draw with; the browser module compiles the same file (web/wasm/CMakeLists.txt).
+    target_sources(caliper_draw_host PRIVATE src/host/draw/library_pieces.cpp)
+    target_compile_definitions(caliper_draw_host PUBLIC CALIPER_HAVE_LIBRARY_PIECES=1)
     target_link_libraries(libcaliper PUBLIC caliper_draw_host)
     target_compile_definitions(libcaliper PRIVATE CALIPER_HAVE_DRAW=1)
     if(BUILD_TESTS)

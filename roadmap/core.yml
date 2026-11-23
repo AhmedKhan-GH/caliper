@@ -14,10 +14,10 @@ features:
     issue: null
 
   - id: COR-02
-    title: ABI Epoch 2
+    title: Frozen Applet ABI
     status: shipped
     scope: supporting
-    summary: ABI epoch 2 is the frozen C header that defines the contract between the host and every applet, and its epoch changes only when the contract breaks.
+    summary: ABI epoch 3 is the frozen C header that defines the contract between the host and every applet, and its epoch changes only when the contract breaks.
     depends_on: []
     docs: docs/applets/applet-contract.md
     issue: null
@@ -26,7 +26,7 @@ features:
     title: Service IDs
     status: shipped
     scope: supporting
-    summary: The 19 service ids are 11 services and their additive revisions, which an applet obtains by id from the host and which the host refuses to serve when it lacks the capability.
+    summary: The 13 service ids are 9 services and their additive revisions, which an applet obtains by id from the host and which the host refuses to serve when it lacks the capability.
     depends_on: [COR-02]
     docs: docs/applets/services/service-catalog.md#service-ids
     issue: null
@@ -116,7 +116,7 @@ features:
     title: In-Tree Applets
     status: shipped
     scope: supporting
-    summary: The in-tree applets are nine applets under applets/ and the tutorial examples, and each builds on its own against the installed SDK rather than in the core build.
+    summary: The in-tree applets are three applets under applets/ and the tutorial examples, and each builds on its own against the installed SDK rather than in the core build.
     depends_on: [COR-04]
     docs: docs/applets/in-tree-applets.md
     issue: null
@@ -221,11 +221,11 @@ features:
 
   - id: COR-25
     title: ABI Epoch 3
-    status: planned
+    status: shipped
     scope: supporting
-    summary: Each graphics service keeps one version under one ABI epoch bump, every applet in the repository is rebuilt against SDK 0.3.0, and an applet built for epoch 2 is refused with the epoch message.
-    depends_on: [REN-16]
-    sprint: 4
+    summary: ABI epoch 3 removes the geometry and export services, and an applet built for epoch 2 is refused with the epoch message.
+    depends_on: [COR-02]
+    docs: docs/development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions
     issue: null
 
   - id: COR-26
@@ -313,7 +313,7 @@ features:
     title: Digital Twin Applets
     status: idea
     scope: peripheral
-    summary: A population twin built on InstanceScope's per-variant reduction and a machine thermal twin fed by the feed service could become applets.
+    summary: A population twin and a machine thermal twin fed by the feed service could become applets.
     depends_on: [COR-13]
     issue: null
 
@@ -321,7 +321,7 @@ features:
     title: Plasma Control Applet
     status: idea
     scope: peripheral
-    summary: An actor-critic policy that steers FieldScope's plasma could become an applet of its own.
+    summary: An actor-critic policy that steers a plasma simulation could become an applet of its own.
     depends_on: [COR-13]
     issue: null
 

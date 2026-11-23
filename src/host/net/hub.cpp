@@ -113,7 +113,11 @@ struct SceneMsg {
     std::string path, part;          // part: "" for a clear
     bool is_static = false, recursive = false, reset = false;
     std::vector<std::string> parts;  // a clear's parts; empty: all
-    std::vector<ScenePtr> pieces;    // a split update: its pieces, in order
+    std::vector<ScenePtr> pieces;    // a split update: its pieces, in order; or a bundle of the piece form
+    // The piece form (capability "scene_pieces"): `piece_form` marks a bundle, the RESOURCE frames of a
+    // scene program and then the update that names them, in `pieces`, sent only to a viewer that
+    // announced the capability; `raw` marks one of those RESOURCE frames, sent as it came.
+    bool piece_form = false, raw = false;
     size_t pieces_expected = 0;      // a split update being put together: the pieces it has
     std::shared_ptr<const TransformRows> rows;   // the entity transforms the hub keeps
     size_t bytes() const {
@@ -293,6 +297,14 @@ struct ProgramRoute {
     uint64_t deadline_ms = 0;        // dropped with `timeout` after this
 };
 
+// One version of a resource as the hub forwards and keeps it: its frame, or the frames of its parts in order.
+using ResourceVersion = std::shared_ptr<const std::vector<SharedBytes>>;
+inline uint64_t version_bytes(const ResourceVersion& v) {
+    uint64_t n = 0;
+    for (const SharedBytes& b : *v) n += b->size();
+    return n;
+}
+
 struct Session {
     std::string id;
     std::string proposed;            // the id the producer asked for
@@ -342,7 +354,22 @@ struct Session {
         SharedBytes frame;
     };
     std::map<std::string, DrawHalf> draw_halves;
-    std::map<std::string, SharedBytes> kept_resources;
+    std::map<std::string, ResourceVersion> kept_resources;
+    // The producer's versions in parts being put together: the order checks without copies, and the
+    // frames of each incomplete version, which the checks bound to two of at most
+    // CALIPER_NET_RESOURCE_VERSION_MAX_BYTES.
+    wire::SplitResources resource_parts{false};
+    std::map<std::string, std::vector<SharedBytes>> resource_building;
+    // 3.2 draft, capability "scene_pieces": the newest whole version of each scene program's resource,
+    // "<program>/<resource>", with its count and its frames, until the update in the piece form that
+    // names it comes on the same connection and takes it into a bundle; and its parts being put together.
+    struct SceneVersion {
+        uint32_t count = 0;
+        std::vector<SharedBytes> frames;
+    };
+    std::map<std::string, SceneVersion> scene_versions;
+    wire::SplitResources scene_parts{false};
+    std::map<std::string, std::vector<SharedBytes>> scene_building;
 };
 
 // The most resources a session keeps, and a viewer has waiting: every resource of every program.
@@ -367,6 +394,7 @@ struct VSub {
     // each with whether it goes as state; then the newest batch of each entity
     // part, each part at most at `rate`.
     bool scene = false;
+    bool scene_pieces = false;          // its viewer announced "scene_pieces": it takes the bundles of the piece form
     std::deque<std::pair<ScenePtr, bool>> scene_first;
     std::map<SceneKey, ScenePtr> scene_pending;
     std::map<SceneKey, uint64_t> scene_last_us;
@@ -389,6 +417,13 @@ struct Peer {
     std::map<uint32_t, uint64_t> pending_sub;   // sub -> ticket of its waiting SUBSCRIBE
     uint64_t tickets = 0;
     bool in_flight = false;          // a data message is in the send queue
+    // One scene bundle continues after each frame drains. No other data
+    // enters the queue before its final update. The subscription ticket
+    // prevents a replacement subscription from receiving the old bundle.
+    std::deque<ScenePtr> sending_scene;
+    uint32_t sending_scene_sub = 0;
+    uint64_t sending_scene_ticket = 0;
+    bool sending_scene_state = false;
     bool dirty = false;
     uint64_t due_us = 0;             // a rate-limited message is due then
     // 3.1: what the viewer announced, its coalesced CONTROLS and SELECTIONs
@@ -398,10 +433,18 @@ struct Peer {
     bool cap_programs = false;       // 3.2 draft: the viewer announced "programs"
     bool cap_interventions = false;  // 3.2 draft: the viewer announced "interventions"
     bool cap_resources = false;      // 3.2 draft: the viewer announced "resources"
+    bool cap_scene_pieces = false;   // 3.2 draft: the viewer announced "scene_pieces"
     // RESOURCEs waiting for the send queue: the newest of each "<program>/<resource>", with the order
     // in which it began to wait, so that a resource with frequent versions holds no other back.
-    std::map<std::string, std::pair<uint64_t, SharedBytes>> pending_resources;
+    std::map<std::string, std::pair<uint64_t, ResourceVersion>> pending_resources;
     uint64_t resource_order = 0;
+    // A version in parts that is being sent, its key and its next part. Its parts go in order, and at
+    // most one waiting version in one frame goes between two of them, so the viewer gets the next part
+    // well within CALIPER_NET_RESOURCE_PART_WAIT frames and a newer version of the same resource waits.
+    ResourceVersion sending_resource;
+    std::string sending_key;
+    size_t sending_next = 0;
+    bool sent_part = false;
     SharedBytes pending_controls;
     std::map<std::string, SharedBytes> pending_selections;
     size_t controls_waiting = 0;
@@ -811,7 +854,7 @@ struct Hub::Impl {
     // ---- 3.2 draft: resources (capability "resources") ----------------------------------------
     // One RESOURCE for a viewer: it replaces a waiting version of the same resource and keeps that
     // version's place; a new resource past kResourcesMax waiting ones is dropped.
-    void offer_resource(Peer& p, const std::string& key, const SharedBytes& buf) {
+    void offer_resource(Peer& p, const std::string& key, const ResourceVersion& buf) {
         auto it = p.pending_resources.find(key);
         if (it != p.pending_resources.end()) {
             ++c.resources_superseded;
@@ -836,7 +879,7 @@ struct Hub::Impl {
         const std::string prefix = id + "/";
         for (auto it = s.kept_resources.lower_bound(prefix);
              it != s.kept_resources.end() && it->first.compare(0, prefix.size(), prefix) == 0;) {
-            resource_bytes -= it->second->size();
+            resource_bytes -= version_bytes(it->second);
             it = s.kept_resources.erase(it);
         }
         for (ConnId v : s.viewers) {
@@ -846,7 +889,15 @@ struct Hub::Impl {
             for (auto it = pending.lower_bound(prefix);
                  it != pending.end() && it->first.compare(0, prefix.size(), prefix) == 0;)
                 it = pending.erase(it);
+            if (pt->second.sending_key.compare(0, prefix.size(), prefix) == 0) stop_sending_resource(pt->second);
         }
+    }
+
+    static void stop_sending_resource(Peer& p) {
+        p.sending_resource.reset();
+        p.sending_key.clear();
+        p.sending_next = 0;
+        p.sent_part = false;
     }
 
     void forget_programs(Session& s) {
@@ -894,23 +945,119 @@ struct Hub::Impl {
     // The producer's RESOURCE: offered to every attached viewer that announced "resources", with one
     // waiting version per resource and viewer, and kept as the newest version for a later viewer
     // while it fits the budget of retained bytes. A version over the budget is forwarded, not kept.
+    // The parts of a version in parts wait until the version is whole, which the order checks of
+    // wire::SplitResources decide; a part they drop or refuse is counted and goes nowhere.
     void producer_resource(Session& s, const wire::Resource& m, SharedBytes buf) {
+        if (wire::scene_program_id(m.program)) return scene_resource(s, m, std::move(buf));
         if (!s.resources_cap) return;
-        ++c.resources_in;
         const std::string key = m.program + "/" + m.resource;
+        std::string err;
+        const uint64_t let_go = s.resource_parts.discarded() + s.resource_parts.expired();
+        const wire::SplitResources::Result got = s.resource_parts.add(m, nullptr, &err);
+        std::vector<SharedBytes> frames;
+        if (!m.split) {
+            frames.push_back(std::move(buf));
+        } else if (got == wire::SplitResources::Result::Pending) {
+            if (m.split->part == 0) s.resource_building[key].clear();
+            s.resource_building[key].push_back(std::move(buf));
+        } else if (got == wire::SplitResources::Result::Whole) {
+            frames = std::move(s.resource_building[key]);
+            frames.push_back(std::move(buf));
+            s.resource_building.erase(key);
+        } else {
+            ++c.resource_parts_dropped;
+        }
+        // The frames of the versions that the checks no longer hold: refused, replaced, or expired.
+        for (auto it = s.resource_building.begin(); it != s.resource_building.end();) {
+            const size_t slash = it->first.find('/');
+            if (!s.resource_parts.holds(it->first.substr(0, slash), it->first.substr(slash + 1)))
+                it = s.resource_building.erase(it);
+            else
+                ++it;
+        }
+        c.resource_versions_incomplete += s.resource_parts.discarded() + s.resource_parts.expired() - let_go -
+                                          (got == wire::SplitResources::Result::Refused ? 1 : 0);
+        if (frames.empty()) return;
+        ++c.resources_in;
+        auto version = std::make_shared<const std::vector<SharedBytes>>(std::move(frames));
+        const uint64_t bytes = version_bytes(version);
         if (auto it = s.kept_resources.find(key); it != s.kept_resources.end()) {
-            resource_bytes -= it->second->size();
+            resource_bytes -= version_bytes(it->second);
             s.kept_resources.erase(it);
         }
-        if (s.kept_resources.size() < kResourcesMax && retained() + buf->size() <= opt.max_retained_bytes) {
-            s.kept_resources[key] = buf;
-            resource_bytes += buf->size();
+        if (s.kept_resources.size() < kResourcesMax && retained() + bytes <= opt.max_retained_bytes) {
+            s.kept_resources[key] = version;
+            resource_bytes += bytes;
         }
         for (ConnId v : s.viewers) {
             auto pt = peers.find(v);
             if (pt == peers.end() || pt->second.closing || !pt->second.cap_resources) continue;
-            offer_resource(pt->second, key, buf);
+            offer_resource(pt->second, key, version);
         }
+    }
+
+    // A scene program's RESOURCE (the piece form of SCENE_UPDATE): its whole version waits for the update
+    // that names it, in the place of an older one, and never takes the program route. At most every batch
+    // of a scene times the resources of a piece wait, so that updates that never come cannot grow it.
+    void scene_resource(Session& s, const wire::Resource& m, SharedBytes buf) {
+        const std::string key = m.program + "/" + m.resource;
+        std::string err;
+        const wire::SplitResources::Result got = s.scene_parts.add(m, nullptr, &err);
+        std::vector<SharedBytes> frames;
+        if (!m.split) {
+            frames.push_back(std::move(buf));
+        } else if (got == wire::SplitResources::Result::Pending) {
+            if (m.split->part == 0) s.scene_building[key].clear();
+            s.scene_building[key].push_back(std::move(buf));
+        } else if (got == wire::SplitResources::Result::Whole) {
+            frames = std::move(s.scene_building[key]);
+            frames.push_back(std::move(buf));
+            s.scene_building.erase(key);
+        } else {
+            ++c.resource_parts_dropped;
+        }
+        for (auto it = s.scene_building.begin(); it != s.scene_building.end();) {
+            const size_t slash = it->first.find('/');
+            if (!s.scene_parts.holds(it->first.substr(0, slash), it->first.substr(slash + 1)))
+                it = s.scene_building.erase(it);
+            else
+                ++it;
+        }
+        if (frames.empty()) return;
+        if (s.scene_versions.size() >= size_t(CALIPER_NET_MAX_BATCHES) * CALIPER_NET_MAX_RESOURCES &&
+            !s.scene_versions.count(key))
+            s.scene_versions.clear();
+        Session::SceneVersion& v = s.scene_versions[key];
+        v.count = m.count;
+        v.frames = std::move(frames);
+    }
+
+    // The update in the piece form takes the versions it names into one bundle: their frames as they came,
+    // then the update. Null when a version did not come or has another count, which drops the update.
+    std::shared_ptr<SceneMsg> scene_bundle(Session& s, const wire::SceneUpdate& up, const ScenePtr& update) {
+        auto group = std::make_shared<SceneMsg>();
+        group->type = CALIPER_NET_MSG_SCENE_UPDATE;
+        group->path = up.path;
+        group->part = up.part;
+        group->is_static = up.is_static;
+        group->piece_form = true;
+        group->meta = Json::object();
+        if (up.state) group->meta.set("state", true);
+        for (const auto& kv : up.resources.members()) {
+            auto it = s.scene_versions.find(*up.program + "/" + kv.first);
+            uint64_t count = 0;
+            if (it == s.scene_versions.end() || !kv.second.get_u64(&count) || it->second.count != count) return nullptr;
+            for (const SharedBytes& f : it->second.frames) {
+                auto raw = std::make_shared<SceneMsg>();
+                raw->type = CALIPER_NET_MSG_RESOURCE;
+                raw->raw = true;
+                raw->frame = f;
+                group->pieces.push_back(std::move(raw));
+            }
+        }
+        for (const auto& kv : up.resources.members()) s.scene_versions.erase(*up.program + "/" + kv.first);
+        group->pieces.push_back(update);
+        return group;
     }
 
     size_t live_count() const {
@@ -948,6 +1095,7 @@ struct Hub::Impl {
         p.pending_controls.reset();
         p.pending_selections.clear();
         p.pending_resources.clear();   // 3.2 draft
+        stop_sending_resource(p);
         drop_held_controls(p);
         auto it = sessions.find(p.attached);
         if (it != sessions.end()) it->second.viewers.erase(p.conn);
@@ -1153,6 +1301,7 @@ struct Hub::Impl {
         ch.members.insert({p.conn, v.sub});
         ch.used_ms = monotonic_ms();
         if (ch.kind == CALIPER_NET_KIND_SCENE) {   // 3.2 draft
+            v.scene_pieces = p.cap_scene_pieces;
             // The hub forgot the scene's state: it subscribes again for a fresh one, which
             // reaches this viewer as the producer's own state.
             if (ch.scene_forgotten && ch.up_sub && !ch.up_request && s.producer) {
@@ -1191,6 +1340,7 @@ struct Hub::Impl {
         auto it = p.subs.find(sub);
         if (it == p.subs.end()) return;
         if (Session* s = session_of(p)) leave(*s, p, it->second);
+        if (p.sending_scene_sub == sub) p.sending_scene.clear();
         p.subs.erase(sub);
         if (p.held_controls) p.dirty = true;   // it may have waited for this one
     }
@@ -1792,6 +1942,11 @@ struct Hub::Impl {
         s.programs_cap = has_cap(caps, CALIPER_NET_CAP_PROGRAMS);
         s.interventions_cap = has_cap(caps, CALIPER_NET_CAP_INTERVENTIONS);
         s.resources_cap = has_cap(caps, CALIPER_NET_CAP_RESOURCES);
+        s.resource_parts = wire::SplitResources(false);   // a new producer connection starts no version
+        s.resource_building.clear();
+        s.scene_versions.clear();
+        s.scene_parts = wire::SplitResources(false);
+        s.scene_building.clear();
     }
 
     // The hub's WELCOME. 3.1: it announces `controls` and `selection`, and to a
@@ -1802,7 +1957,8 @@ struct Hub::Impl {
         w.role = CALIPER_NET_ROLE_HUB;
         w.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_SELECTION,
                           CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS,
-                          CALIPER_NET_CAP_RESOURCES};   // 3.2 draft: forwarded
+                          CALIPER_NET_CAP_RESOURCES,       // 3.2 draft: forwarded
+                          CALIPER_NET_CAP_SCENE_PIECES};   // 3.2 draft: bundled per entity part
         Json sw = Json::object();
         sw.set("name", "caliper-hub");
         sw.set("version", opt.software_version);
@@ -2288,6 +2444,13 @@ struct Hub::Impl {
             msg = group;
             state = group->meta.find("state") && group->meta.find("state")->is_bool() &&
                     group->meta.find("state")->as_bool();
+        } else if (up && up->program) {
+            std::shared_ptr<SceneMsg> group = scene_bundle(s, *up, msg);
+            if (!group) {   // its versions did not come just before it
+                ++c.scene_pieces_dropped;
+                return;
+            }
+            msg = group;
         }
         // The entity transforms of the message, as rows.
         TransformRows rows;
@@ -2356,6 +2519,7 @@ struct Hub::Impl {
         for (const SubKey& k : ch->members) {
             VSub* v = vsub(k);
             if (!v || !v->scene) continue;
+            if (msg->piece_form && !v->scene_pieces) continue;   // a viewer of the per-shape parts: the structure alone
             if (cl) {
                 if (cl->reset) {   // a new state: nothing queued before it matters
                     v->scene_first.clear();
@@ -2475,7 +2639,8 @@ struct Hub::Impl {
         v.transforms_pending.clear();
         // In the order of the keys: the class table, the entity transforms, then every camera and
         // batch in the byte order of their paths.
-        for (const auto& kv : ch.scene_held) v.scene_first.emplace_back(kv.second, true);
+        for (const auto& kv : ch.scene_held)
+            if (!kv.second->piece_form || v.scene_pieces) v.scene_first.emplace_back(kv.second, true);
     }
 
     // A viewer's in-order queue passed kSceneFirstMax, or its pending batches or entity transforms
@@ -2497,15 +2662,12 @@ struct Hub::Impl {
         }
     }
 
-    bool send_scene(Peer& p, VSub& v, const ScenePtr& msg, bool state) {
-        if (msg->rows) {   // the entity transforms the hub keeps: SCENE_TRANSFORMS built now
-            for (const ScenePtr& t : transform_messages(v.view, *msg->rows))
-                if (!send_scene(p, v, t, state)) return false;
-            return true;
-        }
-        if (!msg->pieces.empty()) {   // a split update: its pieces in order
-            for (const ScenePtr& piece : msg->pieces)
-                if (!send_scene(p, v, piece, state)) return false;
+    bool send_scene_frame(Peer& p, VSub& v, const ScenePtr& msg, bool state) {
+        if (msg->raw) {   // a scene program's RESOURCE, as it came
+            if (!server.send(p.conn, msg->frame)) {
+                overflow(p.conn);
+                return false;
+            }
             return true;
         }
         Json meta = msg->meta;
@@ -2531,6 +2693,36 @@ struct Hub::Impl {
         }
         ++c.scenes_out;
         return true;
+    }
+
+    // Expand only the next scene message, then send one frame. The socket's
+    // Writable event resumes this bundle after that frame drains. Pending
+    // resets and newer batches wait until the active bundle is complete.
+    bool send_scene_part(Peer& p, VSub& v) {
+        while (!p.sending_scene.empty()) {
+            ScenePtr msg = std::move(p.sending_scene.front());
+            p.sending_scene.pop_front();
+            if (msg->rows) {
+                const auto messages = transform_messages(v.view, *msg->rows);
+                for (auto it = messages.rbegin(); it != messages.rend(); ++it)
+                    p.sending_scene.push_front(*it);
+            } else if (!msg->pieces.empty()) {
+                for (auto it = msg->pieces.rbegin(); it != msg->pieces.rend(); ++it)
+                    p.sending_scene.push_front(*it);
+            } else {
+                return send_scene_frame(p, v, msg, p.sending_scene_state);
+            }
+        }
+        p.dirty = true;   // An empty transform set leaves the next data message ready.
+        return false;
+    }
+
+    bool send_scene(Peer& p, VSub& v, const ScenePtr& msg, bool state) {
+        p.sending_scene = {msg};
+        p.sending_scene_sub = v.sub;
+        p.sending_scene_ticket = v.ticket;
+        p.sending_scene_state = state;
+        return send_scene_part(p, v);
     }
 
     // Over the byte budget: ended sessions go first (the oldest), then the
@@ -2634,6 +2826,7 @@ struct Hub::Impl {
         p.cap_programs = has_cap(h.capabilities, CALIPER_NET_CAP_PROGRAMS);
         p.cap_interventions = has_cap(h.capabilities, CALIPER_NET_CAP_INTERVENTIONS);
         p.cap_resources = has_cap(h.capabilities, CALIPER_NET_CAP_RESOURCES);
+        p.cap_scene_pieces = p.cap_scenes && has_cap(h.capabilities, CALIPER_NET_CAP_SCENE_PIECES);
         wire::Welcome w = hub_welcome(p.cap_controls);
         if (p.cap_controls && p.watch_only) w.control = false;
         send(p.conn, w);
@@ -2762,6 +2955,14 @@ struct Hub::Impl {
         if (p.in_flight) return;
         Session* s = session_of(p);
         if (!s) return;
+        if (!p.sending_scene.empty()) {
+            auto it = p.subs.find(p.sending_scene_sub);
+            if (it != p.subs.end() && it->second.ticket == p.sending_scene_ticket) {
+                p.in_flight = send_scene_part(p, it->second);
+                return;
+            }
+            p.sending_scene.clear();
+        }
         VSub* best = nullptr;
         bool best_series = false;
         uint64_t due_min = 0;
@@ -2845,12 +3046,36 @@ struct Hub::Impl {
             return;
         }
         // 3.2 draft: resources after series and scenes, before snapshots; the one that waited longest.
-        if (!p.pending_resources.empty() && !(best && best->series)) {
-            auto next = p.pending_resources.begin();
-            for (auto it = p.pending_resources.begin(); it != p.pending_resources.end(); ++it)
-                if (it->second.first < next->second.first) next = it;
-            SharedBytes buf = std::move(next->second.second);
-            p.pending_resources.erase(next);
+        // The parts of a version in parts go in order, one at a time; between two of them at most one
+        // waiting version in one frame goes, and another version in parts waits for the end of this one.
+        if ((p.sending_resource || !p.pending_resources.empty()) && !(best && best->series)) {
+            auto oldest = p.pending_resources.end(), single = p.pending_resources.end();
+            for (auto it = p.pending_resources.begin(); it != p.pending_resources.end(); ++it) {
+                if (oldest == p.pending_resources.end() || it->second.first < oldest->second.first) oldest = it;
+                if (it->second.second->size() == 1 &&
+                    (single == p.pending_resources.end() || it->second.first < single->second.first))
+                    single = it;
+            }
+            SharedBytes buf;
+            if (p.sending_resource && (!p.sent_part || single == p.pending_resources.end())) {
+                buf = (*p.sending_resource)[p.sending_next++];
+                p.sent_part = true;
+                if (p.sending_next == p.sending_resource->size()) stop_sending_resource(p);
+            } else {
+                auto next = p.sending_resource ? single : oldest;
+                if (next == p.pending_resources.end()) return;
+                ResourceVersion v = std::move(next->second.second);
+                const std::string key = next->first;
+                p.pending_resources.erase(next);
+                buf = (*v)[0];
+                p.sent_part = false;
+                if (v->size() > 1) {
+                    p.sending_resource = std::move(v);
+                    p.sending_key = key;
+                    p.sending_next = 1;
+                    p.sent_part = true;
+                }
+            }
             if (!server.send(p.conn, buf)) {
                 overflow(p.conn);
                 return;

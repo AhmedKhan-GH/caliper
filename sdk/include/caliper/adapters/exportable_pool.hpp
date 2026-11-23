@@ -522,7 +522,8 @@ ExportablePool::to_bridge(caliper::Bridge& bridge, const at::Tensor& t) {
 // Lifetime contract: a tensor handed to to_bridge must stay alive until the
 // pool is destroyed (or the import released) — the MPS caching allocator may
 // otherwise hand the same MTLBuffer to an unrelated tensor while the host
-// still renders from it. flow_scope's persistent slot tensors satisfy this.
+// still renders from it. Persistent slot tensors, allocated once and written
+// in place, satisfy this.
 // ===========================================================================
 class ExportablePool {
 public:

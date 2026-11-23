@@ -36,9 +36,7 @@ add_executable(caliper_tests
     test_tensor_bridge.cpp
     test_alloc_registry.cpp
     test_obj.cpp
-    test_instance_field.cpp
     test_pulse_ring.cpp
-    test_export_affordance.cpp
     ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp
 )
 # On Windows the host build provides ZLIB::ZLIB in-tree (Dependencies.cmake).
@@ -60,15 +58,9 @@ endif()
 target_link_libraries(caliper_tests PRIVATE caliper_net)
 # mnist_idx.h now lives with EmbedScope (the sole exemplar is self-contained).
 target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/embed_scope)
-# InstanceScope's pure pose/tint/mesh reference (instance_field.h) is torch-free,
-# so its unit test rides the fast caliper_tests suite.
-target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/instance_scope)
 # PulseScope's pure ring-copy/gap logic (pulse_ring.h) is torch-free + UI-free,
 # so its unit test rides the fast caliper_tests suite (feed spec §5).
 target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/pulse_scope)
-# Export E2 affordance logic (export_affordance.h: frame budget, pacing, path
-# assembly) is torch-free + UI-free, so its unit test rides caliper_tests too.
-target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/common)
 set_target_properties(caliper_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
 # The graphics layer's core on its recording backend, with no GPU (src/host/gfx).
@@ -185,10 +177,7 @@ add_executable(caliper_scene_tests
     scene/test_scene_store.cpp
     scene/test_scene_matrices.cpp
     scene/test_scene_cameras.cpp
-    scene/test_scene_compile.cpp
     scene/test_scene_pick.cpp
-    scene/test_scene_row.cpp
-    scene/test_scene_layer.cpp
     scene/test_scene_scale_bar.cpp
     scene/test_scene_surface.cpp
     scene/test_camera_press.cpp
@@ -288,7 +277,7 @@ if(TARGET caliper)
     caliper_cli_test(applets_needs_folder ARGS "--applets|--help" EXIT 2
         ERROR "--applets needs a folder")
     caliper_cli_test(info ARGS "info" EXIT 0
-        MATCH "abi_epoch 2.*service caliper\\.ui\\.v1_1")
+        MATCH "abi_epoch 3.*service caliper\\.ui\\.v1_1")
     caliper_cli_test(list ARGS "list|--applets|${CMAKE_BINARY_DIR}/applets" EXIT 0
         MATCH "READY +dev\\.caliper\\.hello +0\\.1\\.0 ")
     caliper_cli_test(check ARGS "check|${CMAKE_BINARY_DIR}/test-applets" EXIT 0
@@ -551,19 +540,16 @@ if(APPLE)
     target_include_directories(caliper_gfx_tests PRIVATE ${CMAKE_SOURCE_DIR}/third_party/stb)
     set_source_files_properties(gfx/gfx_layer.cpp PROPERTIES
         COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
-    # The scene core's rows: scenes compiled by caliper_scene and drawn through the layer on Metal.
-    target_sources(caliper_gfx_tests PRIVATE gfx/gfx_scene.cpp)
     target_link_libraries(caliper_gfx_tests PRIVATE caliper_scene)
-    set_source_files_properties(gfx/gfx_scene.cpp PROPERTIES
-        COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
     # The scene view's rows: scenes from wire protocol 3.2 messages, applied to the live views'
     # scene view (src/host/live/live_scene.cpp, compiled in here as libcaliper compiles it).
-    target_sources(caliper_gfx_tests PRIVATE gfx/gfx_scene_view.cpp
-        ${CMAKE_SOURCE_DIR}/src/host/live/live_scene.cpp)
+    target_sources(caliper_gfx_tests PRIVATE gfx/gfx_scene_view.cpp gfx/gfx_scene_piece_form.cpp
+        ${CMAKE_SOURCE_DIR}/src/host/live/live_scene.cpp ${CMAKE_SOURCE_DIR}/src/host/live/scene_legacy.cpp ${CMAKE_SOURCE_DIR}/src/host/live/scene_piece_form.cpp)
     target_link_libraries(caliper_gfx_tests PRIVATE caliper_net)
     target_compile_definitions(caliper_gfx_tests PRIVATE CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
-    set_source_files_properties(gfx/gfx_scene_view.cpp PROPERTIES
+    set_source_files_properties(gfx/gfx_scene_view.cpp gfx/gfx_scene_piece_form.cpp PROPERTIES
         COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
+    set_source_files_properties(gfx/gfx_scene_view.cpp PROPERTIES COMPILE_DEFINITIONS "CALIPER_MATCH_SUITE=\"scene_view\"")
     # The colormap by keys through the layer: the texture path's compute form and the points'
     # vertex stage, from layer and imported buffers, against map_f32_to_rgba8.
     target_sources(caliper_gfx_tests PRIVATE gfx/gfx_colormap.cpp)
@@ -582,7 +568,8 @@ if(WIN32)
 endif()
 
 add_test(NAME caliper_gfx_tests COMMAND caliper_gfx_tests)
-set_tests_properties(caliper_gfx_tests PROPERTIES LABELS "gfx" SKIP_RETURN_CODE 77)
+set_tests_properties(caliper_gfx_tests PROPERTIES LABELS "gfx" SKIP_RETURN_CODE 77
+    ENVIRONMENT "CALIPER_MATCH_REFERENCES=${CMAKE_SOURCE_DIR}/tests/match_references")
 
 # caliper_shader_tests: the generated shader programs (src/host/gfx/shaders/generated) on
 # Metal, headless. Every MSL program compiles and every entry and checked pair becomes a
@@ -621,14 +608,11 @@ if(APPLE)
 endif()
 
 # ---------------------------------------------------------------------------
-# caliper_export_tests — caliper.export.v1 battery (Rung E1). Links libcaliper
-# (host_services vends the export service + the composition reaches its g_bridge/
-# g_renderer) and the Metal backend, and drives the vended service as an embedder
-# would: bind a renderer -> import a quad -> view_png/sequence -> decode the PNG
-# back (stb_image, TEST-ONLY) and byte-compare. The live cases skip with no GPU
-# (counted; exit 77 -> ctest "Skipped", gpu_skip.h); the sidecar-golden /
-# atomic-write / sugar cases are GPU-free. Own "export" label so `ctest -L gfx`
-# (49/49) is untouched.
+# caliper_export_tests — the host's PNG writers (export_service.h), the service
+# registry, and the Metal window capture. Links libcaliper and the Metal backend.
+# The live Metal cases skip with no GPU (counted; exit 77 -> ctest "Skipped",
+# gpu_skip.h); the PNG writer and registry cases are GPU-free. Own "export" label
+# so `ctest -L gfx` is untouched.
 # ---------------------------------------------------------------------------
 add_executable(caliper_export_tests test_export.cpp)
 target_include_directories(caliper_export_tests PRIVATE
@@ -641,15 +625,11 @@ set_target_properties(caliper_export_tests PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 if(APPLE)
     target_compile_definitions(caliper_export_tests PRIVATE CALIPER_HAVE_METAL=1)
-    # ObjC++ + ARC so the harness can allocate the MTLBuffers the imported-
-    # geometry path consumes (mirrors caliper_gfx_tests).
+    # ObjC++ + ARC for the Metal device query of the live cases.
     set_source_files_properties(test_export.cpp PROPERTIES
         COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
     set_target_properties(caliper_export_tests PROPERTIES
         BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
-endif()
-if(WIN32)
-    target_compile_definitions(caliper_export_tests PRIVATE CALIPER_HAVE_VULKAN=1)
 endif()
 add_test(NAME caliper_export_tests COMMAND caliper_export_tests)
 # The stores this binary opens go to a work folder, never the user's app-data.
@@ -824,75 +804,24 @@ set_tests_properties(caliper_live_views_tests PROPERTIES ENVIRONMENT
 set_tests_properties(caliper_live_views_tests PROPERTIES SKIP_RETURN_CODE 77)
 
 # caliper_gfx_views_tests — the graphics suite's rows of the live views drawn by an offscreen core
-# (tests/gfx/gfx_points_view.mm), with the suite's reference mode (tests/gfx/gfx_reference.h) and
-# its committed references (tests/gfx/references/). Labelled gfx with caliper_gfx_tests.
+# (tests/gfx/gfx_points_view.mm), with saved PNG references under tests/match_references.
+# Labelled gfx with caliper_gfx_tests.
 add_executable(caliper_gfx_views_tests gfx/gfx_points_view.mm)
 target_link_libraries(caliper_gfx_views_tests PRIVATE doctest::doctest libcaliper caliper::sdk)
 target_include_directories(caliper_gfx_views_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host
     ${CMAKE_SOURCE_DIR}/third_party/stb)
-target_compile_definitions(caliper_gfx_views_tests PRIVATE CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+target_compile_definitions(caliper_gfx_views_tests PRIVATE CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
+    CALIPER_MATCH_SUITE="points_view")
 set_target_properties(caliper_gfx_views_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 set_source_files_properties(gfx/gfx_points_view.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 add_test(NAME caliper_gfx_views_tests COMMAND caliper_gfx_views_tests)
 set_tests_properties(caliper_gfx_views_tests PROPERTIES LABELS "gfx" SKIP_RETURN_CODE 77 ENVIRONMENT
-    "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_gfx_views_tests")
+    "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_gfx_views_tests;CALIPER_MATCH_REFERENCES=${CMAKE_SOURCE_DIR}/tests/match_references")
 endif()  # APPLE (live tests)
 
-# ---------------------------------------------------------------------------
-# Applet learning-core / engine tests. Each is a SEPARATE binary that links
-# only doctest + libtorch and puts one applet's header directory on the include
-# path — keeping torch out of the fast caliper_tests unit suite. The four blocks
-# below were near-verbatim, so they share one helper (§8.f cleanup class).
-# ---------------------------------------------------------------------------
-if(CALIPER_WITH_TORCH)   # applet learning-core tests all link libtorch
-function(add_caliper_torch_model_test name src applet_dir)
-    add_executable(${name} ${src})
-    caliper_test_needs_torch_dlls(${name})
-    target_link_libraries(${name} PRIVATE doctest::doctest "${TORCH_LIBRARIES}")
-    target_include_directories(${name} PRIVATE "${applet_dir}")
-    set_target_properties(${name} PROPERTIES
-        CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-    if(APPLE)
-        set_target_properties(${name} PROPERTIES
-            BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
-    endif()
-    add_test(NAME ${name} COMMAND ${name})
-endfunction()
-
-# SculptScope learning-core (energy loss, target samplers, that the net learns,
-# and that the addmm_out display fusion == the true forward).
-add_caliper_torch_model_test(caliper_sculpt_tests test_sculpt.cpp
-    "${CMAKE_SOURCE_DIR}/applets/sculpt_scope")
-
-# MeshScope learning-core (that the tanh MLP learns the target surface, the
-# per-vertex error map is honest, finite-difference normals match the analytic
-# normals of a known heightfield, and reset(seed) is reproducible).
-add_caliper_torch_model_test(caliper_mesh_tests test_mesh_surface.cpp
-    "${CMAKE_SOURCE_DIR}/applets/mesh_scope")
-
-# FieldScope PIC physics (FFT Poisson solve, charge-conserving CIC deposition,
-# Boris gyration + E×B drift, plasma momentum conservation).
-add_caliper_torch_model_test(caliper_em_pic_tests test_em_pic.cpp
-    "${CMAKE_SOURCE_DIR}/applets/field_scope")
-
-# TwinScope v2 surface engine (midpoint subdivision, cotan Laplacian, Voronoi
-# masses, stable dt, UV bake). The asset-coverage row loads the committed
-# housing.obj via the T5 loader, so this target also needs the SDK include dir
-# and the source-root macro.
-add_caliper_torch_model_test(caliper_surface_tests test_twin_surface.cpp
-    "${CMAKE_SOURCE_DIR}/applets/twin_scope")
-target_include_directories(caliper_surface_tests PRIVATE
-    "${CMAKE_SOURCE_DIR}/sdk/include")
-target_compile_definitions(caliper_surface_tests PRIVATE
-    CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
-
-# TwinScope v2 thermal model + chasing learner (batched surface heat step,
-# seeded duty schedule, MLP learner). Pure torch, small subdivided-tetra sims.
-add_caliper_torch_model_test(caliper_twin_tests test_twin_thermal.cpp
-    "${CMAKE_SOURCE_DIR}/applets/twin_scope")
-
+if(CALIPER_WITH_TORCH)
 set_tests_properties(caliper_torch_tests PROPERTIES LABELS "torch")
-endif()  # CALIPER_WITH_TORCH (applet model tests)
+endif()
 
 # caliper_wgsl_tests: the runtime WGSL compiler (tools/shaders/caliper-wgsl) through its C
 # interface: one valid compute program validates and translates to MSL and SPIR-V, built-in
@@ -1011,7 +940,9 @@ endif()
 # in its own folder with its own CMakeLists.txt once it exists: the acceptance
 # test, the match of points@1 with the built-in draw, and the pixel
 # comparison of the app and the browser module.
-foreach(_caliper_pg_dir programmable_graphics points_match draw_parity)
+foreach(_caliper_pg_dir programmable_graphics points_match draw_parity surface_match
+        lines_match arrows_match path_match image_match depth_match segmentation_match
+        boxes_match mesh_match frustum_match)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_caliper_pg_dir}/CMakeLists.txt")
         add_subdirectory(${_caliper_pg_dir})
     endif()

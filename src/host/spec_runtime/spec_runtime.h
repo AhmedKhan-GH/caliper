@@ -56,6 +56,9 @@
 #include <vector>
 
 struct CaliperCore;   // the app's core, whose live views hold the live scenes
+namespace caliper_live_views {
+struct DrawnLabel;   // live_views_scene.h
+}  // namespace caliper_live_views
 namespace caliper_gfx {
 class Backend;
 struct ProgramDesc;
@@ -68,6 +71,7 @@ class RunControl;
 struct Event;
 class ValueStore;
 class StepHistory;
+class DrawStatusHost;
 }
 
 namespace caliper_host {
@@ -373,6 +377,9 @@ public:
     // The turn of a 3-D points panel's box after the last frame, as a quaternion (x, y, z, w);
     // false for another panel (tests).
     bool points_turn(const std::string& panel_id, double q[4]) const;
+    // The labels that the scene panel drew at its last draw, with their boxes in window points; none
+    // before its first draw (the dashboard comparison's text).
+    std::vector<caliper_live_views::DrawnLabel> scene_labels(const std::string& panel_id) const;
     // Whether the scene panel holds a drag (a button pressed on its picture) and whether a pick of
     // it waits for its readback; false before its first draw (the app's frame log).
     bool scene_gesture(const std::string& panel_id, bool* down, bool* pick_pending) const;
@@ -442,5 +449,9 @@ private:
 // app's workspace folder, read when the programs are reconciled. Without it a program pinned to a
 // workspace piece is refused with piece.missing. Frame thread.
 void set_program_workspace(std::function<std::string()> workspace);
+
+// The host of the draw halves that the session's program.status reads. The app gives it to its
+// session with AppSession::set_draw_host(). It lives until the process ends. Any thread.
+caliper_builder::DrawStatusHost* app_draw_status_host();
 
 }  // namespace caliper_host

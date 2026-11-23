@@ -1,0 +1,74 @@
+# Library piece frustum@1: the frustum of a pinhole camera, drawn as the built-in draws a camera entity.
+name = "frustum"
+version = 1
+description = "The frustum of a pinhole camera at its pose: four edges from its centre to the corners of its image plane and the outline of the plane, of a width in pixels and one color"
+imports = ["pick@1"]
+
+[[inputs]]
+name = "pose"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+title = "Pose (4, 4) or (3, 4), row by row: the world from the camera"
+
+[[inputs]]
+name = "pinhole"
+kind = "tensor"
+rank_min = 1
+rank_max = 1
+title = "Pinhole (7): fx, fy, cx, cy in pixels, width and height in pixels, and the distance of the image plane"
+
+[[params]]
+name = "width"
+default = 2.0
+min = 0.0
+max = 128.0
+title = "Width in Pixels"
+
+[[params]]
+name = "color"
+type = "u32"
+default = 4293319900
+title = "Color, Packed RGBA"
+
+[[params]]
+name = "convention"
+type = "u32"
+default = 0
+min = 0
+max = 1
+title = "Convention (0 x right, y down, z forward; 1 x right, y up, z backward)"
+
+[[params]]
+name = "depth_offset"
+type = "i32"
+default = 0
+min = -8
+max = 8
+title = "Depth Offset toward the Camera"
+
+[[resources]]
+id = "frustum"
+kind = "buffer"
+struct = "Frustum"
+fields = ["c0: vec4<f32>", "c1: vec4<f32>", "c2: vec4<f32>", "c3: vec4<f32>", "index: u32"]
+count = 1
+
+[[derive.passes]]
+entry = "place_frustum"
+writes = ["frustum"]
+
+[draw]
+camera = "orbit"
+pick = { resource = "frustum", fields = ["index"] }
+
+[[draw.passes]]
+kind = "render"
+vertex = "frustum_vs"
+fragment = "frustum_fs"
+instances = 8
+vertices = 6
+topology = "triangle_list"
+blend = "alpha"
+depth = "write"
+pick = true

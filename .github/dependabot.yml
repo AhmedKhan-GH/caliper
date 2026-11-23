@@ -17,8 +17,6 @@ updates:
       - dependency-name: "third_party/imgui"
       - dependency-name: "third_party/implot"
       - dependency-name: "third_party/implot3d"
-      # Carries local patches (third_party/patches/llama.cpp) against a fast-moving master; bumped by hand.
-      - dependency-name: "third_party/llama.cpp"
 
   - package-ecosystem: "github-actions"
     directory: "/"

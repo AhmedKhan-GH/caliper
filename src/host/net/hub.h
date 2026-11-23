@@ -29,7 +29,9 @@
 // or SERIES) to the socket at a time and chooses the next once it has
 // drained; it keeps at most one pending snapshot per subscription, replaced by
 // a newer one, and serves series values from its retained history by index,
-// coalesced and never dropped while retained. Control messages go first.
+// coalesced and never dropped while retained. Scene bundles also send one
+// frame at a time. Their resources and final update stay together before
+// other data, even when the bundle exceeds the send queue. Control messages go first.
 // Each subscription gets its max_rate messages per second on average, in
 // bursts of at most two, so that a producer sending at that very rate with
 // some jitter passes through without waiting. A slow viewer therefore delays
@@ -181,12 +183,17 @@ struct HubStats {
     // 3.2 draft: scene messages in, out and replaced by a newer batch of the
     // same entity part while waiting, and the bytes of the batches kept
     uint64_t scenes_in = 0, scenes_out = 0, scenes_superseded = 0;
-    uint64_t scene_pieces_dropped = 0;   // pieces of a split update whose piece 0 the hub did not hold
+    uint64_t scene_pieces_dropped = 0;   // pieces of a split update whose piece 0 the hub did not hold, and updates
+                                         // in the piece form whose RESOURCE versions did not come before them
     uint64_t retained_scene_bytes = 0;
     // 3.2 draft, capability "resources": RESOURCE versions in, out and replaced by a newer version of
     // the same resource while waiting, the draw halves that producers relayed and the hub sent to
     // viewers, and the bytes of the newest versions kept for late viewers
     uint64_t resources_in = 0, resources_out = 0, resources_superseded = 0, resources_dropped = 0;
+    // parts of a version in parts that the hub dropped or refused (its part 0 not held, out of order, a
+    // part that differs from part 0, a total that disagrees), and incomplete versions it let go
+    // (a newer version, the bound of two, or no next part within CALIPER_NET_RESOURCE_PART_WAIT frames)
+    uint64_t resource_parts_dropped = 0, resource_versions_incomplete = 0;
     uint64_t program_relays_in = 0, program_relays_out = 0;
     uint64_t retained_resource_bytes = 0;
     size_t controls_waiting = 0;            // CONTROLs waiting for the producer's answer

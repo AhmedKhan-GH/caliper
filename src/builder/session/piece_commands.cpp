@@ -460,12 +460,18 @@ void check_half(const spec::Piece& piece, const cp::Resolved& resolved, cp::Half
             if (derive) return;
             continue;
         }
-        const cp::Compiled compiled = cp::compile_and_reflect(c.text);
+        // A derive pass is a program of its entry point alone, with the bindings that it uses.
+        const cp::Compiled compiled = derive ? cp::compile_and_reflect_entry(c.text, piece.derive->passes[i].entry)
+                                             : cp::compile_and_reflect(c.text);
         bool ok = compiled.verdict.ok();
         if (!ok) {
             const cp::SourcePlace place = cp::source_place(c, compiled.verdict.line, compiled.verdict.column);
             messages.push_back(message("error", compiled.verdict.code, compiled.verdict.message, place.part, place.line,
                                        place.column, std::string(half_name) + ".passes[" + std::to_string(i) + "]"));
+            if (derive) {  // one source for all derive passes: its error once
+                for (std::size_t k = i; k < n; ++k) passes.push_back({{"half", half_name}, {"index", k}, {"ok", false}});
+                return;
+            }
         } else {
             const cp::Verdict r = cp::check_piece_reflection(piece, half, i, compiled.reflection);
             if (r.code == cp::kProgramNotBuilt) {
@@ -476,10 +482,6 @@ void check_half(const spec::Piece& piece, const cp::Resolved& resolved, cp::Half
                 ok = false;
                 messages.push_back(verdict_message(r, ""));
             }
-        }
-        if (derive) {  // the derive half is one module for all its passes
-            for (std::size_t k = 0; k < n; ++k) passes.push_back({{"half", half_name}, {"index", k}, {"ok", ok}});
-            return;
         }
         passes.push_back({{"half", half_name}, {"index", i}, {"ok", ok}});
     }
@@ -882,6 +884,7 @@ Error check_instance(const PieceLibrary& library, const std::string& workspace, 
     for (const spec::PieceInput& in : piece.inputs) {
         const std::string where = "bind." + in.name;
         auto it = program.bind.find(in.name);
+        if (it == program.bind.end() && in.optional) continue;   // the piece reads it as empty
         if (it == program.bind.end())
             return fail(cp::kPieceBadBinding,
                         "The input " + quote(in.name) + " of the piece " + piece.name + " is unbound; bind it to " +

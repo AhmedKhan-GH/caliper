@@ -1,0 +1,12 @@
+{
+  "name": "grid_material",
+  "description": "The points of the first 512 values of a weight, at the places of the grid program, in orange to yellow by their value",
+  "inputs": [{"name": "w", "kind": "tensor", "rank_min": 2, "rank_max": 2, "title": "Weight"}],
+  "params": [{"name": "size", "default": 9.0, "min": 1.0, "max": 32.0, "title": "Size in Pixels"}],
+  "resources": [{"id": "points", "kind": "buffer", "struct": "Point",
+                 "fields": ["position: vec4<f32>", "value: f32"], "count": 512}],
+  "derive": {"passes": [{"entry": "place", "workgroups": [8, 1, 1], "writes": ["points"]}]},
+  "draw": {"camera": "orbit",
+           "passes": [{"kind": "render", "vertex": "material_vs", "fragment": "material_fs", "instances": "points",
+                       "vertices": 6, "topology": "triangle_list", "blend": "opaque", "depth": "write"}]}
+}

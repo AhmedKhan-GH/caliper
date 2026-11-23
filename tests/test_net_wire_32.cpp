@@ -459,6 +459,215 @@ TEST_CASE("net/wire 3.2: a resource whose count times stride wraps in 32 bits is
     CHECK(std::get<Resource>(m).data.size == 256);
 }
 
+namespace {
+// A golden RESOURCE frame and the bytes its section points into.
+struct GoldenResource {
+    std::vector<uint8_t> bytes;
+    Resource r;
+};
+GoldenResource golden_resource(const std::string& name) {
+    GoldenResource g;
+    g.bytes = read_bytes(v32_dir() / (name + ".bin"));
+    Message m;
+    const DecodeResult res = decode_bytes(g.bytes, &m);
+    REQUIRE_MESSAGE(res.ok(), name << ": " << res.error_code << ": " << res.message);
+    g.r = std::get<Resource>(m);
+    return g;
+}
+std::vector<uint8_t> whole_segments() {   // 10 segments (k, -k) of two f32: the version of resource_split_*
+    std::vector<float> v;
+    for (int k = 0; k < 10; ++k) v.insert(v.end(), {float(k), float(-k)});
+    std::vector<uint8_t> b(v.size() * 4);
+    std::memcpy(b.data(), v.data(), b.size());
+    return b;
+}
+}  // namespace
+
+TEST_CASE("net/wire 3.2: the parts of a resource carry their golden values and are put together whole") {
+    const GoldenResource p0 = golden_resource("resource_split_0"), p1 = golden_resource("resource_split_1"),
+                         p2 = golden_resource("resource_split_2");
+    for (const GoldenResource* g : {&p0, &p1, &p2}) {
+        REQUIRE(g->r.split);
+        CHECK(g->r.program == "lines");
+        CHECK(g->r.count == 10);
+        CHECK(g->r.stride == 8);
+        CHECK(g->r.split->version == 5);
+        CHECK(g->r.split->parts == 3);
+    }
+    CHECK(p1.r.split->part == 1);
+    CHECK(p1.r.split->first == 4);
+    CHECK(p2.r.data.size == 16);
+    SplitResources sr;
+    WholeResource whole;
+    std::string err;
+    CHECK(sr.add(p0.r, &whole, &err) == SplitResources::Result::Pending);
+    CHECK(sr.add(p1.r, &whole, &err) == SplitResources::Result::Pending);
+    CHECK(sr.held() == 1);
+    CHECK(sr.held_bytes() == 80);
+    REQUIRE(sr.add(p2.r, &whole, &err) == SplitResources::Result::Whole);
+    CHECK(sr.held() == 0);
+    CHECK(!whole.resource.split);
+    CHECK(whole.resource.step == 1300);
+    REQUIRE(whole.keep);
+    const std::vector<uint8_t> want = whole_segments();
+    REQUIRE(whole.resource.data.size == want.size());
+    CHECK(std::memcmp(whole.resource.data.data, want.data(), want.size()) == 0);
+    // The whole encodes as a version in one frame; each part re-encodes to its golden bytes.
+    std::vector<uint8_t> bytes;
+    REQUIRE(encode(Message(whole.resource), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    Message m;
+    REQUIRE(decode_bytes(bytes, &m).ok());
+    CHECK(std::get<Resource>(m).count == 10);
+    REQUIRE(encode(Message(p1.r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    CHECK(bytes == p1.bytes);
+    // Without copies, as the hub keeps the frames: the same order checks, no bytes held.
+    SplitResources order(false);
+    CHECK(order.add(p0.r, nullptr, &err) == SplitResources::Result::Pending);
+    CHECK(order.held_bytes() == 0);
+    CHECK(order.add(p1.r, nullptr, &err) == SplitResources::Result::Pending);
+    CHECK(order.add(p2.r, nullptr, &err) == SplitResources::Result::Whole);
+}
+
+TEST_CASE("net/wire 3.2: a receiver drops or refuses the parts of a resource that break the order") {
+    const GoldenResource p0 = golden_resource("resource_split_0"), p1 = golden_resource("resource_split_1"),
+                         p2 = golden_resource("resource_split_2"), orphan = golden_resource("resource_split_orphan"),
+                         shortp = golden_resource("resource_split_short"),
+                         differs = golden_resource("resource_split_differs"),
+                         other = golden_resource("resource_buffer");
+    using R = SplitResources::Result;
+    WholeResource whole;
+    std::string err;
+    SUBCASE("a part of a version whose part 0 never came is dropped") {
+        SplitResources sr;
+        CHECK(sr.add(orphan.r, &whole, &err) == R::Dropped);
+        CHECK(sr.add(p0.r, &whole, &err) == R::Pending);
+        CHECK(sr.add(orphan.r, &whole, &err) == R::Dropped);   // version 6, not the held 5
+        CHECK(sr.dropped() == 2);
+        CHECK(sr.held() == 1);
+    }
+    SUBCASE("parts out of order, or a part twice, are refused and discard the version") {
+        SplitResources sr;
+        sr.add(p0.r, &whole, &err);
+        CHECK(sr.add(p2.r, &whole, &err) == R::Refused);
+        CHECK(err.find("out of order") != std::string::npos);
+        CHECK(sr.held() == 0);
+        sr.add(p0.r, &whole, &err);
+        sr.add(p1.r, &whole, &err);
+        CHECK(sr.add(p1.r, &whole, &err) == R::Refused);
+        CHECK(sr.add(p2.r, &whole, &err) == R::Dropped);
+    }
+    SUBCASE("a total that disagrees with the parts, or a part that differs from part 0, is refused") {
+        SplitResources sr;
+        sr.add(p0.r, &whole, &err);
+        sr.add(p1.r, &whole, &err);
+        CHECK(sr.add(shortp.r, &whole, &err) == R::Refused);
+        CHECK(err.find("end before its count") != std::string::npos);
+        sr.add(p0.r, &whole, &err);
+        CHECK(sr.add(differs.r, &whole, &err) == R::Refused);
+        CHECK(err.find("differs from its part 0") != std::string::npos);
+        CHECK(sr.held() == 0);
+    }
+    SUBCASE("a version that never completes expires after CALIPER_NET_RESOURCE_PART_WAIT frames") {
+        SplitResources sr;
+        sr.add(p0.r, &whole, &err);
+        for (uint32_t k = 0; k + 1 < CALIPER_NET_RESOURCE_PART_WAIT; ++k)
+            CHECK(sr.add(other.r, &whole, &err) == R::Whole);
+        CHECK(sr.add(p1.r, &whole, &err) == R::Pending);   // the 256th frame after part 0: in time
+        for (uint32_t k = 0; k < CALIPER_NET_RESOURCE_PART_WAIT; ++k) sr.add(other.r, &whole, &err);
+        CHECK(sr.held() == 1);
+        sr.add(other.r, &whole, &err);                      // the 257th: expired
+        CHECK(sr.held() == 0);
+        CHECK(sr.expired() == 1);
+        CHECK(sr.add(p2.r, &whole, &err) == R::Dropped);
+    }
+    SUBCASE("a newer version discards an incomplete one, and at most two are held") {
+        SplitResources sr;
+        sr.add(p0.r, &whole, &err);
+        sr.add(p0.r, &whole, &err);
+        CHECK(sr.held() == 1);
+        CHECK(sr.discarded() == 1);
+        Resource one = p0.r;
+        one.split.reset();
+        one.count = 2;   // a version in one frame of the same resource
+        CHECK(sr.add(one, &whole, &err) == R::Whole);
+        CHECK(sr.held() == 0);
+        for (const char* name : {"a", "b", "c"}) {
+            Resource r = p0.r;
+            r.resource = name;
+            sr.add(r, &whole, &err);
+        }
+        CHECK(sr.held() == CALIPER_NET_MAX_INCOMPLETE_UPDATES);
+        CHECK(sr.held_bytes() == 2 * 80);
+    }
+}
+
+TEST_CASE("net/wire 3.2: the parts of a resource bound every size before a product or an allocation") {
+    const std::vector<uint8_t> zeros(256, 0);
+    Resource r;
+    r.program = "a";
+    r.resource = "r";
+    r.count = 0xffffffffu;   // times 256 wraps in 32 bits
+    r.stride = 256;
+    r.split = Resource::Split{0, 0, 2, 0};
+    r.data = Section::make(CALIPER_NET_SECTION_RESOURCE, CALIPER_NET_DTYPE_U8, {256}, zeros.data(), zeros.size());
+    std::vector<uint8_t> bytes;
+    std::string err;
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    Message m;
+    DecodeResult res = decode_bytes(bytes, &m);
+    CHECK(res.status == DecodeResult::Status::BadMessage);
+    CHECK(res.message.find("in parts holds at most 134217728 bytes") != std::string::npos);
+    // At the bound the count passes, and the part holds whole elements below it.
+    r.count = CALIPER_NET_RESOURCE_VERSION_MAX_BYTES / 256;
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    REQUIRE(decode_bytes(bytes, &m).ok());
+    // A part 1 whose first element lies at the count is refused before first + elements is taken.
+    r.split = Resource::Split{0, 1, 2, r.count};
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    CHECK(decode_bytes(bytes, &m).message.find("below the count") != std::string::npos);
+    CHECK(CALIPER_NET_RESOURCE_VERSION_MAX_BYTES == 128u << 20);
+}
+
+TEST_CASE("net/wire 3.2: full textures use 32 parts without widening storage buffer limits") {
+    const std::uint32_t pixel = 0;
+    Resource r;
+    r.program = "a";
+    r.resource = "pixels";
+    r.width = r.height = 8192;
+    r.format = CALIPER_NET_TEXTURE_RGBA8;
+    r.count = 8192u * 8192u;
+    r.stride = 4;
+    r.split = Resource::Split{0, 0, CALIPER_NET_RESOURCE_MAX_PARTS, 0};
+    r.data = Section::make(CALIPER_NET_SECTION_RESOURCE, CALIPER_NET_DTYPE_U8, {4}, &pixel, 4);
+    std::vector<std::uint8_t> bytes;
+    std::string err;
+    Message m;
+    // Only one pixel is present. This checks metadata without a full texture or assembly allocation.
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    REQUIRE(decode_bytes(bytes, &m).ok());
+    CHECK(CALIPER_NET_RESOURCE_TEXTURE_VERSION_MAX_BYTES == 256u << 20);
+    CHECK(CALIPER_NET_RESOURCE_MAX_PARTS == 32u);
+    CHECK(CALIPER_NET_MAX_PIECES == 16u);
+    r.format = CALIPER_NET_TEXTURE_R32UINT;
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    CHECK(decode_bytes(bytes, &m).ok());
+    r.split->parts += 1;
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    CHECK(decode_bytes(bytes, &m).status == DecodeResult::Status::BadMessage);
+    r.split->parts = CALIPER_NET_RESOURCE_MAX_PARTS;
+    r.width.reset();
+    r.height.reset();
+    r.format.reset();
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    CHECK(decode_bytes(bytes, &m).status == DecodeResult::Status::BadMessage);
+    r.count = CALIPER_NET_RESOURCE_VERSION_MAX_BYTES / r.stride;
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    CHECK(decode_bytes(bytes, &m).ok());
+    r.count += 1;
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    CHECK(decode_bytes(bytes, &m).status == DecodeResult::Status::BadMessage);
+}
+
 TEST_CASE("net/wire 3.2: decoded scene messages carry the golden values") {
     {
         const std::vector<uint8_t> bin = read_bytes(v32_dir() / "scene_update_mesh.bin");
@@ -856,6 +1065,144 @@ TEST_CASE("net/wire 3.2: a split piece whose rows pass the update's rows is refu
     std::string err;
     CHECK(su.add(pieces[0], &whole, &err) == SplitUpdates::Result::Pending);
     CHECK(su.add(last, &whole, &err) == SplitUpdates::Result::Pending);
+}
+
+TEST_CASE("net/wire 3.2: the piece form of SCENE_UPDATE and the ids scene.<n>") {
+    std::vector<std::vector<uint8_t>> keep;   // a decoded Section points into its buffer
+    auto load = [&](const char* name) {
+        keep.push_back(read_bytes(v32_dir() / (std::string(name) + ".bin")));
+        Message m;
+        const DecodeResult r = decode_bytes(keep.back(), &m);
+        REQUIRE_MESSAGE(r.ok(), name << ": " << r.error_code << ": " << r.message);
+        return m;
+    };
+    {   // the golden frames
+        const SceneUpdate u = std::get<SceneUpdate>(load("scene_update_points_piece"));
+        CHECK(u.program == std::optional<std::string>("scene.1"));
+        CHECK(u.arrays.empty());
+        CHECK(u.split.is_null());
+        CHECK(u.piece.find("name")->as_string() == "points");
+        CHECK(u.resources.size() == 1);
+        REQUIRE(u.names.size() == 2);
+        CHECK(u.names[0] == "positions");
+        CHECK(u.names[1] == "values");
+        const Resource r = std::get<Resource>(load("resource_scene_points"));
+        CHECK(r.program == "scene.1");
+        CHECK(r.resource == "points");
+        CHECK(r.step == 7);
+        CHECK(r.count == 3);
+        CHECK(r.stride == 32);
+        CHECK(r.data.size == 96);
+    }
+    const std::string pin = "{\"name\":\"points\",\"version\":1}";   // the hash is optional
+    // A piece-form update of `part`, each key replaced by `change` (a null value removes the key).
+    auto frame = [&](const std::string& part, std::vector<std::pair<std::string, std::string>> change,
+                     const std::vector<Section>& sections = {}) {
+        std::vector<std::pair<std::string, std::string>> keys = {
+            {"program", "\"scene.1\""}, {"piece", pin}, {"resources", "{\"points\":3}"},
+            {"arrays", "[\"positions\",\"values\"]"}};
+        for (const auto& c : change) {
+            bool found = false;
+            for (auto& k : keys) if (k.first == c.first) { k.second = c.second; found = true; }
+            if (!found) keys.push_back(c);
+        }
+        std::string meta = std::string("{") + kBase + ",\"part\":\"" + part + "\"";
+        for (const auto& k : keys) if (k.second != "null") meta += ",\"" + k.first + "\":" + k.second;
+        return update_frame(meta + "}", sections);
+    };
+    auto refused = [&](const std::vector<uint8_t>& bin, const char* why) {
+        CAPTURE(why);
+        Message m;
+        const DecodeResult r = decode_bytes(bin, &m);
+        CHECK(r.status == DecodeResult::Status::BadMessage);
+        CHECK(r.error_code == "bad_request");
+    };
+    {   // a whole update round-trips
+        const std::vector<uint8_t> bin = frame("points", {});
+        Message m;
+        REQUIRE(decode_bytes(bin, &m).ok());
+        std::vector<uint8_t> again;
+        std::string err;
+        REQUIRE_MESSAGE(encode(m, &again, &err, CALIPER_NET_MINOR_3_2), err);
+        CHECK(again == bin);
+    }
+    {   // each part has its own piece, an image the piece of its form
+        const std::vector<std::pair<std::string, std::string>> parts = {
+            {"lines", "lines"}, {"arrows", "arrows"}, {"boxes", "boxes"}, {"mesh", "mesh"}};
+        for (const auto& p : parts) {
+            const std::string name = "{\"name\":\"" + p.second + "\",\"version\":1,\"hash\":\"sha256:" + std::string(64, 'a') + "\"}";
+            std::vector<std::pair<std::string, std::string>> change = {{"piece", name}};
+            if (p.first == "lines") change.push_back({"mode", "\"segments\""});
+            if (p.first == "arrows") change.push_back({"arrays", "[\"origins\"]"});
+            if (p.first == "boxes") change.push_back({"arrays", "[\"centers\"]"});
+            Message m;
+            CHECK_MESSAGE(decode_bytes(frame(p.first, change), &m).ok(), p.first);
+        }
+        auto image = [&](const char* piece, const char* form) {
+            const std::string name = std::string("{\"name\":\"") + piece + "\",\"version\":1,\"hash\":\"sha256:" + std::string(64, 'a') + "\"}";
+            return frame("image", {{"piece", name}, {"arrays", "[\"pixels\"]"}, {"form", std::string("\"") + form + "\""}});
+        };
+        Message m;
+        CHECK(decode_bytes(image("image", "color"), &m).ok());
+        CHECK(decode_bytes(image("depth", "depth"), &m).ok());
+        CHECK(decode_bytes(image("segmentation", "segmentation"), &m).ok());
+        refused(image("depth", "color"), "image form and piece differ");
+        refused(image("image", "encoded"), "encoded has no piece");
+    }
+    const std::string lines_pin = "{\"name\":\"lines\",\"version\":1,\"hash\":\"sha256:" + std::string(64, 'a') + "\"}";
+    refused(frame("points", {{"program", "\"scene.0123456789\""}}), "program id of 10 digits");
+    refused(frame("points", {{"program", "\"scene.x\""}}), "program id");
+    refused(frame("points", {{"program", "5"}}), "program not a string");
+    refused(frame("points", {{"piece", "null"}}), "piece missing");
+    refused(frame("points", {{"piece", "{\"name\":\"points\",\"version\":1,\"hash\":\"sha256:xyz\"}"}}), "malformed hash");
+    {
+        Message m;
+        CHECK(decode_bytes(frame("points", {{"piece", "{\"name\":\"points\",\"version\":1,\"hash\":\"sha256:" + std::string(64, 'a') + "\"}"}}), &m).ok());
+    }
+    refused(frame("points", {{"piece", "{\"name\":\"points\",\"version\":0,\"hash\":\"sha256:" + std::string(64, 'a') + "\"}"}}), "pin version");
+    refused(frame("points", {{"piece", lines_pin}}), "piece name does not fit the part");
+    refused(frame("camera", {{"piece", "{\"name\":\"camera\",\"version\":1,\"hash\":\"sha256:" + std::string(64, 'a') + "\"}"}, {"arrays", "[\"x\"]"}}), "camera has no piece");
+    refused(frame("points", {{"resources", "null"}}), "resources missing");
+    refused(frame("points", {{"resources", "{}"}}), "resources empty");
+    refused(frame("points", {{"resources", "{\"a\":1,\"b\":1,\"c\":1,\"d\":1,\"e\":1,\"f\":1,\"g\":1,\"h\":1,\"i\":1}"}}), "nine resources");
+    refused(frame("points", {{"resources", "{\"__x\":1}"}}), "resource name");
+    refused(frame("points", {{"resources", "{\"points\":4294967296}"}}), "resource count");
+    refused(frame("points", {{"arrays", "null"}}), "arrays missing");
+    refused(frame("points", {{"arrays", "[]"}}), "arrays empty");
+    refused(frame("points", {{"arrays", "[\"values\"]"}}), "arrays not from the first");
+    refused(frame("points", {{"arrays", "[\"positions\",\"positions\"]"}}), "arrays twice");
+    refused(frame("points", {{"arrays", "[\"values\",\"positions\"]"}}), "arrays out of order");
+    refused(frame("points", {{"arrays", "[\"positions\",\"nope\"]"}}), "arrays unknown name");
+    refused(frame("points", {{"arrays", "[\"positions\",3]"}}), "arrays not strings");
+    refused(frame("points", {{"split", "{\"update\":1,\"piece\":0,\"pieces\":2}"}}), "split");
+    {
+        std::vector<float> pos(9, 0.f);
+        const Section p = Section::make("positions", CALIPER_NET_DTYPE_F32, {3, 3}, pos.data(), pos.size() * 4);
+        refused(frame("points", {}, {p}), "an array section");
+    }
+    {   // RESOURCE and PROGRAM take the ids scene.<n>
+        auto resource = [&](const std::string& program) {
+            Json meta;
+            const std::string text = "{\"program\":\"" + program + "\",\"resource\":\"points\",\"step\":1,\"count\":1,\"stride\":4}";
+            std::string err;
+            REQUIRE_MESSAGE(Json::parse(text.data(), text.size(), &meta, &err), err);
+            std::vector<uint8_t> zero(4, 0);
+            std::vector<uint8_t> out;
+            FrameError fe;
+            const Section s = Section::make("resource", CALIPER_NET_DTYPE_U8, {4}, zero.data(), 4);
+            REQUIRE_MESSAGE(encode_frame(CALIPER_NET_MSG_RESOURCE, meta, {s}, &out, &fe, CALIPER_NET_MINOR_3_2), fe.message);
+            return out;
+        };
+        Message m;
+        for (const char* ok : {"scene.0", "scene.1", "scene.123456789"}) {
+            CHECK_MESSAGE(decode_bytes(resource(ok), &m).ok(), ok);
+            CHECK(scene_program_id(ok));
+        }
+        for (const char* bad : {"scene.", "scene.x", "scene.0123456789", "scene.1a", "scene.-1", "scene.1.2"}) {
+            refused(resource(bad), bad);
+            CHECK_FALSE(scene_program_id(bad));
+        }
+    }
 }
 
 TEST_CASE("net/wire 3.2: every invalid golden frame is refused as expect.json says") {
@@ -1371,6 +1718,78 @@ TEST_CASE("net/hub 3.2: draw halves and resources reach the viewers that announc
         const caliper_net::HubStats st = h.hub->stats();
         return st.resources_in == 2 && st.program_relays_in == 3 && st.retained_resource_bytes == 0;
     }));
+}
+
+TEST_CASE("net/hub 3.2: a resource in parts reaches a viewer whole and in order, and a broken version goes nowhere") {
+    using namespace hubres;
+    const std::vector<std::string> caps = {CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_RESOURCES};
+    Runner h;
+    World w;
+    Peer& p = w.add(h, caps, true);
+    Peer& a = w.add(h, caps, false);
+    auto part = [](int k, uint64_t version = 5) {
+        Resource r = std::get<Resource>(golden(("resource_split_" + std::to_string(k)).c_str()));
+        r.split->version = version;
+        return r;
+    };
+    auto segments_at = [](const Peer& v) {
+        std::vector<const Resource*> out;
+        for (const Resource* r : v.all<Resource>())
+            if (r->resource == "segments") out.push_back(r);
+        return out;
+    };
+    // A part whose part 0 never came goes nowhere; parts 0 and 1 wait in the hub while a version in one
+    // frame of another resource passes them.
+    p.send(golden("resource_split_orphan"));
+    p.send(part(0));
+    p.send(part(1));
+    p.send(heads_at(1200, {1, 2, 3, 4}));
+    REQUIRE(w.until([&] { return !a.all<Resource>().empty(); }));
+    w.settle(a);
+    CHECK(segments_at(a).empty());
+    p.send(part(2));
+    REQUIRE(w.until([&] { return segments_at(a).size() == 3; }));
+    SplitResources sr;
+    WholeResource whole;
+    std::string err;
+    int wholes = 0;
+    for (const Resource* r : segments_at(a)) {
+        if (sr.add(*r, &whole, &err) == SplitResources::Result::Whole) ++wholes;
+    }
+    REQUIRE(wholes == 1);
+    const std::vector<uint8_t> want = whole_segments();
+    REQUIRE(whole.resource.data.size == want.size());
+    CHECK(std::memcmp(whole.resource.data.data, want.data(), want.size()) == 0);
+    // Parts out of order: part 2 refuses version 7, and its part 1 then has no part 0. Nothing reaches the viewer,
+    // and the kept version stays the whole version 5.
+    p.send(part(0, 7));
+    p.send(part(2, 7));
+    p.send(part(1, 7));
+    REQUIRE(w.until([&] { return h.hub->stats().resource_parts_dropped == 3; }));
+    w.settle(a);
+    CHECK(segments_at(a).size() == 3);
+    // A version that never completes: part 0 of version 8 is let go when a newer part 0 comes.
+    p.send(part(0, 8));
+    p.send(part(0, 9));
+    p.send(part(1, 9));
+    p.send(part(2, 9));
+    REQUIRE(w.until([&] { return segments_at(a).size() == 6; }));
+    CHECK(h.hub->stats().resource_versions_incomplete == 1);
+    // A late viewer gets the newest whole version, its parts in order.
+    Peer& late = w.add(h, caps, false);
+    REQUIRE(w.until([&] { return segments_at(late).size() == 3; }));
+    w.settle(late);
+    const auto got = segments_at(late);
+    REQUIRE(got.size() == 3);
+    for (uint32_t k = 0; k < 3; ++k) {
+        REQUIRE(got[k]->split);
+        CHECK(got[k]->split->version == 9);
+        CHECK(got[k]->split->part == k);
+    }
+    CHECK(late.all<Resource>().size() == 4);
+    const caliper_net::HubStats st = h.hub->stats();
+    CHECK(st.resources_in == 3);
+    CHECK(st.retained_resource_bytes > 80);
 }
 
 TEST_CASE("net/hub 3.2: a producer without resources has its RESOURCE and relays ignored") {

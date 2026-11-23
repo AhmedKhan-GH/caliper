@@ -7,6 +7,8 @@
 #include "helpers.h"
 
 #include <caliper_builder/commands/command_table.h>
+#include <caliper_builder/programs/pieces.h>
+#include <caliper_builder/programs/sandbox.h>
 #include <caliper_builder/session/events.h>
 #include <caliper_builder/session/piece_commands.h>
 #include <caliper_builder/session/session.h>
@@ -129,6 +131,95 @@ TEST_CASE("pieces: piece.check checks a piece alone and gives its hash and messa
     bad["hash"] = "sha256:" + std::string(64, '0');
     r = ok(*s, "piece.check", {{"piece", bad}});
     CHECK(has_code(r["messages"], "piece.hash_mismatch"));
+}
+
+// A derive half of six tensor inputs, two counted resources and one plain resource: eleven
+// storage buffers, of which pass `a` binds eight and pass `b` four. With `wide`, pass `a` also
+// writes r2 and binds nine.
+json wide_derive(bool wide) {
+    json inputs = json::array();
+    for (int i = 0; i < 6; ++i) inputs.push_back({{"name", "t" + std::to_string(i)}, {"kind", "tensor"}});
+    std::string derive =
+        "@compute @workgroup_size(64)\nfn a(@builtin(global_invocation_id) id: vec3<u32>) {\n"
+        "    let v = t0[id.x] + t1[id.x] + t2[id.x] + t3[id.x] + t4[id.x] + t5[id.x];\n"
+        "    r0[atomicAdd(&r0_count, 1u)] = v;\n";
+    if (wide) derive += "    r2[id.x] = v;\n";
+    derive += "}\n@compute @workgroup_size(64)\nfn b(@builtin(global_invocation_id) id: vec3<u32>) {\n"
+              "    r1[atomicAdd(&r1_count, 1u)] = r0[id.x];\n    r2[id.x] = r0[id.x] * 2.0;\n}\n";
+    return {{"name", "wide"},
+            {"inputs", inputs},
+            {"resources",
+             {{{"id", "r0"}, {"kind", "buffer"}, {"element", "f32"}, {"count", 64}, {"counted", true}},
+              {{"id", "r1"}, {"kind", "buffer"}, {"element", "f32"}, {"count", 64}, {"counted", true}},
+              {{"id", "r2"}, {"kind", "buffer"}, {"element", "f32"}, {"count", 64}}}},
+            {"derive", {{"passes", {{{"entry", "a"}, {"writes", {"r0"}}}, {{"entry", "b"}, {"writes", {"r1", "r2"}}}}}}},
+            {"files", {{"derive", derive}}}};
+}
+
+TEST_CASE("pieces: piece.check binds each derive pass alone, at most 8 storage buffers, and no workgroup memory") {
+    if (!programs::compiler_available()) {
+        MESSAGE("skipped: this build has no WGSL compiler, so piece.check compiles no pass");
+        return;
+    }
+    auto s = piece_session("piece_check_passes");
+    // Eleven storage buffers in the piece, eight and four in its passes.
+    json r = ok(*s, "piece.check", {{"piece", wide_derive(false)}});
+    INFO(r.dump());
+    CHECK(r["ok"] == true);
+    REQUIRE(r["passes"].size() == 2);
+    CHECK(r["passes"][0]["ok"] == true);
+    CHECK(r["passes"][1]["ok"] == true);
+    // Nine in pass a: refused there, with its place, and pass b stays ok.
+    r = ok(*s, "piece.check", {{"piece", wide_derive(true)}});
+    CHECK(r["ok"] == false);
+    REQUIRE(has_code(r["messages"], "program.over_web_limits"));
+    for (const json& m : r["messages"])
+        if (m["code"] == "program.over_web_limits") CHECK(m["where"] == "derive.passes[0]");
+    CHECK(r["passes"][0]["ok"] == false);
+    CHECK(r["passes"][1]["ok"] == true);
+    // A derive pass entry that derive.wgsl lacks.
+    json missing = wide_derive(false);
+    missing["derive"]["passes"][1]["entry"] = "c";
+    r = ok(*s, "piece.check", {{"piece", missing}});
+    CHECK(r["ok"] == false);
+    CHECK(has_code(r["messages"], "program.compile_failed"));
+
+    // var<workgroup> in a derive pass and in a compute pass of the draw half.
+    json shared = rows_piece();
+    shared["files"]["derive"] =
+        "var<workgroup> part: array<f32, 64>;\n@compute @workgroup_size(64)\n"
+        "fn copy(@builtin(local_invocation_index) i: u32) {\n    part[i] = w[i];\n    workgroupBarrier();\n"
+        "    row[i] = part[63u - i];\n}\n";
+    r = ok(*s, "piece.check", {{"piece", shared}});
+    CHECK(r["ok"] == false);
+    CHECK(has_code(r["messages"], "program.workgroup_memory"));
+    json drawn = {{"name", "sums"},
+                  {"draw",
+                   {{"camera", "none"},
+                    {"buffers", {{{"id", "acc"}, {"element", "f32"}, {"count", 64}}}},
+                    {"passes",
+                     {{{"kind", "compute"}, {"entry", "sum"}, {"writes", {"acc"}}},
+                      {{"kind", "render"}, {"fragment", "fs"}}}}}},
+                  {"files",
+                   {{"draw",
+                     "var<workgroup> part: array<f32, 64>;\n@compute @workgroup_size(64)\n"
+                     "fn sum(@builtin(local_invocation_index) i: u32) {\n    part[i] = f32(i);\n"
+                     "    workgroupBarrier();\n    acc[i] = part[63u - i];\n}\n"
+                     "@fragment\nfn fs(in: CaliperFullscreen) -> @location(0) vec4<f32> {\n"
+                     "    return vec4<f32>(acc[0], in.uv, 1.0);\n}\n"}}}};
+    r = ok(*s, "piece.check", {{"piece", drawn}});
+    CHECK(r["ok"] == false);
+    REQUIRE(has_code(r["messages"], "program.workgroup_memory"));
+    for (const json& m : r["messages"])
+        if (m["code"] == "program.workgroup_memory") CHECK(m["where"] == "draw.passes[0]");
+    // The same pass without workgroup memory checks.
+    drawn["files"]["draw"] =
+        "@compute @workgroup_size(64)\nfn sum(@builtin(local_invocation_index) i: u32) {\n    acc[i] = f32(i);\n}\n"
+        "@fragment\nfn fs(in: CaliperFullscreen) -> @location(0) vec4<f32> {\n"
+        "    return vec4<f32>(acc[0], in.uv, 1.0);\n}\n";
+    r = ok(*s, "piece.check", {{"piece", drawn}});
+    INFO(r.dump());
+    CHECK(r["ok"] == true);
 }
 
 TEST_CASE("pieces: piece.update writes the next version, and saved versions never change") {
@@ -371,6 +462,25 @@ TEST_CASE("pieces: program.create pins a workspace piece with its hash and check
     ok(*s, "program.create",
        {{"id", "bars"}, {"piece", {{"name", "bars"}, {"from", "workspace"}}}, {"panel", "world"},
         {"bind", {{"values", "program:rows/row"}}}});
+    // An optional input may stay unbound; the hash covers the key, and a bound optional input
+    // is still checked. (The draw runtime's tests cover an unbound buffer input.)
+    json loose = rows_piece();
+    loose["name"] = "loose_rows";
+    loose["inputs"].push_back({{"name", "v"}, {"kind", "tensor"}, {"dtype", "i32"}, {"optional", true}});
+    const std::string loose_hash = ok(*s, "piece.update", {{"piece", loose}})["hash"];
+    json strict = loose;
+    strict["name"] = "strict_rows";
+    strict["inputs"][1].erase("optional");
+    ok(*s, "piece.update", {{"piece", strict}});
+    ok(*s, "program.create",
+       {{"id", "loose"}, {"piece", {{"name", "loose_rows"}, {"from", "workspace"}}}, {"bind", {{"w", "live:w"}}}});
+    CHECK(s->open_spec()->spec.find_program("loose")->piece->hash == loose_hash);
+    CHECK(err(*s, "program.create",
+              {{"id", "strict"}, {"piece", {{"name", "strict_rows"}, {"from", "workspace"}}}, {"bind", {{"w", "live:w"}}}}) ==
+          "piece.bad_binding");
+    CHECK(err(*s, "program.create",
+              {{"id", "loose2"}, {"piece", {{"name", "loose_rows"}, {"from", "workspace"}}},
+               {"bind", {{"w", "live:w"}, {"v", "program:rows/row"}}}}) == "piece.bad_binding");
 
     // program.patch pins the next version, with its hash.
     json next = uv_field();
@@ -530,9 +640,8 @@ TEST_CASE("pieces: a spec file whose pin has no hash opens, and its program is r
 
 namespace {
 
-struct ViewerHost : StageHost {
+struct ViewerHost : DrawStatusHost {
     std::vector<ProgramStatus> items;
-    void reconcile(const spec::Spec&) override {}
     std::vector<ProgramStatus> status() const override { return items; }
 };
 
@@ -546,7 +655,7 @@ struct Events : EventSink {
 
 }  // namespace
 
-TEST_CASE("pieces: program.status takes an instance's draw object from the viewer's host, and events name the half") {
+TEST_CASE("pieces: program.status takes an instance's draw object from the viewer's draw host, and events name the half") {
     auto s = piece_session("piece_draw_status");
     ok(*s, "piece.update", {{"piece", uv_field()}});
     ok(*s, "program.create", {{"id", "field"}, {"piece", {{"name", "uv_field"}, {"from", "workspace"}}}, {"panel", "world"}});
@@ -572,7 +681,7 @@ TEST_CASE("pieces: program.status takes an instance's draw object from the viewe
     d.error_where = "draw.passes[0]";
     item.draw = d;
     viewer.items = {item};
-    s->set_stage_host(&viewer);
+    s->set_draw_host(&viewer);
     status = ok(*s, "program.status", {{"id", "field"}});
     const json& draw = status["programs"][0]["draw"];
     CHECK(draw["state"] == "stopped");
@@ -581,8 +690,7 @@ TEST_CASE("pieces: program.status takes an instance's draw object from the viewe
     CHECK(draw["resource_step"] == 120);
     CHECK(draw["error"]["code"] == "program.draw_over_time");
     CHECK(draw["error"]["where"] == "draw.passes[0]");
-    CHECK(status["stages"].empty());
-    s->set_stage_host(nullptr);
+    s->set_draw_host(nullptr);
 
     // The event of an instance's half names the half and its pass; another program's has neither.
     Events events;
@@ -650,4 +758,18 @@ TEST_CASE("pieces: selection.set picks an item of a program that pins a workspac
     const json out = event_json(pick);
     CHECK(out["program"] == "rows");
     CHECK(out["item"] == 1);
+}
+
+TEST_CASE("pieces: every piece of the built-in library passes piece.check, each pass composed and compiled") {
+    const PieceLibrary& lib = PieceLibrary::builtin();
+    REQUIRE(!lib.pieces().empty());
+    for (const spec::Piece& p : lib.pieces()) {
+        CAPTURE(p.name);
+        json j = json::parse(programs::canonical_manifest(p));
+        json files = json::object();
+        for (const auto& [file, text] : p.files) files[file.substr(0, file.find('.'))] = text;
+        j["files"] = files;
+        const json r = check_piece_json(j, false, nullptr);
+        CHECK_MESSAGE(r["ok"] == true, r["messages"].dump());
+    }
 }

@@ -16,48 +16,6 @@ class Backend;
 
 namespace caliper_host {
 
-// Host-side resolved draw for caliper.geometry.v1_1. Applet-facing allocation
-// ids and colormap ids have already been resolved by TensorBridge; backends
-// still re-check liveness/bounds against their own tables before encoding.
-struct HostGeomDraw {
-    uint64_t pos_alloc = 0;
-    uint64_t pos_offset = 0;
-    uint64_t vertex_count = 0;
-    uint64_t index_alloc = 0;
-    uint64_t index_offset = 0;
-    uint64_t index_count = 0;
-    uint64_t normal_alloc = 0;
-    uint64_t normal_offset = 0;
-    uint64_t attr_alloc = 0;
-    uint64_t attr_offset = 0;
-    uint64_t uv_alloc = 0;
-    uint64_t uv_offset = 0;
-    uint64_t texture = 0;
-    uint32_t topology = 0;
-    uint32_t color_mode = 0;
-    uint32_t shade_mode = 0;
-    uint32_t blend_mode = 0;
-    uint32_t depth_flags = 0;
-    uint32_t flat_rgba = 0xffffffffu;
-    const uint32_t* lut256 = nullptr;
-    float vmin = 0.0f;
-    float vmax = 1.0f;
-    float size_px = 1.0f;
-    float model[16] = {
-        1.0f, 0.0f, 0.0f, 0.0f,
-        0.0f, 1.0f, 0.0f, 0.0f,
-        0.0f, 0.0f, 1.0f, 0.0f,
-        0.0f, 0.0f, 0.0f, 1.0f,
-    };
-    // geometry.v1_3 instance tail, resolved to renderer ids + byte offsets.
-    // All zero -> non-instanced (byte-identical to a v1.2 draw).
-    uint64_t instance_alloc = 0;       // resolved (N,16) f32 pose alloc
-    uint64_t instance_offset = 0;
-    uint64_t instance_count = 0;       // N; 0 -> non-instanced
-    uint64_t instance_attr_alloc = 0;  // resolved (N,) f32 tint alloc; 0 -> none
-    uint64_t instance_attr_offset = 0;
-};
-
 // Host-internal renderer seam (docs/applets/rendering.md). The ABI never sees this;
 // backends are swappable forever because applets only see ImGui + bridge ids.
 class HostRenderer {
@@ -140,15 +98,6 @@ public:
     virtual void* device_update_retain_last() { return nullptr; }
     virtual bool device_update_is_done(void* /*handle*/) const { return true; }
     virtual void device_update_release(void* /*handle*/) {}
-    // Typed live views (src/host/live/live_views*), additive: the same kind of
-    // +1 handle, on the command buffer of the most recent geom_draw_points /
-    // geom_draw_primitives call (NULL when none, or on backends that draw
-    // synchronously). Poll it with device_update_is_done, drop it with
-    // device_update_release. A points view re-reads its payload every frame, so
-    // it keeps one handle per payload on the last frame that drew it and frees
-    // the payload's slot only once that frame retired. Independent of
-    // device_update_retain_last (geometry draws never touch the WAIT_GPU target).
-    virtual void* geom_draw_retain_last() { return nullptr; }
 
     // The backend's native device (id<MTLDevice> on Metal) once a canvas or
     // window is up, else NULL. The live viewer creates its shared-memory
@@ -197,44 +146,6 @@ public:
                                           int32_t /*colormap*/,
                                           float /*vmin*/, float /*vmax*/) { return false; }
 
-    // Imported 3-D geometry (caliper.geometry.v1). Default: unsupported — the
-    // service then never grants CALIPER_GEOM_CAP_IMPORTED_POINTS. A view is an
-    // offscreen render target registered in the SAME texture table as bridge
-    // textures (ImGui-drawable, debug-readable); it is released via
-    // tex_release like any texture. geom_draw_points renders ONE view frame
-    // atomically: clear to clear_rgba, then `count` instanced points pulled
-    // from the imported allocation (positions (count,3) f32 at pos_offset;
-    // optional (count,) f32 attr colormapped via lut256, lut null = flat
-    // white). Additive blend, no depth. count 0 = pure clear (alloc ids may
-    // be 0 then). false = view pixels untouched.
-    virtual bool supports_geometry() const { return false; }
-    virtual uint64_t geom_create_view(int /*w*/, int /*h*/) { return 0; }
-    virtual bool geom_draw_points(uint64_t /*view_tex*/,
-                                  const float* /*view16*/, const float* /*proj16*/,
-                                  uint64_t /*pos_alloc*/, uint64_t /*pos_offset*/,
-                                  uint64_t /*count*/,
-                                  uint64_t /*attr_alloc*/, uint64_t /*attr_offset*/,
-                                  const uint32_t* /*lut256*/,
-                                  float /*vmin*/, float /*vmax*/,
-                                  float /*size_px*/, uint32_t /*clear_rgba*/) {
-        return false;
-    }
-    virtual bool supports_geometry_primitives() const { return false; }
-    virtual bool supports_geometry_textured() const { return false; }
-    // geometry.v1_3: true when this backend runs N>1 instanced draws. Default
-    // false -> the bridge never grants CALIPER_GEOM_CAP_INSTANCED. Mirrors
-    // supports_geometry_textured(); no backend grants it yet (T1).
-    virtual bool supports_geometry_instanced() const { return false; }
-    virtual uint64_t geom_create_view_ex(int /*w*/, int /*h*/,
-                                         uint32_t /*flags*/) { return 0; }
-    virtual bool geom_draw_primitives(uint64_t /*view_tex*/,
-                                      const float* /*view16*/, const float* /*proj16*/,
-                                      const HostGeomDraw* /*draws*/,
-                                      uint32_t /*count*/,
-                                      uint32_t /*clear_rgba*/) {
-        return false;
-    }
-
     // GLFW pre-window hint setup for this backend (NO_API: no GL context).
     virtual void window_hints() = 0;
 
@@ -248,7 +159,7 @@ public:
     //
     // These run PARALLEL to init()/new_frame()/render(): a renderer instance is
     // EITHER the exe's swapchain path OR an embed canvas, never both, so the
-    // swapchain path (and its byte-exact geometry rows) is untouched. Default =
+    // swapchain path is untouched. Default =
     // unsupported: canvas_init refuses. The frame-order contract matches the
     // swapchain path: canvas_new_frame CLEARS (opens the pass), canvas_render
     // composites.
@@ -332,7 +243,7 @@ public:
     // CALIPER_VULKAN_STATS line). Over the window since the last reset:
     // frame time is the interval between the ends of consecutive frames; GPU
     // times come from the command buffers' GPU start and end times, for
-    // device texture updates, for view draws (geometry render targets) and
+    // device texture updates, for view draws and
     // for the frame's own pass. Percentiles are nearest-rank. false: this
     // backend records none, or they are off.
     struct FrameStats {

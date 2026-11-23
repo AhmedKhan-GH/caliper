@@ -280,7 +280,14 @@ def render() -> dict[str, bytes]:
     valid_32 = gen_v3_2.valid_vectors()
     for name, buf in [*valid.items(), *valid_vectors_31().items(), *valid_32.items()]:
         files[f"{name}.bin"] = buf
-        files[f"{name}.json"] = _json(describe(name, buf))
+        description = _json(describe(name, buf))
+        if "_bundle" in name:
+            # Resource bytes are lookup data. A compact row keeps large zero palettes readable.
+            import re
+            description = re.sub(rb'"values": \[([^\[\]]*)\]',
+                                 lambda match: b'"values": [' + b' '.join(match[1].split()) + b']',
+                                 description)
+        files[f"{name}.json"] = description
     expect = {}
     for name, (buf, reason, code) in invalid_vectors(valid).items():
         files[f"invalid/{name}.bin"] = buf

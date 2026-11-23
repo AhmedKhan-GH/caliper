@@ -471,6 +471,54 @@ TEST_CASE("api commands: the viewer token opens the spec page and runs its reads
     CHECK(app.session->open_spec()->spec.panels.size() == 1);
 }
 
+TEST_CASE("api commands: the spec page's WebAssembly views come from one folder, by their three names, with either token") {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::current_path() / "spec-assets-test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    const std::string loader = "export const CALIPER_VIEWS_KINDS = [];\n";
+    const std::string wasm("\0asm\x01\0\0\0", 8);
+    std::ofstream(dir / "caliper-views-loader.js", std::ios::binary) << loader;
+    std::ofstream(dir / "caliper-views.wasm", std::ios::binary) << wasm;
+    std::ofstream(dir / "api.json", std::ios::binary) << "{\"token\": \"secret\"}";
+    caliper_api::Options o;
+    o.viewer_token = "api_viewer_token-0123456789abcdef";
+    o.spec_page_html = "<!doctype html><title>Spec</title>";
+    o.spec_assets_dir = dir.string();
+    SessionApp app(o);
+    const uint16_t port = app.port();
+    const std::string q = "?token=" + o.viewer_token;
+    const Response js = read_response(send_request(port, "GET", "/v0/spec/caliper-views-loader.js" + q, ""));
+    CHECK(js.status == 200);
+    CHECK(js.body == loader);
+    CHECK(js.headers.at("content-type") == "text/javascript; charset=utf-8");
+    const Response w = read_response(send_request(port, "GET", "/v0/spec/caliper-views.wasm" + q, ""));
+    CHECK(w.status == 200);
+    CHECK(w.body == wasm);
+    CHECK(w.headers.at("content-type") == "application/wasm");
+    // A missing file, a file of the folder by another name, a path and no token.
+    CHECK(read_response(send_request(port, "GET", "/v0/spec/caliper-views.js" + q, "")).status == 404);
+    CHECK(read_response(send_request(port, "GET", "/v0/spec/api.json" + q, "")).status == 404);
+    CHECK(read_response(send_request(port, "GET", "/v0/spec/../caliper-views.wasm" + q, "")).status != 200);
+    CHECK(read_response(send_request(port, "GET", "/v0/spec/caliper-views.wasm", "")).status == 401);
+    // The page may load them and compile WebAssembly, from its own origin only.
+    const Response page = read_response(send_request(port, "GET", "/v0/spec" + q, ""));
+    const std::string& csp = page.headers.at("content-security-policy");
+    CHECK(csp.find("script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'") != std::string::npos);
+    CHECK(csp.find("connect-src 'self'") != std::string::npos);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("api commands: a build without the views' files answers 404 for them") {
+    caliper_api::Options o;
+    o.viewer_token = "api_viewer_token-0123456789abcdef";
+    o.spec_page_html = "<!doctype html><title>Spec</title>";
+    SessionApp app(o);
+    CHECK(read_response(send_request(app.port(), "GET", "/v0/spec/caliper-views-loader.js?token=" + o.viewer_token, "")).status ==
+          404);
+}
+
 TEST_CASE("api commands: a destructive command from mcp or agent is held while the person decides") {
     SessionApp app;
     const uint16_t port = app.port();

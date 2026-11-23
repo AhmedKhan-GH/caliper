@@ -107,7 +107,7 @@ Each event has the keys `seq`, `time`, `kind`, `panel`, `view` and `origin`. The
 | `run` | The attached script changed | `change`, then the keys of the change |
 | `spec` | A command changed the open spec | `command`, `event`, `applet` |
 | `approval` | A card asked or was decided | `approval`, `command`, `state`, `target` |
-| `program` | A program or a stage changed its state ([GPU Programs and Stages](gpu-programs.md#program-events)) | `program`, `change`, `host`, `code`, `message`, `line`, `column` |
+| `program` | A program changed its state ([GPU Programs](gpu-programs.md#program-events)) | `program`, `change`, `host`, `code`, `message`, `line`, `column` |
 
 A pick in a scene panel has the panel id in `panel` and the name of the scene in `view`. A pick or a selection in a live view outside a spec has `panel` null. The key `index` is the index of the item in the batch that the script sent. The key `row_id` is its row in the source tensor of the script, or null. The key `position` is the point that the click hit in scene coordinates, or null without depth. Each entry of `entities` in a selection has `entity`, `primitive`, `indices` and `row_ids`, and an empty list means that the selection was cleared. The key `truncated` is true when the selection held more than 32,768 items.
 

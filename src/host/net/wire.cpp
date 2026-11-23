@@ -1310,6 +1310,87 @@ void scene_flags(const Json& m, M& out) {
     if (const Json* v = opt(m, "cursor", is_u32, "a uint32")) out.cursor = u32(*v);
 }
 
+bool program_id_ok(const Json* v);
+bool piece_pin_ok(const Json& v);
+bool param_name_ok(const std::string& s);
+
+// The library piece of each part, and of each form of an image (the piece form of SCENE_UPDATE).
+bool scene_piece_fits(int part, const std::string& name, const Json& params) {
+    switch (part) {
+        case kPoints: return name == "points";
+        case kLines: return name == "lines";
+        case kArrows: return name == "arrows";
+        case kBoxes: return name == "boxes";
+        case kMesh: return name == "mesh";
+        case kImage: {
+            const Json* form = params.find("form");
+            const std::string f = form && form->is_string() ? form->as_string() : "";
+            return (f == CALIPER_NET_FORM_COLOR && name == "image") || (f == CALIPER_NET_FORM_DEPTH && name == "depth") ||
+                   (f == CALIPER_NET_FORM_SEGMENTATION && name == "segmentation");
+        }
+        default: return false;
+    }
+}
+
+// The keys of the piece form, in the order program, piece, resources, arrays; then the part's keys, and no
+// array section.
+void scene_piece_form(const Frame& f, const Json& m, int part, SceneUpdate& u) {
+    u.program = req(m, "program", [](const Json& v) { return v.is_string() && scene_program_id(v.as_string()); },
+                    "a scene program id scene.<n> of 1 to 9 digits")
+                    .as_string();
+    u.piece = req(
+        m, "piece",
+        [](const Json& v) {
+            // A library pin: name and version as a pin's, and the hash optional.
+            if (!v.is_object()) return false;
+            Json p = v;
+            if (!p.find("hash")) p.set("hash", Json(std::string("sha256:") + std::string(64, '0')));
+            return piece_pin_ok(p);
+        },
+        "a library pin {name, version} with an optional hash");
+    const std::string name = u.piece.find("name")->as_string();
+    const bool image_piece = name == "image" || name == "depth" || name == "segmentation";
+    if (part == kCamera || (part == kImage ? !image_piece : !scene_piece_fits(part, name, Json::object())))
+        bad("the part '" + u.part + "' has no library piece '" + name + "'");
+    u.resources = req(
+        m, "resources",
+        [](const Json& v) {
+            if (!v.is_object() || v.size() < 1 || v.size() > CALIPER_NET_MAX_RESOURCES) return false;
+            for (const auto& kv : v.members())
+                if (!param_name_ok(kv.first) || !is_u32(kv.second)) return false;
+            return true;
+        },
+        "an object of 1 to 8 resource ids, each with a uint32 count");
+    const Json& names = req(
+        m, "arrays",
+        [](const Json& v) {
+            if (!v.is_array()) return false;
+            for (const Json& x : v.items())
+                if (!x.is_string()) return false;
+            return true;
+        },
+        "a list of array names");
+    const char* const* table = scene_part_sections(part);
+    int last = -1;
+    bool ok = names.size() > 0;
+    for (const Json& x : names.items()) {
+        int at = -1;
+        for (int k = 0; table[k]; ++k)
+            if (x.as_string() == table[k]) at = k;
+        ok = ok && at > last && (last >= 0 || at == 0);
+        last = at;
+        u.names.push_back(x.as_string());
+    }
+    if (!ok) bad("'arrays' must list the arrays of '" + u.part + "' in their order from its first, each once");
+    if (!u.split.is_null()) bad("an update in the piece form is never split");
+    u.params = scene_part_keys(m, part);
+    if (part == kImage && !scene_piece_fits(part, name, u.params))
+        bad("this form of an image has no piece '" + name + "'");
+    for (int k = 0; table[k]; ++k)
+        if (f.section(table[k])) bad(std::string("an update in the piece form carries no array section, got '") +
+                                     table[k] + "'");
+}
+
 SceneUpdate scene_update(const Frame& f) {
     const Json& m = f.meta;
     SceneUpdate u;
@@ -1321,8 +1402,11 @@ SceneUpdate scene_update(const Frame& f) {
     scene_flags(m, u);
     if (const Json* v = opt(m, "axes", is_list, "a list")) u.axes = *v;
     if (const Json* v = opt(m, "items", is_name, "an item space name")) u.items = v->as_string();
-    if (const Json* sp = opt(m, "split", is_obj, "an object")) {
-        u.split = *sp;
+    const Json* sp = opt(m, "split", is_obj, "an object");
+    if (sp) u.split = *sp;
+    if (m.find("program")) {
+        scene_piece_form(f, m, part, u);
+    } else if (sp) {
         scene_piece(f, m, part, u);
     } else {
     u.params = scene_part_keys(m, part);
@@ -1439,6 +1523,14 @@ void scene_update_to_meta(const SceneUpdate& u, Json& m, std::vector<Section>& s
     scene_write_common(m, u);
     m.set("path", u.path);
     m.set("part", u.part);
+    if (u.program) {
+        m.set("program", *u.program);
+        m.set("piece", u.piece);
+        m.set("resources", u.resources);
+        Json names = Json::array();
+        for (const std::string& n : u.names) names.push(Json(n));
+        m.set("arrays", names);
+    }
     const bool camera = u.part == CALIPER_NET_PART_CAMERA;
     for (const auto& kv : u.params.members()) {
         const std::string& k = kv.first;
@@ -1794,6 +1886,7 @@ bool program_id_ok(const Json* v) {
     if (!v || !v->is_string()) return false;
     const std::string& s = v->as_string();
     if (s.empty() || s.size() > CALIPER_NET_PROGRAM_ID_MAX) return false;
+    if (s.compare(0, 6, CALIPER_NET_SCENE_PROGRAM_PREFIX) == 0) return scene_program_id(s);
     if (s.compare(0, 9, "operator.") == 0) return operator_id_ok(s);
     if (!lower(s[0])) return false;
     for (char c : s)
@@ -1982,9 +2075,12 @@ void program_instance(const Frame& f, Program* p) {
     if (!p->derive && !p->draw) bad("an instance of a piece carries the section 'derive' or 'draw'");
 }
 
-// RESOURCE, in _wire.py's order: program, resource, step, count, stride, width and height, the byte limit
-// on count before any product, then the section. Each product below is of values already bounded, thus
-// none wraps: width and height are at most 4096, and count is at most RESOURCE_MAX_BYTES / stride.
+// RESOURCE, in _wire.py's order: program, resource, step, count, stride, width and height, format,
+// element and elements, the keys of "split" (version, parts, part, first), the byte limit on count before any product (a version in parts
+// holds at most 128 MiB for buffers or 256 MiB for textures), then the section. Products use bounded
+// values, thus none wraps: width and height are at most 8192, count is at most the byte limit
+// divided by stride, and a part's first element is below the count before the count less it is taken.
+// A texture's and a narrow buffer's count is in 32-bit words, thus a part holds whole words.
 Resource resource(const Frame& f) {
     const Json& m = f.meta;
     Resource r;
@@ -1998,22 +2094,74 @@ Resource resource(const Frame& f) {
                            return int_in(v, 4, CALIPER_NET_RESOURCE_STRIDE_MAX) && u64(v) % 4 == 0;
                        }, "a multiple of 4 from 4 to 256"));
     auto side = [](const Json& v) { return int_in(v, 1, CALIPER_NET_RESOURCE_SIDE_MAX); };
-    const Json* width = opt(m, "width", side, "an integer from 1 to 4096");
-    const Json* height = opt(m, "height", side, "an integer from 1 to 4096");
+    const Json* width = opt(m, "width", side, "an integer from 1 to 8192");
+    const Json* height = opt(m, "height", side, "an integer from 1 to 8192");
     if (!width != !height) bad("a texture holds both 'width' and 'height'");
+    const Json* format = opt(m, "format", [](const Json& v) {
+        return one_of(v, {CALIPER_NET_TEXTURE_RGBA8, CALIPER_NET_TEXTURE_R8, CALIPER_NET_TEXTURE_R32UINT});
+    }, "rgba8unorm, r8unorm or r32uint");
+    if (format && !width) bad("'format' belongs to a texture, with 'width' and 'height'");
     if (width) {
-        if (r.stride != 4 || (uint64_t)r.count != u64(*width) * u64(*height))
-            bad("a texture has a stride of 4 and width * height elements");
+        // At most 8192 * 8192 texels of 4 bytes, 2^28 bytes: the product cannot wrap.
+        const uint64_t texels = u64(*width) * u64(*height);
+        const bool r8 = format && format->as_string() == CALIPER_NET_TEXTURE_R8;
+        const uint64_t words = r8 ? (texels + 3) / 4 : texels;
+        if (r.stride != 4 || (uint64_t)r.count != words)
+            bad("a texture has a stride of 4 and the words of its texels as its count");
         r.width = u32(*width);
         r.height = u32(*height);
+        if (format) r.format = format->as_string();
     }
-    if (r.count > CALIPER_NET_RESOURCE_MAX_BYTES / r.stride)
-        bad("a resource holds at most " + std::to_string(CALIPER_NET_RESOURCE_MAX_BYTES) + " bytes");
+    const Json* element = opt(m, "element", [](const Json& v) {
+        return one_of(v, {CALIPER_NET_ELEMENT_U8, CALIPER_NET_ELEMENT_U16});
+    }, "u8 or u16");
+    const Json* elements = opt(m, "elements", is_u32, "a uint32");
+    if (!element != !elements) bad("a buffer of narrow elements holds both 'element' and 'elements'");
+    if (element) {
+        if (width) bad("a texture has no 'element'");
+        // At most 2^32 - 1 elements of 2 bytes in 64 bits: the product cannot wrap.
+        const uint64_t bytes = element->as_string() == CALIPER_NET_ELEMENT_U8 ? 1 : 2;
+        if (r.stride != 4 || (uint64_t)r.count != (u64(*elements) * bytes + 3) / 4)
+            bad("a buffer of narrow elements has a stride of 4 and the words of its elements as its count");
+        r.element = element->as_string();
+        r.elements = u32(*elements);
+    }
+    if (const Json* sp = opt(m, "split", is_obj, "an object")) {
+        auto need = [&](const char* key, auto ok, const char* what) -> const Json& {
+            const Json* v = sp->find(key);
+            if (!v || v->is_null() || !ok(*v)) bad(std::string("'split.") + key + "' must be " + what);
+            return *v;
+        };
+        Resource::Split sl;
+        sl.version = u64(need("version", is_safe_uint, "an unsigned integer"));
+        sl.parts = u32(need("parts", [](const Json& v) { return int_in(v, 2, CALIPER_NET_RESOURCE_MAX_PARTS); },
+                            "an integer from 2 to 32"));
+        sl.part = u32(need("part", [&](const Json& v) { return int_in(v, 0, sl.parts - 1); },
+                           "a part number below 'parts'"));
+        sl.first = u32(need("first", is_u32, "a uint32"));
+        r.split = sl;
+    }
+    const uint32_t version_max = r.width ? CALIPER_NET_RESOURCE_TEXTURE_VERSION_MAX_BYTES
+                                         : CALIPER_NET_RESOURCE_VERSION_MAX_BYTES;
+    const uint32_t max_bytes = r.split ? version_max : CALIPER_NET_RESOURCE_MAX_BYTES;
+    if (r.count > max_bytes / r.stride)
+        bad(std::string(r.split ? "a resource in parts" : "a resource") + " holds at most " + std::to_string(max_bytes) +
+            " bytes");
     const Section* s = f.section(CALIPER_NET_SECTION_RESOURCE);
     if (!s || !s->is(CALIPER_NET_DTYPE_U8, 1)) bad("a resource needs a (B,) u8 'resource' section");
-    const uint64_t want = (uint64_t)r.count * r.stride;
-    if (s->shape[0] < 0 || (uint64_t)s->shape[0] != want)
-        bad("'resource' holds count * stride = " + std::to_string(want) + " bytes, got " + std::to_string(s->shape[0]));
+    if (r.split) {
+        const Resource::Split& sl = *r.split;
+        if (sl.part == 0 && sl.first != 0) bad("part 0 of a resource starts at element 0");
+        if (sl.first >= r.count) bad("'split.first' must lie below the count");
+        const int64_t b = s->shape[0];
+        if (b <= 0 || (uint64_t)b % r.stride != 0 || (uint64_t)b / r.stride > (uint64_t)r.count - sl.first)
+            bad("a part of a resource holds whole elements from 'split.first' up to the count");
+    } else {
+        const uint64_t want = (uint64_t)r.count * r.stride;
+        if (s->shape[0] < 0 || (uint64_t)s->shape[0] != want)
+            bad("'resource' holds count * stride = " + std::to_string(want) + " bytes, got " +
+                std::to_string(s->shape[0]));
+    }
     r.data = *s;
     return r;
 }
@@ -2026,6 +2174,17 @@ void resource_to_meta(const Resource& r, Json& m, std::vector<Section>& sections
     m.set("stride", r.stride);
     if (r.width) m.set("width", *r.width);
     if (r.height) m.set("height", *r.height);
+    if (r.format) m.set("format", *r.format);
+    if (r.element) m.set("element", *r.element);
+    if (r.elements) m.set("elements", *r.elements);
+    if (r.split) {
+        Json sp = Json::object();
+        sp.set("version", r.split->version);
+        sp.set("part", r.split->part);
+        sp.set("parts", r.split->parts);
+        sp.set("first", r.split->first);
+        m.set("split", sp);
+    }
     sections.push_back(Section::make(CALIPER_NET_SECTION_RESOURCE, CALIPER_NET_DTYPE_U8, {(int64_t)r.data.size},
                                      r.data.data, r.data.size));
 }
@@ -2900,6 +3059,115 @@ SplitUpdates::Result SplitUpdates::add(const SceneUpdate& piece, WholeUpdate* ou
         ++discarded_;
         return fail(e.message);
     }
+}
+
+bool SplitResources::holds(const std::string& program, const std::string& resource) const {
+    for (const Assembly& a : open_)
+        if (a.head.program == program && a.head.resource == resource) return true;
+    return false;
+}
+
+uint64_t SplitResources::held_bytes() const {
+    uint64_t n = 0;
+    for (const Assembly& a : open_) n += a.bytes ? a.bytes->size() : 0;
+    return n;
+}
+
+SplitResources::Result SplitResources::add(const Resource& r, WholeResource* out, std::string* err) {
+    ++frames_;
+    for (auto it = open_.begin(); it != open_.end();) {   // the next part did not come in time
+        if (frames_ - it->last_frame > CALIPER_NET_RESOURCE_PART_WAIT) {
+            ++expired_;
+            it = open_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    auto held = std::find_if(open_.begin(), open_.end(), [&](const Assembly& a) {
+        return a.head.program == r.program && a.head.resource == r.resource;
+    });
+    if (!r.split || r.split->part == 0) {   // a newer version of the resource
+        if (held != open_.end()) {
+            ++discarded_;
+            open_.erase(held);
+        }
+    }
+    if (!r.split) {
+        if (out) {
+            out->resource = r;
+            out->keep.reset();
+        }
+        return Result::Whole;
+    }
+    const Resource::Split& sl = *r.split;
+    const std::string name = "'" + r.program + "/" + r.resource + "'";
+    // The decoder checked that the part holds whole elements from sl.first up to the count, and that the
+    // count times the stride is at most 256 MiB for textures or 128 MiB for buffers: no product or sum wraps.
+    const uint64_t n = r.data.size / r.stride;
+    if (sl.part == 0) {
+        if (open_.size() >= CALIPER_NET_MAX_INCOMPLETE_UPDATES) {
+            ++discarded_;
+            open_.erase(open_.begin());
+        }
+        Assembly a;
+        a.head = r;
+        a.head.data = Section();
+        a.next_first = n;
+        a.last_frame = frames_;
+        if (copy_) {
+            a.bytes = std::make_shared<std::vector<uint8_t>>((size_t)r.count * r.stride);
+            std::memcpy(a.bytes->data(), r.data.data, r.data.size);
+        }
+        open_.push_back(std::move(a));
+        return Result::Pending;
+    }
+    if (held == open_.end() || held->head.split->version != sl.version) {
+        ++dropped_;   // a part of a version whose part 0 is not held
+        return Result::Dropped;
+    }
+    auto refuse = [&](const std::string& why) {
+        ++discarded_;
+        open_.erase(held);
+        if (err) *err = why;
+        return Result::Refused;
+    };
+    const Resource& h = held->head;
+    if (r.step != h.step || r.count != h.count || r.stride != h.stride || r.width != h.width ||
+        r.height != h.height || r.format != h.format || r.element != h.element || r.elements != h.elements ||
+        sl.parts != h.split->parts)
+        return refuse("a part of the resource " + name + " differs from its part 0");
+    if (sl.part != held->next_part || sl.first != held->next_first)
+        return refuse("a part of the resource " + name + " comes out of order");
+    const uint64_t end = held->next_first + n;
+    const bool last = sl.part + 1 == sl.parts;
+    if (last != (end == h.count))
+        return refuse(last ? "the parts of the resource " + name + " end before its count"
+                           : "a part of the resource " + name + " before the last reaches its count");
+    if (copy_) std::memcpy(held->bytes->data() + held->next_first * h.stride, r.data.data, r.data.size);
+    held->next_part += 1;
+    held->next_first = end;
+    held->last_frame = frames_;
+    if (!last) return Result::Pending;
+    if (out) {
+        out->resource = h;
+        out->resource.split.reset();
+        out->keep = held->bytes;
+        if (held->bytes)
+            out->resource.data = Section::make(CALIPER_NET_SECTION_RESOURCE, CALIPER_NET_DTYPE_U8,
+                                               {(int64_t)held->bytes->size()}, held->bytes->data(),
+                                               held->bytes->size());
+    }
+    open_.erase(held);
+    return Result::Whole;
+}
+
+bool scene_program_id(const std::string& id) {
+    static const std::string kPrefix = CALIPER_NET_SCENE_PROGRAM_PREFIX;
+    if (id.size() <= kPrefix.size() || id.size() > kPrefix.size() + 9 || id.compare(0, kPrefix.size(), kPrefix) != 0)
+        return false;
+    for (size_t i = kPrefix.size(); i < id.size(); ++i)
+        if (id[i] < '0' || id[i] > '9') return false;
+    return true;
 }
 
 }  // namespace wire

@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iterator>
+#include <utility>
 
 namespace caliper_web {
 
@@ -209,14 +210,20 @@ public:
             const auto v = from.versions.find(resource);
             if (v == from.versions.end()) return;
             latest = std::max(latest, v->second.step);
-            if (rt.resource_step(as) == v->second.step && given_epoch_[p.id + "/" + as] == from.epoch) return;
+            const auto version = std::make_pair(from.epoch, v->second.serial);
+            if (rt.resource_step(as) == v->second.step && given_[p.id + "/" + as] == version) return;
             cd::ResourceVersion r;
             r.resource = as;
             r.step = v->second.step;
+            r.serial = v->second.serial;
             r.count = v->second.count;
-            r.bytes = v->second.bytes.data();
-            r.size = v->second.bytes.size();
-            if (rt.set_resource(r).ok()) given_epoch_[p.id + "/" + as] = from.epoch;
+            r.width = v->second.width;
+            r.height = v->second.height;
+            r.format = v->second.format;
+            r.elements = v->second.elements;
+            r.bytes = v->second.bytes->data();
+            r.size = v->second.bytes->size();
+            if (rt.set_resource(r).ok()) given_[p.id + "/" + as] = version;
         };
         std::uint64_t epoch = p.epoch;
         for (const cs::Resource& res : p.piece.resources)
@@ -235,6 +242,7 @@ public:
             epoch = std::max(epoch, from->second->epoch);
         }
         in->params = pack_params(p.piece, p.values);
+        in->selection = owner_.selection_;
         // The module keeps no history: the newest version is the cursor's, and the view is live.
         in->cursor_step = latest;
         in->latest_step = latest;
@@ -253,10 +261,15 @@ public:
 private:
     WebPrograms& owner_;
     std::string panel_;
-    std::map<std::string, std::uint64_t> given_epoch_;
+    std::map<std::string, std::pair<std::uint64_t, std::uint64_t>> given_;
 };
 
 WebPrograms::WebPrograms(WGPUDevice device) : device_(device) {}
+
+std::uint32_t WebPrograms::pick_id_of(const std::string& program) const {
+    const auto it = programs_.find(program);
+    return it == programs_.end() ? 0u : it->second->pick_id;
+}
 WebPrograms::~WebPrograms() = default;
 
 void WebPrograms::on_program(const caliper_net::wire::Program& m) {
@@ -291,7 +304,7 @@ void WebPrograms::on_program(const caliper_net::wire::Program& m) {
     for (auto v = p->versions.begin(); v != p->versions.end();) {
         const auto d = p->published.find(v->first);
         const bool fits = d != p->published.end() && v->second.count <= d->second.count &&
-                          v->second.bytes.size() <= d->second.bytes;
+                          v->second.bytes->size() <= d->second.bytes;
         v = fits ? std::next(v) : p->versions.erase(v);
     }
     if (p->refused.ok()) p->refused = p->check.start(device_, p->piece);
@@ -299,17 +312,35 @@ void WebPrograms::on_program(const caliper_net::wire::Program& m) {
     programs_[m.id] = std::move(p);
 }
 
-void WebPrograms::on_resource(const caliper_net::wire::Resource& r) {
+void WebPrograms::on_resource(const caliper_net::wire::Resource& part) {
+    // The parts of a version in parts are put together first: a version is shown whole or not at all.
+    caliper_net::wire::WholeResource whole;
+    std::string err;
+    if (parts_.add(part, &whole, &err) != caliper_net::wire::SplitResources::Result::Whole) return;
+    const caliper_net::wire::Resource& r = whole.resource;
     auto it = programs_.find(r.program);
     if (it == programs_.end()) return;   // a resource before its program: the next version follows it
     Program& p = *it->second;
     if (!keeps_version(p.published, r)) return;   // no resource that the piece publishes, or above its size
+    // All kept versions stay within kKeptBytesMax, as the app's step history keeps its resources: a version
+    // that would pass it is not kept, and the program draws the version it has.
+    std::uint64_t kept = 0;
+    for (const auto& [id, q] : programs_)
+        for (const auto& [rid, v] : q->versions)
+            if (v.bytes && !(q.get() == &p && rid == r.resource)) kept += v.bytes->size();
+    if (kept + r.data.size > kKeptBytesMax) return;
     Version& v = p.versions[r.resource];
     const std::int64_t step = std::int64_t(std::min<std::uint64_t>(r.step, std::uint64_t(INT64_MAX)));
     if (v.step >= 0 && step < v.step) ++p.epoch;   // the run went back (a new attachment or a fork)
     v.step = step;
+    v.serial = ++resource_serial_;
     v.count = r.count;
-    v.bytes.assign(r.data.data, r.data.data + r.data.size);
+    v.width = r.width.value_or(0);
+    v.height = r.height.value_or(0);
+    v.format = r.format.value_or(std::string());
+    v.elements = r.elements;
+    v.bytes = whole.keep ? whole.keep
+                         : std::make_shared<const std::vector<std::uint8_t>>(r.data.data, r.data.data + r.data.size);
 }
 
 void WebPrograms::pump(const std::vector<std::string>& device_errors) {

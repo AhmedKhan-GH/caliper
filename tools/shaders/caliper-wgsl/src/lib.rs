@@ -15,7 +15,7 @@ use naga::proc::{BoundsCheckPolicies, BoundsCheckPolicy, Layouter};
 use naga::valid::{Capabilities, ModuleInfo, ValidationFlags, Validator};
 use naga::{AddressSpace, Binding as IoBinding, ImageClass, Interpolation, Sampling, ScalarKind, ShaderStage, SourceLocation, TypeInner};
 
-const ABI_VERSION: u32 = 3;
+const ABI_VERSION: u32 = 4;
 const NAGA_VERSION: &CStr = c"30.0.2";
 
 const STATUS_OK: i32 = 0;
@@ -72,6 +72,10 @@ pub struct Options {
     spirv_version_minor: u32,
     metal_vertex_buffer_base: u32,
     bounds_checks: u32,
+    // NULL, or the name of the one entry point that the module keeps: the others are dropped
+    // before the unused declarations, thus the module's bindings are those of that entry point.
+    // The library reads it only during caliper_wgsl_module_create and never keeps the pointer.
+    entry_point: *const c_char,
 }
 
 // The developer-time driver's values, except bounds_checks: checked unless a caller asks for the
@@ -88,6 +92,7 @@ const DEFAULT_OPTIONS: Options = Options {
     spirv_version_minor: 3,
     metal_vertex_buffer_base: 16,
     bounds_checks: BOUNDS_CHECKED,
+    entry_point: ptr::null(),
 };
 
 #[repr(C)]
@@ -123,6 +128,7 @@ pub struct EntryPoint {
     name: *const c_char,
     stage: u32,
     workgroup_size: [u32; 3],
+    workgroup_memory: u32,
 }
 
 #[repr(C)]
@@ -169,6 +175,7 @@ struct Entry {
     name: CString,
     stage: ShaderStage,
     workgroup_size: [u32; 3],
+    workgroup_memory: u32,   // bytes of the var<workgroup> declarations that the entry point uses
     io: Vec<Io>,
 }
 
@@ -348,8 +355,10 @@ fn check_source_size(size: usize, options: &Options) -> Result<(), Failure> {
     Ok(())
 }
 
-// The options and the size of source are already checked.
-fn create(source: &[u8], options: Options) -> Result<Module, Failure> {
+// The options and the size of source are already checked; `keep` is the entry point that the
+// module keeps alone, from options.entry_point.
+fn create(source: &[u8], mut options: Options, keep: Option<&str>) -> Result<Module, Failure> {
+    options.entry_point = ptr::null();
     let text = std::str::from_utf8(source).map_err(|e| {
         let mut f = Failure::new(STATUS_PARSE, "the source is not valid UTF-8");
         f.location = Some(utf8_location(source, e.valid_up_to()));
@@ -376,6 +385,12 @@ fn create(source: &[u8], options: Options) -> Result<Module, Failure> {
             STATUS_UNSUPPORTED,
             "override declarations are not supported: Naga's MSL writer cannot declare them",
         ));
+    }
+    if let Some(name) = keep {
+        module.entry_points.retain(|ep| ep.name == name);
+        if module.entry_points.is_empty() {
+            return Err(Failure::new(STATUS_ARGUMENT, format!("the source has no entry point named {name}")));
+        }
     }
     naga::compact::compact(&mut module, naga::compact::KeepUnused::No);
     let info = validator.validate(&module).map_err(validation)?;
@@ -480,10 +495,22 @@ fn create(source: &[u8], options: Options) -> Result<Module, Failure> {
                 name: c_string(&ep.name),
                 stage: ep.stage,
                 workgroup_size: if ep.stage == ShaderStage::Compute { ep.workgroup_size } else { [0; 3] },
+                workgroup_memory: 0,
                 io,
             }
         })
-        .collect();
+        .collect::<Vec<Entry>>();
+    let mut entries = entries;
+    for (i, e) in entries.iter_mut().enumerate() {
+        let ep_info = info.get_entry_point(i);
+        let mut bytes: u64 = 0;
+        for (handle, var) in module.global_variables.iter() {
+            if var.space == AddressSpace::WorkGroup && !ep_info[handle].is_empty() {
+                bytes = bytes.saturating_add(layouter[var.ty].size as u64);
+            }
+        }
+        e.workgroup_memory = u32::try_from(bytes).unwrap_or(u32::MAX);
+    }
     Ok(Module { module, info, options, resources, entries })
 }
 
@@ -717,13 +744,20 @@ pub unsafe extern "C" fn caliper_wgsl_module_create(
         let options = unsafe { options.as_ref() }.copied().unwrap_or(DEFAULT_OPTIONS);
         check_options(&options)?;
         check_source_size(size, &options)?;
+        let keep = if options.entry_point.is_null() {
+            None
+        } else {
+            // SAFETY: entry_point is NULL or a NUL-terminated string, as the header requires.
+            let name = unsafe { CStr::from_ptr(options.entry_point) };
+            Some(name.to_str().map_err(|_| Failure::new(STATUS_ARGUMENT, "entry_point is not UTF-8"))?.to_owned())
+        };
         let bytes: &[u8] = if size == 0 {
             &[]
         } else {
             // SAFETY: source holds size readable bytes, as the header requires.
             unsafe { std::slice::from_raw_parts(source as *const u8, size) }
         };
-        let m = create(bytes, options)?;
+        let m = create(bytes, options, keep.as_deref())?;
         // SAFETY: as above.
         unsafe { module.write(Box::into_raw(Box::new(m))) };
         Ok(())
@@ -788,7 +822,14 @@ pub unsafe extern "C" fn caliper_wgsl_module_entry_point(module: *const Module, 
             _ => 2,
         };
         // SAFETY: entry_point is non-null and writable, as the header requires.
-        unsafe { entry_point.write(EntryPoint { name: e.name.as_ptr(), stage, workgroup_size: e.workgroup_size }) };
+        unsafe {
+            entry_point.write(EntryPoint {
+                name: e.name.as_ptr(),
+                stage,
+                workgroup_size: e.workgroup_size,
+                workgroup_memory: e.workgroup_memory,
+            })
+        };
         Ok(())
     })
 }
@@ -967,7 +1008,7 @@ fn run(@builtin(global_invocation_id) id: vec3<u32>) {
     fn module_of(source: &str, bounds_checks: u32) -> Module {
         let mut options = DEFAULT_OPTIONS;
         options.bounds_checks = bounds_checks;
-        create(source.as_bytes(), options).unwrap_or_else(|f| panic!("{}", f.report))
+        create(source.as_bytes(), options, None).unwrap_or_else(|f| panic!("{}", f.report))
     }
 
     fn msl_text(m: &Module) -> String {
@@ -1088,6 +1129,80 @@ fn fs(in: VsOut, @location(5) @interpolate(flat, first) extra: vec2<i32>) -> Pic
 @fragment
 fn plain() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }
 "#;
+
+    // Two compute entry points over four storage buffers: each uses two of them, and one uses
+    // workgroup memory.
+    const TWO_PASSES: &str = "@group(0) @binding(0) var<storage, read> a: array<f32>;
+@group(0) @binding(1) var<storage, read_write> b: array<f32>;
+@group(0) @binding(2) var<storage, read> c: array<u32>;
+@group(0) @binding(3) var<storage, read_write> d: array<u32>;
+var<workgroup> shared_sum: array<u32, 64>;
+@compute @workgroup_size(64)
+fn first(@builtin(global_invocation_id) id: vec3<u32>) { b[id.x] = a[id.x]; }
+@compute @workgroup_size(64)
+fn second(@builtin(local_invocation_index) i: u32, @builtin(global_invocation_id) id: vec3<u32>) {
+    shared_sum[i] = c[id.x];
+    workgroupBarrier();
+    d[id.x] = shared_sum[63u - i];
+}
+";
+
+    fn module_keeping(source: &str, keep: Option<&str>) -> Result<Module, Failure> {
+        create(source.as_bytes(), DEFAULT_OPTIONS, keep)
+    }
+
+    #[test]
+    fn an_entry_point_kept_alone_has_only_its_own_bindings() {
+        let all = module_keeping(TWO_PASSES, None).unwrap_or_else(|f| panic!("{}", f.report));
+        assert_eq!(all.resources.len(), 4);
+        assert_eq!(all.entries.len(), 2);
+        let names = |m: &Module| m.resources.iter().map(|r| r.name.to_str().unwrap().to_owned()).collect::<Vec<_>>();
+        let second = module_keeping(TWO_PASSES, Some("second")).unwrap_or_else(|f| panic!("{}", f.report));
+        assert_eq!(names(&second), vec!["c", "d"]);
+        assert_eq!(second.entries.len(), 1);
+        // The Metal indices start again from 0 for the kept entry point's bindings.
+        assert_eq!(second.resources.iter().map(|r| r.metal_index).collect::<Vec<_>>(), vec![0, 1]);
+        let first = module_keeping(TWO_PASSES, Some("first")).unwrap_or_else(|f| panic!("{}", f.report));
+        assert_eq!(names(&first), vec!["a", "b"]);
+        let missing = module_keeping(TWO_PASSES, Some("third")).err().map(|f| f.status);
+        assert_eq!(missing, Some(STATUS_ARGUMENT));
+    }
+
+    #[test]
+    fn an_entry_point_reports_the_bytes_of_its_workgroup_memory() {
+        let m = module_keeping(TWO_PASSES, None).unwrap_or_else(|f| panic!("{}", f.report));
+        let bytes = |name: &str| m.entries.iter().find(|e| e.name.to_str() == Ok(name)).unwrap().workgroup_memory;
+        assert_eq!(bytes("first"), 0);
+        assert_eq!(bytes("second"), 256);
+    }
+
+    #[test]
+    fn the_entry_point_option_reaches_the_module_through_the_c_interface() {
+        let keep = CString::new("first").unwrap();
+        let mut options = DEFAULT_OPTIONS;
+        options.entry_point = keep.as_ptr();
+        let mut module: *mut Module = ptr::null_mut();
+        let mut error = empty_error();
+        // SAFETY: the pointers are valid for the call.
+        let status = unsafe {
+            caliper_wgsl_module_create(
+                TWO_PASSES.as_ptr() as *const c_char,
+                TWO_PASSES.len(),
+                &options,
+                &mut module,
+                &mut error,
+            )
+        };
+        assert_eq!(status, STATUS_OK, "{}", message_of(&error));
+        // SAFETY: module came from caliper_wgsl_module_create.
+        unsafe {
+            assert_eq!(caliper_wgsl_module_binding_count(module), 2);
+            assert_eq!(caliper_wgsl_module_entry_point_count(module), 1);
+            assert!((*module).options.entry_point.is_null());
+            caliper_wgsl_module_destroy(module);
+            caliper_wgsl_error_free(&mut error);
+        }
+    }
 
     #[test]
     fn entry_points_list_their_locations_with_defaults_and_without_builtins() {

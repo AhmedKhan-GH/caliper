@@ -1,0 +1,44 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 301,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 277,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 112
+  },
+  "meta": {
+    "arrays": [
+      "positions",
+      "colors"
+    ],
+    "part": "mesh",
+    "path": "shapes/tri",
+    "piece": {
+      "name": "mesh",
+      "version": 1
+    },
+    "program": "scene.121",
+    "resources": {
+      "attributes": 3,
+      "faces": 3,
+      "info": 1,
+      "tex": 0,
+      "vertices": 3
+    },
+    "seq": 2,
+    "stamp_ns": 81234567893723,
+    "state": true,
+    "static": true,
+    "sub": 3,
+    "view": "flat"
+  },
+  "meta_offset": 24,
+  "name": "v3_2/scene_update_mesh_colors_bundle",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "scene_update"
+}

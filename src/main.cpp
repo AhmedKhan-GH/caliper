@@ -47,7 +47,6 @@
 #include <caliper_builder/session/piece_commands.h>
 #include <caliper_builder/session/session.h>
 #include "host/spec_runtime/spec_runtime.h"
-#include "host/spec_runtime/spec_stages.h"
 #include "live/live_programs.h"
 #endif
 #include "host/builder/spec_ui_driver.h"
@@ -710,7 +709,7 @@ public:
         session_.set_run_link(&run_link_);
 #if CALIPER_WITH_BUILDER
         // The hosts of GPU programs: the programs run in the attached script,
-        // the stages in the spec runtime's scene panels.
+        // and the spec runtime's scene panels draw the pieces.
         session_.set_program_host(&program_host_);
         // The library's and the workspace's pieces that the programs pin. The
         // host checks the hash against the pin itself, thus the lookup takes
@@ -723,7 +722,7 @@ public:
             if (f.error) return std::nullopt;
             return f.piece;
         });
-        session_.set_stage_host(caliper_host::app_stage_host());
+        session_.set_draw_host(caliper_host::app_draw_status_host());
         // The scene panels' programs draw workspace pieces too.
         caliper_host::set_program_workspace([this] { return session_.workspace(); });
         // The model runner of Hosted Runs (design/hosted-runs.md): its runs
@@ -983,7 +982,7 @@ public:
         session_.set_run_link(nullptr);   // before the attachment goes
 #if CALIPER_WITH_BUILDER
         session_.set_program_host(nullptr);
-        session_.set_stage_host(nullptr);
+        session_.set_draw_host(nullptr);
 #endif
         session_.close();
         // Workers FIRST: a job may hold a pointer into applet state, so every

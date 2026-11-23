@@ -52,22 +52,22 @@ def main() -> int:
         r = run(driver, root, "--check")
         expect(r.returncode == 0, "the committed outputs match their sources")
 
-        # A hand-written MSL for index_clamp: not generated, included by the Metal table.
+        # A hand-written MSL for fill_texture: not generated, included by the Metal table.
         root = fresh(tmp, "hand")
         manifest = root / REL / "manifest.json"
         m = json.loads(manifest.read_text())
-        prog = next(p for p in m["programs"] if p["name"] == "index_clamp")
+        prog = next(p for p in m["programs"] if p["name"] == "fill_texture")
         prog["outputs"] = ["wgsl", "spirv"]
-        prog["hand_written"] = {"msl": "gfx/shaders/hand/index_clamp_msl.h"}
+        prog["hand_written"] = {"msl": "gfx/shaders/hand/fill_texture_msl.h"}
         manifest.write_text(json.dumps(m, indent=2))
-        hand = root / "src" / "host" / "gfx" / "shaders" / "hand" / "index_clamp_msl.h"
+        hand = root / "src" / "host" / "gfx" / "shaders" / "hand" / "fill_texture_msl.h"
         hand.parent.mkdir(parents=True)
         hand.write_text("// hand-written\n")
         r = run(driver, root)
         gen = root / REL / "generated"
         expect(r.returncode == 0, "a program with a hand-written MSL generates")
-        expect(not (gen / "index_clamp_msl.h").exists(), "the hand-written output is not generated")
-        expect('#include "gfx/shaders/hand/index_clamp_msl.h"' in (gen / "programs_metal.h").read_text(),
+        expect(not (gen / "fill_texture_msl.h").exists(), "the hand-written output is not generated")
+        expect('#include "gfx/shaders/hand/fill_texture_msl.h"' in (gen / "programs_metal.h").read_text(),
                "the Metal table includes the hand-written header")
         expect(hand.read_text() == "// hand-written\n", "the hand-written file is left alone")
         expect(run(driver, root, "--check").returncode == 0, "the check passes with the hand-written output")
@@ -77,10 +77,10 @@ def main() -> int:
 
         # A WGSL source that does not compile.
         root = fresh(tmp, "broken")
-        src = root / REL / "scene" / "points.wgsl"
+        src = root / REL / "compute" / "fill_texture.wgsl"
         src.write_text(src.read_text() + "\nfn broken() -> u32 { return 1.5; }\n")
         r = run(driver, root, "--check")
-        expect(r.returncode != 0 and "scene_points does not compile" in r.stderr,
+        expect(r.returncode != 0 and "fill_texture does not compile" in r.stderr,
                "a WGSL source that does not compile fails the check")
         print("      " + "\n      ".join(r.stderr.strip().splitlines()[:4]))
 
@@ -88,10 +88,10 @@ def main() -> int:
         root = fresh(tmp, "stale")
         gen = root / REL / "generated"
         (gen / "uniforms.h").write_text((gen / "uniforms.h").read_text() + "// edited\n")
-        (gen / "scene_mesh_spv.h").unlink()
+        (gen / "fill_texture_spv.h").unlink()
         (gen / "stray.h").write_text("\n")
         r = run(driver, root, "--check")
-        expect(r.returncode != 0 and "differs: uniforms.h" in r.stderr and "missing: scene_mesh_spv.h" in r.stderr
+        expect(r.returncode != 0 and "differs: uniforms.h" in r.stderr and "missing: fill_texture_spv.h" in r.stderr
                and "not generated: stray.h" in r.stderr, "changed, missing and extra files fail the check")
 
     print(f"{len(failures)} failed" if failures else "all passed")

@@ -1,0 +1,48 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 176,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 128,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 130
+  },
+  "meta": {
+    "count": 2,
+    "program": "scene.111",
+    "resource": "picks",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "resource",
+        "shape": [
+          16
+        ]
+      }
+    ],
+    "step": 7,
+    "stride": 8
+  },
+  "meta_offset": 28,
+  "name": "v3_2/resource_scene_lines_segments_bundle_picks",
+  "section_lengths": [
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 16,
+      "name": "resource",
+      "offset": 160,
+      "shape": [
+        16
+      ],
+      "values": [0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0]
+    }
+  ],
+  "type_name": "resource"
+}

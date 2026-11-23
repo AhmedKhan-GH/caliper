@@ -6,7 +6,7 @@ summary = "Mechanistic interpretability for a live-training char GPT (4L/4H/128d
 tag     = "ML"
 
 [compat]
-abi_epoch = 2
+abi_epoch = 3
 min_host  = "0.6.0"
 
 [services]

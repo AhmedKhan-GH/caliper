@@ -1,8 +1,7 @@
 #pragma once
 // caliper_builder::programs: the compiler's reflection, the verdict of a
-// check and the result of a compile, which sandbox.h (the one-pass form and
-// stages) and pieces.h (pieces) share. Only the standard
-// library, so that the browser module can compile the checks of graphics.h.
+// check and the result of a compile, which sandbox.h (the one-pass form) and
+// pieces.h (pieces) share. Only the standard library, so that the browser module can compile the checks of graphics.h.
 #include <array>
 #include <cstdint>
 #include <string>
@@ -54,6 +53,7 @@ struct ReflectedEntry {
     std::string name;
     EntryStage stage = EntryStage::compute;
     std::array<std::uint32_t, 3> workgroup_size{};   // compute only; zeros otherwise
+    std::uint32_t workgroup_memory = 0;               // bytes of the var<workgroup> that a compute entry uses
     std::vector<ReflectedIo> inputs;                  // in the order of the arguments
     std::vector<ReflectedIo> outputs;                 // in the order of the result's members
 };

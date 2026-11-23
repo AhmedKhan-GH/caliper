@@ -2052,7 +2052,14 @@ class SceneUpdate(_Msg):
     TIME_STATE a recorded message answers; ``split`` the key of a piece of a
     split update, whose ``arrays`` then hold the piece's rows, checked against
     the part only once :class:`SplitUpdates` has put the update together, and
-    whose ``params`` are the part's keys in piece 0 and empty in the others."""
+    whose ``params`` are the part's keys in piece 0 and empty in the others.
+
+    The piece form (capability "scene_pieces") has ``program``, the scene program
+    (``scene.<n>``) whose RESOURCE versions came just before it and hold the batch's
+    arrays as the resources of the library piece ``piece`` (the pin: name, version and
+    hash); ``resources`` maps each resource id to the count of that version, and
+    ``names`` lists the part's arrays that the batch held (the key "arrays" on the
+    wire). It carries no array section and no ``split``, thus ``arrays`` is empty."""
     TYPE: ClassVar[MsgType] = MsgType.SCENE_UPDATE
     sub: int
     view: str
@@ -2069,10 +2076,18 @@ class SceneUpdate(_Msg):
     stamp: Any = None
     cursor: int | None = None
     split: dict | None = None
+    program: str | None = None
+    piece: dict | None = None
+    resources: dict | None = None
+    names: list | None = None
 
     def to_meta(self):
         meta = {"sub": self.sub, "view": self.view, "seq": self.seq, "stamp_ns": self.stamp_ns,
                 "path": self.path, "part": self.part}
+        if self.program is not None:
+            meta.update(program=self.program, piece=dict(self.piece),
+                        resources={k: int(v) for k, v in self.resources.items()},
+                        arrays=list(self.names))
         camera = self.part == PART_CAMERA
         for key, v in self.params.items():
             if v is None:
@@ -2098,11 +2113,9 @@ class SceneUpdate(_Msg):
         return meta
 
     def to_sections(self):
-        out = [_section(name, self.arrays[name]) for name in PART_SECTIONS.get(self.part, ())
-               if self.arrays.get(name) is not None]
-        if self.stamp is not None:
-            out.append(_section("stamp", self.stamp))
-        return out
+        if self.arrays or self.split is not None:
+            raise ValueError("per-shape scene updates are read-only recording data")
+        return [] if self.stamp is None else [_section("stamp", self.stamp)]
 
     @classmethod
     def from_frame(cls, f):
@@ -2116,7 +2129,19 @@ class SceneUpdate(_Msg):
         axes = _opt(m, "axes", lambda v: isinstance(v, list), "a list")
         items = _opt(m, "items", _name, "an item space name")
         split = _opt(m, "split", _obj, "an object")
-        if split is not None:
+        program = piece = resources = names = None
+        if "program" in m:
+            program, piece, resources, names = _piece_form(m, part)
+            if split is not None:
+                _bad("an update in the piece form is never split")
+            params = _part_keys(m, part)
+            if part == PART_IMAGE and FORM_PIECE.get(params.get("form")) != piece["name"]:
+                _bad(f"an image of the form {params.get('form')!r} has no piece {piece['name']!r}")
+            for name in PART_SECTIONS[part]:
+                if f.section(name) is not None:
+                    _bad(f"an update in the piece form carries no array section, got {name!r}")
+            arrays = {}
+        elif split is not None:
             params, arrays = _piece(f, m, part, split)
         else:
             params = _part_keys(m, part)
@@ -2125,7 +2150,27 @@ class SceneUpdate(_Msg):
         if "stats" in params:
             params["stats"] = [math.nan if x is None else float(x) for x in params["stats"]]
         return cls(sub, view, seq, stamp_ns, path, part, arrays, params, static, state, axes,
-                   items, stamp, cursor, split)
+                   items, stamp, cursor, split, program, piece, resources, names)
+
+
+def _piece_form(m: dict, part: str) -> tuple:
+    """The keys of the piece form of SCENE_UPDATE, checked in this order: ``program``,
+    ``piece``, ``resources``, ``arrays``."""
+    program = _req(m, "program", scene_program_id, "a scene program id scene.<n> of 1 to 9 digits")
+    piece = _req(m, "piece", _library_pin, "a library pin {name, version} with an optional hash")
+    if piece["name"] not in SCENE_PIECES.get(part, ()):
+        _bad(f"the part {part!r} has no library piece {piece['name']!r}")
+    resources = _req(m, "resources", lambda v: _obj(v) and 1 <= len(v) <= MAX_RESOURCES and all(
+        _param_name(k) and _u32(n) for k, n in v.items()),
+        f"an object of 1 to {MAX_RESOURCES} resource ids, each with a uint32 count")
+    table = PART_SECTIONS[part]
+    names = _req(m, "arrays", lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v),
+                 "a list of array names")
+    if not names or names[0] != table[0] or any(x not in table for x in names) or \
+            [table.index(x) for x in names] != sorted({table.index(x) for x in names}):
+        _bad(f"'arrays' must list the arrays of {part!r} in their order from {table[0]!r}, "
+             f"each once, got {names!r}")
+    return program, dict(piece), dict(resources), list(names)
 
 
 @dataclass
@@ -2874,79 +2919,9 @@ class SplitUpdates:
             raise
 
 
-def split_update(u: SceneUpdate, update: int, max_frame: int = MAX_FRAME_BYTES) -> list:
-    """The pieces of scene update ``u`` (split counter ``update``), each frame
-    within ``max_frame`` bytes, or ``[u]`` when it fits one frame. Rows are cut
-    along the first axis of each array in the part's order; piece 0 carries
-    the part's keys and ``rows``, every piece the stamp. Raises ValueError
-    for an update over MAX_UPDATE_BYTES or one that needs more than MAX_PIECES
-    pieces."""
-    try:
-        _, size = frame_parts(u.TYPE, u.to_meta(), u.to_sections())
-    except WireError:                                # over MAX_FRAME_BYTES: it does not fit
-        size = max_frame + 1
-    if size <= max_frame:
-        return [u]
-    arrays = []
-    for name in PART_SECTIONS[u.part]:
-        a = u.arrays.get(name)
-        if a is not None:
-            arrays.append((name, a.array() if isinstance(a, Section) else np.asarray(a)))
-    total = sum(a.nbytes for _, a in arrays)
-    if total > MAX_UPDATE_BYTES:
-        raise ValueError(f"a scene update of {total} bytes, more than {MAX_UPDATE_BYTES}")
-    # A bound on every piece's head: the header, the section table, padding,
-    # and metadata with the part's keys, the largest "split" key and the
-    # descriptors of the whole arrays.
-    rows = {name: int(a.shape[0]) for name, a in arrays}
-    probe = u.to_meta()
-    probe["split"] = {"update": update, "piece": MAX_PIECES - 1, "pieces": MAX_PIECES,
-                      "first": rows, "rows": rows}
-    sections = [Section.from_array(name, a[:0]) for name, a in arrays]
-    probe["sections"] = [dict(x.descriptor(), shape=[int(n) for n in a.shape])
-                         for x, (_, a) in zip(sections, arrays)]
-    nsec = len(arrays) + (u.stamp is not None)
-    stamp_bytes = 0 if u.stamp is None else 8 * MAX_TIMELINES + SECTION_ALIGN
-    head = HEADER_BYTES + 4 * nsec + len(canonical_json(probe)) + 64 + SECTION_ALIGN * nsec
-    room = max_frame - head - stamp_bytes
-    if room <= 0:
-        raise ValueError(f"a frame of {max_frame} bytes leaves no room for rows")
-    pieces, cur, used = [], {}, 0
-    for name, a in arrays:
-        rowbytes = max(1, a.nbytes // a.shape[0]) if a.shape[0] else 1
-        r = 0
-        while r < a.shape[0]:
-            take = min(a.shape[0] - r, max(0, (room - used) // rowbytes))
-            if take == 0:
-                if not cur:
-                    raise ValueError(f"one row of {name!r} needs more than {room} bytes")
-                pieces.append(cur)
-                cur, used = {}, 0
-                continue
-            cur[name] = (r, a[r:r + take])
-            used += take * rowbytes
-            r += take
-    if cur:
-        pieces.append(cur)
-    if not 2 <= len(pieces) <= MAX_PIECES:
-        raise ValueError(f"the update needs {len(pieces)} pieces; a split update has 2 to "
-                         f"{MAX_PIECES}")
-    out = []
-    for k, cut in enumerate(pieces):
-        sp = {"update": update, "piece": k, "pieces": len(pieces),
-              "first": {name: int(r) for name, (r, _) in cut.items()}}
-        if k == 0:
-            sp["rows"] = rows
-        out.append(SceneUpdate(u.sub, u.view, u.seq, u.stamp_ns, u.path, u.part,
-                               {name: a for name, (_, a) in cut.items()},
-                               dict(u.params) if k == 0 else {}, u.static, u.state, u.axes,
-                               u.items, u.stamp, u.cursor, sp))
-        if frame_parts(u.TYPE, out[-1].to_meta(), out[-1].to_sections())[1] > max_frame:
-            raise ValueError(f"piece {k} would pass {max_frame} bytes")
-    return out
 
 
-__all__ += ["SplitUpdates", "split_update"]
+__all__ += ["SplitUpdates"]
 
 
 # ---------------------------------------------------------------------------
@@ -2980,11 +2955,26 @@ TENSOR_ELEMENTS_MAX = 1000000
 # 3.2 draft, programmable graphics (design/programmable-graphics.md, Resource Message):
 # the capability "resources", RESOURCE and the instance form of PROGRAM.
 CAP_RESOURCES = "resources"
+# The piece form of SCENE_UPDATE: the arrays of an entity part travel as the RESOURCE versions of
+# a scene program, an instance of the part's library piece, and the update names them.
+CAP_SCENE_PIECES = "scene_pieces"
+SCENE_PROGRAM_PREFIX = "scene."
+# The library piece of each part, and of each form of an image.
+SCENE_PIECES = {PART_POINTS: ("points",), PART_LINES: ("lines",), PART_ARROWS: ("arrows",),
+                PART_BOXES: ("boxes",), PART_MESH: ("mesh",),
+                PART_IMAGE: ("image", "depth", "segmentation")}
+FORM_PIECE = {FORM_COLOR: "image", FORM_DEPTH: "depth", FORM_SEGMENTATION: "segmentation"}
 SECTION_DERIVE, SECTION_DRAW, SECTION_COMMON, SECTION_RESOURCE = "derive", "draw", "common", "resource"
 MAX_RESOURCES = 8
 RESOURCE_MAX_BYTES = 67043328      # 64 MiB less 64 KiB: the section fits one frame with its metadata
+RESOURCE_VERSION_MAX_BYTES = 134217728   # buffer: 128 MiB, WebGPU's default largest storage binding
+RESOURCE_TEXTURE_VERSION_MAX_BYTES = 268435456  # texture: 8192 by 8192 four-byte texels
+RESOURCE_MAX_PARTS = 32            # texture versions use at most 32 parts of 8 MiB
+RESOURCE_PART_WAIT = 256           # RESOURCE frames a receiver waits for the next part of a version
 RESOURCE_STRIDE_MAX = 256
-RESOURCE_SIDE_MAX = 4096
+RESOURCE_SIDE_MAX = 8192           # a texture's width and height: WebGPU's default largest 2-D texture
+TEXTURE_RGBA8, TEXTURE_R8, TEXTURE_R32UINT = "rgba8unorm", "r8unorm", "r32uint"   # "format"
+ELEMENT_U8, ELEMENT_U16 = "u8", "u16"   # "element": four or two elements a word
 PIECE_NAME_MAX = 32
 PIECE_VERSION_MAX = 1000000
 PIECE_COMMON_MAX = 589824          # 8 lib modules and common.wgsl of 64 KiB each
@@ -3013,14 +3003,27 @@ def _spec_id(v: str) -> bool:
 
 
 def _program_id(v) -> bool:
-    """A program id: 1 to 55 bytes of [a-z0-9_-], the first a letter, or the id of an
-    operator, ``operator.<id>.<n>``: a spec id, a dot and 1 to 5 digits."""
+    """A program id: 1 to 55 bytes of [a-z0-9_-], the first a letter, the id of an
+    operator, ``operator.<id>.<n>``: a spec id, a dot and 1 to 5 digits, or the id of a
+    scene program, ``scene.<n>`` with 1 to 9 digits (:func:`scene_program_id`)."""
     if not (isinstance(v, str) and 0 < len(v) <= PROGRAM_ID_MAX and v.isascii()):
         return False
+    if v.startswith(SCENE_PROGRAM_PREFIX):
+        return scene_program_id(v)
     if v.startswith("operator."):
         spec, dot, n = v[len("operator."):].rpartition(".")
         return bool(dot) and _spec_id(spec) and 1 <= len(n) <= 5 and all(c in _DIGITS for c in n)
     return _spec_id(v)
+
+
+def scene_program_id(v) -> bool:
+    """The id of a scene program, ``scene.<n>`` with n of 1 to 9 digits: the program whose
+    RESOURCE versions hold the arrays of one entity part of a scene in the piece form of
+    SCENE_UPDATE. No spec program takes such an id, since spec ids hold no dot."""
+    if not (isinstance(v, str) and v.startswith(SCENE_PROGRAM_PREFIX)):
+        return False
+    n = v[len(SCENE_PROGRAM_PREFIX):]
+    return 1 <= len(n) <= 9 and all(c in _DIGITS for c in n)
 
 
 def _param_name(v) -> bool:
@@ -3320,6 +3323,15 @@ def _piece_pin(v) -> bool:
             and isinstance(h, str) and h.startswith("sha256:") and _sha256_hex(h[len("sha256:"):]))
 
 
+def _library_pin(v) -> bool:
+    """The pin of a library piece in the piece form of SCENE_UPDATE: ``name`` and ``version``
+    as in :func:`_piece_pin`, and ``hash`` optional. The viewer draws its own library piece of
+    that name and version, whose version names the layout of its resources."""
+    if not _obj(v):
+        return False
+    return _piece_pin(dict(v, hash=v.get("hash", "sha256:" + "0" * 64)))
+
+
 def _binding(v) -> bool:
     """One value of ``bind``: ``live:<tensor>`` (a tensor name of 1 to 255 bytes) or
     ``program:<id>/<resource>`` (a program id and a resource's WGSL name)."""
@@ -3394,9 +3406,14 @@ class Resource(_Msg):
     published resource of a program, the valid elements that a derive pass wrote
     (``design/programmable-graphics.md``, Resource Message). ``step`` is the run's
     step at the pass, ``count`` the valid elements and ``stride`` the bytes of one;
-    a texture also has ``width`` and ``height``, with a stride of 4 and ``count``
-    their product. The section ``resource`` holds exactly count * stride bytes,
-    and ``data`` is a view of them."""
+    a texture also has ``width`` and ``height`` (1 to RESOURCE_SIDE_MAX each) and
+    optionally ``format`` (rgba8unorm when absent), with a stride of 4 and ``count``
+    the 32-bit words of its texels: width * height, or (width * height + 3) // 4
+    for r8unorm. A buffer of narrow elements has ``element`` ("u8" or "u16") and
+    ``elements``, with a stride of 4 and ``count`` (elements * bytes + 3) // 4. The section ``resource`` holds exactly count * stride bytes,
+    and ``data`` is a view of them. A part of a version in parts (:func:`resource_parts`)
+    also has ``split`` ({version, part, parts, first}), and its section holds whole
+    elements from element ``first`` on."""
     TYPE: ClassVar[MsgType] = MsgType.RESOURCE
     program: str
     resource: str
@@ -3406,11 +3423,16 @@ class Resource(_Msg):
     data: Any = b""
     width: int | None = None
     height: int | None = None
+    split: dict | None = None
+    format: str | None = None
+    element: str | None = None
+    elements: int | None = None
 
     def to_meta(self):
         return _drop_none({"program": self.program, "resource": self.resource, "step": self.step,
                            "count": self.count, "stride": self.stride, "width": self.width,
-                           "height": self.height})
+                           "height": self.height, "format": self.format, "element": self.element,
+                           "elements": self.elements, "split": self.split})
 
     def to_sections(self):
         mv = memoryview(self.data)
@@ -3430,18 +3452,158 @@ class Resource(_Msg):
         height = _opt(m, "height", side, f"an integer from 1 to {RESOURCE_SIDE_MAX}")
         if (width is None) != (height is None):
             _bad("a texture holds both 'width' and 'height'")
-        if width is not None and (stride != 4 or count != width * height):
-            _bad("a texture has a stride of 4 and width * height elements")
-        if count > RESOURCE_MAX_BYTES // stride:
-            _bad(f"a resource holds at most {RESOURCE_MAX_BYTES} bytes")
+        fmt = _opt(m, "format", lambda v: v in (TEXTURE_RGBA8, TEXTURE_R8, TEXTURE_R32UINT),
+                   "rgba8unorm, r8unorm or r32uint")
+        if fmt is not None and width is None:
+            _bad("'format' belongs to a texture, with 'width' and 'height'")
+        if width is not None:
+            texels = width * height
+            words = (texels + 3) // 4 if fmt == TEXTURE_R8 else texels
+            if stride != 4 or count != words:
+                _bad("a texture has a stride of 4 and the words of its texels as its count")
+        element = _opt(m, "element", lambda v: v in (ELEMENT_U8, ELEMENT_U16), "u8 or u16")
+        elements = _opt(m, "elements", _u32, "a uint32")
+        if (element is None) != (elements is None):
+            _bad("a buffer of narrow elements holds both 'element' and 'elements'")
+        if element is not None:
+            if width is not None:
+                _bad("a texture has no 'element'")
+            nbytes = 1 if element == ELEMENT_U8 else 2
+            if stride != 4 or count != (elements * nbytes + 3) // 4:
+                _bad("a buffer of narrow elements has a stride of 4 and the words of its elements as its count")
+        split = _opt(m, "split", _obj, "an object")
+        if split is not None:
+            def need(key, ok, what):
+                v = split.get(key)
+                if v is None or not ok(v):
+                    _bad(f"'split.{key}' must be {what}, got {v!r}")
+                return v
+            version = need("version", _safe_uint, "an unsigned integer")
+            parts = need("parts", _int_in(2, RESOURCE_MAX_PARTS), f"an integer from 2 to {RESOURCE_MAX_PARTS}")
+            part = need("part", _int_in(0, parts - 1), "a part number below 'parts'")
+            first = need("first", _u32, "a uint32")
+            split = {"version": version, "part": part, "parts": parts, "first": first}
+        limit = (RESOURCE_MAX_BYTES if split is None else
+                 RESOURCE_TEXTURE_VERSION_MAX_BYTES if width is not None else RESOURCE_VERSION_MAX_BYTES)
+        if count > limit // stride:
+            _bad(f"{'a resource' if split is None else 'a resource in parts'} holds at most {limit} bytes")
         s = f.section(SECTION_RESOURCE)
         if s is None or s.encoding != Encoding.RAW or s.dtype != DType.U8 or len(s.shape) != 1:
             _bad("a resource needs a (B,) u8 'resource' section")
-        if s.shape[0] != count * stride:
+        if split is not None:
+            b = s.shape[0]
+            if split["part"] == 0 and split["first"] != 0:
+                _bad("part 0 of a resource starts at element 0")
+            if split["first"] >= count:
+                _bad("'split.first' must lie below the count")
+            if b <= 0 or b % stride or b // stride > count - split["first"]:
+                _bad("a part of a resource holds whole elements from 'split.first' up to the count")
+        elif s.shape[0] != count * stride:
             _bad(f"'resource' holds count * stride = {count * stride} bytes, got {s.shape[0]}")
-        return cls(program, resource, step, count, stride, s.data, width, height)
+        return cls(program, resource, step, count, stride, s.data, width, height, split, fmt, element, elements)
+
+
+def resource_parts(r: Resource, version: int, part_bytes: int) -> list:
+    """The parts of the version ``r`` (counter ``version`` of the sender's versions
+    in parts), each with at most ``part_bytes`` bytes of whole elements, as views
+    of ``r.data`` without a copy; ``[r]`` when its section holds at most
+    ``part_bytes`` bytes. Raises ValueError for a version over
+    the texture or buffer byte limit, or one that needs more than RESOURCE_MAX_PARTS parts."""
+    mv = memoryview(r.data)
+    mv = mv.cast("B") if mv.nbytes else memoryview(b"")
+    if r.count * r.stride != mv.nbytes:
+        raise ValueError(f"a version of {r.count} elements of {r.stride} bytes holds {mv.nbytes} bytes")
+    limit = RESOURCE_TEXTURE_VERSION_MAX_BYTES if r.width is not None else RESOURCE_VERSION_MAX_BYTES
+    if mv.nbytes > limit:
+        raise ValueError(f"a version of {mv.nbytes} bytes, more than {limit}")
+    if mv.nbytes <= part_bytes:
+        return [r]
+    per = part_bytes // r.stride
+    if per < 1:
+        raise ValueError(f"a part of {part_bytes} bytes holds no element of {r.stride} bytes")
+    parts = -(-r.count // per)
+    if parts > RESOURCE_MAX_PARTS:
+        raise ValueError(f"a version of {mv.nbytes} bytes needs {parts} parts of {part_bytes} bytes, "
+                         f"more than {RESOURCE_MAX_PARTS}")
+    out = []
+    for k in range(parts):
+        a, b = k * per, min(r.count, (k + 1) * per)
+        out.append(Resource(r.program, r.resource, r.step, r.count, r.stride, mv[a * r.stride:b * r.stride],
+                            r.width, r.height, {"version": version, "part": k, "parts": parts, "first": a},
+                            r.format, r.element, r.elements))
+    return out
+
+
+class SplitResources:
+    """A receiver's versions in parts of one connection. :meth:`add` takes every
+    RESOURCE of the connection in order and returns the whole version, else
+    None. A version in one frame comes back at once. Part 0 allocates the
+    version's count * stride bytes, which the decoder bounded by
+    the texture or buffer byte limit, and each part copies its elements in; the last
+    part returns the whole. A part whose version is not held is dropped and
+    counted. A part out of order, one whose keys differ from part 0, or a last
+    part that does not end at the count raises :class:`MessageError` and
+    discards the version. Part 0 of a newer version, or a version in one frame,
+    of the same resource discards an incomplete one; at most
+    MAX_INCOMPLETE_UPDATES are held, the oldest going first; and one whose next
+    part has not come after RESOURCE_PART_WAIT further RESOURCE frames expires."""
+
+    def __init__(self):
+        self.open: dict = {}                      # (program, resource) -> [head, next_part, next_first, last, bytes]
+        self.frames = 0
+        self.dropped = 0
+        self.discarded = 0
+        self.expired = 0
+
+    def add(self, r: Resource) -> Resource | None:
+        self.frames += 1
+        for k in [k for k, a in self.open.items() if self.frames - a[3] > RESOURCE_PART_WAIT]:
+            del self.open[k]
+            self.expired += 1
+        key = (r.program, r.resource)
+        sp = r.split
+        if (sp is None or sp["part"] == 0) and key in self.open:
+            del self.open[key]
+            self.discarded += 1
+        if sp is None:
+            return r
+        data = memoryview(r.data).cast("B") if memoryview(r.data).nbytes else memoryview(b"")
+        n = data.nbytes // r.stride
+        if sp["part"] == 0:
+            while len(self.open) >= MAX_INCOMPLETE_UPDATES:
+                del self.open[next(iter(self.open))]
+                self.discarded += 1
+            buf = bytearray(r.count * r.stride)
+            buf[:data.nbytes] = data
+            self.open[key] = [r, 1, n, self.frames, buf]
+            return None
+        a = self.open.get(key)
+        if a is None or a[0].split["version"] != sp["version"]:
+            self.dropped += 1
+            return None
+        h, name = a[0], f"'{r.program}/{r.resource}'"
+
+        def refuse(why):
+            del self.open[key]
+            self.discarded += 1
+            raise MessageError(ERR_BAD_REQUEST, why)
+        if (r.step, r.count, r.stride, r.width, r.height, r.format, r.element, r.elements, sp["parts"]) != \
+                (h.step, h.count, h.stride, h.width, h.height, h.format, h.element, h.elements, h.split["parts"]):
+            refuse(f"a part of the resource {name} differs from its part 0")
+        if sp["part"] != a[1] or sp["first"] != a[2]:
+            refuse(f"a part of the resource {name} comes out of order")
+        end, last = a[2] + n, sp["part"] + 1 == sp["parts"]
+        if last != (end == h.count):
+            refuse(f"the parts of the resource {name} end before its count" if last else
+                   f"a part of the resource {name} before the last reaches its count")
+        a[4][a[2] * h.stride:end * h.stride] = data
+        a[1], a[2], a[3] = a[1] + 1, end, self.frames
+        if not last:
+            return None
+        del self.open[key]
+        return Resource(h.program, h.resource, h.step, h.count, h.stride, memoryview(a[4]), h.width, h.height, None, h.format, h.element, h.elements)
 
 
 for _cls in (Program, ProgramState, Resource):
     MESSAGES[_cls.TYPE] = _cls
-__all__ += ["Program", "ProgramState", "Resource"]
+__all__ += ["Program", "ProgramState", "Resource", "SplitResources", "resource_parts"]

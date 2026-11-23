@@ -225,7 +225,8 @@ bool read_manifest(const json& m, cs::Piece* p, std::string* why) {
     ok = ok && r.tables(m, "inputs", &p->inputs, [&](const json& t, cs::PieceInput* in) {
         return r.str(t, "name", &in->name, true) && r.enum_of(t, "kind", cs::input_kind_from_name, &in->kind) &&
                r.str(t, "dtype", &in->dtype) && r.u32(t, "rank_min", &in->rank_min) &&
-               r.u32(t, "rank_max", &in->rank_max) && r.layout(t, &in->layout) && r.opt_str(t, "title", &in->title);
+               r.u32(t, "rank_max", &in->rank_max) && r.layout(t, &in->layout) && r.opt_str(t, "title", &in->title) &&
+               r.flag(t, "optional", &in->optional);
     });
     ok = ok && r.tables(m, "params", &p->params, [&](const json& t, cs::PieceParam* pa) {
         return r.str(t, "name", &pa->name, true) && r.enum_of(t, "type", cs::param_type_from_name, &pa->type) &&
@@ -236,6 +237,7 @@ bool read_manifest(const json& m, cs::Piece* p, std::string* why) {
         return r.str(t, "id", &res->id, true) && r.enum_of(t, "kind", cs::resource_kind_from_name, &res->kind) &&
                r.layout(t, &res->layout) && r.u32(t, "count", &res->count) && r.flag(t, "counted", &res->counted) &&
                r.u32(t, "width", &res->width) && r.u32(t, "height", &res->height) &&
+               r.opt_str(t, "format", &res->format) && r.opt_u32(t, "texels", &res->texels) &&
                r.flag(t, "publish", &res->publish) && r.flag(t, "clear", &res->clear) &&
                r.opt_u32(t, "keep", &res->keep);
     });
@@ -338,7 +340,7 @@ bool read_manifest(const json& m, cs::Piece* p, std::string* why) {
                     !r.str(t, "target", &dp->target) || !r.strings(t, "reads", &dp->reads) ||
                     !r.opt_u32(t, "vertices", &dp->vertices) ||
                     !r.enum_of(t, "topology", cs::draw_topology_from_name, &dp->topology) ||
-                    !r.flag(t, "pick", &dp->pick))
+                    !r.flag(t, "pick", &dp->pick) || !r.opt_str(t, "indices", &dp->indices))
                     return false;
                 const auto inst = t.find("instances");
                 if (inst != t.end()) {
@@ -369,7 +371,9 @@ bool read_manifest(const json& m, cs::Piece* p, std::string* why) {
                 const json& t = d["text"];
                 ok = t.is_object() ? (r.str(t, "anchors", &tt.anchors, true) && r.str(t, "position", &tt.position) &&
                                       r.str(t, "string", &tt.string) && r.opt_str(t, "priority", &tt.priority) &&
-                                      r.strings(t, "strings", &tt.strings))
+                                      r.strings(t, "strings", &tt.strings) &&
+                                      r.opt_str(t, "strings_from", &tt.strings_from) &&
+                                      r.enum_of(t, "align", cs::text_align_from_name, &tt.align))
                                    : r.fail("the key text is not a table");
                 if (ok) draw.text = tt;
             }
@@ -501,6 +505,18 @@ std::string pass_name(const DrawRuntime::Impl& m, int pass) {
     return "draw pass " + std::to_string(pass) + " (" + (p.kind == cs::PassKind::compute ? p.entry : p.fragment) + ")";
 }
 
+// A sampled texture of a texture resource's format and the given size, which each version fills
+// with write_texture.
+gfx::Texture make_texture(gfx::Backend& g, const DrawRuntime::Impl::Slot& s, std::uint32_t w, std::uint32_t h) {
+    gfx::TextureDesc d;
+    d.width = w;
+    d.height = h;
+    d.format = s.format;
+    d.usage = gfx::kSampled | gfx::kCopyDstTex;
+    d.label = s.id.c_str();
+    return g.create_texture(d);
+}
+
 // Accounts `add` more bytes against draw.memory_mb in place of `drop`; false (and the program
 // stopped with program.draw_over_memory, naming `what`) when the total would pass it.
 bool account(DrawRuntime::Impl& m, std::uint64_t drop, std::uint64_t add, const std::string& what,
@@ -579,7 +595,10 @@ Object object_at(const DrawRuntime::Impl& m, const cs::DrawPass& p, std::uint32_
         }
         if (binding - 1 >= m.slots.size()) return Object::none;
         *index = binding - 1;
-        *type = m.slots[*index].texture ? gfx::BindingType::Texture : gfx::BindingType::Storage;
+        const DrawRuntime::Impl::Slot& s = m.slots[*index];
+        *type = !s.texture                              ? gfx::BindingType::Storage
+                : s.format == gfx::Format::R32Uint ? gfx::BindingType::UintTexture
+                                                        : gfx::BindingType::Texture;
         return Object::slot;
     }
     if (group == cp::kGroupResources) {
@@ -686,6 +705,7 @@ Verdict compile_pass(DrawRuntime::Impl& m, std::size_t k, const cp::Composed& c,
         r.name = e.name ? e.name : "";
         r.stage = cp::EntryStage(e.stage);
         for (int a = 0; a < 3; ++a) r.workgroup_size[a] = e.workgroup_size[a];
+        r.workgroup_memory = e.workgroup_memory;
         // The inputs and outputs, for the check of the stage interfaces (Check Order 7).
         for (std::size_t k = 0, nio = caliper_wgsl_module_entry_io_count(module, i); k < nio; ++k) {
             caliper_wgsl_io io{};
@@ -1094,21 +1114,38 @@ Verdict DrawRuntime::install(const caliper_builder::spec::Piece& piece, const In
     std::set<std::string> cpu_ids;
     if (draw.pick) cpu_ids.insert(draw.pick->resource);
     if (draw.text) cpu_ids.insert(draw.text->anchors);
+    if (draw.text && draw.text->strings_from) cpu_ids.insert(*draw.text->strings_from);
     for (const cs::Resource& res : piece.resources) {
         if (!res.publish) continue;
         Impl::Slot s;
         s.id = res.id;
         s.keep_cpu = cpu_ids.count(res.id) != 0;
         if (res.kind == cs::ResourceKind::texture) {
+            // The manifest check bounds the sides by 8,192 and the texels by width * height, thus
+            // declared_count is below 2^27 and declared_bytes at most 128 MiB.
             s.texture = true;
             s.width = res.width;
             s.height = res.height;
-            s.declared_count = res.width * res.height;   // at most 4,096 * 4,096, checked by the manifest
-            s.declared_bytes = std::uint64_t(res.width) * res.height * 4;
+            s.format_name = cs::texture_format(res);
+            s.format = s.format_name == "r8unorm"   ? gfx::Format::R8Unorm
+                       : s.format_name == "r32uint" ? gfx::Format::R32Uint
+                                                    : gfx::Format::RGBA8Unorm;
+            s.declared_count = std::uint32_t(cs::texture_texels(res));
+            s.declared_bytes = cs::texture_bytes(res);
+            // The item map reads one scalar field per texel in row order.
+            if (s.format != gfx::Format::R8Unorm) {
+                s.layout.stride = 4;
+                s.layout.align = 4;
+                const std::string name = res.layout.fields.empty()
+                                             ? (s.format == gfx::Format::R32Uint ? "value" : "rgba")
+                                             : res.layout.fields[0].name;
+                const std::string type = res.layout.fields.empty() ? "u32" : res.layout.fields[0].type;
+                s.layout.fields.push_back(cp::FieldLayout{name, type, 0, 4});
+            }
         } else {
             if (Verdict v = c.layout(res.layout, &s.layout); !v.ok()) return refuse(v);
             s.declared_count = res.count;
-            s.declared_bytes = std::uint64_t(res.count) * s.layout.stride;
+            s.declared_bytes = cp::layout_bytes(s.layout, res.count);
         }
         m.slots.push_back(std::move(s));
     }
@@ -1117,11 +1154,20 @@ Verdict DrawRuntime::install(const caliper_builder::spec::Piece& piece, const In
         Impl::Slot s;
         s.id = in.name;
         s.keep_cpu = cpu_ids.count(in.name) != 0;
+        s.unbound = in.optional && instance.bind.find(in.name) == instance.bind.end();
         if (Verdict v = c.layout(in.layout, &s.layout); !v.ok()) return refuse(v);
-        s.declared_count = pl::kCountMax;
-        s.declared_bytes = std::uint64_t(pl::kCountMax) * s.layout.stride;
+        // Another program's published buffer: at most kPublishedResourceBytesMax, whatever its stride.
+        s.declared_bytes = std::min<std::uint64_t>(cp::layout_bytes(s.layout, pl::kCountMax),
+                                                   pl::kPublishedResourceBytesMax);
+        s.declared_count = s.layout.stride
+                               ? std::uint32_t(std::min<std::uint64_t>(
+                                     s.declared_bytes / s.layout.stride * s.layout.per_word, pl::kCountMax))
+                               : 0;
         m.slots.push_back(std::move(s));
     }
+    for (Impl::Slot& s : m.slots)
+        for (const cs::DrawPass& p : draw.passes)
+            if (p.indices && *p.indices == s.id) s.index = true;
     for (Impl::Slot& s : m.slots)
         if (!s.texture && (s.layout.stride == 0 || s.layout.stride % 4 != 0 || s.layout.stride > pl::kStrideMax))
             return refuse(refusal(cp::kProgramBadLayout, "The layout of " + s.id + " has no valid stride.", "resources"));
@@ -1224,25 +1270,28 @@ Verdict DrawRuntime::install(const caliper_builder::spec::Piece& piece, const In
         Impl::Slot& s = m.slots[i];
         const std::string where = "resources[" + s.id + "]";
         if (s.texture) {
+            // The budget holds the largest version; the texture starts at 1 by 1 and takes the size of
+            // each version within it.
             if (!account(m, 0, s.declared_bytes, "the texture " + s.id, where)) return m.status.error;
-            gfx::TextureDesc d;
-            d.width = s.width;
-            d.height = s.height;
-            d.format = gfx::Format::RGBA8Unorm;
-            d.usage = gfx::kSampled | gfx::kCopyDstTex;
-            d.label = s.id.c_str();
-            s.tex = g.create_texture(d);
+            s.tex = make_texture(g, s, 1, 1);
             if (!s.tex)
                 return refuse(refusal(cp::kProgramLayerRefused, "The graphics layer refused the texture " + s.id + ": " +
                                                                     g.last_error(), where));
+            s.tex_width = s.tex_height = 1;
             continue;
         }
         s.capacity = std::max<std::uint64_t>(16, (s.layout.stride + 15) / 16 * 16);
         if (!account(m, 0, s.capacity, "the resource " + s.id, where)) return m.status.error;
-        s.buffer = make_buffer(g, s.capacity, gfx::kStorage | gfx::kCopyDst, s.id.c_str());
+        s.buffer = make_buffer(g, s.capacity, gfx::kStorage | gfx::kCopyDst | (s.index ? gfx::kIndex : 0u), s.id.c_str());
         if (!s.buffer || !zero_buffer(g, s.buffer, s.capacity))
             return refuse(refusal(cp::kProgramLayerRefused, "The graphics layer refused the buffer of " + s.id + ": " +
                                                                 g.last_error(), where));
+        // An unbound optional input is an empty version for good: its count is 0 in `counts`.
+        if (s.unbound) {
+            s.has_version = true;
+            s.count = 0;
+            s.serial = ++m.versions;
+        }
     }
     for (std::size_t i = 0; i < m.buffers.size(); ++i) {
         Impl::DrawBufferSlot& b = m.buffers[i];
@@ -1301,21 +1350,86 @@ Verdict DrawRuntime::set_resource(const ResourceVersion& version) {
     if (s == nullptr)
         return refusal(cp::kProgramUnknownResource,
                        "The draw half of " + m.instance.program + " reads no resource " + version.resource + ".");
+    if (s->unbound)
+        return refusal(cp::kProgramUnknownResource,
+                       "The optional input " + s->id + " of " + m.instance.program + " is unbound and takes no version.");
     const std::string where = "resources[" + s->id + "]";
     if (version.size > 0 && version.bytes == nullptr)
         return refusal(cp::kProgramBadResource, "A version of " + s->id + " has a size but no bytes.", where);
+    std::uint32_t valid = version.count;   // the count that the frame's `counts` gives the draw half
     if (s->texture) {
-        if (version.count != s->declared_count || version.size != s->declared_bytes)
-            return refusal(version.size > s->declared_bytes ? cp::kProgramResourceTooLarge : cp::kProgramBadResource,
-                           "A version of the texture " + s->id + " has " + std::to_string(version.size) +
-                               " bytes, and the texture " + std::to_string(s->declared_bytes) + ".",
+        // The version's format and size against the manifest, each before any product: the sides are at
+        // most 8,192, thus the texels and the bytes fit 64 bits with room.
+        // A version without texels carries no size and thus no format, as RESOURCE gives it.
+        const bool empty = version.width == 0 && version.height == 0;
+        const std::string format = version.format.empty() ? (empty ? s->format_name : std::string("rgba8unorm"))
+                                                          : version.format;
+        if (format != s->format_name)
+            return refusal(cp::kProgramBadResource,
+                           "A version of the texture " + s->id + " has the format " + format + ", and the texture " +
+                               s->format_name + ".",
                            where);
-        if (!m.gfx->write_texture(s->tex, version.bytes, s->width * 4))
-            return refusal(cp::kProgramLayerRefused, "The graphics layer refused a version of " + s->id + ": " +
-                                                         m.gfx->last_error(), where);
+        if (version.elements)
+            return refusal(cp::kProgramBadResource, "A version of the texture " + s->id + " has narrow elements.",
+                           where);
+        if (!empty && (version.width < 1 || version.width > s->width || version.height < 1 ||
+                       version.height > s->height))
+            return refusal(cp::kProgramResourceTooLarge,
+                           "A version of the texture " + s->id + " is " + std::to_string(version.width) + " by " +
+                               std::to_string(version.height) + " texels, outside its largest " +
+                               std::to_string(s->width) + " by " + std::to_string(s->height) + ".",
+                           where);
+        const std::uint64_t texels = std::uint64_t(version.width) * version.height;
+        const std::uint64_t words = cs::texture_words(s->format_name, texels);
+        if (texels > s->declared_count || version.count != words || version.size != words * 4)
+            return refusal(texels > s->declared_count ? cp::kProgramResourceTooLarge : cp::kProgramBadResource,
+                           "A version of the texture " + s->id + " of " + std::to_string(version.width) + " by " +
+                               std::to_string(version.height) + " texels has " + std::to_string(version.size) +
+                               " bytes; it holds at most " + std::to_string(s->declared_count) + " texels in " +
+                               std::to_string(words * 4) + " bytes.",
+                           where);
+        if (!empty) {
+            if (version.width != s->tex_width || version.height != s->tex_height) {
+                gfx::Texture t = make_texture(*m.gfx, *s, version.width, version.height);
+                if (!t)
+                    return refusal(cp::kProgramLayerRefused, "The graphics layer refused the texture " + s->id +
+                                                                 " of a version: " + m.gfx->last_error(), where);
+                m.gfx->release(s->tex);
+                s->tex = t;
+                s->tex_width = version.width;
+                s->tex_height = version.height;
+                m.groups_dirty = true;
+            }
+            const std::uint32_t row = version.width * (s->format == gfx::Format::R8Unorm ? 1u : 4u);
+            if (!m.gfx->write_texture(s->tex, version.bytes, row))
+                return refusal(cp::kProgramLayerRefused, "The graphics layer refused a version of " + s->id + ": " +
+                                                             m.gfx->last_error(), where);
+        }
+        valid = std::uint32_t(texels);
     } else {
+        if (version.width || version.height || !version.format.empty())
+            return refusal(cp::kProgramBadResource, "A version of the buffer " + s->id + " has a texture's size.",
+                           where);
+        if ((s->layout.per_word > 1) != version.elements.has_value())
+            return refusal(cp::kProgramBadResource,
+                           "A version of " + s->id + (s->layout.per_word > 1 ? " has no" : " has a") +
+                               " count of narrow elements, and its layout " +
+                               (s->layout.per_word > 1 ? "packs them." : "has none."),
+                           where);
+        if (version.elements) {
+            // The words of the elements, in 64 bits: at most 2^32 - 1 elements.
+            const std::uint64_t words = (std::uint64_t(*version.elements) + s->layout.per_word - 1) / s->layout.per_word;
+            if (*version.elements > s->declared_count || words != version.count)
+                return refusal(*version.elements > s->declared_count ? cp::kProgramResourceTooLarge
+                                                                     : cp::kProgramBadResource,
+                               "A version of " + s->id + " has " + std::to_string(*version.elements) +
+                                   " narrow elements in " + std::to_string(version.count) + " words, for at most " +
+                                   std::to_string(s->declared_count) + " elements.",
+                               where);
+            valid = *version.elements;
+        }
         const std::uint64_t expect = std::uint64_t(version.count) * s->layout.stride;   // < 2^32 * 256, no wrap
-        if (version.count > s->declared_count || version.size > s->declared_bytes)
+        if ((!version.elements && version.count > s->declared_count) || version.size > s->declared_bytes)
             return refusal(cp::kProgramResourceTooLarge,
                            "A version of " + s->id + " has " + std::to_string(version.count) + " elements and " +
                                std::to_string(version.size) + " bytes, above its " +
@@ -1334,7 +1448,8 @@ Verdict DrawRuntime::set_resource(const ResourceVersion& version) {
             if (!account(m, s->capacity, cap, "a version of " + s->id + " of " + std::to_string(version.size) + " bytes",
                          where))
                 return m.status.error;
-            gfx::Buffer b = make_buffer(*m.gfx, cap, gfx::kStorage | gfx::kCopyDst, s->id.c_str());
+            gfx::Buffer b =
+                make_buffer(*m.gfx, cap, gfx::kStorage | gfx::kCopyDst | (s->index ? gfx::kIndex : 0u), s->id.c_str());
             if (!b) {
                 stop(m, cp::kProgramLayerRefused,
                      "Stopped " + m.instance.program + ": the graphics layer refused a buffer of " + s->id + ": " +
@@ -1355,7 +1470,7 @@ Verdict DrawRuntime::set_resource(const ResourceVersion& version) {
     if (s->keep_cpu) s->cpu.assign(version.bytes, version.bytes + version.size);
     s->has_version = true;
     s->step = version.step;
-    s->count = version.count;
+    s->count = valid;
     s->serial = ++m.versions;   // a version at the same step is another version
     return {};
 }
@@ -1486,6 +1601,15 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
             for (const Impl::Slot& sl : m.slots)
                 if (sl.id == *p.instances_of) instances = sl.has_version ? sl.count : 0;
         }
+        // An indexed pass draws the valid indices of its version: the buffer holds at least count
+        // elements of 4 bytes (set_resource), and each index is only the vertex entry's
+        // vertex_index, whose every read of a buffer is bounds-checked; no index is read on the CPU.
+        const Impl::Slot* index_slot = nullptr;
+        if (p.indices) {
+            for (const Impl::Slot& sl : m.slots)
+                if (sl.id == *p.indices) index_slot = &sl;
+            if (!index_slot || !index_slot->has_version || index_slot->count == 0 || !index_slot->buffer) instances = 0;
+        }
         const bool host = !offscreen(p);
         const std::size_t ti = host ? m.targets.size() : target_index(p.target);
         if (!host && ti == m.targets.size()) continue;   // refused by the manifest check
@@ -1507,8 +1631,14 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
             r.pipeline = s.pipelines[host ? variant : 0u];
             for (std::size_t gi = 0; gi < 3; ++gi) r.groups[gi] = s.groups[gi];
             r.count = p.vertex ? p.vertices.value_or(3) : 3;
+            if (index_slot) {
+                r.index_buffer = index_slot->buffer;
+                r.count = index_slot->count;
+            }
             r.instance_count = instances;
             r.pick_id = p.pick ? m.pick_id : 0;
+            if (host)
+                for (int i = 0; i < 4; ++i) r.scissor[i] = in.scissor[std::size_t(i)];
             list.draw(r);
         } else if (host || !rt.clear) {
             continue;   // a pass whose instances have no version or no valid element is skipped
@@ -1598,6 +1728,22 @@ void DrawRuntime::frame_done(double gpu_ms, double wall_ms) {
         }
     } else if (late || (gpu_ms >= 0 ? gpu_ms : wall_ms) <= kTimeoutMs) {
         m.late_frames = 0;
+    }
+    // Without timestamps the time from the submit until the host saw the work done also holds the
+    // host's polling, once a frame in a browser (about 16.7 ms at 60 Hz), thus it cannot judge a
+    // draw.frame_ms of a few milliseconds: every light frame would count as over. The frame time
+    // stays unknown, so the panel's sum skips it too, and only frames over kHeavyMs of that time,
+    // kWindowFrames in a row, stop the program as over its time.
+    if (gpu_ms < 0 && !timed) {
+        if (e.pass >= 0 || wall_ms < 0) return;
+        m.over = wall_ms > kHeavyMs ? m.over + 1 : 0;
+        if (m.over >= kWindowFrames)
+            stop(m, cp::kProgramDrawOverTime,
+                 "Stopped " + m.instance.program + ": " + std::to_string(kWindowFrames) +
+                     " frames of its draw passes in a row took over " + fmt_ms(kHeavyMs) +
+                     " ms from the submit until done, and this backend gives no GPU time",
+                 e.pass);
+        return;
     }
     if (gpu_ms < 0) gpu_ms = wall_ms;   // the upper bound, where the backend gives no GPU time
     const double limit = m.status.frame_limit_ms;

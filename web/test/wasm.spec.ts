@@ -292,10 +292,8 @@ test('the graphics layer draws an indexed quad and instanced draws, dispatches a
       if (!got.report.startsWith('ok')) console.log(consoleErrors.join('\n'));
       for (const [name, url] of Object.entries(got.images))
         fs.writeFileSync(shotPath(info, `${name}-${compat ? 'compat' : 'core'}`), Buffer.from(url.split(',')[1], 'base64'));
-      // uniforms=same: the scene core's fixture (src/host/scene/uniform_check.h) compiles here to the
-      // arena bytes it compiles to natively, so the browser draws from the same f32 matrices as Metal.
       expect(got.report).toBe('ok color=0 id=0 depth=0 fill=0 copy=0 import=copied-from-host:24 own-target=refused '
-                              + `submit-error=reported level=${compat ? 'compatibility' : 'core'} uniforms=same`);
+                              + `submit-error=reported level=${compat ? 'compatibility' : 'core'}`);
       expect(Object.keys(got.images).sort()).toEqual(['layer-compute', 'layer-copy', 'layer-draws', 'layer-ids']);
     }
   } finally {
@@ -766,6 +764,26 @@ test('data view changes and resizes do not grow what the module holds', async ({
   expect(after.heap - before.heap).toBeLessThan(256 * 1024);
 });
 
+test('a compatibility scene shows its entity error in the HTML status and tooltip', async ({ page }, info) => {
+  test.skip(info.project.name === 'canvas2d', 'the WebAssembly views need a WebGPU adapter');
+  await page.addInitScript(() => Object.assign(window, { caliperViewsCompat: true }));
+  const p = await producerWith(['--scene3']);
+  try {
+    await page.goto(p.url);
+    await plates(page, 7);
+    expect((await state(page, 'world')).drawer).toBe('wasm');
+    await expect.poll(async () => (await wasmStats(page, 'world')).featureLevel).toBe('compatibility');
+    const status = page.locator('caliper-view[view="world"] .info');
+    await expect(status).toBeVisible();
+    await expect(status).toContainText('moved/cloud: program.browser_refused:');
+    await expect(status).toContainText('storage buffers in the vertex stage, the limit is 0');
+    await expect(status).toHaveAttribute('title', (await status.textContent())!);
+    await page.locator('caliper-view[view="world"]').screenshot({ path: shotPath(info, 'compat-scene-error') });
+  } finally {
+    p.proc.kill();
+  }
+});
+
 // A scene's entity transform reaches the scene view intact through the stream (protocol 3.2):
 // mock_server.py --scene3 puts five points under the entity "moved" and moves that entity by
 // (10, 2, 0), and then sends the points four more times. The module decodes SCENE_TRANSFORMS on the
@@ -809,6 +827,12 @@ test('a scene\'s entity transform arrives intact through the stream, and the fit
     const perPixel = (2 * d * Math.tan(Math.PI / 8)) / g.area[3];
     expect(Math.abs(metres / pixels - perPixel) / perPixel).toBeLessThan(1e-6);
     expect(metres, 'a bar of the moved points\' scale').toBeLessThan(10);
+    // The library pieces in the module's last published frame.
+    const st = await wasmStats(page, 'world');
+    const shapes = JSON.parse(String(st.sceneShapes ?? '{}')).world as { draw: string; pieces: number } | undefined;
+    console.log(`${info.project.name} scene shapes at module frame ${st.frames}: ${JSON.stringify(shapes ?? null)}`);
+    expect(shapes?.draw, 'the scene view draws its shapes with the library pieces').toBe('pieces');
+    expect(shapes?.pieces ?? 0, 'the shapes of the scene').toBeGreaterThan(0);
   } finally {
     p.proc.kill();
   }

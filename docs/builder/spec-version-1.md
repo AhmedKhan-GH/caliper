@@ -20,7 +20,7 @@ An instrument is a spec that reacts to a run: its panels read live tensors, kept
 | `range`, `picker`, `text`, `segmented`, `readout`, `transport` | Control `kind` | The control kinds | [Controls](controls.md) |
 | `state:<id>`, `cursor` | Control `bind` | The state and the cursor as targets | [Controls](controls.md) |
 | `shares`, `min` | Layout | The shares of a split and the minimum of a leaf | [Layout Shares](#layout-shares) |
-| `params` | Program and stage | Named numbers that the program or the stage reads | [Operators](operators.md#program-parameters) |
+| `params` | Program | Named numbers that the program reads | [Operators](operators.md#program-parameters) |
 | `tensor` | Program output `kind` | An output that the script publishes as a live tensor | [Operators](operators.md#tensor-output) |
 | `piece` | Top level | An array of inline pieces | [Pieces](#pieces) |
 | `piece`, `bind`, `panel` | Program | The instance of a piece: its pin, its bindings and its scene panel | [Pieces](#pieces) |
@@ -64,7 +64,7 @@ options = { up = "+z", axes = true }
 
 An orbit table has the keys `target`, `distance`, `azimuth` and `elevation`. In a pattern, `*` matches one path segment and `**` matches any number of segments. A scene that the script does not send shows "Source offline", and the validator warns with `spec.unresolved_source`, because a live scene can come later.
 
-In the app, the spec page draws the panel from the live scene of the attached script. A drag orbits the view, the wheel zooms, a click picks and a shift-drag selects. The panel sends its picks and selections to the event ring as `pick` and `select` events that carry its panel id. [Run Control and Events](../agents/run-control-and-events.md) lists their keys. The command `panel.data` of a scene panel gives `{"scene": "<name>"}` and, for each entity, the shape, the minimum, the maximum and the values of its arrays.
+In the app, the spec page draws the panel from the live scene of the attached script. A drag orbits the view, the wheel zooms, a click picks and a shift-drag selects. The panel sends its picks and selections to the event ring as `pick` and `select` events that carry its panel id. [Run Control and Events](../agents/run-control-and-events.md) lists their keys. The command `panel.data` of a scene panel gives `{"scene": "<name>"}` and, for each entity, the shape, the minimum, the maximum and the values of its arrays. It also gives the programs of the panel ([Caliper API](../agents/http-api.md#get-v0spec)).
 
 ## Controls
 
@@ -97,7 +97,7 @@ A slider bound to a parameter takes the range and the scale of the parameter whe
 
 ## Programs
 
-The array `program` holds at most 16 GPU programs. A program is WGSL source with a declaration of its inputs, its output and its limits. The keys are `id` (at most 55 characters), `title`, `wgsl` (at most 64 KiB), `entry`, `inputs` (at most 8, each `{var, source}` with a source `live:<name>`), `output`, `limits` (`time_ms`, `memory_mb` and `every`) and `workgroups`. The output has the `kind` `geometry` or `pixels`. A geometry output names a scene `panel`, and optionally an `entity`, a `part` of `points` or `lines`, `max_count`, the `arrays` and a `style`. A pixels output has `width`, `height` and `format`. The validator holds each program to the limits of the sandbox, and it reports a target that is not a scene panel of the spec as `spec.unknown_panel`. [GPU Programs and Stages](../agents/gpu-programs.md) describes the keys, the limits and what the script does with a program. A program that holds the key `piece` has another form, which the next section describes.
+The array `program` holds at most 16 GPU programs. A program is WGSL source with a declaration of its inputs, its output and its limits. The keys are `id` (at most 55 characters), `title`, `wgsl` (at most 64 KiB), `entry`, `inputs` (at most 8, each `{var, source}` with a source `live:<name>`), `output`, `limits` (`time_ms`, `memory_mb` and `every`) and `workgroups`. The output has the `kind` `geometry` or `pixels`. A geometry output names a scene `panel`, and optionally an `entity`, a `part` of `points` or `lines`, `max_count`, the `arrays` and a `style`. A pixels output has `width`, `height` and `format`. The validator holds each program to the limits of the sandbox, and it reports a target that is not a scene panel of the spec as `spec.unknown_panel`. [GPU Programs](../agents/gpu-programs.md) describes the keys, the limits and what the script does with a program. A program that holds the key `piece` has another form, which the next section describes.
 
 ## Pieces
 
@@ -105,13 +105,13 @@ A program is either a one-pass program or an instance of a piece. An instance ho
 
 The top-level array `piece` holds inline pieces. Each one has the keys of a `piece.toml` manifest, and its table `files` holds the WGSL under `common`, `derive` and `draw`. Two inline pieces may not share a name and a version. The validator checks each inline piece on its own, and a program that pins an inline piece draws only when the piece is whole. A pin that names a piece that its source lacks, or a hash that differs, does not make the spec invalid. The spec opens, and the state of the program is `refused` with `piece.missing` or `piece.hash_mismatch`. [Pieces](../agents/pieces.md) describes the manifest, the halves, the hash and the commands.
 
-## Stages
+## Old Stage Tables
 
-The array `stage` holds at most 32 stages. A stage has a `panel` (a scene panel), an `entity` (an entity path), a `kind` (`material` or `vertex`) and `wgsl` (at most 16 KiB). The panel, the entity and the kind are unique among the stages. A stage replaces one function in the draw of the entity, and its source holds functions and constants only. When a command removes a panel, the same undo step removes the stages of that panel.
+Library pieces replace the old `stage` array. A spec with a `[[stage]]` table opens without that stage. The report gives one `spec.stage_replaced` warning per table at `stage[<index>]`. Each message identifies the stage's kind, entity, and panel, and explains the replacement piece. The next save omits the stage and its review hash. Review hashes for programs stay in the spec.
 
 ## Provenance
 
-The table `provenance` marks a spec from someone else. It has `foreign` (true), `from` (a text that names the origin) and `reviewed`, a list of `{target, sha256}`. A target is `program:<id>` or `stage:<panel>/<entity>/<kind>`, and the hash is the SHA-256 of its WGSL. In a foreign spec, a program or a stage runs only when its hash is in `reviewed`, and else its state is `review`. A spec without `provenance` is the person's own. No command writes `provenance`, and `spec.set_text` refuses a text whose `provenance` differs from the open spec's with `spec.provenance_locked`.
+The table `provenance` marks a spec from someone else. It has `foreign` (true), `from` (a text that names the origin) and `reviewed`, a list of `{target, sha256}`. A target is `program:<id>`, and the hash is the SHA-256 of its WGSL. In a foreign spec, a program runs only when its hash is in `reviewed`, and else its state is `review`. A spec without `provenance` is the person's own. No command writes `provenance`, and `spec.set_text` refuses a text whose `provenance` differs from the open spec's with `spec.provenance_locked`.
 
 ## Control Layout
 
@@ -146,7 +146,7 @@ The result of `control.create` and `control.remove` holds `id`, `warnings`, `dif
 
 ## Validator Codes
 
-Version 1 adds three error codes for controls. The first one is given for an unknown kind. A spec with more than 16 programs or 32 stages fails with `spec.too_many`. The other errors of controls and scene panels use the codes of version 0.
+Version 1 adds three error codes for controls. The first one is given for an unknown kind. A spec with more than 16 programs fails with `spec.too_many`. The other errors of controls and scene panels use the codes of version 0.
 
 | Code | Stage | Cause |
 |---|---|---|
@@ -173,7 +173,7 @@ The keys of an instrument add these codes. The pages named above state when each
 | `spec.operator_shape` | Error | An operator input of another rank, or a column past the last |
 | `spec.duplicate_shortcut`, `spec.reserved_shortcut` | Error | A key of a segmented choice that is used twice, or that the app keeps |
 | `spec.bad_format` | Error | A bound text that does not parse |
-| `program.params_mismatch`, `stage.params_mismatch` | Error | A `Params` struct whose fields differ from the names |
+| `program.params_mismatch` | Error | A `Params` struct whose fields differ from the names |
 | `spec.state_writers` | Warning | Two controls write one state variable |
 | `spec.not_built` | Error | A key that is part of the format but not built: annotations on heatmaps and images, `legend` set to `true` or `false` outside a series panel, `scale_bar` outside a scene, and `choices_from` of a picker |
 

@@ -1,0 +1,51 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 216,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 169,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 130
+  },
+  "meta": {
+    "count": 4,
+    "format": "r32uint",
+    "height": 2,
+    "program": "scene.124",
+    "resource": "pixels",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "resource",
+        "shape": [
+          16
+        ]
+      }
+    ],
+    "step": 7,
+    "stride": 4,
+    "width": 2
+  },
+  "meta_offset": 28,
+  "name": "v3_2/resource_scene_image_depth_f32_bundle_pixels",
+  "section_lengths": [
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 16,
+      "name": "resource",
+      "offset": 200,
+      "shape": [
+        16
+      ],
+      "values": [0, 0, 128, 191, 0, 0, 0, 63, 0, 0, 128, 62, 0, 0, 128, 63]
+    }
+  ],
+  "type_name": "resource"
+}

@@ -1,20 +1,11 @@
 // live_points.h: the points live view as a scene of the scene core (design/renderer-core.md,
 // "The points view and ImPlot3D"; migration step 7).
 //
-// The view's payload is one points batch on the root entity: the positions and the optional values
-// or labels are imported layer buffers at their byte offsets, which the generated points program
-// reads as instance streams. A payload above the scene model's 4,194,304 points a batch continues
-// on child entities "c00001", "c00002" and so on, at later offsets of the same buffers, so that it
-// draws in the same order. Flat points take the view's grey; values map through the shared colormap
-// cache (src/host/gfx/colormap_keys.h); labels, which the producer sends as f32, map through the
-// same keys over the range 0 to 255 with a table that holds the fixed 16-colour palette at every
-// level, as the old view's 256-entry table did, so that labels above 255, below 0 and NaN keep
-// their colours and the payload is read in place. A selection draws every point dimmed toward the
-// ground, then the selected points in their own colours on the entity "selection". Points are
-// squares of 7, 5.5, 4 or 3 logical pixels by count (caliper_scene::default_point_size). In 3-D the
-// points draw the view's depth cues (CompileOptions): nearer points larger within a clamp and the
-// points behind the camera's target dimmed towards the far side of the fitted bounding sphere, the
-// selected points of a selection at full strength.
+// The view writes points@1 resources from the payload. Each instance holds at most 4,194,304
+// points. Further instances draw the remaining points, followed by the selected points.
+// The view packs colors with the shared colormap keys and palette. It passes camera matrices,
+// point sizes, and depth cues to each piece. A payload in private GPU storage first returns
+// through asynchronous texture readback. Missing or stopped pieces report an error.
 //
 // The camera is the scene core's: an orbit about +y in 3-D, a pan and zoom with y up in 2-D, fitted
 // by caliper_scene::fit at the default three-quarter view (camera_defaults.h), composed in double
@@ -26,14 +17,12 @@
 
 #include "gfx/gfx.h"
 #include "scene/camera.h"
-#include "scene/compile.h"
 #include "scene/scene.h"
 
 #include <cstdint>
 #include <memory>
 #include <string>
 
-namespace caliper_scene { class BackendResources; }
 
 namespace caliper_live_views {
 
@@ -45,6 +34,7 @@ struct PointsArrays {
     const void* pos_cpu = nullptr;
     caliper_gfx::Buffer aux;
     uint64_t aux_offset = 0;
+    const void* aux_cpu = nullptr;         // a CPU view of aux, or null
     uint64_t count = 0;
 };
 
@@ -71,6 +61,12 @@ public:
 
     bool init(std::string* why);
     caliper_gfx::Backend& gfx() { return gfx_; }
+
+    bool drew_pieces() const;
+    const std::string& error() const { return error_; }
+    const std::string& error_detail() const { return error_detail_; }   // the layer's or runtime's words
+    // A payload that the CPU cannot read is on its way back from the GPU: render() again later.
+    bool pending() const;
 
     // The points to draw, and, with a selection, the selected points drawn over the dimmed rest.
     // A change of dims changes the camera model. False with *why when the scene store refused it.
@@ -114,10 +110,6 @@ public:
     // Retires completed work; the layer's statistics since the last call.
     caliper_gfx::Stats poll();
 
-    // The draws of the last frame (tests), kept while keep_draws is on.
-    void keep_draws(bool on) { keep_draws_ = on; }
-    const caliper_gfx::DrawList& last_draws() const { return last_list_; }
-    const caliper_scene::DrawMap& last_map() const { return last_map_; }
     const caliper_scene::SceneTree& tree() const { return tree_; }
 
     // The colormap ids of the view's tables beyond the built-in colormaps: the palette at every
@@ -129,11 +121,8 @@ public:
 
 private:
     caliper_gfx::Backend& gfx_;
-    const caliper_gfx::ProgramDesc* programs_;
     std::shared_ptr<Tables> tables_;
-    std::unique_ptr<caliper_scene::BackendResources> res_;
     caliper_scene::SceneTree tree_;
-    caliper_scene::SceneCompiler compiler_;
     caliper_scene::ViewCamera camera_ = caliper_scene::Orbit{};
     int dims_ = 3;
     double radius_ = 1.0;                  // the fitted bounds' radius: the zoom's bounds and the fade
@@ -142,9 +131,15 @@ private:
     caliper_gfx::Texture color_, depth_;
     uint32_t width_ = 0, height_ = 0;
 
-    bool keep_draws_ = false;
-    caliper_gfx::DrawList last_list_;
-    caliper_scene::DrawMap last_map_;
+
+    // points@1's instances, their resources and the readback of a payload (live_points.cpp).
+    struct Pieces;
+    std::unique_ptr<Pieces> pieces_;
+    std::string error_;
+    std::string error_detail_;
+    void set_pieces(const PointsArrays& all, const PointsArrays* selected, const PointsLook& look);
+    void add_rows(const PointsArrays& a, bool selection, bool dimmed, const PointsLook& look);
+    bool render_pieces(float pixel_scale, uint32_t clear_rgba, caliper_gfx::Serial* serial, std::string* why);
 };
 
 // The packed colour dimmed toward the ground as the points view dims the unselected points

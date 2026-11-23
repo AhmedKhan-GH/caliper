@@ -294,6 +294,7 @@ enum Cap : uint64_t {
     kCapCudaWritesTexture  = 1ull << 12,  // a CUDA kernel writes a layer texture (the direct path)
     kCapWaitMetalEvent     = 1ull << 13,  // reads ordered after an MTLSharedEvent value
     kCapWaitCudaStream     = 1ull << 14,  // reads ordered after a CUDA stream, by a shared timeline semaphore
+    kCapDepthWholeCopy     = 1ull << 15,  // a copy from a depth texture covers all of it (WebGPU): no region of it is read
 };
 
 struct Caps {

@@ -1,10 +1,10 @@
 # Service Catalog
 
-The host serves 19 service ids, which are 11 services and their additive revisions. An applet gets a service by id from `CaliperHost.get_service`. The call returns `NULL` for an id the host does not serve. An applet lists the ids it cannot run without in its manifest. See [Manifest](../manifest.md).
+The host serves 13 service ids, which are 9 services and their additive revisions. An applet gets a service by id from `CaliperHost.get_service`. The call returns `NULL` for an id the host does not serve. An applet lists the ids it cannot run without in its manifest. See [Manifest](../manifest.md).
 
 ## Revisions
 
-A revision of a service is a new id with a `_N` suffix after the version, for example `caliper.geometry.v1_2`. A revision is additive. Its table begins with a byte-identical copy of the previous table and appends entries, and the host keeps serving the older ids unchanged. An applet built against `caliper.geometry.v1` keeps working when the host also serves `v1_3`. No service has an incompatible `.v2`. For the full rule, see [Compatibility and epochs](../../development/compatibility-and-epochs.md).
+A revision of a service is a new id with a `_N` suffix after the version, for example `caliper.tensor_bridge.v1_2`. A revision is additive. Its table begins with a byte-identical copy of the previous table and appends entries, and the host keeps serving the older ids unchanged. An applet built against `caliper.tensor_bridge.v1` keeps working when the host also serves `v1_2`. No service has an incompatible `.v2`. For the full rule, see [Compatibility and epochs](../../development/compatibility-and-epochs.md).
 
 ## Service IDs
 
@@ -20,12 +20,6 @@ A revision of a service is a new id with a `_N` suffix after the version, for ex
 | `caliper.tensor_bridge.v1` | A `CaliperTensor` becomes a texture | [tensor bridge](caliper-tensor-bridge-v1.md) | | Frame thread only |
 | `caliper.tensor_bridge.v1_1` | Adds `caps()` and stream-ordered handoff | [tensor bridge](caliper-tensor-bridge-v1.md) | `tensor_bridge.v1` | Frame thread only |
 | `caliper.tensor_bridge.v1_2` | Adds imported device allocations | [tensor bridge](caliper-tensor-bridge-v1.md) | `tensor_bridge.v1_1` | Frame thread only |
-| `caliper.geometry.v1` | Instanced points drawn in place from device memory into an offscreen view | [geometry](caliper-geometry-v1.md) | | Frame thread |
-| `caliper.geometry.v1_1` | Adds points, lines and triangles with optional depth | [geometry](caliper-geometry-v1.md) | `geometry.v1` | Frame thread |
-| `caliper.geometry.v1_2` | Adds textured geometry | [geometry](caliper-geometry-v1.md) | `geometry.v1_1` | Frame thread |
-| `caliper.geometry.v1_3` | Adds instanced transforms | [geometry](caliper-geometry-v1.md) | `geometry.v1_2` | Frame thread |
-| `caliper.export.v1` | Pixel-exact PNG figures and frame sequences with a provenance sidecar | [export](caliper-export-v1.md) | | Frame thread only, stated in the header |
-| `caliper.export.v1_1` | Adds `last_error()` | [export](caliper-export-v1.md) | `export.v1` | Frame thread only, stated in the header |
 | `caliper.artifacts.v1` | Content-addressed files such as checkpoints | [artifacts](caliper-artifacts-v1.md) | | Applet job threads. The host serializes internally. |
 | `caliper.data.v1` | SQL over the embedded DuckDB store, results as Arrow streams | [data](caliper-data-v1.md) | | Applet job threads. `last_error()` is per thread. |
 | `caliper.feed.v1` | Machine telemetry channels read by pull | [feed](caliper-feed-v1.md) | | Any thread, non-blocking, stated in the header |

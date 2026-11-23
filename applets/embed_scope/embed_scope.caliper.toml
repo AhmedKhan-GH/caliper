@@ -6,7 +6,7 @@ summary = "3D embedding projector: a small MNIST net with a learned 3-D bottlene
 tag     = "ML"
 
 [compat]
-abi_epoch = 2
+abi_epoch = 3
 min_host  = "0.6.0"
 
 [services]

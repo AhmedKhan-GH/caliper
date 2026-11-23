@@ -91,7 +91,6 @@ Program decode_program(const json& item, const std::string& path, Sink& sink);
 StateVar decode_state(const json& item, const std::string& path, Sink& sink);
 Entity decode_entity(const json& item, const std::string& path, Sink& sink);
 Annotation decode_annotation(const json& item, const std::string& path, Sink& sink);
-Stage decode_stage(const json& item, const std::string& path, Sink& sink);
 LayoutNode decode_layout(const json& item, const std::string& path, Sink& sink);
 
 }  // namespace caliper_builder::spec::detail

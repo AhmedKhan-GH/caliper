@@ -1,0 +1,48 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 224,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 129,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 130
+  },
+  "meta": {
+    "count": 1,
+    "program": "scene.116",
+    "resource": "boxes",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "resource",
+        "shape": [
+          64
+        ]
+      }
+    ],
+    "step": 7,
+    "stride": 64
+  },
+  "meta_offset": 28,
+  "name": "v3_2/resource_scene_boxes_bundle_boxes",
+  "section_lengths": [
+    64
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 64,
+      "name": "resource",
+      "offset": 160,
+      "shape": [
+        64
+      ],
+      "values": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 62, 0, 0, 64, 64, 0, 0, 128, 61, 0, 0, 128, 61, 0, 0, 128, 62, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 63, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255]
+    }
+  ],
+  "type_name": "resource"
+}

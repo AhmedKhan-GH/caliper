@@ -22,7 +22,7 @@ message(STATUS "Configuring Caliper dependencies...")
 #                             PRIVATE-links this, so an
 #                             embedder that links just libcaliper (embed_host,
 #                             the Python extension) never pulls in the chrome
-#                             widgets, llama.cpp/ggml or slang. DuckDB reaches
+#                             widgets or slang. DuckDB reaches
 #                             it through caliper_host_lib; imgui/implot/implot3d/
 #                             ImGuiFileDialog through caliper::ui_stack.
 set(CALIPER_CORE_LIBS "")
@@ -274,101 +274,14 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/wrappers/imterm EXCLUDE_FROM_
 list(APPEND CALIPER_DEPENDENCY_LIBS imterm)
 message(STATUS "    ✓ ImTerm configured")
 
-# --- llama.cpp (LLM inference) ---
-# Only the opt-in archived opengllama applet links llama (CALIPER_BUILD_OPENGLLAMA,
-# which refuses when this is OFF). CALIPER_WITH_LLAMA=OFF skips the configure AND
-# the patch-apply step (which needs git + the submodule checkout).
-if(NOT CALIPER_WITH_LLAMA)
-    message(STATUS "  Skipping llama.cpp: CALIPER_WITH_LLAMA=OFF")
-    # The ON branch below also provides the root-scope CMAKE_CUDA_ARCHITECTURES
-    # that torch's Caffe2 config needs on Windows CUDA 13+; keep that (untested).
-    if(WIN32 AND USE_CUDA AND CUDAToolkit_VERSION VERSION_GREATER_EQUAL 13
-       AND NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-        set(CMAKE_CUDA_ARCHITECTURES native)
-    endif()
-else()
-message(STATUS "  Configuring llama.cpp...")
-set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
-set(BUILD_SHARED_LIBS_SAVED ${BUILD_SHARED_LIBS})
-set(BUILD_SHARED_LIBS OFF)
-if(APPLE)
-    set(GGML_METAL ON CACHE BOOL "" FORCE)
-    set(GGML_METAL_EMBED_LIBRARY ON CACHE BOOL "" FORCE)
-    message(STATUS "    Metal backend enabled for llama.cpp")
-elseif(USE_CUDA AND NOT WIN32)
-    set(GGML_CUDA ON CACHE BOOL "" FORCE)
-    message(STATUS "    CUDA backend enabled for llama.cpp")
-elseif(WIN32 AND USE_CUDA AND CUDAToolkit_VERSION VERSION_GREATER_EQUAL 13)
-    # Windows needs CUDA 13+: a 12.x ggml build would load a cudart64_12.dll /
-    # cublas64_12.dll that collide with the copies libtorch cu12x ships, and
-    # CUDA 12.x's host_config.h hard-rejects MSVC >= 19.50 (VS2026). CUDA 13's
-    # runtime DLLs carry different names (cudart64_13.dll), so both runtimes
-    # coexist in one process, and nvcc 13's MSVC gate is lifted by the
-    # -allow-unsupported-compiler flag set at the top level.
-    # Pin ggml's nvcc to the same toolkit find_package(CUDAToolkit) resolved,
-    # so the version gate above and the compiler actually agree.
-    set(CMAKE_CUDA_COMPILER "${CUDAToolkit_BIN_DIR}/nvcc.exe")
-    # Both ggml and torch's Caffe2 config enable the CUDA language and need
-    # CMAKE_CUDA_ARCHITECTURES defined at this (root) scope — Caffe2's
-    # try_compile hard-fails on an empty value. "native" targets the local
-    # GPU (requires one at configure time, which USE_CUDA already implies).
-    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-        set(CMAKE_CUDA_ARCHITECTURES native)
-    endif()
-    set(GGML_CUDA ON CACHE BOOL "" FORCE)
-    message(STATUS "    CUDA backend enabled for llama.cpp (CUDA ${CUDAToolkit_VERSION})")
-elseif(WIN32)
-    set(GGML_CUDA OFF CACHE BOOL "" FORCE)
-    message(STATUS "    llama.cpp: CPU backend on Windows (CUDA 13+ toolkit not found)")
+# --- CUDA architectures on Windows ---
+# torch's Caffe2 config enables the CUDA language on Windows with CUDA 13+ and
+# needs CMAKE_CUDA_ARCHITECTURES defined at this (root) scope: its try_compile
+# fails on an empty value. "native" targets the local GPU, which USE_CUDA implies.
+if(WIN32 AND USE_CUDA AND CUDAToolkit_VERSION VERSION_GREATER_EQUAL 13
+   AND NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES native)
 endif()
-
-# Caliper's local llama.cpp deltas live as patch files in-tree (NOT a fork):
-# the submodule pin stays on fetchable upstream, and these apply at configure
-# time. They adapt the loader to ollama's GGUF encoding (ssm_dt tensor name,
-# 3-section rope) and add GPT-OSS arch support — see
-# third_party/patches/llama.cpp/README.md. The apply is idempotent AND atomic:
-# the whole set is reverse-checked first (already-applied dev checkout or a
-# re-configure -> no-op), else forward-checked and applied together (both
-# patches touch llama-model.cpp, so they must land as one transaction).
-file(GLOB _llama_patches "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/llama.cpp/*.patch")
-list(SORT _llama_patches)
-if(_llama_patches)
-    set(_llama_patches_rev ${_llama_patches})
-    list(REVERSE _llama_patches_rev)
-    execute_process(
-        COMMAND git -C ${THIRD_PARTY_DIR}/llama.cpp apply --reverse --check ${_llama_patches_rev}
-        RESULT_VARIABLE _llama_patched OUTPUT_QUIET ERROR_QUIET)
-    if(_llama_patched EQUAL 0)
-        message(STATUS "    llama.cpp patches already applied — skipping")
-    else()
-        execute_process(
-            COMMAND git -C ${THIRD_PARTY_DIR}/llama.cpp apply --check ${_llama_patches}
-            RESULT_VARIABLE _llama_clean OUTPUT_QUIET ERROR_QUIET)
-        if(NOT _llama_clean EQUAL 0)
-            message(FATAL_ERROR
-                "  llama.cpp patches neither apply cleanly nor are already applied.\n"
-                "  The submodule is likely not at the expected upstream base "
-                "(a4107133).\n"
-                "  Reset it (git -C third_party/llama.cpp checkout a4107133) or "
-                "regenerate the patches — see third_party/patches/llama.cpp/README.md.")
-        endif()
-        execute_process(
-            COMMAND git -C ${THIRD_PARTY_DIR}/llama.cpp apply ${_llama_patches}
-            RESULT_VARIABLE _llama_apply)
-        if(NOT _llama_apply EQUAL 0)
-            message(FATAL_ERROR "  Failed to apply llama.cpp patches.")
-        endif()
-        list(LENGTH _llama_patches _llama_npatch)
-        message(STATUS "    applied ${_llama_npatch} local llama.cpp patch(es)")
-    endif()
-endif()
-
-add_subdirectory(${THIRD_PARTY_DIR}/llama.cpp EXCLUDE_FROM_ALL)
-set(BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS_SAVED})
-message(STATUS "    ✓ llama.cpp configured")
-endif()  # CALIPER_WITH_LLAMA
 
 # --- ImGuiFileDialog (File open/save dialog for ImGui) ---
 message(STATUS "  Configuring ImGuiFileDialog...")

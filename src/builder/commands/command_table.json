@@ -1903,6 +1903,10 @@
             "description": "True with a spec in the result, the open one or the named applet's; false when no applet is named and no spec is open, and then no other field is given.",
             "type": "boolean"
           },
+          "open_in_app": {
+            "description": "With applet: whether the app has that applet open, so that its live sources, values and kept steps reach panel.data; a saved applet that is not open shows no live data.",
+            "type": "boolean"
+          },
           "path": {
             "description": "Its file, relative to the workspace, or null when it was never saved.",
             "type": [
@@ -12047,7 +12051,7 @@
                   "type": "string"
                 },
                 "program": {
-                  "description": "program: the program's id, or the stage as <panel>/<entity>/<kind>; pick of a piece's item: the program that drew it.",
+                  "description": "program: the program's id; pick of a piece's item: the program that drew it.",
                   "type": "string"
                 },
                 "row_id": {
@@ -12155,501 +12159,7 @@
         ],
         "type": "object"
       },
-      "summary": "Returns the events that came after a cursor: picks and selections in the app's views and scene panels, changes of controls, changes of the running script (state, parameters, actions, attachment), edits of the open spec, approvals, the compile, refusal and stop of GPU programs and stages, writes of state variables and moves of the cursor. It answers at once when events wait, and otherwise holds the call until one comes or timeout_s ends. Pass the cursor of each result to the next call. The app keeps the last 1024 events; lost counts those that were dropped before you read them. Hovers are not events. It changes nothing."
-    },
-    {
-      "agents": true,
-      "args": {
-        "additionalProperties": false,
-        "properties": {
-          "dry_run": {
-            "default": false,
-            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
-            "type": "boolean"
-          },
-          "entity": {
-            "description": "The entity of the panel's scene, such as programs/ribbons or a path the script publishes.",
-            "maxLength": 255,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9_.-]{1,63}(/[A-Za-z0-9_.-]{1,63}){0,15}$",
-            "type": "string"
-          },
-          "kind": {
-            "description": "material gives the color of each fragment with fn material(in: MaterialIn) -> vec4<f32>; vertex gives the position and the radius of each item with fn vertex(in: VertexIn) -> VertexOut.",
-            "enum": [
-              "material",
-              "vertex"
-            ],
-            "type": "string"
-          },
-          "panel": {
-            "description": "The scene panel's id in the open spec.",
-            "maxLength": 64,
-            "minLength": 1,
-            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
-            "type": "string"
-          },
-          "params": {
-            "description": "A JSON object that gives each of the stage's named parameters, at most 16 names, a number or a binding reference to a control, a selection or a state; the WGSL reads them by name."
-          },
-          "wgsl": {
-            "description": "The stage's WGSL: the function material or vertex, with helper functions and constants, at most 16 KiB.",
-            "maxLength": 16384,
-            "minLength": 1,
-            "type": "string"
-          }
-        },
-        "required": [
-          "panel",
-          "entity",
-          "kind",
-          "wgsl"
-        ],
-        "type": "object"
-      },
-      "destructive": false,
-      "effect": "edit",
-      "examples": [
-        {
-          "entity": "programs/ribbons",
-          "kind": "material",
-          "panel": "world",
-          "wgsl": "fn material(in: MaterialIn) -> vec4<f32> {\n  return vec4<f32>(in.color.rgb * (0.5 + 0.5 * in.value), 1.0);\n}\n"
-        }
-      ],
-      "frame_thread": true,
-      "mutates": true,
-      "name": "stage.set",
-      "result": {
-        "additionalProperties": false,
-        "properties": {
-          "applied": {
-            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
-            "type": "boolean"
-          },
-          "diff": {
-            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
-            "type": "string"
-          },
-          "entity": {
-            "description": "The entity path.",
-            "type": "string"
-          },
-          "kind": {
-            "description": "The stage's kind.",
-            "type": "string"
-          },
-          "messages": {
-            "description": "The compiler's and the sandbox's warnings; an error refuses the edit instead.",
-            "items": {
-              "additionalProperties": false,
-              "properties": {
-                "code": {
-                  "description": "A stable code, such as program.compile_failed or program.writes_input.",
-                  "type": "string"
-                },
-                "column": {
-                  "description": "The column in bytes, from 1; 0 when the message has no place.",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "file": {
-                  "description": "A piece: the file of the line, such as draw.wgsl, common.wgsl, lib/colormap@1 or piece.toml.",
-                  "type": "string"
-                },
-                "line": {
-                  "description": "The line in the given source, from 1; 0 when the message has no place.",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "message": {
-                  "description": "The message of the compiler or the sandbox, in one line.",
-                  "type": "string"
-                },
-                "severity": {
-                  "description": "Whether the message stops the source or only warns.",
-                  "enum": [
-                    "error",
-                    "warning"
-                  ],
-                  "type": "string"
-                },
-                "where": {
-                  "description": "A piece: the manifest key or the pass of the message, such as draw.passes[1].target.",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "severity",
-                "code",
-                "message",
-                "line",
-                "column"
-              ],
-              "type": "object"
-            },
-            "type": "array"
-          },
-          "panel": {
-            "description": "The scene panel's id.",
-            "type": "string"
-          },
-          "warnings": {
-            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
-            "items": {
-              "additionalProperties": false,
-              "properties": {
-                "code": {
-                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
-                  "type": "string"
-                },
-                "message": {
-                  "description": "One plain sentence that says what is wrong.",
-                  "type": "string"
-                },
-                "where": {
-                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "code",
-                "message",
-                "where"
-              ],
-              "type": "object"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "panel",
-          "entity",
-          "kind",
-          "messages",
-          "warnings",
-          "diff",
-          "applied"
-        ],
-        "type": "object"
-      },
-      "summary": "Sets the material or vertex stage of one entity of a scene panel: WGSL that the viewer runs in place of its own function for that entity. material gives the color of each fragment with fn material(in: MaterialIn) -> vec4<f32>; vertex gives the position and the radius of each item with fn vertex(in: VertexIn) -> VertexOut. The source holds functions and constants only, with no binding and no entry point. It replaces the stage of the same panel, entity and kind, and the entity still picks and selects. The sandbox checks it first, and messages give the compiler's line and column. Undo restores the stage before. With dry_run true the change is only checked and not applied."
-    },
-    {
-      "agents": true,
-      "args": {
-        "additionalProperties": false,
-        "properties": {
-          "dry_run": {
-            "default": false,
-            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
-            "type": "boolean"
-          },
-          "entity": {
-            "description": "The entity path of the stage.",
-            "maxLength": 255,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9_.-]{1,63}(/[A-Za-z0-9_.-]{1,63}){0,15}$",
-            "type": "string"
-          },
-          "kind": {
-            "description": "material gives the color of each fragment with fn material(in: MaterialIn) -> vec4<f32>; vertex gives the position and the radius of each item with fn vertex(in: VertexIn) -> VertexOut.",
-            "enum": [
-              "material",
-              "vertex"
-            ],
-            "type": "string"
-          },
-          "panel": {
-            "description": "The scene panel's id in the open spec.",
-            "maxLength": 64,
-            "minLength": 1,
-            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "panel",
-          "entity",
-          "kind"
-        ],
-        "type": "object"
-      },
-      "destructive": false,
-      "effect": "edit",
-      "examples": [
-        {
-          "entity": "programs/ribbons",
-          "kind": "material",
-          "panel": "world"
-        }
-      ],
-      "frame_thread": true,
-      "mutates": true,
-      "name": "stage.remove",
-      "result": {
-        "additionalProperties": false,
-        "properties": {
-          "applied": {
-            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
-            "type": "boolean"
-          },
-          "diff": {
-            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
-            "type": "string"
-          },
-          "entity": {
-            "description": "The entity path.",
-            "type": "string"
-          },
-          "kind": {
-            "description": "The removed stage's kind.",
-            "type": "string"
-          },
-          "panel": {
-            "description": "The scene panel's id.",
-            "type": "string"
-          },
-          "warnings": {
-            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
-            "items": {
-              "additionalProperties": false,
-              "properties": {
-                "code": {
-                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
-                  "type": "string"
-                },
-                "message": {
-                  "description": "One plain sentence that says what is wrong.",
-                  "type": "string"
-                },
-                "where": {
-                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "code",
-                "message",
-                "where"
-              ],
-              "type": "object"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "panel",
-          "entity",
-          "kind",
-          "warnings",
-          "diff",
-          "applied"
-        ],
-        "type": "object"
-      },
-      "summary": "Removes the material or vertex stage of one entity of a scene panel, so that the entity draws with the viewer's own function again. Undo restores the stage. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
-    },
-    {
-      "agents": true,
-      "args": {
-        "additionalProperties": false,
-        "properties": {
-          "entry": {
-            "description": "compute: the entry point to check; the one compute entry point when absent.",
-            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
-            "type": "string"
-          },
-          "kind": {
-            "description": "How to compile it: as a material or vertex stage, or as a program's compute source.",
-            "enum": [
-              "material",
-              "vertex",
-              "compute"
-            ],
-            "type": "string"
-          },
-          "wgsl": {
-            "description": "The WGSL source.",
-            "maxLength": 65536,
-            "minLength": 1,
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind",
-          "wgsl"
-        ],
-        "type": "object"
-      },
-      "destructive": false,
-      "effect": "read",
-      "examples": [
-        {
-          "kind": "compute",
-          "wgsl": "@group(0) @binding(0) var<storage, read> w: array<f32>;\n@group(0) @binding(1) var<storage, read_write> positions: array<f32>;\n@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;\n@compute @workgroup_size(64) fn run(@builtin(global_invocation_id) id: vec3<u32>) {\n  let i = id.x;\n  if (i >= 256u) { return; }\n  positions[3u * i] = w[3u * i];\n  positions[3u * i + 1u] = w[3u * i + 1u];\n  positions[3u * i + 2u] = w[3u * i + 2u];\n  atomicAdd(&count, 1u);\n}\n"
-        }
-      ],
-      "frame_thread": false,
-      "mutates": false,
-      "name": "stage.check",
-      "result": {
-        "additionalProperties": false,
-        "properties": {
-          "bindings": {
-            "description": "The bindings of the source, as the compiler reflects them.",
-            "items": {
-              "additionalProperties": false,
-              "properties": {
-                "access": {
-                  "description": "How the source may use it.",
-                  "enum": [
-                    "read",
-                    "read_write",
-                    "write"
-                  ],
-                  "type": "string"
-                },
-                "binding": {
-                  "description": "The binding's number in its group.",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "group": {
-                  "description": "The binding's group.",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "kind": {
-                  "description": "What the binding is.",
-                  "enum": [
-                    "uniform",
-                    "storage",
-                    "texture",
-                    "uint_texture",
-                    "storage_texture",
-                    "sampler"
-                  ],
-                  "type": "string"
-                },
-                "name": {
-                  "description": "The WGSL variable's name.",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "group",
-                "binding",
-                "name",
-                "kind",
-                "access"
-              ],
-              "type": "object"
-            },
-            "type": "array"
-          },
-          "entry_points": {
-            "description": "The entry points of the source.",
-            "items": {
-              "additionalProperties": false,
-              "properties": {
-                "name": {
-                  "description": "The entry point's name.",
-                  "type": "string"
-                },
-                "stage": {
-                  "description": "The entry point's stage.",
-                  "enum": [
-                    "vertex",
-                    "fragment",
-                    "compute"
-                  ],
-                  "type": "string"
-                },
-                "workgroup_size": {
-                  "description": "compute: the workgroup size x, y and z; zeros otherwise.",
-                  "items": {
-                    "type": "integer"
-                  },
-                  "maxItems": 3,
-                  "minItems": 3,
-                  "type": "array"
-                }
-              },
-              "required": [
-                "name",
-                "stage",
-                "workgroup_size"
-              ],
-              "type": "object"
-            },
-            "type": "array"
-          },
-          "messages": {
-            "description": "The messages, errors first.",
-            "items": {
-              "additionalProperties": false,
-              "properties": {
-                "code": {
-                  "description": "A stable code, such as program.compile_failed or program.writes_input.",
-                  "type": "string"
-                },
-                "column": {
-                  "description": "The column in bytes, from 1; 0 when the message has no place.",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "file": {
-                  "description": "A piece: the file of the line, such as draw.wgsl, common.wgsl, lib/colormap@1 or piece.toml.",
-                  "type": "string"
-                },
-                "line": {
-                  "description": "The line in the given source, from 1; 0 when the message has no place.",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "message": {
-                  "description": "The message of the compiler or the sandbox, in one line.",
-                  "type": "string"
-                },
-                "severity": {
-                  "description": "Whether the message stops the source or only warns.",
-                  "enum": [
-                    "error",
-                    "warning"
-                  ],
-                  "type": "string"
-                },
-                "where": {
-                  "description": "A piece: the manifest key or the pass of the message, such as draw.passes[1].target.",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "severity",
-                "code",
-                "message",
-                "line",
-                "column"
-              ],
-              "type": "object"
-            },
-            "type": "array"
-          },
-          "ok": {
-            "description": "Whether the source compiles and passes the checks that need no declaration.",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "ok",
-          "messages",
-          "entry_points",
-          "bindings"
-        ],
-        "type": "object"
-      },
-      "summary": "Compiles a WGSL source as the viewer compiles a stage or as the runtime compiles a program, and returns the compiler's and the sandbox's messages with line and column, the entry points and the bindings. kind material or vertex checks a stage with the viewer's prelude; kind compute checks a program's source without its declaration. It changes nothing."
+      "summary": "Returns the events that came after a cursor: picks and selections in the app's views and scene panels, changes of controls, changes of the running script (state, parameters, actions, attachment), edits of the open spec, approvals, the compile, refusal and stop of GPU programs, writes of state variables and moves of the cursor. It answers at once when events wait, and otherwise holds the call until one comes or timeout_s ends. Pass the cursor of each result to the next call. The app keeps the last 1024 events; lost counts those that were dropped before you read them. Hovers are not events. It changes nothing."
     },
     {
       "agents": true,
@@ -12790,7 +12300,7 @@
                       "properties": {
                         "count": {
                           "description": "The elements.",
-                          "maximum": 4194304,
+                          "maximum": 33554432,
                           "minimum": 1,
                           "type": "integer"
                         },
@@ -12863,7 +12373,7 @@
                   },
                   "memory_mb": {
                     "description": "The budget of the resources, buffer inputs, draw buffers and targets in the viewer, in MiB; 64 when absent.",
-                    "maximum": 256,
+                    "maximum": 512,
                     "minimum": 1,
                     "type": "integer"
                   },
@@ -12898,6 +12408,11 @@
                         "fragment": {
                           "description": "render: the fragment entry point.",
                           "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+                          "type": "string"
+                        },
+                        "indices": {
+                          "description": "render with a vertex entry and a list topology: a published buffer resource or buffer input of u32 elements, whose valid elements the pass draws as an index buffer; each index is the vertex_index of the vertex entry, whose reads are bounds-checked. vertices then counts nothing.",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$",
                           "type": "string"
                         },
                         "instances": {
@@ -13051,6 +12566,16 @@
                     "additionalProperties": false,
                     "description": "Labels that the host draws and places.",
                     "properties": {
+                      "align": {
+                        "description": "placed: the placer chooses one of eight places around the anchor; left, right and center pin each label at its anchor with the start, the end or the middle of its text there. placed when absent.",
+                        "enum": [
+                          "placed",
+                          "left",
+                          "right",
+                          "center"
+                        ],
+                        "type": "string"
+                      },
                       "anchors": {
                         "description": "A buffer resource with a struct; one label at each valid element.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
@@ -13079,11 +12604,15 @@
                         },
                         "maxItems": 4096,
                         "type": "array"
+                      },
+                      "strings_from": {
+                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                        "type": "string"
                       }
                     },
                     "required": [
-                      "anchors",
-                      "strings"
+                      "anchors"
                     ],
                     "type": "object"
                   }
@@ -13136,16 +12665,12 @@
                   "additionalProperties": false,
                   "properties": {
                     "dtype": {
-                      "description": "tensor: the element type; f32 when absent. The bound tensor's dtype must match it.",
-                      "enum": [
-                        "f32",
-                        "i32",
-                        "u32"
-                      ],
+                      "description": "tensor: the element type, f32, i32, u32, u8 or u16, or two to five of them joined by |, each once; f32 when absent. The bound tensor holds one of them. A narrow type or several types bind the tensor's bytes as array<u32>, read through the checked accessor <name>_at().",
+                      "pattern": "^(f32|i32|u32|u8|u16)(\\|(f32|i32|u32|u8|u16)){0,4}$",
                       "type": "string"
                     },
                     "element": {
-                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "description": "buffer: a plain element type, or the narrow u8 or u16 packed four or two to a 32-bit word; give either element, or struct with fields.",
                       "enum": [
                         "f32",
                         "i32",
@@ -13153,7 +12678,9 @@
                         "vec2<f32>",
                         "vec4<f32>",
                         "vec2<u32>",
-                        "vec4<u32>"
+                        "vec4<u32>",
+                        "u8",
+                        "u16"
                       ],
                       "type": "string"
                     },
@@ -13179,6 +12706,10 @@
                       "description": "The input's name, which the WGSL reads as a generated read-only array.",
                       "pattern": "^[a-z][a-z0-9_]{0,31}$",
                       "type": "string"
+                    },
+                    "optional": {
+                      "description": "true: a program may leave the input unbound; a tensor input then has the shape (0, 0, 0, 0) and reads zero, and a buffer input has the count 0. false when absent.",
+                      "type": "boolean"
                     },
                     "rank_max": {
                       "description": "tensor: the most axes; 8 when absent.",
@@ -13274,8 +12805,8 @@
                       "type": "boolean"
                     },
                     "count": {
-                      "description": "buffer: the elements.",
-                      "maximum": 4194304,
+                      "description": "buffer: the elements, at most 33,554,432 words: 134,217,728 u8 or 67,108,864 u16 elements.",
+                      "maximum": 134217728,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -13284,7 +12815,7 @@
                       "type": "boolean"
                     },
                     "element": {
-                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "description": "buffer: a plain element type, or the narrow u8 or u16 packed four or two to a 32-bit word; give either element, or struct with fields.",
                       "enum": [
                         "f32",
                         "i32",
@@ -13292,7 +12823,9 @@
                         "vec2<f32>",
                         "vec4<f32>",
                         "vec2<u32>",
-                        "vec4<u32>"
+                        "vec4<u32>",
+                        "u8",
+                        "u16"
                       ],
                       "type": "string"
                     },
@@ -13306,9 +12839,18 @@
                       "minItems": 1,
                       "type": "array"
                     },
+                    "format": {
+                      "description": "texture: rgba8unorm when absent, r8unorm (one byte a texel) or r32uint (sampled with textureLoad).",
+                      "enum": [
+                        "rgba8unorm",
+                        "r8unorm",
+                        "r32uint"
+                      ],
+                      "type": "string"
+                    },
                     "height": {
-                      "description": "texture: the height in pixels.",
-                      "maximum": 4096,
+                      "description": "texture: the largest height of a version in pixels.",
+                      "maximum": 8192,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -13324,7 +12866,7 @@
                       "type": "integer"
                     },
                     "kind": {
-                      "description": "buffer: count elements of a layout; texture: an rgba8unorm image that the derive half writes as a packed array<u32> and the draw half samples as texture_2d<f32>.",
+                      "description": "buffer: count elements of a layout; texture: an image of a format and a size per version, which the derive half writes as a packed array<u32> with the size in <id>_size and the draw half samples as texture_2d<f32>, or texture_2d<u32> for r32uint.",
                       "enum": [
                         "buffer",
                         "texture"
@@ -13340,9 +12882,15 @@
                       "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$",
                       "type": "string"
                     },
+                    "texels": {
+                      "description": "texture: the most texels of a version, width times height when absent; the largest version holds at most 128 MiB when published.",
+                      "maximum": 67108864,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
                     "width": {
-                      "description": "texture: the width in pixels.",
-                      "maximum": 4096,
+                      "description": "texture: the largest width of a version in pixels.",
+                      "maximum": 8192,
                       "minimum": 1,
                       "type": "integer"
                     }
@@ -14664,7 +14212,7 @@
         "additionalProperties": false,
         "properties": {
           "id": {
-            "description": "Only this program, or this stage as <panel>/<entity>/<kind>; every program and stage when absent.",
+            "description": "Only this program; every program when absent.",
             "maxLength": 320,
             "minLength": 1,
             "type": "string"
@@ -14812,21 +14360,21 @@
                   ]
                 },
                 "every": {
-                  "description": "The steps between two passes of the program: the cadence N that all programs share, or a multiple of N for a larger limits.every; null for a stage or before the first pass.",
+                  "description": "The steps between two passes of the program: the cadence N that all programs share, or a multiple of N for a larger limits.every; null before the first pass.",
                   "type": [
                     "integer",
                     "null"
                   ]
                 },
                 "every_min": {
-                  "description": "The declared limits.every; null for a stage or when absent.",
+                  "description": "The declared limits.every; null when absent.",
                   "type": [
                     "integer",
                     "null"
                   ]
                 },
                 "host": {
-                  "description": "Where it runs: script for a program in the attached script, viewer for a stage, none when nothing runs it.",
+                  "description": "Where it runs: script for a program in the attached script, viewer for the draw half of a piece, none when nothing runs it.",
                   "enum": [
                     "script",
                     "viewer",
@@ -14835,24 +14383,22 @@
                   "type": "string"
                 },
                 "id": {
-                  "description": "The program's id, or a stage as <panel>/<entity>/<kind>.",
+                  "description": "The program's id.",
                   "type": "string"
                 },
                 "kind": {
-                  "description": "The program's output kind, the stage's kind, piece for an instance of a piece, or operator for the first surface or path step of a source over a live tensor, which runs in the script and has the id operator.<source>.<step index>.",
+                  "description": "The program's output kind, piece for an instance of a piece, or operator for the first surface or path step of a source over a live tensor, which runs in the script and has the id operator.<source>.<step index>.",
                   "enum": [
                     "geometry",
                     "pixels",
                     "tensor",
-                    "material",
-                    "vertex",
                     "operator",
                     "piece"
                   ],
                   "type": "string"
                 },
                 "last_cost_ms": {
-                  "description": "The overhead D of a pass in milliseconds: the time that a pass adds to the run's wall clock, shared by all programs; null for a stage or before it is measured.",
+                  "description": "The overhead D of a pass in milliseconds: the time that a pass adds to the run's wall clock, shared by all programs; null before it is measured.",
                   "type": [
                     "number",
                     "null"
@@ -14878,12 +14424,12 @@
                   "type": "integer"
                 },
                 "memory_limit_bytes": {
-                  "description": "The budget from limits.memory_mb; 0 for a stage.",
+                  "description": "The budget from limits.memory_mb.",
                   "minimum": 0,
                   "type": "integer"
                 },
                 "overhead_share": {
-                  "description": "The measured share of the training time that the passes take, D / (N b), which the cadence aims to keep at or below 0.04; null for a stage or before it is measured.",
+                  "description": "The measured share of the training time that the passes take, D / (N b), which the cadence aims to keep at or below 0.04; null before it is measured.",
                   "minimum": 0,
                   "type": [
                     "number",
@@ -14891,7 +14437,7 @@
                   ]
                 },
                 "passes_per_s": {
-                  "description": "The passes of the program a second on the run's wall clock, over its last passes; null for a stage, before its second pass and while it does not run.",
+                  "description": "The passes of the program a second on the run's wall clock, over its last passes; null before its second pass and while it does not run.",
                   "minimum": 0,
                   "type": [
                     "number",
@@ -14934,7 +14480,7 @@
                   "type": "object"
                 },
                 "runs": {
-                  "description": "The count of passes, or of frames for a stage.",
+                  "description": "The count of passes.",
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -14955,7 +14501,7 @@
                   "type": "string"
                 },
                 "step_ms": {
-                  "description": "The base step time b in milliseconds: the time of a training step far from a pass; null for a stage or before it is measured.",
+                  "description": "The base step time b in milliseconds: the time of a training step far from a pass; null before it is measured.",
                   "type": [
                     "number",
                     "null"
@@ -14985,315 +14531,14 @@
             },
             "maxItems": 16,
             "type": "array"
-          },
-          "stages": {
-            "description": "The stages, in the spec's order.",
-            "items": {
-              "additionalProperties": false,
-              "properties": {
-                "draw": {
-                  "additionalProperties": false,
-                  "description": "An instance whose piece draws: its draw half in the viewer; absent for another program.",
-                  "properties": {
-                    "error": {
-                      "additionalProperties": false,
-                      "description": "The draw half's last error, or null.",
-                      "properties": {
-                        "code": {
-                          "description": "A stable code, such as program.draw_over_time.",
-                          "type": "string"
-                        },
-                        "message": {
-                          "description": "One plain sentence that names the pass, its time or memory, and its limit.",
-                          "type": "string"
-                        },
-                        "where": {
-                          "description": "The pass, such as draw.passes[1], or empty.",
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "code",
-                        "message",
-                        "where"
-                      ],
-                      "type": [
-                        "object",
-                        "null"
-                      ]
-                    },
-                    "frame_limit_ms": {
-                      "description": "Its draw.frame_ms.",
-                      "type": "number"
-                    },
-                    "frame_ms": {
-                      "description": "The GPU time of its last frame in milliseconds, or null.",
-                      "type": [
-                        "number",
-                        "null"
-                      ]
-                    },
-                    "memory_bytes": {
-                      "description": "The bytes of its resources, buffer inputs, draw buffers and targets in the viewer.",
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "memory_limit_bytes": {
-                      "description": "Its draw.memory_mb in bytes.",
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "resource_step": {
-                      "description": "The step of the newest resource version that a frame drew, or null.",
-                      "type": [
-                        "integer",
-                        "null"
-                      ]
-                    },
-                    "state": {
-                      "description": "The draw half's state in the viewer: review in a foreign spec without a review of the piece's hash.",
-                      "enum": [
-                        "waiting",
-                        "review",
-                        "compiled",
-                        "running",
-                        "refused",
-                        "stopped"
-                      ],
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "state",
-                    "frame_ms",
-                    "frame_limit_ms",
-                    "memory_bytes",
-                    "memory_limit_bytes",
-                    "resource_step",
-                    "error"
-                  ],
-                  "type": [
-                    "object",
-                    "null"
-                  ]
-                },
-                "error": {
-                  "additionalProperties": false,
-                  "description": "The last error, or null.",
-                  "properties": {
-                    "code": {
-                      "description": "A stable code, such as program.over_time.",
-                      "type": "string"
-                    },
-                    "column": {
-                      "description": "The column in the source, or 0.",
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "line": {
-                      "description": "The line in the source, or 0.",
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "message": {
-                      "description": "One plain sentence that says what happened.",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "code",
-                    "message",
-                    "line",
-                    "column"
-                  ],
-                  "type": [
-                    "object",
-                    "null"
-                  ]
-                },
-                "every": {
-                  "description": "The steps between two passes of the program: the cadence N that all programs share, or a multiple of N for a larger limits.every; null for a stage or before the first pass.",
-                  "type": [
-                    "integer",
-                    "null"
-                  ]
-                },
-                "every_min": {
-                  "description": "The declared limits.every; null for a stage or when absent.",
-                  "type": [
-                    "integer",
-                    "null"
-                  ]
-                },
-                "host": {
-                  "description": "Where it runs: script for a program in the attached script, viewer for a stage, none when nothing runs it.",
-                  "enum": [
-                    "script",
-                    "viewer",
-                    "none"
-                  ],
-                  "type": "string"
-                },
-                "id": {
-                  "description": "The program's id, or a stage as <panel>/<entity>/<kind>.",
-                  "type": "string"
-                },
-                "kind": {
-                  "description": "The program's output kind, the stage's kind, piece for an instance of a piece, or operator for the first surface or path step of a source over a live tensor, which runs in the script and has the id operator.<source>.<step index>.",
-                  "enum": [
-                    "geometry",
-                    "pixels",
-                    "tensor",
-                    "material",
-                    "vertex",
-                    "operator",
-                    "piece"
-                  ],
-                  "type": "string"
-                },
-                "last_cost_ms": {
-                  "description": "The overhead D of a pass in milliseconds: the time that a pass adds to the run's wall clock, shared by all programs; null for a stage or before it is measured.",
-                  "type": [
-                    "number",
-                    "null"
-                  ]
-                },
-                "last_pass_ms": {
-                  "description": "The GPU time of the last pass or frame in milliseconds, or null.",
-                  "type": [
-                    "number",
-                    "null"
-                  ]
-                },
-                "last_step": {
-                  "description": "The script's step of the last pass, or null.",
-                  "type": [
-                    "integer",
-                    "null"
-                  ]
-                },
-                "memory_bytes": {
-                  "description": "The bytes of its output buffers and bound tensors.",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "memory_limit_bytes": {
-                  "description": "The budget from limits.memory_mb; 0 for a stage.",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "overhead_share": {
-                  "description": "The measured share of the training time that the passes take, D / (N b), which the cadence aims to keep at or below 0.04; null for a stage or before it is measured.",
-                  "minimum": 0,
-                  "type": [
-                    "number",
-                    "null"
-                  ]
-                },
-                "passes_per_s": {
-                  "description": "The passes of the program a second on the run's wall clock, over its last passes; null for a stage, before its second pass and while it does not run.",
-                  "minimum": 0,
-                  "type": [
-                    "number",
-                    "null"
-                  ]
-                },
-                "piece": {
-                  "additionalProperties": false,
-                  "description": "An instance: its pin; absent for another program.",
-                  "properties": {
-                    "from": {
-                      "description": "The piece's source: the built-in library (the default), the workspace's pieces folder, or the spec's inline pieces.",
-                      "enum": [
-                        "library",
-                        "workspace",
-                        "inline"
-                      ],
-                      "type": "string"
-                    },
-                    "hash": {
-                      "description": "The piece's hash. The editor writes it when absent; a piece whose hash differs refuses the program with piece.hash_mismatch.",
-                      "pattern": "^sha256:[0-9a-f]{64}$",
-                      "type": "string"
-                    },
-                    "name": {
-                      "description": "The piece's name.",
-                      "pattern": "^[a-z][a-z0-9_]{0,31}$",
-                      "type": "string"
-                    },
-                    "version": {
-                      "description": "The piece's version; 1 when absent.",
-                      "maximum": 1000000,
-                      "minimum": 1,
-                      "type": "integer"
-                    }
-                  },
-                  "required": [
-                    "name"
-                  ],
-                  "type": "object"
-                },
-                "runs": {
-                  "description": "The count of passes, or of frames for a stage.",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "sha256": {
-                  "description": "The SHA-256 of the source the host runs, in hex; empty when none runs.",
-                  "type": "string"
-                },
-                "state": {
-                  "description": "waiting for a host, review in a foreign spec without a review, compiled before its first pass, running, refused by a check, or stopped by a limit.",
-                  "enum": [
-                    "waiting",
-                    "review",
-                    "compiled",
-                    "running",
-                    "refused",
-                    "stopped"
-                  ],
-                  "type": "string"
-                },
-                "step_ms": {
-                  "description": "The base step time b in milliseconds: the time of a training step far from a pass; null for a stage or before it is measured.",
-                  "type": [
-                    "number",
-                    "null"
-                  ]
-                }
-              },
-              "required": [
-                "id",
-                "kind",
-                "host",
-                "state",
-                "every",
-                "every_min",
-                "last_pass_ms",
-                "last_cost_ms",
-                "step_ms",
-                "overhead_share",
-                "passes_per_s",
-                "last_step",
-                "runs",
-                "memory_bytes",
-                "memory_limit_bytes",
-                "error",
-                "sha256"
-              ],
-              "type": "object"
-            },
-            "maxItems": 32,
-            "type": "array"
           }
         },
         "required": [
-          "programs",
-          "stages"
+          "programs"
         ],
         "type": "object"
       },
-      "summary": "Returns the state of each GPU program and each stage of the open spec: where it runs, whether it compiled, runs, was refused or stopped, its cadence N, the GPU time of its last pass, the overhead of a pass and the base step time on the run's wall clock, the measured share of the training time, its passes a second, its memory, and its last error with line and column. It changes nothing."
+      "summary": "Returns the state of each GPU program of the open spec: where it runs, whether it compiled, runs, was refused or stopped, its cadence N, the GPU time of its last pass, the overhead of a pass and the base step time on the run's wall clock, the measured share of the training time, its passes a second, its memory, and its last error with line and column. It changes nothing."
     },
     {
       "agents": true,
@@ -15418,7 +14663,7 @@
                       "properties": {
                         "count": {
                           "description": "The elements.",
-                          "maximum": 4194304,
+                          "maximum": 33554432,
                           "minimum": 1,
                           "type": "integer"
                         },
@@ -15491,7 +14736,7 @@
                   },
                   "memory_mb": {
                     "description": "The budget of the resources, buffer inputs, draw buffers and targets in the viewer, in MiB; 64 when absent.",
-                    "maximum": 256,
+                    "maximum": 512,
                     "minimum": 1,
                     "type": "integer"
                   },
@@ -15526,6 +14771,11 @@
                         "fragment": {
                           "description": "render: the fragment entry point.",
                           "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+                          "type": "string"
+                        },
+                        "indices": {
+                          "description": "render with a vertex entry and a list topology: a published buffer resource or buffer input of u32 elements, whose valid elements the pass draws as an index buffer; each index is the vertex_index of the vertex entry, whose reads are bounds-checked. vertices then counts nothing.",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$",
                           "type": "string"
                         },
                         "instances": {
@@ -15679,6 +14929,16 @@
                     "additionalProperties": false,
                     "description": "Labels that the host draws and places.",
                     "properties": {
+                      "align": {
+                        "description": "placed: the placer chooses one of eight places around the anchor; left, right and center pin each label at its anchor with the start, the end or the middle of its text there. placed when absent.",
+                        "enum": [
+                          "placed",
+                          "left",
+                          "right",
+                          "center"
+                        ],
+                        "type": "string"
+                      },
                       "anchors": {
                         "description": "A buffer resource with a struct; one label at each valid element.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
@@ -15707,11 +14967,15 @@
                         },
                         "maxItems": 4096,
                         "type": "array"
+                      },
+                      "strings_from": {
+                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                        "type": "string"
                       }
                     },
                     "required": [
-                      "anchors",
-                      "strings"
+                      "anchors"
                     ],
                     "type": "object"
                   }
@@ -15764,16 +15028,12 @@
                   "additionalProperties": false,
                   "properties": {
                     "dtype": {
-                      "description": "tensor: the element type; f32 when absent. The bound tensor's dtype must match it.",
-                      "enum": [
-                        "f32",
-                        "i32",
-                        "u32"
-                      ],
+                      "description": "tensor: the element type, f32, i32, u32, u8 or u16, or two to five of them joined by |, each once; f32 when absent. The bound tensor holds one of them. A narrow type or several types bind the tensor's bytes as array<u32>, read through the checked accessor <name>_at().",
+                      "pattern": "^(f32|i32|u32|u8|u16)(\\|(f32|i32|u32|u8|u16)){0,4}$",
                       "type": "string"
                     },
                     "element": {
-                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "description": "buffer: a plain element type, or the narrow u8 or u16 packed four or two to a 32-bit word; give either element, or struct with fields.",
                       "enum": [
                         "f32",
                         "i32",
@@ -15781,7 +15041,9 @@
                         "vec2<f32>",
                         "vec4<f32>",
                         "vec2<u32>",
-                        "vec4<u32>"
+                        "vec4<u32>",
+                        "u8",
+                        "u16"
                       ],
                       "type": "string"
                     },
@@ -15807,6 +15069,10 @@
                       "description": "The input's name, which the WGSL reads as a generated read-only array.",
                       "pattern": "^[a-z][a-z0-9_]{0,31}$",
                       "type": "string"
+                    },
+                    "optional": {
+                      "description": "true: a program may leave the input unbound; a tensor input then has the shape (0, 0, 0, 0) and reads zero, and a buffer input has the count 0. false when absent.",
+                      "type": "boolean"
                     },
                     "rank_max": {
                       "description": "tensor: the most axes; 8 when absent.",
@@ -15902,8 +15168,8 @@
                       "type": "boolean"
                     },
                     "count": {
-                      "description": "buffer: the elements.",
-                      "maximum": 4194304,
+                      "description": "buffer: the elements, at most 33,554,432 words: 134,217,728 u8 or 67,108,864 u16 elements.",
+                      "maximum": 134217728,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -15912,7 +15178,7 @@
                       "type": "boolean"
                     },
                     "element": {
-                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "description": "buffer: a plain element type, or the narrow u8 or u16 packed four or two to a 32-bit word; give either element, or struct with fields.",
                       "enum": [
                         "f32",
                         "i32",
@@ -15920,7 +15186,9 @@
                         "vec2<f32>",
                         "vec4<f32>",
                         "vec2<u32>",
-                        "vec4<u32>"
+                        "vec4<u32>",
+                        "u8",
+                        "u16"
                       ],
                       "type": "string"
                     },
@@ -15934,9 +15202,18 @@
                       "minItems": 1,
                       "type": "array"
                     },
+                    "format": {
+                      "description": "texture: rgba8unorm when absent, r8unorm (one byte a texel) or r32uint (sampled with textureLoad).",
+                      "enum": [
+                        "rgba8unorm",
+                        "r8unorm",
+                        "r32uint"
+                      ],
+                      "type": "string"
+                    },
                     "height": {
-                      "description": "texture: the height in pixels.",
-                      "maximum": 4096,
+                      "description": "texture: the largest height of a version in pixels.",
+                      "maximum": 8192,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -15952,7 +15229,7 @@
                       "type": "integer"
                     },
                     "kind": {
-                      "description": "buffer: count elements of a layout; texture: an rgba8unorm image that the derive half writes as a packed array<u32> and the draw half samples as texture_2d<f32>.",
+                      "description": "buffer: count elements of a layout; texture: an image of a format and a size per version, which the derive half writes as a packed array<u32> with the size in <id>_size and the draw half samples as texture_2d<f32>, or texture_2d<u32> for r32uint.",
                       "enum": [
                         "buffer",
                         "texture"
@@ -15968,9 +15245,15 @@
                       "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$",
                       "type": "string"
                     },
+                    "texels": {
+                      "description": "texture: the most texels of a version, width times height when absent; the largest version holds at most 128 MiB when published.",
+                      "maximum": 67108864,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
                     "width": {
-                      "description": "texture: the width in pixels.",
-                      "maximum": 4096,
+                      "description": "texture: the largest width of a version in pixels.",
+                      "maximum": 8192,
                       "minimum": 1,
                       "type": "integer"
                     }
@@ -16500,7 +15783,7 @@
                       "properties": {
                         "count": {
                           "description": "The elements.",
-                          "maximum": 4194304,
+                          "maximum": 33554432,
                           "minimum": 1,
                           "type": "integer"
                         },
@@ -16573,7 +15856,7 @@
                   },
                   "memory_mb": {
                     "description": "The budget of the resources, buffer inputs, draw buffers and targets in the viewer, in MiB; 64 when absent.",
-                    "maximum": 256,
+                    "maximum": 512,
                     "minimum": 1,
                     "type": "integer"
                   },
@@ -16608,6 +15891,11 @@
                         "fragment": {
                           "description": "render: the fragment entry point.",
                           "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+                          "type": "string"
+                        },
+                        "indices": {
+                          "description": "render with a vertex entry and a list topology: a published buffer resource or buffer input of u32 elements, whose valid elements the pass draws as an index buffer; each index is the vertex_index of the vertex entry, whose reads are bounds-checked. vertices then counts nothing.",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$",
                           "type": "string"
                         },
                         "instances": {
@@ -16761,6 +16049,16 @@
                     "additionalProperties": false,
                     "description": "Labels that the host draws and places.",
                     "properties": {
+                      "align": {
+                        "description": "placed: the placer chooses one of eight places around the anchor; left, right and center pin each label at its anchor with the start, the end or the middle of its text there. placed when absent.",
+                        "enum": [
+                          "placed",
+                          "left",
+                          "right",
+                          "center"
+                        ],
+                        "type": "string"
+                      },
                       "anchors": {
                         "description": "A buffer resource with a struct; one label at each valid element.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
@@ -16789,11 +16087,15 @@
                         },
                         "maxItems": 4096,
                         "type": "array"
+                      },
+                      "strings_from": {
+                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                        "type": "string"
                       }
                     },
                     "required": [
-                      "anchors",
-                      "strings"
+                      "anchors"
                     ],
                     "type": "object"
                   }
@@ -16846,16 +16148,12 @@
                   "additionalProperties": false,
                   "properties": {
                     "dtype": {
-                      "description": "tensor: the element type; f32 when absent. The bound tensor's dtype must match it.",
-                      "enum": [
-                        "f32",
-                        "i32",
-                        "u32"
-                      ],
+                      "description": "tensor: the element type, f32, i32, u32, u8 or u16, or two to five of them joined by |, each once; f32 when absent. The bound tensor holds one of them. A narrow type or several types bind the tensor's bytes as array<u32>, read through the checked accessor <name>_at().",
+                      "pattern": "^(f32|i32|u32|u8|u16)(\\|(f32|i32|u32|u8|u16)){0,4}$",
                       "type": "string"
                     },
                     "element": {
-                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "description": "buffer: a plain element type, or the narrow u8 or u16 packed four or two to a 32-bit word; give either element, or struct with fields.",
                       "enum": [
                         "f32",
                         "i32",
@@ -16863,7 +16161,9 @@
                         "vec2<f32>",
                         "vec4<f32>",
                         "vec2<u32>",
-                        "vec4<u32>"
+                        "vec4<u32>",
+                        "u8",
+                        "u16"
                       ],
                       "type": "string"
                     },
@@ -16889,6 +16189,10 @@
                       "description": "The input's name, which the WGSL reads as a generated read-only array.",
                       "pattern": "^[a-z][a-z0-9_]{0,31}$",
                       "type": "string"
+                    },
+                    "optional": {
+                      "description": "true: a program may leave the input unbound; a tensor input then has the shape (0, 0, 0, 0) and reads zero, and a buffer input has the count 0. false when absent.",
+                      "type": "boolean"
                     },
                     "rank_max": {
                       "description": "tensor: the most axes; 8 when absent.",
@@ -16984,8 +16288,8 @@
                       "type": "boolean"
                     },
                     "count": {
-                      "description": "buffer: the elements.",
-                      "maximum": 4194304,
+                      "description": "buffer: the elements, at most 33,554,432 words: 134,217,728 u8 or 67,108,864 u16 elements.",
+                      "maximum": 134217728,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -16994,7 +16298,7 @@
                       "type": "boolean"
                     },
                     "element": {
-                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "description": "buffer: a plain element type, or the narrow u8 or u16 packed four or two to a 32-bit word; give either element, or struct with fields.",
                       "enum": [
                         "f32",
                         "i32",
@@ -17002,7 +16306,9 @@
                         "vec2<f32>",
                         "vec4<f32>",
                         "vec2<u32>",
-                        "vec4<u32>"
+                        "vec4<u32>",
+                        "u8",
+                        "u16"
                       ],
                       "type": "string"
                     },
@@ -17016,9 +16322,18 @@
                       "minItems": 1,
                       "type": "array"
                     },
+                    "format": {
+                      "description": "texture: rgba8unorm when absent, r8unorm (one byte a texel) or r32uint (sampled with textureLoad).",
+                      "enum": [
+                        "rgba8unorm",
+                        "r8unorm",
+                        "r32uint"
+                      ],
+                      "type": "string"
+                    },
                     "height": {
-                      "description": "texture: the height in pixels.",
-                      "maximum": 4096,
+                      "description": "texture: the largest height of a version in pixels.",
+                      "maximum": 8192,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -17034,7 +16349,7 @@
                       "type": "integer"
                     },
                     "kind": {
-                      "description": "buffer: count elements of a layout; texture: an rgba8unorm image that the derive half writes as a packed array<u32> and the draw half samples as texture_2d<f32>.",
+                      "description": "buffer: count elements of a layout; texture: an image of a format and a size per version, which the derive half writes as a packed array<u32> with the size in <id>_size and the draw half samples as texture_2d<f32>, or texture_2d<u32> for r32uint.",
                       "enum": [
                         "buffer",
                         "texture"
@@ -17050,9 +16365,15 @@
                       "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$",
                       "type": "string"
                     },
+                    "texels": {
+                      "description": "texture: the most texels of a version, width times height when absent; the largest version holds at most 128 MiB when published.",
+                      "maximum": 67108864,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
                     "width": {
-                      "description": "texture: the width in pixels.",
-                      "maximum": 4096,
+                      "description": "texture: the largest width of a version in pixels.",
+                      "maximum": 8192,
                       "minimum": 1,
                       "type": "integer"
                     }
@@ -17456,7 +16777,7 @@
                       "properties": {
                         "count": {
                           "description": "The elements.",
-                          "maximum": 4194304,
+                          "maximum": 33554432,
                           "minimum": 1,
                           "type": "integer"
                         },
@@ -17529,7 +16850,7 @@
                   },
                   "memory_mb": {
                     "description": "The budget of the resources, buffer inputs, draw buffers and targets in the viewer, in MiB; 64 when absent.",
-                    "maximum": 256,
+                    "maximum": 512,
                     "minimum": 1,
                     "type": "integer"
                   },
@@ -17564,6 +16885,11 @@
                         "fragment": {
                           "description": "render: the fragment entry point.",
                           "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+                          "type": "string"
+                        },
+                        "indices": {
+                          "description": "render with a vertex entry and a list topology: a published buffer resource or buffer input of u32 elements, whose valid elements the pass draws as an index buffer; each index is the vertex_index of the vertex entry, whose reads are bounds-checked. vertices then counts nothing.",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$",
                           "type": "string"
                         },
                         "instances": {
@@ -17717,6 +17043,16 @@
                     "additionalProperties": false,
                     "description": "Labels that the host draws and places.",
                     "properties": {
+                      "align": {
+                        "description": "placed: the placer chooses one of eight places around the anchor; left, right and center pin each label at its anchor with the start, the end or the middle of its text there. placed when absent.",
+                        "enum": [
+                          "placed",
+                          "left",
+                          "right",
+                          "center"
+                        ],
+                        "type": "string"
+                      },
                       "anchors": {
                         "description": "A buffer resource with a struct; one label at each valid element.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
@@ -17745,11 +17081,15 @@
                         },
                         "maxItems": 4096,
                         "type": "array"
+                      },
+                      "strings_from": {
+                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                        "type": "string"
                       }
                     },
                     "required": [
-                      "anchors",
-                      "strings"
+                      "anchors"
                     ],
                     "type": "object"
                   }
@@ -17802,16 +17142,12 @@
                   "additionalProperties": false,
                   "properties": {
                     "dtype": {
-                      "description": "tensor: the element type; f32 when absent. The bound tensor's dtype must match it.",
-                      "enum": [
-                        "f32",
-                        "i32",
-                        "u32"
-                      ],
+                      "description": "tensor: the element type, f32, i32, u32, u8 or u16, or two to five of them joined by |, each once; f32 when absent. The bound tensor holds one of them. A narrow type or several types bind the tensor's bytes as array<u32>, read through the checked accessor <name>_at().",
+                      "pattern": "^(f32|i32|u32|u8|u16)(\\|(f32|i32|u32|u8|u16)){0,4}$",
                       "type": "string"
                     },
                     "element": {
-                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "description": "buffer: a plain element type, or the narrow u8 or u16 packed four or two to a 32-bit word; give either element, or struct with fields.",
                       "enum": [
                         "f32",
                         "i32",
@@ -17819,7 +17155,9 @@
                         "vec2<f32>",
                         "vec4<f32>",
                         "vec2<u32>",
-                        "vec4<u32>"
+                        "vec4<u32>",
+                        "u8",
+                        "u16"
                       ],
                       "type": "string"
                     },
@@ -17845,6 +17183,10 @@
                       "description": "The input's name, which the WGSL reads as a generated read-only array.",
                       "pattern": "^[a-z][a-z0-9_]{0,31}$",
                       "type": "string"
+                    },
+                    "optional": {
+                      "description": "true: a program may leave the input unbound; a tensor input then has the shape (0, 0, 0, 0) and reads zero, and a buffer input has the count 0. false when absent.",
+                      "type": "boolean"
                     },
                     "rank_max": {
                       "description": "tensor: the most axes; 8 when absent.",
@@ -17940,8 +17282,8 @@
                       "type": "boolean"
                     },
                     "count": {
-                      "description": "buffer: the elements.",
-                      "maximum": 4194304,
+                      "description": "buffer: the elements, at most 33,554,432 words: 134,217,728 u8 or 67,108,864 u16 elements.",
+                      "maximum": 134217728,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -17950,7 +17292,7 @@
                       "type": "boolean"
                     },
                     "element": {
-                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "description": "buffer: a plain element type, or the narrow u8 or u16 packed four or two to a 32-bit word; give either element, or struct with fields.",
                       "enum": [
                         "f32",
                         "i32",
@@ -17958,7 +17300,9 @@
                         "vec2<f32>",
                         "vec4<f32>",
                         "vec2<u32>",
-                        "vec4<u32>"
+                        "vec4<u32>",
+                        "u8",
+                        "u16"
                       ],
                       "type": "string"
                     },
@@ -17972,9 +17316,18 @@
                       "minItems": 1,
                       "type": "array"
                     },
+                    "format": {
+                      "description": "texture: rgba8unorm when absent, r8unorm (one byte a texel) or r32uint (sampled with textureLoad).",
+                      "enum": [
+                        "rgba8unorm",
+                        "r8unorm",
+                        "r32uint"
+                      ],
+                      "type": "string"
+                    },
                     "height": {
-                      "description": "texture: the height in pixels.",
-                      "maximum": 4096,
+                      "description": "texture: the largest height of a version in pixels.",
+                      "maximum": 8192,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -17990,7 +17343,7 @@
                       "type": "integer"
                     },
                     "kind": {
-                      "description": "buffer: count elements of a layout; texture: an rgba8unorm image that the derive half writes as a packed array<u32> and the draw half samples as texture_2d<f32>.",
+                      "description": "buffer: count elements of a layout; texture: an image of a format and a size per version, which the derive half writes as a packed array<u32> with the size in <id>_size and the draw half samples as texture_2d<f32>, or texture_2d<u32> for r32uint.",
                       "enum": [
                         "buffer",
                         "texture"
@@ -18006,9 +17359,15 @@
                       "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$",
                       "type": "string"
                     },
+                    "texels": {
+                      "description": "texture: the most texels of a version, width times height when absent; the largest version holds at most 128 MiB when published.",
+                      "maximum": 67108864,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
                     "width": {
-                      "description": "texture: the width in pixels.",
-                      "maximum": 4096,
+                      "description": "texture: the largest width of a version in pixels.",
+                      "maximum": 8192,
                       "minimum": 1,
                       "type": "integer"
                     }

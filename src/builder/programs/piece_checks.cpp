@@ -250,8 +250,11 @@ private:
             const spec::PieceInput& in = p_.inputs[i];
             const std::string where = at("inputs", i);
             if (in.kind == spec::InputKind::tensor) {
-                if (in.dtype != "f32" && in.dtype != "i32" && in.dtype != "u32")
-                    return fail(kPieceBadManifest, "A tensor input's dtype is f32, i32 or u32.", where + ".dtype");
+                if (spec::tensor_dtypes(in.dtype).empty())
+                    return fail(kPieceBadManifest,
+                                "A tensor input's dtype is f32, i32, u32, u8 or u16, or two to five of them joined by "
+                                "|, each once.",
+                                where + ".dtype");
                 if (in.rank_min > in.rank_max || in.rank_max > 8)
                     return fail(kPieceBadManifest, "A tensor input's ranks satisfy rank_min <= rank_max <= 8.",
                                 where + ".rank_max");
@@ -326,39 +329,60 @@ private:
                     v.where = where + (v.where.empty() ? "" : "." + v.where);
                     return v;
                 }
-                if (r.count < 1 || r.count > pl::kCountMax)
+                // kCountMax words: four u8 or two u16 elements to a word.
+                const std::uint64_t most = std::uint64_t(pl::kCountMax) * l.per_word;
+                if (r.count < 1 || r.count > most)
                     return fail(kProgramBadResource,
                                 "The buffer " + quote(r.id) + " has count " + std::to_string(r.count) +
-                                    "; a buffer has 1 to " + std::to_string(pl::kCountMax) + " elements.",
+                                    "; a buffer has 1 to " + std::to_string(most) + " elements.",
                                 where + ".count");
-                // A published buffer goes out with each pass that writes it, thus the bound of what the script sends.
-                const std::uint64_t max_bytes = r.publish ? pl::kPublishedBytesMax : pl::kResourceBytesMax;
-                if (bytes_of(r.count, l.stride) > max_bytes)
+                // A published buffer goes out with each pass that writes it, and a viewer binds it whole: the
+                // largest storage binding of WebGPU's default limits.
+                const std::uint64_t max_bytes = r.publish ? pl::kPublishedResourceBytesMax : pl::kResourceBytesMax;
+                if (layout_bytes(l, r.count) > max_bytes)
                     return fail(kProgramBadResource,
-                                "The buffer " + quote(r.id) + " holds " + std::to_string(bytes_of(r.count, l.stride)) +
+                                "The buffer " + quote(r.id) + " holds " + std::to_string(layout_bytes(l, r.count)) +
                                     " bytes; a " + (r.publish ? "published" : "private") + " resource holds at most " +
                                     std::to_string(max_bytes) + " bytes.",
                                 where + ".count");
-                if (r.width || r.height)
-                    return fail(kProgramBadResource, "A buffer has no width or height.", where + ".width");
-                if (r.publish) published += bytes_of(r.count, l.stride);
+                if (r.width || r.height || r.format || r.texels)
+                    return fail(kProgramBadResource, "A buffer has no width, height, format or texels.",
+                                where + ".width");
+                if (r.publish) published += layout_bytes(l, r.count);
             } else {
-                if (has_layout(r.layout) || r.count || r.counted)
+                if (r.layout.element || r.layout.type_name || r.count || r.counted)
                     return fail(kProgramBadResource,
-                                "A texture is rgba8unorm and has no element, struct, fields, count or counted.", where);
+                                "A texture has a format and a size, and no element, struct, count or counted.", where);
+                if (!r.layout.fields.empty()) {
+                    const auto& fields = r.layout.fields;
+                    if (spec::texture_format(r) != "r32uint" || fields.size() != 1 ||
+                        !field_form(fields[0].name) || fields[0].name.find("__") != std::string::npos ||
+                        (fields[0].type != "f32" && fields[0].type != "i32" && fields[0].type != "u32"))
+                        return fail(kProgramBadResource,
+                                    "An r32uint texture can name one scalar field of type f32, i32 or u32.",
+                                    where + ".fields");
+                }
+                if (r.format && !spec::texture_format_ok(*r.format))
+                    return fail(kProgramBadResource,
+                                "A texture's format is rgba8unorm, r8unorm or r32uint, not " + quote(*r.format) + ".",
+                                where + ".format");
                 if (r.width < 1 || r.width > pl::kTextureSideMax || r.height < 1 || r.height > pl::kTextureSideMax)
                     return fail(kProgramBadResource,
                                 "A texture's width and height are from 1 to " + std::to_string(pl::kTextureSideMax) +
                                     " pixels.",
                                 where + ".width");
-                // Four bytes a texel; a published texture of 1,448 by 1,448 fits, one of 2,048 by 2,048 does not.
-                const std::uint64_t bytes = std::uint64_t(r.width) * r.height * 4;
-                if (r.publish && bytes > pl::kPublishedBytesMax)
+                if (r.texels && (*r.texels < 1 || *r.texels > std::uint64_t(r.width) * r.height))
                     return fail(kProgramBadResource,
-                                "The texture " + quote(r.id) + " holds " + std::to_string(bytes) +
-                                    " bytes; a published resource holds at most " +
-                                    std::to_string(pl::kPublishedBytesMax) + " bytes.",
-                                where + ".height");
+                                "A texture's texels are from 1 to its width times its height.", where + ".texels");
+                // At most 2^26 texels of 4 bytes: the product cannot wrap.
+                const std::uint64_t bytes = spec::texture_bytes(r);
+                const std::uint64_t max_bytes = r.publish ? pl::kPublishedTextureBytesMax : pl::kResourceBytesMax;
+                if (bytes > max_bytes)
+                    return fail(kProgramBadResource,
+                                "The texture " + quote(r.id) + " holds " + std::to_string(bytes) + " bytes; a " +
+                                    (r.publish ? "published" : "private") + " resource holds at most " +
+                                    std::to_string(max_bytes) + " bytes. Give texels to hold fewer.",
+                                where + ".texels");
                 if (r.publish) published += bytes;
             }
         }
@@ -366,7 +390,7 @@ private:
             return fail(kProgramBadResource,
                         "The published resources of the piece hold " + std::to_string(published) +
                             " bytes together; a pass sends at most " + std::to_string(pl::kPublishedBytesMax) +
-                            " bytes to a viewer.",
+                            " bytes to a viewer, one version of each in the step history.",
                         "resources");
         return {};
     }
@@ -463,7 +487,7 @@ private:
         if (d.frame_ms && !(*d.frame_ms >= 0.1 && *d.frame_ms <= pl::kFrameMsMax))
             return fail(kPieceBadManifest, "draw.frame_ms is from 0.1 to 16.", "draw.frame_ms");
         if (d.memory_mb && (*d.memory_mb < 1 || *d.memory_mb > pl::kDrawMemoryMbMax))
-            return fail(kPieceBadManifest, "draw.memory_mb is from 1 to 256.", "draw.memory_mb");
+            return fail(kPieceBadManifest, "draw.memory_mb is from 1 to 512.", "draw.memory_mb");
         if (d.buffers.size() > pl::kDrawBuffers)
             return fail(kPieceBadManifest, "The draw half keeps at most 4 buffers.", "draw.buffers");
         if (d.targets.size() > pl::kTargets)
@@ -477,6 +501,8 @@ private:
                 v.where = where + (v.where.empty() ? "" : "." + v.where);
                 return v;
             }
+            if (l.per_word > 1)
+                return fail(kProgramBadLayout, "A draw buffer has no narrow element u8 or u16.", where + ".element");
             if (b.count < 1 || b.count > pl::kCountMax || bytes_of(b.count, l.stride) > pl::kResourceBytesMax)
                 return fail(kPieceBadManifest,
                             "A draw buffer has 1 to " + std::to_string(pl::kCountMax) + " elements and at most " +
@@ -509,7 +535,7 @@ private:
                 if (Verdict v = workgroups(pass.workgroups, where + ".workgroups"); !v.ok()) return v;
                 if (pass.vertex || !pass.fragment.empty() || pass.target != "host" || pass.instances != 1 ||
                     pass.instances_of || pass.vertices || pass.topology != spec::DrawTopology::triangle_list ||
-                    pass.blend || pass.depth || pass.pick)
+                    pass.blend || pass.depth || pass.pick || pass.indices)
                     return fail(kProgramBadPass,
                                 "A compute pass has entry, workgroups, writes and reads, and none of the keys of a "
                                 "render pass.",
@@ -531,8 +557,9 @@ private:
                 if (Verdict v = entry(pass.fragment, where + ".fragment"); !v.ok()) return v;
                 if (pass.vertex) {
                     if (Verdict v = entry(*pass.vertex, where + ".vertex"); !v.ok()) return v;
-                    if (!pass.vertices)
-                        return fail(kProgramBadPass, "A pass with a vertex entry gives vertices.", where + ".vertices");
+                    if (!pass.vertices && !pass.indices)
+                        return fail(kProgramBadPass, "A pass with a vertex entry gives vertices or indices.",
+                                    where + ".vertices");
                 } else {
                     if ((pass.vertices && *pass.vertices != 3) || pass.topology != spec::DrawTopology::triangle_list ||
                         pass.instances != 1 || pass.instances_of)
@@ -544,11 +571,34 @@ private:
                 if (pass.vertices && (*pass.vertices < 1 || *pass.vertices > pl::kVerticesMax))
                     return fail(kProgramBadPass,
                                 "vertices is from 1 to " + std::to_string(pl::kVerticesMax) + ".", where + ".vertices");
+                if (pass.indices) {
+                    // An index buffer: each index becomes the vertex entry's vertex_index, whose every
+                    // read of a buffer is bounds-checked. A strip would read the restart index.
+                    if (!pass.vertex)
+                        return fail(kProgramBadPass, "A pass with indices has a vertex entry.", where + ".indices");
+                    if (pass.topology == spec::DrawTopology::triangle_strip ||
+                        pass.topology == spec::DrawTopology::line_strip)
+                        return fail(kProgramBadPass,
+                                    "A pass with indices draws a list: triangle_list, line_list or point_list.",
+                                    where + ".topology");
+                    if (!countable(*pass.indices))
+                        return fail(kProgramUnknownResource,
+                                    "indices names " + quote(*pass.indices) +
+                                        ", which is no published buffer resource or buffer input of the piece.",
+                                    where + ".indices");
+                    const spec::Resource* r = find_resource(p_, *pass.indices);
+                    const spec::PieceInput* in = r ? nullptr : find_input(p_, *pass.indices);
+                    const spec::Layout& l = r ? r->layout : in->layout;
+                    if (!l.element || *l.element != "u32" || !l.fields.empty())
+                        return fail(kProgramBadPass, "indices names " + quote(*pass.indices) + ", whose elements are not u32.",
+                                    where + ".indices");
+                }
                 if (pass.instances_of) {
-                    if (!countable(*pass.instances_of))
+                    const spec::Resource* resource = find_resource(p_, *pass.instances_of);
+                    if (!countable(*pass.instances_of) && !(resource && resource->publish))
                         return fail(kProgramUnknownResource,
                                     "instances names " + quote(*pass.instances_of) +
-                                        ", which is no published buffer resource or buffer input of the piece.",
+                                        ", which is no published resource or buffer input of the piece.",
                                     where + ".instances");
                 } else if (pass.instances < 1 || pass.instances > pl::kInstancesMax) {
                     return fail(kProgramBadPass,
@@ -590,15 +640,27 @@ private:
         }
         if (d.pick) {
             const spec::Resource* r = find_resource(p_, d.pick->resource);
-            if (!r || r->kind != spec::ResourceKind::buffer || !r->publish)
+            if (!r || !r->publish)
                 return fail(kProgramUnknownResource,
                             "The item map names " + quote(d.pick->resource) +
-                                ", which is no published buffer resource of the piece.",
+                                ", which is no published buffer or texture resource of the piece.",
                             "draw.pick.resource");
             if (d.pick->fields.empty() || d.pick->fields.size() > pl::kPickFields)
                 return fail(kProgramBadPick, "The item map names 1 to 8 fields.", "draw.pick.fields");
+            // A texture's item is one texel in row order. R32Uint can declare its scalar field.
+            // Without a declaration, RGBA8 uses rgba and R32Uint uses value.
+            if (r->kind == spec::ResourceKind::texture) {
+                const std::string format = spec::texture_format(*r);
+                const char* field = format == "rgba8unorm" ? "rgba" : format == "r32uint" ? "value" : nullptr;
+                if (!r->layout.fields.empty()) field = r->layout.fields[0].name.c_str();
+                if (!field || d.pick->fields.size() != 1 || d.pick->fields[0] != field)
+                    return fail(kProgramBadPick,
+                                "The item map of a texture names its one field: rgba for rgba8unorm, or the declared "
+                                "field of r32uint, with value as its default. An r8unorm texture has none.",
+                                "draw.pick.fields");
+            }
             std::set<std::string> fields;
-            for (std::size_t k = 0; k < d.pick->fields.size(); ++k) {
+            for (std::size_t k = 0; r->kind == spec::ResourceKind::buffer && k < d.pick->fields.size(); ++k) {
                 const spec::Field* f = find_field(r->layout, d.pick->fields[k]);
                 if (!f || !scalar(f->type))
                     return fail(kProgramBadPick,
@@ -640,6 +702,32 @@ private:
             }
             if (t.strings.size() > pl::kStrings)
                 return fail(kProgramBadText, "The text table has at most 4096 strings.", "draw.text.strings");
+            if (t.strings_from) {
+                // The strings of a run: each element of a published buffer is one string of at most
+                // kStringBytes UTF-8 bytes, which the host checks again when it reads them.
+                if (!t.strings.empty())
+                    return fail(kProgramBadText, "The text table takes its strings from strings or strings_from, not both.",
+                                "draw.text.strings_from");
+                if (!countable(*t.strings_from))
+                    return fail(kProgramUnknownResource,
+                                "strings_from names " + quote(*t.strings_from) +
+                                    ", which is no published buffer resource or buffer input of the piece.",
+                                "draw.text.strings_from");
+                const spec::Resource* sr = find_resource(p_, *t.strings_from);
+                const spec::Layout& l = sr ? sr->layout : find_input(p_, *t.strings_from)->layout;
+                ElementLayout el;
+                bool bytes = element_layout(l, &el).ok() && el.stride > 0 && el.stride <= pl::kStringBytes;
+                for (const FieldLayout& f : el.fields)
+                    bytes = bytes && (f.type == "u32" || f.type == "vec2<u32>" || f.type == "vec4<u32>");
+                if (!bytes)
+                    return fail(kProgramBadText,
+                                "The strings of " + quote(*t.strings_from) +
+                                    " need elements of u32, vec2<u32> or vec4<u32> fields, at most 64 bytes each.",
+                                "draw.text.strings_from");
+                if (sr && sr->count > pl::kStrings)
+                    return fail(kProgramBadText, "The strings of " + quote(*t.strings_from) + " are at most 4096.",
+                                "draw.text.strings_from");
+            }
             for (std::size_t k = 0; k < t.strings.size(); ++k)
                 if (t.strings[k].size() > pl::kStringBytes)
                     return fail(kProgramBadText, "A string of the text table has at most 64 bytes.",
@@ -665,8 +753,10 @@ private:
                     return fail(kPieceBadManifest, "The sample's rank is outside the input's ranks.", where + ".shape");
             } else {
                 ElementLayout l;
-                if (s.shape.size() != 1 || !element_layout(in->layout, &l).ok())
-                    return fail(kPieceBadManifest, "A buffer input's sample has one axis, its count.", where + ".shape");
+                if (s.shape.size() != 1 || !element_layout(in->layout, &l).ok() || l.per_word > 1)
+                    return fail(kPieceBadManifest,
+                                "A buffer input's sample has one axis, its count, and no narrow element.",
+                                where + ".shape");
                 element = l.stride;
             }
             std::uint64_t bytes = element;
@@ -716,11 +806,20 @@ Verdict element_layout(const spec::Layout& layout, ElementLayout* out) {
         if (layout.type_name || !layout.fields.empty())
             return fail(kProgramBadLayout, "A layout gives either element, or struct with fields; not both.",
                         "element");
+        if (const std::uint32_t per = spec::narrow_per_word(*layout.element); per > 1) {
+            // Narrow elements, packed into 4-byte words from the low bits up.
+            l.stride = 4;
+            l.align = 4;
+            l.per_word = per;
+            l.fields.push_back(FieldLayout{std::string(), *layout.element, 0, 4});
+            if (out) *out = l;
+            return {};
+        }
         const auto t = plain_type(*layout.element);
         if (!t)
             return fail(kProgramBadLayout,
-                        quote(*layout.element) +
-                            " is not an element type: f32, i32, u32, vec2<f32>, vec4<f32>, vec2<u32> or vec4<u32>.",
+                        quote(*layout.element) + " is not an element type: f32, i32, u32, vec2<f32>, vec4<f32>, "
+                                                 "vec2<u32>, vec4<u32>, or the narrow u8 or u16.",
                         "element");
         l.stride = t->size;
         l.align = t->align;
@@ -809,7 +908,8 @@ Verdict check_tensor_binding(const spec::PieceInput& input, std::string_view dty
                     "The input " + quote(input.name) + " reads a published buffer, as program:<id>/<resource>; it "
                                                        "binds no tensor.",
                     input.name);
-    if (dtype != input.dtype)
+    const std::vector<std::string> types = spec::tensor_dtypes(input.dtype);
+    if (std::find(types.begin(), types.end(), dtype) == types.end())
         return fail(kPieceBadBinding,
                     "The input " + quote(input.name) + " reads " + input.dtype + ", and the bound tensor is " +
                         std::string(dtype) + ".",
@@ -831,7 +931,7 @@ Verdict check_buffer_binding(const spec::PieceInput& input, const spec::Layout& 
     if (!element_layout(input.layout, &want).ok() || !element_layout(published, &have).ok())
         return fail(kPieceBadBinding, "The input " + quote(input.name) + " or the bound resource has a bad layout.",
                     input.name);
-    bool same = want.stride == have.stride && want.fields.size() == have.fields.size();
+    bool same = want.stride == have.stride && want.per_word == have.per_word && want.fields.size() == have.fields.size();
     for (std::size_t i = 0; same && i < want.fields.size(); ++i)
         same = want.fields[i].name == have.fields[i].name && want.fields[i].type == have.fields[i].type &&
                want.fields[i].offset == have.fields[i].offset;

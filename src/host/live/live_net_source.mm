@@ -6,6 +6,7 @@
 
 #include "live/live_net_source.h"
 #include "live/live_series_ring.h"
+#include "live/scene_piece_form.h"
 #include "live/scene_queue.h"
 
 #include "host_version.h"
@@ -436,8 +437,25 @@ public:
     static constexpr size_t kMaxWaitingResources = size_t(CALIPER_NET_MAX_PROGRAMS) * CALIPER_NET_MAX_RESOURCES;
 
     // A RESOURCE (network thread): its valid bytes are copied out of the frame, and the newest
-    // version of each resource waits for the frame thread, in the place of an older one.
-    void on_resource(const wire::Resource& r) {
+    // version of each resource waits for the frame thread, in the place of an older one. The parts
+    // of a version in parts are put together first (wire::SplitResources), so that only a whole
+    // version waits; a part that is dropped or refused is counted, and nothing of it is shown.
+    void on_resource(const wire::Resource& part) {
+        wire::WholeResource whole;
+        std::string err;
+        const wire::SplitResources::Result got = resource_parts_.add(part, &whole, &err);
+        if (got != wire::SplitResources::Result::Whole) {
+            if (got == wire::SplitResources::Result::Dropped || got == wire::SplitResources::Result::Refused)
+                resource_parts_refused_.fetch_add(1);
+            return;
+        }
+        const wire::Resource& r = whole.resource;
+        // A scene program's version waits for the piece-form update that names it (network thread).
+        if (wire::scene_program_id(r.program)) {
+            scene_inbox_.take(r, whole.keep ? whole.keep
+                                            : std::make_shared<const std::vector<uint8_t>>(r.data.data, r.data.data + r.data.size));
+            return;
+        }
         ReceivedResource out;
         out.program = r.program;
         out.resource = r.resource;
@@ -446,7 +464,10 @@ public:
         out.stride = r.stride;
         out.width = r.width.value_or(0);
         out.height = r.height.value_or(0);
-        out.bytes = std::make_shared<const std::vector<uint8_t>>(r.data.data, r.data.data + r.data.size);
+        out.format = r.format.value_or(std::string());
+        out.elements = r.elements;
+        out.bytes = whole.keep ? whole.keep
+                               : std::make_shared<const std::vector<uint8_t>>(r.data.data, r.data.data + r.data.size);
         const std::string key = r.program + "/" + r.resource;
         std::lock_guard<std::mutex> g(mu_);
         auto it = resources_.find(key);
@@ -734,7 +755,7 @@ private:
                         h.role = CALIPER_NET_ROLE_VIEWER;
                         h.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_SCENES,
                                           CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS,
-                                          CALIPER_NET_CAP_TIMELINES, CALIPER_NET_CAP_RESOURCES};
+                                          CALIPER_NET_CAP_TIMELINES, CALIPER_NET_CAP_RESOURCES, CALIPER_NET_CAP_SCENE_PIECES};
                         Json sw = Json::object();
                         sw.set("name", "caliper-app");
                         sw.set("version", caliper_host::kHostVersionStr);
@@ -895,6 +916,12 @@ private:
         else if (auto* su = std::get_if<wire::SceneUpdate>(&m)) {
             if (!su->split.is_null()) {
                 on_piece(r.frame.meta, r.type, *su);
+            } else if (su->program) {
+                // The piece form: the update takes the versions of its scene program that came just before it.
+                std::string why;
+                std::shared_ptr<const void> owner = scene_inbox_.pair(*su, keep, &why);
+                if (owner) on_scene(owner, r.frame.sections, std::move(*su));
+                else scene_note(r.frame.meta, "dropped: " + why);
             } else {
                 const std::string why = scene_not_drawn(*su);
                 if (why.empty()) on_scene(keep, r.frame.sections, std::move(*su));
@@ -1011,6 +1038,8 @@ private:
         server_selection_ = has_cap(w.capabilities, CALIPER_NET_CAP_SELECTION);
         server_programs_ = has_cap(w.capabilities, CALIPER_NET_CAP_PROGRAMS);
         server_resources_ = has_cap(w.capabilities, CALIPER_NET_CAP_RESOURCES);
+        resource_parts_ = wire::SplitResources();   // a new connection holds no part of a version
+        scene_inbox_.clear();
         program_fresh_ = true;   // a new connection: the next attachment is a new epoch
         welcome_control_ = w.control.value_or(false);
         // A server that is itself the producer (caliper.serve()) names its own
@@ -1626,6 +1655,9 @@ private:
     bool server_resources_ = false;
     std::map<std::string, std::pair<uint64_t, ReceivedResource>> resources_;
     uint64_t resource_order_ = 0;
+    wire::SplitResources resource_parts_;   // versions in parts being put together (network thread)
+    ScenePieceInbox scene_inbox_;           // scene programs' versions until their update (network thread)
+    std::atomic<uint64_t> resource_parts_refused_{0};
     Controls controls_;
     std::deque<ControlReply> replies_;
     std::map<std::string, LinkedSelection> selections_;

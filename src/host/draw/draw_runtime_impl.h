@@ -42,9 +42,12 @@ struct DrawRuntime::Impl {
         std::string id;                              // the resource's id, or the buffer input's name
         bool texture = false;
         caliper_builder::programs::ElementLayout layout;   // buffers
-        std::uint32_t declared_count = 0;            // elements, or a texture's width * height
-        std::uint32_t width = 0, height = 0;         // textures
-        std::uint64_t declared_bytes = 0;            // count * stride, or width * height * 4
+        std::uint32_t declared_count = 0;            // elements, or a texture's most texels
+        std::uint32_t width = 0, height = 0;         // textures: the largest sides
+        caliper_gfx::Format format = caliper_gfx::Format::RGBA8Unorm;   // textures
+        std::string format_name = "rgba8unorm";      // textures: as the manifest and RESOURCE name it
+        std::uint32_t tex_width = 0, tex_height = 0; // textures: the size of `tex` now
+        std::uint64_t declared_bytes = 0;            // the bytes of the largest version
         caliper_gfx::Buffer buffer;                  // buffers: grown up to declared_bytes
         std::uint64_t capacity = 0;
         caliper_gfx::Texture tex;                    // textures
@@ -55,6 +58,8 @@ struct DrawRuntime::Impl {
         // version that replaces another at the same step; 0 before the first.
         std::uint64_t serial = 0;
         bool keep_cpu = false;                       // the item map or the text table reads it
+        bool unbound = false;                        // an optional buffer input left unbound: count 0
+        bool index = false;                          // a render pass draws it as its index buffer
         std::vector<std::uint8_t> cpu;               // the bytes of that version, when keep_cpu
         std::uint64_t drawn_serial = 0;              // the version that the last frame showed
         std::shared_ptr<const Shown> shown;          // its copy; null before a frame showed one

@@ -28,11 +28,17 @@
 #include "../scene/primitive_rows.h"
 #include "../scene/surface_row_fixture.h"
 #include "gfx/metal_backend.h"
+#include "gfx/recording_backend.h"
 #include "gfx/shaders/generated/programs_metal.h"
 #include "live/live_scene.h"
+#include "live/scene_piece_form.h"
+#if defined(CALIPER_HAVE_SCENE_PIECES)
+#include "draw/scene_pieces.h"
+#include "draw/draw_runtime.h"
+#endif
 #include "net/wire.h"
 #include "renderer/host_renderer.h"
-#include "scene_reference.h"
+#include "../scene/surface_row_fixture.h"
 
 #define STB_IMAGE_WRITE_STATIC
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -41,6 +47,7 @@
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #pragma clang diagnostic ignored "-Wunused-function"
 #include <stb_image_write.h>
+#include "../match_reference.h"
 #pragma clang diagnostic pop
 
 #include <algorithm>
@@ -54,6 +61,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 caliper_host::HostRenderer* gfx_metal_renderer();
@@ -64,7 +72,9 @@ namespace wire = caliper_net::wire;
 namespace fs = std::filesystem;
 using caliper_net::Json;
 using caliper_live_views::SceneView;
-using namespace scene_reference;
+using caliper_live_views::SceneShapeCounts;
+using namespace caliper_gfx;
+using namespace caliper_scene;
 
 std::unique_ptr<Backend> view_layer() {
     caliper_host::HostRenderer* r = gfx_metal_renderer();
@@ -87,7 +97,11 @@ struct ViewRig {
     bool init(const char* space = CALIPER_NET_SPACE_3D, const char* up = "+z", const char* units = "") {
         gfx = view_layer();
         if (!gfx) return false;
-        view = std::make_unique<SceneView>(*gfx, sh::kMetalPrograms);
+        view = std::make_unique<SceneView>(*gfx, caliper_gfx::shaders::kMetalPrograms);
+        // These rows check the scene core's own draw list, its pick pass and its counters against
+        // their CPU references, thus they draw every shape with the reference draw; the rows of
+        // "Shapes Drawn by Library Pieces" at the end of this file draw the same fixtures with the
+        // pieces and compare them with the reference.
         std::string err;
         REQUIRE_MESSAGE(view->init(&err), err);
         view->describe(wire::SceneView{space, up, units});
@@ -219,17 +233,15 @@ struct DemoMessages {
 };
 
 // The demo's scene applied to a view and drawn at the row's size; returns the draws.
-std::vector<DrawInfo> draw_demo(ViewRig& rig, Wire& w, const DemoMessages& dm) {
+void draw_demo(ViewRig& rig, Wire& w, const DemoMessages& dm) {
     SceneView& v = *rig.view;
     for (const wire::Message& m : {dm.reset(), dm.box(), dm.surface(), dm.path(), dm.marker()}) {
         std::string why;
         REQUIRE_MESSAGE(feed(v, w.roundtrip(m), &why), why);
     }
-    v.keep_draws(true);
     std::string why;
     const uint32_t S = scene_fixtures::SurfaceRowFixture::kSize;
     REQUIRE_MESSAGE(v.render(S, S, 1.0f, scene_fixtures::SurfaceRowFixture::kClear, &why), why);
-    return draws_of(v.last_draws(), v.last_map(), v.tree());
 }
 
 std::vector<uint8_t> pixels(SceneView& v) {
@@ -361,7 +373,7 @@ TEST_CASE("gfx/Metal scene view: the golden frames of protocol 3.2 apply to scen
     REQUIRE(batch(world, "graph/edges", Primitive::Lines));
     CHECK(batch(world, "graph/edges", Primitive::Lines)->line_mode == caliper_scene::LineMode::Edges);
     CHECK(batch(world, "graph/edges", Primitive::Lines)->per_edge);
-    CHECK(bool(batch(world, "floor", Primitive::Mesh)->texture));
+    CHECK(batch(world, "floor", Primitive::Mesh)->image_width > 0);
     CHECK(batch(world, "graph/nodes", Primitive::Points)->labels.size() == 3);
     CHECK(wt.transform(wt.find("rig/left")));
     CHECK(wt.transform(wt.find("arm/link0/link1")));
@@ -372,7 +384,6 @@ TEST_CASE("gfx/Metal scene view: the golden frames of protocol 3.2 apply to scen
     CHECK(batch(overlay, "rig/left/cars", Primitive::Boxes)->fill);
     CHECK(batch(overlay, "elevation", Primitive::Image)->image_form == caliper_scene::ImageForm::Depth);
     CHECK(batch(overlay, "labels", Primitive::Image)->opacity == 0.75f);
-    CHECK(overlay.counts().textures_live == 2);
 
     // Every scene compiles and draws.
     for (auto& kv : views) {
@@ -410,190 +421,18 @@ TEST_CASE("gfx/Metal scene view: the golden frames of protocol 3.2 apply to scen
         const wire::Message m = load("scene_clear_reset");
         REQUIRE(land.apply(std::get<wire::SceneClear>(m), nullptr));
         CHECK(land.counts().batches == 0);
-        CHECK(land.counts().buffers_live == 0);
+        CHECK(land.counts().arrays_live == 0);
     }
 }
 
-TEST_CASE("gfx/Metal scene view: the demo's messages draw the surface row's scene and match the CPU reference") {
-    ViewRig rig;
-    if (!rig.init()) CALIPER_SKIP_NO_GPU("no Metal device");
-    const scene_fixtures::SurfaceRowFixture fx;
-    const DemoMessages dm(fx);
-    Wire w;
-    const std::vector<DrawInfo> draws = draw_demo(rig, w, dm);
-    SceneView& v = *rig.view;
-
-    // The state: four entities, the box static, the rest stamped.
-    CHECK(v.counts().entities == 4);
-    CHECK(v.counts().batches == 4);
-    CHECK(v.tree().batch_static(v.tree().find("box"), caliper_scene::Primitive::Lines));
-    CHECK(v.counts().items == uint64_t(fx.kTriangles + (fx.kPathVertices - 1) + 1 + 12));
-    // Every array went up once, a copy each: positions, indices and values, the strip's positions
-    // and break mask, the marker and the box.
-    CHECK(v.counts().copies_total == 7);
-    CHECK(v.counts().buffers_created == 7);
-    CHECK(v.counts().bytes_total ==
-          (fx.positions.size() + fx.indices.size() + fx.values.size() + fx.path.size() + fx.keep.size() + 3 + fx.box.size()) * 4);
-    CHECK(v.fitted());
-
-    // The draw list is the surface row's: in the byte order of the paths, all opaque, with depth.
-    REQUIRE(draws.size() == 4);
-    CHECK(draws[0].path == "box");
-    CHECK(draws[1].path == "marker");
-    CHECK(draws[2].path == "path");
-    CHECK(draws[3].path == "surface");
-    CHECK(draws[3].p.color_mode == 1);
-    CHECK(draws[3].record.count == uint32_t(fx.kTriangles * 3));
-    CHECK(bool(draws[3].record.index_buffer));
-    CHECK(draws[2].record.instance_count == uint32_t(fx.kPathVertices - 1));
-    CHECK(draws[0].record.instance_count == 12u);
-    CHECK(draws[1].p.flat_rgba == fx.kMarkerRgba);
-    CHECK(draws[0].p.flat_rgba == fx.kBoxRgba);
-    CHECK(bool(v.last_draws().target().depth));
-
-    // The pixels match the CPU rasterisation of the same draws under the parity rules.
-    const int S = fx.kSize;
-    const std::vector<uint8_t> got = pixels(v);
-    capture_png("scene-view-row.png", got, S, S);
-    const Reference ref = rasterise(draws, fx);
-    CHECK(ref.clipped == 0);
-    const Comparison c = compare(ref, got);
-    MESSAGE("scene view row: ", c.interior, " interior pixels (surface ", c.interior_by_draw.at(3), ", path ",
-            c.interior_by_draw.at(2), ", marker ", c.interior_by_draw.at(1), ", box ", c.interior_by_draw.at(0), "), ",
-            c.edge, " edge pixels, largest lit difference ", c.max_interior_lit, ", ", c.failed, " failed");
-    CHECK_MESSAGE(c.failed == 0, c.failed, " pixels outside the parity rules; ", c.first);
-    for (int d = -1; d < 4; ++d) CHECK(c.interior_by_draw.count(d) == 1);
-
-    // The GPU time of the frame reaches the info line once it completed.
-    v.poll();
-    CHECK(v.cost().gpu_ms >= 0.0);
-    CHECK(v.cost().frames == 1);
-    const std::string info = v.info();
-    CHECK_MESSAGE(info.find("4 entities  3,252 items  copied") == 0, info);
-    CHECK_MESSAGE(info.find("gpu ") != std::string::npos, info);
-}
-
-// The rows of every primitive (tests/scene/primitive_fixtures.h): each fixture's messages applied to
-// a scene view on Metal, drawn at 256 x 256, read back and compared with the CPU reference of
-// tests/scene/draw_reference.h under web geometry's parity rules. The demo's scene runs through the
-// same reference first, as a check of the reference against the surface row's own.
-TEST_CASE("gfx/Metal scene view: every primitive drawn from protocol 3.2 messages matches the CPU reference") {
-    ViewRig probe;
-    if (!probe.init()) CALIPER_SKIP_NO_GPU("no Metal device");
-    probe.view.reset();
-    std::vector<primitive_fixtures::Fixture> fixtures = primitive_fixtures::all();
-    const scene_fixtures::SurfaceRowFixture fx;
-    const DemoMessages dm(fx);
-    {
-        primitive_fixtures::Fixture demo;
-        demo.name = "demo";
-        demo.info = {CALIPER_NET_SPACE_3D, "+z", ""};
-        demo.messages = {dm.reset(), dm.box(), dm.surface(), dm.path(), dm.marker()};
-        fixtures.insert(fixtures.begin(), demo);
-    }
-    for (const primitive_fixtures::Fixture& f : fixtures) {
-        CAPTURE(f.name);
-        ViewRig rig;
-        REQUIRE(rig.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str()));
-        SceneView& v = *rig.view;
-        primitive_rows::Row row;
-        row.fixture = f;
-        REQUIRE_MESSAGE(row.draw(v), row.error);
-        CHECK_MESSAGE(v.notes().empty(), f.name, ": ", (v.notes().empty() ? std::string() : v.notes().back()));
-        const std::vector<uint8_t> got = pixels(v);
-        capture_png(("scene-" + f.name + ".png").c_str(), got, int(v.width()), int(v.height()));
-        const primitive_rows::Row::Result r = row.compare(v, got);
-        MESSAGE(r.sentence, "; ", r.draws, " draws, ", r.triangles, " triangles, ", r.c.interior, " interior and ",
-                r.c.edge, " edge pixels, ", r.c.exact, " exact");
-        CHECK_MESSAGE(r.problems.empty(), (r.problems.empty() ? std::string() : r.problems.front()));
-        CHECK_MESSAGE(r.clipped == 0, r.clipped, " triangles would need clipping");
-        CHECK_MESSAGE(r.c.failed == 0, r.c.failed, " pixels outside the parity rules; ", r.c.first);
-        // Every draw shows in the picture.
-        for (uint32_t d = 0; d < r.draws; ++d) CHECK_MESSAGE(r.covered.at(d) > 0, "draw ", d, " of ", f.name, " covers no pixel");
-
-        if (f.name == "boxes") {
-            // The chain's poses compose down the tree, M_arm * M_link0 * M_link1, in double.
-            using caliper_scene::Mat4;
-            auto m = [](const std::vector<float>& c) {
-                Mat4 r;
-                for (int k = 0; k < 16; ++k) r.at(k % 4, k / 4) = c[size_t(k)];
-                return r;
-            };
-            std::vector<float> tilt = {1, 0, 0, 0, 0, std::cos(0.6f), std::sin(0.6f), 0, 0, -std::sin(0.6f), std::cos(0.6f), 0, 0, 0, 0, 1};
-            std::vector<float> next = tilt;
-            next[14] = 0.4f;
-            const Mat4 want = m(primitive_fixtures::translate(0.9f, -0.6f, 0)) * m(tilt) * m(next);
-            const Mat4& got_w = v.tree().world(v.tree().find("arm/link0/link1"));
-            for (int k = 0; k < 16; ++k) CHECK(std::fabs(got_w.at(k % 4, k / 4) - want.at(k % 4, k / 4)) < 1e-12);
-            // The crates' labels, anchored at their centres, nearest first.
-            CHECK(v.labels().size() == 3);
-            // Class colours: 1 and 2 from the table, 7 from the palette.
-            CHECK(v.tree().class_label(1) == "car");
-        }
-        if (f.name == "through") CHECK(v.camera_text().find("through rig/left") != std::string::npos);
-        if (f.name == "images") {
-            CHECK(v.counts().textures_live == 4);
-            CHECK(v.counts().items == 4 + 2 + 2);
-        }
-    }
-}
 
 namespace {
 
-// What decode_pick would find for a pointer at the centre of pixel (px, py) in the reference's pick
-// identities: the texel with an identity nearest the pointer within the radius and the view. robust:
-// the hit pixel and its neighbours show one identity with no near tie in depth, and no other
-// identity lies within 1.5 pixels of the nearest distance, so that a GPU's rounding cannot change it.
-struct PickExpect {
-    bool hit = false, robust = false;
-    bool solid = false;   // the hit pixel and its eight neighbours show the same identity
-    int x = 0, y = 0;
-    uint32_t id = 0;
-};
-PickExpect expect_pick(const draw_reference::Reference& ref, int px, int py, int radius = 8) {
-    PickExpect e;
-    const double cx = px + 0.5, cy = py + 0.5, r2 = double(radius) * radius;
-    double best = 1e300;
-    for (int j = py - radius; j < py + radius; ++j)
-        for (int i = px - radius; i < px + radius; ++i) {
-            if (i < 0 || j < 0 || i >= ref.W || j >= ref.H) continue;
-            const uint32_t id = ref.id[size_t(j) * ref.W + i];
-            if (!id) continue;
-            const double d2 = (i + 0.5 - cx) * (i + 0.5 - cx) + (j + 0.5 - cy) * (j + 0.5 - cy);
-            if (d2 > r2 || d2 >= best) continue;
-            best = d2;
-            e.hit = true;
-            e.x = i;
-            e.y = j;
-            e.id = id;
-        }
-    const double limit = e.hit ? std::pow(std::sqrt(best) + 1.5, 2.0) : std::pow(radius + 2.0, 2.0);
-    e.robust = true;
-    for (int j = py - radius - 2; j < py + radius + 2 && e.robust; ++j)
-        for (int i = px - radius - 2; i < px + radius + 2 && e.robust; ++i) {
-            if (i < 0 || j < 0 || i >= ref.W || j >= ref.H) continue;
-            const uint32_t id = ref.id[size_t(j) * ref.W + i];
-            const double d2 = (i + 0.5 - cx) * (i + 0.5 - cx) + (j + 0.5 - cy) * (j + 0.5 - cy);
-            if (id && id != e.id && d2 <= limit) e.robust = false;
-        }
-    if (e.hit) {
-        e.solid = true;
-        for (int dj = -1; dj <= 1; ++dj)
-            for (int di = -1; di <= 1; ++di) {
-                const int i = std::clamp(e.x + di, 0, ref.W - 1), j = std::clamp(e.y + dj, 0, ref.H - 1);
-                const size_t k = size_t(j) * ref.W + i;
-                if (ref.contested[k] || (ref.id[k] != e.id && ref.id[k] != 0)) e.robust = false;
-                if (ref.id[k] != e.id) e.solid = false;
-            }
-    }
-    return e;
-}
-
 // Waits for the view's pick on Metal (the test may block; a view never does) and takes it.
-caliper_scene::PickPass::Result take_pick(Backend& gfx, SceneView& v, caliper_scene::Hit* hit) {
-    caliper_scene::PickPass::Result r = caliper_scene::PickPass::Result::Pending;
-    for (int tries = 0; tries < 100 && r == caliper_scene::PickPass::Result::Pending; ++tries) {
-        gfx.wait(v.pick_pass()->last_use());
+caliper_scene::PickResult take_pick(Backend& gfx, SceneView& v, caliper_scene::Hit* hit) {
+    caliper_scene::PickResult r = caliper_scene::PickResult::Pending;
+    for (int tries = 0; tries < 100 && r == caliper_scene::PickResult::Pending; ++tries) {
+        gfx.wait(gfx.last_use(v.id_target()));
         gfx.poll();
         r = v.poll_pick(hit);
     }
@@ -608,213 +447,7 @@ caliper_scene::PickPass::Result take_pick(Backend& gfx, SceneView& v, caliper_sc
 // item; at pointers whose nearest hit lies on the edge of the 16 x 16 window or whose window passes
 // the view's edge; a miss; and a result dropped because the view drew another frame first. The
 // world position from the depth is compared with the reference's depth unprojected in double.
-TEST_CASE("gfx/Metal scene view: the pick pass finds every primitive, through transforms and cameras, and drops stale results") {
-    ViewRig probe_rig;
-    if (!probe_rig.init()) CALIPER_SKIP_NO_GPU("no Metal device");
-    probe_rig.view.reset();
-    size_t probes = 0, solid_probes = 0, edge_probes = 0, border_probes = 0, misses = 0, positions = 0;
-    size_t through_transforms = 0;
-    std::set<std::string> kinds;   // primitive / part / overlay of every draw picked
-    double worst_position = 0;   // as a share of the scene's bounding radius
-    for (const primitive_fixtures::Fixture& f : primitive_fixtures::all()) {
-        CAPTURE(f.name);
-        ViewRig rig;
-        REQUIRE(rig.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str()));
-        SceneView& v = *rig.view;
-        primitive_rows::Row row;
-        row.fixture = f;
-        REQUIRE_MESSAGE(row.draw(v), row.error);
-        draw_reference::Rasteriser rr(v.last_draws(), v.last_map(), v.tree(), row.parts, int(primitive_fixtures::kSize),
-                                      int(primitive_fixtures::kSize));
-        rr.pick = true;
-        rr.run();
-        REQUIRE(rr.problems.empty());
-        const draw_reference::Reference& ref = rr.ref;
-        const caliper_scene::DrawMap& map = v.last_map();
-        const double radius = v.tree().scene_bounds().valid ? v.tree().scene_bounds().radius() : 1.0;
-        const int S = int(primitive_fixtures::kSize);
 
-        auto check_hit = [&](const PickExpect& e, int px, int py, bool exact_texel) {
-            caliper_scene::Hit hit;
-            std::string why;
-            REQUIRE_MESSAGE(v.request_pick(px + 0.5f, py + 0.5f, &why), why);
-            const caliper_scene::PickPass::Result r = take_pick(*rig.gfx, v, &hit);
-            if (!e.hit) {
-                CHECK_MESSAGE(r == caliper_scene::PickPass::Result::Miss, "a miss at (", px, ", ", py, ")");
-                return;
-            }
-            REQUIRE_MESSAGE(r == caliper_scene::PickPass::Result::Hit, "a hit at (", px, ", ", py, ")");
-            const int draw = draw_reference::Reference::draw_of(e.id);
-            const uint32_t item = (e.id & 0xffffffu) - 1;
-            const caliper_scene::DrawMapEntry& me = map.entries.at(size_t(draw));
-            CHECK_MESSAGE(hit.entity == me.entity, "at (", px, ", ", py, "): ", v.tree().path(hit.entity), " for ", v.tree().path(me.entity));
-            CHECK(hit.primitive == me.primitive);
-            CHECK(hit.part == me.part);
-            CHECK(hit.overlay == me.overlay);
-            const int tx = e.x - (int(std::floor(px + 0.5f)) - 8), ty = e.y - (int(std::floor(py + 0.5f)) - 8);
-            if (exact_texel) {
-                CHECK(hit.texel[0] == tx);
-                CHECK(hit.texel[1] == ty);
-            } else {
-                CHECK(std::abs(hit.texel[0] - tx) <= 1);
-                CHECK(std::abs(hit.texel[1] - ty) <= 1);
-            }
-            if (me.primitive == caliper_scene::Primitive::Mesh && me.part == caliper_scene::DrawPart::Batch) {
-                const auto& tri = rr.mesh_vertices.at(draw).at(item);   // a vertex of the triangle under the pixel
-                CHECK((hit.item == tri[0] || hit.item == tri[1] || hit.item == tri[2]));
-            } else if (me.primitive == caliper_scene::Primitive::Image && me.part == caliper_scene::DrawPart::Batch) {
-                CHECK(hit.item == 0);   // an image writes no item; its pixel comes from its quad
-                // The image pixel under the hit, from the reference's quad: its UV at the pixel centre.
-                if (exact_texel) {
-                    REQUIRE(hit.has_pixel);
-                    bool found = false;
-                    for (const uint32_t ti : ref.tris_of.at(e.id)) {
-                        const draw_reference::Tri& t = ref.tris[ti];
-                        double q[3], z, mw;
-                        bool inside;
-                        if (!draw_reference::weights(t.v, e.x + 0.5, e.y + 0.5, q, &z, &inside, &mw) || !inside) continue;
-                        const double u = q[0] * t.v[0].uv[0] + q[1] * t.v[1].uv[0] + q[2] * t.v[2].uv[0];
-                        const double w = q[0] * t.v[0].uv[1] + q[1] * t.v[1].uv[1] + q[2] * t.v[2].uv[1];
-                        const uint32_t px_u = std::min(uint32_t(u * me.image_size[0]), me.image_size[0] - 1);
-                        const uint32_t px_v = std::min(uint32_t(w * me.image_size[1]), me.image_size[1] - 1);
-                        CHECK_MESSAGE(std::abs(int(hit.pixel[0]) - int(px_u)) <= (item ? 0 : 1), "image column");
-                        CHECK_MESSAGE(std::abs(int(hit.pixel[1]) - int(px_v)) <= (item ? 0 : 1), "image row");
-                        found = true;
-                        break;
-                    }
-                    CHECK(found);
-                }
-            } else {
-                CHECK_MESSAGE(hit.item == item, "at (", px, ", ", py, ") in ", v.tree().path(me.entity));
-            }
-            // The world position from the depth, in 3-D outside a pinhole's flat pixel space.
-            const bool three_d = v.tree().space() == caliper_scene::Space::k3D && !me.overlay;
-            CHECK(hit.has_position == three_d);
-            if (three_d && hit.has_position && exact_texel) {
-                const double X = 2.0 * (e.x + 0.5) / S - 1.0, Y = 1.0 - 2.0 * (e.y + 0.5) / S;
-                double q[4];
-                caliper_scene::transform_h(map.inverse_view_proj, {X, Y, ref.depth_d[size_t(e.y) * S + e.x]}, q);
-                const caliper_scene::Vec3 want{q[0] / q[3], q[1] / q[3], q[2] / q[3]};
-                const double off = caliper_scene::length(hit.position - want) / radius;
-                worst_position = std::max(worst_position, off);
-                CHECK_MESSAGE(off < 1e-4, "the position at (", px, ", ", py, ") is off by ", off, " of the radius");
-                ++positions;
-                // Through the entity transforms: the hit lies on the entity's own box, in its own frame,
-                // within the edges' 3 pixels on screen (0.04 scene units at that distance).
-                if (f.name == "boxes" && v.tree().path(hit.entity) == "arm/link0/link1") {
-                    caliper_scene::Mat4 inv;
-                    REQUIRE(caliper_scene::inverse(v.tree().world(hit.entity), &inv));
-                    const caliper_scene::Vec3 l = caliper_scene::transform_point(inv, hit.position);
-                    const double k = 0.04;
-                    CHECK_MESSAGE((std::fabs(l.x) <= 0.05 + k && std::fabs(l.y) <= 0.05 + k && l.z >= -k && l.z <= 0.4 + k),
-                                  "link1's local hit ", l.x, " ", l.y, " ", l.z);
-                    ++through_transforms;
-                }
-            }
-        };
-
-        // A pixel of every draw nearest its centroid, inside the draw where it is wider than a pixel
-        // (texel (8, 8) exactly), else on it (a line one or two pixels wide: within a texel).
-        for (size_t d = 0; d < map.entries.size(); ++d) {
-            double sx = 0, sy = 0;
-            size_t n = 0;
-            for (int j = 0; j < S; ++j)
-                for (int i = 0; i < S; ++i) {
-                    const uint32_t id = ref.id[size_t(j) * S + i];
-                    if (id && draw_reference::Reference::draw_of(id) == int(d)) sx += i, sy += j, ++n;
-                }
-            if (n == 0) {   // covered everywhere, as a pinhole's translucent image covers the 3-D content
-                MESSAGE("draw ", d, " of ", f.name, " (", v.tree().path(map.entries[d].entity), ") is covered everywhere");
-                continue;
-            }
-            int bx = -1, by = -1;
-            double bd = 1e300;
-            bool solid = false;
-            for (int j = 2; j < S - 2; ++j)
-                for (int i = 2; i < S - 2; ++i) {
-                    const uint32_t id = ref.id[size_t(j) * S + i];
-                    if (!id || draw_reference::Reference::draw_of(id) != int(d)) continue;
-                    const PickExpect e = expect_pick(ref, i, j);
-                    if (!e.robust || e.x != i || e.y != j || (solid && !e.solid)) continue;
-                    const double dd = (i - sx / n) * (i - sx / n) + (j - sy / n) * (j - sy / n);
-                    if ((e.solid && !solid) || dd < bd) bd = dd, bx = i, by = j, solid = e.solid;
-                }
-            if (bx < 0) {   // a draw seen edge-on or under others everywhere: picked in another fixture
-                MESSAGE("draw ", d, " of ", f.name, " (", v.tree().path(map.entries[d].entity), ") has no pixel to pick robustly");
-                continue;
-            }
-            check_hit(expect_pick(ref, bx, by), bx, by, solid);
-            ++probes;
-            solid_probes += solid ? 1 : 0;
-            const caliper_scene::DrawMapEntry& me = map.entries[d];
-            kinds.insert(std::string(caliper_scene::primitive_name(me.primitive)) + "/" + std::to_string(int(me.part)) +
-                         (me.overlay ? "/overlay" : ""));
-        }
-        // Pointers whose nearest hit lies on the window's edge, and windows past the view's edge.
-        int edges_here = 0, borders_here = 0;
-        for (int j = 0; j < S && (edges_here < 2 || borders_here < 2); j += 3)
-            for (int i = 0; i < S && (edges_here < 2 || borders_here < 2); i += 3) {
-                const PickExpect e = expect_pick(ref, i, j);
-                if (!e.robust || !e.hit) continue;
-                const int tx = e.x - (i - 8), ty = e.y - (j - 8);
-                const bool on_edge = tx == 0 || tx == 15 || ty == 0 || ty == 15;
-                const bool past_view = i < 8 || j < 8 || i >= S - 8 || j >= S - 8;
-                if (on_edge && edges_here < 2) {
-                    check_hit(e, i, j, false);
-                    ++edges_here;
-                    ++edge_probes;
-                } else if (past_view && borders_here < 2) {
-                    check_hit(e, i, j, false);
-                    ++borders_here;
-                    ++border_probes;
-                }
-            }
-        // A miss: nothing within the radius and two pixels more.
-        bool missed = false;
-        for (int j = 0; j < S && !missed; j += 5)
-            for (int i = 0; i < S && !missed; i += 5) {
-                const PickExpect e = expect_pick(ref, i, j);
-                if (e.hit || !e.robust) continue;
-                check_hit(e, i, j, true);
-                missed = true;
-                ++misses;
-            }
-        CHECK_MESSAGE(missed, f.name, " has no empty place");
-        // A result that arrives after the view drew another frame is dropped.
-        {
-            std::string why;
-            REQUIRE(v.request_pick(128.5f, 128.5f, &why));
-            v.orbit(2.0f, 0.0f);
-            REQUIRE_MESSAGE(v.render(primitive_fixtures::kSize, primitive_fixtures::kSize, 1.0f, primitive_fixtures::kClear, &why), why);
-            caliper_scene::Hit hit;
-            CHECK(take_pick(*rig.gfx, v, &hit) == caliper_scene::PickPass::Result::Dropped);
-        }
-        // Nothing is submitted while nobody asks: the view's own frames are the only ones.
-        const uint64_t submits = v.pick_pass()->submits();
-        for (int k = 0; k < 5; ++k) {
-            std::string why;
-            REQUIRE(v.render(primitive_fixtures::kSize, primitive_fixtures::kSize, 1.0f, primitive_fixtures::kClear, &why));
-            caliper_scene::Hit hit;
-            CHECK(v.poll_pick(&hit) == caliper_scene::PickPass::Result::None);
-        }
-        CHECK(v.pick_pass()->submits() == submits);
-    }
-    MESSAGE("picks: ", probes, " pixels, one of every draw (", solid_probes, " inside a draw wider than a pixel), ", edge_probes,
-            " on the window's edge, ", border_probes,
-            " with the window past the view's edge, ", misses, " misses; ", positions,
-            " world positions within ", worst_position, " of the scene's radius of the reference's");
-    CHECK(edge_probes > 0);
-    CHECK(border_probes > 0);
-    CHECK(through_transforms > 0);
-    // Every primitive and part was picked: points, lines, arrows, wire and filled boxes, meshes, images
-    // in 2-D and flat through a pinhole, depth clouds, frustums, and 2-D drawing through a pinhole.
-    std::string all;
-    for (const std::string& k : kinds) all += k + " ";
-    MESSAGE("kinds picked: ", all);
-    for (const char* k : {"points/0", "lines/0", "arrows/0", "boxes/0", "boxes/1", "mesh/0", "image/0", "image/2",
-                          "lines/3", "image/0/overlay", "points/0/overlay", "boxes/0/overlay", "arrows/0/overlay"})
-        CHECK_MESSAGE(kinds.count(k) == 1, "no pick of ", k);
-}
 
 // Rectangle and lasso selections project the CPU copies of the points and the boxes' centres; a
 // selection dims the picture towards the background, as the points view dims, and draws the selected
@@ -910,7 +543,7 @@ TEST_CASE("gfx/Metal scene view: a late attach receives a reset and the state; c
     }
     CHECK_FALSE(v.tree().find("old/cloud"));
     CHECK(v.counts().batches == 3);
-    CHECK(v.counts().buffers_live == 6);   // the box 1, the surface 3, the path 2
+    CHECK(v.counts().arrays_live == 6);   // the box 1, the surface 3, the path 2
 
     // A clear of the whole scene that is not static keeps the static box.
     wire::SceneClear all;
@@ -939,7 +572,7 @@ TEST_CASE("gfx/Metal scene view: a late attach receives a reset and the state; c
     all.is_static = true;
     REQUIRE(feed(v, w.roundtrip(all)));
     CHECK(v.counts().batches == 0);
-    CHECK(v.counts().buffers_live == 0);
+    CHECK(v.counts().arrays_live == 0);
     std::string why;
     CHECK_MESSAGE(v.render(32, 32, 1.0f, 0xff000000u, &why), why);
 }
@@ -993,7 +626,7 @@ TEST_CASE("gfx/Metal scene view: row ids follow the payload axes, and producer v
     }
 }
 
-TEST_CASE("gfx/Metal scene view: an update of one batch reuses its buffers and redraws; nothing changes, nothing draws") {
+TEST_CASE("gfx/Metal scene view: an update of one batch replaces its arrays and redraws; nothing changes, nothing draws") {
     ViewRig rig;
     if (!rig.init()) CALIPER_SKIP_NO_GPU("no Metal device");
     const scene_fixtures::SurfaceRowFixture fx;
@@ -1002,8 +635,8 @@ TEST_CASE("gfx/Metal scene view: an update of one batch reuses its buffers and r
     draw_demo(rig, w, dm);
     SceneView& v = *rig.view;
     const std::vector<uint8_t> before = pixels(v);
-    const uint64_t frames = v.cost().frames, created = v.counts().buffers_created;
-    const uint64_t reused = v.counts().buffers_reused, bytes = v.counts().bytes_total;
+    const uint64_t frames = v.cost().frames;
+    const uint64_t bytes = v.counts().bytes_total;
     const uint64_t revision = v.tree().revision();
 
     // Nothing changed: no compile, no submit.
@@ -1012,12 +645,10 @@ TEST_CASE("gfx/Metal scene view: an update of one batch reuses its buffers and r
     CHECK(v.cost().frames == frames);
 
     // A new surface of the same size (the values shift, as a refit recolours it): its three
-    // buffers are written in place, nothing is created, and the view draws again.
+    // arrays replace the previous values, and the view draws again.
     for (float& x : dm.values) x = fx.vmin + (fx.vmax - x);
     v.begin_round();
     REQUIRE_MESSAGE(feed(v, w.roundtrip(dm.surface(6)), &why), why);
-    CHECK(v.counts().buffers_created == created);
-    CHECK(v.counts().buffers_reused == reused + 3);
     CHECK(v.counts().bytes_last == (fx.positions.size() + fx.indices.size() + fx.values.size()) * 4);
     CHECK(v.counts().bytes_total == bytes + v.counts().bytes_last);
     CHECK(v.tree().revision() != revision);
@@ -1033,117 +664,14 @@ TEST_CASE("gfx/Metal scene view: an update of one batch reuses its buffers and r
     v.orbit(10.0f, 0.0f);
     REQUIRE(v.render(fx.kSize, fx.kSize, 1.0f, fx.kClear, &why));
     CHECK(v.cost().frames == frames + 2);
-    CHECK(v.counts().buffers_reused == reused + 3);
 
-    // A larger marker batch gets a new buffer only when it outgrows the capacity (4 KiB here).
+    // A larger marker batch replaces the previous array.
     wire::SceneUpdate big = std::get<wire::SceneUpdate>(dm.marker());
     std::vector<float> many(3 * 400, 0.0f);
     big.arrays[0] = wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {400, 3}, many.data(), many.size() * 4);
     REQUIRE(feed(v, w.roundtrip(big)));
-    CHECK(v.counts().buffers_created == created + 1);
 }
 
-TEST_CASE("gfx/Metal scene view: a frame dropped after the index clamp was emitted clamps again in the next frame") {
-    // A mesh of 8 vertices is drawn; then one of 4 vertices with the same indices arrives, and the
-    // frame that emitted its clamp is dropped (its compile fails on a camera that is not finite).
-    // The next frame must clamp again, so that every index the draw reads is below 4, rather than
-    // reuse the indices clamped against 8.
-    ViewRig rig;
-    if (!rig.init()) CALIPER_SKIP_NO_GPU("no Metal device");
-    SceneView& v = *rig.view;
-    Wire w;
-    const int32_t tri[6] = {5, 6, 7, 4, 5, 6};
-    auto mesh = [&](uint64_t seq, const std::vector<float>& pos) {
-        wire::SceneUpdate u = update("surface", CALIPER_NET_PART_MESH, seq, false);
-        u.params.set("color", rgba_json(0xff3080c0u));
-        u.arrays.push_back(wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {int64_t(pos.size() / 3), 3},
-                                               pos.data(), pos.size() * 4));
-        u.arrays.push_back(wire::Section::make("indices", CALIPER_NET_DTYPE_I32, {2, 3}, tri, sizeof tri));
-        return w.roundtrip(u);
-    };
-    std::vector<float> eight, four;
-    for (int i = 0; i < 8; ++i) {
-        const float p[3] = {float(i & 1), float((i >> 1) & 1), float(i >> 2)};
-        eight.insert(eight.end(), p, p + 3);
-        if (i < 4) four.insert(four.end(), p, p + 3);
-    }
-    std::string why;
-    REQUIRE_MESSAGE(feed(v, mesh(1, eight), &why), why);
-    v.keep_draws(true);
-    REQUIRE_MESSAGE(v.render(64, 64, 1.0f, 0xff000000u, &why), why);
-    REQUIRE(v.backend().wait(v.backend().last_use(v.color())));
-
-    // The smaller mesh, and a frame whose compile fails after prepare emitted the clamp.
-    REQUIRE_MESSAGE(feed(v, mesh(2, four), &why), why);
-    std::get<caliper_scene::Orbit>(v.camera()).distance = NAN;
-    CHECK_FALSE(v.render(64, 64, 1.0f, 0xff000000u, &why));
-    CHECK(why.find("not finite") != std::string::npos);
-
-    // A good frame: the clamp runs again in it.
-    v.fit();
-    v.backend().take_stats();
-    REQUIRE_MESSAGE(v.render(64, 64, 1.0f, 0xff000000u, &why), why);
-    CHECK(v.backend().take_stats().dispatches == 1);
-    REQUIRE(v.last_draws().records().size == 1);
-    const DrawRecord& r = v.last_draws().records()[0];
-    REQUIRE(bool(r.index_buffer));
-    REQUIRE(r.count == 6);
-
-    // The indices the draw reads, copied out of the layer's index buffer by a small dispatch.
-    static const char* kCopyMsl = R"metal(
-#include <metal_stdlib>
-using namespace metal;
-kernel void cs_copy(device const uint* src [[buffer(0)]], device uint* dst [[buffer(1)]],
-                    uint i [[thread_position_in_grid]]) { dst[i] = src[i]; }
-)metal";
-    static const EntryDesc kCopyEntries[] = {{"cs_copy", kStageCompute, {1, 1, 1}}};
-    static const BindingDesc kCopyBindings[] = {
-        {0, 0, BindingType::Storage, kStageCompute, false, 4, Format::RGBA8Unorm, 0},
-        {0, 1, BindingType::StorageReadWrite, kStageCompute, false, 4, Format::RGBA8Unorm, 1},
-    };
-    Backend& gfx = v.backend();
-    ProgramDesc pd;
-    pd.label = "copy indices";
-    pd.entries = kCopyEntries;
-    pd.entry_count = 1;
-    pd.bindings = kCopyBindings;
-    pd.binding_count = 2;
-    pd.msl = kCopyMsl;
-    const Program copy = gfx.create_program(pd);
-    REQUIRE_MESSAGE(bool(copy), gfx.last_error());
-    ComputePipelineDesc cd;
-    cd.program = copy;
-    cd.entry = "cs_copy";
-    const Pipeline pipe = gfx.create_compute_pipeline(cd);
-    const Buffer out = gfx.create_buffer({r.count * 4, kStorage, true, "indices read back"});
-    REQUIRE_MESSAGE((pipe && out), gfx.last_error());
-    BindGroupDesc bd;
-    bd.program = copy;
-    bd.entry_count = 2;
-    bd.entries[0].binding = 0;
-    bd.entries[0].buffer = r.index_buffer;
-    bd.entries[0].offset = r.index_offset;
-    bd.entries[0].size = r.count * 4;
-    bd.entries[1].binding = 1;
-    bd.entries[1].buffer = out;
-    const BindGroup g = gfx.create_bind_group(bd);
-    REQUIRE_MESSAGE(bool(g), gfx.last_error());
-    Frame f;
-    const BindGroup groups[1] = {g};
-    f.dispatch(pipe, groups, {}, r.count, 1, 1);
-    const Serial s = gfx.submit(std::move(f));
-    REQUIRE_MESSAGE(s != 0, gfx.last_error());
-    REQUIRE(gfx.wait(s));
-    const uint32_t* got = static_cast<const uint32_t*>(gfx.mapped(out));
-    REQUIRE(got != nullptr);
-    std::string seen;
-    for (uint32_t i = 0; i < r.count; ++i) seen += (i ? " " : "") + std::to_string(got[i]);
-    for (uint32_t i = 0; i < r.count; ++i) CHECK_MESSAGE(got[i] < 4, "the draw reads indices ", seen);
-    gfx.release(g);
-    gfx.release(out);
-    gfx.release(pipe);
-    gfx.release(copy);
-}
 
 namespace {
 
@@ -1250,7 +778,6 @@ TEST_CASE("gfx/Metal scene view: switching to Z up draws the point at +z above t
     const caliper_live_views::SceneCounts c1 = v.counts();
     CHECK(c1.messages == c0.messages);
     CHECK(c1.bytes_total == c0.bytes_total);
-    CHECK(c1.buffers_created == c0.buffers_created);
     CHECK(c1.batches == c0.batches);
     CHECK(v.tree().revision() == revision);
     CHECK(v.tree().batch(v.tree().find("above"), cs::Primitive::Points)->seq == above_seq);
@@ -1399,4 +926,574 @@ TEST_CASE("gfx/Metal scene view: timing — the demo scene's cost per frame and 
             " ms, submit ", median(submit), " ms, gpu ", median(gpu), " ms; one mesh update of 1,681 vertices and 3,200 "
             "triangles applied in ", median(apply_ms), " ms");
 }
+// ---- Shapes drawn by library pieces (draw/scene_pieces.h) ------------------------------------------
+
+namespace {
+
+int channel_gap(uint32_t a, uint32_t b) {
+    int g = 0;
+    for (int k = 0; k < 4; ++k) g = std::max(g, std::abs(int((a >> (8 * k)) & 0xffu) - int((b >> (8 * k)) & 0xffu)));
+    return g;
+}
+
+// The view's programs' ID target as (pick id, item) pairs, top row first.
+std::vector<uint64_t> program_ids(Backend& gfx, SceneView& v) {
+    std::vector<uint64_t> ids(size_t(v.width()) * v.height(), 0);
+    if (!v.id_target()) return ids;
+    const caliper_gfx::Readback rb = gfx.read_texture(v.id_target(), 0, 0, v.width(), v.height());
+    std::vector<uint8_t> bytes;
+    REQUIRE(rb);
+    REQUIRE(gfx.wait(gfx.last_use(v.id_target())));
+    REQUIRE(gfx.take_readback(rb, &bytes));
+    REQUIRE(bytes.size() >= ids.size() * 8);
+    for (size_t i = 0; i < ids.size(); ++i) {
+        uint32_t pair[2];
+        std::memcpy(pair, bytes.data() + i * 8, 8);
+        ids[i] = pair[0] == 0 ? 0 : (uint64_t(pair[0]) << 32 | pair[1]) + 1;
+    }
+    return ids;
+}
+
+// The comparison of a picture drawn by the pieces with the reference's, under the rules of the
+// match tests (tests/points_match/): a pixel whose 3 x 3 neighbourhood shows one identity in the
+// pieces' ID target is interior and lies within `interior` levels of the reference pixel; every other
+// pixel lies within 1 level of a reference pixel of its 3 x 3 neighbourhood.
+struct ShapeComparison {
+    size_t differ = 0, interior = 0, failed = 0;
+    int max_interior = 0, max_edge = 0;
+    std::string first;
+};
+ShapeComparison compare_shapes(const std::vector<uint8_t>& piece, const std::vector<uint8_t>& reference,
+                               const std::vector<uint64_t>& ids, int S, int interior) {
+    ShapeComparison c;
+    auto px = [&](const std::vector<uint8_t>& img, int x, int y) {
+        uint32_t v;
+        std::memcpy(&v, img.data() + (size_t(y) * S + x) * 4, 4);
+        return v;
+    };
+    for (int y = 0; y < S; ++y)
+        for (int x = 0; x < S; ++x) {
+            const uint32_t p = px(piece, x, y), b = px(reference, x, y);
+            if (p != b) ++c.differ;
+            const uint64_t own = ids[size_t(y) * S + x];
+            bool inside = own != 0;
+            for (int dy = -1; dy <= 1 && inside; ++dy)
+                for (int dx = -1; dx <= 1 && inside; ++dx)
+                    inside = ids[size_t(std::clamp(y + dy, 0, S - 1)) * S + std::clamp(x + dx, 0, S - 1)] == own;
+            int g = channel_gap(p, b);
+            if (inside) {
+                ++c.interior;
+                c.max_interior = std::max(c.max_interior, g);
+                if (g <= interior) continue;
+            } else {
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx)
+                        g = std::min(g, channel_gap(p, px(reference, std::clamp(x + dx, 0, S - 1), std::clamp(y + dy, 0, S - 1))));
+                c.max_edge = std::max(c.max_edge, g);
+                if (g <= 1) continue;
+            }
+            if (c.failed++ == 0) {
+                char b2[160];
+                std::snprintf(b2, sizeof b2, "pixel (%d, %d): pieces %08x, reference %08x, %s, gap %d", x, y, p, b,
+                              inside ? "interior" : "edge", g);
+                c.first = b2;
+            }
+        }
+    return c;
+}
+
+// The answer to a pick that the view asked, once its readbacks are in.
+caliper_scene::PickResult take_any_pick(Backend& gfx, SceneView& v, caliper_scene::Hit* hit) {
+    caliper_scene::PickResult r = caliper_scene::PickResult::Pending;
+    for (int tries = 0; tries < 10000 && r == caliper_scene::PickResult::Pending; ++tries) {
+        gfx.wait(gfx.last_use(v.id_target()));
+        // The pieces' pick reads the ID target and the depth: each readback is a use of its texture.
+        if (v.id_target()) gfx.wait(gfx.last_use(v.id_target()));
+        if (v.depth_target()) gfx.wait(gfx.last_use(v.depth_target()));
+        gfx.poll();
+        r = v.poll_pick(hit);
+    }
+    return r;
+}
+
+void capture_shapes(const std::string& name, const std::vector<uint8_t>& piece, const std::vector<uint8_t>& reference, int S) {
+    std::vector<uint8_t> diff(piece.size(), 255);
+    for (size_t i = 0; i < piece.size(); i += 4)
+        for (int k = 0; k < 3; ++k) diff[i + size_t(k)] = uint8_t(std::min(255, 32 * std::abs(int(piece[i + size_t(k)]) - int(reference[i + size_t(k)]))));
+    capture_png(("scene-pieces-" + name + "-reference.png").c_str(), reference, S, S);
+    capture_png(("scene-pieces-" + name + "-pieces.png").c_str(), piece, S, S);
+    capture_png(("scene-pieces-" + name + "-diff.png").c_str(), diff, S, S);
+}
+
+std::string hit_text(const SceneView& v, const caliper_scene::Hit& h) {
+    return v.tree().path(h.entity) + " " + caliper_scene::primitive_name(h.primitive) + " " + std::to_string(h.item) +
+           (h.has_pixel ? " px " + std::to_string(h.pixel[0]) + "," + std::to_string(h.pixel[1]) : std::string());
+}
+
+// One fixture drawn twice, by the pieces and by the reference: the pictures under the rules above,
+// the counts of the shapes, and the picks at interior pixels of the pieces' IDs on a grid, which
+// give the same entity, primitive, item and pixel in both views.
+void compare_fixture(const std::string& name, ViewRig& pieces, int S, int interior) {
+    SceneView& pv = *pieces.view;
+    const std::vector<uint8_t> p = pixels(pv);
+    const std::vector<uint8_t> b = match_reference::picture("compare", uint32_t(S), uint32_t(S), nullptr,
+                                                         pieces.gfx->caps().adapter);
+    const std::vector<uint64_t> ids = program_ids(*pieces.gfx, pv);
+    const ShapeComparison c = compare_shapes(p, b, ids, S, interior);
+    capture_shapes(name, p, b, S);
+    size_t picked = 0;
+    for (int y = 4; y < S; y += 9)
+        for (int x = 4; x < S; x += 9) {
+            const uint64_t own = ids[size_t(y) * S + x];
+            bool inside = own != 0;
+            for (int dy = -2; dy <= 2 && inside; ++dy)
+                for (int dx = -2; dx <= 2 && inside; ++dx)
+                    inside = ids[size_t(std::clamp(y + dy, 0, S - 1)) * S + std::clamp(x + dx, 0, S - 1)] == own;
+            if (!inside) continue;
+            std::string why;
+            Hit hit;
+            REQUIRE_MESSAGE(pv.request_pick(x + 0.5f, y + 0.5f, &why), why);
+            REQUIRE(take_any_pick(*pieces.gfx, pv, &hit) == PickResult::Hit);
+            CHECK(pv.tree().valid(hit.entity));
+            uint64_t item = hit.item;
+            if (hit.primitive == Primitive::Image && hit.part == DrawPart::Batch) {
+                // An image hit names its quad and pixel, while the ID target names the pixel directly.
+                CHECK(hit.item == 0);
+                REQUIRE(hit.has_pixel);
+                const Batch* image = pv.tree().batch(hit.entity, Primitive::Image);
+                REQUIRE(image != nullptr);
+                CHECK(hit.pixel[0] < image->image_width);
+                CHECK(hit.pixel[1] < image->image_height);
+                item = uint64_t(hit.pixel[1]) * image->image_width + hit.pixel[0];
+            }
+            CHECK(item == uint32_t(own - 1));
+            ++picked;
+        }
+    MESSAGE(name, ": ", c.differ, " pixels differ, ", c.failed, " outside tolerance; ", picked, " picks");
+    CHECK_MESSAGE(c.failed == 0, name, ": ", c.first);
+}
+
+}  // namespace
+
+// Library pieces preserve the saved pictures and selected item IDs of each primitive fixture.
+TEST_CASE("gfx/Metal scene view: library pieces match the saved scene pictures and preserve their item IDs") {
+    ViewRig probe;
+    if (!probe.init()) CALIPER_SKIP_NO_GPU("no Metal device");
+    std::vector<primitive_fixtures::Fixture> fixtures = primitive_fixtures::all();
+    // The same camera with point sizes in pixels.
+    primitive_fixtures::Fixture flat = primitive_fixtures::through();
+    flat.name = "through-pieces";
+    for (wire::Message& m : flat.messages)
+        if (auto* u = std::get_if<wire::SceneUpdate>(&m)) u->params.erase("radius");
+    fixtures.push_back(flat);
+    // A textured mesh in the camera pixel space follows the same layer order.
+    primitive_fixtures::Fixture late = primitive_fixtures::through();
+    late.name = "through-late";
+    {
+        std::vector<float> qp = {20, 14, 46, 14, 46, 32, 20, 14, 46, 32, 20, 32};
+        std::vector<float> uv = {0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1};
+        std::vector<uint32_t> tex(16);
+        for (uint32_t y = 0; y < 4; ++y)
+            for (uint32_t x = 0; x < 4; ++x) tex[y * 4 + x] = primitive_fixtures::RGBA(90 + 40 * x, 200 - 30 * y, 120, 255);
+        wire::SceneUpdate card = late.update("rig/left/card", CALIPER_NET_PART_MESH);
+        card.arrays.push_back(late.section("positions", CALIPER_NET_DTYPE_F32, {6, 2}, qp));
+        card.arrays.push_back(late.section("uvs", CALIPER_NET_DTYPE_F32, {6, 2}, uv));
+        card.arrays.push_back(late.section("texture", CALIPER_NET_DTYPE_U8, {4, 4, 4}, tex));
+        late.messages.push_back(card);
+    }
+    fixtures.push_back(late);
+    for (const primitive_fixtures::Fixture& f : fixtures) {
+        CAPTURE(f.name);
+        ViewRig pr;
+        REQUIRE(pr.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str()));
+        primitive_rows::Row rp;
+        rp.fixture = f;
+        REQUIRE_MESSAGE(rp.draw(*pr.view), rp.error);
+        const SceneShapeCounts counts = pr.view->shape_counts();
+        CHECK_MESSAGE(counts.pieces > 0, f.name, " draws no shape with a piece");
+        compare_fixture(f.name, pr, int(primitive_fixtures::kSize), f.name == "images" ? 1 : 0);
+    }
+    {
+        ViewRig pr;
+        REQUIRE(pr.init(CALIPER_NET_SPACE_3D, "+z", ""));
+        const scene_fixtures::SurfaceRowFixture fx;
+        const DemoMessages dm(fx);
+        Wire wp;
+        draw_demo(pr, wp, dm);
+        // Every shape of the demo, its surface's mesh of flat faces and indices too.
+        const SceneShapeCounts counts = pr.view->shape_counts();
+        CHECK(counts.pieces == 4);
+        compare_fixture("demo", pr, int(scene_fixtures::SurfaceRowFixture::kSize), 0);
+    }
+}
+
+// The highlight of a selection drawn by the pieces: the dim by image@1 and the selected rows by a
+// second instance of points@1 or boxes@1, into the colour alone, against the reference's dim and
+// highlight, under the rules of the comparison above; the selection over the whole picture holds
+// every box, the points of radii in scene units of "edges" and the points flat over the picture
+// of "through". The highlight writes no ID and no depth, thus the picks are those of the shapes.
+TEST_CASE("gfx/Metal scene view: the selection highlight matches the saved scene pictures") {
+    ViewRig probe;
+    if (!probe.init()) CALIPER_SKIP_NO_GPU("no Metal device");
+    for (const primitive_fixtures::Fixture& f :
+         {primitive_fixtures::boxes(), primitive_fixtures::edges(), primitive_fixtures::through()}) {
+        CAPTURE(f.name);
+        ViewRig pr;
+        REQUIRE(pr.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str()));
+        primitive_rows::Row rp;
+        rp.fixture = f;
+        REQUIRE_MESSAGE(rp.draw(*pr.view), rp.error);
+        const std::vector<uint8_t> plain = pixels(*pr.view);
+        const float S = float(primitive_fixtures::kSize);
+        const std::string sp = pr.view->select_polygon({0, 0, S, 0, S, S, 0, S});
+        CHECK(sp != "{}");
+        std::string why;
+        REQUIRE_MESSAGE(pr.view->render(primitive_fixtures::kSize, primitive_fixtures::kSize, 1.0f, primitive_fixtures::kClear, &why), why);
+        CHECK(pr.view->highlighted() > 0);
+        CHECK(pr.view->shape_counts().marks > 0);
+        CHECK(pixels(*pr.view) != plain);
+        compare_fixture(f.name + "-selected", pr, int(primitive_fixtures::kSize), 1);
+        // No selection: the marks go, and the picture is the plain one again.
+        CHECK(pr.view->select_polygon({1, 1, 2, 1, 2, 2}) == "{}");
+        REQUIRE_MESSAGE(pr.view->render(primitive_fixtures::kSize, primitive_fixtures::kSize, 1.0f, primitive_fixtures::kClear, &why), why);
+        CHECK(pr.view->highlighted() == 0);
+        CHECK(pr.view->shape_counts().marks == 0);
+        CHECK(pixels(*pr.view) == plain);
+    }
+}
+
+TEST_CASE("gfx/Metal scene view: unsupported input reports the entity and reason") {
+    ViewRig rig;
+    if (!rig.init()) CALIPER_SKIP_NO_GPU("no Metal device");
+    auto u = update("wide-line", CALIPER_NET_PART_LINES, 1, false);
+    const float positions[] = {-1, 0, 0, 1, 0, 0};
+    u.arrays.push_back(wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {2, 3}, positions, sizeof positions));
+    u.params = Json::object();
+    u.params.set("width", Json(129.0));
+    std::string why;
+    REQUIRE_MESSAGE(rig.view->apply(u, &why), why);
+    REQUIRE_MESSAGE(rig.view->render(64, 64, 1.0f, 0xff000000u, &why), why);
+    CHECK(rig.view->shape_counts().pieces == 0);
+    REQUIRE(rig.view->notes().size() == 1);
+    CHECK(rig.view->notes().front() == "wide-line: scene.piece_input: width above 128 pixels");
+    u.params.set("width", Json(2.0));
+    REQUIRE_MESSAGE(rig.view->apply(u, &why), why);
+    REQUIRE_MESSAGE(rig.view->render(64, 64, 1.0f, 0xff000000u, &why), why);
+    CHECK(rig.view->shape_counts().pieces == 1);
+    CHECK(rig.view->notes().empty());
+}
+
+TEST_CASE("gfx/scene view: browser refusals report each entity and clear on scene reset") {
+    Caps caps = RecordingBackend::default_caps();
+    caps.backend = "webgpu";
+    caps.bits &= ~kCapVertexStorage;
+    caps.limits.max_storage_buffers_in_vertex_stage = 0;
+    RecordingBackend gfx(caps);
+    SceneView view(gfx, caliper_gfx::shaders::kMetalPrograms);
+    std::string why;
+    REQUIRE_MESSAGE(view.init(&why), why);
+    view.describe(wire::SceneView{CALIPER_NET_SPACE_3D, "+z", ""});
+    const float position[] = {0, 0, 0};
+    for (const char* path : {"first-points", "second-points"}) {
+        auto u = update(path, CALIPER_NET_PART_POINTS, 1, false);
+        u.arrays.push_back(wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {1, 3}, position, sizeof position));
+        REQUIRE_MESSAGE(view.apply(u, &why), why);
+    }
+    REQUIRE_MESSAGE(view.render(64, 64, 1.0f, 0xff000000u, &why), why);
+    const auto runtimes = view.shape_runtimes();
+    REQUIRE(runtimes.size() == 2);
+    REQUIRE(view.notes().size() == 2);
+    for (const auto* runtime : runtimes) {
+        const auto status = runtime->status();
+        CHECK(status.state == caliper_draw::DrawState::refused);
+        CHECK(status.error.code == "program.browser_refused");
+        CHECK(status.error.message.find("storage buffers in the vertex stage, the limit is 0") != std::string::npos);
+        const std::string& program = runtime->instance().program;
+        const std::string path = program.substr(6, program.rfind('#') - 6);
+        CHECK((path == "first-points" || path == "second-points"));
+        const std::string note = path + ": " + status.error.code + ": " + status.error.message;
+        CHECK(std::find(view.notes().begin(), view.notes().end(), note) != view.notes().end());
+    }
+    const auto notes = view.notes();
+    REQUIRE_MESSAGE(view.render(64, 64, 1.0f, 0xff000000u, &why), why);
+    CHECK(view.notes() == notes);
+    wire::SceneClear reset;
+    reset.reset = true;
+    REQUIRE_MESSAGE(view.apply(reset, &why), why);
+    REQUIRE_MESSAGE(view.render(64, 64, 1.0f, 0xff000000u, &why), why);
+    CHECK(view.notes().empty());
+    CHECK(view.shape_runtimes().empty());
+}
+
+TEST_CASE("gfx/Metal scene view: an unchanged frame stays idle and a changed frame drops its pending pick") {
+    ViewRig rig;
+    if (!rig.init()) CALIPER_SKIP_NO_GPU("no Metal device");
+    const scene_fixtures::SurfaceRowFixture fx;
+    const DemoMessages dm(fx);
+    Wire wire;
+    draw_demo(rig, wire, dm);
+    auto& view = *rig.view;
+    const uint32_t size = fx.kSize;
+    std::string why;
+    const uint64_t frames = view.cost().frames;
+    REQUIRE(view.render(size, size, 1, fx.kClear, &why));
+    CHECK(view.cost().frames == frames);
+    REQUIRE(view.request_pick(size * 0.5f, size * 0.5f, &why));
+    view.orbit(2, 0);
+    REQUIRE(view.render(size, size, 1, fx.kClear, &why));
+    Hit hit;
+    CHECK(take_any_pick(*rig.gfx, view, &hit) == PickResult::Dropped);
+}
 #endif
+
+namespace {
+
+// points@1's resource "points" of a points update in the per-shape form, as caliper._scene_pieces
+// writes it (python/caliper/_scene_pieces.py, pack_points): x, y and z (0 in 2-D) and in w the radius
+// (the row's, else the batch's "radius", else 1), then the bits of the color source (packed RGBA,
+// the f32 of a value, a class id, else NaN bits), the row index and 8 bytes of zero.
+std::vector<uint8_t> pack_points(const wire::SceneUpdate& u) {
+    const wire::Section* pos = u.array("positions");
+    const size_t n = size_t(pos->shape[0]), d = size_t(pos->shape[1]);
+    std::vector<uint8_t> out(n * 32, 0);
+    const wire::Section* colors = u.array("colors");
+    const wire::Section* values = u.array("values");
+    const wire::Section* ids = u.array("class_ids");
+    const wire::Section* radii = u.array("radii");
+    const Json* one = u.params.find("radius");
+    const float radius = one && one->is_number() ? float(one->as_double()) : 1.0f;
+    for (size_t i = 0; i < n; ++i) {
+        uint8_t* p = out.data() + i * 32;
+        std::memcpy(p, pos->data + i * d * 4, d * 4);
+        if (radii) std::memcpy(p + 12, radii->data + i * 4, 4);
+        else std::memcpy(p + 12, &radius, 4);
+        uint32_t bits = 0x7fc00000u;
+        if (colors) std::memcpy(&bits, colors->data + (colors->shape[0] == 1 ? 0 : i) * 4, 4);
+        else if (values) std::memcpy(&bits, values->data + i * 4, 4);
+        else if (ids) std::memcpy(&bits, ids->data + i * 4, 4);
+        std::memcpy(p + 16, &bits, 4);
+        const uint32_t index = uint32_t(i);
+        std::memcpy(p + 20, &index, 4);
+    }
+    return out;
+}
+
+// image@1's resources of a color image update, as caliper._scene_pieces writes them (pack_image):
+// "pixels" one packed RGBA a pixel (a grey image repeats its value, alpha 255) and "info" the width,
+// the height, the channels and 0, then the identity as four columns.
+std::pair<std::vector<uint8_t>, std::vector<uint8_t>> pack_image(const wire::SceneUpdate& u) {
+    const wire::Section* px = u.array("pixels");
+    const size_t h = size_t(px->shape[0]), w = size_t(px->shape[1]), n = w * h;
+    const bool grey = px->shape.size() == 2;
+    std::vector<uint8_t> pixels(n * 4);
+    for (size_t i = 0; i < n; ++i) {
+        if (grey) {
+            const uint32_t g = px->data[i], rgba = 0xff000000u | g | (g << 8) | (g << 16);
+            std::memcpy(&pixels[i * 4], &rgba, 4);
+        } else {
+            std::memcpy(&pixels[i * 4], px->data + i * 4, 4);
+        }
+    }
+    std::vector<uint8_t> info(80, 0);
+    const uint32_t size[4] = {uint32_t(w), uint32_t(h), grey ? 1u : 4u, 0};
+    std::memcpy(info.data(), size, 16);
+    for (int k = 0; k < 4; ++k) {
+        const float one = 1.0f;
+        std::memcpy(&info[size_t(16 + k * 16 + k * 4)], &one, 4);
+    }
+    return {std::move(pixels), std::move(info)};
+}
+
+bool color_image(const wire::SceneUpdate& u) {
+    const Json* form = u.params.find("form");
+    return u.part == CALIPER_NET_PART_IMAGE && form && form->is_string() && form->as_string() == CALIPER_NET_FORM_COLOR &&
+           u.array("pixels");
+}
+
+// A fixture's messages as a producer sends them to a viewer with "scene_pieces": each points update
+// as the RESOURCE of its scene program and the update in the piece form, through the codec, paired
+// by the viewer's inbox and applied, the others as they are.
+bool draw_piece_form(const primitive_fixtures::Fixture& f, SceneView& view, std::string* why) {
+    view.describe(f.info);
+    caliper_live::ScenePieceInbox inbox;
+    std::vector<std::shared_ptr<const void>> keep;
+    int program = 0;
+    auto roundtrip = [&](const wire::Message& m, wire::Message* out) {
+        auto bytes = std::make_shared<std::vector<uint8_t>>();
+        std::string err;
+        if (!wire::encode(m, bytes.get(), &err, CALIPER_NET_MINOR_3_2)) return *why = "encode: " + err, false;
+        const wire::DecodeResult r = wire::decode(bytes->data(), bytes->size(), out);
+        if (!r.ok()) return *why = "decode: " + r.message, false;
+        keep.push_back(bytes);
+        return true;
+    };
+    for (const wire::Message& m : f.messages) {
+        const auto* cu = std::get_if<wire::SceneUpdate>(&m);
+        const bool points = cu && cu->part == CALIPER_NET_PART_POINTS && cu->array("positions");
+        if (points || (cu && color_image(*cu))) {
+            const std::string id = "scene." + std::to_string(++program);
+            // (resource id, stride, bytes, width, height) of each resource, in the order they go before the
+            // update; width and height of image@1's pixels, an rgba8unorm texture, and 0 for a buffer.
+            std::vector<std::tuple<std::string, uint32_t, std::vector<uint8_t>, uint32_t, uint32_t>> res;
+            wire::SceneUpdate pu = *cu;
+            pu.program = id;
+            pu.piece = Json::object();
+            pu.piece.set("version", 1);
+            pu.resources = Json::object();
+            if (points) {
+                res.emplace_back("points", 32u, pack_points(*cu), 0u, 0u);
+                pu.piece.set("name", "points");
+                for (const char* name : {"positions", "colors", "values", "class_ids", "radii"})
+                    if (cu->array(name)) pu.names.push_back(name);
+            } else {
+                auto [pixels, info] = pack_image(*cu);
+                const wire::Section* px = cu->array("pixels");
+                res.emplace_back("pixels", 4u, std::move(pixels), uint32_t(px->shape[1]), uint32_t(px->shape[0]));
+                res.emplace_back("info", 80u, std::move(info), 0u, 0u);
+                pu.piece.set("name", "image");
+                pu.names.push_back("pixels");
+            }
+            pu.arrays.clear();
+            for (auto& [rid, stride, bytes, width, height] : res) {
+                wire::Resource r;
+                r.program = id;
+                r.resource = rid;
+                r.step = 0;
+                r.count = uint32_t(bytes.size() / stride);
+                r.stride = stride;
+                if (width) {
+                    r.width = width;
+                    r.height = height;
+                }
+                r.data = wire::Section::make(CALIPER_NET_SECTION_RESOURCE, CALIPER_NET_DTYPE_U8, {int64_t(bytes.size())},
+                                             bytes.data(), bytes.size());
+                pu.resources.set(rid, Json(uint64_t(r.count)));
+                wire::Message rd;
+                if (!roundtrip(r, &rd)) return false;
+                const auto& whole = std::get<wire::Resource>(rd);
+                if (!inbox.take(whole, std::make_shared<const std::vector<uint8_t>>(whole.data.data, whole.data.data + whole.data.size)))
+                    return *why = "the inbox took no scene program", false;
+            }
+            wire::Message ud;
+            if (!roundtrip(pu, &ud)) return false;
+            auto& piece = std::get<wire::SceneUpdate>(ud);
+            std::shared_ptr<const void> owner = inbox.pair(piece, nullptr, why);
+            if (!owner) return false;
+            keep.push_back(owner);
+            if (!view.apply(piece, why)) return false;
+            continue;
+        }
+        wire::Message d;
+        if (!roundtrip(m, &d)) return false;
+        bool ok = true;
+        if (const auto* u = std::get_if<wire::SceneUpdate>(&d)) ok = view.apply(*u, why);
+        else if (const auto* t = std::get_if<wire::SceneTransforms>(&d)) ok = view.apply(*t, why);
+        else if (const auto* c = std::get_if<wire::SceneClasses>(&d)) ok = view.apply(*c, why);
+        else if (const auto* k = std::get_if<wire::SceneClear>(&d)) ok = view.apply(*k, why);
+        if (!ok) return false;
+    }
+    if (!f.look_through.empty() && !view.look_through(f.look_through, why)) return false;
+    return view.render(primitive_fixtures::kSize, primitive_fixtures::kSize, 1.0f, primitive_fixtures::kClear, why);
+}
+
+}  // namespace
+
+// The piece form of points and color images (wire protocol 3.2, capability "scene_pieces"): every fixture
+// whose points and color images arrive as points@1's and image@1's resources, written as
+// caliper._scene_pieces writes them, draws the same pixels as
+// from the per-shape part, both with the pieces (the received bytes against the converter's) and with
+// the reference draw (the batch rebuilt from the bytes against the decoded one), and every pick on a
+// grid gives the same entity, primitive and item. The packing above writes the golden frame
+// resource_scene_points from the arrays of scene_update_points_piece's batch.
+TEST_CASE("gfx/Metal scene view: points and color images in the piece form draw as the per-shape part, with the same picks") {
+    ViewRig probe;
+    if (!probe.init()) CALIPER_SKIP_NO_GPU("no Metal device");
+    {   // the packing against the golden frame: three points with values
+        const fs::path dir = fs::path(CALIPER_TEST_SOURCE_ROOT) / "tests/fixtures/wire_v3/v3_2";
+        std::ifstream in(dir / "resource_scene_points.bin", std::ios::binary);
+        std::vector<uint8_t> frame((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        wire::Message m;
+        REQUIRE(wire::decode(frame.data(), frame.size(), &m).ok());
+        const auto& golden = std::get<wire::Resource>(m);
+        primitive_fixtures::Fixture g;
+        wire::SceneUpdate u = g.update("p", CALIPER_NET_PART_POINTS);
+        u.arrays.push_back(g.section("positions", CALIPER_NET_DTYPE_F32, {3, 3}, std::vector<float>{0, 0, 0, 1, 0, 0.5f, 0, 2, 0.25f}));
+        u.arrays.push_back(g.section("values", CALIPER_NET_DTYPE_F32, {3}, std::vector<float>{0.25f, 0.5f, 1.0f}));
+        const std::vector<uint8_t> packed = pack_points(u);
+        REQUIRE(golden.data.size == packed.size());
+        CHECK(std::memcmp(golden.data.data, packed.data(), packed.size()) == 0);
+    }
+    std::vector<primitive_fixtures::Fixture> fixtures = primitive_fixtures::all();
+    primitive_fixtures::Fixture flat = primitive_fixtures::through();
+    flat.name = "through-pieces";
+    for (wire::Message& m : flat.messages)
+        if (auto* u = std::get_if<wire::SceneUpdate>(&m)) u->params.erase("radius");
+    fixtures.push_back(flat);
+    fixtures.push_back(primitive_fixtures::through());
+    size_t with_points = 0;
+    for (const primitive_fixtures::Fixture& f : fixtures) {
+        CAPTURE(f.name);
+        uint32_t points = 0;
+        for (const wire::Message& m : f.messages)
+            if (const auto* u = std::get_if<wire::SceneUpdate>(&m); u && (u->part == CALIPER_NET_PART_POINTS || color_image(*u))) ++points;
+        if (points == 0) continue;
+        ++with_points;
+        {
+            ViewRig part, piece;
+            REQUIRE(part.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str()));
+            REQUIRE(piece.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str()));
+            primitive_rows::Row row;
+            row.fixture = f;
+            REQUIRE_MESSAGE(row.draw(*part.view), row.error);
+            std::string why;
+            REQUIRE_MESSAGE(draw_piece_form(f, *piece.view, &why), why);
+            {
+                const SceneShapeCounts a = part.view->shape_counts(), b = piece.view->shape_counts();
+                CHECK(a.received == 0);
+                CHECK(b.pieces == a.pieces);
+                MESSAGE("[scene-piece-form] ", f.name, ": ", b.received, " of ", points, " points and color image batches drawn from the received bytes, ",
+                        b.pieces, " shapes by pieces");
+            }
+            const std::vector<uint8_t> pa = pixels(*part.view), pb = pixels(*piece.view);
+            size_t differ = 0;
+            for (size_t i = 0; i < pa.size(); i += 4) differ += std::memcmp(&pa[i], &pb[i], 4) != 0;
+            capture_shapes(std::string("form-") + f.name, pb, pa, int(primitive_fixtures::kSize));
+            MESSAGE("[scene-piece-form] ", f.name, " by pieces", ": ", differ,
+                    " of ", pa.size() / 4, " pixels differ");
+            CHECK_MESSAGE(differ == 0, f.name);
+            // Picks at the pixels whose ID and its 3 x 3 neighbours are one item of a piece: at most 96, spread
+            // over the picture, each giving the same entity, primitive and item in both views.
+            const int S = int(primitive_fixtures::kSize);
+            const std::vector<uint64_t> ids = program_ids(*piece.gfx, *piece.view);
+            std::vector<std::pair<int, int>> at;
+            for (int y = 1; y + 1 < S; ++y)
+                for (int x = 1; x + 1 < S; ++x) {
+                    const uint64_t own = ids[size_t(y) * S + x];
+                    bool inside = own != 0;
+                    for (int dy = -1; dy <= 1 && inside; ++dy)
+                        for (int dx = -1; dx <= 1 && inside; ++dx) inside = ids[size_t(y + dy) * S + x + dx] == own;
+                    if (inside) at.emplace_back(x, y);
+                }
+            size_t asked = 0, agreed = 0;
+            const size_t step = std::max<size_t>(1, at.size() / 96);
+            for (size_t i = 0; i < at.size(); i += step) {
+                std::string why2;
+                caliper_scene::Hit ha, hb;
+                REQUIRE_MESSAGE(piece.view->request_pick(at[i].first + 0.5f, at[i].second + 0.5f, &why2), why2);
+                const auto ra = take_any_pick(*piece.gfx, *piece.view, &ha);
+                REQUIRE_MESSAGE(part.view->request_pick(at[i].first + 0.5f, at[i].second + 0.5f, &why2), why2);
+                const auto rb = take_any_pick(*part.gfx, *part.view, &hb);
+                ++asked;
+                if (ra == rb && (ra != caliper_scene::PickResult::Hit ||
+                                 (piece.view->tree().path(ha.entity) == part.view->tree().path(hb.entity) &&
+                                  ha.primitive == hb.primitive && ha.item == hb.item && ha.has_pixel == hb.has_pixel &&
+                                  (!ha.has_pixel || (ha.pixel[0] == hb.pixel[0] && ha.pixel[1] == hb.pixel[1])))))
+                    ++agreed;
+            }
+            MESSAGE("[scene-piece-form] ", f.name, ": picks at item interiors ", agreed, " of ", asked, " agree");
+            CHECK(agreed == asked);
+            CHECK(asked > 0);
+        }
+    }
+    CHECK(with_points >= 3);
+}

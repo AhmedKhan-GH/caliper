@@ -301,7 +301,10 @@ const EntityScene& spec_scene_content(const SpecScene& scene);
 // written by the last call. The scene's bounds are the data box, so that the fit frames it. With
 // walls, the three walls of the box away from the starting camera, with grid lines at round
 // numbers of the data, go to "spec-box/walls".
+//
+// A surface uses surface@1 over its grid and data box. Lines that `paths` names use path@1
+// over their vertices. The scene tree keeps their bounds and label metadata.
 void apply_entity_scene(caliper_live_views::SceneView& view, const EntityScene& scene,
-                        std::vector<std::string>* drawn);
+                        std::vector<std::string>* drawn, const std::vector<std::string>* paths = nullptr);
 
 }  // namespace caliper_host

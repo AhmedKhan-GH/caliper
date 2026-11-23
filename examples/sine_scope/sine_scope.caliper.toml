@@ -6,7 +6,7 @@ summary = "Tutorial applet: a tiny MLP learns sin(x) live — loss curve, predic
 tag     = "Demo"
 
 [compat]
-abi_epoch = 2
+abi_epoch = 3
 min_host  = "0.6.0"
 
 [services]

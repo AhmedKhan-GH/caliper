@@ -27,7 +27,6 @@ struct SceneTransforms;
 struct SceneClasses;
 }  // namespace caliper_net::wire
 namespace caliper_scene {
-class StageSource;
 }  // namespace caliper_scene
 namespace caliper_draw {
 class DrawFeed;
@@ -115,10 +114,6 @@ struct SceneRectOptions {
     // The panel's programs (draw/draw_host.h), which the view draws after the scene, picks
     // through its ID target and labels with their text tables; null: none.
     caliper_draw::DrawFeed* draw_feed = nullptr;
-    // The panel's stages (scene/stage_cache.h), or null for the built-in programs, and a line that
-    // the picture shows at its bottom, such as a stage's refusal with its line and column.
-    caliper_scene::StageSource* stages = nullptr;
-    std::string stage_message;
 };
 
 // A scene view as a camera press drives it (camera_drag.h): an orbit, or a pan of a picture
@@ -132,6 +127,13 @@ struct ScenePress {
     State state() const;
     void restore(const State& s);
     void move(float dx, float dy);
+};
+
+// A label that the overlays drew over the scene: its text and the box of the text and its shadow,
+// in screen pixels.
+struct DrawnLabel {
+    std::string text;
+    float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
 };
 
 // What a scene drawn into a rectangle keeps between frames: the gesture in progress, a click's
@@ -164,6 +166,8 @@ struct SceneRectState {
     std::string program_detail;   // the programs' hit, "" for none
     float program_depth = 1.0f;
     float rect[4] = {0, 0, 0, 0};   // where the rectangle was drawn last: x, y, width, height in points
+    // The labels drawn at the last draw, for a test that compares them as text apart from the picture.
+    std::vector<DrawnLabel> labels;
 };
 
 // Asks for a pick at (u, v), each from 0 to 1 across the rectangle, at the next draw, as if the

@@ -92,11 +92,11 @@ TEST_CASE("every command of the table says what it does, and the classes agree w
         CHECK(cmd(name).effect == CommandEffect::change);
     for (const char* name : {"state.get", "selection.get", "cursor.get", "camera.get"})
         CHECK(cmd(name).effect == CommandEffect::read);
-    // design/gpu-programs.md: stages and programs are edits of the open spec,
+    // design/gpu-programs.md: programs are edits of the open spec,
     // and an intervention acts on the running script.
-    for (const char* name : {"stage.set", "stage.remove", "program.create", "program.patch", "program.remove"})
+    for (const char* name : {"program.create", "program.patch", "program.remove"})
         CHECK(cmd(name).effect == CommandEffect::edit);
-    for (const char* name : {"stage.check", "program.status", "piece.check", "piece.list", "piece.show", "program.read",
+    for (const char* name : {"program.status", "piece.check", "piece.list", "piece.show", "program.read",
                              "intervene.points", "intervene.list"})
         CHECK(cmd(name).effect == CommandEffect::read);
     // design/programmable-graphics.md: the piece commands that write the

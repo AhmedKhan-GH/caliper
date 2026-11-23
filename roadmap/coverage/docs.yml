@@ -98,7 +98,7 @@ entries:
   ids:
   - COR-03
 - page: docs/applets/services/service-catalog.md#service-ids
-  item: The 19 service ids, their purpose, page and threading.
+  item: The 13 service ids, their purpose, page and threading.
   ids:
   - COR-03
 - page: docs/applets/services/service-catalog.md#companion-types
@@ -152,48 +152,6 @@ entries:
   ids:
   - REN-08
   - REN-64
-- page: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1-instanced-points
-  item: caliper.geometry.v1 draws instanced points in place from device memory into an offscreen view.
-  ids:
-  - REN-04
-- page: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1_1-general-primitives
-  item: caliper.geometry.v1_1 adds points, lines and triangles, depth views and one atomic gated frame.
-  ids:
-  - REN-05
-- page: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1_2-textured-meshes
-  item: caliper.geometry.v1_2 adds textured meshes with the COLOR_TEXTURE colour mode.
-  ids:
-  - REN-06
-- page: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1_3-instanced-transforms
-  item: caliper.geometry.v1_3 adds instanced transforms.
-  ids:
-  - REN-07
-- page: docs/development/vulkan-and-cuda.md#geometry-backend
-  item: Per-backend notes for the geometry service.
-  ids:
-  - REN-04
-- page: docs/applets/services/caliper-geometry-v1.md#c-sugar
-  item: C++ sugar over the geometry service.
-  ids:
-  - REN-04
-  - COR-51
-- page: docs/applets/services/caliper-geometry-v1.md#learned-surface-example
-  item: Worked example of a learned surface in three draws.
-  ids:
-  - REN-05
-- page: docs/applets/services/caliper-export-v1.md#terminal-sink
-  item: caliper.export.v1 re-renders a submitted draw list offscreen at any resolution and writes a pixel-exact
-    PNG with a JSON provenance sidecar, and a frame sequence.
-  ids:
-  - REN-65
-- page: docs/applets/services/caliper-export-v1.md#caliperexportv1_1-error-reporting
-  item: caliper.export.v1_1 adds last_error().
-  ids:
-  - REN-65
-- page: docs/applets/services/caliper-export-v1.md#figure-and-clip-example
-  item: Worked shape for a 4K figure and a recorded clip.
-  ids:
-  - REN-65
 - page: docs/applets/services/caliper-artifacts-v1.md#semantics
   item: caliper.artifacts.v1 is a content-addressed, deduplicated, lineage-tracked store of checkpoints
     and exports.
@@ -219,17 +177,6 @@ entries:
   ids:
   - COR-13
   - INT-27
-- page: docs/applets/in-tree-applets.md#fieldscope
-  item: FieldScope is a charged-particle field simulator, a particle-in-cell plasma with 200,000 particles,
-    drawn zero-copy.
-  ids:
-  - COR-13
-  - REN-70
-- page: docs/applets/in-tree-applets.md#flowscope
-  item: FlowScope drives a flow field of one million particles drawn in place through the geometry service.
-  ids:
-  - COR-13
-  - REN-71
 - page: docs/applets/in-tree-applets.md#gptscope
   item: GPTScope trains a character-level GPT live and shows it in seven windows, with ThoughtSpace as
     a 3-D residual-stream constellation.
@@ -237,38 +184,11 @@ entries:
   - INT-01
   - INT-02
   - INT-03
-- page: docs/applets/in-tree-applets.md#instancescope
-  item: InstanceScope draws a field of procedural gems with one instanced draw call and no copies of the
-    mesh.
-  ids:
-  - COR-13
-  - REN-07
-  - REN-72
-- page: docs/applets/in-tree-applets.md#meshscope
-  item: MeshScope learns a 2-D target surface live, drawn as lit indexed triangles, with figure and 10-second
-    recording export.
-  ids:
-  - COR-13
-  - REN-05
-  - REN-73
 - page: docs/applets/in-tree-applets.md#pulsescope
   item: PulseScope draws one strip chart per telemetry channel of this machine from caliper.feed.v1.
   ids:
   - COR-13
   - STR-42
-- page: docs/applets/in-tree-applets.md#sculptscope
-  item: SculptScope trains a small MLP to turn latent codes into a 3-D shape, with the last layer writing
-    the buffer the GPU draws.
-  ids:
-  - COR-13
-  - REN-74
-- page: docs/applets/in-tree-applets.md#twinscope
-  item: TwinScope runs a synthetic heat twin on a UV-mapped housing and shows physics and belief side
-    by side with a four-rung fallback ladder.
-  ids:
-  - COR-13
-  - REN-06
-  - REN-75
 - page: docs/applets/in-tree-applets.md#tutorial-applets
   item: Hello and SineScope are the tutorial applets under examples/.
   ids:
@@ -277,10 +197,6 @@ entries:
   item: examples/embed_host is a second host of the core in a bare native window, with an offscreen mode.
   ids:
   - EMB-07
-- page: docs/applets/in-tree-applets.md#archived-applets
-  item: Archived applets under applets/legacy are skipped by the default build.
-  ids:
-  - COR-13
 - page: docs/python/routes-and-inspection.md#routing
   item: 'A view call is offered to every open route: the live session, the in-process core and the network
     server.'
@@ -932,7 +848,7 @@ entries:
   ids:
   - COR-49
 - page: docs/applets/applet-contract.md
-  item: The frozen epoch 2 ABI header.
+  item: The frozen epoch 3 ABI header.
   ids:
   - COR-02
 - page: docs/reference/folders-and-environment.md#app-data-folder
@@ -1241,11 +1157,6 @@ entries:
   - EMB-02
   - EMB-04
   - REN-69
-- page: docs/applets/rendering.md#geometry-path
-  item: The geometry path.
-  ids:
-  - REN-04
-  - REN-07
 - page: docs/applets/rendering.md#pixel-space-contract
   item: The pixel-space contract.
   ids:
@@ -1495,7 +1406,7 @@ entries:
   - AGT-02
   - SPC-51
 - page: docs/agents/pieces.md#piece-commands
-  item: "Stages stay unchanged until Graphics Consolidation removes them."
+  item: "Graphics Consolidation replaces stage hooks with library pieces."
   ids:
   - SPC-14
 - page: docs/agents/pieces.md#program-status-and-events
@@ -1504,7 +1415,7 @@ entries:
   - SPC-14
   - SPC-05
 - page: docs/agents/pieces.md#piece-sources
-  item: "The built-in library holds the lib modules and points@1, which matches the built-in draw."
+  item: "The library supplies versioned scene pieces and shared shader modules."
   ids:
   - REN-80
 - page: docs/development/testing.md#draw-parity
@@ -1555,8 +1466,8 @@ entries:
   item: "A program declares its WGSL source, its read-only inputs, one output and its limits."
   ids:
   - SPC-14
-- page: docs/agents/gpu-programs.md#stages
-  item: "A stage replaces one function of the draw of a scene entity."
+- page: docs/builder/spec-version-1.md#old-stage-tables
+  item: "Old stage tables require a replacement piece."
   ids:
   - SPC-14
 - page: docs/agents/gpu-programs.md#sandbox-rules
@@ -1667,11 +1578,62 @@ entries:
   item: "The acceptance test of programmable graphics."
   ids:
   - REN-77
-- page: docs/roadmap/milestones.md#later-milestones
-  item: "The move of every built-in shape and of the surface and path operators onto library pieces, and the removal of the per-shape drawing code."
+- page: docs/roadmap/milestones.md#graphics-consolidation
+  item: "Library scene pieces, their comparison tests, and the removal of the built-in draw route."
   ids:
   - REN-84
   - REN-85
   - REN-86
   - REN-87
   - REN-88
+
+- page: docs/agents/pieces.md#piece-sources
+  item: The library holds pieces for scene shapes, image kinds, the surface and path operators, and camera frustums.
+  ids:
+  - REN-80
+  - REN-84
+  - REN-85
+  - REN-86
+  - REN-87
+  - REN-89
+
+- page: docs/agents/pieces.md#resources
+  item: Pieces accept narrow element types and typed textures with a size for each version.
+  ids:
+  - REN-90
+
+- page: docs/agents/pieces.md#draw-half
+  item: A draw pass supports indexed draws and optional inputs.
+  ids:
+  - REN-91
+
+- page: docs/reference/wire-protocol-3-2.md#resource-parts
+  item: A resource version travels in parts and becomes available after complete assembly.
+  ids:
+  - STR-56
+
+- page: docs/reference/wire-protocol-3-2.md#piece-form
+  item: A scene batch travels as a piece instance and its typed resources.
+  ids:
+  - STR-57
+
+- page: docs/development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions
+  item: ABI epoch 3 removes the geometry and export services and their demo applets.
+  ids:
+  - COR-25
+  - REN-04
+  - REN-05
+  - REN-06
+  - REN-07
+  - REN-65
+  - REN-70
+  - REN-71
+  - REN-72
+  - REN-73
+  - REN-74
+  - REN-75
+
+- page: docs/agents/http-api.md
+  item: The browser dashboard displays scene programs, named series, control states, and the full layout.
+  ids:
+  - EMB-30

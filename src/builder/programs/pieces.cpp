@@ -382,6 +382,7 @@ std::string pass_json(const spec::DrawPass& p) {
     if (p.blend) o.str("blend", spec::draw_blend_name(*p.blend));
     if (p.depth) o.str("depth", spec::draw_depth_name(*p.depth));
     if (p.pick) o.flag("pick", true);
+    if (p.indices) o.str("indices", *p.indices);
     return o.text();
 }
 
@@ -520,6 +521,7 @@ std::string canonical_manifest(const spec::Piece& piece) {
             if (in.rank_max != 8) o.uint("rank_max", in.rank_max);
             layout_into(o, in.layout);
             if (in.title) o.str("title", *in.title);
+            if (in.optional) o.flag("optional", true);
             list.push_back(o.text());
         }
         m.set("inputs", array_of(list));
@@ -548,6 +550,8 @@ std::string canonical_manifest(const spec::Piece& piece) {
             if (r.counted) o.flag("counted", true);
             if (r.width) o.uint("width", r.width);
             if (r.height) o.uint("height", r.height);
+            if (r.format) o.str("format", *r.format);
+            if (r.texels) o.uint("texels", *r.texels);
             if (!r.publish) o.flag("publish", false);
             if (r.clear) o.flag("clear", true);
             if (r.keep) o.uint("keep", *r.keep);
@@ -621,6 +625,8 @@ std::string canonical_manifest(const spec::Piece& piece) {
             if (d.text->string != "string") t.str("string", d.text->string);
             if (d.text->priority) t.str("priority", *d.text->priority);
             t.set("strings", strings(d.text->strings));
+            if (d.text->strings_from) t.str("strings_from", *d.text->strings_from);
+            if (d.text->align != spec::TextAlign::placed) t.str("align", spec::text_align_name(d.text->align));
             o.set("text", t.text());
         }
         if (d.frame_ms) o.num("frame_ms", *d.frame_ms);

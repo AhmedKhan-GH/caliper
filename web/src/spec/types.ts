@@ -2,12 +2,27 @@
 // as far as the spec page reads it, and the result of the panel.data command
 // (src/builder/include/caliper_builder/session/panel_data.h).
 
-export type Primitive = 'series' | 'heatmap' | 'points' | 'histogram' | 'table' | 'image' | 'text';
+export type Primitive = 'series' | 'heatmap' | 'points' | 'histogram' | 'table' | 'image' | 'text' | 'scene';
 
-/** A layout node: a panel id, a split or tabs. */
-export type LayoutNode = string | SplitNode | TabsNode;
-export interface SplitNode { split: 'horizontal' | 'vertical'; ratio?: number; children: LayoutNode[]; title?: string }
+/**
+ * A layout node: a panel or control id, a leaf table { panel, min } (spec
+ * version 1, min in characters and lines of the UI face), a split or tabs.
+ */
+export type LayoutNode = string | LeafNode | SplitNode | TabsNode;
+export interface LeafNode { panel: string; min?: [number, number] }
+export interface SplitNode { split: 'horizontal' | 'vertical'; ratio?: number; shares?: number[]; children: LayoutNode[]; title?: string }
 export interface TabsNode { tabs: LayoutNode[]; title?: string }
+
+/** The kinds of control (design/instruments.md, Control Table). */
+export type ControlKind = 'slider' | 'button' | 'range' | 'toggle' | 'picker' | 'text' | 'segmented' | 'readout' | 'transport';
+
+export interface SpecControl {
+  id: string;
+  kind: ControlKind;
+  title?: string;
+  bind?: string;
+  options?: Record<string, unknown>;
+}
 
 export interface SpecSource { id: string; catalog?: string; sql?: string; from?: string }
 
@@ -32,6 +47,7 @@ export interface Spec {
   applet: { id: string; title?: string; description?: string };
   source?: SpecSource[];
   panel?: SpecPanel[];
+  control?: SpecControl[];
   layout?: LayoutNode;
 }
 
@@ -39,9 +55,10 @@ export interface Spec {
 export interface WireArray { dtype: 'f32' | 'f64'; shape: number[]; base64: string }
 
 export interface SeriesLineData {
-  binding: string; row: number | null; count: number; last: number | null; x: WireArray; y: WireArray;
+  /** The binding, and the name the line draws under, as the app names it (spec_prepare.cpp, slot_name). */
+  binding: string; name: string; row: number | null; count: number; last: number | null; x: WireArray; y: WireArray;
 }
-export interface SeriesData { x_index: boolean; steps: number; lines: SeriesLineData[] }
+export interface SeriesData { x_index: boolean; x_name: string; steps: number; lines: SeriesLineData[] }
 export interface HeatmapData {
   source_rows: number; source_cols: number; stride_rows: number; stride_cols: number; values: WireArray;
 }
@@ -58,6 +75,8 @@ export interface TableData {
   columns: { name: string; type: string }[]; rows: Cell[][]; total_rows: number; truncated: boolean;
 }
 export interface TextData { value: Cell }
+/** A scene panel: its live scene's name, and the instances of pieces it draws (programs.ts, ViewerProgram). */
+export interface SceneData { scene: string | null; programs?: import('./programs.js').ViewerProgram[] }
 
 export interface PanelDataResult {
   panel: string;
@@ -67,7 +86,7 @@ export interface PanelDataResult {
   error: { code: string; message: string; where: string } | null;
   state: { kind: 'empty' | 'mismatch'; detail: string } | null;
   bounds: string[];
-  data: SeriesData | HeatmapData | ImageData | PointsData | HistogramData | TableData | TextData | null;
+  data: SeriesData | HeatmapData | ImageData | PointsData | HistogramData | TableData | TextData | SceneData | null;
 }
 
 /** Decodes a wire array into a Float32Array or Float64Array. */

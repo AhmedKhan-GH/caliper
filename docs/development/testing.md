@@ -19,7 +19,7 @@ Caliper's tests use doctest and run through ctest. The sources are in `tests/`, 
 | ABI | `test_abi.cpp` asserts that the ABI structs are standard layout with `struct_size` first, and checks the epoch and every published table. |
 | C compile check | `abi_c_check.c` includes every public header, newest first, in a C translation unit. A header that lacks its own includes cannot hide behind another one. |
 
-The same executable covers applet-side logic that needs neither torch nor a window, such as the instanced pose helper, the pulse ring and the export affordance. The build makes the `hello` applet and `throwing_applet` first, because the loader tests load them from the build folder.
+The same executable covers applet-side logic that needs neither torch nor a window, such as the pulse ring. The build makes the `hello` applet and `throwing_applet` first, because the loader tests load them from the build folder.
 
 ## Fixture Host
 
@@ -27,53 +27,42 @@ The same executable covers applet-side logic that needs neither torch nor a wind
 
 ## Pixel-Exact Graphics Suite
 
-`caliper_gfx_tests` (`tests/gfx/gfx_main.cpp`) checks the path from a tensor to a texture and the geometry path. It opens a hidden window, so it needs a graphical session. Every case reads the texture back from the GPU and compares it byte for byte with a CPU reference.
+`caliper_gfx_tests` (`tests/gfx/gfx_main.cpp`) checks the path from a tensor to a texture and the scene core. It opens a hidden window, so it needs a graphical session. Every case reads the texture back from the GPU and compares it byte for byte with a CPU reference.
 
 The suite runs on the backend that the platform offers:
 
-- Metal runs on macOS when a Metal device is present. It also covers the device paths, built from raw `MTLBuffer` allocations: the compute path for `f32` with a lookup table, the blit path for `u8`, stream-ordered updates, imported allocations and their gates, and the geometry service.
+- Metal runs on macOS when a Metal device is present. It also covers the device paths, built from raw `MTLBuffer` allocations: the compute path for `f32` with a lookup table, the blit path for `u8`, stream-ordered updates, and imported allocations.
 - Vulkan runs on Windows with the CPU-staged path. Cases that need CUDA hardware run only when a CUDA device is present.
 
 ### Renderer Core Rows
 
-The Metal run of the suite also holds the rows of the renderer core.
+The Metal rows check the graphics layer, colormap compute programs and library scene pieces.
+The layer rows compare offscreen color, ID and depth targets with CPU expectations.
+The colormap rows run `colormap_texture` from layer buffers and imported Metal buffers.
+Each output texel must equal `map_f32_to_rgba8`.
 
-- The `gfx/Metal layer` rows draw through the graphics layer (`src/host/gfx/`) on the renderer's own device and compare each readback byte for byte with a CPU reference.
-- The `gfx/Metal colormap` rows run every boundary range of the colormap by keys through the layer, with the generated `colormap_texture` as a dispatch into an `rgba8unorm` texture and with the vertex stage of `scene_points` drawing one point a pixel wide on each pixel centre. Each runs from a layer buffer and from an imported `MTLBuffer` reported in place with zero bytes copied, and every texel and pixel is compared byte for byte with `map_f32_to_rgba8`.
-- The `gfx/Metal scene` rows draw scenes that the scene core (`src/host/scene/`) compiles, through the layer's Metal backend and the generated programs. The one-entity row, square points on pixel centres, is byte-exact. The surface row is a 3-D scene at 512 x 512 with a colormapped height field of flat-shaded faces, a line strip, a disc marker and a box of segments. It is compared with a CPU rasterisation of the same compiled draws under three rules, because the GPU lights a flat face from the screen-space derivatives of its position and rounds the interpolation in its own way:
-    - Away from edges, where the pixel and its eight neighbours show the same face, line or point in the reference, a flat color and the clear color are exact.
-    - A pixel next to an edge, the edges between a mesh's faces included, may take the color that any primitive beside it gives at that pixel.
-    - A lit face may differ by 2 levels in each channel.
+The scene view rows draw protocol fixtures at 256 by 256 pixels.
+The fixtures cover arrows, boxes, edges, lit and textured meshes, cameras, images and camera-space annotations.
+Their expected images are saved PNGs in `tests/match_references/`.
+The tests retain the pixel tolerances for edges, interpolation, transparency and lighting.
+They do not execute the removed scene compiler.
 
-The scene view's primitive rows (`gfx/Metal scene view: every primitive ...`) draw one fixture per primitive of a scene from protocol 3.2 messages, at 256 x 256, and compare each with the CPU reference of `tests/scene/draw_reference.h`. The fixtures are in `tests/scene/primitive_fixtures.h`:
+The standalone suites compare `points@1`, `lines@1`, `arrows@1`, `path@1`, `boxes@1`, `mesh@1` and `surface@1` with saved images.
+Their metadata records original camera matrices and pick identities where the fixture needs them.
+A pick check reads the piece's ID target at the saved pixel and checks the expected item.
+`tests/match_references/README.md` describes the reference source and update procedure.
+The current renderer cannot write replacement references through these tests.
 
-- arrows;
-- boxes by class, a filled box and a chain of entity transforms;
-- index-pair edges with per-edge values and a clamped index, and per-vertex colors;
-- a lit and a textured mesh;
-- two posed cameras, with a color image on one image plane and a u16 depth image with its cloud;
-- the same rigs looked through one camera, letterboxed, with its pixel space over the picture;
-- a 2-D scene of color, grey, depth and segmentation images with boxes and arrows.
-
-The reference rasterises the draws that the scene core compiled, reading their parameter blocks from the draw list's arena and their arrays from the messages themselves, so the scene view's conversions are checked too. It repeats each vertex stage of the generated programs in f32, covers pixel centres by the top-left rule, tests depth and blends as the layer does, and shades colormapped values through `map_f32_to_rgba8`, class ids through the class table over the palette, and images by nearest or bilinear lookups. The rules are those above, widened as the parity rules of web geometry widen them:
-
-- A color from a lookup is exact away from edges. This covers a flat or per-item color, a colormapped value, a class color and a texel by nearest, whose texel boundaries count as edges.
-- A blended pixel, a bilinear sample and a color interpolated between a line's two ends may differ by 1 level.
-- A lit or flat-shaded face may differ by 2 levels.
-- An edge counts under a translucent layer too.
-
-Each row prints one sentence that says how many pixels differ from the reference and why, and none may be outside the rules. `web/test/scenes.spec.ts` runs the same fixtures through the scene self-test of the WebAssembly views (`web/wasm/src/scene_selftest.cpp`). The self-test compares the module's own WebGPU readback with the same reference compiled into the module, on a default and a compatibility-mode device.
-
-A pick row draws the pick pass of the same scene and checks the entity, the primitive and the item that the picker decodes from the ID window. `caliper_scene_tests` (`tests/scene/`), which is not in the `gfx` label, checks the scene core headless and submits its draw lists to the layer's recording backend. [Rendering](../applets/rendering.md) and [Scene Rendering](../applets/scene-rendering.md) describe both suites.
+`web/test/scenes.spec.ts` checks that every scene fixture draws pieces, produces nonclear pixels and has no notes.
+`web/test/draw_parity.spec.ts` compares the same scenes between the app and browser, including color, IDs and picks.
+`caliper_scene_tests` checks the CPU scene model, camera, labels and frame-pick decode without a GPU.
+[Scene Rendering](../applets/scene-rendering.md) describes the shared view code.
 
 ### Timing Rows
 
-The suite also has timing rows, which print numbers and prove nothing by themselves.
+The suite also has a timing row on Vulkan with CUDA for the update cost by size and the cost of a create and release cycle against an update, which prints numbers and proves nothing by itself.
 
-- On Vulkan with CUDA, the update cost by size and the cost of a create and release cycle against an update.
-- On Metal, `gfx/metal geometry: timing — draws by count` prints the call, completion and GPU microseconds of one `draw_primitives` frame of 1,000 to 4,000,000 imported points and of 1 to 256 draw records. It also checks that no draw counted a copy.
-
-Run them with `-s` to see their messages. The timing rows of the layer and the scene core run only when asked, with `CALIPER_GFX_LAYER_BENCH=1` and `CALIPER_GFX_SCENE_BENCH=1` ([Graphics Layer](../applets/graphics-layer.md)). The migration of the renderer core compares them before and after each step, with the benchmarks in `python/bench/`.
+Run them with `-s` to see their messages. The layer timing rows run only when requested, with `CALIPER_GFX_LAYER_BENCH=1` ([Graphics Layer](../applets/graphics-layer.md)). The migration of the renderer core compares them before and after each step, with the benchmarks in `python/bench/`.
 
 ### Shader Tests
 
@@ -105,18 +94,19 @@ The browser rows, and `web/test/colormap.spec.ts`, which checks the TypeScript c
 
 ### Views Suite
 
-`caliper_gfx_views_tests` (`tests/gfx/gfx_points_view.mm`), also under the `gfx` label, holds the rows of the live views that an offscreen core draws, and the reference mode of the suite (`tests/gfx/gfx_reference.h`).
+`caliper_gfx_views_tests` (`tests/gfx/gfx_points_view.mm`) draws the points view through an offscreen core.
+It compares `points@1` with saved scene images in `tests/match_references/points_view/`.
+The cases cover 2-D lattices, point sizes, subpixel positions, colormaps, categorical colors, selections and 3-D depth cues.
+CPU, shared-storage and private-storage payloads use the same library piece.
 
-A migration step of the renderer core that promises unchanged pixels records, at its first commit and before any code moves, what the old path draws for every case. The record holds the hash of each readback, the path label, the copies of the update and the header text of the view, one line per case in a committed file under `tests/gfx/references/`. The commits that replace the path must reproduce it, and the run writes each readback as a PNG for a later run to compare pixel by pixel.
+A pixel with a uniform 3 by 3 reference neighborhood must keep that color.
+At an edge, it can differ by one level from a color in that neighborhood.
+Lattice center pixels also retain the CPU reference colors.
+The interaction rows compare hover, click, rectangle and lasso results between CPU and device payloads.
+They require a real pick and selection events, then compare the selected pictures.
 
-The 36 cases of the points view cover 2-D lattices of every point size class at four sub-pixel phases, every colormap with fixed and automatic ranges and NaN values, the categorical palette with labels outside 0 to 255, selections, single points, 3-D clouds of up to 4,000,000 points with the depth cues of the view, and the CPU, shared-storage and private-storage routes. Its rows are:
-
-- The record: the path label, copies and header of each case, and on lattices each point's centre pixel against the CPU reference color. The readback's hash equals the record's in every 2-D case and for the single 3-D point. In a 3-D cloud, whose old record came from hardware point sprites, the readback must instead be the CPU reference rasterisation.
-- The CPU reference rasterisation: every case, byte for byte, against a CPU repetition of the draws that the scene core compiled, read from the draw list's arena, with the size and fade of the depth cues and with the vertices snapped to 1/256 of a pixel as the rasteriser does.
-- The images of the old path, with `CALIPER_GFX_REFERENCE_IMAGES` naming a folder of them from a build of the first commit of the step. The row counts and lists the differing pixels of each case in one sentence. Every 2-D case and the single 3-D point must be identical. In a 3-D cloud every differing pixel must lie within 1/32 of a pixel, plus the 1/256 snap, of an edge of one of the CPU reference's squares drawn at or in front of it, and the row fails on any other. The same cases rasterised on the CPU with the float camera of the old view differ from the old images in exactly the same pixels, which shows that the arithmetic of the camera is not the cause.
-- The point sprites: a sprite of every whole and half size from 1.5 to 14 is the exact square on the Metal device. A sprite of a fractional size differs from it only within that bound of its edge, which is what the old path drew with the depth cues.
-- The uniform bytes: the fixture of the scene core (`src/host/scene/uniform_check.h`) hashes the same on the recording and Metal backends.
-- The timing row, with `CALIPER_GFX_POINTS_BENCH=1`: the CPU time of the view to compile and submit a redraw and the GPU time of the draw, at 100,000, 1,000,000 and 4,000,000 points.
+A separate point-sprite test checks the edge bounds of the old Metal sprite rasterizer.
+The optional `CALIPER_GFX_POINTS_BENCH=1` row measures redraw cost by point count.
 
 ### WebAssembly Views
 
@@ -124,7 +114,6 @@ The WebAssembly views of the browser draw through the WebGPU backend of the grap
 
 - A frame of compute dispatches, a buffer-to-texture copy, an indexed quad and instanced draws with an ID target, depth and blending goes through the layer with its draw program already released. Every target read back through its asynchronous readback equals the CPU's expectation byte for byte.
 - Two more frames check the refusals. The core refuses a draw that samples its own target, and a dispatch that WebGPU refuses is reported through the error scope of its submit.
-- The same self-test compiles the uniform fixture of the scene core and reports `uniforms=same` when its arena hashes as it does natively.
 - The same spec compares the fixed heatmaps and points, byte for byte, with a set of pictures saved from an earlier build, and the module itself compares every heatmap texture with `map_f32_to_rgba8`.
 
 `web/wasm/README.md` describes these checks.
@@ -133,14 +122,12 @@ The Playwright tests of the web package run in three projects of headless Chromi
 
 - `web/test/views.spec.ts` checks every kind of the element's own views against known data, the color of every cell, pixel and point included.
 - `web/test/edges.spec.ts` checks the color of every colormap edge case in both renderers.
-- `web/test/points3d.spec.ts` checks that the WebAssembly views and the Canvas 2D view draw the same 3-D box, default camera, depth cues and rotate toggle.
+- `web/test/points3d.spec.ts` checks the 3-D box, default camera, depth cues and rotate toggle in WebAssembly and Canvas 2D. Four WebGPU cases also compare the initial and replaced payload draws through `points@1`.
 - `web/test/renderer.spec.ts` and `web/test/fallback.spec.ts` check which renderer draws a view, with a stub of the loader of the WebAssembly views and without the loader.
 
-### Export and Hidden Windows
+### Hidden Windows
 
-`caliper_export_tests` checks `caliper.export.v1` in the same way. It drives the service as an embedder would and decodes the PNG that the service wrote. Its sidecar, atomic-write and sugar cases need no GPU.
-
-`caliper_gfx_tests` and `caliper_export_tests` open their windows hidden and never show or focus them. On macOS the test process also shows no Dock icon and no menu bar. The suites start GLFW through `tests/glfw_background.h`, which sets `GLFW_COCOA_MENUBAR` to false and sets the activation policy to `NSApplicationActivationPolicyProhibited` around `glfwInit()` (`src/host/background_process.h`). One case in each suite checks that the policy still holds.
+`caliper_gfx_tests` opens its window hidden and never shows or focuses it. On macOS the test process also shows no Dock icon and no menu bar. The suite starts GLFW through `tests/glfw_background.h`, which sets `GLFW_COCOA_MENUBAR` to false and sets the activation policy to `NSApplicationActivationPolicyProhibited` around `glfwInit()` (`src/host/background_process.h`). One case in the suite checks that the policy still holds.
 
 The app uses the same mechanism with `--hidden` or `CALIPER_HIDDEN=1` ([The hidden window](../reference/cli.md#hidden-window)). The ctest entry `caliper_cli_app_hidden` (`tests/test_api.cpp`) starts the real app this way with `--api`. It uses every endpoint of [Caliper API](../agents/http-api.md) and checks that a capture is a PNG of the hidden framebuffer. It then closes the app with SIGTERM and checks that no process, file or socket remains. Without a Metal device the entry is skipped.
 
@@ -180,7 +167,7 @@ Each checks the exact message and exit code 1, and that the run left at most the
 
 No test reads or writes your own app-data folder. ctest runs every entry with `CALIPER_DATA_DIR` on `test-app-data/` in the build folder and with `CALIPER_TEST_RUN=1`. The file that `caliper_offline_tests()` writes (`src/builder/cmake/CaliperOfflineTests.cmake`) sets both, so an entry cannot forget them. Some entries replace that folder with their own:
 
-- Every test binary that opens the stores uses `tests/app-data/<binary>`. These binaries are `caliper_tests`, `caliper_export_tests`, `caliper_embed_tests`, the live suites and `caliper_catalog_providers_tests`.
+- Every test binary that opens the stores uses `tests/app-data/<binary>`. These binaries are `caliper_tests`, `caliper_embed_tests`, the live suites and `caliper_catalog_providers_tests`.
 - Every command-line test has its own `CALIPER_DATA_DIR`.
 - Every test that starts the hidden app, `caliper shot` or a producer gives that process its own folder.
 
@@ -192,7 +179,7 @@ The app-data guard backs this up ([Folders and environment variables](../referen
 
 ## Applet and Adapter Tests
 
-`caliper_torch_tests` tests the torch adapter in `adapters/torch.hpp`. Five small executables test the learning and simulation code of single applets: `caliper_sculpt_tests`, `caliper_mesh_tests`, `caliper_em_pic_tests`, `caliper_surface_tests` and `caliper_twin_tests`. They link libtorch and exist only when torch is enabled, which keeps the torch link cost out of `caliper_tests`.
+`caliper_torch_tests` tests the torch adapter in `adapters/torch.hpp`. It links libtorch and exists only when torch is enabled, which keeps the torch link cost out of `caliper_tests`.
 
 ## Package and Boundary Tests
 
@@ -256,9 +243,9 @@ The check `python3 examples/python/hosted_runs_check.py` runs the same flow with
 
 ## GPU Programs Acceptance
 
-The ctest entry `caliper_gpu_programs_acceptance` (`tests/gpu_programs/driver.py`) is the GPU programs acceptance test. It starts the hidden app with no script and `caliper-mcp` as a child, and it runs `tests/gpu_programs/train.py`, a script whose only Caliper line is `caliper.watch(model, optimizer)`, as a managed run. The WGSL sources of the programs are the files `grid.wgsl`, `heat.wgsl`, `material.wgsl`, `writer.wgsl` and `slow.wgsl` beside it, and `tests/gpu_programs/transcript.jsonl` sends the steps through the MCP tools.
+The ctest entry `caliper_gpu_programs_acceptance` (`tests/gpu_programs/driver.py`) is the GPU programs acceptance test. It starts the hidden app with no script and `caliper-mcp` as a child, and it runs `tests/gpu_programs/train.py`, a script whose only Caliper line is `caliper.watch(model, optimizer)`, as a managed run. The WGSL sources of the programs are the files `grid.wgsl`, `heat.wgsl`, `writer.wgsl` and `slow.wgsl` beside it. The piece `grid_material` that the agent writes is the manifest `material_piece.json` with the files `material_derive.wgsl` and `material_draw.wgsl`. The file `tests/gpu_programs/transcript.jsonl` sends the steps through the MCP tools.
 
-The agent adds a geometry program over the weight `0.weight` and a pixels program over `2.weight`. The driver takes a capture of the empty scene, one with the geometry, one with the image panel and one with the material stage, and it compares them by counts of pixels, not by eye. The geometry must change at least 300 pixels of the empty scene. The material stage must give at least 50 yellow pixels in the lower left quarter of the frame, and at least ten times the count of the capture before it. A program that declares the model tensor writable must fail with `program.writes_input` and must not appear in `program.status`. A program over its `time_ms` must stop with a `program` event of change `stopped` and the code `program.over_time`, while the step of the run keeps growing. `program.status` must report a cadence `every` of at least 1, a last pass time and the memory in use. Then the test waits up to 90 seconds until the measured `overhead_share` of the geometry program reaches its target of 0.04, the budget of the cadence. A share above 0.04 after the wait gives a warning, and a share above 0.08 fails. The test does not assert a value of N.
+The agent adds a geometry program over the weight `0.weight` and a pixels program over `2.weight`. Then it writes the piece `grid_material`, whose derive half places a point for each of the first 512 values of `0.weight` where the geometry program places it, and whose draw half colors each point from orange to yellow by its value. Its first version has a typo in its draw half: `piece.update` must refuse it with `program.compile_failed` and a message that names `draw.wgsl`. The corrected version goes into the workspace, and `program.create` places it in the scene panel with `0.weight` bound. Both halves must compile, the derive half must run in the script and the draw half must draw a resource version. Both must stay inside their budgets: the instance must still run, with a cadence `every` of at least 1 and the memory of each half within its limit. The driver takes a capture of the empty scene, one with the geometry, one with the image panel and one with the piece, and it compares them by counts of pixels, not by eye. The geometry must change at least 300 pixels of the empty scene. The piece must give at least 50 yellow pixels in the lower left quarter of the frame, and at least ten times the count of the capture before it. A program that declares the model tensor writable must fail with `program.writes_input` and must not appear in `program.status`. A program over its `time_ms` must stop with a `program` event of change `stopped` and the code `program.over_time`, while the step of the run keeps growing. `program.status` must report a cadence `every` of at least 1, a last pass time and the memory in use. Then the test waits up to 90 seconds until the measured `overhead_share` of the geometry program reaches its target of 0.04, the budget of the cadence. A share above 0.04 after the wait gives a warning, and a share above 0.08 fails. The test does not assert a value of N.
 
 A toggle bound to `intervene:0` is clicked through `CALIPER_TEST_SPEC_UI`, which waits for files that the driver writes. The mean of five losses while the toggle is on must be above three times the mean before it, and the mean after its release must be below half of the mean while it was on. The driver takes the SHA-256 of the app, of `caliper-mcp` and of each file of the Python package before and after, and the lists must be equal. Last, no process that the driver started may be alive, by its pid. The test waits on events and published state, never for a fixed time.
 
@@ -276,9 +263,9 @@ Pieces have tests at several levels. Each refusal that [Pieces](../agents/pieces
 | Draw runtime | `caliper_gfx_draw_tests` | The draw half on the recording backend of the graphics layer: install, the order of the passes, a skipped pass, the checks before anything is made, a pass that does not compile, the layout of a version, the reset rules of the draw buffers, the stop after 30 slow frames, the late frames judged by their GPU time or three in a row, the heavy frames in a row, the frame whose time the backend no longer keeps, the stop after 5 s, the copy that a pick keeps of its frame's version, the draw memory, the decode of PROGRAM with the hash, and the draw host with its camera conflict (`src/host/draw/tests/test_draw_runtime.cpp`) |
 | Metal rows | `caliper_gfx_tests` | The cases named `gfx/Metal pieces` (`tests/gfx/gfx_pieces.cpp`). The field draws as the CPU reference of its fragment, the arcs draw instanced and additive with an ID for each arc and the bloom of their glow, a slow pass stops its program while the other goes on, a compute pass of the draw half feeds an instanced draw with state, reset and depth, and the scene view draws its programs after its scene |
 | Derive half | `caliper_producer_tests` | The derive half in the producer runtime on Metal: passes in order with the contents kept, clears and counters, read-only tensors, bounds, sizes, the watchdog and the timeout without a wait, a rebind and a texture |
-| Library piece | `caliper_points_match` | The piece `points@1` against the built-in points primitive on Metal, offscreen: the interior pixels equal, the edge pixels on either side, and 16 chosen picks that return the same items (`tests/points_match/`) |
+| Library piece | `caliper_points_match` | The piece `points@1` against saved Metal images and original pick identities, including the live points view depth cues (`tests/points_match/`) |
 | Host | `caliper_spec_runtime` | The `programs` cases: the item map gives the fields and the index of an item and refuses an item past the count, the text table gives a label at each valid anchor, and a piece in a scene panel is picked at its pixel, writes a select state and places its labels |
-| Python | `python/tests/test_programs_pieces.py` | The facade of the script: an instance installs, the derive half runs and publishes RESOURCE, a draw half relays to a viewer, the backlog of RESOURCE frames stays bounded, a viewer gets the versions of a pass whole or skips the pass, and a pass above 8 MiB stops the program with `program.resource_too_large` |
+| Python | `python/tests/test_programs_pieces.py` | The facade of the script: an instance installs, the derive half runs and publishes RESOURCE, a draw half relays to a viewer, the backlog of RESOURCE frames stays bounded, a viewer gets the first chunk of a pass with the pass or skips the pass, a version above 8 MiB goes in parts that come back whole, each part only while the viewer's queue has room, a piece that publishes 64 MiB at every pass keeps its overhead share, and a pass above 128 MiB per buffer, 256 MiB per texture or 512 MiB in total stops the program with `program.resource_too_large` |
 
 The wire frames have golden files and codec tests in all three languages, as [Wire Golden Frames](#wire-golden-frames) describes. The folder `tests/fixtures/wire_v3/v3_2` holds the frames of PROGRAM for an instance of a piece and of RESOURCE, and the invalid frames that each codec refuses.
 
@@ -313,13 +300,21 @@ The ctest entry `caliper_programmable_graphics_acceptance` (`tests/programmable_
 12. The `overhead_share` of each derive half is printed with its target of 0.02. A share above 0.02 gives a warning, and a share above 0.04 fails.
 13. After both runs stop, no process that the test started is alive, and the SHA-256 of the files has not changed.
 
-The driver waits on events and published state, never for a fixed time. The entry has the labels `programmable_graphics` and `acceptance` and a timeout of 900 seconds. It exits with code 77, which ctest reports as skipped, with the reason printed, when the app, Metal, torch, the native sender or the producer module is missing. The captures go to `tests/programmable_graphics-captures` in the build folder. The check `python3 examples/python/arc_tower_check.py` runs the same steps as one command with defaults. It prints each step as it passes and then the measured results, and it runs `caliper_points_match_tests`, the match of `points@1` with the built-in points on Metal, when the build folder holds it.
+The driver waits on events and published state, never for a fixed time. The entry has the labels `programmable_graphics` and `acceptance` and a timeout of 900 seconds. It exits with code 77, which ctest reports as skipped, with the reason printed, when the app, Metal, torch, the native sender or the producer module is missing. The captures go to `tests/programmable_graphics-captures` in the build folder. The check `python3 examples/python/arc_tower_check.py` runs the same steps as one command with defaults. It prints each step as it passes and then the measured results, and it runs `caliper_points_match_tests`, the match of `points@1` with saved Metal references, when the build folder holds it.
 
 ### Draw Parity
 
 The folder `tests/draw_parity/` compares the app and the browser module on the same frame. A fixture holds two instances, a field and a set of arcs, as PROGRAM frames and one RESOURCE frame for each, thus no training runs. `caliper_draw_parity_tests` checks what needs no GPU: the frames, the decode with the hash of the pin, the packed params, the refusals of the module, and an install of each program on the recording backend. `caliper_draw_parity_app` draws the fixture with the draw runtime of the app on Metal into a folder of the build. It exits with 77 and prints the reason when no Metal device exists.
 
 The browser side is `web/test/draw_parity.spec.ts`. It draws the same frames with the browser module in headless Chromium and compares the color and the ID targets with the files of the app. An interior pixel, which has one ID in its 3 by 3 neighborhood in both images, differs by at most 2 levels in each channel and has the same ID. The bloom of the glow target may differ by 3 levels. The pixels that differ at an edge and take neither side stay below 1 percent of the image. A second case sends the draw halves over a connection as PROGRAM and RESOURCE and checks that the scene view of the module draws them and refuses a bad one. The test runs in the macOS lane of CI with the browser on SwiftShader. It waits on a written frame and never on a fixed time.
+
+A second pixel test compares the whole Arc Tower dashboard, the app against the browser, on one recorded run in `tests/draw_parity/dashboard`. The folder holds the spec and the `panel.data` answer of every leaf, recorded once from a short seeded run, thus nothing trains in the test. The app's side is the tool `caliper_dashboard_parity_app` (`tests/draw_parity/dashboard_parity_app.cpp`), which ctest runs as `caliper_draw_parity_dashboard_app`. It draws the recording with the spec runtime of the app offscreen on Metal, and it exits with 77 without a Metal device. It also writes the rectangle of each scene panel and the labels that the panel drew over its programs, with their boxes. The browser side is `web/test/draw_parity_dashboard.spec.ts`, and it takes its picture at a frame at which every program draws the recorded step, in the same task as the frame of the module.
+
+The test applies the rules to each panel, control and tab strip on the rectangle of the app, and to the rest of the area. An interior pixel, which has one color in its 3 by 3 neighborhood in both pictures, differs by at most 2 levels in each channel. An edge pixel counts only where it takes neither side. In a program panel, a control, a tab strip and the rest, such pixels stay at or below 1 percent of the region, the rule of the program pictures. In a plot panel they stay at or below 4 percent, because the plot lines come from two rasterizers, ImPlot in the app and Canvas 2D in the page, and most pixels of each line are edge pixels that differ. The test prints the numbers of each region. The text is compared apart. The box of every string that the page draws is masked in both pictures, and so is the box of every label over a scene, from either side. Every leaf is on the rectangle of the app, the tab labels are the same, each panel title is at the place of the app, and the legend names and the toggle text match. Each scene draws on the rectangle of the app, with the same label strings, each in a box within 1 pixel of the box of the app.
+
+`web/test/spec-dashboard.spec.ts` checks the layout, the line names and colors and the control row of the Arc Tower against a mock of the app. `web/test/spec-programs.spec.ts` clicks an arc of the tower in the page. It checks the fields of the pick, the state that the `select` option of the panel writes in the page, the params that the grid gets, the highlight of the picked arc and that nothing goes to the app. It also checks that the programs give their labels, and that a `view_camera` of the panel starts the camera of the scene.
+
+The test `caliper_dashboard_viewer_acceptance` (`tests/programmable_graphics/viewer_driver.py`) runs the browser's dashboard viewer end to end. The hidden app runs a live run of the Arc Tower's script, with a workspace piece in one scene panel and an inline piece in another. The real spec page opens by the viewer link of the app in headless Chromium, with WebGPU and with SwiftShader. In the page, in the same task as each frame of the module, the test counts the pixels of each program panel, and both programs must be running. Then the app opens another spec, and the page must say that the app does not have the dashboard open. The test exits with 77 without Metal, torch, Node or the WebAssembly views.
 
 ## Instrument Building Acceptance
 
@@ -346,7 +341,7 @@ The check `python3 examples/python/instrument_building_check.py` runs the same f
 
 ## GPU Tests
 
-A suite that needs a GPU must not report success when it finds none. `tests/gpu_skip.h` provides the convention that the gfx, export, embed, live and torch suites share:
+A suite that needs a GPU must not report success when it finds none. `tests/gpu_skip.h` provides the convention that the gfx, embed, live and torch suites share:
 
 - A case with no GPU counts as skipped, prints why, and returns.
 - When any case is skipped for want of a GPU and none fails, the executable exits with code 77. `tests/CMakeLists.txt` registers 77 as `SKIP_RETURN_CODE`, so ctest shows the suite as skipped and not as passed.
@@ -363,7 +358,6 @@ ctest --test-dir cmake-build-release --output-on-failure
 A ctest label selects a group:
 
 - `gfx`: `caliper_gfx_tests`, `caliper_gfx_views_tests` and `caliper_shader_tests`.
-- `export`: `caliper_export_tests`.
 - `torch`: `caliper_torch_tests`.
 - `cli`: the command-line tests.
 - `shot`: the `caliper shot` runs.

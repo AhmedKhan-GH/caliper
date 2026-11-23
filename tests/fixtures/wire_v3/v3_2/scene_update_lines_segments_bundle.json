@@ -1,0 +1,59 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 376,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 352,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 112
+  },
+  "meta": {
+    "arrays": [
+      "positions"
+    ],
+    "color": [
+      160,
+      160,
+      160,
+      255
+    ],
+    "mode": "segments",
+    "part": "lines",
+    "path": "",
+    "piece": {
+      "name": "lines",
+      "version": 1
+    },
+    "program": "scene.111",
+    "resources": {
+      "info": 1,
+      "picks": 2,
+      "segments": 2,
+      "source_positions": 4
+    },
+    "seq": 1,
+    "stamp_ns": 81234567893323,
+    "static": true,
+    "stats": [
+      0.0,
+      0.0,
+      -1.0,
+      1.0,
+      -1.0,
+      1.0,
+      -2.0,
+      -2.0
+    ],
+    "sub": 2,
+    "view": "landscape",
+    "width": 1.0
+  },
+  "meta_offset": 24,
+  "name": "v3_2/scene_update_lines_segments_bundle",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "scene_update"
+}

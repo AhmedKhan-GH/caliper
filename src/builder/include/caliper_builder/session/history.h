@@ -37,22 +37,22 @@
 namespace caliper_builder {
 
 inline constexpr std::int64_t kDefaultLiveDepth = 64;
-inline constexpr std::uint64_t kHistoryBudgetBytes = std::uint64_t(512) << 20;
-// The most that one source keeps: a quarter of the budget, 128 MiB. A raw
+inline constexpr std::uint64_t kHistoryBudgetBytes = std::uint64_t(768) << 20;
+// The most that one source keeps is 128 MiB. A raw
 // activation of 512 by 4096 values (8 MiB a step) thus keeps 16 steps and
 // leaves the rest of the budget to the other sources; a reduce step before
 // the source's history point keeps more.
-inline constexpr std::uint64_t kHistorySourceBytes = kHistoryBudgetBytes / 4;
+inline constexpr std::uint64_t kHistorySourceBytes = std::uint64_t(128) << 20;
 
 // The kept versions of one published resource: `keep` of the piece's
 // resource, 256 when absent and at most 4,096.
 inline constexpr std::uint32_t kResourceKeepDefault = 256;
 inline constexpr std::uint32_t kResourceKeepMax = 4096;
-// All resources together keep at most half the budget, and one resource at
-// most kHistorySourceBytes; the sources share the rest. Over that half, the
+// All resources together keep at most 512 MiB. Sources share at least the
+// remaining 256 MiB. Over the resource limit, the
 // largest rings thin first, then rings drop their oldest versions down to
 // one each, and a version that still does not fit is not kept.
-inline constexpr std::uint64_t kHistoryResourceBytes = kHistoryBudgetBytes / 2;
+inline constexpr std::uint64_t kHistoryResourceBytes = spec::piece_limits::kPublishedBytesMax;
 // The resources that the history keeps for one program, as many as a piece
 // has, and for all programs together, as many as 16 programs of a producer
 // (CALIPER_NET_MAX_PROGRAMS) publish. A version of another resource is not kept.
@@ -75,6 +75,8 @@ struct ResourceVersion {
     std::uint32_t count = 0;                 // valid elements
     std::uint32_t stride = 0;                // bytes of one element
     std::uint32_t width = 0, height = 0;     // a texture's size; 0 for a buffer
+    std::string format;                      // a texture's format; empty for rgba8unorm or a buffer
+    std::optional<std::uint32_t> elements;   // a buffer of narrow elements: their count; count holds the words
     std::shared_ptr<const std::vector<std::uint8_t>> bytes;   // count * stride bytes, shared with readers
     // The history's number of the version, which differs for a version that
     // replaces another at the same step (append_resource() sets it).

@@ -23,6 +23,10 @@
 
 namespace caliper_scene {
 
+inline constexpr float kPointAttenMin = 0.5f;
+inline constexpr float kPointAttenMax = 2.0f;
+inline constexpr float kPointFadeFloor = 0.5f;
+
 inline constexpr double kOrbitFovY = 45.0 * kPi / 180.0;
 inline constexpr double kMaxElevation = 89.0 * kPi / 180.0;     // the bound the orbit keeps within
 

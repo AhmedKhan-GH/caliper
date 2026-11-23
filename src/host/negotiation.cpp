@@ -4,13 +4,7 @@
 #include <caliper/services/artifacts_v1.h>
 #include <caliper/services/data_v1.h>
 #include <caliper/services/device_v1.h>
-#include <caliper/services/export_v1.h>
-#include <caliper/services/export_v1_1.h>
 #include <caliper/services/feed_v1.h>
-#include <caliper/services/geometry_v1.h>
-#include <caliper/services/geometry_v1_1.h>
-#include <caliper/services/geometry_v1_2.h>
-#include <caliper/services/geometry_v1_3.h>
 #include <caliper/services/jobs_v1.h>
 #include <caliper/services/log_v1.h>
 #include <caliper/services/metrics_v1.h>
@@ -115,15 +109,9 @@ const std::set<std::string>& host_service_ids() {
         CALIPER_TENSOR_BRIDGE_V1,
         CALIPER_TENSOR_BRIDGE_V1_1,
         CALIPER_TENSOR_BRIDGE_V1_2,
-        CALIPER_GEOMETRY_V1,
-        CALIPER_GEOMETRY_V1_1,
-        CALIPER_GEOMETRY_V1_2,
-        CALIPER_GEOMETRY_V1_3,
         CALIPER_ARTIFACTS_V1,
         CALIPER_DATA_V1,
         CALIPER_FEED_V1,
-        CALIPER_EXPORT_V1,
-        CALIPER_EXPORT_V1_1,
     };
     return ids;
 }

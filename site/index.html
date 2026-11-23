@@ -1827,12 +1827,10 @@ vulkan_renderer.cpp:2410  VkResult err = vkQueuePresentKHR(queue_, &amp;pi);</ti
             <dt><a href="docs/applets/cpp-sugar/">caliper::Applet</a></dt><dd>The class an applet derives from: the host calls on_init once, on_frame every frame and on_cleanup when the applet closes.</dd>
             <dt><a href="docs/applets/services/caliper-device-v1/">caliper::Device</a></dt><dd>Reports the GPU the app is running on (Metal, CUDA or the CPU), so the applet trains on the same device.</dd>
             <dt><a href="docs/applets/services/caliper-tensor-bridge-v1/">caliper::Bridge</a></dt><dd>Turns a GPU tensor into a texture the interface can draw, colormapped on the GPU without a copy to the CPU.</dd>
-            <dt><a href="docs/applets/services/caliper-geometry-v1/">caliper::Geometry</a></dt><dd>Draws points, lines, meshes and instanced shapes straight from vertex data the applet keeps in GPU memory.</dd>
             <dt><a href="docs/applets/services/caliper-jobs-v1/">caliper::Jobs</a></dt><dd>Runs work such as training on a background thread, with progress shown in the app and a cancel the applet checks.</dd>
             <dt><a href="docs/applets/services/caliper-metrics-v1/">caliper::Metrics</a></dt><dd>Records each run&#x27;s scalars and hyperparameters, so loss curves and run comparisons outlast the session.</dd>
             <dt><a href="docs/applets/services/caliper-data-v1/">caliper::Data</a></dt><dd>Runs SQL over the app&#x27;s built-in analytical store and returns Arrow tables; datasets can be registered and shared between applets.</dd>
             <dt><a href="docs/applets/services/caliper-artifacts-v1/">caliper::Artifacts</a></dt><dd>Stores checkpoints and exports by their content, so identical files are kept once and each records where it came from.</dd>
-            <dt><a href="docs/applets/services/caliper-export-v1/">caliper::Export</a></dt><dd>Re-renders a view offscreen at any resolution and saves a pixel-exact PNG, alone or as a sequence, with a JSON record of how it was made.</dd>
           </dl>
           <a class="link xp-more" href="docs/applets/torch-per-platform/">Torch objects on each platform →</a>
         </div>

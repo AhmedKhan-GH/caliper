@@ -30,11 +30,14 @@ GENERAL_CONTEXT = PRESETS["ollama"].context_length["general"]
 def ollama_agent(caliper):
     started: list[tuple[AgentProcess, FakeOpenAI]] = []
 
-    def start(replies: list[dict], *extra: str, preset: str = "ollama", **flags) -> tuple[AgentProcess, FakeOpenAI]:
+    def start(replies: list[dict], *extra: str, preset: str = "ollama", tools: str | None = "catalog.list",
+              **flags) -> tuple[AgentProcess, FakeOpenAI]:
         server = FakeOpenAI(replies, **flags)
+        # Protocol fixtures need only this command. The full table has a separate context-limit check.
+        tool_args = ["--tools", tools] if tools is not None else []
         agent = AgentProcess(script=None, api_file=caliper.api_file, key=None,
                              extra_args=["--preset", preset, "--base-url", server.base_url, "--model", "qwen-test",
-                                         *extra])
+                                         *tool_args, *extra])
         started.append((agent, server))
         return agent, server
 
@@ -167,7 +170,7 @@ def test_a_request_that_would_not_fit_is_not_sent(ollama_agent, caliper):
 
 
 def test_a_widget_request_that_would_not_fit_names_the_settings(ollama_agent):
-    agent, server = ollama_agent([{"text": "never"}], "--context-length", "1024")
+    agent, server = ollama_agent([{"text": "never"}], "--context-length", "1024", tools=None)
     sid = agent.start_session(meta=widget_meta())
     response, updates = agent.prompt(sid, "Use a linear y axis")
     assert response["result"]["stopReason"] == "max_tokens"
@@ -188,11 +191,22 @@ def test_the_persons_context_length_replaces_the_presets(ollama_agent):
     # At most half of the context length is asked for as output.
     assert request["options"]["num_predict"] <= 10000   # and no more than the first prompt leaves of 20,000
 
-    # A general session's first request with the 34 tools does not fit 8,192 tokens: nothing is sent.
-    agent, server = ollama_agent([{"text": "never"}], "--context-length", "8192")
+    # A general session's first request with the full table does not fit 8,192 tokens: nothing is sent.
+    agent, server = ollama_agent([{"text": "never"}], "--context-length", "8192", tools=None)
     sid = agent.start_session()
     response, updates = agent.prompt(sid, "Say hello")
     assert server.native_requests == [] and "context of 8,192 tokens" in message_text(updates)
+
+
+def test_the_full_command_table_is_refused_before_the_default_general_request(ollama_agent):
+    agent, server = ollama_agent([{"text": "never"}], tools=None)
+    sid = agent.start_session()
+    response, updates = agent.prompt(sid, "Say hello")
+    assert response["result"]["stopReason"] == "max_tokens"
+    assert server.native_requests == []
+    [full] = [s for s in statuses(updates) if s["status"] == "context_full"]
+    assert full["context_length"] == GENERAL_CONTEXT
+    assert full["estimate"] > GENERAL_CONTEXT
 
 
 def test_a_refusal_of_tools_and_a_cut_off_reply_keep_their_meaning(ollama_agent):
@@ -234,6 +248,7 @@ def test_a_reply_cut_at_the_end_of_the_context_is_a_limit_even_with_a_tool_call(
     sid = agent.start_session()
     response, _ = agent.prompt(sid, "What data do I have?")
     assert response["result"]["stopReason"] == "max_tokens"
+    assert len(server.native_requests) == 1
     assert caliper.commands("catalog.list") == []   # no call of a cut-off reply runs
 
 

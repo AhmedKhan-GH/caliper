@@ -251,7 +251,6 @@ struct Spec {
     std::optional<LayoutNode> layout;
     std::vector<Control> controls;   // `control`, spec version 1 (instrument.h); empty in version 0
     std::vector<Program> programs;   // `program`, spec version 1 (program.h); empty in version 0
-    std::vector<Stage> stages;       // `stage`, spec version 1 (program.h); empty in version 0
     std::vector<Piece> pieces;       // `piece`, inline pieces (piece.h), spec version 1
     std::vector<StateVar> states;    // `state`, spec version 1 (state.h); empty in version 0
     Provenance provenance;           // `provenance`, spec version 1 (program.h); empty for the person's own spec
@@ -266,7 +265,7 @@ struct Spec {
 };
 
 // The lowest format version that holds `spec`: 1 when it has a scene panel, a
-// control, a program, a stage, a provenance table or any key of
+// control, a program, a provenance table or any key of
 // design/instrument-interface.md, else 0. An edit that adds
 // one of them to a version 0 spec raises the version to this one in the same
 // step.

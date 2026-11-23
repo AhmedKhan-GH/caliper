@@ -6,7 +6,6 @@
 #include "spec_runtime/spec_instruments.h"
 #include "spec_runtime/spec_shortcuts.h"
 #include "spec_runtime/spec_transport.h"
-#include "spec_runtime/spec_stage_host.h"
 #include "live/camera_drag.h"         // a right click on a 3-D points box, as on a scene
 #include "live/live_views_scene.h"   // a scene drawn into a scene panel's rectangle
 #include "live/live_scene.h"         // the scene view of a panel's entities
@@ -1179,7 +1178,7 @@ struct SpecRuntime::SceneStates {
 namespace {
 
 // The programs of the spec's scene panels (draw/draw_host.h, design/programmable-graphics.md):
-// one host for the app, as for stages, with the linked selection that every program reads.
+// one host for the app, with the linked selection that every program reads.
 struct ProgramHost {
     caliper_draw::DrawHost host;
     std::map<std::string, caliper_draw::Selected> picked;   // the newest program pick of each panel
@@ -1187,8 +1186,8 @@ struct ProgramHost {
     std::uint64_t moves = 0;
     std::function<std::string()> workspace;                 // the app's workspace folder, for its pieces
     std::map<std::string, std::string> seen_picks;          // each panel's last pick that the programs took
-    // The runtimes whose event sink, and whose values and history, the host and the stage host
-    // read: the last that gave each. Each takes back what it gave when it goes, so that no host
+    // The runtimes whose event sink, and whose values and history, the host
+    // reads: the last that gave each. Each takes back what it gave when it goes, so that no host
     // of the process reads the sink, the history or the values of a session that is gone.
     const void* events_owner = nullptr;
     const void* state_owner = nullptr;
@@ -1246,8 +1245,6 @@ ProgramHost& program_host() {
             *out = std::move(f.piece);
             return v;
         });
-        // program.status shows each draw half through the stage host's items.
-        app_stage_host_impl()->set_drawn([p] { return drawn_items(p->host); });
         return p;
     }();
     return *h;
@@ -1329,9 +1326,48 @@ bool same_starting(const caliper_scene::StartingCamera& a, const caliper_scene::
 
 }  // namespace
 
+namespace {
+
+// The draw halves of the pieces that the scene panels draw, for program.status.
+class AppDrawStatusHost final : public caliper_builder::DrawStatusHost {
+public:
+    std::vector<caliper_builder::ProgramStatus> status() const override { return drawn_items(program_host().host); }
+};
+
+}  // namespace
+
+caliper_builder::DrawStatusHost* app_draw_status_host() {
+    static AppDrawStatusHost host;
+    return &host;
+}
+
 void set_program_workspace(std::function<std::string()> workspace) {
     program_host().workspace = std::move(workspace);
 }
+
+namespace {
+
+// The entities of a panel whose source, or a source it derives from, holds a path step: their
+// lines draw with path@1 (apply_entity_scene).
+std::vector<std::string> path_entities(const spec::Spec& s, const spec::Panel& panel) {
+    std::vector<std::string> out;
+    for (const spec::Entity& e : panel.entities) {
+        if (!e.source) continue;
+        const spec::Source* src = s.find_source(*e.source);
+        for (int hop = 0; src && hop < 64; ++hop) {
+            const bool path = std::any_of(src->transforms.begin(), src->transforms.end(),
+                                          [](const spec::Transform& t) { return t.op == spec::TransformOp::path; });
+            if (path) {
+                out.push_back(e.path);
+                break;
+            }
+            src = src->from ? s.find_source(*src->from) : nullptr;
+        }
+    }
+    return out;
+}
+
+}  // namespace
 
 caliper_live_views::SceneView* SpecRuntime::entity_view(const std::string& panel_id) {
     auto it = scenes_->entities.find(panel_id);
@@ -1369,7 +1405,10 @@ caliper_live_views::SceneView* SpecRuntime::entity_view(const std::string& panel
     }
     const bool rebuilt = ep.dirty;
     if (ep.dirty) {
-        apply_entity_scene(*ep.view, spec_scene_content(ep.scene), &ep.drawn);
+        std::vector<std::string> paths;
+        if (spec_)
+            if (const spec::Panel* p = spec_->find_panel(panel_id)) paths = path_entities(*spec_, *p);
+        apply_entity_scene(*ep.view, spec_scene_content(ep.scene), &ep.drawn, &paths);
         ep.dirty = false;
     }
     // The panel's annotations at the cursor, written again when they or the data box change.
@@ -1445,6 +1484,11 @@ bool SpecRuntime::points_turn(const std::string& panel_id, double q[4]) const {
     return true;
 }
 
+std::vector<caliper_live_views::DrawnLabel> SpecRuntime::scene_labels(const std::string& panel_id) const {
+    const auto it = scenes_->by_panel.find(panel_id);
+    return it == scenes_->by_panel.end() ? std::vector<caliper_live_views::DrawnLabel>{} : it->second.labels;
+}
+
 bool SpecRuntime::scene_gesture(const std::string& panel_id, bool* down, bool* pick_pending) const {
     const auto it = scenes_->by_panel.find(panel_id);
     if (it == scenes_->by_panel.end()) return false;
@@ -1472,7 +1516,6 @@ SpecRuntime::SpecRuntime(SpecTextures& textures) : textures_(textures), scenes_(
 void SpecRuntime::set_instruments(caliper_builder::EventSink* events, caliper_builder::RunControl* run) {
     events_ = events;
     run_ = run;
-    if (events) app_stage_host_impl()->set_events(events);   // the stages' program events
     if (events) program_host().host.set_events(events);       // the programs' draw events
     if (events) program_host().events_owner = this;
 }
@@ -1481,11 +1524,6 @@ void SpecRuntime::set_instrument_state(caliper_builder::ValueStore* values, cali
     values_ = values;
     history_ = history;
     if (values || history) program_host().state_owner = this;
-    // A stage's params follow their references at the next frame.
-    app_stage_host_impl()->set_evaluate(
-        values ? std::function<nlohmann::json(const spec::Reference&)>(
-                     [values](const spec::Reference& r) { return values->value(r); })
-               : nullptr);
     // The programs' params follow their references, and their resources come from the history.
     caliper_draw::DrawHost& programs = program_host().host;
     programs.set_evaluate(values ? caliper_draw::DrawHost::Evaluate(
@@ -1503,7 +1541,11 @@ void SpecRuntime::set_instrument_state(caliper_builder::ValueStore* values, cali
                           out->resource = resource;
                           out->step = v->step;
                           out->serial = v->serial;   // a version that replaced another at its step
-                          out->count = v->width ? v->width * v->height : v->count;
+                          out->count = v->count;   // a texture's and a narrow buffer's words
+                          out->width = v->width;
+                          out->height = v->height;
+                          out->format = v->format;
+                          out->elements = v->elements;
                           out->bytes = (*held)->data();
                           out->size = (*held)->size();
                           if (epoch) *epoch = 0;
@@ -1576,10 +1618,7 @@ void SpecRuntime::bind_scene(Entry& e) {
         give_program_cursor(history_);
         sync_program_pick(panel, values_);
         const std::string id = "##spec.scene." + panel;
-        // The panel's stages (spec_stage_host.h), and the line of a refused or stopped one.
         caliper_live_views::SceneRectOptions so = o;
-        so.stages = app_stage_host_impl()->source(panel);
-        so.stage_message = app_stage_host_impl()->message(panel);
         auto sink = [this, &panel, &scene](const char* type, const std::string& detail) {
             caliper_builder::Event ev;
             if (!events_ || !spec_scene_event(type, panel, scene, detail, &ev)) return;
@@ -1611,8 +1650,6 @@ void SpecRuntime::bind_entity_scene(Entry& e) {
         EntityPanel& ep = scenes_->entity(panel);
         if (!view) return false;   // no backend here: the panel shows its source as offline
         caliper_live_views::SceneRectOptions so = o;
-        so.stages = app_stage_host_impl()->source(panel);
-        so.stage_message = app_stage_host_impl()->message(panel);
         const std::string id = "##spec.entities." + panel;
         auto sink = [this, &panel, &ep](const char* type, const std::string& detail) {
             caliper_builder::Event ev;
@@ -1676,7 +1713,6 @@ SpecRuntime::~SpecRuntime() {
     }
     if (program_host().events_owner == this) {
         program_host().host.set_events(nullptr);
-        app_stage_host_impl()->set_events(nullptr);
         program_host().events_owner = nullptr;
     }
     for (auto& e : entries_) textures_.release(e.second.view.texture);

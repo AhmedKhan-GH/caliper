@@ -1,6 +1,6 @@
 # Embedding API
 
-Caliper Embed is the framework core. It holds the applet loader, the service registry, the host-neutral services, `HostRenderer` (Metal or Vulkan), the tensor bridge and the geometry ladder. Its code is the static library `libcaliper`. The `caliper-embed` package installs it as one shared library, `libcaliper_embed.dylib` on macOS and `caliper_embed.dll` on Windows. A small C ABI sits in front of the library. Thus a host binary can run the applet canvas inside a view it owns without linking ImGui, torch or any renderer type.
+Caliper Embed is the framework core. It holds the applet loader, the service registry, the host-neutral services, `HostRenderer` (Metal or Vulkan) and the tensor bridge. Its code is the static library `libcaliper`. The `caliper-embed` package installs it as one shared library, `libcaliper_embed.dylib` on macOS and `caliper_embed.dll` on Windows. A small C ABI sits in front of the library. Thus a host binary can run the applet canvas inside a view it owns without linking ImGui, torch or any renderer type.
 
 The `caliper` executable is the first embedder. The second is `examples/embed_host/`, an AppKit host with a Win32 counterpart and an offscreen mode, and this page mirrors it. A program outside this repository builds against the installed [`caliper-embed` package](#caliper-embed-package). The guide [Embed Caliper in a program](program-embedding.md) shows the steps.
 
@@ -14,7 +14,7 @@ An embedder drives the core with five calls and pumps frames from its own event 
 
 1. `caliper_core_create` creates the core: renderer, services and loader.
 2. `caliper_core_attach_canvas` gives the core the native view (`NSView*` or `HWND`) to paint, or selects an offscreen target.
-3. `caliper_core_load_applet` launches one applet by manifest id, for example `dev.caliper.instance-scope`. Attach a canvas first, because the first frame of an applet touches the ImGui backend of the renderer. Loading before attach is a refusal, not a crash.
+3. `caliper_core_load_applet` launches one applet by manifest id, for example `dev.caliper.embed-scope`. Attach a canvas first, because the first frame of an applet touches the ImGui backend of the renderer. Loading before attach is a refusal, not a crash.
 4. `caliper_core_frame` and `caliper_core_event` pump exactly one frame from your loop (a timer, a `CVDisplayLink` or a Win32 message loop) and forward your toolkit input as `CaliperInputEvent` values.
 5. `caliper_core_shutdown` tears everything down in the reverse order of create and clears the one-core-per-process lock.
 
@@ -28,7 +28,7 @@ canvas.mode = CALIPER_CANVAS_WINDOW;           /* native_view is an NSView* / HW
 canvas.width = w; canvas.height = h; canvas.content_scale = scale;
 caliper_core_attach_canvas(core, native_view, &canvas);
 
-caliper_core_load_applet(core, "dev.caliper.instance-scope");
+caliper_core_load_applet(core, "dev.caliper.embed-scope");
 
 /* ... from YOUR event loop, once per frame: */
 caliper_core_frame(core);
@@ -56,7 +56,7 @@ The modifier flags of `CaliperInputEvent.mods` are constants:
 
 ## Ownership
 
-Caliper Embed owns the applet canvas end to end. The embedder supplies a native child view, and the core runs the ImGui context, `HostRenderer`, bridge and geometry inside it. The chrome of a host (docking, property grids, menus) wraps around those canvases and never paints applet pixels.
+Caliper Embed owns the applet canvas end to end. The embedder supplies a native child view, and the core runs the ImGui context, `HostRenderer` and bridge inside it. The chrome of a host (docking, property grids, menus) wraps around those canvases and never paints applet pixels.
 
 | Concern | Owner | Note |
 |---|---|---|
@@ -64,7 +64,7 @@ Caliper Embed owns the applet canvas end to end. The embedder supplies a native 
 | Native window / view handle | **Embedder** | `NSView*` / `HWND` passed to `attach_canvas` |
 | Input events | **Embedder** translates, core consumes | Your GLFW, AppKit or wx event becomes a `CaliperInputEvent`. No toolkit types cross. |
 | ImGui context (one per canvas) | **Caliper Embed** | The embedder never touches ImGui state |
-| `HostRenderer` + tensor bridge + geometry | **Caliper Embed** | The zero-copy claim travels with the core |
+| `HostRenderer` + tensor bridge | **Caliper Embed** | The zero-copy claim travels with the core |
 | Applet loader + service registry + services | **Caliper Embed** | The same registry that applets see |
 | libtorch (one per process) | **Caliper Embed** | The embedder must NOT link its own torch, because the core owns the device and pack policy |
 | Crash containment | **Caliper Embed** | The core guard catches applet faults and reports them through `crash_fn`. The embedder stays up. |
@@ -126,7 +126,6 @@ The header states a thread rule for each service:
 | `caliper.device.v1` | Any thread. It reads a record negotiated at startup that never changes. |
 | `caliper.log.v1` | Any thread. It is reentrant and routes to `log_fn` when one is installed. |
 | `caliper.tensor_bridge.v1`, `v1_1`, `v1_2` | Frame thread only. They upload to the GPU. |
-| `caliper.geometry.v1` to `v1_3` | Frame thread only. They draw. |
 | `caliper.ui.v1` | Frame thread only. It wraps the ImGui and ImPlot contexts, which a host has no use for. |
 
 A host pushes parameters, and an applet worker produces device tensors, because there is one torch per process and it is never the host torch. The host-side use of the bridge is CPU-staged uploads on the frame thread.
@@ -307,13 +306,12 @@ In a torch-free build the core carries no libtorch at all. The libtorch row of t
 | `CALIPER_BUILD_APPLETS` | OFF | Also builds the `applets/*` folders inside the core build. Each also builds on its own against the installed SDK. Forced OFF when torch is OFF, because most applets link libtorch. |
 | `CALIPER_BUILD_PYTHON` | OFF | Adds the nanobind extensions `caliper._native` and `caliper._live`. The wheel build sets it ON. |
 | `CALIPER_WITH_SLANG` | ON | Configure the vendored slang (SystemVerilog) library. |
-| `CALIPER_WITH_LLAMA` | ON | Configure the vendored llama.cpp and apply its local patches. `CALIPER_BUILD_OPENGLLAMA=ON` stops the configure with an error when this is OFF. |
 | `CALIPER_BUILD_VIEWER` | ON | Builds `caliper_viewer`, the live-viewer process (Apple only). The wheel ships it as `caliper/bin/caliper-viewer`. |
 | `CALIPER_WITH_BUILDER` | ON, but OFF on Windows | Builds the builder, which `libcaliper` does not link and no package installs. It also links the DuckDB json extension into the host DuckDB, so `libcaliper`, the embedding library and the `caliper` exe carry that extension. The wheel sets it OFF. |
 
-slang and llama.cpp are configured `EXCLUDE_FROM_ALL`, and nothing that `libcaliper`, the `caliper` exe or the tests need links them. llama.cpp only backs the opt-in archived opengllama applet. At configure time slang clones boost_regex and mimalloc over the network, which a pip build should not do. The Python build and the `release-notorch` preset therefore set both OFF, and a fresh torch-free configure clones neither. Two FetchContent clones remain: tomlplusplus (`caliper_host_lib`) and doctest (tests only). With `CALIPER_WITH_BUILDER` on, the configure also downloads the nlohmann/json archive.
+slang is configured `EXCLUDE_FROM_ALL`, and nothing that `libcaliper`, the `caliper` exe or the tests need links it. At configure time slang clones boost_regex and mimalloc over the network, which a pip build should not do. The Python build and the `release-notorch` preset therefore set it OFF, and a fresh torch-free configure clones neither. Two FetchContent clones remain: tomlplusplus (`caliper_host_lib`) and doctest (tests only). With `CALIPER_WITH_BUILDER` on, the configure also downloads the nlohmann/json archive.
 
-The wheel build sets `CALIPER_BUILD_PYTHON` ON. It sets `CALIPER_WITH_TORCH`, `CALIPER_BUILD_APPLETS`, `CALIPER_BUILD_EXAMPLES`, `BUILD_TESTS`, `USE_CUDA`, `CALIPER_WITH_SLANG`, `CALIPER_WITH_LLAMA` and `CALIPER_WITH_BUILDER` OFF. It builds only the `_native`, `_live`, `_netio` and `caliper_viewer` targets.
+The wheel build sets `CALIPER_BUILD_PYTHON` ON. It sets `CALIPER_WITH_TORCH`, `CALIPER_BUILD_APPLETS`, `CALIPER_BUILD_EXAMPLES`, `BUILD_TESTS`, `USE_CUDA`, `CALIPER_WITH_SLANG` and `CALIPER_WITH_BUILDER` OFF. It builds only the `_native`, `_live`, `_netio` and `caliper_viewer` targets.
 
 ### Embedder Link Lists
 
@@ -323,7 +321,7 @@ The split matters because `libcaliper` is a static library, and its private depe
 
 ### `release-notorch` Preset
 
-`CMakePresets.json` has configure, build and test presets named `release-notorch`: binary dir `cmake-build-notorch`, `CMAKE_BUILD_TYPE=Release`, `BUILD_TESTS=ON`, `CALIPER_WITH_TORCH=OFF`, `CALIPER_WITH_SLANG=OFF`, `CALIPER_WITH_LLAMA=OFF` and `USE_CUDA=OFF`. The Python extension builds against this configuration.
+`CMakePresets.json` has configure, build and test presets named `release-notorch`: binary dir `cmake-build-notorch`, `CMAKE_BUILD_TYPE=Release`, `BUILD_TESTS=ON`, `CALIPER_WITH_TORCH=OFF`, `CALIPER_WITH_SLANG=OFF` and `USE_CUDA=OFF`. The Python extension builds against this configuration.
 
 ```sh
 cmake --preset release-notorch

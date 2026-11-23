@@ -27,6 +27,7 @@
 
 #include "live/live_clock.h"
 #include "live/live_source.h"
+#include "live/scene_piece_form.h"
 #include "live/scene_queue.h"
 #include "net/json.h"
 #include "net/wire.h"
@@ -114,6 +115,10 @@ public:
     void on_close(unsigned short code, const char* reason);
 
 private:
+    // The versions of scene programs (the piece form of SCENE_UPDATE), put together from their parts,
+    // until the update that names them.
+    caliper_net::wire::SplitResources scene_parts_;
+    caliper_live::ScenePieceInbox scene_inbox_;
     struct Payload {
         std::vector<uint8_t> bytes;   // data, then aux at aux_offset (8-aligned)
         std::vector<float> stats;

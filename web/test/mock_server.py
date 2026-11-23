@@ -88,6 +88,14 @@ def load_wire(path: str):
     return mod
 
 
+def encode_scene3(msg, *, minor: int):
+    """Replay the legacy points fixture to test read-only decode and transform order."""
+    if isinstance(msg, W.SceneUpdate) and msg.part == W.PART_POINTS and msg.program is None:
+        return W.encode_frame(msg.TYPE, msg.to_meta(), [W._section("positions", msg.arrays["positions"])],
+                              minor=minor)
+    return W.encode(msg, minor=minor)
+
+
 # ---------------------------------------------------------------------------
 # the simulated run
 # ---------------------------------------------------------------------------
@@ -496,7 +504,7 @@ SCENE3_SHIFT = (10.0, 2.0, 0.0)
 
 
 def scene3_state(sub: int) -> list:
-    """The state of the --scene3 scene for subscription sub: a reset, a class table, the points, the
+    """The legacy state of the --scene3 scene for subscription sub: a reset, a class table, the points, the
     transform of their parent entity, and four more updates of the same points after it, so that a
     viewer decodes several frames between the transform's arrival and the frame that applies it."""
     now = time.monotonic_ns()
@@ -580,7 +588,8 @@ class Producer:
 
         async def send(msg):
             async with lock:
-                await ws.send(W.encode(msg, minor=minor))
+                encode = encode_scene3 if self.scene3 else W.encode
+                await ws.send(encode(msg, minor=minor))
 
         first = W.decode(await asyncio.wait_for(ws.recv(), W.HANDSHAKE_TIMEOUT_MS / 1000))
         if not isinstance(first, W.Hello) or first.role != W.ROLE_VIEWER:

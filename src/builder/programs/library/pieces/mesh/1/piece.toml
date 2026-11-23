@@ -1,0 +1,234 @@
+# Library piece mesh@1: a triangle mesh, drawn as the built-in mesh primitive draws it.
+name = "mesh"
+version = 1
+description = "A triangle mesh from positions and indices, lit by the headlight from its normals or with flat faces, colored by one color, by a value through a colormap or by RGBA, and textured from uvs"
+imports = ["pick@1"]
+
+[[inputs]]
+name = "positions"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+title = "Positions (V, 3), or (V, 2) for a mesh in 2-D"
+
+[[inputs]]
+name = "indices"
+kind = "tensor"
+dtype = "i32"
+rank_min = 1
+rank_max = 2
+optional = true
+title = "Indices (T, 3), read when indexed is 1; each index above the last vertex draws the last vertex; unbound, every three vertices"
+
+[[inputs]]
+name = "normals"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+optional = true
+title = "Normals (V, 3), read when shading is 1"
+
+[[inputs]]
+name = "colors"
+kind = "tensor"
+dtype = "f32|u8"
+rank_min = 1
+rank_max = 2
+optional = true
+title = "Colors (V, 3 or 4) of u8 from 0 to 255 or of f32 from 0 to 1, or f32 values (V), or one row or value for all; unbound, the one color"
+
+[[inputs]]
+name = "uvs"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+optional = true
+title = "Texture Coordinates (V, 2), read with a texture; unbound, no texture"
+
+[[inputs]]
+name = "texture"
+kind = "tensor"
+dtype = "u8|f32"
+rank_min = 2
+rank_max = 3
+optional = true
+title = "Texture (H, W, 4), (H, W, 3) or grey (H, W) of u8 from 0 to 255 or of f32 from 0 to 1, sampled at the uvs times the vertex color; unbound, no texture"
+
+[[params]]
+name = "color_mode"
+type = "u32"
+default = 0
+min = 0
+max = 2
+title = "Color (0 one color, 1 colormap of values, 2 RGBA of each vertex)"
+
+[[params]]
+name = "color"
+type = "u32"
+default = 4293319900
+title = "One Color as Packed RGBA"
+
+[[params]]
+name = "colormap"
+type = "u32"
+default = 0
+min = 0
+max = 3
+title = "Colormap (0 viridis, 1 magma, 2 rdbu, 3 greys)"
+
+[[params]]
+name = "vmin"
+default = 0.0
+title = "Value at the Colormap's Start"
+
+[[params]]
+name = "vmax"
+default = 1.0
+title = "Value at the Colormap's End"
+
+[[params]]
+name = "shading"
+type = "u32"
+default = 0
+min = 0
+max = 1
+title = "Shading (0 flat faces, 1 vertex normals)"
+
+[[params]]
+name = "indexed"
+type = "u32"
+default = 1
+min = 0
+max = 1
+title = "Triangles (0 every three vertices, 1 the rows of indices)"
+
+[[params]]
+name = "depth_offset"
+type = "i32"
+default = 0
+min = -8
+max = 8
+title = "Depth Offset in Steps of 1/8192"
+
+[[resources]]
+id = "vertices"
+kind = "buffer"
+struct = "Vertex"
+fields = ["px: f32", "py: f32", "pz: f32", "value: f32", "nx: f32", "ny: f32", "nz: f32", "rgba: u32"]
+# 4,194,304 vertices of 32 bytes fill one 128 MiB storage binding.
+count = 4194304
+counted = true
+
+# Pick indices and texture coordinates use 12 bytes per vertex, without vector padding.
+[[resources]]
+id = "attributes"
+kind = "buffer"
+struct = "Attributes"
+fields = ["index: u32", "u: f32", "v: f32"]
+count = 4194304
+counted = true
+
+# Bit 0 marks any vertex color or texture texel with alpha below 255.
+[[resources]]
+id = "info"
+kind = "buffer"
+element = "u32"
+count = 1
+
+# The three vertex indices of each triangle, which the draw passes draw as their index buffer.
+[[resources]]
+id = "faces"
+kind = "buffer"
+element = "u32"
+# 4,194,304 triangles, 48 MiB: the most that the built-in mesh draws.
+count = 12582912
+counted = true
+
+# The texture of a textured mesh, `tex`, of its size up to 8,192 a side and 16,777,216 texels (64 MiB),
+# sampled with the hardware's bilinear filter as the built-in samples its texture. It has no texels
+# when uvs or the texture are unbound.
+[[resources]]
+id = "tex"
+kind = "texture"
+format = "rgba8unorm"
+width = 8192
+height = 8192
+texels = 67108864
+
+# The resources hold at most 480 MiB and one flag word. Inputs remain on their device.
+[derive]
+time_ms = 50
+memory_mb = 512
+
+[[derive.passes]]
+entry = "copy_vertices"
+workgroups = [16384, 1, 1]
+writes = ["vertices", "attributes"]
+
+[[derive.passes]]
+entry = "copy_triangles"
+workgroups = [16384, 1, 1]
+writes = ["faces", "info"]
+
+[[derive.passes]]
+entry = "mark_alpha"
+workgroups = [16384, 1, 1]
+writes = ["info"]
+
+[[derive.passes]]
+entry = "copy_texture"
+workgroups = [64, 1, 1]
+writes = ["tex", "info"]
+
+[draw]
+memory_mb = 512
+camera = "orbit"
+frame_ms = 16
+pick = { resource = "attributes", fields = ["index"] }
+
+# The faces of an opaque mesh: they write the color and depth alone, as the built-in's opaque draw
+# does; the IDs follow in the last pass.
+[[draw.passes]]
+kind = "render"
+vertex = "face_vs"
+fragment = "see_fs"
+indices = "faces"
+blend = "alpha"
+depth = "write"
+
+# The faces of a translucent mesh: they blend and write no depth.
+[[draw.passes]]
+kind = "render"
+vertex = "face_see_vs"
+fragment = "see_fs"
+indices = "faces"
+blend = "alpha"
+depth = "test"
+
+# Texture fragments use separate passes to preserve flat-face derivatives.
+[[draw.passes]]
+kind = "render"
+vertex = "texture_vs"
+fragment = "texture_fs"
+indices = "faces"
+blend = "alpha"
+depth = "write"
+
+[[draw.passes]]
+kind = "render"
+vertex = "texture_see_vs"
+fragment = "texture_fs"
+indices = "faces"
+blend = "alpha"
+depth = "test"
+
+# The IDs of every face, nearest first as the built-in's pick pass finds them, at the depth that the
+# first pass wrote for an opaque mesh; they leave the color as it is.
+[[draw.passes]]
+kind = "render"
+vertex = "face_id_vs"
+fragment = "id_fs"
+indices = "faces"
+blend = "alpha"
+depth = "write"
+pick = true

@@ -10,6 +10,10 @@ docs/reference/wire-protocol-3-2.md.
 Needs numpy and pytest only: ``pytest --noconftest python/tests/test_wire_32.py``."""
 from __future__ import annotations
 
+import legacy_scene_encoder
+legacy_scene_encoder.install()
+
+
 import json
 import re
 import struct
@@ -63,7 +67,7 @@ def test_frame_matches_description(name):
         h["magic"], h["major"], h["minor"], h["type"], h["flags"], h["frame_len"],
         h["meta_len"], h["section_count"], h["reserved"])
     # An instance of a piece carries its manifest and its WGSL, thus a larger frame.
-    most = 2048 if "_piece" in name else 600
+    most = 263168 if name.endswith("_bundle_palette") else 17000 if "_bundle" in name else 2048 if "_piece" in name else 9000 if name.endswith("_texture_wide") else 600
     assert h["minor"] == w.MINOR_3_2 == 2 and h["flags"] == 0 and len(buf) <= most
     f = w.decode_frame(buf)
     assert f.meta == desc["meta"]
@@ -789,6 +793,122 @@ def test_resource_codec_rules():
     assert w.RESOURCE_MAX_BYTES + 65536 == w.MAX_FRAME_BYTES
 
 
+def _golden(name):
+    return w.decode((V32 / f"{name}.bin").read_bytes())
+
+
+def test_resource_formats_and_narrow_elements_decode():
+    n = _golden("resource_narrow_u16")
+    assert (n.element, n.elements, n.count, n.stride, n.width, n.format) == ("u16", 5, 3, 4, None, None)
+    assert np.frombuffer(n.data, np.uint16).tolist() == [1, 2, 3, 4, 5, 0]
+    t = _golden("resource_texture_r8")
+    assert (t.format, t.width, t.height, t.count, t.stride, t.element) == ("r8unorm", 3, 3, 3, 4, None)
+    assert bytes(t.data)[:9] == bytes(range(1, 10))
+
+
+def test_resource_part_with_another_format_is_refused():
+    import dataclasses
+    p0, p1, _ = (_golden(f"resource_split_{k}") for k in range(3))
+    sr = w.SplitResources()
+    assert sr.add(p0) is None
+    with pytest.raises(w.MessageError, match="differs from its part 0"):
+        sr.add(dataclasses.replace(p1, format="r8unorm"))
+
+
+WHOLE_SEGMENTS = np.array([[k, -k] for k in range(10)], np.float32).tobytes()
+
+
+def test_resource_in_parts_is_put_together_whole():
+    parts = [_golden(f"resource_split_{k}") for k in range(3)]
+    assert [p.split for p in parts] == [{"version": 5, "part": k, "parts": 3, "first": 4 * k} for k in range(3)]
+    sr = w.SplitResources()
+    assert sr.add(parts[0]) is None and sr.add(parts[1]) is None
+    whole = sr.add(parts[2])
+    assert (whole.program, whole.resource, whole.step, whole.count, whole.stride, whole.split) == \
+        ("lines", "segments", 1300, 10, 8, None)
+    assert bytes(whole.data) == WHOLE_SEGMENTS and not sr.open
+    # The whole encodes as a version in one frame, which a fresh receiver takes at once.
+    again = w.decode(w.encode(whole))
+    assert w.SplitResources().add(again).count == 10
+    # resource_parts cuts the same parts, as views without a copy.
+    cut = w.resource_parts(w.Resource("lines", "segments", 1300, 10, 8, WHOLE_SEGMENTS), 5, 32)
+    assert [w.encode(p, minor=2) for p in cut] == [(V32 / f"resource_split_{k}.bin").read_bytes() for k in range(3)]
+
+
+def test_resource_parts_that_a_receiver_drops_or_refuses():
+    p0, p1, p2 = (_golden(f"resource_split_{k}") for k in range(3))
+    # A part of a version whose part 0 never came is dropped and counted.
+    sr = w.SplitResources()
+    assert sr.add(_golden("resource_split_orphan")) is None and sr.dropped == 1 and not sr.open
+    sr.add(p0)
+    assert sr.add(_golden("resource_split_orphan")) is None and sr.dropped == 2 and len(sr.open) == 1
+    # Parts out of order: the version is refused and discarded.
+    with pytest.raises(w.MessageError, match="out of order"):
+        sr.add(p2)
+    assert not sr.open and sr.discarded == 1
+    # A part again is out of order too.
+    sr.add(p0)
+    sr.add(p1)
+    with pytest.raises(w.MessageError, match="out of order"):
+        sr.add(p1)
+    # A total that disagrees with the parts: the last part ends before the count.
+    sr.add(p0)
+    sr.add(p1)
+    with pytest.raises(w.MessageError, match="end before its count"):
+        sr.add(_golden("resource_split_short"))
+    # A part whose keys differ from part 0.
+    sr.add(p0)
+    with pytest.raises(w.MessageError, match="differs from its part 0"):
+        sr.add(_golden("resource_split_differs"))
+    assert not sr.open
+    # A version that never completes: the next part after RESOURCE_PART_WAIT further frames is dropped.
+    sr = w.SplitResources()
+    sr.add(p0)
+    other = _golden("resource_buffer")
+    for _ in range(w.RESOURCE_PART_WAIT - 1):
+        assert sr.add(other) is not None
+    assert sr.add(p1) is None and len(sr.open) == 1          # the 256th frame after part 0: in time
+    for _ in range(w.RESOURCE_PART_WAIT):
+        sr.add(other)
+    assert len(sr.open) == 1
+    sr.add(other)                                              # the 257th: expired
+    assert not sr.open and sr.expired == 1
+    assert sr.add(p2) is None and sr.dropped == 1
+    # Part 0 of a newer version, or a version in one frame, of the same resource discards an incomplete one.
+    sr = w.SplitResources()
+    sr.add(p0)
+    sr.add(p0)
+    assert len(sr.open) == 1 and sr.discarded == 1
+    sr.add(w.Resource("lines", "segments", 1400, 1, 8, bytes(8)))
+    assert not sr.open and sr.discarded == 2
+    # At most MAX_INCOMPLETE_UPDATES versions are held; the oldest goes first.
+    for name in ("a", "b", "c"):
+        sr.add(w.Resource("lines", name, 1300, 10, 8, p0.data,
+                          split={"version": 5, "part": 0, "parts": 3, "first": 0}))
+    assert [k[1] for k in sr.open] == ["b", "c"] and w.MAX_INCOMPLETE_UPDATES == 2
+
+
+def test_resource_in_parts_bounds_every_size_first():
+    # The bound of a version in parts holds before any product: a count near 2^32 is refused.
+    frame = w.encode_frame(w.MsgType.RESOURCE, {"program": "a", "resource": "r", "step": 0, "count": 2**32 - 1,
+                                                "stride": 256, "split": {"version": 0, "part": 0, "parts": 2,
+                                                                         "first": 0}},
+                           [w.Section.from_array("resource", np.zeros(256, np.uint8))])
+    with pytest.raises(w.MessageError, match="in parts holds at most 134217728 bytes"):
+        w.decode(frame)
+    assert w.RESOURCE_VERSION_MAX_BYTES == 128 << 20 and w.RESOURCE_PART_WAIT == 256
+    # The sender's cut: one frame when it fits, parts of whole elements, and refusals past the bounds.
+    big = w.Resource("p", "r", 0, 9, 8, bytes(72))
+    assert w.resource_parts(big, 0, 72) == [big]
+    assert [len(p.data) for p in w.resource_parts(big, 0, 20)] == [16, 16, 16, 16, 8]
+    with pytest.raises(ValueError, match="more than 32"):
+        w.resource_parts(w.Resource("p", "r", 0, 33, 8, bytes(264)), 0, 8)
+    with pytest.raises(ValueError, match="holds no element"):
+        w.resource_parts(big, 0, 4)
+    with pytest.raises(ValueError, match="more than 134217728"):
+        w.resource_parts(w.Resource("p", "r", 0, (128 << 20) // 4 + 1, 4, bytearray((128 << 20) + 4)), 0, 8 << 20)
+
+
 def test_instance_codec_rules():
     src = "@fragment fn f() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }"
     pin = {"name": "dots", "version": 1, "hash": "sha256:" + "0" * 64}
@@ -808,3 +928,111 @@ def test_instance_codec_rules():
                                     draw=src)))
     # A params op of an instance keeps the params form.
     assert w.decode(w.encode(w.Program(5, "params", "dots", params={"gain": 1}))).piece is None
+
+
+# The piece form of SCENE_UPDATE (capability "scene_pieces") and the ids "scene.<n>".
+PIECE_PIN = {"name": "points", "version": 1, "hash": "sha256:" + "ab" * 32}
+PIECE_KEYS = {"program": "scene.1", "piece": PIECE_PIN, "resources": {"points": 3},
+              "arrays": ["positions", "values"]}
+
+
+def _piece_update(part="points", sections=None, **change):
+    keys = {k: v for k, v in {**PIECE_KEYS, **change}.items() if v is not None}
+    return _update(part, sections or {}, **keys)
+
+
+def test_scene_pieces_capability_and_prefix():
+    assert w.CAP_SCENE_PIECES == "scene_pieces" and w.SCENE_PROGRAM_PREFIX == "scene."
+
+
+def test_piece_form_golden_frames():
+    m = _d("scene_update_points_piece")
+    assert m.program == "scene.1" and m.arrays == {} and m.split is None
+    assert m.piece == {"name": "points", "version": 1} and m.resources == {"points": 3}
+    assert m.names == ["positions", "values"] and m.stamp is not None
+    r = _d("resource_scene_points")
+    assert (r.program, r.resource, r.step, r.count, r.stride, len(r.data)) == ("scene.1", "points", 7, 3, 32, 96)
+    rows = np.frombuffer(r.data, dtype=[("p", "<f4", 4), ("bits", "<u4"), ("index", "<u4"), ("pad", "V8")])
+    assert rows["p"][:, 3].tolist() == [1.0, 1.0, 1.0] and rows["index"].tolist() == [0, 1, 2]
+
+
+def test_piece_form_round_trips():
+    for part, piece, names in [("points", "points", ["positions"]), ("lines", "lines", ["positions", "colors"]),
+                               ("arrows", "arrows", ["origins", "vectors"]), ("boxes", "boxes", ["centers"]),
+                               ("mesh", "mesh", ["positions", "indices", "uvs"])]:
+        kw = {"mode": "segments"} if part == "lines" else {}
+        buf = _piece_update(part, piece=dict(PIECE_PIN, name=piece), arrays=names, **kw)
+        m = w.decode(buf)
+        assert m.names == names and m.arrays == {} and m.piece["name"] == piece
+        assert w.encode(m) == buf
+    for form, piece in [("color", "image"), ("depth", "depth"), ("segmentation", "segmentation")]:
+        buf = _piece_update("image", piece=dict(PIECE_PIN, name=piece), arrays=["pixels"], form=form)
+        assert w.encode(w.decode(buf)) == buf
+
+
+def test_piece_form_refusals():
+    _refused(_piece_update(program="scene.0123456789"), match="program")
+    _refused(_piece_update(piece=None), match="piece")
+    _refused(_piece_update(piece=dict(PIECE_PIN, name="lines")), match="library piece")
+    _refused(_piece_update(piece=dict(PIECE_PIN, hash="sha256:xyz")), match="pin")
+    _refused(_piece_update(piece=dict(PIECE_PIN, hash="sha256:" + "AB" * 32)), match="pin")
+    assert w.decode(_piece_update(piece={"name": "points", "version": 1})).piece == {"name": "points", "version": 1}
+    _refused(_piece_update("camera", piece=dict(PIECE_PIN, name="camera"), arrays=["x"]))
+    _refused(_piece_update(resources=None), match="resources")
+    _refused(_piece_update(resources={}), match="resources")
+    _refused(_piece_update(resources={f"r{k}": 1 for k in range(9)}), match="resources")
+    _refused(_piece_update(resources={"__x": 1}), match="resources")
+    _refused(_piece_update(resources={"points": -1}), match="resources")
+    _refused(_piece_update(resources={"points": 2**32}), match="resources")
+    _refused(_piece_update(arrays=None), match="arrays")
+    _refused(_piece_update(arrays=[]), match="arrays")
+    _refused(_piece_update(arrays=["values"]), match="arrays")
+    _refused(_piece_update(arrays=["positions", "positions"]), match="arrays")
+    _refused(_piece_update(arrays=["values", "positions"]), match="arrays")
+    _refused(_piece_update(arrays=["positions", "nope"]), match="arrays")
+    _refused(_piece_update(arrays=["positions", 3]), match="arrays")
+    _refused(_piece_update(split={"update": 1, "piece": 0, "pieces": 2}), match="split")
+    _refused(_piece_update(sections={"positions": np.zeros((3, 3), np.float32)}), match="array section")
+    _refused(_piece_update(sections={"colors": np.zeros((3, 4), np.uint8)}), match="array section")
+    # An image takes the piece of its form.
+    _refused(_piece_update("image", piece=dict(PIECE_PIN, name="depth"), arrays=["pixels"], form="color"))
+    _refused(_piece_update("image", piece=dict(PIECE_PIN, name="image"), arrays=["pixels"], form="encoded"))
+    # The part's keys are still checked.
+    _refused(_piece_update(colormap="x"))
+    # The stamp is read as usual.
+    ok = _piece_update(sections={"stamp": np.array([1, 2], np.int64)})
+    assert w.decode(ok).stamp is not None
+
+
+def test_scene_program_ids():
+    def res(program):
+        return w.encode_frame(w.MsgType.RESOURCE, {"program": program, "resource": "points", "step": 1,
+                                                   "count": 1, "stride": 4},
+                              [w.Section.from_array("resource", np.zeros(4, np.uint8))])
+    for ok in ("scene.0", "scene.1", "scene.123456789"):
+        assert w.decode(res(ok)).program == ok and w.scene_program_id(ok)
+    for bad in ("scene.", "scene.x", "scene.0123456789", "scene.1a", "scene.-1", "scene.1.2"):
+        _refused(res(bad), match="program")
+        assert not w.scene_program_id(bad)
+    prog = w.Program(0, w.PROGRAM_REMOVE, "scene.7")
+    assert w.decode(w.encode(prog)).id == "scene.7"
+    _refused(w.encode_frame(w.MsgType.PROGRAM, {"request_id": 0, "op": "remove", "id": "scene.x"}))
+
+
+def test_full_size_texture_parts_keep_the_storage_buffer_limit():
+    assert w.RESOURCE_TEXTURE_VERSION_MAX_BYTES == 256 << 20
+    assert w.RESOURCE_MAX_PARTS == 32 and w.MAX_PIECES == 16
+    metadata = {"program": "a", "resource": "pixels", "step": 0, "count": 8192 * 8192,
+                "stride": 4, "width": 8192, "height": 8192,
+                "split": {"version": 0, "part": 0, "parts": 32, "first": 0}}
+    sections = [w.Section.from_array("resource", np.zeros(4, np.uint8))]
+    texture = w.decode(w.encode_frame(w.MsgType.RESOURCE, metadata, sections))
+    assert texture.count * texture.stride == 256 << 20
+    for fmt in (w.TEXTURE_RGBA8, w.TEXTURE_R32UINT):
+        assert w.decode(w.encode_frame(w.MsgType.RESOURCE, dict(metadata, format=fmt), sections)).format == fmt
+    buffer = {k: v for k, v in metadata.items() if k not in ("width", "height")}
+    with pytest.raises(w.MessageError, match="at most 134217728"):
+        w.decode(w.encode_frame(w.MsgType.RESOURCE, buffer, sections))
+    metadata["split"]["parts"] = 33
+    with pytest.raises(w.MessageError, match="from 2 to 32"):
+        w.decode(w.encode_frame(w.MsgType.RESOURCE, metadata, sections))

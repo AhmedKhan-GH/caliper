@@ -16,6 +16,7 @@
 
 #include "core_lifecycle.h"            // the app-like host of the Attachment case
 #include "host_services.h"
+#include "draw/draw_runtime_impl.h"   // the resource versions that a scene frame showed
 #include "embed/embed_core.h"        // caliper_live_controls, the views' event sink
 #include "embed/render_stats.h"      // copy counters (white-box)
 #include "live/live_attach.h"
@@ -26,6 +27,7 @@
 #include "live/live_scene.h"           // the scene view (protocol 3.2 draft)
 #include "live/live_views_scene.h"
 #include "live/live_views_state.h"     // kPalette (the exact categorical colours)
+#include "live/scene_piece_form.h"     // the piece form of scene batches (protocol 3.2 draft)
 #include "live/scene_queue.h"          // what a source keeps of a scene while the display is paused
 #include "net/wire.h"
 #include "net/ws.h"
@@ -844,12 +846,38 @@ TEST_CASE("live/net: a scene view (protocol 3.2 draft) takes the scene's message
     REQUIRE(vi.width > 0);
     std::vector<uint8_t> px((size_t)vi.width * vi.height * 4);
     CHECK(caliper_core_live_view_readback(core, "world", px.data(), px.size()) == 1);
-    // One copy per uploaded array (the frame's, the cloud's and the split update's positions, the
-    // arrows' origins and vectors) and the class table's texture, uploaded with the frame that drew it.
+    // Scene copy counters cover decoded arrays. The earlier cloud update can reach the viewer
+    // before its replacement. The class table has no separate texture in the piece draw route.
     caliper_stats::ViewCopies vc{};
-    REQUIRE(poll_until(core, [&] {
-        return caliper_stats::view_copies(core, "world", &vc) && vc.total.bytes >= (frame.size() + b.size() + 2 * a.size() + 12) * 4 + 65536 * 4;
+    CHECK(caliper_stats::view_copies(core, "world", &vc));
+    const uint64_t array_bytes = (frame.size() + b.size() + 2 * a.size() + 12) * sizeof(float);
+    CHECK(vc.total.bytes >= array_bytes);
+    CHECK(vc.total.bytes <= array_bytes + a.size() * sizeof(float));
+    CHECK(vc.total.bytes == sv->counts().bytes_total);
+    CHECK(sv->counts().arrays_live == 5);
+
+    // The four pieces must show their current resource versions: one line (32 + 8 + 12 bytes),
+    // seven points (32 bytes each), and two arrows (32 bytes each, plus 12 bytes of info).
+    uint64_t resource_bytes = 0;
+    size_t resource_count = 0;
+    CHECK(poll_until(core, [&] {
+        resource_bytes = 0;
+        resource_count = 0;
+        const auto runtimes = sv->shape_runtimes();
+        bool shown = runtimes.size() == 4;
+        for (const auto* runtime : runtimes) {
+            shown = shown && runtime->status().frames > 0;
+            for (const auto& slot : runtime->internals().slots) {
+                shown = shown && !slot.texture && slot.has_version && slot.shown &&
+                        slot.drawn_serial == slot.serial && slot.shown->count == slot.count;
+                resource_bytes += uint64_t(slot.count) * slot.layout.stride;
+                ++resource_count;
+            }
+        }
+        return shown;
     }));
+    CHECK(resource_count == 7);
+    CHECK(resource_bytes == (32 + 8 + 12) + 7 * 32 + (2 * 32 + 12));
     caliper_core_live_detach(core);
     caliper_core_shutdown(core);
 }
@@ -1607,7 +1635,7 @@ TEST_CASE("live/net: the native source announces controls and selection, and a s
     CHECK(p.call([](FakeProducer& f) { return f.hello_caps; }) ==
           std::vector<std::string>{CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_SCENES,
                                    CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS,
-                                   CALIPER_NET_CAP_TIMELINES, CALIPER_NET_CAP_RESOURCES});
+                                   CALIPER_NET_CAP_TIMELINES, CALIPER_NET_CAP_RESOURCES, CALIPER_NET_CAP_SCENE_PIECES});
     CHECK(rc->access().allowed);
     CHECK(rc->why_not(CALIPER_NET_OP_PAUSE).empty());
     REQUIRE(rc->state().params.size() == 1);
@@ -2175,10 +2203,12 @@ TEST_CASE("live/app: a scene view's picks, hovers and selections reach the scrip
         return 0;
     });
     REQUIRE(frames_until([&] { return sv->highlighted() == 3; }));
-    // The pointer at rest asks nothing more of the pick pass.
-    const uint64_t submits = sv->pick_pass()->submits();
+    // The pointer at rest leaves the frame and completed pick unchanged.
+    REQUIRE(frames_until([&] { return !sv->pick_pending(); }));
+    const uint64_t frame = sv->generation();
     for (int i = 0; i < 20; ++i) host.frame(a, nullptr);
-    CHECK(sv->pick_pass()->submits() == submits);
+    CHECK(sv->generation() == frame);
+    CHECK_FALSE(sv->pick_pending());
     a.detach();
 }
 
@@ -3084,3 +3114,190 @@ TEST_CASE("live/programs: a script that keeps dropping a program gets it a few t
     CHECK(link.sent.size() == size_t(caliper_live::ProgramSync::kMaxSends));
 }
 
+
+
+// The piece form of SCENE_UPDATE on the receiving side: a scene program's RESOURCE waits in the inbox
+// for the update that names it with the same count; another program's goes past; a missing or
+// mismatched version drops the update; the arrays come back from points@1's and image@1's bytes.
+TEST_CASE("live/net: the piece form's inbox pairs a scene program's versions with its update") {
+    namespace wire = caliper_net::wire;
+    caliper_live::ScenePieceInbox inbox;
+    auto resource = [](const std::string& program, const std::string& id, uint32_t count, uint32_t stride) {
+        wire::Resource r;
+        r.program = program;
+        r.resource = id;
+        r.count = count;
+        r.stride = stride;
+        return r;
+    };
+    // Three points (0, 1, 2), (3, 4, 5), (6, 7, 8) with radius 0.5 and values 10, 11, 12.
+    auto bytes = std::make_shared<std::vector<uint8_t>>(3 * 32, 0);
+    for (uint32_t i = 0; i < 3; ++i) {
+        const float p[4] = {float(3 * i), float(3 * i + 1), float(3 * i + 2), 0.5f};
+        const float v = 10.0f + float(i);
+        std::memcpy(bytes->data() + i * 32, p, 16);
+        std::memcpy(bytes->data() + i * 32 + 16, &v, 4);
+        std::memcpy(bytes->data() + i * 32 + 20, &i, 4);
+    }
+    CHECK_FALSE(inbox.take(resource("bars", "points", 3, 32), bytes));
+    CHECK(inbox.held() == 0);
+    CHECK(inbox.take(resource("scene.7", "points", 3, 32), bytes));
+    wire::SceneUpdate u;
+    u.part = CALIPER_NET_PART_POINTS;
+    u.program = std::string("scene.7");
+    u.piece = caliper_net::Json::object();
+    u.piece.set("name", "points");
+    u.piece.set("version", 1);
+    u.resources = caliper_net::Json::object();
+    u.resources.set("points", caliper_net::Json(uint64_t(4)));
+    u.names = {"positions", "values", "radii"};
+    std::string why;
+    CHECK_FALSE(inbox.pair(u, nullptr, &why));   // another count
+    CHECK(why.find("another count") != std::string::npos);
+    u.resources.set("points", caliper_net::Json(uint64_t(3)));
+    std::shared_ptr<const void> owner = inbox.pair(u, nullptr, &why);
+    REQUIRE(owner);
+    CHECK(inbox.held() == 0);
+    REQUIRE(u.paired.size() == 1);
+    CHECK(u.paired[0].shape == std::vector<int64_t>{3, 32});
+    std::vector<wire::Section> arrays;
+    std::vector<std::vector<uint8_t>> owned;
+    REQUIRE_MESSAGE(caliper_live::scene_piece_arrays(u, 2, &arrays, &owned, &why), why);
+    REQUIRE(arrays.size() == 3);
+    CHECK(arrays[0].name == "positions");
+    CHECK(arrays[0].shape == std::vector<int64_t>{3, 2});
+    const float* pos = reinterpret_cast<const float*>(arrays[0].data);
+    CHECK(pos[0] == 0.0f);
+    CHECK(pos[1] == 1.0f);
+    CHECK(pos[2] == 3.0f);
+    CHECK(pos[5] == 7.0f);
+    CHECK(reinterpret_cast<const float*>(arrays[1].data)[2] == 12.0f);
+    CHECK(reinterpret_cast<const float*>(arrays[2].data)[1] == 0.5f);
+    wire::SceneUpdate again = u;
+    again.paired.clear();
+    CHECK_FALSE(inbox.pair(again, nullptr, &why));   // its version went with the first update
+    CHECK(why.find("did not arrive") != std::string::npos);
+    // A grey image of 2 x 3 pixels: image@1's pixels repeat the value; info holds 3, 2 and 1 channel.
+    auto px = std::make_shared<std::vector<uint8_t>>(6 * 4, 0);
+    for (uint32_t i = 0; i < 6; ++i) {
+        const uint32_t g = 40 * i, rgba = 0xff000000u | g | (g << 8) | (g << 16);
+        std::memcpy(px->data() + i * 4, &rgba, 4);
+    }
+    auto info = std::make_shared<std::vector<uint8_t>>(80, 0);
+    const uint32_t size[4] = {3, 2, 1, 0};
+    std::memcpy(info->data(), size, 16);
+    // The pixels travel as an rgba8unorm texture of the image's size.
+    wire::Resource texels = resource("scene.8", "pixels", 6, 4);
+    texels.width = 3;
+    texels.height = 2;
+    CHECK(inbox.take(texels, px));
+    CHECK(inbox.take(resource("scene.8", "info", 1, 80), info));
+    wire::SceneUpdate im;
+    im.part = CALIPER_NET_PART_IMAGE;
+    im.program = std::string("scene.8");
+    im.piece = caliper_net::Json::object();
+    im.piece.set("name", "image");
+    im.piece.set("version", 1);
+    im.resources = caliper_net::Json::object();
+    im.resources.set("pixels", caliper_net::Json(uint64_t(6)));
+    im.resources.set("info", caliper_net::Json(uint64_t(1)));
+    im.names = {"pixels"};
+    REQUIRE(inbox.pair(im, nullptr, &why));
+    REQUIRE(im.paired.size() == 2);
+    CHECK(im.paired[0].shape == std::vector<int64_t>{2, 3, 4});   // the texture's rows of texels
+    arrays.clear();
+    owned.clear();
+    REQUIRE_MESSAGE(caliper_live::scene_piece_arrays(im, 0, &arrays, &owned, &why), why);
+    REQUIRE(arrays.size() == 1);
+    CHECK(arrays[0].shape == std::vector<int64_t>{2, 3});
+    CHECK(arrays[0].data[5] == 200);
+    // A piece of another version is not read.
+    im.piece.set("version", 2);
+    CHECK_FALSE(caliper_live::scene_piece_arrays(im, 0, &arrays, &owned, &why));
+    // Pixels sent as a buffer, without the texture's size, are of another layout.
+    im.piece.set("version", 1);
+    CHECK(inbox.take(resource("scene.8", "pixels", 6, 4), px));
+    CHECK(inbox.take(resource("scene.8", "info", 1, 80), info));
+    im.paired.clear();
+    REQUIRE(inbox.pair(im, nullptr, &why));
+    CHECK_FALSE(caliper_live::scene_piece_arrays(im, 0, &arrays, &owned, &why));
+    CHECK(why.find("another layout") != std::string::npos);
+}
+
+
+TEST_CASE("live/net: every scene piece restores its source arrays and rejects malformed resources") {
+    namespace wire = caliper_net::wire;
+    for (const char* suffix : {"lines_segments", "lines_strip", "lines_strips", "lines_edges", "lines_unused",
+                              "lines_singletons", "arrows", "boxes", "boxes_2d", "mesh", "mesh_normals",
+                              "mesh_textured", "mesh_colors", "image_depth", "image_depth_f32",
+                              "image_segmentation", "image_segmentation_u16"}) {
+        CAPTURE(suffix);
+        std::vector<std::vector<uint8_t>> frames;
+        auto load = [&](const std::string& name) {
+            std::ifstream in(std::string(CALIPER_TEST_SOURCE_ROOT) + "/tests/fixtures/wire_v3/v3_2/" + name + ".bin",
+                             std::ios::binary);
+            REQUIRE(in.good());
+            frames.emplace_back(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+            wire::Message out;
+            REQUIRE(wire::decode(frames.back().data(), frames.back().size(), &out).ok());
+            return out;
+        };
+        auto source_message = load(std::string("scene_update_") + suffix);
+        auto piece_message = load(std::string("scene_update_") + suffix + "_bundle");
+        const auto& source = std::get<wire::SceneUpdate>(source_message);
+        auto& piece = std::get<wire::SceneUpdate>(piece_message);
+        caliper_live::ScenePieceInbox inbox;
+        for (const auto& resource : piece.resources.members()) {
+            const auto message = load(std::string("resource_scene_") + suffix + "_bundle_" + resource.first);
+            const auto& r = std::get<wire::Resource>(message);
+            REQUIRE(inbox.take(r, std::make_shared<const std::vector<uint8_t>>(r.data.data, r.data.data + r.data.size)));
+        }
+        std::string why;
+        auto owner = inbox.pair(piece, nullptr, &why);
+        REQUIRE_MESSAGE(owner, why);
+        std::vector<wire::Section> arrays;
+        std::vector<std::vector<uint8_t>> owned;
+        const uint32_t dims = source.part == "image" ? 3u : uint32_t(source.arrays[0].shape[1]);
+        REQUIRE_MESSAGE(caliper_live::scene_piece_arrays(piece, dims, &arrays, &owned, &why), why);
+        REQUIRE(arrays.size() == source.arrays.size());
+        for (const auto& before : source.arrays) {
+            const auto after = std::find_if(arrays.begin(), arrays.end(), [&](const auto& a) { return a.name == before.name; });
+            REQUIRE(after != arrays.end());
+            CHECK(before.shape == after->shape);
+            if (piece.piece.find("name")->as_string() == "depth") {
+                CHECK(after->dtype == CALIPER_NET_DTYPE_F32);
+                const size_t n = size_t(before.shape[0] * before.shape[1]);
+                REQUIRE(after->size == n * 4);
+                const auto* scale_key = source.params.find("scale");
+                const float scale = scale_key ? float(scale_key->as_double()) : before.dtype == CALIPER_NET_DTYPE_U16 ? .001f : 1.f;
+                for (size_t i = 0; i < n; ++i) {
+                    float raw;
+                    if (before.dtype == CALIPER_NET_DTYPE_U16) { uint16_t v; std::memcpy(&v, before.data + i * 2, 2); raw = float(v); }
+                    else std::memcpy(&raw, before.data + i * 4, 4);
+                    float depth; std::memcpy(&depth, after->data + i * 4, 4);
+                    CHECK(depth == raw * scale);
+                }
+            } else {
+                CHECK(before.dtype == after->dtype);
+                REQUIRE(before.size == after->size);
+                CHECK(std::memcmp(before.data, after->data, before.size) == 0);
+            }
+        }
+        // A forbidden optional column must fail before it can address bytes past a compact row.
+        if (piece.part == "mesh" || piece.part == "arrows") {
+            auto malformed = piece;
+            malformed.names.push_back("rotations");
+            arrays.clear(); owned.clear();
+            CHECK_FALSE(caliper_live::scene_piece_arrays(malformed, dims, &arrays, &owned, &why));
+            CHECK(owned.empty());
+        }
+        // The first drawing buffer is mandatory and its stride must match the library layout.
+        const std::string name = piece.piece.find("name")->as_string();
+        const std::string buffer = name == "lines" ? "segments" : name == "mesh" ? "vertices" :
+                                   name == "depth" || name == "segmentation" ? "pixels" : name;
+        for (auto& r : piece.paired) if (r.name == buffer) r.shape.back() += 4;
+        arrays.clear(); owned.clear();
+        CHECK_FALSE(caliper_live::scene_piece_arrays(piece, dims, &arrays, &owned, &why));
+        CHECK_FALSE(why.empty());
+    }
+}

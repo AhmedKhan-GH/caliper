@@ -11,7 +11,7 @@
 #include "mouse_latency.h"
 #include "live/live_scene.h"
 #include "live/scene_overlays.h"
-#include "scene/pick.h"   // PickPass::Result
+#include "scene/pick.h"   // PickResult
 #if defined(CALIPER_HAVE_DRAW)
 #include "draw/draw_runtime.h"
 #include <nlohmann/json.hpp>
@@ -271,11 +271,11 @@ void poll_program_pick(SceneView& view, SceneRectState& state) {
 #if defined(CALIPER_HAVE_DRAW)
     caliper_draw::PickedItem picked;
     float depth = 1.0f;
-    const caliper_scene::PickPass::Result r = view.poll_program_pick(state.program_ticket, &picked, &depth);
-    if (r == caliper_scene::PickPass::Result::Pending) return;
+    const caliper_scene::PickResult r = view.poll_program_pick(state.program_ticket, &picked, &depth);
+    if (r == caliper_scene::PickResult::Pending) return;
     state.frame_pending = false;
     state.program_ticket = 0;
-    if (r != caliper_scene::PickPass::Result::Hit) return;
+    if (r != caliper_scene::PickResult::Hit) return;
     state.program_detail = program_pick_detail(picked);
     state.program_depth = depth;
 #else
@@ -324,6 +324,11 @@ std::vector<caliper_scene::LabelAnchor> program_labels(const SceneView& view) {
             a.y = float((1.0 - ny) * 0.5 * view.height());
             a.depth = float(h[3]);
             a.text = std::move(l.text);
+            static_assert(int(caliper_builder::spec::TextAlign::left) == 1 &&
+                              int(caliper_builder::spec::TextAlign::right) == 2 &&
+                              int(caliper_builder::spec::TextAlign::center) == 3,
+                          "LabelAnchor::pin numbers the alignments as spec::TextAlign does");
+            a.pin = uint8_t(l.align);
             all.push_back({l.priority, std::move(a)});
         }
     }
@@ -485,7 +490,6 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
     }
     sc->set_entity_filter(filter_key, std::move(keep));
     sc->set_draw_feed(options.draw_feed);
-    sc->set_stage_source(options.stages);
     sc->poll();   // the GPU time of completed frames: the info line and the stages' time watchdog
 
     // ---- input: an invisible button owns the rectangle, so that a drag never moves the window. A
@@ -553,15 +557,16 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
     const ImVec2 p1(p0.x + size.x, p0.y + size.y);
     if (const uint64_t tex = sc->imgui_texture()) dl->AddImage((ImTextureID)tex, p0, p1);
     std::vector<caliper_host::LabelRect> keep_clear;   // the view's own texts, which no label covers
-    if (!options.stage_message.empty()) {   // a stage's refusal or stop, over the picture's bottom
-        const float pad = 4.0f, h = ImGui::GetTextLineHeight() + 2 * pad;
-        const ImVec2 a(p0.x, std::max(p0.y, p1.y - h));
-        dl->AddRectFilled(a, p1, sternbild::col::shade(170));
-        keep_clear.push_back({a.x, a.y, p1.x, p1.y});
-        dl->PushClipRect(a, p1, true);
-        dl->AddText(ImVec2(a.x + pad, a.y + pad), sternbild::col::warning, options.stage_message.c_str());
-        dl->PopClipRect();
+    if (!sc->notes().empty()) {
+        const auto& message = sc->notes().back();
+        const float pad = 5.0f;
+        const ImVec2 text = ImGui::CalcTextSize(message.c_str());
+        const ImVec2 top(p0.x + pad, std::max(p0.y, p1.y - text.y - 2 * pad));
+        dl->AddRectFilled(top, ImVec2(p1.x, p1.y), ImGui::GetColorU32(ImGuiCol_WindowBg));
+        dl->AddText(ImVec2(top.x + pad, top.y + pad), sternbild::col::warning, message.c_str());
+        keep_clear.push_back({top.x, top.y, p1.x, p1.y});
     }
+
 
     // ---- picks and selections, in the render target's pixels
     const float kx = sc->width() ? float(sc->width()) / size.x : 1.0f;
@@ -593,13 +598,13 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
     // The entities' pick pass and the programs' frame pick answer apart; the pick goes out once
     // both did, the program's item unless the entity's hit is nearer.
     caliper_scene::Hit hit;
-    const caliper_scene::PickPass::Result pr = sc->poll_pick(&hit);
-    if (state.entity_pending && (pr == caliper_scene::PickPass::Result::Hit ||
-                                 pr == caliper_scene::PickPass::Result::Miss ||
-                                 pr == caliper_scene::PickPass::Result::Dropped)) {
+    const caliper_scene::PickResult pr = sc->poll_pick(&hit);
+    if (state.entity_pending && (pr == caliper_scene::PickResult::Hit ||
+                                 pr == caliper_scene::PickResult::Miss ||
+                                 pr == caliper_scene::PickResult::Dropped)) {
         state.entity_pending = false;
-        state.entity_dropped = pr == caliper_scene::PickPass::Result::Dropped;
-        if (pr == caliper_scene::PickPass::Result::Hit) {
+        state.entity_dropped = pr == caliper_scene::PickResult::Dropped;
+        if (pr == caliper_scene::PickResult::Hit) {
             state.entity_detail = sc->pick_detail(hit);
             state.entity_depth = hit.depth;
         }
@@ -639,7 +644,7 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
         }
     }
     if (options.axes) {
-        const float bottom = keep_clear.empty() || options.stage_message.empty() ? p1.y : keep_clear.front().y0;
+        const float bottom = p1.y;
         if (const caliper_host::LabelRect mark = draw_axes_mark(dl, *sc, ImVec2(p1.x, bottom)); mark.x1 > mark.x0)
             keep_clear.push_back(mark);
     }
@@ -652,6 +657,7 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
         count_at = ImVec2(p1.x - ts.x - 10.0f, p0.y + 8.0f);
         keep_clear.push_back({count_at.x - 2.0f, count_at.y - 2.0f, count_at.x + ts.x + 2.0f, count_at.y + ts.y + 2.0f});
     }
+    state.labels.clear();
     if (options.labels && sc->width() && sc->height()) {
         // The annotations' labels, then the programs' labels by their priority, then the item
         // labels nearest first (scene_overlays.h).
@@ -692,6 +698,7 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
         in.ink = ink;
         in.shade = shade;
         in.keep_clear = &keep_clear;
+        in.drawn = &state.labels;
         draw_scene_overlays(in);
     }
     if (count_text[0]) dl->AddText(count_at, ink, count_text);

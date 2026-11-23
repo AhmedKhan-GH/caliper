@@ -72,8 +72,18 @@ void append_part(Composed* c, std::string part, const std::string& text, std::ui
 // The WGSL type of one element of a layout: its plain type or its struct's name.
 std::string element_type(const spec::Layout& layout) {
     if (layout.type_name) return *layout.type_name;
-    if (layout.element) return *layout.element;
+    if (layout.element) return spec::narrow_per_word(*layout.element) > 1 ? "u32" : *layout.element;
     return {};
+}
+
+// The checked accessor <id>_at() of a buffer of narrow elements: element i from the words, and zero at
+// or past the valid count of the frame's version.
+std::string narrow_accessor(const std::string& id, const spec::Layout& layout) {
+    if (!layout.element || spec::narrow_per_word(*layout.element) == 1) return {};
+    const std::string v = *layout.element == "u8" ? "(" + id + "[i >> 2u] >> ((i & 3u) * 8u)) & 0xffu"
+                                                  : "(" + id + "[i >> 1u] >> ((i & 1u) * 16u)) & 0xffffu";
+    return "fn " + id + "_at(i: u32) -> u32 {\n    if (i >= counts." + id + ") {\n        return 0u;\n    }\n    return " +
+           v + ";\n}\n";
 }
 
 // Declares the struct of a layout once; false with *why when a struct of the
@@ -225,13 +235,15 @@ Composed compose_draw(const spec::Piece& piece, const Resolved& resolved, std::s
 
     // Group 1: the counts, the published resources, then the buffer inputs.
     std::vector<std::string> counted;
-    std::string group1;
+    std::string group1, accessors;
     std::uint32_t binding = 1;
     for (const spec::Resource& r : piece.resources) {
         if (!r.publish) continue;
         counted.push_back(r.id);
         if (r.kind == spec::ResourceKind::texture) {
-            group1 += "@group(1) @binding(" + std::to_string(binding++) + ") var " + r.id + ": texture_2d<f32>;\n";
+            const bool uint = spec::texture_format(r) == "r32uint";   // not filterable: textureLoad only
+            group1 += "@group(1) @binding(" + std::to_string(binding++) + ") var " + r.id +
+                      (uint ? ": texture_2d<u32>;\n" : ": texture_2d<f32>;\n");
             continue;
         }
         if (!declare_struct(r.layout, &declared, &structs, &why)) {
@@ -240,6 +252,7 @@ Composed compose_draw(const spec::Piece& piece, const Resolved& resolved, std::s
         }
         group1 += "@group(1) @binding(" + std::to_string(binding++) + ") var<storage, read> " + r.id + ": array<" +
                   element_type(r.layout) + ">;\n";
+        accessors += narrow_accessor(r.id, r.layout);
     }
     for (const spec::PieceInput& in : piece.inputs) {
         if (in.kind != spec::InputKind::buffer) continue;
@@ -250,6 +263,7 @@ Composed compose_draw(const spec::Piece& piece, const Resolved& resolved, std::s
         }
         group1 += "@group(1) @binding(" + std::to_string(binding++) + ") var<storage, read> " + in.name + ": array<" +
                   element_type(in.layout) + ">;\n";
+        accessors += narrow_accessor(in.name, in.layout);
     }
     if (!counted.empty()) {
         counts += "struct CaliperCounts { ";
@@ -289,7 +303,7 @@ Composed compose_draw(const spec::Piece& piece, const Resolved& resolved, std::s
 
     std::uint32_t line = 1;
     append_part(&c, "prelude", std::string(draw_prelude()), &line);
-    append_part(&c, "header", params + counts + structs + bindings, &line);
+    append_part(&c, "header", params + counts + structs + bindings + accessors, &line);
     // The lib modules, with their segments moved to their place in the module.
     if (!resolved.lib_text.empty()) {
         const std::uint32_t first = line;

@@ -13,10 +13,6 @@
 #include <caliper/services/tensor_bridge_v1.h>
 #include <caliper/services/tensor_bridge_v1_1.h>
 #include <caliper/services/tensor_bridge_v1_2.h>
-#include <caliper/services/geometry_v1.h>
-#include <caliper/services/geometry_v1_1.h>
-#include <caliper/services/geometry_v1_2.h>
-#include <caliper/services/geometry_v1_3.h>
 #include <caliper/services/device_v1.h>
 
 #include <cstdint>
@@ -107,7 +103,7 @@ public:
     // tensor views use it): re-pin a MAPPED texture's colormap/vmin/vmax so the
     // NEXT update_texture / update_texture_from_alloc maps with the new values,
     // without recreating the texture. Existing texels are not re-rendered.
-    // false (nothing changed): unknown id, a direct-u8/geometry texture, or an
+    // false (nothing changed): unknown id, a direct-u8 texture, or an
     // out-of-range colormap.
     bool           set_mapping(CaliperTextureId tex, int32_t colormap,
                                float vmin, float vmax);
@@ -118,49 +114,8 @@ public:
     // its GPU (tex_update_mapped_from_host). The embed views report it.
     const char*    last_upload_path() const { return last_upload_path_; }
 
-    // caliper.geometry.v1 (imported 3-D points). Lives on the SAME object as
-    // the bridge so views share the texture table (ImGui-drawable ids) and
-    // points address v1.2 imported allocations directly. Every gate fails
-    // closed with a logged reason; a false draw leaves the view's pixels and
-    // telemetry untouched.
-    uint32_t         geom_caps() const;
-    CaliperTextureId geom_create_view(uint32_t w, uint32_t h);
-    CaliperTextureId geom_create_view_ex(uint32_t w, uint32_t h,
-                                         uint32_t flags);
-    void             geom_release_view(CaliperTextureId view);
-    bool             geom_draw_points(CaliperTextureId view,
-                                      const CaliperGeomCamera* cam,
-                                      CaliperAllocId pos_alloc,
-                                      uint64_t pos_offset, uint64_t count,
-                                      CaliperAllocId attr_alloc,
-                                      uint64_t attr_offset,
-                                      int32_t colormap, float vmin, float vmax,
-                                      float size_px, uint32_t clear_rgba);
-    bool             geom_draw_primitives(CaliperTextureId view,
-                                          const CaliperGeomCamera* cam,
-                                          const CaliperGeomDraw* draws,
-                                          uint32_t draw_count,
-                                          uint32_t draw_stride,
-                                          uint32_t clear_rgba);
-    bool             geom_draw_primitives_v1_2(CaliperTextureId view,
-                                          const CaliperGeomCamera* cam,
-                                          const CaliperGeomDrawV1_2* draws,
-                                          uint32_t draw_count,
-                                          uint32_t draw_stride,
-                                          uint32_t clear_rgba);
-    bool             geom_draw_primitives_v1_3(CaliperTextureId view,
-                                          const CaliperGeomCamera* cam,
-                                          const CaliperGeomDrawV1_3* draws,
-                                          uint32_t draw_count,
-                                          uint32_t draw_stride,
-                                          uint32_t clear_rgba);
 
 private:
-    // The revision axis for the shared draw_primitives validator: selects the
-    // minimum stride (192/216/256), the color-mode ceiling, and whether the
-    // instance tail is read. Replaced the earlier bool v12 (single-axis) — a
-    // second bool was the reviewed defect, do not reintroduce it.
-    enum class GeomRev : uint32_t { V1_1, V1_2, V1_3 };
     // Per-texture bookkeeping. The public CaliperTextureId handed to callers is
     // the renderer's ImGui handle (tex_imtexture_id — what imgui_impl_metal or
     // imgui_impl_vulkan binds as ImTextureID; §5.4), and this table is keyed by it. The
@@ -179,9 +134,6 @@ private:
         float        vmax = 1.0f;
         bool         shared = false;
         std::vector<uint8_t> shared_buf;  // alloc_shared CPU-unified backing
-        bool         view = false;        // geometry.v1 render target: updates
-                                          // and bridge-release refuse it
-        bool         view_depth = false;  // geometry.v1_1 depth attachment
     };
 
     // Stage/forward a validated tensor into an existing entry's texture.
@@ -193,16 +145,6 @@ private:
     // update_texture and update_texture_from_alloc so the shape gate is
     // written once; logs "update: ..." and returns false on a mismatch.
     bool desc_matches_entry(const Entry& e, const CaliperTensor& t) const;
-
-    // Shared validation for all draw_primitives entry points. `rev` is the
-    // single revision axis: it selects the minimum stride (192/216/256), the
-    // color-mode ceiling (VERTEX_RGBA vs TEXTURE), and whether the instance
-    // tail is read — the records are otherwise validated identically.
-    bool geom_draw_primitives_impl(CaliperTextureId view,
-                                   const CaliperGeomCamera* cam,
-                                   const void* draws, uint32_t draw_count,
-                                   uint32_t draw_stride, GeomRev rev,
-                                   uint32_t clear_rgba);
 
     // Imported external allocations (v1.2): public CaliperAllocId -> the
     // renderer-internal id + its byte size (for the host-side bounds check).

@@ -78,7 +78,7 @@ Every call takes one mutex, so any thread may use a registry. `ExportablePool` o
 
 ## `exportable_pool.hpp`
 
-`ExportablePool` gives an applet tensors that the bridge can import, so a texture or a geometry buffer updates with zero copies of the data. It is applet-side only, because the [host links no ML framework](../introduction/architecture.md#design-decisions). Every failure degrades to "not pool-backed", and the caller falls back to the `stream_to_tensor` and `update_texture` path.
+`ExportablePool` gives an applet tensors that the bridge can import, so a texture updates with zero copies of the data. It is applet-side only, because the [host links no ML framework](../introduction/architecture.md#design-decisions). Every failure degrades to "not pool-backed", and the caller falls back to the `stream_to_tensor` and `update_texture` path.
 
 The class has the same public surface on every platform, and three implementations behind it:
 
@@ -97,7 +97,7 @@ The members an applet uses:
 
 The returned `BridgeRef` goes to the `*_from_alloc` calls of [`caliper.tensor_bridge.v1_2`](services/caliper-tensor-bridge-v1.md). Release and import calls belong to the frame thread, and the destructor of the pool releases the imports it made. Torch may free a block from any thread. Thus the pool queues the release of the import of that block and drains the queue on the frame thread, in `to_bridge` and in the destructor.
 
-FieldScope, FlowScope, GPTScope, SculptScope, MeshScope, InstanceScope and TwinScope allocate their drawn buffers this way (see [Applets](in-tree-applets.md)). The platform differences are in [Torch on each platform](torch-per-platform.md).
+GPTScope allocates its drawn attention heatmap buffer this way (see [Applets](in-tree-applets.md)). The platform differences are in [Torch on each platform](torch-per-platform.md).
 
 ## `obj.hpp`
 

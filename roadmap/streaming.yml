@@ -490,3 +490,23 @@ features:
     depends_on: [INT-04, STR-45]
     docs: docs/python/run-control-calls.md#watch-with-an-optimizer
     issue: null
+
+  - id: STR-56
+    title: Resource Parts
+    status: built
+    scope: core
+    summary: The senders split a resource version into bounded parts, and receivers assemble the complete version before a draw uses it.
+    depends_on: [REN-78]
+    branches: [playground-m6]
+    docs: docs/reference/wire-protocol-3-2.md#resource-parts
+    issue: null
+
+  - id: STR-57
+    title: Scene Piece Form
+    status: built
+    scope: core
+    summary: Scene batches carry piece instances and typed resources through links with scene_pieces, and the hub preserves each batch for late viewers.
+    depends_on: [STR-10, STR-56]
+    branches: [playground-m6]
+    docs: docs/reference/wire-protocol-3-2.md#piece-form
+    issue: null

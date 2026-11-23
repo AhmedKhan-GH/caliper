@@ -1,0 +1,50 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 192,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 147,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 130
+  },
+  "meta": {
+    "count": 4,
+    "height": 2,
+    "program": "scene.120",
+    "resource": "tex",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "resource",
+        "shape": [
+          16
+        ]
+      }
+    ],
+    "step": 7,
+    "stride": 4,
+    "width": 2
+  },
+  "meta_offset": 28,
+  "name": "v3_2/resource_scene_mesh_textured_bundle_tex",
+  "section_lengths": [
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 16,
+      "name": "resource",
+      "offset": 176,
+      "shape": [
+        16
+      ],
+      "values": [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255]
+    }
+  ],
+  "type_name": "resource"
+}

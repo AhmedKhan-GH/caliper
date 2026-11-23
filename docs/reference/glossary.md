@@ -6,7 +6,7 @@ These pages use each term below with one meaning.
 
 | Term | Meaning |
 |---|---|
-| ABI epoch | The integer version of the frozen applet contract, which is `abi.h` together with the UI-stack pin. It is 2. The host refuses an applet with a different epoch before it loads any applet code. |
+| ABI epoch | The integer version of the frozen applet contract, which is `abi.h` together with the UI-stack pin. It is 3. The host refuses an applet with a different epoch before it loads any applet code. |
 | Applet | A shared library that the host loads and runs in its own process. It draws into the host's UI and uses the host's services. Each applet has a [manifest](../applets/manifest.md) and exports one descriptor. |
 | Caliper API | The HTTP interface to the running app. A program in any language can use it to list and launch applets, stream data to the app and fetch what the app shows. See [Caliper API](../agents/http-api.md). |
 | Caliper CLI | The subcommands of the `caliper` executable, such as `list`, `check`, `new`, `install`, `dev` and `shot`. See [Caliper CLI](cli.md). |
@@ -14,7 +14,7 @@ These pages use each term below with one meaning.
 | Caliper LIB | The `caliper` Python package. It gives a training script live views of its tensors. See [Caliper LIB](../python/caliper-lib-api.md). |
 | Caliper SDK | The C++ applet SDK. Applets build against the `caliper-sdk` package, which holds the C ABI headers, the service tables, the interchange types, the C++ sugar, the adapters, the pinned UI-stack sources, the fixture host and `caliper_add_applet()`. See [SDK package](../applets/sdk-package.md) and the [ABI](../applets/applet-contract.md). |
 | `CaliperTensor` | The interchange type that describes a block of memory with a dtype, a shape, strides, a device and an optional stream. A torch or NumPy tensor converts to it without a copy. See [Tensor](../applets/tensor-and-arrow-headers.md#tensor-header). |
-| `CaliperTextureId` | An opaque 64-bit texture handle that the tensor bridge and the geometry service return. It converts to an `ImTextureID` and is never a raw graphics handle. |
+| `CaliperTextureId` | An opaque 64-bit texture handle that the tensor bridge returns. It converts to an `ImTextureID` and is never a raw graphics handle. |
 | Core | The host's own code, as opposed to the applets. It holds the loader, the service implementations, the renderer, the crash guard and the frame watchdog. It builds as the `libcaliper` library and the `caliper` executable. |
 | Descriptor | The `CaliperAppletDescriptor` that an applet's library exports as `caliper_applet_descriptor`. It holds the identity of the applet, its required services and its five lifecycle functions. The sugar generates it. |
 | Fixture host | A headless fake `CaliperHost`. It lets you test the logic of an applet and the sugar without the UI. See [Testing](../development/testing.md). |

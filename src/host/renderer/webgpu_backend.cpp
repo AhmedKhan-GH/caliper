@@ -236,6 +236,8 @@ std::unique_ptr<WebGpuBackend> WebGpuBackend::create(WGPUDevice device, WGPUQueu
     o.max_color_attachments = lo32(d.max_color_attachments, L.maxColorAttachments);
     const bool compat = o.max_storage_buffers_in_vertex_stage == 0;
     caps.bits = o.max_storage_buffers_in_vertex_stage > 0 ? uint64_t(kCapVertexStorage) : 0;
+    // WebGPU copies a depth texture to a buffer only whole (CopyTextureToBuffer of Depth32Float).
+    caps.bits |= uint64_t(kCapDepthWholeCopy);
     caps.backend = "webgpu";
     adapter_text() = adapter ? adapter : "";
     caps.adapter = adapter_text().c_str();
@@ -1117,8 +1119,16 @@ bool WebGpuBackend::on_read_texture(Serial s, uint32_t readback_slot, uint32_t t
     p->w = w;
     p->h = h;
     p->bpp = texel_bytes(t->format);
-    p->row_pitch = uint32_t(round_up(uint64_t(w) * p->bpp, kCopyRowPitchAlign));
-    const uint64_t bytes = uint64_t(p->row_pitch) * h;
+    // WebGPU copies a depth texture only whole (its copy size must be the subresource's), so a region
+    // of one, such as a pick's window, is copied whole and cut out of the staging rows when mapped.
+    const bool whole = t->format == Format::Depth32Float && (x != 0 || y != 0 || w != t->w || h != t->h);
+    const uint32_t cw = whole ? t->w : w, ch = whole ? t->h : h;
+    if (whole) {
+        p->x = x;
+        p->y = y;
+    }
+    p->row_pitch = uint32_t(round_up(uint64_t(cw) * p->bpp, kCopyRowPitchAlign));
+    const uint64_t bytes = uint64_t(p->row_pitch) * ch;
     WGPUBufferDescriptor bd = WGPU_BUFFER_DESCRIPTOR_INIT;
     bd.label = sv("caliper.gfx.readback");
     bd.size = bytes;
@@ -1131,12 +1141,12 @@ bool WebGpuBackend::on_read_texture(Serial s, uint32_t readback_slot, uint32_t t
     WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(device_, nullptr);
     WGPUTexelCopyTextureInfo src = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
     src.texture = t->texture;
-    src.origin = WGPUOrigin3D{x, y, 0};
+    src.origin = whole ? WGPUOrigin3D{0, 0, 0} : WGPUOrigin3D{x, y, 0};
     WGPUTexelCopyBufferInfo dst = WGPU_TEXEL_COPY_BUFFER_INFO_INIT;
     dst.buffer = p->staging;
     dst.layout.bytesPerRow = p->row_pitch;
-    dst.layout.rowsPerImage = h;
-    const WGPUExtent3D size{w, h, 1};
+    dst.layout.rowsPerImage = ch;
+    const WGPUExtent3D size{cw, ch, 1};
     wgpuCommandEncoderCopyTextureToBuffer(enc, &src, &dst, &size);
     WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(enc, nullptr);
     wgpuQueueSubmit(queue_, 1, &cmd);
@@ -1163,7 +1173,7 @@ bool WebGpuBackend::on_read_texture(Serial s, uint32_t readback_slot, uint32_t t
                 const size_t row = size_t(p.w) * p.bpp;
                 p.bytes.resize(row * p.h);
                 for (uint32_t r = 0; r < p.h; ++r)
-                    std::memcpy(p.bytes.data() + r * row, src + size_t(r) * p.row_pitch, row);
+                    std::memcpy(p.bytes.data() + r * row, src + size_t(r + p.y) * p.row_pitch + size_t(p.x) * p.bpp, row);
             }
             wgpuBufferUnmap(p.staging);
         }

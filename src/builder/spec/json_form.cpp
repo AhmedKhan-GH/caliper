@@ -423,8 +423,11 @@ public:
                     sink_.error("spec.wrong_type", "stage must be an array of tables; write each one as [[stage]].",
                                 "stage");
                 } else {
-                    for (std::size_t i = 0; i < it->size(); ++i)
-                        s.stages.push_back(stage((*it)[i], index_path("stage", i)));
+                    for (std::size_t i = 0; i < it->size(); ++i) {
+                        // Stages were replaced by pieces: the spec opens without the stage.
+                        const Diagnostic d = stage_replaced((*it)[i], index_path("stage", i));
+                        sink_.warning(d.code, d.message, d.path);
+                    }
                 }
             }
             if (auto it = root.find("provenance"); it != root.end()) s.provenance = provenance(*it, "provenance");
@@ -434,7 +437,7 @@ public:
         return s;
     }
 
-    // ---- programs, stages and provenance (spec version 1, program.h) ---------
+    // ---- programs and provenance (spec version 1, program.h) ---------
     // The types, the keys, the required keys and the enumerations are checked
     // here; the ranges, the limits and the references are the validator's.
 
@@ -766,7 +769,7 @@ public:
         DrawPass p;
         strict_keys(o, path,
                     {"kind", "entry", "workgroups", "writes", "vertex", "fragment", "target", "reads", "instances",
-                     "vertices", "topology", "blend", "depth", "pick"},
+                     "vertices", "topology", "blend", "depth", "pick", "indices"},
                     "a pass of the draw half");
         if (o.find("kind") == o.end()) missing(path, "kind", "A pass of the draw half");
         if (auto k = named<PassKind>(o, "kind", path, pass_kind_from_name, {"compute", "render"}, "a kind of pass"))
@@ -793,6 +796,7 @@ public:
         p.blend = named<DrawBlend>(o, "blend", path, draw_blend_from_name, {"opaque", "alpha", "additive"}, "a blend");
         p.depth = named<DrawDepth>(o, "depth", path, draw_depth_from_name, {"none", "test", "write"}, "a depth");
         if (auto b = boolean(o, "pick", path)) p.pick = *b;
+        p.indices = string(o, "indices", path);
         return p;
     }
 
@@ -846,13 +850,18 @@ public:
         if (auto it = o.find("text"); it != o.end()) {
             const std::string tp = key_path(path, "text");
             if (table(*it, tp, tp)) {
-                strict_keys(*it, tp, {"anchors", "position", "string", "priority", "strings"}, "the text table");
+                strict_keys(*it, tp, {"anchors", "position", "string", "priority", "strings", "strings_from", "align"},
+                            "the text table");
                 TextTable t;
                 t.anchors = required_string(*it, "anchors", tp, "The text table");
                 if (auto v = string(*it, "position", tp)) t.position = *v;
                 if (auto v = string(*it, "string", tp)) t.string = *v;
                 t.priority = string(*it, "priority", tp);
                 t.strings = string_list(*it, "strings", tp);
+                t.strings_from = string(*it, "strings_from", tp);
+                if (auto a = named<TextAlign>(*it, "align", tp, text_align_from_name, {"placed", "left", "right", "center"},
+                                              "an alignment"))
+                    t.align = *a;
                 d.text = std::move(t);
             }
         }
@@ -874,18 +883,29 @@ public:
         if (auto v = count(o, "version", path)) p.version = *v;
         if (auto v = string(o, "description", path)) p.description = *v;
         tables(o, "inputs", path, [&](const json& t, const std::string& ip) {
-            strict_keys(t, ip, {"name", "kind", "dtype", "rank_min", "rank_max", "element", "struct", "fields", "title"},
+            strict_keys(t, ip,
+                        {"name", "kind", "dtype", "rank_min", "rank_max", "element", "struct", "fields", "title",
+                         "optional"},
                         "an input");
             PieceInput in;
             in.name = required_string(t, "name", ip, "An input");
             if (t.find("kind") == t.end()) missing(ip, "kind", "An input");
             if (auto k = named<InputKind>(t, "kind", ip, input_kind_from_name, {"tensor", "buffer"}, "a kind of input"))
                 in.kind = *k;
-            if (auto d = enumerated(t, "dtype", ip, {"f32", "i32", "u32"}, "a dtype")) in.dtype = *d;
+            if (auto d = string(t, "dtype", ip)) {
+                if (tensor_dtypes(*d).empty())
+                    sink_.error("spec.bad_value",
+                                quote(*d) + " is not a dtype; the choices are f32, i32, u32, u8 and u16, or two to "
+                                            "five of them joined by |, each once.",
+                                key_path(ip, "dtype"));
+                else
+                    in.dtype = *d;
+            }
             if (auto v = count(t, "rank_min", ip)) in.rank_min = *v;
             if (auto v = count(t, "rank_max", ip)) in.rank_max = *v;
             in.layout = piece_layout(t, ip);
             in.title = string(t, "title", ip);
+            if (auto v = boolean(t, "optional", ip)) in.optional = *v;
             p.inputs.push_back(std::move(in));
         });
         tables(o, "params", path, [&](const json& t, const std::string& pp) {
@@ -902,8 +922,8 @@ public:
         });
         tables(o, "resources", path, [&](const json& t, const std::string& rp) {
             strict_keys(t, rp,
-                        {"id", "kind", "element", "struct", "fields", "count", "counted", "width", "height", "publish",
-                         "clear", "keep"},
+                        {"id", "kind", "element", "struct", "fields", "count", "counted", "width", "height", "format",
+                         "texels", "publish", "clear", "keep"},
                         "a resource");
             Resource r;
             r.id = required_string(t, "id", rp, "A resource");
@@ -916,6 +936,8 @@ public:
             if (auto v = boolean(t, "counted", rp)) r.counted = *v;
             if (auto v = count(t, "width", rp)) r.width = *v;
             if (auto v = count(t, "height", rp)) r.height = *v;
+            r.format = enumerated(t, "format", rp, {"rgba8unorm", "r8unorm", "r32uint"}, "a texture format");
+            r.texels = count(t, "texels", rp);
             if (auto v = boolean(t, "publish", rp)) r.publish = *v;
             if (auto v = boolean(t, "clear", rp)) r.clear = *v;
             r.keep = count(t, "keep", rp);
@@ -987,28 +1009,6 @@ public:
         return p;
     }
 
-    Stage stage(const json& o, const std::string& path) {
-        Stage st;
-        if (!table(o, path, path)) return st;
-        keys(o, path, {"panel", "entity", "kind", "wgsl", "params"}, "a stage");
-        st.panel = required_string(o, "panel", path, "A stage");
-        st.entity = required_string(o, "entity", path, "A stage");
-        if (auto kind = string(o, "kind", path)) {
-            if (auto k = stage_kind_from_name(*kind)) {
-                st.kind = *k;
-            } else {
-                sink_.error("spec.bad_value", quote(*kind) + " is not a kind of stage; the kinds are material and vertex.",
-                            key_path(path, "kind"));
-            }
-        } else if (o.find("kind") == o.end()) {
-            missing(path, "kind", "A stage");
-        }
-        st.wgsl = required_string(o, "wgsl", path, "A stage");
-        st.params = params(o, path);
-        st.x = extension(o, path);
-        return st;
-    }
-
     Provenance provenance(const json& o, const std::string& path) {
         Provenance pv;
         if (!table(o, path, path)) return pv;
@@ -1033,6 +1033,9 @@ public:
                         r.target = required_string(item, "target", ip, "A reviewed source");
                         r.sha256 = required_string(item, "sha256", ip, "A reviewed source");
                     }
+                    // Old stage declarations are discarded above, together with their review hashes.
+                    // Program review hashes remain unchanged.
+                    if (r.target.rfind("stage:", 0) == 0) continue;
                     pv.reviewed.push_back(std::move(r));
                 }
             }
@@ -1790,7 +1793,6 @@ Program decode_program(const json& item, const std::string& path, Sink& sink) {
     return Decoder(sink).program(item, path);
 }
 
-Stage decode_stage(const json& item, const std::string& path, Sink& sink) { return Decoder(sink).stage(item, path); }
 
 Piece decode_piece(const json& item, const std::string& path, Sink& sink) { return Decoder(sink).piece(item, path); }
 
@@ -1945,8 +1947,30 @@ Decoded<Program> program_from_json(const json& item, const std::string& path) {
     return decode_item<Program>(item, path, 2, detail::decode_program);
 }
 
-Decoded<Stage> stage_from_json(const json& item, const std::string& path) {
-    return decode_item<Stage>(item, path, 2, detail::decode_stage);
+Diagnostic stage_replaced(const json& stage, const std::string& path) {
+    auto key = [&](const char* name) {
+        const auto it = stage.is_object() ? stage.find(name) : stage.end();
+        return it != stage.end() && it->is_string() ? it->get<std::string>() : std::string();
+    };
+    const std::string kind = key("kind"), entity = key("entity"), panel = key("panel");
+    std::string what = "the " + (kind.empty() ? std::string() : kind + " ") + "stage";
+    if (!entity.empty()) what += " on the entity " + detail::quote(entity);
+    if (!panel.empty()) what += " of the panel " + detail::quote(panel);
+    std::string how;
+    if (kind == "vertex")
+        how = "put the stage's change of a position into the vertex entry point of its draw.wgsl";
+    else
+        how = "put the stage's color into the color function of its draw.wgsl (point_color in points@1)";
+    Diagnostic d;
+    d.severity = Severity::warning;
+    d.code = "spec.stage_replaced";
+    d.path = path;
+    d.message = "Stages were replaced by pieces, thus " + what +
+                " no longer runs. Write the same look as a piece program: copy points@1, or lines@1 for lines, into "
+                "the workspace with piece.copy, " + how + ", place it in " +
+                (panel.empty() ? std::string("the scene panel") : "the panel " + detail::quote(panel)) +
+                " with program.create, and remove the [[stage]] table.";
+    return d;
 }
 
 PieceParse piece_from_json_value(const json& item, const std::string& path) {
@@ -2301,17 +2325,6 @@ json to_json(const Program& p) {
     return j;
 }
 
-json to_json(const Stage& s) {
-    json j = json::object();
-    j["panel"] = s.panel;
-    j["entity"] = s.entity;
-    j["kind"] = stage_kind_name(s.kind);
-    j["wgsl"] = s.wgsl;
-    if (!s.params.empty()) j["params"] = params_json(s.params);
-    if (!s.x.is_null()) j["x"] = s.x;
-    return j;
-}
-
 json to_json(const Provenance& p) {
     json j = json::object();
     j["foreign"] = p.foreign;
@@ -2383,11 +2396,6 @@ json to_json(const Spec& spec) {
         json list = json::array();
         for (const Program& p : spec.programs) list.push_back(to_json(p));
         j["program"] = std::move(list);
-    }
-    if (!spec.stages.empty()) {
-        json list = json::array();
-        for (const Stage& s : spec.stages) list.push_back(to_json(s));
-        j["stage"] = std::move(list);
     }
     if (!spec.pieces.empty()) {
         json list = json::array();

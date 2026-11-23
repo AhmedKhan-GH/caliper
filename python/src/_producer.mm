@@ -24,6 +24,7 @@
 #include "producer/caliper_producer.h"
 #include "producer/caliper_producer_derive.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <map>
@@ -84,7 +85,8 @@ bool dtype_of(const DLDataType& t, uint32_t* out, uint32_t* item) {
     struct Row { uint8_t code, bits; uint32_t dtype; } const rows[] = {
         {kDLFloat, 32, CALIPER_PRODUCER_F32}, {kDLFloat, 16, CALIPER_PRODUCER_F16},
         {kDLBfloat, 16, CALIPER_PRODUCER_BF16}, {kDLInt, 32, CALIPER_PRODUCER_I32},
-        {kDLUInt, 32, CALIPER_PRODUCER_U32}, {kDLInt, 64, CALIPER_PRODUCER_I64}, {kDLUInt, 8, CALIPER_PRODUCER_U8}};
+        {kDLUInt, 32, CALIPER_PRODUCER_U32}, {kDLInt, 64, CALIPER_PRODUCER_I64}, {kDLUInt, 8, CALIPER_PRODUCER_U8},
+        {kDLUInt, 16, CALIPER_PRODUCER_U16}};
     for (const Row& r : rows)
         if (t.code == r.code && t.bits == r.bits) {
             *out = r.dtype;
@@ -267,30 +269,35 @@ public:
     }
 
     // Checks, composes and compiles the derive half of a piece (caliper_producer_derive.h).
-    // `inputs` holds (name, import handle or 0 for the place of a buffer input, dtype);
+    // `inputs` holds (name, import handle or 0 for the place of a buffer input, dtype), and
+    // `unbound` the names of optional tensor inputs that the program leaves unbound (handle 0);
     // `resources` (id, kind, element, struct name, fields, count, width, height, counted,
-    // publish, clear); `passes` (entry, workgroups, writes); `params` (name, type, value).
+    // publish, clear, format, texels), with format "" and texels 0 for a buffer or the defaults;
+    // `passes` (entry, workgroups, writes); `params` (name, type, value).
     uint32_t derive(const std::string& id, const std::string& wgsl, const std::string& common,
                     const std::vector<std::tuple<std::string, uint32_t, std::string>>& inputs,
                     const std::vector<std::tuple<std::string, std::string, std::string, std::string,
                                                  std::vector<std::string>, uint32_t, uint32_t, uint32_t, bool,
-                                                 bool, bool>>& resources,
+                                                 bool, bool, std::string, uint32_t>>& resources,
                     const std::vector<std::tuple<std::string, std::array<uint32_t, 3>, std::vector<std::string>>>&
                         passes,
                     const std::vector<std::tuple<std::string, std::string, double>>& params, double time_ms,
-                    uint64_t memory_bytes, std::optional<std::string> piece_hash) {
+                    uint64_t memory_bytes, std::optional<std::string> piece_hash,
+                    const std::vector<std::string>& unbound) {
         alive();
         std::vector<caliper_producer_input> ins;
         std::vector<const char*> types;
+        std::vector<uint8_t> loose;
         for (const auto& [name, h, dtype] : inputs) {
             ins.push_back({name.c_str(), h});
             types.push_back(dtype.c_str());
+            loose.push_back(std::find(unbound.begin(), unbound.end(), name) != unbound.end() ? 1 : 0);
         }
         std::vector<std::vector<const char*>> fields(resources.size());
         std::vector<caliper_producer_resource_desc> res;
         for (size_t i = 0; i < resources.size(); ++i) {
-            const auto& [rid, kind, element, struct_name, fs, count, width, height, counted, publish, clear] =
-                resources[i];
+            const auto& [rid, kind, element, struct_name, fs, count, width, height, counted, publish, clear, format,
+                         texels] = resources[i];
             for (const std::string& f : fs) fields[i].push_back(f.c_str());
             caliper_producer_resource_desc r{};
             r.id = rid.c_str();
@@ -305,6 +312,8 @@ public:
             r.counted = counted;
             r.publish = publish;
             r.clear = clear;
+            r.format = format.empty() ? nullptr : format.c_str();
+            r.texels = texels;
             res.push_back(r);
         }
         std::vector<std::vector<const char*>> writes(passes.size());
@@ -344,6 +353,7 @@ public:
         d.param_count = values.size();
         d.time_limit_ms = time_ms;
         d.memory_limit_bytes = memory_bytes;
+        d.input_unbound = loose.empty() ? nullptr : loose.data();
         uint32_t handle = 0;
         caliper_producer_error e{};
         const caliper_producer_status s = caliper_producer_compile_derive(rt_, &d, &handle, &e);
@@ -352,7 +362,9 @@ public:
     }
 
     // The valid bytes of one published resource after the last pass, copied, as (bytes, count,
-    // stride): the next pass writes the runtime's buffer again while a sender still holds them.
+    // stride, width, height, elements): the next pass writes the runtime's buffer again while a
+    // sender still holds them. A texture gives its words as count and its version's size; a buffer
+    // of narrow elements its words and its valid elements, else elements is None.
     nb::tuple resource(uint32_t program, const std::string& name) {
         alive();
         caliper_producer_output o{};
@@ -363,7 +375,8 @@ public:
         const char* base = buffer ? static_cast<const char*>([buffer contents]) : nullptr;
         nb::bytes data(base && o.byte_size ? base + o.byte_offset : "", base ? size_t(o.byte_size) : 0);
         ++outputs_exported_;
-        return nb::make_tuple(data, o.count, o.words * 4);
+        return nb::make_tuple(data, o.count, o.words * 4, o.width, o.height,
+                              o.narrow ? nb::object(nb::int_(o.elements)) : nb::none());
     }
 
     // Binds the import `tensor` in place of `old` in the program, without a compile; raises
@@ -558,7 +571,9 @@ NB_MODULE(_producer, m) {
         .def("derive", &Runtime::derive, nb::arg("id"), nb::arg("wgsl"), nb::arg("common"), nb::arg("inputs"),
              nb::arg("resources"), nb::arg("passes"), nb::arg("params"), nb::arg("time_ms") = 4.0,
              nb::arg("memory_bytes") = uint64_t(64) << 20, nb::arg("piece_hash") = nb::none(),
-             "Check, compose and compile the derive half of a piece; returns its handle or raises ProducerError.")
+             nb::arg("unbound") = std::vector<std::string>{},
+             "Check, compose and compile the derive half of a piece; returns its handle or raises ProducerError. "
+             "An input named in unbound is an optional tensor input without a tensor (handle 0).")
         .def("resource", &Runtime::resource, nb::arg("program"), nb::arg("name"),
              "A published resource after the last pass as (bytes, count, stride), copied.")
         .def("set_params", &Runtime::set_params, nb::arg("program"), nb::arg("params"),

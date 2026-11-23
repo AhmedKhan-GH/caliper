@@ -74,8 +74,6 @@ The macro calls `connect` inside `initialize`, so most applets never call it dir
 | `Artifacts` | [`caliper.artifacts.v1`](services/caliper-artifacts-v1.md) | `put` returns the digest as a `std::string` (empty on failure), plus `path_of` and `exists`. |
 | `Data` | [`caliper.data.v1`](services/caliper-data-v1.md) | `query`, `register_dataset`, `open_dataset` and `last_error`, plus the static helper `drain_numeric`, which reads an all-numeric Arrow stream into column-major doubles. |
 | `Bridge` | [`caliper.tensor_bridge.v1`](services/caliper-tensor-bridge-v1.md) | Texture creation and update, `alloc_shared` and `free_shared`, `caps()` from `v1_1`, and the imported-allocation calls from `v1_2`. `imtex` casts a texture id to an `ImTextureID`. Frame thread only. |
-| `Geometry` | [`caliper.geometry.v1`](services/caliper-geometry-v1.md) | View creation, `draw_points` and the `draw_primitives` overloads for each record revision. When the host vends only a later revision, the wrapper widens older records to the layout that revision requires. Frame thread only. |
-| `Export` | [`caliper.export.v1`](services/caliper-export-v1.md) | `view_png` and the frame-sequence calls `begin_sequence`, `frame` and `end_sequence`, with the same overloads for each geometry record revision. |
 | `Device` | [`caliper.device.v1`](services/caliper-device-v1.md) | A plain struct that `Device::query(host)` fills with `kind`, `index`, `name` and `free_memory_hint`. It reports the CPU when the service is absent. |
 
 ## Fixture-Host TDD Recipe

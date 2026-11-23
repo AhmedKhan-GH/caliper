@@ -26,7 +26,7 @@ rm -rf third_party
 mkdir -p third_party
 
 # The wipe also removed what the superproject tracks under third_party/ directly
-# rather than as submodules (stb's headers, the llama.cpp and DuckDB patches).
+# rather than as submodules (stb's headers).
 # Put those back from HEAD.
 echo "Restoring tracked third_party files..."
 git ls-files -s -- third_party | awk '$1 != "160000" { print $4 }' | while IFS= read -r f; do
@@ -55,7 +55,7 @@ git submodule sync --recursive
 # `git submodule update --init --recursive --force`. That single command aborts
 # at the first submodule whose pinned commit is missing from its remote, which
 # leaves every submodule processed after it un-initialized. Some pins in this
-# repo reference commits that were never pushed upstream (e.g. a llama.cpp fork
+# repo reference commits that were never pushed upstream (for example a fork
 # commit), so we tolerate those and fall back to the remote's default branch
 # rather than failing the whole setup.
 echo "Initializing submodules..."

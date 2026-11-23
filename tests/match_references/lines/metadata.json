@@ -1,0 +1,239 @@
+{
+  "lines/color-000.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 2,
+        "x": 152,
+        "y": 120
+      },
+      {
+        "item": 10,
+        "primitive": 2,
+        "x": 135,
+        "y": 87
+      },
+      {
+        "item": 50,
+        "primitive": 2,
+        "x": 169,
+        "y": 131
+      },
+      {
+        "item": 99,
+        "primitive": 2,
+        "x": 188,
+        "y": 154
+      }
+    ]
+  },
+  "lines/color-001.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 2,
+        "x": 152,
+        "y": 120
+      },
+      {
+        "item": 50,
+        "primitive": 2,
+        "x": 169,
+        "y": 131
+      },
+      {
+        "item": 99,
+        "primitive": 2,
+        "x": 188,
+        "y": 154
+      }
+    ]
+  },
+  "lines/color-002.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 2,
+        "x": 152,
+        "y": 120
+      },
+      {
+        "item": 50,
+        "primitive": 2,
+        "x": 169,
+        "y": 131
+      }
+    ]
+  },
+  "lines/color-003.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 2,
+        "x": 92,
+        "y": 77
+      },
+      {
+        "item": 20,
+        "primitive": 2,
+        "x": 120,
+        "y": 101
+      },
+      {
+        "item": 39,
+        "primitive": 2,
+        "x": 66,
+        "y": 168
+      }
+    ]
+  },
+  "lines/color-004.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 2,
+        "x": 93,
+        "y": 76
+      },
+      {
+        "item": 39,
+        "primitive": 2,
+        "x": 67,
+        "y": 167
+      }
+    ]
+  },
+  "lines/color-005.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 2,
+        "x": 93,
+        "y": 67
+      },
+      {
+        "item": 39,
+        "primitive": 2,
+        "x": 86,
+        "y": 158
+      }
+    ]
+  },
+  "lines/color-006.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 2,
+        "x": 198,
+        "y": 131
+      },
+      {
+        "item": 10,
+        "primitive": 2,
+        "x": 91,
+        "y": 68
+      },
+      {
+        "item": 20,
+        "primitive": 2,
+        "x": 176,
+        "y": 174
+      },
+      {
+        "item": 44,
+        "primitive": 2,
+        "x": 184,
+        "y": 170
+      }
+    ]
+  },
+  "lines/color-007.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 2,
+        "x": 198,
+        "y": 131
+      },
+      {
+        "item": 44,
+        "primitive": 2,
+        "x": 184,
+        "y": 170
+      }
+    ]
+  },
+  "lines/color-008.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 2,
+        "x": 140,
+        "y": 97
+      },
+      {
+        "item": 58,
+        "primitive": 2,
+        "x": 156,
+        "y": 68
+      }
+    ]
+  },
+  "lines/color-009.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 2,
+        "x": 140,
+        "y": 97
+      },
+      {
+        "item": 58,
+        "primitive": 2,
+        "x": 156,
+        "y": 68
+      }
+    ]
+  },
+  "lines/color-010.png": {
+    "picks": []
+  },
+  "lines/color-011.png": {
+    "picks": []
+  },
+  "lines/color-012.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 2,
+        "x": 71,
+        "y": 109
+      },
+      {
+        "item": 38,
+        "primitive": 2,
+        "x": 198,
+        "y": 139
+      }
+    ]
+  },
+  "lines/color-013.png": {
+    "picks": []
+  },
+  "lines/color-014.png": {
+    "picks": []
+  },
+  "lines/color-015.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 2,
+        "x": 192,
+        "y": 115
+      }
+    ]
+  },
+  "lines/color-016.png": {
+    "picks": []
+  }
+}

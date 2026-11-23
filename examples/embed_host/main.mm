@@ -17,7 +17,7 @@
 // Everything else in this file is ordinary Cocoa boilerplate — window, view,
 // timer, event translation — deliberately sparse so the five calls stand out.
 //
-// Run:  ./embed_host [manifest-id]        (default: dev.caliper.instance-scope)
+// Run:  ./embed_host [manifest-id]        (default: dev.caliper.embed-scope)
 //   CALIPER_EMBED_APPLETS=<dir>          the applets folder (applets_dir).
 //   CALIPER_EMBED_EXIT_AFTER=<seconds>   close the window after that long.
 //   CALIPER_EMBED_OFFSCREEN=1            no window at all: an offscreen canvas,
@@ -248,7 +248,7 @@ static void send(CaliperInputEvent ev) {
 @end
 
 int main(int argc, const char* argv[]) {
-    const char* applet_id = (argc > 1) ? argv[1] : "dev.caliper.instance-scope";
+    const char* applet_id = (argc > 1) ? argv[1] : "dev.caliper.embed-scope";
     if (!embed_version_ok()) return 1;
     // The offscreen mode returns before any NSApplication or window exists.
     if (embed_offscreen_requested())

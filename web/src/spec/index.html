@@ -41,10 +41,14 @@
   .status { flex: 0 0 22px; display: flex; align-items: center; padding: 0 12px; background: var(--deep);
             border-top: 1px solid var(--rule); font: 10.77px/1 var(--text); color: var(--secondary); white-space: nowrap; overflow: hidden; }
   .status[data-state="offline"] { color: var(--bronze); }
+  /* A saved dashboard that the app does not have open: one line under the bar says why no live data shows. */
+  .banner { flex: 0 0 auto; padding: 6px 12px; background: var(--plate); border-bottom: 1px solid var(--rule);
+            color: var(--parchment); font: 11.54px/1.3 var(--text); }
 </style>
 </head>
 <body>
 <header class="bar"><span class="wordmark">Caliper</span><span class="title" id="title"></span></header>
+<div class="banner" id="banner" role="note" hidden></div>
 <main id="area"><canvas id="canvas"></canvas><ul class="list" id="list" hidden></ul></main>
 <footer class="status" id="status" role="status" data-state="connecting">connecting</footer>
 <script type="module">/*@SCRIPT@*/</script>

@@ -26,7 +26,7 @@ add_library(caliper_builder_spec STATIC
     validate_references.cpp
     validate_states.cpp)
 target_include_directories(caliper_builder_spec PUBLIC "${CALIPER_BUILDER_INCLUDE_ROOT}")
-# The validator holds programs and stages to the sandbox's declaration checks
+# The validator holds programs to the sandbox's declaration checks
 # (caliper_builder_programs), so that the editor and the hosts share one set
 # of limits.
 target_link_libraries(caliper_builder_spec

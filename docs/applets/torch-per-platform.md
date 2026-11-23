@@ -42,9 +42,7 @@ An applet chooses one of two routes from a CUDA tensor to a Vulkan image for eac
   If the kernel path refuses the tensor, the host copies it inside VRAM. If that also fails, the host stages it on the
   CPU. See [Vulkan and CUDA on Windows](../development/vulkan-and-cuda.md).
 - **The exportable pool.** Tensors from an `ExportablePool` live in `cuMemCreate` blocks with shareable handles. The
-  host imports a block once. Later updates and geometry draws address the tensor as an allocation id and a byte offset.
-  [`caliper.geometry.v1`](services/caliper-geometry-v1.md) draws from this pool because geometry reads imported memory
-  in place and has no tensor to read through a kernel.
+  host imports a block once. Later updates address the tensor as an allocation id and a byte offset.
 
 On macOS, neither route needs an allocator change because the storage of an MPS tensor is already an `MTLBuffer`.
 `ExportablePool` on MPS imports the own buffer of the tensor in the same process.
@@ -75,8 +73,7 @@ An applet opts in after the host grants `CALIPER_BRIDGE_CAP_IMPORT_ALLOC`. Follo
    block, and for an import that the host declined. It remembers a declined block. The update calls return `false` for an
    out-of-bounds window or a released allocation. In each case, use the ordinary `update_texture` or the CPU fallback.
 6. **Keep the bytes still.** The host reads an imported tensor in place. Do not rewrite it until the next update of its
-   texture or the next draw that uses it. Drain the device before you publish a slot. Write the slot that is neither
-   published nor displayed.
+   texture. Drain the device before you publish a slot. Write the slot that is neither published nor displayed.
 7. **On macOS, keep the tensor alive.** The MPS variant requires a contiguous MPS tensor, and the tensor must outlive
    its import. Otherwise the allocator of torch can give the same buffer to an unrelated tensor while the host still
    draws from it. Persistent slot tensors satisfy this rule.

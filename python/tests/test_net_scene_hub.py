@@ -10,7 +10,10 @@
 * a batch over one frame travels through the hub as a split update that the
   codec puts back together;
 * a viewer without the capability "scenes" (a 3.1 viewer) sees no scene and
-  gets unknown_view for one.
+  gets unknown_view for one;
+* points travel through the hub in the piece form, the RESOURCE of their scene
+  program before the update, to a viewer with "scene_pieces", and a viewer
+  without it gets the scene's structure alone.
 
 It skips without the app or the native sender."""
 from __future__ import annotations
@@ -25,7 +28,7 @@ import pytest
 import torch
 
 import caliper
-from caliper import _net_scene, _wire as w
+from caliper import _net_scene, _scene_pieces, _wire as w
 
 from test_net_scene import NATIVE, Viewer, run
 from test_net_scene import _forget_scenes  # noqa: F401  (fixture)
@@ -83,6 +86,7 @@ def _kind(m) -> str:
 
 
 SCENE_MSGS = (w.SceneUpdate, w.SceneTransforms, w.SceneClasses, w.SceneClear)
+PIECES = (w.CAP_SCENES, w.CAP_SCENE_PIECES)
 
 
 def test_scene_parts_through_the_hub(hub, monkeypatch):
@@ -95,8 +99,9 @@ def test_scene_parts_through_the_hub(hub, monkeypatch):
               static=True)
 
     async def go():
-        async with Viewer(hub) as v:
+        async with Viewer(hub, caps=PIECES) as v:
             assert v.welcome.role == "hub" and w.CAP_SCENES in v.welcome.capabilities
+            assert w.CAP_SCENE_PIECES in v.welcome.capabilities
             r = await v.subscribe(1, "world")
             assert r.error is None
             assert v.views["world"]["scene"]["view_camera"] == {"azimuth": 30.0}
@@ -106,7 +111,10 @@ def test_scene_parts_through_the_hub(hub, monkeypatch):
                                                  "rig/cam:camera", "room/cloud:points"]
             assert all(m.state for m in state)
             cloud = next(m for m in state if isinstance(m, w.SceneUpdate) and m.part == "points")
-            assert cloud.arrays["class_ids"].array().tolist() == [0, 1, 0, 1, 0, 1]
+            assert cloud.program is not None and cloud.names == ["positions", "class_ids"]
+            res = await v.expect(w.Resource, lambda m: m.program == cloud.program)
+            back = _scene_pieces.unpack_points(bytes(memoryview(res.data).cast("B")), cloud.names, 3)
+            assert back["class_ids"].tolist() == [0, 1, 0, 1, 0, 1]
             # live messages: index-pair edges, an entity transform, a stamped batch and its clear
             pos = torch.rand(4, 3)
             sc.lines("graph", pos, indices=torch.tensor([[0, 1], [2, 3]]))
@@ -122,17 +130,14 @@ def test_scene_parts_through_the_hub(hub, monkeypatch):
             c = await v.expect(w.SceneClear, lambda m: m.path == "dyn")
             assert not c.reset
             # a split update through the hub
-            monkeypatch.setattr(_net_scene, "FRAME_ROOM", 16 * 1024)
-            monkeypatch.setattr(_net_scene, "PIECE_BYTES", 24 * 1024)
+            from caliper import _programs
+            monkeypatch.setattr(_programs, "PART_BYTES", 24 * 1024)
             big = torch.arange(3 * 3000, dtype=torch.float32).reshape(3000, 3)
             sc.mesh("big", big)
-            su = w.SplitUpdates()
-            whole = None
-            while whole is None:
-                whole = su.add(await v.update("big", "mesh"))
+            whole = await v.update("big", "mesh")
             np.testing.assert_array_equal(whole.arrays["positions"].array(), big.numpy())
             # A viewer that subscribes while the first one watches gets the hub's own state.
-            async with Viewer(hub) as late:                                     # the hub's own state
+            async with Viewer(hub, caps=PIECES) as late:                        # the hub's own state
                 await late.subscribe(2, "world")
                 want = ["reset", "classes", "transforms static rig", "transforms stamped a",
                         "big:mesh", "graph:lines", "rig/cam:camera", "room/cloud:points"]
@@ -147,9 +152,8 @@ def test_scene_parts_through_the_hub(hub, monkeypatch):
                 assert kinds == want
                 assert all(m.state for m in got)
                 pieces = [m for m in got if isinstance(m, w.SceneUpdate) and m.path == "big"]
-                assert len(pieces) >= 2 and [m.split["piece"] for m in pieces] == list(range(len(pieces)))
-                su = w.SplitUpdates()
-                whole = [su.add(m) for m in pieces][-1]
+                assert len(pieces) == 1 and pieces[0].program and pieces[0].split is None
+                whole = pieces[0]
                 np.testing.assert_array_equal(whole.arrays["positions"].array(), big.numpy())
 
     run(go(), timeout=60)
@@ -167,5 +171,22 @@ def test_a_31_viewer_through_the_hub_sees_no_scene(hub):
             await v.send(w.Subscribe(1, "hidden", 101))
             r = await v.expect(w.ViewReply, lambda m: m.request_id == 101)
             assert r.error["code"] == w.ERR_UNKNOWN_VIEW
+
+    run(go(), timeout=60)
+
+
+def test_a_viewer_without_scene_pieces_through_the_hub_gets_the_structure(hub):
+    caliper.connect()
+    sc = caliper.scene("world")
+    sc.camera("cam", width=8, height=6, focal=5.0, static=True)
+    sc.points("cloud", torch.rand(5, 3), static=True)
+    sc.lines("edges", torch.rand(4, 3), static=True)
+
+    async def go():
+        async with Viewer(hub, caps=(w.CAP_SCENES,)) as old:
+            await old.subscribe(1, "world")
+            state = [await old.expect(object, lambda m: isinstance(m, SCENE_MSGS)) for _ in range(2)]
+            assert [_kind(m) for m in state] == ["reset", "cam:camera"]
+            assert not [m for m in old.inbox if isinstance(m, (w.Resource, w.SceneUpdate))]
 
     run(go(), timeout=60)

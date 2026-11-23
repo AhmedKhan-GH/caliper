@@ -1,8 +1,11 @@
 // The draw half of points@1, as the built-in points primitive draws: each point is a quad of two
-// triangles around its projected center, `size` pixels wide at the display's pixel ratio, a disc
-// when `shape` is 1, with depth and the point's ID. A colormap color is the host colormap's
+// triangles around its projected center, `size` pixels wide at the display's pixel ratio, or with
+// radius_mode 1 its radius (position.w) in scene units through radius_scale and the projection's
+// scales, never below half a pixel, a disc when `shape` is 1, with depth and the point's ID. A colormap color is the host colormap's
 // texel of the level that the host's reference gives a value, (v - vmin) / (vmax - vmin) * 255
-// rounded, with NaN at level 0. A point with a NaN coordinate is not drawn.
+// rounded, with NaN at level 0. A point with a NaN coordinate is not drawn. With att_ref above 0 a
+// point's size in pixels follows its distance, and past fade_w0 its color dims toward half at
+// fade_w1, as the live points view's depth cues draw.
 
 struct PointOut {
     @builtin(position) position: vec4<f32>,
@@ -65,8 +68,18 @@ fn point_vs(@builtin(instance_index) i: u32, @builtin(vertex_index) v: u32) -> P
         return out;
     }
     let c = camera::clip(p.position.xyz);
-    let size = params.size * caliper_view.time.z;
-    let k = (size / caliper_view.viewport.zw) * c.w;
+    var size = params.size * caliper_view.time.z;
+    if (params.att_ref > 0.0) {
+        size = size * clamp(params.att_ref / max(c.w, 1e-6), 0.5, 2.0);
+    }
+    if (params.fade_w1 > params.fade_w0) {
+        let f = clamp((c.w - params.fade_w0) / (params.fade_w1 - params.fade_w0), 0.0, 1.0);
+        out.color = vec4<f32>(out.color.rgb * (1.0 - 0.5 * f), out.color.a);
+    }
+    var k = (size / caliper_view.viewport.zw) * c.w;
+    if (params.radius_mode == 1u) {
+        k = max(p.position.w * params.radius_scale * vec2<f32>(params.proj_x, params.proj_y), c.w / caliper_view.viewport.zw);
+    }
     out.position = vec4<f32>(c.xy + corner * k, c.z, c.w);
     return out;
 }

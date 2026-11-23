@@ -1,7 +1,7 @@
-# caliper_builder_programs: the sandbox of GPU programs and stages
+# caliper_builder_programs: the sandbox of GPU programs
 # (design/gpu-programs.md, Sandbox; include/caliper_builder/programs/sandbox.h).
 # The editor's program commands, the producer runtime in the script and the
-# viewer's stages run the same checks. It needs only the standard library and
+# viewer run the same checks. It needs only the standard library and
 # the header-only value types of spec/program.h (with nlohmann_json), and it
 # links the runtime WGSL compiler caliper::wgsl when the build has it.
 # pieces.cpp holds the names, imports, hash, composer and checks of pieces
@@ -29,4 +29,9 @@ caliper_builder_add_tests(programs
         tests/test_pieces.cpp
         tests/test_compose_derive.cpp
         tests/test_compose_draw.cpp
-    LIBS caliper_builder_programs)
+    LIBS caliper_builder_programs caliper_builder_spec)
+# The library's source folder, for the test that the embedded files equal the files on disk.
+if(TARGET caliper_builder_programs_tests)
+    target_compile_definitions(caliper_builder_programs_tests
+                               PRIVATE CALIPER_PROGRAMS_LIBRARY_DIR="${CMAKE_CURRENT_SOURCE_DIR}/library")
+endif()

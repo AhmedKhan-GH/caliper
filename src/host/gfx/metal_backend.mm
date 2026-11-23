@@ -242,12 +242,9 @@ public:
 
     bool reap_ = false;   // the destructor gives the objects to the reaper instead of a wait
 
-    // The geometry service's adapter (metal_backend.h): a live buffer's or texture's Metal object.
+    // A live buffer's Metal object (metal_buffer in metal_backend.h).
     id<MTLBuffer> buffer_object(Buffer b) const {
         return alive(b) && handle_slot(b.id) < buffers_.size() ? buffers_[handle_slot(b.id)] : nil;
-    }
-    id<MTLTexture> texture_object(Texture t) const {
-        return alive(t) && handle_slot(t.id) < textures_.size() ? textures_[handle_slot(t.id)].texture : nil;
     }
 
     // A backend waits for its last submit when it goes, because its submits hold no references
@@ -1003,11 +1000,6 @@ private:
 void* metal_buffer(Backend& b, Buffer buffer) {
     auto* m = dynamic_cast<MetalBackend*>(&b);
     return m ? (__bridge void*)m->buffer_object(buffer) : nullptr;
-}
-
-void* metal_texture(Backend& b, Texture texture) {
-    auto* m = dynamic_cast<MetalBackend*>(&b);
-    return m ? (__bridge void*)m->texture_object(texture) : nullptr;
 }
 
 bool metal_precompile(void* mtl_device, const char* msl, const char* const* compute_entries, size_t entry_count,

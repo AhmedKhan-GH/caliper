@@ -1,5 +1,5 @@
 // surface_row_fixture.h: the 3-D scene of the graphics suite's surface row, the first scene
-// drawn through the whole renderer core (the scene core, BackendResources, the generated
+// drawn through the scene library pieces (the scene tree, resources, and
 // programs and a backend of the graphics layer).
 //
 // A small loss landscape, as demo 0 draws one (design/demos.md): a height field of 41 x 41
@@ -13,7 +13,6 @@
 #pragma once
 
 #include "scene/camera.h"
-#include "scene/compile.h"
 #include "scene/scene.h"
 
 #include <algorithm>
@@ -186,13 +185,7 @@ struct SurfaceRowFixture {
         return cam;
     }
 
-    caliper_scene::CompileOptions options() const {
-        caliper_scene::CompileOptions o;
-        o.width = o.height = kSize;
-        o.pixel_scale = 1.0f;
-        o.clear_rgba = kClear;
-        return o;
-    }
+
 };
 
 }  // namespace scene_fixtures

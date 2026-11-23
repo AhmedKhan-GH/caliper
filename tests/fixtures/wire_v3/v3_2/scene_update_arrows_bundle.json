@@ -1,0 +1,64 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 336,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 288,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 112
+  },
+  "meta": {
+    "arrays": [
+      "origins",
+      "vectors",
+      "colors"
+    ],
+    "part": "arrows",
+    "path": "field",
+    "piece": {
+      "name": "arrows",
+      "version": 1
+    },
+    "program": "scene.115",
+    "resources": {
+      "arrows": 2,
+      "info": 1
+    },
+    "sections": [
+      {
+        "dtype": 3,
+        "name": "stamp",
+        "shape": [
+          2
+        ]
+      }
+    ],
+    "seq": 22,
+    "stamp_ns": 81234567893583,
+    "sub": 2,
+    "view": "world",
+    "width": 2.0
+  },
+  "meta_offset": 28,
+  "name": "v3_2/scene_update_arrows_bundle",
+  "section_lengths": [
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 16,
+      "name": "stamp",
+      "offset": 320,
+      "shape": [
+        2
+      ],
+      "values": [1200, 1763200000123456789]
+    }
+  ],
+  "type_name": "scene_update"
+}

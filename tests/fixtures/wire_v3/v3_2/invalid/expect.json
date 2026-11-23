@@ -486,6 +486,33 @@
   "resource_count_wrap.bin": {
     "error": "bad_request"
   },
+  "resource_element_stride.bin": {
+    "error": "bad_request"
+  },
+  "resource_element_texture.bin": {
+    "error": "bad_request"
+  },
+  "resource_element_unknown.bin": {
+    "error": "bad_request"
+  },
+  "resource_elements_alone.bin": {
+    "error": "bad_request"
+  },
+  "resource_elements_count.bin": {
+    "error": "bad_request"
+  },
+  "resource_elements_missing.bin": {
+    "error": "bad_request"
+  },
+  "resource_format_alone.bin": {
+    "error": "bad_request"
+  },
+  "resource_format_count.bin": {
+    "error": "bad_request"
+  },
+  "resource_format_unknown.bin": {
+    "error": "bad_request"
+  },
   "resource_name.bin": {
     "error": "bad_request"
   },
@@ -501,6 +528,9 @@
   "resource_program_missing.bin": {
     "error": "bad_request"
   },
+  "resource_scene_id.bin": {
+    "error": "bad_request"
+  },
   "resource_section_2d.bin": {
     "error": "bad_request"
   },
@@ -511,6 +541,54 @@
     "error": "bad_request"
   },
   "resource_section_short.bin": {
+    "error": "bad_request"
+  },
+  "resource_split_count_wrap.bin": {
+    "error": "bad_request"
+  },
+  "resource_split_first_missing.bin": {
+    "error": "bad_request"
+  },
+  "resource_split_first_past.bin": {
+    "error": "bad_request"
+  },
+  "resource_split_first_u32.bin": {
+    "error": "bad_request"
+  },
+  "resource_split_first_wraps.bin": {
+    "error": "bad_request"
+  },
+  "resource_split_list.bin": {
+    "error": "bad_request"
+  },
+  "resource_split_over_max.bin": {
+    "error": "bad_request"
+  },
+  "resource_split_part0_first.bin": {
+    "error": "bad_request"
+  },
+  "resource_split_part_past.bin": {
+    "error": "bad_request"
+  },
+  "resource_split_parts_many.bin": {
+    "error": "bad_request"
+  },
+  "resource_split_parts_one.bin": {
+    "error": "bad_request"
+  },
+  "resource_split_section_empty.bin": {
+    "error": "bad_request"
+  },
+  "resource_split_section_partial.bin": {
+    "error": "bad_request"
+  },
+  "resource_split_section_past.bin": {
+    "error": "bad_request"
+  },
+  "resource_split_version.bin": {
+    "error": "bad_request"
+  },
+  "resource_split_version_missing.bin": {
     "error": "bad_request"
   },
   "resource_step.bin": {
@@ -537,10 +615,25 @@
   "resource_texture_side.bin": {
     "error": "bad_request"
   },
+  "resource_texture_side_big.bin": {
+    "error": "bad_request"
+  },
   "resource_texture_stride.bin": {
     "error": "bad_request"
   },
   "resource_width_alone.bin": {
+    "error": "bad_request"
+  },
+  "scene_update_piece_arrays.bin": {
+    "error": "bad_request"
+  },
+  "scene_update_piece_section.bin": {
+    "error": "bad_request"
+  },
+  "scene_update_piece_split.bin": {
+    "error": "bad_request"
+  },
+  "scene_update_piece_wrong.bin": {
     "error": "bad_request"
   },
   "segments_odd.bin": {

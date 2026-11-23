@@ -23,7 +23,6 @@ add_library(caliper_spec_runtime STATIC
     spec_prepare.cpp
     spec_runtime.cpp
     spec_offscreen.cpp
-    spec_stages.cpp
     spec_entities.cpp
     spec_shortcuts.cpp
     spec_transport.cpp
@@ -31,12 +30,6 @@ add_library(caliper_spec_runtime STATIC
 target_include_directories(caliper_spec_runtime PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_spec_runtime PUBLIC libcaliper caliper_builder_session caliper_sternbild_ui)
 set_target_properties(caliper_spec_runtime PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
-# The runtime WGSL compiler translates the viewer's stages (spec_stages.cpp,
-# design/gpu-programs.md); without it the stage host refuses each stage with
-# program.compiler_unavailable.
-if(TARGET caliper::wgsl)
-    target_link_libraries(caliper_spec_runtime PRIVATE caliper::wgsl)
-endif()
 if(NOT MSVC)
     target_compile_options(caliper_spec_runtime PRIVATE -Wall -Wextra)
 endif()
@@ -82,7 +75,6 @@ if(BUILD_TESTS AND TARGET doctest::doctest)
         tests/test_spec_draw.cpp
         tests/test_panel_render.cpp
         tests/test_spec_shot.cpp
-        tests/test_spec_stages.cpp
         tests/test_spec_pixels.cpp
         tests/test_spec_entities.cpp
         tests/test_spec_transport.cpp

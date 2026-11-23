@@ -1,14 +1,16 @@
 # Shader Authoring
 
-The shaders of the graphics layer in `src/host/gfx/` are written once, in WGSL, and translated to MSL for Metal and to SPIR-V for Vulkan at developer time. The translated sources are committed, so building Caliper needs no Rust and no shader tool. Only a developer who changes a shader runs the translator, and a CI check makes sure that nobody forgets to. The renderers in `src/host/renderer/` still use their own hand-written shaders; so far only the graphics suite's layer and scene rows draw through these programs, on Metal.
+The graphics layer keeps generated WGSL compute programs for texture fill and colormap conversion.
+The generator translates them to MSL and SPIR-V at developer time.
+The committed outputs let ordinary builds use them without a Rust toolchain.
+Library scene pieces keep their shaders in `src/builder/programs/library/pieces/` and compile through the piece runtime.
 
 ## Source Locations
 
 | Path | Contents |
 |---|---|
-| `src/host/gfx/shaders/common/` | What the scene programs share: the declarations of the bind groups and varyings (`decls.wgsl`), the colormap decided by integer keys (`colormap.wgsl`), the helpers (`helpers.wgsl`) and the two shared fragment stages (`fragments.wgsl`) |
-| `src/host/gfx/shaders/scene/` | The vertex and fragment stages of each kind of scene draw: points, lines, boxes, meshes and images |
-| `src/host/gfx/shaders/compute/` | The index clamp, the edge gather and `colormap_texture`, the colormap's compute form for textures |
+| `src/host/gfx/shaders/common/` | The colormap decided by integer keys (`colormap.wgsl`) |
+| `src/host/gfx/shaders/compute/` | `colormap_texture` and `fill_texture` |
 | `src/host/gfx/shaders/tests/` | Programs that only the tests use, such as the colormap probe |
 | `src/host/gfx/shaders/manifest.json` | The programs: each one's sources in order, its outputs, the vertex and fragment pairs the checks make into pipelines, and `fast_math` for a program that Metal may compile with fast math |
 | `src/host/gfx/shaders/generated/` | The committed outputs; never edit them by hand |
@@ -31,7 +33,7 @@ It also writes, for all programs together:
 
 | File | Contents |
 |---|---|
-| `uniforms.h` | Every uniform block as a C++ struct, such as `Frame`, `PrimParams` and `Cmap`, with its size and every member's offset checked by `static_assert` |
+| `uniforms.h` | Every uniform block as a C++ struct, such as `Cmap` and `TexParams`, with its size and every member's offset checked by `static_assert` |
 | `programs.h` | `ProgramId`, and each program's entries and bindings as the layer's `EntryDesc` and `BindingDesc`, its vertex inputs, its fragment outputs and its checked pairs |
 | `programs_metal.h`, `programs_vulkan.h`, `programs_webgpu.h` | The table of `ProgramDesc`s for one backend, indexed by `ProgramId`, which includes only that backend's sources |
 | `programs.json` | The same description for tools and tests outside C++ |
@@ -85,10 +87,10 @@ A program may have a hand-written native version on one platform, for example an
 
 ```json
 "outputs": ["wgsl", "spirv"],
-"hand_written": {"msl": "gfx/metal/index_clamp_msl.h"}
+"hand_written": {"msl": "gfx/metal/fill_texture_msl.h"}
 ```
 
-The generator then leaves that file alone and the backend's table includes it in place of a generated header. The hand-written header defines the constant the generated one would, such as `kIndexClampMsl`, and takes the bindings and uniform structs the generator describes. The check covers only the generated outputs; the tests below cover the hand-written one as they cover the others.
+The generator then leaves that file alone and the backend's table includes it in place of a generated header. The hand-written header defines the constant the generated one would, such as `kFillTextureMsl`, and takes the bindings and uniform structs the generator describes. The check covers only the generated outputs; the tests below cover the hand-written one as they cover the others.
 
 ## Checks
 
@@ -98,9 +100,9 @@ The generator then leaves that file alone and the backend's table includes it in
 | `tools/shaders/test_generate.py` | The Shaders workflow | The check fails on a changed, missing or extra file and on a source that does not compile, and a hand-written output is left alone |
 | `tools/shaders/validate_spirv.py` | The Shaders workflow, with SPIRV-Tools' `spirv-val` | Every SPIR-V program is valid for Vulkan 1.1 |
 | `caliper_shader_tests` (`tests/shaders/`) | ctest on macOS, label `gfx` | Every MSL program compiles on the default Metal device, every compute entry and checked pair becomes a pipeline state, and the colormap matches `map_f32_to_rgba8` byte for byte on its boundary cases, with fast math on and off |
-| `web/test/shaders.spec.ts` | The web package's Playwright tests | Every WGSL program compiles and every pipeline is created on a default and a compatibility-mode device, the colormap matches the C++ byte for byte on both through the probe, `colormap_texture` and the points' vertex stage, and the points, line and mesh programs draw a fixture |
+| `web/test/shaders.spec.ts` | The web package's Playwright tests | Every WGSL compute program compiles on default and compatibility-mode devices, and the probe and `colormap_texture` match the CPU reference |
 
-The browser compares the colormap with vectors that the C++ generates. `caliper_colormap_cases` writes them, and the test takes the file through an environment variable; without the file, the colormap rows and the fixture, whose keys come from it too, are skipped:
+The browser compares the colormap with vectors that the C++ generates. `caliper_colormap_cases` writes them, and the test takes the file through an environment variable; without the file, the colormap rows are skipped:
 
 ```sh
 cmake-build-release/tests/caliper_colormap_cases /path/to/cases.bin

@@ -1,17 +1,16 @@
 #pragma once
-// The hosts of GPU programs and stages (design/gpu-programs.md, Program Status
-// and Attachment): where the session meets the parts of the app that run the
-// spec's programs in the attached script and its stages in the viewer.
+// The hosts of GPU programs (design/gpu-programs.md, Program Status and
+// Attachment): where the session meets the parts of the app that run the
+// spec's programs in the attached script and draw its pieces in the viewer.
 //
-// The app gives the session a ProgramHost and a StageHost, as it gives its
-// RunControl (Session::set_program_host(), Session::set_stage_host()), and
+// The app gives the session a ProgramHost and a DrawStatusHost, as it gives
+// its RunControl (Session::set_program_host(), Session::set_draw_host()), and
 // takes them back with null before it destroys them. The session calls
 // reconcile() on the frame thread after each change of the open spec (an
 // edit, an undo, a redo, an open), and the host then makes what it runs equal
 // to the spec: the program host sends PROGRAM set and remove to the attached
-// script, and the stage host compiles the stages. program.status reads
-// status() of both. Each host pushes its own `program` events
-// (push_program_event()). Without a host, program.status reports each item
+// script. program.status reads status() of both; the draw status host only
+// reports. Each host pushes its own `program` events (push_program_event()). Without a host, program.status reports each item
 // with host none and state waiting.
 #include <caliper_builder/session/events.h>
 #include <caliper_builder/spec/spec.h>
@@ -26,7 +25,7 @@
 
 namespace caliper_builder {
 
-// The last error of a program or a stage: a code of sandbox.h, one plain
+// The last error of a program: a code of sandbox.h, one plain
 // sentence, and the line and column in its source (0 when none).
 struct ProgramError {
     std::string code;
@@ -52,13 +51,13 @@ struct DrawStatus {
 // One status item (the command table's program_status, and PROGRAM_STATE's
 // programs).
 struct ProgramStatus {
-    std::string id;                               // a program's id, or spec::stage_id() of a stage
-    std::string kind;                             // "geometry", "pixels", "material" or "vertex"
+    std::string id;                               // a program's id
+    std::string kind;                             // "geometry", "pixels", "tensor", "operator" or "piece"
     std::string host = "none";                    // "script", "viewer" or "none"
     std::string state = "waiting";                // "waiting", "review", "compiled", "running", "refused", "stopped"
-    std::string panel;                            // the target scene panel of a geometry output or a stage; empty otherwise
+    std::string panel;                            // the target scene panel of a geometry output; empty otherwise
     // The cadence (design/gpu-programs.md, Cadence) as the script measures it
-    // on the run's wall clock; null for a stage and before it is measured.
+    // on the run's wall clock; null before it is measured.
     std::optional<std::uint32_t> every;           // steps between passes: N, or a multiple of N
     std::optional<std::uint32_t> every_min;       // the declared limits.every
     std::optional<double> last_pass_ms;           // GPU time of the last pass or frame
@@ -67,9 +66,9 @@ struct ProgramStatus {
     std::optional<double> overhead_share;         // D / (N b): the share of the training time
     std::optional<double> passes_per_s;           // passes a second over the program's last passes
     std::optional<std::int64_t> last_step;        // the script's step of the last pass
-    std::uint64_t runs = 0;                       // passes, or frames of a stage
+    std::uint64_t runs = 0;                       // passes
     std::uint64_t memory_bytes = 0;               // output buffers and bound tensors
-    std::uint64_t memory_limit_bytes = 0;         // from limits.memory_mb; 0 for a stage
+    std::uint64_t memory_limit_bytes = 0;         // from limits.memory_mb
     std::optional<ProgramError> error;            // the last error
     std::string sha256;                           // of the source the host runs; empty when none
     // An instance of a piece (design/programmable-graphics.md, Status and
@@ -102,18 +101,13 @@ public:
     virtual std::vector<ProgramStatus> status() const = 0;
 };
 
-// The stages in the viewer. The app's implementation compiles them for the
-// scene panels of the spec runtime and runs their time watchdog.
-class StageHost {
+// The draw halves of the pieces that the scene panels draw in the viewer. The app's
+// implementation reads them from the spec runtime's draw host.
+class DrawStatusHost {
 public:
-    virtual ~StageHost() = default;
-    // Compiles the new and changed stages of spec.stages and drops the removed
-    // ones. Frame thread.
-    virtual void reconcile(const spec::Spec& spec) = 0;
-    // One item for each stage of the last reconciled spec, in its order. Any
-    // thread. A host that also draws instances of pieces in the viewer adds
-    // one item for each, with the program's id, half "draw" and `draw` set;
-    // program.status takes the instance's draw object from it.
+    virtual ~DrawStatusHost() = default;
+    // One item for each program that the scene panels draw, with the program's id, half "draw" and
+    // `draw` set; program.status takes the instance's draw object from it. Any thread.
     virtual std::vector<ProgramStatus> status() const = 0;
 };
 

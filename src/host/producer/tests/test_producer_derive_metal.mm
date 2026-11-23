@@ -406,6 +406,146 @@ fn keep(@builtin(global_invocation_id) id: vec3<u32>) {
     caliper_producer_error_free(&e);
 }
 
+// Six inputs of one tensor, two counted resources and a plain one: eleven storage buffers, of
+// which pass a binds eight and pass b four (five with its counter's resource read). With `wide`,
+// pass a also writes r2 and binds nine.
+Piece wide_piece(const Fixture& f, bool wide, const char* extra = "") {
+    std::string src = std::string(extra) + R"(@compute @workgroup_size(64)
+fn a(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (id.x >= 64u) { return; }
+    let v = t0[id.x] + t1[id.x] + t2[id.x] + t3[id.x] + t4[id.x] + t5[id.x];
+    r0[atomicAdd(&r0_count, 1u)] = v;
+)";
+    if (wide) src += "    r2[id.x] = v;\n";
+    src += R"(}
+@compute @workgroup_size(64)
+fn b(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (id.x >= 64u) { return; }
+    r1[atomicAdd(&r1_count, 1u)] = r0[id.x] + f32(caliper.step);
+    r2[id.x] = r0[id.x] * 2.0;
+}
+)";
+    Piece p = f.piece(src, 0);
+    p.id = "wide";
+    static const char* const kNames[6] = {"t0", "t1", "t2", "t3", "t4", "t5"};
+    for (const char* n : kNames) {
+        p.inputs.push_back({n, f.attn[0]});
+        p.input_types.push_back("f32");
+    }
+    p.buffer("r0", "f32", 64).counted = 1;
+    p.buffer("r1", "f32", 64).counted = 1;
+    p.buffer("r2", "f32", 64);
+    p.pass("a", 1, {"r0"});
+    p.pass("b", 1, {"r1", "r2"});
+    return p;
+}
+
+TEST_CASE("each derive pass binds only what its entry point uses: eleven storage buffers over two passes run") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    Piece p = wide_piece(f, false);
+    const caliper_producer_derive_desc d = p.desc();
+    uint32_t prog = 0;
+    caliper_producer_error e{};
+    if (!compile_or_skip(f.rt, d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+    caliper_producer_frame frame{7, 0.0, 1};
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+    caliper_producer_output out{};
+    const std::vector<float> r0 = read<float>(f.rt, prog, "r0", &out);
+    const std::vector<float> r1 = read<float>(f.rt, prog, "r1", &out);
+    const std::vector<float> r2 = read<float>(f.rt, prog, "r2", &out);
+    REQUIRE(r0.size() == 64);
+    REQUIRE(r1.size() == 64);
+    REQUIRE(r2.size() == 64);
+    // Every pass saw its own bindings: r0 holds six times each weight, r2 twice r0 at the same
+    // place, and r1 each r0 plus the step of the frame uniform, which only pass b binds.
+    const float* w = static_cast<const float*>([f.tensor contents]);
+    std::vector<float> want(w, w + 64), got = r0;
+    for (float& x : want) x *= 6.0f;
+    std::sort(want.begin(), want.end());
+    std::sort(got.begin(), got.end());
+    for (size_t i = 0; i < 64; ++i) CHECK(got[i] == doctest::Approx(want[i]));
+    for (size_t i = 0; i < 64; ++i) CHECK(r2[i] == 2.0f * r0[i]);
+    std::vector<float> r1s = r1, r0s = r0;
+    for (float& x : r0s) x += 7.0f;
+    std::sort(r1s.begin(), r1s.end());
+    std::sort(r0s.begin(), r0s.end());
+    for (size_t i = 0; i < 64; ++i) CHECK(r1s[i] == r0s[i]);
+    caliper_producer_error_free(&e);
+
+    // Nine storage buffers in pass a are refused before the graphics layer sees them.
+    Piece nine = wide_piece(f, true);
+    CHECK(refused(f.rt, nine) == "program.over_web_limits");
+    // A pass's entry point that derive.wgsl lacks.
+    Piece missing = wide_piece(f, false);
+    missing.passes[1].entry = "c";
+    CHECK(refused(f.rt, missing) == "program.entry_stage");
+    // var<workgroup>: the dispatch gives it no memory, thus it is refused.
+    Piece shared = f.piece(R"(var<workgroup> part: array<f32, 64>;
+@compute @workgroup_size(64)
+fn run(@builtin(local_invocation_index) i: u32) {
+    part[i] = attn0[i];
+    workgroupBarrier();
+    a[i] = part[63u - i];
+}
+)");
+    shared.buffer("a", "f32", 64);
+    shared.pass("run", 1, {"a"});
+    CHECK(refused(f.rt, shared) == "program.workgroup_memory");
+}
+
+TEST_CASE("an optional tensor input left unbound reads as an empty array with the shape (0, 0, 0, 0)") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    // extra is optional and unbound: shapes.extra is zero and every read of it gives zero.
+    Piece p = f.piece(R"(@compute @workgroup_size(4)
+fn look(@builtin(global_invocation_id) id: vec3<u32>) {
+    out[id.x] = vec4<u32>(shapes.extra[id.x], bitcast<u32>(extra[id.x * 9u]), shapes.attn0.w, 7u);
+}
+)");
+    p.inputs.push_back({"extra", 0});
+    p.input_types.push_back("i32");
+    p.buffer("out", "vec4<u32>", 4);
+    p.pass("look", 1, {"out"});
+    std::vector<uint8_t> unbound{0, 1};
+    caliper_producer_derive_desc d = p.desc();
+    d.input_unbound = unbound.data();
+    uint32_t prog = 0;
+    caliper_producer_error e{};
+    if (!compile_or_skip(f.rt, d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+    caliper_producer_frame frame{1, 0.0, 1};
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+    caliper_producer_output out{};
+    const std::vector<uint32_t> v = read<uint32_t>(f.rt, prog, "out", &out);
+    REQUIRE(v.size() == 16);
+    for (int i = 0; i < 4; ++i) {
+        CHECK(v[4 * i + 0] == 0u);       // the shape of the unbound input
+        CHECK(v[4 * i + 1] == 0u);       // its reads, also past its 16 bytes
+        CHECK(v[4 * i + 2] == kT);       // the bound input keeps its shape
+        CHECK(v[4 * i + 3] == 7u);
+    }
+    caliper_producer_error_free(&e);
+
+    // Without the flag, a tensor 0 is the place of a buffer input, which the derive half does
+    // not declare: the source does not compile.
+    caliper_producer_derive_desc plain = p.desc();
+    plain.input_unbound = nullptr;
+    uint32_t none = 9;
+    CHECK(caliper_producer_compile_derive(f.rt, &plain, &none, &e) == CALIPER_PRODUCER_REFUSED);
+    CHECK(none == 0);
+    caliper_producer_error_free(&e);
+    // An input marked unbound that has a tensor is refused before the compile.
+    Piece both = f.piece("@compute @workgroup_size(1)\nfn run() { a[0] = attn0[0]; }\n");
+    both.buffer("a", "f32", 4);
+    both.pass("run", 1, {"a"});
+    std::vector<uint8_t> flag{1};
+    caliper_producer_derive_desc bd = both.desc();
+    bd.input_unbound = flag.data();
+    CHECK(caliper_producer_compile_derive(f.rt, &bd, &none, &e) == CALIPER_PRODUCER_REFUSED);
+    CHECK(std::string(e.code) == "piece.bad_binding");
+    caliper_producer_error_free(&e);
+}
+
 TEST_CASE("the compile refuses a store into a tensor and a binding of a derive pass's own") {
     Fixture f;
     if (f.device == nil) { MESSAGE("no Metal device"); return; }
@@ -477,16 +617,19 @@ TEST_CASE("sizes, layouts, passes and the memory budget are refused before alloc
         return p;
     };
     Piece p = base();
-    p.buffer("a", "f32", 4194305);
+    p.buffer("a", "f32", 33554433);   // one element past kCountMax
     CHECK(refused(f.rt, p) == "program.bad_resource");
     p = base();
-    p.record("a", "Big", {"x: vec4<f32>", "y: vec4<f32>"}, 4194304);   // 4,194,304 x 32 bytes: 128 MiB
+    p.record("a", "Big", {"x: vec4<f32>", "y: vec4<f32>"}, 4194305);   // published: 128 MiB and 32 bytes
+    CHECK(refused(f.rt, p) == "program.bad_resource");
+    p = base();
+    p.record("a", "Big", {"x: vec4<f32>", "y: vec4<f32>"}, 2097153).publish = 0;   // private: 64 MiB and 32 bytes
     CHECK(refused(f.rt, p) == "program.bad_resource");
     p = base();
     p.buffer("a", "f32", 4);
     caliper_producer_resource_desc& t = p.buffer("t", nullptr, 0);
     t.kind = CALIPER_PRODUCER_RESOURCE_TEXTURE;
-    t.width = 4097;
+    t.width = 8193;
     t.height = 1;
     CHECK(refused(f.rt, p) == "program.bad_resource");
     p = base();
@@ -730,3 +873,243 @@ TEST_CASE("a derive half compiles when common carries lib modules that read the 
     caliper_producer_error_free(&e);
 }
 #endif
+
+TEST_CASE("a typed tensor input reads u8, u16, i32 and f32 tensors in place through its checked accessor") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    // One shared buffer holds a u8 tensor of 7 elements (its last word holds 1 byte of the next
+    // tensor), a u16 tensor of 5, an i32 tensor of 3 and an f32 tensor of 3, each at a multiple of 16.
+    id<MTLBuffer> buf = [f.device newBufferWithLength:4096 options:MTLResourceStorageModeShared];
+    auto* bytes = static_cast<uint8_t*>([buf contents]);
+    std::memset(bytes, 0xee, 4096);
+    const uint8_t u8s[7] = {0, 1, 127, 128, 200, 254, 255};
+    std::memcpy(bytes, u8s, 7);
+    const uint16_t u16s[5] = {0, 1, 1000, 40000, 65535};
+    std::memcpy(bytes + 256, u16s, 10);
+    const int32_t i32s[3] = {-5, 0, 70000};
+    std::memcpy(bytes + 512, i32s, 12);
+    const float f32s[3] = {0.25f, -2.5f, 1e6f};
+    std::memcpy(bytes + 768, f32s, 12);
+    struct T { const char* name; uint64_t offset, size; uint32_t dtype, n; };
+    const T ts[4] = {{"u8s", 0, 7, CALIPER_PRODUCER_U8, 7},
+                     {"u16s", 256, 10, CALIPER_PRODUCER_U16, 5},
+                     {"i32s", 512, 12, CALIPER_PRODUCER_I32, 3},
+                     {"f32s", 768, 12, CALIPER_PRODUCER_F32, 3}};
+    uint32_t handle[4] = {};
+    caliper_producer_error e{};
+    for (int k = 0; k < 4; ++k) {
+        caliper_producer_tensor t{};
+        t.name = ts[k].name;
+        t.buffer = (__bridge void*)buf;
+        t.byte_offset = ts[k].offset;
+        t.byte_size = ts[k].size;
+        t.dtype = ts[k].dtype;
+        t.ndim = 1;
+        t.shape[0] = ts[k].n;
+        REQUIRE(caliper_producer_import(f.rt, &t, &handle[k], &e) == CALIPER_PRODUCER_OK);
+    }
+    // The input x reads f32, i32, u8 or u16 as f32: the bound type picks the accessor, the piece is the same.
+    const char* kLook = R"(@compute @workgroup_size(8)
+fn look(@builtin(global_invocation_id) id: vec3<u32>) {
+    out[id.x] = vec4<f32>(x_at(id.x), f32(x_type), f32(shapes.x.w), f32(shapes.x__len));
+}
+)";
+    const std::vector<std::vector<float>> want = {
+        {0, 1, 127, 128, 200, 254, 255, 0},        // the 8th element is past the 7 of the tensor: zero
+        {0, 1, 1000, 40000, 65535, 0, 0, 0},
+        {-5, 0, 70000, 0, 0, 0, 0, 0},
+        {0.25f, -2.5f, 1e6f, 0, 0, 0, 0, 0}};
+    const float kType[4] = {3, 4, 1, 0};   // CALIPER_U8, CALIPER_U16, CALIPER_I32, CALIPER_F32
+    for (int k = 0; k < 4; ++k) {
+        CAPTURE(ts[k].name);
+        Piece p = f.piece(kLook, 0);
+        p.inputs.push_back({"x", handle[k]});
+        p.input_types.push_back("f32|i32|u8|u16");
+        p.buffer("out", "vec4<f32>", 8);
+        p.pass("look", 1, {"out"});
+        caliper_producer_derive_desc d = p.desc();
+        uint32_t prog = 0;
+        if (!compile_or_skip(f.rt, d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+        caliper_producer_frame frame{1, 0.0, 1};
+        REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+        caliper_producer_output out{};
+        const std::vector<float> v = read<float>(f.rt, prog, "out", &out);
+        REQUIRE(v.size() == 32);
+        for (int i = 0; i < 8; ++i) {
+            CHECK(v[4 * i + 0] == want[k][i]);
+            CHECK(v[4 * i + 1] == kType[k]);
+            CHECK(v[4 * i + 2] == float(ts[k].n));
+            CHECK(v[4 * i + 3] == float(ts[k].n));
+        }
+        // A rebind keeps the dtype: a tensor of another dtype and the same size is refused, the
+        // program keeps its tensor, and an equal one is taken.
+        if (k == 2) {
+            CHECK(caliper_producer_rebind(f.rt, prog, handle[2], handle[3], &e) == CALIPER_PRODUCER_REFUSED);
+            CHECK(std::string(e.message).find("another dtype") != std::string::npos);
+            caliper_producer_error_free(&e);
+        }
+        caliper_producer_remove(f.rt, prog);
+    }
+
+    // A narrow type alone reads as u32; an unbound typed input reads zero with the count 0.
+    {
+        Piece p = f.piece(R"(@compute @workgroup_size(8)
+fn look(@builtin(global_invocation_id) id: vec3<u32>) {
+    out[id.x] = vec4<u32>(m_at(id.x), u_at(id.x), shapes.u__len, m[0]);
+}
+)", 0);
+        p.inputs.push_back({"m", handle[0]});
+        p.input_types.push_back("u8");
+        p.inputs.push_back({"u", 0});
+        p.input_types.push_back("u16");
+        p.buffer("out", "vec4<u32>", 8);
+        p.pass("look", 1, {"out"});
+        std::vector<uint8_t> unbound{0, 1};
+        caliper_producer_derive_desc d = p.desc();
+        d.input_unbound = unbound.data();
+        uint32_t prog = 0;
+        if (!compile_or_skip(f.rt, d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+        caliper_producer_frame frame{1, 0.0, 1};
+        REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+        caliper_producer_output out{};
+        const std::vector<uint32_t> v = read<uint32_t>(f.rt, prog, "out", &out);
+        REQUIRE(v.size() == 32);
+        for (int i = 0; i < 8; ++i) {
+            CHECK(v[4 * i + 0] == (i < 7 ? u8s[i] : 0u));
+            CHECK(v[4 * i + 1] == 0u);
+            CHECK(v[4 * i + 2] == 0u);
+            CHECK(v[4 * i + 3] == 0x807f0100u);   // the raw words stay readable within the binding
+        }
+        caliper_producer_remove(f.rt, prog);
+    }
+
+    // A u8 tensor that ends inside the last word of its buffer cannot be bound in whole words.
+    {
+        id<MTLBuffer> tight = [f.device newBufferWithLength:7 options:MTLResourceStorageModeShared];
+        caliper_producer_tensor t{};
+        t.name = "tight";
+        t.buffer = (__bridge void*)tight;
+        t.byte_size = 7;
+        t.dtype = CALIPER_PRODUCER_U8;
+        t.ndim = 1;
+        t.shape[0] = 7;
+        uint32_t h = 0;
+        CHECK(caliper_producer_import(f.rt, &t, &h, &e) == CALIPER_PRODUCER_IMPORT_REFUSED);
+        CHECK(h == 0);
+        caliper_producer_error_free(&e);
+    }
+
+    // Refusals: a tensor whose dtype the input does not name, and a dtype that names no type.
+    {
+        Piece p = f.piece("@compute @workgroup_size(1)\nfn run() { a[0] = f32(x_at(0u)); }\n", 0);
+        p.inputs.push_back({"x", handle[2]});   // i32
+        p.input_types.push_back("u8|u16");
+        p.buffer("a", "f32", 4);
+        p.pass("run", 1, {"a"});
+        CHECK(refused(f.rt, p) == "piece.bad_binding");
+        p.input_types[0] = "u8|u8";
+        CHECK(refused(f.rt, p) == "piece.bad_manifest");
+        p.input_types[0] = "i64";
+        CHECK(refused(f.rt, p) == "piece.bad_manifest");
+        p.input_types[0] = "f32";   // a single 32-bit type takes only that type, as before
+        CHECK(refused(f.rt, p) == "piece.bad_binding");
+    }
+    caliper_producer_error_free(&e);
+}
+
+TEST_CASE("a texture's version takes the size that the derive half sets, and a narrow buffer packs its elements") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    // grey: r8unorm of at most 8 by 8 and 30 texels; the pass sets 5 by 3 and writes 15 bytes in 4 words.
+    // ids: u16 elements, counted, of which the pass writes 5 in 3 words. full: rgba8unorm left at its
+    // largest size by a pass that never sets it.
+    Piece p = f.piece(R"(@compute @workgroup_size(1)
+fn run() {
+    grey_size = vec2<u32>(params.w, params.h);
+    for (var i = 0u; i < 4u; i = i + 1u) {
+        grey[i] = 0x04030201u + i * 0x04040404u;
+    }
+    ids[0] = 0x00020001u;
+    ids[1] = 0x00040003u;
+    ids[2] = 0x00000005u;
+    atomicStore(&ids_count, 5u);
+    full[0] = 0xff0000ffu;
+}
+)", 0);
+    caliper_producer_resource_desc& grey = p.buffer("grey", nullptr, 0);
+    grey.kind = CALIPER_PRODUCER_RESOURCE_TEXTURE;
+    grey.format = "r8unorm";
+    grey.width = grey.height = 8;
+    grey.texels = 30;
+    p.buffer("ids", "u16", 9).counted = 1;
+    caliper_producer_resource_desc& full = p.buffer("full", nullptr, 0);
+    full.kind = CALIPER_PRODUCER_RESOURCE_TEXTURE;
+    full.width = 2;
+    full.height = 3;
+    p.pass("run", 1, {"grey", "ids", "full"});
+    p.params = {{"w", 5}, {"h", 3}};
+    p.param_types = {"u32", "u32"};
+    caliper_producer_derive_desc d = p.desc();
+    uint32_t prog = 0;
+    caliper_producer_error e{};
+    if (!compile_or_skip(f.rt, d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+    caliper_producer_frame frame{1, 0.0, 1};
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+    caliper_producer_output out{};
+    const std::vector<uint8_t> g = read<uint8_t>(f.rt, prog, "grey", &out);
+    CHECK(out.width == 5);
+    CHECK(out.height == 3);
+    CHECK(out.count == 4);   // the words of 15 texels
+    CHECK(out.words == 1);
+    REQUIRE(g.size() == 16);
+    for (int i = 0; i < 15; ++i) CHECK(g[i] == uint8_t(i + 1));
+    const std::vector<uint16_t> ids = read<uint16_t>(f.rt, prog, "ids", &out);
+    CHECK(out.narrow == 1);
+    CHECK(out.elements == 5);
+    CHECK(out.count == 3);
+    REQUIRE(ids.size() == 6);
+    for (int i = 0; i < 5; ++i) CHECK(ids[i] == uint16_t(i + 1));
+    const std::vector<uint32_t> fl = read<uint32_t>(f.rt, prog, "full", &out);
+    CHECK(out.width == 2);
+    CHECK(out.height == 3);
+    CHECK(out.count == 6);
+    CHECK(fl.size() == 6);
+
+    // A size past the largest sides, or above the texels, gives a version without texels.
+    const caliper_producer_param wide[2] = {{"w", 9}, {"h", 1}};
+    REQUIRE(caliper_producer_set_params(f.rt, prog, wide, 2, &e) == CALIPER_PRODUCER_OK);
+    frame.step = 2;
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+    (void)read<uint8_t>(f.rt, prog, "grey", &out);
+    CHECK(out.count == 0);
+    CHECK(out.width == 0);
+    CHECK(out.height == 0);
+    const caliper_producer_param many[2] = {{"w", 8}, {"h", 4}};   // 32 texels, above 30
+    REQUIRE(caliper_producer_set_params(f.rt, prog, many, 2, &e) == CALIPER_PRODUCER_OK);
+    frame.step = 3;
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+    (void)read<uint8_t>(f.rt, prog, "grey", &out);
+    CHECK(out.count == 0);
+    caliper_producer_remove(f.rt, prog);
+
+    // Refusals before anything is made: a side past 8,192, a format that is not one, more texels than
+    // width * height, and a narrow count past four times 33,554,432.
+    Piece q = f.piece("@compute @workgroup_size(1)\nfn run() { t[0] = 1u; }\n", 0);
+    caliper_producer_resource_desc& t = q.buffer("t", nullptr, 0);
+    t.kind = CALIPER_PRODUCER_RESOURCE_TEXTURE;
+    t.width = 8193;
+    t.height = 1;
+    q.pass("run", 1, {"t"});
+    CHECK(refused(f.rt, q) == "program.bad_resource");
+    q.resources[0].width = 8;
+    q.resources[0].format = "bgra8unorm";
+    CHECK(refused(f.rt, q) == "program.bad_resource");
+    q.resources[0].format = nullptr;
+    q.resources[0].texels = 9 * 1 + 64;
+    CHECK(refused(f.rt, q) == "program.bad_resource");
+    Piece n = f.piece("@compute @workgroup_size(1)\nfn run() { b[0] = 1u; }\n", 0);
+    n.buffer("b", "u8", 33554432u * 4u + 1u);
+    n.pass("run", 1, {"b"});
+    CHECK(refused(f.rt, n) == "program.bad_resource");
+    caliper_producer_error_free(&e);
+}

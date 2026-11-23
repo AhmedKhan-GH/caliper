@@ -29,7 +29,7 @@ double now_ms() {
 CaliperHost applet_host_proto() {
     CaliperHost proto{};
     proto.struct_size  = sizeof(CaliperHost);
-    proto.abi_epoch    = 2;
+    proto.abi_epoch    = CALIPER_ABI_EPOCH;
     proto.host_version = kHostVersionU32;
     proto.applet_data_dir = nullptr;   // the loader fills it per applet
     proto.get_service = [](const CaliperHost*, const char* id) {

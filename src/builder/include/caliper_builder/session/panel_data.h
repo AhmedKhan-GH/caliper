@@ -71,4 +71,57 @@ void encode_scene_entities(const spec::Panel& panel, const PanelData& data, cons
 // The result of panel.data when the caller has `version` already.
 nlohmann::json panel_data_unchanged(const spec::Spec& spec, const std::string& panel_id, const std::string& version);
 
+// ---- The viewer's programs and controls (panel_data_viewer.cpp) ----------
+//
+// The browser's spec page draws the instances of pieces on a scene panel with
+// its WebAssembly views, and shows each control of the layout with its
+// state, from panel.data alone: the viewer token opens no stream and runs no
+// command that changes anything (design/command-layer.md, Origins).
+
+class PieceLibrary;
+class ValueStore;
+class StepHistory;
+class RunControl;
+
+// What the viewer's answers read. `values` and `history` are the session's
+// for its open spec, null for a saved spec that is not open.
+struct ViewerInputs {
+    const PieceLibrary* library = nullptr;
+    std::string workspace;
+    const ValueStore* values = nullptr;
+    const StepHistory* history = nullptr;
+};
+
+// At most this many programs of one panel, and this many bytes of resources
+// in one answer, within the resource history budget.
+inline constexpr std::size_t kViewerProgramsMax = 64;
+inline constexpr std::uint64_t kViewerResourceBytesMax = spec::piece_limits::kPublishedBytesMax;
+
+// The instances of pieces whose draw half targets the scene panel
+// `panel_id`, in the spec's order: each {"id", "title", "piece": {name,
+// version, from}, "state", "error", "instance", "params", "resources"}. The
+// state is "ready" with `instance`, the instance form of PROGRAM set as the
+// app sends it to a script ({op "set", id, piece {name, version, hash},
+// manifest, bind, params, panel, segments, common, derive, draw}) with the
+// params' values of now, and the newest kept version of each published
+// resource at the session's cursor ({resource, step, count, stride, width,
+// height, base64}). A program of a foreign spec whose hash nobody reviewed is
+// "review", and a missing piece, another hash than the pin's or imports that
+// do not resolve "refused", each with `error` and without files. The piece
+// comes from the library, this workspace or the spec by the pin's name and
+// version only. `digest` gets 16 hex digits that change when anything the
+// page feeds its module changes.
+nlohmann::json viewer_programs(const spec::Spec& spec, const std::string& panel_id, const ViewerInputs& in,
+                               std::string* digest);
+
+// The result of panel.data for a control `control` of the layout: primitive
+// "control" and `data` {"id", "kind", "title", "bind", "value", "text",
+// "enabled", "why", and "min", "max", "choices" when the control has them}:
+// the state the app's control shows (a toggle of intervene:<point> is on
+// while the run has an ablation of the point that has not ended, with the
+// app's text), `enabled` false and `why` the reason a viewer cannot change
+// it. `run` is the session's run control, null without one.
+nlohmann::json control_data_result(const spec::Spec& spec, const spec::Control& control, const ViewerInputs& in,
+                                   RunControl* run, const std::string& version);
+
 }  // namespace caliper_builder

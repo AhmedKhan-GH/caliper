@@ -1,0 +1,48 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 176,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 135,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 130
+  },
+  "meta": {
+    "count": 2,
+    "program": "scene.113",
+    "resource": "source_colors",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "resource",
+        "shape": [
+          8
+        ]
+      }
+    ],
+    "step": 7,
+    "stride": 4
+  },
+  "meta_offset": 28,
+  "name": "v3_2/resource_scene_lines_strips_bundle_source_colors",
+  "section_lengths": [
+    8
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 8,
+      "name": "resource",
+      "offset": 168,
+      "shape": [
+        8
+      ],
+      "values": [255, 160, 0, 255, 0, 160, 255, 255]
+    }
+  ],
+  "type_name": "resource"
+}

@@ -71,6 +71,15 @@ export class Plot2D {
   }
 
   /** Moves the window so the data under the pointer follows a drag of (dx, dy). */
+  /** A function that puts the visible ranges back as they are now. */
+  keep(): () => void {
+    const x = { ...this.x }, y = { ...this.y };
+    return () => {
+      this.x = { ...x };
+      this.y = { ...y };
+    };
+  }
+
   pan(dx: number, dy: number, axes: 'x' | 'y' | 'xy' = 'xy'): void {
     if (axes !== 'y') {
       const d = (dx / this.area.w) * (this.x.hi - this.x.lo);

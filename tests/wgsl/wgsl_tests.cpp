@@ -11,9 +11,6 @@
 
 #include "caliper/wgsl.h"
 
-#include "gfx/shaders/generated/edge_gather_msl.h"
-#include "gfx/shaders/generated/edge_gather_spv.h"
-#include "gfx/shaders/generated/edge_gather_wgsl.h"
 #include "gfx/shaders/generated/fill_texture_msl.h"
 #include "gfx/shaders/generated/fill_texture_spv.h"
 #include "gfx/shaders/generated/fill_texture_wgsl.h"
@@ -116,6 +113,63 @@ TEST_CASE("versions") {
     CHECK(o.spirv_version_minor == 3);
     CHECK(o.metal_vertex_buffer_base == 16);
     CHECK(o.bounds_checks == CALIPER_WGSL_BOUNDS_CHECKED);
+    CHECK(o.entry_point == nullptr);
+}
+
+// Two compute entry points that use two storage buffers each; the second also uses workgroup memory.
+const char kTwoEntries[] = R"(@group(0) @binding(0) var<storage, read> a: array<f32>;
+@group(0) @binding(1) var<storage, read_write> b: array<f32>;
+@group(0) @binding(2) var<storage, read> c: array<u32>;
+@group(0) @binding(3) var<storage, read_write> d: array<u32>;
+var<workgroup> partial: array<u32, 32>;
+@compute @workgroup_size(32)
+fn first(@builtin(global_invocation_id) id: vec3<u32>) { b[id.x] = a[id.x]; }
+@compute @workgroup_size(32)
+fn second(@builtin(local_invocation_index) i: u32, @builtin(global_invocation_id) id: vec3<u32>) {
+    partial[i] = c[id.x];
+    workgroupBarrier();
+    d[id.x] = partial[31u - i];
+}
+)";
+
+TEST_CASE("a module that keeps one entry point binds only what that entry point uses") {
+    Module all(kTwoEntries);
+    REQUIRE(all.status == CALIPER_WGSL_OK);
+    CHECK(caliper_wgsl_module_binding_count(all.m) == 4);
+    REQUIRE(caliper_wgsl_module_entry_point_count(all.m) == 2);
+    caliper_wgsl_entry_point ep{};
+    REQUIRE(caliper_wgsl_module_entry_point(all.m, 0, &ep) == CALIPER_WGSL_OK);
+    CHECK(std::string(ep.name) == "first");
+    CHECK(ep.workgroup_memory == 0);
+    REQUIRE(caliper_wgsl_module_entry_point(all.m, 1, &ep) == CALIPER_WGSL_OK);
+    CHECK(std::string(ep.name) == "second");
+    CHECK(ep.workgroup_memory == 128);
+
+    caliper_wgsl_options o{};
+    caliper_wgsl_options_init(&o);
+    std::string keep = "second";
+    o.entry_point = keep.c_str();
+    Module second(kTwoEntries, sizeof kTwoEntries - 1, &o);
+    keep.assign("xxxxxx");   // the library keeps no pointer to the name
+    INFO((second.error.report ? second.error.report : ""));
+    REQUIRE(second.status == CALIPER_WGSL_OK);
+    REQUIRE(caliper_wgsl_module_entry_point_count(second.m) == 1);
+    REQUIRE(caliper_wgsl_module_binding_count(second.m) == 2);
+    caliper_wgsl_binding bd[2]{};
+    for (size_t i = 0; i < 2; ++i) REQUIRE(caliper_wgsl_module_binding(second.m, i, &bd[i]) == CALIPER_WGSL_OK);
+    CHECK(std::string(bd[0].name) == "c");
+    CHECK(std::string(bd[1].name) == "d");
+    CHECK(bd[0].metal_index == 0);
+    CHECK(bd[1].metal_index == 1);
+    const std::string msl = msl_of(second.m, "second", CALIPER_WGSL_STAGE_COMPUTE);
+    CHECK(msl.find("threadgroup") != std::string::npos);
+
+    o.entry_point = "third";
+    Module none(kTwoEntries, sizeof kTwoEntries - 1, &o);
+    CHECK(none.status == CALIPER_WGSL_ERROR_ARGUMENT);
+    CHECK(none.m == nullptr);
+    REQUIRE(none.error.message != nullptr);
+    CHECK(std::string(none.error.message).find("third") != std::string::npos);
 }
 
 TEST_CASE("a compute program validates, reports its bindings and translates") {
@@ -221,7 +275,6 @@ TEST_CASE("built-in programs translate as the developer-time driver translated t
     using namespace caliper_gfx::shaders;
     const Builtin programs[] = {
         {kFillTextureWgsl, kFillTextureMsl, kFillTextureSpirv, sizeof(kFillTextureSpirv) / 4},
-        {kEdgeGatherWgsl, kEdgeGatherMsl, kEdgeGatherSpirv, sizeof(kEdgeGatherSpirv) / 4},
     };
     caliper_wgsl_options unchecked{};
     caliper_wgsl_options_init(&unchecked);

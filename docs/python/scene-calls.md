@@ -91,8 +91,15 @@ of the default data view, which samples more than 100,000 points or segments
 by stride. Each array is then copied into pinned host memory without waiting,
 one `torch.mps.Event` is recorded, and the network thread reads the copies
 once the event has completed. Nothing reads the device on the training
-thread. A batch whose arrays pass one frame of 64 MiB travels as a split
-update of up to 16 pieces; a batch over 512 MiB raises `ValueError`.
+thread. Each resource above 8 MiB travels in RESOURCE parts. A batch above 512 MiB raises `ValueError`.
+
+### Piece Form
+
+The Caliper app, `caliper-viewer`, and WebAssembly views announce `scene_pieces`. Every drawable part uses its library piece. The network thread packs host arrays into RESOURCE messages, then sends the update that names them. It packs each batch once and shares the bytes across subscriptions. A newer batch can replace an unsent batch before this work starts.
+
+Points, lines, arrows, boxes, meshes, color images, depth images, and segmentation images use this form. Mesh textures travel as texture resources. The network thread decodes bounded PNG and JPEG images with Pillow, then sends RGBA texture resources. The training thread does not decode images or pack resources.
+
+A viewer without `scene_pieces` receives cameras, transforms, class tables, and clears. It receives no drawable batches. Saved per-shape updates remain readable through the recording converter. See [Piece Form](../reference/wire-protocol-3-2.md#piece-form) for resource layouts and source metadata.
 
 ### Static Items
 

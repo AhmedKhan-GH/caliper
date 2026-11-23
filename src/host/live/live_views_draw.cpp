@@ -708,6 +708,7 @@ PointsArrays points_arrays(const PointsPayload& p) {
     a.pos_cpu = p.pos_cpu;
     a.aux = p.aux ? p.aux->buffer : caliper_gfx::Buffer{};
     a.aux_offset = p.aux_off;
+    a.aux_cpu = p.aux_cpu;
     a.count = p.n;
     return a;
 }
@@ -1173,7 +1174,9 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
             if (v.have_sel_draw && v.content_sel) v.sel_draw.last_draw = serial;
         }
         if (!ok && !v.draw_failed) core->log(1, "live: points '" + v.name + "': " + why);
-        v.dirty = false;   // a refused draw is not retried every frame (it logs)
+        // A refused draw is not retried every frame (it logs); a payload whose bytes are still on
+        // their way back from the GPU draws again at the next frame.
+        v.dirty = ok && sc->pending();
         v.draw_failed = !ok;
     }
     if (v.draw_failed) ImGui::TextUnformatted("points draw refused by the graphics layer (see log)");
@@ -1499,15 +1502,15 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     }
     if (!hovered && !v.scene_hover.empty()) v.scene_hover.clear();
     caliper_scene::Hit hit;
-    const caliper_scene::PickPass::Result pr = sc->poll_pick(&hit);
-    if (pr == caliper_scene::PickPass::Result::Hit || pr == caliper_scene::PickPass::Result::Miss ||
-        pr == caliper_scene::PickPass::Result::Dropped) {
+    const caliper_scene::PickResult pr = sc->poll_pick(&hit);
+    if (pr == caliper_scene::PickResult::Hit || pr == caliper_scene::PickResult::Miss ||
+        pr == caliper_scene::PickResult::Dropped) {
         const bool click = v.scene_click;
         v.scene_click = false;
-        const std::string detail = pr == caliper_scene::PickPass::Result::Hit ? sc->pick_detail(hit) : std::string();
+        const std::string detail = pr == caliper_scene::PickResult::Hit ? sc->pick_detail(hit) : std::string();
         if (click) {
             if (!detail.empty()) emit(S, v, "pick", detail);
-        } else if (pr != caliper_scene::PickPass::Result::Dropped) {
+        } else if (pr != caliper_scene::PickResult::Dropped) {
             const int64_t key = detail.empty() ? -1
                                                : (int64_t(hit.entity.index) << 40) ^ (int64_t(hit.primitive) << 36) ^
                                                      (int64_t(hit.part) << 33) ^ int64_t(hit.item);

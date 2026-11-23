@@ -101,6 +101,16 @@ export class SeriesView implements LiveView {
         this.plot.pan(dx, dy);
         host.request('data');
       },
+      press: () => {
+        const plot = this.plot.keep(), follow = this.follow, autoY = this.autoY;
+        return () => {
+          plot();
+          this.follow = follow;
+          this.autoY = autoY;
+          this.followBtn.set(follow);
+          host.request('data');
+        };
+      },
       wheel: (x, y, k) => {
         const reg = this.plot.region(x, y);
         if (reg === 'none') return;

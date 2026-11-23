@@ -5,8 +5,6 @@
 #include "scene/scene.h"
 
 #include "scene/camera.h"
-#include "scene/compile.h"
-#include "fake_resources.h"
 #include "scene_fixtures.h"
 
 #include <algorithm>
@@ -52,69 +50,6 @@ Orbit z_up_orbit() {
     o.up = Axis::PosZ;
     return o;
 }
-
-RenderTarget surface_target() {
-    RenderTarget t;
-    t.color = Texture{1};
-    t.depth = Texture{2};
-    return t;
-}
-
-struct Drawn {
-    FakeResources res;
-    SceneCompiler compiler;
-    Frame frame;
-    DrawList list{surface_target()};
-    DrawMap map;
-    CompileResult result;
-    Mat4 mvp_of(size_t i) const {
-        const DrawRecord& r = list.records()[i];
-        return Mat4::from(params_of(list, r).mvp);
-    }
-    // The mvp of the draw that belongs to `e`.
-    bool mvp_for(EntityId e, Mat4* out) const {
-        for (size_t i = 0; i < list.records().size; ++i) {
-            const DrawMapEntry* m = map.find(list.records()[i].pick_id);
-            if (m && m->entity == e) {
-                *out = mvp_of(i);
-                return true;
-            }
-        }
-        return false;
-    }
-};
-
-void draw(Drawn& c, SceneTree& t, const ViewCamera& cam) {
-    CompileOptions o;
-    o.width = 400;
-    o.height = 300;
-    o.pixel_scale = 2.0f;
-    t.update();
-    c.compiler.prepare(t, c.res, c.frame);
-    c.list.reset(surface_target());
-    c.result = c.compiler.compile(t, cam, o, c.res, c.list, &c.map);
-}
-
-Batch unit_points(int8_t offset) {
-    Batch b = points3(10);
-    b.bounds.add({-1, -1, -1});
-    b.bounds.add({1, 1, 1});
-    b.depth_offset = offset;
-    return b;
-}
-
-struct TwoPoints {
-    SceneTree t;
-    EntityId a, b;
-    explicit TwoPoints(int8_t offset_b) {
-        a = t.ensure("a");
-        b = t.ensure("b");
-        REQUIRE(t.set_batch(a, unit_points(0)));
-        REQUIRE(t.set_batch(b, unit_points(offset_b)));
-        REQUIRE(t.set_transform(b, translation({0.25, 0, 0})));
-        t.update();
-    }
-};
 
 }  // namespace
 
@@ -237,80 +172,4 @@ TEST_CASE("surface: starting_camera with box_fit fills the target and distance f
     std::get<Orbit>(at30).azimuth = 30.0 * kPi / 180.0;
     fit_box(at30, t.scene_bounds(), aspect);
     for (int i = 0; i < 3; ++i) CHECK(go.target[i] == doctest::Approx(std::get<Orbit>(at30).target[i]));
-}
-
-TEST_CASE("surface: a depth offset subtracts k units of w from the z row of the batch's mvp") {
-    TwoPoints plain(0), offset(2);
-    const ViewCamera cam = [&] {
-        ViewCamera v = Orbit{};
-        std::get<Orbit>(v).up = plain.t.up();
-        fit(v, plain.t.scene_bounds(), 400.0 / 300.0);
-        return v;
-    }();
-    Drawn p, q;
-    draw(p, plain.t, cam);
-    draw(q, offset.t, cam);
-    REQUIRE(p.result.ok);
-    REQUIRE(q.result.ok);
-    REQUIRE(p.list.records().size == 2);
-    REQUIRE(q.list.records().size == 2);
-    Mat4 pa, pb, qa, qb;
-    REQUIRE(p.mvp_for(plain.a, &pa));
-    REQUIRE(p.mvp_for(plain.b, &pb));
-    REQUIRE(q.mvp_for(offset.a, &qa));
-    REQUIRE(q.mvp_for(offset.b, &qb));
-    for (int c = 0; c < 4; ++c) {
-        // The draw without an offset is unchanged.
-        for (int r = 0; r < 4; ++r) CHECK(qa.at(r, c) == pa.at(r, c));
-        // The offset draw: rows x, y and w are as before; z is z - 2 u w.
-        for (int r : {0, 1, 3}) CHECK(qb.at(r, c) == pb.at(r, c));
-        CHECK(std::fabs(qb.at(2, c) - (pb.at(2, c) - 2.0 * kDepthOffsetUnit * pb.at(3, c))) <= 1e-6);  // f32 storage of the mvp
-    }
-    // The offset moves the draw toward the camera: smaller depth for a point in front.
-    CHECK(qb.at(2, 3) < pb.at(2, 3));
-}
-
-TEST_CASE("surface: the depth offset moves depth by k units at every distance and its sign flips the direction") {
-    SceneTree t;
-    const EntityId e = t.ensure("n");
-    REQUIRE(t.set_batch(e, unit_points(-3)));
-    t.update();
-    ViewCamera cam = Orbit{};
-    std::get<Orbit>(cam).up = t.up();
-    fit(cam, t.scene_bounds(), 400.0 / 300.0);
-    Drawn d;
-    draw(d, t, cam);
-    REQUIRE(d.result.ok);
-    SceneTree t0;
-    const EntityId e0 = t0.ensure("n");
-    REQUIRE(t0.set_batch(e0, unit_points(0)));
-    Drawn d0;
-    draw(d0, t0, cam);
-    Mat4 m, m0;
-    REQUIRE(d.mvp_for(e, &m));
-    REQUIRE(d0.mvp_for(e0, &m0));
-    for (int c = 0; c < 4; ++c)
-        CHECK(std::fabs(m.at(2, c) - (m0.at(2, c) + 3.0 * kDepthOffsetUnit * m0.at(3, c))) <= 1e-6);  // f32 storage of the mvp
-}
-
-TEST_CASE("surface: a 2-D scene ignores the depth offset") {
-    auto compile_flat = [](int8_t offset, Mat4* mvp) {
-        SceneTree flat(Space::k2D);
-        Batch p2 = points2(5);
-        p2.bounds.add({0, 0, 0});
-        p2.bounds.add({10, 5, 0});
-        p2.depth_offset = offset;
-        REQUIRE(flat.set_batch(flat.root(), p2));
-        flat.update();
-        const ViewCamera cam = starting_camera(StartingCamera{}, flat, 400.0 / 300.0).camera;
-        Drawn d;
-        draw(d, flat, cam);
-        REQUIRE(d.result.ok);
-        REQUIRE(d.list.records().size == 1);
-        *mvp = d.mvp_of(0);
-    };
-    Mat4 a, b;
-    compile_flat(0, &a);
-    compile_flat(2, &b);
-    for (int i = 0; i < 16; ++i) CHECK(a.m[i] == b.m[i]);
 }

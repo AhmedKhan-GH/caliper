@@ -19,8 +19,7 @@
 // notices as a turn (0.02 radians). Drags that move no camera keep their own thresholds: ImGui's
 // drag threshold (io.MouseDragThreshold) for a spec panel's box selection, a drag from the builder
 // pane or a slider, and kClickSlop for the selections of the live views. The browser element
-// (web/src/views/interact.ts) does not follow this rule yet: its camera drags start past its
-// 3-pixel click slop.
+// (web/src/views/interact.ts) follows the same rule with the same tolerance in CSS pixels.
 #pragma once
 
 #include "scene/camera.h"

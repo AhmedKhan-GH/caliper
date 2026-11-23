@@ -9,7 +9,7 @@ This page specifies what is built of wire protocol 3.2. Producers, the hub and v
 
 | Piece | Built |
 |---|---|
-| Capability | `scenes` |
+| Capability | `scenes`, and `scene_pieces` for the piece form of points and color images |
 | Kind | `scene` (6), with the VIEWS key `scene` and its `view_camera` |
 | Messages | SCENE_UPDATE with the parts `points`, `lines` (segments, strips and index-pair edges), `arrows`, `boxes`, `mesh`, `image` (colour, depth, segmentation and encoded) and `camera`; SCENE_TRANSFORMS; SCENE_CLEAR; SCENE_CLASSES; the section `stamp` of each, and `stamps` of SCENE_TRANSFORMS |
 | Dtype | `u16` (6) |
@@ -139,6 +139,45 @@ The sections and keys of each part, with N items and D = 3 in a 3-D scene or 2 i
 
 The first array of each part is required, and so are `vectors` of arrows, `half_sizes` of boxes, `strip_lengths` of strips and `indices` of edges; the other sections are optional. An item's colour comes from `colors`, else from `values` through the colormap, else from its class id, else from `color`, else from the viewer's default; `colors` and `values` together are refused, and a mesh takes at most one of `colors`, `values` and `uvs`, with `uvs` and `texture` together or not at all. A mesh without `indices` takes each three vertices as a triangle, so V is a multiple of 3. Index values are never checked by a receiver: an index out of range draws as the last vertex, by the index-clamp contract. An image and a texture are at most 8,192 pixels on a side. A camera part carries no array. N, V, T and E are at most 4,194,304 for points, vertices, triangles and edges, and N and S at most 1,048,576 for arrows, boxes and strips.
 
+### Piece Form
+
+A viewer that announces `scene_pieces` beside `scenes` receives every drawable batch in the piece form. The producer also announces this capability. A peer without it receives scene structure only: cameras, transforms, class tables, and clears. New senders never emit per-shape arrays. The array sections above describe the read-only form of saved recordings.
+
+In the piece form, the arrays of the batch travel as the RESOURCE versions of a scene program ([`resource`](#resource)), and the SCENE_UPDATE that follows them names them. A scene program is an instance of the part's library piece, which every viewer that announces `scene_pieces` has built in. Its id is `scene.` followed by 1 to 9 decimal digits, a form that no program of a spec can take, because the id of a spec program has no dot. The producer gives each scene, entity path and part its own scene program, and keeps it. The `step` of such a RESOURCE is the run's step at the call, or 0 before the first step. A version of more than 8 MiB travels as RESOURCE parts, as the versions of other programs do. The producer sends the RESOURCE versions of the batch and then its update on the same subscription, one frame after the other, and the scene's state for a new subscription sends each held batch the same way.
+
+| Key | Type | Meaning |
+|---|---|---|
+| `program` | string | The scene program whose versions came just before the update |
+| `piece` | object | The library piece: `name` (the library piece below) and `version` (1), with an optional `hash` |
+| `resources` | object | Each resource id of the piece, with the count of the version that came before the update |
+| `arrays` | array of strings | The arrays of the part that the batch held, in the order of the table above, from the part's first array |
+
+The update in the piece form carries every key of its part as before, and `axes` and `items`, but no array section and no `split`. A decoder checks, after `items`, the keys `program`, `piece` (whose name must fit the part), `resources` and `arrays`, then refuses `split`, then checks the part's keys, then that an image's `form` fits its piece, then that no section of the part's arrays is present, and last the stamp.
+
+The resources hold the bytes that the piece's derive half writes, and the producer writes them from its arrays without a derive pass:
+
+| Piece | Resource | Element | Bytes of One Element |
+|---|---|---|---|
+| `points@1` | `points` | x, y and z as f32 (z is 0 in 2-D), the radius as f32 (the row's from `radii`, else `radius`, else 1), then a u32: the packed RGBA of `colors` (r, g, b and a from the low byte), else the bits of the f32 of `values`, else the class id of `class_ids`, else the bits of a NaN; then the row as u32 and 8 bytes of zero | 32 |
+| `lines@1` | `segments`, `picks`, `info` | Expanded endpoints with color bits; source indices; value range and flags | 32, 8, 12 |
+| `arrows@1` | `arrows`, `info` | Origin, color bits, vector, source index; value range and flags | 32, 12 |
+| `boxes@1` | `boxes`, `names` | Center, half size, rotation, colors, source index, label index; host labels remain in update keys | 64, 64 |
+| `mesh@1` | `vertices`, `attributes`, `info`, `faces`, `tex` | Position, value, normal, color; source index and UV; alpha flag; clamped indices; RGBA texture | 32, 12, 4, 4, 4 |
+| `depth@1` | `pixels`, `info` | Scaled f32 bits in an `r32uint` texture; size, identity pose, finite range | 4, 96 |
+| `segmentation@1` | `pixels`, `palette`, `info` | Class IDs in an `r32uint` texture; 65,536 class colors; size and identity pose | 4, 4, 80 |
+| `image@1` | `pixels` | The texels of an `rgba8unorm` texture whose `width` and `height` are the image's, one packed RGBA a pixel, row by row; a grey image repeats its value in red, green and blue with alpha 255 | 4 |
+| `image@1` | `info` | The width, the height, the channels (1 or 4) and 0 as u32, then the identity as four columns of four f32 | 80 |
+
+Lines also carry bounded `source_*` buffers for the arrays listed in the update. Expanded segments cannot preserve unused indexed vertices or one-position strips. These buffers preserve bounds, selection, and labels. Each buffer uses its original row stride and count.
+
+Points and boxes retain `source_class_ids` beside explicit colors. Depth pixels hold f32 values in scene units, with `scale` set to 1. This canonical form needs no duplicate source texture. The fourth size word in depth `info` is 4.
+
+In segmentation `info`, that word records the original pixel width in bytes. The viewer validates these host resources and excludes them from draw inputs.
+
+Encoded PNG and JPEG calls become `image@1` texture resources after bounded decode on the producer network thread. The update then has `form` `color`. Malformed or oversized images produce a warning and no drawable update.
+
+A viewer keeps the newest version of each resource of each scene program, apart from the resources of other programs, and takes them with the update that names them, when their counts match `resources`. It drops an update whose versions did not come, and notes it in the scene view. It rebuilds the arrays from the bytes in the dimension of the entity's rows, writes the class colors from the scene's class table into the bits of a class id, and draws the received bytes with its own library piece of that name and version.
+
 ### scene_transforms
 
 The entity transforms of up to 1,024 entities of one scene, each a 4 × 4 matrix.
@@ -185,7 +224,7 @@ The rules of [Flow control](wire-protocol.md#flow-control) hold, with these addi
 
 ## Hub Forwarding
 
-The hub announces `scenes` to producers and viewers. It removes the views of kind 6 from the VIEWS it sends to a viewer without `scenes`, and refuses that viewer's SUBSCRIBE to one with `unknown_view`. It forwards the scene messages to the viewers of the producer subscription, rewriting `sub` and sharing the payload sections, with the flow control above per viewer. Of the messages that go to a viewer in order, clears and states, it keeps at most 2 × `CALIPER_NET_MAX_BATCHES` waiting: a reset drops what waits before it, and past that bound the hub's own state replaces what waits. For a late viewer it keeps, per producer subscription, the newest batch of each entity part, the class table and the newest entity transform of each entity, a clear removing what it clears and a reset all of it, and sends them as the scene's state, opened by its own SCENE_CLEAR with `reset`. A viewer's pending entity transforms merge into one SCENE_TRANSFORMS, the newest per entity, and a camera and a class table are not held to the viewer's `max_rate`. The hub puts the pieces of a split update together before it forwards them, and then sends and keeps them as one update, in order and replaced only as a whole; it drops a piece whose piece 0 it does not hold. What it keeps counts toward its budget of retained bytes. Over that budget, or past `CALIPER_NET_MAX_BATCHES` batches of one scene, it forgets a scene's state, even one that viewers watch; they keep receiving the scene, and when a later viewer subscribes, the hub subscribes again at the producer, whose fresh state reaches that viewer.
+The hub announces `scenes` to producers and viewers. It removes the views of kind 6 from the VIEWS it sends to a viewer without `scenes`, and refuses that viewer's SUBSCRIBE to one with `unknown_view`. It forwards the scene messages to the viewers of the producer subscription, rewriting `sub` and sharing the payload sections, with the flow control above per viewer. Of the messages that go to a viewer in order, clears and states, it keeps at most 2 × `CALIPER_NET_MAX_BATCHES` waiting: a reset drops what waits before it, and past that bound the hub's own state replaces what waits. For a late viewer it keeps, per producer subscription, the newest batch of each entity part, the class table and the newest entity transform of each entity, a clear removing what it clears and a reset all of it, and sends them as the scene's state, opened by its own SCENE_CLEAR with `reset`. A viewer's pending entity transforms merge into one SCENE_TRANSFORMS, the newest per entity, and a camera and a class table are not held to the viewer's `max_rate`. The hub puts the pieces of a split update together before it forwards them, and then sends and keeps them as one update, in order and replaced only as a whole; it drops a piece whose piece 0 it does not hold. The hub announces `scene_pieces` to producers and viewers. It keeps the newest RESOURCE version of each scene program apart from its program route, and the update in the piece form that names it takes it into one bundle, which the hub then forwards, keeps, replaces and clears as one update, the RESOURCE frames first and as they came. It drops an update whose versions did not come before it. It sends a bundle only to a viewer that announced `scene_pieces`. What it keeps counts toward its budget of retained bytes. Over that budget, or past `CALIPER_NET_MAX_BATCHES` batches of one scene, it forgets a scene's state, even one that viewers watch; they keep receiving the scene, and when a later viewer subscribes, the hub subscribes again at the producer, whose fresh state reaches that viewer.
 
 ## Limits
 
@@ -248,10 +287,11 @@ A receiver of this version handles the rest of the 3.2 draft by the rules of [Ve
 |---|---|
 | A piece of a split update (the key `split`) at a viewer that does not assemble them yet | Ignores the message and answers ERROR `unsupported` |
 | A part or a form that the viewer does not draw yet: the native and browser scene views draw every part and form but encoded images | Ignores the message, answers ERROR `unsupported` and says so in the scene view |
+| An update in the piece form whose RESOURCE versions did not come just before it, or whose piece, version or resource layout the viewer does not have | Drops the update and says so in the scene view |
 | A section the viewer does not use, such as `stamp` | Ignores the section, says so in the scene view, and draws the rest of the message |
 | An unknown part, a bad entity path, a section of the wrong dtype or shape, strip lengths that do not add up, or a batch over a limit | Answers ERROR `bad_request` |
 
-A 3.1 peer announces no `scenes`, so it receives no scene view and no scene message; a 3.1 decoder finds the 3.2 frames well formed, with their types unknown to it.
+A 3.1 peer announces no `scenes`, so it receives no scene view and no scene message; a 3.1 decoder finds the 3.2 frames well formed, with their types unknown to it. A viewer that announces `scenes` without `scene_pieces` receives every batch with its arrays from a producer. Behind a hub, which takes the piece form from the producer, such a viewer receives the structure of a scene alone for the batches that came in the piece form: cameras, entity transforms, the class table and clears.
 
 ## Readings of the Draft
 
@@ -324,7 +364,7 @@ An update whose frame would pass 64 MiB travels as 2 to 16 SCENE_UPDATE pieces w
 | `first` | An object from the name of each array section of this piece to the first row of the whole array that it holds |
 | `rows` | Piece 0 only: an object from the name of each array of the update to its rows |
 
-A piece holds a contiguous range of rows of some arrays, cut along their first axis, and the stamp whole; piece 0 carries the part's keys. The codecs check a piece's `split` and that `first` names exactly its arrays, and put the update together: `SplitUpdates` in Python and TypeScript and `wire::SplitUpdates` in C++ allocate each array when its first rows arrive, refuse a whole update over 512 MiB (`CALIPER_NET_MAX_UPDATE_BYTES`), overlapping rows, a piece twice or a piece that differs from piece 0, and check the whole update as an unsplit one once every piece and row has arrived. A newer update of the same entity part discards an incomplete one, and at most 2 incomplete updates are held per subscription, the oldest going first. `split_update` in Python divides an update into pieces.
+A piece holds a contiguous range of rows of some arrays, cut along their first axis, and the stamp whole; piece 0 carries the part's keys. The codecs check a piece's `split` and that `first` names exactly its arrays, and put the update together: `SplitUpdates` in Python and TypeScript and `wire::SplitUpdates` in C++ allocate each array when its first rows arrive, refuse a whole update over 512 MiB (`CALIPER_NET_MAX_UPDATE_BYTES`), overlapping rows, a piece twice or a piece that differs from piece 0, and check the whole update as an unsplit one once every piece and row has arrived. A newer update of the same entity part discards an incomplete one, and at most 2 incomplete updates are held per subscription, the oldest going first. The test encoder creates these legacy pieces for recording fixtures. Production senders use RESOURCE parts.
 
 ### Recording Messages
 
@@ -456,20 +496,50 @@ RESOURCE carries one version of one published resource of a program: the element
 | `step` | integer | The run's step at the pass, from 0 to 2^53 − 1: the step stamp of the version |
 | `count` | integer (uint32) | The valid elements |
 | `stride` | integer | The bytes of one element, a multiple of 4 from 4 to 256 |
-| `width`, `height` | integer, optional | A texture's size, 1 to 4,096 each, both or neither; a texture has a stride of 4 and `count` equal to `width` times `height` |
+| `width`, `height` | integer, optional | A texture's size, 1 to 8,192 each, both or neither. A texture has a stride of 4 and a `count` that is the number of 32-bit words of its texels |
+| `format` | string, optional | A texture's format: `rgba8unorm`, `r8unorm` or `r32uint`. It needs `width` and `height`, and `rgba8unorm` is the default when it is absent. The `count` is `width` times `height` for `rgba8unorm` and `r32uint`, and `width` times `height` plus 3, divided by 4 and rounded down, for `r8unorm` |
+| `element` | string, optional | The type of the elements of a buffer of narrow elements: `u8` or `u16`. It needs `elements` and does not go with `width` |
+| `elements` | integer (uint32), optional | The exact number of narrow elements, with `element`. The stride is 4, and the `count` is `elements` times the bytes of one element (1 for `u8`, 2 for `u16`), plus 3, divided by 4 and rounded down |
 
-The section `resource` is of dtype u8 and shape (B,), and B is exactly `count` times `stride`, at most 67,043,328 bytes. A counted buffer with no valid element has `count` 0 and an empty section. The codecs check the keys in the order of the table, then that `count` is at most 67,043,328 divided by `stride`, and only then the section's length, thus no product of two values from the network can wrap. A texture's bytes are `rgba8unorm` texels, one packed `u32` each, in row order.
+The section `resource` is of dtype u8 and shape (B,), and B is exactly `count` times `stride`, at most 67,043,328 bytes. A counted buffer with no valid element has `count` 0 and an empty section. The codecs check the keys in the order of the table, then that `count` is at most 67,043,328 divided by `stride`, and only then the section's length, thus no product of two values from the network can wrap. A texture's bytes are its texels in row order, packed into 32-bit words: one `rgba8unorm` or `r32uint` texel in each word, or four `r8unorm` texels in each word from the low byte up, with the last word padded with zeros. A buffer of narrow elements packs its elements into words in the same way, four `u8` or two `u16` in each word. The codecs check `width` and `height`, then `format`, then `element` and `elements`, and then `split`, as the table lists them.
+
+### Resource Parts
+
+A version whose section would pass one frame travels as 2 to 32 RESOURCE parts. Each part holds the keys of the whole version and the key `split`. The parts go in order on one connection, and each part holds whole elements, without gap or overlap.
+
+| `split` key | Type | Meaning |
+|---|---|---|
+| `version` | integer | The sender's counter of versions in parts, from 0 to 2^53 − 1 |
+| `parts` | integer | The number of parts, 2 to 32 (`CALIPER_NET_RESOURCE_MAX_PARTS`) |
+| `part` | integer | This part's number, from 0 to `parts` − 1 |
+| `first` | integer (uint32) | The first element of the version that this part holds, 0 in part 0 |
+
+The section of a part holds B bytes, more than 0 and a multiple of `stride`. The codecs check the keys of `split` in the order of the table. Then they check the byte limit before multiplication. A buffer holds at most 134,217,728 bytes, and a texture holds at most 268,435,456 bytes. The `count` must fit that limit divided by `stride`. The `first` index lies below `count`, and B divided by `stride` is at most `count` less `first`. Thus no product or sum of two values from the network can wrap.
+
+A receiver puts the parts together with `SplitResources` in Python and TypeScript and `wire::SplitResources` in C++. Part 0 allocates `count` times `stride` bytes, which the check above bounds, and each part copies its elements in. The last part gives the whole version, which the receiver then treats as a version in one frame. Thus a viewer shows a version whole or not at all. These rules hold for each connection:
+
+- A part whose version the receiver does not hold is dropped and counted. This is a part whose part 0 never came or was discarded.
+- A part out of order, a part whose keys differ from those of part 0, and a last part that does not end at `count` are refused, and the receiver discards the version.
+- Part 0 of a newer version of the same resource, or a version in one frame, discards an incomplete version.
+- The receiver holds at most 2 incomplete versions (`CALIPER_NET_MAX_INCOMPLETE_UPDATES`), thus at most 512 MiB for two full textures. A third one discards the oldest.
+- An incomplete version expires when 256 further RESOURCE frames (`CALIPER_NET_RESOURCE_PART_WAIT`) come on the connection before its next part.
+
+A sender sends the parts of one version in order. Between two parts of a version, it sends fewer than 256 other RESOURCE frames. `resource_parts` in Python cuts a version into parts without a copy. The script cuts a version of more than 8 MiB into parts of 8 MiB. The hub keeps the frames of the parts until the version is whole, and then forwards and keeps them as one version.
 
 ### Resource Flow
 
-A producer keeps at most one unsent RESOURCE for each resource of each program and connection, and a newer version replaces it, as with snapshots. A viewer that falls behind thus gets the newest version of each resource and loses the older ones. A hub forwards RESOURCE to each attached viewer that announced `resources`, with the same rule for each viewer, and it never sends one to another viewer. It forwards a viewer's PROGRAM to the producer as before, with its permission rules, and answers an instance with ERROR `unsupported` when the producer did not announce `resources`. It forwards a producer's PROGRAM to each attached viewer that announced `resources`. For a viewer that attaches later, the hub keeps each program's last draw half and the newest version of each of its resources, and sends them to that viewer after its WELCOME. A PROGRAM `remove`, or the draw half of another piece, drops what the hub keeps of the program. The same piece relayed again keeps its resources, thus a static resource, which the script publishes once, stays. The kept versions count toward the hub's budget of retained bytes, and a version over the budget is forwarded but not kept.
+A producer keeps at most one unsent RESOURCE for each resource of each program and connection, and a newer version replaces it, as with snapshots. A viewer that falls behind thus gets the newest version of each resource and loses the older ones. The script sends the frames of a pass in chunks of at most 8 MiB and 64 KiB. It sends the first chunk with the pass, and the other chunks at the next steps, each while the viewer's queue stays within that bound. A viewer takes no other pass until the chunks of a pass went. A hub forwards RESOURCE to each attached viewer that announced `resources`, with the same rule for each viewer, and it never sends one to another viewer. It forwards the parts of a version in parts only when the version is whole. It sends them to a viewer in order, one at a time, with at most one version in one frame between two parts, and a newer version of the same resource waits until they went. It forwards a viewer's PROGRAM to the producer as before, with its permission rules, and answers an instance with ERROR `unsupported` when the producer did not announce `resources`. It forwards a producer's PROGRAM to each attached viewer that announced `resources`. For a viewer that attaches later, the hub keeps each program's last draw half and the newest version of each of its resources, and sends them to that viewer after its WELCOME. A PROGRAM `remove`, or the draw half of another piece, drops what the hub keeps of the program. The same piece relayed again keeps its resources, thus a static resource, which the script publishes once, stays. The kept versions count toward the hub's budget of retained bytes, and a version over the budget is forwarded but not kept.
 
 | Constant | Value | Meaning |
 |---|---|---|
 | `CALIPER_NET_MAX_RESOURCES` | 8 | Resources of one program |
 | `CALIPER_NET_RESOURCE_MAX_BYTES` | 67,043,328 | Bytes of the section `resource`: 64 MiB less 64 KiB, thus a version fits one frame with its metadata |
+| `CALIPER_NET_RESOURCE_VERSION_MAX_BYTES` | 134,217,728 | Bytes of a buffer version in parts: 128 MiB, the largest storage binding of the default limits of WebGPU |
+| `CALIPER_NET_RESOURCE_TEXTURE_VERSION_MAX_BYTES` | 268,435,456 | Bytes of a texture version in parts, for 8,192 by 8,192 four-byte texels |
+| `CALIPER_NET_RESOURCE_MAX_PARTS` | 32 | Parts of one resource version |
+| `CALIPER_NET_RESOURCE_PART_WAIT` | 256 | RESOURCE frames after which an incomplete version expires |
 | `CALIPER_NET_RESOURCE_STRIDE_MAX` | 256 | The largest `stride` |
-| `CALIPER_NET_RESOURCE_SIDE_MAX` | 4,096 | The largest `width` and `height` of a texture |
+| `CALIPER_NET_RESOURCE_SIDE_MAX` | 8,192 | The largest `width` and `height` of a texture, the default largest 2-D texture of WebGPU |
 | `CALIPER_NET_PIECE_NAME_MAX` | 32 | Bytes of a piece's name |
 | `CALIPER_NET_PIECE_VERSION_MAX` | 1,000,000 | The largest version of a piece |
 | `CALIPER_NET_PIECE_COMMON_MAX` | 589,824 | Bytes of the section `common`: eight lib modules and `common.wgsl` of 64 KiB each |
@@ -477,7 +547,7 @@ A producer keeps at most one unsent RESOURCE for each resource of each program a
 
 ## Golden Frames
 
-`tests/fixtures/wire_v3/v3_2` holds the frames of a 3.2 sender, with minor 2 in their header, which `gen_v3_2.py` writes for `generate.py`: HELLO and WELCOME with `scenes`, VIEWS with scenes and a starting camera, VIEWS with a scene whose keys are null (which mean the same as absent keys, so the scene takes the defaults), the resolved default scene data view, SCENE_UPDATE of each part and form, with and without stamps, the five pieces of a split update, SCENE_TRANSFORMS with one stamp, a stamp each and none, SCENE_CLEAR with and without `reset`, SCENE_CLASSES, VIEWS with timelines and recorded data views, SESSIONS with a recording, SNAPSHOT with a stamp, static, empty and of a bar chart, SERIES with a stamp per value (the draft's example frame), one stamp and decimated, CONTROLS with a stamp, TEXT, every recording message and CURSOR op, PROGRAM `set` of each output and `remove`, PROGRAM `set` of an instance of a piece with both halves and as a draw half alone, PROGRAM_STATE as an answer and on its own and of an instance, RESOURCE of a buffer, a struct buffer, a texture and an empty counted buffer, CONTROL `intervene` of each form, its CONTROL_REPLY, and CONTROLS with `interventions`. Each implementation decodes every frame to what its `.json` says and encodes it back to the same bytes, except `scene_update_points_future`, which carries a section no part has. `v3_2/invalid` holds frames every implementation refuses; its `expect.json` gives, for each, the reason and close code of a frame that is not well formed or the ERROR code of an invalid message.
+`tests/fixtures/wire_v3/v3_2` holds the frames of a 3.2 sender, with minor 2 in their header, which `gen_v3_2.py` writes for `generate.py`: HELLO and WELCOME with `scenes`, VIEWS with scenes and a starting camera, VIEWS with a scene whose keys are null (which mean the same as absent keys, so the scene takes the defaults), the resolved default scene data view, SCENE_UPDATE of each part and form, with and without stamps, the five pieces of a split update, SCENE_TRANSFORMS with one stamp, a stamp each and none, SCENE_CLEAR with and without `reset`, SCENE_CLASSES, VIEWS with timelines and recorded data views, SESSIONS with a recording, SNAPSHOT with a stamp, static, empty and of a bar chart, SERIES with a stamp per value (the draft's example frame), one stamp and decimated, CONTROLS with a stamp, TEXT, every recording message and CURSOR op, PROGRAM `set` of each output and `remove`, PROGRAM `set` of an instance of a piece with both halves and as a draw half alone, PROGRAM_STATE as an answer and on its own and of an instance, RESOURCE of a buffer, a struct buffer, a texture and an empty counted buffer, a texture of each other format (`resource_texture_r8`, `resource_texture_r32` and `resource_texture_wide`, an `r8unorm` texture 8,192 texels wide), a buffer of narrow elements (`resource_narrow_u8` and `resource_narrow_u16`), the three parts of a version in parts (`resource_split_0` to `_2`), and three parts that are valid frames but that a receiver drops or refuses in a sequence (`resource_split_orphan`, `resource_split_short` and `resource_split_differs`), a points update in the piece form (`scene_update_points_piece`) with the RESOURCE of its scene program (`resource_scene_points`), CONTROL `intervene` of each form, its CONTROL_REPLY, and CONTROLS with `interventions`. Each implementation decodes every frame to what its `.json` says and encodes it back to the same bytes, except `scene_update_points_future`, which carries a section no part has. `v3_2/invalid` holds frames every implementation refuses; its `expect.json` gives, for each, the reason and close code of a frame that is not well formed or the ERROR code of an invalid message.
 
 This is `v3_2/scene_update_mesh.bin`: the surface of two triangles over four vertices, coloured by their values through viridis on the fixed range −4 to 2.
 

@@ -56,7 +56,6 @@ For any CPU tensor, the bridge stages through host memory. It applies the colorm
 | Vulkan with CUDA, any CUDA tensor, buffer path | 0 | 1 | A copy into the shared buffer, then a Vulkan pass. Used when the direct path refuses the tensor and for the offscreen canvas |
 | Vulkan with CUDA, `alloc_shared` | 0 | 0 | The applet's kernels write the texture's own buffer, and a Vulkan pass converts it |
 | Vulkan with CUDA, tensor in an exportable pool | 0 | 0 | The bridge imports the pool block once, and the pass reads it at a byte offset |
-| Metal and Vulkan with CUDA, imported geometry (`geometry.v1` to `v1_3`) | 0 | 0 | Indexed triangles, lines and points are vertex-pulled in place from imported buffers |
 | Any CPU tensor | 1 (staging) | 0 | The bridge converts on the CPU and uploads |
 
 `alloc_shared` differs by platform. On Vulkan it returns a device-backed tensor, so a CUDA kernel can write the texture's memory in place. On Metal it returns a CPU vector in unified memory. That is zero-copy for CPU writers, but a device writer goes through the normal update path.
@@ -79,15 +78,6 @@ Torch's public MPS stream calls are not serialized, and a handoff during kernel 
 
 A NULL stream from a CUDA producer can still be an honored handoff. `CUDAStream::stream()` returns `nullptr` for the legacy default stream, and the renderer's NULL rung enqueues on that same stream. To test the stream channel, pin a non-default pool stream.
 
-### Drain Rung Geometry
-
-The `geometry.v1` calls (`draw_points`, `draw_primitives`) address device memory as an allocation id and a byte offset. The ABI has no `CaliperTensor` and so no `stream` field. A stream-ordered handoff is thus impossible there, and it is not needed. Correctness rests on two invariants that the applet owns, and both are required:
-
-1. **The drain, before publishing.** Every applet worker drains its device before it flips the ready slot under the publish mutex. When the frame thread learns which slot to draw, the producer's writes are retired. No in-flight producer work remains for a semaphore to order against. The renderer only makes completed writes visible to the vertex stage.
-2. **The triple buffer, for slot stability.** The worker writes the slot that is neither the ready slot nor the display slot. Thus it never rewrites the slot that the frame thread reads in place.
-
-Together the two invariants make the in-place path safe without the stream-ordered gate of the texture path. The rule is part of the contract in the [geometry reference](../applets/services/caliper-geometry-v1.md), so a new worker-to-frame publish path inherits it.
-
 ### Stream-Ordered Rung Benefits
 
 The stream-ordered rung does not change training speed when the training loop already synchronizes each step, for example with `loss.item()`. The gain is that the frame thread stops waiting on the training queue.
@@ -96,7 +86,7 @@ Two habits keep the frame thread fast. Keep I/O off it, because the host [forbid
 
 ## Imported Allocations
 
-With an imported allocation, the applet exports a block of device memory once, and the host imports it once. Then both the texture path and the geometry path address the memory as an allocation id plus a byte offset. This is [`caliper.tensor_bridge.v1_2`](../applets/services/caliper-tensor-bridge-v1.md), and it is opt-in per allocation.
+With an imported allocation, the applet exports a block of device memory once, and the host imports it once. Then the texture path addresses the memory as an allocation id plus a byte offset. This is [`caliper.tensor_bridge.v1_2`](../applets/services/caliper-tensor-bridge-v1.md), and it is opt-in per allocation.
 
 **Windows.** An applet allocates its torch CUDA tensors from `caliper::adapters::ExportablePool`, a torch `MemPool` whose blocks are created with `cuMemCreate` and a shareable handle. The host imports each block into Vulkan on first use. Then `update_texture_from_alloc` runs the colormap or blit pass directly on the imported buffer at the tensor's offset. Memory that was born in the pool needs no copy. Memory that was born unshareable, such as torch's default caching allocator, takes the ordinary update path.
 

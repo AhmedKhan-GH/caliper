@@ -114,6 +114,8 @@ class Batch:
     cast: dict = field(default_factory=dict)
     arrays: dict | None = None            # name -> numpy, once finished (network thread)
     refused: bool = False                 # finished and found invalid: never sent
+    step: int | None = None               # the run's step at the call (the step of a piece form's RESOURCE)
+    packed: Any = None                    # the piece form's resources, packed once (caliper._scene_pieces)
 
     def ready(self) -> bool:
         return self.event is None or self.event.query()
@@ -1725,7 +1727,7 @@ def _log(st: SceneState, path: str, spec: _Spec, static: bool, iv) -> bool:
     if nbytes + META_MARGIN > _wire.MAX_FRAME_BYTES:
         if nbytes > _wire.MAX_UPDATE_BYTES:
             raise ValueError(f"this batch needs {nbytes} bytes, more than the "
-                             f"{_wire.MAX_UPDATE_BYTES >> 20} MiB of a split update")
+                             f"{_wire.MAX_UPDATE_BYTES >> 20} MiB of a scene batch")
     key = (path, spec.part)
     _admit(st, path, spec.part)
     watching = _watching(st)
@@ -1739,12 +1741,18 @@ def _log(st: SceneState, path: str, spec: _Spec, static: bool, iv) -> bool:
             return False
         st.last[key] = now
     b = _snapshot(st, path, spec, static)
+    b.step = _run_step()
     if static:
         st.static[key] = b
     for sr in watching:
         sr.queue(b)
     st.count("taken")
     return True
+
+
+def _run_step():
+    from ._net_ring import _run_step as run_step
+    return run_step()
 
 
 def _stride(count: int, size: int, device):

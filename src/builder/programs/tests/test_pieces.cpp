@@ -5,8 +5,12 @@
 // and the checks of a piece alone, with a test for each refusal.
 #include <caliper_builder/programs/pieces.h>
 #include <caliper_builder/programs/sandbox.h>
+#include <caliper_builder/spec/spec.h>
 
 #include <doctest/doctest.h>
+
+#include <fstream>
+#include <iterator>
 
 #include <set>
 #include <string>
@@ -208,9 +212,12 @@ std::string code_of(const cs::Piece& p) { return cp::check_piece_manifest(p).cod
 
 }  // namespace
 
-TEST_CASE("the published resources of a piece hold at most 8 MiB together, what a pass sends; a private one 64 MiB") {
-    // What the script queues for one viewer at a pass (python/caliper/_programs.py, PUBLISHED_BYTES_MAX).
-    CHECK(cs::piece_limits::kPublishedBytesMax == 8u << 20);
+TEST_CASE("published buffers hold 128 MiB, textures 256 MiB, and all resources 512 MiB") {
+    // What the script sends at a pass (python/caliper/_programs.py, PUBLISHED_BYTES_MAX and PUBLISHED_RESOURCE_MAX).
+    CHECK(cs::piece_limits::kPublishedBytesMax == 512u << 20);
+    CHECK(cs::piece_limits::kPublishedResourceBytesMax == 128u << 20);   // CALIPER_NET_RESOURCE_VERSION_MAX_BYTES
+    CHECK(cs::piece_limits::kPublishedTextureBytesMax == 256u << 20);
+    CHECK(cs::piece_limits::kCountMax == 33554432u);
     cs::Piece p = arcs_piece();
     std::uint64_t others = 0;   // the arcs and the labels, which stay published
     for (std::size_t i = 1; i < p.resources.size(); ++i) {
@@ -219,33 +226,97 @@ TEST_CASE("the published resources of a piece hold at most 8 MiB together, what 
         others += std::uint64_t(p.resources[i].count) * l.stride;
     }
     REQUIRE(others % 16 == 0);
-    // 4,194,304 elements of 16 bytes: exactly 64 MiB, the most of a private resource.
+    // 4,194,304 elements of 16 bytes: exactly 64 MiB, the most of a private resource, and one more is refused.
     p.resources[0].layout.element = "vec4<f32>";
-    p.resources[0].count = cs::piece_limits::kCountMax;
-    CHECK(code_of(p) == cp::kProgramBadResource);
+    p.resources[0].count = 4194304;
     p.resources[0].publish = false;
-    CHECK(code_of(p).empty());
-    // Published, it fits while all three hold at most 8 MiB together, and one element more is refused.
-    p.resources[0].publish = true;
-    p.resources[0].count = std::uint32_t((cs::piece_limits::kPublishedBytesMax - others) / 16);
     CHECK(code_of(p).empty());
     p.resources[0].count += 1;
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    // Published: 128 MiB, 8,388,608 elements of 16 bytes, and one element more is refused at the resource.
+    p.resources[0].publish = true;
+    p.resources[0].count = 8388608;
+    CHECK(code_of(p).empty());
+    p.resources[0].count += 1;
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    CHECK(cp::check_piece_manifest(p).where != "resources");
+    // Five buffers reach 512 MiB while each remains below its 128 MiB binding limit.
+    p.resources[1].count = 3145728;
+    const std::uint64_t arcs_bytes = std::uint64_t(p.resources[1].count) * 24;
+    p.resources[0].count = 7340032;
+    p.resources[2].count = std::uint32_t((cs::piece_limits::kPublishedBytesMax - (320u << 20) - arcs_bytes) / 32);
+    for (const char* id : {"extra_a", "extra_b"}) {
+        cs::Resource extra = p.resources[0];
+        extra.id = id;
+        extra.count = 6815744;   // 104 MiB
+        p.resources.push_back(extra);
+    }
+    CHECK_MESSAGE(code_of(p).empty(), cp::check_piece_manifest(p).message);
+    p.resources[2].count += 1;
     CHECK(cp::check_piece_manifest(p).code == cp::kProgramBadResource);
     CHECK(cp::check_piece_manifest(p).where == "resources");
-    p.resources[0].publish = false;
+    // A count past 33,554,432 is refused before its bytes are taken.
+    p = arcs_piece();
+    p.resources[0].layout.element = "u32";
+    p.resources[0].count = cs::piece_limits::kCountMax;
     CHECK(code_of(p).empty());
-    // A texture of 2,048 by 2,048 texels holds 16 MiB: refused published, and private up to 4,096 by 4,096.
+    p.resources[0].count += 1;
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    // A texture of 4,096 by 4,096 texels holds 64 MiB, published or private.
     p = arcs_piece();
     p.resources[0].kind = cs::ResourceKind::texture;
     p.resources[0].layout = {};
     p.resources[0].count = 0;
     p.resources[0].width = p.resources[0].height = 2048;
-    CHECK(code_of(p) == cp::kProgramBadResource);
+    CHECK(code_of(p).empty());
     p.resources[0].width = p.resources[0].height = 1024;
     CHECK(code_of(p).empty());
     p.resources[0].publish = false;
+    p.resources[0].width = p.resources[0].height = 4096;
+    CHECK(code_of(p).empty());
+    p.resources[0].width = 4097;   // a private resource holds at most 64 MiB
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    // Full 8,192 by 8,192 textures fit at 256 MiB. Storage buffers keep the separate 128 MiB bound.
+    p.resources[0].publish = true;
     p.resources[0].width = p.resources[0].height = cs::piece_limits::kTextureSideMax;
     CHECK(code_of(p).empty());
+    p.resources[0].texels = 33554432u;
+    CHECK(code_of(p).empty());
+    p.resources[0].texels = 67108864u;
+    CHECK(code_of(p).empty());
+    p.resources[0].texels = 67108865u;
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    p.resources[0].texels.reset();
+    p.resources[0].format = "r8unorm";
+    CHECK(code_of(p).empty());
+    p.resources[0].format = "r32uint";
+    CHECK(code_of(p).empty());
+    p.resources[0].format = "rgba16float";
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    p.resources[0].format.reset();
+    p.resources[0].width = p.resources[0].height = 2;
+    p.resources[0].texels = 5u;   // more than width times height
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    p.resources[0].texels = 0u;
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    p.resources[0].texels.reset();
+    p.resources[0].width = p.resources[0].height = cs::piece_limits::kTextureSideMax + 1;
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    // A narrow buffer counts its words: 134,217,728 u8 elements or 67,108,864 u16 elements fill 128 MiB.
+    p = arcs_piece();
+    p.resources[0].layout = {};
+    p.resources[0].layout.element = "u8";
+    p.resources[0].count = cs::piece_limits::kCountMax * 4;
+    CHECK(code_of(p).empty());
+    p.resources[0].count = cs::piece_limits::kCountMax * 4 + 1;
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    p.resources[0].layout.element = "u16";
+    p.resources[0].count = cs::piece_limits::kCountMax * 2;
+    CHECK(code_of(p).empty());
+    p.resources[0].count = cs::piece_limits::kCountMax * 2 + 1;
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    p.resources[0].layout.element = "u4";
+    CHECK(code_of(p) == cp::kProgramBadLayout);
 }
 
 TEST_CASE("a piece name is a lowercase name of at most 32 bytes and a version from 1 to 1000000") {
@@ -313,6 +384,21 @@ TEST_CASE("resolution refuses a module that is not imported, an unknown item and
     CHECK(!cp::resolve_imports(p).verdict.ok());
 }
 
+#if defined(CALIPER_PROGRAMS_LIBRARY_DIR)
+TEST_CASE("the embedded library equals its files on disk, thus a changed file reached the build") {
+    std::size_t n = 0;
+    for (const cp::LibraryFile& f : cp::library_files()) {
+        const std::string path = std::string(CALIPER_PROGRAMS_LIBRARY_DIR) + "/" + std::string(f.path);
+        std::ifstream in(path, std::ios::binary);
+        REQUIRE_MESSAGE(in.good(), path);
+        const std::string disk((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        CHECK_MESSAGE(disk == f.text, f.path, " differs from its embedded copy");
+        ++n;
+    }
+    CHECK(n > 0);
+}
+#endif
+
 TEST_CASE("the canonical manifest is RFC 8785 JSON of the manifest without hash, files and defaults") {
     cs::Piece p;
     p.name = "field";
@@ -329,6 +415,20 @@ TEST_CASE("the canonical manifest is RFC 8785 JSON of the manifest without hash,
     p.files["draw.wgsl"] = "x";
     CHECK(cp::canonical_manifest(p) ==
           R"({"description":"Quote \" back\\slash \u0001 tab\t","draw":{"camera":"none","passes":[{"fragment":"field","kind":"render"}]},"name":"field","params":[{"default":1,"max":1e+21,"min":0.1,"name":"gain"},{"default":1e-7,"max":0.05,"min":0,"name":"tiny"}],"version":1})");
+}
+
+TEST_CASE("an optional input reaches the canonical manifest only when it is optional") {
+    cs::Piece p;
+    p.name = "loose";
+    cs::PieceInput in;
+    in.name = "v";
+    p.inputs = {in};
+    CHECK(cp::canonical_manifest(p) == R"({"inputs":[{"kind":"tensor","name":"v"}],"name":"loose","version":1})");
+    const std::string before = cp::piece_hash(p);
+    p.inputs[0].optional = true;
+    CHECK(cp::canonical_manifest(p) ==
+          R"({"inputs":[{"kind":"tensor","name":"v","optional":true}],"name":"loose","version":1})");
+    CHECK(cp::piece_hash(p) != before);
 }
 
 TEST_CASE("the hash covers the canonical manifest, the imported modules and the files with LF line ends") {
@@ -407,6 +507,74 @@ TEST_CASE("the manifest check takes the arcs piece of the plan") {
     CHECK(v.ok());
 }
 
+TEST_CASE("an indexed pass draws a u32 buffer from a vertex entry as a list, and every other form is refused") {
+    cs::Piece p = arcs_piece();
+    cs::Resource idx;
+    idx.id = "idx";
+    idx.layout.element = "u32";
+    idx.count = 96;
+    p.resources.push_back(idx);
+    cs::DrawPass& arc = p.draw->passes[0];
+    arc.indices = "idx";
+    arc.topology = cs::DrawTopology::triangle_list;
+    arc.vertices.reset();   // the index count comes from the version
+    CHECK(cp::check_piece_manifest(p).ok());
+    CHECK(cp::canonical_manifest(p).find(R"("indices":"idx")") != std::string::npos);
+    cs::Piece bad = p;
+    bad.draw->passes[0].topology = cs::DrawTopology::triangle_strip;
+    CHECK(code_of(bad) == cp::kProgramBadPass);
+    bad = p;
+    bad.draw->passes[0].indices = "missing";
+    CHECK(code_of(bad) == cp::kProgramUnknownResource);
+    bad = p;
+    bad.draw->passes[0].indices = "heads";   // f32 elements
+    CHECK(code_of(bad) == cp::kProgramBadPass);
+    bad = p;
+    bad.draw->passes[0].indices = "labels";  // a struct
+    CHECK(code_of(bad) == cp::kProgramBadPass);
+    bad = p;
+    bad.draw->passes[2].indices = "idx";     // the full-screen bloom has no vertex entry
+    CHECK(code_of(bad) == cp::kProgramBadPass);
+    bad = p;
+    bad.resources.back().publish = false;     // a private resource never reaches the viewer
+    CHECK(code_of(bad) == cp::kProgramUnknownResource);
+}
+
+TEST_CASE("a text table takes its strings from a published buffer of at most 4096 strings of 64 bytes") {
+    cs::Piece p = arcs_piece();
+    cs::Resource names;
+    names.id = "names";
+    names.layout = struct_layout("Name", {{"b0", "vec4<u32>"}, {"b1", "vec4<u32>"}, {"b2", "vec4<u32>"}, {"b3", "vec4<u32>"}});
+    names.count = 4096;
+    p.resources.push_back(names);
+    p.draw->text->strings.clear();
+    p.draw->text->strings_from = "names";
+    p.draw->text->align = cs::TextAlign::center;
+    CHECK(cp::check_piece_manifest(p).ok());
+    const std::string canon = cp::canonical_manifest(p);
+    CHECK(canon.find(R"("strings_from":"names")") != std::string::npos);
+    CHECK(canon.find(R"("align":"center")") != std::string::npos);
+    CHECK(cp::canonical_manifest(arcs_piece()).find("align") == std::string::npos);
+    cs::Piece bad = p;
+    bad.draw->text->strings = {"x"};   // two sources
+    CHECK(code_of(bad) == cp::kProgramBadText);
+    bad = p;
+    bad.draw->text->strings_from = "missing";
+    CHECK(code_of(bad) == cp::kProgramUnknownResource);
+    bad = p;
+    bad.resources.back().count = 4097;
+    CHECK(code_of(bad) == cp::kProgramBadText);
+    bad = p;
+    bad.resources.back().layout.fields.push_back({"b4", "vec4<u32>"});   // 80 bytes a string
+    CHECK(code_of(bad) == cp::kProgramBadText);
+    bad = p;
+    bad.draw->text->strings_from = "heads";   // f32 elements
+    CHECK(code_of(bad) == cp::kProgramBadText);
+    bad = p;
+    bad.resources.back().publish = false;
+    CHECK(code_of(bad) == cp::kProgramUnknownResource);
+}
+
 TEST_CASE("the manifest check refuses each breach with its code") {
     cs::Piece p = arcs_piece();
     p.name = "Arcs";
@@ -434,7 +602,7 @@ TEST_CASE("the manifest check refuses each breach with its code") {
     p.resources[0].count = cs::piece_limits::kCountMax + 1;
     CHECK(code_of(p) == cp::kProgramBadResource);
     p = arcs_piece();
-    p.resources[1].count = cs::piece_limits::kCountMax;  // 4,194,304 arcs of 24 bytes: 96 MiB
+    p.resources[1].count = cs::piece_limits::kCountMax;  // 33,554,432 arcs of 24 bytes: 768 MiB
     CHECK(code_of(p) == cp::kProgramBadResource);
     p = arcs_piece();
     p.resources[0].kind = cs::ResourceKind::texture;
@@ -545,4 +713,122 @@ TEST_CASE("a binding checks the tensor's dtype and rank, or the published buffer
     CHECK(cp::check_buffer_binding(in, p.resources[2].layout).code == cp::kPieceBadBinding);
     CHECK(cp::check_tensor_binding(in, "f32", 1).code == cp::kPieceBadBinding);
     CHECK(cp::check_buffer_binding(p.inputs[0], p.resources[1].layout).code == cp::kPieceBadBinding);
+}
+
+
+TEST_CASE("the lines and mesh library layouts retain full scene capacities within WebGPU limits") {
+    constexpr std::uint32_t count = 4194304;
+    for (const std::string name : {"lines", "mesh"}) {
+        CAPTURE(name);
+        cs::Piece piece;
+        const std::string prefix = "pieces/" + name + "/1/";
+        for (const auto& file : cp::library_files()) {
+            if (file.path.substr(0, prefix.size()) != prefix) continue;
+            const std::string leaf(file.path.substr(prefix.size()));
+            if (leaf == "piece.toml") {
+                const auto parsed = cs::piece_from_toml(file.text);
+                REQUIRE(parsed.ok());
+                piece = parsed.piece;
+            }
+        }
+        for (const auto& file : cp::library_files())
+            if (file.path.substr(0, prefix.size()) == prefix && file.path.substr(prefix.size()) != "piece.toml")
+                piece.files[std::string(file.path.substr(prefix.size()))] = file.text;
+        REQUIRE(piece.name == name);
+        const auto verdict = cp::check_piece_manifest(piece);
+        REQUIRE_MESSAGE(verdict.ok(), verdict.message);
+        std::uint64_t bytes = 0;
+        std::map<std::string, std::uint32_t> strides;
+        std::map<std::string, std::uint32_t> counts;
+        for (const auto& resource : piece.resources) {
+            if (!resource.publish) continue;
+            std::uint64_t size = 0;
+            if (resource.kind == cs::ResourceKind::buffer) {
+                cp::ElementLayout layout;
+                REQUIRE(cp::element_layout(resource.layout, &layout).ok());
+                strides[resource.id] = layout.stride;
+                counts[resource.id] = resource.count;
+                size = cp::layout_bytes(layout, resource.count);
+                CHECK(size <= cs::piece_limits::kPublishedResourceBytesMax);
+            } else {
+                size = cs::texture_bytes(resource);
+            }
+            bytes += size;
+        }
+        if (name == "lines") {
+            CHECK(strides["segments"] == 32);
+            CHECK(strides["picks"] == 8);
+            CHECK(counts["segments"] == count);
+            CHECK(counts["picks"] == count);
+            CHECK(bytes == (std::uint64_t(160) << 20) + 12);
+            CHECK(piece.draw->pick->resource == "picks");
+        } else {
+            CHECK(strides["vertices"] == 32);
+            CHECK(strides["attributes"] == 12);
+            CHECK(counts["vertices"] == count);
+            CHECK(counts["attributes"] == count);
+            CHECK(counts["faces"] == 3 * count);
+            CHECK(strides["info"] == 4);
+            CHECK(counts["info"] == 1);
+            CHECK(bytes == (std::uint64_t(480) << 20) + 4);
+            CHECK(piece.draw->pick->resource == "attributes");
+        }
+        CHECK(bytes <= cs::piece_limits::kPublishedBytesMax);
+        CHECK(bytes <= std::uint64_t(piece.draw->memory_mb.value()) << 20);
+        if (!cp::compiler_available()) continue;
+        const auto resolved = cp::resolve_imports(piece);
+        REQUIRE(resolved.verdict.ok());
+        const auto composed = cp::compose_derive(piece, resolved);
+        REQUIRE(composed.verdict.ok());
+        for (const auto& pass : piece.derive->passes) {
+            CAPTURE(pass.entry);
+            const auto compiled = cp::compile_and_reflect_entry(composed.text, pass.entry);
+            REQUIRE_MESSAGE(compiled.verdict.ok(), compiled.verdict.message);
+            std::size_t storage = 0;
+            for (const auto& binding : compiled.reflection.bindings)
+                storage += binding.kind == cp::BindingKind::storage_buffer;
+            CHECK(storage <= 8);
+            if (name == "mesh" && pass.entry == "copy_vertices") CHECK(storage == 8);
+        }
+    }
+    cs::Piece p = arcs_piece();
+    p.draw->memory_mb = 512;
+    CHECK(cp::check_piece_manifest(p).ok());
+    p.draw->memory_mb = 513;
+    CHECK_FALSE(cp::check_piece_manifest(p).ok());
+}
+
+
+TEST_CASE("an r32uint texture declares at most one scalar item field") {
+    cs::Piece p;
+    p.name = "texture_fields";
+    cs::Resource r;
+    r.id = "pixels";
+    r.kind = cs::ResourceKind::texture;
+    r.format = "r32uint";
+    r.width = r.height = 2;
+    p.resources = {r};
+    cs::Draw draw;
+    cs::DrawPass pass;
+    pass.fragment = "color_fs";
+    draw.passes = {pass};
+    p.draw = draw;
+    p.files["draw.wgsl"] = "@fragment fn color_fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }";
+    for (const char* type : {"f32", "i32", "u32"}) {
+        p.resources[0].layout.fields = {{"sample", type}};
+        CHECK_MESSAGE(cp::check_piece_manifest(p).ok(), cp::check_piece_manifest(p).message);
+    }
+    for (const char* type : {"u16", "vec2<f32>", "vec4<u32>"}) {
+        p.resources[0].layout.fields = {{"sample", type}};
+        CHECK(cp::check_piece_manifest(p).code == cp::kProgramBadResource);
+    }
+    p.resources[0].layout.fields = {{"first", "f32"}, {"second", "f32"}};
+    CHECK(cp::check_piece_manifest(p).code == cp::kProgramBadResource);
+    p.resources[0].layout.fields = {{"bad__field", "f32"}};
+    CHECK(cp::check_piece_manifest(p).code == cp::kProgramBadResource);
+    p.resources[0].layout.fields = {{"sample", "f32"}};
+    p.resources[0].format = "rgba8unorm";
+    CHECK(cp::check_piece_manifest(p).code == cp::kProgramBadResource);
+    p.resources[0].format = "r8unorm";
+    CHECK(cp::check_piece_manifest(p).code == cp::kProgramBadResource);
 }

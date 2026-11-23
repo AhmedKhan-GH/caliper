@@ -69,7 +69,7 @@ jobs:
       - name: Make the instrument test Python
         run: |
           python3 -m venv "$RUNNER_TEMP/acceptance-py"
-          "$RUNNER_TEMP/acceptance-py/bin/pip" install "torch==$ACCEPTANCE_TORCH_VERSION" numpy websockets nanobind pytest
+          "$RUNNER_TEMP/acceptance-py/bin/pip" install "torch==$ACCEPTANCE_TORCH_VERSION" numpy Pillow websockets nanobind pytest
           "$RUNNER_TEMP/acceptance-py/bin/python" scripts/build_netio.py
           PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -c "import torch, caliper, caliper._netio; print('Instrument test Python ready, torch', torch.__version__)"
       # The runtime WGSL compiler (tools/shaders/caliper-wgsl) is built from source in this job
@@ -120,7 +120,7 @@ jobs:
         run: |
           set -e
           cmake -S . -B cmake-build-python -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
-            -DCALIPER_WITH_SLANG=OFF -DCALIPER_WITH_LLAMA=OFF -DCALIPER_WITH_TORCH=OFF \
+            -DCALIPER_WITH_SLANG=OFF -DCALIPER_WITH_TORCH=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DCMAKE_OBJC_COMPILER_LAUNCHER=sccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=sccache \
             -DCALIPER_WGSL_LIBRARY="$PWD/cmake-build-release/caliper-wgsl/source/lib/libcaliper_wgsl.a" \
@@ -365,6 +365,37 @@ jobs:
             grep -q "comparison skipped: no Metal device" "$log"
             echo "Draw parity: the browser side RAN and passed; the comparison SKIPPED because the runner has no Metal device"
           fi
+          # The whole Attention Arc Tower dashboard, app against the browser's spec page, on the recording in
+          # tests/draw_parity/dashboard: the app's spec runtime on Metal, the page with the module just built.
+          cd ..
+          dash="$RUNNER_TEMP/dashboard-parity"
+          set +e
+          cmake-build-release/caliper_dashboard_parity_app tests/draw_parity/dashboard demos/arc_tower "$dash" \
+            | tee "$RUNNER_TEMP/dashboard-parity-app.log"
+          dapp=$?
+          set -e
+          if [ "$dapp" -eq 0 ]; then
+            echo "Dashboard parity, app side: drew the recording on Metal"
+          elif [ "$dapp" -eq 77 ] && grep -q "skipped: no Metal device" "$RUNNER_TEMP/dashboard-parity-app.log"; then
+            echo "Dashboard parity, app side: SKIPPED because the runner has no Metal device; the browser side runs alone"
+          else
+            echo "::error::Dashboard parity, app side: exit $dapp, neither drawn nor skipped for lack of Metal"
+            exit 1
+          fi
+          cd web
+          node build.mjs
+          dlog="$RUNNER_TEMP/dashboard-parity-browser.log"
+          CALIPER_WASM_DIR="$RUNNER_TEMP/draw-parity-views" CALIPER_DASHBOARD_PARITY_DIR="$dash" \
+          CALIPER_DRAW_PARITY_CAPTURES="$RUNNER_TEMP/draw-parity-captures" \
+            npx playwright test --project=swiftshader --reporter=list test/draw_parity_dashboard.spec.ts | tee "$dlog"
+          grep -q "1 passed" "$dlog"
+          if [ "$dapp" -eq 0 ]; then
+            grep -q "dashboard: interior" "$dlog"
+            echo "Dashboard parity: RAN, compared and passed"
+          else
+            grep -q "dashboard: comparison skipped: no Metal device" "$dlog"
+            echo "Dashboard parity: the browser side RAN and passed; the comparison SKIPPED because the runner has no Metal device"
+          fi
       - if: failure()
         uses: actions/upload-artifact@v6
         with:
@@ -373,6 +404,8 @@ jobs:
             ${{ runner.temp }}/draw-parity
             ${{ runner.temp }}/draw-parity-captures
             ${{ runner.temp }}/draw-parity-*.log
+            ${{ runner.temp }}/dashboard-parity/app
+            ${{ runner.temp }}/dashboard-parity-*.log
           if-no-files-found: ignore
       - if: failure()
         uses: actions/upload-artifact@v6
@@ -453,9 +486,7 @@ jobs:
       - run: >-
           scripts/build_applets_against_sdk.sh cmake-build-release
           "$(cygpath -m "$RUNNER_TEMP")/applets"
-          examples/hello examples/sine_scope
-          applets/field_scope applets/flow_scope applets/instance_scope
-          applets/mesh_scope applets/pulse_scope applets/sculpt_scope applets/twin_scope
+          examples/hello examples/sine_scope applets/pulse_scope
         env:
           CMAKE_GENERATOR: Ninja
           CMAKE_C_COMPILER_LAUNCHER: sccache

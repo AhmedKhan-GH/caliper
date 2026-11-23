@@ -47,15 +47,18 @@ inline constexpr std::size_t kImports = 8;                       // lib modules
 inline constexpr std::size_t kDepends = 8;
 inline constexpr std::size_t kFields = 16;                       // fields of one layout
 inline constexpr std::uint32_t kStrideMax = 256;                 // bytes of one element
-inline constexpr std::uint32_t kCountMax = 4'194'304;            // elements of one buffer
-inline constexpr std::uint32_t kTextureSideMax = 4096;           // pixels of one texture side
+inline constexpr std::uint32_t kCountMax = 33'554'432;           // elements of one buffer: 128 MiB of 4-byte elements
+inline constexpr std::uint32_t kTextureSideMax = 8192;           // pixels of one texture side: WebGPU's default
 inline constexpr std::uint64_t kResourceBytesMax = 64ull << 20;  // bytes of one private resource or draw buffer
-// Bytes of all published resources of a piece together, 8 MiB: what one pass sends to a viewer. The
-// script queues at most these bytes and 64 KiB of message headers for one viewer, half of the 16 MiB
-// control queue of either sender, and a viewer with more waiting skips the pass and gets a later one
-// (python/caliper/_programs.py, PUBLISHED_BYTES_MAX and RESOURCE_BACKLOG_BYTES). Below the wire's
-// bound of one RESOURCE, CALIPER_NET_RESOURCE_MAX_BYTES.
-inline constexpr std::uint64_t kPublishedBytesMax = 8ull << 20;
+// Published buffers retain WebGPU's 128 MiB storage binding limit. Textures
+// can hold every texel of an 8,192 by 8,192 RGBA8 or R32 image, 256 MiB.
+inline constexpr std::uint64_t kPublishedResourceBytesMax = 128ull << 20;
+inline constexpr std::uint64_t kPublishedTextureBytesMax = 256ull << 20;
+// Bytes of all published resources of a piece together, 512 MiB: one version of each fits the step
+// history's resource budget. A version above 8 MiB goes to a viewer in parts of 8 MiB, each while
+// the viewer's queue holds at most 8 MiB and 64 KiB, half of the 16 MiB control queue of either sender
+// (python/caliper/_programs.py, PUBLISHED_BYTES_MAX, PART_BYTES and RESOURCE_BACKLOG_BYTES).
+inline constexpr std::uint64_t kPublishedBytesMax = 512ull << 20;
 inline constexpr std::uint32_t kKeepDefault = 256;               // kept versions of a resource in the step history
 inline constexpr std::uint32_t kKeepMax = 4096;
 inline constexpr std::size_t kDerivePasses = 8;
@@ -70,12 +73,62 @@ inline constexpr std::uint32_t kWorkgroupsMax = 65'535;          // each of thre
 inline constexpr double kFrameMsDefault = 4.0;                   // GPU time of the draw half in one frame
 inline constexpr double kFrameMsMax = 16.0;
 inline constexpr std::uint32_t kDrawMemoryMbDefault = 64;        // resources, draw buffers and targets in the viewer
-inline constexpr std::uint32_t kDrawMemoryMbMax = 256;
+inline constexpr std::uint32_t kDrawMemoryMbMax = 512;
 inline constexpr std::size_t kPickFields = 8;
 inline constexpr std::size_t kStrings = 4096;                    // strings of the text table
 inline constexpr std::size_t kStringBytes = 64;
 inline constexpr std::size_t kLabels = 512;                      // labels drawn in one frame, as place_labels
 }  // namespace piece_limits
+
+// The element types of a tensor input. Its `dtype` names one of them, or several joined by "|", such as
+// "f32|u8", and the bound tensor chooses among them. A 32-bit type alone binds an array of that type; a
+// narrow type (u8, u16) or several types bind the tensor's bytes as array<u32>, which the derive half reads
+// through the checked accessor <name>_at() of the generated header (programs/pieces.h, compose_derive).
+inline constexpr std::array<const char*, 5> kTensorDtypes{"f32", "i32", "u32", "u8", "u16"};
+
+// The types of a tensor input's `dtype`, in their order: empty unless the text is one to five distinct
+// types of kTensorDtypes joined by "|".
+inline std::vector<std::string> tensor_dtypes(std::string_view dtype) {
+    std::vector<std::string> out;
+    if (dtype.size() > 32) return {};
+    std::size_t at = 0;
+    while (true) {
+        const std::size_t bar = dtype.find('|', at);
+        const std::string_view one = dtype.substr(at, bar == std::string_view::npos ? std::string_view::npos : bar - at);
+        bool known = false;
+        for (const char* t : kTensorDtypes) known = known || one == t;
+        if (!known) return {};
+        for (const std::string& seen : out)
+            if (seen == one) return {};
+        out.emplace_back(one);
+        if (bar == std::string_view::npos) break;
+        at = bar + 1;
+    }
+    return out;
+}
+
+// Whether a tensor input reads its tensor through the accessor <name>_at(): a narrow type or several types.
+inline bool typed_tensor_input(std::string_view dtype) {
+    const std::vector<std::string> t = tensor_dtypes(dtype);
+    return t.size() > 1 || (t.size() == 1 && (t[0] == "u8" || t[0] == "u16"));
+}
+
+// The type that <name>_at() returns for a dtype: f32 when the dtype names f32, else i32 when it names
+// i32, else u32.
+inline const char* tensor_read_type(std::string_view dtype) {
+    const std::vector<std::string> t = tensor_dtypes(dtype);
+    bool f = false, i = false;
+    for (const std::string& s : t) {
+        f = f || s == "f32";
+        i = i || s == "i32";
+    }
+    return f ? "f32" : i ? "i32" : "u32";
+}
+
+// The bytes of one element of a tensor dtype, 0 for a text that is not one type of kTensorDtypes.
+inline std::uint32_t tensor_dtype_bytes(std::string_view t) {
+    return t == "u8" ? 1u : t == "u16" ? 2u : (t == "f32" || t == "i32" || t == "u32") ? 4u : 0u;
+}
 
 // The only file names of a piece folder besides piece.toml and sample/.
 inline constexpr std::array<const char*, 3> kPieceFiles{"common.wgsl", "derive.wgsl", "draw.wgsl"};
@@ -103,6 +156,11 @@ enum class DrawDepth { none, test, write };
 enum class CameraMode { orbit, pan_zoom, none };
 // When the draw half's buffers return to zero besides an install.
 enum class BufferReset { install, cursor, resource };
+// Where the host puts a label: `placed` lets the placer choose one of eight
+// places around the anchor, as for the other labels of the panel; `left`,
+// `right` and `center` pin the label at its anchor, with the start, the end or
+// the middle of its text there and the text centered on it vertically.
+enum class TextAlign { placed, left, right, center };
 
 inline const char* input_kind_name(InputKind k) { return k == InputKind::tensor ? "tensor" : "buffer"; }
 inline const char* param_type_name(ParamType t) { return t == ParamType::f32 ? "f32" : t == ParamType::i32 ? "i32" : "u32"; }
@@ -130,6 +188,9 @@ inline const char* camera_mode_name(CameraMode c) {
 }
 inline const char* buffer_reset_name(BufferReset r) {
     return r == BufferReset::install ? "install" : r == BufferReset::cursor ? "cursor" : "resource";
+}
+inline const char* text_align_name(TextAlign a) {
+    return a == TextAlign::placed ? "placed" : a == TextAlign::left ? "left" : a == TextAlign::right ? "right" : "center";
 }
 
 namespace detail {
@@ -182,6 +243,10 @@ inline std::optional<BufferReset> buffer_reset_from_name(std::string_view s) {
     static const BufferReset all[] = {BufferReset::install, BufferReset::cursor, BufferReset::resource};
     return detail::from_name(s, all, buffer_reset_name);
 }
+inline std::optional<TextAlign> text_align_from_name(std::string_view s) {
+    static const TextAlign all[] = {TextAlign::placed, TextAlign::left, TextAlign::right, TextAlign::center};
+    return detail::from_name(s, all, text_align_name);
+}
 
 // One field of a layout, written "name: type" in the manifest. The types are
 // f32, i32, u32, vec2<f32>, vec4<f32>, vec2<u32> and vec4<u32>; vec3 is left
@@ -208,19 +273,22 @@ inline bool operator==(const Layout& a, const Layout& b) {
 // the derive half, with its shape in the generated uniform `shapes`; its rank
 // must be from rank_min to rank_max. A buffer input is a read-only array of
 // `layout` in the draw half, bound to another program's published buffer
-// resource with the same layout.
+// resource with the same layout. An optional input may stay unbound: a tensor
+// input then reads as an empty array with the shape (0, 0, 0, 0), and a buffer
+// input as an empty array with the count 0.
 struct PieceInput {
     std::string name;                        // the WGSL name of the generated binding
     InputKind kind = InputKind::tensor;
-    std::string dtype = "f32";               // tensor: f32, i32 or u32
+    std::string dtype = "f32";               // tensor: f32, i32, u32, u8 or u16, or several joined by "|"
     std::uint32_t rank_min = 1;              // tensor
     std::uint32_t rank_max = 8;
     Layout layout;                           // buffer
     std::optional<std::string> title;
+    bool optional = false;                   // a program may leave it unbound
 };
 inline bool operator==(const PieceInput& a, const PieceInput& b) {
     return a.name == b.name && a.kind == b.kind && a.dtype == b.dtype && a.rank_min == b.rank_min &&
-           a.rank_max == b.rank_max && a.layout == b.layout && a.title == b.title;
+           a.rank_max == b.rank_max && a.layout == b.layout && a.title == b.title && a.optional == b.optional;
 }
 
 // One entry of `params`: a field of the generated struct Params, which both
@@ -241,9 +309,14 @@ inline bool operator==(const PieceParam& a, const PieceParam& b) {
 
 // One entry of `resources`. A buffer holds `count` elements of its layout;
 // with `counted`, the derive half also gets the counter <id>_count, and the
-// valid elements are the first min(counter, count). A texture is rgba8unorm,
-// `width` by `height`, which the derive half writes as packed array<u32> and
-// the draw half samples as texture_2d<f32>. A published resource is an
+// valid elements are the first min(counter, count). A buffer of the narrow
+// element u8 or u16 packs four or two elements into each 32-bit word, which
+// both halves bind as array<u32>. A texture has a `format` (rgba8unorm when
+// absent, r8unorm or r32uint) and a size per version of at most `width` by
+// `height` and at most `texels` texels (width * height when absent): the
+// derive half writes the texels as packed array<u32> in row order, sets the
+// version's size in <id>_size, and the draw half samples a texture_2d<f32>
+// (texture_2d<u32> for r32uint) of that size. A published resource is an
 // output that the viewer and other pieces read.
 struct Resource {
     std::string id;                          // unique among the piece's inputs, resources and draw buffers
@@ -251,15 +324,41 @@ struct Resource {
     Layout layout;                           // buffer
     std::uint32_t count = 0;                 // buffer: elements
     bool counted = false;                    // buffer: the derive half counts the valid elements
-    std::uint32_t width = 0, height = 0;     // texture
+    std::uint32_t width = 0, height = 0;     // texture: the largest side of a version
+    std::optional<std::string> format;       // texture: rgba8unorm when absent, r8unorm or r32uint
+    std::optional<std::uint32_t> texels;     // texture: the most texels of a version, width * height when absent
     bool publish = true;                     // false: a private resource of the derive half, never sent
     bool clear = false;                      // true: zero before each run of the derive passes
     std::optional<std::uint32_t> keep;       // kept versions in the step history, kKeepDefault when absent
 };
 inline bool operator==(const Resource& a, const Resource& b) {
     return a.id == b.id && a.kind == b.kind && a.layout == b.layout && a.count == b.count && a.counted == b.counted &&
-           a.width == b.width && a.height == b.height && a.publish == b.publish && a.clear == b.clear &&
-           a.keep == b.keep;
+           a.width == b.width && a.height == b.height && a.format == b.format && a.texels == b.texels &&
+           a.publish == b.publish && a.clear == b.clear && a.keep == b.keep;
+}
+
+// The formats of a texture resource, the first when `format` is absent: four 8-bit channels, one
+// 8-bit channel, or one 32-bit unsigned integer a texel.
+inline constexpr std::array<const char*, 3> kTextureFormats{"rgba8unorm", "r8unorm", "r32uint"};
+inline bool texture_format_ok(std::string_view f) {
+    for (const char* k : kTextureFormats)
+        if (f == k) return true;
+    return false;
+}
+inline std::string texture_format(const Resource& r) { return r.format.value_or(kTextureFormats[0]); }
+// The 32-bit words that `texels` texels of a format fill in row order: four r8unorm texels a word.
+inline std::uint64_t texture_words(std::string_view format, std::uint64_t texels) {
+    return format == "r8unorm" ? (texels + 3) / 4 : texels;
+}
+// The most texels of a version of a texture resource: `texels`, else width * height (at most 2^26).
+inline std::uint64_t texture_texels(const Resource& r) {
+    return r.texels ? *r.texels : std::uint64_t(r.width) * r.height;
+}
+// The bytes of the largest version of a texture resource.
+inline std::uint64_t texture_bytes(const Resource& r) { return texture_words(texture_format(r), texture_texels(r)) * 4; }
+// The narrow elements of a buffer packed into each 32-bit word: 4 for u8, 2 for u16, else 1.
+inline std::uint32_t narrow_per_word(std::string_view element) {
+    return element == "u8" ? 4u : element == "u16" ? 2u : 1u;
 }
 
 // One compute pass of the derive half. Passes run in their order in one
@@ -312,6 +411,9 @@ inline bool operator==(const DrawTarget& a, const DrawTarget& b) {
 // `writes` (draw buffers). A render pass has `fragment`, and `vertex` unless
 // it is a full-screen triangle; `instances` is a count or, through
 // `instances_of`, the valid count of a buffer resource or input at the cursor.
+// With `indices`, a render pass draws the valid elements of a u32 buffer
+// resource or input as an index buffer: each index is the vertex_index of the
+// vertex entry, and each instance draws all of them.
 struct DrawPass {
     PassKind kind = PassKind::render;
     std::string entry;                                   // compute
@@ -324,6 +426,7 @@ struct DrawPass {
     std::uint32_t instances = 1;
     std::optional<std::string> instances_of;             // a buffer resource or buffer input
     std::optional<std::uint32_t> vertices;               // render: 3 for the full-screen triangle
+    std::optional<std::string> indices;                  // render: a u32 buffer resource or input of indices
     DrawTopology topology = DrawTopology::triangle_list;
     std::optional<DrawBlend> blend;                      // opaque on the host target, additive offscreen
     std::optional<DrawDepth> depth;                      // write on the host target with a vertex entry, else none
@@ -333,7 +436,8 @@ inline bool operator==(const DrawPass& a, const DrawPass& b) {
     return a.kind == b.kind && a.entry == b.entry && a.workgroups == b.workgroups && a.writes == b.writes &&
            a.vertex == b.vertex && a.fragment == b.fragment && a.target == b.target && a.reads == b.reads &&
            a.instances == b.instances && a.instances_of == b.instances_of && a.vertices == b.vertices &&
-           a.topology == b.topology && a.blend == b.blend && a.depth == b.depth && a.pick == b.pick;
+           a.topology == b.topology && a.blend == b.blend && a.depth == b.depth && a.pick == b.pick &&
+           a.indices == b.indices;
 }
 
 // The item map: a picked item is the index of an element of `resource`, and
@@ -347,17 +451,22 @@ inline bool operator==(const PickMap& a, const PickMap& b) { return a.resource =
 // Text that the host draws: one label at each valid element of `anchors`,
 // whose `position` field (vec4<f32>, world xyz) places it and whose `string`
 // field (u32) indexes `strings`. An optional `priority` field (f32) orders
-// the labels when they overlap.
+// the labels when they overlap. With `strings_from`, the strings come from a
+// published buffer resource or buffer input instead: each valid element is one
+// string of UTF-8 bytes, ended by its stride (at most kStringBytes) or its
+// first zero byte.
 struct TextTable {
     std::string anchors;                     // a buffer resource
     std::string position = "position";
     std::string string = "string";
     std::optional<std::string> priority;
     std::vector<std::string> strings;        // at most kStrings, each at most kStringBytes
+    std::optional<std::string> strings_from; // a buffer of at most kStrings elements of at most kStringBytes
+    TextAlign align = TextAlign::placed;
 };
 inline bool operator==(const TextTable& a, const TextTable& b) {
     return a.anchors == b.anchors && a.position == b.position && a.string == b.string && a.priority == b.priority &&
-           a.strings == b.strings;
+           a.strings == b.strings && a.strings_from == b.strings_from && a.align == b.align;
 }
 
 // The table `draw`; its source is draw.wgsl.

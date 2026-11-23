@@ -157,8 +157,8 @@ def test_every_part_reaches_a_viewer(server, device):
             assert _arr(s, "pixels").dtype == np.uint16
             assert _arr(s, "pixels").tolist() == seg.cpu().tolist()
             f = await v.update("rig/left/frame", "image")
-            assert f.params["form"] == "encoded" and f.params["format"] == "png"
-            assert bytes(f.arrays["pixels"].data) == png
+            assert f.params["form"] == "color" and "format" not in f.params
+            assert _arr(f, "pixels").tolist() == [[[255, 128, 0, 255]]]
 
     run(go())
 
@@ -264,38 +264,27 @@ def test_clears_reach_the_viewer_in_order_and_leave_static_parts(server):
     run(go())
 
 
-def test_a_batch_over_one_frame_travels_as_a_split_update(server, monkeypatch):
-    """Small frames stand in for 64 MiB, so that the test moves a few hundred KB."""
-    monkeypatch.setattr(_net_scene, "FRAME_ROOM", 16 * 1024)
-    monkeypatch.setattr(_net_scene, "PIECE_BYTES", 24 * 1024)
+def test_large_resources_arrive_before_the_update(server, monkeypatch):
+    from caliper import _programs
+    monkeypatch.setattr(_programs, "PART_BYTES", 24 * 1024)
     sc = caliper.scene("big")
     pos = torch.arange(3 * 4000, dtype=torch.float32).reshape(4000, 3) / 7
 
     async def go():
         async with Viewer(server) as v:
             await v.subscribe(1, "big")
-            await v.expect(w.SceneClear, lambda m: m.reset)
             sc.mesh("m", pos[:3999], values=pos[:3999, 0], vmin=0.0, vmax=1.0)
-            su = w.SplitUpdates()
-            whole = None
-            while whole is None:
-                piece = await v.update("m", "mesh")
-                assert piece.split is not None
-                whole = su.add(piece)
-            assert whole.split is None and whole.params["vmax"] == 1.0
-            assert len(su.open) == 0 and su.dropped == 0
-            async with Viewer(server) as late:            # the batch kept for a late viewer splits too
-                await late.subscribe(1, "big")
-                su = w.SplitUpdates()
-                whole = None
-                while whole is None:
-                    piece = await late.update("m", "mesh")
-                    assert piece.split is not None and piece.state
-                    whole = su.add(piece)
-                np.testing.assert_array_equal(_arr(whole, "positions"), pos[:3999].numpy())
+            whole = await v.update("m", "mesh")
+            assert whole.split is None and whole.program and whole.params["vmax"] == 1.0
+            resources = [m for m in v.inbox if isinstance(m, w.Resource) and m.split]
+            assert len(resources) > 1
             np.testing.assert_array_equal(_arr(whole, "positions"), pos[:3999].numpy())
             np.testing.assert_array_equal(_arr(whole, "values"), pos[:3999, 0].numpy())
-
+            async with Viewer(server) as late:
+                await late.subscribe(1, "big")
+                whole = await late.update("m", "mesh")
+                assert whole.state and whole.program and whole.split is None
+                np.testing.assert_array_equal(_arr(whole, "positions"), pos[:3999].numpy())
     run(go())
 
 
