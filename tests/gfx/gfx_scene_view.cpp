@@ -1587,17 +1587,13 @@ TEST_CASE("gfx/Metal scene view: shapes drawn by the library pieces match the bu
     ViewRig probe;
     if (!probe.init()) CALIPER_SKIP_NO_GPU("no Metal device");
     std::vector<primitive_fixtures::Fixture> fixtures = primitive_fixtures::all();
-    // The view through a camera without the points of radii in scene units, which keep the built-in
-    // draw and with it every shape of a view through a camera: the pinhole frames the pieces, the
-    // camera's pixel space lies flat over the picture, and the letterbox's bars keep the ground.
+    // The view through a camera with its points sized in pixels, not by radii in scene units,
+    // which keep the built-in draw and with it every shape of the view: the pinhole frames the
+    // pieces, the camera's pixel space lies flat over the picture, and the bars keep the ground.
     primitive_fixtures::Fixture flat = primitive_fixtures::through();
     flat.name = "through-pieces";
-    flat.messages.erase(std::remove_if(flat.messages.begin(), flat.messages.end(),
-                                       [](const wire::Message& m) {
-                                           const auto* u = std::get_if<wire::SceneUpdate>(&m);
-                                           return u && u->array("radii") != nullptr;
-                                       }),
-                        flat.messages.end());
+    for (wire::Message& m : flat.messages)
+        if (auto* u = std::get_if<wire::SceneUpdate>(&m)) u->params.erase("radius");
     fixtures.push_back(flat);
     for (const primitive_fixtures::Fixture& f : fixtures) {
         CAPTURE(f.name);
