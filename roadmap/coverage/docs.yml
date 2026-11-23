@@ -1406,7 +1406,7 @@ entries:
   - AGT-02
   - SPC-51
 - page: docs/agents/pieces.md#piece-commands
-  item: "Stages stay unchanged until Graphics Consolidation removes them."
+  item: "Graphics Consolidation replaces stage hooks with library pieces."
   ids:
   - SPC-14
 - page: docs/agents/pieces.md#program-status-and-events
@@ -1415,7 +1415,7 @@ entries:
   - SPC-14
   - SPC-05
 - page: docs/agents/pieces.md#piece-sources
-  item: "The built-in library holds the lib modules and points@1, which matches the built-in draw."
+  item: "The library supplies versioned scene pieces and shared shader modules."
   ids:
   - REN-80
 - page: docs/development/testing.md#draw-parity
@@ -1466,8 +1466,8 @@ entries:
   item: "A program declares its WGSL source, its read-only inputs, one output and its limits."
   ids:
   - SPC-14
-- page: docs/agents/gpu-programs.md#stages
-  item: "A stage replaces one function of the draw of a scene entity."
+- page: docs/builder/spec-version-1.md
+  item: "Old stage tables require a replacement piece."
   ids:
   - SPC-14
 - page: docs/agents/gpu-programs.md#sandbox-rules
@@ -1578,11 +1578,57 @@ entries:
   item: "The acceptance test of programmable graphics."
   ids:
   - REN-77
-- page: docs/roadmap/milestones.md#later-milestones
-  item: "The move of every built-in shape and of the surface and path operators onto library pieces, and the removal of the per-shape drawing code."
+- page: docs/roadmap/milestones.md#graphics-consolidation
+  item: "Library scene pieces, their comparison tests, and the removal of the built-in draw route."
   ids:
   - REN-84
   - REN-85
   - REN-86
   - REN-87
   - REN-88
+
+- page: docs/agents/pieces.md#piece-sources
+  item: The library holds pieces for scene shapes, image kinds, the surface and path operators, and camera frustums.
+  ids:
+  - REN-80
+  - REN-84
+  - REN-85
+  - REN-86
+  - REN-87
+  - REN-89
+
+- page: docs/agents/pieces.md#resources
+  item: Pieces accept narrow element types and typed textures with a size for each version.
+  ids:
+  - REN-90
+
+- page: docs/agents/pieces.md#draw-half
+  item: A draw pass supports indexed draws and optional inputs.
+  ids:
+  - REN-91
+
+- page: docs/reference/wire-protocol-3-2.md#resource-parts
+  item: A resource version travels in parts and becomes available after complete assembly.
+  ids:
+  - STR-56
+
+- page: docs/reference/wire-protocol-3-2.md#piece-form
+  item: A scene batch travels as a piece instance and its typed resources.
+  ids:
+  - STR-57
+
+- page: docs/development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions
+  item: ABI epoch 3 removes the geometry and export services and their demo applets.
+  ids:
+  - COR-25
+  - REN-04
+  - REN-05
+  - REN-06
+  - REN-07
+  - REN-65
+  - REN-70
+  - REN-71
+  - REN-72
+  - REN-73
+  - REN-74
+  - REN-75

@@ -37,8 +37,9 @@ features:
     scope: peripheral
     summary: Removed in ABI epoch 3. caliper.geometry.v1 drew instanced points from imported device memory into an offscreen view texture.
     depends_on: [REN-08]
-    branches: [playground-m6geom]
+    branches: [playground-m6]
     issue: null
+    docs: docs/development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions
 
   - id: REN-05
     title: geometry.v1_1
@@ -46,8 +47,9 @@ features:
     scope: peripheral
     summary: Removed in ABI epoch 3. caliper.geometry.v1_1 added general primitives, depth views and one atomic gated frame.
     depends_on: [REN-04]
-    branches: [playground-m6geom]
+    branches: [playground-m6]
     issue: null
+    docs: docs/development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions
 
   - id: REN-06
     title: geometry.v1_2
@@ -55,8 +57,9 @@ features:
     scope: peripheral
     summary: Removed in ABI epoch 3. caliper.geometry.v1_2 added textures on meshes.
     depends_on: [REN-05]
-    branches: [playground-m6geom]
+    branches: [playground-m6]
     issue: null
+    docs: docs/development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions
 
   - id: REN-07
     title: geometry.v1_3
@@ -64,8 +67,9 @@ features:
     scope: peripheral
     summary: Removed in ABI epoch 3. caliper.geometry.v1_3 added instanced transforms.
     depends_on: [REN-06]
-    branches: [playground-m6geom]
+    branches: [playground-m6]
     issue: null
+    docs: docs/development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions
 
   - id: REN-08
     title: Zero-Copy from Torch
@@ -592,8 +596,9 @@ features:
     scope: peripheral
     summary: Removed in ABI epoch 3. caliper.export.v1 drew a geometry draw list offscreen into a PNG with a JSON provenance sidecar.
     depends_on: [REN-05]
-    branches: [playground-m6geom]
+    branches: [playground-m6]
     issue: null
+    docs: docs/development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions
 
   - id: REN-66
     title: Torch Adapter
@@ -637,8 +642,9 @@ features:
     scope: peripheral
     summary: Deleted demo applet (removed in epoch 3). Simulated charged particles in electromagnetic fields on a GPU.
     depends_on: [REN-04]
-    branches: [playground-m6geom]
+    branches: [playground-m6]
     issue: null
+    docs: docs/development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions
 
   - id: REN-71
     title: FlowScope
@@ -646,8 +652,9 @@ features:
     scope: peripheral
     summary: Deleted demo applet (removed in epoch 3). Drove a flow field of one million particles on a GPU.
     depends_on: [REN-04]
-    branches: [playground-m6geom]
+    branches: [playground-m6]
     issue: null
+    docs: docs/development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions
 
   - id: REN-72
     title: InstanceScope
@@ -655,8 +662,9 @@ features:
     scope: peripheral
     summary: Deleted demo applet (removed in epoch 3). Drew a field of procedural gems with one instanced draw call.
     depends_on: [REN-07]
-    branches: [playground-m6geom]
+    branches: [playground-m6]
     issue: null
+    docs: docs/development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions
 
   - id: REN-73
     title: MeshScope
@@ -664,8 +672,9 @@ features:
     scope: peripheral
     summary: Deleted demo applet (removed in epoch 3). Trained a small network on a 2-D surface drawn as lit triangles with a wireframe.
     depends_on: [REN-65]
-    branches: [playground-m6geom]
+    branches: [playground-m6]
     issue: null
+    docs: docs/development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions
 
   - id: REN-74
     title: SculptScope
@@ -673,8 +682,9 @@ features:
     scope: peripheral
     summary: Deleted demo applet (removed in epoch 3). Trained a small network mapping latent codes to a 3-D point cloud.
     depends_on: [REN-04]
-    branches: [playground-m6geom]
+    branches: [playground-m6]
     issue: null
+    docs: docs/development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions
 
   - id: REN-75
     title: TwinScope
@@ -682,8 +692,9 @@ features:
     scope: peripheral
     summary: Deleted demo applet (removed in epoch 3). Ran a synthetic heat twin of a textured housing.
     depends_on: [REN-06, REN-65]
-    branches: [playground-m6geom]
+    branches: [playground-m6]
     issue: null
+    docs: docs/development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions
 
   - id: REN-76
     title: Program Sandbox
@@ -725,7 +736,7 @@ features:
     title: Piece Library
     status: shipped
     scope: core
-    summary: The built-in library holds the piece points@1 and the shader modules camera, colormap, easing and pick, which pieces import by name, and points@1 draws the same pixels and returns the same picks as the built-in points.
+    summary: The library supplies reusable scene pieces and the camera, colormap, easing and pick shader modules under the same manifest and version rules as workspace pieces.
     depends_on: [REN-32, REN-79]
     docs: docs/agents/pieces.md#piece-sources
     issue: null
@@ -759,40 +770,79 @@ features:
 
   - id: REN-84
     title: Lines Arrows and Paths as Library Pieces
-    status: planned
+    status: built
     scope: core
-    summary: Lines are in work, and arrows and paths are in the same work. Each becomes a piece of the library that matches the pixels and the picks of the built-in shape.
+    summary: The lines@1, arrows@1 and path@1 pieces draw line segments, arrows and paths with color, width, depth and item picks.
     depends_on: [REN-80]
     issue: null
+    branches: [playground-m6]
+    docs: docs/agents/pieces.md#piece-sources
 
   - id: REN-85
     title: Boxes and Meshes as Library Pieces
-    status: planned
+    status: built
     scope: core
-    summary: Boxes are in work, and meshes are in the same work. Each becomes a piece of the library that matches the pixels and the picks of the built-in shape.
+    summary: The boxes@1 and mesh@1 pieces draw boxes and triangle meshes with class colors, labels, lighting, textures and item picks.
     depends_on: [REN-80]
     issue: null
+    branches: [playground-m6]
+    docs: docs/agents/pieces.md#piece-sources
 
   - id: REN-86
     title: Images Depth Maps and Segmentation Masks as Library Pieces
-    status: planned
+    status: built
     scope: core
-    summary: Images, depth maps and segmentation masks are in work. Each becomes a piece of the library that matches the pixels and the picks of the built-in shape.
+    summary: The image@1, depth@1 and segmentation@1 pieces draw images, depth clouds and class masks with camera poses, native element types and item picks.
     depends_on: [REN-80]
     issue: null
+    branches: [playground-m6]
+    docs: docs/agents/pieces.md#piece-sources
 
   - id: REN-87
     title: Surface as a Library Piece
-    status: planned
+    status: built
     scope: core
-    summary: The surface piece exists with its match test. The work checks it against the pixels and the picks of the built-in surface.
+    summary: The surface@1 piece derives a height field from a tensor and draws it with the data bounds, value range and item picks.
     depends_on: [REN-80, SPC-43]
     issue: null
+    branches: [playground-m6]
+    docs: docs/agents/pieces.md#piece-sources
 
   - id: REN-88
     title: Removal of Per-Shape Draw Code
     status: planned
     scope: core
-    summary: When every built-in shape is a library piece, the per-shape shaders, draw code, wire parts and browser drawers are deleted, so that one rendering path remains.
+    summary: Library pieces replace the built-in scene shaders, draw code and stage hooks. One read-only converter preserves old scene recordings, and Canvas 2D panels stay.
     depends_on: [REN-84, REN-85, REN-86, REN-87]
+    issue: null
+    docs: docs/roadmap/milestones.md#graphics-consolidation
+
+  - id: REN-89
+    title: Camera Frustum Piece
+    status: built
+    scope: core
+    summary: The frustum@1 library piece draws a camera entity with the pose and intrinsics of its pinhole camera.
+    depends_on: [REN-80]
+    branches: [playground-m6]
+    docs: docs/agents/pieces.md#piece-sources
+    issue: null
+
+  - id: REN-90
+    title: Typed Piece Resources
+    status: built
+    scope: core
+    summary: Pieces read u8 and u16 tensors and buffers, and publish typed textures with a size for each version, without float conversion.
+    depends_on: [REN-78]
+    branches: [playground-m6]
+    docs: docs/agents/pieces.md#resources
+    issue: null
+
+  - id: REN-91
+    title: Indexed Piece Draws
+    status: built
+    scope: core
+    summary: A draw pass takes an index buffer, and optional inputs let one piece accept only the resources that a scene part needs.
+    depends_on: [REN-79]
+    branches: [playground-m6]
+    docs: docs/agents/pieces.md#draw-half
     issue: null

@@ -12,7 +12,7 @@ This page lists the milestones of Caliper's current trajectory, Agent-Built Play
 | M3, Instrument Building | Entities from tensors, operators, shared state, time transport, annotations, all control kinds | Done | [#28](https://github.com/AhmedKhan-GH/caliper/pull/28) |
 | M4, Hosted Runs | Start, fork and stop a model's run from Caliper and over MCP | Done | [#26](https://github.com/AhmedKhan-GH/caliper/pull/26) |
 | M5, Programmable Graphics | Pieces with a derive half in the run and a draw half in the viewer, written by the agent, in the app and the browser | Done | [#34](https://github.com/AhmedKhan-GH/caliper/pull/34) |
-| M6, Graphics Consolidation | Every built-in shape and operator as a library piece, and the old per-shape code removed | In progress | |
+| M6, Graphics Consolidation | Library scene pieces, typed resources, dashboard parity, and removal of the built-in draw route | In progress | |
 | M7, Derivation Catalog | Projections, layouts, overlays and model probes as library pieces | Planned | |
 | M8, Steering and Intervention | Steer, scale and patch | Planned | |
 | M9, Saved and Editable Instruments | Saved instruments with their pieces, and the node editor | Planned | |
@@ -52,10 +52,18 @@ M5 gives the agent the graphics layer itself, inside the sandbox. The agent decl
 
 The demo is an attention arc tower that the agent writes completely. A small transformer trains, and a compute pass turns each attention weight into an arc between tokens on a ring for each layer. A render pass draws the arcs with additive blending, and a bloom pass adds the glow. The arcs show when induction heads form, and an ablation and a fork test whether they cause the drop in loss.
 
-## Built-In Primitives
+## Graphics Consolidation
 
-The built-in primitives stay as the standard library and as the Python logging API, `caliper.scene`. They give a script one call for a common visual, with picking, labels and cameras included. They get no new features. Over time they move onto the programmable layer, so that one rendering path remains, and an agent can copy the program of a primitive and change it.
+M6 supplies library pieces for points, lines, arrows, boxes, meshes, images, depth maps, segmentation masks, camera frustums, surfaces and paths. The pieces use the same manifest and WGSL contract as an agent's own graphics. The scene view, points view and browser module draw through these pieces. Caliper LIB keeps `caliper.scene` as the interface for a script that logs common shapes.
+
+Piece resources accept `u8` and `u16` elements and typed textures. Large resource versions travel in parts, then each viewer assembles a complete version before it draws. The [piece reference](../agents/pieces.md#piece-sources) lists the capacities, and the [wire reference](../reference/wire-protocol-3-2.md#resource-parts) defines the parts.
+
+[ABI epoch 3](../development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions) removes the geometry and export services. The six demos that depend on those services and the five archived applets leave the repository. GPTScope keeps its ImPlot3D view.
+
+The remaining work removes the built-in draw route and stage hooks, and completes the piece form of every scene batch. A read-only converter preserves old per-shape recordings. The Vulkan renderer stays for the Windows interface, and the graphics layer's Vulkan backend remains planned. The browser dashboard must match the app's programs, series labels and colors, controls, and layout.
+
+The library tests check pixels and picks, and the app and browser comparison tests cover each piece. The final checks include the earlier acceptance tests and an Arc Tower dashboard comparison. These checks remain required before M6 is done. [Testing](../development/testing.md) describes the test suites.
 
 ## Later Milestones
 
-M6 moves every built-in shape and the `surface` and `path` operators onto the programmable layer as library pieces, moves the earlier demos onto them, and removes the per-shape drawing code, so that one rendering path remains. M7 adds projections and layouts of high-dimensional data, overlays and model probes as library pieces. M8 adds steering, scaling and patching, the core of interpretability work. M9 to M16 complete saved and editable instruments, browser parity, the two acceptance demos, image data, vector drawing, recordings and WebAssembly views.
+M7 adds projections, layouts, overlays and model probes as library pieces. M8 adds steering, scaling and patching. M9 adds saved and editable instruments with the node editor. M10 completes browser parity beyond the dashboard viewer. M11 to M14 cover the two acceptance demos, image data and vector drawing. M15 and M16 defer recordings, timelines and custom WebAssembly views.
