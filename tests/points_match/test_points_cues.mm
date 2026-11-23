@@ -9,8 +9,8 @@
 // of the fitted sphere, as the points view gives both for its camera (live/live_points.h,
 // cue_values). Two colorings are drawn: packed RGBA, as the points view writes its rows, and a
 // value through viridis. The images are held to the tolerances of test_points_match.mm, and the
-// built-in's pick at an interior pixel of 16 points names the item that the piece's ID image shows
-// there. Without a Metal device the test skips (exit 77).
+// built-in's pick at an interior pixel of 16 of the points that show one names the item that the
+// piece's ID image shows there. Without a Metal device the test skips (exit 77).
 //
 // With CALIPER_POINTS_MATCH_CAPTURE_DIR set, the test writes points-cues-<coloring>-builtin.png,
 // points-cues-<coloring>-piece.png and points-cues-<coloring>-diff.png there.
@@ -148,12 +148,18 @@ void run_cues(bool packed) {
             "), ", c.failed, " failed");
     CHECK_MESSAGE(c.failed == 0, c.failed, " pixels outside the tolerances; ", c.first);
     CHECK(c.lit_interior >= 2000);
-    // The cues change the picture: a near point is drawn larger and a far one dimmer than without them.
+    // 16 points that show an interior pixel in the piece's ID image, spread over the cloud: the
+    // built-in's pick there names each one.
+    std::vector<std::uint64_t> shown;
+    for (int i = 0; i < kCount; ++i)
+        if (pixel_of_item(p.ids, kSize, std::uint64_t(i))) shown.push_back(std::uint64_t(i));
+    REQUIRE(shown.size() >= 16);
     std::vector<std::uint64_t> items;
-    for (int k = 0; k < 16; ++k) items.push_back(std::uint64_t(k * kCount / 16 + 3));
+    for (std::size_t k = 0; k < 16; ++k) items.push_back(shown[k * shown.size() / 16]);
     const int agree = check_picks(b, p, items, sc::Primitive::Points);
-    MESSAGE("points cues (", coloring, "): ", agree, " of 16 picks name the piece's item");
-    CHECK(agree >= 12);
+    MESSAGE("points cues (", coloring, "): ", shown.size(), " points show an interior pixel; ", agree,
+            " of 16 picks name the piece's item");
+    CHECK(agree == 16);
 
     match_rig::capture("CALIPER_POINTS_MATCH_CAPTURE_DIR", "points-cues-" + coloring + "-builtin.png", kSize, b.image);
     match_rig::capture("CALIPER_POINTS_MATCH_CAPTURE_DIR", "points-cues-" + coloring + "-piece.png", kSize, p.color);

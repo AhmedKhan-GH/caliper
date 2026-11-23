@@ -135,7 +135,7 @@ The Playwright tests of the web package run in three projects of headless Chromi
 
 - `web/test/views.spec.ts` checks every kind of the element's own views against known data, the color of every cell, pixel and point included.
 - `web/test/edges.spec.ts` checks the color of every colormap edge case in both renderers.
-- `web/test/points3d.spec.ts` checks that the WebAssembly views and the Canvas 2D view draw the same 3-D box, default camera, depth cues and rotate toggle.
+- `web/test/points3d.spec.ts` checks that the WebAssembly views and the Canvas 2D view draw the same 3-D box, default camera, depth cues and rotate toggle. It also has the module draw four cases of the points view with `points@1` and with the built-in on WebGPU (`web/wasm/src/points_parity.cpp`): every case must be drawn by the piece and match the built-in within the tolerances of the match tests.
 - `web/test/renderer.spec.ts` and `web/test/fallback.spec.ts` check which renderer draws a view, with a stub of the loader of the WebAssembly views and without the loader.
 
 ### Export and Hidden Windows
