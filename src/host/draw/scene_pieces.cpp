@@ -1201,8 +1201,9 @@ bool ScenePieces::set_highlight(const std::vector<HighlightRows>& rows, std::uin
                                 std::uint32_t height, std::uint64_t* highlighted) {
     std::vector<std::unique_ptr<Program>> next;
     std::uint64_t drawn = 0;
-    bool ok = true;
-    if (!rows.empty() && tree_ && width > 0 && height > 0) {
+    // Rows without a synced tree or a target keep the built-in highlight; no rows draw no marks.
+    bool ok = rows.empty() || (tree_ && width > 0 && height > 0);
+    if (!rows.empty() && ok) {
         // The dim: one pixel of the ground, opaque, stretched over the target by a pan-zoom of its
         // pixels with y down, at the opacity of the built-in's dim, 0.72.
         auto dim = std::make_unique<Program>();
