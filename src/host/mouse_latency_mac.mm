@@ -40,7 +40,8 @@ struct Trace {
     std::array<Sample, 3> press{}, first_motion{}, motion{};
     std::array<bool, 3> down{}, changed{};
 
-    // Times share NSEvent.timestamp's uptime clock. NewFrame hooks bound consumption.
+    // Times share NSEvent.timestamp's uptime clock. NewFrame starts the consumption interval.
+    // A camera widget can consume adjacent motion after the NewFrame hook.
     void line(const char* stage, const Sample& s, double camera = -1) {
         if (!file || lines >= 60000) return;
         std::fprintf(file, "%s\t%u\t%u\t%d\t%d\t%d\t%.9f\t%.9f\t%.9f\t%.9f\t%.9f\t%d\t%.3f\t%.3f\n",
@@ -219,6 +220,10 @@ void mouse_latency_stop() {
 }
 
 bool mouse_latency_enabled() { return trace && trace->lines < 60000; }
+
+void mouse_latency_consume() {
+    if (mouse_latency_enabled()) trace->consumed();
+}
 
 void mouse_latency_camera(int button) {
     if (!mouse_latency_enabled() || button < 0 || button >= 3) return;

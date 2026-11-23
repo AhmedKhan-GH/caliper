@@ -7,6 +7,7 @@
 #include "embed/embed_core.h"
 #include "embed/render_stats.h"   // copy counters
 #include "live/camera_drag.h"
+#include "live/camera_input.h"
 #include "mouse_latency.h"
 #include "live/live_scene.h"
 #include "live/scene_overlays.h"
@@ -526,7 +527,7 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
         } else {
             const auto before = caliper_host::mouse_latency_enabled()
                                     ? std::optional<caliper_scene::ViewCamera>(sc->camera()) : std::nullopt;
-            camera_press_frame(state.press, press_view, valid, io.MousePos.x, io.MousePos.y, released);
+            camera_press_input(state.press, press_view, state.button, released);
             if (before && !same_camera(*before, sc->camera())) caliper_host::mouse_latency_camera(state.button);
             state.moved = !state.press.click();
         }

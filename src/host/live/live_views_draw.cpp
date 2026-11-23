@@ -45,6 +45,7 @@
 // dimmed. Without a sink a selection stays in the view.
 #include "live/live_views_state.h"
 #include "live/camera_drag.h"
+#include "live/camera_input.h"
 
 #include "live/live_points.h"
 #include "live/live_scene.h"
@@ -1063,7 +1064,7 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     if ((g.down || released) && !g.selecting) {
         const auto before = caliper_host::mouse_latency_enabled()
                                 ? std::optional<caliper_scene::ViewCamera>(sc->camera()) : std::nullopt;
-        camera_press_frame(g.press, press_view, valid, io.MousePos.x, io.MousePos.y, released);
+        camera_press_input(g.press, press_view, g.button, released);
         if (before && !same_camera(*before, sc->camera())) caliper_host::mouse_latency_camera(g.button);
         g.moved = !g.press.click();
     }
@@ -1409,7 +1410,7 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     if ((g.down || released) && !g.selecting) {
         const auto before = caliper_host::mouse_latency_enabled()
                                 ? std::optional<caliper_scene::ViewCamera>(sc->camera()) : std::nullopt;
-        camera_press_frame(g.press, press_view, valid, io.MousePos.x, io.MousePos.y, released);
+        camera_press_input(g.press, press_view, g.button, released);
         if (before && !same_camera(*before, sc->camera())) caliper_host::mouse_latency_camera(g.button);
         g.moved = !g.press.click();
     }

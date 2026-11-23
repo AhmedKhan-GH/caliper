@@ -10,11 +10,13 @@ namespace caliper_host {
 #ifdef __APPLE__
 void mouse_latency_start(GLFWwindow* window);
 void mouse_latency_stop();
+void mouse_latency_consume();
 bool mouse_latency_enabled();
 void mouse_latency_camera(int button);
 #else
 inline void mouse_latency_start(GLFWwindow*) {}
 inline void mouse_latency_stop() {}
+inline void mouse_latency_consume() {}
 inline bool mouse_latency_enabled() { return false; }
 inline void mouse_latency_camera(int) {}
 #endif
