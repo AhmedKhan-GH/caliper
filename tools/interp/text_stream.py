@@ -80,6 +80,7 @@ class TextStream:
         self.offset = 0
         self.document_id = 0
         self.iterator = None
+        self.buffer = [[], [], []]
         if state is not None:
             self.load_state_dict(state)
 
@@ -99,7 +100,7 @@ class TextStream:
                 "partitions": partition_metadata(), "rows": self.rows, "emitted": self.emitted,
                 "skipped_long": self.skipped_long, "pending": list(self.pending),
                 "offset": self.offset, "document_id": self.document_id,
-                "source_state": copy.deepcopy(source_state)}
+                "source_state": copy.deepcopy(source_state), "buffer": copy.deepcopy(self.buffer)}
 
     def load_state_dict(self, state):
         if (state.get("version"), state.get("source_id"), state.get("partition"), state.get("partitions")) != (
@@ -112,19 +113,22 @@ class TextStream:
                 raise ValueError("invalid text cursor")
             setattr(self, key, value)
         self.pending = list(state["pending"])
+        self.buffer = copy.deepcopy(state.get("buffer", [[], [], []]))
         if not 0 <= self.offset <= len(self.pending) or any(type(t) is not int or t < 0 for t in self.pending):
             raise ValueError("invalid token cursor")
         self._iterator(state.get("source_state"))
 
-    def next_tokens(self, count):
+    def next_tokens(self, count, *, health=None):
         """Return at most count tokens. Exhaustion returns a shorter batch."""
         if type(count) is not int or count < 1:
             raise ValueError("token count must be positive")
         if self.iterator is None:
             self._iterator()
-        tokens, documents, positions = [], [], []
+        tokens, documents, positions = self.buffer
         while len(tokens) < count:
             if self.offset >= len(self.pending):
+                if health:
+                    health()
                 self.pending, self.offset = [], 0
                 try:
                     record = next(self.iterator)
@@ -151,5 +155,7 @@ class TextStream:
             documents.extend([self.document_id] * (end - self.offset))
             positions.extend(range(self.offset, end))
             self.offset = end
-        self.emitted += len(tokens)
-        return TokenBatch(*(torch.tensor(values, dtype=torch.int64) for values in (tokens, documents, positions)))
+        values = [part[:count] for part in self.buffer]
+        self.buffer = [part[count:] for part in self.buffer]
+        self.emitted += len(values[0])
+        return TokenBatch(*(torch.tensor(part, dtype=torch.int64) for part in values))
