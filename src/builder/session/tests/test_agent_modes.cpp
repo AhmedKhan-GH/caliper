@@ -312,6 +312,13 @@ TEST_CASE("no command reads or sets a mode or a rule, from any origin") {
     // No argument of a real command sets it either: the schemas refuse what they do not name.
     CHECK(chat(*f.s, "panel.patch", {{"id", "loss"}, {"patch", {{"title", "X"}}}, {"mode", "allow_all"}}).error.code ==
           "command.invalid_args");
+    // Nor does a spec that names it, opened by the person or written by an agent.
+    const std::string named = read_text(f.ws + "/applets/dash/dash.spec.toml") +
+                              "\n[permissions]\nchat = \"allow_all\"\nmcp = \"allow_all\"\n";
+    write_text(f.ws + "/named.spec.toml", named);
+    invoke(*f.s, "spec.open", {{"path", "named.spec.toml"}});
+    chat(*f.s, "spec.set_text", {{"text", named}});
+    send(*f.s, "spec.set_text", {{"text", named}}, CommandOrigin::mcp, "");
     CHECK(f.s->agent_mode(AgentPrincipal::mcp) == AgentMode::ask);
     CHECK(read_text(f.perms).find("allow_all") == std::string::npos);
     // A malformed client is refused, and one that is not "chat" is not governed.
