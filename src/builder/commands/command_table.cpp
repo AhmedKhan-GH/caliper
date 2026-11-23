@@ -898,6 +898,7 @@ const Row kRows[] = {
         "id": {"type": "string", "description": "The spec's applet id."},
         "path": {"type": ["string", "null"], "description": "Its file, relative to the workspace, or null when it was never saved."},
         "dirty": {"type": "boolean", "description": "Whether it has changes that are not saved."},
+        "open_in_app": {"type": "boolean", "description": "With applet: whether the app has that applet open, so that its live sources, values and kept steps reach panel.data; a saved applet that is not open shows no live data."},
         "text": {"type": "string", "description": "The spec as TOML text, in canonical form."},
         "json": {"type": "object", "additionalProperties": true, "description": "The spec's canonical JSON form: the TOML tables as JSON objects, as the spec format's JSON Schema describes them."}}})json",
      "{}"},

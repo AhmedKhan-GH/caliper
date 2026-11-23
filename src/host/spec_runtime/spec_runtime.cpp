@@ -1472,6 +1472,11 @@ bool SpecRuntime::points_turn(const std::string& panel_id, double q[4]) const {
     return true;
 }
 
+std::vector<caliper_live_views::DrawnLabel> SpecRuntime::scene_labels(const std::string& panel_id) const {
+    const auto it = scenes_->by_panel.find(panel_id);
+    return it == scenes_->by_panel.end() ? std::vector<caliper_live_views::DrawnLabel>{} : it->second.labels;
+}
+
 bool SpecRuntime::scene_gesture(const std::string& panel_id, bool* down, bool* pick_pending) const {
     const auto it = scenes_->by_panel.find(panel_id);
     if (it == scenes_->by_panel.end()) return false;

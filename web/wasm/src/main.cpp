@@ -8,10 +8,18 @@
 //
 // One module instance draws on one canvas (Module.canvas) and shows one view,
 // or every view of the session when no view is named. The instance reads its
-// settings from Module.caliperConfig: {src, view, kind, header, compat, shapes};
-// compat "true" asks for a WebGPU device in compatibility mode, and shapes
-// "builtin" draws every shape of a scene with the scene core's built-in draw in
-// place of the library pieces, as CALIPER_SCENE_SHAPES=builtin does in the app.
+// settings from Module.caliperConfig: {src, view, kind, header, compat, feed,
+// scene}; compat "true" asks for a WebGPU device in compatibility mode.
+//
+// With feed "page" there is no stream: the instance draws one scene of its own
+// over the whole canvas, as the app's spec runtime draws a scene panel that
+// holds programs alone (a scene view of its own with box fit, through
+// draw_scene_view_in_rect, with the panel's `labels` and `scale_bar` from
+// `scene`, a JSON object), and the page hands it the instances of pieces
+// named for the panel `view` and their resources through
+// caliper_views_feed_program() and caliper_views_feed_resource(). The
+// browser's spec page does this with what panel.data gives a viewer, which
+// never opens the stream. Picks and selections go to Module.onEvent.
 //
 // What a person does in a view (a selection, a pick, a hover) comes out of
 // the view layer's event sink: it goes to the producer as an EVENT through
@@ -37,6 +45,8 @@
 #include "source_poll.h"
 #include "web_input.h"
 #include "web_programs.h"
+
+#include <caliper_builder/programs/pieces.h>   // kMaxSelected
 
 #include "caliper/embed.h"
 #include "caliper/live_net.h"   // CALIPER_NET_BYE_NORMAL
@@ -83,6 +93,8 @@ struct Config {
     int32_t kind = 0;   // 0 = any
     bool header = true; // false: the page draws the view's header (no title bars)
     bool compat = false;// a compatibility-mode device
+    bool page_feed = false;   // feed "page": no stream, the page feeds the programs
+    std::string scene;        // feed "page": the scene view's description, JSON
 };
 
 struct Page {
@@ -97,6 +109,13 @@ struct Page {
     // draw them (web_programs.h).
     std::unique_ptr<caliper_web::WebPrograms> programs;
     uint64_t programs_published = 0;
+    // feed "page": the scene that the page's programs draw in, with its own backend.
+    std::unique_ptr<caliper_gfx::Backend> page_gfx;
+    std::unique_ptr<caliper_live_views::SceneView> page_view;
+    caliper_live_views::SceneRectOptions page_options;
+    caliper_live_views::SceneRectState page_state;
+    uint64_t page_events = 0;           // picks and selections of the page's scene, for the page's tests
+    std::string page_last_event;
     caliper_web::PollState poll;
     std::string adapter_text;
     std::string error;
@@ -345,6 +364,33 @@ void publish() {
     put("sceneShapes", shapes.dump().c_str());
     put("selected", selected);
     put("events", (double)g.events_sent);
+    put("pageEvents", (double)g.page_events);
+    put("pageLastEvent", g.page_last_event.c_str());
+    if (g.page_view) {
+        // The page scene's orbit, [target x, y, z, distance, azimuth, elevation] (angles in radians), and
+        // the labels of its programs' text tables, for the page's tests of its camera and its labels.
+        const caliper_scene::Orbit* o = std::get_if<caliper_scene::Orbit>(&g.page_view->camera());
+        char ob[256];
+        if (o && g.page_view->fitted())
+            std::snprintf(ob, sizeof ob, "[%.17g,%.17g,%.17g,%.17g,%.17g,%.17g]", o->target[0], o->target[1], o->target[2],
+                          o->distance, o->azimuth, o->elevation);
+        else
+            std::snprintf(ob, sizeof ob, "null");
+        put("pageOrbit", ob);
+        // [[text, x0, y0, x1, y1], ...]: the labels drawn at the last frame with their text boxes, in CSS pixels
+        // of the canvas, which the page's dashboard comparison checks as text.
+        caliper_net::Json labels = caliper_net::Json::array();
+        for (const caliper_live_views::DrawnLabel& l : g.page_state.labels) {
+            caliper_net::Json e = caliper_net::Json::array();
+            e.push(l.text);
+            e.push((double)l.x0);
+            e.push((double)l.y0);
+            e.push((double)l.x1);
+            e.push((double)l.y1);
+            labels.push(std::move(e));
+        }
+        put("pageLabels", labels.dump().c_str());
+    }
     const caliper_web::InputCounts ic = caliper_web::input_counts();
     put("inputPointer", ic.pointer);
     put("inputButtons", ic.buttons);
@@ -724,6 +770,93 @@ void pump_programs() {
     }
 }
 
+// The panel's starting camera from its options `view_camera` and `views`, as the app's spec runtime
+// reads them (spec_entities.cpp, spec_starting_camera): an object is an orbit with the keys it
+// gives, a string names a saved view or else a camera entity, and anything else is the fit. A
+// camera that the checks of scenes.md refuse (not finite, a distance not above 0, an elevation
+// outside -89 to 89 degrees) is the fit too, as the spec check refuses it in the app.
+caliper_scene::StartingCamera page_starting_camera(const caliper_net::Json& scene) {
+    using caliper_scene::StartingCamera;
+    StartingCamera s;
+    const caliper_net::Json* v = scene.is_object() ? scene.find("view_camera") : nullptr;
+    auto num = [](const caliper_net::Json& o, const char* key, std::optional<double>* out) {
+        if (const caliper_net::Json* n = o.find(key); n && n->is_number()) *out = n->as_double();
+    };
+    auto vec3 = [](const caliper_net::Json* t, caliper_scene::Vec3* out) {
+        if (!t || !t->is_array() || t->size() != 3) return false;
+        for (size_t k = 0; k < 3; ++k)
+            if (!t->at(k).is_number()) return false;
+        *out = caliper_scene::Vec3{t->at(0).as_double(), t->at(1).as_double(), t->at(2).as_double()};
+        return true;
+    };
+    if (v && v->is_object() && v->size() > 0) {
+        s.form = StartingCamera::Form::Orbit;
+        caliper_scene::Vec3 t;
+        if (vec3(v->find("target"), &t)) s.target = t;
+        std::optional<double> d;
+        num(*v, "distance", &d);
+        if (d && *d > 0) s.distance = d;
+        num(*v, "azimuth", &s.azimuth_deg);
+        num(*v, "elevation", &s.elevation_deg);
+    } else if (v && v->is_string()) {
+        const std::string name = v->as_string();
+        const caliper_net::Json* views = scene.find("views");
+        for (size_t i = 0; views && views->is_array() && i < views->size() && i < 64; ++i) {
+            const caliper_net::Json& sv = views->at(i);
+            const caliper_net::Json* n = sv.is_object() ? sv.find("name") : nullptr;
+            if (!n || !n->is_string() || n->as_string() != name) continue;
+            s.form = StartingCamera::Form::Orbit;
+            caliper_scene::Vec3 t{0, 0, 0};
+            vec3(sv.find("target"), &t);
+            s.target = t;
+            s.distance = 1.0;
+            s.azimuth_deg = 0.0;
+            s.elevation_deg = 0.0;
+            num(sv, "distance", &s.distance);
+            num(sv, "azimuth", &s.azimuth_deg);
+            num(sv, "elevation", &s.elevation_deg);
+            break;
+        }
+        if (s.form != StartingCamera::Form::Orbit) {
+            s.form = StartingCamera::Form::Entity;
+            s.entity = name;
+        }
+    }
+    if (!caliper_scene::validate_starting_camera(s, caliper_scene::Space::k3D)) return StartingCamera{};
+    return s;
+}
+
+// feed "page": the panel's scene over the whole canvas, drawn as the app's spec runtime draws
+// a scene panel's content, with the page's programs. A pick or a selection goes to the page.
+void draw_page_scene(float w, float h, float scale) {
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(w, h));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    // The scene clears to the window's colour: the ground of a spec panel, as in the app.
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, sternbild::col::ground);
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground |
+                                   ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollWithMouse;
+    if (ImGui::Begin("##caliper.page.scene", nullptr, flags)) {
+        g.page_options.draw_feed = g.programs ? g.programs->feed(g.cfg.view) : nullptr;
+        auto sink = [](const char* type, const std::string& detail) {
+            ++g.page_events;
+            g.page_last_event = std::string(type) + " " + detail.substr(0, 200);
+            EM_ASM({
+                var cb = Module["onEvent"];
+                if (cb) cb(UTF8ToString($0), UTF8ToString($1), JSON.parse(UTF8ToString($2)));
+            }, g.cfg.view.c_str(), type, detail.c_str());
+            g.publish_soon = true;
+        };
+        caliper_live_views::draw_scene_view_in_rect(*g.page_view, scale, "##page.scene", ImVec2(0.0f, 0.0f), ImVec2(w, h),
+                                                    g.page_options, g.page_state, sink);
+    }
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
+}
+
 void frame() {
     const double t0 = emscripten_get_now();
     if (caliper_web::gfx_selftest_running() && g.renderer && g.renderer->gfx() &&
@@ -781,9 +914,13 @@ void frame() {
 
     g.renderer->new_frame();
     ImGui::NewFrame();
-    pin_single_view(fs.css_w, fs.css_h);
-    caliper_core_hosted_frame(g.core, 0.0f, 0.0f, fs.css_w, fs.css_h, scale);
-    draw_status(fs.css_w, fs.css_h);
+    if (g.page_view) {
+        draw_page_scene(fs.css_w, fs.css_h, scale);
+    } else {
+        pin_single_view(fs.css_w, fs.css_h);
+        caliper_core_hosted_frame(g.core, 0.0f, 0.0f, fs.css_w, fs.css_h, scale);
+        draw_status(fs.css_w, fs.css_h);
+    }
     ImGui::Render();
     caliper_web::input_end_frame();
     const double t_ui = emscripten_get_now();
@@ -853,7 +990,44 @@ void start() {
     caliper_live_views::set_event_sink(g.core, on_event);
     g.programs = std::make_unique<caliper_web::WebPrograms>(g.device);
 
-    if (g.cfg.src.empty()) {
+    if (g.cfg.page_feed) {
+        // The scene of a panel that holds programs alone, as the app's spec runtime makes it
+        // (spec_runtime.cpp, entity_view): a scene view of its own on a backend of the graphics
+        // layer, fitted to its box, with the panel's labels and scale bar.
+        caliper_net::Json scene;
+        std::string err;
+        if (!g.cfg.scene.empty() && !caliper_net::Json::parse(g.cfg.scene.data(), g.cfg.scene.size(), &scene, &err))
+            return fail("caliperConfig.scene is not JSON: " + err);
+        std::string up = "+z";   // the panel's option up, +z as the app's spec runtime takes it
+        if (scene.is_object()) {
+            if (const caliper_net::Json* l = scene.find("labels"); l && l->is_bool()) g.page_options.labels = l->as_bool();
+            if (const caliper_net::Json* b = scene.find("scale_bar"); b && b->is_bool()) g.page_options.scale_bar = b->as_bool();
+            if (const caliper_net::Json* u = scene.find("up"); u && u->is_string()) up = u->as_string();
+        }
+        if (g.cfg.view.empty()) return fail("feed page needs caliperConfig.view, the panel's id");
+        caliper_gfx::Backend* backend = nullptr;
+        const caliper_gfx::ProgramDesc* table = nullptr;
+        std::string why;
+        if (!caliper_live_views::open_layer(g.core, "scenes", &g.page_gfx, &backend, &table, &why))
+            return fail("the scene cannot start here: " + why);
+        auto view = std::make_unique<caliper_live_views::SceneView>(*backend, table);
+        if (!view->init(&why)) return fail("the scene view did not start: " + why);
+        view->set_box_fit(true);
+        // A 3-D scene with the panel's up axis and the panel's starting camera, as apply_entity_scene
+        // describes it and SpecRuntime::entity_view starts it.
+        caliper_net::wire::SceneView info;
+        info.space = CALIPER_NET_SPACE_3D;
+        info.up = up;
+        info.units = "m";
+        view->describe(info);
+        view->set_starting(page_starting_camera(scene));
+        g.page_view = std::move(view);
+        g.ready = true;
+        EM_ASM({
+            var f = Module["onReady"];
+            if (f) f();
+        });
+    } else if (g.cfg.src.empty()) {
         fail("no stream: set caliperConfig.src to the ws:// URL of a Caliper stream");
     } else {
         NetSource::Options o;
@@ -1083,12 +1257,135 @@ EMSCRIPTEN_KEEPALIVE int caliper_views_colormap_keys(float vmin, float vmax) {
 // Ends this instance: BYE to the producer, no more frames, every view, GPU
 // resource and context released, the input listeners removed. The page drops
 // the canvas and the module afterwards; an instance is not reused.
+// feed "page": one PROGRAM of an instance of a piece, as JSON {op, id, piece,
+// manifest, bind, params, panel, segments, common, derive, draw} with op
+// "set", "params" or "remove", which the module checks as it checks a relay
+// of the stream (web_programs.h: the pin's hash, the manifest, the files and
+// WebGPU's compile). 1 when it was handed on, 0 for JSON that is no object or
+// an op or id that is not a string.
+EMSCRIPTEN_KEEPALIVE int caliper_views_feed_program(const char* json) {
+    if (!g.cfg.page_feed || !g.programs || !json) return 0;
+    caliper_net::Json j;
+    std::string err;
+    const size_t n = std::strlen(json);
+    if (n > (size_t)64 << 20 || !caliper_net::Json::parse(json, n, &j, &err) || !j.is_object()) return 0;
+    const caliper_net::Json* op = j.find("op");
+    const caliper_net::Json* id = j.find("id");
+    if (!op || !op->is_string() || !id || !id->is_string()) return 0;
+    caliper_net::wire::Program m;
+    m.op = op->as_string();
+    m.id = id->as_string();
+    if (m.op != CALIPER_NET_PROGRAM_SET && m.op != CALIPER_NET_PROGRAM_PARAMS && m.op != CALIPER_NET_PROGRAM_REMOVE)
+        return 0;
+    auto obj = [&](const char* k, caliper_net::Json* out) {
+        if (const caliper_net::Json* v = j.find(k)) *out = *v;
+    };
+    auto text = [&](const char* k, std::optional<std::string>* out) {
+        if (const caliper_net::Json* v = j.find(k); v && v->is_string()) *out = v->as_string();
+    };
+    obj("piece", &m.piece);
+    obj("manifest", &m.manifest);
+    obj("bind", &m.bind);
+    obj("segments", &m.segments);
+    obj("params", &m.params);
+    text("panel", &m.panel);
+    text("common", &m.common);
+    text("derive", &m.derive);
+    text("draw", &m.draw);
+    g.programs->on_program(m);
+    return 1;
+}
+
+// feed "page": one version of a published resource: `n` bytes of `count`
+// elements of `stride` bytes, or a texture of width by height texels. The
+// module keeps it only when the piece of its program publishes that resource
+// within its declared count and bytes (web_programs.h).
+EMSCRIPTEN_KEEPALIVE int caliper_views_feed_resource(const char* program, const char* resource, double step,
+                                                    uint32_t count, uint32_t stride, uint32_t width, uint32_t height,
+                                                    const uint8_t* bytes, uint32_t n) {
+    if (!g.cfg.page_feed || !g.programs || !program || !resource || (!bytes && n)) return 0;
+    if (!(step >= 0.0) || step > 9.007199254740992e15) return 0;
+    if ((uint64_t)count * stride != n) return 0;
+    caliper_net::wire::Resource r;
+    r.program = program;
+    r.resource = resource;
+    r.step = (uint64_t)step;
+    r.count = count;
+    r.stride = stride;
+    if (width || height) {
+        r.width = width;
+        r.height = height;
+    }
+    r.data.name = "resource";
+    r.data.dtype = CALIPER_NET_DTYPE_U8;
+    r.data.shape = {(int64_t)n};
+    r.data.data = bytes;
+    r.data.size = n;
+    g.programs->on_resource(r);
+    return 1;
+}
+
+// feed "page": the linked selection of the page's picks, as JSON
+// [{program, item, index, newest}], each pick of a program of this module as
+// the app's draw host gives it to every program (at most kMaxSelected).
+// feed "page": the panel's options view_camera and views changed in the spec, as JSON text
+// {view_camera, views}. A new starting camera moves a camera the person has not moved, as in
+// the app; the same one changes nothing. Returns 1 when it was read.
+EMSCRIPTEN_KEEPALIVE int caliper_views_set_starting(const char* json) {
+    if (!g.cfg.page_feed || !g.page_view || !json) return 0;
+    caliper_net::Json j;
+    std::string err;
+    const size_t n = std::strlen(json);
+    if (n > (size_t)1 << 16 || !caliper_net::Json::parse(json, n, &j, &err) || !j.is_object()) return 0;
+    const caliper_scene::StartingCamera s = page_starting_camera(j);
+    const caliper_scene::StartingCamera& now = g.page_view->starting();
+    auto same_vec = [](const std::optional<caliper_scene::Vec3>& a, const std::optional<caliper_scene::Vec3>& b) {
+        return a.has_value() == b.has_value() && (!a || (a->x == b->x && a->y == b->y && a->z == b->z));
+    };
+    if (s.form != now.form || !same_vec(s.target, now.target) || s.distance != now.distance ||
+        s.azimuth_deg != now.azimuth_deg || s.elevation_deg != now.elevation_deg || s.entity != now.entity)
+        g.page_view->set_starting(s);
+    return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE int caliper_views_select(const char* json) {
+    if (!g.cfg.page_feed || !g.programs || !json) return 0;
+    caliper_net::Json j;
+    std::string err;
+    const size_t n = std::strlen(json);
+    if (n > (size_t)1 << 16 || !caliper_net::Json::parse(json, n, &j, &err) || !j.is_array()) return 0;
+    std::vector<caliper_draw::Selected> sel;
+    for (size_t i = 0; i < j.size() && sel.size() < caliper_builder::programs::kMaxSelected; ++i) {
+        const caliper_net::Json& e = j.at(i);
+        const caliper_net::Json* prog = e.find("program");
+        const caliper_net::Json* item = e.find("item");
+        uint64_t it = 0;
+        if (!prog || !prog->is_string() || !item || !item->get_u64(&it) || it > 0xffffffffull) continue;
+        caliper_draw::Selected s;
+        s.pick = g.programs->pick_id_of(prog->as_string());
+        if (!s.pick) continue;
+        s.item = (uint32_t)it;
+        if (const caliper_net::Json* nw = e.find("newest"); nw && nw->is_bool() && nw->as_bool()) s.flags = 1u;
+        if (const caliper_net::Json* ix = e.find("index"); ix && ix->is_array() && ix->size() == 4)
+            for (size_t k = 0; k < 4; ++k) {
+                const caliper_net::Json& c = ix->at(k);
+                const double v = c.is_number() ? c.as_double() : 0.0;
+                if (c.is_number() && v >= -2147483648.0 && v <= 2147483647.0) s.index[k] = (int32_t)v;
+            }
+        sel.push_back(s);
+    }
+    g.programs->set_selection(std::move(sel));
+    return 1;
+}
+
 EMSCRIPTEN_KEEPALIVE void caliper_views_destroy() {
     if (g.destroyed) return;
     g.destroyed = true;
     emscripten_cancel_main_loop();
     if (g.net) g.net->close(CALIPER_NET_BYE_NORMAL);
     caliper_web::input_uninstall();
+    g.page_view.reset();                            // the page's scene, before its backend and the feeds
+    g.page_gfx.reset();
     if (g.core) {
         caliper_web::remove_polled_views(g.core, g.poll);
         caliper_core_destroy_hosted(g.core);   // releases the views; the renderer is ours
@@ -1130,6 +1427,8 @@ int main() {
     // The scene views read the switch of their shapes from the environment when they are made
     // (live_scene.h, default_shape_draw), thus it is set before any view exists.
     if (config_string("shapes") == "builtin") setenv("CALIPER_SCENE_SHAPES", "builtin", 1);
+    g.cfg.page_feed = config_string("feed") == "page";
+    g.cfg.scene = config_string("scene");
 
     g.instance = wgpuCreateInstance(nullptr);
     if (!g.instance) {

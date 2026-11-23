@@ -12,8 +12,9 @@ import { bindingName, panelTitle } from './layout.js';
 import { classRgb } from './look.js';
 import {
   decodeArray, type HeatmapData, type HistogramData, type ImageData, type PanelDataResult, type PointsData,
-  type SeriesData, type Spec, type SpecPanel, type TableData, type TextData,
+  type SceneData, type SeriesData, type Spec, type SpecPanel, type TableData, type TextData,
 } from './types.js';
+import type { ViewerProgram } from './programs.js';
 
 export interface PanelState { label: string; detail: string }
 
@@ -54,6 +55,9 @@ export interface PreparedPanel {
   histogram?: PreparedHistogram;
   table?: PreparedTable;
   text?: PreparedText;
+  /** A scene panel: the instances of pieces it draws (programs.ts), and its live scene's name. */
+  programs?: ViewerProgram[];
+  scene?: string | null;
   bounds: string[];
 }
 
@@ -168,10 +172,11 @@ export function preparePanel(spec: Spec, panel: SpecPanel, result: PanelDataResu
   switch (panel.primitive) {
     case 'series': {
       const d = data as SeriesData;
-      const yb = panel.bind?.x;
-      const xName = d.x_index ? 'step' : name(Array.isArray(yb) ? yb[0] : yb ?? 'step');
+      const xName = d.x_name;
+      // The app's name of each line: a column by its column, a tensor (a live
+      // or window source) by its source's name, with the row of a matrix.
       const lines = d.lines.map((l) => ({
-        name: name(l.binding) + (l.row === null ? '' : `[${l.row}]`),
+        name: l.name,
         x: decodeArray(l.x) as Float64Array, y: decodeArray(l.y) as Float64Array,
       }));
       p.series = { lines, xName };
@@ -320,6 +325,16 @@ export function preparePanel(spec: Spec, panel: SpecPanel, result: PanelDataResu
       const v = d.value;
       const value = v === null ? '' : typeof v === 'number' ? fmt4(v) : typeof v === 'boolean' ? fmt4(v ? 1 : 0) : v;
       p.text = { text: o.text ?? '', value, hasValue: v !== null };
+      break;
+    }
+    case 'scene': {
+      // The programs draw in the page's WebAssembly views; a live scene comes
+      // over the stream, which the viewer token does not open.
+      const d = data as SceneData;
+      p.programs = Array.isArray(d.programs) ? d.programs : [];
+      p.scene = d.scene ?? null;
+      if (!p.programs.length)
+        p.state = d.scene ? { label: 'Live scene', detail: `${d.scene} shows in the app` } : { label: 'No programs', detail: panel.id };
       break;
     }
   }

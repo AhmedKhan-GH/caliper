@@ -142,8 +142,10 @@ export class Plot2D {
     const plotH = canvas.h - padB;
     this.yt = this.y.ticks ?? defaultTicks(this.y.lo, this.y.hi, plotH, true, width);
     this.yTickW = 0;
-    for (const t of this.yt) if (t.show && t.label) this.yTickW = Math.max(this.yTickW, width(t.label));
-    const padL = (this.y.label ? T + LABEL_PAD.x : 0) + (this.yt.some((t) => t.show && t.label) ? this.yTickW + LABEL_PAD.x : 0);
+    // ImPlot sizes the axis by every label it formats (AddTick's MaxSize), the ones that it then hides
+    // because they crowd included, so a plot with labels 2, 3, 4 keeps the width of 2.5.
+    for (const t of this.yt) if (t.label) this.yTickW = Math.max(this.yTickW, width(t.label));
+    const padL = (this.y.label ? T + LABEL_PAD.x : 0) + (this.yt.some((t) => t.label) ? this.yTickW + LABEL_PAD.x : 0);
     const plotW = canvas.w - padL;
     this.xt = this.x.ticks ?? defaultTicks(this.x.lo, this.x.hi, plotW, false, width);
     this.rect = { x: canvas.x + padL, y: canvas.y, w: Math.max(1, plotW), h: Math.max(1, plotH) };

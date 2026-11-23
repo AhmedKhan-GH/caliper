@@ -19,11 +19,23 @@
 //     compat,       // true: a WebGPU device in compatibility mode; default globalThis.caliperViewsCompat
 //     shapes,       // 'builtin': a scene's shapes drawn by the built-in draw in place of the library
 //                   // pieces, for a comparison; default globalThis.caliperViewsShapes, else 'pieces'
+//     feed,         // 'page': no stream; the page feeds the programs of one scene view named `view`
+//     scene,        // feed 'page': the scene view's {space, up, units, labels, scale_bar, view_camera, views}
+//     assetQuery,   // a query such as '?token=<token>' for the module's two files, when their server needs one
 //   });
 //   handle.setDataView({ index: { layer: 2 } });   // a VIEW_REQUEST
 //   handle.setToggle('follow', false);             // a header toggle of the view
 //   handle.setLink('points', [3, 9]);              // a linked selection to draw (3.1)
 //   handle.destroy();
+//
+// With feed 'page', handle.feedProgram(json) hands the module one PROGRAM of
+// an instance of a piece ({op, id, piece, manifest, bind, params, panel,
+// segments, common, derive, draw}) and handle.feedResource(r, bytes) one
+// version of a published resource ({program, resource, step, count, stride,
+// width, height} and its Uint8Array); the module checks both as it checks a
+// relay of the stream. handle.select(picks) gives its programs the linked
+// selection of the page's picks, and handle.setStarting({view_camera, views})
+// the panel's starting camera when the spec changes it.
 //
 // A selection, pick or hover goes to the producer as an EVENT on the mount's
 // own connection, with the same detail the <caliper-view> element's
@@ -63,10 +75,10 @@ async function compileWasm(url) {
 
 // Fetches and compiles the module once per assetBase. Optional: a mount does
 // it anyway, but a page may start it early.
-export function preloadCaliperViews(assetBase) {
+export function preloadCaliperViews(assetBase, assetQuery = '') {
   const b = base(assetBase);
   if (!compiled.has(b)) {
-    const p = Promise.all([import(b + 'caliper-views.js'), compileWasm(b + 'caliper-views.wasm')])
+    const p = Promise.all([import(b + 'caliper-views.js' + assetQuery), compileWasm(b + 'caliper-views.wasm' + assetQuery)])
       .then(([mod, wasm]) => ({ factory: mod.default, wasm }));
     p.catch(() => compiled.delete(b));   // a failed load may be retried
     compiled.set(b, p);
@@ -76,7 +88,7 @@ export function preloadCaliperViews(assetBase) {
 
 export async function mountCaliperViews(container, options = {}) {
   const { src = '', view = '', kind = '', height, header = true, assetBase, onSelect, onEvent, onInfo, onToggle, augment, onDataView,
-          compat = globalThis.caliperViewsCompat ?? false, shapes = globalThis.caliperViewsShapes ?? 'pieces' } = options;
+          compat = globalThis.caliperViewsCompat ?? false, shapes = globalThis.caliperViewsShapes ?? 'pieces', feed = '', scene, assetQuery = '' } = options;
   if (!container) throw new Error('caliper-views: no container element');
   if (!navigator.gpu) throw new Error('caliper-views: this browser has no WebGPU');
 
@@ -87,14 +99,15 @@ export async function mountCaliperViews(container, options = {}) {
   canvas.style.height = height ? `${height}px` : '100%';
   container.appendChild(canvas);
 
-  const { factory, wasm } = await preloadCaliperViews(assetBase);
+  const { factory, wasm } = await preloadCaliperViews(assetBase, assetQuery);
   let ready;
   const readyPromise = new Promise((resolve) => { ready = resolve; });
   let module;
   try {
     module = await factory({
       canvas,
-      caliperConfig: { src, view, kind, header: header ? 'true' : 'false', compat: compat ? 'true' : 'false', shapes: String(shapes) },
+      caliperConfig: { src, view, kind, header: header ? 'true' : 'false', compat: compat ? 'true' : 'false',
+                       shapes: String(shapes), feed, scene: scene ? JSON.stringify(scene) : '' },
       instantiateWasm: (imports, receive) => {
         WebAssembly.instantiate(wasm, imports).then((instance) => receive(instance, wasm));
         return {};
@@ -152,6 +165,53 @@ export async function mountCaliperViews(container, options = {}) {
       const ok = module._caliper_views_set_link(a, j) === 1;
       module._free(a);
       module._free(j);
+      return ok;
+    },
+    // feed 'page': one PROGRAM of an instance of a piece, as an object. True
+    // when the module took it to check; a refusal shows in stats.programs.
+    feedProgram(program) {
+      if (destroyed || feed !== 'page') return false;
+      const p = module.stringToNewUTF8(JSON.stringify(program));
+      const ok = module._caliper_views_feed_program(p) === 1;
+      module._free(p);
+      return ok;
+    },
+    // feed 'page': one version of a published resource and its bytes (a
+    // Uint8Array of count * stride bytes).
+    feedResource(r, bytes) {
+      if (destroyed || feed !== 'page' || !(bytes instanceof Uint8Array)) return false;
+      const prog = module.stringToNewUTF8(String(r.program));
+      const res = module.stringToNewUTF8(String(r.resource));
+      const at = bytes.length ? module._malloc(bytes.length) : 0;
+      if (bytes.length && !at) {
+        module._free(prog);
+        module._free(res);
+        return false;
+      }
+      if (bytes.length) module.HEAPU8.set(bytes, at);
+      const ok = module._caliper_views_feed_resource(prog, res, Number(r.step) || 0, r.count >>> 0, r.stride >>> 0,
+        (r.width || 0) >>> 0, (r.height || 0) >>> 0, at, bytes.length >>> 0) === 1;
+      if (at) module._free(at);
+      module._free(prog);
+      module._free(res);
+      return ok;
+    },
+    // feed 'page': the linked selection that every program reads, from the
+    // page's picks: [{program, item, index, newest}].
+    select(picks) {
+      if (destroyed || feed !== 'page') return false;
+      const p = module.stringToNewUTF8(JSON.stringify(Array.from(picks || [])));
+      const ok = module._caliper_views_select(p) === 1;
+      module._free(p);
+      return ok;
+    },
+    // feed 'page': the panel's starting camera changed in the spec,
+    // {view_camera, views} as the panel's options give them.
+    setStarting(scene) {
+      if (destroyed || feed !== 'page') return false;
+      const p = module.stringToNewUTF8(JSON.stringify(scene || {}));
+      const ok = module._caliper_views_set_starting(p) === 1;
+      module._free(p);
       return ok;
     },
     // Says goodbye to the producer, releases the GPU and removes the canvas.

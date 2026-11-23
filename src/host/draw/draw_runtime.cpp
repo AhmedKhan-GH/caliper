@@ -1725,6 +1725,22 @@ void DrawRuntime::frame_done(double gpu_ms, double wall_ms) {
     } else if (late || (gpu_ms >= 0 ? gpu_ms : wall_ms) <= kTimeoutMs) {
         m.late_frames = 0;
     }
+    // Without timestamps the time from the submit until the host saw the work done also holds the
+    // host's polling, once a frame in a browser (about 16.7 ms at 60 Hz), thus it cannot judge a
+    // draw.frame_ms of a few milliseconds: every light frame would count as over. The frame time
+    // stays unknown, so the panel's sum skips it too, and only frames over kHeavyMs of that time,
+    // kWindowFrames in a row, stop the program as over its time.
+    if (gpu_ms < 0 && !timed) {
+        if (e.pass >= 0 || wall_ms < 0) return;
+        m.over = wall_ms > kHeavyMs ? m.over + 1 : 0;
+        if (m.over >= kWindowFrames)
+            stop(m, cp::kProgramDrawOverTime,
+                 "Stopped " + m.instance.program + ": " + std::to_string(kWindowFrames) +
+                     " frames of its draw passes in a row took over " + fmt_ms(kHeavyMs) +
+                     " ms from the submit until done, and this backend gives no GPU time",
+                 e.pass);
+        return;
+    }
     if (gpu_ms < 0) gpu_ms = wall_ms;   // the upper bound, where the backend gives no GPU time
     const double limit = m.status.frame_limit_ms;
     if (e.pass < 0) {

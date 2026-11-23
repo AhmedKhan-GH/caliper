@@ -236,6 +236,8 @@ std::unique_ptr<WebGpuBackend> WebGpuBackend::create(WGPUDevice device, WGPUQueu
     o.max_color_attachments = lo32(d.max_color_attachments, L.maxColorAttachments);
     const bool compat = o.max_storage_buffers_in_vertex_stage == 0;
     caps.bits = o.max_storage_buffers_in_vertex_stage > 0 ? uint64_t(kCapVertexStorage) : 0;
+    // WebGPU copies a depth texture to a buffer only whole (CopyTextureToBuffer of Depth32Float).
+    caps.bits |= uint64_t(kCapDepthWholeCopy);
     caps.backend = "webgpu";
     adapter_text() = adapter ? adapter : "";
     caps.adapter = adapter_text().c_str();

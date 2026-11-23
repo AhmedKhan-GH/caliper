@@ -239,6 +239,7 @@ public:
             epoch = std::max(epoch, from->second->epoch);
         }
         in->params = pack_params(p.piece, p.values);
+        in->selection = owner_.selection_;
         // The module keeps no history: the newest version is the cursor's, and the view is live.
         in->cursor_step = latest;
         in->latest_step = latest;
@@ -261,6 +262,11 @@ private:
 };
 
 WebPrograms::WebPrograms(WGPUDevice device) : device_(device) {}
+
+std::uint32_t WebPrograms::pick_id_of(const std::string& program) const {
+    const auto it = programs_.find(program);
+    return it == programs_.end() ? 0u : it->second->pick_id;
+}
 WebPrograms::~WebPrograms() = default;
 
 void WebPrograms::on_program(const caliper_net::wire::Program& m) {

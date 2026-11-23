@@ -165,6 +165,10 @@ TEST_CASE("panel.data gives the dashboard's three panels from the saved applet, 
     CHECK(d["steps"] == 10);
     REQUIRE(d["lines"].size() == 2);
     CHECK(d["lines"][0]["binding"] == "metrics.loss");
+    // The names the app draws the lines under: a column by its column, and the x by its column.
+    CHECK(d["lines"][0]["name"] == "loss");
+    CHECK(d["lines"][1]["name"] == "accuracy");
+    CHECK(d["x_name"] == "step");
     CHECK(d["lines"][0]["row"].is_null());
     CHECK(d["lines"][0]["count"] == 10);
     CHECK(numbers(d["lines"][0]["x"], "f64", {10}) == std::vector<double>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
@@ -242,6 +246,10 @@ id = "line"
 primitive = "series"
 bind = { y = "long.v" }
 [[panel]]
+id = "rowlines"
+primitive = "series"
+bind = { y = "grid" }
+[[panel]]
 id = "heat"
 primitive = "heatmap"
 bind = { values = "grid" }
@@ -271,6 +279,13 @@ options = { text = "Last value" }
 
     const json line = panel_data(*f.s, {{"panel", "line"}});
     CHECK(line["data"]["x_index"] == true);
+    CHECK(line["data"]["x_name"] == "step");
+    CHECK(line["data"]["lines"][0]["name"] == "v");
+    // A tensor's rows go by the source's name (its catalog name after the colon) and the row, as in the app.
+    const json rows2 = panel_data(*f.s, {{"panel", "rowlines"}});
+    REQUIRE(rows2["data"]["lines"].size() == 64);
+    CHECK(rows2["data"]["lines"][0]["name"] == "grid_g[0]");
+    CHECK(rows2["data"]["lines"][63]["name"] == "grid_g[63]");
     CHECK(line["data"]["lines"][0]["count"] == 10000);
     const auto ys = numbers(line["data"]["lines"][0]["y"], "f64",
                             {line["data"]["lines"][0]["y"]["shape"][0].get<std::int64_t>()});

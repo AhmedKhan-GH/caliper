@@ -4,6 +4,7 @@
 // the same colour in the browser and in the app.
 
 import type { ColormapName } from '../protocol/messages.js';
+import { CATEGORICAL } from './palette.gen.js';
 
 const f = Math.fround;
 
@@ -74,13 +75,11 @@ function rdbuLut(): Uint8Array {
   return out;
 }
 
-/** Tableau 10 and six lighter companions, as RGB triples. */
-export const PALETTE: readonly (readonly [number, number, number])[] = [
-  [31, 119, 180], [255, 127, 14], [44, 160, 44], [214, 39, 40],
-  [148, 103, 189], [140, 86, 75], [227, 119, 194], [127, 127, 127],
-  [188, 189, 34], [23, 190, 207], [174, 199, 232], [255, 187, 120],
-  [152, 223, 138], [255, 152, 150], [197, 176, 213], [196, 156, 148],
-];
+/**
+ * Tableau 10 and six lighter companions, as RGB triples: the app's own table
+ * (caliper_scene::kPalette), through the generated palette.gen.ts.
+ */
+export const PALETTE: readonly (readonly [number, number, number])[] = CATEGORICAL;
 
 const cache = new Map<string, Uint8Array>();
 

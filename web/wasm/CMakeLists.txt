@@ -110,8 +110,11 @@ target_sources(caliper_view_layer PRIVATE
     ${_caliper_programs_text_cpp})
 target_include_directories(caliper_view_layer PUBLIC ${CALIPER_ROOT}/src/builder/include)
 # The scene view draws the programs of its panel (live_scene.cpp with CALIPER_HAVE_DRAW), from the
-# feeds of the module's programs (src/web_programs.cpp), as the app's scene view does.
-set_property(SOURCE ${CALIPER_ROOT}/src/host/live/live_scene.cpp APPEND PROPERTY COMPILE_DEFINITIONS CALIPER_HAVE_DRAW=1)
+# feeds of the module's programs (src/web_programs.cpp), as the app's scene view does. The scene's
+# rectangle (live_views_scene.cpp) needs the same definition: without it, a click's frame pick gives
+# no item and the programs' text tables give no labels.
+set_property(SOURCE ${CALIPER_ROOT}/src/host/live/live_scene.cpp ${CALIPER_ROOT}/src/host/live/live_views_scene.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS CALIPER_HAVE_DRAW=1)
 # The scene view also draws every shape of its scene with the library pieces, through the app's
 # converter (src/host/draw/scene_pieces.cpp, CALIPER_HAVE_SCENE_PIECES as the app's caliper_draw_host
 # defines it), and keeps the built-in draw for the fallbacks that converter counts. caliperConfig.shapes
@@ -205,7 +208,7 @@ target_link_options(caliper-views PRIVATE
     -sMAXIMUM_MEMORY=512MB
     -sERROR_ON_UNDEFINED_SYMBOLS=1
     "-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$UTF8ToString,$stringToNewUTF8,$stringToUTF8OnStack,$stackSave,$stackRestore,$specialHTMLTargets"
-    "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view,_caliper_views_set_toggle,_caliper_views_set_link,_caliper_views_gfx_selftest,_caliper_views_scene_selftest,_caliper_views_draw_parity,_caliper_views_scene_parity,_caliper_views_points_parity,_caliper_views_colormap_keys,_caliper_views_destroy"
+    "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view,_caliper_views_set_toggle,_caliper_views_set_link,_caliper_views_gfx_selftest,_caliper_views_scene_selftest,_caliper_views_draw_parity,_caliper_views_scene_parity,_caliper_views_points_parity,_caliper_views_colormap_keys,_caliper_views_feed_program,_caliper_views_feed_resource,_caliper_views_select,_caliper_views_set_starting,_caliper_views_destroy"
     "-sEXPORTED_RUNTIME_METHODS=ccall,UTF8ToString,stringToNewUTF8,HEAPU8"
 )
 if(CALIPER_WEB_CLOSURE AND CMAKE_BUILD_TYPE STREQUAL "Release")

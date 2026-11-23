@@ -93,6 +93,11 @@ public:
     std::string status_json() const;
     // Changes whenever a program is added, replaced, refused or removed.
     std::uint64_t revision() const { return revision_; }
+    // The linked selection that every program reads (CaliperSelected), as the
+    // app's draw host gives it from the panels' picks; and the pick id of a
+    // program, 0 when there is none.
+    void set_selection(std::vector<caliper_draw::Selected> selection) { selection_ = std::move(selection); }
+    std::uint32_t pick_id_of(const std::string& program) const;
 
     static constexpr std::uint64_t kKeptBytesMax = std::uint64_t(256) << 20;
 
@@ -115,6 +120,7 @@ private:
     std::uint64_t revision_ = 1;
     std::uint32_t next_pick_ = 1u << 24;   // above the entities' ids, as the app's draw host gives them
     std::size_t errors_seen_ = 0;
+    std::vector<caliper_draw::Selected> selection_;
 };
 
 }  // namespace caliper_web

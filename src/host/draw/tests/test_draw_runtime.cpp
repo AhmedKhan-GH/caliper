@@ -835,6 +835,32 @@ TEST_CASE("without GPU time, three late frames in a row stop the program, and a 
     CHECK(rt.status().error.message.find("3 frames") != std::string::npos);
 }
 
+TEST_CASE("without GPU time, a light frame that the host sees done a frame later never counts as over its time") {
+    Host h;
+    h.gfx.set_auto_complete(false);
+    REQUIRE_FALSE(h.gfx.caps().has(gfx::kCapTimestamps));
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    cd::Instance a;
+    a.program = "arcs";
+    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    give_arcs(rt, ex::arc_resources(), 1);
+    // A browser polls once a frame: 17 ms from the submit until seen done, far above the 4 ms limit.
+    for (int i = 0; i < 90; ++i) {
+        REQUIRE(frame(h, rt).size() == 1);
+        rt.frame_done(-1.0, 17.0);
+    }
+    CHECK(rt.status().state == cd::DrawState::running);
+    CHECK(rt.status().frame_ms < 0);   // unknown: the panel's sum of frame times skips it
+    // Frames over 250 ms of that time, 30 in a row, still stop it.
+    for (int i = 0; i < 30; ++i) {
+        REQUIRE(frame(h, rt).size() == 1);
+        rt.frame_done(-1.0, 300.0);
+    }
+    CHECK(rt.status().state == cd::DrawState::stopped);
+    CHECK(rt.status().error.code == cp::kProgramDrawOverTime);
+    CHECK(rt.status().error.message.find("gives no GPU time") != std::string::npos);
+}
+
 TEST_CASE("a pick keeps the version of the frame it read, and a version at the same step replaces the copy") {
     Host h;
     cd::DrawRuntime rt(h.gfx, true, checks());

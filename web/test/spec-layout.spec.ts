@@ -7,9 +7,9 @@
 import { test, expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { computeLayout, effectiveLayout, layoutShares, metricsForTextScale, panelTitle, bindingName, findPanel,
-  type Rect, type SpecLayout, type TabChoice } from '../src/spec/layout.js';
-import type { Spec } from '../src/spec/types.js';
+import { computeLayout, effectiveLayout, layoutFixedHeight, layoutMinSize, layoutShares, metricsForTextScale, panelTitle,
+  bindingName, findPanel, type Rect, type SpecLayout, type TabChoice } from '../src/spec/layout.js';
+import type { Spec, SplitNode } from '../src/spec/types.js';
 import { REPO } from './util.js';
 
 test.beforeEach(({}, info) => test.skip(info.project.name !== 'swiftshader', 'pure layout arithmetic: one project is enough'));
@@ -20,10 +20,17 @@ const FIXTURES = path.join(REPO, 'src', 'builder', 'spec', 'tests', 'fixtures');
 const PYTHON = process.env.CALIPER_PYTHON ?? 'python3';
 
 function fixture(name: string): Spec {
+  return toml(path.join(FIXTURES, name), true);
+}
+
+/** A spec from TOML, a file or its text, through Python's tomllib. */
+function toml(source: string, file = false): Spec {
   let text: Buffer;
   try {
-    text = execFileSync(PYTHON, ['-I', '-c',
-      'import json, sys, tomllib; print(json.dumps(tomllib.load(open(sys.argv[1], "rb"))))', path.join(FIXTURES, name)]);
+    text = execFileSync(PYTHON, ['-I', '-c', file
+      ? 'import json, sys, tomllib; print(json.dumps(tomllib.load(open(sys.argv[1], "rb"))))'
+      : 'import json, sys, tomllib; print(json.dumps(tomllib.loads(sys.stdin.read())))', ...(file ? [source] : [])],
+    file ? {} : { input: source });
   } catch {
     test.skip(true, 'needs a Python with tomllib (3.11 or newer) in CALIPER_PYTHON or as python3');
     throw new Error('unreachable');
@@ -196,4 +203,151 @@ test('a panel without a title goes by what it draws, never its id', () => {
   expect(panelTitle(e, findPanel(e, 'note')!)).toBe('Text');
   expect(bindingName(e, 'probs')).toBe('probs');
   expect(bindingName(e, 'metrics.value')).toBe('value');
+});
+
+// ---- spec version 1: control leaves, shares and leaf minimums ---------------
+
+test('a row of controls takes one control row under the panels', () => {
+  const s = fixture('instruments.spec.toml');
+  expect(s.control!.length).toBe(2);
+  const m = metricsForTextScale(1);
+  const l = lay(s, 1200, 800);
+  expect(l.panels.length).toBe(3);
+  const world = l.panels.find((p) => p.id === 'world')!, lr = l.panels.find((p) => p.id === 'lr')!;
+  const pause = l.panels.find((p) => p.id === 'pause')!;
+  expect([world.control, lr.control, pause.control]).toEqual([false, true, true]);
+  expect(lr.rect.h).toBe(m.controlRowH);
+  expect(pause.rect.h).toBe(m.controlRowH);
+  expect(lr.rect.y).toBe(pause.rect.y);
+  expect(lr.rect.w + pause.rect.w + m.gap).toBe(1200);
+  // The scene panel takes the rest of the height.
+  expect(world.rect.h + m.gap + lr.rect.h).toBe(800);
+  expect(lr.rect.y + lr.rect.h).toBe(800);
+  checkTiling(l, 1200, 800);
+  const root = effectiveLayout(s)!;
+  expect(layoutFixedHeight(root, s, m)).toBeNull();
+  expect(layoutFixedHeight((root as SplitNode).children[1], s, m)).toBe(m.controlRowH);
+});
+
+test('the default layout of a spec with controls and its minimums', () => {
+  const s = fixture('instruments.spec.toml');
+  delete s.layout;
+  const m = metricsForTextScale(1);
+  const l = lay(s, 900, 600);
+  expect(l.panels.length).toBe(3);
+  expect(rectOf(l, 'lr')!.h).toBe(m.controlRowH);
+  expect(rectOf(l, 'world')!.y).toBe(0);
+  const root = effectiveLayout(s)!;
+  const min = layoutMinSize(root, m, s);
+  expect(min.h).toBe(m.minPanelH + m.gap + m.controlRowH);
+  expect(min.w).toBe(Math.max(m.minPanelW, 2 * m.minControlW + m.gap));
+  // Without the spec, every leaf counts as a panel.
+  expect(layoutMinSize(root, m).h).toBe(2 * m.minPanelH + m.gap);
+  // Only controls: the rows stack from the top and the rest stays empty.
+  const only: Spec = { ...s, panel: [] };
+  const lc = lay(only, 900, 600);
+  expect(lc.panels.length).toBe(2);
+  expect(lc.panels[0].rect.h).toBe(m.controlRowH);
+  expect(lc.panels[0].rect.y).toBe(0);
+});
+
+test('a scene panel goes by its scene when it has no title', () => {
+  const s = fixture('instruments.spec.toml');
+  const p = { ...findPanel(s, 'world')! };
+  expect(panelTitle(s, p)).toBe('Model');
+  delete p.title;
+  expect(panelTitle(s, p)).toBe('model');
+});
+
+const SHARES = `caliper_spec = 1
+[applet]
+id = "shares"
+[[source]]
+id = "w"
+catalog = "tensor:w"
+[[panel]]
+id = "world"
+primitive = "heatmap"
+bind = { values = "w" }
+[[panel]]
+id = "detail"
+primitive = "heatmap"
+bind = { values = "w" }
+[[panel]]
+id = "loss"
+primitive = "series"
+bind = { y = "w" }
+[[control]]
+id = "lr"
+kind = "slider"
+bind = "value"
+options = { min = 0.0, max = 1.0 }
+[[control]]
+id = "go"
+kind = "button"
+bind = "action:go"
+[layout]
+split = "vertical"
+shares = [6, 3, 1]
+children = [
+  { split = "horizontal", shares = [3, 2], children = [{ panel = "world", min = [48, 20] }, "detail"] },
+  "loss",
+  { split = "horizontal", children = ["lr", "go"] },
+]
+`;
+
+test('shares split the space by weight, after the row of controls', () => {
+  const s = toml(SHARES);
+  const m = metricsForTextScale(1);
+  for (const [w, h] of [[2560, 1440], [1440, 900]]) {
+    const l = lay(s, w, h);
+    checkTiling(l, w, h);
+    const world = rectOf(l, 'world')!, detail = rectOf(l, 'detail')!, loss = rectOf(l, 'loss')!, lr = rectOf(l, 'lr')!;
+    expect(Math.abs(world.h / loss.h - 2)).toBeLessThan(0.02);
+    expect(Math.abs(world.w / (world.w + detail.w + 1) - 0.6)).toBeLessThan(0.01);
+    expect(world.w).toBeGreaterThanOrEqual(Math.round(48 * m.charW));
+    expect(world.h).toBeGreaterThanOrEqual(Math.round(20 * m.lineH));
+    expect(lr.h).toBe(m.controlRowH);
+  }
+});
+
+test('a share below its minimum keeps the minimum, and the others share the rest by weight', () => {
+  const s = layoutShares(1000, [50, 50, 200], 0.5, [6, 3, 1]);
+  expect(s[2]).toBe(200);
+  expect(Math.abs(s[0] - 533)).toBeLessThanOrEqual(533 * 0.01);
+  expect(s[0] + s[1] + s[2]).toBe(1000);
+  expect(layoutShares(900, [10, 10], 0.5, [1, 2])).toEqual([300, 600]);
+  expect(layoutShares(300, [200, 400], 0.5, [5, 1])).toEqual([100, 200]);
+  expect(layoutShares(300, [10, 10, 10], 0.5, [])).toEqual(layoutShares(300, [10, 10, 10], 0.5));
+});
+
+test('a leaf minimum is in characters and lines of the text scale', () => {
+  const one = metricsForTextScale(1), two = metricsForTextScale(2);
+  const a = layoutMinSize({ panel: 'world', min: [48, 20] }, one), b = layoutMinSize({ panel: 'world', min: [48, 20] }, two);
+  expect(a).toEqual({ w: Math.round(48 * one.charW), h: Math.round(20 * one.lineH) });
+  expect(b.w).toBeGreaterThan(1.9 * a.w);
+  expect(b.h).toBeGreaterThan(1.9 * a.h);
+});
+
+test('the Arc Tower fills the window over its row of controls', () => {
+  // The layout that the acceptance driver builds (tests/programmable_graphics/driver.py, step 6), in canonical JSON.
+  const s: Spec = {
+    caliper_spec: 1, applet: { id: 'arc_tower', title: 'Attention Arc Tower' },
+    panel: ['tower', 'pattern', 'head_scores', 'icl_curve', 'loss_curve'].map((id) => ({ id, primitive: 'series' as const })),
+    control: [{ id: 'ablate', kind: 'toggle', bind: 'intervene:blocks.1.attn#0' }],
+    layout: { split: 'vertical', children: [
+      { split: 'horizontal', ratio: 0.5, children: [
+        { split: 'vertical', ratio: 0.45, children: ['tower', { split: 'vertical', ratio: 0.62, children: ['head_scores',
+          { tabs: ['icl_curve', 'loss_curve'] }] }] }, 'pattern'] }, 'ablate'] },
+  };
+  const m = metricsForTextScale(1);
+  const l = lay(s, 1280, 750);
+  checkTiling(l, 1280, 750);
+  const ablate = l.panels.find((p) => p.id === 'ablate')!;
+  expect(ablate.control).toBe(true);
+  same(ablate.rect, 0, 750 - m.controlRowH, 1280, m.controlRowH);
+  // The panels fill everything above the row: the grid reaches the rule over the control.
+  const pattern = rectOf(l, 'pattern')!;
+  expect(pattern.y).toBe(0);
+  expect(pattern.y + pattern.h + m.gap).toBe(ablate.rect.y);
 });

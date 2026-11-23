@@ -135,7 +135,7 @@ ctest runs every test binary that opens the stores, and every command-line test,
 | `CALIPER_VIEWER` | The path of the `caliper-viewer` executable, in place of the one inside the package. |
 | `CALIPER_DATA_DIR` | The data folder that an in-process window or offscreen canvas uses when no `data_dir` argument is given. Without either, it uses a private temporary folder. |
 | `CALIPER_PY_LOG` | Any value other than `0` echoes the diagnostic lines of the host from the in-process core to stderr. |
-| `CALIPER_WEB_DIR` | The folder of the browser files that `serve()` and the widgets hand out, in place of `caliper/_web/` in the package. |
+| `CALIPER_WEB_DIR` | The folder of the browser files that `serve()` and the widgets hand out, in place of `caliper/_web/` in the package. It is also the folder from which the app serves the WebAssembly views to the browser's dashboard viewer. |
 
 See [Caliper LIB](../python/caliper-lib-api.md) for the calls themselves.
 
