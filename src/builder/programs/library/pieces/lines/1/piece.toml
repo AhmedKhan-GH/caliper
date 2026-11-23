@@ -1,0 +1,191 @@
+# Library piece lines@1: line segments, strips and index-pair edges, drawn as the built-in lines primitive draws them.
+name = "lines"
+version = 1
+description = "Line segments, strips or index-pair edges of a width in pixels, colored by one color, by a value through a colormap, or by a packed RGBA, at each vertex, strip or edge"
+imports = ["pick@1", "camera@1"]
+
+[[inputs]]
+name = "positions"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+title = "Positions (V, 3), or (V, 2) with z 0"
+
+[[inputs]]
+name = "values"
+kind = "tensor"
+rank_min = 1
+rank_max = 1
+title = "Values of the vertices, strips or edges, or one for all: a value for the colormap, or a packed RGBA in its bits"
+
+[[inputs]]
+name = "topology"
+kind = "tensor"
+dtype = "i32"
+rank_min = 1
+rank_max = 2
+title = "Strip lengths (S) for strips, index pairs (E, 2) for edges; segments read none"
+
+[[params]]
+name = "width"
+default = 2.0
+min = 0.5
+max = 64.0
+title = "Width in Pixels"
+
+[[params]]
+name = "mode"
+type = "u32"
+default = 0
+min = 0
+max = 2
+title = "Mode (0 segments of vertices 2k and 2k + 1, 1 strips, 2 edges)"
+
+[[params]]
+name = "color_mode"
+type = "u32"
+default = 0
+min = 0
+max = 2
+title = "Color (0 one color, 1 colormap, 2 packed RGBA)"
+
+[[params]]
+name = "color"
+type = "u32"
+default = 4292664550
+title = "One Color as Packed RGBA"
+
+[[params]]
+name = "color_per"
+type = "u32"
+default = 0
+min = 0
+max = 1
+title = "Values Belong To (0 vertices, 1 strips or edges)"
+
+[[params]]
+name = "colormap"
+type = "u32"
+default = 0
+min = 0
+max = 3
+title = "Colormap (0 viridis, 1 magma, 2 rdbu, 3 greys)"
+
+[[params]]
+name = "range"
+type = "u32"
+default = 3
+min = 0
+max = 3
+title = "Ends From the Values (0 none, 1 start, 2 end, 3 both)"
+
+[[params]]
+name = "vmin"
+default = 0.0
+title = "Value at the Colormap's Start"
+
+[[params]]
+name = "vmax"
+default = 1.0
+title = "Value at the Colormap's End"
+
+[[params]]
+name = "depth_offset"
+type = "i32"
+default = 0
+min = -8
+max = 8
+title = "Depth Offset Toward the Camera"
+
+# One element for each segment that the built-in draw instances, in its order: segment k of
+# vertices 2k and 2k + 1, the join of vertex i and i + 1 of strips, or edge e. A join across two
+# strips has `index_b` 0xffffffff and is not drawn. 40 bytes, thus 209,714 fit beside `info` in the
+# 8 MiB of published resources.
+[[resources]]
+id = "segments"
+kind = "buffer"
+struct = "Segment"
+fields = ["ax: f32", "ay: f32", "az: f32", "color_a: u32", "bx: f32", "by: f32", "bz: f32", "color_b: u32",
+          "index_a: u32", "index_b: u32"]
+count = 209714
+counted = true
+
+# The finite range of the values and two flags: bit 0 a NaN or no value, bit 1 a packed RGBA with
+# an alpha below 255.
+[[resources]]
+id = "info"
+kind = "buffer"
+struct = "Info"
+fields = ["lo: f32", "hi: f32", "flags: u32"]
+count = 1
+
+# Private words of the derive half: the end of each of at most 1,048,576 strips, the sums and then
+# the starts of 1,024 chunks of strips, and the greatest key, the greatest inverted key and the
+# flags of the values that each of 4,096 invocations saw. The derive half binds at most 8 storage
+# buffers, thus one resource holds them all.
+[[resources]]
+id = "scratch"
+kind = "buffer"
+element = "u32"
+count = 1061888
+publish = false
+
+[derive]
+time_ms = 50
+memory_mb = 192
+
+[[derive.passes]]
+entry = "sum_chunks"
+workgroups = [4, 1, 1]
+writes = ["scratch"]
+
+[[derive.passes]]
+entry = "start_chunks"
+writes = ["scratch"]
+
+[[derive.passes]]
+entry = "end_strips"
+workgroups = [4, 1, 1]
+writes = ["scratch"]
+
+[[derive.passes]]
+entry = "build_segments"
+workgroups = [820, 1, 1]
+writes = ["segments"]
+
+[[derive.passes]]
+entry = "scan_values"
+workgroups = [16, 1, 1]
+writes = ["scratch"]
+
+[[derive.passes]]
+entry = "finish_info"
+writes = ["info"]
+
+[draw]
+camera = "orbit"
+pick = { resource = "segments", fields = ["index_a", "index_b"] }
+
+# Opaque segments write depth; segments of a color with an alpha below 255 only test it, as the
+# built-in draws translucent batches. Each pass hides the segments of the other.
+[[draw.passes]]
+kind = "render"
+vertex = "opaque_vs"
+fragment = "line_fs"
+instances = "segments"
+vertices = 6
+topology = "triangle_list"
+blend = "alpha"
+depth = "write"
+pick = true
+
+[[draw.passes]]
+kind = "render"
+vertex = "translucent_vs"
+fragment = "line_fs"
+instances = "segments"
+vertices = 6
+topology = "triangle_list"
+blend = "alpha"
+depth = "test"
+pick = true
