@@ -756,6 +756,18 @@ public:
                     landing_.log("rule revoked", command, agent);
             };
             agent_settings_.set_permissions(std::move(ph));
+            // Every page's status bar says so while Allow all is on, saved
+            // and set only in the settings and the side chat's mode menu.
+            set_host_status_flag([this]() -> std::string {
+                cb::Session* s = session_.session();
+                if (!s) return {};
+                const bool chat = s->agent_mode(cb::AgentPrincipal::chat) == cb::AgentMode::allow_all;
+                const bool mcp = s->agent_mode(cb::AgentPrincipal::mcp) == cb::AgentMode::allow_all;
+                return chat && mcp ? "allow all for side chat and MCP clients"
+                       : chat      ? "allow all for side chat"
+                       : mcp       ? "allow all for MCP clients"
+                                   : "";
+            });
         }
 #endif
     }
