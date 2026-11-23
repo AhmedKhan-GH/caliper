@@ -9,7 +9,7 @@
 #include "draw/draw_runtime.h"
 #endif
 // The shapes drawn by library pieces need the draw layer and the library's manifests, which the app
-// with the builder has and the browser module does not (scene_pieces.h).
+// with the builder and the browser module have (scene_pieces.h).
 #if defined(CALIPER_HAVE_DRAW) && defined(CALIPER_HAVE_SCENE_PIECES)
 #define CALIPER_SCENE_PIECES 1
 #include "draw/scene_pieces.h"

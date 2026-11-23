@@ -111,6 +111,38 @@ target_include_directories(caliper_view_layer PUBLIC ${CALIPER_ROOT}/src/builder
 # The scene view draws the programs of its panel (live_scene.cpp with CALIPER_HAVE_DRAW), from the
 # feeds of the module's programs (src/web_programs.cpp), as the app's scene view does.
 set_property(SOURCE ${CALIPER_ROOT}/src/host/live/live_scene.cpp APPEND PROPERTY COMPILE_DEFINITIONS CALIPER_HAVE_DRAW=1)
+# The scene view also draws every shape of its scene with the library pieces, through the app's
+# converter (src/host/draw/scene_pieces.cpp, CALIPER_HAVE_SCENE_PIECES as the app's caliper_draw_host
+# defines it), and keeps the built-in draw for the fallbacks that converter counts. caliperConfig.shapes
+# "builtin" selects the built-in draw for every view (src/main.cpp), as CALIPER_SCENE_SHAPES does in the app.
+#
+# The converter reads each library piece from its piece.toml with the spec library's reader
+# (piece_from_toml), thus the module compiles the sources of the spec library that the reader needs,
+# with toml++ at the native build's pin. The linker keeps only what the reader reaches.
+if(NOT TARGET tomlplusplus::tomlplusplus)
+    FetchContent_Declare(tomlplusplus
+        GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
+        GIT_TAG v3.4.0 GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(tomlplusplus)
+endif()
+set(_spec "${CALIPER_ROOT}/src/builder/spec")
+add_library(caliper_spec_reader STATIC
+    ${_spec}/annotation.cpp
+    ${_spec}/colormaps.cpp
+    ${_spec}/common.cpp
+    ${_spec}/entity.cpp
+    ${_spec}/instrument.cpp
+    ${_spec}/json_form.cpp
+    ${_spec}/reference.cpp
+    ${_spec}/spec.cpp
+    ${_spec}/state.cpp
+    ${_spec}/toml_form.cpp)
+target_include_directories(caliper_spec_reader PUBLIC ${CALIPER_ROOT}/src/builder/include)
+target_link_libraries(caliper_spec_reader PUBLIC nlohmann_json::nlohmann_json PRIVATE tomlplusplus::tomlplusplus)
+target_sources(caliper_view_layer PRIVATE ${CALIPER_ROOT}/src/host/draw/scene_pieces.cpp)
+set_property(SOURCE ${CALIPER_ROOT}/src/host/live/live_scene.cpp ${CALIPER_ROOT}/src/host/draw/scene_pieces.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS CALIPER_HAVE_SCENE_PIECES=1)
+target_link_libraries(caliper_view_layer PUBLIC caliper_spec_reader)
 target_compile_definitions(caliper_view_layer PUBLIC IMGUI_IMPL_WEBGPU_BACKEND_DAWN)
 # The scene core's arithmetic without contraction, as natively (the root CMakeLists.txt's caliper_scene),
 # so that both compute the same uniform bytes; WebAssembly has no fused multiply-add, so this only
@@ -140,6 +172,7 @@ add_executable(caliper-views
     src/scene_selftest.cpp
     src/web_programs.cpp
     src/draw_parity.cpp
+    src/scene_parity.cpp
 )
 # fonts.cpp embeds the native app's faces from the design token package (C23 #embed).
 set_source_files_properties(src/fonts.cpp PROPERTIES
@@ -163,7 +196,7 @@ target_link_options(caliper-views PRIVATE
     -sMAXIMUM_MEMORY=512MB
     -sERROR_ON_UNDEFINED_SYMBOLS=1
     "-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$UTF8ToString,$stringToNewUTF8,$stringToUTF8OnStack,$stackSave,$stackRestore,$specialHTMLTargets"
-    "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view,_caliper_views_set_toggle,_caliper_views_set_link,_caliper_views_gfx_selftest,_caliper_views_scene_selftest,_caliper_views_draw_parity,_caliper_views_colormap_keys,_caliper_views_destroy"
+    "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view,_caliper_views_set_toggle,_caliper_views_set_link,_caliper_views_gfx_selftest,_caliper_views_scene_selftest,_caliper_views_draw_parity,_caliper_views_scene_parity,_caliper_views_colormap_keys,_caliper_views_destroy"
     "-sEXPORTED_RUNTIME_METHODS=ccall,UTF8ToString,stringToNewUTF8,HEAPU8"
 )
 if(CALIPER_WEB_CLOSURE AND CMAKE_BUILD_TYPE STREQUAL "Release")
