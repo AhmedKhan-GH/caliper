@@ -42,8 +42,20 @@ _spec.loader.exec_module(gp)
 Fail, Skip = gp.Fail, gp.Skip
 
 SCRIPT = "arc_tower_train.py"
-# The head of layer 1 that the toggle, the ablation and the fork name, as the demo script is seeded.
-ABLATED = 0
+# The head of layer 1 that the toggle names, before the agent knows which head forms.
+TOGGLED = 0
+# The rise of the in-context loss over its settled value at the first steps with the strongest head ablated. Two runs
+# with the script's seed differ in the last digits from step 5 on (the Apple GPU's kernels are not bitwise
+# deterministic), and the step at which the driver ablates depends on timing. Measured on the script without the app
+# at 15 steps from 1,050 to 1,400, after the loss settled below 0.2: the first ablated step gave 4.0 to 8.8 times its
+# value, an in-context loss of 0.74 to 0.96, while the other heads make up for the ablated one within tens of steps.
+# Thus a settled value below 0.2 gives at least 3.7 times, and 3 keeps a margin.
+RISE = 3.0
+# The steps the run single-steps with the head ablated, each a pass of the views; the other heads make up for the
+# ablated one within about 10 to 30 steps.
+ABLATED_STEPS = 3
+# The steps of the fork child past the parent's step at the bump, at which the ablated head must still be unformed.
+FORK_STEPS = 500
 LOG = re.compile(r"step (\d+) loss ([0-9.]+) in-context ([0-9.]+)")
 # The commands that wait on a card of the person; the driver approves each as the person would.
 CARDS = {"spec_new", "spec_open", "run_start", "run_pause", "run_fork", "run_stop", "piece_update", "state_create",
@@ -269,8 +281,8 @@ def steps(r):
     r.call("layout_place", {"panel": "pattern", "target": "tower", "where": "beside", "ratio": 0.4})
     r.call("layout_place", {"panel": "loss_curve", "target": "pattern", "where": "below", "ratio": 0.5})
     r.call("layout_place", {"panel": "icl_curve", "target": "loss_curve", "where": "below", "ratio": 0.5})
-    r.call("control_create", {"id": "ablate", "kind": "toggle", "title": "Ablate Head 0 of Layer 1",
-                              "bind": "intervene:blocks.1.attn#0", "options": {"value": False}})
+    r.call("control_create", {"id": "ablate", "kind": "toggle", "title": f"Ablate Head {TOGGLED} of Layer 1",
+                              "bind": f"intervene:blocks.1.attn#{TOGGLED}", "options": {"value": False}})
     if "[[panel.entity]]" in r.call("spec_get", {}).get("text", ""):
         raise Fail("the spec holds an entity: a primitive of the scene is in the frame")
     cap("empty")
@@ -352,44 +364,55 @@ def steps(r):
     r.result["pick"] = {"item": item, "layer": 1, "head": best, "tokens": [want[0], want[1]]}
     cap("tower-parent")
 
-    # 11. Ablating the head raises the in-context loss at once.
-    r.step("the ablation of the head raises the in-context loss")
+    # 11. Ablating the strongest head raises the in-context loss at once. The run is paused, the head with the highest
+    # score of layer 1 in the newest published version is ablated, and the run single-steps, so that each ablated step
+    # is a pass of the views and its in-context loss is published, whatever the shared cadence of the views and the
+    # time at which the ablation reaches the script. The other heads make up for the ablated one within tens of steps.
+    r.step("the ablation of the strongest head raises the in-context loss")
     def converged():
         ys = [y for _, y in r.icl()[-5:]]
         return sum(ys) / len(ys) if len(ys) == 5 and sum(ys) / 5 < 0.2 else None
     base = c.until("the in-context loss settles below 0.2", converged, 400)
-    at = r.run_step(c.run)
-    r.call("intervene_set", {"point": f"blocks.1.attn#{ABLATED}", "op": "ablate"})
-    window = []
-    def raised():
-        window[:] = [y for x, y in r.icl() if at < x <= at + 200]
-        if window and max(window) > 2 * base:
-            return max(window)
-        if r.run_step(c.run) > at + 200:
-            raise Fail(f"within 200 steps the in-context loss reached {max(window) if window else None} with head "
-                       f"{ABLATED} ablated, and was {base}; scores {h}")
-        return None
-    mean_after = c.until("the in-context loss rises after the ablation", raised, 200)
-    r.call("intervene_clear", {"point": f"blocks.1.attn#{ABLATED}"})
-    r.result["ablation"] = {"point": f"blocks.1.attn#{ABLATED}", "before": base, "after": mean_after}
+    r.call("run_pause", {"op": "pause", "run": c.run})
+    c.until("the run paused", lambda: c.runs()[c.run]["state"] == "paused", 60)
+    _, hs = r.heads()
+    strong = max(range(4), key=lambda i: hs[4 + i])
+    point = f"blocks.1.attn#{strong}"
+    last = r.icl()[-1][0]
+    r.call("intervene_set", {"point": point, "op": "ablate"})
+    for _ in range(ABLATED_STEPS):
+        at = r.run_step(c.run)
+        r.call("run_pause", {"op": "step", "count": 1, "run": c.run})
+        c.until("the single step", lambda: r.run_step(c.run) > at and c.runs()[c.run]["state"] == "paused", 60)
+        c.until("the in-context loss of the step", lambda: any(x >= at for x, _ in r.icl()), 60)
+    after = [(x, y) for x, y in r.icl() if x > last]
+    rise = max(y for _, y in after) / base
+    if rise < RISE:
+        raise Fail(f"with head {strong} of layer 1 ablated the in-context loss rose {rise:.2f} times, from {base} to "
+                   f"{after}; scores {hs}")
+    r.call("intervene_clear", {"point": point})
+    r.call("run_pause", {"op": "resume", "run": c.run})
+    r.result["ablation"] = {"point": point, "scores": hs[4:], "before": base, "after": after, "rise": rise}
 
     # 12. A fork from the first kept step with the strong head ablated never forms that head.
     r.step("a fork from a past step with the head ablated")
     parent = c.run
     kids_before = set(c.runs())
     fork = r.call("run_fork", {"run": parent, "step": first_step,
-                               "interventions": [{"point": f"blocks.1.attn#{ABLATED}", "op": "ablate"}]})["run"]
+                               "interventions": [{"point": point, "op": "ablate"}]})["run"]
     child = fork["id"]
     c.run = child
     c.until("the child runs and is attached",
             lambda: (lambda x: x and x["state"] == "running" and x.get("attached"))(c.runs().get(child)), 120)
     c.pids.update(gp.pids_of(c.ws / SCRIPT))
+    target = newest["step"] + FORK_STEPS
     def child_formed():
         b, hh = r.heads()
-        return (b, hh) if r.run_step(child) > 900 and max(hh[4 + i] for i in range(4) if i != ABLATED) > 0.4 else None
-    cb, ch = c.until("the other heads of the child form", child_formed, 420)
-    if ch[4 + ABLATED] >= 0.2:
-        raise Fail(f"the ablated head {ABLATED} scores {ch[4 + ABLATED]} in the child at step {cb['step']}")
+        return (b, hh) if (b.get("step") or 0) >= target and max(hh[4 + i] for i in range(4) if i != strong) > 0.4 \
+            else None
+    cb, ch = c.until(f"the other heads of the child form by step {target}", child_formed, 420)
+    if ch[4 + strong] >= 0.2:
+        raise Fail(f"the ablated head {strong} scores {ch[4 + strong]} in the child at step {cb['step']}")
     cap("tower-child")
     n = c.differs("tower-parent", "tower-child", 300)
     r.result["fork"] = {"child": child, "step": cb["step"], "scores": ch, "tower_pixels_changed": n}
