@@ -603,14 +603,11 @@ if(APPLE)
 endif()
 
 # ---------------------------------------------------------------------------
-# caliper_export_tests — caliper.export.v1 battery (Rung E1). Links libcaliper
-# (host_services vends the export service + the composition reaches its g_bridge/
-# g_renderer) and the Metal backend, and drives the vended service as an embedder
-# would: bind a renderer -> import a quad -> view_png/sequence -> decode the PNG
-# back (stb_image, TEST-ONLY) and byte-compare. The live cases skip with no GPU
-# (counted; exit 77 -> ctest "Skipped", gpu_skip.h); the sidecar-golden /
-# atomic-write / sugar cases are GPU-free. Own "export" label so `ctest -L gfx`
-# (49/49) is untouched.
+# caliper_export_tests — the host's PNG writers (export_service.h), the service
+# registry, and the Metal window capture. Links libcaliper and the Metal backend.
+# The live Metal cases skip with no GPU (counted; exit 77 -> ctest "Skipped",
+# gpu_skip.h); the PNG writer and registry cases are GPU-free. Own "export" label
+# so `ctest -L gfx` is untouched.
 # ---------------------------------------------------------------------------
 add_executable(caliper_export_tests test_export.cpp)
 target_include_directories(caliper_export_tests PRIVATE
@@ -623,15 +620,11 @@ set_target_properties(caliper_export_tests PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 if(APPLE)
     target_compile_definitions(caliper_export_tests PRIVATE CALIPER_HAVE_METAL=1)
-    # ObjC++ + ARC so the harness can allocate the MTLBuffers the imported-
-    # geometry path consumes (mirrors caliper_gfx_tests).
+    # ObjC++ + ARC for the Metal device query of the live cases.
     set_source_files_properties(test_export.cpp PROPERTIES
         COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
     set_target_properties(caliper_export_tests PROPERTIES
         BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
-endif()
-if(WIN32)
-    target_compile_definitions(caliper_export_tests PRIVATE CALIPER_HAVE_VULKAN=1)
 endif()
 add_test(NAME caliper_export_tests COMMAND caliper_export_tests)
 # The stores this binary opens go to a work folder, never the user's app-data.

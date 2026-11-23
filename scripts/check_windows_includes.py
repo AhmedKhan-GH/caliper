@@ -148,8 +148,7 @@ GL/gl.h GL/glu.h powerbase.h windowsx.h""".split()
 # Headers the Windows build generates or fetches (FetchContent volk and Vulkan-Headers, glslang
 # SPIR-V headers, the PTX header) and that the macOS build does not have.
 WINDOWS_GENERATED = """volk.h vulkan/vulkan.h vulkan/vulkan_core.h vulkan/vulkan_win32.h
-vulkan/vk_platform.h colormap_spv.h points_vert_spv.h points_frag_spv.h geom_vert_spv.h
-geom_frag_spv.h geom_tex_frag_spv.h cmap_direct_ptx.h
+vulkan/vk_platform.h colormap_spv.h cmap_direct_ptx.h
 zlib.h""".split()   # zlib.h: the core build provides zlib on Windows (ZLIB::ZLIB)
 # macOS-only or POSIX-only headers that MSVC lacks.
 POISON = """unistd.h libproc.h pthread.h sched.h semaphore.h dlfcn.h spawn.h poll.h netdb.h dirent.h

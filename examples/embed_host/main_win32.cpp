@@ -81,7 +81,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 int main(int argc, char** argv) {
-    const char* applet_id = (argc > 1) ? argv[1] : "dev.caliper.instance-scope";
+    const char* applet_id = (argc > 1) ? argv[1] : "dev.caliper.embed-scope";
     if (!embed_version_ok()) return 1;
     // CALIPER_EMBED_OFFSCREEN=1: an offscreen canvas and no window class or
     // window at all (embed_host.h).
