@@ -7,11 +7,12 @@
 // a start that writes no link, a stop of a fork that waits for its
 // checkpoint, a script that ends with another code than 0 during a stop
 // (failed) and one that the runner ends after the limit (stopped), a fork
-// whose parent exits just after its checkpoint reply, the
-// end of the child's whole process group, the size limit and the mode of
-// output.log, and no child left at the end. Every wait
-// waits on the runner's state, never on a fixed sleep, and every child is
-// ended by its own process id, also when a check fails.
+// whose parent exits just after its checkpoint reply, the end of the child's
+// whole process group, the size limit and the mode of output.log, and no
+// child left at the end. Every wait waits on the runner's state, never on a
+// fixed sleep, and every child is ended by its own process id, also when a
+// check fails. Where a slow machine could change the order of two events, a
+// gate holds the runner's passes (PassGate) and forces the order.
 #include "runner/child_process.h"
 #include "runner/model_runner.h"
 #include "runner/run_connection.h"
@@ -24,15 +25,20 @@
 #include <cerrno>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <mutex>
 #include <sstream>
 #include <thread>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <signal.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 namespace cb = caliper_builder;
@@ -119,6 +125,43 @@ std::vector<float> values_of(cr::ModelRunner& runner, const std::string& id) {
     return out;
 }
 
+// Holds the runner's passes (ModelRunner::Options::before_pass): from the
+// pass close_at on, the runner's thread waits before each pass until open()
+// or step(). Declare it before the runner, so that it outlives the runner's
+// thread.
+struct PassGate {
+    std::mutex m;
+    std::condition_variable cv;
+    std::uint64_t passes = 0;
+    std::uint64_t close_at = 0;   // 0: open
+    std::uint64_t holds = 0;      // how often the runner's thread began to wait
+    void before_pass() {
+        std::unique_lock<std::mutex> lock(m);
+        ++passes;
+        if (close_at == 0 || passes < close_at) return;
+        ++holds;
+        cv.notify_all();
+        cv.wait(lock, [&] { return close_at == 0 || passes < close_at; });
+    }
+    // Holds the runner's thread before its next pass, and returns once it waits.
+    bool hold(int timeout_ms) { return let_through(timeout_ms); }
+    // Lets exactly one pass of the held runner run, and returns once the
+    // runner's thread waits before the next one.
+    bool step(int timeout_ms) { return let_through(timeout_ms); }
+    bool let_through(int timeout_ms) {
+        std::unique_lock<std::mutex> lock(m);
+        const std::uint64_t before = holds;
+        close_at = passes + 1;
+        cv.notify_all();
+        return cv.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&] { return holds > before; });
+    }
+    void open() {
+        std::lock_guard<std::mutex> lock(m);
+        close_at = 0;
+        cv.notify_all();
+    }
+};
+
 }  // namespace
 
 TEST_CASE("runner: a child process writes its output to the file and reports its exit code") {
@@ -197,12 +240,21 @@ TEST_CASE("runner: a page link or a stream link of this computer becomes the str
 TEST_CASE("runner: a start that writes no link fails at the start limit, and its process ends") {
     Workspace w("runner_no_link");
     std::ofstream(w.ws + "/scripts/silent.py") << "import time\nprint('silent', flush=True)\ntime.sleep(120)\n";
+    // The runner's passes wait until the script has printed its line, so that
+    // a slow start of the interpreter cannot meet the short start limit first.
+    PassGate gate;
+    gate.close_at = 1;
     cr::ModelRunner::Options o;
     o.workspace = w.ws;
     o.python = w.python.empty() ? "python3" : w.python;
     o.start_limit_s = 1.0;
     o.kill_grace_s = 1.0;
+    o.before_pass = [&] { gate.before_pass(); };
     cr::ModelRunner runner(o);
+    struct Opener {
+        PassGate& g;
+        ~Opener() { g.open(); }   // before the runner's shutdown, also when a check fails
+    } opener{gate};
     cb::RunStartRequest r;
     r.script_path = w.ws + "/scripts/silent.py";
     r.script = "scripts/silent.py";
@@ -211,6 +263,13 @@ TEST_CASE("runner: a start that writes no link fails at the start limit, and its
     CHECK(e.id == "silent-1");
     CHECK(e.state == "starting");
     CHECK(fs::is_directory(w.ws + "/runs/silent-1"));
+    bool printed = false;
+    for (int i = 0; i < 3000 && !printed; ++i) {
+        printed = read_file(w.ws + "/runs/silent-1/output.log").find("silent\n") != std::string::npos;
+        if (!printed) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    REQUIRE(printed);
+    gate.open();
     REQUIRE(runner.wait_for(state_is("silent-1", "failed"), 20000));
     const cb::RunEntry got = runner.list().at(0);
     REQUIRE(got.error);
@@ -394,12 +453,13 @@ namespace {
 struct StandIn {
     Workspace w;
     cr::ModelRunner runner;
-    explicit StandIn(const std::string& name, double start_limit_s = 60.0)
+    explicit StandIn(const std::string& name, double start_limit_s = 60.0, std::function<void()> before_pass = {})
         : w(name), runner([&] {
               cr::ModelRunner::Options o;
               o.workspace = w.ws;
               o.python = w.python;
               o.start_limit_s = start_limit_s;
+              o.before_pass = std::move(before_pass);
               return o;
           }()) {}
     ~StandIn() { runner.shutdown(); }
@@ -435,14 +495,16 @@ TEST_CASE("runner: a stop ends a fork that waits for its checkpoint, and the che
             if (f.path().filename().u8string().rfind("checkpoint-", 0) == 0) return values_of(runner, "run:base/loss").size() >= 4;
         return false;
     }, 60000));
+    CHECK(runner.running_pids().size() == 1);
+    REQUIRE(!runner.stop("base", 30, &stopped));
+    REQUIRE(runner.wait_for(state_is("base", "exited"), 60000));
+    // The parent's end read every reply that it sent, so the checkpoint's
+    // reply has been handled here, also on a slow machine: it started nothing.
     const std::vector<cb::RunEntry> runs = runner.list();
     const cb::RunEntry* after = find(runs, fork.id);
     REQUIRE(after);
     CHECK(after->state == "exited");
-    CHECK(runner.running_pids().size() == 1);
     CHECK_FALSE(fs::exists(t.w.ws + "/runs/" + fork.id + "/output.log"));
-    REQUIRE(!runner.stop("base", 30, &stopped));
-    REQUIRE(runner.wait_for(state_is("base", "exited"), 60000));
     CHECK(runner.running_pids().empty());
 }
 
@@ -500,7 +562,12 @@ TEST_CASE("runner: a fork starts when its parent exits in the pass of its checkp
         MESSAGE("skipped: the build names no Python that imports Caliper LIB");
         return;
     }
-    StandIn t("runner_fork_parent_exits");
+    PassGate gate;
+    StandIn t("runner_fork_parent_exits", 60.0, [&] { gate.before_pass(); });
+    struct Opener {
+        PassGate& g;
+        ~Opener() { g.open(); }   // before the runner's shutdown, also when a check fails
+    } opener{gate};
     cr::ModelRunner& runner = t.runner;
     cb::RunEntry base;
     REQUIRE(!runner.start(t.w.start({"100000", "0.02", "exit-after-checkpoint"}, json::object(), "base"), &base));
@@ -509,7 +576,66 @@ TEST_CASE("runner: a fork starts when its parent exits in the pass of its checkp
     fr.parent = "base";
     fr.params = json{{"lr", 0.01}};
     cb::RunEntry fork;
+    // The order that a slow machine gives: one pass writes the checkpoint
+    // request, then the runner reads nothing until the parent has replied,
+    // closed its stream and ended. The runner is held before the fork, so
+    // that no pass can run between the request and the hold.
+    REQUIRE(gate.hold(60000));
     REQUIRE(!runner.fork(fr, &fork));
+    REQUIRE(gate.step(60000));
+    bool ended = false;
+    for (int i = 0; i < 3000 && !ended; ++i) {
+        ended = runner.running_pids().empty();
+        if (!ended) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    REQUIRE(ended);
+    {
+        const std::vector<cb::RunEntry> held = runner.list();
+        const cb::RunEntry* f = find(held, fork.id);
+        REQUIRE(f);
+        CHECK(f->state == "starting");   // the runner has not read the reply yet
+    }
+    // Then the runner's first poll writes before it reads, into a socket
+    // that the ended parent has reset: a frame waits in the runner's queue
+    // (a pause for the parent), and the reset is there already. A ping
+    // written beside the runner's connection reaches the parent's closed
+    // socket, whose system answers with the reset; a later write fails once
+    // the runner's socket took it. The reply is still unread, so the runner
+    // starts the fork only if it reads what is left after its write failed
+    // (src/host/net/ws.cpp).
+    {
+        const std::string link = read_file(t.w.ws + "/runs/base/link.txt");
+        const std::size_t colon = link.find("127.0.0.1:");
+        REQUIRE(colon != std::string::npos);
+        const int port = std::atoi(link.c_str() + colon + 10);
+        REQUIRE(port > 0);
+        int sock = -1;
+        for (int fd = 0; fd < 4096 && sock < 0; ++fd) {
+            sockaddr_in theirs{};
+            socklen_t tl = sizeof theirs;
+            if (::getpeername(fd, (sockaddr*)&theirs, &tl) == 0 && theirs.sin_family == AF_INET &&
+                ntohs(theirs.sin_port) == port)
+                sock = fd;
+        }
+        REQUIRE(sock >= 0);
+#ifdef MSG_NOSIGNAL
+        const int flags = MSG_NOSIGNAL;
+#else
+        const int flags = 0;   // Apple: the runner's socket has SO_NOSIGPIPE
+#endif
+        const unsigned char ping[] = {0x89, 0x80, 0, 0, 0, 0};   // a masked ping with no payload
+        bool reset = false;
+        for (int i = 0; i < 5000 && !reset; ++i) {
+            reset = ::send(sock, ping, sizeof ping, flags) < 0 && (errno == EPIPE || errno == ECONNRESET);
+            if (!reset) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        REQUIRE(reset);
+        cb::Error ce;
+        cb::RunControl* control = runner.control_of("base", &ce);
+        REQUIRE(control);
+        REQUIRE(!control->pause(cb::RunPauseOp::pause, 1));
+    }
+    gate.open();
     REQUIRE(runner.wait_for([&](const std::vector<cb::RunEntry>& runs) {
         const cb::RunEntry* f = find(runs, fork.id);
         return f && f->state != "starting";

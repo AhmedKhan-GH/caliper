@@ -1052,6 +1052,12 @@ void ModelRunner::loop() {
     RunnerState& s = *state_;
     std::unique_lock<std::mutex> lock(s.m);
     while (!s.stopping) {
+        if (s.options.before_pass) {
+            lock.unlock();
+            s.options.before_pass();
+            lock.lock();
+            if (s.stopping) break;
+        }
         bool changed = false;
         std::vector<cb::Event> events;
         const auto now = Clock::now();
