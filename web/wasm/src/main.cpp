@@ -112,6 +112,8 @@ struct Page {
     std::unique_ptr<caliper_live_views::SceneView> page_view;
     caliper_live_views::SceneRectOptions page_options;
     caliper_live_views::SceneRectState page_state;
+    uint64_t page_events = 0;           // picks and selections of the page's scene, for the page's tests
+    std::string page_last_event;
     caliper_web::PollState poll;
     std::string adapter_text;
     std::string error;
@@ -336,6 +338,8 @@ void publish() {
     put("geometry", geo.c_str());
     put("selected", selected);
     put("events", (double)g.events_sent);
+    put("pageEvents", (double)g.page_events);
+    put("pageLastEvent", g.page_last_event.c_str());
     const caliper_web::InputCounts ic = caliper_web::input_counts();
     put("inputPointer", ic.pointer);
     put("inputButtons", ic.buttons);
@@ -730,6 +734,8 @@ void draw_page_scene(float w, float h, float scale) {
     if (ImGui::Begin("##caliper.page.scene", nullptr, flags)) {
         g.page_options.draw_feed = g.programs ? g.programs->feed(g.cfg.view) : nullptr;
         auto sink = [](const char* type, const std::string& detail) {
+            ++g.page_events;
+            g.page_last_event = std::string(type) + " " + detail.substr(0, 200);
             EM_ASM({
                 var cb = Module["onEvent"];
                 if (cb) cb(UTF8ToString($0), UTF8ToString($1), JSON.parse(UTF8ToString($2)));
