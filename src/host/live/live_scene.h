@@ -395,6 +395,7 @@ private:
     bool shape_asked_ = false;
     uint64_t shape_generation_ = 0;   // the frame the shapes' pick reads; a newer one drops it
     void sync_shapes();
+    void refresh_piece_notes();
     bool external_draws() const;
     caliper_draw::DrawFeed* slot_feed(const ProgramSlot& slot) const;
     caliper_draw::DrawFeed* draw_feed_ = nullptr;

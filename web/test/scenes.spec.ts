@@ -1,5 +1,5 @@
-// Each scene fixture draws through library pieces on core and compatibility WebGPU devices.
-// The report checks piece count, nonempty pixels, and scene errors. draw_parity.spec.ts compares
+// Each scene fixture draws through library pieces on core WebGPU devices. Compatibility devices
+// must report an explicit refusal for each piece that requires vertex storage. draw_parity.spec.ts compares
 // the app and browser color, ID, and depth targets for the same fixtures.
 //
 // The files come from CALIPER_WASM_DIR, else from python/caliper/_web, where scripts/build_wasm.py
@@ -18,7 +18,7 @@ test.skip(!FILES.every((f) => fs.existsSync(path.join(WASM, f))), `needs the Web
 
 for (const compat of [false, true]) {
   const level = compat ? 'compatibility' : 'core';
-  test(`every primitive drawn by the scene view draws with library pieces on a ${level} device`, async ({ page }, info) => {
+  test(`every primitive ${compat ? "reports its unsupported pieces" : "draws with library pieces"} on a ${level} device`, async ({ page }, info) => {
     test.skip(info.project.name === 'canvas2d', 'the WebAssembly views need a WebGPU adapter');
     const site = await serve(WEB, (name) => (FILES.includes(name.slice(1)) ? path.join(WASM, name.slice(1)) : null));
     try {
@@ -79,9 +79,32 @@ for (const compat of [false, true]) {
       for (const name of FIXTURES) {
         const r = got.reports[name] ?? 'fail no report';
         console.log(`[${info.project.name}] ${level}: ${r}`);
-        expect(r, name).toMatch(/^ok /);
-        expect(r, name).toContain('notes=0');
+        expect(r, name).toMatch(compat ? /^refused / : /^ok /);
         expect(r, name).toContain(`level=${level}`);
+        expect(r, name).toContain(' details=');
+        const details = JSON.parse(r.slice(r.indexOf(' details=') + 9)) as {
+          errors: { program: string; entity: string; code: string; message: string }[];
+          notes: string[];
+        };
+        const pieces = Number(/pieces=(\d+)/.exec(r)?.[1]);
+        expect(pieces, name).toBeGreaterThan(0);
+        if (compat) {
+          expect(r, name).toContain('pixels=0');
+          expect(details.errors, name).toHaveLength(pieces);
+          expect(new Set(details.errors.map((error) => error.program)).size, name).toBe(pieces);
+          expect(details.notes, name).toHaveLength(pieces);
+          for (const error of details.errors) {
+            expect(error.program.startsWith(`scene:${error.entity}#`), name).toBe(true);
+            expect(error.code, name).toBe('program.browser_refused');
+            expect(error.message, name).toContain('storage buffers in the vertex stage, the limit is 0');
+            expect(details.notes, name).toContain(`${error.entity}: ${error.code}: ${error.message}`);
+          }
+        } else {
+          expect(Number(/pixels=(\d+)/.exec(r)?.[1]), name).toBeGreaterThan(0);
+          expect(details.errors, name).toEqual([]);
+          expect(details.notes, name).toEqual([]);
+          expect(r, name).toContain('notes=0');
+        }
       }
     } finally {
       site.close();

@@ -5,7 +5,9 @@
 
 #include "../../../tests/scene/primitive_rows.h"
 #include "renderer/webgpu_backend.h"
+#include "draw/draw_runtime.h"
 
+#include <algorithm>
 #include <memory>
 #include <cstring>
 
@@ -84,10 +86,35 @@ bool scene_selftest_poll(caliper_gfx::Backend& b, std::string* report) {
         std::memcpy(&pixel, r.pixels.data() + at, 4);
         colored += pixel != primitive_fixtures::kClear;
     }
-    const bool ok = count.pieces > 0 && colored > 0 && r.view->notes().empty();
-    *report = std::string(ok ? "ok " : "fail ") + r.row.fixture.name + ": pieces=" + std::to_string(count.pieces) +
-              " pixels=" + std::to_string(colored) + " notes=" + std::to_string(r.view->notes().size()) + " level=" + level;
-    if (!r.view->notes().empty()) *report += " note=" + r.view->notes().back();
+    using caliper_net::Json;
+    Json errors = Json::array(), notes = Json::array();
+    bool explicit_refusals = true;
+    for (const auto* runtime : r.view->shape_runtimes()) {
+        const auto status = runtime->status();
+        if (status.state != caliper_draw::DrawState::refused && status.state != caliper_draw::DrawState::stopped) continue;
+        const std::string& program = runtime->instance().program;
+        const std::string entity = program.substr(6, program.rfind('#') - 6);
+        Json error = Json::object();
+        error.set("program", Json(program));
+        error.set("entity", Json(entity));
+        error.set("code", Json(status.error.code));
+        error.set("message", Json(status.error.message));
+        errors.push(std::move(error));
+        const std::string note = entity + ": " + status.error.code + ": " + status.error.message;
+        explicit_refusals &= status.state == caliper_draw::DrawState::refused &&
+                             status.error.code == "program.browser_refused" &&
+                             std::find(r.view->notes().begin(), r.view->notes().end(), note) != r.view->notes().end();
+    }
+    for (const auto& note : r.view->notes()) notes.push(Json(note));
+    const bool ok = count.pieces > 0 && colored > 0 && notes.size() == 0 && errors.size() == 0;
+    const bool refused = level == "compatibility" && count.pieces > 0 && colored == 0 &&
+                         errors.size() == count.pieces && notes.size() == errors.size() && explicit_refusals;
+    Json details = Json::object();
+    details.set("errors", std::move(errors));
+    details.set("notes", std::move(notes));
+    *report = std::string(ok ? "ok " : refused ? "refused " : "fail ") + r.row.fixture.name +
+              ": pieces=" + std::to_string(count.pieces) + " pixels=" + std::to_string(colored) +
+              " notes=" + std::to_string(r.view->notes().size()) + " level=" + level + " details=" + details.dump();
     return true;
 }
 

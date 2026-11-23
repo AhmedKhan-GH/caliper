@@ -158,7 +158,7 @@ private:
     std::shared_ptr<Converted> frustum_;   // frustum@1's resource: the identity, element 0
     std::vector<std::unique_ptr<Program>> programs_;     // in the tree's path order
     std::map<std::string, std::uint32_t> pick_ids_;      // by program id, stable while it lives
-    std::map<std::string, int> refused_;                 // program id: its generation when it stopped
+    std::map<std::string, Verdict> refused_;             // original runtime error, until clear()
     std::uint32_t next_pick_ = 0x40000000u;
     std::uint64_t revision_ = 1;
     std::uint64_t generation_ = 0;

@@ -527,14 +527,8 @@ void SceneView::sync_shapes() {
     const ViewCamera cam = effective_camera();
     if (const ThroughPinhole* t = std::get_if<ThroughPinhole>(&cam)) st.through = t->camera;
     st.three_d = tree_.space() == Space::k3D;
-    for (const auto& message : piece_notes_)
-        notes_.erase(std::remove(notes_.begin(), notes_.end(), message), notes_.end());
-    piece_notes_.clear();
     shapes_->sync(tree_, st);
-    for (const auto& error : shapes_->errors()) {
-        piece_notes_.push_back(error.path + ": " + error.code + ": " + error.message);
-        note(piece_notes_.back());
-    }
+    refresh_piece_notes();
     // The highlight of a selection with the pieces: the selected rows of each points and boxes batch.
     std::vector<caliper_draw::HighlightRows> rows;
     if (highlight_wanted())
@@ -550,6 +544,19 @@ void SceneView::sync_shapes() {
     piece_highlight_ = !rows.empty() && shapes_->set_highlight(rows, clear_, width_, height_, &lit);
     if (!piece_highlight_) shapes_->set_highlight({}, clear_, width_, height_, nullptr);
     highlighted_ = piece_highlight_ ? lit : 0;
+#endif
+}
+
+void SceneView::refresh_piece_notes() {
+#if defined(CALIPER_SCENE_PIECES)
+    if (!shapes_) return;
+    for (const auto& message : piece_notes_)
+        notes_.erase(std::remove(notes_.begin(), notes_.end(), message), notes_.end());
+    piece_notes_.clear();
+    for (const auto& error : shapes_->errors()) {
+        piece_notes_.push_back(error.path + ": " + error.code + ": " + error.message);
+        note(piece_notes_.back());
+    }
 #endif
 }
 
@@ -679,6 +686,7 @@ void SceneView::reconcile_programs() {
         }
     }
     draws_ = std::move(next);   // a program no longer in the feed releases its objects
+    refresh_piece_notes();
     panel_over_ = 0;
     changed();
 #endif
@@ -796,6 +804,7 @@ void SceneView::draw_programs() {
         }
         report_state(feed, &d->reported, &d->reported_step, *d->runtime);
     }
+    refresh_piece_notes();
 #endif
 }
 
@@ -819,6 +828,7 @@ void SceneView::poll_programs() {
         if (!d->pending.empty()) d->runtime->frame_pending(ms_since(d->pending.front().second));
         report_state(slot_feed(*d), &d->reported, &d->reported_step, *d->runtime);
     }
+    refresh_piece_notes();
     // The programs of the panel together: over 16.7 ms a frame on 30 polls in a row stops the
     // costliest one, which names its costliest pass after one more measured frame.
     if (!completed) return;

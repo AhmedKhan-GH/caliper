@@ -28,11 +28,13 @@
 #include "../scene/primitive_rows.h"
 #include "../scene/surface_row_fixture.h"
 #include "gfx/metal_backend.h"
+#include "gfx/recording_backend.h"
 #include "gfx/shaders/generated/programs_metal.h"
 #include "live/live_scene.h"
 #include "live/scene_piece_form.h"
 #if defined(CALIPER_HAVE_SCENE_PIECES)
 #include "draw/scene_pieces.h"
+#include "draw/draw_runtime.h"
 #endif
 #include "net/wire.h"
 #include "renderer/host_renderer.h"
@@ -1178,6 +1180,48 @@ TEST_CASE("gfx/Metal scene view: unsupported input reports the entity and reason
     REQUIRE_MESSAGE(rig.view->render(64, 64, 1.0f, 0xff000000u, &why), why);
     CHECK(rig.view->shape_counts().pieces == 1);
     CHECK(rig.view->notes().empty());
+}
+
+TEST_CASE("gfx/scene view: browser refusals report each entity and clear on scene reset") {
+    Caps caps = RecordingBackend::default_caps();
+    caps.backend = "webgpu";
+    caps.bits &= ~kCapVertexStorage;
+    caps.limits.max_storage_buffers_in_vertex_stage = 0;
+    RecordingBackend gfx(caps);
+    SceneView view(gfx, caliper_gfx::shaders::kMetalPrograms);
+    std::string why;
+    REQUIRE_MESSAGE(view.init(&why), why);
+    view.describe(wire::SceneView{CALIPER_NET_SPACE_3D, "+z", ""});
+    const float position[] = {0, 0, 0};
+    for (const char* path : {"first-points", "second-points"}) {
+        auto u = update(path, CALIPER_NET_PART_POINTS, 1, false);
+        u.arrays.push_back(wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {1, 3}, position, sizeof position));
+        REQUIRE_MESSAGE(view.apply(u, &why), why);
+    }
+    REQUIRE_MESSAGE(view.render(64, 64, 1.0f, 0xff000000u, &why), why);
+    const auto runtimes = view.shape_runtimes();
+    REQUIRE(runtimes.size() == 2);
+    REQUIRE(view.notes().size() == 2);
+    for (const auto* runtime : runtimes) {
+        const auto status = runtime->status();
+        CHECK(status.state == caliper_draw::DrawState::refused);
+        CHECK(status.error.code == "program.browser_refused");
+        CHECK(status.error.message.find("storage buffers in the vertex stage, the limit is 0") != std::string::npos);
+        const std::string& program = runtime->instance().program;
+        const std::string path = program.substr(6, program.rfind('#') - 6);
+        CHECK((path == "first-points" || path == "second-points"));
+        const std::string note = path + ": " + status.error.code + ": " + status.error.message;
+        CHECK(std::find(view.notes().begin(), view.notes().end(), note) != view.notes().end());
+    }
+    const auto notes = view.notes();
+    REQUIRE_MESSAGE(view.render(64, 64, 1.0f, 0xff000000u, &why), why);
+    CHECK(view.notes() == notes);
+    wire::SceneClear reset;
+    reset.reset = true;
+    REQUIRE_MESSAGE(view.apply(reset, &why), why);
+    REQUIRE_MESSAGE(view.render(64, 64, 1.0f, 0xff000000u, &why), why);
+    CHECK(view.notes().empty());
+    CHECK(view.shape_runtimes().empty());
 }
 
 TEST_CASE("gfx/Metal scene view: an unchanged frame stays idle and a changed frame drops its pending pick") {

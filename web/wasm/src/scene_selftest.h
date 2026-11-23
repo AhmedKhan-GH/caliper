@@ -1,7 +1,8 @@
 // scene_selftest.h: the scene rows in the page, for the browser tests (web/test/scenes.spec.ts).
 //
 // Each fixture draws through library pieces. The asynchronous readback checks that the
-// scene has pixels, pieces, and no error notes. App/browser parity tests compare the targets.
+// scene has pixels, pieces, and no error notes, or an explicit refusal for each unsupported piece.
+// App/browser parity tests compare the targets.
 #pragma once
 
 #include "gfx/gfx.h"
@@ -16,8 +17,8 @@ namespace caliper_web {
 bool scene_selftest_start(caliper_gfx::Backend& b, const caliper_gfx::ProgramDesc* programs, const std::string& name,
                           std::string* why);
 
-// Called every frame while a row runs. True once its readback is in, with the report: "ok" or
-// "fail", the fixture's name, then the sentence of the comparison and key=value facts.
+// Called every frame while a row runs. True once its readback is in, with the report: "ok",
+// "refused", or "fail", the fixture name, key=value facts, and JSON error details.
 bool scene_selftest_poll(caliper_gfx::Backend& b, std::string* report);
 
 bool scene_selftest_running();

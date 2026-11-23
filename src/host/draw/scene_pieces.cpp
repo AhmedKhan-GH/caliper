@@ -888,8 +888,8 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
                 f.at(2, 2) = d;
                 pr->model = tree.camera_frame(e) * f;
                 pr->params = pack(*pr->piece, {{"width", 2.0}, {"color", double(caliper_scene::kDefaultRgba)}});
-                if (refused_.count(pr->id)) {
-                    errors_.push_back({path, "scene.piece_stopped", input_error_message(InputError::stopped)});
+                if (const auto refused = refused_.find(pr->id); refused != refused_.end()) {
+                    errors_.push_back({path, refused->second.code, refused->second.message});
                 } else {
                     auto pid = pick_ids_.find(pr->id);
                     if (pid == pick_ids_.end()) pid = pick_ids_.emplace(pr->id, next_pick_++).first;
@@ -923,7 +923,7 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
             }
             const std::string id = "scene:" + path + "#" + caliper_scene::primitive_name(prim);
             if (auto r = refused_.find(id); r != refused_.end()) {
-                reject(InputError::stopped);
+                errors_.push_back({path, r->second.code, r->second.message});
                 continue;
             }
             const cs::Piece* piece = library_piece(c->piece);
@@ -1369,7 +1369,13 @@ void ScenePieces::status(const DrawRuntime& runtime) {
     const DrawStatus st = runtime.status();
     if (st.state != DrawState::refused && st.state != DrawState::stopped) return;
     const std::string& id = runtime.instance().program;
-    if (refused_.emplace(id, 0).second) ++revision_;
+    if (!refused_.emplace(id, st.error).second) return;
+    ++revision_;
+    for (const auto& program : programs_)
+        if (program->id == id) {
+            errors_.push_back({program->path, st.error.code, st.error.message});
+            break;
+        }
 }
 
 }  // namespace caliper_draw
