@@ -961,6 +961,10 @@ if(CALIPER_WITH_BUILDER)
     target_compile_definitions(caliper_draw_host PUBLIC CALIPER_HAVE_SCENE_PIECES=1)
     set_target_properties(caliper_draw_host PROPERTIES
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+    # The library pieces of version 1 (draw/library_pieces.h), which the scene view and the live points
+    # view draw with; the browser module compiles the same file (web/wasm/CMakeLists.txt).
+    target_sources(caliper_draw_host PRIVATE src/host/draw/library_pieces.cpp)
+    target_compile_definitions(caliper_draw_host PUBLIC CALIPER_HAVE_LIBRARY_PIECES=1)
     target_link_libraries(libcaliper PUBLIC caliper_draw_host)
     target_compile_definitions(libcaliper PRIVATE CALIPER_HAVE_DRAW=1)
     if(BUILD_TESTS)
