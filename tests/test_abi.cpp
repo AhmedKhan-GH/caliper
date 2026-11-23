@@ -31,7 +31,7 @@ static_assert(offsetof(CaliperHost, struct_size) == 0);
 static_assert(offsetof(CaliperFrameInfo, struct_size) == 0);
 static_assert(offsetof(CaliperAppletAPI, struct_size) == 0);
 static_assert(offsetof(CaliperAppletDescriptor, struct_size) == 0);
-static_assert(CALIPER_ABI_EPOCH == 2);
+static_assert(CALIPER_ABI_EPOCH == 3);
 
 TEST_CASE("abi: descriptor symbol name is fixed") {
     CHECK(std::string(CALIPER_DESCRIPTOR_SYMBOL) == "caliper_applet_descriptor");
