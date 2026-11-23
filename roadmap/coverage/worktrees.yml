@@ -1,31 +1,6 @@
 # yaml-language-server: $schema=schema.json
 title: Uncommitted work
 kind: worktrees
-summary: The uncommitted changes in the worktrees of the graphics consolidation, looked at with git status.
-  Every other worktree was clean apart from its pinned third_party folders. Each of these four holds new
-  library pieces and match tests that no commit has yet.
-entries:
-- branch: playground-m6lines
-  state: uncommitted
-  wip: true
-  item: The library piece lines and its match test against the built-in lines.
-  ids:
-  - REN-84
-- branch: playground-m6boxes
-  state: uncommitted
-  wip: true
-  item: The library piece boxes and its match test against the built-in boxes.
-  ids:
-  - REN-85
-- branch: playground-m6images
-  state: uncommitted
-  wip: true
-  item: The library pieces image, depth and segmentation and the match test of the image piece.
-  ids:
-  - REN-86
-- branch: playground-m6surface
-  state: uncommitted
-  wip: true
-  item: The library piece surface and its match test against the built-in surface.
-  ids:
-  - REN-87
+summary: The uncommitted changes in every worktree of the repository, looked at with git status and git
+  diff. Every worktree was clean apart from its pinned third_party folders, so this group holds no entries.
+entries: []
