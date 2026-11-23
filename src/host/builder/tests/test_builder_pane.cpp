@@ -343,8 +343,12 @@ TEST_CASE("builder pane: metrics grouped by run, newest first, the last few unti
     REQUIRE((p.list_items().back().kind == PaneListItem::Kind::more));
     CHECK(p.list_items().back().name == "Show all");
     CHECK(p.list_items().back().metrics == 1100);
-    // The tables and tensors are listed as before.
-    CHECK(p.visible_sources().size() == 2);
+    // The tables and tensors are listed as before. The pieces of the built-in
+    // library are listed too, and the count leaves them out, so that it does
+    // not depend on what the library holds.
+    size_t listed = 0;
+    for (const PaneSource* s : p.visible_sources()) listed += s->group != PaneSource::Group::piece;
+    CHECK(listed == 2);
 
     // A run opens to its metrics, by tag, under it.
     p.toggle_expanded("run:" + std::to_string(runs[1098]));
@@ -1180,7 +1184,9 @@ TEST_CASE("builder pane: pieces in Sources, and a piece dropped on a scene panel
     p.update();
 
     // The group Pieces after the tensors, in piece.list's order; a piece row
-    // keeps the focus when selected.
+    // keeps the focus when selected. The pieces of the built-in library are
+    // left out, so that the test does not depend on what the library holds.
+    const auto library = [](const PaneSource* s) { return s->key.rfind("piece:library/", 0) == 0; };
     const std::string glow = "piece:workspace/glow@1", norms = "piece:workspace/row_norms@1";
     const PaneSource* g = p.find_source(glow);
     REQUIRE(g);
@@ -1191,11 +1197,12 @@ TEST_CASE("builder pane: pieces in Sources, and a piece dropped on a scene panel
     CHECK(p.find_source(norms)->inputs == std::vector<std::string>{"w"});
     std::vector<std::string> order;
     for (const PaneSource* s : p.visible_sources())
-        if (s->group == PaneSource::Group::piece || s->group == PaneSource::Group::tensor) order.push_back(s->key);
+        if ((s->group == PaneSource::Group::piece && !library(s)) || s->group == PaneSource::Group::tensor)
+            order.push_back(s->key);
     CHECK(order == std::vector<std::string>{"tensor:attn_weights", glow, norms});
     p.set_filter("glow");
     bool only = true;
-    for (const PaneSource* s : p.visible_sources()) only = only && s->key == glow;
+    for (const PaneSource* s : p.visible_sources()) only = only && (library(s) || s->key == glow);
     CHECK(only);
     p.set_filter("");
     p.focus_panel("curves");
