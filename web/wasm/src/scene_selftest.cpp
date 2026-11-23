@@ -55,6 +55,10 @@ bool scene_selftest_start(caliper_gfx::Backend& b, const caliper_gfx::ProgramDes
         return false;
     }
     r.view = std::make_unique<caliper_live_views::SceneView>(b, programs);
+    // The row checks the scene core's own draw list against its CPU reference, thus it draws every
+    // shape with the built-in draw, as the graphics suite's rows do (tests/gfx/gfx_scene_view.cpp);
+    // the scene comparison with the app (scene_parity.h) draws the same fixtures with the pieces.
+    r.view->set_shape_draw(caliper_live_views::ShapeDraw::builtin);
     if (!r.view->init(why)) return false;
     if (!r.row.draw(*r.view)) {
         *why = r.row.error;

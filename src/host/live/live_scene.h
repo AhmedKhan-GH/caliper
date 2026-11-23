@@ -82,9 +82,10 @@ struct SceneCounts {
 
 // What draws the shapes of a scene view (draw/scene_pieces.h): the library pieces, or the scene
 // core's built-in draw. The pieces are the default where the build has them (the app with the
-// builder); CALIPER_SCENE_SHAPES=builtin in the environment selects the built-in for every view,
-// and set_shape_draw() for one view, as the comparison tests do. A build without the pieces (the
-// browser module, a build without the builder) always draws the built-in.
+// builder, and the browser module); CALIPER_SCENE_SHAPES=builtin in the environment selects the
+// built-in for every view (the browser module sets it from caliperConfig.shapes), and
+// set_shape_draw() for one view, as the comparison tests do. A build without the pieces (a build
+// without the builder) always draws the built-in.
 enum class ShapeDraw : uint8_t { pieces = 0, builtin = 1 };
 ShapeDraw default_shape_draw();
 

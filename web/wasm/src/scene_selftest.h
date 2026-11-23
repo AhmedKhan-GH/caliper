@@ -5,7 +5,8 @@
 // message encoded with the C++ codec, decoded again and applied, the view drawn at 256 x 256. The
 // target comes back through the layer's asynchronous readback a frame or two later, and the module
 // compares it with the CPU reference of tests/scene/draw_reference.h, rasterised from the parameter
-// blocks the module itself compiled, under web geometry's parity rules.
+// blocks the module itself compiled, under web geometry's parity rules. The row's view draws every
+// shape with the scene core's built-in draw, whose draw list the reference reads.
 #pragma once
 
 #include "gfx/gfx.h"

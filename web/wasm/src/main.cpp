@@ -8,8 +8,10 @@
 //
 // One module instance draws on one canvas (Module.canvas) and shows one view,
 // or every view of the session when no view is named. The instance reads its
-// settings from Module.caliperConfig: {src, view, kind, header, compat};
-// compat "true" asks for a WebGPU device in compatibility mode.
+// settings from Module.caliperConfig: {src, view, kind, header, compat, shapes};
+// compat "true" asks for a WebGPU device in compatibility mode, and shapes
+// "builtin" draws every shape of a scene with the scene core's built-in draw in
+// place of the library pieces, as CALIPER_SCENE_SHAPES=builtin does in the app.
 //
 // What a person does in a view (a selection, a pick, a hover) comes out of
 // the view layer's event sink: it goes to the producer as an EVENT through
@@ -315,6 +317,26 @@ void publish() {
         }
     geo += "}";
     put("geometry", geo.c_str());
+    // What drew the shapes of each scene view in its last frame: the library pieces, the built-in
+    // draw, and why each shape that the built-in drew fell back, by kind, as JSON {"view": {"draw":
+    // "pieces" or "builtin", "pieces": n, "builtin": n, "fallbacks": {kind: n}}}.
+    caliper_net::Json shapes = caliper_net::Json::object();
+    for (const auto& pv : g.poll.views) {
+        if (!pv.shown) continue;
+        const caliper_live_views::View* v = caliper_live_views::find(g.core, pv.name.c_str());
+        const caliper_live_views::SceneView* sv = v ? caliper_live_views::scene_view(*v) : nullptr;
+        if (!sv) continue;
+        const caliper_live_views::SceneShapeCounts c = sv->shape_counts();
+        caliper_net::Json falls = caliper_net::Json::object();
+        for (const auto& [kind, n] : c.fallbacks) falls.set(kind, double(n));
+        caliper_net::Json one = caliper_net::Json::object();
+        one.set("draw", sv->shape_draw() == caliper_live_views::ShapeDraw::pieces ? "pieces" : "builtin");
+        one.set("pieces", double(c.pieces));
+        one.set("builtin", double(c.builtin));
+        one.set("fallbacks", falls);
+        shapes.set(pv.name, one);
+    }
+    put("sceneShapes", shapes.dump().c_str());
     put("selected", selected);
     put("events", (double)g.events_sent);
     const caliper_web::InputCounts ic = caliper_web::input_counts();
@@ -1042,6 +1064,9 @@ int main() {
     g.cfg.kind = kind_of(config_string("kind"));
     g.cfg.header = config_string("header") != "false";
     g.cfg.compat = config_string("compat") == "true";
+    // The scene views read the switch of their shapes from the environment when they are made
+    // (live_scene.h, default_shape_draw), thus it is set before any view exists.
+    if (config_string("shapes") == "builtin") setenv("CALIPER_SCENE_SHAPES", "builtin", 1);
 
     g.instance = wgpuCreateInstance(nullptr);
     if (!g.instance) {
