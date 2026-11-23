@@ -92,13 +92,35 @@ export function dashboardData(): Record<string, Json> {
 }
 
 /** Routes the page and the three commands of the viewer to `app`. */
-export async function mockApp(page: Page, app: MockApp): Promise<void> {
+/** The WebAssembly views' files, which the app serves beside the page (GET /v0/spec/<name>). */
+export const VIEWS_FILES = ['caliper-views-loader.js', 'caliper-views.js', 'caliper-views.wasm'];
+
+/**
+ * Routes the mock app. With `assets`, the folder of the WebAssembly views, it
+ * serves their three files as the app does, with the viewer's token in the
+ * query, and the page's CSP as the app sends it.
+ */
+export async function mockApp(page: Page, app: MockApp, assets?: string): Promise<void> {
   const html = fs.readFileSync(path.join(WEB, 'dist', 'spec.html'), 'utf8');
   await page.route(`${ORIGIN}/**`, async (route: Route) => {
     const req = route.request();
     const url = new URL(req.url());
     if (req.method() === 'GET' && url.pathname === '/v0/spec') {
-      await route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: html });
+      await route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: html, headers: {
+        'Content-Security-Policy': "default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; " +
+          "style-src 'unsafe-inline'; font-src data:; img-src data: blob:; connect-src 'self'; base-uri 'none'; " +
+          "form-action 'none'; frame-ancestors 'none'" } });
+      return;
+    }
+    const asset = /^\/v0\/spec\/([a-z-]+\.(?:js|wasm))$/.exec(url.pathname);
+    if (req.method() === 'GET' && asset && VIEWS_FILES.includes(asset[1])) {
+      app.requests.push({ name: `GET ${asset[1]}`, args: {}, headers: req.headers() });
+      if (!assets || url.searchParams.get('token') !== TOKEN || !fs.existsSync(path.join(assets, asset[1]))) {
+        await route.fulfill({ status: assets ? 401 : 404, contentType: 'application/json', body: '{"error":"no such file"}' });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: asset[1].endsWith('.wasm') ? 'application/wasm' : 'text/javascript',
+        body: fs.readFileSync(path.join(assets, asset[1])) });
       return;
     }
     const m = /^\/v0\/commands\/([a-z.]+)$/.exec(url.pathname);

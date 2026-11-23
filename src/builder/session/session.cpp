@@ -1569,15 +1569,49 @@ struct Session::Impl {
         spec::Spec s;
         if (Error e = view_spec(str_arg(args, "applet"), ctx.invocation.preview, &s)) return CommandOutput::fail(e);
         const std::string id = str_arg(args, "panel");
-        if (!s.find_panel(id)) return fail("panel.not_found", "The spec has no panel " + id + "; spec.get lists them.", "args.panel");
+        // The session's values and kept steps belong to its open spec: a page
+        // of that applet reads them, a page of another saved applet does not.
+        ViewerInputs in;
+        in.library = &PieceLibrary::builtin();
+        in.workspace = workspace;
+        {
+            std::lock_guard<std::mutex> lock(doc_mutex);
+            const std::string applet = str_arg(args, "applet");
+            if (doc && (applet.empty() || doc->spec.applet.id == applet)) {
+                in.values = &values;
+                in.history = &history;
+            }
+        }
         const std::uint64_t revision = catalog->revision();
+        if (!s.find_panel(id)) {
+            // A control of the layout: its state, which the page shows.
+            const spec::Control* c = s.find_control(id);
+            if (!c) return fail("panel.not_found", "The spec has no panel " + id + "; spec.get lists them.", "args.panel");
+            json r = control_data_result(s, *c, in, run_control.load(), "");
+            const std::string version = panel_data_version(s, id, revision, std::hash<std::string>{}(r["data"].dump()));
+            if (str_arg(args, "known") == version) return CommandOutput::ok(panel_data_unchanged(s, id, version));
+            r["version"] = version;
+            return CommandOutput::ok(std::move(r));
+        }
         // The cursor goes into the version, so that a move of a held cursor
-        // gives new data.
+        // gives new data; for a scene panel, so do its programs and their
+        // newest resources.
         const ChainContext chain = chain_context();
-        const std::string version = panel_data_version(s, id, revision, panel_generation(s, id, sources, &chain));
+        std::uint64_t generation = panel_generation(s, id, sources, &chain);
+        json programs;
+        std::string digest;
+        if (s.find_panel(id)->primitive == spec::Primitive::scene) {
+            programs = viewer_programs(s, id, in, &digest);
+            generation ^= std::hash<std::string>{}(digest);
+        }
+        const std::string version = panel_data_version(s, id, revision, generation);
         if (str_arg(args, "known") == version) return CommandOutput::ok(panel_data_unchanged(s, id, version));
-        return CommandOutput::ok(
-            panel_data_result(s, resolve_panel(s, id, *store, options.resolve, &sources, &chain), revision));
+        json r = panel_data_result(s, resolve_panel(s, id, *store, options.resolve, &sources, &chain), revision);
+        if (!programs.is_null()) {
+            r["version"] = version;
+            if (r["data"].is_object()) r["data"]["programs"] = std::move(programs);
+        }
+        return CommandOutput::ok(std::move(r));
     }
 
     // ---- the app's commands ------------------------------------------------

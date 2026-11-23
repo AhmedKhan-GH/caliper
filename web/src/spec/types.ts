@@ -75,6 +75,8 @@ export interface TableData {
   columns: { name: string; type: string }[]; rows: Cell[][]; total_rows: number; truncated: boolean;
 }
 export interface TextData { value: Cell }
+/** A scene panel: its live scene's name, and the instances of pieces it draws (programs.ts, ViewerProgram). */
+export interface SceneData { scene: string | null; programs?: import('./programs.js').ViewerProgram[] }
 
 export interface PanelDataResult {
   panel: string;
@@ -84,7 +86,7 @@ export interface PanelDataResult {
   error: { code: string; message: string; where: string } | null;
   state: { kind: 'empty' | 'mismatch'; detail: string } | null;
   bounds: string[];
-  data: SeriesData | HeatmapData | ImageData | PointsData | HistogramData | TableData | TextData | null;
+  data: SeriesData | HeatmapData | ImageData | PointsData | HistogramData | TableData | TextData | SceneData | null;
 }
 
 /** Decodes a wire array into a Float32Array or Float64Array. */
