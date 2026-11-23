@@ -528,7 +528,10 @@ export class CaliperView extends HTMLElement {
       onInfo: (facts) => {
         if (this.drawer !== 'wasm' && !this.deciding) return;
         const text = factsInfo(facts);
-        if (text !== null) this.parts.info.textContent = text;
+        if (text !== null) {
+          this.parts.info.textContent = text;
+          this.parts.info.title = text;
+        }
         this.wasmRotateTool(facts);
       },
       onToggle: (name, on) => this.wasmToggles.get(name)?.set(on),

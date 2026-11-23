@@ -654,6 +654,14 @@ std::string facts(const caliper_live_views::View& v) {
             const caliper_live_views::SceneView* sv = caliper_live_views::scene_view(v);
             if (!sv) return v.scene ? "{\"kind\":\"scene\",\"notice\":" + caliper_net::Json(v.scene->notice).dump() + "}"
                                     : std::string();
+            if (!sv->notes().empty()) {
+                std::string notice;
+                for (const auto& note : sv->notes()) {
+                    if (!notice.empty()) notice += '\n';
+                    notice += note;
+                }
+                return "{\"kind\":\"scene\",\"notice\":" + caliper_net::Json(notice).dump() + "}";
+            }
             const caliper_live_views::SceneCounts c = sv->counts();
             std::snprintf(b, sizeof b, "{\"kind\":\"scene\",\"entities\":%u,\"items\":%llu,\"copied\":%llu,\"gpu_ms\":%s}",
                           c.entities, (unsigned long long)c.items, (unsigned long long)c.bytes_last,

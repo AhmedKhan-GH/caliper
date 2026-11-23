@@ -764,6 +764,26 @@ test('data view changes and resizes do not grow what the module holds', async ({
   expect(after.heap - before.heap).toBeLessThan(256 * 1024);
 });
 
+test('a compatibility scene shows its entity error in the HTML status and tooltip', async ({ page }, info) => {
+  test.skip(info.project.name === 'canvas2d', 'the WebAssembly views need a WebGPU adapter');
+  await page.addInitScript(() => Object.assign(window, { caliperViewsCompat: true }));
+  const p = await producerWith(['--scene3']);
+  try {
+    await page.goto(p.url);
+    await plates(page, 7);
+    expect((await state(page, 'world')).drawer).toBe('wasm');
+    await expect.poll(async () => (await wasmStats(page, 'world')).featureLevel).toBe('compatibility');
+    const status = page.locator('caliper-view[view="world"] .info');
+    await expect(status).toBeVisible();
+    await expect(status).toContainText('moved/cloud: program.browser_refused:');
+    await expect(status).toContainText('storage buffers in the vertex stage, the limit is 0');
+    await expect(status).toHaveAttribute('title', (await status.textContent())!);
+    await page.locator('caliper-view[view="world"]').screenshot({ path: shotPath(info, 'compat-scene-error') });
+  } finally {
+    p.proc.kill();
+  }
+});
+
 // A scene's entity transform reaches the scene view intact through the stream (protocol 3.2):
 // mock_server.py --scene3 puts five points under the entity "moved" and moves that entity by
 // (10, 2, 0), and then sends the points four more times. The module decodes SCENE_TRANSFORMS on the
