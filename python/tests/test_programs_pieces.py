@@ -723,7 +723,7 @@ def _wait(cond, what, timeout=60.0):
         time.sleep(0.01)
 
 
-def test_two_programs_at_the_published_limit_reach_one_viewer_in_turn(server, watching, monkeypatch):
+def test_two_programs_of_one_chunk_each_reach_one_viewer_in_turn(server, watching, monkeypatch):
     """Two instances that publish 8 MiB each at one pass, as two of the library's points@1 do. The frames
     posted for the viewer and not queued yet count toward its bound, thus the second program skips the
     pass where both would overflow the 16 MiB queue, the viewer stays connected, and the program that it
@@ -746,7 +746,7 @@ def test_two_programs_at_the_published_limit_reach_one_viewer_in_turn(server, wa
             p.kind = "piece"
         for step in range(1, 5):
             with gate:                                   # the whole pass is posted before one flush
-                P._publish_pass([(p, [_resource_frame("points", bytes(P.PUBLISHED_BYTES_MAX), p.id, 32, step)])
+                P._publish_pass([(p, [_resource_frame("points", bytes(P.PART_BYTES), p.id, 32, step)])
                                  for p in progs])
             _wait(lambda: reader.closed is not None or any(s == step for _p, s in reader.got),
                   f"the viewer gets a version of step {step}")
