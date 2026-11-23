@@ -1,6 +1,6 @@
 // ============================================================================
 // Sternbild house style for the Caliper chrome: the ImGui style table, the
-// draw-list primitives (rules, cut plate, star, diamond, mark, tracked text)
+// draw-list primitives (rules, star, diamond, mark, tracked text)
 // and the dense workstation widgets declared in sternbild_theme.h.
 //
 // UX patterns this file leans on, named where they apply:
@@ -278,8 +278,8 @@ void apply_style() {
         st._NextFrameFontSizeBase = font_size::ui;
     }
 
-    // Square corners everywhere (SPEC §3.5); the only cut corners are drawn
-    // by cut_plate() and caliper_mark().
+    // Square corners everywhere (SPEC §3.5); the only cut corners are the
+    // logo's, drawn by caliper_mark().
     st.WindowRounding = tokens::RADIUS;
     st.ChildRounding = tokens::RADIUS;
     st.PopupRounding = tokens::RADIUS;
@@ -420,24 +420,6 @@ void rule_v(ImDrawList* dl, float x, float y0, float y1, ImU32 c) {
     dl->AddRectFilled(ImVec2(x, y0), ImVec2(x + 1.0f, y1), c);
 }
 
-void cut_plate(ImDrawList* dl, ImVec2 p_min, ImVec2 p_max, ImU32 outline,
-               ImU32 fill, float cut) {
-    // SPEC §6.7 on half pixels: 6.5,0.5  W-6.5,0.5  W-0.5,6.5  W-0.5,H-6.5
-    // W-6.5,H-0.5  6.5,H-0.5  0.5,H-6.5  0.5,6.5 (clockwise, as AA fill needs).
-    const float x0 = ImFloor(p_min.x) + 0.5f;
-    const float y0 = ImFloor(p_min.y) + 0.5f;
-    const float x1 = ImFloor(p_max.x) - 0.5f;
-    const float y1 = ImFloor(p_max.y) - 0.5f;
-    const float c = ImMin(ImFloor(cut), ImFloor(ImMin(x1 - x0, y1 - y0) * 0.5f));
-    const ImVec2 pts[8] = {
-        ImVec2(x0 + c, y0), ImVec2(x1 - c, y0), ImVec2(x1, y0 + c), ImVec2(x1, y1 - c),
-        ImVec2(x1 - c, y1), ImVec2(x0 + c, y1), ImVec2(x0, y1 - c), ImVec2(x0, y0 + c),
-    };
-    if (fill != 0)
-        dl->AddConvexPolyFilled(pts, 8, fill);
-    dl->AddPolyline(pts, 8, outline, 1.0f, ImDrawFlags_Closed);
-}
-
 void open_star(ImDrawList* dl, ImVec2 centre, float tip_radius, ImU32 fill, ImU32 halo) {
     // SPEC §6.13 at R = 12, scaled: tip at R, base on the inner vertices
     // (±3.31 across, 4.27 from the centre). Each arm is its own triangle so
@@ -484,7 +466,7 @@ void caliper_mark(ImDrawList* dl, ImVec2 p_min, float size, ImU32 c) {
     const float y0 = o.y + 0.5f;
     const float x1 = o.x + s - 0.5f;
     const float y1 = o.y + s - 0.5f;
-    const float cut = IM_ROUND(0.2f * (s - 1.0f));
+    const float cut = IM_ROUND(0.2f * (s - 1.0f));   // the logo's own frame cut
     const ImVec2 frame[8] = {
         ImVec2(x0 + cut, y0), ImVec2(x1 - cut, y0),
         ImVec2(x1, y0 + cut), ImVec2(x1, y1 - cut),
@@ -812,16 +794,15 @@ bool primary_button(const char* label, ImVec2 size_arg, const char* key) {
         fill = styled(col::plate_hover);
     }
     ImDrawList* dl = window->DrawList;
-    cut_plate(dl, bb.Min, bb.Max, outline, fill);
+    if (fill != 0) dl->AddRectFilled(bb.Min, bb.Max, fill);
+    dl->AddRect(bb.Min, bb.Max, outline, 0.0f, 0, tokens::rule::width);
 
-    // Keyboard focus: a second cut outline 3 px outside, in bronze (the focus
-    // accent). Its cut grows by about 3 × (√2 − 1) to keep the diagonals
-    // parallel. Replaces ImGui's square nav rectangle.
+    // Keyboard focus: a square outline 3 px outside the plate, in bronze (the
+    // focus accent). Replaces ImGui's nav rectangle.
     if (!disabled && g.NavId == id && g.NavCursorVisible) {
         const ImVec2 d(kFocusOffset, kFocusOffset);
-        cut_plate(dl, ImVec2(bb.Min.x - d.x, bb.Min.y - d.y),
-                  ImVec2(bb.Max.x + d.x, bb.Max.y + d.y), styled(col::bronze), 0,
-                  metric::cut + 1.0f);
+        dl->AddRect(ImVec2(bb.Min.x - d.x, bb.Min.y - d.y), ImVec2(bb.Max.x + d.x, bb.Max.y + d.y),
+                    styled(col::bronze), 0.0f, 0, tokens::rule::width);
     }
 
     const ImVec2 text_pos(pos.x + ImFloor((size.x - run.width) * 0.5f), pos.y + text_y);

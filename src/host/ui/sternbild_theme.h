@@ -110,7 +110,6 @@ constexpr float status_bar  = tokens::app::status_bar;    // status strip at the
 constexpr float pad         = tokens::app::pad;           // pane inner padding
 constexpr float gap         = tokens::app::gap;           // between inline status items
 constexpr float key_button  = tokens::app::key_button;    // key_button height: the 15 px line + 5
-constexpr float cut         = tokens::CUT;                // 45 degree cut on the primary plate corners
 constexpr float tracking    = tokens::tracking::ui_label; // em tracking for uppercase labels
 }  // namespace metric
 
@@ -129,11 +128,6 @@ void apply_style();
 // fringe at any framebuffer scale); callers pass integral coordinates.
 void rule_h(ImDrawList* dl, float x0, float x1, float y, ImU32 c = col::rule);
 void rule_v(ImDrawList* dl, float x, float y0, float y1, ImU32 c = col::rule);
-
-// The primary-action plate (SPEC §6.7): a 1 px outline with 45° cuts of
-// `cut` px on all four corners, drawn on half pixels; optional fill (0 = none).
-void cut_plate(ImDrawList* dl, ImVec2 p_min, ImVec2 p_max, ImU32 outline,
-               ImU32 fill = 0, float cut = metric::cut);
 
 // The open star (SPEC §6.13): four separate triangular arms, tip at R, base on
 // the inner vertices (±0.276R across, 0.356R from the centre), each arm with a
@@ -193,7 +187,7 @@ bool key_button(const char* key, const char* action, bool enabled = true,
 void pane_header(const char* title, const char* subtitle, const char* shortcut,
                  bool focused);
 
-// Primary action: the cut-corner plate, the house's button for a pane's one
+// Primary action: the square plate, the house's button for a pane's one
 // main action. size.x == 0 fits the label plus 2 × 12 px padding; height is
 // 24 px unless size.y is given. A `key` is drawn before the label as in
 // key_button, in bronze (the primary's key: "⏎ Launch"). States: rest =
