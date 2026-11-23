@@ -1,5 +1,6 @@
 // The derive half of points@1: one element of `points` for each row of `positions`, with the
-// bits of the row's value (NaN where `values` is shorter), and the count of rows.
+// row's radius in position.w (the one radius for all, 0 where `radii` is shorter, 1 without
+// radii), the bits of the row's value (NaN where `values` is shorter), and the count of rows.
 
 @compute @workgroup_size(256)
 fn copy_points(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -18,6 +19,12 @@ fn copy_points(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     if (d > 2u) {
         p.z = positions[base + 2u];
+    }
+    let r = shapes.radii.w;
+    if (r == 1u) {
+        p.w = radii[0];
+    } else if (r > 0u) {
+        p.w = select(0.0, radii[min(id.x, r - 1u)], id.x < r);
     }
     var bits = 0x7fc00000u;
     if (id.x < shapes.values.w) {
