@@ -384,7 +384,10 @@ def steps(r):
         at = r.run_step(c.run)
         r.call("run_pause", {"op": "step", "count": 1, "run": c.run})
         c.until("the single step", lambda: r.run_step(c.run) > at and c.runs()[c.run]["state"] == "paused", 60)
-        c.until("the in-context loss of the step", lambda: any(x > at for x, _ in r.icl()), 60)
+        # The loss of a step's forward pass carries the step of the checkpoint before it (the run's step at
+        # the snapshot), thus the newest loss of a run paused at step `at` has the step at - 1, and the loss of
+        # the single step has the step `at`.
+        c.until("the in-context loss of the step", lambda: any(x >= at for x, _ in r.icl()), 60)
     after = [(x, y) for x, y in r.icl() if x > last]
     rise = max(y for _, y in after) / base
     if rise < RISE:
