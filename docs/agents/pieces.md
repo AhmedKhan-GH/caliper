@@ -366,14 +366,15 @@ The host owns the camera. A piece selects `orbit` for the 3-D orbit camera of th
 
 A draw half writes only the color, ID and depth of its panel and its own targets. The host records the passes of each program in a submit of its own after the frame of the scene. The GPU time of that submit is the frame time of the program. Where the backend has no timestamps, the host measures the time from the submit until the work is done, which is an upper bound.
 
-A training run on the same GPU can delay a correct frame by a second or more. Thus a frame that is not done 1 s after its submit is late, and the program submits no new frame until the late frame is done. Then the GPU time of the late frame decides. Where the backend has no timestamps, three late frames in a row decide.
+A training run on the same GPU can delay a correct frame by a second or more, thus the GPU time of a frame decides. A frame that is not done 1 s after its submit is late, and the program submits no new frame until it is done. A frame over 250 ms of GPU time is heavy, which is more than 15 times the largest `frame_ms`. Heavy frames in a row remove the program when their GPU time passes 1 s together. Thus one frame over 1 s of GPU time removes it at once. Where the backend has no timestamps, three late frames in a row remove it.
 
 The host cannot stop a pass that runs on the GPU. Thus it removes a draw that goes over its budget and reports it. The other programs of the panel keep drawing, and the derive half keeps its own limits.
 
 | Condition | Result |
 |---|---|
 | A program is over `frame_ms` on 30 frames in a row | `program.draw_over_time`, naming the costliest pass |
-| A late frame took more than 1 s of GPU time, or the driver ended it | `program.draw_timeout` |
+| Heavy frames in a row took more than 1 s of GPU time together | `program.draw_timeout`, at once |
+| The driver ended a late frame | `program.draw_timeout` |
 | Three frames in a row are late, on a backend without timestamps | `program.draw_timeout` |
 | A frame of a program is not done after 5 s | `program.draw_timeout`, at once |
 | The programs of one panel together are over 16.7 ms on 30 frames in a row | `program.draw_over_time` for the costliest program |
