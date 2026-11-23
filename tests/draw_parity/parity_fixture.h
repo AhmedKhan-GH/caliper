@@ -114,6 +114,8 @@ inline std::string broken_field_draw(std::uint32_t* line) {
     return text;
 }
 
+inline void add_surface_program(Fixture* fx);   // surface_fixture.h
+
 inline Fixture make_fixture(std::uint32_t size = 512) {
     namespace cp = caliper_builder::programs;
     namespace cs = caliper_builder::spec;
@@ -205,7 +207,10 @@ inline Fixture make_fixture(std::uint32_t size = 512) {
     wp.pick_id = 3;
     wp.expect = cp::kPieceHashMismatch;
     fx.plan.programs.push_back(wp);
+    add_surface_program(&fx);
     return fx;
 }
 
 }  // namespace draw_parity
+
+#include "surface_fixture.h"

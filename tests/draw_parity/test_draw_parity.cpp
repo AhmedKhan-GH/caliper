@@ -48,7 +48,7 @@ TEST_CASE("the fixture's frames are PROGRAM sets of the instance form and RESOUR
     const dp::Fixture fx = dp::make_fixture();
     REQUIRE_MESSAGE(fx.error.empty(), fx.error);
     const Decoded d = decode(fx);
-    CHECK(d.programs.size() == 4);
+    CHECK(d.programs.size() == fx.plan.programs.size());
     for (const auto& [id, p] : d.programs) {
         CHECK(p.op == CALIPER_NET_PROGRAM_SET);
         CHECK(p.piece.is_object());
