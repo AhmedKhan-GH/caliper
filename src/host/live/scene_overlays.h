@@ -17,6 +17,8 @@ struct LabelAnchor;  // scene/compile.h
 
 namespace caliper_live_views {
 
+struct DrawnLabel;   // live_views_scene.h
+
 struct SceneOverlayInput {
     ImDrawList* draw = nullptr;
     ImVec2 origin;                    // the view's top-left corner, in screen pixels
@@ -38,6 +40,8 @@ struct SceneOverlayInput {
     // One priority for each label, lower placed first, in place of the default (an annotation's
     // index, else 1000 and its index); null for the default.
     const std::vector<int>* priorities = nullptr;
+    // The labels drawn, with their text boxes; filled when not null.
+    std::vector<DrawnLabel>* drawn = nullptr;
 };
 
 void draw_scene_overlays(const SceneOverlayInput& input);

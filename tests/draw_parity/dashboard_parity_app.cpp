@@ -16,7 +16,7 @@
 // It draws frames until every program's draw half has drawn the recorded step, then two more,
 // and writes <out>/app/dashboard.rgba (RGBA8, top row first), dashboard.png and report.json
 // (the size, the step, the frames drawn, the layout's rectangles, the tab strips, each
-// program's state). The browser draws the same answers, served as panel.data, at the same size.
+// program's state, and each scene panel's rectangle and the labels it drew with their boxes). The browser draws the same answers, served as panel.data, at the same size.
 // Without a Metal device it writes <out>/skipped.txt and exits 77, which ctest counts as
 // skipped. Exit 1 on anything else that fails.
 #include "spec_runtime/spec_layout.h"
@@ -25,6 +25,7 @@
 #include "spec_runtime/spec_stage_host.h"
 
 #include "export_service.h"
+#include "live/live_views_scene.h"   // DrawnLabel
 #include "gfx/metal_backend.h"
 #include "gfx/shaders/generated/programs_metal.h"
 
@@ -312,8 +313,20 @@ int main(int argc, char** argv) {
         tabs.push_back({{"path", t.path}, {"labels", t.labels}, {"active", t.active},
                         {"bar", {{"x", t.bar.x}, {"y", t.bar.y}, {"w", t.bar.w}, {"h", t.bar.h}}}});
     for (const auto& x : caliper_host::app_stage_host_impl()->status()) progs.push_back(caliper_builder::program_status_json(x));
-    const json report = {{"width", W}, {"height", H}, {"step", step}, {"frames", frames},
-                         {"layout", layout}, {"tabs", tabs}, {"programs", progs}};
+    // The labels that each scene panel drew over its programs, with their text boxes, and where its scene
+    // drew, in the picture's pixels: the browser compares them as text, apart from the pixels.
+    json labels = json::object(), scenes = json::object();
+    for (const auto& p : rt.layout().panels) {
+        float r[4];
+        if (!rt.scene_rect(p.id, r)) continue;
+        scenes[p.id] = {r[0], r[1], r[2], r[3]};
+        json list = json::array();
+        for (const caliper_live_views::DrawnLabel& l : rt.scene_labels(p.id))
+            list.push_back({{"text", l.text}, {"x0", l.x0}, {"y0", l.y0}, {"x1", l.x1}, {"y1", l.y1}});
+        labels[p.id] = std::move(list);
+    }
+    const json report = {{"width", W}, {"height", H}, {"step", step}, {"frames", frames}, {"layout", layout},
+                         {"tabs", tabs}, {"programs", progs}, {"scenes", scenes}, {"labels", labels}};
     const std::string rtext = report.dump(1);
     std::string png;
     if (!write_file(out / "app" / "dashboard.rgba", px.data(), px.size()) ||

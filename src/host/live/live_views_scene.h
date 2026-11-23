@@ -121,6 +121,13 @@ struct SceneRectOptions {
     std::string stage_message;
 };
 
+// A label that the overlays drew over the scene: its text and the box of the text and its shadow,
+// in screen pixels.
+struct DrawnLabel {
+    std::string text;
+    float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+};
+
 // What a scene drawn into a rectangle keeps between frames: the gesture in progress, a click's
 // pick in flight and a pick that a test seam asked for. The caller keeps one per rectangle.
 struct SceneRectState {
@@ -149,6 +156,8 @@ struct SceneRectState {
     std::string program_detail;   // the programs' hit, "" for none
     float program_depth = 1.0f;
     float rect[4] = {0, 0, 0, 0};   // where the rectangle was drawn last: x, y, width, height in points
+    // The labels drawn at the last draw, for a test that compares them as text apart from the picture.
+    std::vector<DrawnLabel> labels;
 };
 
 // Asks for a pick at (u, v), each from 0 to 1 across the rectangle, at the next draw, as if the

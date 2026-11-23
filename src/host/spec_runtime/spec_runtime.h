@@ -54,6 +54,9 @@
 #include <vector>
 
 struct CaliperCore;   // the app's core, whose live views hold the live scenes
+namespace caliper_live_views {
+struct DrawnLabel;   // live_views_scene.h
+}  // namespace caliper_live_views
 namespace caliper_gfx {
 class Backend;
 struct ProgramDesc;
@@ -354,6 +357,9 @@ public:
     // Where the scene panel `panel_id` was drawn last, in window points: x, y, width and height.
     // False before its first draw (the UI driver's drags).
     bool scene_rect(const std::string& panel_id, float rect[4]) const;
+    // The labels that the scene panel drew at its last draw, with their boxes in window points; none
+    // before its first draw (the dashboard comparison's text).
+    std::vector<caliper_live_views::DrawnLabel> scene_labels(const std::string& panel_id) const;
     // Whether the scene panel holds a drag (a button pressed on its picture) and whether a pick of
     // it waits for its readback; false before its first draw (the app's frame log).
     bool scene_gesture(const std::string& panel_id, bool* down, bool* pick_pending) const;

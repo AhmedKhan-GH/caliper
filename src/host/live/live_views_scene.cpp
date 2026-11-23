@@ -629,6 +629,7 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
         count_at = ImVec2(p1.x - ts.x - 10.0f, p0.y + 8.0f);
         keep_clear.push_back({count_at.x - 2.0f, count_at.y - 2.0f, count_at.x + ts.x + 2.0f, count_at.y + ts.y + 2.0f});
     }
+    state.labels.clear();
     if (options.labels && sc->width() && sc->height()) {
         // The annotations' labels, then the programs' labels by their priority, then the item
         // labels nearest first (scene_overlays.h).
@@ -669,6 +670,7 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
         in.ink = ink;
         in.shade = shade;
         in.keep_clear = &keep_clear;
+        in.drawn = &state.labels;
         draw_scene_overlays(in);
     }
     if (count_text[0]) dl->AddText(count_at, ink, count_text);

@@ -12,6 +12,7 @@
 // covers.
 #include "live/scene_overlays.h"
 
+#include "live/live_views_scene.h"   // DrawnLabel
 #include "scene/compile.h"
 #include "spec_runtime/label_layout.h"
 
@@ -65,6 +66,7 @@ const std::vector<PlacedLabel>& placed_for(const std::vector<LabelBox>& boxes, c
 }  // namespace
 
 void draw_scene_overlays(const SceneOverlayInput& in) {
+    if (in.drawn) in.drawn->clear();
     if (!in.draw || !in.labels || in.labels->empty()) return;
     const ImVec2 clip0 = in.draw->GetClipRectMin(), clip1 = in.draw->GetClipRectMax();
     const LabelRect panel{clip0.x, clip0.y, clip1.x, clip1.y};
@@ -122,6 +124,10 @@ void draw_scene_overlays(const SceneOverlayInput& in) {
         const ImVec2 at(p.x + pad, p.y + pad);
         in.draw->AddText(ImVec2(at.x + 1.0f, at.y + 1.0f), in.shade, text.c_str());
         in.draw->AddText(at, in.ink, text.c_str());
+        if (in.drawn) {
+            const ImVec2 size = ImGui::CalcTextSize(text.c_str());
+            in.drawn->push_back({text, at.x, at.y, at.x + size.x + 1.0f, at.y + size.y + 1.0f});
+        }
     }
 }
 
