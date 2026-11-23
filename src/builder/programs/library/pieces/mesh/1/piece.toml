@@ -189,6 +189,23 @@ indices = "faces"
 blend = "alpha"
 depth = "test"
 
+# Texture fragments use separate passes to preserve flat-face derivatives.
+[[draw.passes]]
+kind = "render"
+vertex = "texture_vs"
+fragment = "texture_fs"
+indices = "faces"
+blend = "alpha"
+depth = "write"
+
+[[draw.passes]]
+kind = "render"
+vertex = "texture_see_vs"
+fragment = "texture_fs"
+indices = "faces"
+blend = "alpha"
+depth = "test"
+
 # The IDs of every face, nearest first as the built-in's pick pass finds them, at the depth that the
 # first pass wrote for an opaque mesh; they leave the color as it is.
 [[draw.passes]]

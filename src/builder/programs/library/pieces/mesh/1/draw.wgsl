@@ -116,11 +116,6 @@ fn face_vertex(index: u32, shown: bool) -> MeshOut {
 // The color of a fragment: the texture times the vertex color's RGB with the texture's alpha, as the
 // built-in's textured fragment; else a flat face, or the vertex color.
 fn shade(in: MeshOut) -> vec4<f32> {
-    // `counts` is uniform, thus the sample stays in uniform control flow.
-    if (counts.tex > 0u) {
-        let s = textureSample(tex, caliper_linear, in.uv);
-        return vec4<f32>(s.rgb * in.color.rgb, s.a);
-    }
     let n = cross(dpdx(in.obj), dpdy(in.obj));
     if (params.shading == 0u) {
         let lit = 0.30 + 0.70 * abs(view_normal(n).z);
@@ -131,12 +126,29 @@ fn shade(in: MeshOut) -> vec4<f32> {
 
 @vertex
 fn face_vs(@builtin(vertex_index) i: u32) -> MeshOut {
-    return face_vertex(i, !mesh_translucent());
+    return face_vertex(i, !mesh_translucent() && counts.tex == 0u);
 }
 
 @vertex
 fn face_see_vs(@builtin(vertex_index) i: u32) -> MeshOut {
-    return face_vertex(i, mesh_translucent());
+    return face_vertex(i, mesh_translucent() && counts.tex == 0u);
+}
+
+// Separate texture passes keep texture samples outside the flat-face derivative path.
+@vertex
+fn texture_vs(@builtin(vertex_index) i: u32) -> MeshOut {
+    return face_vertex(i, !mesh_translucent() && counts.tex > 0u);
+}
+
+@vertex
+fn texture_see_vs(@builtin(vertex_index) i: u32) -> MeshOut {
+    return face_vertex(i, mesh_translucent() && counts.tex > 0u);
+}
+
+@fragment
+fn texture_fs(in: MeshOut) -> @location(0) vec4<f32> {
+    let s = textureSample(tex, caliper_linear, in.uv);
+    return vec4<f32>(s.rgb * in.color.rgb, s.a);
 }
 
 @vertex
