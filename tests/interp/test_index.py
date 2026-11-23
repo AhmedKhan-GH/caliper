@@ -135,3 +135,145 @@ def test_invalid_queries(indexed, layer, feature, limit):
     index, _ = indexed
     with pytest.raises(ValueError):
         index.examples(layer, feature, limit)
+
+
+def test_empty_index_and_zero_features(tmp_path):
+    model, _ = write_fixture(tmp_path)
+    build_index(tmp_path, [], model=model, tokenizer=TinyTokenizer(), provenance={"partition": "empty"})
+    index = FeatureIndex(tmp_path, model=model, tokenizer=TinyTokenizer())
+    assert index.examples(0, 0) == []
+    assert index.examples(0, 0, 0) == []
+    info = index.show(0, 0)
+    assert info["count"] == info["maximum"] == 0
+    assert info["example_tokens"] == [] and info["label"].endswith("Examples: none")
+    assert len(info["promoted_tokens"]) == 3
+    assert len(index.documents) == len(index.tokens) == 0
+
+
+def test_one_token_document_and_budget_edge(tmp_path):
+    model, _ = write_fixture(tmp_path)
+    build_index(tmp_path, [("one", [65]), ("cut", [66, 67, 68])], model=model,
+                tokenizer=TinyTokenizer(), provenance={"partition": "fixture"}, max_tokens=3)
+    index = FeatureIndex(tmp_path, model=model, tokenizer=TinyTokenizer())
+    assert index.tokens.tolist() == [65, 66, 67]
+    assert index.documents["length"].tolist() == [1, 2]
+    assert index.documents["truncated"].tolist() == [False, True]
+    for offset in (0, 2):
+        layer, feature, _ = map(int, np.argwhere(index.table["offset"] == offset)[0])
+        rows = index.examples(layer, feature)
+        row = next(r for r in rows if r["document_id"] == ("one" if offset == 0 else "cut"))
+        assert sum(row["valid"]) == (1 if offset == 0 else 2)
+        assert row["document_truncated"] == (offset != 0)
+        assert len(rows) <= 3
+
+
+def test_true_lru_eviction(indexed, monkeypatch):
+    index, _ = indexed
+    calls = []
+    original = index._windows
+    def windows(layer, feature):
+        calls.append((layer, feature))
+        return original(layer, feature) if feature == 0 else []
+    monkeypatch.setattr(index, "_windows", windows)
+    index.examples(0, 0)
+    for feature in range(1, 256):
+        index.examples(0, feature)
+    assert len(index._cache) == 256
+    index.examples(0, 0)  # A hit protects the oldest entry.
+    index.examples(1, 1)
+    assert (0, 0) in index._cache and (0, 1) not in index._cache
+    index.examples(0, 1)
+    assert calls.count((0, 0)) == 1 and calls.count((0, 1)) == 2
+    assert len(index._cache) == 256
+
+
+@pytest.mark.parametrize("damage", ["missing_manifest", "partial_manifest", "wrong_hash", "version", "incomplete",
+                                    "table", "counts", "tokens", "documents", "source", "weights", "tokenizer", "model"])
+def test_incompatible_or_incomplete_index(indexed, damage):
+    import json
+    from caliper.interp._index import _json
+    import hashlib
+    index, _ = indexed
+    manifest_path = index.root / "index" / "index.json"
+    if damage == "missing_manifest":
+        manifest_path.unlink()
+    elif damage == "partial_manifest":
+        manifest_path.write_text('{"complete":')
+    elif damage in ("wrong_hash", "version", "incomplete"):
+        manifest = json.loads(manifest_path.read_text())
+        manifest.pop("index_hash")
+        if damage == "version":
+            manifest["format_version"] = 99
+        elif damage == "incomplete":
+            manifest["complete"] = False
+        manifest["index_hash"] = "bad" if damage == "wrong_hash" else hashlib.sha256(_json(manifest).encode()).hexdigest()
+        manifest_path.write_text(_json(manifest))
+    elif damage in ("table", "counts", "tokens", "documents"):
+        name = damage + (".npy" if damage in ("table", "counts") else ".bin")
+        with (index.root / "index" / name).open("r+b") as output:
+            output.truncate(1)
+    elif damage == "source":
+        with (index.root / "dictionary.json").open("a") as output:
+            output.write(" ")
+    elif damage == "weights":
+        with torch.no_grad():
+            index.dictionary.layers[0].W_enc[0, 0] += 1
+    elif damage == "tokenizer":
+        index.tokenizer.eos_token_id = 0
+    else:
+        with torch.no_grad():
+            index.model.lm_head.weight[-1, -1] += 1
+    with pytest.raises(ValueError):
+        FeatureIndex(index.root, model=index.model, tokenizer=index.tokenizer, dictionary=index.dictionary)
+
+
+def test_promoted_chunk_ties_and_zero_direction(indexed):
+    index, _ = indexed
+    with torch.no_grad():
+        index.dictionary.layers[0].W_dec[0].zero_()
+    tokens = index._promoted(0, 0, chunk_size=37)
+    assert [row["token_id"] for row in tokens] == [0, 1, 2]
+    assert [row["score"] for row in tokens] == [0, 0, 0]
+
+
+def test_token_store_preserves_32_bits(tmp_path):
+    from .fixture import TinyLM
+    model = TinyLM(layers=1, width=4, heads=1, latents=4, k=2, vocab=70_003)
+    model, _ = write_fixture(tmp_path, model)
+    class Tokenizer(TinyTokenizer):
+        vocab_size = 70_003
+    build_index(tmp_path, [("wide-vocab", [70_000, 70_001, 70_002])], model=model,
+                tokenizer=Tokenizer(), provenance={"partition": "fixture"})
+    index = FeatureIndex(tmp_path, model=model, tokenizer=Tokenizer())
+    assert index.tokens.tolist() == [70_000, 70_001, 70_002]
+    assert (tmp_path / "index" / "tokens.bin").stat().st_size == 12
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("nan")])
+def test_nonfinite_table_refusal(tmp_path, bad):
+    table = _TopTable(tmp_path, 1, 1)
+    with pytest.raises(ValueError, match="finite"):
+        table.update(0, torch.tensor([[bad]]), 0)
+
+
+def test_failed_build_has_no_completion_manifest(tmp_path):
+    model, _ = write_fixture(tmp_path)
+    def fail(stage):
+        if stage == "model batch":
+            raise RuntimeError("fixture stop")
+    with pytest.raises(RuntimeError, match="fixture stop"):
+        build_index(tmp_path, [("doc", [65, 66])], model=model, tokenizer=TinyTokenizer(),
+                    provenance={"partition": "fixture"}, memory_guard=fail)
+    assert not (tmp_path / "index" / "index.json").exists()
+    with pytest.raises(ValueError, match="incomplete"):
+        FeatureIndex(tmp_path, model=model, tokenizer=TinyTokenizer())
+    assert all(not block.mlp._forward_pre_hooks for block in model.layers)
+
+
+def test_existing_index_is_not_overwritten(indexed):
+    index, documents = indexed
+    before = (index.root / "index" / "index.json").read_bytes()
+    with pytest.raises(FileExistsError):
+        build_index(index.root, documents, model=index.model, tokenizer=index.tokenizer,
+                    provenance={"partition": "fixture"})
+    assert (index.root / "index" / "index.json").read_bytes() == before
