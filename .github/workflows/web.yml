@@ -75,7 +75,7 @@ jobs:
       # so that the bundle check below, which runs after a failed step too, has its Python.
       - run: |
           python -m venv "$RUNNER_TEMP/py"
-          "$RUNNER_TEMP/py/bin/pip" install numpy websockets pytest pyyaml
+          "$RUNNER_TEMP/py/bin/pip" install numpy Pillow websockets pytest pyyaml
           echo "CALIPER_PYTHON=$RUNNER_TEMP/py/bin/python" >> "$GITHUB_ENV"
       # Builds into web/wasm/build and copies the three files into
       # python/caliper/_web/, as in a checkout. It refuses another Emscripten.

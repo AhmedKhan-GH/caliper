@@ -2967,7 +2967,9 @@ FORM_PIECE = {FORM_COLOR: "image", FORM_DEPTH: "depth", FORM_SEGMENTATION: "segm
 SECTION_DERIVE, SECTION_DRAW, SECTION_COMMON, SECTION_RESOURCE = "derive", "draw", "common", "resource"
 MAX_RESOURCES = 8
 RESOURCE_MAX_BYTES = 67043328      # 64 MiB less 64 KiB: the section fits one frame with its metadata
-RESOURCE_VERSION_MAX_BYTES = 134217728   # a version in parts: 128 MiB, WebGPU's default largest storage binding
+RESOURCE_VERSION_MAX_BYTES = 134217728   # buffer: 128 MiB, WebGPU's default largest storage binding
+RESOURCE_TEXTURE_VERSION_MAX_BYTES = 268435456  # texture: 8192 by 8192 four-byte texels
+RESOURCE_MAX_PARTS = 32            # texture versions use at most 32 parts of 8 MiB
 RESOURCE_PART_WAIT = 256           # RESOURCE frames a receiver waits for the next part of a version
 RESOURCE_STRIDE_MAX = 256
 RESOURCE_SIDE_MAX = 8192           # a texture's width and height: WebGPU's default largest 2-D texture
@@ -3477,11 +3479,12 @@ class Resource(_Msg):
                     _bad(f"'split.{key}' must be {what}, got {v!r}")
                 return v
             version = need("version", _safe_uint, "an unsigned integer")
-            parts = need("parts", _int_in(2, MAX_PIECES), f"an integer from 2 to {MAX_PIECES}")
+            parts = need("parts", _int_in(2, RESOURCE_MAX_PARTS), f"an integer from 2 to {RESOURCE_MAX_PARTS}")
             part = need("part", _int_in(0, parts - 1), "a part number below 'parts'")
             first = need("first", _u32, "a uint32")
             split = {"version": version, "part": part, "parts": parts, "first": first}
-        limit = RESOURCE_MAX_BYTES if split is None else RESOURCE_VERSION_MAX_BYTES
+        limit = (RESOURCE_MAX_BYTES if split is None else
+                 RESOURCE_TEXTURE_VERSION_MAX_BYTES if width is not None else RESOURCE_VERSION_MAX_BYTES)
         if count > limit // stride:
             _bad(f"{'a resource' if split is None else 'a resource in parts'} holds at most {limit} bytes")
         s = f.section(SECTION_RESOURCE)
@@ -3505,22 +3508,23 @@ def resource_parts(r: Resource, version: int, part_bytes: int) -> list:
     in parts), each with at most ``part_bytes`` bytes of whole elements, as views
     of ``r.data`` without a copy; ``[r]`` when its section holds at most
     ``part_bytes`` bytes. Raises ValueError for a version over
-    RESOURCE_VERSION_MAX_BYTES or one that needs more than MAX_PIECES parts."""
+    the texture or buffer byte limit, or one that needs more than RESOURCE_MAX_PARTS parts."""
     mv = memoryview(r.data)
     mv = mv.cast("B") if mv.nbytes else memoryview(b"")
     if r.count * r.stride != mv.nbytes:
         raise ValueError(f"a version of {r.count} elements of {r.stride} bytes holds {mv.nbytes} bytes")
+    limit = RESOURCE_TEXTURE_VERSION_MAX_BYTES if r.width is not None else RESOURCE_VERSION_MAX_BYTES
+    if mv.nbytes > limit:
+        raise ValueError(f"a version of {mv.nbytes} bytes, more than {limit}")
     if mv.nbytes <= part_bytes:
         return [r]
-    if mv.nbytes > RESOURCE_VERSION_MAX_BYTES:
-        raise ValueError(f"a version of {mv.nbytes} bytes, more than {RESOURCE_VERSION_MAX_BYTES}")
     per = part_bytes // r.stride
     if per < 1:
         raise ValueError(f"a part of {part_bytes} bytes holds no element of {r.stride} bytes")
     parts = -(-r.count // per)
-    if parts > MAX_PIECES:
+    if parts > RESOURCE_MAX_PARTS:
         raise ValueError(f"a version of {mv.nbytes} bytes needs {parts} parts of {part_bytes} bytes, "
-                         f"more than {MAX_PIECES}")
+                         f"more than {RESOURCE_MAX_PARTS}")
     out = []
     for k in range(parts):
         a, b = k * per, min(r.count, (k + 1) * per)
@@ -3535,7 +3539,7 @@ class SplitResources:
     RESOURCE of the connection in order and returns the whole version, else
     None. A version in one frame comes back at once. Part 0 allocates the
     version's count * stride bytes, which the decoder bounded by
-    RESOURCE_VERSION_MAX_BYTES, and each part copies its elements in; the last
+    the texture or buffer byte limit, and each part copies its elements in; the last
     part returns the whole. A part whose version is not held is dropped and
     counted. A part out of order, one whose keys differ from part 0, or a last
     part that does not end at the count raises :class:`MessageError` and

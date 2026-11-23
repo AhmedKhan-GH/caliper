@@ -1317,10 +1317,9 @@ def _tensor_dtype_ok(dtype) -> bool:
         return False
     types = dtype.split("|")
     return all(t in _TENSOR_DTYPES for t in types) and len(set(types)) == len(types)
-# The published resources of a piece hold at most PUBLISHED_BYTES_MAX bytes together, 256 MiB, and each at
-# most PUBLISHED_RESOURCE_MAX, 128 MiB, as the app's check of the manifest states (caliper_builder/spec/
-# piece.h, kPublishedBytesMax and kPublishedResourceBytesMax): one version of each fits the step history's
-# 256 MiB of resources, and one resource fits the largest storage binding of WebGPU's default limits. A
+# The published resources of a piece hold at most 512 MiB together. A storage buffer holds at most
+# 128 MiB, the default WebGPU storage binding limit. A texture holds at most 256 MiB for 8192 by 8192
+# four-byte texels. These limits match the app manifest check and its resource history. A
 # version above PART_BYTES goes to a viewer in parts of at most PART_BYTES (wire RESOURCE "split"). The frames
 # of a pass go to a viewer in chunks of at most RESOURCE_BACKLOG_BYTES, PART_BYTES and 64 KiB of headers:
 # half of the 16 MiB control queue of either sender (MAX_CONTROL_BYTES). A chunk goes only while the viewer's
@@ -1329,8 +1328,9 @@ def _tensor_dtype_ok(dtype) -> bool:
 # closes the connection. The first chunk goes with the pass or not at all: a viewer behind skips the pass
 # and gets a later one, and a program that it skipped goes first at the next pass. The later chunks of a
 # pass wait in the viewer's outbox, one pass at a time for each viewer, and each step sends what then fits.
-PUBLISHED_BYTES_MAX = 256 << 20
+PUBLISHED_BYTES_MAX = 512 << 20
 PUBLISHED_RESOURCE_MAX = 128 << 20
+PUBLISHED_TEXTURE_MAX = 256 << 20
 PART_BYTES = 8 << 20
 RESOURCE_BACKLOG_BYTES = PART_BYTES + (64 << 10)
 
@@ -1592,7 +1592,7 @@ def _resource_frames(rt, p: _Program) -> list:
     parts of an earlier pass, which it would skip anyway.
 
     Raises _Refused with ``program.resource_too_large`` when a version holds more than
-    PUBLISHED_RESOURCE_MAX bytes, or the versions of the run more than PUBLISHED_BYTES_MAX together:
+    the texture or buffer byte limit, or the versions of the run more than PUBLISHED_BYTES_MAX together:
     the app's check refuses such a manifest, thus only a manifest that skipped it gets here."""
     from . import _wire
     first = not p.sent_static
@@ -1605,9 +1605,10 @@ def _resource_frames(rt, p: _Program) -> list:
             continue
         data, count, stride, vw, vh, elements = rt.resource(p.handle, r["id"])
         total += len(data)
-        if len(data) > PUBLISHED_RESOURCE_MAX or total > PUBLISHED_BYTES_MAX:
+        limit = PUBLISHED_TEXTURE_MAX if r["kind"] == "texture" else PUBLISHED_RESOURCE_MAX
+        if len(data) > limit or total > PUBLISHED_BYTES_MAX:
             raise _Refused("program.resource_too_large",
-                           f"The published resources of {p.id} hold more than {PUBLISHED_RESOURCE_MAX} bytes "
+                           f"The published resources of {p.id} hold more than {limit} bytes "
                            f"in one resource or {PUBLISHED_BYTES_MAX} bytes together at a pass, more than a "
                            "viewer takes, thus no version could be sent. The program stopped.")
         # A texture's version carries its size (none for a version without texels) and its format, absent

@@ -901,8 +901,8 @@ def test_resource_in_parts_bounds_every_size_first():
     big = w.Resource("p", "r", 0, 9, 8, bytes(72))
     assert w.resource_parts(big, 0, 72) == [big]
     assert [len(p.data) for p in w.resource_parts(big, 0, 20)] == [16, 16, 16, 16, 8]
-    with pytest.raises(ValueError, match="more than 16"):
-        w.resource_parts(w.Resource("p", "r", 0, 17, 8, bytes(136)), 0, 8)
+    with pytest.raises(ValueError, match="more than 32"):
+        w.resource_parts(w.Resource("p", "r", 0, 33, 8, bytes(264)), 0, 8)
     with pytest.raises(ValueError, match="holds no element"):
         w.resource_parts(big, 0, 4)
     with pytest.raises(ValueError, match="more than 134217728"):
@@ -1017,3 +1017,22 @@ def test_scene_program_ids():
     prog = w.Program(0, w.PROGRAM_REMOVE, "scene.7")
     assert w.decode(w.encode(prog)).id == "scene.7"
     _refused(w.encode_frame(w.MsgType.PROGRAM, {"request_id": 0, "op": "remove", "id": "scene.x"}))
+
+
+def test_full_size_texture_parts_keep_the_storage_buffer_limit():
+    assert w.RESOURCE_TEXTURE_VERSION_MAX_BYTES == 256 << 20
+    assert w.RESOURCE_MAX_PARTS == 32 and w.MAX_PIECES == 16
+    metadata = {"program": "a", "resource": "pixels", "step": 0, "count": 8192 * 8192,
+                "stride": 4, "width": 8192, "height": 8192,
+                "split": {"version": 0, "part": 0, "parts": 32, "first": 0}}
+    sections = [w.Section.from_array("resource", np.zeros(4, np.uint8))]
+    texture = w.decode(w.encode_frame(w.MsgType.RESOURCE, metadata, sections))
+    assert texture.count * texture.stride == 256 << 20
+    for fmt in (w.TEXTURE_RGBA8, w.TEXTURE_R32UINT):
+        assert w.decode(w.encode_frame(w.MsgType.RESOURCE, dict(metadata, format=fmt), sections)).format == fmt
+    buffer = {k: v for k, v in metadata.items() if k not in ("width", "height")}
+    with pytest.raises(w.MessageError, match="at most 134217728"):
+        w.decode(w.encode_frame(w.MsgType.RESOURCE, buffer, sections))
+    metadata["split"]["parts"] = 33
+    with pytest.raises(w.MessageError, match="from 2 to 32"):
+        w.decode(w.encode_frame(w.MsgType.RESOURCE, metadata, sections))

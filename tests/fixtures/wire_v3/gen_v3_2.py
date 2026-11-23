@@ -1094,7 +1094,7 @@ def _resource_split_invalid(resource, bad) -> dict:
         "resource_split_version": (part(version=-1), bad),
         "resource_split_version_missing": (part(version=None), bad),
         "resource_split_parts_one": (part(parts=1, part=0, first=0), bad),
-        "resource_split_parts_many": (part(parts=17), bad),
+        "resource_split_parts_many": (part(parts=33), bad),
         "resource_split_part_past": (part(part=3), bad),
         "resource_split_first_missing": (part(first=None), bad),
         "resource_split_first_u32": (part(first=2**32), bad),

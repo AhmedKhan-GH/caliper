@@ -320,17 +320,17 @@ def _piece_program(pid, ids, monkeypatch=None):
 
 def test_versions_above_the_published_bytes_are_a_named_refusal_not_a_silent_drop():
     """One resource above PUBLISHED_RESOURCE_MAX (128 MiB), or the resources of a pass above
-    PUBLISHED_BYTES_MAX (256 MiB) together, from a manifest that skipped the app's check."""
+    PUBLISHED_BYTES_MAX (512 MiB) together, from a manifest that skipped the app's check."""
     assert P.PUBLISHED_RESOURCE_MAX == w.RESOURCE_VERSION_MAX_BYTES == 128 << 20
-    assert P.PUBLISHED_BYTES_MAX == 256 << 20
+    assert P.PUBLISHED_BYTES_MAX == 512 << 20
     over = bytearray(P.PUBLISHED_RESOURCE_MAX + 4)
     with pytest.raises(P._Refused) as e:
         P._resource_frames(_Runtime({"a": over}), _piece_program("big", ["a"]))
     assert e.value.error["code"] == "program.resource_too_large"
     del over
-    third = bytearray(96 << 20)                      # three of them pass 256 MiB together
+    third = bytearray(96 << 20)                      # six versions pass 512 MiB together
     with pytest.raises(P._Refused) as e:
-        P._resource_frames(_Runtime({"a": third, "b": third, "c": third}), _piece_program("big", "abc"))
+        P._resource_frames(_Runtime(dict.fromkeys("abcdef", third)), _piece_program("big", "abcdef"))
     assert e.value.error["code"] == "program.resource_too_large"
     frames = P._resource_frames(_Runtime({"a": third, "b": third}), _piece_program("big", "ab"))
     assert len(frames) == 24 and all(f.split["parts"] == 12 for f in frames)   # 96 MiB in parts of 8 MiB
@@ -687,10 +687,10 @@ fn add(@builtin(global_invocation_id) id: vec3<u32>) {
 
 
 @needs_device
-def test_a_piece_whose_versions_no_viewer_takes_stops_with_a_named_error(attached):
-    """A manifest that skipped the app's check: five published buffers of 64 MiB, above
-    PUBLISHED_BYTES_MAX together."""
+def test_a_piece_whose_versions_no_viewer_takes_stops_with_a_named_error(attached, monkeypatch):
+    """A manifest that skipped the app's check exceeds a reduced viewer budget."""
     model, opt, ctl = attached
+    monkeypatch.setattr(P, "PUBLISHED_BYTES_MAX", 256 << 20)
     ids = [f"v{k}" for k in range(5)]
     big = {"name": "big", "version": 1, "inputs": [{"name": "t", "kind": "tensor"}],
            "resources": [{"id": i, "kind": "buffer", "element": "vec4<u32>", "count": 4194304} for i in ids],
@@ -911,3 +911,20 @@ def test_two_programs_of_one_chunk_each_reach_one_viewer_in_turn(server, watchin
     finally:
         reader.stop.set()
         reader.join(10)
+
+
+def test_published_textures_have_a_separate_byte_limit(monkeypatch):
+    assert P.PUBLISHED_TEXTURE_MAX == w.RESOURCE_TEXTURE_VERSION_MAX_BYTES == 256 << 20
+    monkeypatch.setattr(P, "PUBLISHED_RESOURCE_MAX", 8)
+    monkeypatch.setattr(P, "PUBLISHED_TEXTURE_MAX", 16)
+    class TextureRuntime:
+        def resource(self, handle, rid):
+            return bytes(16), 4, 4, 2, 2, None
+    p = _piece_program("tex", ["a"])
+    p.resources[0]["kind"] = "texture"
+    frames = P._resource_frames(TextureRuntime(), p)
+    assert len(frames) == 1
+    assert w.decode(frames[0]).width == 2
+    p.resources[0]["kind"] = "buffer"
+    with pytest.raises(P._Refused, match="in one resource"):
+        P._resource_frames(TextureRuntime(), p)
