@@ -9,7 +9,7 @@ This page specifies what is built of wire protocol 3.2. Producers, the hub and v
 
 | Piece | Built |
 |---|---|
-| Capability | `scenes` |
+| Capability | `scenes`, and `scene_pieces` for the piece form of points and color images |
 | Kind | `scene` (6), with the VIEWS key `scene` and its `view_camera` |
 | Messages | SCENE_UPDATE with the parts `points`, `lines` (segments, strips and index-pair edges), `arrows`, `boxes`, `mesh`, `image` (colour, depth, segmentation and encoded) and `camera`; SCENE_TRANSFORMS; SCENE_CLEAR; SCENE_CLASSES; the section `stamp` of each, and `stamps` of SCENE_TRANSFORMS |
 | Dtype | `u16` (6) |
@@ -139,6 +139,31 @@ The sections and keys of each part, with N items and D = 3 in a 3-D scene or 2 i
 
 The first array of each part is required, and so are `vectors` of arrows, `half_sizes` of boxes, `strip_lengths` of strips and `indices` of edges; the other sections are optional. An item's colour comes from `colors`, else from `values` through the colormap, else from its class id, else from `color`, else from the viewer's default; `colors` and `values` together are refused, and a mesh takes at most one of `colors`, `values` and `uvs`, with `uvs` and `texture` together or not at all. A mesh without `indices` takes each three vertices as a triangle, so V is a multiple of 3. Index values are never checked by a receiver: an index out of range draws as the last vertex, by the index-clamp contract. An image and a texture are at most 8,192 pixels on a side. A camera part carries no array. N, V, T and E are at most 4,194,304 for points, vertices, triangles and edges, and N and S at most 1,048,576 for arrows, boxes and strips.
 
+### Piece Form
+
+A viewer that announces the capability `scene_pieces` beside `scenes` receives a batch of the points part, and a color image, in the piece form. A producer announces `scene_pieces` when it sends that form, and it sends the form only to a peer that announced it. Every other peer receives the batch with its arrays, as the table above gives them. The other parts and forms travel with their arrays to every peer.
+
+In the piece form, the arrays of the batch travel as the RESOURCE versions of a scene program ([`resource`](#resource)), and the SCENE_UPDATE that follows them names them. A scene program is an instance of the part's library piece, which every viewer that announces `scene_pieces` has built in. Its id is `scene.` followed by 1 to 9 decimal digits, a form that no program of a spec can take, because the id of a spec program has no dot. The producer gives each scene, entity path and part its own scene program, and keeps it. The `step` of such a RESOURCE is the run's step at the call, or 0 before the first step. A version of more than 8 MiB travels as RESOURCE parts, as the versions of other programs do. The producer sends the RESOURCE versions of the batch and then its update on the same subscription, one frame after the other, and the scene's state for a new subscription sends each held batch the same way.
+
+| Key | Type | Meaning |
+|---|---|---|
+| `program` | string | The scene program whose versions came just before the update |
+| `piece` | object | The library piece: `name` (`points` for points, `image` for a color image) and `version` (1), with an optional `hash` |
+| `resources` | object | Each resource id of the piece, with the count of the version that came before the update |
+| `arrays` | array of strings | The arrays of the part that the batch held, in the order of the table above, from the part's first array |
+
+The update in the piece form carries every key of its part as before, and `axes` and `items`, but no array section and no `split`. A decoder checks, after `items`, the keys `program`, `piece` (whose name must fit the part), `resources` and `arrays`, then refuses `split`, then checks the part's keys, then that an image's `form` fits its piece, then that no section of the part's arrays is present, and last the stamp.
+
+The resources hold the bytes that the piece's derive half writes, and the producer writes them from its arrays without a derive pass:
+
+| Piece | Resource | Element | Bytes of One Element |
+|---|---|---|---|
+| `points@1` | `points` | x, y and z as f32 (z is 0 in 2-D), the radius as f32 (the row's from `radii`, else `radius`, else 1), then a u32: the packed RGBA of `colors` (r, g, b and a from the low byte), else the bits of the f32 of `values`, else the class id of `class_ids`, else the bits of a NaN; then the row as u32 and 8 bytes of zero | 32 |
+| `image@1` | `pixels` | One packed RGBA a pixel, row by row; a grey image repeats its value in red, green and blue with alpha 255 | 4 |
+| `image@1` | `info` | The width, the height, the channels (1 or 4) and 0 as u32, then the identity as four columns of four f32 | 80 |
+
+A viewer keeps the newest version of each resource of each scene program, apart from the resources of other programs, and takes them with the update that names them, when their counts match `resources`. It drops an update whose versions did not come, and notes it in the scene view. It rebuilds the arrays from the bytes in the dimension of the entity's rows, writes the class colors from the scene's class table into the bits of a class id, and draws the received bytes with its own library piece of that name and version.
+
 ### scene_transforms
 
 The entity transforms of up to 1,024 entities of one scene, each a 4 × 4 matrix.
@@ -248,10 +273,11 @@ A receiver of this version handles the rest of the 3.2 draft by the rules of [Ve
 |---|---|
 | A piece of a split update (the key `split`) at a viewer that does not assemble them yet | Ignores the message and answers ERROR `unsupported` |
 | A part or a form that the viewer does not draw yet: the native and browser scene views draw every part and form but encoded images | Ignores the message, answers ERROR `unsupported` and says so in the scene view |
+| An update in the piece form whose RESOURCE versions did not come just before it, or whose piece, version or resource layout the viewer does not have | Drops the update and says so in the scene view |
 | A section the viewer does not use, such as `stamp` | Ignores the section, says so in the scene view, and draws the rest of the message |
 | An unknown part, a bad entity path, a section of the wrong dtype or shape, strip lengths that do not add up, or a batch over a limit | Answers ERROR `bad_request` |
 
-A 3.1 peer announces no `scenes`, so it receives no scene view and no scene message; a 3.1 decoder finds the 3.2 frames well formed, with their types unknown to it.
+A 3.1 peer announces no `scenes`, so it receives no scene view and no scene message; a 3.1 decoder finds the 3.2 frames well formed, with their types unknown to it. A viewer that announces `scenes` without `scene_pieces` receives every batch with its arrays. The hub does not announce `scene_pieces` yet, thus a producer sends a hub every batch with its arrays.
 
 ## Readings of the Draft
 
