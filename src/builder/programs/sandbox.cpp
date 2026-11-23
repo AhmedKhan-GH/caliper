@@ -1,7 +1,7 @@
-// The sandbox of GPU programs and stages (sandbox.h, design/gpu-programs.md,
+// The sandbox of GPU programs (sandbox.h, design/gpu-programs.md,
 // Sandbox): the declaration checks, the provenance check, the source check,
 // the compile and reflection through caliper-wgsl, the binding checks of a
-// program and of a stage, and the helpers the hosts share.
+// program, and the helpers the hosts share.
 //
 // The declaration check uses three codes: program.bad_target for a target
 // panel or entity path that cannot name one, program.output_mismatch for an
@@ -9,7 +9,7 @@
 // program.over_limits for every other id, name, count, size or limit outside
 // its form or its maximum. The source scan below skips comments and tracks
 // lines and columns in bytes from 1, as the compiler reports them, so that a
-// directive, a stage's binding or a refused declaration has its place.
+// directive or a refused declaration has its place.
 #include <caliper_builder/programs/sandbox.h>
 
 #include <algorithm>
@@ -490,23 +490,6 @@ Verdict check_declaration(const spec::Program& p) {
     return {};
 }
 
-Verdict check_stage_declaration(const spec::Stage& s) {
-    if (!valid_id(s.panel))
-        return fail(kStageNotScenePanel, quote_text(s.panel) + " is not a panel id.", "panel");
-    if (!valid_entity_path(s.entity))
-        return fail(kProgramBadTarget,
-                    quote_text(s.entity) + " is not an entity path; a path has 1 to 16 segments of letters, digits, _, . "
-                                       "and -, joined by /.",
-                    "entity");
-    if (s.wgsl.empty()) return fail(kProgramOverLimits, "The stage's wgsl is empty.", "wgsl");
-    if (s.wgsl.size() > lim::kStageSourceBytes)
-        return fail(kProgramTooLarge,
-                    "The source has " + std::to_string(s.wgsl.size()) + " bytes; a stage's limit is " +
-                        std::to_string(lim::kStageSourceBytes) + " bytes.",
-                    "wgsl");
-    return {};
-}
-
 // ---- 2. provenance
 
 Verdict check_provenance(const spec::Provenance& provenance, std::string_view target, std::string_view sha256) {
@@ -536,7 +519,7 @@ Verdict check_source(std::string_view wgsl, std::size_t max_bytes) {
         if (first == "enable" || first == "requires" || first == "diagnostic")
             return fail(kProgramDirectiveNotAllowed,
                         "The source starts with the directive " + std::string(first) +
-                            "; a program or a stage may not enable extensions or change diagnostics.",
+                            "; a program may not enable extensions or change diagnostics.",
                         "wgsl", toks.front().line, toks.front().column);
     }
     return {};
@@ -773,47 +756,6 @@ Verdict check_program(const spec::Program& p, const Reflection& r) {
     return {};
 }
 
-Verdict check_stage(const spec::Stage& s, const Reflection& r) {
-    const std::vector<Token> toks = tokens(s.wgsl);
-    if (!r.bindings.empty())
-        return at_declaration(fail(kStageBindingNotAllowed,
-                                   "A stage declares no binding, and the source declares " + r.bindings.front().name +
-                                       "; the viewer gives the stage its inputs through MaterialIn and VertexIn.",
-                                   r.bindings.front().name),
-                              toks, r.bindings.front().name);
-    // The compiler drops a binding that no entry point uses, thus the
-    // attributes are looked for in the source as well.
-    for (const Token& t : toks)
-        if (t.text == "@") {
-            const auto next = &t + 1;
-            if (next < toks.data() + toks.size() && (next->text == "group" || next->text == "binding"))
-                return fail(kStageBindingNotAllowed,
-                            "A stage declares no binding; the viewer gives the stage its inputs through MaterialIn "
-                            "and VertexIn.",
-                            "wgsl", t.line, t.column);
-        }
-    if (!r.entries.empty()) {
-        Verdict v = fail(kStageEntryNotAllowed,
-                         "A stage declares no entry point, and the source declares " + r.entries.front().name +
-                             "; the viewer adds its own entry points, which call fn " + stage_function(s.kind) + ".",
-                         r.entries.front().name);
-        for (std::size_t i = 0; i + 2 < toks.size(); ++i)
-            if (toks[i].text == "fn" && toks[i + 1].text == r.entries.front().name) {
-                v.line = toks[i + 1].line;
-                v.column = toks[i + 1].column;
-            }
-        return v;
-    }
-    for (std::size_t i = 0; i + 1 < toks.size(); ++i)
-        if (toks[i].text == "@" &&
-            (toks[i + 1].text == "vertex" || toks[i + 1].text == "fragment" || toks[i + 1].text == "compute"))
-            return fail(kStageEntryNotAllowed,
-                        "A stage declares no entry point; the viewer adds its own entry points, which call fn " +
-                            std::string(stage_function(s.kind)) + ".",
-                        "wgsl", toks[i].line, toks[i].column);
-    return {};
-}
-
 // ---- helpers
 
 std::string sha256_hex(std::string_view text) {
@@ -933,32 +875,6 @@ Verdict check_params(const spec::Program& p) {
     return {};
 }
 
-Verdict check_stage_params(const spec::Stage& s) {
-    const std::vector<Token> toks = tokens(s.wgsl);
-    for (std::size_t i = 0; i + 1 < toks.size(); ++i) {
-        const bool own_struct = toks[i].text == "struct" && toks[i + 1].text == "Params";
-        if (own_struct)
-            return fail(kStageParamsMismatch,
-                        "A stage declares no struct Params; the viewer declares it from the stage's params.", "wgsl",
-                        toks[i + 1].line, toks[i + 1].column);
-    }
-    if (auto t = var_declaration(toks, spec::kParamsVar))
-        return fail(kStageParamsMismatch,
-                    "A stage declares no params variable; the viewer declares params from the stage's params.",
-                    "wgsl", t->line, t->column);
-    for (std::size_t i = 0; i + 2 < toks.size(); ++i) {
-        if (toks[i].text != spec::kParamsVar || toks[i + 1].text != ".") continue;
-        if (i > 0 && toks[i - 1].text == ".") continue;   // a field named params of something else
-        const std::string name(toks[i + 2].text);
-        if (!s.params.count(name))
-            return fail(kStageParamsMismatch,
-                        s.params.empty() ? "The stage reads params." + name + ", and it has no params."
-                                         : "The stage reads params." + name + ", which is not a name of its params.",
-                        "params." + name, toks[i + 2].line, toks[i + 2].column);
-    }
-    return {};
-}
-
 bool param_in_range(ParamType type, double value) {
     if (!std::isfinite(value)) return false;
     switch (type) {
@@ -998,28 +914,6 @@ std::vector<std::uint8_t> pack_params(const std::vector<ParamField>& fields,
         std::memcpy(out.data() + i * 4, &bits, 4);
     }
     return out;
-}
-
-std::vector<ParamField> stage_params_fields(const spec::Stage& s) {
-    std::vector<ParamField> out;
-    for (const auto& kv : s.params) out.push_back(ParamField{kv.first, ParamType::f32});
-    return out;
-}
-
-std::string stage_params_declaration(const spec::Stage& s, bool uniform) {
-    if (s.params.empty()) return {};
-    std::string text = "\nstruct Params {";
-    bool first = true;
-    for (const auto& kv : s.params) {
-        text += (first ? " " : ", ") + kv.first + ": f32";
-        first = false;
-    }
-    text += " }\n";
-    if (uniform)
-        text += "@group(" + std::to_string(kStageParamsGroup) + ") @binding(0) var<uniform> params: Params;\n";
-    else
-        text += "var<private> params: Params;\n";
-    return text;
 }
 
 std::uint64_t output_bytes(const spec::Program& p) {

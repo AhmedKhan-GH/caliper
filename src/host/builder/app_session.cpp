@@ -495,8 +495,8 @@ struct AppSession::Impl {
     std::shared_ptr<HostBinding> binding;
     AppRunControl run_ctl;   // the session's run control from its adoption until close()
     std::atomic<cb::ModelRunner*> runner{nullptr};   // the session's model runner from its adoption until close()
-    std::atomic<cb::ProgramHost*> program_host{nullptr};   // the hosts of GPU programs and stages, likewise
-    std::atomic<cb::StageHost*> stage_host{nullptr};
+    std::atomic<cb::ProgramHost*> program_host{nullptr};   // the hosts of GPU programs and draw halves, likewise
+    std::atomic<cb::DrawStatusHost*> draw_host{nullptr};
 
     std::mutex lines_m;
     std::vector<Line> lines;   // from the journal, any thread
@@ -605,7 +605,7 @@ struct AppSession::Impl {
         s->set_run_control(&run_ctl);
         s->set_model_runner(runner.load());
         s->set_program_host(program_host.load());
-        s->set_stage_host(stage_host.load());
+        s->set_draw_host(draw_host.load());
         cb::Session* raw = s.get();
         {
             std::lock_guard<std::mutex> lock(m);
@@ -945,7 +945,7 @@ struct AppSession::Impl {
             session->set_run_control(nullptr);
             session->set_model_runner(nullptr);
             session->set_program_host(nullptr);
-            session->set_stage_host(nullptr);
+            session->set_draw_host(nullptr);
             session->close();   // the queue and the journal
             session.reset();    // the loader store and workspace.duckdb
             say("workspace " + opt.workspace + " closed");
@@ -1140,10 +1140,10 @@ void AppSession::set_program_host(caliper_builder::ProgramHost* host) {
     if (impl_->session) impl_->session->set_program_host(host);
 }
 
-void AppSession::set_stage_host(caliper_builder::StageHost* host) {
-    impl_->stage_host.store(host);
+void AppSession::set_draw_host(caliper_builder::DrawStatusHost* host) {
+    impl_->draw_host.store(host);
     std::lock_guard<std::mutex> lock(impl_->m);
-    if (impl_->session) impl_->session->set_stage_host(host);
+    if (impl_->session) impl_->session->set_draw_host(host);
 }
 
 uint64_t AppSession::journaled() const { return impl_->journaled.load(std::memory_order_acquire); }
@@ -1241,7 +1241,7 @@ void AppSession::set_run_link(caliper_live::RunLink*) {}
 caliper_builder::RunControl* AppSession::run_control() { return nullptr; }
 void AppSession::set_model_runner(caliper_builder::ModelRunner*) {}
 void AppSession::set_program_host(caliper_builder::ProgramHost*) {}
-void AppSession::set_stage_host(caliper_builder::StageHost*) {}
+void AppSession::set_draw_host(caliper_builder::DrawStatusHost*) {}
 uint64_t AppSession::journaled() const { return 0; }
 uint64_t AppSession::specs_opened() const { return 0; }
 uint64_t AppSession::agent_specs_opened() const { return 0; }

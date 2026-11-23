@@ -88,7 +88,7 @@ TEST_CASE("operators: parameters out of range, keys of another op and a wrong ra
     CHECK(has(r.diagnostics, "spec.operator_shape", "source[0].transform[0].columns[1]"));
 }
 
-TEST_CASE("operators: params and the tensor output of a program, and the params of a stage") {
+TEST_CASE("operators: params and the tensor output of a program") {
     cs::ValidationReport r = check(std::string(kSurfaceProgram) + "params = { level = 0.5, count = 16 }\n");
     INFO(dump(r.diagnostics));
     CHECK(r.ok());
@@ -105,21 +105,4 @@ TEST_CASE("operators: params and the tensor output of a program, and the params 
     big.replace(big.find("shape = [16]"), 12, "shape = [1001, 1000]");
     r = check(big + "params = { level = 0.5, count = 16 }\n");
     CHECK(has(r.diagnostics, "program.over_limits", "program[0].output.shape"));
-
-    // A stage reads its params by name; a name it lacks, and its own struct, are refused.
-    const std::string scene =
-        "[[source]]\nid = \"pts\"\ncatalog = \"tensor:embedding\"\n"
-        "[[panel]]\nid = \"world\"\nprimitive = \"scene\"\nbind = { scene = \"live:world\" }\n";
-    const std::string stage = "[[stage]]\npanel = \"world\"\nentity = \"spec/terrain\"\nkind = \"material\"\n";
-    r = check(scene + stage + "params = { level = 0.25 }\nwgsl = \"\"\"\nfn material(in: MaterialIn) -> vec4<f32> {\n"
-                              "  if (abs(in.value - params.level) < 0.01) { return vec4<f32>(1.0); }\n  return in.color;\n}\n\"\"\"\n");
-    INFO(dump(r.diagnostics));
-    CHECK_FALSE(has(r.diagnostics, "stage.params_mismatch"));
-    CHECK_FALSE(has(r.diagnostics, "spec.not_built"));
-    r = check(scene + stage + "params = { level = 0.25 }\nwgsl = \"\"\"\nfn material(in: MaterialIn) -> vec4<f32> {\n"
-                              "  return in.color * params.gain;\n}\n\"\"\"\n");
-    CHECK(has(r.diagnostics, "stage.params_mismatch", "stage[0].params.gain"));
-    r = check(scene + stage + "wgsl = \"\"\"\nstruct Params { level: f32 }\nfn material(in: MaterialIn) -> vec4<f32> {\n"
-                              "  return in.color;\n}\n\"\"\"\n");
-    CHECK(has(r.diagnostics, "stage.params_mismatch"));
 }

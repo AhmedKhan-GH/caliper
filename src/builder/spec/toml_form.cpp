@@ -298,8 +298,8 @@ public:
                 table(c, {"id", "kind", "title", "bind", "options", "x"}, false, "");
             }
         }
-        // A program's and a stage's WGSL come last in their tables, as
-        // multi-line strings, so that the short keys stay together above them.
+        // A program's WGSL comes last in its table, as a
+        // multi-line string, so that the short keys stay together above them.
         if (auto programs = j.find("program"); programs != j.end()) {
             for (const json& p : *programs) {
                 out_ += "\n[[program]]\n";
@@ -307,12 +307,6 @@ public:
                       {"id", "title", "piece", "panel", "bind", "entry", "inputs", "output", "limits", "workgroups",
                        "params", "x", "wgsl"},
                       false, "");
-            }
-        }
-        if (auto stages = j.find("stage"); stages != j.end()) {
-            for (const json& s : *stages) {
-                out_ += "\n[[stage]]\n";
-                table(s, {"panel", "entity", "kind", "params", "x", "wgsl"}, false, "");
             }
         }
         // Inline pieces (design/programmable-graphics.md, Piece Files): the
@@ -510,11 +504,8 @@ ParseResult parse_toml(std::string_view text) {
             std::size_t count = 0;
             if (detail::check_values(doc, "", 0, count, sink)) {
                 ParseResult decoded = from_json(doc);
-                if (decoded.ok()) {
-                    r.spec = std::move(decoded.spec);
-                } else {
-                    for (Diagnostic& d : decoded.diagnostics) r.diagnostics.push_back(std::move(d));
-                }
+                if (decoded.ok()) r.spec = std::move(decoded.spec);
+                for (Diagnostic& d : decoded.diagnostics) r.diagnostics.push_back(std::move(d));
             }
         }
         locate(r.diagnostics, r.positions);

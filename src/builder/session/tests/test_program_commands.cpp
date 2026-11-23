@@ -1,8 +1,8 @@
-// Tests of the stage and program commands (program_commands.h,
-// design/gpu-programs.md, Commands): the session binds all seven, the edits
+// Tests of the program commands (program_commands.h,
+// design/gpu-programs.md, Commands): the session binds all four, the edits
 // check the source with the sandbox and file a diff and an undo step, the
-// refusals carry the sandbox's codes with line and column, stage.check
-// reflects a source, program.status merges both hosts, the status item has
+// refusals carry the sandbox's codes with line and column, program.status
+// merges the program host with the draw host, the status item has
 // the keys of the command table's program_status, and a program event keeps
 // the keys of its kind. The cases that compile WGSL run only in a build with
 // the caliper-wgsl library; the others run in every build.
@@ -25,12 +25,11 @@ using namespace caliper_builder;
 using namespace session_test;
 using nlohmann::json;
 
-TEST_CASE("programs: the session binds the stage and program commands and has no hosts at first") {
+TEST_CASE("programs: the session binds the program commands and has no hosts at first") {
     auto s = open_session(fresh_dir("program_commands_bound") + "/workspace");
     CHECK(s->program_host() == nullptr);
-    CHECK(s->stage_host() == nullptr);
-    for (const char* name : {"stage.set", "stage.remove", "stage.check", "program.create", "program.patch",
-                             "program.remove", "program.status"}) {
+    CHECK(s->draw_host() == nullptr);
+    for (const char* name : {"program.create", "program.patch", "program.remove", "program.status"}) {
         const CommandDescriptor* d = find_command_descriptor(name);
         REQUIRE(d);
         CAPTURE(name);
@@ -94,7 +93,6 @@ const char* const kRows =
     "  atomicAdd(&count, 1u);\n"
     "}\n";
 
-const char* const kMaterial = "fn material(in: MaterialIn) -> vec4<f32> {\n  return vec4<f32>(in.color.rgb * in.value, 1.0);\n}\n";
 
 json rows_args() {
     return {{"id", "rows"},
@@ -233,96 +231,6 @@ TEST_CASE("programs: program.patch merges a patch and checks again, and program.
     CHECK(s->open_spec()->spec.programs.size() == 1);
 }
 
-TEST_CASE("stages: stage.set replaces the stage of one panel, entity and kind, and stage.remove removes it") {
-    auto s = scene_session("stage_set");
-    json args = {{"panel", "world"}, {"entity", "programs/rows"}, {"kind", "material"}, {"wgsl", kMaterial}};
-    json r = ok(*s, "stage.set", args);
-    CHECK(r["panel"] == "world");
-    CHECK(r["kind"] == "material");
-    CHECK(r["diff"].get<std::string>().find("+[[stage]]") != std::string::npos);
-    args["wgsl"] = "fn material(in: MaterialIn) -> vec4<f32> {\n  return in.color;\n}\n";
-    ok(*s, "stage.set", args);
-    REQUIRE(s->open_spec()->spec.stages.size() == 1);
-    CHECK(s->open_spec()->spec.stages[0].wgsl == args["wgsl"]);
-    ok(*s, "stage.set",
-       {{"panel", "world"}, {"entity", "programs/rows"}, {"kind", "vertex"},
-        {"wgsl", "fn vertex(in: VertexIn) -> VertexOut {\n  return VertexOut(in.position * 2.0, in.radius);\n}\n"}});
-    CHECK(s->open_spec()->spec.stages.size() == 2);
-
-    json chart = args;
-    chart["panel"] = "chart";
-    CHECK(err(*s, "stage.set", chart) == cp::kStageNotScenePanel);
-    json bound = args;
-    bound["wgsl"] = std::string(kMaterial) + "@group(0) @binding(0) var<uniform> u: vec4<f32>;\n";
-    const CommandResult b = call(*s, "stage.set", bound);
-    REQUIRE_FALSE(b.ok);
-    CHECK(b.error.code == cp::kStageBindingNotAllowed);
-    CHECK(b.error.where == "args.wgsl:4:1");
-
-    ok(*s, "stage.remove", {{"panel", "world"}, {"entity", "programs/rows"}, {"kind", "vertex"}});
-    CHECK(s->open_spec()->spec.stages.size() == 1);
-    CHECK(err(*s, "stage.remove", {{"panel", "world"}, {"entity", "programs/rows"}, {"kind", "vertex"}}) ==
-          cp::kStageNotFound);
-    // A panel's removal takes its stages along, in one undo step.
-    const spec::Spec before = s->open_spec()->spec;
-    ok(*s, "panel.remove", {{"id", "world"}});
-    CHECK(s->open_spec()->spec.stages.empty());
-    ok(*s, "history.undo");
-    CHECK(s->open_spec()->spec == before);
-}
-
-TEST_CASE("stages: with the compiler stage.set gives the line of a compile error in the stage's own source") {
-    if (!cp::compiler_available()) {
-        MESSAGE("skipped: this build has no caliper-wgsl library");
-        return;
-    }
-    auto s = scene_session("stage_compile");
-    json args = {{"panel", "world"}, {"entity", "e"}, {"kind", "material"},
-                 {"wgsl", "fn material(in: MaterialIn) -> vec4<f32> {\n  return in.colour;\n}\n"}};
-    CommandResult r = call(*s, "stage.set", args);
-    REQUIRE_FALSE(r.ok);
-    CHECK(r.error.code == cp::kStageCompileFailed);
-    CHECK(r.error.where.rfind("args.wgsl:2:", 0) == 0);
-    // A function with another signature fails at the viewer's call of it.
-    args["wgsl"] = "fn material(in: MaterialIn) -> vec3<f32> {\n  return in.color.rgb;\n}\n";
-    r = call(*s, "stage.set", args);
-    REQUIRE_FALSE(r.ok);
-    CHECK(r.error.code == cp::kStageCompileFailed);
-    CHECK(r.error.message.find("fn material(in: MaterialIn) -> vec4<f32>") != std::string::npos);
-    args["wgsl"] = std::string(kMaterial) + "@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }\n";
-    CHECK(err(*s, "stage.set", args) == cp::kStageEntryNotAllowed);
-    CHECK(s->open_spec()->spec.stages.empty());
-}
-
-TEST_CASE("stages: stage.check compiles a source and reflects its entry points and bindings") {
-    auto s = scene_session("stage_check");
-    const CommandDescriptor* d = find_command_descriptor("stage.check");
-    REQUIRE(d);
-    if (!cp::compiler_available()) {
-        CHECK(err(*s, "stage.check", d->examples.front()) == cp::kProgramCompilerUnavailable);
-        return;
-    }
-    json r = ok(*s, "stage.check", d->examples.front());
-    CHECK(r["ok"] == true);
-    REQUIRE(r["entry_points"].size() == 1);
-    CHECK(r["entry_points"][0] == json::parse(R"({"name": "run", "stage": "compute", "workgroup_size": [64, 1, 1]})"));
-    REQUIRE(r["bindings"].size() == 3);
-    CHECK(r["bindings"][0]["access"] == "read");
-    CHECK(r["bindings"][1]["access"] == "read_write");
-    CHECK(r["bindings"][2]["kind"] == "storage");
-    r = ok(*s, "stage.check", {{"kind", "material"}, {"wgsl", kMaterial}});
-    CHECK(r["ok"] == true);
-    CHECK(r["entry_points"].empty());
-    r = ok(*s, "stage.check", {{"kind", "vertex"}, {"wgsl", "fn vertex(in: VertexIn) -> VertexOut {\n  return VertexOut(in.positon, in.radius);\n}\n"}});
-    CHECK(r["ok"] == false);
-    REQUIRE(r["messages"].size() == 1);
-    CHECK(r["messages"][0]["code"] == cp::kStageCompileFailed);
-    CHECK_MESSAGE(r["messages"][0]["line"] == 2, r["messages"][0].dump());
-    r = ok(*s, "stage.check", {{"kind", "compute"}, {"wgsl", "fn f() {}"}});
-    CHECK(r["ok"] == false);
-    CHECK(r["messages"][0]["code"] == cp::kProgramNoEntry);
-}
-
 namespace {
 
 // Hosts that report fixed items and count their reconciles.
@@ -336,19 +244,12 @@ struct FakeProgramHost : ProgramHost {
     }
     std::vector<ProgramStatus> status() const override { return items; }
 };
-struct FakeStageHost : StageHost {
-    std::vector<ProgramStatus> items;
-    int reconciles = 0;
-    void reconcile(const spec::Spec&) override { ++reconciles; }
-    std::vector<ProgramStatus> status() const override { return items; }
-};
 
 }  // namespace
 
-TEST_CASE("programs: program.status lists the spec's items with what each host reports") {
+TEST_CASE("programs: program.status lists the spec's items with what the program host reports") {
     auto s = scene_session("program_status");
     ok(*s, "program.create", rows_args());
-    ok(*s, "stage.set", {{"panel", "world"}, {"entity", "programs/rows"}, {"kind", "material"}, {"wgsl", kMaterial}});
     json r = ok(*s, "program.status");
     REQUIRE(r["programs"].size() == 1);
     CHECK(r["programs"][0]["host"] == "none");
@@ -356,9 +257,6 @@ TEST_CASE("programs: program.status lists the spec's items with what each host r
     CHECK(r["programs"][0]["every_min"] == 10);
     CHECK(r["programs"][0]["memory_limit_bytes"] == 64u << 20);
     CHECK(r["programs"][0]["kind"] == "geometry");
-    REQUIRE(r["stages"].size() == 1);
-    CHECK(r["stages"][0]["id"] == "world/programs/rows/material");
-    CHECK(r["stages"][0]["host"] == "none");
 
     FakeProgramHost programs;
     ProgramStatus running;
@@ -369,26 +267,13 @@ TEST_CASE("programs: program.status lists the spec's items with what each host r
     running.every = 12;
     running.runs = 3;
     programs.items = {running};
-    FakeStageHost stages;
-    ProgramStatus compiled;
-    compiled.id = "world/programs/rows/material";
-    compiled.kind = "material";
-    compiled.host = "viewer";
-    compiled.state = "compiled";
-    stages.items = {compiled};
     s->set_program_host(&programs);
-    s->set_stage_host(&stages);
     r = ok(*s, "program.status");
     CHECK(r["programs"][0]["host"] == "script");
     CHECK(r["programs"][0]["every"] == 12);
     CHECK(r["programs"][0]["runs"] == 3);
-    CHECK(r["stages"][0]["state"] == "compiled");
-    r = ok(*s, "program.status", {{"id", "world/programs/rows/material"}});
-    CHECK(r["programs"].empty());
-    CHECK(r["stages"].size() == 1);
     CHECK(err(*s, "program.status", {{"id", "nothing"}}) == cp::kProgramNotFound);
     s->set_program_host(nullptr);
-    s->set_stage_host(nullptr);
 }
 
 TEST_CASE("programs: program.status lists the program of an operator that runs in the script, with kind operator") {
@@ -440,7 +325,6 @@ TEST_CASE("programs: in a foreign spec an unreviewed source waits for a review a
     REQUIRE(r["programs"].size() == 2);
     CHECK(r["programs"][0]["state"] == "waiting");   // rows: its hash is reviewed
     CHECK(r["programs"][1]["state"] == "review");    // image: no review
-    CHECK(r["stages"][0]["state"] == "review");
     // An edit keeps the provenance table, and no text can change it.
     ok(*s, "program.patch", {{"id", "image"}, {"patch", {{"title", "Gradient"}}}});
     CHECK(s->open_spec()->spec.provenance.foreign);

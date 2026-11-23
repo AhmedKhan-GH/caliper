@@ -394,7 +394,7 @@ const std::pair<const char*, const char*> kFragments[] = {
         "error": {"type": ["string", "null"], "description": "run with change runner: why the run failed, else null."},
         "point": {"type": "string", "description": "run with change intervene: the intervention point."},
         "op": {"type": ["string", "null"], "description": "run with change intervene: the op applied, or null when the point's interventions were cleared."},
-        "program": {"type": "string", "description": "program: the program's id, or the stage as <panel>/<entity>/<kind>; pick of a piece's item: the program that drew it."},
+        "program": {"type": "string", "description": "program: the program's id; pick of a piece's item: the program that drew it."},
         "half": {"type": "string", "enum": ["derive", "draw"], "description": "program of an instance of a piece: the half that compiled, was refused or stopped."},
         "pass": {"type": ["integer", "null"], "minimum": 0, "description": "program of an instance of a piece: the index of the pass in its half, or null for the whole half."},
         "host": {"type": "string", "enum": ["script", "viewer"], "description": "program: where it compiled, was refused or stopped."},
@@ -405,8 +405,6 @@ const std::pair<const char*, const char*> kFragments[] = {
 
     // GPU programs and interventions (design/gpu-programs.md)
     {"entity_path", R"json({"type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[A-Za-z0-9_.-]{1,63}(/[A-Za-z0-9_.-]{1,63}){0,15}$", "description": "An entity path of a scene, such as programs/ribbons: segments of letters, digits, _, . and - joined by /."})json"},
-
-    {"stage_kind", R"json({"type": "string", "enum": ["material", "vertex"], "description": "material gives the color of each fragment with fn material(in: MaterialIn) -> vec4<f32>; vertex gives the position and the radius of each item with fn vertex(in: VertexIn) -> VertexOut."})json"},
 
     {"compiler_message", R"json({
       "type": "object", "additionalProperties": false, "required": ["severity", "code", "message", "line", "column"],
@@ -494,21 +492,21 @@ const std::pair<const char*, const char*> kFragments[] = {
       "type": "object", "additionalProperties": false,
       "required": ["id", "kind", "host", "state", "every", "every_min", "last_pass_ms", "last_cost_ms", "step_ms", "overhead_share", "passes_per_s", "last_step", "runs", "memory_bytes", "memory_limit_bytes", "error", "sha256"],
       "properties": {
-        "id": {"type": "string", "description": "The program's id, or a stage as <panel>/<entity>/<kind>."},
-        "kind": {"type": "string", "enum": ["geometry", "pixels", "tensor", "material", "vertex", "operator", "piece"], "description": "The program's output kind, the stage's kind, piece for an instance of a piece, or operator for the first surface or path step of a source over a live tensor, which runs in the script and has the id operator.<source>.<step index>."},
-        "host": {"type": "string", "enum": ["script", "viewer", "none"], "description": "Where it runs: script for a program in the attached script, viewer for a stage, none when nothing runs it."},
+        "id": {"type": "string", "description": "The program's id."},
+        "kind": {"type": "string", "enum": ["geometry", "pixels", "tensor", "operator", "piece"], "description": "The program's output kind, piece for an instance of a piece, or operator for the first surface or path step of a source over a live tensor, which runs in the script and has the id operator.<source>.<step index>."},
+        "host": {"type": "string", "enum": ["script", "viewer", "none"], "description": "Where it runs: script for a program in the attached script, viewer for the draw half of a piece, none when nothing runs it."},
         "state": {"type": "string", "enum": ["waiting", "review", "compiled", "running", "refused", "stopped"], "description": "waiting for a host, review in a foreign spec without a review, compiled before its first pass, running, refused by a check, or stopped by a limit."},
-        "every": {"type": ["integer", "null"], "description": "The steps between two passes of the program: the cadence N that all programs share, or a multiple of N for a larger limits.every; null for a stage or before the first pass."},
-        "every_min": {"type": ["integer", "null"], "description": "The declared limits.every; null for a stage or when absent."},
+        "every": {"type": ["integer", "null"], "description": "The steps between two passes of the program: the cadence N that all programs share, or a multiple of N for a larger limits.every; null before the first pass."},
+        "every_min": {"type": ["integer", "null"], "description": "The declared limits.every; null when absent."},
         "last_pass_ms": {"type": ["number", "null"], "description": "The GPU time of the last pass or frame in milliseconds, or null."},
-        "last_cost_ms": {"type": ["number", "null"], "description": "The overhead D of a pass in milliseconds: the time that a pass adds to the run's wall clock, shared by all programs; null for a stage or before it is measured."},
-        "step_ms": {"type": ["number", "null"], "description": "The base step time b in milliseconds: the time of a training step far from a pass; null for a stage or before it is measured."},
-        "overhead_share": {"type": ["number", "null"], "minimum": 0, "description": "The measured share of the training time that the passes take, D / (N b), which the cadence aims to keep at or below 0.04; null for a stage or before it is measured."},
-        "passes_per_s": {"type": ["number", "null"], "minimum": 0, "description": "The passes of the program a second on the run's wall clock, over its last passes; null for a stage, before its second pass and while it does not run."},
+        "last_cost_ms": {"type": ["number", "null"], "description": "The overhead D of a pass in milliseconds: the time that a pass adds to the run's wall clock, shared by all programs; null before it is measured."},
+        "step_ms": {"type": ["number", "null"], "description": "The base step time b in milliseconds: the time of a training step far from a pass; null before it is measured."},
+        "overhead_share": {"type": ["number", "null"], "minimum": 0, "description": "The measured share of the training time that the passes take, D / (N b), which the cadence aims to keep at or below 0.04; null before it is measured."},
+        "passes_per_s": {"type": ["number", "null"], "minimum": 0, "description": "The passes of the program a second on the run's wall clock, over its last passes; null before its second pass and while it does not run."},
         "last_step": {"type": ["integer", "null"], "description": "The script's step of the last pass, or null."},
-        "runs": {"type": "integer", "minimum": 0, "description": "The count of passes, or of frames for a stage."},
+        "runs": {"type": "integer", "minimum": 0, "description": "The count of passes."},
         "memory_bytes": {"type": "integer", "minimum": 0, "description": "The bytes of its output buffers and bound tensors."},
-        "memory_limit_bytes": {"type": "integer", "minimum": 0, "description": "The budget from limits.memory_mb; 0 for a stage."},
+        "memory_limit_bytes": {"type": "integer", "minimum": 0, "description": "The budget from limits.memory_mb."},
         "error": {"type": ["object", "null"], "additionalProperties": false, "required": ["code", "message", "line", "column"], "description": "The last error, or null.",
                   "properties": {
                     "code": {"type": "string", "description": "A stable code, such as program.over_time."},
@@ -1734,7 +1732,7 @@ const Row kRows[] = {
     {"events.wait", false, false, false,
      "Returns the events that came after a cursor: picks and selections in the app's views and scene panels, "
      "changes of controls, changes of the running script (state, parameters, actions, attachment), edits of the open "
-     "spec, approvals, the compile, refusal and stop of GPU programs and stages, writes of state variables and "
+     "spec, approvals, the compile, refusal and stop of GPU programs, writes of state variables and "
      "moves of the cursor. It answers at once when events "
      "wait, and otherwise holds the call until one comes or "
      "timeout_s ends. Pass the cursor of each result to the next call. The app keeps the last 1024 events; lost "
@@ -1754,81 +1752,7 @@ const Row kRows[] = {
         "more": {"type": "boolean", "description": "Whether more matching events wait after cursor, beyond limit."}}})json",
      R"json({"cursor": 0, "kinds": ["pick"], "panels": ["world"], "timeout_s": 30})json"},
 
-    // stages and programs (design/gpu-programs.md)
-    {"stage.set", true, false, true,
-     "Sets the material or vertex stage of one entity of a scene panel: WGSL that the viewer runs in place of its own "
-     "function for that entity. material gives the color of each fragment with fn material(in: MaterialIn) -> "
-     "vec4<f32>; vertex gives the position and the radius of each item with fn vertex(in: VertexIn) -> VertexOut. The "
-     "source holds functions and constants only, with no binding and no entry point. It replaces the stage of the same "
-     "panel, entity and kind, and the entity still picks and selects. The sandbox checks it first, and messages give "
-     "the compiler's line and column. Undo restores the stage before. With dry_run true the change is only checked and "
-     "not applied.",
-     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "entity", "kind", "wgsl"],
-      "properties": {
-        "panel": {"$use": "id", "description": "The scene panel's id in the open spec."},
-        "entity": {"$use": "entity_path", "description": "The entity of the panel's scene, such as programs/ribbons or a path the script publishes."},
-        "kind": {"$use": "stage_kind"},
-        "wgsl": {"type": "string", "minLength": 1, "maxLength": 16384, "description": "The stage's WGSL: the function material or vertex, with helper functions and constants, at most 16 KiB."},
-        "params": {"description": "A JSON object that gives each of the stage's named parameters, at most 16 names, a number or a binding reference to a control, a selection or a state; the WGSL reads them by name."},
-        "dry_run": {"$use": "dry_run"}}})json",
-     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "entity", "kind", "messages", "warnings", "diff", "applied"],
-      "properties": {
-        "panel": {"type": "string", "description": "The scene panel's id."},
-        "entity": {"type": "string", "description": "The entity path."},
-        "kind": {"type": "string", "description": "The stage's kind."},
-        "messages": {"type": "array", "items": {"$use": "compiler_message"}, "description": "The compiler's and the sandbox's warnings; an error refuses the edit instead."},
-        "warnings": {"$use": "warnings"},
-        "diff": {"$use": "diff"},
-        "applied": {"$use": "applied"}}})json",
-     R"json({"panel": "world", "entity": "programs/ribbons", "kind": "material", "wgsl": "fn material(in: MaterialIn) -> vec4<f32> {\n  return vec4<f32>(in.color.rgb * (0.5 + 0.5 * in.value), 1.0);\n}\n"})json"},
-    {"stage.remove", true, false, true,
-     "Removes the material or vertex stage of one entity of a scene panel, so that the entity draws with the viewer's "
-     "own function again. Undo restores the stage. The result holds the change as a diff; with dry_run true the change "
-     "is only checked and not applied.",
-     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "entity", "kind"],
-      "properties": {
-        "panel": {"$use": "id", "description": "The scene panel's id in the open spec."},
-        "entity": {"$use": "entity_path", "description": "The entity path of the stage."},
-        "kind": {"$use": "stage_kind"},
-        "dry_run": {"$use": "dry_run"}}})json",
-     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "entity", "kind", "warnings", "diff", "applied"],
-      "properties": {
-        "panel": {"type": "string", "description": "The scene panel's id."},
-        "entity": {"type": "string", "description": "The entity path."},
-        "kind": {"type": "string", "description": "The removed stage's kind."},
-        "warnings": {"$use": "warnings"},
-        "diff": {"$use": "diff"},
-        "applied": {"$use": "applied"}}})json",
-     R"json({"panel": "world", "entity": "programs/ribbons", "kind": "material"})json"},
-    {"stage.check", false, false, false,
-     "Compiles a WGSL source as the viewer compiles a stage or as the runtime compiles a program, and returns the "
-     "compiler's and the sandbox's messages with line and column, the entry points and the bindings. kind material or "
-     "vertex checks a stage with the viewer's prelude; kind compute checks a program's source without its declaration. "
-     "It changes nothing.",
-     R"json({"type": "object", "additionalProperties": false, "required": ["kind", "wgsl"],
-      "properties": {
-        "kind": {"type": "string", "enum": ["material", "vertex", "compute"], "description": "How to compile it: as a material or vertex stage, or as a program's compute source."},
-        "wgsl": {"type": "string", "minLength": 1, "maxLength": 65536, "description": "The WGSL source."},
-        "entry": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$", "description": "compute: the entry point to check; the one compute entry point when absent."}}})json",
-     R"json({"type": "object", "additionalProperties": false, "required": ["ok", "messages", "entry_points", "bindings"],
-      "properties": {
-        "ok": {"type": "boolean", "description": "Whether the source compiles and passes the checks that need no declaration."},
-        "messages": {"type": "array", "items": {"$use": "compiler_message"}, "description": "The messages, errors first."},
-        "entry_points": {"type": "array", "description": "The entry points of the source.",
-                         "items": {"type": "object", "additionalProperties": false, "required": ["name", "stage", "workgroup_size"],
-                                   "properties": {
-                                     "name": {"type": "string", "description": "The entry point's name."},
-                                     "stage": {"type": "string", "enum": ["vertex", "fragment", "compute"], "description": "The entry point's stage."},
-                                     "workgroup_size": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "integer"}, "description": "compute: the workgroup size x, y and z; zeros otherwise."}}}},
-        "bindings": {"type": "array", "description": "The bindings of the source, as the compiler reflects them.",
-                     "items": {"type": "object", "additionalProperties": false, "required": ["group", "binding", "name", "kind", "access"],
-                               "properties": {
-                                 "group": {"type": "integer", "minimum": 0, "description": "The binding's group."},
-                                 "binding": {"type": "integer", "minimum": 0, "description": "The binding's number in its group."},
-                                 "name": {"type": "string", "description": "The WGSL variable's name."},
-                                 "kind": {"type": "string", "enum": ["uniform", "storage", "texture", "uint_texture", "storage_texture", "sampler"], "description": "What the binding is."},
-                                 "access": {"type": "string", "enum": ["read", "read_write", "write"], "description": "How the source may use it."}}}}}})json",
-     R"json({"kind": "compute", "wgsl": "@group(0) @binding(0) var<storage, read> w: array<f32>;\n@group(0) @binding(1) var<storage, read_write> positions: array<f32>;\n@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;\n@compute @workgroup_size(64) fn run(@builtin(global_invocation_id) id: vec3<u32>) {\n  let i = id.x;\n  if (i >= 256u) { return; }\n  positions[3u * i] = w[3u * i];\n  positions[3u * i + 1u] = w[3u * i + 1u];\n  positions[3u * i + 2u] = w[3u * i + 2u];\n  atomicAdd(&count, 1u);\n}\n"})json"},
+    // programs (design/gpu-programs.md)
     {"program.create", true, false, true,
      "Adds a GPU program to the open spec: a WGSL compute pass that reads live tensors of the running script in place "
      "and read-only, and writes one output. A geometry output becomes an entity of a scene panel. A pixels output "
@@ -1898,17 +1822,16 @@ const Row kRows[] = {
         "applied": {"$use": "applied"}}})json",
      R"json({"id": "rows"})json"},
     {"program.status", false, false, true,
-     "Returns the state of each GPU program and each stage of the open spec: where it runs, whether it compiled, runs, "
+     "Returns the state of each GPU program of the open spec: where it runs, whether it compiled, runs, "
      "was refused or stopped, its cadence N, the GPU time of its last pass, the overhead of a pass and the base step "
      "time on the run's wall clock, the measured share of the training time, its passes a second, its memory, and "
      "its last error with line and column. It changes nothing.",
      R"json({"type": "object", "additionalProperties": false, "required": [],
       "properties": {
-        "id": {"type": "string", "minLength": 1, "maxLength": 320, "description": "Only this program, or this stage as <panel>/<entity>/<kind>; every program and stage when absent."}}})json",
-     R"json({"type": "object", "additionalProperties": false, "required": ["programs", "stages"],
+        "id": {"type": "string", "minLength": 1, "maxLength": 320, "description": "Only this program; every program when absent."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["programs"],
       "properties": {
-        "programs": {"type": "array", "maxItems": 16, "items": {"$use": "program_status"}, "description": "The programs, in the spec's order."},
-        "stages": {"type": "array", "maxItems": 32, "items": {"$use": "program_status"}, "description": "The stages, in the spec's order."}}})json",
+        "programs": {"type": "array", "maxItems": 16, "items": {"$use": "program_status"}, "description": "The programs, in the spec's order."}}})json",
      R"json({"id": "rows"})json"},
 
     // pieces and programmable graphics (design/programmable-graphics.md, Commands)
@@ -2159,9 +2082,6 @@ const std::pair<const char*, CommandEffect> kEffects[] = {
     {"run.stop", E::run},
     {"run.logs", E::read},
     {"events.wait", E::read},
-    {"stage.set", E::edit},
-    {"stage.remove", E::edit},
-    {"stage.check", E::read},
     {"program.create", E::edit},
     {"program.patch", E::edit},
     {"program.remove", E::edit},

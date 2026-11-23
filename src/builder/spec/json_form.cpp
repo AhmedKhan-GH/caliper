@@ -423,8 +423,11 @@ public:
                     sink_.error("spec.wrong_type", "stage must be an array of tables; write each one as [[stage]].",
                                 "stage");
                 } else {
-                    for (std::size_t i = 0; i < it->size(); ++i)
-                        s.stages.push_back(stage((*it)[i], index_path("stage", i)));
+                    for (std::size_t i = 0; i < it->size(); ++i) {
+                        // Stages were replaced by pieces: the spec opens without the stage.
+                        const Diagnostic d = stage_replaced((*it)[i], index_path("stage", i));
+                        sink_.warning(d.code, d.message, d.path);
+                    }
                 }
             }
             if (auto it = root.find("provenance"); it != root.end()) s.provenance = provenance(*it, "provenance");
@@ -434,7 +437,7 @@ public:
         return s;
     }
 
-    // ---- programs, stages and provenance (spec version 1, program.h) ---------
+    // ---- programs and provenance (spec version 1, program.h) ---------
     // The types, the keys, the required keys and the enumerations are checked
     // here; the ranges, the limits and the references are the validator's.
 
@@ -1006,28 +1009,6 @@ public:
         return p;
     }
 
-    Stage stage(const json& o, const std::string& path) {
-        Stage st;
-        if (!table(o, path, path)) return st;
-        keys(o, path, {"panel", "entity", "kind", "wgsl", "params"}, "a stage");
-        st.panel = required_string(o, "panel", path, "A stage");
-        st.entity = required_string(o, "entity", path, "A stage");
-        if (auto kind = string(o, "kind", path)) {
-            if (auto k = stage_kind_from_name(*kind)) {
-                st.kind = *k;
-            } else {
-                sink_.error("spec.bad_value", quote(*kind) + " is not a kind of stage; the kinds are material and vertex.",
-                            key_path(path, "kind"));
-            }
-        } else if (o.find("kind") == o.end()) {
-            missing(path, "kind", "A stage");
-        }
-        st.wgsl = required_string(o, "wgsl", path, "A stage");
-        st.params = params(o, path);
-        st.x = extension(o, path);
-        return st;
-    }
-
     Provenance provenance(const json& o, const std::string& path) {
         Provenance pv;
         if (!table(o, path, path)) return pv;
@@ -1052,6 +1033,9 @@ public:
                         r.target = required_string(item, "target", ip, "A reviewed source");
                         r.sha256 = required_string(item, "sha256", ip, "A reviewed source");
                     }
+                    // Old stage declarations are discarded above, together with their review hashes.
+                    // Program review hashes remain unchanged.
+                    if (r.target.rfind("stage:", 0) == 0) continue;
                     pv.reviewed.push_back(std::move(r));
                 }
             }
@@ -1809,7 +1793,6 @@ Program decode_program(const json& item, const std::string& path, Sink& sink) {
     return Decoder(sink).program(item, path);
 }
 
-Stage decode_stage(const json& item, const std::string& path, Sink& sink) { return Decoder(sink).stage(item, path); }
 
 Piece decode_piece(const json& item, const std::string& path, Sink& sink) { return Decoder(sink).piece(item, path); }
 
@@ -1964,10 +1947,6 @@ Decoded<Program> program_from_json(const json& item, const std::string& path) {
     return decode_item<Program>(item, path, 2, detail::decode_program);
 }
 
-Decoded<Stage> stage_from_json(const json& item, const std::string& path) {
-    return decode_item<Stage>(item, path, 2, detail::decode_stage);
-}
-
 Diagnostic stage_replaced(const json& stage, const std::string& path) {
     auto key = [&](const char* name) {
         const auto it = stage.is_object() ? stage.find(name) : stage.end();
@@ -1983,6 +1962,7 @@ Diagnostic stage_replaced(const json& stage, const std::string& path) {
     else
         how = "put the stage's color into the color function of its draw.wgsl (point_color in points@1)";
     Diagnostic d;
+    d.severity = Severity::warning;
     d.code = "spec.stage_replaced";
     d.path = path;
     d.message = "Stages were replaced by pieces, thus " + what +
@@ -2345,17 +2325,6 @@ json to_json(const Program& p) {
     return j;
 }
 
-json to_json(const Stage& s) {
-    json j = json::object();
-    j["panel"] = s.panel;
-    j["entity"] = s.entity;
-    j["kind"] = stage_kind_name(s.kind);
-    j["wgsl"] = s.wgsl;
-    if (!s.params.empty()) j["params"] = params_json(s.params);
-    if (!s.x.is_null()) j["x"] = s.x;
-    return j;
-}
-
 json to_json(const Provenance& p) {
     json j = json::object();
     j["foreign"] = p.foreign;
@@ -2427,11 +2396,6 @@ json to_json(const Spec& spec) {
         json list = json::array();
         for (const Program& p : spec.programs) list.push_back(to_json(p));
         j["program"] = std::move(list);
-    }
-    if (!spec.stages.empty()) {
-        json list = json::array();
-        for (const Stage& s : spec.stages) list.push_back(to_json(s));
-        j["stage"] = std::move(list);
     }
     if (!spec.pieces.empty()) {
         json list = json::array();

@@ -45,7 +45,7 @@ void validate_controls(const AdditionsCheck& c);
 // transport control.
 void validate_history(const AdditionsCheck& c);
 // validate_operators.cpp: the `surface` and `path` steps, `params` of
-// programs and stages, and the `tensor` output.
+// programs, and the `tensor` output.
 void validate_operators(const AdditionsCheck& c);
 // validate_entities.cpp: the `entity` array of a scene panel, and the scene
 // options `box` and `views`.

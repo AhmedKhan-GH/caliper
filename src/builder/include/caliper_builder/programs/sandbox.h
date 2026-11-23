@@ -1,14 +1,14 @@
 #pragma once
-// caliper_builder::programs: the sandbox of GPU programs and stages
+// caliper_builder::programs: the sandbox of GPU programs
 // (design/gpu-programs.md, Sandbox). A declaration and the compiler's
 // reflection go in, and a verdict comes out.
 //
-// The same checks run in three places: in the editor before a stage or
-// program edit (the session's program commands), in the producer runtime in
-// the script before a program runs, and in the viewer before a stage draws.
+// The same checks run in two places: in the editor before a program
+// edit (the session's program commands), and in the producer runtime in the
+// script before a program runs.
 // They run in this order, and the first failure stops the program:
 //
-//   1. check_declaration() or check_stage_declaration(): ids, counts, sizes
+//   1. check_declaration(): ids, counts, sizes
 //      and limits inside their maximums (spec/program.h, program_limits)
 //   2. check_provenance(): a source of a foreign spec has its hash in
 //      provenance.reviewed, else the program waits for a review
@@ -16,7 +16,7 @@
 //      directive
 //   4. compile_and_reflect(): caliper-wgsl parses and validates the source
 //      and reflects its bindings and entry points
-//   5. and 6. check_program() or check_stage(): the entry point, the
+//   5. and 6. check_program(): the entry point, the
 //      workgroup size, and each binding against the declaration; an input
 //      must be a storage buffer with read access only
 //   7. to 9. the host's own: the read-only import of each input, the memory
@@ -47,8 +47,6 @@ namespace caliper_builder::programs {
 // The editor's codes.
 inline constexpr const char* kProgramExists = "program.exists";
 inline constexpr const char* kProgramNotFound = "program.not_found";
-inline constexpr const char* kStageNotFound = "stage.not_found";
-inline constexpr const char* kStageNotScenePanel = "stage.not_scene_panel";
 inline constexpr const char* kProgramBadTarget = "program.bad_target";
 inline constexpr const char* kProgramTooLarge = "program.too_large";
 inline constexpr const char* kProgramDirectiveNotAllowed = "program.directive_not_allowed";
@@ -60,14 +58,9 @@ inline constexpr const char* kProgramOutputMismatch = "program.output_mismatch";
 inline constexpr const char* kProgramOverLimits = "program.over_limits";
 inline constexpr const char* kProgramCompilerUnavailable = "program.compiler_unavailable";
 inline constexpr const char* kProgramNotChecked = "program.not_checked";   // a warning
-inline constexpr const char* kStageBindingNotAllowed = "stage.binding_not_allowed";
-inline constexpr const char* kStageEntryNotAllowed = "stage.entry_not_allowed";
-inline constexpr const char* kStageCompileFailed = "stage.compile_failed";
-// The struct Params of a program, or the params a stage reads, differ from
-// the names of its `params` (design/instrument-interface.md, Program
+// The struct Params of a program differs from the names of its `params` (design/instrument-interface.md, Program
 // Parameters).
 inline constexpr const char* kProgramParamsMismatch = "program.params_mismatch";
-inline constexpr const char* kStageParamsMismatch = "stage.params_mismatch";
 // The hosts' codes.
 inline constexpr const char* kProgramNeedsReview = "program.needs_review";   // state review, not an error event
 inline constexpr const char* kProgramUnknownInput = "program.unknown_input";
@@ -79,7 +72,6 @@ inline constexpr const char* kProgramOverBudget = "program.over_budget";   // th
 inline constexpr const char* kProgramTimeout = "program.timeout";
 inline constexpr const char* kProgramDeviceLost = "program.device_lost";
 inline constexpr const char* kProgramUnavailable = "program.unavailable";
-inline constexpr const char* kStageOverTime = "stage.over_time";
 
 // ---- reflection, verdict and compile result: programs/reflection.h
 
@@ -92,16 +84,13 @@ bool compiler_available();
 // The editor also checks the target panel against the spec; this check does
 // not see the spec.
 Verdict check_declaration(const spec::Program& program);
-// 1. The declaration of a stage: the panel's id, the entity path and the size.
-Verdict check_stage_declaration(const spec::Stage& stage);
 
-// 2. Whether a program or a stage may run under `provenance`: ok for a spec
-// that is not foreign, or when `target` (spec::program_target() or
-// spec::stage_target()) is reviewed with this hash; else program.needs_review.
+// 2. Whether a program may run under `provenance`: ok for a spec
+// that is not foreign, or when `target` (spec::program_target()) is reviewed with this hash; else program.needs_review.
 Verdict check_provenance(const spec::Provenance& provenance, std::string_view target, std::string_view sha256);
 
 // 3. The source before the compiler: at most `max_bytes`
-// (program_limits::kProgramSourceBytes or kStageSourceBytes), and no
+// (program_limits::kProgramSourceBytes), and no
 // directive (enable, requires or diagnostic) at the top of the module.
 Verdict check_source(std::string_view wgsl, std::size_t max_bytes);
 
@@ -124,10 +113,6 @@ Compiled compile_and_reflect_entry(std::string_view wgsl, std::string_view entry
 // program.binding_undeclared, and a missing or mismatched output is
 // program.output_mismatch.
 Verdict check_program(const spec::Program& program, const Reflection& reflection);
-// 5. and 6. A stage's reflection, compiled with stage_prelude() before it: no
-// binding (stage.binding_not_allowed) and no entry point
-// (stage.entry_not_allowed). The viewer then compiles the composed shader.
-Verdict check_stage(const spec::Stage& stage, const Reflection& reflection);
 
 // ---- helpers the hosts share
 // The SHA-256 of a source, in lowercase hex: provenance, status and the
@@ -165,10 +150,6 @@ bool params_fields(std::string_view wgsl, std::vector<ParamField>* fields, Verdi
 // fields of its struct Params are the same set, and the source declares the
 // struct exactly when the program has params; else program.params_mismatch.
 Verdict check_params(const spec::Program& program);
-// A stage's params against its source: the source declares no struct Params
-// and no `params` of its own (the viewer declares them), and each field it
-// reads as params.<name> is a name of `params`; else stage.params_mismatch.
-Verdict check_stage_params(const spec::Stage& stage);
 // Whether `value` is inside the declared range of a field of struct Params:
 // a finite number of float range for f32, and after rounding a whole number
 // of the type's range for i32 and u32. A value outside it is refused, not
@@ -180,32 +161,4 @@ bool param_in_range(ParamType type, double value);
 // there are no fields.
 std::vector<std::uint8_t> pack_params(const std::vector<ParamField>& fields,
                                       const std::vector<std::pair<std::string, double>>& values);
-// The group of the uniform `params` in a stage's composed shader; its binding
-// is 0. Groups 0 to 2 hold the built-in program's resources.
-inline constexpr std::uint32_t kStageParamsGroup = 3;
-// The declaration of a stage's params that a host puts after the stage's
-// source, so that the line numbers of the source stay as they are: struct
-// Params with one f32 field for each name of `params` in name order, and
-// `params` as var<uniform> at kStageParamsGroup (uniform true) or as
-// var<private> for a check compile without bindings. Empty when the stage has
-// no params.
-std::string stage_params_declaration(const spec::Stage& stage, bool uniform);
-// The fields of a stage's struct Params: each name of `params` in name order,
-// as f32.
-std::vector<ParamField> stage_params_fields(const spec::Stage& stage);
-
-// ---- the stage contract (design/gpu-programs.md, Stage Declaration)
-// The WGSL that every host puts before a stage's source. The compiler's line
-// numbers of a composed shader are those of the stage's source plus
-// stage_prelude_lines().
-inline constexpr std::string_view kStagePrelude =
-    "struct MaterialIn { color: vec4<f32>, value: f32, item: u32, position: vec3<f32>, normal: vec3<f32>, "
-    "time_s: f32, step: u32 }\n"
-    "struct VertexIn { position: vec3<f32>, value: f32, radius: f32, item: u32, time_s: f32, step: u32 }\n"
-    "struct VertexOut { position: vec3<f32>, radius: f32 }\n";
-inline constexpr std::string_view stage_prelude() { return kStagePrelude; }
-inline constexpr std::uint32_t stage_prelude_lines() { return 3; }
-// The function a stage of this kind defines: "material" or "vertex".
-inline const char* stage_function(spec::StageKind kind) { return spec::stage_kind_name(kind); }
-
 }  // namespace caliper_builder::programs

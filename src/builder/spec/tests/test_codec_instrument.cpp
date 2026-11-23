@@ -2,7 +2,7 @@
 // version 1 (design/instrument-interface.md): state, history, the window,
 // surface and path steps, entities, annotations, binding references, the new
 // options, the new control kinds, bound texts, layout shares and the params of
-// programs and stages.
+// programs.
 #include <set>
 #include <string>
 
@@ -227,13 +227,6 @@ inputs = [{ source = "live:x", var = "a" }]
 output = { kind = "tensor", shape = [16] }
 params = { gain = { control = "stop" }, level = 0.5 }
 
-[[stage]]
-panel = "world"
-entity = "spec/terrain"
-kind = "material"
-params = { level = { control = "stop" } }
-wgsl = "fn material(in: MaterialIn) -> vec4<f32> { return in.color; }"
-
 [layout]
 split = "vertical"
 shares = [6.0, 3.0, 1.0]
@@ -394,8 +387,6 @@ TEST_CASE("a version 1 document with every new key reads into the expected value
     CHECK(std::get<double>(s.programs[0].params.at("level")) == 0.5);
     CHECK(std::get<cs::Reference>(s.programs[0].params.at("gain")).target == "stop");
     CHECK_FALSE(s.programs[0].builtin.has_value());
-    REQUIRE(s.stages.size() == 1);
-    CHECK(std::get<cs::Reference>(s.stages[0].params.at("level")).target == "stop");
 
     REQUIRE(s.layout.has_value());
     CHECK(s.layout->shares == std::vector<double>{6, 3, 1});
@@ -544,9 +535,6 @@ TEST_CASE("a table that looks like a reference but is not one gives spec.bad_ref
     auto fields = parse(head + "[[control]]\nid = \"c\"\nkind = \"readout\"\n"
                                "options = { format = \"{a}\", fields = { a = { state = 1 } } }\n");
     CHECK(has(fields.diagnostics, "spec.bad_reference", "control[0].options.fields.a"));
-    auto params = parse(head + "[[stage]]\npanel = \"w\"\nentity = \"spec/a\"\nkind = \"material\"\nwgsl = \"x\"\n"
-                               "params = { level = { control = 2 } }\n");
-    CHECK(has(params.diagnostics, "spec.bad_reference", "stage[0].params.level"));
 }
 
 TEST_CASE("the types of the new keys are checked") {
@@ -598,9 +586,6 @@ TEST_CASE("the types of the new keys are checked") {
               "spec.wrong_type", "layout.children[0].min"));
     CHECK(has(diagnostics("[[program]]\nid = \"p\"\nwgsl = \"x\"\ninputs = []\noutput = { kind = \"tensor\" }\n"),
               "spec.missing_key", "program[0].output.shape"));
-    CHECK(has(diagnostics("[[stage]]\npanel = \"w\"\nentity = \"spec/a\"\nkind = \"material\"\nwgsl = \"x\"\n"
-                          "params = { level = \"high\" }\n"),
-              "spec.wrong_type", "stage[0].params.level"));
 }
 
 TEST_CASE("a spec built in code needs version 1 for each new key") {

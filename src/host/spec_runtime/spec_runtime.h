@@ -68,6 +68,7 @@ class RunControl;
 struct Event;
 class ValueStore;
 class StepHistory;
+class DrawStatusHost;
 }
 
 namespace caliper_host {
@@ -442,5 +443,9 @@ private:
 // app's workspace folder, read when the programs are reconciled. Without it a program pinned to a
 // workspace piece is refused with piece.missing. Frame thread.
 void set_program_workspace(std::function<std::string()> workspace);
+
+// The host of the draw halves that the session's program.status reads. The app gives it to its
+// session with AppSession::set_draw_host(). It lives until the process ends. Any thread.
+caliper_builder::DrawStatusHost* app_draw_status_host();
 
 }  // namespace caliper_host

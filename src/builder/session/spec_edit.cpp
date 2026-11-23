@@ -315,12 +315,8 @@ SpecEdit panel_remove(const spec::Spec& s, const json& args, const spec::SourceR
         remove_leaf(*next.layout, id, &drop);
         if (drop) next.layout.reset();
     }
-    // The panel's stages go with it, in the same undo step
-    // (design/gpu-programs.md, Stage Declaration). A program that draws in the
-    // panel stays, and the validator refuses the removal until it moves.
-    next.stages.erase(std::remove_if(next.stages.begin(), next.stages.end(),
-                                     [&](const spec::Stage& st) { return st.panel == id; }),
-                      next.stages.end());
+    // A program that draws in the panel stays, and the validator refuses the
+    // removal until it moves.
     return finish(std::move(next), resolver, json{{"id", id}});
 }
 
@@ -641,7 +637,7 @@ bool is_spec_edit_command(std::string_view name) {
     return name == "spec.set_text" || name == "source.add" || name == "source.patch" || name == "source.remove" ||
            name == "panel.create" || name == "panel.patch" || name == "panel.remove" || name == "layout.place" ||
            name == "layout.set" || name == "control.create" || name == "control.patch" || name == "control.remove" ||
-           name == "stage.set" || name == "stage.remove" || name == "program.create" || name == "program.patch" ||
+           name == "program.create" || name == "program.patch" ||
            name == "program.remove" || name == "state.create" || name == "state.patch" || name == "state.remove" ||
            name == "entity.set" || name == "entity.remove" || name == "annotation.set" ||
            name == "annotation.remove" || name == "camera.save";
@@ -662,8 +658,7 @@ SpecEdit apply_spec_edit(const spec::Spec& s, std::string_view name, const json&
         if (name == "layout.set") return layout_set(s, args, resolver);
         if (name == "control.create" || name == "control.patch" || name == "control.remove")
             return apply_control_edit(s, name, args, resolver);
-        if (name == "stage.set" || name == "stage.remove" || name == "program.create" || name == "program.patch" ||
-            name == "program.remove")
+        if (name == "program.create" || name == "program.patch" || name == "program.remove")
             return apply_program_edit(s, name, args, resolver);
         // design/instrument-interface.md (instrument_commands.h)
         if (name == "state.create" || name == "state.patch" || name == "state.remove")

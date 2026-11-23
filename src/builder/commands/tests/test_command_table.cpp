@@ -40,7 +40,7 @@ const char* const kV0[] = {
     "cursor.get",      "cursor.set",      "cursor.step",    "camera.get",    "camera.set",       "camera.save",
     "run.state",
     "run.set_param",   "run.action",      "run.pause",      "run.list",      "run.start",        "run.fork",
-    "run.stop",        "run.logs",        "events.wait",    "stage.set",     "stage.remove",     "stage.check",
+    "run.stop",        "run.logs",        "events.wait",
     "program.create",  "program.patch",   "program.remove", "program.status", "piece.check",    "piece.list",
     "piece.show",      "piece.save",      "piece.copy",     "piece.update",  "piece.remove",     "program.read",
     "intervene.points", "intervene.set",
@@ -143,7 +143,7 @@ TEST_CASE("the flags follow the design page") {
                                 "spec.new", "spec.open", "spec.set_text", "source.add", "source.patch",
                                 "source.remove", "panel.create", "panel.patch", "panel.remove", "layout.place",
                                 "layout.set", "preview.commit", "applet.save", "applet.open", "control.create",
-                                "control.patch", "control.remove", "stage.set", "stage.remove", "program.create",
+                                "control.patch", "control.remove", "program.create",
                                 "program.patch", "program.remove", "history.undo", "history.redo", "state.create",
                                 "state.patch", "state.remove", "entity.set", "entity.remove", "annotation.set",
                                 "annotation.remove", "camera.save", "piece.save", "piece.copy", "piece.update",
@@ -158,8 +158,8 @@ TEST_CASE("the flags follow the design page") {
                                 "state.get", "control.set", "selection.set", "selection.get", "entity.set",
                                 "entity.remove", "annotation.set", "annotation.remove", "cursor.get", "cursor.set",
                                 "cursor.step", "camera.get", "camera.set", "camera.save", "run.state", "run.set_param", "run.action", "run.pause",
-                                "run.list", "run.start", "run.fork", "run.stop", "run.logs", "stage.set",
-                                "stage.remove", "program.create", "program.patch", "program.remove", "program.status",
+                                "run.list", "run.start", "run.fork", "run.stop", "run.logs",
+                                "program.create", "program.patch", "program.remove", "program.status",
                                 "piece.list", "piece.show", "piece.save", "program.read", "intervene.points", "intervene.set", "intervene.clear", "intervene.list",
                                 "history.undo", "history.redo", "history.list"});
     // Every destructive command mutates.

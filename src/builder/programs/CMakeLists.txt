@@ -1,7 +1,7 @@
-# caliper_builder_programs: the sandbox of GPU programs and stages
+# caliper_builder_programs: the sandbox of GPU programs
 # (design/gpu-programs.md, Sandbox; include/caliper_builder/programs/sandbox.h).
 # The editor's program commands, the producer runtime in the script and the
-# viewer's stages run the same checks. It needs only the standard library and
+# viewer run the same checks. It needs only the standard library and
 # the header-only value types of spec/program.h (with nlohmann_json), and it
 # links the runtime WGSL compiler caliper::wgsl when the build has it.
 # pieces.cpp holds the names, imports, hash, composer and checks of pieces
