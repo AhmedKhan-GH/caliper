@@ -73,6 +73,16 @@ FoundPiece find_piece(const PieceLibrary& library, const std::string& workspace,
 FoundPiece resolve_pin(const PieceLibrary& library, const std::string& workspace, const spec::Spec& spec,
                        const spec::PieceRef& pin);
 
+// The piece that a pin of an open spec names, for the hosts that run it. A
+// pin needs its hash: the editor writes it only into the pins of
+// program.create and program.patch, thus a pin without one in a spec file is
+// spec.missing_key at piece.hash, not piece.hash_mismatch. Otherwise as
+// resolve_pin().
+FoundPiece resolve_spec_pin(const PieceLibrary& library, const std::string& workspace, const spec::Spec& spec,
+                            const spec::PieceRef& pin);
+// The message of spec.missing_key for a pin without a hash.
+std::string pin_without_hash_message(const spec::PieceRef& pin);
+
 // Checks an instance against its piece and the catalog: each input bound
 // once with the form of its kind and, when the catalog knows the tensor, its
 // dtype and rank (piece.bad_binding), a buffer input bound to a published

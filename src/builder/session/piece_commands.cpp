@@ -838,6 +838,22 @@ FoundPiece resolve_pin(const PieceLibrary& library, const std::string& workspace
     return f;
 }
 
+std::string pin_without_hash_message(const spec::PieceRef& pin) {
+    return "The pin of " + pin.name + " version " + std::to_string(pin.version) +
+           " has no hash; a pin in a spec needs the piece's hash, which piece.check gives, and program.patch "
+           "writes it into a pin without one.";
+}
+
+FoundPiece resolve_spec_pin(const PieceLibrary& library, const std::string& workspace, const spec::Spec& spec,
+                            const spec::PieceRef& pin) {
+    if (pin.hash.empty()) {
+        FoundPiece f;
+        f.error = fail("spec.missing_key", pin_without_hash_message(pin), "piece.hash");
+        return f;
+    }
+    return resolve_pin(library, workspace, spec, pin);
+}
+
 Error check_instance(const PieceLibrary& library, const std::string& workspace, const spec::Spec& spec,
                      const spec::Program& program, const spec::Piece& piece, const spec::SourceResolver& resolver) {
     for (const auto& [name, target] : program.bind) {

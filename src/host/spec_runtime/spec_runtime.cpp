@@ -1185,7 +1185,7 @@ ProgramHost& program_host() {
                 return v;
             }
             caliper_builder::FoundPiece f =
-                caliper_builder::resolve_pin(caliper_builder::PieceLibrary::builtin(),
+                caliper_builder::resolve_spec_pin(caliper_builder::PieceLibrary::builtin(),
                                              p->workspace ? p->workspace() : std::string(), s, *program.piece);
             if (f.error) {
                 v.code = f.error.code;

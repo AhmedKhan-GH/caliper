@@ -331,13 +331,13 @@ struct Session::Impl {
     }
 
     // The event `refused` of each program whose pinned piece is missing from
-    // its source or has another hash, when a spec opens
-    // (design/programmable-graphics.md, Status and Events). The spec opens all
-    // the same, and the host never pins another version on its own.
+    // its source or has another hash, or whose pin has no hash, when a spec
+    // opens (design/programmable-graphics.md, Status and Events). The spec
+    // opens all the same, and the host never pins another version on its own.
     void refuse_unresolved_pins(const spec::Spec& s) {
         for (const spec::Program& p : s.programs) {
             if (!p.piece) continue;
-            const FoundPiece f = resolve_pin(PieceLibrary::builtin(), workspace, s, *p.piece);
+            const FoundPiece f = resolve_spec_pin(PieceLibrary::builtin(), workspace, s, *p.piece);
             if (!f.error) continue;
             ProgramStatus st;
             st.id = p.id;

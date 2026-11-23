@@ -180,7 +180,7 @@ The hash identifies what runs. It is the SHA-256 of these bytes, in lowercase he
 
 The hash covers the text of the imported modules, because they run. It does not cover the samples. The canonical JSON and the LF line ends make the hash the same on every platform and in every language that computes it. The editor, the script and the browser module all compute it.
 
-A program pins its piece by name, version, hash and source. The pin is `piece = { name = "...", version = 1, hash = "sha256:...", from = "workspace" }`. The editor writes the hash when the pin has none. A program keeps its pinned version until `program.patch` pins another one, and `piece.update` never changes a saved version.
+A program pins its piece by name, version, hash and source. The pin is `piece = { name = "...", version = 1, hash = "sha256:...", from = "workspace" }`. `program.create` and `program.patch` write the hash when the pin has none. A pin without a hash in a spec file, written by hand or with `spec.set_text`, refuses its program with `spec.missing_key`, and `program.patch` with the same pin writes the hash. A program keeps its pinned version until `program.patch` pins another one, and `piece.update` never changes a saved version.
 
 When the source of a pin lacks the piece, the state of the program is `refused` with `piece.missing`. When the piece has another hash than the pin, the state is `refused` with `piece.hash_mismatch`. In both cases the spec still opens, and the app never pins another version on its own. The person or the agent restores the folder, or pins an existing version with `program.patch`. A script and a browser viewer compute the hash again from what they receive. A hash that differs from the pin refuses the program.
 

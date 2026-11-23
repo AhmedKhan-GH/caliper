@@ -465,6 +465,7 @@ inline std::vector<ProgramChange> ProgramSync::take_changes() {
 #include <caliper_builder/programs/sandbox.h>
 #include <caliper_builder/session/history.h>
 #include <caliper_builder/session/chain_hooks.h>
+#include <caliper_builder/session/piece_commands.h>
 #include <caliper_builder/session/program_host.h>
 #include <caliper_builder/session/session.h>
 #include <caliper_builder/session/values.h>
@@ -743,6 +744,9 @@ public:
         if (p.id.size() > CALIPER_NET_PROGRAM_ID_MAX)
             return refuse("program.bad_target", "A program id is at most " + std::to_string(CALIPER_NET_PROGRAM_ID_MAX) +
                                                     " bytes on the wire.");
+        // A pin needs its hash, which the editor writes only into the pins of
+        // its commands: a pin of a spec file without one is a missing key.
+        if (ref.hash.empty()) return refuse("spec.missing_key", caliper_builder::pin_without_hash_message(ref));
         if (!piece)
             return refuse(pg::kPieceMissing, "The piece " + pin + " that the program " + p.id + " pins is not in " +
                                                  sp::piece_from_name(ref.from) + ".");

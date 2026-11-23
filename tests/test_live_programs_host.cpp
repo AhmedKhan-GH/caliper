@@ -301,3 +301,53 @@ TEST_CASE("live/programs: a foreign spec's programs and pieces wait for a review
     CHECK(link.inner.sent.back().op == CALIPER_NET_PROGRAM_REMOVE);
     CHECK(link.inner.sent.back().id == "heat");
 }
+
+// A pin needs its hash (design/programmable-graphics.md, Versions and Pins).
+// The editor writes it only into the pins of program.create and
+// program.patch, thus a pin without one in a spec file is refused with
+// spec.missing_key and never goes out, and the pin with the piece's hash goes
+// out.
+TEST_CASE("live/programs: a pin without a hash is a missing key, not a hash mismatch") {
+    struct PieceLink final : caliper_live::ProgramLink {
+        Link inner;
+        bool ready() override { return true; }
+        uint64_t epoch() override { return 1; }
+        uint32_t send(caliper_net::wire::Program m) override { return inner.send(std::move(m)); }
+        std::vector<caliper_live::ProgramAnswer> take() override { return inner.take(); }
+        bool takes_pieces() override { return true; }
+    };
+    cb::spec::Spec spec;
+    cb::spec::Piece field = caliper_test_pieces::attention_field();
+    field.hash = cb::programs::piece_hash(field);
+    spec.pieces = {field};
+    cb::spec::Program instance;
+    instance.id = "field";
+    cb::spec::PieceRef pin;
+    pin.name = field.name;
+    pin.version = field.version;
+    pin.from = cb::spec::PieceFrom::inline_piece;
+    instance.piece = pin;
+    instance.panel = std::string("pattern");
+    instance.bind = {{"attn0", "live:0.attn"}, {"attn1", "live:1.attn"}};
+    spec.programs = {instance};
+
+    caliper_live::AppProgramHost host;
+    cb::EventRing ring;
+    PieceLink link;
+    host.reconcile(spec);
+    host.pump(link, &ring);
+    CHECK(link.inner.sent.empty());
+    auto st = host.status();
+    REQUIRE(st.size() == 1);
+    CHECK(st[0].state == "refused");
+    REQUIRE(st[0].error.has_value());
+    CHECK(st[0].error->code == "spec.missing_key");
+    CHECK(st[0].error->message.find("no hash") != std::string::npos);
+
+    spec.programs[0].piece->hash = field.hash;
+    host.reconcile(spec);
+    host.pump(link, &ring);
+    REQUIRE(link.inner.sent.size() == 1);
+    CHECK(link.inner.sent[0].id == "field");
+    CHECK(host.status()[0].state == "waiting");
+}

@@ -463,6 +463,44 @@ TEST_CASE("pieces: a spec that pins a missing or changed piece opens, and its pr
     CHECK(hash.size() == 71);
 }
 
+// A pin needs its hash. The editor writes it only into the pins of
+// program.create and program.patch, thus a hand-written pin without one opens
+// and refuses its program with spec.missing_key, which is no hash mismatch;
+// program.patch with the same pin writes the hash.
+TEST_CASE("pieces: a spec file whose pin has no hash opens, and its program is refused as a missing key") {
+    std::string ws;
+    auto s = piece_session("piece_no_hash", &ws);
+    ok(*s, "piece.update", {{"piece", uv_field()}});
+    ok(*s, "program.create",
+       {{"id", "field"}, {"piece", {{"name", "uv_field"}, {"from", "workspace"}}}, {"panel", "world"}});
+    spec::Spec saved = s->open_spec()->spec;
+    REQUIRE(saved.programs.size() == 1);
+    REQUIRE(saved.programs[0].piece);
+    CHECK(!saved.programs[0].piece->hash.empty());
+    saved.programs[0].piece->hash.clear();
+    const std::string text = spec::to_toml(saved);
+    CHECK(text.find("sha256:") == std::string::npos);
+    write_text(ws + "/unhashed.spec.toml", text);
+    const std::uint64_t cursor = s->events().latest();
+    ok(*s, "spec.open", {{"path", "unhashed.spec.toml"}});
+    REQUIRE(s->open_spec());
+    std::string code;
+    for (const Event& e : s->events().read(cursor, EventFilter{}, 64).events)
+        if (e.kind == EventKind::program && e.fields.value("change", "") == "refused" &&
+            e.fields.value("program", "") == "field")
+            code = e.fields.value("code", "");
+    CHECK(code == "spec.missing_key");
+    json status = ok(*s, "program.status", {{"id", "field"}});
+    CHECK(status["programs"][0]["state"] == "refused");
+    CHECK(status["programs"][0]["error"]["code"] == "spec.missing_key");
+    ok(*s, "program.patch",
+       {{"id", "field"}, {"patch", {{"piece", {{"name", "uv_field"}, {"version", 1}, {"from", "workspace"}}}}}});
+    REQUIRE(s->open_spec()->spec.programs[0].piece);
+    CHECK(s->open_spec()->spec.programs[0].piece->hash.size() == 71);
+    status = ok(*s, "program.status", {{"id", "field"}});
+    CHECK(status["programs"][0]["state"] != "refused");
+}
+
 namespace {
 
 struct ViewerHost : StageHost {
