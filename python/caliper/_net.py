@@ -611,7 +611,8 @@ class _Producer:
 
     def capabilities(self) -> list:
         from ._net_controls import capabilities
-        caps = capabilities(self.controls is not None) + [_wire.CAP_SCENES, _wire.CAP_TIMELINES]
+        caps = capabilities(self.controls is not None) + [_wire.CAP_SCENES, _wire.CAP_SCENE_PIECES,
+                                                           _wire.CAP_TIMELINES]
         if _wire.CAP_PROGRAMS in caps:               # pieces: RESOURCE and the relayed draw halves
             caps.append(_wire.CAP_RESOURCES)
         return sorted(caps)
@@ -1049,6 +1050,8 @@ class _Listener:
                     link.caps = link.caps | {_wire.CAP_RESOURCES}
             if _wire.CAP_SCENES in hello.capabilities:            # 3.2 draft
                 link.caps = link.caps | {_wire.CAP_SCENES}
+                if _wire.CAP_SCENE_PIECES in hello.capabilities:  # the piece form of scene batches
+                    link.caps = link.caps | {_wire.CAP_SCENE_PIECES}
             if _wire.CAP_TIMELINES in hello.capabilities:
                 link.caps = link.caps | {_wire.CAP_TIMELINES}
             await ws.send(_wire.encode(_wire.Welcome(

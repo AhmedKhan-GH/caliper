@@ -37,7 +37,7 @@ import threading
 import time
 import warnings
 
-from . import _wire
+from . import _scene_pieces, _wire
 from ._net_ring import ViewState
 from ._scene import (KIND_SCENE, PART_ORDER, SCENES, Batch, Classes, Clear, SceneState,
                      Transform)
@@ -143,14 +143,18 @@ def _transforms(sub: int, view: str, items, static: bool, state: bool) -> list:
 
 
 class SubQueue:
-    """What one subscription to a scene still has to send."""
+    """What one subscription to a scene still has to send. With ``piece_form`` (the link
+    announced "scene_pieces" and CALIPER_SCENE_SHAPES is not "builtin"), a batch with a piece
+    route goes as the RESOURCE versions of its scene program followed by the SCENE_UPDATE in the
+    piece form, one frame after the other (caliper._scene_pieces)."""
     __slots__ = ("sub", "view", "interval", "state", "pending", "last", "transforms", "classes",
-                 "pieces", "splits")
+                 "pieces", "splits", "piece_form")
 
-    def __init__(self, sub: int, view: str, interval: float):
+    def __init__(self, sub: int, view: str, interval: float, piece_form: bool = False):
         self.sub = sub
         self.view = view
         self.interval = interval
+        self.piece_form = piece_form
         self.state: collections.deque = collections.deque()   # sent first, in order, never dropped
         self.pending: dict = {}           # (path, part) -> Batch, the newest wins
         self.last: dict = {}              # (path, part) -> monotonic time of its last send
@@ -204,7 +208,7 @@ class SubQueue:
             if due <= 0:
                 del self.pending[key]
                 self.last[key] = now
-                return self.whole_or_pieces(self.update(b, False)), None
+                return self.emit(b, False), None
             wait = due if wait is None else min(wait, due)
         return None, wait
 
@@ -218,6 +222,23 @@ class SubQueue:
         pieces = _wire.split_update(msg, self.splits, max_frame=PIECE_BYTES)
         self.pieces.extend(pieces[1:])
         return pieces[0]
+
+    def frames(self, b: Batch, state: bool) -> list:
+        """The messages of batch ``b``: its RESOURCE versions and its update in the piece form,
+        else the update with its arrays (whole; :meth:`whole_or_pieces` splits it when sent)."""
+        if self.piece_form and b.part != _wire.PART_CAMERA:
+            out = _scene_pieces.bundle(self.sub, self.view, b, state)
+            if out is not None:
+                return out
+        return [self.update(b, state)]
+
+    def emit(self, b: Batch, state: bool):
+        """The first frame of batch ``b``; the others wait in ``pieces``."""
+        out = self.frames(b, state)
+        if len(out) > 1:
+            self.pieces.extend(out[1:])
+            return out[0]
+        return self.whole_or_pieces(out[0])
 
     def update(self, b: Batch, state: bool) -> _wire.SceneUpdate:
         return _wire.SceneUpdate(self.sub, self.view, b.seq, b.stamp_ns, b.path, b.part,
@@ -245,6 +266,9 @@ class LinkScenes:
         if not self.subs:
             return None, None
         qs = list(self.subs.values())
+        for q in qs:            # the rest of a bundle or a split update goes before anything else
+            if q.pieces:
+                return _wire.encode_parts(q.pieces.popleft()), None
         self.turn = (self.turn + 1) % len(qs)
         wait = None
         for q in qs[self.turn:] + qs[:self.turn]:      # subscriptions take turns
@@ -357,7 +381,8 @@ class SceneRoute:
         st = SCENES.get(s.view)
         if st is None:
             return
-        q = SubQueue(s.sub, s.view, s.interval)
+        q = SubQueue(s.sub, s.view, s.interval,
+                     _wire.CAP_SCENE_PIECES in getattr(link, "caps", ()) and _scene_pieces.enabled())
         q.state.append(_wire.SceneClear(s.sub, s.view, st.seq, time.monotonic_ns(), "",
                                         reset=True, state=True))
         late = []
@@ -383,7 +408,7 @@ class SceneRoute:
             if b.arrays is None and b.ready() and not finish(b):
                 continue                               # refused: no receiver would take it
             if b.arrays is not None:
-                q.state.append(q.update(b, True))
+                q.state.extend(q.frames(b, True))
             else:
                 late.append(b)                         # the pump offers it once its copy is done
         if late:
@@ -431,7 +456,8 @@ class SceneRoute:
                         wait = w if wait is None else min(wait, w)
                     break
                 parts, _ = frame
-                if not link.p.nio.send(link.conn, b"".join(bytes(p) for p in parts)):
+                # A scene program's RESOURCE counts toward the scene backlog, as the update it precedes.
+                if not link.p.nio.send(link.conn, b"".join(bytes(p) for p in parts), True):
                     link.stats["scenes_refused"] += 1  # the connection is closing: nothing more
                     break
                 link.stats["scenes_sent"] += 1
