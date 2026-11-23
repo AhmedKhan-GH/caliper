@@ -810,7 +810,8 @@ features:
 
   - id: REN-88
     title: Removal of Per-Shape Draw Code
-    status: planned
+    status: built
+    branches: [playground-m6]
     scope: core
     summary: Library pieces replace the built-in scene shaders, draw code and stage hooks. One read-only converter preserves old scene recordings, and Canvas 2D panels stay.
     depends_on: [REN-84, REN-85, REN-86, REN-87]

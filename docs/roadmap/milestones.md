@@ -12,7 +12,7 @@ This page lists the milestones of Caliper's current trajectory, Agent-Built Play
 | M3, Instrument Building | Entities from tensors, operators, shared state, time transport, annotations, all control kinds | Done | [#28](https://github.com/AhmedKhan-GH/caliper/pull/28) |
 | M4, Hosted Runs | Start, fork and stop a model's run from Caliper and over MCP | Done | [#26](https://github.com/AhmedKhan-GH/caliper/pull/26) |
 | M5, Programmable Graphics | Pieces with a derive half in the run and a draw half in the viewer, written by the agent, in the app and the browser | Done | [#34](https://github.com/AhmedKhan-GH/caliper/pull/34) |
-| M6, Graphics Consolidation | Library scene pieces, typed resources, dashboard parity, and removal of the built-in draw route | In progress | |
+| M6, Graphics Consolidation | Library scene pieces, typed resources, dashboard parity, and removal of the built-in draw route | Done | [#42](https://github.com/AhmedKhan-GH/caliper/pull/42) |
 | M7, Derivation Catalog | Projections, layouts, overlays and model probes as library pieces | Planned | |
 | M8, Steering and Intervention | Steer, scale and patch | Planned | |
 | M9, Saved and Editable Instruments | Saved instruments with their pieces, and the node editor | Planned | |
@@ -60,9 +60,9 @@ Piece resources accept `u8` and `u16` elements and typed textures. Large resourc
 
 [ABI epoch 3](../development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions) removes the geometry and export services. The six demos that depend on those services and the five archived applets leave the repository. GPTScope keeps its ImPlot3D view.
 
-The remaining work removes the built-in draw route and stage hooks, and completes the piece form of every scene batch. A read-only converter preserves old per-shape recordings. The Vulkan renderer stays for the Windows interface, and the graphics layer's Vulkan backend remains planned. The browser dashboard must match the app's programs, series labels and colors, controls, and layout.
+Library pieces now own every scene draw, and each sender uses the piece form for every scene batch. The change removes the built-in draw route and stage hooks. A read-only converter preserves old per-shape recordings. The Vulkan renderer stays for the Windows interface, and the graphics layer's Vulkan backend remains planned. The browser dashboard draws programs, series labels and colors, controls, and layout from the same spec as the app. Viewer controls keep the origin restrictions.
 
-The library tests check pixels and picks, and the app and browser comparison tests cover each piece. The final checks include the earlier acceptance tests and an Arc Tower dashboard comparison. These checks remain required before M6 is done. [Testing](../development/testing.md) describes the test suites.
+The library tests check pixels and picks, and the app and browser comparison tests cover each piece. The earlier acceptance tests pass, and the Arc Tower dashboard comparison checks the app and browser against the same recorded data. [Testing](../development/testing.md) describes the test suites.
 
 ## Later Milestones
 

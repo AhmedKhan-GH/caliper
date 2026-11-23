@@ -528,6 +528,9 @@ The manifest check holds every pass to the default limits of WebGPU, thus a piec
 
 ## Browser Viewer
 
+Library scene pieces require vertex storage.
+On a WebGPU device in compatibility mode without vertex storage, the viewer reports `program.browser_refused` for each affected entity.
+
 The browser module runs the same draw half from the same WGSL and the same declaration. It receives each draw half as PROGRAM from the script, and the resources as RESOURCE. It checks the names, the files, the imports and the hash with the same code that the app compiles. A hash that differs from the pin refuses the program. It then gives each composed module to WebGPU. A compilation message or a refused pipeline refuses the program with `program.browser_refused`, and the line maps back to its file.
 
 The browser has no compiler of its own, because WebGPU keeps each draw inside its bindings. The browser's dashboard viewer gets the instances and the newest resources of a scene panel through `panel.data` and draws them with the same module. A program of a foreign spec stays in review there until the app reviews it. The browser module keeps no step history and draws the newest version of each resource. It keeps a version only of a resource that the piece of its program publishes, with at most the declared count and bytes, and it keeps at most 16 programs of a script. All its versions hold at most 512 MiB together. A version above this limit is not kept. Without timestamps, the frame time is unknown. The time from the submit until the work is seen done also holds the polling of the page, once a frame, thus it cannot judge a limit of a few milliseconds. Only 30 frames in a row over 250 ms of that time stop a program with `program.draw_over_time`, and the rules of late frames apply as in the app.

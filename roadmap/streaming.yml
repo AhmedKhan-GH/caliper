@@ -509,5 +509,4 @@ features:
     depends_on: [STR-10, STR-56]
     branches: [playground-m6]
     docs: docs/reference/wire-protocol-3-2.md#piece-form
-    in_progress: true
     issue: null
