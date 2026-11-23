@@ -20,11 +20,11 @@ TEST_CASE("negotiate: compatible applet passes") {
 }
 
 TEST_CASE("negotiate: epoch mismatch → friendly reason") {
-    auto m = base(); m.abi_epoch = 1;
+    auto m = base(); m.abi_epoch = 2;   // an applet built before epoch 3 removed the geometry service
     auto n = negotiate(m, host());
     CHECK_FALSE(n.ok);
     CHECK(n.reason ==
-        "Built for ABI epoch 1; this host speaks 2 — check for an applet update.");
+        "Built for ABI epoch 2; this host speaks 3 — check for an applet update.");
 }
 
 TEST_CASE("negotiate: min_host newer than host → refuse") {
