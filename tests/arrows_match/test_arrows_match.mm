@@ -1,15 +1,5 @@
-// test_arrows_match.mm: the match of the library piece arrows@1 with the built-in arrows primitive
-// (design/programmable-graphics.md, Library Pieces).
-//
-// Each case draws one set of arrows twice on Metal, offscreen: by the scene core as an arrows
-// batch, and by the piece end to end, its derive half on the producer runtime over the same arrays
-// as tensors and its draw half in a draw runtime with the camera matrix of the built-in draw. The
-// cases cover each color mode (one color, values through each colormap, packed RGBA), one value
-// for all, fixed and automatic ranges (with a NaN, with equal values), translucent colors, NaN
-// coordinates and values, an arrow of length 0, two-column rows, a width at a pixel ratio of 2,
-// the depth offset, one arrow, and the most arrows that the piece publishes (262,143, the 8 MiB
-// limit, below the built-in's 1,048,576). ../lines_match/line_match.h holds the tolerances and
-// the picks.
+// The arrows piece retains the original images and pick identities across color
+// modes, depth offsets and edge cases. line_match.h defines the pixel tolerances.
 #include "../lines_match/line_match.h"
 
 #include "scene/scene.h"
@@ -95,7 +85,7 @@ std::vector<float> rows3(const std::vector<float>& rows, int dims, std::uint32_t
 }
 
 // The built-in batch of the case, as the live scene makes it from SCENE_UPDATE.
-void add_builtin(Builtin& b, const std::string& path, const Arrows& l) {
+void add_fixture(ReferenceScene& b, const std::string& path, const Arrows& l) {
     const std::uint32_t n = l.count();
     const std::vector<float> o = rows3(l.origins, l.dims, n), v = rows3(l.vectors, l.dims, n);
     sc::Batch batch;
@@ -155,10 +145,10 @@ Fields index_of(std::uint32_t k) { return {{"index", double(k)}}; }
 Comparison run_case(Metal& m, const std::string& name, const Arrows& l, const std::vector<std::uint32_t>& items,
                     std::size_t min_lit, float pixel_ratio = 1.0f, const std::string& capture_name = "") {
     CAPTURE(name);
-    Builtin b(*m.backend, pixel_ratio);
-    add_builtin(b, "arrows", l);
+    ReferenceScene b(*m.backend, pixel_ratio);
+    add_fixture(b, "arrows", l);
     const std::array<float, 16> mvp = b.fit();
-    const std::vector<std::uint8_t> builtin = b.draw();
+    const std::vector<std::uint8_t> builtin = b.load();
     Program p;
     make_program(m, "arrows", tensors_of(l), params_of(l), kPick, &p);
     const Drawn drawn = draw_programs(*m.backend, {&p}, mvp, pixel_ratio);
@@ -268,10 +258,10 @@ TEST_CASE("arrows_match: NaN, length 0, the depth offset, one arrow and the edge
         none.origins.insert(none.origins.end(), {0.0f, 0.0f, 0.0f});   // a second arrow, for the camera's bounds
         none.vectors.insert(none.vectors.end(), {0.0f, 0.0f, 0.0f});
         none.flat = rgba(0x14, 0x18, 0x20, 0);
-        Builtin b(*m.backend);
-        add_builtin(b, "arrows", none);
+        ReferenceScene b(*m.backend);
+        add_fixture(b, "arrows", none);
         const std::array<float, 16> mvp = b.fit();
-        const std::vector<std::uint8_t> builtin = b.draw();
+        const std::vector<std::uint8_t> builtin = b.load();
         Program p;
         make_program(m, "arrows", tensors_of(none), params_of(none), kPick, &p);
         const Drawn drawn = draw_programs(*m.backend, {&p}, mvp);
@@ -291,11 +281,11 @@ TEST_CASE("arrows_match: NaN, length 0, the depth offset, one arrow and the edge
         }
         c.flat = rgba(60, 200, 240, 255);
         c.width = 8.0f;
-        Builtin b(*m.backend);
-        add_builtin(b, "a", a);
-        add_builtin(b, "b", c);
+        ReferenceScene b(*m.backend);
+        add_fixture(b, "a", a);
+        add_fixture(b, "b", c);
         const std::array<float, 16> mvp = b.fit();
-        const std::vector<std::uint8_t> builtin = b.draw();
+        const std::vector<std::uint8_t> builtin = b.load();
         Program pa, pb;
         make_program(m, "arrows", tensors_of(a), params_of(a), kPick, &pa);
         make_program(m, "arrows", tensors_of(c), params_of(c), kPick + 1, &pb);
@@ -325,10 +315,10 @@ TEST_CASE("arrows_match: the most arrows that the piece publishes, and the count
     }
     l.width = 3.0f;
     {
-        Builtin b(*m.backend);
-        add_builtin(b, "arrows", l);
+        ReferenceScene b(*m.backend);
+        add_fixture(b, "arrows", l);
         const std::array<float, 16> mvp = b.fit();
-        const std::vector<std::uint8_t> builtin = b.draw();
+        const std::vector<std::uint8_t> builtin = b.load();
         Program p;
         make_program(m, "arrows", tensors_of(l), params_of(l), kPick, &p);
         CHECK(find_published(p.published, "arrows")->count == kMost);

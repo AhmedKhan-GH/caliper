@@ -1,31 +1,6 @@
-// test_mesh_match.mm: the match of the library piece mesh@1 with the built-in mesh primitive
-// (design/programmable-graphics.md, Library Pieces).
-//
-// Each case draws one mesh twice on Metal, offscreen and without a window: once by the scene core as
-// a mesh batch (SceneCompiler over BackendResources, with its index clamp), and once by the piece:
-// its derive half runs on the same mesh as tensors in the script's producer runtime, and its draw
-// half draws the published resources in a DrawRuntime with the camera that the scene view gives a
-// program. The two images are held to the tolerances of ../boxes_match/match_rig.h, and the picks
-// of the built-in draw at interior pixels of the first, a middle and the last triangle must name
-// the vertex that the piece's ID image shows there, with the field `index` of its item map. The
-// piece draws its faces through the index buffer `faces`, as the built-in's indexed draw does, and
-// leaves the inputs that a mesh lacks (indices, normals, colors) unbound. Flat faces are held to the
-// tolerances of the lit cases: the piece's opaque color pass writes no ID, as the built-in's color
-// pass writes none, and its last pass writes the IDs at the depth that the color pass wrote. A
-// color pass that also wrote the ID lit flat faces otherwise at their shared edges on Metal, in 140
-// and 571 pixels by at most 8 levels, with an opaque or an alpha blend alike, while the matrices of
-// both draws were the same. Each case prints how many pixels differ. The
-// cases cover the color modes (one color, one RGBA for all, values through a colormap, RGBA of each
-// vertex), lighting from normals and flat faces, translucency (an alpha below 255 of the one color
-// or of a vertex), indices above the last vertex and negative ones, a NaN vertex, the depth offset,
-// a mesh in 2-D, one triangle, empty input, and the capacity of the piece: 98,304 vertices of 48
-// bytes and 196,608 triangles of 12 bytes of indices, 6.75 MiB of its 8 MiB of published resources
-// (the built-in takes 4,194,304 of each). The built-in's texture is not part of the piece yet: a
-// texture resource of the piece has one fixed size and format. Without a Metal device the test
-// skips (exit 77).
-//
-// With CALIPER_MESH_MATCH_CAPTURE_DIR set, each case writes mesh-<case>-builtin.png,
-// mesh-<case>-piece.png and mesh-<case>-diff.png (the difference scaled up 32 times) there.
+// The mesh piece derives and draws each fixture on Metal. Saved original images
+// and pick identities cover colors, normals, flat faces, textures and index clamps.
+// Interior and edge pixels retain the comparison tolerances of match_rig.h.
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 #include "../gpu_skip.h"
@@ -93,7 +68,7 @@ void color_vertices(Mesh& m, std::uint8_t alpha) {
 }
 
 // The built-in's batch of the mesh, as live_scene.cpp makes it from a SCENE_UPDATE part.
-void builtin_mesh(Builtin& bt, const Mesh& m, gfx::Texture texture = {}) {
+void add_mesh(ReferenceScene& bt, const Mesh& m) {
     const int v = m.v();
     sc::Batch batch;
     batch.primitive = sc::Primitive::Mesh;
@@ -113,13 +88,6 @@ void builtin_mesh(Builtin& bt, const Mesh& m, gfx::Texture texture = {}) {
         for (std::size_t i = 3; i < m.rgba.size(); i += 4) batch.translucent = batch.translucent || m.rgba[i] < 255;
     }
     if (!m.values.empty()) up.add(sc::Role::Values, m.values, std::uint32_t(m.values.size()), 4, gfx::VertexFormat::F32);
-    if (!m.uvs.empty() && texture) {   // as live_scene.cpp's textured mesh
-        up.add(sc::Role::Uvs, m.uvs, std::uint32_t(v), 8, gfx::VertexFormat::F32x2);
-        batch.texture = texture;
-        batch.image_width = m.tex_w;
-        batch.image_height = m.tex_h;
-        for (std::size_t i = 3; i < m.tex.size(); i += 4) batch.translucent = batch.translucent || m.tex[i] < 255;
-    }
     for (int i = 0; i < v; ++i) {
         double p[3] = {0, 0, 0};
         for (int k = 0; k < m.dims; ++k) p[k] = m.positions[std::size_t(i * m.dims + k)];
@@ -195,42 +163,34 @@ Outcome run(Metal& mt, const std::string& name, const Mesh& m, std::vector<int> 
     gfx::Backend& g = *mt.backend;
     Outcome o;
     {
-        Builtin bt(g, kSize, m.dims == 3 ? sc::Space::k3D : sc::Space::k2D);
-        gfx::Texture texture;
-        if (!m.tex.empty()) {
-            texture = g.create_texture({m.tex_w, m.tex_h, gfx::Format::RGBA8Unorm, gfx::kSampled | gfx::kCopyDstTex, "mesh match texture"});
-            REQUIRE_MESSAGE(bool(texture), g.last_error());
-            REQUIRE(g.write_texture(texture, m.tex.data(), m.tex_w * 4));
-        }
-        builtin_mesh(bt, m, texture);
-        bt.draw();
-        REQUIRE(bt.draws.size() == 1);
+        ReferenceScene bt(g, kSize, m.dims == 3 ? sc::Space::k3D : sc::Space::k2D);
+        add_mesh(bt, m);
+        bt.load();
 
         cs::Piece piece;
         std::string why;
         REQUIRE_MESSAGE(load_piece("mesh", &piece, &why), why);
         caliper_net::Json params;
         const std::vector<Published> res = run_derive(mt.device, piece, piece_tensors(m, &params), as_map(params));
-        REQUIRE(res.size() == 3);
+        REQUIRE(res.size() == 5);
         const Published& vertices = find(res, "vertices");
         const Published& faces = find(res, "faces");
         const Published& tex = find(res, "tex");
+        const Published& info = find(res, "info");
         CHECK(tex.width == m.tex_w);
         CHECK(tex.height == m.tex_h);
         o.vertices = vertices.count;
         CHECK(faces.count % 3 == 0);
         o.triangles = faces.count / 3;
         if (vertices.count > 0) {
-            float flags = 0;   // vertex 0's normal.w
-            std::memcpy(&flags, vertices.bytes.data() + 28, 4);
-            o.flags = std::uint32_t(flags);
+            REQUIRE(info.bytes.size() >= 4);
+            std::memcpy(&o.flags, info.bytes.data(), 4);
         }
 
         PieceDraw pd(g, kSize);
         pd.install(piece, "mesh");
-        pd.set("vertices", vertices.bytes, vertices.count);
-        pd.set("faces", faces.bytes, faces.count);
-        pd.set("tex", tex.bytes, tex.count, &tex);
+        for (const Published& resource : res)
+            pd.set(resource.id, resource.bytes, resource.count, &resource);
         cd::FrameInputs in = bt.frame_inputs();
         in.params = caliper_web::pack_params(piece, params);
         CHECK(pd.draw(in));
@@ -262,7 +222,6 @@ Outcome run(Metal& mt, const std::string& name, const Mesh& m, std::vector<int> 
         capture("CALIPER_MESH_MATCH_CAPTURE_DIR", "mesh-" + name + "-builtin.png", kSize, bt.image);
         capture("CALIPER_MESH_MATCH_CAPTURE_DIR", "mesh-" + name + "-piece.png", kSize, pd.color);
         capture("CALIPER_MESH_MATCH_CAPTURE_DIR", "mesh-" + name + "-diff.png", kSize, difference(pd.color, bt.image));
-        if (texture) g.release(texture);
     }
     return o;
 }
@@ -436,8 +395,8 @@ TEST_CASE("mesh_match: no mesh draws nothing") {
     // The script's runtime imports no tensor without bytes (producer.mm refuses it), thus a viewer
     // gets no version of the triangles, or a version without a valid element; the piece then draws
     // nothing, as the built-in draws nothing for a mesh without vertices, which removes the batch.
-    Builtin bt(g, kSize, sc::Space::k3D);
-    bt.draw();
+    ReferenceScene bt(g, kSize, sc::Space::k3D);
+    bt.load();
     cs::Piece piece;
     std::string why;
     REQUIRE_MESSAGE(load_piece("mesh", &piece, &why), why);
@@ -501,20 +460,17 @@ TEST_CASE("mesh_match: the capacity of 98,304 vertices and 196,608 triangles, an
     over.indices.insert(over.indices.end(), {0, 1, int(kVertexCapacity)});
     caliper_net::Json params;
     const std::vector<Published> res = run_derive(mt.device, piece, piece_tensors(over, &params), as_map(params));
-    // The piece now holds 2,796,202 vertices and 4,194,304 triangles, thus one vertex and one triangle
+    // The piece holds 4,194,304 vertices and 4,194,304 triangles, thus one vertex and one triangle
     // more than the case's mesh are all published.
     CHECK(find(res, "vertices").count == kVertexCapacity + 1);
     CHECK(find(res, "faces").count == 3 * (kTriangleCapacity + 1));
 }
 
-// The most that the piece publishes, 2,796,202 vertices and 4,194,304 triangles, indexed and
-// untextured, or 1/CALIPER_CAPACITY_FRACTION of each: a grid padded with unused vertices and copies of
-// one triangle, with the first and the last triangle large and in front. Skipped unless run with
-// --no-skip --test-case="*at its capacity".
+// Optional capacity check of the derive output. The default suite uses bounded image fixtures.
 TEST_CASE("mesh_match: mesh@1 at its capacity" * doctest::skip()) {
     Metal mt;
     if (!mt.backend) CALIPER_SKIP_NO_GPU(mt.why);
-    const int V = 2796202 / capacity_fraction(), T = 4194304 / capacity_fraction();
+    const int V = 4194304 / capacity_fraction(), T = 4194304 / capacity_fraction();
     const int s = int(std::sqrt(double(V) * 0.75));
     Mesh m = grid(s, s);
     while (m.v() < V) {
@@ -540,10 +496,14 @@ TEST_CASE("mesh_match: mesh@1 at its capacity" * doctest::skip()) {
     m.indices.reserve(std::size_t(T) * 3);
     while (m.t() < T - 1) m.indices.insert(m.indices.end(), {0, 1, s + 1});
     m.indices.insert(m.indices.end(), {v - 1, v - 4, v - 5});
-    const Outcome o = run(mt, "at_capacity", m, {0, T - 1});
-    CHECK(o.vertices == std::uint32_t(V));
-    CHECK(o.triangles == std::uint32_t(T));
-    CHECK(o.picks == o.asked);
+    cs::Piece piece;
+    std::string why;
+    REQUIRE_MESSAGE(load_piece("mesh", &piece, &why), why);
+    caliper_net::Json params;
+    const auto tensors = piece_tensors(m, &params);
+    const auto output = run_derive(mt.device, piece, tensors, as_map(params));
+    CHECK(find(output, "vertices").count == std::uint32_t(V));
+    CHECK(find(output, "faces").count == std::uint32_t(T) * 3);
 }
 
 CALIPER_GPU_TEST_MAIN()

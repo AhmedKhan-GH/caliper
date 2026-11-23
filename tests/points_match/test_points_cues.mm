@@ -1,19 +1,5 @@
-// test_points_cues.mm: the match of points@1's depth cues with the built-in points primitive's
-// (design/programmable-graphics.md, Library Pieces), the cues that the live points view draws.
-//
-// One cloud of 256 points in 3-D, a third of them behind the orbit's target, is drawn on Metal,
-// offscreen and without a window, by the scene core with CompileOptions::point_att_ref,
-// point_fade_w0 and point_fade_w1, and by points@1 in a DrawRuntime with the params att_ref,
-// fade_w0 and fade_w1 of the same values: a point's size follows its distance from the camera
-// within half and twice its size, and past the target its color falls toward half at the far side
-// of the fitted sphere, as the points view gives both for its camera (live/live_points.h,
-// cue_values). Two colorings are drawn: packed RGBA, as the points view writes its rows, and a
-// value through viridis. The images are held to the tolerances of test_points_match.mm, and the
-// built-in's pick at an interior pixel of 16 of the points that show one names the item that the
-// piece's ID image shows there. Without a Metal device the test skips (exit 77).
-//
-// With CALIPER_POINTS_MATCH_CAPTURE_DIR set, the test writes points-cues-<coloring>-builtin.png,
-// points-cues-<coloring>-piece.png and points-cues-<coloring>-diff.png there.
+// The points piece retains the original depth cues, colors and pick identities.
+// Both cue fixtures use saved reference images and the same camera bounds.
 #include <doctest/doctest.h>
 #include "../gpu_skip.h"
 
@@ -78,7 +64,7 @@ void run_cues(bool packed) {
     }
 
     // ---- The built-in draw, with the cues of its fitted camera ----------------------------------
-    Builtin b(g, kSize, sc::Space::k3D);
+    ReferenceScene b(g, kSize, sc::Space::k3D);
     sc::Batch batch;
     batch.primitive = sc::Primitive::Points;
     batch.size_px = kSizePx;
@@ -103,13 +89,7 @@ void run_cues(bool packed) {
     // As PointsScene::cue_values gives them: the size at the target's distance, the fade from the
     // target to the far side of the fitted sphere.
     const float att_ref = float(orbit->distance), fade_w0 = float(orbit->distance), fade_w1 = float(orbit->distance + radius);
-    b.options.point_att_ref = att_ref;
-    b.options.point_fade_w0 = fade_w0;
-    b.options.point_fade_w1 = fade_w1;
-    b.draw();
-    REQUIRE(b.draws.size() == 1);
-    CHECK(b.draws[0].p.att_ref == att_ref);
-    CHECK(b.draws[0].p.fade_w1 == fade_w1);
+    b.load();
 
     // ---- The piece's draw, with the same cues as params ----------------------------------------
     cs::Piece piece;
@@ -155,7 +135,9 @@ void run_cues(bool packed) {
         if (pixel_of_item(p.ids, kSize, std::uint64_t(i))) shown.push_back(std::uint64_t(i));
     REQUIRE(shown.size() >= 16);
     std::vector<std::uint64_t> items;
-    for (std::size_t k = 0; k < 16; ++k) items.push_back(shown[k * shown.size() / 16]);
+    for (const auto& probe : match_reference::metadata(b.reference).at("picks"))
+        items.push_back(probe.at("item").get<std::uint64_t>());
+    REQUIRE(items.size() == 16);
     const int agree = check_picks(b, p, items, sc::Primitive::Points);
     MESSAGE("points cues (", coloring, "): ", shown.size(), " points show an interior pixel; ", agree,
             " of 16 picks name the piece's item");

@@ -1,13 +1,6 @@
-# The match of the library piece points@1 with the built-in points primitive
-# (design/programmable-graphics.md, Library Pieces). caliper_points_match_tests draws one cloud of
-# points with the scene core's built-in draw and with the piece in the draw runtime, both on
-# Metal and offscreen, and compares the color images and the picks. Without a Metal device the
-# test skips and the binary exits 77, which ctest reports as skipped. With the environment
-# variable CALIPER_POINTS_MATCH_CAPTURE_DIR set, the test writes the two images and their
-# difference there as PNG files.
-#
-# The draw runtime (caliper_draw) is defined with the builder after this folder, thus the target
-# is made by a call deferred to the end of the top folder.
+# Library piece checks use saved original images and pick identities.
+# All draws use the piece runtime on offscreen Metal targets.
+# A missing Metal device returns 77.
 function(caliper_points_match_targets)
     if(NOT APPLE OR NOT TARGET caliper_draw OR NOT TARGET caliper_draw_host OR NOT TARGET caliper_net OR NOT TARGET caliper_scene OR NOT TARGET caliper_producer)
         return()
@@ -22,12 +15,11 @@ function(caliper_points_match_targets)
     set_source_files_properties("${_dir}/test_points_match.mm" PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_target_properties(caliper_points_match_tests PROPERTIES
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
-    # The depth cues of the live points view: points@1's params att_ref, fade_w0 and fade_w1 against
-    # the built-in's CompileOptions.
+    # Saved reference images cover the depth cues of the points view.
     target_sources(caliper_points_match_tests PRIVATE "${_dir}/test_points_cues.mm")
     set_source_files_properties("${_dir}/test_points_cues.mm" PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     add_test(NAME caliper_points_match COMMAND caliper_points_match_tests)
-    # The reference pictures of the built-in draw (tests/match_reference.h).
+    # The original renderer supplied these fixed reference images.
     target_compile_definitions(caliper_points_match_tests PRIVATE CALIPER_MATCH_SUITE="points")
     set_property(TEST caliper_points_match APPEND PROPERTY ENVIRONMENT
         "CALIPER_MATCH_REFERENCES=${CMAKE_SOURCE_DIR}/tests/match_references")

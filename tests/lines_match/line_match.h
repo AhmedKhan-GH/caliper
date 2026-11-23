@@ -1,18 +1,7 @@
-// line_match.h: the shared parts of the matches of the library pieces lines@1, arrows@1 and
-// path@1 with the built-in lines and arrows (design/programmable-graphics.md, Library Pieces).
-//
-// Each case draws one scene twice on Metal, offscreen and without a window. The scene core draws
-// the built-in batches (SceneCompiler over BackendResources), and the pieces draw the same data
-// end to end: the producer runtime runs each piece's derive half over the same arrays as tensors,
-// and the draw runtime draws the published resources with the camera matrix of the built-in draw.
-// The comparison holds the tolerances of the points match: an interior pixel, whose 3 x 3
-// neighborhood shows one item in the piece's ID image, has the same color in both images, and an
-// edge pixel has a piece color within 1 level of a built-in color in its 3 x 3 neighborhood. A pick
-// of the built-in draw at a pixel that shows an element of the piece must name that element, and
-// the piece's item map must give its fields.
-//
-// With CALIPER_LINE_MATCH_CAPTURE_DIR set, a case that names a capture writes <name>-builtin.png,
-// <name>-piece.png and <name>-diff.png (the difference scaled up 32 times) there.
+// Shared fixtures for the lines, arrows and path library pieces. The producer
+// runtime derives resources, and the draw runtime renders them on Metal.
+// Saved images and pick identities define the reference. Interiors are exact.
+// Edge pixels stay within one level of a reference color in the 3 x 3 neighborhood.
 #pragma once
 
 #define DOCTEST_CONFIG_IMPLEMENT
@@ -27,13 +16,9 @@
 #include "draw/draw_runtime.h"
 #include "gfx/colormap_keys.h"
 #include "gfx/metal_backend.h"
-#include "gfx/shaders/generated/programs_metal.h"
 #include "producer/caliper_producer.h"
 #include "producer/caliper_producer_derive.h"
-#include "scene/backend_resources.h"
 #include "scene/camera.h"
-#include "scene/compile.h"
-#include "scene/pick.h"
 
 #include <caliper_builder/programs/pieces.h>
 #include <caliper_builder/session/piece_commands.h>
@@ -72,7 +57,6 @@ namespace cs = caliper_builder::spec;
 namespace dp = draw_parity;
 namespace gfx = caliper_gfx;
 namespace sc = caliper_scene;
-namespace sh = caliper_gfx::shaders;
 using Json = caliper_net::Json;
 
 constexpr std::uint32_t kSize = 256;              // the target, square
@@ -493,53 +477,23 @@ Array array(sc::Role role, const std::vector<T>& v, std::uint64_t count, std::ui
     return a;
 }
 
-// The built-in scene of one case: its batches, its fitted orbit camera and its draw.
-struct Builtin {
-    gfx::Backend& g;
-    std::unique_ptr<sc::BackendResources> res;
+// The fixture scene supplies bounds and the camera of the saved reference.
+struct ReferenceScene {
     sc::SceneTree tree{sc::Space::k3D};
     sc::ViewCamera camera = sc::Orbit{};
-    sc::CompileOptions options;
-    sc::SceneCompiler compiler;
-    gfx::Texture color, depth;
-    std::vector<gfx::Buffer> buffers;
+    std::vector<std::vector<std::uint8_t>> cpu_copies;
     std::uint64_t seq = 0;
+    std::string reference;
 
-    explicit Builtin(gfx::Backend& backend, float pixel_scale = 1.0f) : g(backend) {
-        res = std::make_unique<sc::BackendResources>(
-            g, sh::kMetalPrograms, gfx::cmap::colormap_source(std::make_shared<gfx::cmap::KeyBlockCache>()));
-        std::string err;
-        REQUIRE_MESSAGE(res->init(&err), err);
-        color = g.create_texture({kSize, kSize, gfx::Format::RGBA8Unorm, gfx::kRenderTarget | gfx::kCopySrcTex,
-                                  "line match color"});
-        depth = g.create_texture({kSize, kSize, gfx::Format::Depth32Float, gfx::kRenderTarget, "line match depth"});
-        REQUIRE_MESSAGE((color && depth), g.last_error());
-        options.width = options.height = kSize;
-        options.pixel_scale = pixel_scale;
-        options.clear_rgba = kClear;
-    }
-    ~Builtin() {
-        res.reset();
-        for (gfx::Buffer b : buffers) g.release(b);
-        g.release(color);
-        g.release(depth);
-    }
-    Builtin(const Builtin&) = delete;
-    Builtin& operator=(const Builtin&) = delete;
+    explicit ReferenceScene(gfx::Backend&, float = 1.0f) {}
 
-    // Adds the batch of an entity with its arrays, each in a buffer of its own at offset 0.
     void add(const std::string& path, sc::Batch b, const std::vector<Array>& arrays) {
         for (const Array& a : arrays) {
-            const std::size_t size = std::max<std::size_t>(a.bytes.size(), 4);
-            gfx::Buffer buf = g.create_buffer({size, gfx::kVertex | gfx::kIndex | gfx::kStorage | gfx::kCopyDst, false,
-                                               "line match array"});
-            REQUIRE_MESSAGE(bool(buf), g.last_error());
-            if (!a.bytes.empty()) REQUIRE(g.write_buffer(buf, 0, a.bytes.data(), a.bytes.size()));
-            buffers.push_back(buf);
+            cpu_copies.push_back(a.bytes);
+            if (cpu_copies.back().empty()) cpu_copies.back().resize(4);
             sc::BatchArray ba;
             ba.role = a.role;
-            ba.buffer = buf;
-            ba.offset = 0;
+            ba.cpu = cpu_copies.back().data();
             ba.count = a.count;
             ba.stride = a.stride;
             ba.format = a.format;
@@ -550,11 +504,8 @@ struct Builtin {
         REQUIRE_MESSAGE(tree.set_batch(tree.ensure(path), b, false, &why), path, ": ", why);
     }
 
-    // Fits the camera to the scene and gives the camera matrix that a program's frame gets,
-    // proj * view, rounded to f32 once as the scene core rounds it.
     std::array<float, 16> fit() {
         tree.update();
-        res->update_class_table(tree);
         sc::fit(camera, tree.scene_bounds(), 1.0);
         const sc::CameraMatrices cm = sc::camera_matrices(camera, tree, kSize, kSize);
         std::array<float, 16> m{};
@@ -562,55 +513,10 @@ struct Builtin {
         return m;
     }
 
-    std::vector<std::uint8_t> draw() {
-        gfx::Frame frame;
-        compiler.prepare(tree, *res, frame);
-        gfx::RenderTarget target;
-        target.color = color;
-        target.depth = depth;
-        target.clear_rgba = kClear;
-        gfx::DrawList list(target);
-        sc::DrawMap map;
-        const sc::CompileResult r = compiler.compile(tree, camera, options, *res, list, &map);
-        REQUIRE_MESSAGE(r.ok, (r.notes.empty() ? std::string() : r.notes[0]));
-        CHECK_MESSAGE(r.skipped == 0, (r.notes.empty() ? std::string() : r.notes[0]));
-        CHECK_MESSAGE(res->error().empty(), res->error());
-        frame.render(std::move(list));
-        @autoreleasepool {
-            const gfx::Serial s = g.submit(std::move(frame));
-            REQUIRE_MESSAGE(s != 0, g.last_error());
-            REQUIRE(g.wait(s));
-        }
-        const std::vector<std::uint8_t> px = read_back(g, color, kSize, kSize);
-        return match_reference::picture("color", kSize, kSize, &px);
-    }
-
-    // The built-in pick at pixel (x, y), through the scene's pick pass and the picker.
-    std::optional<sc::Hit> pick(int x, int y) {
-        gfx::Texture ids = g.create_texture({16, 16, gfx::Format::RG32Uint, gfx::kRenderTarget | gfx::kCopySrcTex, "pick ids"});
-        gfx::Texture dep = g.create_texture({16, 16, gfx::Format::Depth32Float, gfx::kRenderTarget | gfx::kCopySrcTex,
-                                             "pick depth"});
-        REQUIRE_MESSAGE((ids && dep), g.last_error());
-        sc::Picker picker;
-        const sc::PickWindow w = picker.request(float(x) + 0.5f, float(y) + 0.5f, 8, kSize, kSize);
-        const std::int32_t window[4] = {w.x0, w.y0, w.width, w.height};
-        gfx::RenderTarget pt;
-        pt.color = ids;
-        pt.depth = dep;
-        gfx::DrawList list(pt);
-        sc::DrawMap map;
-        const sc::CompileResult r = compiler.compile_pick(tree, camera, options, window, *res, list, &map);
-        REQUIRE_MESSAGE(r.ok, (r.notes.empty() ? std::string() : r.notes[0]));
-        gfx::Frame f;
-        f.render(std::move(list));
-        @autoreleasepool {
-            REQUIRE_MESSAGE(g.submit(std::move(f)) != 0, g.last_error());
-        }
-        const std::vector<std::uint8_t> id_bytes = read_back(g, ids, 16, 16);
-        const std::vector<std::uint8_t> depth_bytes = read_back(g, dep, 16, 16);
-        g.release(ids);
-        g.release(dep);
-        return picker.deliver(picker.current(), map.revision, id_bytes, &depth_bytes, map);
+    std::vector<std::uint8_t> load() {
+        auto image = match_reference::picture("color", kSize, kSize, nullptr);
+        reference = match_reference::last_name("color");
+        return image;
     }
 };
 
@@ -716,7 +622,7 @@ using Fields = std::vector<std::pair<std::string, double>>;
 
 // Compares the two pictures, prints the measured differences and checks the picks of `items`
 // (each must show an interior pixel unless it is listed in `hidden`).
-inline Comparison check_case(const std::string& name, Builtin& b, const std::vector<std::uint8_t>& builtin,
+inline Comparison check_case(const std::string& name, ReferenceScene& b, const std::vector<std::uint8_t>& builtin,
                              const Drawn& piece, Program& p, const std::vector<std::uint32_t>& items,
                              const std::function<Fields(std::uint32_t)>& fields, std::size_t min_lit = 1,
                              const std::string& capture_name = "") {
@@ -735,22 +641,19 @@ inline Comparison check_case(const std::string& name, Builtin& b, const std::vec
         capture_pair(file, builtin, piece.color);
     }
 
-    // The picks: a pixel inside each element, the built-in pick there, and the piece's item map.
-    const int S = int(kSize);
+    // The original renderer supplied these pixel positions and item identities.
+    const auto& probes = match_reference::metadata(b.reference).at("picks");
     int agree = 0;
     for (std::uint32_t item : items) {
         CAPTURE(item);
+        const auto probe = std::find_if(probes.begin(), probes.end(), [&](const auto& value) {
+            return value.at("item").template get<std::uint32_t>() == item;
+        });
+        REQUIRE_MESSAGE(probe != probes.end(), name, ": no saved pick for item ", item);
+        const int px = probe->at("x").get<int>(), py = probe->at("y").get<int>();
         const std::uint64_t want = (std::uint64_t(p.pick_id) << 32 | item) + 1;
-        int px = -1, py = -1;
-        for (int y = 1; y < S - 1 && px < 0; ++y)
-            for (int x = 1; x < S - 1 && px < 0; ++x)
-                if (identity_of(piece.ids, x, y) == want && is_interior(piece.ids, x, y)) px = x, py = y;
-        CHECK_MESSAGE(px >= 0, name, ": element ", item, " shows no interior pixel");
-        if (px < 0) continue;
-        const std::optional<sc::Hit> hit = b.pick(px, py);
-        REQUIRE_MESSAGE(hit.has_value(), name, ": no built-in hit at (", px, ", ", py, ")");
-        CHECK_MESSAGE(hit->item == item, name, ": pixel (", px, ", ", py, "): built-in item ", hit->item,
-                      ", piece item ", item);
+        const bool same = identity_of(piece.ids, px, py) == want;
+        CHECK_MESSAGE(same, name, ": pixel (", px, ", ", py, "): saved item ", item);
         const std::optional<cd::PickedItem> picked = p.rt->pick(item);
         REQUIRE_MESSAGE(picked.has_value(), name, ": the piece gives no fields for element ", item);
         CHECK(picked->item == item);
@@ -761,7 +664,7 @@ inline Comparison check_case(const std::string& name, Builtin& b, const std::vec
             CHECK_MESSAGE(picked->fields[k].second == want_fields[k].second, name, ": field ", want_fields[k].first,
                           " of element ", item, " is ", picked->fields[k].second, ", not ", want_fields[k].second);
         }
-        agree += hit->item == item;
+        agree += same;
     }
     MESSAGE(name, ": ", agree, " of ", items.size(), " picks name the piece's element");
     return c;

@@ -1,14 +1,6 @@
-# The match of the library piece arrows@1 with the built-in arrows primitive
-# (design/programmable-graphics.md, Library Pieces). caliper_arrows_match_tests runs piece.check on
-# the piece, then draws each case of arrows with the scene core's built-in draw and with the piece
-# end to end, its derive half on the producer runtime and its draw half in the draw runtime, both
-# on Metal and offscreen, and compares the color images and the picks. Without a Metal device the
-# binary exits 77, which ctest reports as skipped. With the environment variable
-# CALIPER_LINE_MATCH_CAPTURE_DIR set, the test writes the two images and their difference there as
-# PNG files. It shares tests/lines_match/line_match.h.
-#
-# The draw runtime (caliper_draw) is defined with the builder after this folder, thus the target
-# is made by a call deferred to the end of the top folder.
+# Library piece checks use saved original images and pick identities.
+# All draws use the piece runtime on offscreen Metal targets.
+# A missing Metal device returns 77.
 function(caliper_arrows_match_targets)
     if(NOT APPLE OR NOT TARGET caliper_draw OR NOT TARGET caliper_draw_host OR NOT TARGET caliper_net
        OR NOT TARGET caliper_scene OR NOT TARGET caliper_producer OR NOT TARGET caliper_builder_session)
@@ -26,7 +18,7 @@ function(caliper_arrows_match_targets)
     set_target_properties(caliper_arrows_match_tests PROPERTIES
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
     add_test(NAME caliper_arrows_match COMMAND caliper_arrows_match_tests)
-    # The reference pictures of the built-in draw (tests/match_reference.h).
+    # The original renderer supplied these fixed reference images.
     target_compile_definitions(caliper_arrows_match_tests PRIVATE CALIPER_MATCH_SUITE="arrows")
     set_property(TEST caliper_arrows_match APPEND PROPERTY ENVIRONMENT
         "CALIPER_MATCH_REFERENCES=${CMAKE_SOURCE_DIR}/tests/match_references")

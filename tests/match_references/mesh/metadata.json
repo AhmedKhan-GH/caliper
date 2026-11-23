@@ -1,0 +1,243 @@
+{
+  "mesh/rig-000.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 5,
+        "x": 78,
+        "y": 167
+      },
+      {
+        "item": 276,
+        "primitive": 5,
+        "x": 130,
+        "y": 129
+      },
+      {
+        "item": 550,
+        "primitive": 5,
+        "x": 200,
+        "y": 65
+      }
+    ]
+  },
+  "mesh/rig-001.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 5,
+        "x": 78,
+        "y": 167
+      },
+      {
+        "item": 276,
+        "primitive": 5,
+        "x": 130,
+        "y": 129
+      },
+      {
+        "item": 550,
+        "primitive": 5,
+        "x": 200,
+        "y": 65
+      }
+    ]
+  },
+  "mesh/rig-002.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 5,
+        "x": 66,
+        "y": 50
+      },
+      {
+        "item": 0,
+        "primitive": 5,
+        "x": 66,
+        "y": 50
+      }
+    ]
+  },
+  "mesh/rig-003.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 5,
+        "x": 66,
+        "y": 50
+      },
+      {
+        "item": 0,
+        "primitive": 5,
+        "x": 66,
+        "y": 50
+      }
+    ]
+  },
+  "mesh/rig-004.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 5,
+        "x": 78,
+        "y": 167
+      },
+      {
+        "item": 276,
+        "primitive": 5,
+        "x": 130,
+        "y": 129
+      },
+      {
+        "item": 550,
+        "primitive": 5,
+        "x": 200,
+        "y": 65
+      }
+    ]
+  },
+  "mesh/rig-005.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 5,
+        "x": 79,
+        "y": 164
+      },
+      {
+        "item": 238,
+        "primitive": 5,
+        "x": 196,
+        "y": 64
+      }
+    ]
+  },
+  "mesh/rig-006.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 5,
+        "x": 79,
+        "y": 164
+      },
+      {
+        "item": 238,
+        "primitive": 5,
+        "x": 196,
+        "y": 64
+      }
+    ]
+  },
+  "mesh/rig-007.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 5,
+        "x": 86,
+        "y": 160
+      },
+      {
+        "item": 408,
+        "primitive": 5,
+        "x": 123,
+        "y": 175
+      },
+      {
+        "item": 778,
+        "primitive": 5,
+        "x": 173,
+        "y": 81
+      }
+    ]
+  },
+  "mesh/rig-008.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 5,
+        "x": 86,
+        "y": 160
+      },
+      {
+        "item": 778,
+        "primitive": 5,
+        "x": 173,
+        "y": 81
+      }
+    ]
+  },
+  "mesh/rig-009.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 5,
+        "x": 84,
+        "y": 165
+      },
+      {
+        "item": 65,
+        "primitive": 5,
+        "x": 126,
+        "y": 123
+      },
+      {
+        "item": 130,
+        "primitive": 5,
+        "x": 192,
+        "y": 64
+      }
+    ]
+  },
+  "mesh/rig-010.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 5,
+        "x": 10,
+        "y": 10
+      },
+      {
+        "item": 44,
+        "primitive": 5,
+        "x": 116,
+        "y": 116
+      },
+      {
+        "item": 88,
+        "primitive": 5,
+        "x": 221,
+        "y": 221
+      }
+    ]
+  },
+  "mesh/rig-011.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 5,
+        "x": 137,
+        "y": 63
+      }
+    ]
+  },
+  "mesh/rig-012.png": {
+    "picks": []
+  },
+  "mesh/rig-013.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 5,
+        "x": 58,
+        "y": 138
+      },
+      {
+        "item": 98303,
+        "primitive": 5,
+        "x": 110,
+        "y": 81
+      }
+    ]
+  }
+}

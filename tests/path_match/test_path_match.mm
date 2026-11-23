@@ -1,21 +1,5 @@
-// test_path_match.mm: the match of the library piece path@1 with the built-in draw of the path
-// operator's output (design/programmable-graphics.md, Library Pieces; design/instrument-interface.md,
-// Path Operator).
-//
-// The path operator turns the rows of a tensor into a polyline, which a lines entity in strip mode
-// draws: one strip through the kept rows, colored by each row's value through the colormap, with
-// the entity's range (the finite range of the values, widened by 0.5 when empty, unless vmin or
-// vmax is given), a width of 2 pixels and a depth offset of 1. Each case draws that twice on
-// Metal, offscreen: the scene core draws a lines batch of the operator's CPU reference
-// (path_reference), and the piece reads the same tensor end to end, its derive half on the
-// producer runtime and its draw half in a draw runtime with the camera matrix of the built-in
-// draw. The entity's data box, which scales the positions of a spec panel, is not part of either.
-// The cases cover the default columns of three and of two columns, chosen columns and z 0, the
-// thinning of max_points, one color and a translucent one, fixed and partly fixed ranges, a NaN
-// coordinate, a pixel ratio of 2, one row, two rows, and the most vertices that the piece
-// publishes (1,048,576, the operator's most); above them the piece
-// thins as the operator does with max_points 1,048,576. ../lines_match/line_match.h holds the
-// tolerances and the picks.
+// The path piece retains the original images and pick identities. The CPU path
+// operator checks its derived fields, and line_match.h defines pixel tolerances.
 #include "../lines_match/line_match.h"
 
 #include "scene/scene.h"
@@ -84,7 +68,7 @@ Reference reference_of(const Path& p) {
 }
 
 // The built-in lines batch of a lines entity in strip mode over the operator's output.
-void add_builtin(Builtin& b, const Path& p, const Reference& r) {
+void add_fixture(ReferenceScene& b, const Path& p, const Reference& r) {
     const std::uint32_t n = std::uint32_t(r.line.values.size());
     sc::Batch batch;
     batch.primitive = sc::Primitive::Lines;
@@ -143,10 +127,10 @@ Comparison run_case(Metal& m, const std::string& name, const Path& p, const std:
                     std::size_t min_lit, float pixel_ratio = 1.0f, const std::string& capture_name = "") {
     CAPTURE(name);
     const Reference r = reference_of(p);
-    Builtin b(*m.backend, pixel_ratio);
-    add_builtin(b, p, r);
+    ReferenceScene b(*m.backend, pixel_ratio);
+    add_fixture(b, p, r);
     const std::array<float, 16> mvp = b.fit();
-    const std::vector<std::uint8_t> builtin = b.draw();
+    const std::vector<std::uint8_t> builtin = b.load();
     Program prog;
     make_program(m, "path", tensors_of(p), params_of(p), kPick, &prog);
     const Published* v = find_published(prog.published, "vertices");
@@ -271,10 +255,10 @@ TEST_CASE("path_match: NaN, one and two rows, and the most vertices") {
         one.rows = 1;
         one.data = {0.1f, 0.2f, 0.3f};
         const Reference r = reference_of(one);
-        Builtin b(*m.backend);
-        add_builtin(b, one, r);
+        ReferenceScene b(*m.backend);
+        add_fixture(b, one, r);
         const std::array<float, 16> mvp = b.fit();
-        const std::vector<std::uint8_t> builtin = b.draw();
+        const std::vector<std::uint8_t> builtin = b.load();
         Program prog;
         make_program(m, "path", tensors_of(one), params_of(one), kPick, &prog);
         CHECK(find_published(prog.published, "vertices")->count == 1);
@@ -307,10 +291,10 @@ TEST_CASE("path_match: NaN, one and two rows, and the most vertices") {
         asked.max_points = 1048576;
         const Reference r = reference_of(more);
         CHECK(r.line.values.size() == 524289);
-        Builtin b(*m.backend);
-        add_builtin(b, more, r);
+        ReferenceScene b(*m.backend);
+        add_fixture(b, more, r);
         const std::array<float, 16> mvp = b.fit();
-        const std::vector<std::uint8_t> builtin = b.draw();
+        const std::vector<std::uint8_t> builtin = b.load();
         Program prog;
         make_program(m, "path", tensors_of(asked), params_of(asked), kPick, &prog);
         CHECK(find_published(prog.published, "vertices")->count == 524289);

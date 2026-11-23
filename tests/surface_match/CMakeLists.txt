@@ -1,16 +1,6 @@
-# The match of the library piece surface@1 with the built-in surface draw kind
-# (design/programmable-graphics.md, Library Pieces). caliper_surface_match_tests checks the piece
-# as piece.check does, runs its derive half on the producer runtime against the CPU reference of
-# the surface operator, and draws grids of heights twice on Metal, offscreen: once as the app
-# draws a surface entity (the spec runtime's mesh of the grid through the scene core) and once by
-# the piece in the draw runtime, then compares the color images, the depth where a depth offset
-# applies, and the picks with their fields. Without a Metal device the test skips and the binary
-# exits 77, which ctest reports as skipped. With the environment variable
-# CALIPER_SURFACE_MATCH_CAPTURE_DIR set, the test writes the two images of each case and their
-# difference there as PNG files.
-#
-# The draw runtime (caliper_draw) and the spec runtime are defined after this folder, thus the
-# target is made by a call deferred to the end of the top folder.
+# Library piece checks use saved original images and pick identities.
+# All draws use the piece runtime on offscreen Metal targets.
+# A missing Metal device returns 77.
 function(caliper_surface_match_targets)
     if(NOT APPLE OR NOT TARGET caliper_draw OR NOT TARGET caliper_draw_host OR NOT TARGET caliper_net
        OR NOT TARGET caliper_scene OR NOT TARGET caliper_spec_runtime OR NOT TARGET caliper_producer
@@ -28,7 +18,7 @@ function(caliper_surface_match_targets)
     set_target_properties(caliper_surface_match_tests PROPERTIES
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
     add_test(NAME caliper_surface_match COMMAND caliper_surface_match_tests)
-    # The reference pictures of the built-in draw (tests/match_reference.h).
+    # The original renderer supplied these fixed reference images.
     target_compile_definitions(caliper_surface_match_tests PRIVATE CALIPER_MATCH_SUITE="surface")
     set_property(TEST caliper_surface_match APPEND PROPERTY ENVIRONMENT
         "CALIPER_MATCH_REFERENCES=${CMAKE_SOURCE_DIR}/tests/match_references")

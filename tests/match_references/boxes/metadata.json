@@ -1,0 +1,240 @@
+{
+  "boxes/rig-000.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 4,
+        "x": 99,
+        "y": 157
+      },
+      {
+        "item": 11,
+        "primitive": 4,
+        "x": 113,
+        "y": 64
+      },
+      {
+        "item": 23,
+        "primitive": 4,
+        "x": 150,
+        "y": 140
+      }
+    ]
+  },
+  "boxes/rig-001.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 4,
+        "x": 107,
+        "y": 105
+      },
+      {
+        "item": 5,
+        "primitive": 4,
+        "x": 150,
+        "y": 130
+      },
+      {
+        "item": 11,
+        "primitive": 4,
+        "x": 128,
+        "y": 97
+      }
+    ]
+  },
+  "boxes/rig-002.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 4,
+        "x": 169,
+        "y": 163
+      },
+      {
+        "item": 7,
+        "primitive": 4,
+        "x": 82,
+        "y": 98
+      },
+      {
+        "item": 15,
+        "primitive": 4,
+        "x": 103,
+        "y": 83
+      }
+    ]
+  },
+  "boxes/rig-003.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 4,
+        "x": 104,
+        "y": 139
+      },
+      {
+        "item": 15,
+        "primitive": 4,
+        "x": 167,
+        "y": 140
+      }
+    ]
+  },
+  "boxes/rig-004.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 4,
+        "x": 112,
+        "y": 101
+      },
+      {
+        "item": 19,
+        "primitive": 4,
+        "x": 189,
+        "y": 154
+      }
+    ]
+  },
+  "boxes/rig-005.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 4,
+        "x": 169,
+        "y": 163
+      },
+      {
+        "item": 7,
+        "primitive": 4,
+        "x": 82,
+        "y": 98
+      },
+      {
+        "item": 15,
+        "primitive": 4,
+        "x": 103,
+        "y": 83
+      }
+    ]
+  },
+  "boxes/rig-006.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 4,
+        "x": 112,
+        "y": 101
+      },
+      {
+        "item": 19,
+        "primitive": 4,
+        "x": 189,
+        "y": 154
+      }
+    ]
+  },
+  "boxes/rig-007.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 4,
+        "x": 112,
+        "y": 101
+      },
+      {
+        "item": 19,
+        "primitive": 4,
+        "x": 189,
+        "y": 154
+      }
+    ]
+  },
+  "boxes/rig-008.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 4,
+        "x": 94,
+        "y": 71
+      },
+      {
+        "item": 9,
+        "primitive": 4,
+        "x": 113,
+        "y": 147
+      }
+    ]
+  },
+  "boxes/rig-009.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 4,
+        "x": 70,
+        "y": 104
+      },
+      {
+        "item": 10,
+        "primitive": 4,
+        "x": 131,
+        "y": 164
+      },
+      {
+        "item": 19,
+        "primitive": 4,
+        "x": 205,
+        "y": 156
+      }
+    ]
+  },
+  "boxes/rig-010.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 4,
+        "x": 105,
+        "y": 64
+      }
+    ]
+  },
+  "boxes/rig-011.png": {
+    "picks": []
+  },
+  "boxes/rig-012.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 4,
+        "x": 112,
+        "y": 109
+      }
+    ]
+  },
+  "boxes/rig-013.png": {
+    "picks": []
+  },
+  "boxes/rig-014.png": {
+    "picks": []
+  },
+  "boxes/rig-015.png": {
+    "picks": []
+  },
+  "boxes/rig-016.png": {
+    "picks": [
+      {
+        "item": 0,
+        "primitive": 4,
+        "x": 66,
+        "y": 124
+      },
+      {
+        "item": 126975,
+        "primitive": 4,
+        "x": 112,
+        "y": 139
+      }
+    ]
+  }
+}

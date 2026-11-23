@@ -1,17 +1,6 @@
-// test_points_match.mm: the match of the library piece points@1 with the built-in points
-// primitive (design/programmable-graphics.md, Library Pieces).
-//
-// One cloud of 256 points in 3-D is drawn twice on Metal, offscreen and without a window: once by
-// the scene core as a points batch (SceneCompiler over BackendResources), and once by the piece in
-// a DrawRuntime, with the camera matrix that the built-in draw used. The values sit at exact
-// colormap levels, so that no value is on the boundary between two levels. The test then holds the
-// two images to the tolerances of the plan: an interior pixel has the same color in both images,
-// and a pixel at an edge has a piece color within 1 level of a built-in color in its 3 x 3
-// neighborhood. The picks of the built-in draw at 16 pixels must name the item that the piece's ID
-// image shows there. Without a Metal device the test skips (exit 77).
-//
-// With CALIPER_POINTS_MATCH_CAPTURE_DIR set, the test writes points-match-builtin.png,
-// points-match-piece.png and points-match-diff.png (the difference scaled up 32 times) there.
+// Points library tests compare Metal output with saved images and pick identities.
+// The original renderer supplied the reference cameras and pixel positions.
+// Interior colors are exact. Edge colors retain the one-level neighborhood tolerance.
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 #include "../gpu_skip.h"
@@ -20,14 +9,10 @@
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 
 #include "../draw_parity/parity_draw.h"
-#include "../gfx/scene_reference.h"
 #include "draw/draw_runtime.h"
 #include "gfx/colormap_keys.h"
 #include "gfx/metal_backend.h"
-#include "gfx/shaders/generated/programs_metal.h"
-#include "scene/backend_resources.h"
 #include "scene/camera.h"
-#include "scene/pick.h"
 
 #include <caliper_builder/programs/pieces.h>
 #include <caliper_builder/spec/spec.h>
@@ -57,8 +42,6 @@ namespace cs = caliper_builder::spec;
 namespace dp = draw_parity;
 namespace gfx = caliper_gfx;
 namespace sc = caliper_scene;
-namespace sh = caliper_gfx::shaders;
-namespace sr = scene_reference;
 
 constexpr std::uint32_t kSize = 256;        // the target, square
 constexpr int kPoints = 256;
@@ -66,6 +49,13 @@ constexpr int kMostPoints = 4194304;   // the most that the piece publishes: 128
 constexpr float kPointSize = 10.0f;         // pixels
 constexpr std::uint32_t kPiecePick = 1u << 24;
 constexpr std::uint32_t kClear = dp::kBackground;
+
+struct ClipPoint { float x, y, z, w; };
+ClipPoint project(const float m[16], float x, float y, float z) {
+    return {m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * x + m[5] * y + m[9] * z + m[13],
+            m[2] * x + m[6] * y + m[10] * z + m[14], m[3] * x + m[7] * y + m[11] * z + m[15]};
+}
+
 
 // What the values of the cloud are: the f32 values of the colormap, whose rows the case builds by
 // hand, or a tensor of colors or class ids that the derive half of the piece turns into rows.
@@ -240,106 +230,9 @@ void run_points_case(int n, Values kind = Values::f32, const char* name = "") {
     const Cloud cloud(n);
     const int S = int(kSize);
 
-    // ---- The built-in draw ----------------------------------------------------------------------
-    sh::PrimParams builtin_params{};
-    std::vector<std::uint8_t> builtin_color;
-    struct Rig {
-        gfx::Backend& g;
-        std::unique_ptr<sc::BackendResources> res;
-        ~Rig() { res.reset(); }
-    } rig{g, nullptr};
-    rig.res = std::make_unique<sc::BackendResources>(
-        g, sh::kMetalPrograms, gfx::cmap::colormap_source(std::make_shared<gfx::cmap::KeyBlockCache>()));
-    {
-        std::string err;
-        REQUIRE_MESSAGE(rig.res->init(&err), err);
-    }
-
-    // One buffer: the positions at 0 and the values after them, at a multiple of 256 bytes.
-    const std::uint64_t off_values = (std::uint64_t(n) * 12 + 255) / 256 * 256;
-    std::vector<std::uint8_t> bytes(off_values + std::uint64_t(n) * 4, 0);
-    std::memcpy(bytes.data(), cloud.positions.data(), std::size_t(n) * 12);
-    if (kind == Values::f32) {
-        std::memcpy(bytes.data() + off_values, cloud.values.data(), std::size_t(n) * 4);
-    } else {
-        for (int i = 0; i < n; ++i) {
-            const std::uint32_t v = kind == Values::u16_classes ? class_of(i) : packed_color(i);
-            std::memcpy(bytes.data() + off_values + std::size_t(i) * 4, &v, 4);
-        }
-    }
-    gfx::Buffer data = g.create_buffer({bytes.size(), gfx::kVertex | gfx::kIndex | gfx::kStorage | gfx::kCopyDst, false,
-                                        "points match"});
-    REQUIRE_MESSAGE(bool(data), g.last_error());
-    REQUIRE(g.write_buffer(data, 0, bytes.data(), bytes.size()));
-    gfx::Texture color = g.create_texture({kSize, kSize, gfx::Format::RGBA8Unorm, gfx::kRenderTarget | gfx::kCopySrcTex,
-                                           "points match color"});
-    gfx::Texture depth = g.create_texture({kSize, kSize, gfx::Format::Depth32Float, gfx::kRenderTarget, "points match depth"});
-    REQUIRE_MESSAGE((color && depth), g.last_error());
-
-    sc::SceneTree tree(sc::Space::k3D);
-    sc::Batch batch;
-    batch.primitive = sc::Primitive::Points;
-    batch.arrays.resize(2);
-    batch.arrays[0].role = sc::Role::Positions;
-    batch.arrays[0].buffer = data;
-    batch.arrays[0].offset = 0;
-    batch.arrays[0].count = n;
-    batch.arrays[0].stride = 12;
-    batch.arrays[0].format = gfx::VertexFormat::F32x3;
-    batch.arrays[1].role = kind == Values::f32 ? sc::Role::Values
-                           : kind == Values::u16_classes ? sc::Role::ClassIds : sc::Role::Colors;
-    batch.arrays[1].buffer = data;
-    batch.arrays[1].offset = off_values;
-    batch.arrays[1].count = n;
-    batch.arrays[1].stride = 4;
-    batch.arrays[1].format = kind == Values::f32 ? gfx::VertexFormat::F32
-                             : kind == Values::u16_classes ? gfx::VertexFormat::S32 : gfx::VertexFormat::Unorm8x4;
-    batch.colormap = 0;   // viridis
-    batch.vmin = 0.0f;
-    batch.vmax = 1.0f;
-    batch.size_px = kPointSize;
-    batch.point_shape = sc::PointShape::Disc;
-    for (int i = 0; i < n; ++i)
-        batch.bounds.add({cloud.positions[3 * i], cloud.positions[3 * i + 1], cloud.positions[3 * i + 2]});
-    batch.seq = 1;
-    REQUIRE(tree.set_batch(tree.ensure("cloud"), batch));
-    tree.update();
-    rig.res->update_class_table(tree);
-    sc::Orbit orbit;
-    sc::ViewCamera camera = orbit;
-    sc::fit(camera, tree.scene_bounds(), 1.0);
-    sc::CompileOptions options;
-    options.width = options.height = kSize;
-    options.pixel_scale = 1.0f;
-    options.clear_rgba = kClear;
-    sc::SceneCompiler compiler;
-
-    {
-        gfx::Frame frame;
-        compiler.prepare(tree, *rig.res, frame);
-        gfx::RenderTarget target;
-        target.color = color;
-        target.depth = depth;
-        target.clear_rgba = kClear;
-        gfx::DrawList list(target);
-        sc::DrawMap map;
-        const sc::CompileResult r = compiler.compile(tree, camera, options, *rig.res, list, &map);
-        REQUIRE_MESSAGE(r.ok, (r.notes.empty() ? std::string() : r.notes[0]));
-        CHECK(r.skipped == 0);
-        CHECK_MESSAGE(rig.res->error().empty(), rig.res->error());
-        const std::vector<sr::DrawInfo> draws = sr::draws_of(list, map, tree);
-        REQUIRE(draws.size() == 1);
-        builtin_params = draws[0].p;
-        CHECK(builtin_params.color_mode == (kind == Values::f32 ? 1u : kind == Values::u16_classes ? 4u : 2u));
-        frame.render(std::move(list));
-        const gfx::Serial s = g.submit(std::move(frame));
-        REQUIRE_MESSAGE(s != 0, g.last_error());
-        REQUIRE(g.wait(s));
-        const std::vector<std::uint8_t> px = read_back(g, color, kSize, kSize);
-        builtin_color = match_reference::picture("color", kSize, kSize, &px);
-    }
-    std::array<float, 16> mvp{};
-    std::memcpy(mvp.data(), builtin_params.mvp, sizeof(float) * 16);   // column-major, as the runtime's clip_from_world
+    const auto builtin_color = match_reference::picture("color", kSize, kSize, nullptr);
+    const auto& reference = match_reference::metadata(match_reference::last_name("color"));
+    const auto mvp = reference.at("mvp").get<std::array<float, 16>>();
 
     // ---- The piece's draw -----------------------------------------------------------------------
     cs::Piece piece;
@@ -455,51 +348,18 @@ void run_points_case(int n, Values kind = Values::f32, const char* name = "") {
     // ---- The picks ------------------------------------------------------------------------------
     // Candidates: a point whose projected center pixel is interior in the piece's ID image and
     // shows that same point.
-    struct Probe {
-        int x, y, item;
-    };
-    std::vector<Probe> candidates;
-    for (int i = 0; i < n; ++i) {
-        const sr::F4 c = sr::mul(mvp.data(), cloud.positions[3 * i], cloud.positions[3 * i + 1], cloud.positions[3 * i + 2]);
-        if (!(c.w > 0)) continue;
-        const int x = int(std::floor((c.x / c.w + 1) * 0.5 * S)), y = int(std::floor((1 - c.y / c.w) * 0.5 * S));
-        if (x < 1 || y < 1 || x > S - 2 || y > S - 2) continue;
-        if (is_interior(piece_ids, x, y) && identity_of(piece_ids, x, y) == std::uint64_t(i) + 1) candidates.push_back({x, y, i});
-    }
-    MESSAGE("points match: ", candidates.size(), " points show their own center pixel");
-    REQUIRE(candidates.size() >= 16);
-    std::vector<Probe> probes;
-    for (int k = 0; k < 16; ++k) probes.push_back(candidates[std::size_t(k) * candidates.size() / 16]);
-
-    gfx::Texture pick_ids = g.create_texture({16, 16, gfx::Format::RG32Uint, gfx::kRenderTarget | gfx::kCopySrcTex, "pick ids"});
-    gfx::Texture pick_depth =
-        g.create_texture({16, 16, gfx::Format::Depth32Float, gfx::kRenderTarget | gfx::kCopySrcTex, "pick depth"});
-    REQUIRE_MESSAGE((pick_ids && pick_depth), g.last_error());
-    sc::Picker picker;
+    const auto& probes = reference.at("picks");
+    REQUIRE(probes.size() == 16);
     int agree = 0;
-    for (const Probe& pr : probes) {
-        CAPTURE(pr.x);
-        CAPTURE(pr.y);
-        const sc::PickWindow w = picker.request(pr.x + 0.5f, pr.y + 0.5f, 8, kSize, kSize);
-        const std::int32_t window[4] = {w.x0, w.y0, w.width, w.height};
-        gfx::RenderTarget pt;
-        pt.color = pick_ids;
-        pt.depth = pick_depth;
-        gfx::DrawList pick(pt);
-        sc::DrawMap pick_map;
-        const sc::CompileResult r = compiler.compile_pick(tree, camera, options, window, *rig.res, pick, &pick_map);
-        REQUIRE_MESSAGE(r.ok, (r.notes.empty() ? std::string() : r.notes[0]));
-        gfx::Frame f;
-        f.render(std::move(pick));
-        REQUIRE_MESSAGE(g.submit(std::move(f)) != 0, g.last_error());
-        const std::vector<std::uint8_t> id_bytes = read_back(g, pick_ids, 16, 16);
-        const std::vector<std::uint8_t> depth_bytes = read_back(g, pick_depth, 16, 16);
-        const std::optional<sc::Hit> hit = picker.deliver(picker.current(), pick_map.revision, id_bytes, &depth_bytes, pick_map);
-        REQUIRE(hit.has_value());
-        const std::uint64_t piece_item = identity_of(piece_ids, pr.x, pr.y) - 1;
-        CHECK_MESSAGE(hit->item == piece_item, "pixel (", pr.x, ", ", pr.y, "): built-in item ", hit->item, ", piece item ",
-                      piece_item);
-        agree += hit->item == piece_item;
+    for (const auto& probe : probes) {
+        const int x = probe.at("x").get<int>(), y = probe.at("y").get<int>();
+        const auto item = probe.at("item").get<std::uint64_t>();
+        const auto id = identity_of(piece_ids, x, y);
+        CHECK_MESSAGE(id == item + 1, "pixel (", x, ", ", y, "): saved item ", item, ", piece identity ", id);
+        const auto picked = rt.pick(std::uint32_t(item));
+        REQUIRE(picked.has_value());
+        CHECK(picked->item == item);
+        agree += id == item + 1;
     }
     MESSAGE("points match: ", agree, " of 16 picks name the piece's item");
 
@@ -511,11 +371,6 @@ void run_points_case(int n, Values kind = Values::f32, const char* name = "") {
         diff[i] = (i % 4 == 3) ? 255 : std::uint8_t(std::min(255, std::abs(int(piece_color[i]) - int(builtin_color[i])) * 32));
     capture((std::string("points-match") + name + "-diff.png").c_str(), diff);
 
-    g.release(pick_ids);
-    g.release(pick_depth);
-    g.release(color);
-    g.release(depth);
-    g.release(data);
 }
 
 }  // namespace
@@ -601,109 +456,19 @@ TEST_CASE("points_match: points@1 with radii in scene units draws as the built-i
     }
     CHECK_MESSAGE(wrong == 0, wrong, " rows with a position.w other than their radius, the one radius or 1.0");
 
-    // ---- The built-in draw with a Radii array ---------------------------------------------------
-    sh::PrimParams builtin_params{};
-    std::vector<std::uint8_t> builtin_color;
-    struct Rig {
-        gfx::Backend& g;
-        std::unique_ptr<sc::BackendResources> res;
-        ~Rig() { res.reset(); }
-    } rig{g, nullptr};
-    rig.res = std::make_unique<sc::BackendResources>(
-        g, sh::kMetalPrograms, gfx::cmap::colormap_source(std::make_shared<gfx::cmap::KeyBlockCache>()));
-    {
-        std::string err;
-        REQUIRE_MESSAGE(rig.res->init(&err), err);
-    }
-    auto aligned = [](std::uint64_t n) { return (n + 255) / 256 * 256; };
-    const std::uint64_t off_values = aligned(std::uint64_t(kPoints) * 12);
-    const std::uint64_t off_radii = off_values + aligned(std::uint64_t(kPoints) * 4);
-    std::vector<std::uint8_t> bytes(off_radii + std::uint64_t(kPoints) * 4, 0);
-    std::memcpy(bytes.data(), cloud.positions.data(), std::size_t(kPoints) * 12);
-    std::memcpy(bytes.data() + off_values, cloud.values.data(), std::size_t(kPoints) * 4);
-    std::memcpy(bytes.data() + off_radii, radii.data(), std::size_t(kPoints) * 4);
-    gfx::Buffer data = g.create_buffer({bytes.size(), gfx::kVertex | gfx::kIndex | gfx::kStorage | gfx::kCopyDst, false,
-                                        "points radii match"});
-    REQUIRE_MESSAGE(bool(data), g.last_error());
-    REQUIRE(g.write_buffer(data, 0, bytes.data(), bytes.size()));
-    gfx::Texture color = g.create_texture({kSize, kSize, gfx::Format::RGBA8Unorm, gfx::kRenderTarget | gfx::kCopySrcTex,
-                                           "points radii color"});
-    gfx::Texture depth = g.create_texture({kSize, kSize, gfx::Format::Depth32Float, gfx::kRenderTarget, "points radii depth"});
-    REQUIRE_MESSAGE((color && depth), g.last_error());
-
-    sc::SceneTree tree(sc::Space::k3D);
-    sc::Batch batch;
-    batch.primitive = sc::Primitive::Points;
-    batch.arrays.resize(3);
-    const std::uint64_t offsets[3] = {0, off_values, off_radii};
-    const sc::Role roles[3] = {sc::Role::Positions, sc::Role::Values, sc::Role::Radii};
-    const std::uint32_t strides[3] = {12, 4, 4};
-    const gfx::VertexFormat formats[3] = {gfx::VertexFormat::F32x3, gfx::VertexFormat::F32, gfx::VertexFormat::F32};
-    for (int k = 0; k < 3; ++k) {
-        batch.arrays[std::size_t(k)].role = roles[k];
-        batch.arrays[std::size_t(k)].buffer = data;
-        batch.arrays[std::size_t(k)].offset = offsets[k];
-        batch.arrays[std::size_t(k)].count = kPoints;
-        batch.arrays[std::size_t(k)].stride = strides[k];
-        batch.arrays[std::size_t(k)].format = formats[k];
-    }
-    batch.colormap = 0;
-    batch.vmin = 0.0f;
-    batch.vmax = 1.0f;
-    batch.size_px = kPointSize;
-    batch.point_shape = sc::PointShape::Disc;
-    for (int i = 0; i < kPoints; ++i)
-        batch.bounds.add({cloud.positions[3 * i], cloud.positions[3 * i + 1], cloud.positions[3 * i + 2]});
-    batch.seq = 1;
-    REQUIRE(tree.set_batch(tree.ensure("cloud"), batch));
-    tree.update();
-    rig.res->update_class_table(tree);
-    sc::Orbit orbit;
-    sc::ViewCamera camera = orbit;
-    sc::fit(camera, tree.scene_bounds(), 1.0);
-    sc::CompileOptions options;
-    options.width = options.height = kSize;
-    options.pixel_scale = 1.0f;
-    options.clear_rgba = kClear;
-    sc::SceneCompiler compiler;
-    {
-        gfx::Frame frame;
-        compiler.prepare(tree, *rig.res, frame);
-        gfx::RenderTarget target;
-        target.color = color;
-        target.depth = depth;
-        target.clear_rgba = kClear;
-        gfx::DrawList list(target);
-        sc::DrawMap map;
-        const sc::CompileResult r = compiler.compile(tree, camera, options, *rig.res, list, &map);
-        REQUIRE_MESSAGE(r.ok, (r.notes.empty() ? std::string() : r.notes[0]));
-        CHECK(r.skipped == 0);
-        CHECK_MESSAGE(rig.res->error().empty(), rig.res->error());
-        const std::vector<sr::DrawInfo> draws = sr::draws_of(list, map, tree);
-        REQUIRE(draws.size() == 1);
-        builtin_params = draws[0].p;
-        CHECK(builtin_params.color_mode == 1);
-        CHECK(builtin_params.radius_mode == 1);
-        frame.render(std::move(list));
-        const gfx::Serial s = g.submit(std::move(frame));
-        REQUIRE_MESSAGE(s != 0, g.last_error());
-        REQUIRE(g.wait(s));
-        const std::vector<std::uint8_t> px = read_back(g, color, kSize, kSize);
-        builtin_color = match_reference::picture("color", kSize, kSize, &px);
-    }
-    std::array<float, 16> mvp{};
-    std::memcpy(mvp.data(), builtin_params.mvp, sizeof(float) * 16);
-    // The frame block's projection scales, as compile.cpp rounds them from the camera's matrices.
-    const sc::CameraMatrices cm = sc::camera_matrices(camera, tree, kSize, kSize);
-    REQUIRE(cm.ok);
-    const float proj_x = float(std::fabs(cm.proj.at(0, 0))), proj_y = float(std::fabs(cm.proj.at(1, 1)));
+    const auto builtin_color = match_reference::picture("color", kSize, kSize, nullptr);
+    const auto& reference = match_reference::metadata(match_reference::last_name("color"));
+    const auto mvp = reference.at("mvp").get<std::array<float, 16>>();
+    const float radius_scale = reference.at("radius_scale").get<float>();
+    const auto projection = reference.at("projection").get<std::array<float, 2>>();
+    const float proj_x = projection[0], proj_y = projection[1];
 
     // How many points sit at the half-pixel floor and how many above it, for the message.
     int at_floor = 0, above_floor = 0;
     for (int i = 0; i < kPoints; ++i) {
-        const sr::F4 c = sr::mul(mvp.data(), cloud.positions[3 * i], cloud.positions[3 * i + 1], cloud.positions[3 * i + 2]);
+        const auto c = project(mvp.data(), cloud.positions[3 * i], cloud.positions[3 * i + 1], cloud.positions[3 * i + 2]);
         const double half_px = double(c.w) / double(kSize);
-        (double(radii[std::size_t(i)]) * double(builtin_params.radius_scale) * double(proj_x) > half_px ? above_floor : at_floor)++;
+        (double(radii[std::size_t(i)]) * double(radius_scale) * double(proj_x) > half_px ? above_floor : at_floor)++;
     }
     MESSAGE("points radii match: ", at_floor, " points at the half-pixel floor, ", above_floor, " above it");
     CHECK(at_floor > 0);
@@ -735,7 +500,7 @@ TEST_CASE("points_match: points@1 with radii in scene units draws as the built-i
     in.cursor_step = 1;
     in.latest_step = 1;
     in.live = true;
-    in.params = radii_params(kPointSize, 1, builtin_params.radius_scale, proj_x, proj_y);
+    in.params = radii_params(kPointSize, 1, radius_scale, proj_x, proj_y);
     std::vector<gfx::Serial> serials;
     {
         const bool drawn = target.frame(rt, in, &serials, &why);
@@ -786,50 +551,18 @@ TEST_CASE("points_match: points@1 with radii in scene units draws as the built-i
     CHECK(lit_interior >= 500);
 
     // ---- The picks ------------------------------------------------------------------------------
-    struct Probe {
-        int x, y, item;
-    };
-    std::vector<Probe> candidates;
-    for (int i = 0; i < kPoints; ++i) {
-        const sr::F4 c = sr::mul(mvp.data(), cloud.positions[3 * i], cloud.positions[3 * i + 1], cloud.positions[3 * i + 2]);
-        if (!(c.w > 0)) continue;
-        const int x = int(std::floor((c.x / c.w + 1) * 0.5 * S)), y = int(std::floor((1 - c.y / c.w) * 0.5 * S));
-        if (x < 1 || y < 1 || x > S - 2 || y > S - 2) continue;
-        if (is_interior(piece_ids, x, y) && identity_of(piece_ids, x, y) == std::uint64_t(i) + 1) candidates.push_back({x, y, i});
-    }
-    MESSAGE("points radii match: ", candidates.size(), " points show their own center pixel");
-    REQUIRE(candidates.size() >= 16);
-    std::vector<Probe> probes;
-    for (int k = 0; k < 16; ++k) probes.push_back(candidates[std::size_t(k) * candidates.size() / 16]);
-    gfx::Texture pick_ids = g.create_texture({16, 16, gfx::Format::RG32Uint, gfx::kRenderTarget | gfx::kCopySrcTex, "pick ids"});
-    gfx::Texture pick_depth =
-        g.create_texture({16, 16, gfx::Format::Depth32Float, gfx::kRenderTarget | gfx::kCopySrcTex, "pick depth"});
-    REQUIRE_MESSAGE((pick_ids && pick_depth), g.last_error());
-    sc::Picker picker;
+    const auto& probes = reference.at("picks");
+    REQUIRE(probes.size() == 16);
     int agree = 0;
-    for (const Probe& pr : probes) {
-        CAPTURE(pr.x);
-        CAPTURE(pr.y);
-        const sc::PickWindow w = picker.request(pr.x + 0.5f, pr.y + 0.5f, 8, kSize, kSize);
-        const std::int32_t window[4] = {w.x0, w.y0, w.width, w.height};
-        gfx::RenderTarget pt;
-        pt.color = pick_ids;
-        pt.depth = pick_depth;
-        gfx::DrawList pick(pt);
-        sc::DrawMap pick_map;
-        const sc::CompileResult r = compiler.compile_pick(tree, camera, options, window, *rig.res, pick, &pick_map);
-        REQUIRE_MESSAGE(r.ok, (r.notes.empty() ? std::string() : r.notes[0]));
-        gfx::Frame f;
-        f.render(std::move(pick));
-        REQUIRE_MESSAGE(g.submit(std::move(f)) != 0, g.last_error());
-        const std::vector<std::uint8_t> id_bytes = read_back(g, pick_ids, 16, 16);
-        const std::vector<std::uint8_t> depth_bytes = read_back(g, pick_depth, 16, 16);
-        const std::optional<sc::Hit> hit = picker.deliver(picker.current(), pick_map.revision, id_bytes, &depth_bytes, pick_map);
-        REQUIRE(hit.has_value());
-        const std::uint64_t piece_item = identity_of(piece_ids, pr.x, pr.y) - 1;
-        CHECK_MESSAGE(hit->item == piece_item, "pixel (", pr.x, ", ", pr.y, "): built-in item ", hit->item, ", piece item ",
-                      piece_item);
-        agree += hit->item == piece_item;
+    for (const auto& probe : probes) {
+        const int x = probe.at("x").get<int>(), y = probe.at("y").get<int>();
+        const auto item = probe.at("item").get<std::uint64_t>();
+        const auto id = identity_of(piece_ids, x, y);
+        CHECK_MESSAGE(id == item + 1, "pixel (", x, ", ", y, "): saved item ", item, ", piece identity ", id);
+        const auto picked = rt.pick(std::uint32_t(item));
+        REQUIRE(picked.has_value());
+        CHECK(picked->item == item);
+        agree += id == item + 1;
     }
     MESSAGE("points radii match: ", agree, " of 16 picks name the piece's item");
 
@@ -841,11 +574,6 @@ TEST_CASE("points_match: points@1 with radii in scene units draws as the built-i
         diff[i] = (i % 4 == 3) ? 255 : std::uint8_t(std::min(255, std::abs(int(piece_color[i]) - int(builtin_color[i])) * 32));
     capture("points-radii-diff.png", diff);
 
-    g.release(pick_ids);
-    g.release(pick_depth);
-    g.release(color);
-    g.release(depth);
-    g.release(data);
 }
 
 CALIPER_GPU_TEST_MAIN()

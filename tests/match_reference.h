@@ -1,23 +1,10 @@
 #pragma once
-// The reference pictures of the match tests (tests/*_match): what the scene core's built-in draw
-// gave for each case before it was deleted, as PNG files under tests/match_references/<suite>/.
-// Each library piece is compared with them at the tolerances that its test used against the
-// built-in draw, thus the pieces stay pinned to the pictures that the built-in drew.
-//
-// The test target names its suite (CALIPER_MATCH_SUITE), and ctest gives the folder of the
-// references in the environment (CALIPER_MATCH_REFERENCES). The pictures of one kind are numbered
-// in the order in which the test binary asks for them, so a test binary runs whole, as ctest runs
-// it. picture(kind, w, h, &pixels) records pixels as the next picture when
-// CALIPER_MATCH_REFERENCE_WRITE names a folder (this is how the references were taken, from the
-// built-in draw, before its deletion) and otherwise gives them back; picture(kind, w, h, nullptr)
-// reads the next picture. A picture is width x height texels of 4 bytes, RGBA8 colours or the bits
-// of a 32-bit depth, stored losslessly in the PNG's four channels.
-//
-// The references change only when a piece's picture is meant to change: a person replaces the
-// files with the piece's own pictures, which the tests leave in their capture folders, and the
-// change is reviewed like code.
-//
-// The including file has included <stb_image_write.h> (every match rig writes its captures).
+// The match tests compare library pieces with saved images from the removed renderer.
+// PNG channels preserve RGBA8 colors or the bits of Depth32Float values.
+// Each suite runs as a whole because image numbers follow its fixture order.
+// The adjacent metadata stores camera matrices and picks from the same original draw.
+// The reference files are read-only during tests. README.md describes their provenance.
+
 #ifndef STBI_INCLUDE_STB_IMAGE_H   // a file that reads PNG files itself has its own stb_image
 #define STBI_ONLY_PNG
 #define STB_IMAGE_STATIC
@@ -33,6 +20,8 @@
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
 
@@ -41,6 +30,34 @@
 #endif
 
 namespace match_reference {
+
+inline std::map<std::string, std::string>& names() {
+    static std::map<std::string, std::string> value;
+    return value;
+}
+
+inline const std::string& last_name(const char* kind) {
+    REQUIRE(names().count(kind) == 1);
+    return names().at(kind);
+}
+
+inline const char* root() {
+    const char* value = std::getenv("CALIPER_MATCH_REFERENCES");
+    REQUIRE_MESSAGE((value && *value), "CALIPER_MATCH_REFERENCES names no folder");
+    return value;
+}
+
+inline const nlohmann::json& metadata(const std::string& name) {
+    static const nlohmann::json saved = [] {
+        const auto file = std::filesystem::path(root()) / CALIPER_MATCH_SUITE / "metadata.json";
+        std::ifstream in(file);
+        REQUIRE_MESSAGE(in.good(), "no reference metadata ", file.string());
+        return nlohmann::json::parse(in);
+    }();
+    REQUIRE_MESSAGE(saved.contains(name), "no metadata for ", name);
+    return saved.at(name);
+}
+
 
 inline std::string next_name(const char* kind) {
     static std::map<std::string, int> counts;
@@ -51,19 +68,10 @@ inline std::string next_name(const char* kind) {
 
 inline std::vector<std::uint8_t> picture(const char* kind, std::uint32_t width, std::uint32_t height,
                                          const std::vector<std::uint8_t>* drawn) {
+    REQUIRE_MESSAGE(drawn == nullptr, "reference images are read-only");
     const std::string name = next_name(kind);
-    if (drawn) {
-        REQUIRE(drawn->size() == std::size_t(width) * height * 4);
-        if (const char* dir = std::getenv("CALIPER_MATCH_REFERENCE_WRITE"); dir && *dir) {
-            const std::filesystem::path path = std::filesystem::path(dir) / name;
-            std::filesystem::create_directories(path.parent_path());
-            CHECK(stbi_write_png(path.string().c_str(), int(width), int(height), 4, drawn->data(), int(width) * 4) != 0);
-        }
-        return *drawn;
-    }
-    const char* root = std::getenv("CALIPER_MATCH_REFERENCES");
-    REQUIRE_MESSAGE((root && *root), "CALIPER_MATCH_REFERENCES names no folder");
-    const std::string path = std::string(root) + "/" + name;
+    names()[kind] = name;
+    const std::string path = std::string(root()) + "/" + name;
     int w = 0, h = 0, channels = 0;
     unsigned char* px = stbi_load(path.c_str(), &w, &h, &channels, 4);
     REQUIRE_MESSAGE(px != nullptr, "no reference picture ", path);

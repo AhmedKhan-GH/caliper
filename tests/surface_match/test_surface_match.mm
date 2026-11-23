@@ -1,26 +1,6 @@
-// test_surface_match.mm: the match of the library piece surface@1 with the built-in surface draw
-// kind (design/programmable-graphics.md, Library Pieces; design/instrument-interface.md, Draw Kinds).
-//
-// The built-in draw of a surface entity is the spec runtime's mesh of its grid
-// (build_entity_scene: the data box, two triangles a cell, holes, normals), drawn by the scene
-// core's mesh program. Each case below builds that mesh from resolved arrays as the app does,
-// draws it on Metal offscreen with the scene core, and draws the same grid with the piece in a
-// DrawRuntime: the rows of its resource `cells` are what an app that attaches the piece writes
-// (cells_of), and the camera matrix is the one that the built-in draw used. The images are held
-// to the tolerances of the plan: a pixel inside one item of the piece's ID image is within
-// 1 level of the built-in's color there, and a pixel at an edge is within 1 level of a built-in
-// color in its 3 x 3 neighborhood. The values of the fixtures keep away from the boundary between
-// two colormap levels, because the device's division may round such a value to the next level.
-// Picks at pixels, with the first and the last item that a pick can name, must name the same
-// item, and that item's fields must equal the built-in's pick fields.
-//
-// Two more cases need no image: the piece passes piece.check, its manifest and web limits and
-// both composers, and its derive half on the producer runtime pools a tensor as the surface
-// operator's CPU reference does. Without a Metal device the GPU cases skip (exit 77).
-//
-// With CALIPER_SURFACE_MATCH_CAPTURE_DIR set, the test writes surface-match-<case>-builtin.png,
-// surface-match-<case>-piece.png and surface-match-<case>-diff.png (the difference scaled up 32
-// times) there.
+// The surface piece retains the original images, depth values and pick identities.
+// Saved camera matrices keep each fixture fixed. The CPU operator reference checks
+// derived cells, and the entity model checks the fields of each selected item.
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 #include "../gpu_skip.h"
@@ -31,16 +11,12 @@
 
 #include "../../src/host/spec_runtime/tests/spec_test_data.h"
 #include "../draw_parity/parity_fixture.h"
-#include "../gfx/scene_reference.h"
 #include "draw/draw_runtime.h"
 #include "gfx/colormap_keys.h"
 #include "gfx/metal_backend.h"
-#include "gfx/shaders/generated/programs_metal.h"
 #include "producer/caliper_producer.h"
 #include "producer/caliper_producer_derive.h"
-#include "scene/backend_resources.h"
 #include "scene/camera.h"
-#include "scene/pick.h"
 #include "spec_runtime/spec_prepare.h"
 
 #include <caliper_builder/operators/operators.h>
@@ -82,8 +58,6 @@ namespace dp = draw_parity;
 namespace gfx = caliper_gfx;
 namespace ops = caliper_builder::operators;
 namespace sc = caliper_scene;
-namespace sh = caliper_gfx::shaders;
-namespace sr = scene_reference;
 namespace st = spec_test;
 
 constexpr std::uint32_t kSize = 256;   // the target, square
@@ -447,142 +421,13 @@ void run_case(Metal& m, const Case& k, Outcome* out) {
     const ch::EntityBox& box = scene.box;
     const std::vector<Cell> rows = cells_of(d);
 
-    // ---- The built-in draw: the mesh of apply_entity_scene() through the scene core --------------
-    struct Rig {
-        gfx::Backend& g;
-        std::unique_ptr<sc::BackendResources> res;
-        std::vector<gfx::Texture> textures;
-        std::vector<gfx::Buffer> buffers;
-        ~Rig() {
-            res.reset();
-            for (gfx::Texture t : textures) g.release(t);
-            for (gfx::Buffer b : buffers) g.release(b);
-        }
-    } rig{g, nullptr, {}, {}};
-    rig.res = std::make_unique<sc::BackendResources>(
-        g, sh::kMetalPrograms, gfx::cmap::colormap_source(std::make_shared<gfx::cmap::KeyBlockCache>()));
-    {
-        std::string err;
-        REQUIRE_MESSAGE(rig.res->init(&err), err);
-    }
-    gfx::Texture color = g.create_texture({kSize, kSize, gfx::Format::RGBA8Unorm, gfx::kRenderTarget | gfx::kCopySrcTex,
-                                           "surface match color"});
-    gfx::Texture depth = g.create_texture({kSize, kSize, gfx::Format::Depth32Float, gfx::kRenderTarget | gfx::kCopySrcTex,
-                                           "surface match depth"});
-    REQUIRE_MESSAGE((color && depth), g.last_error());
-    rig.textures = {color, depth};
-
-    sc::SceneTree tree(sc::Space::k3D);
-    REQUIRE(tree.set_up(sc::Axis::PosZ));
-    sc::Aabb bounds;
-    bounds.add({-box.half[0], -box.half[1], -box.half[2]});
-    bounds.add({box.half[0], box.half[1], box.half[2]});
     out->builtin_drew = !d.error && !d.indices.empty();
-    if (out->builtin_drew) {
-        const std::uint64_t n = d.positions.size() / 3, t = d.indices.size() / 3;
-        auto align = [](std::uint64_t x) { return (x + 255) / 256 * 256; };
-        const std::uint64_t off_idx = align(n * 12), off_nrm = off_idx + align(t * 12), off_val = off_nrm + align(n * 12);
-        std::vector<std::uint8_t> bytes(off_val + n * 4, 0);
-        std::vector<float> values(d.values.begin(), d.values.end());
-        std::memcpy(bytes.data(), d.positions.data(), n * 12);
-        std::memcpy(bytes.data() + off_idx, d.indices.data(), t * 12);
-        std::memcpy(bytes.data() + off_nrm, d.normals.data(), n * 12);
-        std::memcpy(bytes.data() + off_val, values.data(), n * 4);
-        gfx::Buffer data = g.create_buffer(
-            {bytes.size(), gfx::kVertex | gfx::kIndex | gfx::kStorage | gfx::kCopyDst, false, "surface match mesh"});
-        REQUIRE_MESSAGE(bool(data), g.last_error());
-        rig.buffers.push_back(data);
-        REQUIRE(g.write_buffer(data, 0, bytes.data(), bytes.size()));
-        sc::Batch batch;
-        batch.primitive = sc::Primitive::Mesh;
-        auto array = [&](sc::Role role, std::uint64_t offset, std::uint64_t count, std::uint32_t stride,
-                         gfx::VertexFormat format) {
-            sc::BatchArray a;
-            a.role = role;
-            a.buffer = data;
-            a.offset = offset;
-            a.count = count;
-            a.stride = stride;
-            a.format = format;
-            batch.arrays.push_back(a);
-        };
-        array(sc::Role::Positions, 0, n, 12, gfx::VertexFormat::F32x3);
-        array(sc::Role::Indices, off_idx, t, 12, gfx::VertexFormat::S32);
-        array(sc::Role::Normals, off_nrm, n, 12, gfx::VertexFormat::F32x3);
-        array(sc::Role::Values, off_val, n, 4, gfx::VertexFormat::F32);
-        batch.colormap = std::uint32_t(d.colormap);
-        batch.vmin = float(d.vmin);
-        batch.vmax = float(d.vmax);
-        batch.depth_offset = std::int8_t(d.depth_offset);
-        batch.bounds = bounds;
-        batch.seq = 1;
-        REQUIRE(tree.set_batch(tree.ensure(d.path), batch));
-    }
-    tree.update();
-    rig.res->update_class_table(tree);
-    sc::Orbit orbit;
-    orbit.up = sc::Axis::PosZ;
-    orbit.azimuth = k.azimuth;
-    orbit.elevation = k.elevation;
-    sc::ViewCamera camera = orbit;
-    sc::fit(camera, bounds, 1.0);
-    sc::CompileOptions options;
-    options.width = options.height = kSize;
-    options.pixel_scale = 1.0f;
-    options.clear_rgba = kClear;
-    sc::SceneCompiler compiler;
-
-    std::array<float, 16> mvp{};       // the camera without the depth offset: the piece's clip_from_world
-    std::array<float, 16> view{};
-    {
-        const sc::CameraMatrices cm = sc::camera_matrices(camera, tree, kSize, kSize);
-        REQUIRE(cm.ok);
-        const sc::Mat4 clip = cm.proj * cm.view;
-        for (int i = 0; i < 16; ++i) mvp[std::size_t(i)] = float(clip.m[i]), view[std::size_t(i)] = float(cm.view.m[i]);
-    }
-    std::vector<std::uint8_t> builtin_color, builtin_depth;
-    {
-        gfx::Frame frame;
-        compiler.prepare(tree, *rig.res, frame);
-        gfx::RenderTarget target;
-        target.color = color;
-        target.depth = depth;
-        target.clear_rgba = kClear;
-        gfx::DrawList list(target);
-        sc::DrawMap map;
-        const sc::CompileResult r = compiler.compile(tree, camera, options, *rig.res, list, &map);
-        REQUIRE_MESSAGE(r.ok, (r.notes.empty() ? std::string() : r.notes[0]));
-        CHECK(r.skipped == 0);
-        CHECK_MESSAGE(rig.res->error().empty(), rig.res->error());
-        const std::vector<sr::DrawInfo> draws = sr::draws_of(list, map, tree);
-        REQUIRE(draws.size() == (out->builtin_drew ? 1u : 0u));
-        if (out->builtin_drew) {
-            const sh::PrimParams& p = draws[0].p;
-            CHECK(p.color_mode == 1);
-            CHECK(p.shade_mode == 1);
-            // The draw's matrix holds the depth offset; the piece applies it itself, so it takes
-            // the matrix without it: row 2 of D * M is row 2 of M less k / 8192 times row 3.
-            const double kk = double(d.depth_offset) / 8192.0;
-            for (int c = 0; c < 4; ++c) {
-                for (int r2 = 0; r2 < 4; ++r2) {
-                    double want = p.mvp[c * 4 + r2];
-                    if (r2 == 2) want += kk * double(p.mvp[c * 4 + 3]);
-                    CHECK(std::fabs(want - double(mvp[std::size_t(c * 4 + r2)])) <= 1e-5 * (1.0 + std::fabs(want)));
-                }
-            }
-            if (d.depth_offset == 0) std::memcpy(mvp.data(), p.mvp, sizeof(float) * 16);
-        }
-        frame.render(std::move(list));
-        const gfx::Serial s = g.submit(std::move(frame));
-        REQUIRE_MESSAGE(s != 0, g.last_error());
-        REQUIRE(g.wait(s));
-        const std::vector<std::uint8_t> px = read_back(g, color, kSize, kSize);
-        builtin_color = match_reference::picture("color", kSize, kSize, &px);
-        if (k.depth) {
-            const std::vector<std::uint8_t> dz = read_back(g, depth, kSize, kSize);
-            builtin_depth = match_reference::picture("depth", kSize, kSize, &dz);
-        }
-    }
+    const auto builtin_color = match_reference::picture("color", kSize, kSize, nullptr);
+    const auto& reference = match_reference::metadata(match_reference::last_name("color"));
+    const auto mvp = reference.at("mvp").get<std::array<float, 16>>();
+    const auto view = reference.at("view").get<std::array<float, 16>>();
+    std::vector<std::uint8_t> builtin_depth;
+    if (k.depth) builtin_depth = match_reference::picture("depth", kSize, kSize, nullptr);
 
     // ---- The piece's draw ------------------------------------------------------------------------
     cs::Piece piece;
@@ -710,65 +555,17 @@ void run_case(Metal& m, const Case& k, Outcome* out) {
 
     // ---- The picks -------------------------------------------------------------------------------
     if (out->builtin_drew && k.picks) {
-        // The first item that a pick can name is vertex 0, the first corner of cell (0, 0); the last is
-        // vertex (R - 2, C - 1), the corner b of the second triangle of cell (R - 2, C - 2).
-        const std::uint64_t first_item = 0, last_item = std::uint64_t((d.rows - 2) * d.cols + (d.cols - 1));
-        struct Probe {
-            int x, y;
-            std::uint64_t item;
-        };
-        std::vector<Probe> candidates, chosen;
-        std::optional<Probe> at_first, at_last;
-        for (int y = 1; y < kS - 1; ++y)
-            for (int x = 1; x < kS - 1; ++x) {
-                const std::uint64_t id = identity_of(piece_ids, x, y);
-                if (id == 0) continue;
-                const bool interior = is_interior(piece_ids, x, y);
-                if (interior) candidates.push_back({x, y, id - 1});
-                if (id - 1 == first_item && (!at_first || interior)) at_first = Probe{x, y, id - 1};
-                if (id - 1 == last_item && (!at_last || interior)) at_last = Probe{x, y, id - 1};
-            }
-        REQUIRE(candidates.size() >= 14);
-        CHECK_MESSAGE(at_first.has_value(), k.name, ": no interior pixel shows the first item");
-        CHECK_MESSAGE(at_last.has_value(), k.name, ": no interior pixel shows the last item");
-        if (at_first) chosen.push_back(*at_first);
-        if (at_last) chosen.push_back(*at_last);
-        for (int i = 0; i < 14; ++i) chosen.push_back(candidates[std::size_t(i) * candidates.size() / 14]);
-
-        gfx::Texture pick_ids =
-            g.create_texture({16, 16, gfx::Format::RG32Uint, gfx::kRenderTarget | gfx::kCopySrcTex, "pick ids"});
-        gfx::Texture pick_depth =
-            g.create_texture({16, 16, gfx::Format::Depth32Float, gfx::kRenderTarget | gfx::kCopySrcTex, "pick depth"});
-        REQUIRE_MESSAGE((pick_ids && pick_depth), g.last_error());
-        rig.textures.push_back(pick_ids);
-        rig.textures.push_back(pick_depth);
-        sc::Picker picker;
-        for (const Probe& pr : chosen) {
-            CAPTURE(pr.x);
-            CAPTURE(pr.y);
-            const sc::PickWindow w = picker.request(pr.x + 0.5f, pr.y + 0.5f, 8, kSize, kSize);
-            const std::int32_t window[4] = {w.x0, w.y0, w.width, w.height};
-            gfx::RenderTarget pt;
-            pt.color = pick_ids;
-            pt.depth = pick_depth;
-            gfx::DrawList pick(pt);
-            sc::DrawMap pick_map;
-            const sc::CompileResult r = compiler.compile_pick(tree, camera, options, window, *rig.res, pick, &pick_map);
-            REQUIRE_MESSAGE(r.ok, (r.notes.empty() ? std::string() : r.notes[0]));
-            gfx::Frame f;
-            f.render(std::move(pick));
-            REQUIRE_MESSAGE(g.submit(std::move(f)) != 0, g.last_error());
-            const std::vector<std::uint8_t> id_bytes = read_back(g, pick_ids, 16, 16);
-            const std::vector<std::uint8_t> depth_bytes = read_back(g, pick_depth, 16, 16);
-            const std::optional<sc::Hit> hit =
-                picker.deliver(picker.current(), pick_map.revision, id_bytes, &depth_bytes, pick_map);
-            CHECK(hit.has_value());
-            if (!hit) continue;
+        const auto& probes = reference.at("picks");
+        REQUIRE(probes.size() == 16);
+        for (const auto& probe : probes) {
+            const int x = probe.at("x").get<int>(), y = probe.at("y").get<int>();
+            const auto item = probe.at("item").get<std::uint64_t>();
+            const auto id = identity_of(piece_ids, x, y);
+            CHECK_MESSAGE(id == item + 1, k.name, ": pixel (", x, ", ", y, "): saved item ", item,
+                          ", piece identity ", id);
             ++out->picks;
-            CHECK_MESSAGE(hit->item == pr.item, k.name, ": pixel (", pr.x, ", ", pr.y, "): built-in item ", hit->item,
-                          ", piece item ", pr.item);
-            out->agree += hit->item == pr.item;
-            check_fields(scene, d.path, rt, pr.item, out);
+            out->agree += id == item + 1;
+            check_fields(scene, d.path, rt, item, out);
         }
         // A pick without a pointer, as selection.set makes it: the first and the last element.
         check_fields(scene, d.path, rt, 0, out);

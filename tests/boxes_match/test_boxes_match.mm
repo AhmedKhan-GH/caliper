@@ -1,28 +1,11 @@
-// test_boxes_match.mm: the match of the library piece boxes@1 with the built-in boxes primitive
-// (design/programmable-graphics.md, Library Pieces).
-//
-// Each case draws one set of boxes twice on Metal, offscreen and without a window: once by the scene
-// core as a boxes batch (SceneCompiler over BackendResources), and once by the piece: its derive
-// half runs on the same boxes as tensors in the script's producer runtime, and its draw half draws
-// the published resource in a DrawRuntime with the camera that the scene view gives a program. The
-// two images are held to the tolerances of match_rig.h, and the picks of the built-in draw at
-// interior pixels of the first, a middle and the last box must name the item that the piece's ID
-// image shows there, with the field `index` of its item map. The cases cover the color modes (one
-// color, RGBA of each box, class ids with ids outside the table), widths and the pixel ratio,
-// faces, translucent boxes (an alpha below 255, of one color or of a box), rotations, the depth
-// offset, boxes in 2-D, a box with a NaN center, empty input, one box, labels (of each box, one for
-// all, and of every step-th box of a large set, whose anchors and texts must equal the built-in's),
-// and the capacity of the piece, 126,976 boxes of 64 bytes beside 4,096 label strings of 64 bytes
-// in its 8 MiB of published resources (the built-in takes 1,048,576). The inputs that a case
-// lacks stay unbound. Without a Metal device the test skips (exit 77).
-//
-// With CALIPER_BOXES_MATCH_CAPTURE_DIR set, each case writes boxes-<case>-builtin.png,
-// boxes-<case>-piece.png and boxes-<case>-diff.png (the difference scaled up 32 times) there.
+// The boxes piece derives and draws each fixture on Metal. Saved original images
+// and pick identities define the reference. CPU scene helpers check label anchors.
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 #include "../gpu_skip.h"
 
 #include "match_rig.h"
+#include "scene/labels.h"
 
 namespace {
 
@@ -89,7 +72,7 @@ void color_boxes(Boxes& b, std::uint8_t alpha) {
 }
 
 // The built-in's batch of the boxes, as live_scene.cpp makes it from a SCENE_UPDATE part.
-void builtin_boxes(Builtin& bt, const Boxes& b) {
+void add_boxes(ReferenceScene& bt, const Boxes& b) {
     const int n = b.n();
     if (n == 0) return;   // an empty part removes the batch
     sc::Batch batch;
@@ -213,15 +196,10 @@ Outcome run(Metal& m, const std::string& name, const Boxes& b, std::vector<std::
             bool same_labels = true) {
     gfx::Backend& g = *m.backend;
     Outcome o;
-    Builtin bt(g, kSize, b.dims == 3 ? sc::Space::k3D : sc::Space::k2D);
-    bt.options.pixel_scale = b.pixel_ratio;
-    builtin_boxes(bt, b);
-    bt.draw();
-    if (b.n() > 0) {
-        REQUIRE(!bt.draws.empty());
-        CHECK(bt.draws[0].p.color_mode == (!b.rgba.empty() ? 2u : !b.classes.empty() ? 4u : 0u));
-        CHECK(bt.draws.size() == (b.fill ? 2u : 1u));
-    }
+    ReferenceScene bt(g, kSize, b.dims == 3 ? sc::Space::k3D : sc::Space::k2D);
+    add_boxes(bt, b);
+    bt.load();
+
 
     cs::Piece piece;
     std::string why;
@@ -439,8 +417,8 @@ TEST_CASE("boxes_match: no box draws nothing") {
     // The script's runtime imports no tensor without bytes (producer.mm refuses it), thus a viewer
     // gets no version of the boxes, or a version without a valid element. The piece then draws
     // nothing, as the built-in draws nothing for an empty part, which removes the batch.
-    Builtin bt(g, kSize, sc::Space::k3D);
-    bt.draw();
+    ReferenceScene bt(g, kSize, sc::Space::k3D);
+    bt.load();
     cs::Piece piece;
     std::string why;
     REQUIRE_MESSAGE(load_piece("boxes", &piece, &why), why);
@@ -532,8 +510,7 @@ TEST_CASE("boxes_match: the capacity of 126,976 boxes, and the first boxes of a 
     CHECK(find(res, "names").count == 0);
 }
 
-// The most boxes that the piece publishes, 1,048,576, or 1/CALIPER_CAPACITY_FRACTION of them, drawn
-// beside the built-in. Skipped unless run with --no-skip --test-case="*at its capacity".
+// Optional capacity check of the derive output. The default suite uses bounded image fixtures.
 TEST_CASE("boxes_match: boxes@1 at its capacity" * doctest::skip()) {
     Metal m;
     if (!m.backend) CALIPER_SKIP_NO_GPU(m.why);
@@ -555,9 +532,14 @@ TEST_CASE("boxes_match: boxes@1 at its capacity" * doctest::skip()) {
     b.fill = true;
     b.width = 1.0f;
     color_boxes(b, 255);
-    const Outcome o = run(m, "at_capacity", b, {0, std::uint64_t(n - 1)});
-    CHECK(o.published == std::uint32_t(n));
-    CHECK(o.picks == o.asked);
+    cs::Piece piece;
+    std::string why;
+    REQUIRE_MESSAGE(load_piece("boxes", &piece, &why), why);
+    caliper_net::Json params;
+    const auto tensors = piece_tensors(b, &params);
+    const auto output = run_derive(m.device, piece, tensors, as_map(params));
+    CHECK(find(output, "boxes").count == std::uint32_t(n));
+    CHECK(find(output, "boxes").bytes.size() == std::size_t(n) * 64);
 }
 
 CALIPER_GPU_TEST_MAIN()
