@@ -178,6 +178,7 @@ struct SceneView::ProgramSlot {
     std::string program;
     uint64_t revision = 0;
     bool shape = false;   // a shape's piece (shapes_), else a program of the feed
+    bool marks = false;   // a mark of the highlight (shapes_->marks()), drawn last into the colour alone
     std::deque<std::pair<caliper_gfx::Serial, std::chrono::steady_clock::time_point>> pending;
     int reported = -1;
     int64_t reported_step = -2;   // the resource step of the last report
@@ -1065,6 +1066,7 @@ SceneShapeCounts SceneView::shape_counts() const {
         out.pieces = c.pieces;
         out.builtin = c.builtin;
         out.fallbacks = c.fallbacks;
+        out.marks = c.marks;
         return out;
     }
 #endif
@@ -1087,11 +1089,12 @@ void SceneView::set_piece_batch(const std::string& path, Primitive p, const cali
 
 bool SceneView::external_draws() const {
     for (const auto& d : draws_)
-        if (!d->shape) return true;
+        if (!d->shape && !d->marks) return true;
     return false;
 }
 
 void SceneView::sync_shapes() {
+    piece_highlight_ = false;
 #if defined(CALIPER_SCENE_PIECES)
     if (!shapes_ || shape_draw_ != ShapeDraw::pieces) return;
     caliper_draw::ScenePieces::SyncState st;
@@ -1101,6 +1104,36 @@ void SceneView::sync_shapes() {
     if (stages_ && stages_->source())
         st.stage = [this](const std::string& path, Primitive p) { return stages_->find(path, p) != nullptr; };
     shapes_->sync(tree_, st);
+    // The highlight of a selection with the pieces: the selected rows of each points and boxes batch.
+    std::vector<caliper_draw::HighlightRows> rows;
+    if (highlight_wanted())
+        for (uint32_t idx : tree_.path_order()) {
+            const EntityId e = tree_.entity_at(idx);
+            if (!tree_.drawable(e)) continue;
+            for (const Primitive p : {Primitive::Points, Primitive::Boxes}) {
+                std::vector<int64_t> pick = highlight_rows(e, p);
+                if (!pick.empty()) rows.push_back({tree_.path(e), p, std::move(pick)});
+            }
+        }
+    uint64_t lit = 0;
+    piece_highlight_ = !rows.empty() && shapes_->set_highlight(rows, clear_, width_, height_, &lit);
+    if (!piece_highlight_) shapes_->set_highlight({}, clear_, width_, height_, nullptr);
+    highlighted_ = piece_highlight_ ? lit : 0;
+    // CALIPER_SCENE_FALLBACK_LOG=<file>: each change of what the pieces draw, as one line
+    // "pieces <n> builtin <n>" and a line "fallback <count> <kind>" for each kind, appended, so that
+    // a run of tests can count the fallbacks of every scene view it opened.
+    if (const char* log = std::getenv("CALIPER_SCENE_FALLBACK_LOG"); log && *log) {
+        const caliper_draw::ShapeCounts c = shapes_->counts();
+        std::string text = "pieces " + std::to_string(c.pieces) + " builtin " + std::to_string(c.builtin) + "\n";
+        for (const auto& [kind, n] : c.fallbacks) text += "fallback " + std::to_string(n) + " " + kind + "\n";
+        if (text != logged_shapes_) {
+            logged_shapes_ = text;
+            if (FILE* f = std::fopen(log, "a")) {
+                std::fputs(text.c_str(), f);
+                std::fclose(f);
+            }
+        }
+    }
 #endif
 }
 
@@ -1122,7 +1155,7 @@ std::vector<const caliper_draw::DrawRuntime*> SceneView::draw_runtimes() const {
     std::vector<const caliper_draw::DrawRuntime*> out;
 #if defined(CALIPER_HAVE_DRAW)
     for (const auto& d : draws_)
-        if (d->runtime && !d->shape) out.push_back(d->runtime.get());
+        if (d->runtime && !d->shape && !d->marks) out.push_back(d->runtime.get());
 #endif
     return out;
 }
@@ -1187,29 +1220,37 @@ void SceneView::reconcile_programs() {
 #if defined(CALIPER_HAVE_DRAW)
     // The shapes' pieces first, in the tree's order, then the feed's programs.
     caliper_draw::DrawFeed* shapes = nullptr;
+    caliper_draw::DrawFeed* marks = nullptr;
 #if defined(CALIPER_SCENE_PIECES)
-    if (shapes_ && shape_draw_ == ShapeDraw::pieces) shapes = shapes_.get();
+    if (shapes_ && shape_draw_ == ShapeDraw::pieces) {
+        shapes = shapes_.get();
+        marks = &shapes_->marks();
+    }
 #endif
-    const uint64_t srev = shapes ? shapes->revision() : ~1ull, frev = draw_feed_ ? draw_feed_->revision() : ~1ull;
-    if (srev == shape_revision_ && frev == draw_revision_) return;
+    const uint64_t srev = shapes ? shapes->revision() : ~1ull, frev = draw_feed_ ? draw_feed_->revision() : ~1ull,
+                   mrev = marks ? marks->revision() : ~1ull;
+    if (srev == shape_revision_ && frev == draw_revision_ && mrev == marks_revision_) return;
     shape_revision_ = srev;
     draw_revision_ = frev;
+    marks_revision_ = mrev;
     const bool webgpu = std::strcmp(gfx_.caps().backend, "webgpu") == 0 || std::strcmp(gfx_.caps().backend, "dawn") == 0;
     std::vector<std::unique_ptr<ProgramSlot>> next;
-    for (caliper_draw::DrawFeed* feed : {shapes, draw_feed_}) {
+    for (caliper_draw::DrawFeed* feed : {shapes, draw_feed_, marks}) {
         if (!feed) continue;
-        const bool shape = feed == shapes;
+        const bool shape = feed == shapes, mark = feed == marks;
         for (const caliper_draw::PanelProgram& p : feed->programs()) {
             if (!p.refused.ok()) continue;   // the feed reports a refusal before any runtime
             std::unique_ptr<ProgramSlot> slot;
             for (auto& d : draws_)
-                if (d && d->shape == shape && d->program == p.instance.program && d->revision == p.revision)
+                if (d && d->shape == shape && d->marks == mark && d->program == p.instance.program &&
+                    d->revision == p.revision)
                     slot = std::move(d);
             if (!slot) {
                 slot = std::make_unique<ProgramSlot>();
                 slot->program = p.instance.program;
                 slot->revision = p.revision;
                 slot->shape = shape;
+                slot->marks = mark;
                 slot->runtime = std::make_unique<caliper_draw::DrawRuntime>(gfx_, webgpu, feed->checks());
                 slot->runtime->install(p.piece, p.instance, p.pick_id);
                 slot->installed = std::chrono::steady_clock::now();
@@ -1315,21 +1356,30 @@ void SceneView::draw_programs() {
     // The shapes' matrices are the scene core's, of the camera it drew with.
     if (shapes_) shapes_->set_camera(shape_cm);
 #endif
-    bool shapes_drawn = false;
+    // The built-in batches of a looked-through camera's pixel space: each segment before its next
+    // shape's program, and what remains after the last one.
+    auto late = [&](const std::string* program) {
+        while (!late_lists_.empty() && (!program || late_lists_.front().first == *program)) {
+            caliper_gfx::Frame f;
+            f.render(std::move(late_lists_.front().second));
+            late_lists_.erase(late_lists_.begin());
+            if (gfx_.submit(std::move(f)) == 0) note("the layer refused the camera's pixel space: " + gfx_.last_error());
+        }
+    };
     for (auto& d : draws_) {
         if (!d->runtime) continue;
-        // After the last shape's piece, the letterbox's bars of a pinhole looked through.
-        if (!d->shape && shapes_drawn) {
-            paint_bars(shape_cm);
-            shapes_drawn = false;
-        }
-        shapes_drawn = shapes_drawn || d->shape;
+        late(d->shape ? &d->program : nullptr);
         caliper_draw::DrawFeed* feed = slot_feed(*d);
         caliper_draw::FrameInputs in = base;
         in.time_s = std::chrono::duration<double>(now - d->installed).count();
         if (feed) feed->frame(*d->runtime, &in);
         std::vector<caliper_gfx::Frame> frames;
-        if (d->runtime->encode(&frames, in, target)) {
+        // A mark of the highlight draws into the colour alone: no depth hides it, and the picks
+        // read the shapes under it.
+        caliper_draw::HostTarget bare = target;
+        bare.id = {};
+        bare.depth = {};
+        if (d->runtime->encode(&frames, in, d->marks ? bare : target)) {
             for (caliper_gfx::Frame& f : frames) {
                 const caliper_gfx::Serial s = gfx_.submit(std::move(f));
                 if (s == 0) {
@@ -1341,60 +1391,8 @@ void SceneView::draw_programs() {
         }
         report_state(feed, &d->reported, &d->reported_step, *d->runtime);
     }
-    if (shapes_drawn) paint_bars(shape_cm);
+    late(nullptr);
 #endif
-}
-
-void SceneView::paint_bars(const caliper_scene::CameraMatrices& cm) {
-    const uint32_t x0 = cm.scissor[0], y0 = cm.scissor[1];
-    const uint32_t x1 = std::min<uint32_t>(width_, x0 + cm.scissor[2]), y1 = std::min<uint32_t>(height_, y0 + cm.scissor[3]);
-    if (!cm.through || (x0 == 0 && y0 == 0 && x1 >= width_ && y1 >= height_)) return;
-    if (!dim_texture_ || dim_rgba_ != clear_) {
-        if (!dim_texture_)
-            dim_texture_ = gfx_.create_texture({1, 1, caliper_gfx::Format::RGBA8Unorm,
-                                                caliper_gfx::kSampled | caliper_gfx::kCopyDstTex, "scene dim"});
-        const uint32_t ground = clear_ | 0xff000000u;
-        if (dim_texture_ && gfx_.write_texture(dim_texture_, &ground, 4)) dim_rgba_ = clear_;
-    }
-    if (!dim_texture_) return;
-    // The scene core scissors its draws to the picture and a piece draws the whole target, thus the
-    // bars take the ground again: the rectangles above, below, left of and right of the picture.
-    const uint32_t rects[4][4] = {{0, 0, width_, y0}, {0, y1, width_, height_ - std::min(height_, y1)},
-                                  {0, y0, x0, y1 - std::min(y1, y0)}, {x1, y0, width_ - std::min(width_, x1), y1 - std::min(y1, y0)}};
-    SceneTree bars(Space::k2D);
-    std::string err;
-    for (int k = 0; k < 4; ++k) {
-        if (rects[k][2] == 0 || rects[k][3] == 0) continue;
-        const EntityId e = bars.ensure("bar" + std::to_string(k), &err);
-        if (!e) continue;
-        bars.set_transform(e, caliper_scene::translation({double(rects[k][0]), double(rects[k][1]), 0.0}), false, &err);
-        Batch q;
-        q.primitive = Primitive::Image;
-        q.texture = dim_texture_;
-        q.image_width = rects[k][2];
-        q.image_height = rects[k][3];
-        q.opacity = 1.0f;
-        bars.set_batch(e, q, false, &err);
-    }
-    bars.update();
-    PanZoom pz;
-    pz.center[0] = width_ * 0.5;
-    pz.center[1] = height_ * 0.5;
-    pz.half_height = height_ * 0.5;
-    pz.y_down = true;
-    caliper_gfx::RenderTarget over;
-    over.color = color_;
-    over.clear = false;
-    caliper_gfx::DrawList dl(over);
-    CompileOptions o;
-    o.width = width_;
-    o.height = height_;
-    o.pixel_scale = scale_;
-    o.clear_rgba = clear_;
-    if (!bar_compiler_.compile(bars, pz, o, *res_, dl, nullptr).ok) return;
-    caliper_gfx::Frame f;
-    f.render(std::move(dl));
-    if (gfx_.submit(std::move(f)) == 0) note("the layer refused the letterbox: " + gfx_.last_error());
 }
 
 void SceneView::poll_programs() {
@@ -1445,8 +1443,9 @@ void SceneView::poll_programs() {
 caliper_draw::DrawFeed* SceneView::slot_feed(const ProgramSlot& slot) const {
 #if defined(CALIPER_SCENE_PIECES)
     if (slot.shape) return shapes_.get();
+    if (slot.marks) return shapes_ ? &shapes_->marks() : nullptr;
 #endif
-    return slot.shape ? nullptr : draw_feed_;
+    return slot.shape || slot.marks ? nullptr : draw_feed_;
 }
 
 CompileOptions SceneView::stage_options(CompileOptions opt) const {
@@ -1481,7 +1480,13 @@ PickPass::Result SceneView::poll_pick(Hit* out) {
         if (entity_result_ == PickPass::Result::Dropped || shape_generation_ != generation_)
             return PickPass::Result::Dropped;
         const bool entity = entity_result_ == PickPass::Result::Hit;
-        if (shape_has_hit_ && (!entity || !(entity_hit_.depth < shape_hit_.depth))) {
+        // The flat layer of a camera looked through lies over everything else, in its draw order: a
+        // built-in batch there wins over a piece below it, and a piece there over any built-in hit
+        // below it; elsewhere the nearer hit wins.
+        bool shape_wins = shape_has_hit_ && (!entity || !(entity_hit_.depth < shape_hit_.depth));
+        if (shape_has_hit_ && entity && (entity_hit_.overlay || shape_hit_.overlay))
+            shape_wins = !entity_hit_.overlay || (shape_hit_.overlay && !shapes_->late_over(entity_hit_, shape_hit_));
+        if (shape_wins) {
             if (out) *out = shape_hit_;
             return PickPass::Result::Hit;
         }
@@ -1778,16 +1783,7 @@ bool SceneView::build_highlight(SceneTree* hl, ViewCamera* cam, std::string* why
             const auto it = slots_.find(Key{path, int(p), tree_.batch_static(e, p)});
             if (it == slots_.end()) continue;
             const Slot& slot = it->second;
-            const uint64_t n = b->count();
-            std::vector<int64_t> pick;
-            if (const auto sel = selected_.find({path, int(p)}); sel != selected_.end()) pick = sel->second;
-            if (const auto lk = linked_.find(slot.items); !slot.items.empty() && lk != linked_.end())
-                for (uint64_t i = 0; i < n; ++i)
-                    if (std::binary_search(lk->second.begin(), lk->second.end(), row_id(path, p, int64_t(i))))
-                        pick.push_back(int64_t(i));
-            std::sort(pick.begin(), pick.end());
-            pick.erase(std::unique(pick.begin(), pick.end()), pick.end());
-            while (!pick.empty() && pick.back() >= int64_t(n)) pick.pop_back();
+            const std::vector<int64_t> pick = highlight_rows(e, p);
             if (pick.empty()) continue;
             Batch h = *b;
             h.labels.clear();
@@ -1835,6 +1831,26 @@ bool SceneView::build_highlight(SceneTree* hl, ViewCamera* cam, std::string* why
     }
     hl->update();
     return true;
+}
+
+std::vector<int64_t> SceneView::highlight_rows(EntityId e, Primitive p) const {
+    std::vector<int64_t> pick;
+    const Batch* b = tree_.batch(e, p);
+    if (!b) return pick;
+    const std::string& path = tree_.path(e);
+    const auto it = slots_.find(Key{path, int(p), tree_.batch_static(e, p)});
+    if (it == slots_.end()) return pick;
+    const Slot& slot = it->second;
+    const uint64_t n = b->count();
+    if (const auto sel = selected_.find({path, int(p)}); sel != selected_.end()) pick = sel->second;
+    if (const auto lk = linked_.find(slot.items); !slot.items.empty() && lk != linked_.end())
+        for (uint64_t i = 0; i < n; ++i)
+            if (std::binary_search(lk->second.begin(), lk->second.end(), row_id(path, p, int64_t(i))))
+                pick.push_back(int64_t(i));
+    std::sort(pick.begin(), pick.end());
+    pick.erase(std::unique(pick.begin(), pick.end()), pick.end());
+    while (!pick.empty() && pick.back() >= int64_t(n)) pick.pop_back();
+    return pick;
 }
 
 bool SceneView::in_pixel_space(EntityId e) const {
@@ -2109,13 +2125,37 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
         stages_->begin_frame();
     }
     CompileOptions main_opt = stage_options(opt);
+    late_lists_.clear();
 #if defined(CALIPER_SCENE_PIECES)
+    bool late = false;
     if (shapes_ && shape_draw_ == ShapeDraw::pieces && shapes_->any()) {
-        main_opt.skip = [this](EntityId e, Primitive p) { return shapes_->draws(e, p); };
+        late = !shapes_->late_segments().empty();
+        main_opt.skip = [this](EntityId e, Primitive p) { return shapes_->draws(e, p) || shapes_->late(e, p); };
         main_opt.skip_frustum = [this](EntityId e) { return shapes_->draws_frustum(e); };
     }
 #endif
     const CompileResult r = compiler_.compile(tree_, effective_camera(), main_opt, *res_, list, &map);
+#if defined(CALIPER_SCENE_PIECES)
+    // The batches of a looked-through camera's pixel space that keep the built-in draw: one list
+    // of each segment, which draw_programs() submits among the shapes' pieces in the scene core's
+    // order of that flat layer.
+    if (r.ok && late) {
+        const std::vector<std::string>& before = shapes_->late_segments();
+        for (size_t k = 0; k < before.size(); ++k) {
+            CompileOptions late_opt = stage_options(opt);
+            late_opt.skip = [this, k](EntityId e, Primitive p) { return !shapes_->late(e, p) || shapes_->late_segment(e, p) != k; };
+            late_opt.skip_frustum = [](EntityId) { return true; };
+            caliper_gfx::RenderTarget lt;
+            lt.color = color_;
+            lt.depth = depth_;
+            lt.clear = false;
+            caliper_gfx::DrawList ll(lt);
+            const CompileResult lr = compiler_.compile(tree_, effective_camera(), late_opt, *res_, ll, nullptr);
+            for (const std::string& n : lr.notes) note(n);
+            if (lr.ok) late_lists_.emplace_back(before[k], std::move(ll));
+        }
+    }
+#endif
     if (stages_) stages_->end_frame();   // programs no draw used go back to the layer
     staged_ = r.staged;
     for (const std::string& n : r.notes) note(n);
@@ -2139,6 +2179,10 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
     if (!program_why.empty()) note(program_why);
     caliper_gfx::Frame after;
     caliper_gfx::Frame& hl_frame = with_programs ? after : frame;
+    if (!with_programs) {
+        for (auto& [next, ll] : late_lists_) frame.render(std::move(ll));
+        late_lists_.clear();
+    }
     if (with_programs) {
         caliper_gfx::RenderTarget ids;
         ids.color = id_;
@@ -2148,8 +2192,8 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
     }
     // A selection: the picture dimmed towards the background, as the points view dims, then the
     // selected items over it in their own colours, without depth so that none is hidden.
-    highlighted_ = 0;
-    if (highlight_wanted()) {
+    if (!piece_highlight_) highlighted_ = 0;
+    if (highlight_wanted() && !piece_highlight_) {
         SceneTree hl(tree_.space());
         ViewCamera hl_cam;
         std::string err;

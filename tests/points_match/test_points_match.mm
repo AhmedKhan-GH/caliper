@@ -26,19 +26,15 @@
 #include "gfx/metal_backend.h"
 #include "gfx/shaders/generated/programs_metal.h"
 #include "scene/backend_resources.h"
+#include "scene/camera.h"
 #include "scene/pick.h"
 
 #include <caliper_builder/programs/pieces.h>
 #include <caliper_builder/spec/spec.h>
 
-#define STB_IMAGE_WRITE_STATIC
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wmissing-field-initializers"
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#pragma clang diagnostic ignored "-Wunused-function"
-#include <stb_image_write.h>
-#pragma clang diagnostic pop
+#include "../boxes_match/match_rig.h"
+
+// The stb image writer comes with ../boxes_match/match_rig.h, which defines it once for the file.
 
 #include <algorithm>
 #include <array>
@@ -472,5 +468,320 @@ void run_points_case(int n) {
 TEST_CASE("points_match: points@1 draws as the built-in points primitive") { run_points_case(kPoints); }
 
 TEST_CASE("points_match: the most points that the piece publishes") { run_points_case(kMostPoints); }
+
+namespace {
+
+// The eleven params of points@1 in the manifest's order with radius_mode 1.
+std::vector<std::uint8_t> radii_params(float size, std::uint32_t shape, float radius_scale, float proj_x, float proj_y) {
+    std::vector<std::uint8_t> out = points_params(size, shape, 1, 0xffffffffu, 0, 0.0f, 1.0f);
+    out.resize(11 * 4);
+    const std::uint32_t mode = 1;
+    std::memcpy(out.data() + 28, &mode, 4);
+    std::memcpy(out.data() + 32, &radius_scale, 4);
+    std::memcpy(out.data() + 36, &proj_x, 4);
+    std::memcpy(out.data() + 40, &proj_y, 4);
+    return out;
+}
+
+const match_rig::Published& published(const std::vector<match_rig::Published>& all, const char* id) {
+    for (const match_rig::Published& p : all)
+        if (p.id == id) return p;
+    FAIL("no published resource ", id);
+    return all.front();
+}
+
+// position.w of row i of the published `points` rows (32 bytes each).
+float row_radius(const match_rig::Published& p, std::uint32_t i) {
+    float w = 0;
+    std::memcpy(&w, p.bytes.data() + std::size_t(i) * 32 + 12, 4);
+    return w;
+}
+
+}  // namespace
+
+TEST_CASE("points_match: points@1 with radii in scene units draws as the built-in radius mode") {
+    Metal m;
+    if (!m.backend) CALIPER_SKIP_NO_GPU(m.why);
+    gfx::Backend& g = *m.backend;
+    const Cloud cloud;
+    const int S = int(kSize);
+    std::vector<float> radii(kPoints);
+    // Every eighth point is far below half a pixel, so that the floor of the radius mode is drawn too.
+    for (int i = 0; i < kPoints; ++i)
+        radii[std::size_t(i)] = i % 8 == 0 ? 0.0005f : 0.01f + 0.05f * float((i * 7) % 16) / 15.0f;
+
+    cs::Piece piece;
+    std::string why;
+    REQUIRE_MESSAGE(load_points_piece(&piece, &why), why);
+
+    // ---- The derive half: radii per point, one for all, and unbound -------------------------------
+    using match_rig::HostTensor;
+    const HostTensor positions = HostTensor::of<float>("positions", "f32", {kPoints, 3}, cloud.positions);
+    const HostTensor values = HostTensor::of<float>("values", "f32", {kPoints}, cloud.values);
+    const std::vector<match_rig::Published> per_point = match_rig::run_derive(
+        m.device, piece, {positions, values, HostTensor::of<float>("radii", "f32", {kPoints}, radii)}, {});
+    const std::vector<match_rig::Published> one_for_all = match_rig::run_derive(
+        m.device, piece, {positions, values, HostTensor::of<float>("radii", "f32", {1}, std::vector<float>{0.037f})}, {});
+    const std::vector<match_rig::Published> unbound = match_rig::run_derive(m.device, piece, {positions, values}, {});
+    const match_rig::Published& rows_per_point = published(per_point, "points");
+    const match_rig::Published& rows_one = published(one_for_all, "points");
+    const match_rig::Published& rows_unbound = published(unbound, "points");
+    REQUIRE(rows_per_point.count == std::uint32_t(kPoints));
+    REQUIRE(rows_one.count == std::uint32_t(kPoints));
+    REQUIRE(rows_unbound.count == std::uint32_t(kPoints));
+    REQUIRE(rows_per_point.bytes.size() == std::size_t(kPoints) * 32);
+    std::size_t wrong = 0;
+    for (std::uint32_t i = 0; i < std::uint32_t(kPoints); ++i) {
+        wrong += row_radius(rows_per_point, i) != radii[i];
+        wrong += row_radius(rows_one, i) != 0.037f;
+        wrong += row_radius(rows_unbound, i) != 1.0f;
+    }
+    CHECK_MESSAGE(wrong == 0, wrong, " rows with a position.w other than their radius, the one radius or 1.0");
+
+    // ---- The built-in draw with a Radii array ---------------------------------------------------
+    sh::PrimParams builtin_params{};
+    std::vector<std::uint8_t> builtin_color;
+    struct Rig {
+        gfx::Backend& g;
+        std::unique_ptr<sc::BackendResources> res;
+        ~Rig() { res.reset(); }
+    } rig{g, nullptr};
+    rig.res = std::make_unique<sc::BackendResources>(
+        g, sh::kMetalPrograms, gfx::cmap::colormap_source(std::make_shared<gfx::cmap::KeyBlockCache>()));
+    {
+        std::string err;
+        REQUIRE_MESSAGE(rig.res->init(&err), err);
+    }
+    auto aligned = [](std::uint64_t n) { return (n + 255) / 256 * 256; };
+    const std::uint64_t off_values = aligned(std::uint64_t(kPoints) * 12);
+    const std::uint64_t off_radii = off_values + aligned(std::uint64_t(kPoints) * 4);
+    std::vector<std::uint8_t> bytes(off_radii + std::uint64_t(kPoints) * 4, 0);
+    std::memcpy(bytes.data(), cloud.positions.data(), std::size_t(kPoints) * 12);
+    std::memcpy(bytes.data() + off_values, cloud.values.data(), std::size_t(kPoints) * 4);
+    std::memcpy(bytes.data() + off_radii, radii.data(), std::size_t(kPoints) * 4);
+    gfx::Buffer data = g.create_buffer({bytes.size(), gfx::kVertex | gfx::kIndex | gfx::kStorage | gfx::kCopyDst, false,
+                                        "points radii match"});
+    REQUIRE_MESSAGE(bool(data), g.last_error());
+    REQUIRE(g.write_buffer(data, 0, bytes.data(), bytes.size()));
+    gfx::Texture color = g.create_texture({kSize, kSize, gfx::Format::RGBA8Unorm, gfx::kRenderTarget | gfx::kCopySrcTex,
+                                           "points radii color"});
+    gfx::Texture depth = g.create_texture({kSize, kSize, gfx::Format::Depth32Float, gfx::kRenderTarget, "points radii depth"});
+    REQUIRE_MESSAGE((color && depth), g.last_error());
+
+    sc::SceneTree tree(sc::Space::k3D);
+    sc::Batch batch;
+    batch.primitive = sc::Primitive::Points;
+    batch.arrays.resize(3);
+    const std::uint64_t offsets[3] = {0, off_values, off_radii};
+    const sc::Role roles[3] = {sc::Role::Positions, sc::Role::Values, sc::Role::Radii};
+    const std::uint32_t strides[3] = {12, 4, 4};
+    const gfx::VertexFormat formats[3] = {gfx::VertexFormat::F32x3, gfx::VertexFormat::F32, gfx::VertexFormat::F32};
+    for (int k = 0; k < 3; ++k) {
+        batch.arrays[std::size_t(k)].role = roles[k];
+        batch.arrays[std::size_t(k)].buffer = data;
+        batch.arrays[std::size_t(k)].offset = offsets[k];
+        batch.arrays[std::size_t(k)].count = kPoints;
+        batch.arrays[std::size_t(k)].stride = strides[k];
+        batch.arrays[std::size_t(k)].format = formats[k];
+    }
+    batch.colormap = 0;
+    batch.vmin = 0.0f;
+    batch.vmax = 1.0f;
+    batch.size_px = kPointSize;
+    batch.point_shape = sc::PointShape::Disc;
+    for (int i = 0; i < kPoints; ++i)
+        batch.bounds.add({cloud.positions[3 * i], cloud.positions[3 * i + 1], cloud.positions[3 * i + 2]});
+    batch.seq = 1;
+    REQUIRE(tree.set_batch(tree.ensure("cloud"), batch));
+    tree.update();
+    rig.res->update_class_table(tree);
+    sc::Orbit orbit;
+    sc::ViewCamera camera = orbit;
+    sc::fit(camera, tree.scene_bounds(), 1.0);
+    sc::CompileOptions options;
+    options.width = options.height = kSize;
+    options.pixel_scale = 1.0f;
+    options.clear_rgba = kClear;
+    sc::SceneCompiler compiler;
+    {
+        gfx::Frame frame;
+        compiler.prepare(tree, *rig.res, frame);
+        gfx::RenderTarget target;
+        target.color = color;
+        target.depth = depth;
+        target.clear_rgba = kClear;
+        gfx::DrawList list(target);
+        sc::DrawMap map;
+        const sc::CompileResult r = compiler.compile(tree, camera, options, *rig.res, list, &map);
+        REQUIRE_MESSAGE(r.ok, (r.notes.empty() ? std::string() : r.notes[0]));
+        CHECK(r.skipped == 0);
+        CHECK_MESSAGE(rig.res->error().empty(), rig.res->error());
+        const std::vector<sr::DrawInfo> draws = sr::draws_of(list, map, tree);
+        REQUIRE(draws.size() == 1);
+        builtin_params = draws[0].p;
+        CHECK(builtin_params.color_mode == 1);
+        CHECK(builtin_params.radius_mode == 1);
+        frame.render(std::move(list));
+        const gfx::Serial s = g.submit(std::move(frame));
+        REQUIRE_MESSAGE(s != 0, g.last_error());
+        REQUIRE(g.wait(s));
+        builtin_color = read_back(g, color, kSize, kSize);
+    }
+    std::array<float, 16> mvp{};
+    std::memcpy(mvp.data(), builtin_params.mvp, sizeof(float) * 16);
+    // The frame block's projection scales, as compile.cpp rounds them from the camera's matrices.
+    const sc::CameraMatrices cm = sc::camera_matrices(camera, tree, kSize, kSize);
+    REQUIRE(cm.ok);
+    const float proj_x = float(std::fabs(cm.proj.at(0, 0))), proj_y = float(std::fabs(cm.proj.at(1, 1)));
+
+    // How many points sit at the half-pixel floor and how many above it, for the message.
+    int at_floor = 0, above_floor = 0;
+    for (int i = 0; i < kPoints; ++i) {
+        const sr::F4 c = sr::mul(mvp.data(), cloud.positions[3 * i], cloud.positions[3 * i + 1], cloud.positions[3 * i + 2]);
+        const double half_px = double(c.w) / double(kSize);
+        (double(radii[std::size_t(i)]) * double(builtin_params.radius_scale) * double(proj_x) > half_px ? above_floor : at_floor)++;
+    }
+    MESSAGE("points radii match: ", at_floor, " points at the half-pixel floor, ", above_floor, " above it");
+    CHECK(at_floor > 0);
+    CHECK(above_floor > 0);
+
+    // ---- The piece's draw, from the rows of the derive half --------------------------------------
+    cd::DrawRuntime rt(g, false);
+    cd::Instance instance;
+    instance.program = "cloud";
+    instance.panel = "cloud";
+    const cd::Verdict installed = rt.install(piece, instance, kPiecePick);
+    REQUIRE_MESSAGE(installed.ok(), installed.code << " " << installed.message);
+    cd::ResourceVersion version;
+    version.resource = "points";
+    version.step = 1;
+    version.count = rows_per_point.count;
+    version.bytes = rows_per_point.bytes.data();
+    version.size = rows_per_point.bytes.size();
+    {
+        const cd::Verdict v = rt.set_resource(version);
+        REQUIRE_MESSAGE(v.ok(), v.code << " " << v.message);
+    }
+    dp::Target target(g, kSize);
+    REQUIRE_MESSAGE(target.ok, g.last_error());
+    cd::FrameInputs in;
+    in.clip_from_world = mvp;
+    in.viewport = {0, 0, float(kSize), float(kSize)};
+    in.pixel_ratio = 1.0f;
+    in.cursor_step = 1;
+    in.latest_step = 1;
+    in.live = true;
+    in.params = radii_params(kPointSize, 1, builtin_params.radius_scale, proj_x, proj_y);
+    std::vector<gfx::Serial> serials;
+    {
+        const bool drawn = target.frame(rt, in, &serials, &why);
+        REQUIRE_MESSAGE(drawn, why);
+    }
+    for (gfx::Serial s : serials) REQUIRE_MESSAGE(g.wait(s), g.last_error());
+    CHECK_MESSAGE(rt.status().state == cd::DrawState::running,
+                  rt.status().error.code << " " << rt.status().error.message);
+    const std::vector<std::uint8_t> piece_color = read_back(g, target.host.color, kSize, kSize);
+    const std::vector<std::uint8_t> piece_ids = read_back(g, target.host.id, kSize, kSize);
+    REQUIRE(piece_color.size() == std::size_t(S) * S * 4);
+    REQUIRE(piece_ids.size() == std::size_t(S) * S * 8);
+    REQUIRE(builtin_color.size() == piece_color.size());
+
+    // ---- The comparison, under the rules of the case above ----------------------------------------
+    std::size_t differing = 0, interior = 0, lit_interior = 0, edge = 0, failed = 0;
+    std::string first;
+    for (int y = 0; y < S; ++y)
+        for (int x = 0; x < S; ++x) {
+            const std::uint32_t pc = pixel_of(piece_color, x, y), bc = pixel_of(builtin_color, x, y);
+            differing += pc != bc;
+            bool ok;
+            if (is_interior(piece_ids, x, y)) {
+                ++interior;
+                lit_interior += pc != kClear;
+                ok = pc == bc;
+            } else {
+                ++edge;
+                ok = false;
+                for (int dy = -1; dy <= 1 && !ok; ++dy)
+                    for (int dx = -1; dx <= 1 && !ok; ++dx)
+                        ok = channel_gap(pc, pixel_of(builtin_color, std::clamp(x + dx, 0, S - 1),
+                                                      std::clamp(y + dy, 0, S - 1))) <= 1;
+            }
+            if (!ok) {
+                ++failed;
+                if (first.empty()) {
+                    char buf[160];
+                    std::snprintf(buf, sizeof buf, "first at (%d, %d): piece %08x, built-in %08x, %s", x, y, pc, bc,
+                                  is_interior(piece_ids, x, y) ? "interior" : "edge");
+                    first = buf;
+                }
+            }
+        }
+    MESSAGE("points radii match: ", differing, " differing pixels, ", interior, " interior pixels (", lit_interior,
+            " lit), ", edge, " edge pixels, ", failed, " failed");
+    CHECK_MESSAGE(failed == 0, failed, " pixels outside the tolerances; ", first);
+    CHECK(lit_interior >= 500);
+
+    // ---- The picks ------------------------------------------------------------------------------
+    struct Probe {
+        int x, y, item;
+    };
+    std::vector<Probe> candidates;
+    for (int i = 0; i < kPoints; ++i) {
+        const sr::F4 c = sr::mul(mvp.data(), cloud.positions[3 * i], cloud.positions[3 * i + 1], cloud.positions[3 * i + 2]);
+        if (!(c.w > 0)) continue;
+        const int x = int(std::floor((c.x / c.w + 1) * 0.5 * S)), y = int(std::floor((1 - c.y / c.w) * 0.5 * S));
+        if (x < 1 || y < 1 || x > S - 2 || y > S - 2) continue;
+        if (is_interior(piece_ids, x, y) && identity_of(piece_ids, x, y) == std::uint64_t(i) + 1) candidates.push_back({x, y, i});
+    }
+    MESSAGE("points radii match: ", candidates.size(), " points show their own center pixel");
+    REQUIRE(candidates.size() >= 16);
+    std::vector<Probe> probes;
+    for (int k = 0; k < 16; ++k) probes.push_back(candidates[std::size_t(k) * candidates.size() / 16]);
+    gfx::Texture pick_ids = g.create_texture({16, 16, gfx::Format::RG32Uint, gfx::kRenderTarget | gfx::kCopySrcTex, "pick ids"});
+    gfx::Texture pick_depth =
+        g.create_texture({16, 16, gfx::Format::Depth32Float, gfx::kRenderTarget | gfx::kCopySrcTex, "pick depth"});
+    REQUIRE_MESSAGE((pick_ids && pick_depth), g.last_error());
+    sc::Picker picker;
+    int agree = 0;
+    for (const Probe& pr : probes) {
+        CAPTURE(pr.x);
+        CAPTURE(pr.y);
+        const sc::PickWindow w = picker.request(pr.x + 0.5f, pr.y + 0.5f, 8, kSize, kSize);
+        const std::int32_t window[4] = {w.x0, w.y0, w.width, w.height};
+        gfx::RenderTarget pt;
+        pt.color = pick_ids;
+        pt.depth = pick_depth;
+        gfx::DrawList pick(pt);
+        sc::DrawMap pick_map;
+        const sc::CompileResult r = compiler.compile_pick(tree, camera, options, window, *rig.res, pick, &pick_map);
+        REQUIRE_MESSAGE(r.ok, (r.notes.empty() ? std::string() : r.notes[0]));
+        gfx::Frame f;
+        f.render(std::move(pick));
+        REQUIRE_MESSAGE(g.submit(std::move(f)) != 0, g.last_error());
+        const std::vector<std::uint8_t> id_bytes = read_back(g, pick_ids, 16, 16);
+        const std::vector<std::uint8_t> depth_bytes = read_back(g, pick_depth, 16, 16);
+        const std::optional<sc::Hit> hit = picker.deliver(picker.current(), pick_map.revision, id_bytes, &depth_bytes, pick_map);
+        REQUIRE(hit.has_value());
+        const std::uint64_t piece_item = identity_of(piece_ids, pr.x, pr.y) - 1;
+        CHECK_MESSAGE(hit->item == piece_item, "pixel (", pr.x, ", ", pr.y, "): built-in item ", hit->item, ", piece item ",
+                      piece_item);
+        agree += hit->item == piece_item;
+    }
+    MESSAGE("points radii match: ", agree, " of 16 picks name the piece's item");
+
+    // ---- The captures ---------------------------------------------------------------------------
+    capture("points-radii-builtin.png", builtin_color);
+    capture("points-radii-piece.png", piece_color);
+    std::vector<std::uint8_t> diff(piece_color.size());
+    for (std::size_t i = 0; i < diff.size(); ++i)
+        diff[i] = (i % 4 == 3) ? 255 : std::uint8_t(std::min(255, std::abs(int(piece_color[i]) - int(builtin_color[i])) * 32));
+    capture("points-radii-diff.png", diff);
+
+    g.release(pick_ids);
+    g.release(pick_depth);
+    g.release(color);
+    g.release(depth);
+    g.release(data);
+}
 
 CALIPER_GPU_TEST_MAIN()

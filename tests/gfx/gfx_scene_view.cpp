@@ -30,6 +30,9 @@
 #include "gfx/metal_backend.h"
 #include "gfx/shaders/generated/programs_metal.h"
 #include "live/live_scene.h"
+#if defined(CALIPER_HAVE_SCENE_PIECES)
+#include "draw/scene_pieces.h"
+#endif
 #include "net/wire.h"
 #include "renderer/host_renderer.h"
 #include "scene_reference.h"
@@ -1595,6 +1598,24 @@ TEST_CASE("gfx/Metal scene view: shapes drawn by the library pieces match the bu
     for (wire::Message& m : flat.messages)
         if (auto* u = std::get_if<wire::SceneUpdate>(&m)) u->params.erase("radius");
     fixtures.push_back(flat);
+    // The view through a camera whose pixel space holds a textured mesh, which keeps the built-in
+    // draw: it draws among the pieces of that flat layer in the scene core's order, after the image
+    // and before the arrow, the marks and the box that overlap it.
+    primitive_fixtures::Fixture late = primitive_fixtures::through();
+    late.name = "through-late";
+    {
+        std::vector<float> qp = {20, 14, 46, 14, 46, 32, 20, 14, 46, 32, 20, 32};
+        std::vector<float> uv = {0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1};
+        std::vector<uint32_t> tex(16);
+        for (uint32_t y = 0; y < 4; ++y)
+            for (uint32_t x = 0; x < 4; ++x) tex[y * 4 + x] = primitive_fixtures::RGBA(90 + 40 * x, 200 - 30 * y, 120, 255);
+        wire::SceneUpdate card = late.update("rig/left/card", CALIPER_NET_PART_MESH);
+        card.arrays.push_back(late.section("positions", CALIPER_NET_DTYPE_F32, {6, 2}, qp));
+        card.arrays.push_back(late.section("uvs", CALIPER_NET_DTYPE_F32, {6, 2}, uv));
+        card.arrays.push_back(late.section("texture", CALIPER_NET_DTYPE_U8, {4, 4, 4}, tex));
+        late.messages.push_back(card);
+    }
+    fixtures.push_back(late);
     for (const primitive_fixtures::Fixture& f : fixtures) {
         CAPTURE(f.name);
         ViewRig pr, br;
@@ -1605,9 +1626,14 @@ TEST_CASE("gfx/Metal scene view: shapes drawn by the library pieces match the bu
         rb.fixture = f;
         REQUIRE_MESSAGE(rp.draw(*pr.view), rp.error);
         REQUIRE_MESSAGE(rb.draw(*br.view), rb.error);
+        // Only a textured mesh keeps the built-in draw (a texture resource of other formats and
+        // sizes is not built yet), alone and without the other shapes of its view.
         const SceneShapeCounts counts = pr.view->shape_counts();
-        if (f.name == "through") CHECK(counts.fallbacks.count("view through a camera with a built-in overlay") == 1);
-        else CHECK_MESSAGE(counts.pieces > 0, f.name, " draws no shape with a piece");
+        CHECK_MESSAGE(counts.pieces > 0, f.name, " draws no shape with a piece");
+        const bool textured = f.name == "mesh" || f.name == "through-late";
+        CHECK(counts.builtin == (textured ? 1u : 0u));
+        CHECK(counts.fallbacks.size() == (textured ? 1u : 0u));
+        if (textured) CHECK(counts.fallbacks.count("textured mesh") == 1);
         compare_fixture(f.name, pr, br, int(primitive_fixtures::kSize), f.name == "images" ? 1 : 0);
     }
     {
@@ -1619,13 +1645,79 @@ TEST_CASE("gfx/Metal scene view: shapes drawn by the library pieces match the bu
         Wire wp, wb;
         draw_demo(pr, wp, dm);
         draw_demo(br, wb, dm);
-        // The demo's mesh has flat faces and indices, which mesh@1 does not draw yet.
+        // Every shape of the demo, its surface's mesh of flat faces and indices too.
         const SceneShapeCounts counts = pr.view->shape_counts();
-        CHECK(counts.pieces == 3);
-        CHECK(counts.fallbacks.count("indexed mesh with flat faces") == 1);
+        CHECK(counts.pieces == 4);
+        CHECK(counts.builtin == 0);
+        CHECK(counts.fallbacks.empty());
         compare_fixture("demo", pr, br, int(scene_fixtures::SurfaceRowFixture::kSize), 0);
     }
 }
+
+// The highlight of a selection drawn by the pieces: the dim by image@1 and the selected rows by a
+// second instance of points@1 or boxes@1, into the colour alone, against the built-in's dim and
+// highlight, under the rules of the comparison above; the selection over the whole picture holds
+// every box, the points of radii in scene units of "edges" and the points flat over the picture
+// of "through". The highlight writes no ID and no depth, thus the picks are those of the shapes.
+TEST_CASE("gfx/Metal scene view: the highlight of a selection drawn by the pieces matches the built-in's") {
+    ViewRig probe;
+    if (!probe.init()) CALIPER_SKIP_NO_GPU("no Metal device");
+    for (const primitive_fixtures::Fixture& f :
+         {primitive_fixtures::boxes(), primitive_fixtures::edges(), primitive_fixtures::through()}) {
+        CAPTURE(f.name);
+        ViewRig pr, br;
+        REQUIRE(pr.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str(), caliper_live_views::ShapeDraw::pieces));
+        REQUIRE(br.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str(), caliper_live_views::ShapeDraw::builtin));
+        primitive_rows::Row rp, rb;
+        rp.fixture = f;
+        rb.fixture = f;
+        REQUIRE_MESSAGE(rp.draw(*pr.view), rp.error);
+        REQUIRE_MESSAGE(rb.draw(*br.view), rb.error);
+        const std::vector<uint8_t> plain = pixels(*pr.view);
+        const float S = float(primitive_fixtures::kSize);
+        const std::string sp = pr.view->select_polygon({0, 0, S, 0, S, S, 0, S});
+        const std::string sb = br.view->select_polygon({0, 0, S, 0, S, S, 0, S});
+        CHECK(sp == sb);
+        std::string why;
+        REQUIRE_MESSAGE(pr.view->render(primitive_fixtures::kSize, primitive_fixtures::kSize, 1.0f, primitive_fixtures::kClear, &why), why);
+        REQUIRE_MESSAGE(br.view->render(primitive_fixtures::kSize, primitive_fixtures::kSize, 1.0f, primitive_fixtures::kClear, &why), why);
+        CHECK(pr.view->highlighted() > 0);
+        CHECK(pr.view->highlighted() == br.view->highlighted());
+        CHECK(pr.view->shape_counts().marks > 0);
+        CHECK(pr.view->shape_counts().fallbacks.empty());
+        CHECK(pixels(*pr.view) != plain);
+        compare_fixture(f.name + "-selected", pr, br, int(primitive_fixtures::kSize), 1);
+        // No selection: the marks go, and the picture is the plain one again.
+        CHECK(pr.view->select_polygon({1, 1, 2, 1, 2, 2}) == "{}");
+        REQUIRE_MESSAGE(pr.view->render(primitive_fixtures::kSize, primitive_fixtures::kSize, 1.0f, primitive_fixtures::kClear, &why), why);
+        CHECK(pr.view->highlighted() == 0);
+        CHECK(pr.view->shape_counts().marks == 0);
+        CHECK(pixels(*pr.view) == plain);
+    }
+}
+
+// Every kind of fallback that the shapes' pieces count, in the order of caliper_draw::Fallback. A
+// new kind fails this row until it is listed here. What remains: inputs of another dtype or shape
+// (u8 and u16 elements are not taken yet), parts above a piece's capacity, a textured mesh (a
+// texture resource of other formats and sizes is not built yet), a stage program (stages go with
+// their hooks), params outside a piece's range, a depth cloud in a moved pixel space, a class
+// above the 4,096 colors of segmentation@1, and the error paths of a part without arrays, a
+// stopped piece and a build without the library.
+#if defined(CALIPER_HAVE_SCENE_PIECES)
+TEST_CASE("gfx/Metal scene view: the kinds of fallback of the shapes' pieces are the listed ones") {
+    const std::vector<std::string> listed = {
+        "points of another shape", "lines of another shape", "arrows of another shape", "boxes of another shape",
+        "mesh of another shape", "image of another shape", "depth image of another shape", "mask of another shape",
+        "points above the piece's capacity", "segments above the piece's capacity", "arrows above the piece's capacity",
+        "boxes above the piece's capacity", "mesh vertices above the piece's capacity",
+        "mesh triangles above the piece's capacity", "image pixels above the piece's capacity",
+        "depth pixels above the piece's capacity", "mask pixels above the piece's capacity", "textured mesh",
+        "stage program", "point size outside 1 to 64 pixels", "width above 128 pixels",
+        "box edge width outside 0.5 to 64 pixels", "depth cloud in a moved pixel space", "class above 4,095 in a mask",
+        "batch without arrays to convert", "piece stopped by its runtime", "no library piece"};
+    CHECK(caliper_draw::fallback_kinds() == listed);
+}
+#endif
 
 // The switch: one view drawn with the pieces, then with the built-in, then with the pieces again,
 // gives each time the picture of a view that drew that way from the start; nothing draws while
@@ -1642,7 +1734,7 @@ TEST_CASE("gfx/Metal scene view: the switch between the pieces and the built-in 
     SceneView& v = *pr.view;
     const uint32_t S = scene_fixtures::SurfaceRowFixture::kSize;
     const std::vector<uint8_t> with_pieces = pixels(v), builtin = pixels(*br.view);
-    CHECK(v.shape_runtimes().size() == 3);
+    CHECK(v.shape_runtimes().size() == 4);
     CHECK(v.draw_runtimes().empty());
     std::string why;
     v.set_shape_draw(caliper_live_views::ShapeDraw::builtin);
@@ -1651,7 +1743,7 @@ TEST_CASE("gfx/Metal scene view: the switch between the pieces and the built-in 
     CHECK(pixels(v) == builtin);
     v.set_shape_draw(caliper_live_views::ShapeDraw::pieces);
     REQUIRE_MESSAGE(v.render(S, S, 1.0f, scene_fixtures::SurfaceRowFixture::kClear, &why), why);
-    CHECK(v.shape_runtimes().size() == 3);
+    CHECK(v.shape_runtimes().size() == 4);
     const std::vector<uint8_t> again = pixels(v);
     size_t changed = 0;
     for (size_t i = 0; i + 4 <= again.size(); i += 4) changed += std::memcmp(&again[i], &with_pieces[i], 4) != 0;

@@ -37,7 +37,7 @@ constexpr std::uint32_t kNanBits = 0x7fc00000u;
 constexpr std::uint32_t kNone = 0xffffffffu;
 
 // The capacities of the library pieces' resources (their piece.toml).
-constexpr std::uint64_t kPointsMax = 262144, kSegmentsMax = 209714, kArrowsMax = 262143, kBoxesMax = 131072,
+constexpr std::uint64_t kPointsMax = 262144, kSegmentsMax = 209714, kArrowsMax = 262143, kBoxesMax = 126976,
                         kMeshVerticesMax = 98304, kMeshTrianglesMax = 196608, kImagePixelsMax = 2097120,
                         kMaskPixelsMax = 2093024, kPaletteSize = 4096;
 
@@ -160,7 +160,7 @@ void info_of(const Source& s, std::uint64_t rows, std::vector<std::uint8_t>* out
 // the batch, or the kind of fallback when no piece draws it.
 struct ScenePieces::Converted {
     std::string piece;
-    std::string fallback;
+    Fallback fallback = Fallback::none;
     std::vector<PieceBatch::Resource> resources;
     std::vector<std::pair<std::string, double>> params;   // an override's
     bool is_override = false;
@@ -194,9 +194,57 @@ struct ScenePieces::Program {
     bool is_image = false;
     bool frustum = false;       // frustum@1 over a camera entity, not a batch
     std::uint32_t camera = 0;   // the index of the camera of the batch's pixel space, 0 for none
+    std::uint32_t dims = 3;     // the scene core's dims of the batch: 2 in 2-D and in a pixel space
+    double through_fx = 0;      // the focal length in pixels of the camera looked through
     bool given = false;                 // the runtime holds the resources of given_generation
     std::uint64_t given_generation = 0;
+    bool fixed = false;   // a mark drawn with `clip` alone, as the dim of a selection
+    bool late = false;    // a marker of a built-in batch of the flat layer, in the sort of sync()
+    Mat4 clip;
 };
+
+// The feed of the highlight's programs: ScenePieces::marks_, drawn after every other program.
+class ScenePieces::Marks final : public DrawFeed {
+public:
+    explicit Marks(ScenePieces& owner) : owner_(owner) {}
+    std::uint64_t revision() const override { return owner_.marks_revision_; }
+    std::vector<PanelProgram> programs() const override {
+        std::vector<PanelProgram> out;
+        for (const auto& pr : owner_.marks_) {
+            PanelProgram p;
+            p.piece = *pr->piece;
+            p.instance.program = pr->id;
+            p.instance.panel = "scene";
+            p.pick_id = pr->pick_id;
+            p.revision = std::hash<std::string>{}(pr->conv->piece);
+            out.push_back(std::move(p));
+        }
+        return out;
+    }
+    void frame(DrawRuntime& runtime, FrameInputs* in) override {
+        for (auto& pr : owner_.marks_)
+            if (pr->id == runtime.instance().program) return owner_.frame_of(*pr, runtime, in);
+    }
+    void status(const DrawRuntime&) override {}
+
+private:
+    ScenePieces& owner_;
+};
+
+namespace {
+const char* const kFallbackNames[] = {"points of another shape", "lines of another shape", "arrows of another shape", "boxes of another shape", "mesh of another shape", "image of another shape", "depth image of another shape", "mask of another shape", "points above the piece's capacity", "segments above the piece's capacity", "arrows above the piece's capacity", "boxes above the piece's capacity", "mesh vertices above the piece's capacity", "mesh triangles above the piece's capacity", "image pixels above the piece's capacity", "depth pixels above the piece's capacity", "mask pixels above the piece's capacity", "textured mesh", "stage program", "point size outside 1 to 64 pixels", "width above 128 pixels", "box edge width outside 0.5 to 64 pixels", "depth cloud in a moved pixel space", "class above 4,095 in a mask", "batch without arrays to convert", "piece stopped by its runtime", "no library piece"};
+static_assert(sizeof kFallbackNames / sizeof kFallbackNames[0] == std::size_t(Fallback::count),
+              "a name for each kind of fallback");
+}  // namespace
+
+const char* fallback_name(Fallback kind) {
+    const std::size_t k = std::size_t(kind);
+    return k < std::size_t(Fallback::count) ? kFallbackNames[k] : "";
+}
+
+std::vector<std::string> fallback_kinds() {
+    return std::vector<std::string>(std::begin(kFallbackNames), std::end(kFallbackNames));
+}
 
 const cs::Piece* ScenePieces::library_piece(const std::string& name) {
     static const std::map<std::string, cs::Piece> pieces = [] {
@@ -233,9 +281,9 @@ namespace {
 
 using Converted = ScenePieces::Converted;
 
-bool too_many(Converted& c, uint64_t n, uint64_t most, const char* what) {
+bool too_many(Converted& c, uint64_t n, uint64_t most, Fallback kind) {
     if (n <= most) return false;
-    c.fallback = std::string(what) + " above the piece's capacity";
+    c.fallback = kind;
     return true;
 }
 
@@ -244,14 +292,28 @@ void points_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
     Rows pos;
     std::string why;
     Source src;
-    if (!rows(u.array("positions"), &pos) || !source_of(u, &src, &why)) return void(c.fallback = "points of another shape");
-    if (b.array(caliper_scene::Role::Radii)) return void(c.fallback = "points with radii in scene units");
-    if (too_many(c, uint64_t(pos.n), kPointsMax, "points")) return;
+    if (!rows(u.array("positions"), &pos) || !source_of(u, &src, &why)) return void(c.fallback = Fallback::points_shape);
+    if (too_many(c, uint64_t(pos.n), kPointsMax, Fallback::points_capacity)) return;
+    // Radii in scene units (radius_mode 1), in position.w as the derive half writes them: one for
+    // each point from `radii`, or the one `radius` for all, as the scene view's batch holds them.
+    const float* radii = nullptr;
+    float radius = 1.0f;
+    if (b.array(caliper_scene::Role::Radii)) {
+        if (const wire::Section* r = u.array("radii")) {
+            if (rows_of(r, CALIPER_NET_DTYPE_F32, 4, 0) < pos.n) return void(c.fallback = Fallback::points_shape);
+            radii = reinterpret_cast<const float*>(r->data);
+        } else if (const caliper_net::Json* one = u.params.find("radius"); one && one->is_number()) {
+            radius = float(one->as_double());
+        } else {
+            return void(c.fallback = Fallback::points_shape);
+        }
+        c.mode = 1;
+    }
     c.count = uint64_t(pos.n);
     c.color_mode = src.mode == 3 ? 2 : src.mode;
     std::vector<std::uint8_t> out(std::size_t(pos.n) * 32, 0);
     for (int64_t i = 0; i < pos.n; ++i) {
-        const float p[4] = {pos.at(i, 0), pos.at(i, 1), pos.at(i, 2), 1.0f};
+        const float p[4] = {pos.at(i, 0), pos.at(i, 1), pos.at(i, 2), radii ? radii[i] : radius};
         const std::uint32_t bits = src.mode == 3 ? 0u : src.at(uint64_t(i)), index = std::uint32_t(i);
         put(out, std::size_t(i) * 32, p, 16);
         put(out, std::size_t(i) * 32 + 16, &bits, 4);
@@ -270,7 +332,7 @@ void lines_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
     std::string why;
     Source src;
     if (!rows(u.array("positions"), &pos) || !source_of(u, &src, &why) || src.mode == 3)
-        return void(c.fallback = "lines of another shape");
+        return void(c.fallback = Fallback::lines_shape);
     const uint64_t n = uint64_t(pos.n);
     c.mode = b.line_mode == caliper_scene::LineMode::Strips ? 1u : b.line_mode == caliper_scene::LineMode::Edges ? 2u : 0u;
     c.color_mode = src.mode;
@@ -282,7 +344,7 @@ void lines_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
     if (c.mode == 1) {
         const wire::Section* sl = u.array("strip_lengths");
         const int64_t s = rows_of(sl, CALIPER_NET_DTYPE_I32, 4, 0);
-        if (s < 0) return void(c.fallback = "lines of another shape");
+        if (s < 0) return void(c.fallback = Fallback::lines_shape);
         const std::int32_t* len = reinterpret_cast<const std::int32_t*>(sl->data);
         joins.assign(std::size_t(n), 0);
         strip_of.assign(std::size_t(n), 0);
@@ -301,12 +363,12 @@ void lines_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
     } else if (c.mode == 2) {
         const wire::Section* ix = u.array("indices");
         const int64_t e = rows_of(ix, CALIPER_NET_DTYPE_I32, 4, 2);
-        if (e < 0) return void(c.fallback = "lines of another shape");
+        if (e < 0) return void(c.fallback = Fallback::lines_shape);
         pairs = reinterpret_cast<const std::int32_t*>(ix->data);
         count = n > 0 ? uint64_t(e) : 0;
         c.color_per = b.per_edge ? 1u : 0u;
     }
-    if (too_many(c, count, kSegmentsMax, "segments")) return;
+    if (too_many(c, count, kSegmentsMax, Fallback::segments_capacity)) return;
     c.count = count;
     std::vector<std::uint8_t> out(std::size_t(count) * 40, 0);
     for (uint64_t i = 0; i < count; ++i) {
@@ -346,8 +408,8 @@ void arrows_of(const wire::SceneUpdate& u, Converted& c) {
     std::string why;
     Source src;
     if (!rows(u.array("origins"), &o) || !rows(u.array("vectors"), &v) || !source_of(u, &src, &why) || src.mode == 3)
-        return void(c.fallback = "arrows of another shape");
-    if (too_many(c, uint64_t(o.n), kArrowsMax, "arrows")) return;
+        return void(c.fallback = Fallback::arrows_shape);
+    if (too_many(c, uint64_t(o.n), kArrowsMax, Fallback::arrows_capacity)) return;
     c.count = uint64_t(o.n);
     c.color_mode = src.mode;
     std::vector<std::uint8_t> out(std::size_t(o.n) * 32, 0);
@@ -379,12 +441,12 @@ void boxes_of(const wire::SceneUpdate& u, Converted& c) {
     Source src;
     if (!rows(u.array("centers"), &ctr) || !rows(u.array("half_sizes"), &half) || !source_of(u, &src, &why) ||
         src.mode == 1)
-        return void(c.fallback = "boxes of another shape");
+        return void(c.fallback = Fallback::boxes_shape);
     const bool has_rot = u.array("rotations") != nullptr;
-    if (has_rot && (!rows(u.array("rotations"), &rot) || rot.d != 4)) return void(c.fallback = "boxes of another shape");
+    if (has_rot && (!rows(u.array("rotations"), &rot) || rot.d != 4)) return void(c.fallback = Fallback::boxes_shape);
     int64_t n = ctr.n;
     if (half.n != 1) n = std::min(n, half.n);
-    if (too_many(c, uint64_t(n), kBoxesMax, "boxes")) return;
+    if (too_many(c, uint64_t(n), kBoxesMax, Fallback::boxes_capacity)) return;
     c.count = uint64_t(n);
     c.color_mode = src.mode == 2 ? 1u : src.mode == 3 ? 2u : 0u;
     const float dims = ctr.d >= 3 ? 3.0f : 2.0f;
@@ -406,6 +468,7 @@ void boxes_of(const wire::SceneUpdate& u, Converted& c) {
         put(out, at + 48, &rgba, 4);
         put(out, at + 52, &klass, 4);
         put(out, at + 56, &index, 4);
+        put(out, at + 60, &kNone, 4);   // no label string: the scene view draws the labels itself
     }
     if (n > 0 && alpha) {
         const float one = 1.0f;
@@ -416,6 +479,7 @@ void boxes_of(const wire::SceneUpdate& u, Converted& c) {
         c.class_resource = 0;
     }
     c.resources.push_back({"boxes", std::uint32_t(n), std::move(out)});
+    c.resources.push_back({"names", 0, {}});
 }
 
 void mesh_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
@@ -423,21 +487,20 @@ void mesh_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
     Rows pos, nrm;
     std::string why;
     Source src;
-    if (b.texture || u.array("uvs") || u.array("texture")) return void(c.fallback = "textured mesh");
+    if (b.texture || u.array("uvs") || u.array("texture")) return void(c.fallback = Fallback::textured_mesh);
     if (!rows(u.array("positions"), &pos) || !source_of(u, &src, &why) || src.mode == 3)
-        return void(c.fallback = "mesh of another shape");
+        return void(c.fallback = Fallback::mesh_shape);
     const bool normals = u.array("normals") != nullptr;
-    if (normals && (!rows(u.array("normals"), &nrm) || nrm.d < 3)) return void(c.fallback = "mesh of another shape");
+    if (normals && (!rows(u.array("normals"), &nrm) || nrm.d < 3)) return void(c.fallback = Fallback::mesh_shape);
     const wire::Section* ix = u.array("indices");
     const bool indexed = ix != nullptr;
     int64_t t = pos.n / 3;
     if (indexed) {
         t = rows_of(ix, CALIPER_NET_DTYPE_I32, 4, 3);
-        if (t < 0) return void(c.fallback = "mesh of another shape");
+        if (t < 0) return void(c.fallback = Fallback::mesh_shape);
     }
-    if (!normals && indexed) return void(c.fallback = "indexed mesh with flat faces");
-    if (too_many(c, uint64_t(pos.n), kMeshVerticesMax, "mesh vertices") ||
-        too_many(c, uint64_t(t), kMeshTrianglesMax, "mesh triangles"))
+    if (too_many(c, uint64_t(pos.n), kMeshVerticesMax, Fallback::mesh_vertices_capacity) ||
+        too_many(c, uint64_t(t), kMeshTrianglesMax, Fallback::mesh_triangles_capacity))
         return;
     c.count = uint64_t(pos.n);
     c.color_mode = src.mode;
@@ -463,17 +526,18 @@ void mesh_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
         const float one = 1.0f;
         put(verts, 28, &one, 4);   // vertex 0's normal.w: an alpha below 255
     }
-    std::vector<std::uint8_t> tris(std::size_t(t) * 16, 0);
+    // The index buffer faces, three vertex indices a triangle, each clamped to the last vertex.
+    std::vector<std::uint8_t> faces(std::size_t(t) * 12, 0);
     const std::uint32_t last = pos.n > 0 ? std::uint32_t(pos.n - 1) : 0;
     const std::int32_t* ids = indexed ? reinterpret_cast<const std::int32_t*>(ix->data) : nullptr;
     for (int64_t k = 0; k < t; ++k) {
-        std::uint32_t v[4] = {std::uint32_t(3 * k), std::uint32_t(3 * k + 1), std::uint32_t(3 * k + 2), 0};
+        std::uint32_t v[3] = {std::uint32_t(3 * k), std::uint32_t(3 * k + 1), std::uint32_t(3 * k + 2)};
         if (ids)
             for (int a = 0; a < 3; ++a) v[a] = std::min(std::uint32_t(ids[3 * k + a]), last);
-        put(tris, std::size_t(k) * 16, v, 16);
+        put(faces, std::size_t(k) * 12, v, 12);
     }
     c.resources.push_back({"vertices", std::uint32_t(pos.n), std::move(verts)});
-    c.resources.push_back({"triangles", std::uint32_t(t), std::move(tris)});
+    c.resources.push_back({"faces", std::uint32_t(t * 3), std::move(faces)});
 }
 
 // The info of an image piece: its size and the identity pose (the pose is in the matrix).
@@ -498,8 +562,8 @@ void image_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
         c.piece = "image";
         const bool grey = b.image_form == caliper_scene::ImageForm::Grey;
         if (!px || px->dtype != CALIPER_NET_DTYPE_U8 || px->size < n * (grey ? 1 : 4))
-            return void(c.fallback = "image of another shape");
-        if (too_many(c, n, kImagePixelsMax, "image pixels")) return;
+            return void(c.fallback = Fallback::image_shape);
+        if (too_many(c, n, kImagePixelsMax, Fallback::image_pixels_capacity)) return;
         std::vector<std::uint8_t> out(std::size_t(n) * 4);
         if (grey) {
             for (uint64_t i = 0; i < n; ++i) {
@@ -515,8 +579,8 @@ void image_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
         c.piece = "depth";
         const bool u16 = px && px->dtype == CALIPER_NET_DTYPE_U16;
         if (!px || (!u16 && px->dtype != CALIPER_NET_DTYPE_F32) || px->size < n * (u16 ? 2 : 4))
-            return void(c.fallback = "depth image of another shape");
-        if (too_many(c, n, kImagePixelsMax, "depth pixels")) return;
+            return void(c.fallback = Fallback::depth_shape);
+        if (too_many(c, n, kImagePixelsMax, Fallback::depth_pixels_capacity)) return;
         const caliper_net::Json* sp = u.params.find("scale");
         const float scale = float(sp && sp->is_number() ? sp->as_double() : (u16 ? 0.001 : 1.0));
         std::vector<std::uint8_t> out(std::size_t(n) * 4);
@@ -547,8 +611,8 @@ void image_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
     } else {
         c.piece = "segmentation";
         const bool u16 = px && px->dtype == CALIPER_NET_DTYPE_U16;
-        if (!px || px->size < n * (u16 ? 2 : 1)) return void(c.fallback = "mask of another shape");
-        if (too_many(c, n, kMaskPixelsMax, "mask pixels")) return;
+        if (!px || px->size < n * (u16 ? 2 : 1)) return void(c.fallback = Fallback::mask_shape);
+        if (too_many(c, n, kMaskPixelsMax, Fallback::mask_pixels_capacity)) return;
         std::vector<std::uint8_t> out(std::size_t(n) * 4);
         for (uint64_t i = 0; i < n; ++i) {
             std::uint32_t id = 0;
@@ -595,6 +659,20 @@ std::vector<std::uint8_t> pack(const cs::Piece& piece, const std::vector<std::pa
     return out;
 }
 
+// The f32 param `name` of the packed params, where the piece has it.
+void set_param(const cs::Piece& piece, std::vector<std::uint8_t>& packed, const char* name, float value) {
+    for (std::size_t i = 0; i < piece.params.size() && (i + 1) * 4 <= packed.size(); ++i)
+        if (piece.params[i].name == name) std::memcpy(packed.data() + i * 4, &value, 4);
+}
+
+// The longest of the first n columns of m's rotation part, as the scene core scales a radius.
+double column_scale(const Mat4& m, int n) {
+    double s = 0;
+    for (int c = 0; c < n; ++c)
+        s = std::max(s, caliper_scene::length(caliper_scene::Vec3{m.at(0, c), m.at(1, c), m.at(2, c)}));
+    return s;
+}
+
 bool is_identity(const Mat4& m) {
     const Mat4 id;
     for (int i = 0; i < 16; ++i)
@@ -615,8 +693,8 @@ void ScenePieces::take(const std::string& path, Primitive p, bool fixed, const w
         case Primitive::Mesh: mesh_of(u, b, *c); break;
         case Primitive::Image: image_of(u, b, *c); break;
     }
-    if (c->fallback.empty() && !library_piece(c->piece)) c->fallback = "no library piece " + c->piece;
-    if (!c->fallback.empty()) c->resources.clear();
+    if (c->fallback == Fallback::none && !library_piece(c->piece)) c->fallback = Fallback::no_piece;
+    if (c->fallback != Fallback::none) c->resources.clear();
     parts_[{{path, int(p)}, fixed}] = std::move(c);
 }
 
@@ -635,7 +713,7 @@ void ScenePieces::set_override(const std::string& path, Primitive p, PieceBatch 
     c->params = std::move(batch.params);
     c->resources = std::move(batch.resources);
     if (!library_piece(c->piece)) {
-        c->fallback = "no library piece " + c->piece;
+        c->fallback = Fallback::no_piece;
         c->resources.clear();
     }
     overrides_[{path, int(p)}] = std::move(c);
@@ -650,7 +728,8 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
     bool changed = false;
     std::vector<std::uint32_t> texels;
     const bool through = bool(state.through);
-    bool overlay_fell = false;   // an entity of the looked-through camera's pixel space keeps the built-in
+    late_.clear();
+    late_before_.clear();
     if (!frustum_) {
         frustum_ = std::make_shared<Converted>();
         frustum_->piece = "frustum";
@@ -662,7 +741,7 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
             put(bytes, std::size_t(k * 16 + k * 4), &one, 4);
         }
         frustum_->resources.push_back({"frustum", 1, std::move(bytes)});
-        if (!library_piece("frustum")) frustum_->fallback = "no library piece frustum";
+        if (!library_piece("frustum")) frustum_->fallback = Fallback::no_piece;
     }
     for (std::uint32_t idx : tree.path_order()) {
         const EntityId e = tree.entity_at(idx);
@@ -672,9 +751,9 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
         // matrix as the scene core composes them; none in 2-D, as the scene core draws none.
         // The camera looked through draws no frustum, as in the scene core.
         if (const caliper_scene::Pinhole* pin = tree.camera(e); pin && state.three_d && e != state.through) {
-            if (!frustum_->fallback.empty()) {
+            if (frustum_->fallback != Fallback::none) {
                 ++counts_.builtin;
-                ++counts_.fallbacks[frustum_->fallback];
+                ++counts_.fallbacks[fallback_name(frustum_->fallback)];
             } else {
                 auto pr = std::make_unique<Program>();
                 pr->id = "scene:" + path + "#camera";
@@ -694,7 +773,7 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
                 pr->params = pack(*pr->piece, {{"width", 2.0}, {"color", double(caliper_scene::CompileOptions{}.camera_rgba)}});
                 if (refused_.count(pr->id)) {
                     ++counts_.builtin;
-                    ++counts_.fallbacks["piece stopped by its runtime"];
+                    ++counts_.fallbacks[fallback_name(Fallback::stopped)];
                 } else {
                     auto pid = pick_ids_.find(pr->id);
                     if (pid == pick_ids_.end()) pid = pick_ids_.emplace(pr->id, next_pick_++).first;
@@ -711,29 +790,40 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
             const EntityId pcam = tree.pixel_space_of(e);
             // Looking through a camera, the entities of its pixel space lie flat over the picture.
             const bool overlay = through && pcam && pcam == state.through;
-            auto fall = [&](const std::string& kind) {
+            // A batch of the looked-through camera's pixel space that keeps the built-in draws flat
+            // over the picture after the pieces (late()), as the scene core draws that layer last.
+            auto fall = [&](Fallback kind) {
                 ++counts_.builtin;
-                ++counts_.fallbacks[kind];
-                overlay_fell = overlay_fell || overlay;
+                ++counts_.fallbacks[fallback_name(kind)];
+                if (!overlay) return;
+                // A marker in the order of the pieces, which the sort below places.
+                auto m = std::make_unique<Program>();
+                m->path = path;
+                m->primitive = prim;
+                m->overlay = true;
+                m->late = true;
+                m->is_image = prim == Primitive::Image;
+                m->camera = pcam.index + 1;
+                next.push_back(std::move(m));
             };
             std::shared_ptr<Converted> c;
             if (auto o = overrides_.find({path, k}); o != overrides_.end()) c = o->second;
             else if (auto q = parts_.find({{path, k}, tree.batch_static(e, prim)}); q != parts_.end()) c = q->second;
             if (!c) {
-                fall("batch without arrays to convert");
+                fall(Fallback::no_arrays);
                 continue;
             }
-            if (!c->fallback.empty()) {
+            if (c->fallback != Fallback::none) {
                 fall(c->fallback);
                 continue;
             }
             if (state.stage && state.stage(path, prim)) {
-                fall("stage program");
+                fall(Fallback::stage);
                 continue;
             }
             const std::string id = "scene:" + path + "#" + caliper_scene::primitive_name(prim);
             if (auto r = refused_.find(id); r != refused_.end()) {
-                fall("piece stopped by its runtime");
+                fall(Fallback::stopped);
                 continue;
             }
             const cs::Piece* piece = library_piece(c->piece);
@@ -748,6 +838,9 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
             pr->depth_offset = state.three_d && !overlay ? b->depth_offset : 0;
             pr->is_image = prim == Primitive::Image;
             pr->camera = pcam ? pcam.index + 1 : 0;
+            pr->dims = state.three_d && !pcam ? 3u : 2u;
+            if (overlay)
+                if (const caliper_scene::Pinhole* pin = tree.camera(state.through)) pr->through_fx = pin->fx;
             pr->translucent = b->translucent || (prim == Primitive::Image && b->opacity < 1.0f) ||
                               (prim != Primitive::Image && c->color_mode == 0 && (b->flat_rgba >> 24) < 255u);
             // The params from the batch as the scene view resolved it, with its styles.
@@ -756,8 +849,8 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
             switch (prim) {
                 case Primitive::Points: {
                     const float size = b->size_px > 0 ? b->size_px : caliper_scene::default_point_size(c->count);
-                    if (!(size >= 1.0f && size <= 64.0f)) {
-                        fall("point size outside 1 to 64 pixels");
+                    if (c->mode == 0 && !(size >= 1.0f && size <= 64.0f)) {
+                        fall(Fallback::point_size);
                         continue;
                     }
                     v = {{"size", size},
@@ -766,13 +859,14 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
                          {"color", flat},
                          {"colormap", double(b->colormap)},
                          {"vmin", b->vmin},
-                         {"vmax", b->vmax}};
+                         {"vmax", b->vmax},
+                         {"radius_mode", double(c->mode)}};
                     break;
                 }
                 case Primitive::Lines:
                 case Primitive::Arrows:
                     if (b->width_px > 128.0f) {
-                        fall("width above 128 pixels");
+                        fall(Fallback::line_width);
                         continue;
                     }
                     v = {{"width", b->width_px},   {"mode", double(c->mode)},         {"color_mode", double(c->color_mode)},
@@ -782,7 +876,7 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
                     break;
                 case Primitive::Boxes:
                     if (b->width_px < 0.5f || b->width_px > 64.0f) {
-                        fall("box edge width outside 0.5 to 64 pixels");
+                        fall(Fallback::box_width);
                         continue;
                     }
                     v = {{"width", b->width_px},
@@ -808,7 +902,7 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
                             // its pinhole and its plane, with the image at the pixel space's origin.
                             const caliper_scene::Pinhole* pin = tree.camera(pcam);
                             if (!pin || !is_identity(tree.pixel_local(e))) {
-                                fall("depth cloud in a moved pixel space");
+                                fall(Fallback::depth_cloud_moved);
                                 continue;
                             }
                             pr->model = tree.world(pcam);
@@ -834,7 +928,7 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
                 if (c->piece == "segmentation") {
                     bool high = false;
                     for (const caliper_scene::ClassEntry& ce : tree.classes()) high = high || ce.id >= kPaletteSize;
-                    if (high) c->fallback = "class above 4,095 in a mask";
+                    if (high) c->fallback = Fallback::mask_class;
                     for (std::size_t i = 0; i < kPaletteSize; ++i) put(r.bytes, i * 4, &texels[i], 4);
                 } else {
                     const std::size_t stride = c->piece == "points" ? 32 : 64, at = c->piece == "points" ? 16 : 52;
@@ -848,7 +942,7 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
                 }
                 c->classes_revision = tree.classes_revision();
                 c->generation = ++generation_;
-                if (!c->fallback.empty()) {
+                if (c->fallback != Fallback::none) {
                     fall(c->fallback);
                     continue;
                 }
@@ -860,16 +954,6 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
             ++counts_.pieces;
             next.push_back(std::move(pr));
         }
-    }
-    // The scene core draws the pixel space of a camera looked through flat over everything, in its
-    // own order and without a depth test; a piece draws after the scene core's frame. Thus when one
-    // entity there keeps the built-in draw, every shape keeps it, so that nothing a piece draws
-    // lands over that flat layer or under it out of order.
-    if (overlay_fell && !next.empty()) {
-        counts_.fallbacks["view through a camera with a built-in overlay"] += std::uint32_t(next.size());
-        counts_.builtin += std::uint32_t(next.size());
-        counts_.pieces = 0;
-        next.clear();
     }
     // The scene core's order: opaque, then translucent, in path order within each; a camera's
     // plane with a translucent image draws with the translucent group, its images first.
@@ -885,6 +969,24 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
     std::stable_sort(next.begin(), next.end(), [](const std::unique_ptr<Program>& a, const std::unique_ptr<Program>& b) {
         return a->group != b->group ? a->group < b->group : a->sub < b->sub;
     });
+    // The built-in batches of the flat layer: each run of markers is a segment that draws before
+    // the next program.
+    {
+        std::vector<std::unique_ptr<Program>> kept;
+        bool open = false;
+        for (auto& pr : next) {
+            if (pr->late) {
+                if (!open) late_before_.emplace_back();
+                open = true;
+                late_[{pr->path, int(pr->primitive)}] = late_before_.size() - 1;
+                continue;
+            }
+            if (open) late_before_.back() = pr->id;
+            open = false;
+            kept.push_back(std::move(pr));
+        }
+        next = std::move(kept);
+    }
     // A program keeps what it gave its runtime while it stays; the list changes when a program
     // comes, goes or changes its piece.
     if (next.size() != programs_.size()) changed = true;
@@ -912,6 +1014,28 @@ bool ScenePieces::draws(EntityId e, Primitive p) const {
     for (const auto& pr : programs_)
         if (!pr->frustum && pr->primitive == p && pr->path == path) return refused_.find(pr->id) == refused_.end();
     return false;
+}
+
+bool ScenePieces::late(EntityId e, Primitive p) const {
+    return tree_ && !late_.empty() && late_.count({tree_->path(e), int(p)}) != 0;
+}
+
+bool ScenePieces::late_over(const caliper_scene::Hit& builtin, const caliper_scene::Hit& piece) const {
+    if (!tree_ || !late(builtin.entity, builtin.primitive)) return false;
+    const std::string& before = late_before_[late_segment(builtin.entity, builtin.primitive)];
+    const std::string& path = tree_->path(piece.entity);
+    std::size_t at = programs_.size(), next = programs_.size();
+    for (std::size_t i = 0; i < programs_.size(); ++i) {
+        if (!programs_[i]->frustum && programs_[i]->path == path && programs_[i]->primitive == piece.primitive) at = i;
+        if (!before.empty() && programs_[i]->id == before) next = i;
+    }
+    return at < programs_.size() && next > at;
+}
+
+std::size_t ScenePieces::late_segment(EntityId e, Primitive p) const {
+    if (!tree_) return 0;
+    auto it = late_.find({tree_->path(e), int(p)});
+    return it == late_.end() ? 0 : it->second;
 }
 
 bool ScenePieces::draws_frustum(EntityId e) const {
@@ -977,7 +1101,11 @@ bool ScenePieces::hit(const caliper_scene::FrameHit& fh, const caliper_scene::Pi
     return false;
 }
 
-ShapeCounts ScenePieces::counts() const { return counts_; }
+ShapeCounts ScenePieces::counts() const {
+    ShapeCounts c = counts_;
+    c.marks = std::uint32_t(marks_.size());
+    return c;
+}
 
 void ScenePieces::installed(const std::string& program) {
     for (auto& pr : programs_)
@@ -999,10 +1127,12 @@ std::vector<PanelProgram> ScenePieces::programs() const {
 }
 
 void ScenePieces::frame(DrawRuntime& runtime, FrameInputs* in) {
-    Program* pr = nullptr;
     for (auto& p : programs_)
-        if (p->id == runtime.instance().program) pr = p.get();
-    if (!pr) return;
+        if (p->id == runtime.instance().program) return frame_of(*p, runtime, in);
+}
+
+void ScenePieces::frame_of(Program& program, DrawRuntime& runtime, FrameInputs* in) {
+    Program* pr = &program;
     const Converted& c = *pr->conv;
     if (!pr->given || pr->given_generation != c.generation) {
         for (const PieceBatch::Resource& r : c.resources) {
@@ -1019,12 +1149,16 @@ void ScenePieces::frame(DrawRuntime& runtime, FrameInputs* in) {
         pr->given_generation = c.generation;
     }
     in->params = pr->params;
+    // Looking through a camera, the scene core scissors every draw to the picture, and so do the
+    // shapes and the highlight; the letterbox's bars keep the ground of the frame's clear.
+    if (cm_.through && !pr->fixed)
+        for (int i = 0; i < 4; ++i) in->scissor[std::size_t(i)] = cm_.scissor[i];
     in->cursor_step = in->latest_step = std::int64_t(c.generation);
     in->live = true;
     // The batch's matrix as the scene core composes it: in double, the depth offset in clip space,
     // rounded to f32 once.
-    const Mat4 vm = pr->overlay ? pr->model : cm_.view * pr->model;
-    Mat4 mvp = pr->overlay ? cm_.pixel_to_clip * pr->model : cm_.proj * vm;
+    const Mat4 vm = pr->overlay || pr->fixed ? pr->model : cm_.view * pr->model;
+    Mat4 mvp = pr->fixed ? pr->clip : pr->overlay ? cm_.pixel_to_clip * pr->model : cm_.proj * vm;
     // An overlay is drawn flat over the picture without a depth test in the scene core: at clip
     // depth 0 it passes the test of every piece and draws over what the frame drew before it.
     if (pr->overlay)
@@ -1033,6 +1167,16 @@ void ScenePieces::frame(DrawRuntime& runtime, FrameInputs* in) {
         Mat4 d;
         d.m[14] = -double(pr->depth_offset) * caliper_scene::kDepthOffsetUnit;
         mvp = d * mvp;
+    }
+    if (pr->primitive == Primitive::Points && !pr->frustum && c.mode == 1) {
+        // Radii in scene units: the scale of the model-view, or in a camera's pixel space the
+        // entity's scale over the focal length, and the projection's scales, as the scene core
+        // gives its points program; f32 products in the built-in's order are left to the piece.
+        const double s = pr->overlay ? (pr->through_fx > 0 ? column_scale(pr->model, 2) / pr->through_fx : 0.0)
+                                     : column_scale(vm, int(pr->dims));
+        set_param(*pr->piece, in->params, "radius_scale", float(s));
+        set_param(*pr->piece, in->params, "proj_x", float(std::fabs(cm_.proj.at(0, 0))));
+        set_param(*pr->piece, in->params, "proj_y", float(std::fabs(cm_.proj.at(1, 1))));
     }
     Mat4 inv;
     if (!caliper_scene::inverse(mvp, &inv)) inv = Mat4{};
@@ -1046,6 +1190,134 @@ void ScenePieces::frame(DrawRuntime& runtime, FrameInputs* in) {
     for (int col = 0; col < 4; ++col)
         for (int row = 0; row < 4; ++row)
             in->view_from_world[std::size_t(col * 4 + row)] = col < 3 ? (row < 3 ? cols[col][row] : 0.0f) : (row == 3 ? 1.0f : 0.0f);
+}
+
+DrawFeed& ScenePieces::marks() {
+    if (!marks_feed_) marks_feed_ = std::make_unique<Marks>(*this);
+    return *marks_feed_;
+}
+
+bool ScenePieces::set_highlight(const std::vector<HighlightRows>& rows, std::uint32_t ground, std::uint32_t width,
+                                std::uint32_t height, std::uint64_t* highlighted) {
+    std::vector<std::unique_ptr<Program>> next;
+    std::uint64_t drawn = 0;
+    // Rows without a synced tree or a target keep the built-in highlight; no rows draw no marks.
+    bool ok = rows.empty() || (tree_ && width > 0 && height > 0);
+    if (!rows.empty() && ok) {
+        // The dim: one pixel of the ground, opaque, stretched over the target by a pan-zoom of its
+        // pixels with y down, at the opacity of the built-in's dim, 0.72.
+        auto dim = std::make_unique<Program>();
+        dim->id = "mark:dim";
+        dim->piece = library_piece("image");
+        dim->fixed = true;
+        caliper_scene::PanZoom pz;
+        pz.center[0] = width * 0.5;
+        pz.center[1] = height * 0.5;
+        pz.half_height = height * 0.5;
+        pz.y_down = true;
+        Mat4 stretch;
+        stretch.at(0, 0) = double(width);
+        stretch.at(1, 1) = double(height);
+        dim->clip = caliper_scene::panzoom_projection(pz, double(width) / double(height)) * stretch;
+        auto conv = std::make_shared<Converted>();
+        conv->piece = "image";
+        conv->width = conv->height = 1;
+        conv->count = 1;
+        const std::uint32_t texel = ground | 0xff000000u;
+        std::vector<std::uint8_t> px(4);
+        put(px, 0, &texel, 4);
+        conv->resources.push_back({"pixels", 1, std::move(px)});
+        conv->resources.push_back({"info", 1, image_info(1, 1, 4, 80)});
+        conv->generation = ++generation_;
+        dim->conv = std::move(conv);
+        if (dim->piece) {
+            dim->params = pack(*dim->piece, {{"opacity", 0.72}, {"scale", 1.0}, {"placement", 0.0}});
+            next.push_back(std::move(dim));
+        } else {
+            ok = false;
+        }
+        // The selected rows of each batch, in the order the shapes draw: the batch's resource rows
+        // with its params and matrix; points of the default size take the size of the selected
+        // count, as the built-in's highlight of a copy of the batch does.
+        std::vector<bool> found(rows.size(), false);
+        for (const auto& pr : programs_) {
+            if (pr->frustum) continue;
+            std::size_t k = 0;
+            while (k < rows.size() && (rows[k].path != pr->path || rows[k].primitive != pr->primitive)) ++k;
+            if (k == rows.size()) continue;
+            found[k] = true;
+            const Converted& src = *pr->conv;
+            const std::size_t stride = pr->primitive == Primitive::Points ? 32 : pr->primitive == Primitive::Boxes ? 64 : 0;
+            if (stride == 0 || src.resources.empty() || src.is_override) {
+                ok = false;
+                continue;
+            }
+            const PieceBatch::Resource& all = src.resources[0];
+            auto conv = std::make_shared<Converted>(src);
+            conv->class_ids.clear();
+            std::vector<std::uint8_t> out;
+            out.reserve(rows[k].rows.size() * stride);
+            for (std::int64_t r : rows[k].rows)
+                if (r >= 0 && std::uint64_t(r) < all.count && (std::uint64_t(r) + 1) * stride <= all.bytes.size())
+                    out.insert(out.end(), all.bytes.begin() + std::ptrdiff_t(std::uint64_t(r) * stride),
+                               all.bytes.begin() + std::ptrdiff_t((std::uint64_t(r) + 1) * stride));
+            const std::uint32_t n = std::uint32_t(out.size() / stride);
+            if (pr->primitive == Primitive::Boxes && n > 0) {
+                // Box 0's half_size.w marks an alpha below 255 in the batch, which the copy keeps.
+                for (std::uint32_t i = 0; i < n; ++i) std::memset(out.data() + std::size_t(i) * stride + 28, 0, 4);
+                std::memcpy(out.data() + 28, all.bytes.data() + 28, 4);
+            }
+            conv->resources[0] = {all.id, n, std::move(out)};
+            conv->count = n;
+            conv->generation = ++generation_;
+            auto m = std::make_unique<Program>(*pr);
+            m->id = "mark:" + pr->id;
+            m->conv = std::move(conv);
+            m->given = false;
+            if (pr->primitive == Primitive::Points && src.mode == 0) {
+                const Batch* b = tree_->batch(tree_->find(pr->path), Primitive::Points);
+                if (b && !(b->size_px > 0)) {
+                    const float size = caliper_scene::default_point_size(n);
+                    m->params = pack(*m->piece, {{"size", size},
+                                                 {"shape", b->point_shape == caliper_scene::PointShape::Disc ? 1.0 : 0.0},
+                                                 {"color_mode", double(src.color_mode)},
+                                                 {"color", double(b->flat_rgba)},
+                                                 {"colormap", double(b->colormap)},
+                                                 {"vmin", b->vmin},
+                                                 {"vmax", b->vmax},
+                                                 {"radius_mode", 0.0}});
+                }
+            }
+            drawn += n;
+            next.push_back(std::move(m));
+        }
+        for (bool f : found) ok = ok && f;
+    }
+    if (!ok) next.clear(), drawn = 0;
+    // A mark keeps its runtime's resources while its rows stay the same.
+    for (auto& n : next)
+        for (auto& o : marks_)
+            if (o->id == n->id && o->conv->piece == n->conv->piece) {
+                bool same = o->conv->resources.size() == n->conv->resources.size();
+                for (std::size_t i = 0; same && i < n->conv->resources.size(); ++i)
+                    same = o->conv->resources[i].count == n->conv->resources[i].count &&
+                           o->conv->resources[i].bytes == n->conv->resources[i].bytes;
+                n->pick_id = o->pick_id;
+                if (same) {
+                    n->conv = o->conv;
+                    n->given = o->given;
+                    n->given_generation = o->given_generation;
+                }
+            }
+    bool changed = next.size() != marks_.size();
+    for (std::size_t i = 0; i < next.size() && !changed; ++i)
+        changed = next[i]->id != marks_[i]->id || next[i]->conv->piece != marks_[i]->conv->piece;
+    for (auto& n : next)
+        if (n->pick_id < 0x60000000u) n->pick_id = next_mark_pick_++;
+    marks_ = std::move(next);
+    if (changed) ++marks_revision_;
+    if (highlighted) *highlighted = drawn;
+    return ok;
 }
 
 void ScenePieces::status(const DrawRuntime& runtime) {

@@ -1,7 +1,7 @@
 # Library piece points@1: a cloud of points, drawn as the built-in points primitive draws it.
 name = "points"
 version = 1
-description = "A cloud of round or square points of a size in pixels, colored by one color, by a value through a colormap, or by a packed RGBA"
+description = "A cloud of round or square points of a size in pixels or of radii in scene units, colored by one color, by a value through a colormap, or by a packed RGBA"
 imports = ["pick@1", "camera@1"]
 
 [[inputs]]
@@ -17,6 +17,14 @@ kind = "tensor"
 rank_min = 1
 rank_max = 1
 title = "Values (N): a value for the colormap, or a packed RGBA in its bits"
+
+[[inputs]]
+name = "radii"
+kind = "tensor"
+rank_min = 1
+rank_max = 1
+optional = true
+title = "Radii (N) in scene units, or one for all, read when radius_mode is 1; unbound, a radius of 1"
 
 [[params]]
 name = "size"
@@ -64,6 +72,32 @@ title = "Value at the Colormap's Start"
 name = "vmax"
 default = 1.0
 title = "Value at the Colormap's End"
+
+[[params]]
+name = "radius_mode"
+type = "u32"
+default = 0
+min = 0
+max = 1
+title = "Size (0 size in pixels, 1 radius in scene units)"
+
+# A radius r in scene units is r * radius_scale * (proj_x, proj_y) in clip units, at least half a
+# pixel, as the built-in computes it: radius_scale is the longest column of the model-view's
+# rotation part, and proj_x and proj_y are the projection's scales |proj[0][0]| and |proj[1][1]|.
+[[params]]
+name = "radius_scale"
+default = 1.0
+title = "Scene Units to View Units"
+
+[[params]]
+name = "proj_x"
+default = 1.0
+title = "Projection's Horizontal Scale"
+
+[[params]]
+name = "proj_y"
+default = 1.0
+title = "Projection's Vertical Scale"
 
 [[resources]]
 id = "points"

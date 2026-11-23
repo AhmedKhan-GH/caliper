@@ -9,13 +9,12 @@
 // of the built-in draw at interior pixels of the first, a middle and the last triangle must name
 // the vertex that the piece's ID image shows there, with the field `index` of its item map. The
 // piece draws its faces through the index buffer `faces`, as the built-in's indexed draw does, and
-// leaves the inputs that a mesh lacks (indices, normals, colors) unbound. With flat faces, a pixel
-// whose 3 x 3 neighborhood in the built-in's picture holds two colors is an edge pixel. There the
-// two draws may light a pixel from the other face of a shared edge, because the camera matrix of
-// a program and the built-in's matrix differ in their last bits and the faces' colors differ;
-// such pixels may differ by at most 8 levels on at most a twentieth of the mesh's pixels (the
-// indexed draw took them from 2,341 and 2,704 differing pixels to 140 and 571), and no interior
-// pixel may differ by more than 1 level; each case prints how many do. The
+// leaves the inputs that a mesh lacks (indices, normals, colors) unbound. Flat faces are held to the
+// tolerances of the lit cases: the piece's opaque color pass writes no ID, as the built-in's color
+// pass writes none, and its last pass writes the IDs at the depth that the color pass wrote. A
+// color pass that also wrote the ID lit flat faces otherwise at their shared edges on Metal, in 140
+// and 571 pixels by at most 8 levels, with an opaque or an alpha blend alike, while the matrices of
+// both draws were the same. Each case prints how many pixels differ. The
 // cases cover the color modes (one color, one RGBA for all, values through a colormap, RGBA of each
 // vertex), lighting from normals and flat faces, translucency (an alpha below 255 of the one color
 // or of a vertex), indices above the last vertex and negative ones, a NaN vertex, the depth offset,
@@ -216,13 +215,7 @@ Outcome run(Metal& mt, const std::string& name, const Mesh& m, std::vector<int> 
                 o.c.edge, " edge pixels; ", o.c.differ, " differ, largest gap ", o.c.max_interior, " inside and ",
                 o.c.max_edge, " at edges, ", o.c.edge_far, " edge pixels over 1 level; ", o.c.failed,
                 " outside the tolerances");
-        if (flat) {
-            CHECK_MESSAGE(o.c.max_interior <= 1, name, ": ", o.c.interior_failed, " interior pixels differ; ", o.c.first);
-            CHECK(o.c.max_edge <= 8);
-            CHECK(o.c.edge_far * 20 <= o.c.lit);
-        } else {
-            CHECK_MESSAGE(o.c.failed == 0, name, ": ", o.c.failed, " pixels outside the tolerances; ", o.c.first);
-        }
+        CHECK_MESSAGE(o.c.failed == 0, name, ": ", o.c.failed, " pixels outside the tolerances; ", o.c.first);
         std::vector<std::uint32_t> rows(faces.count);
         if (!rows.empty()) std::memcpy(rows.data(), faces.bytes.data(), rows.size() * 4);
         for (int t : triangles) {

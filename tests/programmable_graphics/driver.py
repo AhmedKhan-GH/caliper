@@ -69,6 +69,11 @@ SCORE_AFTER = 0.5
 SCORE_MID = 0.3
 ICL_MID = 2.0
 BUMP_STEPS = 100
+# The bump itself: a head of layer 1 above 0.4 in the newest version, the training loss at most 3.4 and the in-context
+# loss at most 1.5 in the script's log, which prints every 50 steps. Measured at steps 707 to 735 in runs of the
+# instrument; under load a head passed 0.4 at step 700 before the log showed the fall, thus the driver waits for both,
+# and fails only when the run passes BUMP_CAP steps without them.
+BUMP_CAP = 1500
 LOG = re.compile(r"step (\d+) loss ([0-9.]+) in-context ([0-9.]+)")
 # The commands that wait on a card of the person; the driver approves each as the person would.
 CARDS = {"spec_new", "spec_open", "run_start", "run_pause", "run_fork", "run_stop", "piece_update", "state_create",
@@ -352,10 +357,16 @@ def steps(r):
     # 9. The bump: the newest version scores above 0.4, and the first kept version holds no score above 0.2. The chart
     # of the head scores rises at the steps where the in-context loss falls.
     r.step("the heads form at the bump, the first kept version holds none, and the chart rises with the bump")
-    def formed():
+    def bumped():
         b, h = r.heads()
-        return (b, h) if max(h[4:]) > 0.4 else None
-    newest, h_new = c.until("a head with a score above 0.4", formed, 420)
+        log = r.logs(c.run)
+        if max(h[4:]) > 0.4 and log and min(x[2] for x in log) <= 1.5 and log[-1][1] <= 3.4:
+            return b, h, log
+        step = r.run_step(c.run)
+        if step > BUMP_CAP:
+            raise Fail(f"no bump by step {BUMP_CAP} (step {step}): scores {h}, loss first {log[:1]}, last {log[-1:]}")
+        return None
+    newest, h_new, log = c.until(f"a head above 0.4 and the fall of the loss by step {BUMP_CAP}", bumped, 600)
     first_step = newest["kept"]["first"]
     old, h_old = r.heads(first_step)
     if old["step"] != first_step or max(h_old) >= 0.2:
@@ -365,9 +376,8 @@ def steps(r):
     r.call("cursor_set", {"live": True})
     cap("bump-after")
     n = c.differs("bump-before", "bump-after", 500)
-    log = r.logs(c.run)
-    if not log or log[0][1] < 3.5 or min(x[2] for x in log) > 1.5 or log[-1][1] > 3.4:
-        raise Fail(f"the loss shows no bump: first {log[:1]}, last {log[-1:]}")
+    if log[0][1] < 3.5:
+        raise Fail(f"the loss starts below 3.5, without a bump: first {log[:1]}, last {log[-1:]}")
     r.result["bump"] = {"first_kept": first_step, "newest": newest["step"], "scores": h_new,
                         "loss_first": log[0][1], "loss_last": log[-1][1], "tower_pixels_changed": n}
     def risen():

@@ -94,6 +94,7 @@ struct SceneShapeCounts {
     uint32_t pieces = 0;
     uint32_t builtin = 0;
     std::map<std::string, uint32_t> fallbacks;
+    uint32_t marks = 0;   // the programs of the highlight of a selection, drawn by the pieces
 };
 
 class SceneView {
@@ -430,6 +431,11 @@ private:
     std::vector<caliper_gfx::Buffer> hl_buffers_;
     caliper_scene::SceneCompiler hl_compiler_, dim_compiler_;
     bool build_highlight(caliper_scene::SceneTree* hl, caliper_scene::ViewCamera* cam, std::string* why);
+    // The selected rows of a batch, by the view's selection and the linked one: sorted, unique and
+    // below the batch's count; empty when none is selected or the batch has no slot.
+    std::vector<int64_t> highlight_rows(caliper_scene::EntityId e, caliper_scene::Primitive p) const;
+    bool piece_highlight_ = false;   // the shapes' pieces draw this frame's highlight
+    std::string logged_shapes_;      // the last lines of CALIPER_SCENE_FALLBACK_LOG
     bool highlight_wanted() const { return !selected_.empty() || !linked_.empty(); }
     std::map<Key, Slot> slots_;
     std::vector<uint8_t> scratch_;
@@ -469,7 +475,10 @@ private:
         void operator()(caliper_draw::ScenePieces* p) const;
     };
     std::unique_ptr<caliper_draw::ScenePieces, ShapesDeleter> shapes_;
-    uint64_t shape_revision_ = ~0ull;
+    uint64_t shape_revision_ = ~0ull, marks_revision_ = ~0ull;
+    // The built-in batches of a looked-through camera's pixel space, each list with the shape's
+    // program it draws before ("" after the last one).
+    std::vector<std::pair<std::string, caliper_gfx::DrawList>> late_lists_;
     std::unique_ptr<caliper_scene::FramePick> shape_pick_;
     bool shape_asked_ = false, shape_done_ = false, entity_done_ = false;
     caliper_scene::PickPass::Result entity_result_ = caliper_scene::PickPass::Result::None;
@@ -477,9 +486,6 @@ private:
     bool shape_has_hit_ = false;
     uint64_t shape_generation_ = 0;   // the frame the shapes' pick reads; a newer one drops it
     void sync_shapes();
-    // The letterbox's bars over the shapes' pieces while the view looks through a pinhole.
-    caliper_scene::SceneCompiler bar_compiler_;
-    void paint_bars(const caliper_scene::CameraMatrices& cm);
     bool external_draws() const;
     caliper_draw::DrawFeed* slot_feed(const ProgramSlot& slot) const;
     caliper_draw::DrawFeed* draw_feed_ = nullptr;
