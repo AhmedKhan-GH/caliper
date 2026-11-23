@@ -1903,6 +1903,10 @@
             "description": "True with a spec in the result, the open one or the named applet's; false when no applet is named and no spec is open, and then no other field is given.",
             "type": "boolean"
           },
+          "open_in_app": {
+            "description": "With applet: whether the app has that applet open, so that its live sources, values and kept steps reach panel.data; a saved applet that is not open shows no live data.",
+            "type": "boolean"
+          },
           "path": {
             "description": "Its file, relative to the workspace, or null when it was never saved.",
             "type": [

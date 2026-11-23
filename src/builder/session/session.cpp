@@ -903,10 +903,18 @@ struct Session::Impl {
         if (!applet.empty()) {
             LoadedSpec loaded = load_applet(applet, {});
             if (loaded.error) return fail(loaded.error.code, loaded.error.message, "args.applet");
+            // Whether the app has this applet open: only then do its live sources, the session's
+            // values and the kept steps reach panel.data (the browser's viewer says so when not).
+            bool shown = false;
+            {
+                std::lock_guard<std::mutex> lock(doc_mutex);
+                shown = doc && doc->spec.applet.id == loaded.spec.applet.id;
+            }
             return CommandOutput::ok({{"open", true},
                                       {"id", loaded.spec.applet.id},
                                       {"path", loaded.path},
                                       {"dirty", false},
+                                      {"open_in_app", shown},
                                       {"text", spec::to_toml(loaded.spec)},
                                       {"json", spec::to_json(loaded.spec)}});
         }

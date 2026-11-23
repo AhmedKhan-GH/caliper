@@ -82,7 +82,10 @@ async function open(page: import('@playwright/test').Page): Promise<MockApp & { 
 
 test('the Arc Tower fills the window over its control row, and the toggle shows the run state, disabled', async ({ page }) => {
   const { state, requests } = await open(page);
-  const area = await page.evaluate(() => { const r = document.getElementById('area')!.getBoundingClientRect(); return { w: r.width, h: r.height }; });
+  const area = await page.evaluate(() => {
+    const r = document.getElementById('area')!.getBoundingClientRect();
+    return { top: r.top, w: r.width, h: r.height };
+  });
   const ctl = state.controls[0];
   expect(ctl.id).toBe('ablate');
   expect(ctl.kind).toBe('toggle');
@@ -111,7 +114,7 @@ test('the Arc Tower fills the window over its control row, and the toggle shows 
   }, [ctl.rect.y + 15]);
   expect(knob.length).toBeGreaterThan(0);
   // A hover over the control says why the viewer cannot change it.
-  await page.mouse.move(400, ctl.rect.y + 15);
+  await page.mouse.move(400, area.top + ctl.rect.y + 15);
   await expect.poll(() => page.evaluate(() => document.getElementById('canvas')!.title)).toContain('only reads');
   // The control's state came from panel.data, a read; nothing else was asked.
   expect(requests.some((r) => r.name === 'panel.data' && r.args.panel === 'ablate')).toBe(true);
@@ -141,4 +144,27 @@ test('the chart lines take the app palette in its order, named by their sources,
     return [...out];
   }, [chart.x + chart.w / 2, chart.y, chart.w / 2, chart.h / 2]);
   for (const c of palette.slice(1, 9).map(rgb)) expect(seen).toContain(c);
+});
+
+test('a dashboard that the app does not have open says so, and an offline source of an open one says Source offline', async ({ page }) => {
+  const offline = { panel: 'head_scores', primitive: 'series', version: '', unchanged: false, bounds: [], state: null, data: null,
+    error: { code: 'resolve.unavailable', message: 'The live source live:induction_l1_h0 is not attached.', where: 'l1_h0' } };
+  const data = { ...arcTowerData(), head_scores: offline };
+  const app: MockApp = { specs: { arc_tower: ARC_TOWER }, data: { arc_tower: data }, requests: [], openInApp: { arc_tower: false } };
+  await mockApp(page, app);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openSpec(page, 'arc_tower');
+  const state = (s: Json) => s.panels.find((p: Json) => p.id === 'head_scores')?.state;
+  await expect.poll(async () => state(await page.evaluate(() => (window as any).caliperSpec.debugState()))).toBe('Dashboard not open in the app');
+  let s = await page.evaluate(() => (window as any).caliperSpec.debugState());
+  expect(s.notOpen).toBe(true);
+  expect(s.banner).toBe('The app does not have this dashboard open. It shows data when the dashboard is open in the app.');
+  await expect(page.locator('#banner')).toBeVisible();
+  // The person opens it in the app: the banner goes, and an offline source says so plainly.
+  app.openInApp = { arc_tower: true };
+  await expect.poll(async () => state(await page.evaluate(() => (window as any).caliperSpec.debugState()))).toBe('Source offline');
+  s = await page.evaluate(() => (window as any).caliperSpec.debugState());
+  expect(s.notOpen).toBe(false);
+  expect(s.banner).toBe('');
+  await expect(page.locator('#banner')).toBeHidden();
 });

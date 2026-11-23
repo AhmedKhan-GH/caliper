@@ -246,4 +246,11 @@ options = { min = 0.0, max = 2.0, value = 0.5 }
     const auto none = invoke(*s, "panel.data", {{"applet", "ctl"}, {"panel", "nothing"}}, CommandOrigin::viewer);
     CHECK_FALSE(none.ok);
     CHECK(none.error.code == "panel.not_found");
+    // spec.get says whether the app has the applet open, which a viewer cannot change.
+    CHECK(ok(*s, "spec.get", {{"applet", "ctl"}}, CommandOrigin::viewer)["open_in_app"] == true);
+    ok(*s, "spec.new", {{"id", "other"}});
+    CHECK(ok(*s, "spec.get", {{"applet", "ctl"}}, CommandOrigin::viewer)["open_in_app"] == false);
+    const auto reopen = invoke(*s, "applet.open", {{"id", "ctl"}}, CommandOrigin::viewer);
+    CHECK_FALSE(reopen.ok);
+    CHECK(reopen.error.code == "command.not_allowed");
 }

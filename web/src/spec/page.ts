@@ -49,7 +49,15 @@ export async function command(base: URL, token: string, name: string, args: Reco
   return (await res.json()) as CommandEnvelope;
 }
 
-export interface PageParts { title: HTMLElement; area: HTMLElement; canvas: HTMLCanvasElement; status: HTMLElement; list: HTMLElement }
+export interface PageParts {
+  title: HTMLElement; area: HTMLElement; canvas: HTMLCanvasElement; status: HTMLElement; list: HTMLElement;
+  /** The line under the bar that says why no live data shows (a dashboard the app does not have open). */
+  banner?: HTMLElement;
+}
+
+/** What the page says when the app does not have the dashboard open: no live source, value or kept step reaches it. */
+export const NOT_OPEN_BANNER = 'The app does not have this dashboard open. It shows data when the dashboard is open in the app.';
+export const NOT_OPEN_STATE = { label: 'Dashboard not open in the app', detail: 'shows data when it is open in the app' };
 
 interface PanelEntry { version: string; prepared: PreparedPanel | null; busy: boolean; view: PanelView; control: ControlData | null }
 
@@ -58,6 +66,9 @@ export interface SpecPageState {
   status: string;
   /** The state the whole page shows in place of the applet, or null. */
   state: string | null;
+  /** The app does not have this dashboard open (spec.get's open_in_app), and the banner that says so. */
+  notOpen: boolean;
+  banner: string;
   applet: string;
   title: string;
   panels: { id: string; title: string; primitive: string; drawn: boolean; state: string | null; info: string;
@@ -88,6 +99,7 @@ export class SpecPage {
   private whole: { label: string; detail: string } | null = null;
   private requests = 0;
   private timer = 0;
+  private notOpen = false;
   readonly programs: ProgramViews;
 
   constructor(private readonly parts: PageParts, private readonly base: URL, private readonly token: string,
@@ -172,6 +184,18 @@ export class SpecPage {
       return;
     }
     this.whole = null;
+    // A saved dashboard that the app does not have open gets no live data: the page says so, and asks
+    // for every panel again when that changes.
+    const notOpen = env.result.open_in_app === false;
+    if (notOpen !== this.notOpen) {
+      this.notOpen = notOpen;
+      for (const e of this.panels.values()) e.version = '';
+      const b = this.parts.banner;
+      if (b) {
+        b.textContent = notOpen ? NOT_OPEN_BANNER : '';
+        b.hidden = !notOpen;
+      }
+    }
     if (env.result.text !== this.specText) {
       this.specText = env.result.text;
       this.spec = env.result.json as Spec;
@@ -227,6 +251,8 @@ export class SpecPage {
         const r = env.result as PanelDataResult;
         if (!r.unchanged) {
           e.prepared = preparePanel(spec, panel!, r);
+          // An offline source of a dashboard that the app does not have open: say that, not "Source offline".
+          if (this.notOpen && e.prepared.state?.label === 'Source offline') e.prepared.state = { ...NOT_OPEN_STATE };
           e.version = r.version;
           if (e.prepared.programs) this.programs.update(panel!, e.prepared.programs);
         }
@@ -297,7 +323,7 @@ export class SpecPage {
         if (!panel) continue;
         const frame = drawPanel(ctx, e.prepared, panelTitle(spec, panel), lp.rect, !lp.tab, this.key!, e.view);
         if (panel.primitive === 'scene' && this.programs.has(panel.id)) {
-          const st = this.programs.stateOf(panel.id);
+          const st = this.notOpen ? NOT_OPEN_STATE : this.programs.stateOf(panel.id);
           if (st) drawState(ctx, st, frame.content);
           this.programs.place(panel.id, st ? null : frame.content);
         }
@@ -364,6 +390,8 @@ export class SpecPage {
     return {
       status: this.status,
       state: this.whole?.label ?? null,
+      notOpen: this.notOpen,
+      banner: this.parts.banner && !this.parts.banner.hidden ? this.parts.banner.textContent ?? '' : '',
       applet: this.applet,
       title: spec ? spec.applet.title ?? spec.applet.id : '',
       controls: this.layout.panels.filter((lp) => lp.control).map((lp) => {
@@ -378,8 +406,11 @@ export class SpecPage {
         const e = this.panels.get(lp.id);
         const p = e?.prepared ?? null;
         const panel = spec ? findPanel(spec, lp.id) : undefined;
+        // A scene panel's programs may show a state over it: the dashboard not open, or no program views.
+        const over = panel?.primitive === 'scene' && this.programs.has(lp.id)
+          ? (this.notOpen ? NOT_OPEN_STATE : this.programs.stateOf(lp.id)) : null;
         return { id: lp.id, title: p?.title ?? (spec && panel ? panelTitle(spec, panel) : lp.id), primitive: panel?.primitive ?? '',
-          drawn: !!p && !p.state, state: p?.state?.label ?? null, info: p?.info ?? '', rect: { ...lp.rect } };
+          drawn: !!p && !p.state && !over, state: over?.label ?? p?.state?.label ?? null, info: p?.info ?? '', rect: { ...lp.rect } };
       }),
       tabs: this.layout.tabs.map((t) => ({ path: t.path, labels: [...t.labels], active: t.active })),
       programs: this.programs.debug(),

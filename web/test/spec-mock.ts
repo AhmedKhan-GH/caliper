@@ -33,6 +33,8 @@ export interface MockApp {
   specs: Record<string, Json>;                         // applet id -> canonical JSON
   data: Record<string, Record<string, Json>>;          // applet id -> panel id -> panel.data result
   requests: { name: string; args: Json; headers: Record<string, string> }[];
+  /** spec.get's open_in_app for an applet: whether the app has it open; absent when not set. */
+  openInApp?: Record<string, boolean>;
 }
 
 /** A seeded pseudo-random sequence, so captures repeat. */
@@ -143,7 +145,8 @@ export async function mockApp(page: Page, app: MockApp, assets?: string): Promis
     } else if (name === 'spec.get') {
       const s = app.specs[args.applet];
       if (!s) await fail('applet.not_found');
-      else await ok({ id: s.applet.id, path: `applets/${args.applet}/${args.applet}.spec.toml`, dirty: false, text: JSON.stringify(s), json: s });
+      else await ok({ id: s.applet.id, path: `applets/${args.applet}/${args.applet}.spec.toml`, dirty: false, text: JSON.stringify(s), json: s,
+        ...(app.openInApp && args.applet in app.openInApp ? { open_in_app: app.openInApp[args.applet] } : {}) });
     } else if (name === 'panel.data') {
       const d = app.data[args.applet]?.[args.panel];
       if (!d) await fail('panel.not_found');
