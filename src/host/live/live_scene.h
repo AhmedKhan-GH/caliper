@@ -52,7 +52,7 @@
 #include <vector>
 
 namespace caliper_scene { class BackendResources; }
-namespace caliper_draw { class DrawFeed; class DrawRuntime; struct PickedItem; }
+namespace caliper_draw { class DrawFeed; class DrawRuntime; struct PickedItem; class ScenePieces; struct PieceBatch; }
 namespace caliper_gfx { namespace cmap { class KeyBlockCache; } }
 
 namespace caliper_live_views {
@@ -78,6 +78,22 @@ struct SceneCounts {
     uint64_t buffers_live = 0;
     uint64_t textures_created = 0, textures_reused = 0;   // images and textured meshes
     uint64_t textures_live = 0;
+};
+
+// What draws the shapes of a scene view (draw/scene_pieces.h): the library pieces, or the scene
+// core's built-in draw. The pieces are the default where the build has them (the app with the
+// builder); CALIPER_SCENE_SHAPES=builtin in the environment selects the built-in for every view,
+// and set_shape_draw() for one view, as the comparison tests do. A build without the pieces (the
+// browser module, a build without the builder) always draws the built-in.
+enum class ShapeDraw : uint8_t { pieces = 0, builtin = 1 };
+ShapeDraw default_shape_draw();
+
+// The shapes of the last frame that pieces drew, those that the built-in drew, and why each of
+// those fell back, by kind.
+struct SceneShapeCounts {
+    uint32_t pieces = 0;
+    uint32_t builtin = 0;
+    std::map<std::string, uint32_t> fallbacks;
 };
 
 class SceneView {
@@ -132,7 +148,7 @@ public:
     // or that a newer request superseded, is dropped. Nothing is submitted while nobody asks.
     bool request_pick(float x, float y, std::string* why);
     caliper_scene::PickPass::Result poll_pick(caliper_scene::Hit* out);
-    bool pick_pending() const { return pick_ && pick_->pending(); }
+    bool pick_pending() const { return (pick_ && pick_->pending()) || shape_asked_; }
     const caliper_scene::PickPass* pick_pass() const { return pick_.get(); }
     // The frames the view has drawn: the generation a pick belongs to.
     uint64_t generation() const { return generation_; }
@@ -271,8 +287,23 @@ public:
     // program's state goes back to the feed. Null draws no program. Without the draw layer in the
     // build (CALIPER_HAVE_DRAW), the view draws none.
     void set_draw_feed(caliper_draw::DrawFeed* feed);
-    // The installed programs, in draw order.
+    // The installed programs of the feed, in draw order.
     std::vector<const caliper_draw::DrawRuntime*> draw_runtimes() const;
+    // The installed pieces of the shapes, in draw order; they draw before the feed's programs.
+    std::vector<const caliper_draw::DrawRuntime*> shape_runtimes() const;
+
+    // ---- shapes drawn by library pieces (draw/scene_pieces.h) ---------------------------------------
+    // Draws the shapes with the pieces or with the built-in draw; a change draws the view again.
+    // The pieces draw each batch that one can draw in submits of their own after the scene's frame,
+    // before the feed's programs, with the batch's pose and depth offset in their matrix; the
+    // scene core leaves those batches out of its colour pass and its pick pass, and request_pick()
+    // also reads the pieces' IDs, so that poll_pick() gives the same hit for a batch either way.
+    void set_shape_draw(ShapeDraw d);
+    ShapeDraw shape_draw() const { return shape_draw_; }
+    SceneShapeCounts shape_counts() const;
+    // A piece that draws the batch (path, p) with resources that the caller writes, in place of the
+    // converter's (the spec's surface@1 and path@1); null removes it. Nothing without the pieces.
+    void set_piece_batch(const std::string& path, caliper_scene::Primitive p, const caliper_draw::PieceBatch* batch);
     // The programs' ID target; none while the view draws no program.
     caliper_gfx::Texture id_target() const { return id_; }
     // The depth target of the view's frame (Depth32Float, with kCopySrcTex); none in 2-D. A
@@ -423,6 +454,24 @@ private:
     // the ID target, the host's colormaps, the pointer and the polls over the panel's limit.
     struct ProgramSlot;
     std::vector<std::unique_ptr<ProgramSlot>> draws_;
+    // The shapes' pieces, their revision drawn, and the pick of their IDs that request_pick() asks
+    // beside the pick pass: its readback, whether it and the pass answered, and their hits.
+    ShapeDraw shape_draw_ = ShapeDraw::builtin;
+    // Deleted in live_scene.cpp, which knows the type only where the build has the pieces.
+    struct ShapesDeleter {
+        void operator()(caliper_draw::ScenePieces* p) const;
+    };
+    std::unique_ptr<caliper_draw::ScenePieces, ShapesDeleter> shapes_;
+    uint64_t shape_revision_ = ~0ull;
+    std::unique_ptr<caliper_scene::FramePick> shape_pick_;
+    bool shape_asked_ = false, shape_done_ = false, entity_done_ = false;
+    caliper_scene::PickPass::Result entity_result_ = caliper_scene::PickPass::Result::None;
+    caliper_scene::Hit entity_hit_, shape_hit_;
+    bool shape_has_hit_ = false;
+    uint64_t shape_generation_ = 0;   // the frame the shapes' pick reads; a newer one drops it
+    void sync_shapes();
+    bool external_draws() const;
+    caliper_draw::DrawFeed* slot_feed(const ProgramSlot& slot) const;
     caliper_draw::DrawFeed* draw_feed_ = nullptr;
     uint64_t draw_revision_ = ~0ull;
     caliper_gfx::Texture id_, program_colormaps_;

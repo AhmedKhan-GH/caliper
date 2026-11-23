@@ -21,6 +21,7 @@
 #include "scene/stages.h"
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -54,6 +55,12 @@ struct CompileOptions {
     const StageLookup* stages = nullptr;
     float stage_time_s = 0.0f;
     uint32_t stage_step = 0;
+    // The batches that the caller draws another way (the scene view's library pieces,
+    // draw/scene_pieces.h): left out of the colour pass and the pick pass, their bounds and labels
+    // kept. Empty: every batch draws here, as before.
+    std::function<bool(EntityId, Primitive)> skip;
+    // The camera entities whose frustum the caller draws another way (frustum@1).
+    std::function<bool(EntityId)> skip_frustum;
 };
 
 // The constants of the depth cues above, written out in src/host/gfx/shaders/scene/points.wgsl and

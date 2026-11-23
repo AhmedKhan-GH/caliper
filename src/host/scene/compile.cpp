@@ -402,6 +402,7 @@ CompileResult SceneCompiler::run(const SceneTree& tree, const ViewCamera& camera
             const Primitive prim = Primitive(k);
             const Batch* bp = tree.batch(e, prim);
             if (!bp) continue;
+            if (opts.skip && opts.skip(e, prim)) continue;
             const Batch& b = *bp;
             const uint64_t n = b.count();
             if (n == 0) continue;
@@ -696,7 +697,7 @@ CompileResult SceneCompiler::run(const SceneTree& tree, const ViewCamera& camera
 
         // A camera entity's frustum, unless the view looks through it.
         const Pinhole* pin = tree.camera(e);
-        if (pin && e != cm.through && three_d) {
+        if (pin && e != cm.through && three_d && !(opts.skip_frustum && opts.skip_frustum(e))) {
             Spec s = base(Primitive::Lines, DrawPart::Frustum);
             s.program = ProgramId::scene_lines;
             s.vs = "vs_lines";
