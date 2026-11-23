@@ -37,7 +37,7 @@ namespace {
 constexpr std::uint32_t kNanBits = 0x7fc00000u;
 constexpr std::uint32_t kNone = 0xffffffffu;
 
-constexpr std::uint64_t kPaletteSize = 4096;
+constexpr std::uint64_t kPaletteSize = 65536;
 
 // The resource limit from the installed library piece manifest.
 std::uint64_t capacity(const char* piece, const char* resource) {
@@ -660,7 +660,7 @@ void image_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
         std::vector<std::uint8_t> info = image_info(c.width, c.height, 1, 96);
         const float range[4] = {lo, hi, seen, 0};
         put(info, 80, range, 16);
-        c.resources.push_back({"pixels", std::uint32_t(n), std::move(out)});
+        c.resources.push_back({"pixels", std::uint32_t(n), std::move(out), c.width, c.height});
         c.resources.push_back({"info", 1, std::move(info)});
     } else {
         c.piece = "segmentation";
@@ -679,7 +679,7 @@ void image_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
             }
             put(out, std::size_t(i) * 4, &id, 4);
         }
-        c.resources.push_back({"pixels", std::uint32_t(n), std::move(out)});
+        c.resources.push_back({"pixels", std::uint32_t(n), std::move(out), c.width, c.height});
         c.resources.push_back({"palette", std::uint32_t(kPaletteSize), std::vector<std::uint8_t>(kPaletteSize * 4, 0)});
         c.resources.push_back({"info", 1, image_info(c.width, c.height, 1, 80)});
         c.class_resource = 1;
@@ -964,9 +964,6 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
                 }
                 PieceBatch::Resource& r = c->resources[c->class_resource];
                 if (c->piece == "segmentation") {
-                    bool high = false;
-                    for (const caliper_scene::ClassEntry& ce : tree.classes()) high = high || ce.id >= kPaletteSize;
-                    if (high) c->error = InputError::mask_class;
                     for (std::size_t i = 0; i < kPaletteSize; ++i) put(r.bytes, i * 4, &texels[i], 4);
                 } else {
                     const std::size_t stride = c->piece == "points" ? 32 : 64, at = c->piece == "points" ? 16 : 52;
@@ -1126,6 +1123,9 @@ void ScenePieces::frame_of(Program& program, DrawRuntime& runtime, FrameInputs* 
             v.count = r.count;
             v.width = r.width;
             v.height = r.height;
+            if (r.width || r.height)
+                for (const auto& resource : pr->piece->resources)
+                    if (resource.id == r.id) v.format = cs::texture_format(resource);
             v.bytes = r.bytes.data();
             v.size = r.bytes.size();
             if (!runtime.set_resource(v).ok()) break;
