@@ -70,6 +70,7 @@ target_sources(caliper_view_layer PRIVATE
     ${CALIPER_ROOT}/src/host/live/scene_overlays.cpp
     ${CALIPER_ROOT}/src/host/spec_runtime/label_layout.cpp
     ${CALIPER_ROOT}/src/host/live/live_scene.cpp
+    ${CALIPER_ROOT}/src/host/live/scene_piece_form.cpp
     ${CALIPER_ROOT}/src/host/live/live_points.cpp
     ${CALIPER_ROOT}/src/host/scene/stages.cpp
     ${CALIPER_ROOT}/src/host/scene/path.cpp

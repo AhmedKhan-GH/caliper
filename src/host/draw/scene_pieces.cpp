@@ -171,6 +171,7 @@ struct ScenePieces::Converted {
     std::vector<PieceBatch::Resource> resources;
     std::vector<std::pair<std::string, double>> params;   // an override's
     bool is_override = false;
+    bool received = false;            // the resources came in the piece form
     std::uint64_t generation = 0;
     std::uint64_t count = 0;          // items, for the default point size
     std::uint32_t color_mode = 0;
@@ -331,6 +332,52 @@ void points_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
         c.class_resource = 0;
     }
     c.resources.push_back({"points", std::uint32_t(pos.n), std::move(out)});
+}
+
+// points@1's resource as the piece form carried it, with the arrays the update lists (`u` is the
+// classic form rebuilt from the resource, thus its arrays name the color source): the bytes are the
+// derive half's, but a class id in `bits`, whose color sync() writes from the scene's table.
+void points_received(const wire::SceneUpdate& u, const Batch& b, const std::vector<wire::Section>& received, Converted& c) {
+    c.piece = "points";
+    const wire::Section* r = nullptr;
+    for (const wire::Section& s : received)
+        if (s.name == "points") r = &s;
+    if (!r || r->shape.size() != 2 || r->shape[1] != 32 || r->size != std::size_t(r->shape[0]) * 32)
+        return void(c.fallback = Fallback::points_shape);
+    const uint64_t n = uint64_t(r->shape[0]);
+    if (too_many(c, n, capacity("points", "points"), Fallback::points_capacity)) return;
+    c.mode = b.array(caliper_scene::Role::Radii) ? 1 : 0;
+    c.count = n;
+    const bool ids = u.array("class_ids") && !u.array("colors") && !u.array("values");
+    c.color_mode = u.array("colors") || ids ? 2 : u.array("values") ? 1 : 0;
+    std::vector<std::uint8_t> out(r->data, r->data + r->size);
+    if (ids) {
+        c.class_ids.resize(std::size_t(n));
+        for (uint64_t i = 0; i < n; ++i) std::memcpy(&c.class_ids[std::size_t(i)], r->data + i * 32 + 16, 4);
+        c.class_resource = 0;
+    }
+    c.resources.push_back({"points", std::uint32_t(n), std::move(out)});
+    c.received = true;
+}
+
+// image@1's resources of a color image as the piece form carried them: "pixels" one packed RGBA a
+// pixel and "info" its size, channels and the identity pose, which the piece draws as they came.
+void image_received(const Batch& b, const std::vector<wire::Section>& received, Converted& c) {
+    c.piece = "image";
+    const wire::Section *px = nullptr, *info = nullptr;
+    for (const wire::Section& s : received) {
+        if (s.name == "pixels") px = &s;
+        if (s.name == "info") info = &s;
+    }
+    const uint64_t w = b.image_width, h = b.image_height, n = w * h;
+    c.width = std::uint32_t(w);
+    c.height = std::uint32_t(h);
+    c.count = n;
+    if (!px || !info || px->size != n * 4 || info->size != 80) return void(c.fallback = Fallback::image_shape);
+    if (too_many(c, n, capacity("image", "pixels"), Fallback::image_pixels_capacity)) return;
+    c.resources.push_back({"pixels", std::uint32_t(n), std::vector<std::uint8_t>(px->data, px->data + px->size)});
+    c.resources.push_back({"info", 1, std::vector<std::uint8_t>(info->data, info->data + info->size)});
+    c.received = true;
 }
 
 void lines_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
@@ -689,10 +736,13 @@ bool is_identity(const Mat4& m) {
 
 }  // namespace
 
-void ScenePieces::take(const std::string& path, Primitive p, bool fixed, const wire::SceneUpdate& u, const Batch& b) {
+void ScenePieces::take(const std::string& path, Primitive p, bool fixed, const wire::SceneUpdate& u, const Batch& b,
+                       const std::vector<wire::Section>* received) {
     auto c = std::make_shared<Converted>();
     c->generation = ++generation_;
-    switch (p) {
+    if (received && p == Primitive::Points) points_received(u, b, *received, *c);
+    else if (received && p == Primitive::Image) image_received(b, *received, *c);
+    else switch (p) {
         case Primitive::Points: points_of(u, b, *c); break;
         case Primitive::Lines: lines_of(u, b, *c); break;
         case Primitive::Arrows: arrows_of(u, *c); break;
@@ -959,6 +1009,7 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
             if (pid == pick_ids_.end()) pid = pick_ids_.emplace(id, next_pick_++).first;
             pr->pick_id = pid->second;
             ++counts_.pieces;
+            if (c->received) ++counts_.received;
             next.push_back(std::move(pr));
         }
     }

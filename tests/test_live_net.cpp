@@ -26,6 +26,7 @@
 #include "live/live_scene.h"           // the scene view (protocol 3.2 draft)
 #include "live/live_views_scene.h"
 #include "live/live_views_state.h"     // kPalette (the exact categorical colours)
+#include "live/scene_piece_form.h"     // the piece form of scene batches (protocol 3.2 draft)
 #include "live/scene_queue.h"          // what a source keeps of a scene while the display is paused
 #include "net/wire.h"
 #include "net/ws.h"
@@ -3084,3 +3085,98 @@ TEST_CASE("live/programs: a script that keeps dropping a program gets it a few t
     CHECK(link.sent.size() == size_t(caliper_live::ProgramSync::kMaxSends));
 }
 
+
+
+// The piece form of SCENE_UPDATE on the receiving side: a scene program's RESOURCE waits in the inbox
+// for the update that names it with the same count; another program's goes past; a missing or
+// mismatched version drops the update; the arrays come back from points@1's and image@1's bytes.
+TEST_CASE("live/net: the piece form's inbox pairs a scene program's versions with its update") {
+    namespace wire = caliper_net::wire;
+    caliper_live::ScenePieceInbox inbox;
+    auto resource = [](const std::string& program, const std::string& id, uint32_t count, uint32_t stride) {
+        wire::Resource r;
+        r.program = program;
+        r.resource = id;
+        r.count = count;
+        r.stride = stride;
+        return r;
+    };
+    // Three points (0, 1, 2), (3, 4, 5), (6, 7, 8) with radius 0.5 and values 10, 11, 12.
+    auto bytes = std::make_shared<std::vector<uint8_t>>(3 * 32, 0);
+    for (uint32_t i = 0; i < 3; ++i) {
+        const float p[4] = {float(3 * i), float(3 * i + 1), float(3 * i + 2), 0.5f};
+        const float v = 10.0f + float(i);
+        std::memcpy(bytes->data() + i * 32, p, 16);
+        std::memcpy(bytes->data() + i * 32 + 16, &v, 4);
+        std::memcpy(bytes->data() + i * 32 + 20, &i, 4);
+    }
+    CHECK_FALSE(inbox.take(resource("bars", "points", 3, 32), bytes));
+    CHECK(inbox.held() == 0);
+    CHECK(inbox.take(resource("scene.7", "points", 3, 32), bytes));
+    wire::SceneUpdate u;
+    u.part = CALIPER_NET_PART_POINTS;
+    u.program = std::string("scene.7");
+    u.piece = caliper_net::Json::object();
+    u.piece.set("name", "points");
+    u.piece.set("version", 1);
+    u.resources = caliper_net::Json::object();
+    u.resources.set("points", caliper_net::Json(4.0));
+    u.names = {"positions", "values", "radii"};
+    std::string why;
+    CHECK_FALSE(inbox.pair(u, nullptr, &why));   // another count
+    CHECK(why.find("another count") != std::string::npos);
+    u.resources.set("points", caliper_net::Json(3.0));
+    std::shared_ptr<const void> owner = inbox.pair(u, nullptr, &why);
+    REQUIRE(owner);
+    CHECK(inbox.held() == 0);
+    REQUIRE(u.paired.size() == 1);
+    CHECK(u.paired[0].shape == std::vector<int64_t>{3, 32});
+    std::vector<wire::Section> arrays;
+    std::vector<std::vector<uint8_t>> owned;
+    REQUIRE_MESSAGE(caliper_live::scene_piece_arrays(u, 2, &arrays, &owned, &why), why);
+    REQUIRE(arrays.size() == 3);
+    CHECK(arrays[0].name == "positions");
+    CHECK(arrays[0].shape == std::vector<int64_t>{3, 2});
+    const float* pos = reinterpret_cast<const float*>(arrays[0].data);
+    CHECK(pos[0] == 0.0f);
+    CHECK(pos[1] == 1.0f);
+    CHECK(pos[2] == 3.0f);
+    CHECK(pos[5] == 7.0f);
+    CHECK(reinterpret_cast<const float*>(arrays[1].data)[2] == 12.0f);
+    CHECK(reinterpret_cast<const float*>(arrays[2].data)[1] == 0.5f);
+    wire::SceneUpdate again = u;
+    again.paired.clear();
+    CHECK_FALSE(inbox.pair(again, nullptr, &why));   // its version went with the first update
+    CHECK(why.find("did not arrive") != std::string::npos);
+    // A grey image of 2 x 3 pixels: image@1's pixels repeat the value; info holds 3, 2 and 1 channel.
+    auto px = std::make_shared<std::vector<uint8_t>>(6 * 4, 0);
+    for (uint32_t i = 0; i < 6; ++i) {
+        const uint32_t g = 40 * i, rgba = 0xff000000u | g | (g << 8) | (g << 16);
+        std::memcpy(px->data() + i * 4, &rgba, 4);
+    }
+    auto info = std::make_shared<std::vector<uint8_t>>(80, 0);
+    const uint32_t size[4] = {3, 2, 1, 0};
+    std::memcpy(info->data(), size, 16);
+    CHECK(inbox.take(resource("scene.8", "pixels", 6, 4), px));
+    CHECK(inbox.take(resource("scene.8", "info", 1, 80), info));
+    wire::SceneUpdate im;
+    im.part = CALIPER_NET_PART_IMAGE;
+    im.program = std::string("scene.8");
+    im.piece = caliper_net::Json::object();
+    im.piece.set("name", "image");
+    im.piece.set("version", 1);
+    im.resources = caliper_net::Json::object();
+    im.resources.set("pixels", caliper_net::Json(6.0));
+    im.resources.set("info", caliper_net::Json(1.0));
+    im.names = {"pixels"};
+    REQUIRE(inbox.pair(im, nullptr, &why));
+    arrays.clear();
+    owned.clear();
+    REQUIRE_MESSAGE(caliper_live::scene_piece_arrays(im, 0, &arrays, &owned, &why), why);
+    REQUIRE(arrays.size() == 1);
+    CHECK(arrays[0].shape == std::vector<int64_t>{2, 3});
+    CHECK(arrays[0].data[5] == 200);
+    // A piece of another version is not read.
+    im.piece.set("version", 2);
+    CHECK_FALSE(caliper_live::scene_piece_arrays(im, 0, &arrays, &owned, &why));
+}

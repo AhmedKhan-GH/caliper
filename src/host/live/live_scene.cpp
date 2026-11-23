@@ -1,5 +1,6 @@
 // live_scene.cpp: the scene view of the shared view layer (live_scene.h).
 #include "live/live_scene.h"
+#include "live/scene_piece_form.h"
 
 #include "gfx/colormap_keys.h"
 #include "gfx/colormap_tables.h"
@@ -441,6 +442,30 @@ void SceneView::rebuild(const std::string& path) {
 // ---- messages ------------------------------------------------------------------------------------
 
 bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
+    if (!u.program) return apply_update(u, nullptr, why);
+    // The piece form: the arrays come back from the paired resources in the rows' dimension of the
+    // entity, and the scene view's pieces draw the received bytes.
+    const std::string where = (u.path.empty() ? std::string("the root") : u.path) + " " + u.part;
+    std::string err;
+    const EntityId e = tree_.ensure(u.path, &err);
+    std::vector<wire::Section> arrays;
+    std::vector<std::vector<uint8_t>> owned;
+    const uint32_t dims = (tree_.space() == Space::k2D || (e && in_pixel_space(e))) ? 2u : 3u;
+    if (!e || !caliper_live::scene_piece_arrays(u, dims, &arrays, &owned, &err)) {
+        ++counts_.messages;
+        const std::string t = where + ": " + err;
+        note(t);
+        if (why) *why = t;
+        return false;
+    }
+    wire::SceneUpdate cu = u;
+    cu.arrays = std::move(arrays);
+    cu.program.reset();
+    return apply_update(cu, &u.paired, why);
+}
+
+bool SceneView::apply_update(const wire::SceneUpdate& u, const std::vector<wire::Section>* received,
+                             std::string* why) {
     ++counts_.messages;
     // The stages' step: the first timeline of the update's stamp, the producer's step.
     if (u.stamp && u.stamp->is(CALIPER_NET_DTYPE_I64, 1) && u.stamp->size >= 8 && u.stamp->data) {
@@ -856,7 +881,7 @@ bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
     slot.present = true;
 #if defined(CALIPER_SCENE_PIECES)
     // The part's arrays as the piece's resources, while the message's sections live.
-    if (shapes_) shapes_->take(u.path, prim, u.is_static, u, slot.batch);
+    if (shapes_) shapes_->take(u.path, prim, u.is_static, u, slot.batch, received);
 #endif
     // Buffers of roles this batch no longer has, and a texture it no longer has, go back to the layer.
     for (auto it = slot.buffers.begin(); it != slot.buffers.end();) {
@@ -1069,6 +1094,7 @@ SceneShapeCounts SceneView::shape_counts() const {
         out.builtin = c.builtin;
         out.fallbacks = c.fallbacks;
         out.marks = c.marks;
+        out.received = c.received;
         return out;
     }
 #endif
@@ -1128,6 +1154,7 @@ void SceneView::sync_shapes() {
         const caliper_draw::ShapeCounts c = shapes_->counts();
         std::string text = "pieces " + std::to_string(c.pieces) + " builtin " + std::to_string(c.builtin) + "\n";
         for (const auto& [kind, n] : c.fallbacks) text += "fallback " + std::to_string(n) + " " + kind + "\n";
+        if (c.received) text += "received " + std::to_string(c.received) + "\n";
         if (text != logged_shapes_) {
             logged_shapes_ = text;
             if (FILE* f = std::fopen(log, "a")) {
