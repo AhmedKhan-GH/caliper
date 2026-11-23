@@ -350,10 +350,18 @@ private:
                                 where + ".width");
                 if (r.publish) published += layout_bytes(l, r.count);
             } else {
-                if (has_layout(r.layout) || r.count || r.counted)
+                if (r.layout.element || r.layout.type_name || r.count || r.counted)
                     return fail(kProgramBadResource,
-                                "A texture has a format and a size, and no element, struct, fields, count or counted.",
-                                where);
+                                "A texture has a format and a size, and no element, struct, count or counted.", where);
+                if (!r.layout.fields.empty()) {
+                    const auto& fields = r.layout.fields;
+                    if (spec::texture_format(r) != "r32uint" || fields.size() != 1 ||
+                        !field_form(fields[0].name) || fields[0].name.find("__") != std::string::npos ||
+                        (fields[0].type != "f32" && fields[0].type != "i32" && fields[0].type != "u32"))
+                        return fail(kProgramBadResource,
+                                    "An r32uint texture can name one scalar field of type f32, i32 or u32.",
+                                    where + ".fields");
+                }
                 if (r.format && !spec::texture_format_ok(*r.format))
                     return fail(kProgramBadResource,
                                 "A texture's format is rgba8unorm, r8unorm or r32uint, not " + quote(*r.format) + ".",
@@ -586,10 +594,11 @@ private:
                                     where + ".indices");
                 }
                 if (pass.instances_of) {
-                    if (!countable(*pass.instances_of))
+                    const spec::Resource* resource = find_resource(p_, *pass.instances_of);
+                    if (!countable(*pass.instances_of) && !(resource && resource->publish))
                         return fail(kProgramUnknownResource,
                                     "instances names " + quote(*pass.instances_of) +
-                                        ", which is no published buffer resource or buffer input of the piece.",
+                                        ", which is no published resource or buffer input of the piece.",
                                     where + ".instances");
                 } else if (pass.instances < 1 || pass.instances > pl::kInstancesMax) {
                     return fail(kProgramBadPass,
@@ -638,15 +647,16 @@ private:
                             "draw.pick.resource");
             if (d.pick->fields.empty() || d.pick->fields.size() > pl::kPickFields)
                 return fail(kProgramBadPick, "The item map names 1 to 8 fields.", "draw.pick.fields");
-            // A texture's item is a texel of the version, in row order, with the one field rgba of an
-            // rgba8unorm texel or value of an r32uint texel.
+            // A texture's item is one texel in row order. R32Uint can declare its scalar field.
+            // Without a declaration, RGBA8 uses rgba and R32Uint uses value.
             if (r->kind == spec::ResourceKind::texture) {
                 const std::string format = spec::texture_format(*r);
                 const char* field = format == "rgba8unorm" ? "rgba" : format == "r32uint" ? "value" : nullptr;
+                if (!r->layout.fields.empty()) field = r->layout.fields[0].name.c_str();
                 if (!field || d.pick->fields.size() != 1 || d.pick->fields[0] != field)
                     return fail(kProgramBadPick,
-                                "The item map of a texture names its one field: rgba for rgba8unorm, value for "
-                                "r32uint; an r8unorm texture has none.",
+                                "The item map of a texture names its one field: rgba for rgba8unorm, or the declared "
+                                "field of r32uint, with value as its default. An r8unorm texture has none.",
                                 "draw.pick.fields");
             }
             std::set<std::string> fields;

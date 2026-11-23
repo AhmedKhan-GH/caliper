@@ -797,3 +797,38 @@ TEST_CASE("the lines and mesh library layouts retain full scene capacities withi
     p.draw->memory_mb = 513;
     CHECK_FALSE(cp::check_piece_manifest(p).ok());
 }
+
+
+TEST_CASE("an r32uint texture declares at most one scalar item field") {
+    cs::Piece p;
+    p.name = "texture_fields";
+    cs::Resource r;
+    r.id = "pixels";
+    r.kind = cs::ResourceKind::texture;
+    r.format = "r32uint";
+    r.width = r.height = 2;
+    p.resources = {r};
+    cs::Draw draw;
+    cs::DrawPass pass;
+    pass.fragment = "color_fs";
+    draw.passes = {pass};
+    p.draw = draw;
+    p.files["draw.wgsl"] = "@fragment fn color_fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }";
+    for (const char* type : {"f32", "i32", "u32"}) {
+        p.resources[0].layout.fields = {{"sample", type}};
+        CHECK_MESSAGE(cp::check_piece_manifest(p).ok(), cp::check_piece_manifest(p).message);
+    }
+    for (const char* type : {"u16", "vec2<f32>", "vec4<u32>"}) {
+        p.resources[0].layout.fields = {{"sample", type}};
+        CHECK(cp::check_piece_manifest(p).code == cp::kProgramBadResource);
+    }
+    p.resources[0].layout.fields = {{"first", "f32"}, {"second", "f32"}};
+    CHECK(cp::check_piece_manifest(p).code == cp::kProgramBadResource);
+    p.resources[0].layout.fields = {{"bad__field", "f32"}};
+    CHECK(cp::check_piece_manifest(p).code == cp::kProgramBadResource);
+    p.resources[0].layout.fields = {{"sample", "f32"}};
+    p.resources[0].format = "rgba8unorm";
+    CHECK(cp::check_piece_manifest(p).code == cp::kProgramBadResource);
+    p.resources[0].format = "r8unorm";
+    CHECK(cp::check_piece_manifest(p).code == cp::kProgramBadResource);
+}

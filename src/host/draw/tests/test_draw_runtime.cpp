@@ -1344,3 +1344,78 @@ TEST_CASE("the draw host holds a foreign spec's piece for a review of its hash, 
     CHECK(tower[0].refused.ok());
     CHECK(tower[1].refused.code == cp::kProgramCameraConflict);
 }
+
+
+TEST_CASE("texture instances and scalar item fields use the current texels") {
+    for (bool webgpu : modes()) {
+        for (const std::string type : {"f32", "i32", "u32"}) {
+            CAPTURE(webgpu);
+            CAPTURE(type);
+            Host h;
+            cd::DrawRuntime rt(h.gfx, webgpu, checks());
+            cs::Piece p;
+            p.name = "scalar_texels";
+            p.imports = {"pick@1"};
+            cs::Resource pixels;
+            pixels.id = "pixels";
+            pixels.kind = cs::ResourceKind::texture;
+            pixels.format = "r32uint";
+            pixels.width = 4;
+            pixels.height = 2;
+            pixels.layout.fields = {{"sample", type}};
+            p.resources = {pixels};
+            cs::Draw d;
+            d.pick = cs::PickMap{"pixels", {"sample"}};
+            cs::DrawPass pass;
+            pass.vertex = "sample_vs";
+            pass.fragment = "sample_fs";
+            pass.vertices = 3;
+            pass.instances_of = "pixels";
+            pass.pick = true;
+            d.passes = {pass};
+            p.draw = d;
+            p.files["draw.wgsl"] = R"(
+@vertex
+fn sample_vs(@builtin(vertex_index) v: u32, @builtin(instance_index) i: u32) -> @builtin(position) vec4<f32> {
+    return vec4<f32>(f32(v), f32(i), 0.0, 1.0);
+}
+@fragment
+fn sample_fs() -> CaliperPicked {
+    var out: CaliperPicked;
+    out.color = vec4<f32>(1.0);
+    out.id = pick::id(0u);
+    return out;
+}
+)";
+            cd::Instance in;
+            in.program = p.name;
+            const cp::Verdict installed = rt.install(p, in, 3);
+            REQUIRE_MESSAGE(installed.ok(), installed.message);
+            const std::vector<std::uint32_t> raw = {0xbf400000u, 0x7fc00000u, 65535u, 0xffffffffu};
+            cd::ResourceVersion r = version("pixels", raw, 9);
+            r.width = r.height = 2;
+            r.format = "r32uint";
+            REQUIRE(rt.set_resource(r).ok());
+            const auto frames = frame(h, rt);
+            REQUIRE(frames.size() == 1);
+            REQUIRE(list_of(frames[0], 0).records().size == 1);
+            CHECK(list_of(frames[0], 0).records()[0].instance_count == 4);
+            const auto picked = rt.pick(0);
+            REQUIRE(picked.has_value());
+            REQUIRE(picked->fields.size() == 1);
+            CHECK(picked->fields[0].first == "sample");
+            const double want = type == "f32" ? -0.75 : type == "i32" ? double(std::int32_t(raw[0])) : double(raw[0]);
+            CHECK(picked->fields[0].second == want);
+            const auto nan = rt.pick(1);
+            REQUIRE(nan.has_value());
+            CHECK(nan->fields.size() == (type == "f32" ? 0u : 1u));
+            CHECK_FALSE(rt.pick(4).has_value());
+            r.width = r.height = r.count = 0;
+            r.bytes = nullptr;
+            r.size = 0;
+            REQUIRE(rt.set_resource(r).ok());
+            CHECK(frame(h, rt).empty());
+            CHECK(rt.internals().slots[0].count == 0);
+        }
+    }
+}

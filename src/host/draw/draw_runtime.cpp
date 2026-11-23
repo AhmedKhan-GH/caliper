@@ -1132,11 +1132,15 @@ Verdict DrawRuntime::install(const caliper_builder::spec::Piece& piece, const In
                                                     : gfx::Format::RGBA8Unorm;
             s.declared_count = std::uint32_t(cs::texture_texels(res));
             s.declared_bytes = cs::texture_bytes(res);
-            // The item map of a texture reads one u32 field of each texel in row order.
+            // The item map reads one scalar field per texel in row order.
             if (s.format != gfx::Format::R8Unorm) {
                 s.layout.stride = 4;
                 s.layout.align = 4;
-                s.layout.fields.push_back(cp::FieldLayout{s.format == gfx::Format::R32Uint ? "value" : "rgba", "u32", 0, 4});
+                const std::string name = res.layout.fields.empty()
+                                             ? (s.format == gfx::Format::R32Uint ? "value" : "rgba")
+                                             : res.layout.fields[0].name;
+                const std::string type = res.layout.fields.empty() ? "u32" : res.layout.fields[0].type;
+                s.layout.fields.push_back(cp::FieldLayout{name, type, 0, 4});
             }
         } else {
             if (Verdict v = c.layout(res.layout, &s.layout); !v.ok()) return refuse(v);
