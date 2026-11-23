@@ -511,5 +511,21 @@ TEST_CASE("a protected file is found by its path resolved, by a link, a case var
     protect_file(later.string());
     fs::create_symlink(later, ws / "later.loader.toml");
     CHECK(touches_protected_file((ws / "later.loader.toml").string()));
+    // A second spelling of the same folders (on macOS /System/Volumes/Data
+    // holds the same /Users): the folder, a link to its parent's spelling,
+    // and a file not made yet, by device and inode.
+    const fs::path canon = fs::canonical(settings);
+    const fs::path alt = fs::path("/System/Volumes/Data") / canon.relative_path();
+    std::error_code ec;
+    if (fs::exists(alt, ec) && fs::equivalent(alt, canon, ec)) {
+        CHECK(touches_protected_file(alt.string()));
+        fs::create_directory_symlink(alt.parent_path(), ws / "outputs");
+        CHECK(touches_protected_file((ws / "outputs" / "settings").string()));
+        CHECK(touches_protected_file((alt / "side-chat.json").string()));
+        CHECK(touches_protected_file((alt / "SIDE-CHAT.JSON").string()));
+        CHECK_FALSE(touches_protected_file((alt / "other.json").string()));
+    } else {
+        MESSAGE("No second spelling of the folder on this system.");
+    }
 #endif
 }

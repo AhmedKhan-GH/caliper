@@ -155,6 +155,9 @@ struct AgentPermissionsRead {
     std::vector<std::string> problems;  // one plain sentence for each thing ignored
 };
 AgentPermissionsRead read_agent_permissions(const std::string& path);
+// The same, with the user id that must own the file on POSIX (the process's
+// effective user id above); a test names another to check the owner rule.
+AgentPermissionsRead read_agent_permissions(const std::string& path, long owner);
 // The file's JSON text.
 std::string agent_permissions_text(const AgentPermissionsFile& file);
 // Writes it owner-only through a temporary file in the same folder.

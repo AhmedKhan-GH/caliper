@@ -13,6 +13,7 @@
 
 #ifndef _WIN32
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 using namespace caliper_builder;
@@ -432,6 +433,14 @@ TEST_CASE("Allow all is read only from a clean file, and every other file leaves
     r = read_agent_permissions(path);
     CHECK(r.file.chat == AgentMode::ask);
     CHECK(r.file.mcp == AgentMode::ask);
+    // A clean file that another user owns grants nothing.
+    write(path, R"({"version": 1, "modes": {"chat": "allow_all", "mcp": "allow_all"}})");
+    ::chmod(path.c_str(), 0600);
+    REQUIRE(read_agent_permissions(path).file.chat == AgentMode::allow_all);
+    r = read_agent_permissions(path, static_cast<long>(::geteuid()) + 1);
+    CHECK(r.file.chat == AgentMode::ask);
+    CHECK(r.file.mcp == AgentMode::ask);
+    CHECK(r.problems == std::vector<std::string>{"The agent permissions file belongs to another user, so it grants nothing."});
     // Saving over a file of another mode leaves it owner-only.
     ::chmod(path.c_str(), 0644);
     AgentPermissionsFile f;

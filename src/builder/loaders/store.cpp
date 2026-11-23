@@ -515,7 +515,8 @@ struct LoaderStore::Impl {
         for (fs::directory_iterator it(ws() / "tensors", ec), end; !ec && it != end; it.increment(ec)) {
             std::error_code rec;
             const std::string p = fs::canonical(it->path(), rec).u8string();
-            if (!rec && !used.count(p) && it->is_regular_file(rec)) fs::remove(it->path(), rec);
+            if (!rec && !used.count(p) && it->is_regular_file(rec) && !touches_protected_file(it->path().u8string()))
+                fs::remove(it->path(), rec);
         }
         return {};
     }

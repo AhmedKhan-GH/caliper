@@ -175,6 +175,15 @@ bool rule_command_allowed(std::string_view command) {
 }
 
 AgentPermissionsRead read_agent_permissions(const std::string& path) {
+#ifndef _WIN32
+    return read_agent_permissions(path, static_cast<long>(::geteuid()));
+#else
+    return read_agent_permissions(path, -1);
+#endif
+}
+
+AgentPermissionsRead read_agent_permissions(const std::string& path, long owner) {
+    (void)owner;
     AgentPermissionsRead out;
     std::error_code ec;
     const fs::path p = fs::u8path(path);
@@ -189,7 +198,7 @@ AgentPermissionsRead read_agent_permissions(const std::string& path) {
     if (::stat(p.c_str(), &st) != 0) return give_up("The agent permissions file cannot be read, so it grants nothing.");
     if (st.st_mode & (S_IWGRP | S_IWOTH))
         return give_up("The agent permissions file may be written by others, so it grants nothing.");
-    if (st.st_uid != ::geteuid())
+    if (static_cast<long>(st.st_uid) != owner)
         return give_up("The agent permissions file belongs to another user, so it grants nothing.");
 #endif
     const auto size = fs::file_size(p, ec);
