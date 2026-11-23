@@ -1,0 +1,113 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 224,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 130,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 130
+  },
+  "meta": {
+    "count": 2,
+    "program": "scene.115",
+    "resource": "arrows",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "resource",
+        "shape": [
+          64
+        ]
+      }
+    ],
+    "step": 7,
+    "stride": 32
+  },
+  "meta_offset": 28,
+  "name": "v3_2/resource_scene_arrows_bundle_arrows",
+  "section_lengths": [
+    64
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 64,
+      "name": "resource",
+      "offset": 160,
+      "shape": [
+        64
+      ],
+      "values": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        255,
+        0,
+        0,
+        255,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        128,
+        63,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        128,
+        63,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        255,
+        0,
+        255,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        63,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0
+      ]
+    }
+  ],
+  "type_name": "resource"
+}

@@ -1,0 +1,41 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 264,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 240,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 112
+  },
+  "meta": {
+    "arrays": [
+      "positions",
+      "indices",
+      "normals"
+    ],
+    "part": "mesh",
+    "path": "surface",
+    "piece": {
+      "name": "mesh",
+      "version": 1
+    },
+    "program": "scene.119",
+    "resources": {
+      "faces": 6,
+      "tex": 0,
+      "vertices": 4
+    },
+    "seq": 39,
+    "stamp_ns": 81234567893623,
+    "sub": 2,
+    "view": "landscape"
+  },
+  "meta_offset": 24,
+  "name": "v3_2/scene_update_mesh_normals_bundle",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "scene_update"
+}

@@ -1,0 +1,76 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 432,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 386,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 112
+  },
+  "meta": {
+    "arrays": [
+      "pixels"
+    ],
+    "cloud": true,
+    "colormap": 0,
+    "flags": 3,
+    "form": "depth",
+    "part": "image",
+    "path": "rig/left/depth",
+    "piece": {
+      "name": "depth",
+      "version": 1
+    },
+    "program": "scene.123",
+    "resources": {
+      "info": 1,
+      "pixels": 6,
+      "source_pixels": 6
+    },
+    "scale": 0.001,
+    "sections": [
+      {
+        "dtype": 3,
+        "name": "stamp",
+        "shape": [
+          2
+        ]
+      }
+    ],
+    "seq": 26,
+    "stamp_ns": 81234567893783,
+    "stats": [
+      0.5,
+      2.5
+    ],
+    "sub": 2,
+    "view": "world",
+    "vmax": 1.0,
+    "vmin": 0.0
+  },
+  "meta_offset": 28,
+  "name": "v3_2/scene_update_image_depth_bundle",
+  "section_lengths": [
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 16,
+      "name": "stamp",
+      "offset": 416,
+      "shape": [
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}

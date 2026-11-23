@@ -1,0 +1,45 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 324,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 300,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 112
+  },
+  "meta": {
+    "arrays": [
+      "pixels"
+    ],
+    "colormap": 2,
+    "flags": 0,
+    "form": "depth",
+    "part": "image",
+    "path": "elevation",
+    "piece": {
+      "name": "depth",
+      "version": 1
+    },
+    "program": "scene.124",
+    "resources": {
+      "info": 1,
+      "pixels": 4,
+      "source_pixels": 4
+    },
+    "seq": 5,
+    "stamp_ns": 81234567893793,
+    "static": true,
+    "sub": 3,
+    "view": "overlay",
+    "vmax": 1.0,
+    "vmin": -1.0
+  },
+  "meta_offset": 24,
+  "name": "v3_2/scene_update_image_depth_f32_bundle",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "scene_update"
+}

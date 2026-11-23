@@ -70,11 +70,14 @@ def run(coro, timeout=30.0):
 class Viewer:
     """A viewer that announces "scenes" (or not) and decodes everything."""
 
-    def __init__(self, server, caps=(w.CAP_SCENES,)):
+    def __init__(self, server, caps=(w.CAP_SCENES, w.CAP_SCENE_PIECES)):
         self.url = server.stream_url
         self.caps = list(caps)
         self.inbox: list = []
         self.views: dict = {}
+        from scene_piece_reader import Inbox
+        self.pieces = Inbox()
+        self.cameras = set()
 
     async def __aenter__(self):
         self.ws = await connect(self.url, max_size=None, compression=None, ping_interval=None,
@@ -90,7 +93,13 @@ class Viewer:
         m = w.decode(await asyncio.wait_for(self.ws.recv(), timeout))
         if isinstance(m, w.Views):
             self.views = {v["name"]: v for v in m.views}
-        return m
+        dims = 3
+        if isinstance(m, w.SceneUpdate):
+            info = self.views.get(m.view, {}).get("scene", {})
+            if m.part == "camera": self.cameras.add((m.view, m.path))
+            pixel_space = any(m.view == view and m.path.startswith(path + "/") for view, path in self.cameras)
+            dims = 2 if info.get("space") == "2d" or pixel_space else 3
+        return self.pieces.take(m, dims)
 
     async def expect(self, cls, pred=lambda m: True, timeout=10.0):
         deadline = time.monotonic() + timeout
@@ -655,7 +664,7 @@ def test_the_demo_sequence_runs(server):
         asked.append(True)
 
     async def body():
-        async with Viewer(server, caps=(w.CAP_SCENES, w.CAP_CONTROLS)) as v:
+        async with Viewer(server, caps=(w.CAP_SCENES, w.CAP_SCENE_PIECES, w.CAP_CONTROLS)) as v:
             await v.subscribe(1, "landscape")
             st = await v.state(1, 1)
             assert [(m.path, m.part, m.static) for m in st] == [("", "lines", True)]
@@ -932,8 +941,12 @@ def _native_scene_frames(server, big_mib: float, waiting_mib: float) -> None:
 
     sc = caliper.scene("frames", up="+z")
     v = RawViewer(server)
+    from scene_piece_reader import Inbox
+    inbox = Inbox()
+    raw_next = v.next
+    v.next = lambda: inbox.take(raw_next())
     try:
-        v.send(w.Hello("viewer", [w.CAP_SCENES]))
+        v.send(w.Hello("viewer", [w.CAP_SCENES, w.CAP_SCENE_PIECES]))
         v.expect(lambda m: isinstance(m, w.Views) and any(x["name"] == "frames" for x in m.views), "VIEWS")
         v.send(w.Subscribe(1, "frames", 101))
         assert v.expect(lambda m: isinstance(m, w.ViewReply), "the reply").error is None

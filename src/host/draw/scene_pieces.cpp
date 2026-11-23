@@ -356,6 +356,64 @@ void image_received(const Batch& b, const std::vector<wire::Section>& received, 
     c.received = true;
 }
 
+// Received resources already hold the library layout. Only host metadata and class colors need
+// interpretation. Source resources remain outside the draw graph.
+void shape_received(const wire::SceneUpdate& u, const Batch& b,
+                    const std::vector<wire::Section>& received, Converted& c) {
+    const auto primitive = b.primitive;
+    c.piece = primitive == Primitive::Lines ? "lines" : primitive == Primitive::Arrows ? "arrows" :
+              primitive == Primitive::Boxes ? "boxes" : primitive == Primitive::Mesh ? "mesh" :
+              b.image_form == caliper_scene::ImageForm::Depth ? "depth" : "segmentation";
+    const cs::Piece* piece = ScenePieces::library_piece(c.piece);
+    if (!piece) return void(c.error = InputError::no_piece);
+    c.received = true;
+    c.color_mode = u.array("colors") ? 2u : u.array("values") ? 1u : 0u;
+    c.mode = b.line_mode == caliper_scene::LineMode::Strips ? 1u : b.line_mode == caliper_scene::LineMode::Edges ? 2u : 0u;
+    const auto* per = u.params.find("color_per");
+    c.color_per = per && per->is_string() && (per->as_string() == "strip" || per->as_string() == "edge") ? 1u : 0u;
+    c.shading = u.array("normals") ? 1u : 0u;
+    c.indexed = u.array("indices") ? 1u : 0u;
+    c.width = b.image_width;
+    c.height = b.image_height;
+    if (primitive == Primitive::Boxes) {
+        c.color_mode = u.array("colors") ? 1u : u.array("class_ids") ? 2u : 0u;
+        if (c.color_mode == 2) {
+            const auto* ids = u.array("class_ids");
+            c.class_ids.resize(ids->size / 4);
+            if (ids->size) std::memcpy(c.class_ids.data(), ids->data, ids->size);
+        }
+    }
+    if (c.piece == "segmentation") c.class_ids = {0};
+    for (const auto& declaration : piece->resources) {
+        if (!declaration.publish) continue;
+        const wire::Section* data = nullptr;
+        for (const auto& r : received) if (r.name == declaration.id) data = &r;
+        if (!data) return void(c.error = InputError::no_arrays);
+        const bool texture = declaration.kind == cs::ResourceKind::texture;
+        uint64_t count = 0;
+        uint32_t width = 0, height = 0;
+        if (texture && data->shape.size() == 3 && data->shape[2] == 4 && data->shape[0] > 0 && data->shape[1] > 0) {
+            width = uint32_t(data->shape[1]); height = uint32_t(data->shape[0]);
+            count = uint64_t(width) * height;
+            if (data->size != count * 4 || width > CALIPER_NET_MAX_IMAGE_SIDE || height > CALIPER_NET_MAX_IMAGE_SIDE)
+                return void(c.error = InputError::no_arrays);
+        } else if (data->shape.size() == 2 && data->shape[0] >= 0 && data->shape[1] > 0) {
+            count = uint64_t(data->shape[0]);
+            if ((texture && count != 0) || data->size != count * uint64_t(data->shape[1]))
+                return void(c.error = InputError::no_arrays);
+        } else return void(c.error = InputError::no_arrays);
+        if (count > capacity(c.piece.c_str(), declaration.id.c_str())) return void(c.error = InputError::no_arrays);
+        if ((c.piece == "boxes" && declaration.id == "boxes") ||
+            (c.piece == "segmentation" && declaration.id == "palette")) c.class_resource = c.resources.size();
+        if (declaration.id == "segments" || declaration.id == "arrows" || declaration.id == "boxes" ||
+            declaration.id == "vertices" || declaration.id == "pixels") c.count = count;
+        PieceBatch::Resource resource{declaration.id, uint32_t(count), {}};
+        if (data->size) resource.bytes.assign(data->data, data->data + data->size);
+        resource.width = width; resource.height = height;
+        c.resources.push_back(std::move(resource));
+    }
+}
+
 void lines_of(const wire::SceneUpdate& u, const Batch& b, Converted& c) {
     c.piece = "lines";
     Rows pos;
@@ -741,7 +799,9 @@ void ScenePieces::take(const std::string& path, Primitive p, bool fixed, const w
     auto c = std::make_shared<Converted>();
     c->generation = ++generation_;
     if (received && p == Primitive::Points) points_received(u, b, *received, *c);
-    else if (received && p == Primitive::Image) image_received(b, *received, *c);
+    else if (received && p == Primitive::Image && (b.image_form == caliper_scene::ImageForm::Color ||
+                                                   b.image_form == caliper_scene::ImageForm::Grey)) image_received(b, *received, *c);
+    else if (received) shape_received(u, b, *received, *c);
     else switch (p) {
         case Primitive::Points: points_of(u, b, *c); break;
         case Primitive::Lines: lines_of(u, b, *c); break;

@@ -1,0 +1,70 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 360,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 315,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 112
+  },
+  "meta": {
+    "arrays": [
+      "centers",
+      "half_sizes",
+      "colors"
+    ],
+    "fill": true,
+    "labels": [
+      "car"
+    ],
+    "part": "boxes",
+    "path": "rig/left/cars",
+    "piece": {
+      "name": "boxes",
+      "version": 1
+    },
+    "program": "scene.117",
+    "resources": {
+      "boxes": 2,
+      "names": 0
+    },
+    "sections": [
+      {
+        "dtype": 3,
+        "name": "stamp",
+        "shape": [
+          2
+        ]
+      }
+    ],
+    "seq": 4,
+    "stamp_ns": 81234567893603,
+    "sub": 3,
+    "view": "overlay"
+  },
+  "meta_offset": 28,
+  "name": "v3_2/scene_update_boxes_2d_bundle",
+  "section_lengths": [
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 16,
+      "name": "stamp",
+      "offset": 344,
+      "shape": [
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}

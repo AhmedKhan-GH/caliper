@@ -1727,7 +1727,7 @@ def _log(st: SceneState, path: str, spec: _Spec, static: bool, iv) -> bool:
     if nbytes + META_MARGIN > _wire.MAX_FRAME_BYTES:
         if nbytes > _wire.MAX_UPDATE_BYTES:
             raise ValueError(f"this batch needs {nbytes} bytes, more than the "
-                             f"{_wire.MAX_UPDATE_BYTES >> 20} MiB of a split update")
+                             f"{_wire.MAX_UPDATE_BYTES >> 20} MiB of a scene batch")
     key = (path, spec.part)
     _admit(st, path, spec.part)
     watching = _watching(st)

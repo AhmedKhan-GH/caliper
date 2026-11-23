@@ -1,0 +1,43 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 278,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 254,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 112
+  },
+  "meta": {
+    "arrays": [
+      "positions",
+      "indices",
+      "uvs",
+      "texture"
+    ],
+    "part": "mesh",
+    "path": "floor",
+    "piece": {
+      "name": "mesh",
+      "version": 1
+    },
+    "program": "scene.120",
+    "resources": {
+      "faces": 6,
+      "tex": 4,
+      "vertices": 4
+    },
+    "seq": 24,
+    "stamp_ns": 81234567893673,
+    "static": true,
+    "sub": 2,
+    "view": "world"
+  },
+  "meta_offset": 24,
+  "name": "v3_2/scene_update_mesh_textured_bundle",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "scene_update"
+}

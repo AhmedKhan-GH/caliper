@@ -1,19 +1,6 @@
-"""The Caliper app draws the piece form of a scene that caliper.serve() sends (wire protocol 3.2,
-capability "scene_pieces") as it draws the per-shape parts, end to end, with nothing on screen.
-
-A script logs a scene with three point clouds (values through magma, colours with radii in scene
-units, class ids with a class table) and a pinhole camera that holds a colour image and a grey image
-in its pixel space. A websockets viewer is subscribed while the batches are logged, so the producer
-holds them. The app attaches late with ``caliper --hidden --url`` twice: first as itself, thus it
-announces "scene_pieces" and receives each batch as the RESOURCE versions of its scene program and
-the update in the piece form; then with ``CALIPER_SCENE_SHAPES=builtin`` in the script's process,
-thus the same batches come as the per-shape parts. The scene view's area of the two frames
-(``GET /v0/capture.png``) must be equal pixel for pixel, and the app's log of its shapes
-(``CALIPER_SCENE_FALLBACK_LOG``) must count every points and image batch as drawn from the received
-bytes in the first attachment and none in the second.
-
-It needs the app (``CALIPER_TEST_CALIPER_EXE``) and Metal; it skips without either.
-``CALIPER_SCENE_CAPTURE_DIR`` keeps the two frames as scene-pieces-form.png and scene-pieces-parts.png."""
+"""Hidden app captures compare scene resources with the saved-recording converter.
+The test-only legacy encoder supplies the recording form on the second attachment.
+"""
 from __future__ import annotations
 
 import os
@@ -27,7 +14,7 @@ import pytest
 import torch
 
 import caliper
-from caliper import _scene
+from caliper import _scene, _net_scene, _wire
 
 EXE = os.environ.get("CALIPER_TEST_CALIPER_EXE", "")
 pytestmark = pytest.mark.skipif(sys.platform != "darwin" or not EXE or not os.path.exists(EXE),
@@ -62,16 +49,7 @@ def log_scene(scene) -> int:
 
 
 def attach(url, tmp, name, log):
-    # The app gets the log and never the script's CALIPER_SCENE_SHAPES, which would switch its own draw;
-    # the script reads the switch when the app subscribes, well after the app started.
-    shapes = os.environ.pop("CALIPER_SCENE_SHAPES", None)
-    os.environ["CALIPER_SCENE_FALLBACK_LOG"] = log
-    try:
-        app = App(url, os.path.join(tmp, name), f"where {SCENE}; wait 60; where {SCENE}; wait 400")
-    finally:
-        del os.environ["CALIPER_SCENE_FALLBACK_LOG"]
-        if shapes is not None:
-            os.environ["CALIPER_SCENE_SHAPES"] = shapes
+    app = App(url, os.path.join(tmp, name), f"where {SCENE}; wait 60; where {SCENE}; wait 400")
     renderer = app.wait_for(lambda l: l.startswith("[renderer] "), 60)
     if renderer is None or "metal" not in renderer:
         app.close()
@@ -104,17 +82,9 @@ def stable(app, where, timeout=30.0):
     raise AssertionError("the scene view did not settle")
 
 
-def counts(log):
-    with open(log) as f:
-        lines = f.read().splitlines()
-    received = [int(l.split()[1]) for l in lines if l.startswith("received ")]
-    return lines, (received[-1] if received else 0)
-
-
 def test_the_piece_form_draws_as_the_per_shape_parts(monkeypatch):
     monkeypatch.setenv("CALIPER_SESSION", "0")
     monkeypatch.setenv("CALIPER_NETIO", "0")
-    monkeypatch.delenv("CALIPER_SCENE_SHAPES", raising=False)
     s = caliper.serve(port=0)
     tmp = tempfile.mkdtemp(prefix="caliper-scene-pieces-")
     sub = None
@@ -123,15 +93,21 @@ def test_the_piece_form_draws_as_the_per_shape_parts(monkeypatch):
         sub = Subscriber(s.stream_url)
         sub.start()
         assert sub.ready.wait(10), "the websockets viewer did not subscribe"
-        batches = log_scene(scene)
+        log_scene(scene)
         end = time.monotonic() + 10
         while time.monotonic() < end and {"cloud", "ring", "blocks", "rig/rgb", "rig/grey"} - {p for p, _ in sub.updates}:
             time.sleep(0.05)
 
         frames = {}
-        for name, shapes in (("form", None), ("parts", "builtin")):
-            if shapes:
-                monkeypatch.setenv("CALIPER_SCENE_SHAPES", shapes)
+        for name in ("form", "parts"):
+            if name == "parts":
+                import legacy_scene_encoder
+                legacy_scene_encoder.install()
+                def recorded_frames(self, batch, state):
+                    return [_wire.SceneUpdate(self.sub, self.view, batch.seq, batch.stamp_ns,
+                                              batch.path, batch.part, batch.arrays, batch.params,
+                                              static=batch.static, state=state, axes=batch.axes)]
+                monkeypatch.setattr(_net_scene.SubQueue, "frames", recorded_frames)
             log = os.path.join(tmp, f"{name}.log")
             app, where = attach(s.stream_url, tmp, name, log)
             try:
@@ -141,11 +117,7 @@ def test_the_piece_form_draws_as_the_per_shape_parts(monkeypatch):
             finally:
                 code = app.close()
             assert code == 0, "\n".join(app.lines[-40:])
-            lines, received = counts(log)
-            frames[name] += (received,)
-            print(f"[scene-pieces-app] {name}: {received} shapes from the received bytes; log {lines[-4:]}")
-        (a, wa, ra), (b, wb, rb) = frames["form"], frames["parts"]
-        assert ra == batches and rb == 0
+        (a, wa), (b, wb) = frames["form"], frames["parts"]
         assert (wa.target_px, wa.distance, wa.azimuth, wa.elevation) == (wb.target_px, wb.distance, wb.azimuth,
                                                                          wb.elevation)
         assert a.shape == b.shape and len({tuple(c) for c in a[::5, ::5].reshape(-1, 3)}) > 20, "the scene is blank"

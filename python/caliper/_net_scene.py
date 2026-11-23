@@ -21,8 +21,7 @@ Each NetRing (one per ``caliper.serve()`` producer) has one :class:`SceneRoute`
   the static ones apart), and at most one pending batch per entity part,
   which a newer one replaces, each entity part at the subscription's
   ``max_rate`` (cameras unlimited). A clear drops the pending batches and
-  transforms it clears. A batch over one frame travels as a split update, its
-  pieces sent one after another before anything else of the subscription.
+  transforms it clears. Resources and their update travel as one ordered bundle.
 
 The Python sender asks a link's :class:`LinkScenes` for its next frame
 between series and snapshots; the native sender's links get their frames
@@ -47,10 +46,6 @@ __all__ = ["route_of", "SceneRoute", "LinkScenes", "SubQueue"]
 _routes_lock = threading.Lock()
 NATIVE_BACKLOG = 2                       # scene frames a native link may have waiting at once
                                          # (caliper._netio.MAX_SCENE_BYTES is this many frames)
-# The array bytes a batch sends whole, at most: a frame less the largest metadata (labels take up
-# to 258 KB) and the section table with its padding.
-FRAME_ROOM = _wire.MAX_FRAME_BYTES - _wire.MAX_META_BYTES - 8 * 1024
-PIECE_BYTES = _wire.MAX_FRAME_BYTES              # the frame of a piece of a split update, at most
 
 
 def route_of(ring) -> "SceneRoute":
@@ -144,11 +139,11 @@ def _transforms(sub: int, view: str, items, static: bool, state: bool) -> list:
 
 class SubQueue:
     """What one subscription to a scene still has to send. With ``piece_form`` (the link
-    announced "scene_pieces" and CALIPER_SCENE_SHAPES is not "builtin"), a batch with a piece
+    announced "scene_pieces"), a batch with a piece
     route goes as the RESOURCE versions of its scene program followed by the SCENE_UPDATE in the
     piece form, one frame after the other (caliper._scene_pieces)."""
     __slots__ = ("sub", "view", "interval", "state", "pending", "last", "transforms", "classes",
-                 "pieces", "splits", "piece_form")
+                 "pieces", "piece_form")
 
     def __init__(self, sub: int, view: str, interval: float, piece_form: bool = False):
         self.sub = sub
@@ -160,8 +155,7 @@ class SubQueue:
         self.last: dict = {}              # (path, part) -> monotonic time of its last send
         self.transforms: dict = {}        # path -> Transform, the newest wins
         self.classes: Classes | None = None
-        self.pieces: collections.deque = collections.deque()  # the rest of a split update
-        self.splits = 0                   # this subscription's split updates so far
+        self.pieces: collections.deque = collections.deque()  # the rest of a resource bundle
 
     def offer(self, item) -> bool:
         """Queue an item; True when it replaced a pending one."""
@@ -180,6 +174,8 @@ class SubQueue:
             replaced = self.classes is not None
             self.classes = item
             return replaced
+        if not self.piece_form and item.part != _wire.PART_CAMERA:
+            return False
         replaced = (item.path, item.part) in self.pending
         self.pending[(item.path, item.part)] = item
         return replaced
@@ -190,7 +186,7 @@ class SubQueue:
             return self.pieces.popleft(), None
         if self.state:
             msg = self.state.popleft()
-            return (self.whole_or_pieces(msg) if isinstance(msg, _wire.SceneUpdate) else msg), None
+            return msg, None
         if self.classes is not None:
             k, self.classes = self.classes, None
             return self.table(k, False), None
@@ -202,47 +198,40 @@ class SubQueue:
                 del self.transforms[t.path]
             return _transforms(self.sub, self.view, group, static, False)[0], None
         wait = None
-        for key, b in self.pending.items():
+        for key, b in list(self.pending.items()):
             interval = 0.0 if b.part == _wire.PART_CAMERA else self.interval
             due = self.last.get(key, -math.inf) + interval - now
             if due <= 0:
                 del self.pending[key]
                 self.last[key] = now
-                return self.emit(b, False), None
+                msg = self.emit(b, False)
+                if msg is not None:
+                    return msg, None
+                continue
             wait = due if wait is None else min(wait, due)
         return None, wait
 
-    def whole_or_pieces(self, msg: _wire.SceneUpdate):
-        """The update, or its first piece when its arrays pass one frame (the
-        other pieces wait in ``pieces``)."""
-        size = sum(getattr(a, "nbytes", 0) for a in msg.arrays.values())
-        if size <= FRAME_ROOM:
-            return msg
-        self.splits += 1
-        pieces = _wire.split_update(msg, self.splits, max_frame=PIECE_BYTES)
-        self.pieces.extend(pieces[1:])
-        return pieces[0]
-
     def frames(self, b: Batch, state: bool) -> list:
         """The messages of batch ``b``: its RESOURCE versions and its update in the piece form,
-        else the update with its arrays (whole; :meth:`whole_or_pieces` splits it when sent)."""
-        if self.piece_form and b.part != _wire.PART_CAMERA:
-            out = _scene_pieces.bundle(self.sub, self.view, b, state)
-            if out is not None:
-                return out
-        return [self.update(b, state)]
+        or camera metadata. A link without the capability receives no drawable batch."""
+        if b.part == _wire.PART_CAMERA:
+            return [_wire.SceneUpdate(self.sub, self.view, b.seq, b.stamp_ns, b.path, b.part,
+                                      {}, b.params, static=b.static, state=state, axes=b.axes)]
+        if not self.piece_form:
+            return []
+        try:
+            return _scene_pieces.bundle(self.sub, self.view, b, state)
+        except (ValueError, KeyError) as error:
+            warnings.warn(f"caliper: scene {b.scene!r}, {b.path!r}: {error}", stacklevel=2)
+            return []
 
     def emit(self, b: Batch, state: bool):
-        """The first frame of batch ``b``; the others wait in ``pieces``."""
+        """The first resource of a batch, with the rest held in order."""
         out = self.frames(b, state)
-        if len(out) > 1:
-            self.pieces.extend(out[1:])
-            return out[0]
-        return self.whole_or_pieces(out[0])
-
-    def update(self, b: Batch, state: bool) -> _wire.SceneUpdate:
-        return _wire.SceneUpdate(self.sub, self.view, b.seq, b.stamp_ns, b.path, b.part,
-                                 b.arrays, b.params, static=b.static, state=state, axes=b.axes)
+        if not out:
+            return None
+        self.pieces.extend(out[1:])
+        return out[0]
 
     def table(self, k: Classes, state: bool) -> _wire.SceneClasses:
         return _wire.SceneClasses(self.sub, self.view, k.seq, k.stamp_ns, k.classes,
@@ -266,7 +255,7 @@ class LinkScenes:
         if not self.subs:
             return None, None
         qs = list(self.subs.values())
-        for q in qs:            # the rest of a bundle or a split update goes before anything else
+        for q in qs:            # a resource bundle goes before another update
             if q.pieces:
                 return _wire.encode_parts(q.pieces.popleft()), None
         self.turn = (self.turn + 1) % len(qs)
@@ -382,7 +371,7 @@ class SceneRoute:
         if st is None:
             return
         q = SubQueue(s.sub, s.view, s.interval,
-                     _wire.CAP_SCENE_PIECES in getattr(link, "caps", ()) and _scene_pieces.enabled())
+                     _wire.CAP_SCENE_PIECES in getattr(link, "caps", ()))
         q.state.append(_wire.SceneClear(s.sub, s.view, st.seq, time.monotonic_ns(), "",
                                         reset=True, state=True))
         late = []

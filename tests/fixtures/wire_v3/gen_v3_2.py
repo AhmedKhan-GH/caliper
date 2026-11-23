@@ -29,6 +29,12 @@ import struct
 import numpy as np
 
 from caliper import _wire as w
+# Per-shape encoders exist only in the test tree.
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "python/tests"))
+import legacy_scene_encoder
+legacy_scene_encoder.install()
 
 SESSION = {"id": "clp-4242-a1b2c3", "script": "train.py", "pid": 4242,
            "start_unix_ms": 1763200000000}
@@ -324,10 +330,17 @@ def valid_vectors() -> dict[str, bytes]:
                                             parts=[w.PART_TRANSFORM, w.PART_BOXES],
                                             stamp=STAMP_T),
     }
+    msgs["scene_update_lines_unused"] = _update(
+        2, "world", 40, STAMP + 3900, "unused", w.PART_LINES,
+        {"positions": CLOUD, "indices": np.array([[0, 1]], i32)}, {"mode": w.LINES_EDGES})
+    msgs["scene_update_lines_singletons"] = _update(
+        2, "world", 41, STAMP + 3901, "singleton", w.PART_LINES,
+        {"positions": CLOUD, "strip_lengths": np.array([1, 1, 1], i32)}, {"mode": w.LINES_STRIPS})
     msgs.update(_timeline_vectors())
     msgs.update(_program_vectors())
     msgs.update(_resource_vectors())
     msgs.update(_scene_piece_vectors())
+    msgs.update(_scene_bundles(msgs))
     out = {f"v3_2/{name}": w.encode(m, minor=M) for name, m in msgs.items()}
     # A split update: 20 coloured points in five pieces of at most 600 bytes, with a stamp.
     for k, piece in enumerate(w.split_update(SPLIT, update=4, max_frame=600)):
@@ -1097,3 +1110,27 @@ def _resource_split_invalid(resource, bad) -> dict:
         "resource_split_section_partial": (part(section={"resource": data[:14]}), bad),
         "resource_split_section_past": (part(first=8, section={"resource": np.zeros(12, np.uint8)}), bad),
     }
+
+
+def _scene_bundles(messages):
+    """Each scene part in the same layout that the Python network sender writes."""
+    from types import SimpleNamespace
+    from dataclasses import replace
+    from caliper import _scene_pieces
+    out = {}
+    for index, (name, message) in enumerate(list(messages.items()), 100):
+        if not isinstance(message, w.SceneUpdate) or not message.arrays or message.program or message.part == "camera":
+            continue
+        if message.params.get("form") == "encoded":
+            continue
+        batch = SimpleNamespace(part=message.part, arrays=message.arrays, params=message.params, packed=None)
+        piece = _scene_pieces.route(batch)
+        names, resources = _scene_pieces.pack(batch, piece)
+        program = f"scene.{index}"
+        counts = {}
+        for rid, count, stride, data, width, height in resources:
+            out[name.replace("scene_update_", "resource_scene_", 1) + "_bundle_" + rid] = w.Resource(program, rid, 7, count, stride, data, width, height)
+            counts[rid] = count
+        out[name + "_bundle"] = replace(message, arrays={}, program=program, piece=_scene_pieces.PINS[piece],
+                                         resources=counts, names=names)
+    return out

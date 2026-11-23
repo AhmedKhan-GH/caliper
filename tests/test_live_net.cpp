@@ -3196,3 +3196,58 @@ TEST_CASE("live/net: the piece form's inbox pairs a scene program's versions wit
     CHECK_FALSE(caliper_live::scene_piece_arrays(im, 0, &arrays, &owned, &why));
     CHECK(why.find("another layout") != std::string::npos);
 }
+
+
+TEST_CASE("live/net: every scene piece restores its source arrays and rejects malformed resources") {
+    namespace wire = caliper_net::wire;
+    for (const char* suffix : {"lines_segments", "lines_strip", "lines_strips", "lines_edges", "lines_unused",
+                              "lines_singletons", "arrows", "boxes", "boxes_2d", "mesh", "mesh_normals",
+                              "mesh_textured", "mesh_colors", "image_depth", "image_depth_f32",
+                              "image_segmentation", "image_segmentation_u16"}) {
+        CAPTURE(suffix);
+        std::vector<std::vector<uint8_t>> frames;
+        auto load = [&](const std::string& name) {
+            std::ifstream in(std::string(CALIPER_TEST_SOURCE_ROOT) + "/tests/fixtures/wire_v3/v3_2/" + name + ".bin",
+                             std::ios::binary);
+            REQUIRE(in.good());
+            frames.emplace_back(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+            wire::Message out;
+            REQUIRE(wire::decode(frames.back().data(), frames.back().size(), &out).ok());
+            return out;
+        };
+        auto source_message = load(std::string("scene_update_") + suffix);
+        auto piece_message = load(std::string("scene_update_") + suffix + "_bundle");
+        const auto& source = std::get<wire::SceneUpdate>(source_message);
+        auto& piece = std::get<wire::SceneUpdate>(piece_message);
+        caliper_live::ScenePieceInbox inbox;
+        for (const auto& resource : piece.resources.members()) {
+            const auto message = load(std::string("resource_scene_") + suffix + "_bundle_" + resource.first);
+            const auto& r = std::get<wire::Resource>(message);
+            REQUIRE(inbox.take(r, std::make_shared<const std::vector<uint8_t>>(r.data.data, r.data.data + r.data.size)));
+        }
+        std::string why;
+        auto owner = inbox.pair(piece, nullptr, &why);
+        REQUIRE_MESSAGE(owner, why);
+        std::vector<wire::Section> arrays;
+        std::vector<std::vector<uint8_t>> owned;
+        const uint32_t dims = source.part == "image" ? 3u : uint32_t(source.arrays[0].shape[1]);
+        REQUIRE_MESSAGE(caliper_live::scene_piece_arrays(piece, dims, &arrays, &owned, &why), why);
+        REQUIRE(arrays.size() == source.arrays.size());
+        for (const auto& before : source.arrays) {
+            const auto after = std::find_if(arrays.begin(), arrays.end(), [&](const auto& a) { return a.name == before.name; });
+            REQUIRE(after != arrays.end());
+            CHECK(before.dtype == after->dtype);
+            CHECK(before.shape == after->shape);
+            REQUIRE(before.size == after->size);
+            CHECK(std::memcmp(before.data, after->data, before.size) == 0);
+        }
+        // The first drawing buffer is mandatory and its stride must match the library layout.
+        const std::string name = piece.piece.find("name")->as_string();
+        const std::string buffer = name == "lines" ? "segments" : name == "mesh" ? "vertices" :
+                                   name == "depth" || name == "segmentation" ? "pixels" : name;
+        for (auto& r : piece.paired) if (r.name == buffer) r.shape.back() += 4;
+        arrays.clear(); owned.clear();
+        CHECK_FALSE(caliper_live::scene_piece_arrays(piece, dims, &arrays, &owned, &why));
+        CHECK_FALSE(why.empty());
+    }
+}

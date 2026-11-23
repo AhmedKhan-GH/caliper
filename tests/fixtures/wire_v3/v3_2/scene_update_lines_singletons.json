@@ -1,0 +1,85 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 300,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 214,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 2,
+    "type": 112
+  },
+  "meta": {
+    "mode": "strips",
+    "part": "lines",
+    "path": "singleton",
+    "sections": [
+      {
+        "dtype": 0,
+        "name": "positions",
+        "shape": [
+          3,
+          3
+        ]
+      },
+      {
+        "dtype": 4,
+        "name": "strip_lengths",
+        "shape": [
+          3
+        ]
+      }
+    ],
+    "seq": 41,
+    "stamp_ns": 81234567894024,
+    "sub": 2,
+    "view": "world"
+  },
+  "meta_offset": 32,
+  "name": "v3_2/scene_update_lines_singletons",
+  "section_lengths": [
+    36,
+    12
+  ],
+  "sections": [
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 36,
+      "name": "positions",
+      "offset": 248,
+      "shape": [
+        3,
+        3
+      ],
+      "values": [
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.5,
+        0.0,
+        2.0,
+        0.25
+      ]
+    },
+    {
+      "dtype": 4,
+      "encoding": 0,
+      "length": 12,
+      "name": "strip_lengths",
+      "offset": 288,
+      "shape": [
+        3
+      ],
+      "values": [
+        1,
+        1,
+        1
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}

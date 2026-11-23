@@ -232,7 +232,7 @@ class Subscriber(threading.Thread):
 
     def run(self):
         with connect(self.url, max_size=None, compression=None) as ws:
-            ws.send(w.encode(w.Hello("viewer", [w.CAP_SCENES])))
+            ws.send(w.encode(w.Hello("viewer", [w.CAP_SCENES, w.CAP_SCENE_PIECES])))
             subscribed = False
             while not self.stop.is_set():
                 try:

@@ -7,6 +7,10 @@ Needs numpy and pytest only: _wire imports no torch and no native extension, so
 ``pytest --noconftest python/tests/test_wire.py`` runs it without them."""
 from __future__ import annotations
 
+import legacy_scene_encoder
+legacy_scene_encoder.install()
+
+
 import importlib.util
 import json
 import math

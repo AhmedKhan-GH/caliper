@@ -130,14 +130,11 @@ def test_scene_parts_through_the_hub(hub, monkeypatch):
             c = await v.expect(w.SceneClear, lambda m: m.path == "dyn")
             assert not c.reset
             # a split update through the hub
-            monkeypatch.setattr(_net_scene, "FRAME_ROOM", 16 * 1024)
-            monkeypatch.setattr(_net_scene, "PIECE_BYTES", 24 * 1024)
+            from caliper import _programs
+            monkeypatch.setattr(_programs, "PART_BYTES", 24 * 1024)
             big = torch.arange(3 * 3000, dtype=torch.float32).reshape(3000, 3)
             sc.mesh("big", big)
-            su = w.SplitUpdates()
-            whole = None
-            while whole is None:
-                whole = su.add(await v.update("big", "mesh"))
+            whole = await v.update("big", "mesh")
             np.testing.assert_array_equal(whole.arrays["positions"].array(), big.numpy())
             # A viewer that subscribes while the first one watches gets the hub's own state.
             async with Viewer(hub, caps=PIECES) as late:                        # the hub's own state
@@ -155,9 +152,8 @@ def test_scene_parts_through_the_hub(hub, monkeypatch):
                 assert kinds == want
                 assert all(m.state for m in got)
                 pieces = [m for m in got if isinstance(m, w.SceneUpdate) and m.path == "big"]
-                assert len(pieces) >= 2 and [m.split["piece"] for m in pieces] == list(range(len(pieces)))
-                su = w.SplitUpdates()
-                whole = [su.add(m) for m in pieces][-1]
+                assert len(pieces) == 1 and pieces[0].program and pieces[0].split is None
+                whole = pieces[0]
                 np.testing.assert_array_equal(whole.arrays["positions"].array(), big.numpy())
 
     run(go(), timeout=60)
@@ -187,10 +183,10 @@ def test_a_viewer_without_scene_pieces_through_the_hub_gets_the_structure(hub):
     sc.lines("edges", torch.rand(4, 3), static=True)
 
     async def go():
-        async with Viewer(hub) as old:
+        async with Viewer(hub, caps=(w.CAP_SCENES,)) as old:
             await old.subscribe(1, "world")
-            state = [await old.expect(object, lambda m: isinstance(m, SCENE_MSGS)) for _ in range(3)]
-            assert [_kind(m) for m in state] == ["reset", "cam:camera", "edges:lines"]
+            state = [await old.expect(object, lambda m: isinstance(m, SCENE_MSGS)) for _ in range(2)]
+            assert [_kind(m) for m in state] == ["reset", "cam:camera"]
             assert not [m for m in old.inbox if isinstance(m, (w.Resource, w.SceneUpdate))]
 
     run(go(), timeout=60)

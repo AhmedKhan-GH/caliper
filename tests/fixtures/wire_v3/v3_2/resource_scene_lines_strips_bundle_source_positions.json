@@ -1,0 +1,109 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 228,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 140,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 130
+  },
+  "meta": {
+    "count": 5,
+    "program": "scene.113",
+    "resource": "source_positions",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "resource",
+        "shape": [
+          60
+        ]
+      }
+    ],
+    "step": 7,
+    "stride": 12
+  },
+  "meta_offset": 28,
+  "name": "v3_2/resource_scene_lines_strips_bundle_source_positions",
+  "section_lengths": [
+    60
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 60,
+      "name": "resource",
+      "offset": 168,
+      "shape": [
+        60
+      ],
+      "values": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        128,
+        63,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        128,
+        63,
+        0,
+        0,
+        128,
+        63,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        128,
+        63,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        128,
+        63,
+        0,
+        0,
+        128,
+        63
+      ]
+    }
+  ],
+  "type_name": "resource"
+}

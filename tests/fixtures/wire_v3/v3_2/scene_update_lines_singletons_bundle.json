@@ -1,0 +1,42 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 313,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 289,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 112
+  },
+  "meta": {
+    "arrays": [
+      "positions",
+      "strip_lengths"
+    ],
+    "mode": "strips",
+    "part": "lines",
+    "path": "singleton",
+    "piece": {
+      "name": "lines",
+      "version": 1
+    },
+    "program": "scene.139",
+    "resources": {
+      "info": 1,
+      "segments": 2,
+      "source_positions": 3,
+      "source_strip_lengths": 3
+    },
+    "seq": 41,
+    "stamp_ns": 81234567894024,
+    "sub": 2,
+    "view": "world"
+  },
+  "meta_offset": 24,
+  "name": "v3_2/scene_update_lines_singletons_bundle",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "scene_update"
+}

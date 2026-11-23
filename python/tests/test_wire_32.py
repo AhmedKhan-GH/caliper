@@ -10,6 +10,10 @@ docs/reference/wire-protocol-3-2.md.
 Needs numpy and pytest only: ``pytest --noconftest python/tests/test_wire_32.py``."""
 from __future__ import annotations
 
+import legacy_scene_encoder
+legacy_scene_encoder.install()
+
+
 import json
 import re
 import struct
@@ -63,7 +67,7 @@ def test_frame_matches_description(name):
         h["magic"], h["major"], h["minor"], h["type"], h["flags"], h["frame_len"],
         h["meta_len"], h["section_count"], h["reserved"])
     # An instance of a piece carries its manifest and its WGSL, thus a larger frame.
-    most = 2048 if "_piece" in name else 9000 if name.endswith("_texture_wide") else 600
+    most = 17000 if "_bundle" in name else 2048 if "_piece" in name else 9000 if name.endswith("_texture_wide") else 600
     assert h["minor"] == w.MINOR_3_2 == 2 and h["flags"] == 0 and len(buf) <= most
     f = w.decode_frame(buf)
     assert f.meta == desc["meta"]

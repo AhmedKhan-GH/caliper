@@ -1,0 +1,53 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 298,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 274,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 112
+  },
+  "meta": {
+    "arrays": [
+      "positions"
+    ],
+    "color": [
+      255,
+      80,
+      80,
+      255
+    ],
+    "part": "points",
+    "path": "current",
+    "piece": {
+      "name": "points",
+      "version": 1
+    },
+    "program": "scene.108",
+    "resources": {
+      "points": 1
+    },
+    "seq": 41,
+    "stamp_ns": 81234567893123,
+    "stats": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      -0.25,
+      -0.25
+    ],
+    "sub": 2,
+    "view": "landscape"
+  },
+  "meta_offset": 24,
+  "name": "v3_2/scene_update_points_color_bundle",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "scene_update"
+}

@@ -1,0 +1,97 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 216,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 140,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 130
+  },
+  "meta": {
+    "count": 4,
+    "program": "scene.112",
+    "resource": "source_positions",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "resource",
+        "shape": [
+          48
+        ]
+      }
+    ],
+    "step": 7,
+    "stride": 12
+  },
+  "meta_offset": 28,
+  "name": "v3_2/resource_scene_lines_strip_bundle_source_positions",
+  "section_lengths": [
+    48
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 48,
+      "name": "resource",
+      "offset": 168,
+      "shape": [
+        48
+      ],
+      "values": [
+        0,
+        0,
+        0,
+        191,
+        0,
+        0,
+        0,
+        191,
+        205,
+        204,
+        204,
+        189,
+        0,
+        0,
+        128,
+        190,
+        0,
+        0,
+        128,
+        190,
+        154,
+        153,
+        25,
+        190,
+        0,
+        0,
+        0,
+        0,
+        205,
+        204,
+        204,
+        189,
+        205,
+        204,
+        76,
+        190,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        128,
+        190
+      ]
+    }
+  ],
+  "type_name": "resource"
+}

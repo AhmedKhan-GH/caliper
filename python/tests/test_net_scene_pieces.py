@@ -205,28 +205,20 @@ def test_each_color_source_radii_and_2d_give_their_bytes(server):
     run(body())
 
 
-def test_older_viewers_and_the_switch_get_the_per_shape_part(server, monkeypatch):
+def test_older_viewers_get_structure_only(server):
     sc = caliper.scene("world")
     pos = torch.rand(5, 3)
 
     async def body():
         async with Viewer(server) as new, Viewer(server, caps=(w.CAP_SCENES,)) as old:
-            assert w.CAP_SCENE_PIECES in old.welcome.capabilities     # the producer offers the form
             await new.subscribe(1, "world")
             await old.subscribe(1, "world")
             assert sc.points("cloud", pos)
-            u = await new.update("cloud")
-            assert u.program is not None
-            o = await old.update("cloud")
-            assert o.program is None and not [m for m in old.got if isinstance(m, w.Resource)]
-            np.testing.assert_array_equal(o.arrays["positions"].array(), pos.numpy())
-        monkeypatch.setenv("CALIPER_SCENE_SHAPES", "builtin")
-        async with Viewer(server) as later:
-            await later.subscribe(3, "world")
-            u = await later.update("cloud", state=True)
-            assert u.program is None
-            np.testing.assert_array_equal(u.arrays["positions"].array(), pos.numpy())
-            assert not [m for m in later.got if isinstance(m, w.Resource)]
+            assert sc.camera("camera", width=8, height=6, focal=5, static=True)
+            assert (await new.update("cloud")).program is not None
+            await old.update("camera", "camera")
+            assert not [m for m in old.got if isinstance(m, w.Resource)]
+            assert not [m for m in old.got if isinstance(m, w.SceneUpdate) and m.part != "camera"]
     run(body())
 
 
@@ -328,3 +320,71 @@ def test_color_and_grey_images_in_the_piece_form(server):
                     np.testing.assert_array_equal(px[..., :3], want)
                     assert (px[..., 3] == 255).all() and u.params["opacity"] == 0.5
     run(body())
+
+
+def test_every_library_layout_preserves_the_source_arrays():
+    from pathlib import Path
+    from scene_piece_reader import arrays
+    folder = Path(__file__).resolve().parents[2] / "tests/fixtures/wire_v3/v3_2"
+    checked = set()
+    for path in folder.glob("scene_update_*_bundle.bin"):
+        update = w.decode(path.read_bytes())
+        base = path.stem.removesuffix("_bundle")
+        source = w.decode((folder / (base + ".bin")).read_bytes())
+        resources = {rid: w.decode((folder / (path.stem.replace("scene_update_", "resource_scene_", 1) + "_" + rid + ".bin")).read_bytes())
+                     for rid in update.resources}
+        first = next(iter(source.arrays.values()))
+        dims = first.shape[1] if source.part != "image" else 3
+        back = arrays(update, resources, dims)
+        for name, section in source.arrays.items():
+            np.testing.assert_array_equal(back[name], section.array(), err_msg=path.stem + ":" + name)
+        checked.add(update.piece["name"])
+    assert checked == set(_scene_pieces.PINS)
+
+
+def test_lines_preserve_unused_vertices_and_singleton_strips():
+    from types import SimpleNamespace
+    from scene_piece_reader import arrays
+    positions = np.arange(15, dtype="<f4").reshape(5, 3)
+    for extra, params in (({"indices": np.array([[0, 1]], "<i4")}, {"mode": "edges"}),
+                          ({"strip_lengths": np.array([1, 3, 1], "<i4")}, {"mode": "strips"})):
+        batch = SimpleNamespace(part="lines", arrays={"positions": positions, **extra}, params=params, packed=None)
+        names, packed = _scene_pieces.pack(batch, "lines")
+        update = w.SceneUpdate(1, "s", 1, 0, "line", "lines", {}, params,
+                               program="scene.1", piece=_scene_pieces.PINS["lines"], names=names,
+                               resources={name: count for name, count, *_ in packed})
+        resources = {name: w.Resource("scene.1", name, 0, count, stride, data, width, height)
+                     for name, count, stride, data, width, height in packed}
+        back = arrays(update, resources)
+        for name, expected in batch.arrays.items():
+            np.testing.assert_array_equal(back[name], expected)
+
+
+@pytest.mark.parametrize("format", ["PNG", "JPEG"])
+def test_encoded_images_become_bounded_texture_resources(format):
+    import io
+    from types import SimpleNamespace
+    from PIL import Image
+    image = Image.new("RGB", (7, 5), (240, 40, 80))
+    stream = io.BytesIO()
+    image.save(stream, format=format)
+    batch = SimpleNamespace(part="image", arrays={"pixels": np.frombuffer(stream.getvalue(), np.uint8)},
+                            params={"form": "encoded", "format": format.lower()}, packed=None)
+    assert _scene_pieces.route(batch) == "image"
+    assert batch.arrays["pixels"].shape == (5, 7, 4)
+    assert batch.params == {"form": "color"}
+    _, resources = _scene_pieces.pack(batch, "image")
+    assert resources[0][1:3] == (35, 4)
+
+
+def test_encoded_images_refuse_malformed_and_oversize_headers():
+    import io
+    from types import SimpleNamespace
+    from PIL import Image
+    stream = io.BytesIO()
+    Image.new("RGB", (8193, 1)).save(stream, format="PNG")
+    for data in (b"not an image", stream.getvalue()):
+        batch = SimpleNamespace(part="image", arrays={"pixels": np.frombuffer(data, np.uint8)},
+                                params={"form": "encoded", "format": "png"}, packed=None)
+        with pytest.raises(ValueError):
+            _scene_pieces.route(batch)

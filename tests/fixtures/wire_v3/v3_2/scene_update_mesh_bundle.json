@@ -1,0 +1,55 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 356,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 332,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 112
+  },
+  "meta": {
+    "arrays": [
+      "positions",
+      "indices",
+      "values"
+    ],
+    "colormap": 0,
+    "flags": 0,
+    "part": "mesh",
+    "path": "surface",
+    "piece": {
+      "name": "mesh",
+      "version": 1
+    },
+    "program": "scene.118",
+    "resources": {
+      "faces": 6,
+      "tex": 0,
+      "vertices": 4
+    },
+    "seq": 39,
+    "stamp_ns": 81234567893623,
+    "stats": [
+      -1.5,
+      1.0,
+      -1.0,
+      1.0,
+      -1.0,
+      1.0,
+      -0.75,
+      0.5
+    ],
+    "sub": 2,
+    "view": "landscape",
+    "vmax": 2.0,
+    "vmin": -4.0
+  },
+  "meta_offset": 24,
+  "name": "v3_2/scene_update_mesh_bundle",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "scene_update"
+}
