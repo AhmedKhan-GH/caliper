@@ -444,3 +444,179 @@ def test_dtype_overflow_refuses_before_hook_install():
     with pytest.raises(InterventionError, match="dtype range"):
         service.install(add_spec(vector=[1e100] * 64))
     assert not any(m._forward_hooks for m in model.modules())
+
+
+@pytest.fixture
+def public_watch(monkeypatch):
+    import caliper
+    from caliper import _controls, _managed
+    ctl = _controls.Controls()
+    monkeypatch.setattr(_controls, "CONTROLS", ctl)
+    monkeypatch.setattr(caliper, "_CTL", ctl)
+    monkeypatch.setattr(caliper, "_auto_tried", True)
+    monkeypatch.setattr(_managed, "current", lambda: None)
+    monkeypatch.setattr(caliper, "serve", lambda: None)
+    return caliper, ctl
+
+
+def test_inference_watch_announces_capabilities_and_releases_resources(public_watch):
+    from caliper import _net_programs, _programs
+    from caliper.interp import publish
+    caliper, ctl = public_watch
+    model, tokenizer = make_fixture()
+    count = _net_programs._watches
+    handle = caliper.watch(model, activations=False, groups=False, scene=False)
+    try:
+        assert handle._run is None and "lr" not in ctl.params
+        assert _net_programs._watches == count + 1
+        assert set(_net_programs.capabilities()) == {"programs", "interventions"}
+        assert _programs._STATE["model"] is model and _programs._STATE["optimizer"] is None
+        service = ctl.intervention_service
+        service.configure(dictionary=dictionary_for(model), tokenizer=tokenizer, dictionary_id="fixture")
+        publish("intervention.example", torch.ones(2, 3))
+        service.set(add_spec())
+        caliper.step()
+        hook = next(iter(ctl._ivs.values())).hook
+        assert service.specifications() and not hook.removed
+    finally:
+        handle.remove()
+    assert hook.removed and service.dictionary is None
+    assert ctl.intervention_service is None and _net_programs._watches == count
+    assert _programs._STATE["model"] is None
+    handle.remove()
+    assert _net_programs._watches == count
+
+
+def test_training_watch_enables_capabilities_once(public_watch):
+    from caliper import _net_programs
+    caliper, ctl = public_watch
+    model, _ = make_fixture()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    count = _net_programs._watches
+    with caliper.watch(model, optimizer, activations=False, groups=False, scene=False):
+        assert _net_programs._watches == count + 1
+        assert ctl.intervention_service.model is model and "lr" in ctl.params
+    assert _net_programs._watches == count and "lr" not in ctl.params
+    assert ctl.intervention_service is None
+
+
+def test_old_watch_removal_preserves_new_inference_capabilities(public_watch):
+    from caliper import _net_programs
+    caliper, ctl = public_watch
+    first_model, _ = make_fixture()
+    second_model, _ = make_fixture()
+    count = _net_programs._watches
+    first = caliper.watch(first_model, activations=False, groups=False)
+    second = caliper.watch(second_model, activations=False, groups=False)
+    try:
+        assert _net_programs._watches == count + 2
+        first.remove()
+        assert _net_programs._watches == count + 1
+        assert ctl.intervention_service.model is second_model
+    finally:
+        first.remove()
+        second.remove()
+    assert _net_programs._watches == count
+
+
+@pytest.mark.parametrize("optimizer_watch", [False, True])
+def test_failed_public_attach_releases_capabilities_and_hooks(public_watch, monkeypatch, optimizer_watch):
+    from caliper import _net_programs, _programs
+    caliper, ctl = public_watch
+    model, _ = make_fixture()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01) if optimizer_watch else None
+    count = _net_programs._watches
+
+    def fail(*args):
+        raise ValueError("attachment failed")
+
+    monkeypatch.setattr(_programs, "attach", fail)
+    with pytest.raises(ValueError, match="attachment failed"):
+        caliper.watch(model, optimizer, activations=False, groups=False, scene=False)
+    assert _net_programs._watches == count and ctl.intervention_service is None
+    assert not any(m._forward_hooks or m._forward_pre_hooks for m in model.modules())
+    assert "lr" not in ctl.params
+
+
+def test_invalid_watch_model_releases_inference_capabilities(public_watch):
+    from caliper import _net_programs
+    caliper, _ = public_watch
+    count = _net_programs._watches
+    with pytest.raises(TypeError):
+        caliper.watch(object())
+    assert _net_programs._watches == count
+
+
+def test_matching_discriminators_are_accepted_and_missing_dictionary_is_refused():
+    from caliper._controls import Controls
+    model, _ = make_fixture()
+    ctl = Controls()
+    service = ctl.interventions_on(model)
+    try:
+        service.set(add_spec(op="add"))
+        before = service.state_dict()
+        with pytest.raises(InterventionError) as failure:
+            service.set({"kind": "clamp", "point": "layers.0.mlp_out", "feature": 1, "value": 0})
+        assert failure.value.code == "intervene.unknown_dictionary"
+        assert service.state_dict() == before
+    finally:
+        service.remove()
+
+
+def test_feature_encoder_failure_preserves_forward_and_ends_hook(controlled, monkeypatch):
+    model, tokenizer, ctl, service = controlled
+    ids = tokenizer("abc")["input_ids"]
+    baseline = model(ids).logits
+    service.set({"kind": "clamp", "point": "layers.0.mlp_out", "feature": 1, "value": 0})
+    ctl.step()
+    hook = next(iter(ctl._ivs.values())).hook
+
+    def fail(*args):
+        raise RuntimeError("fixture encoder failure")
+
+    monkeypatch.setattr(service.dictionary, "encode", fail)
+    torch.testing.assert_close(model(ids).logits, baseline, rtol=0, atol=0)
+    assert hook.removed and ctl.summary()["interventions"][0]["state"] == "ended"
+    torch.testing.assert_close(model(ids).logits, baseline, rtol=0, atol=0)
+    assert hook.calls == 1
+
+
+def test_add_changes_only_selected_tokens_at_the_point(case):
+    from caliper.interp import capture
+    model, tokenizer, service = case
+    ids = tokenizer("abc")["input_ids"].repeat(2, 1)
+    with capture(model, ["layers.1.mlp_out"]) as original:
+        model(ids)
+    expected = original["layers.1.mlp_out"].clone()
+    expected[1, 2] += torch.arange(64, dtype=expected.dtype) * 0.01
+    service.install({"kind": "add", "point": "layers.1.mlp_out", "vector": list(range(64)),
+                     "coefficient": 0.01, "positions": [2]})
+    with service.rows([1]), capture(model, ["layers.1.mlp_out"]) as observed:
+        model(ids)
+    torch.testing.assert_close(observed["layers.1.mlp_out"], expected, rtol=0, atol=1e-12)
+
+
+def test_managed_clean_source_skips_public_step_and_program_execution(public_watch, monkeypatch):
+    from caliper import _managed, _programs
+    caliper, ctl = public_watch
+    model, tokenizer = make_fixture()
+    watch = caliper.watch(model, activations=False, groups=False, scene=False)
+    service = ctl.intervention_service
+    service.configure(dictionary=dictionary_for(model), tokenizer=tokenizer, dictionary_id="fixture")
+    managed = object.__new__(_managed.ManagedRun)
+    managed._pkg = caliper
+    managed.stopping = False
+    callback = model.register_forward_hook(managed._forward)
+    program_steps = []
+    monkeypatch.setattr(_programs, "ACTIVE", True)
+    monkeypatch.setattr(_programs, "at_step", program_steps.append)
+    try:
+        service.set({"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "abc"})
+        caliper.step()
+        assert ctl.n == 1 and program_steps == [1]
+        assert service.specifications() and not service.executor.preparing_source
+        model(**tokenizer("xyz"))
+        assert ctl.n == 2 and program_steps == [1, 2]
+    finally:
+        callback.remove()
+        watch.remove()
