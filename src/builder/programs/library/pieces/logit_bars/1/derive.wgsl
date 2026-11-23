@@ -1,9 +1,8 @@
 fn text_row(row: u32) -> Text {
     let b = row*16u;
-    return Text(vec4<u32>(label_text[b],label_text[b+1u],label_text[b+2u],label_text[b+3u]),
-                vec4<u32>(label_text[b+4u],label_text[b+5u],label_text[b+6u],label_text[b+7u]),
-                vec4<u32>(label_text[b+8u],label_text[b+9u],label_text[b+10u],label_text[b+11u]),
-                vec4<u32>(label_text[b+12u],label_text[b+13u],label_text[b+14u],label_text[b+15u]));
+    var words: array<u32,16>;
+    for (var i=0u; i<16u; i++) { words[i]=label_text[b+i]; }
+    return bounded_text(words);
 }
 
 @compute @workgroup_size(16)

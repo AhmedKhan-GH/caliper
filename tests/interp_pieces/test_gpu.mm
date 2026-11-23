@@ -86,14 +86,21 @@ void check_pick(const mr::PieceDraw& draw, float x, float y, unsigned item) {
     CHECK(pick->item == item);
 }
 void no_overlap(const Published& nodes) {
-    for (unsigned i = 0; i < nodes.count; ++i) {
-        const float x = scalar<float>(nodes,i,0,48), y = scalar<float>(nodes,i,4,48), r = scalar<float>(nodes,i,12,48);
-        REQUIRE(std::isfinite(x)); REQUIRE(std::isfinite(y)); REQUIRE(r > 0);
-        for (unsigned j = 0; j < i; ++j) {
-            if (scalar<int>(nodes,i,24,48) != scalar<int>(nodes,j,24,48) ||
-                scalar<int>(nodes,i,28,48) != scalar<int>(nodes,j,28,48)) continue;
-            const float dx = std::abs(x - scalar<float>(nodes,j,0,48));
-            CHECK(dx > r + scalar<float>(nodes,j,12,48));
+    struct Placed { float x, radius, influence; unsigned index; };
+    std::map<std::pair<int,int>,std::vector<Placed>> cells;
+    for (unsigned i=0;i<nodes.count;++i) {
+        const float x=scalar<float>(nodes,i,0,48), y=scalar<float>(nodes,i,4,48), r=scalar<float>(nodes,i,12,48);
+        REQUIRE(std::isfinite(x)); REQUIRE(std::isfinite(y)); REQUIRE(r>0);
+        const auto key=std::make_pair(scalar<int>(nodes,i,24,48),scalar<int>(nodes,i,28,48));
+        cells[key].push_back({x,r,scalar<float>(nodes,i,36,48),i});
+    }
+    for (auto& [key,placed]:cells) {
+        std::sort(placed.begin(),placed.end(),[](const Placed& a,const Placed& b){ return a.x<b.x; });
+        for (unsigned i=1;i<placed.size();++i) {
+            const auto& a=placed[i-1]; const auto& b=placed[i];
+            CHECK(b.x-a.x>a.radius+b.radius);
+            CHECK(a.influence>=b.influence);
+            if (a.influence==b.influence) CHECK(a.index<b.index);
         }
     }
 }
@@ -209,6 +216,23 @@ TEST_CASE("graph layout has disjoint cells, stable bytes, labels, and sixteen ce
             dimmed += draw.color[p]+draw.color[p+1]+draw.color[p+2] > selected[p]+selected[p+1]+selected[p+2]+5;
         }
         CHECK(dimmed>100);
+        for (unsigned i=0;i<2;++i) {
+            const float t=0.37f, u=1-t;
+            const float x=u*u*u*scalar<float>(curves,i,0,48)+3*u*u*t*scalar<float>(curves,i,8,48)+
+                3*u*t*t*scalar<float>(curves,i,16,48)+t*t*t*scalar<float>(curves,i,24,48);
+            const float y=u*u*u*scalar<float>(curves,i,4,48)+3*u*u*t*scalar<float>(curves,i,12,48)+
+                3*u*t*t*scalar<float>(curves,i,20,48)+t*t*t*scalar<float>(curves,i,28,48);
+            const auto [px,py]=pixel(x,y);
+            const auto at=(py*size+px)*4;
+            CHECK(mr::identity_of(draw.ids,size,px,py)==0);
+            if (i==0) {
+                CHECK(draw.color[at+2]>draw.color[at]);
+                CHECK(draw.color[at+2]==selected[at+2]);
+            } else {
+                CHECK(draw.color[at]>draw.color[at+2]);
+                CHECK(draw.color[at]>selected[at]+20);
+            }
+        }
         output.add("graph",piece,data,draw,Json::object(),picks);
         output.finish();
     }
@@ -247,11 +271,13 @@ TEST_CASE("example pages retain eight row picks and two hundred dynamic token la
             HostTensor::of("activations","f32",{16,25},activations),HostTensor::of("example_ids","i32",{16},ids),
             HostTensor::of("valid_tokens","i32",{16},counts),text};
         std::set<int> seen;
+        mr::PieceDraw draw(*metal.backend,size);
+        draw.install(piece,piece.name);
         auto& output=exporter();
         for (unsigned page=0;page<2;++page) {
             @autoreleasepool {
                 const auto data=mr::run_derive(metal.device,piece,inputs,{{"page",page}});
-                mr::PieceDraw draw(*metal.backend,size); set_resources(draw,piece,data);
+                for (const auto& r:data) draw.set(r.id,r.bytes,r.count,&r);
                 Json params=Json::object(); params.set("page",std::uint64_t(page));
                 REQUIRE(draw.draw(frame(piece,params)));
                 const auto labels=draw.rt.labels(); REQUIRE(labels.size()==200);
@@ -298,6 +324,16 @@ TEST_CASE("output bars retain baseline probabilities and recovery cells retain t
                 int top=int(size);
                 for (unsigned y=0;y<size;++y) if (mr::identity_of(draw.ids,size,px,y)==i+1) { top=int(y); break; }
                 CHECK(std::abs(top-expected_y)<=2);
+                const auto [ghost_x,baseline_y]=pixel(x-0.065f,-0.72f+1.44f*probs[i]);
+                int ghost_top=int(size), current_top=int(size);
+                for (unsigned y=0;y<size;++y) {
+                    if (ghost_top==int(size) && mr::identity_of(draw.ids,size,ghost_x,y)==i+1) ghost_top=int(y);
+                    const auto at=(y*size+px)*4;
+                    if (current_top==int(size) && draw.color[at+1]>150 && draw.color[at]<90) current_top=int(y);
+                }
+                CHECK(std::abs(ghost_top-baseline_y)<=2);
+                const auto current_y=pixel(x,-0.72f+1.44f*probs[10+i]).second;
+                CHECK(std::abs(current_top-current_y)<=2);
             }
             output.add("logits",piece,data,draw,Json::object(),picks);
         }
@@ -317,6 +353,37 @@ TEST_CASE("output bars retain baseline probabilities and recovery cells retain t
             output.add("recovery",piece,data,draw,Json::object(),picks);
         }
         output.finish();
+    }
+}
+
+TEST_CASE("dynamic labels retain complete UTF-8 characters at the byte limit") {
+    @autoreleasepool {
+        mr::Metal metal;
+        if (!metal.backend) CALIPER_SKIP_NO_GPU(metal.why);
+        const std::vector<std::string> raw={std::string(63,'a')+"\xc3",std::string(62,'b')+"\xc3\xa9",
+            std::string(61,'c')+"\xf0\x9f\x8c",std::string(60,'d')+"\xf0\x9f\x8c\x90"};
+        const std::vector<std::string> expected={std::string(63,'a'),raw[1],std::string(61,'c'),raw[3]};
+        for (const std::string name:{"attribution_graph","token_strip","logit_bars"}) {
+            @autoreleasepool {
+                CAPTURE(name);
+                const auto piece=ip::load(name);
+                std::vector<HostTensor> inputs;
+                if (name=="attribution_graph") inputs=graph_tensors();
+                else if (name=="token_strip") inputs={
+                    HostTensor::of("tokens","i32",{16,25},std::vector<std::int32_t>(400,1)),
+                    HostTensor::of("activations","f32",{16,25},std::vector<float>(400,0.5f)),
+                    HostTensor::of("example_ids","i32",{16},std::vector<std::int32_t>(16,1)),
+                    HostTensor::of("valid_tokens","i32",{16},std::vector<std::int32_t>(16,25)),text_tensor(400,"word ")};
+                else inputs={HostTensor::of("probs","f32",{2,10},std::vector<float>(20,0.5f)),
+                    HostTensor::of("tokens","i32",{10},std::vector<std::int32_t>(10,1)),text_tensor(10,"word ")};
+                for (auto& input:inputs) if (input.var=="label_text")
+                    for (unsigned i=0;i<raw.size();++i) std::memcpy(input.bytes.data()+64*i,raw[i].data(),64);
+                const auto data=mr::run_derive(metal.device,piece,inputs,{});
+                mr::PieceDraw draw(*metal.backend,size); set_resources(draw,piece,data); REQUIRE(draw.draw(frame(piece)));
+                const auto labels=draw.rt.labels(); REQUIRE(labels.size()>=4);
+                for (unsigned i=0;i<4;++i) CHECK(labels[i].text==expected[i]);
+            }
+        }
     }
 }
 CALIPER_GPU_TEST_MAIN()

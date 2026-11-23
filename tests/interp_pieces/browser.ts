@@ -52,8 +52,14 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
     const fixture = process.env.CALIPER_INTERP_PIECES_OUT ?? path.join(REPO, 'cmake-build-release/tests/interp_pieces/out');
     const wasm = process.env.CALIPER_WASM_DIR ?? path.join(REPO, 'python/caliper/_web');
     const files = ['caliper-views-loader.js', 'caliper-views.js', 'caliper-views.wasm'];
-    test.skip(!fs.existsSync(path.join(fixture, 'frames.bin')), 'The offscreen native fixture requires a Metal backend.');
-    test.skip(!files.every((f) => fs.existsSync(path.join(wasm, f))), 'The WebAssembly views are absent.');
+    const hasFixture = fs.existsSync(path.join(fixture, 'frames.bin'));
+    const hasViews = files.every((f) => fs.existsSync(path.join(wasm, f)));
+    if (process.env.CALIPER_REQUIRE_INTERP_PIECES === '1') {
+      expect(hasFixture, 'Metal is available, and CTest must export the interpretation fixture.').toBe(true);
+      expect(hasViews, 'The required WebAssembly views must exist.').toBe(true);
+    }
+    test.skip(!hasFixture, 'The offscreen native fixture requires a Metal backend.');
+    test.skip(!hasViews, 'The WebAssembly views are absent.');
     test.setTimeout(180_000);
     const plan = JSON.parse(fs.readFileSync(path.join(fixture, 'plan.json'), 'utf8'));
     const picks = JSON.parse(fs.readFileSync(path.join(fixture, 'picks.json'), 'utf8'));

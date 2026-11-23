@@ -49,8 +49,7 @@ fn copy_text(row: u32, number: u32, prefix: u32) {
             words[b/4u] = words[b/4u] | (digits[count-j-1u] << (8u*(b%4u)));
         }
     }
-    strings[row] = Text(vec4<u32>(words[0],words[1],words[2],words[3]), vec4<u32>(words[4],words[5],words[6],words[7]),
-                       vec4<u32>(words[8],words[9],words[10],words[11]), vec4<u32>(words[12],words[13],words[14],words[15]));
+    strings[row] = bounded_text(words);
 }
 
 @compute @workgroup_size(64)

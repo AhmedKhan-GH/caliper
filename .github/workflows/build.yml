@@ -351,6 +351,8 @@ jobs:
           npm ci
           npx playwright install chromium-headless-shell
           log="$RUNNER_TEMP/draw-parity-browser.log"
+          # CTest exports the interpretation fixtures before this browser step.
+          if [ "$app" -eq 0 ]; then export CALIPER_REQUIRE_INTERP_PIECES=1; fi
           CALIPER_WASM_DIR="$RUNNER_TEMP/draw-parity-views" CALIPER_DRAW_PARITY_DIR="$out" \
           CALIPER_DRAW_PARITY_CAPTURES="$RUNNER_TEMP/draw-parity-captures" \
           CALIPER_PYTHON="$RUNNER_TEMP/acceptance-py/bin/python" \
