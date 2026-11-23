@@ -254,8 +254,8 @@ def test_a_piece_without_a_derive_half_is_only_relayed(monkeypatch):
     assert ctl.posts[-1][1].meta["op"] == "remove"
 
 
-def _resource_frame(rid, data, pid="r", stride=4):
-    return w.encode_frame(P.RESOURCE_TYPE, {"program": pid, "resource": rid, "step": 1,
+def _resource_frame(rid, data, pid="r", stride=4, step=1):
+    return w.encode_frame(P.RESOURCE_TYPE, {"program": pid, "resource": rid, "step": step,
                                             "count": len(data) // stride, "stride": stride},
                           [w.Section(w.SECTION_RESOURCE, int(w.DType.U8), (len(data),), memoryview(data))])
 
@@ -515,3 +515,78 @@ def test_both_senders_relay_the_draw_half_and_send_resources_to_viewers_with_res
     assert all(f.meta["count"] == len(rows) and f.section(w.SECTION_RESOURCE).shape == (len(rows) * 24,)
                for f in arcs)
     assert not [f for f in other if f.type in (w.MsgType.PROGRAM, P.RESOURCE_TYPE)]
+
+
+class _Reader(threading.Thread):
+    """A viewer with ``resources`` on a thread of its own: it keeps the program and step of each
+    RESOURCE and the close code of a connection that the server closed."""
+
+    def __init__(self, url):
+        super().__init__(daemon=True)
+        self.url = url
+        self.got = []
+        self.closed = None
+        self.stop = threading.Event()
+
+    def run(self):
+        asyncio.run(self._read())
+
+    async def _read(self):
+        from websockets.asyncio.client import connect
+        from websockets.exceptions import ConnectionClosed
+        caps = [w.CAP_CONTROLS, w.CAP_SELECTION, w.CAP_PROGRAMS, w.CAP_RESOURCES]
+        try:
+            async with connect(self.url, max_size=None, compression=None, ping_interval=None,
+                               close_timeout=1) as ws:
+                await ws.send(w.encode(w.Hello("viewer", caps, {"name": "test", "version": "0"})))
+                while not self.stop.is_set():
+                    try:
+                        f = w.decode_frame(await asyncio.wait_for(ws.recv(), 0.05))
+                    except asyncio.TimeoutError:
+                        continue
+                    if f.type == P.RESOURCE_TYPE:
+                        self.got.append((f.meta["program"], f.meta["step"]))
+        except ConnectionClosed as e:
+            self.closed = e.rcvd.code if e.rcvd is not None else -1
+
+
+def _wait(cond, what, timeout=60.0):
+    deadline = time.monotonic() + timeout
+    while not cond():
+        assert time.monotonic() < deadline, what
+        time.sleep(0.01)
+
+
+def test_two_programs_at_the_published_limit_reach_one_viewer_in_turn(server, watching, monkeypatch):
+    """Two instances that publish 8 MiB each at one pass, as two of the library's points@1 do. The frames
+    posted for the viewer and not queued yet count toward its bound, thus the second program skips the
+    pass where both would overflow the 16 MiB queue, the viewer stays connected, and the program that it
+    skipped goes first at the next pass."""
+    reader = _Reader(server.stream_url)
+    reader.start()
+    try:
+        _wait(lambda: [ln for c in P._controls_ports() if c.server is server for ln in P._resource_links(c)],
+              "the viewer attaches")
+        ctl, = [c for c in P._controls_ports() if c.server is server]
+        gate = threading.Lock()
+        flush = ctl.flush
+
+        def gated(*a, **kw):
+            with gate:
+                return flush(*a, **kw)
+        monkeypatch.setattr(ctl, "flush", gated)
+        progs = [P._Program(pid, {}, "", None, "") for pid in ("a", "b")]
+        for p in progs:
+            p.kind = "piece"
+        for step in range(1, 5):
+            with gate:                                   # the whole pass is posted before one flush
+                P._publish_pass([(p, [_resource_frame("points", bytes(P.PUBLISHED_BYTES_MAX), p.id, 32, step)])
+                                 for p in progs])
+            _wait(lambda: reader.closed is not None or any(s == step for _p, s in reader.got),
+                  f"the viewer gets a version of step {step}")
+            assert reader.closed is None, f"the server closed the viewer with {reader.closed}"
+        assert reader.got == [("a", 1), ("b", 2), ("a", 3), ("b", 4)]
+        assert [p.skipped for p in progs] == [2, 2]
+    finally:
+        reader.stop.set()
+        reader.join(10)
