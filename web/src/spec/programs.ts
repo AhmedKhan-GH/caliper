@@ -153,7 +153,11 @@ export class ProgramViews {
         assetQuery: `?token=${encodeURIComponent(this.token)}`,
         onEvent: (e: { view: string; type: string; detail: unknown }) => this.onEvent(panel.id, e.type, e.detail),
       });
-      this.feed(m);
+      // The module starts its WebGPU device after the mount returns: it takes programs once ready.
+      void m.handle.ready.then(() => {
+        this.feed(m);
+        this.onChange();
+      });
     } catch (e) {
       m.failed = e instanceof Error ? e.message : String(e);
     } finally {
@@ -168,8 +172,7 @@ export class ProgramViews {
     if (!h) return;
     const wanted = new Set(m.programs.filter((p) => p.state === 'ready').map((p) => p.id));
     for (const id of [...m.fed.keys()])
-      if (!wanted.has(id)) {
-        h.feedProgram({ op: 'remove', id });
+      if (!wanted.has(id) && h.feedProgram({ op: 'remove', id })) {
         m.fed.delete(id);
         m.params.delete(id);
       }
@@ -177,14 +180,14 @@ export class ProgramViews {
       if (p.state !== 'ready' || !p.instance) continue;
       const pin = JSON.stringify((p.instance as { piece?: unknown }).piece ?? null);
       const params = { ...(p.params ?? {}), ...this.localParams(p.id) };
+      // Each is marked as sent only when the module took it, so a later round sends it again.
       if (m.fed.get(p.id) !== pin) {
-        h.feedProgram({ ...p.instance, params });
+        if (!h.feedProgram({ ...p.instance, params })) continue;
         m.fed.set(p.id, pin);
         m.params.set(p.id, JSON.stringify(params));
         for (const k of [...m.versions.keys()]) if (k.startsWith(`${p.id}/`)) m.versions.delete(k);
       } else if (m.params.get(p.id) !== JSON.stringify(params)) {
-        h.feedProgram({ op: 'params', id: p.id, params });
-        m.params.set(p.id, JSON.stringify(params));
+        if (h.feedProgram({ op: 'params', id: p.id, params })) m.params.set(p.id, JSON.stringify(params));
       }
       for (const r of p.resources) {
         const key = `${p.id}/${r.resource}`, v = `${r.step} ${r.base64.length} ${r.base64.slice(-16)}`;

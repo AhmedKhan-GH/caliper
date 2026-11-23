@@ -11,12 +11,15 @@
 // settings from Module.caliperConfig: {src, view, kind, header, compat, feed,
 // scene}; compat "true" asks for a WebGPU device in compatibility mode.
 //
-// With feed "page" there is no stream: the instance opens one empty scene view
-// named `view` (with `scene`, a JSON object {space, up, units, view_camera},
-// as a VIEWS entry gives it), and the page hands it the instances of pieces and
-// their resources through caliper_views_feed_program() and
-// caliper_views_feed_resource(). The browser's spec page does this with what
-// panel.data gives a viewer, which never opens the stream.
+// With feed "page" there is no stream: the instance draws one scene of its own
+// over the whole canvas, as the app's spec runtime draws a scene panel that
+// holds programs alone (a scene view of its own with box fit, through
+// draw_scene_view_in_rect, with the panel's `labels` and `scale_bar` from
+// `scene`, a JSON object), and the page hands it the instances of pieces
+// named for the panel `view` and their resources through
+// caliper_views_feed_program() and caliper_views_feed_resource(). The
+// browser's spec page does this with what panel.data gives a viewer, which
+// never opens the stream. Picks and selections go to Module.onEvent.
 //
 // What a person does in a view (a selection, a pick, a hover) comes out of
 // the view layer's event sink: it goes to the producer as an EVENT through
@@ -104,6 +107,11 @@ struct Page {
     // draw them (web_programs.h).
     std::unique_ptr<caliper_web::WebPrograms> programs;
     uint64_t programs_published = 0;
+    // feed "page": the scene that the page's programs draw in, with its own backend.
+    std::unique_ptr<caliper_gfx::Backend> page_gfx;
+    std::unique_ptr<caliper_live_views::SceneView> page_view;
+    caliper_live_views::SceneRectOptions page_options;
+    caliper_live_views::SceneRectState page_state;
     caliper_web::PollState poll;
     std::string adapter_text;
     std::string error;
@@ -707,6 +715,32 @@ void pump_programs() {
     }
 }
 
+// feed "page": the panel's scene over the whole canvas, drawn as the app's spec runtime draws
+// a scene panel's content, with the page's programs. A pick or a selection goes to the page.
+void draw_page_scene(float w, float h, float scale) {
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(w, h));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground |
+                                   ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollWithMouse;
+    if (ImGui::Begin("##caliper.page.scene", nullptr, flags)) {
+        g.page_options.draw_feed = g.programs ? g.programs->feed(g.cfg.view) : nullptr;
+        auto sink = [](const char* type, const std::string& detail) {
+            EM_ASM({
+                var cb = Module["onEvent"];
+                if (cb) cb(UTF8ToString($0), UTF8ToString($1), JSON.parse(UTF8ToString($2)));
+            }, g.cfg.view.c_str(), type, detail.c_str());
+            g.publish_soon = true;
+        };
+        caliper_live_views::draw_scene_view_in_rect(*g.page_view, scale, "##page.scene", ImVec2(0.0f, 0.0f), ImVec2(w, h),
+                                                    g.page_options, g.page_state, sink);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+}
+
 void frame() {
     const double t0 = emscripten_get_now();
     if (caliper_web::gfx_selftest_running() && g.renderer && g.renderer->gfx() &&
@@ -750,9 +784,13 @@ void frame() {
 
     g.renderer->new_frame();
     ImGui::NewFrame();
-    pin_single_view(fs.css_w, fs.css_h);
-    caliper_core_hosted_frame(g.core, 0.0f, 0.0f, fs.css_w, fs.css_h, scale);
-    draw_status(fs.css_w, fs.css_h);
+    if (g.page_view) {
+        draw_page_scene(fs.css_w, fs.css_h, scale);
+    } else {
+        pin_single_view(fs.css_w, fs.css_h);
+        caliper_core_hosted_frame(g.core, 0.0f, 0.0f, fs.css_w, fs.css_h, scale);
+        draw_status(fs.css_w, fs.css_h);
+    }
     ImGui::Render();
     caliper_web::input_end_frame();
     const double t_ui = emscripten_get_now();
@@ -823,18 +861,27 @@ void start() {
     g.programs = std::make_unique<caliper_web::WebPrograms>(g.device);
 
     if (g.cfg.page_feed) {
-        // One empty scene view that the page's programs draw into, described
-        // as a VIEWS entry describes it.
-        caliper_net::Json entry = caliper_net::Json::object(), scene;
+        // The scene of a panel that holds programs alone, as the app's spec runtime makes it
+        // (spec_runtime.cpp, entity_view): a scene view of its own on a backend of the graphics
+        // layer, fitted to its box, with the panel's labels and scale bar.
+        caliper_net::Json scene;
         std::string err;
         if (!g.cfg.scene.empty() && !caliper_net::Json::parse(g.cfg.scene.data(), g.cfg.scene.size(), &scene, &err))
             return fail("caliperConfig.scene is not JSON: " + err);
-        if (scene.is_object()) entry.set("scene", scene);
-        caliper_net::wire::SceneView info;
-        if (!caliper_net::wire::scene_view_info(entry, &info, &err)) return fail("caliperConfig.scene: " + err);
+        if (scene.is_object()) {
+            if (const caliper_net::Json* l = scene.find("labels"); l && l->is_bool()) g.page_options.labels = l->as_bool();
+            if (const caliper_net::Json* b = scene.find("scale_bar"); b && b->is_bool()) g.page_options.scale_bar = b->as_bool();
+        }
+        if (g.cfg.view.empty()) return fail("feed page needs caliperConfig.view, the panel's id");
+        caliper_gfx::Backend* backend = nullptr;
+        const caliper_gfx::ProgramDesc* table = nullptr;
         std::string why;
-        if (g.cfg.view.empty() || !caliper_live_views::scene_open(g.core, g.cfg.view, info, &why))
-            return fail("the scene view " + g.cfg.view + " did not open: " + why);
+        if (!caliper_live_views::open_layer(g.core, "scenes", &g.page_gfx, &backend, &table, &why))
+            return fail("the scene cannot start here: " + why);
+        auto view = std::make_unique<caliper_live_views::SceneView>(*backend, table);
+        if (!view->init(&why)) return fail("the scene view did not start: " + why);
+        view->set_box_fit(true);
+        g.page_view = std::move(view);
         g.ready = true;
         EM_ASM({
             var f = Module["onReady"];
@@ -1136,6 +1183,8 @@ EMSCRIPTEN_KEEPALIVE void caliper_views_destroy() {
     emscripten_cancel_main_loop();
     if (g.net) g.net->close(CALIPER_NET_BYE_NORMAL);
     caliper_web::input_uninstall();
+    g.page_view.reset();                            // the page's scene, before its backend and the feeds
+    g.page_gfx.reset();
     if (g.core) {
         caliper_web::remove_polled_views(g.core, g.poll);
         caliper_core_destroy_hosted(g.core);   // releases the views; the renderer is ours
