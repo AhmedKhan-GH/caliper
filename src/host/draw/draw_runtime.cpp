@@ -1541,6 +1541,8 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
             }
             r.instance_count = instances;
             r.pick_id = p.pick ? m.pick_id : 0;
+            if (host)
+                for (int i = 0; i < 4; ++i) r.scissor[i] = in.scissor[std::size_t(i)];
             list.draw(r);
         } else if (host || !rt.clear) {
             continue;   // a pass whose instances have no version or no valid element is skipped

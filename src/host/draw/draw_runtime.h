@@ -130,6 +130,10 @@ struct FrameInputs {
     std::uint64_t epoch = 0;
     std::vector<Selected> selection; // at most kMaxSelected
     std::vector<std::uint8_t> params;   // the generated struct Params, in the manifest's order
+    // The scissor of the passes into the host target: x, y, width and height in pixels, clamped to
+    // the target; the whole target when absent. The scene view gives its shapes the picture of a
+    // camera looked through, as the scene core scissors its own draws.
+    std::array<std::uint16_t, 4> scissor{0, 0, 0xffff, 0xffff};
 };
 
 // The host target of the scene view, which the program's passes with the
