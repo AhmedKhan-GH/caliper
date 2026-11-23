@@ -17,7 +17,11 @@
 // needs no extra work.
 // ============================================================================
 
+// <rpcndr.h> on Windows defines the macro `small`, a token name in the generated header.
+#pragma push_macro("small")
+#undef small
 #include <sternbild_tokens.h>
+#pragma pop_macro("small")
 
 #include <cstddef>
 #include <string>
