@@ -32,7 +32,7 @@ Each entry of `run.list` has `id`, `managed`, `state`, `script`, `args`, `params
 
 ## Review Cards
 
-A managed run executes Python code on your computer. As a result, `run.start` and `run.fork` always wait for your card, in every mode. No rule of a session and no saved rule removes this card, and the mode Allow all does not remove it. The mode Read only refuses both commands. The card shows the script, the arguments and the parameters. `run.stop` is a `run` command as in [Run Control and Events](run-control-and-events.md#approval-rules): it asks the origins `agent` and `mcp`, and a rule can allow it.
+A managed run executes Python code on your computer. As a result, `run.start` and `run.fork` wait for your card in the modes Ask and Accept edits, and for your own runs panel. No rule of a session and no saved rule removes this card. The mode Allow all runs both commands without a card. The mode Read only refuses both commands. The card shows the script, the arguments and the parameters. `run.stop` is a `run` command as in [Run Control and Events](run-control-and-events.md#approval-rules): it asks the origins `agent` and `mcp`, and a rule can allow it.
 
 ## Logs and Files
 

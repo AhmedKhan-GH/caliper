@@ -228,12 +228,6 @@ TEST_CASE("live/programs: a params change sends only values, and a value outside
     CHECK(sets() == 1);
 }
 
-// A program of a foreign spec (design/gpu-programs.md, Provenance;
-// design/programmable-graphics.md, Piece Sources) never goes out to the
-// script, which would compile it and relay its draw half to the viewers,
-// before provenance.reviewed holds its hash: the source's SHA-256 for the
-// one-pass form, the piece's hash for an instance. Until then its state is
-// review, without an error and without an event.
 TEST_CASE("live/programs: only a resource that the pinned piece publishes, in its declared form, reaches the history") {
     struct ResourceLink final : caliper_live::ProgramLink {
         std::vector<caliper_live::ReceivedResource> incoming;
@@ -300,6 +294,12 @@ TEST_CASE("live/programs: only a resource that the pinned piece publishes, in it
     CHECK(history.resource_at("tower/arcs", 100)->count == 100);
 }
 
+// A program of a foreign spec (design/gpu-programs.md, Provenance;
+// design/programmable-graphics.md, Piece Sources) never goes out to the
+// script, which would compile it and relay its draw half to the viewers,
+// before provenance.reviewed holds its hash: the source's SHA-256 for the
+// one-pass form, the piece's hash for an instance. Until then its state is
+// review, without an error and without an event.
 TEST_CASE("live/programs: a foreign spec's programs and pieces wait for a review of their hash before they go out") {
     struct PieceLink final : caliper_live::ProgramLink {
         Link inner;

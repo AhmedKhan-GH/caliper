@@ -61,8 +61,24 @@ Error read_text(const fs::path& p, std::size_t max, std::string* out) {
     return {};
 }
 
+Error protected_error(const fs::path& p) {
+    return Error("loader.protected_file", "The file is, or leads to, a protected settings file, so it was not written.",
+                 p.u8string());
+}
+
+// Removes a file or a folder with its contents, unless that would change a
+// protected file (paths.h).
+void remove_unprotected(const fs::path& p) {
+    if (touches_protected_file(p.u8string())) return;
+    std::error_code ec;
+    fs::remove_all(p, ec);
+}
+
 Error write_text_atomic(const fs::path& p, const std::string& text) {
     const fs::path tmp = fs::u8path(p.u8string() + ".tmp");
+    std::error_code rec;
+    fs::remove(tmp, rec);   // a name already there, such as a link, is removed, not written through
+    if (touches_protected_file(p.u8string()) || touches_protected_file(tmp.u8string())) return protected_error(p);
     {
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
         if (!out) return Error("loader.io", "The file could not be created.", p.u8string());
@@ -262,6 +278,7 @@ struct LoaderStore::Impl {
         o.temp_directory = (ws() / "workspace.duckdb.tmp").u8string();
         o.threads = options.threads;
         o.memory_limit = options.memory_limit;
+        if (touches_protected_file((ws() / "workspace.duckdb").u8string())) return protected_error(ws() / "workspace.duckdb");
         return Db::open((ws() / "workspace.duckdb").u8string(), o, &db);
     }
 
@@ -490,10 +507,7 @@ struct LoaderStore::Impl {
             }
             if (!keep) orphans.push_back(it->path());
         }
-        for (const fs::path& p : orphans) {
-            std::error_code rec;
-            fs::remove_all(p, rec);
-        }
+        for (const fs::path& p : orphans) remove_unprotected(p);
         // Derived tensors that no source uses any more are removed.
         std::set<std::string> used;
         for (const LoadedSource& s : select_sources("\"derived\"")) used.insert(s.data_file);
@@ -501,7 +515,8 @@ struct LoaderStore::Impl {
         for (fs::directory_iterator it(ws() / "tensors", ec), end; !ec && it != end; it.increment(ec)) {
             std::error_code rec;
             const std::string p = fs::canonical(it->path(), rec).u8string();
-            if (!rec && !used.count(p) && it->is_regular_file(rec)) fs::remove(it->path(), rec);
+            if (!rec && !used.count(p) && it->is_regular_file(rec) && !touches_protected_file(it->path().u8string()))
+                fs::remove(it->path(), rec);
         }
         return {};
     }
@@ -549,6 +564,10 @@ struct LoaderStore::Impl {
         if (derived) {
             const fs::path final = ws() / "tensors" / fs::u8path(name + ".npy");
             const fs::path temp = fs::u8path(final.u8string() + ".tmp");
+            std::error_code rec;
+            fs::remove(temp, rec);   // a name already there, such as a link, is removed, not written through
+            if (touches_protected_file(final.u8string()) || touches_protected_file(temp.u8string()))
+                return protected_error(final);
             uint64_t offset = 0;
             if (Error e = write_npy(temp.u8string(), data, &offset)) return e;
             pending->push_back({temp, final});
@@ -713,17 +732,13 @@ struct LoaderStore::Impl {
     // Removes every run-<n> folder but `keep`, and with `stale` every tmp-<n> too.
     void prune_python(const std::string& id, const fs::path& keep, bool stale) {
         for (const RunFolder& f : python_folders(id)) {
-            if ((f.kept && f.path != keep) || (!f.kept && stale)) {
-                std::error_code ec;
-                fs::remove_all(f.path, ec);
-            }
+            if ((f.kept && f.path != keep) || (!f.kept && stale)) remove_unprotected(f.path);
         }
     }
 
     void remove_python_outputs(const std::string& id) {
         if (!valid_id(id)) return;
-        std::error_code ec;
-        fs::remove_all(python_root(id), ec);
+        remove_unprotected(python_root(id));
     }
 
     // A Python loader's script: a regular file inside the workspace (not a
@@ -986,10 +1001,7 @@ struct LoaderStore::Impl {
         }
         const fs::path out_dir = tmp / "out";
         const fs::path host_dir = tmp / "host";
-        auto cleanup = [&] {
-            std::error_code rec;
-            fs::remove_all(tmp, rec);
-        };
+        auto cleanup = [&] { remove_unprotected(tmp); };
         fs::create_directory(out_dir, ec);
         if (!ec) fs::create_directory(host_dir, ec);
         std::string host = options.python.host_script;
@@ -1039,6 +1051,10 @@ struct LoaderStore::Impl {
         }
         Error moved;
         for (const PythonOutput& o : ran.manifest.outputs) {
+            if (touches_protected_file((kept / fs::u8path(o.file)).u8string())) {
+                moved = protected_error(kept / fs::u8path(o.file));
+                break;
+            }
             fs::rename(out_dir / fs::u8path(o.file), kept / fs::u8path(o.file), ec);
             if (ec) {
                 moved = Error("loader.io", "The Python loader's output " + o.file + " could not be kept.", o.file);
@@ -1048,12 +1064,12 @@ struct LoaderStore::Impl {
         if (!moved) moved = write_text_atomic(kept / "manifest.json", ran.manifest.to_json().dump(1));
         cleanup();
         if (moved) {
-            fs::remove_all(kept, ec);
+            remove_unprotected(kept);
             return failed(id, now, moved);
         }
         RunResult r = ingest(kept);
         if (r.error) {
-            fs::remove_all(kept, ec);
+            remove_unprotected(kept);
             return r;
         }
         prune_python(id, kept, false);

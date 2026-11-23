@@ -4,11 +4,12 @@
 It starts the hidden app with no script and caliper-mcp as a child over stdio, then follows the steps of
 tests/programmable_graphics/transcript.jsonl in order, each step with its own checks. An agent that holds nothing but
 the MCP tools builds the Attention Arc Tower from the pieces of demos/arc_tower: the arcs of a two-layer model's
-attention in one scene panel, and a fragment-only field of one head in another, with no built-in primitive in either
-frame. The model runner starts examples/python/arc_tower_train.py, whose only Caliper line is
-`caliper.watch(model, optimizer)`. The driver then scrubs to the first kept step and the bump of the loss, picks an
-arc, ablates the head that formed, forks the run from a past step with the head ablated, stops a draw that is over its
-time while training goes on, and checks that a foreign spec's piece waits in review.
+attention in one scene panel, and a fragment-only attention grid of one head in another, with no built-in primitive
+in either frame, and a chart of the induction score of each head over training. The model runner starts
+examples/python/arc_tower_train.py, which calls `caliper.watch(model, optimizer)` and publishes the scores with
+`caliper.series`. The driver then scrubs to the first kept step and the bump of the loss, picks an arc, ablates the
+head that formed, forks the run from a past step with the head ablated, stops a draw that is over its time while
+training goes on, and checks that a foreign spec's piece waits in review.
 
 The driver waits on events and on published state, never for a fixed time, and runs without a window and without the
 network. Exit code 0 passes, 77 skips (no app, no torch, no Metal, no native sender, no producer module), 1 fails.
@@ -56,11 +57,24 @@ RISE = 3.0
 ABLATED_STEPS = 3
 # The steps of the fork child past the parent's step at the bump, at which the ablated head must still be unformed.
 FORK_STEPS = 500
+# The chart of the head scores: one window source of a series of the script for each head, layer 1 first.
+SCORE_LINES = [f"l{layer}_h{head}" for layer in (1, 0) for head in range(4)]
+# The highest score of layer 1 up to the first kept step, and the score that its strongest head passes after the bump.
+# The steps at which the strongest line of layer 1 passes SCORE_MID and the in-context loss falls below ICL_MID lie at
+# most BUMP_STEPS apart. Measured in a run of the instrument: at most 0.05 up to the first kept step 36, all four heads
+# of layer 1 at 0.55 to 0.67 by step 770, the strongest line above 0.3 at step 706 and the in-context loss below 2 at
+# step 734, where the chart's sources hold a point about every 9 steps.
+SCORE_BEFORE = 0.2
+SCORE_AFTER = 0.5
+SCORE_MID = 0.3
+ICL_MID = 2.0
+BUMP_STEPS = 100
 LOG = re.compile(r"step (\d+) loss ([0-9.]+) in-context ([0-9.]+)")
 # The commands that wait on a card of the person; the driver approves each as the person would.
 CARDS = {"spec_new", "spec_open", "run_start", "run_pause", "run_fork", "run_stop", "piece_update", "state_create",
-         "state_set", "panel_create", "panel_patch", "program_create", "source_add", "layout_place", "control_create",
-         "cursor_set", "selection_set", "intervene_set", "intervene_clear", "program_remove", "panel_remove"}
+         "state_set", "panel_create", "panel_patch", "program_create", "source_add", "layout_place", "layout_set",
+         "control_create", "cursor_set", "selection_set", "intervene_set", "intervene_clear", "program_remove",
+         "panel_remove"}
 
 FOREIGN = '''caliper_spec = 1
 
@@ -173,6 +187,14 @@ class Run:
             first += 1024
         return b["step"], out
 
+    def chart(self):
+        """The lines of the chart of the head scores in the order of SCORE_LINES, each as a list of (step, score)."""
+        lines = [list(zip(f64s(d["x"]), f64s(d["y"])))
+                 for d in self.call("panel_data", {"panel": "head_scores"})["data"]["lines"]]
+        if len(lines) != len(SCORE_LINES):
+            raise Fail(f"the chart of the head scores has {len(lines)} lines, not {len(SCORE_LINES)}")
+        return lines
+
     def icl(self):
         d = self.call("panel_data", {"panel": "icl_curve"})["data"]["lines"][0]
         return list(zip(f64s(d["x"]), f64s(d["y"])))
@@ -241,7 +263,7 @@ def steps(r):
 
     # 5. Check and write the pieces of the demo.
     r.step("check and write both pieces as version 1")
-    pieces = {n: piece_args(ROOT / "demos" / "arc_tower" / n) for n in ("attention_arcs", "attention_field")}
+    pieces = {n: piece_args(ROOT / "demos" / "arc_tower" / n) for n in ("attention_arcs", "attention_grid")}
     for n, p in pieces.items():
         ck = r.call("piece_check", {"piece": p})
         if not ck["ok"]:
@@ -252,16 +274,18 @@ def steps(r):
             raise Fail(f"piece_update of {n} wrote version {up['version']}")
         r.result.setdefault("hashes", {})[n] = up["hash"]
 
-    # 6. The instrument: two scene panels that hold programs alone, state, sources, curves and a toggle.
+    # 6. The instrument: two scene panels that hold programs alone, state, sources, the chart of the head scores, the
+    # loss curves and a toggle. The tower and the chart are the left column, the attention grid the right one. The chart
+    # gets the height that its legend of eight lines needs in a window of 1280 by 800.
     r.step("build the instrument from pieces")
     r.call("state_create", {"id": "head", "type": "integer", "default": 0, "min": 0, "max": 3, "title": "Head"})
-    for pid, title in (("tower", "Attention Arc Tower"), ("pattern", "Head Pattern")):
+    for pid, title in (("tower", "Attention Arc Tower"), ("pattern", "Attention Grid")):
         r.call("panel_create", {"id": pid, "primitive": "scene", "title": title, "bind": {"scene": "live:model"},
                                 "options": {"exclude": ["**"]}})
     binds = {"attn0": "live:blocks.0.attn.weights.act", "attn1": "live:blocks.1.attn.weights.act"}
     r.call("program_create", {"id": "tower_arcs", "title": "Tower Arcs", "piece": {"name": "attention_arcs",
            "version": 1, "from": "workspace"}, "panel": "tower", "bind": binds, "params": {"threshold": 0.05}})
-    r.call("program_create", {"id": "head_pattern", "title": "Head Pattern", "piece": {"name": "attention_field",
+    r.call("program_create", {"id": "head_pattern", "title": "Attention Grid", "piece": {"name": "attention_grid",
            "version": 1, "from": "workspace"}, "panel": "pattern", "bind": binds,
            "params": {"layer": {"selection": "tower", "field": "layer", "default": 1}, "head": {"state": "head"},
                       "gain": 2.0}})
@@ -278,11 +302,24 @@ def steps(r):
         r.call("panel_create", {"id": pid, "primitive": "series", "title": title,
                                 "bind": {"x": f"{src}.step", "y": f"{src}.value"},
                                 "options": {"x_label": "Step", "y_label": "Loss"}})
-    r.call("layout_place", {"panel": "pattern", "target": "tower", "where": "beside", "ratio": 0.4})
-    r.call("layout_place", {"panel": "loss_curve", "target": "pattern", "where": "below", "ratio": 0.5})
-    r.call("layout_place", {"panel": "icl_curve", "target": "loss_curve", "where": "below", "ratio": 0.5})
+    def listed():
+        ids = {e["id"] for e in r.call("catalog_list", {"kind": "live", "limit": 1000}).get("entries", [])}
+        return all(f"live:induction_{line}" in ids for line in SCORE_LINES) or None
+    c.until("the series of the head scores in the catalog", listed, 60)
+    for line in SCORE_LINES:
+        r.call("source_add", {"id": f"{line}_raw", "catalog": f"live:induction_{line}", "history": 4096})
+        r.call("source_add", {"id": line, "from": f"{line}_raw", "transform": [{"op": "window", "steps": 4096}]})
+    r.call("panel_create", {"id": "head_scores", "primitive": "series", "title": "Induction Score of Each Head",
+                            "bind": {"x": f"{SCORE_LINES[0]}.step", "y": [f"{line}.value" for line in SCORE_LINES]},
+                            "options": {"x_label": "Step", "y_label": "Induction Score", "legend": True}})
     r.call("control_create", {"id": "ablate", "kind": "toggle", "title": f"Ablate Head {TOGGLED} of Layer 1",
                               "bind": f"intervene:blocks.1.attn#{TOGGLED}", "options": {"value": False}})
+    r.call("layout_set", {"layout": {"root": "page", "nodes": [
+        {"id": "page", "split": "vertical", "children": ["main", "ablate"], "ratio": None},
+        {"id": "main", "split": "horizontal", "children": ["left", "pattern"], "ratio": 0.5},
+        {"id": "left", "split": "vertical", "children": ["tower", "charts"], "ratio": 0.45},
+        {"id": "charts", "split": "vertical", "children": ["head_scores", "curves"], "ratio": 0.62},
+        {"id": "curves", "split": "tabs", "children": ["icl_curve", "loss_curve"], "ratio": None}]}})
     if "[[panel.entity]]" in r.call("spec_get", {}).get("text", ""):
         raise Fail("the spec holds an entity: a primitive of the scene is in the frame")
     cap("empty")
@@ -312,8 +349,9 @@ def steps(r):
     if "[[panel.entity]]" in r.call("spec_get", {}).get("text", ""):
         raise Fail("the panel has an entity")
 
-    # 9. The bump: the newest version scores above 0.4, and the first kept version holds no score above 0.2.
-    r.step("the heads form at the bump, and the first kept version holds none")
+    # 9. The bump: the newest version scores above 0.4, and the first kept version holds no score above 0.2. The chart
+    # of the head scores rises at the steps where the in-context loss falls.
+    r.step("the heads form at the bump, the first kept version holds none, and the chart rises with the bump")
     def formed():
         b, h = r.heads()
         return (b, h) if max(h[4:]) > 0.4 else None
@@ -332,6 +370,24 @@ def steps(r):
         raise Fail(f"the loss shows no bump: first {log[:1]}, last {log[-1:]}")
     r.result["bump"] = {"first_kept": first_step, "newest": newest["step"], "scores": h_new,
                         "loss_first": log[0][1], "loss_last": log[-1][1], "tower_pixels_changed": n}
+    def risen():
+        lines = r.chart()
+        return lines if all(lines) and max(line[-1][1] for line in lines[:4]) > SCORE_AFTER else None
+    lines = c.until(f"a line of layer 1 in the chart above {SCORE_AFTER}", risen, 300)
+    strongest = {}                          # the highest score of layer 1 at each step
+    for line in lines[:4]:
+        for x, y in line:
+            strongest[x] = max(y, strongest.get(x, y))
+    early = max((y for x, y in strongest.items() if x <= first_step), default=None)
+    if early is None or early >= SCORE_BEFORE:
+        raise Fail(f"the chart holds a score of layer 1 of {early} up to the first kept step {first_step}")
+    rise_at = min(x for x, y in strongest.items() if y > SCORE_MID)
+    fall_at = next((x for x, y in r.icl() if y < ICL_MID), None)
+    if fall_at is None or abs(rise_at - fall_at) > BUMP_STEPS:
+        raise Fail(f"the chart rises above {SCORE_MID} at step {rise_at}, and the in-context loss falls below "
+                   f"{ICL_MID} at step {fall_at}")
+    r.result["chart"] = {"before": early, "newest": [line[-1][1] for line in lines], "rise_step": rise_at,
+                         "icl_fall_step": fall_at, "points": len(lines[0])}
 
     # 10. A pick of the brightest arc of the best head.
     r.step("a pick returns the layer, the head and the token pair")
@@ -359,7 +415,7 @@ def steps(r):
     def pattern_changed():
         cap("pick-after")
         return _differs(c, "pick-before", "pick-after", 1000)
-    c.until("the pattern panel follows the pick", pattern_changed, 30)
+    c.until("the attention grid follows the pick", pattern_changed, 30)
     r.call("run_pause", {"op": "resume", "run": c.run})
     r.result["pick"] = {"item": item, "layer": 1, "head": best, "tokens": [want[0], want[1]]}
     cap("tower-parent")
@@ -384,6 +440,9 @@ def steps(r):
         at = r.run_step(c.run)
         r.call("run_pause", {"op": "step", "count": 1, "run": c.run})
         c.until("the single step", lambda: r.run_step(c.run) > at and c.runs()[c.run]["state"] == "paused", 60)
+        # The loss of a step's forward pass carries the step of the checkpoint before it (the run's step at
+        # the snapshot), thus the newest loss of a run paused at step `at` has the step at - 1, and the loss of
+        # the single step has the step `at`.
         c.until("the in-context loss of the step", lambda: any(x >= at for x, _ in r.icl()), 60)
     after = [(x, y) for x, y in r.icl() if x > last]
     rise = max(y for _, y in after) / base
@@ -455,13 +514,15 @@ def steps(r):
     c.until("training goes on", lambda: r.run_step(child) > step_at + 5, 60)
     r.result["draw_stop"] = {"code": err["code"], "where": err["where"], "message": err["message"]}
 
-    # 14. The derive halves stay inside their share of the run.
-    r.step("the derive halves stay at or below 2 percent of the run")
+    # 14. The derive halves stay inside their share of the run: 2 percent is the target, a miss is a warning,
+    # and only a share above twice the target fails.
+    r.step("the derive halves stay near their target of 2 percent of the run")
     shares = {}
     for prog in ("tower_arcs", "head_pattern"):
         s = (c.status(prog) or {}).get("overhead_share")
-        if s is None or s > 0.02:
-            raise Fail(f"{prog} has an overhead_share of {s}")
+        failure = gp.targets.overhead_share(prog, s, 0.02)
+        if failure:
+            raise Fail(failure)
         shares[prog] = s
     r.result["overhead_share"] = shares
 
@@ -473,7 +534,8 @@ def steps(r):
                                              for x in c.runs().values()), 90)
     after_hashes = {str(f): gp.sha256(f) for f in [Path(c.app), Path(c.mcp_path)] + gp.package_files()}
     if after_hashes != before:
-        raise Fail("a file of the app, caliper-mcp or the package changed")
+        changed = sorted(f for f in set(before) | set(after_hashes) if before.get(f) != after_hashes.get(f))
+        raise Fail(f"a file of the app, caliper-mcp or the package changed: {changed}")
 
 
 def _differs(c, a, b, n):

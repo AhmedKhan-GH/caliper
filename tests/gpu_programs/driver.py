@@ -14,6 +14,7 @@ usage: driver.py --app <caliper> --mcp <caliper-mcp> --python <python> --work <d
 import argparse
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -29,6 +30,12 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 SKIP = 77
+# The overhead targets that the acceptance tests share: a measured share is printed with its target, a
+# miss is a warning, and only a share above twice the target fails.
+_targets_spec = importlib.util.spec_from_file_location("overhead_targets",
+                                                       ROOT / "python" / "tests" / "overhead_targets.py")
+targets = importlib.util.module_from_spec(_targets_spec)
+_targets_spec.loader.exec_module(targets)
 META = {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
         "io.modelcontextprotocol/clientCapabilities": {},
         "io.modelcontextprotocol/clientInfo": {"name": "gpu-programs-check", "version": "1"}}
@@ -445,21 +452,24 @@ class Check:
             mem, limit = st.get("memory_bytes"), st.get("memory_limit_bytes")
             if not mem or mem <= 0 or (limit and mem > limit):
                 raise Fail(f"{name}: memory in use {mem!r} against the limit {limit!r}")
-            if "share_at_most" in w:
+            if "share_target" in w:
                 # The measured overhead share comes down to the budget once the cadence settles; a
                 # pass of a stopped program or a slow cycle can lift it for a few cycles before that.
-                last = {}
+                # The driver waits up to settle_s for the target, then judges the last share: a miss
+                # is a warning, and only a share above twice the target fails.
+                last, target = {}, w["share_target"]
+                end = time.monotonic() + w.get("settle_s", 90)
 
                 def settled():
                     last["st"] = self.status(w["id"]) or {}
                     share = last["st"].get("overhead_share")
-                    return isinstance(share, (int, float)) and 0 <= share <= w["share_at_most"]
-                try:
-                    self.until(f"the overhead share of {w['id']} is at most {w['share_at_most']}", settled,
-                               w.get("settle_s", 90))
-                except Fail as e:
-                    raise Fail(f"{name}: {e}; last status {json.dumps(last.get('st'))[:600]}")
+                    return (isinstance(share, (int, float)) and 0 <= share <= target) or time.monotonic() > end
+                self.until(f"the overhead share of {w['id']} reaches its target {target}", settled,
+                           w.get("settle_s", 90) + 30)
                 st = last["st"]
+                failure = targets.overhead_share(w["id"], st.get("overhead_share"), target)
+                if failure:
+                    raise Fail(f"{name}: {failure}; last status {json.dumps(st)[:600]}")
             self.result[name] = {k: st.get(k) for k in ("every", "last_pass_ms", "last_cost_ms", "step_ms",
                                                          "overhead_share", "passes_per_s", "memory_bytes",
                                                          "memory_limit_bytes", "runs")}

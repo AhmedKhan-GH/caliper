@@ -826,9 +826,12 @@ protected:
     void track(Serial s, id<MTLCommandBuffer> cb) {
         std::shared_ptr<CompletionSink> sink = completion_sink();
         [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
-            const double ms = done.status == MTLCommandBufferStatusCompleted
-                                  ? (done.GPUEndTime - done.GPUStartTime) * 1000.0 : -1.0;
-            sink->complete(s, ms);
+            // A command buffer that ends in an error (a timeout, a fault) gives no time: the
+            // driver ended it.
+            if (done.status == MTLCommandBufferStatusCompleted)
+                sink->complete(s, (done.GPUEndTime - done.GPUStartTime) * 1000.0);
+            else
+                sink->ended(s);
         }];
         prune_inflight();
         inflight_.push_back({s, cb});

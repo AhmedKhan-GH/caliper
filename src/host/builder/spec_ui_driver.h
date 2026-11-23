@@ -50,7 +50,7 @@
 //   chat mode <mode>     wait until the chat's header shows Caliper's mode
 //                        for its agent: ask, accept_edits, read_only, allow_all
 //   chat allow-all on|off
-//                        Allow all for this session on, or off, as its menu
+//                        Allow all on, or off (to Ask), as its menu
 //                        item and the banner's End do
 //   chat undo <command>  the Undo of the newest APPLIED row of that command,
 //                        as its button does, once it is the newest step
@@ -121,8 +121,8 @@
 //                        List and Probe do
 //   settings perm <chat|mcp> <mode>
 //                        sets the mode of the side chat's agent or of mcp
-//                        clients (ask, accept_edits, read_only), as a click on
-//                        its button in Permissions does
+//                        clients (ask, accept_edits, read_only, allow_all), as
+//                        a click on its button in Permissions does
 //   settings rules <n>   wait until Permissions lists n saved rules
 //   settings revoke <agent> <command>
 //                        Revoke of that saved rule, as its button does

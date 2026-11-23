@@ -498,7 +498,8 @@ TEST_CASE("chat app: a step of the input script waits as long as patience says, 
     CHECK(bad.err.find("[ui] stopped: patience takes a number of seconds from 0 to 86400") != std::string::npos);
 }
 
-TEST_CASE("chat app: Caliper's modes for the chat's agent, the card's three answers, the settings' rules and Allow all" *
+TEST_CASE("chat app: Caliper's modes for the chat's agent, the card's three answers, the settings' rules and a saved "
+          "Allow all" *
           doctest::test_suite("app")) {
     const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
     if (!exe || !*exe) {
@@ -538,15 +539,18 @@ TEST_CASE("chat app: Caliper's modes for the chat's agent, the card's three answ
                   {"open", false}};
         std::ofstream(data / "side-chat.json") << s.dump();
     }
-    // A saved file that asks for Allow all: it is never honoured.
+    // A saved Allow all for both principals: the app loads it at launch.
     const fs::path perms = data / "agent-permissions.json";
-    std::ofstream(perms) << R"({"version": 1, "modes": {"chat": "allow_all"}, "rules": []})";
+    std::ofstream(perms) << R"({"version": 1, "modes": {"chat": "allow_all", "mcp": "allow_all"}, "rules": []})";
     fs::permissions(perms, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace);
     const fs::path decisions = root / "decisions.txt";
     std::ofstream(decisions).close();
     const std::string d = decisions.string();
     const std::string ui =
-        "wait 60; chat open; wait 10; chat focus; wait 3; chat mode ask; "
+        "wait 60; chat open; wait 10; chat mode allow_all; wait 5; shot m-allow-all-status; "
+        // The settings show it, and the person turns the chat's back to Ask there.
+        "settings open; wait 5; shot m-allow-all-settings; settings perm chat ask; settings close; wait 3; "
+        "chat focus; wait 3; chat mode ask; "
         // Ask: the edit waits on a card with the three answers; for this session.
         R"(type call panel_patch {"id":"curves","patch":{"title":"Asked"}}; key enter; )"
         "chat item approval panel.patch waiting; cards 1; wait 5; shot m-card; append " + d + " session panel.patch agent; "
@@ -572,7 +576,8 @@ TEST_CASE("chat app: Caliper's modes for the chat's agent, the card's three answ
         "chat item applied panel.remove; chat until ready; chat focus; wait 3; "
         R"(type call applet_save {"overwrite":true}; key enter; )"
         "chat item approval applet.save waiting; cards 1; wait 5; shot m-bound; append " + d + " approve applet.save agent; "
-        "chat until ready; chat allow-all off; chat mode read_only; wait 5; quit";
+        "chat until ready; chat allow-all off; chat mode ask; settings perm chat read_only; chat mode read_only; "
+        "wait 5; quit";
     acp::SpawnOptions o;
     o.argv = {exe, "--hidden", "--workspace", ws.string()};
     o.env = {{"CALIPER_DATA_DIR", data.string()},
@@ -599,7 +604,8 @@ TEST_CASE("chat app: Caliper's modes for the chat's agent, the card's three answ
     CHECK(run.err.find("[ui] done") != std::string::npos);
     CHECK(run.err.find("[ui] stopped") == std::string::npos);
     if (const char* out = std::getenv("CALIPER_TEST_MODES_SHOTS"); out && *out)
-        for (const char* n : {"m-card", "m-settings", "m-header", "m-banner", "m-bound"})
+        for (const char* n :
+             {"m-allow-all-status", "m-allow-all-settings", "m-card", "m-settings", "m-header", "m-banner", "m-bound"})
             fs::copy_file(shots / (std::string(n) + ".png"), fs::path(out) / (std::string(n) + "-" + size + ".png"),
                           fs::copy_options::overwrite_existing);
 
@@ -622,10 +628,10 @@ TEST_CASE("chat app: Caliper's modes for the chat's agent, the card's three answ
         "agent applet.save do ok",                        // an overwrite still asks, under Allow all
     };
     CHECK(seen == want);
-    // The saved file: owner-only, the chat's saved mode, the rule revoked, never Allow all.
+    // The saved file: owner-only, the chat's saved mode, mcp's Allow all kept, the rule revoked.
     const std::string saved = read_file(perms);
     CHECK(saved.find("\"chat\": \"read_only\"") != std::string::npos);
-    CHECK(saved.find("allow_all") == std::string::npos);
+    CHECK(saved.find("\"mcp\": \"allow_all\"") != std::string::npos);
     CHECK(saved.find("panel.create") == std::string::npos);
     CHECK((fs::status(perms).permissions() & fs::perms::all) == (fs::perms::owner_read | fs::perms::owner_write));
     CHECK(run.err.find("[approval] ap-1 panel.patch (agent) rule for this session") != std::string::npos);

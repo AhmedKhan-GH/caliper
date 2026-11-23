@@ -142,6 +142,9 @@ inline constexpr uint32_t kMaxBindGroups = 4;          // 0 frame, 1 draw, 2 ima
 inline constexpr uint32_t kMaxBindingsPerGroup = 8;
 inline constexpr uint32_t kMaxDynamicOffsets = 4;      // per draw or dispatch (decision 7)
 inline constexpr uint32_t kMaxVertexBuffers = 8;       // WebGPU's limit (decision 8)
+// What Backend::submit_gpu_ms gives for a completed submit without a measured time.
+inline constexpr double kGpuMsNone = -1.0;        // a backend without timestamps, or work the driver ended
+inline constexpr double kGpuMsForgotten = -2.0;   // older than the last 1,024 completions, whose times are kept
 inline constexpr uint32_t kMaxAttributesPerBuffer = 4;
 inline constexpr uint32_t kMaxConstants = 8;
 inline constexpr uint32_t kUniformAlign = 256;         // arena slices and dynamic offsets
@@ -521,10 +524,11 @@ public:
     bool   completed(Serial s) const;                // never blocks
     // The GPU time of one submit, for a host that times each of its submits on its own (the
     // draw half of a program, design/programmable-graphics.md, Safety of Draws). True once
-    // serial s completed and its time is known, with *gpu_ms < 0 on a backend without
-    // timestamps; false while it runs, while the completion handler has not given its time
-    // yet (wait() completes a serial before that), and for a submit older than the last 1,024
-    // completions. Never blocks.
+    // serial s completed and nothing more is to come of its time: *gpu_ms >= 0 is its time,
+    // kGpuMsNone a backend without timestamps or work that the driver ended, kGpuMsForgotten
+    // a submit older than the last 1,024 completions, whose time is no longer kept. False while
+    // it runs and while the completion handler has not given its time yet (wait() completes a
+    // serial before that). Never blocks.
     bool   submit_gpu_ms(Serial s, double* gpu_ms) const;
     bool   wait(Serial s);                           // tests and WAIT_GPU; false without kCapBlockingWait
     Serial last_use(uint64_t handle) const;          // the last submit that read or wrote it; 0 none
@@ -566,6 +570,9 @@ protected:
     // when unknown. Serials may complete out of order. Completion handlers on other threads
     // hold the sink by shared pointer instead, so a late one never reaches a dead backend.
     void complete(Serial s, double gpu_ms = -1);
+    // Called by a backend when the driver ended the submit with this serial (an error or a
+    // timeout of its command buffer): it completes, and submit_gpu_ms gives kGpuMsNone for it.
+    void ended(Serial s);
     std::shared_ptr<CompletionSink> completion_sink() const;
     // Read access to what the core keeps per handle, for the hooks.
     const ProgramInfo&   program_info(Program p) const;

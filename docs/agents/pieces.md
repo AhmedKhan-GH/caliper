@@ -217,56 +217,84 @@ The editor checks each binding against the catalog. It checks the dtype and rank
 
 A buffer input makes the programs of a spec a graph. Only the draw half reads a buffer input. The viewer gives it the version of the other resource at the cursor.
 
-This example is the piece `attention_field`. It draws the attention pattern of one head as a field with contour lines. Its derive half copies the first batch row of two attention tensors into one resource, and its draw half has one full-screen pass.
+This example is the piece `attention_grid` of `demos/arc_tower/`. It draws the attention weights of one head as a grid with one cell for each pair of tokens. Its derive half copies the first batch row of two attention tensors into one resource. It also places one label anchor for each token at the left of its row. Its draw half has one full-screen pass, and its text table holds the words of the sentence.
 
 ```toml
-name = "attention_field"
+name = "attention_grid"
 version = 1
-description = "The attention pattern of one head of a two-layer model, as a field with contour lines"
+description = "The attention grid of one head of a two-layer model, one cell for each pair of tokens, with the words of the rows"
 imports = ["colormap@1"]
 
 [[inputs]]
 name = "attn0"
 kind = "tensor"
-rank_min = 4
-rank_max = 4
+rank_min = 2
+rank_max = 2
+title = "Attention Weights of Layer 0"
 
 [[inputs]]
 name = "attn1"
 kind = "tensor"
-rank_min = 4
-rank_max = 4
+rank_min = 2
+rank_max = 2
+title = "Attention Weights of Layer 1"
 
 [[params]]
 name = "layer"
 type = "i32"
 min = 0
 max = 1
+title = "Layer"
 
 [[params]]
 name = "head"
 type = "i32"
 min = 0
 max = 3
+title = "Head"
 
 [[params]]
 name = "gain"
 default = 1.0
 min = 0.1
 max = 10.0
+title = "Gain"
 
 [[resources]]
 id = "pattern"
 kind = "buffer"
 element = "f32"
-count = 8192
+count = 8192      # 2 layers, 4 heads, 32 by 32 tokens
 
-[derive]
-passes = [{ entry = "copy_rows", workgroups = [16, 1, 1], writes = ["pattern"] }]
+[[resources]]
+id = "labels"
+kind = "buffer"
+struct = "Label"
+fields = ["position: vec4<f32>", "string: u32"]
+count = 32
+
+[[derive.passes]]
+entry = "copy_rows"
+workgroups = [16, 1, 1]
+writes = ["pattern"]
+
+[[derive.passes]]
+entry = "place_labels"
 
 [draw]
 camera = "none"
-passes = [{ kind = "render", fragment = "field" }]
+
+[draw.text]
+anchors = "labels"
+strings = [
+  "the", "old", "map", "shows", "red", "fox", "jumps", "over", "lazy", "dogs", "near", "green",
+  "hills", "under", "blue", "skies", "red", "fox", "jumps", "over", "lazy", "dogs", "near", "green",
+  "hills", "under", "blue", "skies", "and", "then", "it", "ends",
+]
+
+[[draw.passes]]
+kind = "render"
+fragment = "grid"
 ```
 
 A program then places the piece in the panel `pattern`, and it follows the head that a pick selects through two state variables.
@@ -274,7 +302,7 @@ A program then places the piece in the panel `pattern`, and it follows the head 
 ```toml
 [[program]]
 id = "head_pattern"
-piece = { name = "attention_field", version = 1, from = "workspace", hash = "sha256:..." }
+piece = { name = "attention_grid", version = 1, from = "workspace", hash = "sha256:..." }
 panel = "pattern"
 bind = { attn0 = "live:blocks.0.attn.weights.act", attn1 = "live:blocks.1.attn.weights.act" }
 params = { layer = { state = "layer" }, head = { state = "head" }, gain = 2.0 }
@@ -311,7 +339,7 @@ The event `program` carries the keys `half` (`derive` or `draw`) and `pass`, the
 
 ## Resources and Step History
 
-The script sends each version of a published resource to a viewer as one RESOURCE message. The message needs the capability `resources` on both ends. A script that does not announce it refuses an instance with `program.resources_unavailable`. One message carries one resource, thus a large resource never holds a small one back. The script sends the versions of a pass to a viewer only when its queue then holds at most 8 MiB and 64 KiB, which is half of the 16 MiB control queue of a connection. Thus a viewer that falls behind skips whole passes, and it gets a later pass when it catches up. A pass that would send more than 8 MiB, from a manifest that did not pass the app's check, stops the program with `program.resource_too_large`.
+The script sends each version of a published resource to a viewer as one RESOURCE message. The message needs the capability `resources` on both ends. A script that does not announce it refuses an instance with `program.resources_unavailable`. One message carries one resource, thus a large resource never holds a small one back. The script sends the versions of a pass to a viewer only when its queue then holds at most 8 MiB and 64 KiB, which is half of the 16 MiB control queue of a connection. This count also holds the frames that other programs gave to that viewer in the same pass and that the script has not queued yet. Thus a viewer that falls behind skips whole passes, and it gets a later pass when it catches up. Two programs that publish 8 MiB each do not fit in one pass of a viewer. The program that the viewer skipped goes first at the next pass, thus the programs reach the viewer in turn. A pass that would send more than 8 MiB, from a manifest that did not pass the app's check, stops the program with `program.resource_too_large`.
 
 The app keeps the versions of each published resource in the step history under `<program>/<resource>`, beside the kept steps of the sources. A resource keeps at most `keep` versions. When its ring is full, the history drops every second kept version. From then on it keeps a version only when its step lies far enough after the newest one. Thus the kept versions span the whole run evenly, and the step cursor scrubs the whole training. The viewer gives the draw half the newest kept version at or before the cursor. A version that replaces another at the same step, as after a fork from that step, takes its place in the history, in the draw and in picks and labels.
 
@@ -366,14 +394,15 @@ The host owns the camera. A piece selects `orbit` for the 3-D orbit camera of th
 
 A draw half writes only the color, ID and depth of its panel and its own targets. The host records the passes of each program in a submit of its own after the frame of the scene. The GPU time of that submit is the frame time of the program. Where the backend has no timestamps, the host measures the time from the submit until the work is done, which is an upper bound.
 
-A training run on the same GPU can delay a correct frame by a second or more. Thus a frame that is not done 1 s after its submit is late, and the program submits no new frame until the late frame is done. Then the GPU time of the late frame decides. Where the backend has no timestamps, three late frames in a row decide.
+A training run on the same GPU can delay a correct frame by a second or more, thus the GPU time of a frame decides. A frame that is not done 1 s after its submit is late, and the program submits no new frame until it is done. A frame over 250 ms of GPU time is heavy, which is more than 15 times the largest `frame_ms`. Heavy frames in a row remove the program when their GPU time passes 1 s together. Thus one frame over 1 s of GPU time removes it at once. Where the backend has no timestamps, three late frames in a row remove it.
 
 The host cannot stop a pass that runs on the GPU. Thus it removes a draw that goes over its budget and reports it. The other programs of the panel keep drawing, and the derive half keeps its own limits.
 
 | Condition | Result |
 |---|---|
 | A program is over `frame_ms` on 30 frames in a row | `program.draw_over_time`, naming the costliest pass |
-| A late frame took more than 1 s of GPU time, or the driver ended it | `program.draw_timeout` |
+| Heavy frames in a row took more than 1 s of GPU time together | `program.draw_timeout`, at once |
+| The driver ended a late frame | `program.draw_timeout` |
 | Three frames in a row are late, on a backend without timestamps | `program.draw_timeout` |
 | A frame of a program is not done after 5 s | `program.draw_timeout`, at once |
 | The programs of one panel together are over 16.7 ms on 30 frames in a row | `program.draw_over_time` for the costliest program |
@@ -434,15 +463,15 @@ A person drags a piece row onto the middle of a scene panel, or focuses a scene 
 
 ## Attention Arc Tower
 
-The Attention Arc Tower answers one question. When and where does the model learn to copy, and is that what drops the loss? An agent builds it through `caliper-mcp` alone, on a managed run whose script has one Caliper line, `caliper.watch(model, optimizer)`. No built-in primitive is in its frames. The scene panels `tower` and `pattern` hold programs only, and the loss curves are series panels.
+The Attention Arc Tower answers one question. When and where does the model learn to copy, and is that what drops the loss? An agent builds it through `caliper-mcp` alone, on a managed run of a script that calls `caliper.watch(model, optimizer)` and `caliper.series`. The chart of the induction score of each head is the headline view. The tower of arcs is the overview, and the attention grid is the inspector of one head. No built-in primitive is in the frames of the tower and the grid. The scene panels `tower` and `pattern` hold programs only, and the chart and the loss curves are series panels.
 
 The script `examples/python/arc_tower_train.py` trains an attention-only transformer with two layers of four heads, a width of 64 and a vocabulary of 64 words. Each sequence holds 32 random tokens, and a segment of 12 of them repeats. The loss stays near ln 64 until heads of layer 1 learn to copy, and then it drops at a bump, which comes between step 600 and step 1,000 on an Apple GPU. Row 0 of every batch is a fixed sentence that the loss leaves out. Thus the attention that a viewer shows is always that of the same sentence.
 
-The watch publishes the attention weights of each layer as `live:blocks.<i>.attn.weights.act`, as rows of batch, head and query token against the key tokens. It publishes `live:token_loss.act`, the loss of each token, and one intervention point `blocks.<i>.attn#<h>` for each head. The in-context loss is the mean of the loss of row 0 over the second copy, which only a copy from the first occurrence predicts.
+The watch publishes the attention weights of each layer as `live:blocks.<i>.attn.weights.act`, as rows of batch, head and query token against the key tokens. It publishes `live:token_loss.act`, the loss of each token, and one intervention point `blocks.<i>.attn#<h>` for each head. The in-context loss is the mean of the loss of row 0 over the second copy, which only a copy from the first occurrence predicts. After each optimizer step, the script publishes the induction score of each head as the series `induction_l<i>_h<h>`. The score is the mean weight of row 0 from a token of the second copy to the token after the first occurrence of the same token. The calls pass 0-d tensors on the device, thus a step does not wait for the GPU.
 
-The pieces are in `demos/arc_tower/`. The piece `attention_arcs` scores each head for induction in its derive half and publishes `heads`, one score for each head. It also publishes the arcs, one for each attention weight above the threshold, with `from_token`, `to_token`, `layer`, `head`, `weight` and `score`. Its draw half draws the arcs instanced and additive with an ID for each arc, a glow target and a bloom pass, and it labels the tokens. Its item map holds the six fields of an arc. The piece `attention_field` is the second graphic. It is fragment-only, has the camera `none`, and draws the pattern of one head with contour lines. Its parameters follow the state `head` and the layer of the last pick in `tower`.
+The pieces are in `demos/arc_tower/`. The piece `attention_arcs` scores each head for induction in its derive half and publishes `heads`, one score for each head. It also publishes the arcs, one for each attention weight above the threshold, with `from_token`, `to_token`, `layer`, `head`, `weight` and `score`. Its draw half draws the arcs instanced and additive with an ID for each arc, a glow target and a bloom pass, and it labels the tokens. Its item map holds the six fields of an arc. The piece `attention_grid` is the second graphic. It is fragment-only and has the camera `none`. It draws the weights of one head as flat cells in magma, with the words of the rows in a left margin. It leaves the half above the diagonal empty, because a token never attends to a later token. It outlines the cells that an induction head fills, and it lights the row and the column under the pointer. Its parameters follow the state `head` and the layer of the last pick in `tower`.
 
-The agent starts the run, writes both pieces with `piece_check` and `piece_update`, and places them with `program_create`. It adds the loss series, the in-context loss, and a toggle bound to `intervene:blocks.1.attn#0`. After the bump, `program_read` shows the head scores rise from below 0.2 at the first kept version to above 0.4. A pick of an arc with `selection_set` gives its layer, head and token pair, and the pattern panel follows the head. The toggle raises the in-context loss at once. A fork from the first kept step with the same head ablated through `run_fork` never forms that head.
+The agent starts the run, writes both pieces with `piece_check` and `piece_update`, and places them with `program_create`. It adds the loss series, the in-context loss, and a window source for each score series. The series panel `head_scores` shows one line for each head, with a legend. A toggle is bound to `intervene:blocks.1.attn#0`. In the layout, the left column holds the tower, the chart below it, and the in-context loss and the loss as tabs below the chart. The attention grid fills the right column. After the bump, `program_read` shows the head scores rise from below 0.2 at the first kept version to above 0.4. In the chart, the strongest line of layer 1 starts below 0.2 and passes 0.5, at the steps where the in-context loss falls. A pick of an arc with `selection_set` gives its layer, head and token pair, and the attention grid follows the head. The toggle raises the in-context loss at once. A fork from the first kept step with the same head ablated through `run_fork` never forms that head.
 
 ## Limits
 

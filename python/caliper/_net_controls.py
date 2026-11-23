@@ -21,6 +21,9 @@ What it does for the server:
 * sends a late viewer CONTROLS and the current SELECTIONs right after the
   VIEWS of its attachment, and gives a peer with ``selection`` the VIEWS with
   item spaces;
+* counts the bytes of the frames posted for each connection until the
+  server's thread queues them (``unsent``), which the programs add to the
+  connection's backlog before they post more;
 * sends CONTROLS, SELECTION and the later replies of actions from the
   server's own thread, coalesced: of the CONTROLS (and of each item space's
   SELECTION) made between two sends, only the newest goes out;
@@ -93,6 +96,8 @@ class ControlsPort:
         self._held_until = 0.0
         self._recheck = False                     # the Python sender: a look again is on its way
         self._posts: list = []                    # (link or None, frame, capability) to send
+        self._unsent: dict = {}                   # link -> the bytes of its posts not queued yet
+        self._unsent_all: dict = {}               # capability -> the same, of posts to every peer
         self.route = _controls.attach(self)
         self.programs = _net_programs.ProgramsPort(self)
         _controls.CONTROLS.wait_hooks.append(self._before_wait)
@@ -117,7 +122,19 @@ class ControlsPort:
         ``link`` is None, on the server's thread (from any thread)."""
         with self._lock:
             self._posts.append((link, frame, cap))
+            self._count(link, cap, len(frame))
         self._kick()
+
+    def unsent(self, link) -> int:
+        """The bytes of the frames posted for ``link`` that the server's thread has not queued
+        on it yet: a sender that bounds the queue of a peer adds them to its backlog, so that
+        several posts before one flush are bounded together (from any thread)."""
+        with self._lock:
+            n = self._unsent.get(link, 0)
+            for cap, b in self._unsent_all.items():
+                if cap in getattr(link, "caps", ()):
+                    n += b
+            return n
 
     def may_control(self, conn) -> bool:
         return bool(getattr(conn, "may_control", False)) and not getattr(conn, "closed", True)
@@ -222,10 +239,16 @@ class ControlsPort:
         for ln, meta in replies:
             if not ln.closed:
                 self._send(ln, _wire.encode_frame(_wire.MsgType.CONTROL_REPLY, meta))
-        for ln, frame, cap in posts:
-            for target in ([ln] if ln is not None else links):
-                if not target.closed and cap in target.caps:
-                    self._send(target, frame)
+        try:
+            for ln, frame, cap in posts:
+                for target in ([ln] if ln is not None else links):
+                    if not target.closed and cap in target.caps:
+                        self._send(target, frame)
+        finally:
+            if posts:                                 # now in the links' queues, or dropped
+                with self._lock:
+                    for ln, frame, cap in posts:
+                        self._count(ln, cap, -len(frame))
 
     def _release(self, final: bool = False):
         """The held CONTROLS once the data sent before it has gone out (or the
@@ -268,6 +291,16 @@ class ControlsPort:
             pass
 
     # -- inside ---------------------------------------------------------------------------
+    def _count(self, link, cap: str, n: int) -> None:
+        """Adds ``n`` to the bytes not queued yet for ``link``, or for every peer with ``cap``
+        when ``link`` is None (under the lock)."""
+        table, key = (self._unsent_all, cap) if link is None else (self._unsent, link)
+        left = table.get(key, 0) + n
+        if left > 0:
+            table[key] = left
+        else:
+            table.pop(key, None)
+
     def _send(self, link, frame: bytes) -> None:
         if self.native:
             self.server.nio.send(link.conn, frame)

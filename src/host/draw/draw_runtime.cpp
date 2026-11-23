@@ -32,10 +32,14 @@ namespace {
 
 constexpr std::uint32_t kWindowFrames = 30;      // frames in a row over draw.frame_ms before a stop
 // A frame not done after kTimeoutMs by the wall clock is late. A training run on the same GPU can
-// delay a correct frame that long, thus a late frame stops its program only when its GPU time is
-// over kTimeoutMs too, or where the backend gives no GPU time, when kLateFrames frames in a row are
-// late. A frame not done after kHangMs stops it at once: its pass may never end.
+// delay a correct frame that long, thus the wall clock alone stops a program only at kHangMs, and a
+// late frame waits for its GPU time. A frame over kHeavyMs of GPU time, more than 15 times the
+// largest draw.frame_ms, is heavy: heavy frames in a row stop the program once their GPU time passes
+// kTimeoutMs together, thus a single frame over kTimeoutMs stops it at once, late or not. Where the
+// backend gives no GPU time, kLateFrames late frames in a row stop it. A frame not done after kHangMs
+// stops it at once: its pass may never end.
 constexpr double kTimeoutMs = 1000.0;
+constexpr double kHeavyMs = 250.0;
 constexpr std::uint32_t kLateFrames = 3;
 constexpr double kHangMs = 5000.0;
 constexpr std::uint64_t kMiB = 1ull << 20;
@@ -1278,6 +1282,8 @@ void DrawRuntime::remove() {
     m.epoch_known = false;
     m.late = false;
     m.late_frames = 0;
+    m.heavy_frames = 0;
+    m.heavy_ms = 0;
 }
 
 // ---- resources ---------------------------------------------------------------------------
@@ -1551,17 +1557,35 @@ void DrawRuntime::frame_done(double gpu_ms, double wall_ms) {
     const bool late = m.late;   // the oldest frame, which this is, was late
     m.late = false;
     if (m.status.state != DrawState::running) return;
-    // A late frame: its GPU time judges it where the backend gives one, and a backend with
-    // timestamps that gives none for it reports work that the driver ended. Without timestamps,
-    // late frames in a row stop it, and a frame done in time ends the row.
+    // A time that the backend no longer keeps (the panel was not drawn while other views of the
+    // backend completed many submits): the frame is done, its time is unknown, and it is not judged.
+    if (gpu_ms == gfx::kGpuMsForgotten) return;
+    const std::string what = e.pass >= 0 ? pass_name(m, e.pass) : std::string("a frame of its draw passes");
+    // Heavy frames in a row: their GPU time together over 1 s stops the program, late or not.
+    if (gpu_ms >= 0) {
+        if (gpu_ms > kHeavyMs) {
+            ++m.heavy_frames;
+            m.heavy_ms += gpu_ms;
+        } else {
+            m.heavy_frames = 0;
+            m.heavy_ms = 0;
+        }
+        if (m.heavy_ms > kTimeoutMs) {
+            stop(m, cp::kProgramDrawTimeout,
+                 "Stopped " + m.instance.program + ": " +
+                     (m.heavy_frames == 1 ? what + " took " + fmt_ms(gpu_ms) + " ms of GPU time, above 1 s"
+                                          : std::to_string(m.heavy_frames) + " frames of its draw passes in a row took " +
+                                                fmt_ms(m.heavy_ms) + " ms of GPU time together, above 1 s"),
+                 e.pass);
+            return;
+        }
+    }
+    // A late frame on a backend with timestamps that gives no time for it: the driver ended it.
+    // Without timestamps, late frames in a row stop it, and a frame done in time ends the row.
     const bool timed = m.gfx->caps().has(gfx::kCapTimestamps);
-    if (late && ((gpu_ms >= 0 && gpu_ms > kTimeoutMs) || (gpu_ms < 0 && timed))) {
+    if (late && gpu_ms < 0 && timed) {
         stop(m, cp::kProgramDrawTimeout,
-             "Stopped " + m.instance.program + ": " +
-                 (e.pass >= 0 ? pass_name(m, e.pass) : std::string("a frame of its draw passes")) +
-                 (gpu_ms >= 0 ? " took " + fmt_ms(gpu_ms) + " ms of GPU time, above 1 s"
-                              : " did not finish, and the driver ended it"),
-             e.pass);
+             "Stopped " + m.instance.program + ": " + what + " did not finish, and the driver ended it", e.pass);
         return;
     }
     if (late && gpu_ms < 0) {

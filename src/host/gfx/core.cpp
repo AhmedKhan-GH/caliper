@@ -157,10 +157,22 @@ void CompletionSink::complete(Serial s, double gpu_ms) {
     if (gpu_ms >= 0) { gpu_ms_ += gpu_ms; ++gpu_n_; gpu_known_ = true; }
     // A wait completes a serial without its time (-1) before or after the backend's handler
     // gives it: only a measured time is kept.
-    if (gpu_ms >= 0) {
-        times_[s] = gpu_ms;
-        while (times_.size() > kSubmitTimes) times_.erase(times_.begin());
-    }
+    if (gpu_ms >= 0) keep(s, gpu_ms);
+    advance(s);
+}
+
+void CompletionSink::ended(Serial s) {
+    std::lock_guard<std::mutex> lock(mu_);
+    keep(s, kGpuMsNone);
+    advance(s);
+}
+
+void CompletionSink::keep(Serial s, double ms) {
+    times_[s] = ms;
+    while (times_.size() > kSubmitTimes) times_.erase(times_.begin());
+}
+
+void CompletionSink::advance(Serial s) {
     Serial through = through_.load(std::memory_order_relaxed);
     if (s <= through) return;
     if (s != through + 1) { early_.insert(s); return; }
@@ -184,9 +196,17 @@ bool CompletionSink::submit_gpu_ms(Serial s, double* gpu_ms) const {
     if (s == 0 || s > completed_through()) return false;
     std::lock_guard<std::mutex> lock(mu_);
     const auto it = times_.find(s);
-    if (it == times_.end()) return false;
-    if (gpu_ms) *gpu_ms = it->second;
-    return true;
+    if (it != times_.end()) {
+        if (gpu_ms) *gpu_ms = it->second;
+        return true;
+    }
+    // Older than every time kept while the times are full: its time came and is gone. A time
+    // still to come belongs to a serial newer than the times of later completions.
+    if (times_.size() >= kSubmitTimes && s < times_.begin()->first) {
+        if (gpu_ms) *gpu_ms = kGpuMsForgotten;
+        return true;
+    }
+    return false;
 }
 
 // ---- Program lookups ---------------------------------------------------------------------------
@@ -526,6 +546,7 @@ const Caps& Backend::caps() const { return core_->caps; }
 const std::string& Backend::last_error() const { return core_->error; }
 bool Backend::refuse(std::string reason) { return core_->fail(std::move(reason)); }
 void Backend::complete(Serial s, double gpu_ms) { core_->sink->complete(s, gpu_ms); }
+void Backend::ended(Serial s) { core_->sink->ended(s); }
 std::shared_ptr<CompletionSink> Backend::completion_sink() const { return core_->sink; }
 
 Buffer Backend::create_buffer(const BufferDesc& d) {
@@ -1280,7 +1301,7 @@ bool Backend::submit_gpu_ms(Serial s, double* gpu_ms) const {
     if (core_->sink->submit_gpu_ms(s, gpu_ms)) return true;
     // Without timestamps no time comes; with them, the completion handler may still give it.
     if (core_->caps.has(kCapTimestamps)) return false;
-    if (gpu_ms) *gpu_ms = -1;
+    if (gpu_ms) *gpu_ms = kGpuMsNone;
     return true;
 }
 

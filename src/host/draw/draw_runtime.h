@@ -29,10 +29,11 @@
 // then stops with program.draw_over_time, naming its costliest pass. A frame
 // still pending after 1 s by the wall clock is late, and the program submits
 // no frame until it is done: a training run on the same GPU can delay a
-// correct frame that long. A late frame stops it with program.draw_timeout
-// when its GPU time is over 1 s too, or, where the backend gives no GPU time,
-// when 3 frames in a row are late; a frame still pending after 5 s stops it
-// at once. A resource, draw buffer or target over draw.memory_mb stops it with
+// correct frame that long. Frames over 250 ms of GPU time in a row stop it
+// with program.draw_timeout once their GPU time passes 1 s together, thus a
+// frame over 1 s of GPU time stops it at once. A late frame that the driver
+// ended stops it too, and where the backend gives no GPU time, 3 late frames
+// in a row do; a frame still pending after 5 s stops it at once. A resource, draw buffer or target over draw.memory_mb stops it with
 // program.draw_over_memory. A stopped program releases its objects and draws
 // nothing; the other programs of the panel keep drawing. Nothing here throws.
 #include "gfx/gfx.h"
@@ -234,10 +235,12 @@ public:
     // none, and `wall_ms`, the time from the submit until the host saw the
     // work done, which stands in for a missing GPU time as an upper bound.
     // Over draw.frame_ms on 30 frames in a row stops the program with
-    // program.draw_over_time. A late frame (frame_pending) stops it with
-    // program.draw_timeout when its GPU time is over 1 s, when the backend has
-    // timestamps and gave it none (the driver ended it), or, without
-    // timestamps, when it is the third late frame in a row.
+    // program.draw_over_time. Frames over 250 ms of GPU time in a row stop it
+    // with program.draw_timeout once their GPU time passes 1 s together. A
+    // late frame (frame_pending) stops it when the backend has timestamps and
+    // gave it none (the driver ended it), or, without timestamps, when it is
+    // the third late frame in a row. A frame whose time the backend no longer
+    // keeps (caliper_gfx::kGpuMsForgotten) is done and not judged.
     void frame_done(double gpu_ms, double wall_ms = -1);
     // The oldest submitted frame of the program that is not done has waited
     // this long by the wall clock: after 1 s the frame is late and the

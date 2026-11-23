@@ -1,5 +1,7 @@
 #include "util.h"
 
+#include <caliper_builder/loaders/paths.h>
+
 #include <atomic>
 #include <cstdio>
 #include <ctime>
@@ -88,6 +90,9 @@ Error write_file_atomic(const std::string& path, const std::string& text) {
     static std::atomic<unsigned> counter{0};
     const fs::path target = fs::u8path(path);
     std::error_code ec;
+    if (touches_protected_file(path))
+        return Error("session.protected_file", "The file is, or leads to, a protected settings file, so it was not written.",
+                     path);
     fs::create_directories(target.parent_path(), ec);
 #ifdef _WIN32
     const long pid = static_cast<long>(_getpid());
@@ -96,6 +101,11 @@ Error write_file_atomic(const std::string& path, const std::string& text) {
 #endif
     const fs::path temp = target.parent_path() / fs::u8path("." + target.filename().u8string() + ".tmp-" +
                                                             std::to_string(pid) + "-" + std::to_string(counter++));
+    // A name that is already there, such as a link, is removed, not written through.
+    fs::remove(temp, ec);
+    if (touches_protected_file(temp.u8string()))
+        return Error("session.protected_file", "The file is, or leads to, a protected settings file, so it was not written.",
+                     path);
     {
         std::ofstream out(temp, std::ios::binary | std::ios::trunc);
         if (!out) return Error("session.io", "The file could not be written.", path);

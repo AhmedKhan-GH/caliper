@@ -117,8 +117,8 @@ struct ChatPane::Impl {
     bool busy = false;        // a long command holds the session's registry this frame
     std::string agent_file;   // the API file of the agent's session, with its own agent token
 
-    // The agent's session ends with its token: Allow all and the rules of
-    // this session go with it (Session::end_chat_session()).
+    // The agent's session ends with its token: the rules of this session go
+    // with it (Session::end_chat_session()); the saved mode stays.
     void end_agent_file() {
         if (!agent_file.empty() && hooks.end_api_file) hooks.end_api_file(agent_file);
         if (!agent_file.empty() && session) session->end_chat_session();
@@ -181,11 +181,16 @@ struct ChatPane::Impl {
             if (!session) return {};
             return caliper_builder::agent_mode_label(session->agent_mode(caliper_builder::AgentPrincipal::chat));
         };
-        h.set_permission_mode = [this](const std::string& name) {
+        h.permission_note = [this]() -> std::string {
             namespace cb = caliper_builder;
-            // "" ends Allow all: the saved mode beneath it holds again.
-            const auto mode = name.empty() && session ? std::optional<cb::AgentMode>(session->saved_agent_mode(cb::AgentPrincipal::chat))
-                                                      : cb::agent_mode_from_name(name);
+            if (!session || session->permission_save_error().empty() ||
+                session->saved_agent_mode(cb::AgentPrincipal::chat) != cb::AgentMode::allow_all ||
+                session->agent_mode(cb::AgentPrincipal::chat) == cb::AgentMode::allow_all)
+                return {};
+            return "Still saved: ending it was not saved, so it returns at the next launch";
+        };
+        h.set_permission_mode = [this](const std::string& name) {
+            const auto mode = caliper_builder::agent_mode_from_name(name);
             if (!session || !mode) return;
             const caliper_builder::Error e = session->set_agent_mode(caliper_builder::AgentPrincipal::chat, *mode);
             log(e ? "mode not set" : "side chat mode", caliper_builder::agent_mode_label(*mode), e ? e.code : "");

@@ -836,13 +836,12 @@ public:
             ph.mode = [this, who_of](const std::string& who) -> std::string {
                 cb::Session* s = session_.session();
                 if (!s) return "ask";
-                // The saved mode: Allow all is the chat's session's, above it, and not here.
-                return cb::agent_mode_name(s->saved_agent_mode(who_of(who)));
+                return cb::agent_mode_name(s->agent_mode(who_of(who)));
             };
             ph.set_mode = [this, who_of](const std::string& who, const std::string& mode) {
                 cb::Session* s = session_.session();
                 const auto m = cb::agent_mode_from_name(mode);
-                if (!s || !m || *m == cb::AgentMode::allow_all) return;
+                if (!s || !m) return;
                 const cb::Error e = s->set_agent_mode(who_of(who), *m);
                 landing_.log(e ? "mode not set" : (who == "mcp" ? "mcp mode" : "side chat mode"), cb::agent_mode_label(*m),
                              e ? e.code : "");
@@ -853,11 +852,21 @@ public:
                     for (const cb::AgentRule& r : s->saved_agent_rules()) out.push_back({r.agent, r.command});
                 return out;
             };
+            ph.note = [this]() -> std::string {
+                cb::Session* s = session_.session();
+                return s ? caliper_host::permission_save_note(*s) : std::string();
+            };
             ph.revoke = [this](const std::string& agent, const std::string& command) {
                 if (cb::Session* s = session_.session(); s && s->revoke_agent_rule({agent, command}))
                     landing_.log("rule revoked", command, agent);
             };
             agent_settings_.set_permissions(std::move(ph));
+            // Every page's status bar says so while Allow all is on, saved
+            // and set only in the settings and the side chat's mode menu.
+            set_host_status_flag([this]() -> std::string {
+                cb::Session* s = session_.session();
+                return s ? caliper_host::allow_all_status(*s) : std::string();
+            });
         }
 #endif
     }
@@ -2136,13 +2145,14 @@ private:
         glfwSetWindowCloseCallback(window_, [](GLFWwindow* w) {
             if (auto* app = static_cast<CaliperApp*>(glfwGetWindowUserPointer(w))) app->on_close_request();
         });
-        // A press at the pointer's place: GLFW's macOS backend gives a mouse press without the
+        // A press at the pointer's place, on macOS only: GLFW's macOS backend gives a mouse press without the
         // place of its event (cocoa_window.m, mouseDown:), and the window gets no cursor moves
         // while it is not the key window or while moves do not reach it, so ImGui would put the
         // press at the last place it was given, often hundreds of points away, and the drag's
         // first move would then carry that whole distance in one frame. The pointer's place goes
         // to ImGui first: ImGui's GLFW backend (installed by the renderer below) calls the
         // callback it finds here before it adds the button.
+#ifdef __APPLE__
         glfwSetMouseButtonCallback(window_, [](GLFWwindow* w, int, int action, int) {
             auto* app = static_cast<CaliperApp*>(glfwGetWindowUserPointer(w));
             if (action != GLFW_PRESS || !app || !ImGui::GetCurrentContext()) return;
@@ -2155,6 +2165,7 @@ private:
             }
             ImGui::GetIO().AddMousePosEvent(float(x), float(y));
         });
+#endif
         return renderer_->init(window_);
     }
 
