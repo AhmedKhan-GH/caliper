@@ -999,7 +999,7 @@ endif()
 # in its own folder with its own CMakeLists.txt once it exists: the acceptance
 # test, the match of points@1 with the built-in draw, and the pixel
 # comparison of the app and the browser module.
-foreach(_caliper_pg_dir programmable_graphics points_match draw_parity)
+foreach(_caliper_pg_dir programmable_graphics points_match draw_parity surface_match)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_caliper_pg_dir}/CMakeLists.txt")
         add_subdirectory(${_caliper_pg_dir})
     endif()
