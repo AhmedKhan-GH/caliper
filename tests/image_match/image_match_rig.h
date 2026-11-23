@@ -735,7 +735,7 @@ inline Outcome run_case(Metal& m, const cs::Piece& piece, const Case& k) {
         if (std::find(items.begin(), items.end(), item) == items.end()) items.push_back(item);
     }
     for (const std::uint64_t item : items) {
-        const auto [x, y] = where[item];
+        const int x = where[item].first, y = where[item].second;
         CAPTURE(x);
         CAPTURE(y);
         ++o.probes;
