@@ -486,6 +486,33 @@
   "resource_count_wrap.bin": {
     "error": "bad_request"
   },
+  "resource_element_stride.bin": {
+    "error": "bad_request"
+  },
+  "resource_element_texture.bin": {
+    "error": "bad_request"
+  },
+  "resource_element_unknown.bin": {
+    "error": "bad_request"
+  },
+  "resource_elements_alone.bin": {
+    "error": "bad_request"
+  },
+  "resource_elements_count.bin": {
+    "error": "bad_request"
+  },
+  "resource_elements_missing.bin": {
+    "error": "bad_request"
+  },
+  "resource_format_alone.bin": {
+    "error": "bad_request"
+  },
+  "resource_format_count.bin": {
+    "error": "bad_request"
+  },
+  "resource_format_unknown.bin": {
+    "error": "bad_request"
+  },
   "resource_name.bin": {
     "error": "bad_request"
   },
@@ -583,6 +610,9 @@
     "error": "bad_request"
   },
   "resource_texture_side.bin": {
+    "error": "bad_request"
+  },
+  "resource_texture_side_big.bin": {
     "error": "bad_request"
   },
   "resource_texture_stride.bin": {

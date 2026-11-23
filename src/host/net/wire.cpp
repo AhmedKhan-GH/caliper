@@ -1982,11 +1982,12 @@ void program_instance(const Frame& f, Program* p) {
     if (!p->derive && !p->draw) bad("an instance of a piece carries the section 'derive' or 'draw'");
 }
 
-// RESOURCE, in _wire.py's order: program, resource, step, count, stride, width and height, the keys of
-// "split" (version, parts, part, first), the byte limit on count before any product (a version in parts
+// RESOURCE, in _wire.py's order: program, resource, step, count, stride, width and height, format,
+// element and elements, the keys of "split" (version, parts, part, first), the byte limit on count before any product (a version in parts
 // holds at most CALIPER_NET_RESOURCE_VERSION_MAX_BYTES), then the section. Each product below is of values
 // already bounded, thus none wraps: width and height are at most 4096, count is at most the byte limit
 // divided by stride, and a part's first element is below the count before the count less it is taken.
+// A texture's and a narrow buffer's count is in 32-bit words, thus a part holds whole words.
 Resource resource(const Frame& f) {
     const Json& m = f.meta;
     Resource r;
@@ -2000,14 +2001,37 @@ Resource resource(const Frame& f) {
                            return int_in(v, 4, CALIPER_NET_RESOURCE_STRIDE_MAX) && u64(v) % 4 == 0;
                        }, "a multiple of 4 from 4 to 256"));
     auto side = [](const Json& v) { return int_in(v, 1, CALIPER_NET_RESOURCE_SIDE_MAX); };
-    const Json* width = opt(m, "width", side, "an integer from 1 to 4096");
-    const Json* height = opt(m, "height", side, "an integer from 1 to 4096");
+    const Json* width = opt(m, "width", side, "an integer from 1 to 8192");
+    const Json* height = opt(m, "height", side, "an integer from 1 to 8192");
     if (!width != !height) bad("a texture holds both 'width' and 'height'");
+    const Json* format = opt(m, "format", [](const Json& v) {
+        return one_of(v, {CALIPER_NET_TEXTURE_RGBA8, CALIPER_NET_TEXTURE_R8, CALIPER_NET_TEXTURE_R32UINT});
+    }, "rgba8unorm, r8unorm or r32uint");
+    if (format && !width) bad("'format' belongs to a texture, with 'width' and 'height'");
     if (width) {
-        if (r.stride != 4 || (uint64_t)r.count != u64(*width) * u64(*height))
-            bad("a texture has a stride of 4 and width * height elements");
+        // At most 8192 * 8192 texels of 4 bytes, 2^28 bytes: the product cannot wrap.
+        const uint64_t texels = u64(*width) * u64(*height);
+        const bool r8 = format && format->as_string() == CALIPER_NET_TEXTURE_R8;
+        const uint64_t words = r8 ? (texels + 3) / 4 : texels;
+        if (r.stride != 4 || (uint64_t)r.count != words)
+            bad("a texture has a stride of 4 and the words of its texels as its count");
         r.width = u32(*width);
         r.height = u32(*height);
+        if (format) r.format = format->as_string();
+    }
+    const Json* element = opt(m, "element", [](const Json& v) {
+        return one_of(v, {CALIPER_NET_ELEMENT_U8, CALIPER_NET_ELEMENT_U16});
+    }, "u8 or u16");
+    const Json* elements = opt(m, "elements", is_u32, "a uint32");
+    if (!element != !elements) bad("a buffer of narrow elements holds both 'element' and 'elements'");
+    if (element) {
+        if (width) bad("a texture has no 'element'");
+        // At most 2^32 - 1 elements of 2 bytes in 64 bits: the product cannot wrap.
+        const uint64_t bytes = element->as_string() == CALIPER_NET_ELEMENT_U8 ? 1 : 2;
+        if (r.stride != 4 || (uint64_t)r.count != (u64(*elements) * bytes + 3) / 4)
+            bad("a buffer of narrow elements has a stride of 4 and the words of its elements as its count");
+        r.element = element->as_string();
+        r.elements = u32(*elements);
     }
     if (const Json* sp = opt(m, "split", is_obj, "an object")) {
         auto need = [&](const char* key, auto ok, const char* what) -> const Json& {
@@ -2055,6 +2079,9 @@ void resource_to_meta(const Resource& r, Json& m, std::vector<Section>& sections
     m.set("stride", r.stride);
     if (r.width) m.set("width", *r.width);
     if (r.height) m.set("height", *r.height);
+    if (r.format) m.set("format", *r.format);
+    if (r.element) m.set("element", *r.element);
+    if (r.elements) m.set("elements", *r.elements);
     if (r.split) {
         Json sp = Json::object();
         sp.set("version", r.split->version);
@@ -3011,7 +3038,8 @@ SplitResources::Result SplitResources::add(const Resource& r, WholeResource* out
     };
     const Resource& h = held->head;
     if (r.step != h.step || r.count != h.count || r.stride != h.stride || r.width != h.width ||
-        r.height != h.height || sl.parts != h.split->parts)
+        r.height != h.height || r.format != h.format || r.element != h.element || r.elements != h.elements ||
+        sl.parts != h.split->parts)
         return refuse("a part of the resource " + name + " differs from its part 0");
     if (sl.part != held->next_part || sl.first != held->next_first)
         return refuse("a part of the resource " + name + " comes out of order");

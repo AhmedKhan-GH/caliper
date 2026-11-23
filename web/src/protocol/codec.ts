@@ -14,7 +14,7 @@ import {
   INTERVENTION_STATES, MAX_INTERVENTIONS, MAX_POINTS_LISTED, MAX_PROGRAMS, OUTPUT_GEOMETRY, OUTPUT_PIXELS, OUTPUT_TENSOR, POINT_MAX, PROGRAM_ARRAYS,
   PROGRAM_EVERY_MAX, PROGRAM_ID_MAX, PROGRAM_MAX_COUNT, PROGRAM_MAX_INPUTS, PROGRAM_MEMORY_MB_MAX, PROGRAM_BUILTIN_MAX, PROGRAM_PARAM_NAME_MAX, PROGRAM_PARAMS, PROGRAM_PARAMS_MAX, PROGRAM_REMOVE, PROGRAM_SET, STATUS_OPERATOR, TENSOR_AXES_MAX, TENSOR_ELEMENTS_MAX,
   PROGRAM_SIDE_MAX, PROGRAM_SOURCE_MAX, PROGRAM_STATES, PROGRAM_TIME_MS_MAX, PROGRAM_WORKGROUPS_MAX, SECTION_WGSL, TENSOR_NAME_MAX,
-  PIECE_COMMON_MAX, PIECE_NAME_MAX, PIECE_SEGMENTS_MAX, PIECE_VERSION_MAX, RESOURCE_MAX_BYTES, RESOURCE_PART_WAIT, RESOURCE_SIDE_MAX, RESOURCE_STRIDE_MAX, RESOURCE_VERSION_MAX_BYTES,
+  PIECE_COMMON_MAX, PIECE_NAME_MAX, PIECE_SEGMENTS_MAX, PIECE_VERSION_MAX, RESOURCE_MAX_BYTES, RESOURCE_ELEMENTS, RESOURCE_PART_WAIT, RESOURCE_SIDE_MAX, RESOURCE_STRIDE_MAX, RESOURCE_VERSION_MAX_BYTES, TEXTURE_FORMATS,
   SECTION_COMMON, SECTION_DERIVE, SECTION_DRAW, SECTION_RESOURCE, STATUS_PIECE,
   type InterveneRequest, type InterventionsInfo, type ProgramDeclaration, type ProgramMsg, type ResourceMsg, type ResourceSplit, type ProgramStateMsg, type ProgramStatus,
 } from './messages.js';
@@ -1904,7 +1904,21 @@ export function decodeResource(f: Frame): ResourceMsg {
   const width = opt<number | undefined>(f, 'width', side, `an integer from 1 to ${RESOURCE_SIDE_MAX}`, undefined);
   const height = opt<number | undefined>(f, 'height', side, `an integer from 1 to ${RESOURCE_SIDE_MAX}`, undefined);
   if ((width === undefined) !== (height === undefined)) bad(f.type, "a texture holds both 'width' and 'height'");
-  if (width !== undefined && (stride !== 4 || count !== width * height!)) bad(f.type, 'a texture has a stride of 4 and width * height elements');
+  const format = opt<ResourceMsg['format']>(f, 'format', (v) => (TEXTURE_FORMATS as readonly unknown[]).includes(v), 'rgba8unorm, r8unorm or r32uint', undefined);
+  if (format !== undefined && width === undefined) bad(f.type, "'format' belongs to a texture, with 'width' and 'height'");
+  if (width !== undefined) {
+    const texels = width * height!;
+    const words = format === 'r8unorm' ? Math.floor((texels + 3) / 4) : texels;
+    if (stride !== 4 || count !== words) bad(f.type, 'a texture has a stride of 4 and the words of its texels as its count');
+  }
+  const element = opt<ResourceMsg['element']>(f, 'element', (v) => (RESOURCE_ELEMENTS as readonly unknown[]).includes(v), 'u8 or u16', undefined);
+  const elements = opt<number | undefined>(f, 'elements', isU32, 'a uint32', undefined);
+  if ((element === undefined) !== (elements === undefined)) bad(f.type, "a buffer of narrow elements holds both 'element' and 'elements'");
+  if (element !== undefined) {
+    if (width !== undefined) bad(f.type, "a texture has no 'element'");
+    const nbytes = element === 'u8' ? 1 : 2;
+    if (stride !== 4 || count !== Math.floor((elements! * nbytes + 3) / 4)) bad(f.type, 'a buffer of narrow elements has a stride of 4 and the words of its elements as its count');
+  }
   const raw = opt<Raw | undefined>(f, 'split', isObj, 'an object', undefined);
   let split: ResourceSplit | undefined;
   if (raw !== undefined) {
@@ -1935,6 +1949,9 @@ export function decodeResource(f: Frame): ResourceMsg {
   const m: ResourceMsg = { type: 'resource', program, resource, step, count, stride, data: s.bytes };
   if (width !== undefined) m.width = width;
   if (height !== undefined) m.height = height;
+  if (format !== undefined) m.format = format;
+  if (element !== undefined) m.element = element;
+  if (elements !== undefined) m.elements = elements;
   if (split) m.split = split;
   return m;
 }
@@ -1991,7 +2008,7 @@ export class SplitResources {
       throw new MessageError('bad_request', why, MSG.resource);
     };
     const name = `'${key}'`;
-    if (r.step !== h.step || r.count !== h.count || r.stride !== h.stride || r.width !== h.width || r.height !== h.height || sp.parts !== h.split!.parts) {
+    if (r.step !== h.step || r.count !== h.count || r.stride !== h.stride || r.width !== h.width || r.height !== h.height || r.format !== h.format || r.element !== h.element || r.elements !== h.elements || sp.parts !== h.split!.parts) {
       refuse(`a part of the resource ${name} differs from its part 0`);
     }
     if (sp.part !== a.nextPart || sp.first !== a.nextFirst) refuse(`a part of the resource ${name} comes out of order`);
@@ -2009,6 +2026,9 @@ export class SplitResources {
     const whole: ResourceMsg = { type: 'resource', program: h.program, resource: h.resource, step: h.step, count: h.count, stride: h.stride, data: a.bytes };
     if (h.width !== undefined) whole.width = h.width;
     if (h.height !== undefined) whole.height = h.height;
+    if (h.format !== undefined) whole.format = h.format;
+    if (h.element !== undefined) whole.element = h.element;
+    if (h.elements !== undefined) whole.elements = h.elements;
     return whole;
   }
 }
@@ -2016,6 +2036,7 @@ export class SplitResources {
 export function encodeResource(m: ResourceMsg, minor: number = PROTOCOL_MINOR): Uint8Array {
   const meta = drop({
     program: m.program, resource: m.resource, step: m.step, count: m.count, stride: m.stride, width: m.width, height: m.height,
+    format: m.format, element: m.element, elements: m.elements,
     split: m.split ? { version: m.split.version, part: m.split.part, parts: m.split.parts, first: m.split.first } : undefined,
   });
   return frameAt(MSG.resource, meta, [{ name: SECTION_RESOURCE, dtype: DTYPE.u8, shape: [m.data.length], encoding: 0, bytes: m.data }], minor);
