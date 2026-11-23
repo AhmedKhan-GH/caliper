@@ -1179,9 +1179,11 @@ void SceneView::poll_programs() {
     bool completed = false;
     for (auto& d : draws_) {
         if (!d->runtime) continue;
-        // Never a wait: the completed submits give their GPU time, or < 0 without timestamps, and
-        // the time from the submit until the work was seen done, an upper bound. A frame not done
-        // after 1 s is late, and the runtime judges it by its GPU time once it is done.
+        // Never a wait: the completed submits give their GPU time, or < 0 without timestamps, for
+        // work that the driver ended, or for a submit whose time the backend no longer keeps (the
+        // panel was not drawn for a while), and the time from the submit until the work was seen
+        // done, an upper bound. A frame not done after 1 s is late, and the runtime judges it by
+        // its GPU time once it is done.
         while (!d->pending.empty()) {
             double ms = -1;
             if (!gfx_.submit_gpu_ms(d->pending.front().first, &ms)) break;

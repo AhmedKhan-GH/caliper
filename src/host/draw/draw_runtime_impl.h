@@ -133,6 +133,9 @@ struct DrawRuntime::Impl {
     // none, by kLateFrames late frames in a row (draw_runtime.cpp).
     bool late = false;
     std::uint32_t late_frames = 0;
+    // Frames over kHeavyMs of GPU time in a row, and their GPU time together.
+    std::uint32_t heavy_frames = 0;
+    double heavy_ms = 0;
 };
 
 }  // namespace caliper_draw

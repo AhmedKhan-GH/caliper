@@ -1142,10 +1142,11 @@ struct ProgramHost {
     std::uint64_t moves = 0;
     std::function<std::string()> workspace;                 // the app's workspace folder, for its pieces
     std::map<std::string, std::string> seen_picks;          // each panel's last pick that the programs took
-    // The runtime whose event sink, values and history the host and the stage host read: the
-    // last that gave them. It takes them back when it goes, so that no host of the process reads
-    // the history or the values of a session that is gone.
-    const void* owner = nullptr;
+    // The runtimes whose event sink, and whose values and history, the host and the stage host
+    // read: the last that gave each. Each takes back what it gave when it goes, so that no host
+    // of the process reads the sink, the history or the values of a session that is gone.
+    const void* events_owner = nullptr;
+    const void* state_owner = nullptr;
 };
 
 // One status item for each program that the scene panels draw: half "draw" and its draw object.
@@ -1384,13 +1385,13 @@ void SpecRuntime::set_instruments(caliper_builder::EventSink* events, caliper_bu
     run_ = run;
     if (events) app_stage_host_impl()->set_events(events);   // the stages' program events
     if (events) program_host().host.set_events(events);       // the programs' draw events
-    if (events) program_host().owner = this;
+    if (events) program_host().events_owner = this;
 }
 
 void SpecRuntime::set_instrument_state(caliper_builder::ValueStore* values, caliper_builder::StepHistory* history) {
     values_ = values;
     history_ = history;
-    if (values || history) program_host().owner = this;
+    if (values || history) program_host().state_owner = this;
     // A stage's params follow their references at the next frame.
     app_stage_host_impl()->set_evaluate(
         values ? std::function<nlohmann::json(const spec::Reference&)>(
@@ -1580,11 +1581,14 @@ void SpecRuntime::draw_control(const spec::Control& control, const ImRect& r, co
 
 SpecRuntime::~SpecRuntime() {
     // The hosts of the process outlive this runtime: they stop reading its sink, values and history.
-    if (program_host().owner == this) {
+    if (program_host().state_owner == this) {
         set_instrument_state(nullptr, nullptr);
+        program_host().state_owner = nullptr;
+    }
+    if (program_host().events_owner == this) {
         program_host().host.set_events(nullptr);
         app_stage_host_impl()->set_events(nullptr);
-        program_host().owner = nullptr;
+        program_host().events_owner = nullptr;
     }
     for (auto& e : entries_) textures_.release(e.second.view.texture);
     for (auto& e : previews_) textures_.release(e.second.view.texture);

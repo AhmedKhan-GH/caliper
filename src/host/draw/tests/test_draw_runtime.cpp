@@ -450,6 +450,80 @@ TEST_CASE("a late frame waits for its GPU time: a busy GPU keeps the program, ov
     CHECK(rt.status().error.code == cp::kProgramDrawTimeout);
 }
 
+TEST_CASE("a frame over 1 s of GPU time stops the program also when no poll saw it late") {
+    Host h(64, 48, timed_caps());
+    h.gfx.set_auto_complete(false);
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    cd::Instance a;
+    a.program = "arcs";
+    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    give_arcs(rt, ex::arc_resources(), 1);
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_pending(900.0);         // the last poll before it completed: not late yet
+    rt.frame_done(1500.0, 1600.0);
+    CHECK(rt.status().state == cd::DrawState::stopped);
+    CHECK(rt.status().error.code == cp::kProgramDrawTimeout);
+    CHECK(rt.status().error.message == "Stopped arcs: a frame of its draw passes took 1500.0 ms of GPU time, above 1 s");
+}
+
+TEST_CASE("heavy frames in a row stop the program once their GPU time passes 1 s, and a light frame ends the row") {
+    Host h(64, 48, timed_caps());
+    h.gfx.set_auto_complete(false);
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    cd::Instance a;
+    a.program = "arcs";
+    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    give_arcs(rt, ex::arc_resources(), 1);
+    // A busy GPU delays light frames by the wall clock: they never count.
+    for (int k = 0; k < 10; ++k) {
+        REQUIRE(frame(h, rt).size() == 1);
+        rt.frame_pending(1500.0);
+        rt.frame_done(3.0, 1600.0);
+    }
+    // Frames of 400 ms, a light one between them, then frames of 900 ms of GPU time.
+    for (const double ms : {400.0, 400.0, 3.0, 400.0, 400.0}) {
+        REQUIRE(frame(h, rt).size() == 1);
+        rt.frame_done(ms, ms + 50.0);
+    }
+    CHECK(rt.status().state == cd::DrawState::running);
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_done(400.0, 450.0);   // three in a row: 1,200 ms together
+    CHECK(rt.status().state == cd::DrawState::stopped);
+    CHECK(rt.status().error.code == cp::kProgramDrawTimeout);
+    CHECK(rt.status().error.message ==
+          "Stopped arcs: 3 frames of its draw passes in a row took 1200.0 ms of GPU time together, above 1 s");
+    // A program just under 1 s of GPU time a frame stops at its second frame.
+    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    give_arcs(rt, ex::arc_resources(), 1);
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_pending(1100.0);
+    rt.frame_done(900.0, 1200.0);
+    CHECK(rt.status().state == cd::DrawState::running);
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_done(900.0, 950.0);
+    CHECK(rt.status().state == cd::DrawState::stopped);
+    CHECK(rt.status().error.code == cp::kProgramDrawTimeout);
+}
+
+TEST_CASE("a frame whose time the backend no longer keeps is done, and neither stops nor counts") {
+    Host h(64, 48, timed_caps());
+    h.gfx.set_auto_complete(false);
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    cd::Instance a;
+    a.program = "arcs";
+    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    give_arcs(rt, ex::arc_resources(), 1);
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_pending(1100.0);   // late at the last poll, then the panel was not drawn for a while
+    rt.frame_done(gfx::kGpuMsForgotten, 60000.0);
+    CHECK(rt.status().state == cd::DrawState::running);
+    CHECK(rt.status().frame_ms < 0);   // nothing measured
+    REQUIRE(frame(h, rt).size() == 1);   // it submits again
+    rt.frame_done(2.0, 3.0);
+    CHECK(rt.status().state == cd::DrawState::running);
+    CHECK(rt.status().frame_ms == doctest::Approx(2.0));
+}
+
 TEST_CASE("without GPU time, three late frames in a row stop the program, and a frame in time ends the row") {
     Host h;
     h.gfx.set_auto_complete(false);
