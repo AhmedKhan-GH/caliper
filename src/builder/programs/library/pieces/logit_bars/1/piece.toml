@@ -1,0 +1,81 @@
+name = "logit_bars"
+version = 1
+description = "Ten output probabilities with baseline ghost bars and token picks"
+imports = ["pick@1", "camera@1"]
+
+[[inputs]]
+name = "probs"
+kind = "tensor"
+dtype = "f32"
+rank_min = 2
+rank_max = 2
+title = "Baseline And Intervention Probabilities (2, 10)"
+optional = false
+
+[[inputs]]
+name = "tokens"
+kind = "tensor"
+dtype = "i32"
+rank_min = 1
+rank_max = 1
+title = "Shared Token IDs (10)"
+optional = false
+
+[[inputs]]
+name = "label_text"
+kind = "tensor"
+dtype = "u32"
+rank_min = 2
+rank_max = 2
+title = "Packed UTF-8 Tokens (10, 16)"
+optional = false
+
+[[resources]]
+id = "cells"
+kind = "buffer"
+struct = "Bar"
+fields = ["rect: vec4<f32>", "baseline: f32", "probability: f32", "token: i32", "index: u32"]
+count = 10
+counted = true
+
+[[resources]]
+id = "labels"
+kind = "buffer"
+struct = "Label"
+fields = ["position: vec4<f32>", "string: u32"]
+count = 10
+counted = false
+
+[[resources]]
+id = "strings"
+kind = "buffer"
+struct = "Text"
+fields = ["a: vec4<u32>", "b: vec4<u32>", "c: vec4<u32>", "d: vec4<u32>"]
+count = 10
+counted = false
+
+[derive]
+time_ms = 50
+memory_mb = 64
+
+[[derive.passes]]
+entry = "output_bars"
+workgroups = [1, 1, 1]
+writes = ["cells", "labels", "strings"]
+
+[draw]
+camera = "pan_zoom"
+frame_ms = 4
+memory_mb = 64
+pick = { resource = "cells", fields = ["index", "token", "baseline", "probability"] }
+text = { anchors = "labels", position = "position", string = "string", strings_from = "strings", align = "center" }
+
+[[draw.passes]]
+kind = "render"
+vertex = "panel_vs"
+fragment = "panel_fs"
+instances = "cells"
+vertices = 6
+blend = "alpha"
+depth = "none"
+pick = true

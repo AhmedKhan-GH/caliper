@@ -186,6 +186,7 @@ instances = "curves"
 vertices = 72
 blend = "additive"
 depth = "none"
+pick = true
 
 [[draw.passes]]
 kind = "render"

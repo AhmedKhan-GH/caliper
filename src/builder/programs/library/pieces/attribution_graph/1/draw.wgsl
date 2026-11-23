@@ -1,6 +1,7 @@
 struct EdgeOut {
     @builtin(position) position: vec4<f32>,
     @location(0) color: vec4<f32>,
+    @location(1) @interpolate(flat) segment: u32,
 }
 fn cubic(c: Curve, t: f32) -> vec2<f32> {
     let u = 1.0-t;
@@ -32,10 +33,17 @@ fn edge_vs(@builtin(instance_index) i: u32, @builtin(vertex_index) v: u32) -> Ed
         c.source_node != u32(params.selected_node) && c.target_node != u32(params.selected_node)) { alpha *= 0.12; }
     if (c.weight == 0.0) { alpha = 0.0; }
     out.color = vec4<f32>(color*alpha,alpha);
+    out.segment = i*12u+segment+1u;
     return out;
 }
 @fragment
-fn edge_fs(in: EdgeOut) -> @location(0) vec4<f32> { return in.color; }
+fn edge_fs(in: EdgeOut) -> CaliperPicked {
+    var out: CaliperPicked;
+    out.color = in.color;
+    // Program ID zero prevents edge picks. The item distinguishes raster boundaries in the ID target.
+    out.id = vec2<u32>(0u,in.segment);
+    return out;
+}
 
 struct NodeOut {
     @builtin(position) position: vec4<f32>,

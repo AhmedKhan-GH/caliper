@@ -1,0 +1,62 @@
+name = "heat_grid"
+version = 1
+description = "A grid of normalized recovery with layer and token position picks"
+imports = ["pick@1", "camera@1"]
+
+[[inputs]]
+name = "grid"
+kind = "tensor"
+dtype = "f32"
+rank_min = 2
+rank_max = 2
+title = "Recovery (Layers, Positions)"
+optional = false
+
+[[params]]
+name = "vmin"
+type = "f32"
+default = -1.0
+min = -1000.0
+max = 1000.0
+title = "Minimum Recovery"
+
+[[params]]
+name = "vmax"
+type = "f32"
+default = 1.0
+min = -1000.0
+max = 1000.0
+title = "Maximum Recovery"
+
+[[resources]]
+id = "cells"
+kind = "buffer"
+struct = "Cell"
+fields = ["rect: vec4<f32>", "recovery: f32", "layer: u32", "token_position: u32", "valid: u32"]
+count = 16384
+counted = true
+
+[derive]
+time_ms = 50
+memory_mb = 64
+
+[[derive.passes]]
+entry = "recovery_cells"
+workgroups = [256, 1, 1]
+writes = ["cells"]
+
+[draw]
+camera = "pan_zoom"
+frame_ms = 4
+memory_mb = 64
+pick = { resource = "cells", fields = ["layer", "token_position", "recovery"] }
+
+[[draw.passes]]
+kind = "render"
+vertex = "panel_vs"
+fragment = "panel_fs"
+instances = "cells"
+vertices = 6
+blend = "alpha"
+depth = "none"
+pick = true

@@ -354,7 +354,7 @@ jobs:
           CALIPER_WASM_DIR="$RUNNER_TEMP/draw-parity-views" CALIPER_DRAW_PARITY_DIR="$out" \
           CALIPER_DRAW_PARITY_CAPTURES="$RUNNER_TEMP/draw-parity-captures" \
           CALIPER_PYTHON="$RUNNER_TEMP/acceptance-py/bin/python" \
-            npx playwright test --project=swiftshader --reporter=list test/draw_parity.spec.ts | tee "$log"
+            npx playwright test --project=swiftshader --reporter=list test/draw_parity.spec.ts test/interp_pieces.spec.ts | tee "$log"
           grep -q "draw parity: ok" "$log"
           grep -q "live tower:" "$log"
           if [ "$app" -eq 0 ]; then
