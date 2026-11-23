@@ -208,9 +208,11 @@ std::string code_of(const cs::Piece& p) { return cp::check_piece_manifest(p).cod
 
 }  // namespace
 
-TEST_CASE("the published resources of a piece hold at most 8 MiB together, what a pass sends; a private one 64 MiB") {
-    // What the script queues for one viewer at a pass (python/caliper/_programs.py, PUBLISHED_BYTES_MAX).
-    CHECK(cs::piece_limits::kPublishedBytesMax == 8u << 20);
+TEST_CASE("a published resource holds at most 128 MiB, the published resources of a piece 256 MiB, a private one 64 MiB") {
+    // What the script sends at a pass (python/caliper/_programs.py, PUBLISHED_BYTES_MAX and PUBLISHED_RESOURCE_MAX).
+    CHECK(cs::piece_limits::kPublishedBytesMax == 256u << 20);
+    CHECK(cs::piece_limits::kPublishedResourceBytesMax == 128u << 20);   // CALIPER_NET_RESOURCE_VERSION_MAX_BYTES
+    CHECK(cs::piece_limits::kCountMax == 33554432u);
     cs::Piece p = arcs_piece();
     std::uint64_t others = 0;   // the arcs and the labels, which stay published
     for (std::size_t i = 1; i < p.resources.size(); ++i) {
@@ -219,28 +221,42 @@ TEST_CASE("the published resources of a piece hold at most 8 MiB together, what 
         others += std::uint64_t(p.resources[i].count) * l.stride;
     }
     REQUIRE(others % 16 == 0);
-    // 4,194,304 elements of 16 bytes: exactly 64 MiB, the most of a private resource.
+    // 4,194,304 elements of 16 bytes: exactly 64 MiB, the most of a private resource, and one more is refused.
     p.resources[0].layout.element = "vec4<f32>";
-    p.resources[0].count = cs::piece_limits::kCountMax;
-    CHECK(code_of(p) == cp::kProgramBadResource);
+    p.resources[0].count = 4194304;
     p.resources[0].publish = false;
-    CHECK(code_of(p).empty());
-    // Published, it fits while all three hold at most 8 MiB together, and one element more is refused.
-    p.resources[0].publish = true;
-    p.resources[0].count = std::uint32_t((cs::piece_limits::kPublishedBytesMax - others) / 16);
     CHECK(code_of(p).empty());
     p.resources[0].count += 1;
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    // Published: 128 MiB, 8,388,608 elements of 16 bytes, and one element more is refused at the resource.
+    p.resources[0].publish = true;
+    p.resources[0].count = 8388608;
+    CHECK(code_of(p).empty());
+    p.resources[0].count += 1;
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    CHECK(cp::check_piece_manifest(p).where != "resources");
+    // With the labels of 32 bytes the three hold exactly 256 MiB together; one label more is refused for the sum.
+    const std::uint64_t arcs_bytes = std::uint64_t(p.resources[1].count) * 24;
+    p.resources[0].count = 8388608;
+    p.resources[2].count = std::uint32_t((cs::piece_limits::kPublishedBytesMax - (128u << 20) - arcs_bytes) / 32);
+    CHECK_MESSAGE(code_of(p).empty(), cp::check_piece_manifest(p).message);
+    p.resources[2].count += 1;
     CHECK(cp::check_piece_manifest(p).code == cp::kProgramBadResource);
     CHECK(cp::check_piece_manifest(p).where == "resources");
-    p.resources[0].publish = false;
+    // A count past 33,554,432 is refused before its bytes are taken.
+    p = arcs_piece();
+    p.resources[0].layout.element = "u32";
+    p.resources[0].count = cs::piece_limits::kCountMax;
     CHECK(code_of(p).empty());
-    // A texture of 2,048 by 2,048 texels holds 16 MiB: refused published, and private up to 4,096 by 4,096.
+    p.resources[0].count += 1;
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    // A texture of 4,096 by 4,096 texels holds 64 MiB, published or private.
     p = arcs_piece();
     p.resources[0].kind = cs::ResourceKind::texture;
     p.resources[0].layout = {};
     p.resources[0].count = 0;
     p.resources[0].width = p.resources[0].height = 2048;
-    CHECK(code_of(p) == cp::kProgramBadResource);
+    CHECK(code_of(p).empty());
     p.resources[0].width = p.resources[0].height = 1024;
     CHECK(code_of(p).empty());
     p.resources[0].publish = false;
@@ -434,7 +450,7 @@ TEST_CASE("the manifest check refuses each breach with its code") {
     p.resources[0].count = cs::piece_limits::kCountMax + 1;
     CHECK(code_of(p) == cp::kProgramBadResource);
     p = arcs_piece();
-    p.resources[1].count = cs::piece_limits::kCountMax;  // 4,194,304 arcs of 24 bytes: 96 MiB
+    p.resources[1].count = cs::piece_limits::kCountMax;  // 33,554,432 arcs of 24 bytes: 768 MiB
     CHECK(code_of(p) == cp::kProgramBadResource);
     p = arcs_piece();
     p.resources[0].kind = cs::ResourceKind::texture;

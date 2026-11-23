@@ -309,6 +309,13 @@ void WebPrograms::on_resource(const caliper_net::wire::Resource& part) {
     if (it == programs_.end()) return;   // a resource before its program: the next version follows it
     Program& p = *it->second;
     if (!keeps_version(p.published, r)) return;   // no resource that the piece publishes, or above its size
+    // All kept versions stay within kKeptBytesMax, as the app's step history keeps its resources: a version
+    // that would pass it is not kept, and the program draws the version it has.
+    std::uint64_t kept = 0;
+    for (const auto& [id, q] : programs_)
+        for (const auto& [rid, v] : q->versions)
+            if (v.bytes && !(q.get() == &p && rid == r.resource)) kept += v.bytes->size();
+    if (kept + r.data.size > kKeptBytesMax) return;
     Version& v = p.versions[r.resource];
     const std::int64_t step = std::int64_t(std::min<std::uint64_t>(r.step, std::uint64_t(INT64_MAX)));
     if (v.step >= 0 && step < v.step) ++p.epoch;   // the run went back (a new attachment or a fork)

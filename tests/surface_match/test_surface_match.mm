@@ -886,11 +886,12 @@ TEST_CASE("surface_match: surface@1 passes piece.check, its manifest and web lim
         const cp::Composed pass = cp::compose_draw(piece, resolved, i);
         CHECK_MESSAGE(pass.verdict.ok(), "draw pass ", i, ": ", pass.verdict.message);
     }
-    // The published bytes: 262,144 cells of 32 bytes, the 8 MiB that one pass may send.
+    // The published bytes: 262,144 cells of 32 bytes, the most cells of the surface operator.
     cp::ElementLayout layout;
     REQUIRE(cp::element_layout(piece.resources.at(0).layout, &layout).ok());
     CHECK(layout.stride == 32);
-    CHECK(std::uint64_t(piece.resources.at(0).count) * layout.stride == cs::piece_limits::kPublishedBytesMax);
+    CHECK(piece.resources.at(0).count == 262144u);
+    CHECK(std::uint64_t(piece.resources.at(0).count) * layout.stride <= cs::piece_limits::kPublishedResourceBytesMax);
     const nlohmann::json check = caliper_builder::check_piece_json(cs::to_json(piece), false, nullptr);
     CHECK_MESSAGE(check.value("ok", false), check["messages"].dump());
     CHECK(check["hash"] == piece.hash);

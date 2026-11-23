@@ -47,15 +47,19 @@ inline constexpr std::size_t kImports = 8;                       // lib modules
 inline constexpr std::size_t kDepends = 8;
 inline constexpr std::size_t kFields = 16;                       // fields of one layout
 inline constexpr std::uint32_t kStrideMax = 256;                 // bytes of one element
-inline constexpr std::uint32_t kCountMax = 4'194'304;            // elements of one buffer
+inline constexpr std::uint32_t kCountMax = 33'554'432;           // elements of one buffer: 128 MiB of 4-byte elements
 inline constexpr std::uint32_t kTextureSideMax = 4096;           // pixels of one texture side
 inline constexpr std::uint64_t kResourceBytesMax = 64ull << 20;  // bytes of one private resource or draw buffer
-// Bytes of all published resources of a piece together, 8 MiB: what one pass sends to a viewer. The
-// script queues at most these bytes and 64 KiB of message headers for one viewer, half of the 16 MiB
-// control queue of either sender, and a viewer with more waiting skips the pass and gets a later one
-// (python/caliper/_programs.py, PUBLISHED_BYTES_MAX and RESOURCE_BACKLOG_BYTES). Below the wire's
-// bound of one RESOURCE, CALIPER_NET_RESOURCE_MAX_BYTES.
-inline constexpr std::uint64_t kPublishedBytesMax = 8ull << 20;
+// Bytes of one published resource, 128 MiB: the largest storage binding of WebGPU's default limits, which
+// the app's graphics layer and the browser module both hold to, and the bound of a version that goes to a
+// viewer in RESOURCE parts (CALIPER_NET_RESOURCE_VERSION_MAX_BYTES). The step history keeps at most this
+// much of one resource as well.
+inline constexpr std::uint64_t kPublishedResourceBytesMax = 128ull << 20;
+// Bytes of all published resources of a piece together, 256 MiB: one version of each fits the step
+// history's 256 MiB of resources. A version above 8 MiB goes to a viewer in parts of 8 MiB, each while
+// the viewer's queue holds at most 8 MiB and 64 KiB, half of the 16 MiB control queue of either sender
+// (python/caliper/_programs.py, PUBLISHED_BYTES_MAX, PART_BYTES and RESOURCE_BACKLOG_BYTES).
+inline constexpr std::uint64_t kPublishedBytesMax = 256ull << 20;
 inline constexpr std::uint32_t kKeepDefault = 256;               // kept versions of a resource in the step history
 inline constexpr std::uint32_t kKeepMax = 4096;
 inline constexpr std::size_t kDerivePasses = 8;

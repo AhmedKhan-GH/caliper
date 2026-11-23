@@ -72,9 +72,11 @@ public:
     // RESOURCE: the newest version of a resource of a program, copied, when
     // the program's piece publishes that resource and the version holds at
     // most its declared count and bytes (program_frames.h, keeps_version).
-    // Thus the page keeps at most the published bytes of 16 pieces. The parts of
-    // a version in parts are put together first (caliper_net::wire::SplitResources),
-    // which holds at most two incomplete versions.
+    // The page keeps at most kKeptBytesMax of versions, 256 MiB as the app's step
+    // history keeps of resources; a version that would pass it is not kept. The
+    // parts of a version in parts are put together first
+    // (caliper_net::wire::SplitResources), which holds at most two incomplete
+    // versions of at most 128 MiB.
     void on_resource(const caliper_net::wire::Resource& r);
     // Once a frame: takes the browser checks that finished, and refuses a
     // program whose module or pipeline WebGPU refused since the last call
@@ -90,6 +92,8 @@ public:
     std::string status_json() const;
     // Changes whenever a program is added, replaced, refused or removed.
     std::uint64_t revision() const { return revision_; }
+
+    static constexpr std::uint64_t kKeptBytesMax = std::uint64_t(256) << 20;
 
     struct Program;
     struct Version {

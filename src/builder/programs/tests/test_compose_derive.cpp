@@ -187,7 +187,7 @@ TEST_CASE("the composer refuses every name and type that would change the header
     p.resources[0].id = "a__b";
     CHECK(code_of(p) == cp::kProgramBadResource);
     p = arcs();
-    p.resources[0].count = 4194305;
+    p.resources[0].count = cs::piece_limits::kCountMax + 1;
     CHECK(code_of(p) == cp::kProgramBadResource);
     p = arcs();
     p.resources[2].kind = cs::ResourceKind::texture;

@@ -1118,8 +1118,10 @@ Verdict DrawRuntime::install(const caliper_builder::spec::Piece& piece, const In
         s.id = in.name;
         s.keep_cpu = cpu_ids.count(in.name) != 0;
         if (Verdict v = c.layout(in.layout, &s.layout); !v.ok()) return refuse(v);
-        s.declared_count = pl::kCountMax;
-        s.declared_bytes = std::uint64_t(pl::kCountMax) * s.layout.stride;
+        // Another program's published buffer: at most kPublishedResourceBytesMax, whatever its stride.
+        s.declared_bytes = std::min<std::uint64_t>(std::uint64_t(pl::kCountMax) * s.layout.stride,
+                                                   pl::kPublishedResourceBytesMax);
+        s.declared_count = s.layout.stride ? std::uint32_t(s.declared_bytes / s.layout.stride) : 0;
         m.slots.push_back(std::move(s));
     }
     for (Impl::Slot& s : m.slots)
