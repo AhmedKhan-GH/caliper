@@ -198,6 +198,8 @@ A program names the source of its piece with `from`.
 
 The piece `points@1` draws a cloud of round or square points of a size in pixels. It colors them by one color, by a value through a colormap, or by a packed RGBA value. Its derive half reads a tensor of positions with rank 2 and an optional tensor of values with rank 1. With the same points, camera and options, it draws the same pixels as the built-in `points` primitive, within the tolerances of the scene tests, and a pick returns the same item.
 
+The piece `surface@1` draws a height field as a lit surface in a data box. Its derive half pools a tensor of rank 2 into at most `max_cells` cells, as the operator `surface` does, and its draw half draws the grid as the built-in `surface` draw kind draws it, with the same pixels and the same picks. The params `x_lo` to `z_hi`, `box_x` to `box_z`, `vmin` and `vmax` set the data box and the value range, and each bit of `fit` takes one of these ranges from the data instead.
+
 A workspace piece with the name of a library piece replaces it only in a program that says `from = "workspace"`. `caliper-mcp` serves each file of the library as a read-only resource under `caliper://library/`. Thus an agent can read a piece before it pins, copies or imitates it.
 
 ## Program Instances
