@@ -78,22 +78,20 @@ features:
 
   - id: STR-09
     title: Wire Protocol 3.2
-    status: built
+    status: shipped
     scope: core
     summary: Wire protocol 3.2 adds the scene, text and bar view kinds, timelines and stamps, the scene messages for points, lines, arrows, boxes, meshes, images, cameras, transforms, class tables and clears, and the recording and cursor messages, in the C++, Python and TypeScript codecs.
     depends_on: [STR-03]
-    sprint: 4
-    branches: [sprint4-integ3, sprint4-proto3]
+    docs: docs/reference/wire-protocol-3-2.md#implementation-status
     issue: null
 
   - id: STR-10
     title: caliper.scene
-    status: built
+    status: shipped
     scope: core
     summary: caliper.scene builds 3-D and 2-D scenes of points, lines, meshes, arrows, boxes, images and cameras, with entity transforms, a class table, clears and a starting camera, checked on the device and sent by both senders with the state a late viewer needs.
     depends_on: [STR-05, STR-09]
-    sprint: 4
-    branches: [sprint4-integ3, sprint4-proto3]
+    docs: docs/python/scene-calls.md#primitives
     issue: null
 
   - id: STR-11
@@ -464,4 +462,31 @@ features:
     scope: peripheral
     summary: Caliper LIB could take TensorFlow tensors through DLPack, with TensorFlow's synchronization, through the same adapter interface.
     depends_on: [STR-48]
+    issue: null
+
+  - id: STR-53
+    title: Producer Runtime
+    status: shipped
+    scope: core
+    summary: The producer runtime in the training script compiles a program through the sandbox, imports each model tensor on the GPU in place and read-only, and runs the program after a step with no copy of the tensor.
+    depends_on: [REN-76, STR-55]
+    docs: docs/python/run-control-calls.md#programs-in-the-script
+    issue: null
+
+  - id: STR-54
+    title: Program Cadence
+    status: shipped
+    scope: core
+    summary: A program runs every N steps, and the script sets N from the overhead that it measures in the wall clock of the run, so that the passes take at most 4 percent of the training time.
+    depends_on: [STR-53]
+    docs: docs/agents/gpu-programs.md#cadence
+    issue: null
+
+  - id: STR-55
+    title: Run Control Under Watch
+    status: shipped
+    scope: core
+    summary: caliper.watch(model, optimizer) makes optimizer.step() the checkpoint of the run, where parameters apply, actions run and a pause waits, and it announces programs and interventions to a viewer.
+    depends_on: [INT-04, STR-45]
+    docs: docs/python/run-control-calls.md#watch-with-an-optimizer
     issue: null

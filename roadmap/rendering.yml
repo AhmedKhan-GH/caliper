@@ -78,72 +78,65 @@ features:
 
   - id: REN-09
     title: Graphics Layer
-    status: built
+    status: shipped
     scope: core
     summary: The graphics layer, an internal C++ layer shaped like WebGPU, holds buffers, textures, pipelines, draw lists and a uniform arena, validates every frame, and has a Metal backend.
     depends_on: [REN-01]
-    sprint: 4
-    branches: [sprint4-integ3, sprint4-pr1-main2]
+    docs: docs/applets/graphics-layer.md#backends
     issue: null
 
   - id: REN-10
     title: WGSL Shaders Through Naga
-    status: built
+    status: shipped
     scope: core
     summary: Scene shaders are written once in WGSL, and a generator with a pinned Naga translates them into the programs that each backend of the graphics layer loads.
     depends_on: [REN-09]
-    sprint: 4
-    branches: [sprint4-integ3, sprint4-pr1-main2]
+    docs: docs/applets/shader-authoring.md#translator
     issue: null
 
   - id: REN-11
     title: Scene Core
-    status: built
+    status: shipped
     scope: core
     summary: "The scene core is the one camera and scene model of the views: an entity tree with cameras, bounds and fitting, which it compiles into a draw list of the graphics layer, with a pick pass."
     depends_on: [REN-10]
-    sprint: 4
-    branches: [sprint4-integ3, sprint4-pr1-main2]
+    docs: docs/applets/scene-rendering.md#scene-core
     issue: null
 
   - id: REN-12
     title: Scene View
-    status: built
+    status: shipped
     scope: core
     summary: The scene view is a live view of kind scene that draws the points, lines and meshes of a protocol 3.2 scene through the scene core, in the app and in the browser, with an orbit camera.
     depends_on: [REN-11, REN-14, STR-09]
-    sprint: 4
-    branches: [sprint4-integ3, sprint4-pr1-main2]
+    docs: docs/applets/scene-rendering.md#scene-view
     issue: null
 
   - id: REN-13
     title: WebGPU Backend of the Graphics Layer
-    status: built
+    status: shipped
     scope: core
     summary: The WebGPU backend of the graphics layer runs in the browser, so the WebAssembly views draw scenes through the same layer as the native renderers.
     depends_on: [EMB-04, REN-10]
-    sprint: 4
-    branches: [sprint4-integ3, sprint4-pr1-main2]
+    docs: docs/applets/rendering.md#webgpu-backend
     issue: null
 
   - id: REN-14
     title: Colormap by Keys
-    status: built
+    status: shipped
     scope: core
     summary: A colormap is decided by integer comparisons against keys derived once from the CPU reference, so every shader and adapter gives the same colours as the reference.
     depends_on: [REN-13]
-    sprint: 4
-    branches: [sprint4-integ3, sprint4-pr1-main2]
+    docs: docs/applets/graphics-layer.md#colormap-by-keys
     issue: null
 
   - id: REN-15
     title: Picking
-    status: built
+    status: shipped
     scope: core
     summary: Picking finds the entity, item and row under the pointer through a pick pass of the scene core on the graphics layer, natively and in a browser.
     depends_on: [REN-11]
-    sprint: 4
-    branches: [sprint4-integ3, sprint4-draws]
+    docs: docs/applets/scene-rendering.md#scene-core
     issue: null
 
   - id: REN-16
@@ -285,22 +278,20 @@ features:
 
   - id: REN-31
     title: Renderer Baseline and Counters
-    status: built
+    status: shipped
     scope: supporting
     summary: Copy counters, frame-time statistics on Metal and benchmark rows record a baseline before the renderer core's migration, so that every later step is measured against it.
     depends_on: [REN-01, REN-02]
-    sprint: 4
-    branches: [sprint4-integ3, sprint4-pr1-main2]
+    docs: docs/applets/rendering.md#copy-counters-and-frame-statistics
     issue: null
 
   - id: REN-32
     title: Points View on the Scene Core
-    status: built
+    status: shipped
     scope: core
     summary: The points live view draws as a scene of one entity through the scene core, with its pixels checked against references from the old path, which is deleted.
     depends_on: [REN-11, REN-31]
-    sprint: 4
-    branches: [sprint4-integ3, sprint4-pr2]
+    docs: docs/applets/scene-rendering.md#points-view
     issue: null
 
   - id: REN-33
@@ -422,13 +413,11 @@ features:
 
   - id: REN-45
     title: Starting Camera of a Scene
-    status: built
+    status: shipped
     scope: core
     summary: A script sets the camera a scene view opens on with view_camera, by a target, a distance and angles or by a camera entity.
     depends_on: [REN-12, STR-10]
-    sprint: 4
-    branches: [sprint4-integ3, sprint4-draws]
-    in_progress: true
+    docs: docs/python/scene-calls.md#scene
     issue: null
 
   - id: REN-46
@@ -694,4 +683,116 @@ features:
     summary: TwinScope runs a synthetic heat twin of a textured housing, with the simulated physics and the learned belief side by side.
     depends_on: [REN-06, REN-65]
     docs: docs/applets/in-tree-applets.md#twinscope
+    issue: null
+
+  - id: REN-76
+    title: Program Sandbox
+    status: shipped
+    scope: core
+    summary: The sandbox checks each program in the editor, the script and the viewer, keeps model tensors read-only, translates the WGSL with a bounds check on every access, and stops a program at its time limit and memory budget.
+    depends_on: [SPC-14]
+    docs: docs/agents/gpu-programs.md#sandbox-rules
+    issue: null
+
+  - id: REN-77
+    title: Programmable Graphics
+    status: shipped
+    scope: core
+    summary: An agent writes the graphics of an instrument as pieces with its own buffers, textures, state between frames and WGSL passes, which read live tensors without a copy, draw into a scene panel with the camera given, keep picking and run inside the sandbox.
+    depends_on: [REN-76, SPC-50]
+    docs: docs/agents/pieces.md
+    issue: null
+
+  - id: REN-78
+    title: Derive Half of a Piece
+    status: shipped
+    scope: core
+    summary: The derive half runs compute passes in the training script at the shared cadence, over live tensors that it reads without a copy, and publishes named typed resources that keep their contents from one run to the next.
+    depends_on: [REN-77, STR-54]
+    docs: docs/agents/pieces.md#derive-half
+    issue: null
+
+  - id: REN-79
+    title: Draw Half of a Piece
+    status: shipped
+    scope: core
+    summary: The draw half runs in the viewer every frame as a render graph over the published resources, with its own targets, blending and depth, and the host removes a draw that goes over its time or memory budget.
+    depends_on: [REN-77]
+    docs: docs/agents/pieces.md#draw-half
+    issue: null
+
+  - id: REN-80
+    title: Piece Library
+    status: shipped
+    scope: core
+    summary: The built-in library holds the piece points@1 and the shader modules camera, colormap, easing and pick, which pieces import by name, and points@1 draws the same pixels and returns the same picks as the built-in points.
+    depends_on: [REN-32, REN-79]
+    docs: docs/agents/pieces.md#piece-sources
+    issue: null
+
+  - id: REN-81
+    title: Picking of Program Items
+    status: shipped
+    scope: core
+    summary: A pick pass of a draw half returns the item of a program under the pointer with its fields, a selection command can set the same item, and the host places the text labels that a program publishes.
+    depends_on: [REN-15, REN-79]
+    docs: docs/agents/pieces.md#selection-and-picking
+    issue: null
+
+  - id: REN-82
+    title: Browser Draw Runtime
+    status: shipped
+    scope: core
+    summary: The browser module runs the draw half on WebGPU from the same WGSL and declaration, with the same hash checks and refusals, and a test compares its pictures with the pictures of the app.
+    depends_on: [REN-69, REN-79]
+    docs: docs/agents/pieces.md#browser-viewer
+    issue: null
+
+  - id: REN-83
+    title: Attention Arc Tower Demo
+    status: shipped
+    scope: peripheral
+    summary: A small transformer trains while an agent writes the pieces that draw the attention arcs of its tokens on rings, the induction score of each head and the attention grid, and an ablation and a fork test whether the induction heads cause the loss to fall.
+    depends_on: [INT-34, REN-80, RUN-15]
+    docs: docs/agents/pieces.md#attention-arc-tower
+    issue: null
+
+  - id: REN-84
+    title: Lines Arrows and Paths as Library Pieces
+    status: planned
+    scope: core
+    summary: Lines are in work, and arrows and paths are in the same work. Each becomes a piece of the library that matches the pixels and the picks of the built-in shape.
+    depends_on: [REN-80]
+    issue: null
+
+  - id: REN-85
+    title: Boxes and Meshes as Library Pieces
+    status: planned
+    scope: core
+    summary: Boxes are in work, and meshes are in the same work. Each becomes a piece of the library that matches the pixels and the picks of the built-in shape.
+    depends_on: [REN-80]
+    issue: null
+
+  - id: REN-86
+    title: Images Depth Maps and Segmentation Masks as Library Pieces
+    status: planned
+    scope: core
+    summary: Images, depth maps and segmentation masks are in work. Each becomes a piece of the library that matches the pixels and the picks of the built-in shape.
+    depends_on: [REN-80]
+    issue: null
+
+  - id: REN-87
+    title: Surface as a Library Piece
+    status: planned
+    scope: core
+    summary: The surface piece exists with its match test. The work checks it against the pixels and the picks of the built-in surface.
+    depends_on: [REN-80, SPC-43]
+    issue: null
+
+  - id: REN-88
+    title: Removal of Per-Shape Draw Code
+    status: planned
+    scope: core
+    summary: When every built-in shape is a library piece, the per-shape shaders, draw code, wire parts and browser drawers are deleted, so that one rendering path remains.
+    depends_on: [REN-84, REN-85, REN-86, REN-87]
     issue: null
