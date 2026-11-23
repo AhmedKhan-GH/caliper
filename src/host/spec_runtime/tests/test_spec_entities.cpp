@@ -438,11 +438,11 @@ TEST_CASE("entities: a line that lies on the surface wins by its depth offset, a
     CHECK(seen[0] > 3 * seen[1]);
 }
 
-// The entities drawn by the library pieces against the built-in draw through the scene view's switch
-// (live_scene.h, ShapeDraw): the surface with its hole and its window's steps by surface@1 over its
+// The entities drawn by the library pieces against the generic draw through the scene view's switch
+// (live_scene.h): the surface with its hole and its window's steps by surface@1 over its
 // grid, the strip of the loss by path@1, the points by points@1 and the walls of the box by lines@1.
 // The pictures agree under the rules of the pieces' match tests (an interior pixel of the pieces'
-// IDs within 1 level, as surface@1's match allows, every other pixel within 1 level of a built-in
+// IDs within 1 level, as surface@1's match allows, every other pixel within 1 level of a generic
 // pixel of its 3 x 3 neighbourhood), and a pick at an interior pixel gives the same entity, item and
 // pick fields in both views.
 TEST_CASE("entities: the library pieces draw the surface, the path, the points and the walls as generic scene pieces do") {
@@ -494,13 +494,13 @@ TEST_CASE("entities: the library pieces draw the surface, the path, the points a
             }
         }
     };
-    Drawn pieces, builtin;
+    Drawn pieces, generic;
     draw(true, &pieces);
-    draw(false, &builtin);
+    draw(false, &generic);
     const caliper_live_views::SceneShapeCounts counts = pieces.view->shape_counts();
     CHECK(counts.pieces == 4);
     dump(pieces.img, "entities-pieces.png");
-    dump(builtin.img, "entities-builtin.png");
+    dump(generic.img, "entities-generic.png");
 
     auto px = [&](const Image& img, int x, int y) {
         uint32_t v;
@@ -525,7 +525,7 @@ TEST_CASE("entities: the library pieces draw the surface, the path, the points a
     std::string first;
     for (int y = 0; y < H; ++y)
         for (int x = 0; x < W; ++x) {
-            const uint32_t p = px(pieces.img, x, y), b = px(builtin.img, x, y);
+            const uint32_t p = px(pieces.img, x, y), b = px(generic.img, x, y);
             if (p != b) ++differ;
             int g = gap(p, b);
             const bool in = interior(x, y, 1);
@@ -535,7 +535,7 @@ TEST_CASE("entities: the library pieces draw the surface, the path, the points a
             } else {
                 for (int dy = -1; dy <= 1; ++dy)
                     for (int dx = -1; dx <= 1; ++dx)
-                        g = std::min(g, gap(p, px(builtin.img, std::clamp(x + dx, 0, W - 1), std::clamp(y + dy, 0, H - 1))));
+                        g = std::min(g, gap(p, px(generic.img, std::clamp(x + dx, 0, W - 1), std::clamp(y + dy, 0, H - 1))));
                 max_edge = std::max(max_edge, g);
             }
             if (g > 1 && failed++ == 0)
@@ -570,13 +570,13 @@ TEST_CASE("entities: the library pieces draw the surface, the path, the points a
             caliper_scene::Hit hp, hb;
             REQUIRE(pieces.view->request_pick(x + 0.5f, y + 0.5f, &why));
             const auto rp = take(*pieces.backend, *pieces.view, &hp);
-            REQUIRE(builtin.view->request_pick(x + 0.5f, y + 0.5f, &why));
-            const auto rb = take(*builtin.backend, *builtin.view, &hb);
+            REQUIRE(generic.view->request_pick(x + 0.5f, y + 0.5f, &why));
+            const auto rb = take(*generic.backend, *generic.view, &hb);
             ++asked;
             bool same = rp == caliper_scene::PickResult::Hit && rb == rp;
             if (same) {
                 const std::string path = pieces.view->tree().path(hp.entity);
-                same = path == builtin.view->tree().path(hb.entity) && hp.item == hb.item && hp.primitive == hb.primitive;
+                same = path == generic.view->tree().path(hb.entity) && hp.item == hb.item && hp.primitive == hb.primitive;
                 const auto fp = caliper_host::entity_pick_fields(sc, path, hp.item);
                 const auto fb = caliper_host::entity_pick_fields(sc, path, hb.item);
                 same = same && fp.has_value() == fb.has_value();
@@ -587,16 +587,16 @@ TEST_CASE("entities: the library pieces draw the surface, the path, the points a
                              (rp == caliper_scene::PickResult::Hit
                                   ? pieces.view->tree().path(hp.entity) + " " + std::to_string(hp.item)
                                   : "result " + std::to_string(int(rp))) +
-                             ", built-in " +
+                             ", generic " +
                              (rb == caliper_scene::PickResult::Hit
-                                  ? builtin.view->tree().path(hb.entity) + " " + std::to_string(hb.item)
+                                  ? generic.view->tree().path(hb.entity) + " " + std::to_string(hb.item)
                                   : std::string("no hit"));
         }
     MESSAGE("entities on pieces: picks " << agreed << " of " << asked << " agree");
     CHECK(asked > 20);
     CHECK_MESSAGE(agreed == asked, first_pick);
     pieces.view.reset();
-    builtin.view.reset();
+    generic.view.reset();
 }
 
 TEST_CASE("entities: view_camera angles open the panel at those angles with its box framed") {

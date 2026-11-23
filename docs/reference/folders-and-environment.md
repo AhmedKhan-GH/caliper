@@ -100,6 +100,8 @@ On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shor
 | `CALIPER_TEST_FORCE_NO_GPU=1` | The device suites behave as if there were no GPU. |
 | `CALIPER_TEST_RENDERER_FAIL=1` | The Metal or Vulkan renderer's start fails before it touches a device, with the reason `CALIPER_TEST_RENDERER_FAIL=1 made its start fail`, so the refusals of the app, `caliper shot` and Caliper Embed can be tested on a machine whose GPU works. |
 | `CALIPER_TEST_APPLET_DIR=<folder>` | Runs the headless acceptance case of `caliper_tests` on the applets in that folder. Without it the case is skipped. |
+| `CALIPER_GFX_RECORD=<file>` | `caliper_gfx_texture_tests` writes texture reference hashes and transfer facts to this file. |
+| `CALIPER_GFX_REFERENCES=<file>` | `caliper_gfx_texture_tests` reads this reference file instead of `tests/gfx/references/texture_path.txt`. |
 | `CALIPER_GFX_CAPTURE_DIR=<folder>` | `caliper_gfx_tests` writes PNG captures of the graphics layer, colormap and scene-view rows to that folder, and `caliper_gfx_views_tests` each points view case's readback as `points-view-<case>.png`. Without it nothing is written. |
 | `CALIPER_GFX_POINTS_CASES=<text>` | `caliper_gfx_views_tests` runs only the points view's cases whose names contain the text. |
 | `CALIPER_GFX_POINTS_BENCH=1` | `caliper_gfx_views_tests` runs the points view's timing row: the CPU time to compile and submit a redraw and the GPU time of the draw at 100,000, 1,000,000 and 4,000,000 points, with the load average. Without it the row returns at once. |

@@ -1,17 +1,6 @@
-// scene_parity.h: the scene comparison between the app and the browser module. Both draw the scene
-// fixtures of the scene view's rows (tests/scene/primitive_fixtures.h, as the graphics suite's
-// comparison of the pieces with the built-in draws them, tests/gfx/gfx_scene_view.cpp) through a scene
-// view whose shapes the library pieces draw: the app on Metal (scene_parity_app.mm, ctest
-// caliper_scene_parity_app, which writes <out>/scene/), the module on WebGPU in headless Chromium
-// (web/wasm/src/scene_parity.cpp). web/test/draw_parity.spec.ts compares the pictures and the IDs of
-// the pieces under its edge rule and tolerances, the counts of the shapes of the same frame, and the
-// hits of picks at the same points.
-//
-// For one fixture, each side gives the facts of the first frame that the view drew, as JSON: the
-// frame, the shapes that pieces drew and those that the built-in drew with the reason of each
-// fallback, the program of each pick id, and the hits of picks. The pick points are pixels inside
-// one ID of the pieces (pick_points), at most kPickPoints of them, one for each program first. It
-// depends on no test framework.
+// Scene fixtures drawn by library pieces in the app and browser. Each side exposes color,
+// ID, depth, piece counts, and picks from the same frame. The browser suite compares those
+// targets under its edge rules and tolerances. This helper has no test-framework dependency.
 #pragma once
 
 #include "../scene/primitive_fixtures.h"

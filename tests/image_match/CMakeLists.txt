@@ -18,7 +18,7 @@ function(caliper_image_match_target name)
     set(_src "${CMAKE_SOURCE_DIR}/tests/${name}_match/test_${name}_match.mm")
     add_executable(caliper_${name}_match_tests "${_src}"
         "${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp"
-        "${CMAKE_SOURCE_DIR}/src/host/live/live_scene.cpp"
+        "${CMAKE_SOURCE_DIR}/src/host/live/live_scene.cpp" "${CMAKE_SOURCE_DIR}/src/host/live/scene_legacy.cpp"
         "${CMAKE_SOURCE_DIR}/src/host/live/scene_piece_form.cpp")
     target_include_directories(caliper_${name}_match_tests PRIVATE
         "${CMAKE_SOURCE_DIR}/src/host" "${CMAKE_SOURCE_DIR}/third_party/stb")

@@ -302,11 +302,8 @@ const EntityScene& spec_scene_content(const SpecScene& scene);
 // walls, the three walls of the box away from the starting camera, with grid lines at round
 // numbers of the data, go to "spec-box/walls".
 //
-// The library pieces draw the entities' shapes where the view draws with them
-// (live_scene.h, ShapeDraw): a surface with surface@1 over its grid in data units and the data
-// box, and a lines entity that `paths` names (the entities whose source holds a path step) with
-// path@1 over its vertices; the parts stay in the view for its bounds, its labels and the
-// built-in draw.
+// A surface uses surface@1 over its grid and data box. Lines that `paths` names use path@1
+// over their vertices. The scene tree keeps their bounds and label metadata.
 void apply_entity_scene(caliper_live_views::SceneView& view, const EntityScene& scene,
                         std::vector<std::string>* drawn, const std::vector<std::string>* paths = nullptr);
 

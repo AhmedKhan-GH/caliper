@@ -47,7 +47,7 @@ function(caliper_draw_parity_targets)
     # compiled in with the draw layer, as the graphics suite compiles it.
     if(TARGET caliper_draw_host AND TARGET caliper_scene)
         add_executable(caliper_scene_parity_app "${_dir}/scene_parity_app.mm"
-            "${CMAKE_SOURCE_DIR}/src/host/live/live_scene.cpp" "${CMAKE_SOURCE_DIR}/src/host/live/scene_piece_form.cpp"
+            "${CMAKE_SOURCE_DIR}/src/host/live/live_scene.cpp" "${CMAKE_SOURCE_DIR}/src/host/live/scene_legacy.cpp" "${CMAKE_SOURCE_DIR}/src/host/live/scene_piece_form.cpp"
             "${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp")
         target_include_directories(caliper_scene_parity_app PRIVATE
             "${CMAKE_SOURCE_DIR}/src/host" "${CMAKE_SOURCE_DIR}/third_party/stb")

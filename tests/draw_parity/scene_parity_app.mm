@@ -58,13 +58,11 @@ std::vector<std::uint8_t> read(gfx::Backend& g, gfx::Texture t, std::uint32_t si
     return out;
 }
 
-// The answer to a pick that the view asked, once its readbacks are in: the pick pass's and the
-// pieces' window of the ID and depth targets.
+// The answer to a pick after its ID and depth readbacks complete.
 caliper_scene::PickResult take_pick(gfx::Backend& g, caliper_live_views::SceneView& v, caliper_scene::Hit* hit) {
     caliper_scene::PickResult r = caliper_scene::PickResult::Pending;
     for (int tries = 0; tries < 10000 && r == caliper_scene::PickResult::Pending; ++tries) {
         @autoreleasepool {
-            g.wait(v.pick_pass()->last_use());
             if (v.id_target()) g.wait(g.last_use(v.id_target()));
             if (v.depth_target()) g.wait(g.last_use(v.depth_target()));
             g.poll();
@@ -112,7 +110,6 @@ bool one(gfx::Backend& g, const primitive_fixtures::Fixture& f, const fs::path& 
         return (*line = f.name + ": cannot write into " + dir.string(), false);
     *line = f.name + ": frame " + std::to_string(facts["frame"].get<std::uint64_t>()) + ", " +
             std::to_string(facts["pieces"].get<std::uint32_t>()) + " shapes by pieces, " +
-            std::to_string(facts["builtin"].get<std::uint32_t>()) + " by the built-in " + facts["fallbacks"].dump() + ", " +
             std::to_string(points.size()) + " picks";
     return true;
 }

@@ -2,8 +2,7 @@
 // suite on Metal (tests/gfx/gfx_scene_view.cpp) and the browser module's self-test on WebGPU
 // (web/wasm/src/scene_selftest.cpp). A row encodes each message of its fixture with the C++ codec,
 // decodes it again and applies it to a scene view, as a source hands decoded messages over, draws
-// the view at 256 x 256, and once the caller has read the target back compares it with the CPU
-// reference of draw_reference.h. It depends on no test framework.
+// the view at 256 x 256. The caller reads the target for comparison. It needs no test framework.
 #pragma once
 
 #include "live/live_scene.h"

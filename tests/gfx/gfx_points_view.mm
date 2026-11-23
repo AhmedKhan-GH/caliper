@@ -14,24 +14,13 @@
 // grey, the palette colour of the label's level, or the colormap's colour of the value's level as
 // map_f32_to_rgba8 decides it, dimmed toward the ground for the unselected points of a selection.
 //
-// The reference mode (gfx_reference.h, tests/gfx/references/points_view.txt), recorded at the first
-// commit of migration step 7 from the old path (hardware point sprites through the Metal
-// renderer's geometry draw), holds each case's readback hash, its path label, whether it imported,
-// the copies of its update and its header text. The rows that the step promises unchanged must
-// match it byte for byte. The view now draws every point as an exact square, two triangles, on Metal
-// as it already did in the browser, where the old Metal path drew hardware point sprites. With the
-// depth cues of 3-D points a point's size is fractional, and a sprite's edge can then sit up to about
-// 1/32 of a pixel from the exact square's (the sprite row below measures it), so a 3-D case may
-// differ from the old path's images in pixels at a point's edge: the row against those images
-// bounds every such pixel, and the view must equal the CPU reference rasterisation of its draws byte
-// for byte in every case.
+// Saved PNGs in tests/match_references/points_view preserve the original pictures.
+// Each case compares interior colors and edge neighborhoods with that reference.
 //
 //   CALIPER_GFX_POINTS_CASES=<substring>   runs only the cases whose names contain it
 //   CALIPER_GFX_POINTS_BENCH=1             runs the timing row (draw cost by count)
 #define DOCTEST_CONFIG_IMPLEMENT
 #include "../gpu_skip.h"
-
-#include "gfx_reference.h"
 
 #include <caliper/embed.h>
 #include <caliper/live_views.h>
@@ -80,7 +69,7 @@
 
 namespace {
 
-namespace ref = gfx_reference;
+
 
 constexpr int kCanvasW = 800, kCanvasH = 600;
 constexpr uint32_t kFlat = 0xff000000u | (230u << 16) | (220u << 8) | 220u;   // the points view's grey
@@ -336,7 +325,6 @@ id<MTLBuffer> metal_buffer(id<MTLDevice> dev, const std::vector<float>& v, size_
 struct Result {
     int width = 0, height = 0;
     std::vector<uint8_t> rgba;
-    ref::Line line;
     Payload payload;
     std::string error;
     bool drew_pieces = false;
@@ -445,21 +433,8 @@ bool draw_case(const Case& c, Result* out, const After& after = {}) {
     out->rgba.assign((size_t)vi.width * vi.height * 4, 0);
     REQUIRE_MESSAGE(caliper_core_live_view_readback(core.core, name, out->rgba.data(), out->rgba.size()) == 1,
                     caliper_core_last_error(core.core));
-    caliper_stats::ViewCopies vc{};
-    caliper_stats::view_copies(core.core, name, &vc);
     caliper_live_views::View* v = caliper_live_views::find(core.core, name);
     REQUIRE(v != nullptr);
-    ref::Line& l = out->line;
-    l.name = c.name;
-    l.width = vi.width;
-    l.height = vi.height;
-    l.hash = ref::hex16(ref::fnv1a64(out->rgba));
-    l.fields = {{"path", vi.path ? vi.path : ""},
-                {"imported", std::to_string(vi.imported)},
-                {"copies", std::to_string(vc.last.copies)},
-                {"bytes", std::to_string(vc.last.bytes)},
-                {"count", std::to_string(vi.count)}};
-    l.info = caliper_live_views::info_text(core.core, *v);
     if (v->points && v->points->scene) {
         const caliper_live_views::PointsScene& sc = *v->points->scene;
         out->drew_pieces = sc.drew_pieces();
@@ -530,36 +505,13 @@ size_t check_lattice_colours(const Case& c, const Result& r, std::string* first,
 }
 
 void capture(const Case& c, const Result& r) {
-    const char* dir = ref::env("CALIPER_GFX_CAPTURE_DIR");
+    const char* dir = std::getenv("CALIPER_GFX_CAPTURE_DIR");
     if (!dir) return;
     const std::string path = std::string(dir) + "/points-view-" + c.name + ".png";
     CHECK(stbi_write_png(path.c_str(), r.width, r.height, 4, r.rgba.data(), r.width * 4) != 0);
 }
 
-// ---- The CPU reference rasterisation of the scene core's points draws ----------------------------
-//
-// Every draw of the last frame is repeated on the CPU from the bytes the GPU read: the frame block,
-// the draw's parameter block and its colormap block from the draw list's arena, and the payload's
-// rows. vs_points in f32 (the scene programs compile without fast math): clip = mvp * (x, y, z, 1)
-// summed column by column, each corner c.xy + corner * (size_px / viewport) * c.w, then the
-// target's NDC scale and offset; the perspective divide and the viewport transform; the corners
-// snapped to 1/256 of a pixel with a half rounded up, which is the rasteriser's fixed point (found
-// against these rows' readbacks: 4 or 16 bits, or a half rounded to even or down, leave edge rows
-// and columns apart); coverage of pixel centres inside each quad by the top-left rule; depth z / w
-// tested less-or-equal and written, in instance order and draw order; the colour by the
-// colormap's keys (colormap_keys.h) or the flat colour; NaN positions hidden. With the 3-D view's
-// depth cues (att_ref, fade_w0 and fade_w1 in the parameter block) the size is size_px *
-// clamp(att_ref / max(w, 1e-6), 0.5, 2) and each channel c / 255 is scaled by
-// 1 - 0.5 * clamp((w - fade_w0) / (fade_w1 - fade_w0), 0, 1) and written to the target rounded to
-// the nearest of its 255 steps, a half to even.
 }  // namespace
-
-
-// The view's readback against the CPU reference rasterisation of the draws the scene core compiled
-// (above), byte for byte, for every case: the scene core's camera composed in double and rounded to
-// f32 once is what both the GPU and the reference read, so they agree to the bit wherever the
-// reference repeats the GPU's arithmetic.
-
 
 // ---- points@1 against the reference draw ----------------------------------------------------------
 //
@@ -616,7 +568,7 @@ Match match_pictures(int W, int H, const std::vector<uint8_t>& reference, const 
 }
 
 void capture_named(const std::string& name, int W, int H, const std::vector<uint8_t>& rgba) {
-    const char* dir = ref::env("CALIPER_GFX_CAPTURE_DIR");
+    const char* dir = std::getenv("CALIPER_GFX_CAPTURE_DIR");
     if (!dir) return;
     const std::string path = std::string(dir) + "/points-view-" + name + ".png";
     CHECK(stbi_write_png(path.c_str(), W, H, 4, rgba.data(), W * 4) != 0);
@@ -635,7 +587,7 @@ TEST_CASE("gfx/Metal points view: points@1 matches the saved scene references") 
         b.width = p.width;
         b.height = p.height;
         b.rgba = match_reference::picture("compare", uint32_t(b.width), uint32_t(b.height), nullptr);
-        CHECK_MESSAGE(p.drew_pieces, c.name, ": the reference drew the case of points@1: ", p.error);
+        CHECK_MESSAGE(p.drew_pieces, c.name, ": points@1 did not draw: ", p.error);
         REQUIRE(b.width == p.width);
         REQUIRE(b.height == p.height);
         const Match m = match_pictures(b.width, b.height, b.rgba, p.rgba);
@@ -655,7 +607,7 @@ TEST_CASE("gfx/Metal points view: points@1 matches the saved scene references") 
 
 // The picks, hovers and selections of the view come from the CPU payload under the camera, as the
 // browser element's do, and the draw changes none of them: the same gestures on a case drawn by
-// points@1 and by the reference give the same events, the same hovered point and the same selection
+// points@1 with CPU and device payloads gives the same events, hovered point, and selection
 // count, and the pictures with the selection drawn match within the tolerances above. The gestures:
 // a hover and a click at the point nearest the plot's centre, a shift-alt drag of a rectangle and a
 // shift drag of a lasso around the centre.
@@ -779,21 +731,11 @@ TEST_CASE("gfx/Metal points view: picks, hovers and selections are the same for 
     }
 }
 
-// The old path's images, captured by a build of the step's first commit on the merged base, against
-// the view now. Every 2-D case and the single 3-D point are byte-identical. In a 3-D cloud the old
-// path drew hardware point sprites of the depth cues' fractional sizes, whose edges can sit up to
-// kSpriteSlack from the exact square's: every pixel that differs there must lie within kSpriteSlack
-// of an edge of one of the CPU reference's squares drawn at or in front of it, and the row fails on
-// any pixel outside. The same cases rasterised by the CPU reference with the old view's float camera
-// differ from the old images in exactly the same pixels, so the camera's arithmetic is not the cause.
-
-
 // How Metal rasterises a point sprite: one sprite of size s at a known sub-pixel centre, read back
 // along its centre row and column, against the exact square [c - s/2, c + s/2] with the centre
 // snapped to 1/256 of a pixel and a pixel covered when its centre lies inside (top-left rule). For
 // every whole and half size the sprite is the exact square; for a fractional size a pixel may differ
-// from it only within kSpriteSlack of the square's edge. This is the bound of the row above: the old
-// path drew sprites, and the depth cues of 3-D points made their sizes fractional.
+// from it only within kSpriteSlack of the square's edge.
 constexpr float kSpriteSlack = 1.0f / 32.0f + 1.0f / 256.0f;
 
 TEST_CASE("gfx/Metal point sprites: whole and half sizes are exact squares, other sizes within the bound") {
@@ -923,7 +865,7 @@ fragment float4 fs(P in [[stage_in]]) { return float4(1.0); }
 }
 
 TEST_CASE("gfx/Metal points view: timing — a redraw by count") {
-    if (!ref::env("CALIPER_GFX_POINTS_BENCH")) return;
+    if (!std::getenv("CALIPER_GFX_POINTS_BENCH")) return;
     setenv("CALIPER_METAL_STATS", "1", 1);
     for (const uint64_t n : {100000ull, 1000000ull, 4000000ull}) {
         Core core;

@@ -2176,10 +2176,12 @@ TEST_CASE("live/app: a scene view's picks, hovers and selections reach the scrip
         return 0;
     });
     REQUIRE(frames_until([&] { return sv->highlighted() == 3; }));
-    // The pointer at rest asks nothing more of the pick pass.
-    const uint64_t submits = sv->pick_pass()->submits();
+    // The pointer at rest leaves the frame and completed pick unchanged.
+    REQUIRE(frames_until([&] { return !sv->pick_pending(); }));
+    const uint64_t frame = sv->generation();
     for (int i = 0; i < 20; ++i) host.frame(a, nullptr);
-    CHECK(sv->pick_pass()->submits() == submits);
+    CHECK(sv->generation() == frame);
+    CHECK_FALSE(sv->pick_pending());
     a.detach();
 }
 

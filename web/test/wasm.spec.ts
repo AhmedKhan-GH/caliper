@@ -807,14 +807,12 @@ test('a scene\'s entity transform arrives intact through the stream, and the fit
     const perPixel = (2 * d * Math.tan(Math.PI / 8)) / g.area[3];
     expect(Math.abs(metres / pixels - perPixel) / perPixel).toBeLessThan(1e-6);
     expect(metres, 'a bar of the moved points\' scale').toBeLessThan(10);
-    // What drew the scene's shapes in the module's last published frame: the library pieces by
-    // default, with each shape that fell back to the built-in draw counted by its reason.
+    // The library pieces in the module's last published frame.
     const st = await wasmStats(page, 'world');
-    const shapes = JSON.parse(String(st.sceneShapes ?? '{}')).world as { draw: string; pieces: number; builtin: number;
-      fallbacks: Record<string, number> } | undefined;
+    const shapes = JSON.parse(String(st.sceneShapes ?? '{}')).world as { draw: string; pieces: number } | undefined;
     console.log(`${info.project.name} scene shapes at module frame ${st.frames}: ${JSON.stringify(shapes ?? null)}`);
     expect(shapes?.draw, 'the scene view draws its shapes with the library pieces').toBe('pieces');
-    expect((shapes?.pieces ?? 0) + (shapes?.builtin ?? 0), 'the shapes of the scene').toBeGreaterThan(0);
+    expect(shapes?.pieces ?? 0, 'the shapes of the scene').toBeGreaterThan(0);
   } finally {
     p.proc.kill();
   }

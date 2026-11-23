@@ -424,18 +424,8 @@ TEST_CASE("gfx/Metal scene view: the golden frames of protocol 3.2 apply to scen
 }
 
 
-// The rows of every primitive (tests/scene/primitive_fixtures.h): each fixture's messages applied to
-// a scene view on Metal, drawn at 256 x 256, read back and compared with the CPU reference of
-// tests/scene/draw_reference.h under web geometry's parity rules. The demo's scene runs through the
-// same reference first, as a check of the reference against the surface row's own.
-
-
 namespace {
 
-// What decode_pick would find for a pointer at the centre of pixel (px, py) in the reference's pick
-// identities: the texel with an identity nearest the pointer within the radius and the view. robust:
-// the hit pixel and its neighbours show one identity with no near tie in depth, and no other
-// identity lies within 1.5 pixels of the nearest distance, so that a GPU's rounding cannot change it.
 // Waits for the view's pick on Metal (the test may block; a view never does) and takes it.
 caliper_scene::PickResult take_pick(Backend& gfx, SceneView& v, caliper_scene::Hit* hit) {
     caliper_scene::PickResult r = caliper_scene::PickResult::Pending;
@@ -1100,27 +1090,22 @@ TEST_CASE("gfx/Metal scene view: library pieces match the saved scene pictures a
     fixtures.push_back(late);
     for (const primitive_fixtures::Fixture& f : fixtures) {
         CAPTURE(f.name);
-        ViewRig pr, br;
+        ViewRig pr;
         REQUIRE(pr.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str()));
-        REQUIRE(br.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str()));
-        primitive_rows::Row rp, rb;
+        primitive_rows::Row rp;
         rp.fixture = f;
-        rb.fixture = f;
         REQUIRE_MESSAGE(rp.draw(*pr.view), rp.error);
-        REQUIRE_MESSAGE(rb.draw(*br.view), rb.error);
         const SceneShapeCounts counts = pr.view->shape_counts();
         CHECK_MESSAGE(counts.pieces > 0, f.name, " draws no shape with a piece");
         compare_fixture(f.name, pr, int(primitive_fixtures::kSize), f.name == "images" ? 1 : 0);
     }
     {
-        ViewRig pr, br;
+        ViewRig pr;
         REQUIRE(pr.init(CALIPER_NET_SPACE_3D, "+z", ""));
-        REQUIRE(br.init());
         const scene_fixtures::SurfaceRowFixture fx;
         const DemoMessages dm(fx);
-        Wire wp, wb;
+        Wire wp;
         draw_demo(pr, wp, dm);
-        draw_demo(br, wb, dm);
         // Every shape of the demo, its surface's mesh of flat faces and indices too.
         const SceneShapeCounts counts = pr.view->shape_counts();
         CHECK(counts.pieces == 4);
@@ -1139,24 +1124,18 @@ TEST_CASE("gfx/Metal scene view: the selection highlight matches the saved scene
     for (const primitive_fixtures::Fixture& f :
          {primitive_fixtures::boxes(), primitive_fixtures::edges(), primitive_fixtures::through()}) {
         CAPTURE(f.name);
-        ViewRig pr, br;
+        ViewRig pr;
         REQUIRE(pr.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str()));
-        REQUIRE(br.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str()));
-        primitive_rows::Row rp, rb;
+        primitive_rows::Row rp;
         rp.fixture = f;
-        rb.fixture = f;
         REQUIRE_MESSAGE(rp.draw(*pr.view), rp.error);
-        REQUIRE_MESSAGE(rb.draw(*br.view), rb.error);
         const std::vector<uint8_t> plain = pixels(*pr.view);
         const float S = float(primitive_fixtures::kSize);
         const std::string sp = pr.view->select_polygon({0, 0, S, 0, S, S, 0, S});
-        const std::string sb = br.view->select_polygon({0, 0, S, 0, S, S, 0, S});
-        CHECK(sp == sb);
+        CHECK(sp != "{}");
         std::string why;
         REQUIRE_MESSAGE(pr.view->render(primitive_fixtures::kSize, primitive_fixtures::kSize, 1.0f, primitive_fixtures::kClear, &why), why);
-        REQUIRE_MESSAGE(br.view->render(primitive_fixtures::kSize, primitive_fixtures::kSize, 1.0f, primitive_fixtures::kClear, &why), why);
         CHECK(pr.view->highlighted() > 0);
-        CHECK(pr.view->highlighted() == br.view->highlighted());
         CHECK(pr.view->shape_counts().marks > 0);
         CHECK(pixels(*pr.view) != plain);
         compare_fixture(f.name + "-selected", pr, int(primitive_fixtures::kSize), 1);

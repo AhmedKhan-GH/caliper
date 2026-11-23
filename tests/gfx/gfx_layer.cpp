@@ -328,10 +328,10 @@ TEST_CASE("gfx/Metal layer: an instanced draw from an imported MTLBuffer is in p
 using namespace metal;
 struct Input { float3 pos [[attribute(0)]]; uint rgba [[attribute(1)]]; float radius [[attribute(2)]]; };
 struct Output { float4 pos [[position]]; float4 color; uint2 id [[flat]]; };
-vertex Output vs_instance(Input in [[stage_in]], uint vertex [[vertex_id]], uint instance [[instance_id]]) {
+vertex Output vs_instance(Input in [[stage_in]], uint vid [[vertex_id]], uint instance [[instance_id]]) {
     const float2 corners[6] = {float2(-1,-1),float2(1,-1),float2(-1,1),float2(1,-1),float2(1,1),float2(-1,1)};
     Output o;
-    o.pos = float4(in.pos.xy + corners[vertex] * in.radius, in.pos.z, 1);
+    o.pos = float4(in.pos.xy + corners[vid] * in.radius, in.pos.z, 1);
     o.color = float4(in.rgba & 255u,(in.rgba >> 8u) & 255u,(in.rgba >> 16u) & 255u,in.rgba >> 24u) / 255.0f;
     o.id = uint2(9, 10 + instance);
     return o;

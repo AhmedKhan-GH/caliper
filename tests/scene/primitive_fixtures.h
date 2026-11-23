@@ -1,7 +1,7 @@
 // primitive_fixtures.h: one scene per primitive of a scene, as wire protocol 3.2 messages, for the
 // scene view's rows on Metal (tests/gfx/gfx_scene_view.cpp) and the browser module's scene
 // self-test on WebGPU (web/wasm/src/scene_selftest.cpp), which draw each at 256 x 256 and compare it
-// with the CPU reference of draw_reference.h under web geometry's parity rules. It depends on no
+// with saved references under the image parity rules. It depends on no
 // test framework.
 //
 //   arrows    arrows with per-arrow colours and with values through magma, over a floor of segments

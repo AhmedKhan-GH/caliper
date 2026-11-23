@@ -803,8 +803,8 @@ set_tests_properties(caliper_live_views_tests PROPERTIES ENVIRONMENT
 set_tests_properties(caliper_live_views_tests PROPERTIES SKIP_RETURN_CODE 77)
 
 # caliper_gfx_views_tests — the graphics suite's rows of the live views drawn by an offscreen core
-# (tests/gfx/gfx_points_view.mm), with the suite's reference mode (tests/gfx/gfx_reference.h) and
-# its committed references (tests/gfx/references/). Labelled gfx with caliper_gfx_tests.
+# (tests/gfx/gfx_points_view.mm), with saved PNG references under tests/match_references.
+# Labelled gfx with caliper_gfx_tests.
 add_executable(caliper_gfx_views_tests gfx/gfx_points_view.mm)
 target_link_libraries(caliper_gfx_views_tests PRIVATE doctest::doctest libcaliper caliper::sdk)
 target_include_directories(caliper_gfx_views_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host
