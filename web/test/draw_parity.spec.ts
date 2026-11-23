@@ -45,7 +45,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import zlib from 'node:zlib';
-import { decodePng, REPO, serve, shotPath, WEB } from './util.js';
+import { REPO, serve, shotPath, WEB } from './util.js';
 
 const WASM = process.env.CALIPER_WASM_DIR ?? path.join(REPO, 'python', 'caliper', '_web');
 const FILES = ['caliper-views-loader.js', 'caliper-views.js', 'caliper-views.wasm'];
@@ -317,6 +317,12 @@ test('the module draws the draw halves that PROGRAM and RESOURCE bring over its 
         if (line.startsWith('{')) ok((JSON.parse(line) as { url: string }).url);
       });
     });
+    // Opt-in for a check on a slow machine: CALIPER_CPU_THROTTLE=6 slows the page six times.
+    const throttle = Number(process.env.CALIPER_CPU_THROTTLE ?? 1);
+    if (throttle > 1) {
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: throttle });
+    }
     await page.goto(`${site.origin}/test/blank.html`);
     const programs = await page.evaluate(async ({ base, src }) => {
       type M = { caliperStats?: Record<string, string>; _caliper_views_destroy(): void };
@@ -339,21 +345,60 @@ test('the module draws the draw halves that PROGRAM and RESOURCE bring over its 
       type P = { id: string; state: string; code: string; message: string; where: string; line: number; frames: number };
       const list = () => JSON.parse(m.caliperStats?.programs ?? '[]') as P[];
       const of = (id: string) => list().find((p) => p.id === id);
-      // Waits on what the module publishes, never on a fixed time: the arcs have drawn some frames,
-      // and the other two programs were refused.
-      const frames = () => Number(m.caliperStats?.frames ?? 0);
-      let since = -1;
-      const settled = () => {
-        if (of('tower_arcs')?.state === 'running' && since < 0) since = frames();
-        return since >= 0 && frames() >= since + 3 && of('broken_pattern')?.state === 'refused' &&
-          of('wrong_pin')?.state === 'refused';
+      // The arcs' pixels are counted inside the page, in the same task as each frame of the module:
+      // right after the module's animation callback has drawn, the canvas is copied into a 2D canvas
+      // (a WebGPU canvas keeps its texture only until the end of that task). A screenshot from the
+      // test process has no tie to a frame, and a slow software adapter may stop the arcs
+      // (program.draw_over_time) or sit between presents when it lands. The wait ends when the count
+      // passes the bound while the two programs are refused, or when the arcs leave "running", or at
+      // the frame cap.
+      const probe = document.createElement('canvas');
+      const pg = probe.getContext('2d', { willReadFrequently: true })!;
+      const count = () => {
+        probe.width = canvas.width;   // the module sizes the canvas after its first frames
+        probe.height = canvas.height;
+        pg.clearRect(0, 0, probe.width, probe.height);
+        pg.drawImage(canvas, 0, 0);
+        const d = pg.getImageData(0, 0, probe.width, probe.height).data;
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4)
+          if (d[i + 1] > 150 && d[i + 2] > 150 && d[i + 1] + d[i + 2] > d[i] + 200) n++;
+        return n;
       };
-      for (let i = 0; i < 6000 && !settled(); i++) await new Promise((ok) => requestAnimationFrame(() => ok(null)));
-      return { list: list(), state: m.caliperStats?.state ?? '', errors: m.caliperStats?.gfxErrors ?? '' };
+      let since = -1, largest = 0, largestFrame = -1, stopped = '', ticks = 0;
+      const frames = () => Number(m.caliperStats?.frames ?? 0);
+      const afterFrame = () => {
+        const arcs = of('tower_arcs');
+        if (arcs?.state === 'running') {
+          if (since < 0) since = frames();
+          if (frames() >= since + 1 && largest <= 500) {
+            const n = count();
+            if (n > largest) { largest = n; largestFrame = frames(); }
+          }
+        } else if (since >= 0 && !stopped) stopped = `${arcs?.state} ${arcs?.code}`;
+      };
+      const original = window.requestAnimationFrame.bind(window);
+      let hooked = true;
+      window.requestAnimationFrame = (cb: FrameRequestCallback) => original((t) => { cb(t); if (hooked) afterFrame(); });
+      const ready = () => largest > 500 && of('broken_pattern')?.state === 'refused' && of('wrong_pin')?.state === 'refused';
+      for (; ticks < 6000 && !stopped && !ready(); ticks++) await new Promise((ok) => original(() => ok(null)));
+      hooked = false;
+      window.requestAnimationFrame = original;
+      return { list: list(), state: m.caliperStats?.state ?? '', errors: m.caliperStats?.gfxErrors ?? '',
+        largest, largestFrame, stopped, ticks, frame: frames(), since };
     }, { base: `${site.origin}/`, src: url });
     console.log(`[${info.project.name}] live programs: ${JSON.stringify(programs.list.map((p) => [p.id, p.state, p.code]))}`);
     const of = (id: string) => programs.list.find((p) => p.id === id);
-    expect(of('tower_arcs')?.state, `tower_arcs: ${of('tower_arcs')?.message}`).toBe('running');
+    console.log(`[${info.project.name}] live tower: largest count ${programs.largest} at module frame ` +
+      `${programs.largestFrame} (arcs running from frame ${programs.since}, ended at frame ${programs.frame}, ` +
+      `${programs.ticks} animation frames)`);
+    if (programs.largest <= 500) {
+      const why = programs.stopped ? `the arcs stopped with "${programs.stopped}" after ${programs.frame - programs.since} frames`
+        : of('tower_arcs')?.state === 'running' ? 'the frame cap ended the wait while the arcs ran' : 'the arcs never ran';
+      expect.soft(programs.largest, `the scene view draws the arcs: ${why}; largest count of the arcs' colors seen ` +
+        `${programs.largest} (module frame ${programs.largestFrame})`).toBeGreaterThan(500);
+    }
+    expect(of('tower_arcs')?.state === 'running' || programs.stopped !== '', `tower_arcs: ${of('tower_arcs')?.message}`).toBe(true);
     expect(of('head_pattern')?.code ?? '', 'head_pattern: no refusal').toBe('');
     expect(of('broken_pattern')?.code).toBe('program.browser_refused');
     expect(of('broken_pattern')?.where).toBe('draw.passes[0]');
@@ -365,15 +410,7 @@ test('the module draws the draw halves that PROGRAM and RESOURCE bring over its 
       fs.mkdirSync(CAPTURES, { recursive: true });
       fs.writeFileSync(path.join(CAPTURES, `parity-live-tower-${info.project.name}.png`), png);
     }
-    const px = decodePng(png);
-    let bright = 0;
-    for (let y = 0; y < px.height; y++)
-      for (let x = 0; x < px.width; x++) {
-        const [r, g, b] = px.at(x, y);
-        if (g > 150 && b > 150 && g + b > r + 200) bright++;   // the cyan and white of the arcs
-      }
-    console.log(`[${info.project.name}] live tower: ${bright} pixels of the arcs' colors in ${px.width} x ${px.height}`);
-    expect(bright, 'the scene view draws the arcs').toBeGreaterThan(500);
+    expect(programs.largest, 'the scene view draws the arcs').toBeGreaterThan(500);
     // On a software adapter the frame time is the time from the submit until the work is done (no
     // timestamps), far over the arcs' 4 ms, so the safety rule may stop them after 30 frames: the
     // arcs either keep running or stop with program.draw_over_time, never with another code.
