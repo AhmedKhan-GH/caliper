@@ -24,6 +24,8 @@ MEMORY_LIMIT_GB = 12
 
 def validate_partitions(metadata):
     """Require the exact T2 source and disjoint document partitions."""
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("training"), dict):
+        raise ValueError("dictionary requires text source metadata")
     training = metadata.get("training", {})
     expected = {"dataset_id": DATASET_ID, "dataset_config": DATASET_CONFIG,
                 "dataset_revision": DATASET_REVISION, "split": "train",
@@ -122,26 +124,27 @@ def main(argv=None):
     provenance = validate_partitions(metadata)
     if args.query is None and (args.dictionary / "index").exists():
         raise ValueError("the dictionary already has an index folder")
-    if args.query is not None and (args.query[0] < 0 or args.query[1] < 0):
-        raise ValueError("query layer and feature must be nonnegative")
+    if args.query is not None and not (0 <= args.query[0] < metadata["layers"] and
+                                      0 <= args.query[1] < metadata["latents"]):
+        raise ValueError("query layer or feature is outside the dictionary")
     memory = MemoryGuard(args.memory_gb, args.device)
-    memory.check("start")
     try:
+        memory.check("start")
         with StopControl() as stop:
             def check(stage):
                 stop.check()
                 # Resource checks occur before and after each bounded model batch.
-                memory.check(stage, force=stage in ("dictionary", "before batch", "model batch", "table"))
+                memory.check(stage, force=stage in ("dictionary", "before batch", "model batch", "table", "before completion"))
 
             model, tokenizer = load_text_model(device=args.device, memory=memory)
             stop.check()
             dictionary = load_dictionary(args.dictionary, model=model)
             memory.check("dictionary")
             if args.query is not None:
-                index = FeatureIndex(args.dictionary, model=model, tokenizer=tokenizer, dictionary=dictionary)
-                memory.check("index")
-                layer, feature = args.query
-                response = {"show": index.show(layer, feature), "examples": index.examples(layer, feature, args.limit)}
+                with FeatureIndex(args.dictionary, model=model, tokenizer=tokenizer, dictionary=dictionary) as index:
+                    memory.check("index")
+                    layer, feature = args.query
+                    response = {"show": index.show(layer, feature), "examples": index.examples(layer, feature, args.limit)}
                 memory.check("query")
                 print(json.dumps(response, ensure_ascii=False, allow_nan=False), flush=True)
                 return 0

@@ -19,7 +19,8 @@ def indexed(tmp_path):
     dictionary = load_dictionary(tmp_path, model=model)
     build_index(tmp_path, documents, model=model, tokenizer=tokenizer, dictionary=dictionary,
                 provenance={"partition": "fixture-examples"}, context_length=17)
-    return FeatureIndex(tmp_path, model=model, tokenizer=tokenizer, dictionary=dictionary), documents
+    with FeatureIndex(tmp_path, model=model, tokenizer=tokenizer, dictionary=dictionary) as index:
+        yield index, documents
 
 
 def test_streamed_table_equals_brute_force(indexed):
@@ -195,6 +196,7 @@ def test_incompatible_or_incomplete_index(indexed, damage):
     import hashlib
     index, _ = indexed
     manifest_path = index.root / "index" / "index.json"
+    index.close()
     if damage == "missing_manifest":
         manifest_path.unlink()
     elif damage == "partial_manifest":
@@ -384,3 +386,137 @@ def test_cli_clean_memory_stop(tmp_path, monkeypatch):
     monkeypatch.setattr(command, "MemoryGuard", Memory)
     assert command.main(["--dictionary", str(tmp_path), "--device", "cpu"]) == 2
     assert not (tmp_path / "index" / "index.json").exists()
+
+
+def test_near_ties_retain_float64_values(tmp_path):
+    table = _TopTable(tmp_path, 1, 1)
+    values = torch.ones(31, 1, dtype=torch.float64)
+    values[25, 0] = np.nextafter(1.0, 2.0)
+    values[26, 0] = np.nextafter(1.0, 0.0)
+    table.update(0, values[:12], 0)
+    table.update(0, values[12:], 12)
+    expected = sorted(range(31), key=lambda i: (-values[i, 0].item(), i))[:16]
+    assert table.table[0, 0]["offset"].tolist() == expected
+    assert table.table[0, 0]["activation"].tolist() == values[expected, 0].tolist()
+
+
+def test_zero_feature_skips_forward_and_short_feature_keeps_its_count(indexed):
+    index, _ = indexed
+    layer, feature = map(int, np.argwhere(index.counts == 0)[0])
+    handle = index.model.register_forward_pre_hook(lambda *_: pytest.fail("zero feature ran the model"))
+    try:
+        assert index.examples(layer, feature) == []
+        assert index.show(layer, feature)["maximum"] == 0
+    finally:
+        handle.remove()
+    layer, feature = map(int, np.argwhere((index.counts > 0) & (index.counts < 16))[0])
+    assert len(index.examples(layer, feature)) == int(index.counts[layer, feature])
+
+
+def test_topk_identity_and_eval_mode_refusal(indexed):
+    index, _ = indexed
+    index.dictionary.layers[0].k += 1
+    with pytest.raises(ValueError, match="TopK mismatch"):
+        FeatureIndex(index.root, model=index.model, tokenizer=index.tokenizer, dictionary=index.dictionary)
+    index.model.train()
+    with pytest.raises(ValueError, match="eval mode"):
+        index.show(0, 0)
+
+
+@pytest.mark.parametrize("data", [None, [], "invalid", 7])
+def test_malformed_manifest_root(indexed, data):
+    import json
+    index, _ = indexed
+    (index.root / "index" / "index.json").write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="malformed"):
+        FeatureIndex(index.root, model=index.model, tokenizer=index.tokenizer, dictionary=index.dictionary)
+
+
+def test_last_resource_check_precedes_completion(tmp_path):
+    model, _ = write_fixture(tmp_path)
+    def check(stage):
+        if stage == "before completion":
+            raise RuntimeError("last resource check")
+    with pytest.raises(RuntimeError, match="last resource check"):
+        build_index(tmp_path, [("doc", [65])], model=model, tokenizer=TinyTokenizer(),
+                    provenance={"partition": "fixture"}, memory_guard=check)
+    assert not (tmp_path / "index" / "index.json").exists()
+
+
+def test_budget_does_not_consume_another_document(tmp_path):
+    model, _ = write_fixture(tmp_path)
+    def documents():
+        yield "first", [65, 66, 67]
+        pytest.fail("source advanced after token budget")
+    manifest = build_index(tmp_path, documents(), model=model, tokenizer=TinyTokenizer(),
+                           provenance={"partition": "fixture"}, max_tokens=2)
+    assert manifest["tokens"] == 2
+
+
+def test_cli_refuses_invalid_query_before_model_load(tmp_path, monkeypatch):
+    from tools.interp import build_index as command
+    from .fixture import TinyLM
+    _t2_source_manifest(tmp_path, TinyLM())
+    monkeypatch.setattr(command, "load_text_model", lambda **kwargs: pytest.fail("invalid query loaded a model"))
+    with pytest.raises(ValueError, match="outside the dictionary"):
+        command.main(["--dictionary", str(tmp_path), "--query", "4", "0"])
+
+
+def test_nonfinite_window_refuses_cache_entry(indexed, monkeypatch):
+    index, _ = indexed
+    layer, feature = map(int, np.argwhere(index.counts > 0)[0])
+    encode = index.dictionary.encode
+    monkeypatch.setattr(index.dictionary, "encode", lambda layer, x: encode(layer, x) * float("nan"))
+    with pytest.raises(ValueError, match="finite"):
+        index.examples(layer, feature)
+    assert "examples" not in index._cache[layer, feature]
+    assert all(not block.mlp._forward_pre_hooks for block in index.model.layers)
+
+
+def test_index_close_releases_maps_and_refuses_queries(indexed):
+    index, _ = indexed
+    maps = [getattr(index, name)._mmap for name in ("table", "counts", "tokens", "documents")]
+    index.close()
+    index.close()
+    assert all(mapping.closed for mapping in maps)
+    with pytest.raises(ValueError, match="closed"):
+        index.examples(0, 0)
+    with pytest.raises(ValueError, match="closed"):
+        with index:
+            pass
+    # This unlink also succeeds on Windows because no mapping remains open.
+    (index.root / "index" / "table.npy").unlink()
+
+
+def test_index_partial_load_closes_earlier_maps(indexed, monkeypatch):
+    index, _ = indexed
+    index.close()
+    actual_load = np.load
+    maps = []
+    def load(path, **kwargs):
+        if maps:
+            raise ValueError("fixture map failure")
+        value = actual_load(path, **kwargs)
+        maps.append(value._mmap)
+        return value
+    monkeypatch.setattr(np, "load", load)
+    with pytest.raises(ValueError, match="fixture map failure"):
+        FeatureIndex(index.root, model=index.model, tokenizer=index.tokenizer, dictionary=index.dictionary)
+    assert len(maps) == 1 and maps[0].closed
+    (index.root / "index" / "table.npy").unlink()
+
+
+def test_table_partial_allocation_closes_earlier_map(tmp_path, monkeypatch):
+    actual_open = np.lib.format.open_memmap
+    maps = []
+    def open_map(path, **kwargs):
+        if maps:
+            raise OSError("fixture map failure")
+        value = actual_open(path, **kwargs)
+        maps.append(value._mmap)
+        return value
+    monkeypatch.setattr(np.lib.format, "open_memmap", open_map)
+    with pytest.raises(OSError, match="fixture map failure"):
+        _TopTable(tmp_path, 1, 1)
+    assert len(maps) == 1 and maps[0].closed
+    (tmp_path / "table.npy").unlink()

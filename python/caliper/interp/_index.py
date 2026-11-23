@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter, OrderedDict
+from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
 import json
@@ -24,6 +25,25 @@ _DOCUMENT = np.dtype([("id", "S128"), ("start", "<i8"), ("length", "<i8"),
 _FILES = ("table.npy", "counts.npy", "tokens.bin", "documents.bin")
 
 
+@contextmanager
+def _device_scope(device):
+    """Release Objective-C temporaries after each MPS work unit."""
+    if torch.device(device).type != "mps":
+        yield
+        return
+    import ctypes
+    runtime = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
+    runtime.objc_autoreleasePoolPush.restype = ctypes.c_void_p
+    runtime.objc_autoreleasePoolPush.argtypes = []
+    runtime.objc_autoreleasePoolPop.restype = None
+    runtime.objc_autoreleasePoolPop.argtypes = [ctypes.c_void_p]
+    pool = runtime.objc_autoreleasePoolPush()
+    try:
+        yield
+    finally:
+        runtime.objc_autoreleasePoolPop(pool)
+
+
 def _json(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
@@ -38,7 +58,8 @@ def _hash_file(path):
 
 def _dictionary_hash(dictionary):
     digest = hashlib.sha256(_json(dictionary.metadata).encode())
-    digest.update(weights_hash(dictionary).encode())
+    with _device_scope(next(dictionary.parameters()).device):
+        digest.update(weights_hash(dictionary).encode())
     return digest.hexdigest()
 
 
@@ -79,8 +100,12 @@ def _compatible(model, dictionary):
     if data["read_points"] != expected:
         raise ValueError("index dictionary probe mismatch")
     for layer in dictionary.layers:
-        if tuple(layer.W_dec.shape) != (data["latents"], data["width"]):
+        shape = (data["latents"], data["width"])
+        if (tuple(layer.W_enc.shape) != shape or tuple(layer.W_dec.shape) != shape or
+                tuple(layer.b_enc.shape) != (shape[0],) or tuple(layer.b_dec.shape) != (shape[1],)):
             raise ValueError("index dictionary dimensions mismatch")
+        if type(layer.k) is not int or layer.k != data["k"]:
+            raise ValueError("index dictionary TopK mismatch")
     return data
 
 
@@ -116,13 +141,17 @@ def _stable_topk(values, offsets, k=TOP_EXAMPLES):
 
 class _TopTable:
     def __init__(self, folder, layers, features):
-        self.table = np.lib.format.open_memmap(folder / "table.npy", mode="w+", dtype=_TABLE,
-                                               shape=(layers, features, TOP_EXAMPLES))
-        self.table["activation"] = 0
-        self.table["offset"] = -1
-        self.counts = np.lib.format.open_memmap(folder / "counts.npy", mode="w+", dtype="<u8",
-                                                shape=(layers, features))
-        self.counts[:] = 0
+        try:
+            self.table = np.lib.format.open_memmap(folder / "table.npy", mode="w+", dtype=_TABLE,
+                                                   shape=(layers, features, TOP_EXAMPLES))
+            self.table["activation"] = 0
+            self.table["offset"] = -1
+            self.counts = np.lib.format.open_memmap(folder / "counts.npy", mode="w+", dtype="<u8",
+                                                    shape=(layers, features))
+            self.counts[:] = 0
+        except BaseException:
+            self.close()
+            raise
 
     def update(self, layer, activations, start):
         values = activations.reshape(-1, activations.shape[-1]).T
@@ -140,6 +169,23 @@ class _TopTable:
     def flush(self):
         self.table.flush()
         self.counts.flush()
+
+    def close(self):
+        for name in ("table", "counts"):
+            value = getattr(self, name, None)
+            setattr(self, name, None)
+            mapping = getattr(value, "_mmap", None)
+            if mapping is not None:
+                mapping.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+    def __del__(self):
+        self.close()
 
 
 def _forward(model, input_ids, attention_mask):
@@ -178,7 +224,7 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
     device = next(model.parameters()).device
     total, document_count = 0, 0
     seen = set()
-    with (folder / "tokens.bin").open("wb") as token_file, (folder / "documents.bin").open("wb") as doc_file:
+    with table, (folder / "tokens.bin").open("wb") as token_file, (folder / "documents.bin").open("wb") as doc_file:
         for document_id, token_ids in documents:
             if not isinstance(document_id, str) or not document_id or len(document_id.encode()) > 128 or "\0" in document_id:
                 raise ValueError("invalid document ID")
@@ -199,7 +245,7 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
             for begin in range(0, length, context_length):
                 check("before batch")
                 ids = torch.tensor(tokens[begin:begin + context_length].astype(np.int64), device=device).unsqueeze(0)
-                with torch.inference_mode(), capture(model, data["read_points"]) as saved:
+                with _device_scope(device), torch.inference_mode(), capture(model, data["read_points"]) as saved:
                     _forward(model, ids, torch.ones_like(ids))
                     check("model batch")
                     for layer, point in enumerate(data["read_points"]):
@@ -214,7 +260,7 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
             document_count += 1
             if total == max_tokens:
                 break
-    table.flush()
+        table.flush()
     check("table")
     manifest = {
         "format_version": INDEX_VERSION, "complete": True, "top_examples": TOP_EXAMPLES,
@@ -228,6 +274,7 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
                          "sha256": _hash_file(folder / name)} for name in _FILES},
     }
     manifest["index_hash"] = hashlib.sha256(_json(manifest).encode()).hexdigest()
+    check("before completion")
     # Write the completion record last. A partial or malformed record is refused.
     (folder / "index.json").write_text(_json(manifest) + "\n", encoding="utf-8")
     return manifest
@@ -245,6 +292,8 @@ class FeatureIndex:
     """
 
     def __init__(self, dictionary_path, *, model, tokenizer, dictionary=None):
+        self._closed = False
+        self._cache = OrderedDict()
         self.root = Path(dictionary_path)
         self.model, self.tokenizer = model, tokenizer
         self.dictionary = dictionary if dictionary is not None else load_dictionary(self.root, model=model)
@@ -252,11 +301,13 @@ class FeatureIndex:
         folder = self.root / "index"
         try:
             manifest = json.loads((folder / "index.json").read_text(encoding="utf-8"))
+            if not isinstance(manifest, dict):
+                raise ValueError("malformed feature index manifest")
             claimed = manifest.pop("index_hash")
             if claimed != hashlib.sha256(_json(manifest).encode()).hexdigest():
                 raise ValueError("index hash mismatch")
             manifest["index_hash"] = claimed
-            if (manifest["format_version"] != INDEX_VERSION or manifest["complete"] is not True or
+            if (type(manifest["format_version"]) is not int or manifest["format_version"] != INDEX_VERSION or manifest["complete"] is not True or
                     manifest["top_examples"] != TOP_EXAMPLES or manifest["window_tokens"] != WINDOW_TOKENS):
                 raise ValueError("incomplete or unsupported index")
             if (manifest["dictionary_source_hash"] != _source_hash(self.root, data["layers"]) or
@@ -291,9 +342,34 @@ class FeatureIndex:
             elif len(self.tokens):
                 raise ValueError("index lacks document boundaries")
         except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+            self.close()
             raise ValueError("incomplete or malformed feature index") from error
+        except BaseException:
+            self.close()
+            raise
         self.metadata = manifest
-        self._cache = OrderedDict()
+
+    def close(self):
+        """Release memory maps and cached results. Repeated calls are safe."""
+        self._closed = True
+        self._cache.clear()
+        for name in ("table", "counts", "tokens", "documents"):
+            value = getattr(self, name, None)
+            setattr(self, name, None)
+            mapping = getattr(value, "_mmap", None)
+            if mapping is not None:
+                mapping.close()
+
+    def __enter__(self):
+        if self._closed:
+            raise ValueError("feature index is closed")
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+    def __del__(self):
+        self.close()
 
     @staticmethod
     def _map(path, dtype, count):
@@ -303,6 +379,10 @@ class FeatureIndex:
         return np.memmap(path, mode="r", dtype=dtype, shape=(count,)) if count else np.empty(0, dtype=dtype)
 
     def _entry(self, layer, feature):
+        if self._closed:
+            raise ValueError("feature index is closed")
+        if self.model.training:
+            raise ValueError("index requires a model in eval mode")
         _positive_integer(layer, "layer", self.metadata["layers"] - 1, minimum=0)
         _positive_integer(feature, "feature", self.metadata["features"] - 1, minimum=0)
         key = (layer, feature)
@@ -351,7 +431,7 @@ class FeatureIndex:
         output = self.model.get_output_embeddings().weight
         direction = self.dictionary.layers[layer].W_dec[feature].to(device=output.device, dtype=output.dtype)
         best, ids = np.empty((1, 0)), np.empty((1, 0), dtype=np.int64)
-        with torch.inference_mode():
+        with _device_scope(output.device), torch.inference_mode():
             for start in range(0, output.shape[0], chunk_size):
                 values = (output[start:start + chunk_size] @ direction).unsqueeze(0)
                 positions = torch.arange(start, start + values.shape[1], device=output.device)
@@ -393,10 +473,12 @@ class FeatureIndex:
                     ids[row_number, :len(valid)] = torch.tensor(valid, device=device)
                     mask[row_number, :len(valid)] = 1
                 point = self.dictionary.metadata["read_points"][layer]
-                with torch.inference_mode(), capture(self.model, [point]) as saved:
+                with _device_scope(device), torch.inference_mode(), capture(self.model, [point]) as saved:
                     _forward(self.model, ids, mask)
                     weights = self.dictionary.layers[layer].W_enc
                     values = self.dictionary.encode(layer, saved[point].to(device=weights.device, dtype=weights.dtype))
+                    if not torch.isfinite(values).all().item():
+                        raise ValueError("index window activations must be finite")
                     values = values[..., feature].cpu().tolist()
                 for row, values_row in zip(rows, values):
                     iterator = iter(values_row)
