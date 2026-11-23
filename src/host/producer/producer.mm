@@ -1082,7 +1082,7 @@ caliper_producer_status caliper_producer_compile(caliper_producer* rt, const cal
                 caliper_wgsl_entry_point ep{};
                 if (caliper_wgsl_module_entry_point(mod, i, &ep) != CALIPER_WGSL_OK) continue;
                 refl.entries.push_back({ep.name, sb::EntryStage(ep.stage),
-                                        {ep.workgroup_size[0], ep.workgroup_size[1], ep.workgroup_size[2]}});
+                                        {ep.workgroup_size[0], ep.workgroup_size[1], ep.workgroup_size[2]}, {}, {}});
             }
             if (sandbox_refused(sb::check_program(spec, refl), error, &refused)) return refused;
         }
