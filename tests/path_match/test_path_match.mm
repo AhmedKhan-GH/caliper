@@ -13,8 +13,8 @@
 // The cases cover the default columns of three and of two columns, chosen columns and z 0, the
 // thinning of max_points, one color and a translucent one, fixed and partly fixed ranges, a NaN
 // coordinate, a pixel ratio of 2, one row, two rows, and the most vertices that the piece
-// publishes (419,430, the 8 MiB limit, below the operator's 1,048,576); above them the piece
-// thins as the operator does with max_points 419,430. ../lines_match/line_match.h holds the
+// publishes (1,048,576, the operator's most); above them the piece
+// thins as the operator does with max_points 1,048,576. ../lines_match/line_match.h holds the
 // tolerances and the picks.
 #include "../lines_match/line_match.h"
 
@@ -287,35 +287,35 @@ TEST_CASE("path_match: NaN, one and two rows, and the most vertices") {
         CHECK(lit == 0);
         MESSAGE("one row: 1 vertex, ", lit, " pixels lit, ", c.differ, " pixels differ");
     }
-    {   // 419,430 rows, all kept with max_points 1,048,576: the most that the piece publishes.
-        constexpr std::int64_t kMost = 419430;
+    {   // 1,048,576 rows, all kept with max_points 1,048,576: the most that the piece publishes.
+        constexpr std::int64_t kMost = 1048576;
         Path p = knot(kMost, 3, 6);
         p.max_points = 1048576;
-        p.colormapped = false;   // a value of each of 419,430 rows can sit on a boundary of two levels
+        p.colormapped = false;   // a value of each of 1,048,576 rows can sit on a boundary of two levels
         p.flat = rgba(120, 220, 160, 255);
         p.width = 3.0f;
         // Each join is below a pixel here, thus no element shows an interior pixel to pick.
-        run_case(m, "419,430 rows", p, {}, 0);
+        run_case(m, "1,048,576 rows", p, {}, 0);
         // One row more: the piece keeps every second row, as the operator does with max_points
-        // 419,430.
+        // 1,048,576.
         Path more = knot(kMost + 1, 3, 7);
-        more.max_points = 419430;
+        more.max_points = 1048576;
         more.colormapped = false;
         more.flat = p.flat;
         more.width = 3.0f;
         Path asked = more;
         asked.max_points = 1048576;
         const Reference r = reference_of(more);
-        CHECK(r.line.values.size() == 209716);
+        CHECK(r.line.values.size() == 524289);
         Builtin b(*m.backend);
         add_builtin(b, more, r);
         const std::array<float, 16> mvp = b.fit();
         const std::vector<std::uint8_t> builtin = b.draw();
         Program prog;
         make_program(m, "path", tensors_of(asked), params_of(asked), kPick, &prog);
-        CHECK(find_published(prog.published, "vertices")->count == 209716);
+        CHECK(find_published(prog.published, "vertices")->count == 524289);
         const Drawn drawn = draw_programs(*m.backend, {&prog}, mvp);
-        check_case("419,431 rows with max_points 1,048,576", b, builtin, drawn, prog, {},
+        check_case("1,048,577 rows with max_points 1,048,576", b, builtin, drawn, prog, {},
                    [&](std::uint32_t k) { return vertex_of(r, k); }, 0);
     }
 }

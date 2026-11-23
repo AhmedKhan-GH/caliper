@@ -41,7 +41,7 @@ type = "u32"
 default = 65536
 min = 2
 max = 1048576
-title = "Most Vertices, at most 419,430 drawn"
+title = "Most Vertices, at most 1,048,576 drawn"
 
 [[params]]
 name = "width"
@@ -99,13 +99,14 @@ max = 8
 title = "Depth Offset Toward the Camera"
 
 # One element for each kept row in order: its position, its row index as the value, and the row.
-# 20 bytes, thus 419,430 fit in the 8 MiB of published resources.
+# 20 bytes, thus 1,048,576 take 20 MiB of the published resources.
 [[resources]]
 id = "vertices"
 kind = "buffer"
 struct = "Vertex"
 fields = ["x: f32", "y: f32", "z: f32", "value: f32", "row: u32"]
-count = 419430
+# 1,048,576 vertices of 20 bytes: 20 MiB, the most that the path operator keeps (kMaxPointsMax).
+count = 1048576
 counted = true
 
 [derive]
@@ -114,10 +115,11 @@ memory_mb = 256
 
 [[derive.passes]]
 entry = "keep_rows"
-workgroups = [1639, 1, 1]
+workgroups = [4096, 1, 1]
 writes = ["vertices"]
 
 [draw]
+memory_mb = 64
 camera = "orbit"
 pick = { resource = "vertices", fields = ["row", "value", "x", "y", "z"] }
 
