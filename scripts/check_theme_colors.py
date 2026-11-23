@@ -4,16 +4,20 @@
 The theme reads every colour from the generated header of the shared design
 tokens (sternbild_tokens.h, fetched by CMake). This check scans the theme
 sources for colour literals written by hand: IM_COL32(...) and ImColor(...)
-calls, ImVec4(...) constructions, and 0xRRGGBB or 0xAARRGGBB constants. Comments
-and the contents of string literals are skipped. The macros IM_COL32_BLACK_TRANS
-and IM_COL32_A_MASK name no colour and pass.
+calls, ImVec4 and ImColor constructions with parentheses or braces, declarations
+such as `ImVec4 c(1, 0, 0, 1)`, three or four numbers in braces of which one is
+a float literal (`{0.9f, 0.8f, 0.7f, 1}`), and 0xRRGGBB or 0xAARRGGBB constants.
+Comments and the contents of string literals are skipped. The macros
+IM_COL32_BLACK_TRANS and IM_COL32_A_MASK name no colour and pass.
 
-One region may hold literals: the lines between
+Exactly one region of the theme may hold literals: the lines between
 
     // BEGIN colours without a token
     // END colours without a token
 
-in a theme file. It lists the colours that the tokens do not cover, apart from
+Each marker must stand on a line of its own. A second region, a marker after
+code on its line, an END without its BEGIN and a BEGIN without its END are
+findings. The region lists the colours that the tokens do not cover, apart from
 everything generated.
 
 Usage: check_theme_colors.py [--root <repository root>] [files...]
@@ -33,15 +37,17 @@ THEME_FILES = (
 )
 
 BEGIN = "colours without a token"
-REGION_BEGIN = re.compile(r"//\s*BEGIN\s+" + BEGIN)
-REGION_END = re.compile(r"//\s*END\s+" + BEGIN)
+REGION_BEGIN = re.compile(r"^\s*//\s*BEGIN\s+" + BEGIN + r"\s*$")
+REGION_END = re.compile(r"^\s*//\s*END\s+" + BEGIN + r"\s*$")
+MARKER = re.compile(r"\b(?:BEGIN|END)\s+" + BEGIN)
 
 # A colour written by hand. IM_COL32_BLACK_TRANS and IM_COL32_A_MASK do not match
 # because the call needs its opening parenthesis right after the macro name.
 LITERAL = re.compile(
     r"\bIM_COL32\s*\("
     r"|\bImColor\s*\("
-    r"|\bImVec4\s*\("
+    r"|\b(?:ImVec4|ImColor)\s*[({]"
+    r"|\b(?:ImVec4|ImColor)\s+\w+\s*[({]\s*[-+]?\.?\d"
     r"|\bIM_COL32_(?:WHITE|BLACK)\b"
     r"|\b0[xX][0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?[uUlL]*\b"
 )
@@ -82,24 +88,51 @@ def code_only(line, in_block):
     return "".join(out), in_block
 
 
-def scan(text):
-    """Returns (line number, text) of each raw colour literal outside the allowed region."""
+# Three or four numbers in braces, an initializer of a colour when one is a float literal.
+NUMBER = r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?[fF]?"
+NUMBER_GROUP = re.compile(r"\{\s*(" + NUMBER + r"(?:\s*,\s*" + NUMBER + r"){2,3})\s*\}")
+
+
+def float_group(code):
+    """Whether the code holds three or four numbers in braces, one of them a float literal."""
+    for match in NUMBER_GROUP.finditer(code):
+        if any(re.search(r"[.eEfF]", n) for n in match.group(1).split(",")):
+            return True
+    return False
+
+
+def scan(text, regions_before=0):
+    """Returns (line number, text) of each raw colour literal outside the allowed region, and of
+    each misplaced marker. `regions_before` counts the regions of the files read before this one."""
     hits = []
     in_block = False
     in_region = False
+    regions = regions_before
     for number, raw in enumerate(text.splitlines(), 1):
         if REGION_BEGIN.search(raw):
+            regions += 1
+            if in_region or regions > 1:
+                hits.append((number, "only one region 'BEGIN " + BEGIN + "' is allowed: " + raw.strip()))
             in_region = True
             continue
         if REGION_END.search(raw):
+            if not in_region:
+                hits.append((number, "an END without its BEGIN: " + raw.strip()))
             in_region = False
             continue
+        if MARKER.search(raw):
+            hits.append((number, "a marker must stand on a line of its own: " + raw.strip()))
         code, in_block = code_only(raw, in_block)
-        if not in_region and LITERAL.search(code):
-            hits.append((number, raw.strip()))
+        if not in_region and (LITERAL.search(code) or float_group(code)):
+            hits.append((number, "raw colour: " + raw.strip()))
     if in_region:
         hits.append((0, "a region 'BEGIN " + BEGIN + "' has no END"))
     return hits
+
+
+def count_regions(text):
+    """The number of regions that a file opens."""
+    return sum(1 for raw in text.splitlines() if REGION_BEGIN.search(raw))
 
 
 def main():
@@ -113,17 +146,21 @@ def main():
     names = args.files or THEME_FILES
     found = 0
     checked = 0
+    regions = 0
     for name in names:
         path = root / name
         if not path.is_file():
             print(f"error: {name} does not exist", file=sys.stderr)
             return 2
         checked += 1
-        for number, text in scan(path.read_text(encoding="utf-8")):
+        text = path.read_text(encoding="utf-8")
+        hits = scan(text, regions)
+        regions += count_regions(text)
+        for number, text in hits:
             found += 1
-            print(f"{name}:{number}: raw colour: {text}")
+            print(f"{name}:{number}: {text}")
     if found:
-        print(f"The theme holds {found} raw colour literal(s). Read the value from "
+        print(f"The theme check has {found} finding(s). Read a colour from "
               "sternbild_tokens.h, or list a colour without a token in the region "
               f"'{BEGIN}'.")
         return 1
