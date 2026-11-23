@@ -141,14 +141,14 @@ The first array of each part is required, and so are `vectors` of arrows, `half_
 
 ### Piece Form
 
-A viewer that announces the capability `scene_pieces` beside `scenes` receives a batch of the points part, and a color image, in the piece form. A producer announces `scene_pieces` when it sends that form, and it sends the form only to a peer that announced it. Every other peer receives the batch with its arrays, as the table above gives them. The other parts and forms travel with their arrays to every peer.
+A viewer that announces `scene_pieces` beside `scenes` receives every drawable batch in the piece form. The producer also announces this capability. A peer without it receives scene structure only: cameras, transforms, class tables, and clears. New senders never emit per-shape arrays. The array sections above describe the read-only form of saved recordings.
 
 In the piece form, the arrays of the batch travel as the RESOURCE versions of a scene program ([`resource`](#resource)), and the SCENE_UPDATE that follows them names them. A scene program is an instance of the part's library piece, which every viewer that announces `scene_pieces` has built in. Its id is `scene.` followed by 1 to 9 decimal digits, a form that no program of a spec can take, because the id of a spec program has no dot. The producer gives each scene, entity path and part its own scene program, and keeps it. The `step` of such a RESOURCE is the run's step at the call, or 0 before the first step. A version of more than 8 MiB travels as RESOURCE parts, as the versions of other programs do. The producer sends the RESOURCE versions of the batch and then its update on the same subscription, one frame after the other, and the scene's state for a new subscription sends each held batch the same way.
 
 | Key | Type | Meaning |
 |---|---|---|
 | `program` | string | The scene program whose versions came just before the update |
-| `piece` | object | The library piece: `name` (`points` for points, `image` for a color image) and `version` (1), with an optional `hash` |
+| `piece` | object | The library piece: `name` (the library piece below) and `version` (1), with an optional `hash` |
 | `resources` | object | Each resource id of the piece, with the count of the version that came before the update |
 | `arrays` | array of strings | The arrays of the part that the batch held, in the order of the table above, from the part's first array |
 
@@ -159,8 +159,22 @@ The resources hold the bytes that the piece's derive half writes, and the produc
 | Piece | Resource | Element | Bytes of One Element |
 |---|---|---|---|
 | `points@1` | `points` | x, y and z as f32 (z is 0 in 2-D), the radius as f32 (the row's from `radii`, else `radius`, else 1), then a u32: the packed RGBA of `colors` (r, g, b and a from the low byte), else the bits of the f32 of `values`, else the class id of `class_ids`, else the bits of a NaN; then the row as u32 and 8 bytes of zero | 32 |
+| `lines@1` | `segments`, `picks`, `info` | Expanded endpoints with color bits; source indices; value range and flags | 32, 8, 12 |
+| `arrows@1` | `arrows`, `info` | Origin, color bits, vector, source index; value range and flags | 32, 12 |
+| `boxes@1` | `boxes`, `names` | Center, half size, rotation, colors, source index, label index; host labels remain in update keys | 64, 64 |
+| `mesh@1` | `vertices`, `attributes`, `info`, `faces`, `tex` | Position, value, normal, color; source index and UV; alpha flag; clamped indices; RGBA texture | 32, 12, 4, 4, 4 |
+| `depth@1` | `pixels`, `info` | Scaled f32 bits in an `r32uint` texture; size, identity pose, finite range | 4, 96 |
+| `segmentation@1` | `pixels`, `palette`, `info` | Class IDs in an `r32uint` texture; 65,536 class colors; size and identity pose | 4, 4, 80 |
 | `image@1` | `pixels` | The texels of an `rgba8unorm` texture whose `width` and `height` are the image's, one packed RGBA a pixel, row by row; a grey image repeats its value in red, green and blue with alpha 255 | 4 |
 | `image@1` | `info` | The width, the height, the channels (1 or 4) and 0 as u32, then the identity as four columns of four f32 | 80 |
+
+Lines also carry bounded `source_*` buffers for the arrays listed in the update. Expanded segments cannot preserve unused indexed vertices or one-position strips. These buffers preserve bounds, selection, and labels. Each buffer uses its original row stride and count.
+
+Points and boxes retain `source_class_ids` beside explicit colors. Depth pixels hold f32 values in scene units, with `scale` set to 1. This canonical form needs no duplicate source texture. The fourth size word in depth `info` is 4.
+
+In segmentation `info`, that word records the original pixel width in bytes. The viewer validates these host resources and excludes them from draw inputs.
+
+Encoded PNG and JPEG calls become `image@1` texture resources after bounded decode on the producer network thread. The update then has `form` `color`. Malformed or oversized images produce a warning and no drawable update.
 
 A viewer keeps the newest version of each resource of each scene program, apart from the resources of other programs, and takes them with the update that names them, when their counts match `resources`. It drops an update whose versions did not come, and notes it in the scene view. It rebuilds the arrays from the bytes in the dimension of the entity's rows, writes the class colors from the scene's class table into the bits of a class id, and draws the received bytes with its own library piece of that name and version.
 
@@ -350,7 +364,7 @@ An update whose frame would pass 64 MiB travels as 2 to 16 SCENE_UPDATE pieces w
 | `first` | An object from the name of each array section of this piece to the first row of the whole array that it holds |
 | `rows` | Piece 0 only: an object from the name of each array of the update to its rows |
 
-A piece holds a contiguous range of rows of some arrays, cut along their first axis, and the stamp whole; piece 0 carries the part's keys. The codecs check a piece's `split` and that `first` names exactly its arrays, and put the update together: `SplitUpdates` in Python and TypeScript and `wire::SplitUpdates` in C++ allocate each array when its first rows arrive, refuse a whole update over 512 MiB (`CALIPER_NET_MAX_UPDATE_BYTES`), overlapping rows, a piece twice or a piece that differs from piece 0, and check the whole update as an unsplit one once every piece and row has arrived. A newer update of the same entity part discards an incomplete one, and at most 2 incomplete updates are held per subscription, the oldest going first. `split_update` in Python divides an update into pieces.
+A piece holds a contiguous range of rows of some arrays, cut along their first axis, and the stamp whole; piece 0 carries the part's keys. The codecs check a piece's `split` and that `first` names exactly its arrays, and put the update together: `SplitUpdates` in Python and TypeScript and `wire::SplitUpdates` in C++ allocate each array when its first rows arrive, refuse a whole update over 512 MiB (`CALIPER_NET_MAX_UPDATE_BYTES`), overlapping rows, a piece twice or a piece that differs from piece 0, and check the whole update as an unsplit one once every piece and row has arrived. A newer update of the same entity part discards an incomplete one, and at most 2 incomplete updates are held per subscription, the oldest going first. The test encoder creates these legacy pieces for recording fixtures. Production senders use RESOURCE parts.
 
 ### Recording Messages
 
@@ -491,23 +505,23 @@ The section `resource` is of dtype u8 and shape (B,), and B is exactly `count` t
 
 ### Resource Parts
 
-A version whose section would pass one frame travels as 2 to 16 RESOURCE parts. Each part holds the keys of the whole version and the key `split`. The parts go in order on one connection, and each part holds whole elements, without gap or overlap.
+A version whose section would pass one frame travels as 2 to 32 RESOURCE parts. Each part holds the keys of the whole version and the key `split`. The parts go in order on one connection, and each part holds whole elements, without gap or overlap.
 
 | `split` key | Type | Meaning |
 |---|---|---|
 | `version` | integer | The sender's counter of versions in parts, from 0 to 2^53 − 1 |
-| `parts` | integer | The number of parts, 2 to 16 (`CALIPER_NET_MAX_PIECES`) |
+| `parts` | integer | The number of parts, 2 to 32 (`CALIPER_NET_RESOURCE_MAX_PARTS`) |
 | `part` | integer | This part's number, from 0 to `parts` − 1 |
 | `first` | integer (uint32) | The first element of the version that this part holds, 0 in part 0 |
 
-The section of a part holds B bytes, more than 0 and a multiple of `stride`. The codecs check the keys of `split` in the order of the table. Then they check that `count` is at most 134,217,728 (`CALIPER_NET_RESOURCE_VERSION_MAX_BYTES`) divided by `stride`, that `first` lies below `count`, and that B divided by `stride` is at most `count` less `first`. Thus no product or sum of two values from the network can wrap.
+The section of a part holds B bytes, more than 0 and a multiple of `stride`. The codecs check the keys of `split` in the order of the table. Then they check the byte limit before multiplication. A buffer holds at most 134,217,728 bytes, and a texture holds at most 268,435,456 bytes. The `count` must fit that limit divided by `stride`. The `first` index lies below `count`, and B divided by `stride` is at most `count` less `first`. Thus no product or sum of two values from the network can wrap.
 
 A receiver puts the parts together with `SplitResources` in Python and TypeScript and `wire::SplitResources` in C++. Part 0 allocates `count` times `stride` bytes, which the check above bounds, and each part copies its elements in. The last part gives the whole version, which the receiver then treats as a version in one frame. Thus a viewer shows a version whole or not at all. These rules hold for each connection:
 
 - A part whose version the receiver does not hold is dropped and counted. This is a part whose part 0 never came or was discarded.
 - A part out of order, a part whose keys differ from those of part 0, and a last part that does not end at `count` are refused, and the receiver discards the version.
 - Part 0 of a newer version of the same resource, or a version in one frame, discards an incomplete version.
-- The receiver holds at most 2 incomplete versions (`CALIPER_NET_MAX_INCOMPLETE_UPDATES`), thus at most 256 MiB. A third one discards the oldest.
+- The receiver holds at most 2 incomplete versions (`CALIPER_NET_MAX_INCOMPLETE_UPDATES`), thus at most 512 MiB for two full textures. A third one discards the oldest.
 - An incomplete version expires when 256 further RESOURCE frames (`CALIPER_NET_RESOURCE_PART_WAIT`) come on the connection before its next part.
 
 A sender sends the parts of one version in order. Between two parts of a version, it sends fewer than 256 other RESOURCE frames. `resource_parts` in Python cuts a version into parts without a copy. The script cuts a version of more than 8 MiB into parts of 8 MiB. The hub keeps the frames of the parts until the version is whole, and then forwards and keeps them as one version.
@@ -520,7 +534,9 @@ A producer keeps at most one unsent RESOURCE for each resource of each program a
 |---|---|---|
 | `CALIPER_NET_MAX_RESOURCES` | 8 | Resources of one program |
 | `CALIPER_NET_RESOURCE_MAX_BYTES` | 67,043,328 | Bytes of the section `resource`: 64 MiB less 64 KiB, thus a version fits one frame with its metadata |
-| `CALIPER_NET_RESOURCE_VERSION_MAX_BYTES` | 134,217,728 | Bytes of a version in parts: 128 MiB, the largest storage binding of the default limits of WebGPU |
+| `CALIPER_NET_RESOURCE_VERSION_MAX_BYTES` | 134,217,728 | Bytes of a buffer version in parts: 128 MiB, the largest storage binding of the default limits of WebGPU |
+| `CALIPER_NET_RESOURCE_TEXTURE_VERSION_MAX_BYTES` | 268,435,456 | Bytes of a texture version in parts, for 8,192 by 8,192 four-byte texels |
+| `CALIPER_NET_RESOURCE_MAX_PARTS` | 32 | Parts of one resource version |
 | `CALIPER_NET_RESOURCE_PART_WAIT` | 256 | RESOURCE frames after which an incomplete version expires |
 | `CALIPER_NET_RESOURCE_STRIDE_MAX` | 256 | The largest `stride` |
 | `CALIPER_NET_RESOURCE_SIDE_MAX` | 8,192 | The largest `width` and `height` of a texture, the default largest 2-D texture of WebGPU |
