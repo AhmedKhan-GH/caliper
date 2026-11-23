@@ -62,7 +62,8 @@ test('the viewer page shows every view of the stream', async ({ page, producer }
     ['loss', 'series', 'canvas2d'], ['weights', 'heatmap', 'canvas2d'], ['attention', 'heatmap', 'canvas2d'],
     ['embedding', 'points', 'canvas2d'], ['weight_hist', 'histogram', 'canvas2d'], ['input', 'image', 'canvas2d'],
   ]);
-  // Data keeps arriving: the newest snapshot of a view advances.
+  // A connected view can precede its first snapshot. Wait for a numeric sequence before checking that it advances.
+  await roundTrip.poll(async () => (await state(page, 'weights')).seq).toEqual(expect.any(Number));
   const seq0 = (await state(page, 'weights')).seq as number;
   await roundTrip.poll(async () => (await state(page, 'weights')).seq as number).toBeGreaterThan(seq0);
   await drawn(page);
