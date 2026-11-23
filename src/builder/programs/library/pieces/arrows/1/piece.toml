@@ -81,14 +81,15 @@ max = 8
 title = "Depth Offset Toward the Camera"
 
 # One element for each arrow, in the order of the rows. An arrow past the rows of `vectors` has
-# `index` 0xffffffff and is not drawn. 32 bytes, thus 262,143 fit beside `info` in the 8 MiB of
-# published resources.
+# `index` 0xffffffff and is not drawn. 32 bytes, thus 1,048,576 fit beside `info` in the 32 MiB
+# that they take of the published resources.
 [[resources]]
 id = "arrows"
 kind = "buffer"
 struct = "Arrow"
 fields = ["ox: f32", "oy: f32", "oz: f32", "color: u32", "vx: f32", "vy: f32", "vz: f32", "index: u32"]
-count = 262143
+# 1,048,576 arrows of 32 bytes: 32 MiB, the most that the built-in draws.
+count = 1048576
 counted = true
 
 # The finite range of the values and two flags: bit 0 a NaN or no value, bit 1 a packed RGBA with
@@ -115,7 +116,7 @@ memory_mb = 128
 
 [[derive.passes]]
 entry = "build_arrows"
-workgroups = [1024, 1, 1]
+workgroups = [4096, 1, 1]
 writes = ["arrows"]
 
 [[derive.passes]]
@@ -128,6 +129,7 @@ entry = "finish_info"
 writes = ["info"]
 
 [draw]
+memory_mb = 64
 camera = "orbit"
 pick = { resource = "arrows", fields = ["index"] }
 

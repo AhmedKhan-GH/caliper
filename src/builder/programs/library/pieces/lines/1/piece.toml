@@ -99,15 +99,16 @@ title = "Depth Offset Toward the Camera"
 
 # One element for each segment that the built-in draw instances, in its order: segment k of
 # vertices 2k and 2k + 1, the join of vertex i and i + 1 of strips, or edge e. A join across two
-# strips has `index_b` 0xffffffff and is not drawn. 40 bytes, thus 209,714 fit beside `info` in the
-# 8 MiB of published resources.
+# strips has `index_b` 0xffffffff and is not drawn. 40 bytes, thus 2,097,152 fit beside `info` in the
+# 80 MiB that they take of the published resources.
 [[resources]]
 id = "segments"
 kind = "buffer"
 struct = "Segment"
 fields = ["ax: f32", "ay: f32", "az: f32", "color_a: u32", "bx: f32", "by: f32", "bz: f32", "color_b: u32",
           "index_a: u32", "index_b: u32"]
-count = 209714
+# 2,097,152 segments of 40 bytes: 80 MiB, the most that the built-in draws.
+count = 2097152
 counted = true
 
 # The finite range of the values and two flags: bit 0 a NaN or no value, bit 1 a packed RGBA with
@@ -132,7 +133,7 @@ publish = false
 
 [derive]
 time_ms = 50
-memory_mb = 192
+memory_mb = 256
 
 [[derive.passes]]
 entry = "sum_chunks"
@@ -150,7 +151,7 @@ writes = ["scratch"]
 
 [[derive.passes]]
 entry = "build_segments"
-workgroups = [820, 1, 1]
+workgroups = [8192, 1, 1]
 writes = ["segments"]
 
 [[derive.passes]]
@@ -163,6 +164,7 @@ entry = "finish_info"
 writes = ["info"]
 
 [draw]
+memory_mb = 96
 camera = "orbit"
 pick = { resource = "segments", fields = ["index_a", "index_b"] }
 

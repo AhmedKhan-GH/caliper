@@ -459,6 +459,175 @@ TEST_CASE("net/wire 3.2: a resource whose count times stride wraps in 32 bits is
     CHECK(std::get<Resource>(m).data.size == 256);
 }
 
+namespace {
+// A golden RESOURCE frame and the bytes its section points into.
+struct GoldenResource {
+    std::vector<uint8_t> bytes;
+    Resource r;
+};
+GoldenResource golden_resource(const std::string& name) {
+    GoldenResource g;
+    g.bytes = read_bytes(v32_dir() / (name + ".bin"));
+    Message m;
+    const DecodeResult res = decode_bytes(g.bytes, &m);
+    REQUIRE_MESSAGE(res.ok(), name << ": " << res.error_code << ": " << res.message);
+    g.r = std::get<Resource>(m);
+    return g;
+}
+std::vector<uint8_t> whole_segments() {   // 10 segments (k, -k) of two f32: the version of resource_split_*
+    std::vector<float> v;
+    for (int k = 0; k < 10; ++k) v.insert(v.end(), {float(k), float(-k)});
+    std::vector<uint8_t> b(v.size() * 4);
+    std::memcpy(b.data(), v.data(), b.size());
+    return b;
+}
+}  // namespace
+
+TEST_CASE("net/wire 3.2: the parts of a resource carry their golden values and are put together whole") {
+    const GoldenResource p0 = golden_resource("resource_split_0"), p1 = golden_resource("resource_split_1"),
+                         p2 = golden_resource("resource_split_2");
+    for (const GoldenResource* g : {&p0, &p1, &p2}) {
+        REQUIRE(g->r.split);
+        CHECK(g->r.program == "lines");
+        CHECK(g->r.count == 10);
+        CHECK(g->r.stride == 8);
+        CHECK(g->r.split->version == 5);
+        CHECK(g->r.split->parts == 3);
+    }
+    CHECK(p1.r.split->part == 1);
+    CHECK(p1.r.split->first == 4);
+    CHECK(p2.r.data.size == 16);
+    SplitResources sr;
+    WholeResource whole;
+    std::string err;
+    CHECK(sr.add(p0.r, &whole, &err) == SplitResources::Result::Pending);
+    CHECK(sr.add(p1.r, &whole, &err) == SplitResources::Result::Pending);
+    CHECK(sr.held() == 1);
+    CHECK(sr.held_bytes() == 80);
+    REQUIRE(sr.add(p2.r, &whole, &err) == SplitResources::Result::Whole);
+    CHECK(sr.held() == 0);
+    CHECK(!whole.resource.split);
+    CHECK(whole.resource.step == 1300);
+    REQUIRE(whole.keep);
+    const std::vector<uint8_t> want = whole_segments();
+    REQUIRE(whole.resource.data.size == want.size());
+    CHECK(std::memcmp(whole.resource.data.data, want.data(), want.size()) == 0);
+    // The whole encodes as a version in one frame; each part re-encodes to its golden bytes.
+    std::vector<uint8_t> bytes;
+    REQUIRE(encode(Message(whole.resource), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    Message m;
+    REQUIRE(decode_bytes(bytes, &m).ok());
+    CHECK(std::get<Resource>(m).count == 10);
+    REQUIRE(encode(Message(p1.r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    CHECK(bytes == p1.bytes);
+    // Without copies, as the hub keeps the frames: the same order checks, no bytes held.
+    SplitResources order(false);
+    CHECK(order.add(p0.r, nullptr, &err) == SplitResources::Result::Pending);
+    CHECK(order.held_bytes() == 0);
+    CHECK(order.add(p1.r, nullptr, &err) == SplitResources::Result::Pending);
+    CHECK(order.add(p2.r, nullptr, &err) == SplitResources::Result::Whole);
+}
+
+TEST_CASE("net/wire 3.2: a receiver drops or refuses the parts of a resource that break the order") {
+    const GoldenResource p0 = golden_resource("resource_split_0"), p1 = golden_resource("resource_split_1"),
+                         p2 = golden_resource("resource_split_2"), orphan = golden_resource("resource_split_orphan"),
+                         shortp = golden_resource("resource_split_short"),
+                         differs = golden_resource("resource_split_differs"),
+                         other = golden_resource("resource_buffer");
+    using R = SplitResources::Result;
+    WholeResource whole;
+    std::string err;
+    SUBCASE("a part of a version whose part 0 never came is dropped") {
+        SplitResources sr;
+        CHECK(sr.add(orphan.r, &whole, &err) == R::Dropped);
+        CHECK(sr.add(p0.r, &whole, &err) == R::Pending);
+        CHECK(sr.add(orphan.r, &whole, &err) == R::Dropped);   // version 6, not the held 5
+        CHECK(sr.dropped() == 2);
+        CHECK(sr.held() == 1);
+    }
+    SUBCASE("parts out of order, or a part twice, are refused and discard the version") {
+        SplitResources sr;
+        sr.add(p0.r, &whole, &err);
+        CHECK(sr.add(p2.r, &whole, &err) == R::Refused);
+        CHECK(err.find("out of order") != std::string::npos);
+        CHECK(sr.held() == 0);
+        sr.add(p0.r, &whole, &err);
+        sr.add(p1.r, &whole, &err);
+        CHECK(sr.add(p1.r, &whole, &err) == R::Refused);
+        CHECK(sr.add(p2.r, &whole, &err) == R::Dropped);
+    }
+    SUBCASE("a total that disagrees with the parts, or a part that differs from part 0, is refused") {
+        SplitResources sr;
+        sr.add(p0.r, &whole, &err);
+        sr.add(p1.r, &whole, &err);
+        CHECK(sr.add(shortp.r, &whole, &err) == R::Refused);
+        CHECK(err.find("end before its count") != std::string::npos);
+        sr.add(p0.r, &whole, &err);
+        CHECK(sr.add(differs.r, &whole, &err) == R::Refused);
+        CHECK(err.find("differs from its part 0") != std::string::npos);
+        CHECK(sr.held() == 0);
+    }
+    SUBCASE("a version that never completes expires after CALIPER_NET_RESOURCE_PART_WAIT frames") {
+        SplitResources sr;
+        sr.add(p0.r, &whole, &err);
+        for (uint32_t k = 0; k + 1 < CALIPER_NET_RESOURCE_PART_WAIT; ++k)
+            CHECK(sr.add(other.r, &whole, &err) == R::Whole);
+        CHECK(sr.add(p1.r, &whole, &err) == R::Pending);   // the 256th frame after part 0: in time
+        for (uint32_t k = 0; k < CALIPER_NET_RESOURCE_PART_WAIT; ++k) sr.add(other.r, &whole, &err);
+        CHECK(sr.held() == 1);
+        sr.add(other.r, &whole, &err);                      // the 257th: expired
+        CHECK(sr.held() == 0);
+        CHECK(sr.expired() == 1);
+        CHECK(sr.add(p2.r, &whole, &err) == R::Dropped);
+    }
+    SUBCASE("a newer version discards an incomplete one, and at most two are held") {
+        SplitResources sr;
+        sr.add(p0.r, &whole, &err);
+        sr.add(p0.r, &whole, &err);
+        CHECK(sr.held() == 1);
+        CHECK(sr.discarded() == 1);
+        Resource one = p0.r;
+        one.split.reset();
+        one.count = 2;   // a version in one frame of the same resource
+        CHECK(sr.add(one, &whole, &err) == R::Whole);
+        CHECK(sr.held() == 0);
+        for (const char* name : {"a", "b", "c"}) {
+            Resource r = p0.r;
+            r.resource = name;
+            sr.add(r, &whole, &err);
+        }
+        CHECK(sr.held() == CALIPER_NET_MAX_INCOMPLETE_UPDATES);
+        CHECK(sr.held_bytes() == 2 * 80);
+    }
+}
+
+TEST_CASE("net/wire 3.2: the parts of a resource bound every size before a product or an allocation") {
+    const std::vector<uint8_t> zeros(256, 0);
+    Resource r;
+    r.program = "a";
+    r.resource = "r";
+    r.count = 0xffffffffu;   // times 256 wraps in 32 bits
+    r.stride = 256;
+    r.split = Resource::Split{0, 0, 2, 0};
+    r.data = Section::make(CALIPER_NET_SECTION_RESOURCE, CALIPER_NET_DTYPE_U8, {256}, zeros.data(), zeros.size());
+    std::vector<uint8_t> bytes;
+    std::string err;
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    Message m;
+    DecodeResult res = decode_bytes(bytes, &m);
+    CHECK(res.status == DecodeResult::Status::BadMessage);
+    CHECK(res.message.find("in parts holds at most 134217728 bytes") != std::string::npos);
+    // At the bound the count passes, and the part holds whole elements below it.
+    r.count = CALIPER_NET_RESOURCE_VERSION_MAX_BYTES / 256;
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    REQUIRE(decode_bytes(bytes, &m).ok());
+    // A part 1 whose first element lies at the count is refused before first + elements is taken.
+    r.split = Resource::Split{0, 1, 2, r.count};
+    REQUIRE(encode(Message(r), &bytes, &err, CALIPER_NET_MINOR_3_2));
+    CHECK(decode_bytes(bytes, &m).message.find("below the count") != std::string::npos);
+    CHECK(CALIPER_NET_RESOURCE_VERSION_MAX_BYTES == 128u << 20);
+}
+
 TEST_CASE("net/wire 3.2: decoded scene messages carry the golden values") {
     {
         const std::vector<uint8_t> bin = read_bytes(v32_dir() / "scene_update_mesh.bin");
@@ -1371,6 +1540,78 @@ TEST_CASE("net/hub 3.2: draw halves and resources reach the viewers that announc
         const caliper_net::HubStats st = h.hub->stats();
         return st.resources_in == 2 && st.program_relays_in == 3 && st.retained_resource_bytes == 0;
     }));
+}
+
+TEST_CASE("net/hub 3.2: a resource in parts reaches a viewer whole and in order, and a broken version goes nowhere") {
+    using namespace hubres;
+    const std::vector<std::string> caps = {CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_RESOURCES};
+    Runner h;
+    World w;
+    Peer& p = w.add(h, caps, true);
+    Peer& a = w.add(h, caps, false);
+    auto part = [](int k, uint64_t version = 5) {
+        Resource r = std::get<Resource>(golden(("resource_split_" + std::to_string(k)).c_str()));
+        r.split->version = version;
+        return r;
+    };
+    auto segments_at = [](const Peer& v) {
+        std::vector<const Resource*> out;
+        for (const Resource* r : v.all<Resource>())
+            if (r->resource == "segments") out.push_back(r);
+        return out;
+    };
+    // A part whose part 0 never came goes nowhere; parts 0 and 1 wait in the hub while a version in one
+    // frame of another resource passes them.
+    p.send(golden("resource_split_orphan"));
+    p.send(part(0));
+    p.send(part(1));
+    p.send(heads_at(1200, {1, 2, 3, 4}));
+    REQUIRE(w.until([&] { return !a.all<Resource>().empty(); }));
+    w.settle(a);
+    CHECK(segments_at(a).empty());
+    p.send(part(2));
+    REQUIRE(w.until([&] { return segments_at(a).size() == 3; }));
+    SplitResources sr;
+    WholeResource whole;
+    std::string err;
+    int wholes = 0;
+    for (const Resource* r : segments_at(a)) {
+        if (sr.add(*r, &whole, &err) == SplitResources::Result::Whole) ++wholes;
+    }
+    REQUIRE(wholes == 1);
+    const std::vector<uint8_t> want = whole_segments();
+    REQUIRE(whole.resource.data.size == want.size());
+    CHECK(std::memcmp(whole.resource.data.data, want.data(), want.size()) == 0);
+    // Parts out of order: part 2 refuses version 7, and its part 1 then has no part 0. Nothing reaches the viewer,
+    // and the kept version stays the whole version 5.
+    p.send(part(0, 7));
+    p.send(part(2, 7));
+    p.send(part(1, 7));
+    REQUIRE(w.until([&] { return h.hub->stats().resource_parts_dropped == 3; }));
+    w.settle(a);
+    CHECK(segments_at(a).size() == 3);
+    // A version that never completes: part 0 of version 8 is let go when a newer part 0 comes.
+    p.send(part(0, 8));
+    p.send(part(0, 9));
+    p.send(part(1, 9));
+    p.send(part(2, 9));
+    REQUIRE(w.until([&] { return segments_at(a).size() == 6; }));
+    CHECK(h.hub->stats().resource_versions_incomplete == 1);
+    // A late viewer gets the newest whole version, its parts in order.
+    Peer& late = w.add(h, caps, false);
+    REQUIRE(w.until([&] { return segments_at(late).size() == 3; }));
+    w.settle(late);
+    const auto got = segments_at(late);
+    REQUIRE(got.size() == 3);
+    for (uint32_t k = 0; k < 3; ++k) {
+        REQUIRE(got[k]->split);
+        CHECK(got[k]->split->version == 9);
+        CHECK(got[k]->split->part == k);
+    }
+    CHECK(late.all<Resource>().size() == 4);
+    const caliper_net::HubStats st = h.hub->stats();
+    CHECK(st.resources_in == 3);
+    CHECK(st.retained_resource_bytes > 80);
 }
 
 TEST_CASE("net/hub 3.2: a producer without resources has its RESOURCE and relays ignored") {

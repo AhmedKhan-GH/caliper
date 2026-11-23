@@ -72,7 +72,11 @@ public:
     // RESOURCE: the newest version of a resource of a program, copied, when
     // the program's piece publishes that resource and the version holds at
     // most its declared count and bytes (program_frames.h, keeps_version).
-    // Thus the page keeps at most the published bytes of 16 pieces.
+    // The page keeps at most kKeptBytesMax of versions, 256 MiB as the app's step
+    // history keeps of resources; a version that would pass it is not kept. The
+    // parts of a version in parts are put together first
+    // (caliper_net::wire::SplitResources), which holds at most two incomplete
+    // versions of at most 128 MiB.
     void on_resource(const caliper_net::wire::Resource& r);
     // Once a frame: takes the browser checks that finished, and refuses a
     // program whose module or pipeline WebGPU refused since the last call
@@ -89,9 +93,11 @@ public:
     // Changes whenever a program is added, replaced, refused or removed.
     std::uint64_t revision() const { return revision_; }
 
+    static constexpr std::uint64_t kKeptBytesMax = std::uint64_t(256) << 20;
+
     struct Program;
     struct Version {
-        std::vector<std::uint8_t> bytes;
+        std::shared_ptr<const std::vector<std::uint8_t>> bytes;   // never null once received
         std::int64_t step = -1;
         std::uint32_t count = 0;
     };
@@ -101,6 +107,7 @@ private:
     WGPUDevice device_ = nullptr;
     std::map<std::string, std::unique_ptr<Program>> programs_;
     std::map<std::string, std::unique_ptr<PanelFeed>> feeds_;
+    caliper_net::wire::SplitResources parts_;   // versions in parts being put together
     std::uint64_t revision_ = 1;
     std::uint32_t next_pick_ = 1u << 24;   // above the entities' ids, as the app's draw host gives them
     std::size_t errors_seen_ = 0;

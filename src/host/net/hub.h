@@ -187,6 +187,10 @@ struct HubStats {
     // the same resource while waiting, the draw halves that producers relayed and the hub sent to
     // viewers, and the bytes of the newest versions kept for late viewers
     uint64_t resources_in = 0, resources_out = 0, resources_superseded = 0, resources_dropped = 0;
+    // parts of a version in parts that the hub dropped or refused (its part 0 not held, out of order, a
+    // part that differs from part 0, a total that disagrees), and incomplete versions it let go
+    // (a newer version, the bound of two, or no next part within CALIPER_NET_RESOURCE_PART_WAIT frames)
+    uint64_t resource_parts_dropped = 0, resource_versions_incomplete = 0;
     uint64_t program_relays_in = 0, program_relays_out = 0;
     uint64_t retained_resource_bytes = 0;
     size_t controls_waiting = 0;            // CONTROLs waiting for the producer's answer

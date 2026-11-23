@@ -789,6 +789,104 @@ def test_resource_codec_rules():
     assert w.RESOURCE_MAX_BYTES + 65536 == w.MAX_FRAME_BYTES
 
 
+def _golden(name):
+    return w.decode((V32 / f"{name}.bin").read_bytes())
+
+
+WHOLE_SEGMENTS = np.array([[k, -k] for k in range(10)], np.float32).tobytes()
+
+
+def test_resource_in_parts_is_put_together_whole():
+    parts = [_golden(f"resource_split_{k}") for k in range(3)]
+    assert [p.split for p in parts] == [{"version": 5, "part": k, "parts": 3, "first": 4 * k} for k in range(3)]
+    sr = w.SplitResources()
+    assert sr.add(parts[0]) is None and sr.add(parts[1]) is None
+    whole = sr.add(parts[2])
+    assert (whole.program, whole.resource, whole.step, whole.count, whole.stride, whole.split) == \
+        ("lines", "segments", 1300, 10, 8, None)
+    assert bytes(whole.data) == WHOLE_SEGMENTS and not sr.open
+    # The whole encodes as a version in one frame, which a fresh receiver takes at once.
+    again = w.decode(w.encode(whole))
+    assert w.SplitResources().add(again).count == 10
+    # resource_parts cuts the same parts, as views without a copy.
+    cut = w.resource_parts(w.Resource("lines", "segments", 1300, 10, 8, WHOLE_SEGMENTS), 5, 32)
+    assert [w.encode(p, minor=2) for p in cut] == [(V32 / f"resource_split_{k}.bin").read_bytes() for k in range(3)]
+
+
+def test_resource_parts_that_a_receiver_drops_or_refuses():
+    p0, p1, p2 = (_golden(f"resource_split_{k}") for k in range(3))
+    # A part of a version whose part 0 never came is dropped and counted.
+    sr = w.SplitResources()
+    assert sr.add(_golden("resource_split_orphan")) is None and sr.dropped == 1 and not sr.open
+    sr.add(p0)
+    assert sr.add(_golden("resource_split_orphan")) is None and sr.dropped == 2 and len(sr.open) == 1
+    # Parts out of order: the version is refused and discarded.
+    with pytest.raises(w.MessageError, match="out of order"):
+        sr.add(p2)
+    assert not sr.open and sr.discarded == 1
+    # A part again is out of order too.
+    sr.add(p0)
+    sr.add(p1)
+    with pytest.raises(w.MessageError, match="out of order"):
+        sr.add(p1)
+    # A total that disagrees with the parts: the last part ends before the count.
+    sr.add(p0)
+    sr.add(p1)
+    with pytest.raises(w.MessageError, match="end before its count"):
+        sr.add(_golden("resource_split_short"))
+    # A part whose keys differ from part 0.
+    sr.add(p0)
+    with pytest.raises(w.MessageError, match="differs from its part 0"):
+        sr.add(_golden("resource_split_differs"))
+    assert not sr.open
+    # A version that never completes: the next part after RESOURCE_PART_WAIT further frames is dropped.
+    sr = w.SplitResources()
+    sr.add(p0)
+    other = _golden("resource_buffer")
+    for _ in range(w.RESOURCE_PART_WAIT - 1):
+        assert sr.add(other) is not None
+    assert sr.add(p1) is None and len(sr.open) == 1          # the 256th frame after part 0: in time
+    for _ in range(w.RESOURCE_PART_WAIT):
+        sr.add(other)
+    assert len(sr.open) == 1
+    sr.add(other)                                              # the 257th: expired
+    assert not sr.open and sr.expired == 1
+    assert sr.add(p2) is None and sr.dropped == 1
+    # Part 0 of a newer version, or a version in one frame, of the same resource discards an incomplete one.
+    sr = w.SplitResources()
+    sr.add(p0)
+    sr.add(p0)
+    assert len(sr.open) == 1 and sr.discarded == 1
+    sr.add(w.Resource("lines", "segments", 1400, 1, 8, bytes(8)))
+    assert not sr.open and sr.discarded == 2
+    # At most MAX_INCOMPLETE_UPDATES versions are held; the oldest goes first.
+    for name in ("a", "b", "c"):
+        sr.add(w.Resource("lines", name, 1300, 10, 8, p0.data,
+                          split={"version": 5, "part": 0, "parts": 3, "first": 0}))
+    assert [k[1] for k in sr.open] == ["b", "c"] and w.MAX_INCOMPLETE_UPDATES == 2
+
+
+def test_resource_in_parts_bounds_every_size_first():
+    # The bound of a version in parts holds before any product: a count near 2^32 is refused.
+    frame = w.encode_frame(w.MsgType.RESOURCE, {"program": "a", "resource": "r", "step": 0, "count": 2**32 - 1,
+                                                "stride": 256, "split": {"version": 0, "part": 0, "parts": 2,
+                                                                         "first": 0}},
+                           [w.Section.from_array("resource", np.zeros(256, np.uint8))])
+    with pytest.raises(w.MessageError, match="in parts holds at most 134217728 bytes"):
+        w.decode(frame)
+    assert w.RESOURCE_VERSION_MAX_BYTES == 128 << 20 and w.RESOURCE_PART_WAIT == 256
+    # The sender's cut: one frame when it fits, parts of whole elements, and refusals past the bounds.
+    big = w.Resource("p", "r", 0, 9, 8, bytes(72))
+    assert w.resource_parts(big, 0, 72) == [big]
+    assert [len(p.data) for p in w.resource_parts(big, 0, 20)] == [16, 16, 16, 16, 8]
+    with pytest.raises(ValueError, match="more than 16"):
+        w.resource_parts(w.Resource("p", "r", 0, 17, 8, bytes(136)), 0, 8)
+    with pytest.raises(ValueError, match="holds no element"):
+        w.resource_parts(big, 0, 4)
+    with pytest.raises(ValueError, match="more than 134217728"):
+        w.resource_parts(w.Resource("p", "r", 0, (128 << 20) // 4 + 1, 4, bytearray((128 << 20) + 4)), 0, 8 << 20)
+
+
 def test_instance_codec_rules():
     src = "@fragment fn f() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }"
     pin = {"name": "dots", "version": 1, "hash": "sha256:" + "0" * 64}

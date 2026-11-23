@@ -12790,7 +12790,7 @@
                       "properties": {
                         "count": {
                           "description": "The elements.",
-                          "maximum": 4194304,
+                          "maximum": 33554432,
                           "minimum": 1,
                           "type": "integer"
                         },
@@ -13298,7 +13298,7 @@
                     },
                     "count": {
                       "description": "buffer: the elements.",
-                      "maximum": 4194304,
+                      "maximum": 33554432,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -15441,7 +15441,7 @@
                       "properties": {
                         "count": {
                           "description": "The elements.",
-                          "maximum": 4194304,
+                          "maximum": 33554432,
                           "minimum": 1,
                           "type": "integer"
                         },
@@ -15949,7 +15949,7 @@
                     },
                     "count": {
                       "description": "buffer: the elements.",
-                      "maximum": 4194304,
+                      "maximum": 33554432,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -16546,7 +16546,7 @@
                       "properties": {
                         "count": {
                           "description": "The elements.",
-                          "maximum": 4194304,
+                          "maximum": 33554432,
                           "minimum": 1,
                           "type": "integer"
                         },
@@ -17054,7 +17054,7 @@
                     },
                     "count": {
                       "description": "buffer: the elements.",
-                      "maximum": 4194304,
+                      "maximum": 33554432,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -17525,7 +17525,7 @@
                       "properties": {
                         "count": {
                           "description": "The elements.",
-                          "maximum": 4194304,
+                          "maximum": 33554432,
                           "minimum": 1,
                           "type": "integer"
                         },
@@ -18033,7 +18033,7 @@
                     },
                     "count": {
                       "description": "buffer: the elements.",
-                      "maximum": 4194304,
+                      "maximum": 33554432,
                       "minimum": 1,
                       "type": "integer"
                     },

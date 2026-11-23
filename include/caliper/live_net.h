@@ -578,6 +578,17 @@ static inline uint32_t caliper_net_align(uint32_t n) {
  * the pass), "count" (valid elements), "stride" (bytes of one element, a
  * multiple of 4) and, for a texture, "width" and "height" (count = width *
  * height, stride 4); its section holds exactly count * stride bytes.
+ * A version larger than one frame travels as 2 to CALIPER_NET_MAX_PIECES
+ * RESOURCE parts, in order, each with the whole version's keys and the key
+ * "split" ({version, part, parts, first}): the sender's counter of versions
+ * in parts, this part's number from 0, the number of parts, and the first
+ * element of the version that the part's section holds. A part holds whole
+ * elements; the parts hold the version's elements in order, without gap or
+ * overlap. A receiver puts the parts together, holds at most
+ * CALIPER_NET_MAX_INCOMPLETE_UPDATES incomplete versions per connection, and
+ * drops one whose next part has not come after CALIPER_NET_RESOURCE_PART_WAIT
+ * further RESOURCE frames, or when part 0 of a newer version of the same
+ * resource comes.
  * PROGRAM_STATE gives an instance the status kind "piece".
  * docs/reference/wire-protocol-3-2.md states the keys and checks. */
 #define CALIPER_NET_CAP_RESOURCES        "resources"  /* RESOURCE, and PROGRAM of a piece          */
@@ -590,6 +601,9 @@ static inline uint32_t caliper_net_align(uint32_t n) {
 #define CALIPER_NET_MAX_RESOURCES        8u           /* resources of one program           */
 /* A resource of 64 MiB less 64 KiB fits one frame of CALIPER_NET_MAX_FRAME_BYTES with its metadata. */
 #define CALIPER_NET_RESOURCE_MAX_BYTES   67043328u    /* bytes of the section "resource"    */
+/* A version in parts: 128 MiB, the largest storage binding of WebGPU's default limits. */
+#define CALIPER_NET_RESOURCE_VERSION_MAX_BYTES 134217728u /* bytes of a whole version in parts */
+#define CALIPER_NET_RESOURCE_PART_WAIT   256u         /* RESOURCE frames a receiver waits for the next part */
 #define CALIPER_NET_RESOURCE_STRIDE_MAX  256u         /* "stride": the bytes of one element */
 #define CALIPER_NET_RESOURCE_SIDE_MAX    4096u        /* a texture's "width" and "height"   */
 #define CALIPER_NET_PIECE_NAME_MAX       32u          /* bytes of "piece" "name", [a-z][a-z0-9_]* */

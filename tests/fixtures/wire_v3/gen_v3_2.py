@@ -331,6 +331,11 @@ def valid_vectors() -> dict[str, bytes]:
     # A split update: 20 coloured points in five pieces of at most 600 bytes, with a stamp.
     for k, piece in enumerate(w.split_update(SPLIT, update=4, max_frame=600)):
         out[f"v3_2/scene_update_split_{k}"] = w.encode(piece, minor=M)
+    # A version in parts: 10 segments of 8 bytes in three parts of at most 32 bytes, and the parts that
+    # a receiver drops or refuses in a sequence (_resource_split_vectors).
+    for k, part in enumerate(w.resource_parts(RESOURCE_SPLIT, version=5, part_bytes=32)):
+        out[f"v3_2/resource_split_{k}"] = w.encode(part, minor=M)
+    out.update({f"v3_2/{name}": w.encode(m, minor=M) for name, m in _resource_split_vectors().items()})
     # Decode only: a section that no part has, which decoders ignore.
     out["v3_2/scene_update_points_future"] = w.encode_frame(
         w.MsgType.SCENE_UPDATE,
@@ -873,6 +878,27 @@ def _resource_vectors() -> dict:
     }
 
 
+# 10 segments of two f32 each, (k, -k), 80 bytes: the version that resource_split_0 to _2 carry.
+RESOURCE_SPLIT = w.Resource("lines", "segments", 1300, 10, 8,
+                            np.array([[k, -k] for k in range(10)], np.float32).tobytes())
+
+
+def _resource_split_vectors() -> dict:
+    """Parts that are valid frames on their own, for the sequences that the receivers' tests play:
+    a part 1 of a version whose part 0 never came (dropped), a last part that ends before the count
+    (refused after parts 0 and 1), and a part 1 whose step differs from part 0 (refused)."""
+    data = memoryview(RESOURCE_SPLIT.data)
+
+    def part(k, first, n, step=1300, version=5):
+        return w.Resource("lines", "segments", step, 10, 8, data[first * 8:(first + n) * 8],
+                          split={"version": version, "part": k, "parts": 3, "first": first})
+    return {
+        "resource_split_orphan": part(1, 4, 4, version=6),
+        "resource_split_short": part(2, 8, 1),
+        "resource_split_differs": part(1, 4, 4, step=1301),
+    }
+
+
 def _resource_invalid() -> dict:
     bad = {"error": w.ERR_BAD_REQUEST}
     PG, RS = w.MsgType.PROGRAM, w.MsgType.RESOURCE
@@ -960,4 +986,37 @@ def _resource_invalid() -> dict:
         "resource_section_short": (resource(section={"resource": data[:15]}), bad),
         "resource_section_dtype": (resource(section={"resource": data.view(np.float32)}), bad),
         "resource_section_2d": (resource(section={"resource": data.reshape(4, 4)}), bad),
+        **_resource_split_invalid(resource, bad),
+    }
+
+
+def _resource_split_invalid(resource, bad) -> dict:
+    """Parts of a version in parts that every decoder refuses on their own: the keys of split, the
+    bound of a version in parts before any product, and a section of whole elements within the count."""
+    sp = {"version": 5, "part": 1, "parts": 3, "first": 4}
+    data = np.arange(16, dtype=np.uint8)            # 4 elements of 4 bytes
+
+    def part(section=None, count=10, **change):
+        split = {k: v for k, v in dict(sp, **change).items() if v is not None}
+        return resource(count=count, split=split, section=section)
+    return {
+        "resource_split_list": (resource(count=10, split=[5, 1, 3, 4]), bad),
+        "resource_split_version": (part(version=-1), bad),
+        "resource_split_version_missing": (part(version=None), bad),
+        "resource_split_parts_one": (part(parts=1, part=0, first=0), bad),
+        "resource_split_parts_many": (part(parts=17), bad),
+        "resource_split_part_past": (part(part=3), bad),
+        "resource_split_first_missing": (part(first=None), bad),
+        "resource_split_first_u32": (part(first=2**32), bad),
+        "resource_split_part0_first": (part(part=0), bad),
+        "resource_split_first_past": (part(first=10), bad),
+        # first near 2^32: first + elements wraps in 32 bits back below the count.
+        "resource_split_first_wraps": (part(first=2**32 - 2), bad),
+        # count * stride is 2^40 less 256, which wraps in 32 bits; refused by the bound of a version in parts.
+        "resource_split_count_wrap": (part(count=2**32 - 1, stride=256,
+                                           section={"resource": np.zeros(256, np.uint8)}), bad),
+        "resource_split_over_max": (part(count=w.RESOURCE_VERSION_MAX_BYTES // 4 + 1), bad),
+        "resource_split_section_empty": (part(section={"resource": np.zeros(0, np.uint8)}), bad),
+        "resource_split_section_partial": (part(section={"resource": data[:14]}), bad),
+        "resource_split_section_past": (part(first=8, section={"resource": np.zeros(12, np.uint8)}), bad),
     }

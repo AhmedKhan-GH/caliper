@@ -331,8 +331,9 @@ private:
                                 "The buffer " + quote(r.id) + " has count " + std::to_string(r.count) +
                                     "; a buffer has 1 to " + std::to_string(pl::kCountMax) + " elements.",
                                 where + ".count");
-                // A published buffer goes out with each pass that writes it, thus the bound of what the script sends.
-                const std::uint64_t max_bytes = r.publish ? pl::kPublishedBytesMax : pl::kResourceBytesMax;
+                // A published buffer goes out with each pass that writes it, and a viewer binds it whole: the
+                // largest storage binding of WebGPU's default limits.
+                const std::uint64_t max_bytes = r.publish ? pl::kPublishedResourceBytesMax : pl::kResourceBytesMax;
                 if (bytes_of(r.count, l.stride) > max_bytes)
                     return fail(kProgramBadResource,
                                 "The buffer " + quote(r.id) + " holds " + std::to_string(bytes_of(r.count, l.stride)) +
@@ -351,13 +352,13 @@ private:
                                 "A texture's width and height are from 1 to " + std::to_string(pl::kTextureSideMax) +
                                     " pixels.",
                                 where + ".width");
-                // Four bytes a texel; a published texture of 1,448 by 1,448 fits, one of 2,048 by 2,048 does not.
+                // Four bytes a texel: at most 64 MiB, below the bound of a published resource.
                 const std::uint64_t bytes = std::uint64_t(r.width) * r.height * 4;
-                if (r.publish && bytes > pl::kPublishedBytesMax)
+                if (r.publish && bytes > pl::kPublishedResourceBytesMax)
                     return fail(kProgramBadResource,
                                 "The texture " + quote(r.id) + " holds " + std::to_string(bytes) +
                                     " bytes; a published resource holds at most " +
-                                    std::to_string(pl::kPublishedBytesMax) + " bytes.",
+                                    std::to_string(pl::kPublishedResourceBytesMax) + " bytes.",
                                 where + ".height");
                 if (r.publish) published += bytes;
             }
@@ -366,7 +367,7 @@ private:
             return fail(kProgramBadResource,
                         "The published resources of the piece hold " + std::to_string(published) +
                             " bytes together; a pass sends at most " + std::to_string(pl::kPublishedBytesMax) +
-                            " bytes to a viewer.",
+                            " bytes to a viewer, one version of each in the step history.",
                         "resources");
         return {};
     }

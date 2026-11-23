@@ -617,10 +617,13 @@ TEST_CASE("sizes, layouts, passes and the memory budget are refused before alloc
         return p;
     };
     Piece p = base();
-    p.buffer("a", "f32", 4194305);
+    p.buffer("a", "f32", 33554433);   // one element past kCountMax
     CHECK(refused(f.rt, p) == "program.bad_resource");
     p = base();
-    p.record("a", "Big", {"x: vec4<f32>", "y: vec4<f32>"}, 4194304);   // 4,194,304 x 32 bytes: 128 MiB
+    p.record("a", "Big", {"x: vec4<f32>", "y: vec4<f32>"}, 4194305);   // published: 128 MiB and 32 bytes
+    CHECK(refused(f.rt, p) == "program.bad_resource");
+    p = base();
+    p.record("a", "Big", {"x: vec4<f32>", "y: vec4<f32>"}, 2097153).publish = 0;   // private: 64 MiB and 32 bytes
     CHECK(refused(f.rt, p) == "program.bad_resource");
     p = base();
     p.buffer("a", "f32", 4);

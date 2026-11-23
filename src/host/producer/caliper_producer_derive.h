@@ -57,7 +57,7 @@ typedef struct caliper_producer_resource_desc {
     const char* struct_name;          /* buffer: the struct's name when `fields` is given     */
     const char* const* fields;        /* buffer: "name: type", in order                      */
     size_t field_count;               /* at most 16                                           */
-    uint32_t count;                   /* buffer: elements, at most 4,194,304                  */
+    uint32_t count;                   /* buffer: elements, at most 33,554,432                 */
     uint32_t width;                   /* texture                                              */
     uint32_t height;
     uint32_t counted;                 /* 1: the counter <id>_count bounds the valid elements  */

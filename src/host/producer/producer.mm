@@ -93,10 +93,11 @@ constexpr uint32_t kFrameBytes = 32;
 constexpr size_t kDerivePasses = 8;
 constexpr size_t kResources = 8;
 constexpr size_t kFields = 16;
-constexpr uint32_t kResourceCountMax = 4194304;
+constexpr uint32_t kResourceCountMax = 33554432;   // spec/piece.h, kCountMax
 constexpr uint32_t kTextureSideMax = 4096;
 constexpr uint32_t kStrideMax = 256;
-constexpr uint64_t kResourceBytesMax = uint64_t(64) << 20;
+constexpr uint64_t kResourceBytesMax = uint64_t(64) << 20;            // a private resource
+constexpr uint64_t kPublishedResourceBytesMax = uint64_t(128) << 20;  // spec/piece.h, kPublishedResourceBytesMax
 constexpr size_t kCommonBytes = 9 * kSourceBytes;
 [[maybe_unused]] constexpr size_t kComposedBytes = 16 * kSourceBytes;   // used only with the sandbox and the compiler
 constexpr uint32_t kOverTimePasses = 3;
@@ -749,7 +750,7 @@ caliper_producer_status check_derive_desc(const caliper_producer_derive_desc* d,
         if (id.empty()) return refuse(kBadResource, "A resource has no id.");
         if (r.kind == CALIPER_PRODUCER_RESOURCE_BUFFER) {
             if (r.count == 0 || r.count > kResourceCountMax)
-                return refuse(kBadResource, "The buffer " + id + " has a count outside 1 to 4,194,304.");
+                return refuse(kBadResource, "The buffer " + id + " has a count outside 1 to 33,554,432.");
         } else if (r.kind == CALIPER_PRODUCER_RESOURCE_TEXTURE) {
             if (r.width == 0 || r.height == 0 || r.width > kTextureSideMax || r.height > kTextureSideMax || r.counted)
                 return refuse(kBadResource, "The texture " + id + " needs each side from 1 to 4,096 and no counter.");
@@ -759,9 +760,9 @@ caliper_producer_status check_derive_desc(const caliper_producer_derive_desc* d,
         uint32_t stride = 0;
         std::string why;
         if (!element_stride(r, &stride, &why)) return refuse(kBadLayout, "The resource " + id + ": " + why + ".");
-        if (resource_bytes(r, stride) > kResourceBytesMax)
+        if (resource_bytes(r, stride) > (r.publish ? kPublishedResourceBytesMax : kResourceBytesMax))
             return refuse(kBadResource, "The resource " + id + " takes " + std::to_string(resource_bytes(r, stride)) +
-                                            " bytes, above 64 MiB.");
+                                            (r.publish ? " bytes, above 128 MiB." : " bytes, above 64 MiB."));
         for (size_t j = 0; j < i; ++j)
             if (d->resources[j].id && id == d->resources[j].id)
                 return refuse(kBadResource, "The resource id " + id + " repeats.");

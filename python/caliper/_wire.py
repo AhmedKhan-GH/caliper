@@ -2983,6 +2983,8 @@ CAP_RESOURCES = "resources"
 SECTION_DERIVE, SECTION_DRAW, SECTION_COMMON, SECTION_RESOURCE = "derive", "draw", "common", "resource"
 MAX_RESOURCES = 8
 RESOURCE_MAX_BYTES = 67043328      # 64 MiB less 64 KiB: the section fits one frame with its metadata
+RESOURCE_VERSION_MAX_BYTES = 134217728   # a version in parts: 128 MiB, WebGPU's default largest storage binding
+RESOURCE_PART_WAIT = 256           # RESOURCE frames a receiver waits for the next part of a version
 RESOURCE_STRIDE_MAX = 256
 RESOURCE_SIDE_MAX = 4096
 PIECE_NAME_MAX = 32
@@ -3396,7 +3398,9 @@ class Resource(_Msg):
     step at the pass, ``count`` the valid elements and ``stride`` the bytes of one;
     a texture also has ``width`` and ``height``, with a stride of 4 and ``count``
     their product. The section ``resource`` holds exactly count * stride bytes,
-    and ``data`` is a view of them."""
+    and ``data`` is a view of them. A part of a version in parts (:func:`resource_parts`)
+    also has ``split`` ({version, part, parts, first}), and its section holds whole
+    elements from element ``first`` on."""
     TYPE: ClassVar[MsgType] = MsgType.RESOURCE
     program: str
     resource: str
@@ -3406,11 +3410,12 @@ class Resource(_Msg):
     data: Any = b""
     width: int | None = None
     height: int | None = None
+    split: dict | None = None
 
     def to_meta(self):
         return _drop_none({"program": self.program, "resource": self.resource, "step": self.step,
                            "count": self.count, "stride": self.stride, "width": self.width,
-                           "height": self.height})
+                           "height": self.height, "split": self.split})
 
     def to_sections(self):
         mv = memoryview(self.data)
@@ -3432,16 +3437,136 @@ class Resource(_Msg):
             _bad("a texture holds both 'width' and 'height'")
         if width is not None and (stride != 4 or count != width * height):
             _bad("a texture has a stride of 4 and width * height elements")
-        if count > RESOURCE_MAX_BYTES // stride:
-            _bad(f"a resource holds at most {RESOURCE_MAX_BYTES} bytes")
+        split = _opt(m, "split", _obj, "an object")
+        if split is not None:
+            def need(key, ok, what):
+                v = split.get(key)
+                if v is None or not ok(v):
+                    _bad(f"'split.{key}' must be {what}, got {v!r}")
+                return v
+            version = need("version", _safe_uint, "an unsigned integer")
+            parts = need("parts", _int_in(2, MAX_PIECES), f"an integer from 2 to {MAX_PIECES}")
+            part = need("part", _int_in(0, parts - 1), "a part number below 'parts'")
+            first = need("first", _u32, "a uint32")
+            split = {"version": version, "part": part, "parts": parts, "first": first}
+        limit = RESOURCE_MAX_BYTES if split is None else RESOURCE_VERSION_MAX_BYTES
+        if count > limit // stride:
+            _bad(f"{'a resource' if split is None else 'a resource in parts'} holds at most {limit} bytes")
         s = f.section(SECTION_RESOURCE)
         if s is None or s.encoding != Encoding.RAW or s.dtype != DType.U8 or len(s.shape) != 1:
             _bad("a resource needs a (B,) u8 'resource' section")
-        if s.shape[0] != count * stride:
+        if split is not None:
+            b = s.shape[0]
+            if split["part"] == 0 and split["first"] != 0:
+                _bad("part 0 of a resource starts at element 0")
+            if split["first"] >= count:
+                _bad("'split.first' must lie below the count")
+            if b <= 0 or b % stride or b // stride > count - split["first"]:
+                _bad("a part of a resource holds whole elements from 'split.first' up to the count")
+        elif s.shape[0] != count * stride:
             _bad(f"'resource' holds count * stride = {count * stride} bytes, got {s.shape[0]}")
-        return cls(program, resource, step, count, stride, s.data, width, height)
+        return cls(program, resource, step, count, stride, s.data, width, height, split)
+
+
+def resource_parts(r: Resource, version: int, part_bytes: int) -> list:
+    """The parts of the version ``r`` (counter ``version`` of the sender's versions
+    in parts), each with at most ``part_bytes`` bytes of whole elements, as views
+    of ``r.data`` without a copy; ``[r]`` when its section holds at most
+    ``part_bytes`` bytes. Raises ValueError for a version over
+    RESOURCE_VERSION_MAX_BYTES or one that needs more than MAX_PIECES parts."""
+    mv = memoryview(r.data)
+    mv = mv.cast("B") if mv.nbytes else memoryview(b"")
+    if r.count * r.stride != mv.nbytes:
+        raise ValueError(f"a version of {r.count} elements of {r.stride} bytes holds {mv.nbytes} bytes")
+    if mv.nbytes <= part_bytes:
+        return [r]
+    if mv.nbytes > RESOURCE_VERSION_MAX_BYTES:
+        raise ValueError(f"a version of {mv.nbytes} bytes, more than {RESOURCE_VERSION_MAX_BYTES}")
+    per = part_bytes // r.stride
+    if per < 1:
+        raise ValueError(f"a part of {part_bytes} bytes holds no element of {r.stride} bytes")
+    parts = -(-r.count // per)
+    if parts > MAX_PIECES:
+        raise ValueError(f"a version of {mv.nbytes} bytes needs {parts} parts of {part_bytes} bytes, "
+                         f"more than {MAX_PIECES}")
+    out = []
+    for k in range(parts):
+        a, b = k * per, min(r.count, (k + 1) * per)
+        out.append(Resource(r.program, r.resource, r.step, r.count, r.stride, mv[a * r.stride:b * r.stride],
+                            r.width, r.height, {"version": version, "part": k, "parts": parts, "first": a}))
+    return out
+
+
+class SplitResources:
+    """A receiver's versions in parts of one connection. :meth:`add` takes every
+    RESOURCE of the connection in order and returns the whole version, else
+    None. A version in one frame comes back at once. Part 0 allocates the
+    version's count * stride bytes, which the decoder bounded by
+    RESOURCE_VERSION_MAX_BYTES, and each part copies its elements in; the last
+    part returns the whole. A part whose version is not held is dropped and
+    counted. A part out of order, one whose keys differ from part 0, or a last
+    part that does not end at the count raises :class:`MessageError` and
+    discards the version. Part 0 of a newer version, or a version in one frame,
+    of the same resource discards an incomplete one; at most
+    MAX_INCOMPLETE_UPDATES are held, the oldest going first; and one whose next
+    part has not come after RESOURCE_PART_WAIT further RESOURCE frames expires."""
+
+    def __init__(self):
+        self.open: dict = {}                      # (program, resource) -> [head, next_part, next_first, last, bytes]
+        self.frames = 0
+        self.dropped = 0
+        self.discarded = 0
+        self.expired = 0
+
+    def add(self, r: Resource) -> Resource | None:
+        self.frames += 1
+        for k in [k for k, a in self.open.items() if self.frames - a[3] > RESOURCE_PART_WAIT]:
+            del self.open[k]
+            self.expired += 1
+        key = (r.program, r.resource)
+        sp = r.split
+        if (sp is None or sp["part"] == 0) and key in self.open:
+            del self.open[key]
+            self.discarded += 1
+        if sp is None:
+            return r
+        data = memoryview(r.data).cast("B") if memoryview(r.data).nbytes else memoryview(b"")
+        n = data.nbytes // r.stride
+        if sp["part"] == 0:
+            while len(self.open) >= MAX_INCOMPLETE_UPDATES:
+                del self.open[next(iter(self.open))]
+                self.discarded += 1
+            buf = bytearray(r.count * r.stride)
+            buf[:data.nbytes] = data
+            self.open[key] = [r, 1, n, self.frames, buf]
+            return None
+        a = self.open.get(key)
+        if a is None or a[0].split["version"] != sp["version"]:
+            self.dropped += 1
+            return None
+        h, name = a[0], f"'{r.program}/{r.resource}'"
+
+        def refuse(why):
+            del self.open[key]
+            self.discarded += 1
+            raise MessageError(ERR_BAD_REQUEST, why)
+        if (r.step, r.count, r.stride, r.width, r.height, sp["parts"]) != \
+                (h.step, h.count, h.stride, h.width, h.height, h.split["parts"]):
+            refuse(f"a part of the resource {name} differs from its part 0")
+        if sp["part"] != a[1] or sp["first"] != a[2]:
+            refuse(f"a part of the resource {name} comes out of order")
+        end, last = a[2] + n, sp["part"] + 1 == sp["parts"]
+        if last != (end == h.count):
+            refuse(f"the parts of the resource {name} end before its count" if last else
+                   f"a part of the resource {name} before the last reaches its count")
+        a[4][a[2] * h.stride:end * h.stride] = data
+        a[1], a[2], a[3] = a[1] + 1, end, self.frames
+        if not last:
+            return None
+        del self.open[key]
+        return Resource(h.program, h.resource, h.step, h.count, h.stride, memoryview(a[4]), h.width, h.height)
 
 
 for _cls in (Program, ProgramState, Resource):
     MESSAGES[_cls.TYPE] = _cls
-__all__ += ["Program", "ProgramState", "Resource"]
+__all__ += ["Program", "ProgramState", "Resource", "SplitResources", "resource_parts"]
