@@ -198,6 +198,8 @@ A program names the source of its piece with `from`.
 
 The piece `points@1` draws a cloud of round or square points of a size in pixels. It colors them by one color, by a value through a colormap, or by a packed RGBA value. Its derive half reads a tensor of positions with rank 2 and an optional tensor of values with rank 1. With the same points, camera and options, it draws the same pixels as the built-in `points` primitive, within the tolerances of the scene tests, and a pick returns the same item.
 
+The piece `boxes@1` draws boxes as the built-in `boxes` primitive draws them, up to 131,072 boxes. It draws edges of a width in pixels and optional translucent faces, and it colors a box by one color, by RGBA or by a class id. The piece `mesh@1` draws a triangle mesh as the built-in `mesh` primitive draws it, up to 98,304 vertices and 196,608 triangles. It lights the mesh from its normals or with flat faces, and it colors a vertex by one color, by RGBA or by a value through a colormap. Neither piece draws labels, and `mesh@1` takes no texture.
+
 A workspace piece with the name of a library piece replaces it only in a program that says `from = "workspace"`. `caliper-mcp` serves each file of the library as a read-only resource under `caliper://library/`. Thus an agent can read a piece before it pins, copies or imitates it.
 
 ## Program Instances
