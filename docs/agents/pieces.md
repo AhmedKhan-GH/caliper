@@ -409,7 +409,7 @@ The manifest check holds every pass to the default limits of WebGPU, thus a piec
 
 The browser module runs the same draw half from the same WGSL and the same declaration. It receives each draw half as PROGRAM from the script, and the resources as RESOURCE. It checks the names, the files, the imports and the hash with the same code that the app compiles. A hash that differs from the pin refuses the program. It then gives each composed module to WebGPU. A compilation message or a refused pipeline refuses the program with `program.browser_refused`, and the line maps back to its file.
 
-The browser has no compiler of its own, because WebGPU keeps each draw inside its bindings. The browser module keeps no step history and draws the newest version of each resource. Without timestamps, the frame time is the time from the submit until the work is done.
+The browser has no compiler of its own, because WebGPU keeps each draw inside its bindings. The browser module keeps no step history and draws the newest version of each resource. It keeps a version only of a resource that the piece of its program publishes, with at most the declared count and bytes, and it keeps at most 16 programs of a script. Without timestamps, the frame time is the time from the submit until the work is done.
 
 ## Builder Pane
 
