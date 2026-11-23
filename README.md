@@ -72,7 +72,7 @@ it, and [SDK package](docs/applets/sdk-package.md) describes the package.
 
 ### All platforms
 - **Git** (for submodule management)
-- **CMake 3.25 or later** and **Ninja** (the presets use the Ninja generator; configuring without a preset needs CMake 3.18)
+- **CMake 3.25 or later** and **Ninja** (the presets use the Ninja generator; configuring without a preset needs CMake 3.20)
 - **A C++20 compiler** for the host and the applets
 
 ### Windows
