@@ -10,20 +10,27 @@
 // the ascender below it.
 
 import { PALETTE } from '../render/colormap.js';
+import { HOUSE_PIGMENTS, TOKENS } from '../render/palette.gen.js';
 import type { Spec } from './types.js';
 import { bindingName } from './layout.js';
 
+const tok = (name: string): string => {
+  const c = TOKENS[name];
+  return `#${c.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+};
+
+/** The house's colours, from the app's own tokens (palette.gen.ts). */
 export const COL = {
-  deep: '#12110f',
-  ground: '#181715',
-  plate: '#201f1c',
-  plateHover: '#2a2925',
-  rule: '#4b4945',
-  ruleFaint: '#2c2b28',
-  text: '#e8e0d0',
-  secondary: '#c1baaa',
-  faint: '#8f897c',
-  accent: '#b38b59',
+  deep: tok('deep'),
+  ground: tok('ground'),
+  plate: tok('plate'),
+  plateHover: tok('plate_hover'),
+  rule: tok('rule'),
+  ruleFaint: tok('rule_faint'),
+  text: tok('parchment'),
+  secondary: tok('secondary'),
+  faint: tok('faint'),
+  accent: tok('bronze'),
   flatPoint: 'rgb(220,220,230)',
 } as const;
 
@@ -106,11 +113,15 @@ export function outline(ctx: CanvasRenderingContext2D, x0: number, y0: number, x
 }
 
 const hex = (c: readonly number[]) => `rgb(${c[0]},${c[1]},${c[2]})`;
-/** The house's class pigments (vehicle, dog, bird, cat, other), then the live views' categorical palette. */
-const HOUSE = ['#4677ad', '#3ca99c', '#867424', '#a35a74', '#55524c'];
 
+/**
+ * The data palette (spec_palette_color): the house's class pigments (vehicle,
+ * dog, bird, cat, other) in their fixed order, then the live views'
+ * categorical palette.
+ */
 export function paletteColor(i: number): string {
-  return i < HOUSE.length ? HOUSE[i] : hex(PALETTE[(i - HOUSE.length) % 16]);
+  const n = HOUSE_PIGMENTS.length;
+  return hex(i < n ? HOUSE_PIGMENTS[i] : PALETTE[(i - n) % 16]);
 }
 
 /** The colour of class label L: the live views' categorical palette, L mod 16. */

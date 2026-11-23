@@ -9,6 +9,7 @@
 #include <caliper_builder/spec/format.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -188,7 +189,47 @@ void decimate(Line& l, std::size_t buckets) {
     l.y.swap(ys);
 }
 
-void encode_series(Encoded& e, const spec::Panel& panel, const PanelData& d, const PanelDataLimits& lim) {
+// The name a source draws under, as the app names it (spec_layout.cpp,
+// spec_binding_name): a catalog source by the name after the catalog's
+// colon, a query by the first table it reads, another source by its id.
+std::string source_name(const spec::Spec& s, const std::string& id) {
+    for (const auto& src : s.sources) {
+        if (src.id != id) continue;
+        if (src.catalog) {
+            const std::size_t colon = src.catalog->find(':');
+            return colon == std::string::npos ? *src.catalog : src.catalog->substr(colon + 1);
+        }
+        if (src.sql) {
+            const std::string& q = *src.sql;
+            for (std::size_t i = 0; i + 4 < q.size(); ++i) {
+                const auto up = [&](std::size_t k) { return static_cast<char>(std::toupper(static_cast<unsigned char>(q[k]))); };
+                const bool word = (i == 0 || !std::isalnum(static_cast<unsigned char>(q[i - 1]))) && up(i) == 'F' &&
+                                  up(i + 1) == 'R' && up(i + 2) == 'O' && up(i + 3) == 'M' &&
+                                  std::isspace(static_cast<unsigned char>(q[i + 4]));
+                if (!word) continue;
+                std::size_t a = i + 4;
+                while (a < q.size() && std::isspace(static_cast<unsigned char>(q[a]))) ++a;
+                std::size_t b = a;
+                while (b < q.size() && (std::isalnum(static_cast<unsigned char>(q[b])) || q[b] == '_')) ++b;
+                if (b > a) return q.substr(a, b - a);
+                break;
+            }
+        }
+        return src.id;
+    }
+    return id;
+}
+
+// The name a slot draws under, as the app's spec runtime names it
+// (spec_prepare.cpp, slot_name): a column by its column, a tensor (a live or
+// window source) by its source's name.
+std::string slot_name(const spec::Spec& s, const SlotData& slot) {
+    if (slot.kind == SlotData::Kind::column) return slot.column;
+    return source_name(s, slot.source);
+}
+
+void encode_series(Encoded& e, const spec::Spec& spec, const spec::Panel& panel, const PanelData& d,
+                   const PanelDataLimits& lim) {
     const bool x_log = panel.options.x_log.value_or(false), y_log = panel.options.y_log.value_or(false);
     std::vector<double> xs;
     const SlotData* xslot = slot(d, "x");
@@ -209,6 +250,7 @@ void encode_series(Encoded& e, const spec::Panel& panel, const PanelData& d, con
         std::string binding;
         json row = nullptr;
         std::vector<double> y;
+        std::string name;
     };
     std::vector<Raw> raw;
     for (const SlotData* ys : slots(d, "y")) {
@@ -216,7 +258,7 @@ void encode_series(Encoded& e, const spec::Panel& panel, const PanelData& d, con
             const TensorData& t = ys->tensor;
             const std::int64_t rows = t.shape()[0], cols = t.shape()[1];
             for (std::int64_t r = 0; r < rows && raw.size() < lim.series_rows; ++r) {
-                Raw line{ys->binding, r, {}};
+                Raw line{ys->binding, r, {}, slot_name(spec, *ys) + "[" + std::to_string(r) + "]"};
                 line.y.reserve(static_cast<std::size_t>(cols));
                 for (std::int64_t c = 0; c < cols; ++c) line.y.push_back(t.element(static_cast<std::uint64_t>(r * cols + c)));
                 raw.push_back(std::move(line));
@@ -225,7 +267,7 @@ void encode_series(Encoded& e, const spec::Panel& panel, const PanelData& d, con
                 e.bounds.push_back("lines cut at " + std::to_string(lim.series_rows) + " rows");
             continue;
         }
-        Raw line{ys->binding, nullptr, {}};
+        Raw line{ys->binding, nullptr, {}, slot_name(spec, *ys)};
         if (!vector_of(*ys, &line.y)) return mismatch(e, ys->binding);
         raw.push_back(std::move(line));
     }
@@ -260,6 +302,7 @@ void encode_series(Encoded& e, const spec::Panel& panel, const PanelData& d, con
         }
         any = any || !l.y.empty();
         lines.push_back({{"binding", l.binding},
+                         {"name", r.name},
                          {"row", l.row},
                          {"count", l.count},
                          {"last", l.has_last ? json(l.last) : json(nullptr)},
@@ -267,7 +310,10 @@ void encode_series(Encoded& e, const spec::Panel& panel, const PanelData& d, con
                          {"y", vector_json(l.y)}});
     }
     if (!any) return empty(e, raw.front().binding);
-    e.data = {{"x_index", !has_x}, {"steps", steps}, {"lines", std::move(lines)}};
+    e.data = {{"x_index", !has_x},
+              {"x_name", xslot ? slot_name(spec, *xslot) : std::string("step")},
+              {"steps", steps},
+              {"lines", std::move(lines)}};
 }
 
 // What the time cursor chose for the panel (design/instrument-interface.md,
@@ -559,7 +605,7 @@ json panel_data_result(const spec::Spec& spec, const PanelData& data, std::uint6
     Encoded e;
     try {
         switch (panel->primitive) {
-            case spec::Primitive::series: encode_series(e, *panel, data, limits); break;
+            case spec::Primitive::series: encode_series(e, spec, *panel, data, limits); break;
             case spec::Primitive::heatmap: encode_heatmap(e, *panel, data, limits); break;
             case spec::Primitive::image: encode_image(e, *panel, data, limits); break;
             case spec::Primitive::points: encode_points(e, *panel, data, limits); break;

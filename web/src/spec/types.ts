@@ -55,9 +55,10 @@ export interface Spec {
 export interface WireArray { dtype: 'f32' | 'f64'; shape: number[]; base64: string }
 
 export interface SeriesLineData {
-  binding: string; row: number | null; count: number; last: number | null; x: WireArray; y: WireArray;
+  /** The binding, and the name the line draws under, as the app names it (spec_prepare.cpp, slot_name). */
+  binding: string; name: string; row: number | null; count: number; last: number | null; x: WireArray; y: WireArray;
 }
-export interface SeriesData { x_index: boolean; steps: number; lines: SeriesLineData[] }
+export interface SeriesData { x_index: boolean; x_name: string; steps: number; lines: SeriesLineData[] }
 export interface HeatmapData {
   source_rows: number; source_cols: number; stride_rows: number; stride_cols: number; values: WireArray;
 }

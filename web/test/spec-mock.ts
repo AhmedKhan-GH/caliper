@@ -78,13 +78,13 @@ export function dashboardData(): Record<string, Json> {
   att[0] = 1;
   // The app decimates a line of more than 8,192 points; 4,000 travel whole.
   const lines = [
-    { binding: 'metrics.loss', row: null, count: n, last: loss[n - 1], x: f64(step), y: f64(loss) },
-    { binding: 'metrics.accuracy', row: null, count: n, last: acc[n - 1], x: f64(step), y: f64(acc) },
+    { binding: 'metrics.loss', name: 'loss', row: null, count: n, last: loss[n - 1], x: f64(step), y: f64(loss) },
+    { binding: 'metrics.accuracy', name: 'accuracy', row: null, count: n, last: acc[n - 1], x: f64(step), y: f64(acc) },
   ];
   const rows: number[][] = [];
   for (let i = 0; i < 1000; i++) rows.push([i, loss[i]]);
   return {
-    curves: ready('curves', 'series', { x_index: false, steps: n, lines }),
+    curves: ready('curves', 'series', { x_index: false, x_name: 'step', steps: n, lines }),
     attention: ready('attention', 'heatmap', { source_rows: T, source_cols: T, stride_rows: 1, stride_cols: 1, values: f32(att, [T, T]) }),
     rows: ready('rows', 'table', { columns: [{ name: 'step', type: 'BIGINT' }, { name: 'loss', type: 'DOUBLE' }], rows,
       total_rows: n, truncated: false }),

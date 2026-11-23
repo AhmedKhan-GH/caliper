@@ -140,7 +140,7 @@ function everyPrimitive(): { spec: Json; data: Record<string, Json> } {
   const rows: (number | string)[][] = [];
   for (let i = 0; i < 40; i++) rows.push([i, 1 / (i + 1), i % 4, `run-${i}`]);
   const data = {
-    s: ready('s', 'series', { x_index: true, steps: n, lines: [{ binding: 'acts', row: null, count: n, last: ys[n - 1],
+    s: ready('s', 'series', { x_index: true, x_name: 'step', steps: n, lines: [{ binding: 'acts', name: 'acts', row: null, count: n, last: ys[n - 1],
       x: f64(ys.map((_, i) => i)), y: f64(ys) }] }),
     h: ready('h', 'histogram', { lo: -4, hi: 4, total: counts.reduce((a, b) => a + b, 0), outside: 0, counts }),
     p2: ready('p2', 'points', { three_d: false, total: 500, stride: 1, x: f32(px), y: f32(py), z: null, color: f32(pc),

@@ -168,10 +168,11 @@ export function preparePanel(spec: Spec, panel: SpecPanel, result: PanelDataResu
   switch (panel.primitive) {
     case 'series': {
       const d = data as SeriesData;
-      const yb = panel.bind?.x;
-      const xName = d.x_index ? 'step' : name(Array.isArray(yb) ? yb[0] : yb ?? 'step');
+      const xName = d.x_name;
+      // The app's name of each line: a column by its column, a tensor (a live
+      // or window source) by its source's name, with the row of a matrix.
       const lines = d.lines.map((l) => ({
-        name: name(l.binding) + (l.row === null ? '' : `[${l.row}]`),
+        name: l.name,
         x: decodeArray(l.x) as Float64Array, y: decodeArray(l.y) as Float64Array,
       }));
       p.series = { lines, xName };
