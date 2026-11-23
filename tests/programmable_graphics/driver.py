@@ -15,7 +15,7 @@ The driver waits on events and on published state, never for a fixed time, and r
 network. Exit code 0 passes, 77 skips (no app, no torch, no Metal, no native sender, no producer module), 1 fails.
 
 usage: driver.py --app <caliper> --mcp <caliper-mcp> --python <python> --work <dir> [--capture-dir <dir>]
-                 [--limit-s 840] [--transcript <file>]
+                 [--limit-s 2400] [--transcript <file>]
 """
 import argparse
 import base64
@@ -74,6 +74,20 @@ BUMP_STEPS = 100
 # instrument; under load a head passed 0.4 at step 700 before the log showed the fall, thus the driver waits for both,
 # and fails only when the run passes BUMP_CAP steps without them.
 BUMP_CAP = 1500
+# The waits on training (the bump, the chart's rise, the settled in-context loss and the fork child's heads) end on the
+# event itself. Each fails when the run passes its step cap without the event, or when the run's step stops growing for
+# STALL_S seconds, and not on a wall-clock bound that load stretches: under GPU load the child took more than 420 s for
+# the 1,200 steps to its target, and the parent more than 600 s for the steps to its bump. TRAIN_WAIT_S is only the
+# outer bound of one wait, far above any run measured (the whole test took 281 to 348 s on a quiet machine).
+STALL_S = 120
+TRAIN_WAIT_S = 1500
+# The step by which a line of layer 1 in the chart passes SCORE_AFTER: all four heads of layer 1 reached 0.55 to 0.67
+# by step 770 in a run of the instrument.
+RISE_CAP = 2000
+# The step by which the in-context loss settles below 0.2: measured from step 1,050 on.
+SETTLE_CAP = 4000
+# The steps of the fork child past its target by which its other heads must have formed.
+FORK_CAP_STEPS = 1000
 LOG = re.compile(r"step (\d+) loss ([0-9.]+) in-context ([0-9.]+)")
 # The commands that wait on a card of the person; the driver approves each as the person would.
 CARDS = {"spec_new", "spec_open", "run_start", "run_pause", "run_fork", "run_stop", "piece_update", "state_create",
@@ -366,7 +380,8 @@ def steps(r):
         if step > BUMP_CAP:
             raise Fail(f"no bump by step {BUMP_CAP} (step {step}): scores {h}, loss first {log[:1]}, last {log[-1:]}")
         return None
-    newest, h_new, log = c.until(f"a head above 0.4 and the fall of the loss by step {BUMP_CAP}", bumped, 600)
+    newest, h_new, log = until_trained(c, r, c.run, f"a head above 0.4 and the fall of the loss by step {BUMP_CAP}",
+                                       bumped, BUMP_CAP)
     first_step = newest["kept"]["first"]
     old, h_old = r.heads(first_step)
     if old["step"] != first_step or max(h_old) >= 0.2:
@@ -383,7 +398,8 @@ def steps(r):
     def risen():
         lines = r.chart()
         return lines if all(lines) and max(line[-1][1] for line in lines[:4]) > SCORE_AFTER else None
-    lines = c.until(f"a line of layer 1 in the chart above {SCORE_AFTER}", risen, 300)
+    lines = until_trained(c, r, c.run, f"a line of layer 1 in the chart above {SCORE_AFTER} by step {RISE_CAP}", risen,
+                          RISE_CAP)
     strongest = {}                          # the highest score of layer 1 at each step
     for line in lines[:4]:
         for x, y in line:
@@ -438,7 +454,8 @@ def steps(r):
     def converged():
         ys = [y for _, y in r.icl()[-5:]]
         return sum(ys) / len(ys) if len(ys) == 5 and sum(ys) / 5 < 0.2 else None
-    base = c.until("the in-context loss settles below 0.2", converged, 400)
+    base = until_trained(c, r, c.run, f"the in-context loss settles below 0.2 by step {SETTLE_CAP}", converged,
+                         SETTLE_CAP)
     r.call("run_pause", {"op": "pause", "run": c.run})
     c.until("the run paused", lambda: c.runs()[c.run]["state"] == "paused", 60)
     _, hs = r.heads()
@@ -479,7 +496,8 @@ def steps(r):
         b, hh = r.heads()
         return (b, hh) if (b.get("step") or 0) >= target and max(hh[4 + i] for i in range(4) if i != strong) > 0.4 \
             else None
-    cb, ch = c.until(f"the other heads of the child form by step {target}", child_formed, 420)
+    cb, ch = until_trained(c, r, child, f"the other heads of the child form at a step from {target} to "
+                           f"{target + FORK_CAP_STEPS}", child_formed, target + FORK_CAP_STEPS)
     if ch[4 + strong] >= 0.2:
         raise Fail(f"the ablated head {strong} scores {ch[4 + strong]} in the child at step {cb['step']}")
     cap("tower-child")
@@ -554,6 +572,27 @@ def _differs(c, a, b, n):
         return True
     except Fail:
         return False
+
+
+def until_trained(c, r, run, what, pred, cap):
+    """pred() until it holds while the run `run` trains: fails when the run passes step `cap` without it, or when its
+    step stops growing for STALL_S seconds, and at most after TRAIN_WAIT_S seconds."""
+    seen, since = -1, time.monotonic()
+    end = since + TRAIN_WAIT_S
+    while True:
+        v = pred()
+        if v:
+            return v
+        step, now = r.run_step(run), time.monotonic()
+        if step > cap:
+            raise Fail(f"{what}: not reached by step {cap} (step {step})")
+        if step > seen:
+            seen, since = step, now
+        elif now - since > STALL_S:
+            raise Fail(f"{what}: the run stayed at step {step} for {STALL_S} s")
+        if now > end:
+            raise Fail(f"{what}: not reached within {TRAIN_WAIT_S} s (step {step})")
+        c.pace(1)
 
 
 def run(a):
@@ -657,7 +696,7 @@ def main():
     ap.add_argument("--python", default=sys.executable)
     ap.add_argument("--work", required=True)
     ap.add_argument("--capture-dir")
-    ap.add_argument("--limit-s", type=int, default=840)
+    ap.add_argument("--limit-s", type=int, default=2400)
     a = ap.parse_args()
     try:
         res = run(a)
