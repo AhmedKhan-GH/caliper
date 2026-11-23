@@ -1664,7 +1664,7 @@ entries:
   ids:
   - SPC-49
 - page: docs/development/testing.md#programmable-graphics-acceptance
-  item: "The acceptance test of programmable graphics, built on the playground branch."
+  item: "The acceptance test of programmable graphics."
   ids:
   - REN-77
 - page: docs/roadmap/milestones.md#later-milestones
