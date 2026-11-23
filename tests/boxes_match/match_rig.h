@@ -173,9 +173,9 @@ inline bool load_piece(const std::string& name, cs::Piece* piece, std::string* w
 inline void check_piece(const cs::Piece& piece) {
     const cp::Verdict m = cp::check_piece_manifest(piece);
     CHECK_MESSAGE(m.ok(), m.code, " ", m.where, " ", m.message);
-    for (const auto& [name, text] : piece.files) {
-        const cp::Verdict v = cp::check_piece_source(text, 64 * 1024);
-        CHECK_MESSAGE(v.ok(), name, ": ", v.code, " ", v.message);
+    for (const auto& file : piece.files) {
+        const cp::Verdict v = cp::check_piece_source(file.second, 64 * 1024);
+        CHECK_MESSAGE(v.ok(), file.first, ": ", v.code, " ", v.message);
     }
     const cp::Resolved r = cp::resolve_imports(piece);
     REQUIRE_MESSAGE(r.verdict.ok(), r.verdict.code, " ", r.verdict.message);
