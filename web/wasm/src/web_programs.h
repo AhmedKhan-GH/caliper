@@ -105,6 +105,7 @@ public:
     struct Version {
         std::shared_ptr<const std::vector<std::uint8_t>> bytes;   // never null once received
         std::int64_t step = -1;
+        std::uint64_t serial = 0;
         std::uint32_t count = 0;
         std::uint32_t width = 0, height = 0;    // a texture's size in this version
         std::string format;                     // a texture's format; empty for rgba8unorm
@@ -118,6 +119,7 @@ private:
     std::map<std::string, std::unique_ptr<PanelFeed>> feeds_;
     caliper_net::wire::SplitResources parts_;   // versions in parts being put together
     std::uint64_t revision_ = 1;
+    std::uint64_t resource_serial_ = 0;
     std::uint32_t next_pick_ = 1u << 24;   // above the entities' ids, as the app's draw host gives them
     std::size_t errors_seen_ = 0;
     std::vector<caliper_draw::Selected> selection_;

@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iterator>
+#include <utility>
 
 namespace caliper_web {
 
@@ -209,10 +210,12 @@ public:
             const auto v = from.versions.find(resource);
             if (v == from.versions.end()) return;
             latest = std::max(latest, v->second.step);
-            if (rt.resource_step(as) == v->second.step && given_epoch_[p.id + "/" + as] == from.epoch) return;
+            const auto version = std::make_pair(from.epoch, v->second.serial);
+            if (rt.resource_step(as) == v->second.step && given_[p.id + "/" + as] == version) return;
             cd::ResourceVersion r;
             r.resource = as;
             r.step = v->second.step;
+            r.serial = v->second.serial;
             r.count = v->second.count;
             r.width = v->second.width;
             r.height = v->second.height;
@@ -220,7 +223,7 @@ public:
             r.elements = v->second.elements;
             r.bytes = v->second.bytes->data();
             r.size = v->second.bytes->size();
-            if (rt.set_resource(r).ok()) given_epoch_[p.id + "/" + as] = from.epoch;
+            if (rt.set_resource(r).ok()) given_[p.id + "/" + as] = version;
         };
         std::uint64_t epoch = p.epoch;
         for (const cs::Resource& res : p.piece.resources)
@@ -258,7 +261,7 @@ public:
 private:
     WebPrograms& owner_;
     std::string panel_;
-    std::map<std::string, std::uint64_t> given_epoch_;
+    std::map<std::string, std::pair<std::uint64_t, std::uint64_t>> given_;
 };
 
 WebPrograms::WebPrograms(WGPUDevice device) : device_(device) {}
@@ -330,6 +333,7 @@ void WebPrograms::on_resource(const caliper_net::wire::Resource& part) {
     const std::int64_t step = std::int64_t(std::min<std::uint64_t>(r.step, std::uint64_t(INT64_MAX)));
     if (v.step >= 0 && step < v.step) ++p.epoch;   // the run went back (a new attachment or a fork)
     v.step = step;
+    v.serial = ++resource_serial_;
     v.count = r.count;
     v.width = r.width.value_or(0);
     v.height = r.height.value_or(0);

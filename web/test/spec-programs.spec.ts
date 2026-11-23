@@ -184,3 +184,24 @@ test('removing the last program hides its canvas and clears its resources', asyn
       programs.length > 0 && programs.every((p: any) => p.module === 'running' && p.frames >= 1);
   });
 });
+
+test('a resource replacement at the same step changes the dashboard pixels', async ({ page }) => {
+  const { spec, app } = await openRecorded(page);
+  const before = await pixels(page, 'pattern');
+  const changed = structuredClone(app.data[spec.applet.id].pattern);
+  const resource = changed.data.programs[0].resources.find((r: Json) => r.resource === 'pattern');
+  const bytes = Buffer.from(resource.base64, 'base64');
+  for (let offset = 0; offset < bytes.length - 64; offset += 4) bytes.writeFloatLE(1, offset);
+  resource.base64 = bytes.toString('base64');
+  resource.version = 'replacement-at-current-step';
+  changed.version = 'replacement-panel';
+  app.data[spec.applet.id].pattern = changed;
+  await expect.poll(async () => {
+    const after = await pixels(page, 'pattern');
+    let changedPixels = 0;
+    for (let i = 0; i < after.px.length; i += 4)
+      if (Math.abs(after.px[i] - before.px[i]) + Math.abs(after.px[i + 1] - before.px[i + 1]) +
+          Math.abs(after.px[i + 2] - before.px[i + 2]) > 30) ++changedPixels;
+    return changedPixels;
+  }, { timeout: 10_000 }).toBeGreaterThan(100);
+});
