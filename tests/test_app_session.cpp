@@ -1476,3 +1476,37 @@ TEST_CASE("app session: the run control reads the link's key interventions and s
     CHECK(json::parse(link.sent[1].value) == json{{"clear", "blocks.0.attn"}});
     CHECK(json::parse(link.sent[2].value) == json{{"clear_all", true}});
 }
+
+TEST_CASE("app session: the status bar and the settings say when the file still holds Allow all") {
+    const fs::path root = caliper_test::unique_temp_path("caliper-app-session-allow-all");
+    fs::create_directories(root / "app-data");
+    cb::SessionOptions o;
+    o.permissions_file = (root / "app-data" / "agent-permissions.json").string();
+    cb::Session::Open opened = cb::Session::open((root / "ws").string(), o);
+    REQUIRE(opened.error.ok());
+    cb::Session& s = *opened.session;
+    CHECK(caliper_host::allow_all_status(s).empty());
+    CHECK(caliper_host::permission_save_note(s).empty());
+    REQUIRE(s.set_agent_mode(cb::AgentPrincipal::chat, cb::AgentMode::allow_all).ok());
+    CHECK(caliper_host::allow_all_status(s) == "allow all for side chat");
+    REQUIRE(s.set_agent_mode(cb::AgentPrincipal::mcp, cb::AgentMode::allow_all).ok());
+    CHECK(caliper_host::allow_all_status(s) == "allow all for side chat and MCP clients");
+    // The person ends the chat's Allow all and the save fails: both places say
+    // that the file still holds it.
+    fs::create_directories(o.permissions_file + ".tmp/keep");
+    CHECK_FALSE(s.set_agent_mode(cb::AgentPrincipal::chat, cb::AgentMode::ask).ok());
+    CHECK(caliper_host::allow_all_status(s) == "allow all for MCP clients  \xc2\xb7  allow all still saved for side chat");
+    const std::string note = caliper_host::permission_save_note(s);
+    CHECK(note.find("could not be saved") != std::string::npos);
+    CHECK(note.find("The file still says Allow all for Side chat, which returns at the next launch.") != std::string::npos);
+    CHECK(note.find("Choose the mode again to save it.") != std::string::npos);
+    // Choosing the mode again once the save works clears both.
+    std::error_code ec;
+    fs::remove_all(o.permissions_file + ".tmp", ec);
+    REQUIRE(s.set_agent_mode(cb::AgentPrincipal::chat, cb::AgentMode::ask).ok());
+    CHECK(caliper_host::allow_all_status(s) == "allow all for MCP clients");
+    CHECK(caliper_host::permission_save_note(s).empty());
+    s.close();
+    opened.session.reset();
+    fs::remove_all(root, ec);
+}

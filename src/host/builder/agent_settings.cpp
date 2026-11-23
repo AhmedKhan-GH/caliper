@@ -584,6 +584,10 @@ AgentSettingsLayout layout_in_window(const AgentSettingsLayoutInput& in, const A
         y += m.gap * 2;
         L.perm_title = {x0, y, pw, m.line};
         y += m.line + m.gap;
+        if (in.perm_note) {
+            L.perm_note = {x0, y, pw, 2 * m.line};
+            y += 2 * m.line + m.gap;
+        }
         const std::vector<std::string> modes = {"Ask", "Accept edits", "Read only", "Allow all"};
         auto mode_row = [&](WidgetRect* label, std::vector<WidgetRect>* buttons) {
             *label = {x0, y, m.label - m.gap, m.row};
@@ -1121,6 +1125,8 @@ std::vector<std::string> AgentSettings::visible_text() const {
         const auto rules = permissions_.rules();
         for (const auto& r : rules) out.push_back((r.first == "mcp" ? std::string("MCP clients") : r.first) + " " + r.second);
         if (rules.empty()) out.push_back("None");
+        if (permissions_.note)
+            if (const std::string note = permissions_.note(); !note.empty()) out.push_back(note);
     }
     out.push_back(yes_no(caps.tools) + " " + source_text(caps.tools_source));
     out.push_back(yes_no(caps.vision) + " " + source_text(caps.vision_source));
@@ -1154,6 +1160,7 @@ AgentSettingsLayoutInput AgentSettings::layout_input(const WidgetRect& area) con
     if (has_permissions()) {
         in.permissions = true;
         in.rules = (int)permissions_.rules().size();
+        in.perm_note = permissions_.note && !permissions_.note().empty();
     }
     return in;
 }
@@ -1427,6 +1434,11 @@ void AgentSettings::draw(float x, float y, float w, float h, const SpecLook& L) 
         dl->AddLine(ImVec2(lay.perm_title.x, lay.perm_title.y - m.gap),
                     ImVec2(lay.perm_title.right(), lay.perm_title.y - m.gap), L.rule_faint);
         text_at(dl, L.ui, L.small_size, ImVec2(lay.perm_title.x, lay.perm_title.y), L.faint, "Permissions");
+        if (!lay.perm_note.empty() && permissions_.note) {
+            const std::string note = permissions_.note();
+            dl->AddText(L.ui ? L.ui : ImGui::GetFont(), L.ui_size, ImVec2(lay.perm_note.x, lay.perm_note.y), L.accent,
+                        note.c_str(), nullptr, lay.perm_note.w);
+        }
         const char* names[] = {"ask", "accept_edits", "read_only", "allow_all"};
         const char* words[] = {"Ask", "Accept edits", "Read only", "Allow all"};
         auto modes = [&](const WidgetRect& lr, const char* text, const std::vector<WidgetRect>& buttons, const char* who) {

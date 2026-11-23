@@ -408,6 +408,7 @@ TEST_CASE("no command writes a protected file, by its name, a relative path, a l
         const CommandResult r = approve_save(link.first);
         CHECK(r.error.code == "applet.write_failed");
         CHECK(r.error.message.find("protected") != std::string::npos);
+        CHECK(fs::is_symlink(settings + "/applets/" + link.first + "/" + link.first + ".spec.toml"));
         unchanged();
     }
     // A hard link to the permissions file under an applet's name.
@@ -436,3 +437,84 @@ TEST_CASE("no command writes a protected file, by its name, a relative path, a l
     unchanged();
 #endif
 }
+
+TEST_CASE("a failed save never leaves Allow all in the file while the session shows another mode") {
+    Fixture f("modes-failed-save");
+    REQUIRE(f.s->set_agent_mode(AgentPrincipal::chat, AgentMode::allow_all).ok());
+    // A folder at the temporary file's name makes every save fail.
+    const std::string blocker = f.perms + ".tmp";
+    write_text(blocker + "/keep", "x");
+    // Ending Allow all: the stricter mode holds at once, and the session says
+    // that the file still holds Allow all.
+    const Error ended = f.s->set_agent_mode(AgentPrincipal::chat, AgentMode::ask);
+    CHECK(ended.code == "permissions.write_failed");
+    CHECK(f.s->agent_mode(AgentPrincipal::chat) == AgentMode::ask);
+    CHECK(f.s->saved_agent_mode(AgentPrincipal::chat) == AgentMode::allow_all);
+    CHECK_FALSE(f.s->permission_save_error().empty());
+    CHECK(read_text(f.perms).find("\"chat\": \"allow_all\"") != std::string::npos);
+    CHECK(chat(*f.s, "panel.patch", retitle("Held")).error.code == "command.needs_approval");
+    f.s->registry().cancel_pending();
+    // Turning Allow all on: it takes effect only after a successful save.
+    CHECK(f.s->set_agent_mode(AgentPrincipal::mcp, AgentMode::allow_all).code == "permissions.write_failed");
+    CHECK(f.s->agent_mode(AgentPrincipal::mcp) == AgentMode::ask);
+    // Once the save works, choosing the mode again writes it, and a new launch agrees.
+    fs::remove_all(blocker);
+    REQUIRE(f.s->set_agent_mode(AgentPrincipal::chat, AgentMode::ask).ok());
+    CHECK(f.s->saved_agent_mode(AgentPrincipal::chat) == AgentMode::ask);
+    CHECK(f.s->permission_save_error().empty());
+    f.reopen();
+    CHECK(f.s->agent_mode(AgentPrincipal::chat) == AgentMode::ask);
+    CHECK(f.s->agent_mode(AgentPrincipal::mcp) == AgentMode::ask);
+}
+
+TEST_CASE("a second app's save changes only what it changed, so Allow all ended in one app stays ended") {
+    Fixture a("modes-two-apps");
+    REQUIRE(a.s->set_agent_mode(AgentPrincipal::chat, AgentMode::allow_all).ok());
+    REQUIRE(a.s->set_agent_mode(AgentPrincipal::mcp, AgentMode::read_only).ok());
+    // A second app, on another workspace, with the same file.
+    const std::string ws2 = fresh_dir("modes-two-apps-second") + "/workspace";
+    SessionOptions o;
+    o.permissions_file = a.perms;
+    auto opened = Session::open(ws2, o);
+    REQUIRE(opened.error.ok());
+    Session& b = *opened.session;
+    CHECK(b.agent_mode(AgentPrincipal::chat) == AgentMode::allow_all);
+    // The person ends Allow all in the first app and adds a rule there.
+    REQUIRE(a.s->set_agent_mode(AgentPrincipal::chat, AgentMode::ask).ok());
+    // The second app's next save keeps that, and takes it on.
+    REQUIRE(b.set_agent_mode(AgentPrincipal::mcp, AgentMode::accept_edits).ok());
+    CHECK(b.agent_mode(AgentPrincipal::chat) == AgentMode::ask);
+    CHECK(read_text(a.perms).find("allow_all") == std::string::npos);
+    a.reopen();
+    CHECK(a.s->agent_mode(AgentPrincipal::chat) == AgentMode::ask);
+    CHECK(a.s->agent_mode(AgentPrincipal::mcp) == AgentMode::accept_edits);
+}
+
+#ifndef _WIN32
+TEST_CASE("a journal or a workspace database that leads to the permissions file stops the workspace from opening") {
+    int n = 0;
+    for (const char* which : {"journal link", "journal hard link", "database link"}) {
+        INFO(which);
+        const std::string root = fresh_dir("modes-open-links-" + std::to_string(n++));
+        const std::string perms = root + "/app-data/agent-permissions.json";
+        const std::string ws = root + "/workspace";
+        AgentPermissionsFile file;
+        file.chat = AgentMode::read_only;
+        REQUIRE(write_agent_permissions(perms, file).ok());
+        const std::string before = read_text(perms);
+        fs::create_directories(ws + "/journal");
+        const std::string target = std::string(which).rfind("database", 0) == 0 ? ws + "/workspace.duckdb"
+                                                                                 : ws + "/journal/commands.jsonl";
+        if (std::string(which) == "journal hard link") fs::create_hard_link(perms, target);
+        else fs::create_symlink(perms, target);
+        SessionOptions o;
+        o.permissions_file = perms;
+        auto opened = Session::open(ws, o);
+        // Without the check, the journal would append its lines to the file
+        // and the database would take it over; either would change it.
+        CHECK_FALSE(opened.error.ok());
+        CHECK(opened.error.code.find("protected_file") != std::string::npos);
+        CHECK(read_text(perms) == before);
+    }
+}
+#endif

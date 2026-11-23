@@ -212,6 +212,7 @@ struct AgentSettingsLayoutInput {
     std::string cache_note;                // "Context cache about 18 GB", or ""
     bool permissions = false;              // the Permissions section
     int rules = 0;                         // its saved rules (at most kMaxRulesShown are laid out)
+    bool perm_note = false;                // the note of a failed save, two lines under the title
 };
 
 struct AgentSettingsLayout {
@@ -240,6 +241,7 @@ struct AgentSettingsLayout {
     // Permissions: in the left column under the key with two columns, else
     // across the window under the rest; empty without them.
     WidgetRect perm_title;
+    WidgetRect perm_note;                            // a failed save's note; empty without one
     WidgetRect chat_label, mcp_label;
     std::vector<WidgetRect> chat_modes, mcp_modes;   // Ask, Accept edits, Read only, Allow all
     WidgetRect rules_label;
@@ -264,6 +266,8 @@ struct AgentPermissionHooks {
     std::function<void(const std::string& who, const std::string& mode)> set_mode;
     std::function<std::vector<std::pair<std::string, std::string>>()> rules;   // agent, command
     std::function<void(const std::string& agent, const std::string& command)> revoke;
+    // The note of a failed save (permission_save_note() of app_session.h), "" for none.
+    std::function<std::string()> note;
 };
 
 class AgentSettings {

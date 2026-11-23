@@ -751,6 +751,10 @@ public:
                     for (const cb::AgentRule& r : s->saved_agent_rules()) out.push_back({r.agent, r.command});
                 return out;
             };
+            ph.note = [this]() -> std::string {
+                cb::Session* s = session_.session();
+                return s ? caliper_host::permission_save_note(*s) : std::string();
+            };
             ph.revoke = [this](const std::string& agent, const std::string& command) {
                 if (cb::Session* s = session_.session(); s && s->revoke_agent_rule({agent, command}))
                     landing_.log("rule revoked", command, agent);
@@ -760,13 +764,7 @@ public:
             // and set only in the settings and the side chat's mode menu.
             set_host_status_flag([this]() -> std::string {
                 cb::Session* s = session_.session();
-                if (!s) return {};
-                const bool chat = s->agent_mode(cb::AgentPrincipal::chat) == cb::AgentMode::allow_all;
-                const bool mcp = s->agent_mode(cb::AgentPrincipal::mcp) == cb::AgentMode::allow_all;
-                return chat && mcp ? "allow all for side chat and MCP clients"
-                       : chat      ? "allow all for side chat"
-                       : mcp       ? "allow all for MCP clients"
-                                   : "";
+                return s ? caliper_host::allow_all_status(*s) : std::string();
             });
         }
 #endif

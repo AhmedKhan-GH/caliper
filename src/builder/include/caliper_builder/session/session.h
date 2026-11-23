@@ -325,8 +325,18 @@ public:
     // The mode of the side chat's agent or of mcp clients.
     AgentMode agent_mode(AgentPrincipal who) const;
     // Sets it and saves it, Allow all as any other mode: it holds, across
-    // launches, until the person sets another.
+    // launches, until the person sets another. Allow all takes effect only
+    // after a successful save. Another mode takes effect at once, also when
+    // its save fails; the error is returned and permission_save_error() keeps
+    // it until a later save succeeds.
     Error set_agent_mode(AgentPrincipal who, AgentMode mode);
+    // The mode that the permissions file holds, as the session last read or
+    // wrote it; after a failed save it differs from agent_mode().
+    AgentMode saved_agent_mode(AgentPrincipal who) const;
+    // Why the last save of the permissions failed; "" after a successful one.
+    // Each save reads the file again and changes only what this session
+    // changed, so a second app's change stays.
+    std::string permission_save_error() const;
     // The side chat's agent id, whose saved rules apply to the chat ("" for
     // none). The chat calls it when its agent starts.
     void set_chat_agent(const std::string& agent_id);

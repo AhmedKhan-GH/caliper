@@ -380,4 +380,16 @@ private:
 // given) says why. app_session_options() (app_hooks.h) applies it.
 void gate_command_script(AppSession::Options* o, bool scripts_allowed, std::string* refused);
 
+// What every page's status bar says about Allow all, "" for nothing: "allow
+// all for side chat", "allow all for MCP clients" or both, and "allow all
+// still saved for ..." while a principal's file still holds Allow all after a
+// failed save of another mode (Session::saved_agent_mode()). The session also
+// says it on standard error when it opens, for a run with no status bar.
+// Built with the builder only.
+std::string allow_all_status(const caliper_builder::Session& s);
+// The Permissions section's note after a failed save, "" when the file holds
+// what the session holds: why, which mode the file still holds and returns at
+// the next launch, and that choosing the mode again saves it.
+std::string permission_save_note(const caliper_builder::Session& s);
+
 }  // namespace caliper_host

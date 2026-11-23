@@ -181,6 +181,13 @@ struct ChatPane::Impl {
             if (!session) return {};
             return caliper_builder::agent_mode_label(session->agent_mode(caliper_builder::AgentPrincipal::chat));
         };
+        h.permission_note = [this]() -> std::string {
+            namespace cb = caliper_builder;
+            if (!session || session->saved_agent_mode(cb::AgentPrincipal::chat) != cb::AgentMode::allow_all ||
+                session->agent_mode(cb::AgentPrincipal::chat) == cb::AgentMode::allow_all)
+                return {};
+            return "Still saved: ending it was not saved, so it returns at the next launch";
+        };
         h.set_permission_mode = [this](const std::string& name) {
             const auto mode = caliper_builder::agent_mode_from_name(name);
             if (!session || !mode) return;

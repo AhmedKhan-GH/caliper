@@ -217,6 +217,8 @@ struct Session::Impl {
     // registry asks for next.
     mutable std::mutex perm_mutex;
     AgentPermissionsFile perms;
+    AgentPermissionsFile saved;   // what the file holds, as last read or written
+    std::string save_error;       // why the last save failed; "" after a successful one
     std::string chat_agent;
     std::set<std::string> chat_session_rules;
     std::set<std::string> mcp_session_rules;
@@ -1795,9 +1797,39 @@ struct Session::Impl {
         return AgentMode::ask;
     }
 
+    // Saves the permissions. The file is read again first and only what this
+    // session changed since it last read or wrote the file is changed in it,
+    // so that a change by a second app stays; after a successful save the
+    // session holds what the file holds. A file that reads with a problem is
+    // replaced with what the session holds.
     Error save_perms() {
-        if (options.permissions_file.empty()) return {};
-        return write_agent_permissions(options.permissions_file, perms);
+        if (options.permissions_file.empty()) {
+            saved = perms;
+            return {};
+        }
+        AgentPermissionsFile merged = perms;
+        const AgentPermissionsRead now = read_agent_permissions(options.permissions_file);
+        if (now.problems.empty()) {
+            merged = now.file;
+            if (perms.chat != saved.chat) merged.chat = perms.chat;
+            if (perms.mcp != saved.mcp) merged.mcp = perms.mcp;
+            auto has = [](const std::vector<AgentRule>& v, const AgentRule& r) {
+                return std::find(v.begin(), v.end(), r) != v.end();
+            };
+            for (const AgentRule& r : perms.rules)
+                if (!has(saved.rules, r) && !has(merged.rules, r)) merged.rules.push_back(r);
+            for (const AgentRule& r : saved.rules)
+                if (!has(perms.rules, r)) merged.rules.erase(std::remove(merged.rules.begin(), merged.rules.end(), r),
+                                                             merged.rules.end());
+        }
+        if (Error e = write_agent_permissions(options.permissions_file, merged)) {
+            save_error = e.message;
+            return e;
+        }
+        perms = merged;
+        saved = std::move(merged);
+        save_error.clear();
+        return {};
     }
 
     // The session's policy with the agent's mode and rules applied, and the
@@ -1959,6 +1991,7 @@ Session::Open Session::open(const std::string& workspace, SessionOptions options
         if (!im.options.permissions_file.empty()) {
             AgentPermissionsRead read = read_agent_permissions(im.options.permissions_file);
             im.perms = std::move(read.file);
+            im.saved = im.perms;
             im.perm_problems = std::move(read.problems);
         }
         for (CommandOrigin o : {CommandOrigin::ui, CommandOrigin::builder, CommandOrigin::agent, CommandOrigin::mcp,
@@ -2051,8 +2084,25 @@ Error Session::set_agent_mode(AgentPrincipal who, AgentMode mode) {
     Impl& im = *impl_;
     std::lock_guard<std::mutex> lock(im.perm_mutex);
     if (who == AgentPrincipal::none) return Error("permissions.no_principal", "Only the side chat's agent and mcp clients have a mode.");
-    (who == AgentPrincipal::chat ? im.perms.chat : im.perms.mcp) = mode;
-    return im.save_perms();
+    AgentMode& slot = who == AgentPrincipal::chat ? im.perms.chat : im.perms.mcp;
+    const AgentMode before = slot;
+    slot = mode;
+    const Error e = im.save_perms();
+    // Allow all holds only once the file says so. Another mode holds at once
+    // even when its save failed, and saved_agent_mode() and
+    // permission_save_error() say that the file still holds the old one.
+    if (e && mode == AgentMode::allow_all) slot = before;
+    return e;
+}
+
+AgentMode Session::saved_agent_mode(AgentPrincipal who) const {
+    std::lock_guard<std::mutex> lock(impl_->perm_mutex);
+    return who == AgentPrincipal::chat ? impl_->saved.chat : who == AgentPrincipal::mcp ? impl_->saved.mcp : AgentMode::ask;
+}
+
+std::string Session::permission_save_error() const {
+    std::lock_guard<std::mutex> lock(impl_->perm_mutex);
+    return impl_->save_error;
 }
 
 void Session::set_chat_agent(const std::string& agent_id) {
