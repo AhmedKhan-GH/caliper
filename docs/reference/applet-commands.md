@@ -144,7 +144,7 @@ Prints the host's version, its ABI epoch, the SDK version it was built with, its
 
 ```text
 host 0.6.0
-abi_epoch 2
+abi_epoch 3
 sdk 0.2.0
 libtorch 2.5.1
 ui_stack 03c557182adc5cd9

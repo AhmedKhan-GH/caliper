@@ -21,7 +21,7 @@ Arrows point down only, from each layer to the layer that it depends on or that 
 
 ## Components
 
-The top layer holds the applets. An applet is a shared library that stands beside a `<stem>.caliper.toml` manifest, and the host loads it at run time. The repository holds nine scope applets and two tutorial applets, which [In-Tree Applets](../applets/in-tree-applets.md) lists.
+The top layer holds the applets. An applet is a shared library that stands beside a `<stem>.caliper.toml` manifest, and the host loads it at run time. The repository holds three scope applets and two tutorial applets, which [In-Tree Applets](../applets/in-tree-applets.md) lists.
 
 The SDK is the `caliper-sdk` package. It holds the frozen C entry ABI in `abi.h`, which an epoch versions, and the `CaliperTensor` interchange type in `tensor.h`. It also holds the Arrow C Data Interface in `arrow_c.h`, the named C service tables in `services/*.h` and the header-only C++ sugar in `caliper.hpp`. Header-only adapters for torch and allocations, the fixture host and the CMake package with `caliper_add_applet()` complete it. [Applet Contract](../applets/applet-contract.md), [Tensor and Arrow Headers](../applets/tensor-and-arrow-headers.md) and [SDK Package](../applets/sdk-package.md) describe these parts.
 
@@ -33,7 +33,7 @@ The host is the `caliper` executable and Caliper Embed, which is the library `li
 
 Applets depend on the SDK and the UI stack, and the host implements the SDK. The SDK depends on nothing else in Caliper. Torch and DuckDB types stay out of every SDK header, because the interchange types `CaliperTensor` and Arrow C streams cross the boundary instead ([Compatibility and Epochs](../development/compatibility-and-epochs.md)).
 
-Only `caliper.ui.v1` is allowed to know the toolkit or the renderer. Every other service describes data, such as tensors, tables, geometry and files, and never an ImGui, Metal or Vulkan type. A host that draws with a different toolkit can thus use these services. The ABI never mentions a graphics API, and applets render only through ImGui and ImPlot. Textures cross the boundary as an opaque `CaliperTextureId`, and as a result a renderer change causes no epoch bump and no applet rebuild ([Rendering](../applets/rendering.md)). [`caliper.ui.v1`](../applets/services/caliper-ui-v1.md) is the one service that gives applets the ImGui, ImPlot and ImPlot3D contexts.
+Only `caliper.ui.v1` is allowed to know the toolkit or the renderer. Every other service describes data, such as tensors, tables and files, and never an ImGui, Metal or Vulkan type. A host that draws with a different toolkit can thus use these services. The ABI never mentions a graphics API, and applets render only through ImGui and ImPlot. Textures cross the boundary as an opaque `CaliperTextureId`, and as a result a renderer change causes no epoch bump and no applet rebuild ([Rendering](../applets/rendering.md)). [`caliper.ui.v1`](../applets/services/caliper-ui-v1.md) is the one service that gives applets the ImGui, ImPlot and ImPlot3D contexts.
 
 The repository holds all four layers, but the core build compiles no applet, and the `caliper` target depends on none. Each applet builds against the installed SDK with `find_package(caliper-sdk)` and `caliper_add_applet()`, as an applet outside the repository does. [SDK Package](../applets/sdk-package.md) gives the build options for the applets in the repository.
 
@@ -49,9 +49,9 @@ A table that the applet rebuilds several times each second for a live display is
 
 ## Embedding
 
-Caliper Embed is the host without the window, built as the static library `libcaliper`. It holds the applet loader, the service registry, the services, `HostRenderer`, the tensor bridge and the geometry path behind a small C interface. Thus another program can operate the applet canvas in a view of the embedder. The `caliper` executable is the first embedder.
+Caliper Embed is the host without the window, built as the static library `libcaliper`. It holds the applet loader, the service registry, the services, `HostRenderer` and the tensor bridge behind a small C interface. Thus another program can operate the applet canvas in a view of the embedder. The `caliper` executable is the first embedder.
 
-The embedder supplies a native view and its input events, and `libcaliper` owns the applet canvas end to end. The ImGui context, the renderer, the bridge and the geometry all operate inside it. The chrome of the embedder wraps around the canvas and never paints applet pixels. A toolkit such as wxWidgets paints through graphics backends of its own and cannot paint pixels that applets make on the GPU. One owner of the canvas keeps the applet contract the same in every host.
+The embedder supplies a native view and its input events, and `libcaliper` owns the applet canvas end to end. The ImGui context, the renderer and the bridge all operate inside it. The chrome of the embedder wraps around the canvas and never paints applet pixels. A toolkit such as wxWidgets paints through graphics backends of its own and cannot paint pixels that applets make on the GPU. One owner of the canvas keeps the applet contract the same in every host.
 
 A program outside this repository embeds the core through the `caliper-embed` package, which holds one shared library, `caliper_embed`. [Embedding API](../web/embedding-api.md) gives the package layout and the include roots, and [Program Embedding](../web/program-embedding.md) builds an embedder against the package. A process has one libtorch, and the core owns it. An embedder must not link a torch of its own, and `caliper_core_create` refuses a second live core in the same process.
 
@@ -71,7 +71,7 @@ The `caliper` executable and `libcaliper` link neither libtorch nor the CUDA too
 
 ### One-Way Data Flow
 
-Data flows one way, from tensors to pixels. Tensors become textures and geometry, and ImGui shows them. Nothing flows back, thus there is no render-to-tensor readback. Applets cannot supply shaders, and the appearance of an image comes from a fixed menu of shading modes. [Rendering](../applets/rendering.md#one-way-data-flow) lists what this rules out and what it does not.
+Data flows one way, from tensors to pixels. Tensors become textures, and ImGui shows them. Nothing flows back, thus there is no render-to-tensor readback. Applets cannot supply shaders, and the appearance of an image comes from a fixed menu of shading modes. [Rendering](../applets/rendering.md#one-way-data-flow) lists what this rules out and what it does not.
 
 The purpose of the instrument is to show the state of a model. Shaders from applets break the boundary between applet and host and weaken its security. A fixed menu keeps each image reproducible against the CPU reference.
 

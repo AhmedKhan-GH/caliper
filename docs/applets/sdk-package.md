@@ -62,7 +62,7 @@ The UI stack ships as sources because a prebuilt static library would tie every 
 | Variable | Value |
 |---|---|
 | `CALIPER_SDK_VERSION` | The SDK version, `0.2.0` |
-| `CALIPER_SDK_ABI_EPOCH` | The ABI epoch the headers speak, `2` |
+| `CALIPER_SDK_ABI_EPOCH` | The ABI epoch the headers speak, `3` |
 | `CALIPER_UI_STACK_HASH` | The [UI-stack hash](#ui-stack-hash) |
 | `CALIPER_TORCH_VERSION` | The version of the libtorch of the host, or empty when the SDK was built without libtorch |
 | `CALIPER_MACOS_MIN` | The minimum macOS of the host, `14.0` by default. On macOS it becomes `CMAKE_OSX_DEPLOYMENT_TARGET` unless the project, `-DCMAKE_OSX_DEPLOYMENT_TARGET` or the environment variable `MACOSX_DEPLOYMENT_TARGET` chose one. |

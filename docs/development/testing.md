@@ -19,7 +19,7 @@ Caliper's tests use doctest and run through ctest. The sources are in `tests/`, 
 | ABI | `test_abi.cpp` asserts that the ABI structs are standard layout with `struct_size` first, and checks the epoch and every published table. |
 | C compile check | `abi_c_check.c` includes every public header, newest first, in a C translation unit. A header that lacks its own includes cannot hide behind another one. |
 
-The same executable covers applet-side logic that needs neither torch nor a window, such as the instanced pose helper, the pulse ring and the export affordance. The build makes the `hello` applet and `throwing_applet` first, because the loader tests load them from the build folder.
+The same executable covers applet-side logic that needs neither torch nor a window, such as the pulse ring. The build makes the `hello` applet and `throwing_applet` first, because the loader tests load them from the build folder.
 
 ## Fixture Host
 
@@ -27,11 +27,11 @@ The same executable covers applet-side logic that needs neither torch nor a wind
 
 ## Pixel-Exact Graphics Suite
 
-`caliper_gfx_tests` (`tests/gfx/gfx_main.cpp`) checks the path from a tensor to a texture and the geometry path. It opens a hidden window, so it needs a graphical session. Every case reads the texture back from the GPU and compares it byte for byte with a CPU reference.
+`caliper_gfx_tests` (`tests/gfx/gfx_main.cpp`) checks the path from a tensor to a texture and the scene core. It opens a hidden window, so it needs a graphical session. Every case reads the texture back from the GPU and compares it byte for byte with a CPU reference.
 
 The suite runs on the backend that the platform offers:
 
-- Metal runs on macOS when a Metal device is present. It also covers the device paths, built from raw `MTLBuffer` allocations: the compute path for `f32` with a lookup table, the blit path for `u8`, stream-ordered updates, imported allocations and their gates, and the geometry service.
+- Metal runs on macOS when a Metal device is present. It also covers the device paths, built from raw `MTLBuffer` allocations: the compute path for `f32` with a lookup table, the blit path for `u8`, stream-ordered updates, and imported allocations.
 - Vulkan runs on Windows with the CPU-staged path. Cases that need CUDA hardware run only when a CUDA device is present.
 
 ### Renderer Core Rows
@@ -68,10 +68,7 @@ A pick row draws the pick pass of the same scene and checks the entity, the prim
 
 ### Timing Rows
 
-The suite also has timing rows, which print numbers and prove nothing by themselves.
-
-- On Vulkan with CUDA, the update cost by size and the cost of a create and release cycle against an update.
-- On Metal, `gfx/metal geometry: timing — draws by count` prints the call, completion and GPU microseconds of one `draw_primitives` frame of 1,000 to 4,000,000 imported points and of 1 to 256 draw records. It also checks that no draw counted a copy.
+The suite also has a timing row on Vulkan with CUDA for the update cost by size and the cost of a create and release cycle against an update, which prints numbers and proves nothing by itself.
 
 Run them with `-s` to see their messages. The timing rows of the layer and the scene core run only when asked, with `CALIPER_GFX_LAYER_BENCH=1` and `CALIPER_GFX_SCENE_BENCH=1` ([Graphics Layer](../applets/graphics-layer.md)). The migration of the renderer core compares them before and after each step, with the benchmarks in `python/bench/`.
 
@@ -138,11 +135,9 @@ The Playwright tests of the web package run in three projects of headless Chromi
 - `web/test/points3d.spec.ts` checks that the WebAssembly views and the Canvas 2D view draw the same 3-D box, default camera, depth cues and rotate toggle. It also has the module draw four cases of the points view with `points@1` and with the built-in on WebGPU (`web/wasm/src/points_parity.cpp`): every case must be drawn by the piece and match the built-in within the tolerances of the match tests.
 - `web/test/renderer.spec.ts` and `web/test/fallback.spec.ts` check which renderer draws a view, with a stub of the loader of the WebAssembly views and without the loader.
 
-### Export and Hidden Windows
+### Hidden Windows
 
-`caliper_export_tests` checks `caliper.export.v1` in the same way. It drives the service as an embedder would and decodes the PNG that the service wrote. Its sidecar, atomic-write and sugar cases need no GPU.
-
-`caliper_gfx_tests` and `caliper_export_tests` open their windows hidden and never show or focus them. On macOS the test process also shows no Dock icon and no menu bar. The suites start GLFW through `tests/glfw_background.h`, which sets `GLFW_COCOA_MENUBAR` to false and sets the activation policy to `NSApplicationActivationPolicyProhibited` around `glfwInit()` (`src/host/background_process.h`). One case in each suite checks that the policy still holds.
+`caliper_gfx_tests` opens its window hidden and never shows or focuses it. On macOS the test process also shows no Dock icon and no menu bar. The suite starts GLFW through `tests/glfw_background.h`, which sets `GLFW_COCOA_MENUBAR` to false and sets the activation policy to `NSApplicationActivationPolicyProhibited` around `glfwInit()` (`src/host/background_process.h`). One case in the suite checks that the policy still holds.
 
 The app uses the same mechanism with `--hidden` or `CALIPER_HIDDEN=1` ([The hidden window](../reference/cli.md#hidden-window)). The ctest entry `caliper_cli_app_hidden` (`tests/test_api.cpp`) starts the real app this way with `--api`. It uses every endpoint of [Caliper API](../agents/http-api.md) and checks that a capture is a PNG of the hidden framebuffer. It then closes the app with SIGTERM and checks that no process, file or socket remains. Without a Metal device the entry is skipped.
 
@@ -182,7 +177,7 @@ Each checks the exact message and exit code 1, and that the run left at most the
 
 No test reads or writes your own app-data folder. ctest runs every entry with `CALIPER_DATA_DIR` on `test-app-data/` in the build folder and with `CALIPER_TEST_RUN=1`. The file that `caliper_offline_tests()` writes (`src/builder/cmake/CaliperOfflineTests.cmake`) sets both, so an entry cannot forget them. Some entries replace that folder with their own:
 
-- Every test binary that opens the stores uses `tests/app-data/<binary>`. These binaries are `caliper_tests`, `caliper_export_tests`, `caliper_embed_tests`, the live suites and `caliper_catalog_providers_tests`.
+- Every test binary that opens the stores uses `tests/app-data/<binary>`. These binaries are `caliper_tests`, `caliper_embed_tests`, the live suites and `caliper_catalog_providers_tests`.
 - Every command-line test has its own `CALIPER_DATA_DIR`.
 - Every test that starts the hidden app, `caliper shot` or a producer gives that process its own folder.
 
@@ -194,7 +189,7 @@ The app-data guard backs this up ([Folders and environment variables](../referen
 
 ## Applet and Adapter Tests
 
-`caliper_torch_tests` tests the torch adapter in `adapters/torch.hpp`. Five small executables test the learning and simulation code of single applets: `caliper_sculpt_tests`, `caliper_mesh_tests`, `caliper_em_pic_tests`, `caliper_surface_tests` and `caliper_twin_tests`. They link libtorch and exist only when torch is enabled, which keeps the torch link cost out of `caliper_tests`.
+`caliper_torch_tests` tests the torch adapter in `adapters/torch.hpp`. It links libtorch and exists only when torch is enabled, which keeps the torch link cost out of `caliper_tests`.
 
 ## Package and Boundary Tests
 
@@ -348,7 +343,7 @@ The check `python3 examples/python/instrument_building_check.py` runs the same f
 
 ## GPU Tests
 
-A suite that needs a GPU must not report success when it finds none. `tests/gpu_skip.h` provides the convention that the gfx, export, embed, live and torch suites share:
+A suite that needs a GPU must not report success when it finds none. `tests/gpu_skip.h` provides the convention that the gfx, embed, live and torch suites share:
 
 - A case with no GPU counts as skipped, prints why, and returns.
 - When any case is skipped for want of a GPU and none fails, the executable exits with code 77. `tests/CMakeLists.txt` registers 77 as `SKIP_RETURN_CODE`, so ctest shows the suite as skipped and not as passed.
@@ -365,7 +360,6 @@ ctest --test-dir cmake-build-release --output-on-failure
 A ctest label selects a group:
 
 - `gfx`: `caliper_gfx_tests`, `caliper_gfx_views_tests` and `caliper_shader_tests`.
-- `export`: `caliper_export_tests`.
 - `torch`: `caliper_torch_tests`.
 - `cli`: the command-line tests.
 - `shot`: the `caliper shot` runs.

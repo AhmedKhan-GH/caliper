@@ -69,7 +69,7 @@ TEST_CASE("applet.save writes what the loader lists, validates and reads back") 
     // the workspace's folder beside them, which the loader must refuse.
     run(s, "applet.save", {{"id", "copy"}});
     std::ofstream(ws / "applets" / "intruder.caliper.toml")
-        << "[applet]\nid=\"local.intruder\"\nname=\"I\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=2\n";
+        << "[applet]\nid=\"local.intruder\"\nname=\"I\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=3\n";
     const caliper_builder::spec::Spec saved = s.open_spec()->spec;
     opened.session.reset();
 

@@ -453,9 +453,7 @@ jobs:
       - run: >-
           scripts/build_applets_against_sdk.sh cmake-build-release
           "$(cygpath -m "$RUNNER_TEMP")/applets"
-          examples/hello examples/sine_scope
-          applets/field_scope applets/flow_scope applets/instance_scope
-          applets/mesh_scope applets/pulse_scope applets/sculpt_scope applets/twin_scope
+          examples/hello examples/sine_scope applets/pulse_scope
         env:
           CMAKE_GENERATOR: Ninja
           CMAKE_C_COMPILER_LAUNCHER: sccache

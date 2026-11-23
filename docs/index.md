@@ -1,6 +1,6 @@
 # Overview
 
-Caliper is a desktop application that draws live graphics from tensors that stay on the GPU. It is for people who train models and write tools for them. A host program owns the window, the renderer and the frame loop. Applets are shared libraries that the host loads at run time. Caliper is built from source. This version of the repository is host 0.6.0, SDK 0.1.0 and ABI epoch 2.
+Caliper is a desktop application that draws live graphics from tensors that stay on the GPU. It is for people who train models and write tools for them. A host program owns the window, the renderer and the frame loop. Applets are shared libraries that the host loads at run time. Caliper is built from source. This version of the repository is host 0.6.0, SDK 0.1.0 and ABI epoch 3.
 
 ## Components
 

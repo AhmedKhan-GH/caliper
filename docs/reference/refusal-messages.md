@@ -1,6 +1,6 @@
 # Refusal Messages
 
-Before the host loads any applet code, it runs a pure **negotiation** check on the applet's manifest and the host's capabilities. See [Manifest](../applets/manifest.md) and [ABI (epoch 2)](../applets/applet-contract.md). If the applet is incompatible, the host refuses it, runs no applet code, and shows one message below as the status text on the landing screen.
+Before the host loads any applet code, it runs a pure **negotiation** check on the applet's manifest and the host's capabilities. See [Manifest](../applets/manifest.md) and [ABI (epoch 3)](../applets/applet-contract.md). If the applet is incompatible, the host refuses it, runs no applet code, and shows one message below as the status text on the landing screen.
 
 The checks run in this fixed order: **ABI epoch → minimum host version → UI-stack hash → libtorch version → required services → data schema**. See [Compatibility](../development/compatibility-and-epochs.md). The first failing check wins, so the host shows only one message. These strings are contractual, and the loader and the landing screen reuse them verbatim.
 

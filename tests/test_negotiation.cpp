@@ -5,12 +5,12 @@ using namespace caliper_host;
 static AppletManifest base() {
     AppletManifest m;
     m.id = "a.b"; m.name = "A"; m.version = "1.0.0";
-    m.abi_epoch = 2; m.min_host = "0.6.0";
+    m.abi_epoch = 3; m.min_host = "0.6.0";
     m.required_services = {"caliper.ui.v1"};
     return m;
 }
 static HostCaps host() {
-    return HostCaps{2, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}};
+    return HostCaps{3, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}};
 }
 
 TEST_CASE("negotiate: compatible applet passes") {
@@ -115,7 +115,7 @@ TEST_CASE("negotiate: check order is epoch, min_host, UI stack, torch, services,
     m.torch = "1.0.0"; m.required_services = {"caliper.nope.v1"}; m.data_schema = 1;
     const HostCaps c = torch_host();
     CHECK(negotiate(m, c, 5).reason.find("ABI epoch") != std::string::npos);
-    m.abi_epoch = 2;
+    m.abi_epoch = 3;
     CHECK(negotiate(m, c, 5).reason.find("Requires host") != std::string::npos);
     m.min_host.clear();
     CHECK(negotiate(m, c, 5).reason.find("UI stack") != std::string::npos);
@@ -131,7 +131,7 @@ TEST_CASE("negotiate: check order is epoch, min_host, UI stack, torch, services,
 
 TEST_CASE("host_caps: advertises the epoch, the version and every served id") {
     const HostCaps c = host_caps();
-    CHECK(c.abi_epoch == 2);
+    CHECK(c.abi_epoch == 3);
     CHECK(c.version == "0.6.0");
     CHECK(c.services.count("caliper.ui.v1") == 1);
     CHECK(c.services == host_service_ids());

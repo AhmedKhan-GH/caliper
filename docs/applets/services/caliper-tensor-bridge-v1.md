@@ -128,4 +128,4 @@ v1_2 adds three entry points to the seven v1_1 members. A host without bit 1 kee
 
 <!-- c-api ids sdk/include/caliper/services/tensor_bridge_v1_2.h -->
 
-`CaliperAllocId` is the id that `import_allocation` returns. It is the import machinery that [`caliper.geometry.v1` and its revisions](caliper-geometry-v1.md) draw from. Geometry sources are pairs of `(CaliperAllocId, byte offset)` into these same imports, and they reuse the caches, gates and lifecycle of v1_2. The applet side of an import is [`ExportablePool`](../torch-per-platform.md#exportablepool-opt-in).
+`CaliperAllocId` is the id that `import_allocation` returns. It reuses the caches, gates and lifecycle of v1_2. The applet side of an import is [`ExportablePool`](../torch-per-platform.md#exportablepool-opt-in).

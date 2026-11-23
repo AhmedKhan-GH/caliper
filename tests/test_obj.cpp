@@ -79,34 +79,3 @@ TEST_CASE("obj adapter rejects malformed input without partial output") {
         CHECK_FALSE(error.empty());
     }
 }
-
-TEST_CASE("obj adapter loads the committed TwinScope housing") {
-    // Charted, watertight finned heatsink (procedurally generated, generator not
-    // shipped). Stats from the generator's self-verification: 3184 triangles,
-    // 2430 loader vertices, 30 charts, 6-texel min gutter @256, closed 2-manifold.
-    caliper::obj::Mesh mesh;
-    std::string error;
-    const std::string path = std::string(CALIPER_TEST_SOURCE_ROOT) +
-        "/applets/twin_scope/assets/housing.obj";
-    REQUIRE_MESSAGE(caliper::obj::load_file(path, mesh, &error), error);
-    CHECK(mesh.has_uvs);
-    CHECK(mesh.has_normals);
-    // Exact pins for the committed asset (generator self-verification, confirmed
-    // from the loader): 1592 quads triangulate to 3184 triangles, and the
-    // (v,vt,vn)-dedup yields 2430 vertices (every face pairs v==vt, one of 6
-    // normals). Spec envelope is 2,500-4,000 triangles.
-    CHECK(mesh.triangle_count() == 3184);
-    CHECK(mesh.vertex_count() == 2430);
-    // Vertices are deduplicated on the (v,vt,vn) triple: far fewer than 3 per tri.
-    CHECK(mesh.vertex_count() < mesh.triangle_count() * 3);
-    CHECK(mesh.positions.size() == mesh.vertex_count() * 3);
-    CHECK(mesh.normals.size() == mesh.vertex_count() * 3);
-    CHECK(mesh.uvs.size() == mesh.vertex_count() * 2);
-    // Charted atlas UVs: strictly inside [0,1] (gutter-inset, no chart touches an edge).
-    const float uv_min = *std::min_element(mesh.uvs.begin(), mesh.uvs.end());
-    const float uv_max = *std::max_element(mesh.uvs.begin(), mesh.uvs.end());
-    CHECK(uv_min >= 0.f);
-    CHECK(uv_max <= 1.f);
-    CHECK(uv_min > 0.f);
-    CHECK(uv_max < 1.f);
-}

@@ -1,11 +1,11 @@
 #pragma once
-/* Caliper ABI, epoch 2. Frozen: any change here is an epoch bump.
+/* Caliper ABI, epoch 3. Frozen: any change here is an epoch bump.
  * C types only, with no STL, exceptions or third-party types. */
 #include <stdint.h>
 #include <stdbool.h>
 
 /** The epoch of this contract. Any change to the frozen contract bumps the epoch. */
-#define CALIPER_ABI_EPOCH 2
+#define CALIPER_ABI_EPOCH 3
 /** The name of the one symbol that every applet exports, as a string. */
 #define CALIPER_DESCRIPTOR_SYMBOL "caliper_applet_descriptor"
 

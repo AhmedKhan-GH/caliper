@@ -45,7 +45,7 @@ examples/hello/
 ```
 
 - **Manifest**: It holds the reverse-DNS `id`, the name, the version, a summary and the lists of required and optional services. The `id` and `version` must be byte-identical to the descriptor in the `CALIPER_APPLET` call. If they differ, the loader refuses the applet and lists it with the reason. See [Manifest](../applets/manifest.md).
-- **Macro**: `CALIPER_APPLET(...)` at the bottom of the `.cpp` generates the epoch-2 C ABI glue. This is the descriptor and an exception wall on every entry point. You never write `extern "C"`.
+- **Macro**: `CALIPER_APPLET(...)` at the bottom of the `.cpp` generates the epoch-3 C ABI glue. This is the descriptor and an exception wall on every entry point. You never write `extern "C"`.
 - **Class**: It has three lifecycle methods. `on_init(Host&)` probes the services. Assert the required ones and let the optional ones degrade. `on_frame(const Frame&)` runs on the frame thread every frame. It submits ImGui windows and reads state that workers publish. `on_cleanup()` cancels jobs, waits for them with a bound, releases textures and returns.
 - **CMakeLists**: Copy the one from `examples/hello/` for a UI-only applet. Copy the one from `examples/sine_scope/` for an ML applet, which adds `TORCH`. Edit only the project and target name, the source files and the manifest filename.
 
@@ -169,7 +169,7 @@ cmake --build --preset release
 ctest --preset release            # prints the output of failing suites
 ```
 
-Six suites need a GPU for some cases: `caliper_gfx_tests`, `caliper_export_tests`, `caliper_embed_tests`, `caliper_torch_tests`, `caliper_live_tests` and `caliper_live_views_tests`. A case that finds no device skips and is counted. The suite prints a summary when it ends:
+Five suites need a GPU for some cases: `caliper_gfx_tests`, `caliper_embed_tests`, `caliper_torch_tests`, `caliper_live_tests` and `caliper_live_views_tests`. A case that finds no device skips and is counted. The suite prints a summary when it ends:
 
 ```
 [caliper-tests] skipped 49 of 49 test cases: 49 no GPU, 0 not applicable on this platform -> exit 77 (ctest: Skipped)

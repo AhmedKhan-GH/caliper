@@ -65,7 +65,7 @@ void fake_applet(const fs::path& dir, const std::string& stem, const std::string
     fs::create_directories(dir);
     std::ofstream(dir / (stem + ".caliper.toml")) <<
         "[applet]\nid=\"" << id << "\"\nname=\"Example\"\nversion=\"" << version <<
-        "\"\n[compat]\nabi_epoch=2\n" << extra;
+        "\"\n[compat]\nabi_epoch=3\n" << extra;
     std::ofstream(dir / lib_name(stem)) << "library bytes";
 }
 
@@ -92,7 +92,7 @@ Run run(const std::vector<const char*>& args, const CliContext& ctx) {
 
 CliContext context(const TempDir& t) {
     CliContext c;
-    c.caps = HostCaps{2, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}, "", ""};
+    c.caps = HostCaps{3, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}, "", ""};
     c.sdk_version = "0.2.0";
     c.user_dir = t.str("user");
     c.shipped_dir = t.str("shipped");
@@ -295,7 +295,7 @@ TEST_CASE("cli: info prints the versions and every service") {
     ctx.caps.ui_stack_hash = "0123456789abcdef";
     const Run r = run({"info"}, ctx);
     CHECK(r.code == 0);
-    CHECK(r.out == "host 0.6.0\nabi_epoch 2\nsdk 0.2.0\nlibtorch 2.5.1\n"
+    CHECK(r.out == "host 0.6.0\nabi_epoch 3\nsdk 0.2.0\nlibtorch 2.5.1\n"
                    "ui_stack 0123456789abcdef\n"
                    "service caliper.log.v1\nservice caliper.ui.v1\n");
     ctx.sdk_version.clear();
@@ -460,7 +460,7 @@ TEST_CASE("cli: info and list as JSON hold what the text forms print") {
     CliContext ctx = context(t);
     ctx.caps.torch_version = "2.5.1";
     CHECK(info_json(ctx) ==
-          "{\"abi_epoch\":2,\"host\":\"0.6.0\",\"libtorch\":\"2.5.1\",\"sdk\":\"0.2.0\","
+          "{\"abi_epoch\":3,\"host\":\"0.6.0\",\"libtorch\":\"2.5.1\",\"sdk\":\"0.2.0\","
           "\"services\":[\"caliper.log.v1\",\"caliper.ui.v1\"],\"ui_stack\":null}");
 
     fake_applet(t.path / "dev", "x", "x.app", "2.0.0", "torch=\"9.9.9\"\n");
@@ -835,7 +835,7 @@ TEST_CASE("cli: new writes a project from the template and never overwrites") {
     REQUIRE(parsed.ok);
     CHECK(parsed.manifest.id == "com.example.my-viewer");
     CHECK(parsed.manifest.name == "My Viewer");
-    CHECK(parsed.manifest.abi_epoch == 2);
+    CHECK(parsed.manifest.abi_epoch == 3);
     CHECK(parsed.manifest.min_host == "0.6.0");
     const std::string source = slurp(t.path / "viewer" / "my_viewer.cpp");
     CHECK(source.find("class MyViewerApplet final") != std::string::npos);

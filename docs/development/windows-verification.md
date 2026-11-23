@@ -1,6 +1,6 @@
 # Windows Verification
 
-This procedure checks a change on a Windows machine with an NVIDIA GPU. Use it for any change to the Vulkan backend, the tensor bridge, the geometry service, the CUDA kernels or the torch adapters, because macOS compiles these paths out.
+This procedure checks a change on a Windows machine with an NVIDIA GPU. Use it for any change to the Vulkan backend, the tensor bridge, the CUDA kernels or the torch adapters, because macOS compiles these paths out.
 
 ```mermaid
 flowchart LR
@@ -45,13 +45,12 @@ Then run the gfx suite on its own and read it closely:
 ctest --preset release -L gfx --output-on-failure
 ```
 
-The gfx suite has three environments, all on Vulkan, which are the point of this procedure.
+The gfx suite has two environments, both on Vulkan, which are the point of this procedure.
 
 | Rows | What they check | Needs |
 |---|---|---|
 | `gfx/Vulkan` | The CPU-staged matrix on the Vulkan backend, byte-exact against the CPU reference | Any Vulkan driver |
 | `gfx/Vulkan+CUDA` | The device paths against the same reference: `compute`, the direct kernels, mixed update paths, refusal of unsafe tensors, burst updates ordered by the semaphore, `alloc_shared`, imported allocations and the timing rows | A UUID-paired CUDA device, the only one in the machine |
-| `gfx/geometry` | Points, primitives, textured meshes and instanced transforms drawn from imported allocations, and every gate that refuses a whole frame. Results are byte-exact, except the lit rows, which allow two LSBs | The gate rows need no CUDA. The drawing rows need imported CUDA blocks |
 
 To iterate on one path, select rows by name with doctest, for example `caliper_gfx_tests -tc="gfx/Vulkan+CUDA*"`.
 
@@ -83,7 +82,6 @@ Open an applet that trains on CUDA. For repeatable runs, set `CALIPER_EMBED_AUTO
 | `[vulkan] device path: CUDA interop OK — GPU-resident (no CPU staging)` | A texture update took the buffer path, which makes one copy inside VRAM |
 | `[vulkan] device path: direct image: ... using the buffer path` | The direct path failed to set up for a texture. The line says why |
 | `[vulkan] device path: import path OK — zero-copy (imported allocation in place)` | An update read an imported allocation |
-| `[vulkan] device path: geometry path OK — primitives drawn from imported allocations in place` | The geometry path drew from imported memory |
 
 Each line prints once per process, so a line that never appears means that path never ran. An applet's status line may name a zero-copy path only when one of these lines confirms it. [Vulkan and CUDA on Windows](vulkan-and-cuda.md) describes each path.
 

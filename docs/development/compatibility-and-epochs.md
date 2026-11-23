@@ -66,7 +66,7 @@ Four layers are versioned separately, so a change in one rarely forces a change 
 
 | Layer | What it versions | Scheme | Declared in |
 |---|---|---|---|
-| [The host ABI epoch and service revisions](#host-abi-epoch-and-service-revisions) | The entry points, the `CaliperHost` layout and the UI-stack pin, and each service table | An integer epoch, 2 now. A service id with a revision suffix. | `[compat].abi_epoch` and `[services]` |
+| [The host ABI epoch and service revisions](#host-abi-epoch-and-service-revisions) | The entry points, the `CaliperHost` layout and the UI-stack pin, and each service table | An integer epoch, 3 now. A service id with a revision suffix. | `[compat].abi_epoch` and `[services]` |
 | [The SDK version](#sdk-version) | The installed `caliper-sdk` package | Semver | `[build].sdk`, written by the build |
 | [Each applet's version](#applet-versions-and-requirements) | The applet and what it requires | Semver, chosen by the applet's author | `[applet].version`, `[compat]` and `[services]` |
 | [The version of stored data](#stored-data-versions) | The applet's data folder | An integer of at least 1, chosen by the applet's author | `[data].schema` |
@@ -77,7 +77,7 @@ The host application has its own semver version, which an applet compares agains
 
 The ABI epoch is an integer that versions the frozen contract. The contract is the entry points in [`abi.h`](../applets/applet-contract.md), the `CaliperHost` layout and the UI-stack pin. A host speaks exactly one epoch, and the epoch check is exact equality. Before it opens an applet's library, the host compares `[compat].abi_epoch` with its own epoch. It refuses an applet built for an older or a newer epoch, so an epoch change means a rebuild of every applet. After it opens the library, the host checks that the descriptor carries the same epoch.
 
-Within an epoch, the id of a service carries its version. `caliper.geometry.v1` is the first version of a table. The ids `caliper.geometry.v1_1` to `caliper.geometry.v1_3` are revisions that append to it. A major id such as `caliper.metrics.v2` is reserved for an incompatible change.
+Within an epoch, the id of a service carries its version. `caliper.tensor_bridge.v1` is the first version of a table. The ids `caliper.tensor_bridge.v1_1` and `caliper.tensor_bridge.v1_2` are revisions that append to it. A major id such as `caliper.metrics.v2` is reserved for an incompatible change. Epoch 3 removed the applet-facing geometry service (`caliper.geometry.v1` to `v1_3`) and export service (`caliper.export.v1` and `caliper.export.v1_1`). An applet built for epoch 2 is refused before its library opens.
 
 !!! note "Why epochs, not a rolling ABI"
     Applets write raw ImGui against the host's headers and share its ImGui context. Thus the UI-stack pin is part of the epoch. The pin is the exact ImGui, ImPlot, ImPlot3D and ImGuiFileDialog versions and the `imconfig`. A change of the pin costs an applet rebuild instead of a silent break. See [Architecture](../introduction/architecture.md).
@@ -86,10 +86,10 @@ Within an epoch, the id of a service carries its version. `caliper.geometry.v1` 
 
 These four rules let the contract grow without breaking an applet that is already built:
 
-1. **A published service table is immutable.** A new capability ships as a new service id with a revision suffix, such as `caliper.metrics.v1_1`, `caliper.tensor_bridge.v1_2` or `caliper.geometry.v1_3`. The new table starts with a byte-identical copy of the previous table and appends its new entries. The host keeps serving every older id unchanged, so an applet that asks for `caliper.geometry.v1` still gets the original table. If a revision adds behavior that a host may not provide, one `caps()` bit per revision says so. A change that cannot be made by appending gets a new major id, served beside the old one.
+1. **A published service table is immutable.** A new capability ships as a new service id with a revision suffix, such as `caliper.metrics.v1_1`, `caliper.tensor_bridge.v1_2` or `caliper.ui.v1_1`. The new table starts with a byte-identical copy of the previous table and appends its new entries. The host keeps serving every older id unchanged, so an applet that asks for `caliper.tensor_bridge.v1` still gets the original table. If a revision adds behavior that a host may not provide, one `caps()` bit per revision says so. A change that cannot be made by appending gets a new major id, served beside the old one.
 2. **Hosts may provide any set of services.** An applet lists the services it cannot run without in `[services].required` and probes optional ones at run time. A host that lacks a required service refuses the applet, and the landing screen lists it as `REFUSED` with the reason.
 3. **`struct_size` is always the first field.** A reader never touches bytes beyond the size that the writer declared.
-4. **The ABI epoch changes only for** an entry-point change, a `CaliperHost` layout change or a UI-stack pin change.
+4. **The ABI epoch changes only for** an entry-point change, a `CaliperHost` layout change, a UI-stack pin change or the removal of a published service.
 
 Under these rules, an applet built years ago keeps running on a new host. A new applet checks for a newer id and falls back when the host lacks it. The ABI tests pin every frozen layout.
 

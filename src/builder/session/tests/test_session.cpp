@@ -52,7 +52,7 @@ public:
     int renders = 0;
     PanelData last;
     CommandOutput app_info() override {
-        return CommandOutput::ok({{"abi_epoch", 2},
+        return CommandOutput::ok({{"abi_epoch", 3},
                                   {"host", "0.0.0-test"},
                                   {"libtorch", nullptr},
                                   {"sdk", nullptr},

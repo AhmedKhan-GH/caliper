@@ -45,7 +45,7 @@ features:
     title: Windows Build and Test Baseline
     status: planned
     scope: supporting
-    summary: The Windows baseline runs full CI on windows-latest for every package and subcommand and runs the graphics, export and embed suites on Windows hardware with no skipped GPU rows.
+    summary: The Windows baseline runs full CI on windows-latest for every package and subcommand and runs the graphics and embed suites on Windows hardware with no skipped GPU rows.
     depends_on: [PLT-02, PLT-03]
     docs: docs/development/windows-verification.md
     design: design/windows-parity.md#1-build-and-test-baseline

@@ -45,7 +45,7 @@ TEST_CASE("no spec runtime: the kind is parsed and every spec applet is refused"
     // A broken spec applet keeps its own reason: the file checks come first.
     caliper_test::write_spec_applet(t.path / "ws" / "applets" / "gone", "gone", "local.gone",
                                     "0.1.0", nullptr);
-    AppletLoader L(HostCaps{2, "0.6.0", {}}, (t.path / "data").string());
+    AppletLoader L(HostCaps{3, "0.6.0", {}}, (t.path / "data").string());
     L.set_workspace((t.path / "ws").string());
     L.scan(applet_search_dirs({}, nullptr, "", "", (t.path / "ws").string()));
     REQUIRE(L.count() == 2);

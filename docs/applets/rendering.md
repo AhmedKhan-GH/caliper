@@ -15,7 +15,7 @@ flowchart LR
 The applet gives a tensor to the bridge, and the renderer fills a texture that the applet shows through ImGui.
 
 To avoid this problem, Caliper keeps graphics out of the applet contract. A `HostRenderer` seam hides the backends, and
-each backend updates textures in its own way. The geometry path draws 3-D data. [Zero-copy tensor visualization](../python/zero-copy-tensors.md)
+each backend updates textures in its own way. [Zero-copy tensor visualization](../python/zero-copy-tensors.md)
 describes how a tensor reaches pixels without a CPU round trip and what each path costs. The [graphics layer](graphics-layer.md) and [scene rendering](scene-rendering.md) pages describe the renderer core that the live views draw through.
 
 ## Graphics API Independence
@@ -150,35 +150,9 @@ Several things look as though they need a new host capability, but they do not:
   owns.
 - **Annotation and heads-up displays.** ImGui composites over the view image.
 
-## Geometry Path
-
-Textures show tensors as images, and the geometry path draws a tensor as 3-D geometry. The applet writes vertices,
-indices, normals and attributes into device memory. It imports them into the host once through
-[`caliper.tensor_bridge.v1_2`](services/caliper-tensor-bridge-v1.md), and it calls
-[`caliper.geometry.v1` and its revisions](services/caliper-geometry-v1.md) each frame. The host draws the geometry
-in place into an offscreen view. The view is an ordinary `CaliperTextureId` that the applet shows with `ImGui::Image`.
-
-- **Offscreen views.** A view is a texture that the host renders into. It lives in the same id table as bridge
-  textures.
-- **Depth views.** A view created with the depth flag carries a D32 float depth buffer that is private to the renderer.
-  The host refuses depth state on a view without one and never ignores it.
-- **Vertex pulling.** There is no vertex-input state. The vertex shader reads positions, indices, normals and
-  attributes from the imported buffers by vertex index. An indexed draw becomes a non-indexed draw of `index_count`
-  vertices, so one mechanism serves every topology on both backends.
-- **One atomic, gated frame.** `draw_primitives` renders a whole frame from an array of draw descriptors. The host
-  checks every draw before it encodes anything. One failed check refuses the whole frame and leaves the previous pixels
-  intact, which a begin and end API could not promise.
-- **Growth by records.** A revision is a new service id. Its table and record begin with the bytes of the previous
-  revision, and a new capability bit gates it. A host draws a zero tail exactly as the earlier revision did (see the
-  [growth rules](../development/compatibility-and-epochs.md#growth-rules)). Both backends stay byte-exact against one
-  shared CPU reference.
-
-Metal compiles its shaders at run time, and Vulkan embeds SPIR-V that the build produces
-([Build-time SPIR-V](../development/vulkan-and-cuda.md#build-time-spir-v)).
-
 ## Copy Counters and Frame Statistics
 
-The host counts every copy it makes of tensor or geometry data on the way to pixels, so that each route's copies can
+The host counts every copy it makes of tensor data on the way to pixels, so that each route's copies can
 be read and compared, and the Metal renderer can record frame times and GPU times. Both exist to measure the
 renderer: a change to it must leave a zero-copy route at zero copies and keep the times within bounds.
 
@@ -186,7 +160,7 @@ renderer: a change to it must leave a zero-copy route at zero copies and keep th
 copy of a CPU points payload at import, natively and in the browser; in the browser, the host colormap's upload of the
 values), a host copy into a staging buffer, a copy inside the GPU (the Vulkan buffer path's copy into
 the shared buffer), a network snapshot received into its slot, the values of a series or histogram copied into the
-view at apply, and a readback of a payload (the Metal geometry rigidity check reading private instance matrices).
+view at apply, and a readback of a payload.
 The pass that turns a payload into a view's pixels, such as a colormap dispatch, the blit of an RGBA8 image into the
 view's texture or a draw, is the update itself and not a copy, as [Zero-copy tensor visualization](../python/zero-copy-tensors.md#terms)
 defines the words. The colormap's 256-entry table is not tensor data and is not counted.
@@ -213,15 +187,15 @@ heatmap reached through the shared-memory session or the in-process window count
 **Frame statistics.** With `CALIPER_METAL_STATS` set, the Metal renderer records the interval between the ends of
 consecutive frames, the GPU time of every texture update, of every view draw and of the frame's own pass, taken from
 each command buffer's `GPUStartTime` and `GPUEndTime`, and the updates by path, such as `compute-imported`. A view
-draw is a geometry render target, or a frame of a points view through the graphics layer, whose GPU time the layer
+draw is a frame of a points or scene view through the graphics layer, whose GPU time the layer
 measures and the view hands to the renderer (`HostRenderer::note_draw_gpu_ms`); a points draw is not an update by
 path. Without the variable nothing is recorded and no completion handler is added. At shutdown it
 prints one line for the whole run, beside the renderer's copy count, in the form of `CALIPER_VULKAN_STATS`:
 
 ```text
-[metal] stats: 364 frames, ms p50 20.10 p99 21.21 max 348.49; updates compute 2 compute-imported 478
-primitives-imported 239; gpu ms update p50 0.014 p99 0.114 max 0.270 (480), view draw p50 0.119 p99 0.390
-max 0.528 (239), frame p50 0.116 p99 0.472 max 0.924 (364); copies 224 (344024 bytes)
+[metal] stats: 364 frames, ms p50 20.10 p99 21.21 max 348.49; updates compute 2 compute-imported 478;
+gpu ms update p50 0.014 p99 0.114 max 0.270 (480), view draw p50 0.119 p99 0.390 max 0.528 (239),
+frame p50 0.116 p99 0.472 max 0.924 (364); copies 224 (344024 bytes)
 ```
 
 Percentiles are nearest-rank, as on Vulkan. The worst frame of a run is usually the first, which compiles the
@@ -252,6 +226,6 @@ machinery for:
 
 Metal therefore keeps no per-texture sync objects, no back-pressure wait and no list of pending waits. An
 `MTLSharedEvent` appears only where a second queue exists, which is the queue of the producer when a stream-ordered
-handoff is in use. The remaining CPU waits are in readbacks, the offscreen canvas, the geometry rigidity check and a
+handoff is in use. The remaining CPU waits are in readbacks, the offscreen canvas and a
 rare fallback, and not in the update path. [Zero-copy tensor visualization](../python/zero-copy-tensors.md#sync-ladder)
 covers the handoff.

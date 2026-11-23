@@ -109,10 +109,9 @@ WINDOWS_ONLY = {
 # (an applet that includes <caliper/embed.h> must not compile).
 # The applets the Windows lane builds against the installed SDK
 # (scripts/build_applets_against_sdk.sh with no folder: every scope but these).
-APPLETS_SKIPPED_ON_WINDOWS = {"embed_scope", "gpt_scope", "common"}
-# An applet gets the SDK, UI-stack and export definitions of examples/hello and the libtorch
-# include paths of tests/test_sculpt.cpp.
-APPLET_DONORS = ["examples/hello/hello.cpp", "tests/test_sculpt.cpp"]
+APPLETS_SKIPPED_ON_WINDOWS = {"embed_scope", "gpt_scope"}
+# An applet gets the SDK, UI-stack and export definitions of examples/hello.
+APPLET_DONORS = ["examples/hello/hello.cpp"]
 EXTRA_DEFINES = ["WIN32", "_WINDOWS", "_MBCS", "VK_USE_PLATFORM_WIN32_KHR", "IMGUI_IMPL_VULKAN_USE_VOLK"]
 MACOS_DEFINES = {"CALIPER_HAVE_METAL"}
 
@@ -149,8 +148,7 @@ GL/gl.h GL/glu.h powerbase.h windowsx.h""".split()
 # Headers the Windows build generates or fetches (FetchContent volk and Vulkan-Headers, glslang
 # SPIR-V headers, the PTX header) and that the macOS build does not have.
 WINDOWS_GENERATED = """volk.h vulkan/vulkan.h vulkan/vulkan_core.h vulkan/vulkan_win32.h
-vulkan/vk_platform.h colormap_spv.h points_vert_spv.h points_frag_spv.h geom_vert_spv.h
-geom_frag_spv.h geom_tex_frag_spv.h cmap_direct_ptx.h
+vulkan/vk_platform.h colormap_spv.h cmap_direct_ptx.h
 zlib.h""".split()   # zlib.h: the core build provides zlib on Windows (ZLIB::ZLIB)
 # macOS-only or POSIX-only headers that MSVC lacks.
 POISON = """unistd.h libproc.h pthread.h sched.h semaphore.h dlfcn.h spawn.h poll.h netdb.h dirent.h
@@ -319,7 +317,7 @@ def translation_units(build: str) -> list[tuple[str, list[str], str]]:
     afl, astd = [], "c++17"
     for donor in APPLET_DONORS:
         if donor not in by_rel:
-            sys.exit(f"{donor} is not in compile_commands.json (a build with libtorch and tests is needed)")
+            sys.exit(f"{donor} is not in compile_commands.json (a build with the tests is needed)")
         fl, astd = flags_of(by_rel[donor])
         k = 0
         while k < len(fl):   # merge, keeping "-isystem <dir>" pairs together
@@ -337,7 +335,7 @@ def translation_units(build: str) -> list[tuple[str, list[str], str]]:
             for f in sorted(files):
                 if f.endswith((".cpp", ".c")):
                     rel = os.path.relpath(os.path.join(dirpath, f), ROOT)
-                    units.append((rel, afl + ["-I" + d, "-I" + os.path.join(ROOT, "applets", "common")], astd))
+                    units.append((rel, afl + ["-I" + d], astd))
     return units
 
 

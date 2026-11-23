@@ -10,7 +10,7 @@ not_features:
 - Developer features
 entries:
 - heading: Where things stand
-  item: 'State on 15 November 2026: host, SDK with 19 service ids, Caliper Embed 1.4.0, Caliper LIB, nine
+  item: 'State on 15 November 2026: host, SDK with 13 service ids, Caliper Embed 1.4.0, Caliper LIB, three
     in-tree applets not compiled by the core build; the inspector is on the inspector branch and not on
     main.'
   ids:
@@ -428,12 +428,7 @@ entries:
   item: EmbedScope saves its checkpoint on the frame thread; move the save into a job.
   reason: maintenance
 - heading: Smaller work
-  item: Add the Vulkan mirror of the geometry.v1_2 textured POINT row in tests/gfx.
-  ids:
-  - REN-06
-- heading: Smaller work
-  item: Re-check the G15 instance-offset gate in the Metal and Vulkan backends and isolate the Metal G1
-    to G12 re-gate.
+  item: Re-check the instance-offset gate and isolate the Metal re-gate.
   ids:
   - REN-07
 - heading: Smaller work
@@ -508,17 +503,15 @@ entries:
   ids:
   - COR-38
 - heading: Undecided
-  item: 'The em-controller: an actor-critic policy that steers FieldScope''s plasma, as an applet of its
-    own.'
+  item: 'The em-controller: an actor-critic plasma control policy, as an applet of its own.'
   ids:
   - COR-37
 - heading: Undecided
-  item: 'Digital twins: a population twin on InstanceScope''s unused per-variant reduction and a machine
-    thermal twin fed by caliper.feed.v1.'
+  item: 'Digital twins: a population twin and a machine thermal twin fed by caliper.feed.v1.'
   ids:
   - COR-36
 - heading: Undecided
-  item: 'Research publishing beyond export: a Python DLPack path into the geometry bridge.'
+  item: 'Research publishing beyond export: a Python DLPack path.'
   ids:
   - STR-36
 - heading: Undecided

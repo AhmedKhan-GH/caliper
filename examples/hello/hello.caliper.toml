@@ -6,7 +6,7 @@ summary = "Epoch-2 fixture applet: sugar demo + loader-test substrate."
 tag     = "Demo"
 
 [compat]
-abi_epoch = 2
+abi_epoch = 3
 min_host  = "0.6.0"
 
 [services]

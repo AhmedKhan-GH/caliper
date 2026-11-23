@@ -86,8 +86,6 @@ On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shor
 | Variable | What it does |
 |---|---|
 | `CALIPER_SINE_AUTOTRAIN`, `CALIPER_EMBED_AUTOTRAIN`, `CALIPER_GPT_AUTOTRAIN` | SineScope, EmbedScope or GPTScope starts training on its first frame. |
-| `CALIPER_EXPORT_SELFTEST` | MeshScope and TwinScope request one figure export and one recording, to exercise `export.v1`. |
-| `FS_FIELD=<n>` | FieldScope starts in field mode `n`. |
 | `CALIPER_HELLO_CRASH` | The hello applet faults in its frame function, to exercise quarantine. |
 | `CALIPER_HELLO_INIT_FAIL` | The `on_init` function of the hello applet returns false. |
 | `CALIPER_EMBED_APPLETS` | The applets folder the `embed_host` example passes in `CaliperCoreDesc.applets_dir`. |
@@ -157,7 +155,6 @@ On Windows the Vulkan renderer reports how each tensor update travelled. Each di
 |---|---|
 | `CUDA interop OK — zero-copy (kernel reads the tensor, writes the image)` | The CUDA kernel wrote the update straight into the Vulkan image. |
 | `import path OK — zero-copy (imported allocation in place)` | The renderer used an imported allocation in place, with no copy. |
-| `geometry path OK — points drawn from imported allocation in place` | `geometry.v1` drew points from an imported allocation. |
 | `tensor not CUDA-resident`, `external-memory interop unavailable`, `dtype not f32/u8`, `CUDA context init failed` and similar | The update took the CPU-staged or buffer path, and the message gives the reason. The fallback is not an error. See [Platform rules](../introduction/architecture.md#design-decisions). |
 | `direct image: exportable image failed, using the buffer path` | The direct path could not be set up, and updates use the buffer path. |
 

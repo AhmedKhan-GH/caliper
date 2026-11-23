@@ -25,7 +25,7 @@ std::string lib_name(const std::string& stem) {
 #endif
 }
 
-HostCaps caps() { return HostCaps{2, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}}; }
+HostCaps caps() { return HostCaps{3, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}}; }
 
 struct TempDir {
     fs::path path;
@@ -47,7 +47,7 @@ void fake_applet(const fs::path& dir, const std::string& stem, const std::string
     fs::create_directories(dir);
     std::ofstream(dir / (stem + ".caliper.toml")) <<
         "[applet]\nid=\"" << id << "\"\nname=\"Example\"\nversion=\"" << version <<
-        "\"\n[compat]\nabi_epoch=2\n" << extra;
+        "\"\n[compat]\nabi_epoch=3\n" << extra;
     std::ofstream(dir / lib_name(stem)) << "never opened";
 }
 
@@ -58,7 +58,7 @@ void hello_applet(const fs::path& dir, const std::string& stem) {
                   dir / lib_name(stem), fs::copy_options::overwrite_existing);
     std::ofstream(dir / (stem + ".caliper.toml")) <<
         "[applet]\nid=\"dev.caliper.hello\"\nname=\"Hello\"\nversion=\"0.1.0\"\n"
-        "[compat]\nabi_epoch=2\n[services]\nrequired=[\"caliper.ui.v1\"]\n";
+        "[compat]\nabi_epoch=3\n[services]\nrequired=[\"caliper.ui.v1\"]\n";
 }
 
 // The entry of `id` found in `folder`, or -1.
@@ -179,7 +179,7 @@ TEST_CASE("copies: a refused newest copy stays visible and the next one is chose
     fake_applet(t.path / "dev", "x", "x.app", "3.0.0", "torch=\"9.9.9\"\n");  // refused
     fake_applet(t.path / "user", "x", "x.app", "2.0.0");
     std::ofstream(t.path / "user" / "y.caliper.toml") <<                       // failed
-        "[applet]\nid=\"x.app\"\nname=\"Example\"\nversion=\"2.5.0\"\n[compat]\nabi_epoch=2\n";
+        "[applet]\nid=\"x.app\"\nname=\"Example\"\nversion=\"2.5.0\"\n[compat]\nabi_epoch=3\n";
     fake_applet(t.path / "shipped", "x", "x.app", "1.0.0");
     AppletLoader L(caps(), t.str("data"));
     L.scan(applet_search_dirs({t.str("dev")}, nullptr, t.str("user"), t.str("shipped")));
@@ -283,7 +283,7 @@ TEST_CASE("copies: probe opens, checks and creates without initializing") {
     hello_applet(t.path / "a", "hello");
     std::ofstream(t.path / "a" / "liar.caliper.toml") <<   // descriptor disagrees
         "[applet]\nid=\"dev.caliper.liar\"\nname=\"Liar\"\nversion=\"0.1.0\"\n"
-        "[compat]\nabi_epoch=2\n";
+        "[compat]\nabi_epoch=3\n";
     fs::copy_file(t.path / "a" / lib_name("hello"), t.path / "a" / lib_name("liar"));
     AppletLoader L(caps(), t.str("data"));
     L.scan(t.str("a"));

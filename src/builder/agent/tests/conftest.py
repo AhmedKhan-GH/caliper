@@ -92,7 +92,7 @@ class FakeCaliper:
                     return
                 fake._record(self, "GET", None)
                 if self.path == "/v0/info":
-                    self._json(200, {"abi_epoch": 2, "host": "0.6.0", "libtorch": None, "sdk": "0.2.0",
+                    self._json(200, {"abi_epoch": 3, "host": "0.6.0", "libtorch": None, "sdk": "0.2.0",
                                      "services": ["caliper.ui.v1"], "ui_stack": None})
                 elif self.path == "/v0/applets":
                     self._json(200, {"applets": []})

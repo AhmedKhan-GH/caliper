@@ -10,7 +10,6 @@ An applet passes a `CaliperTensor` into a service. No service returns one. These
 
 - [`caliper.metrics.v1`](services/caliper-metrics-v1.md): `image()` accepts a CPU-resident, contiguous, HWC `u8` tensor.
 - [`caliper.tensor_bridge.v1`](services/caliper-tensor-bridge-v1.md) and its revisions `v1_1` and `v1_2`: they turn a tensor on any supported device into a texture.
-- [`caliper.geometry.v1`](services/caliper-geometry-v1.md) through `v1_3`: they read tensors as point and primitive data.
 
 ### Types
 
