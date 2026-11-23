@@ -121,6 +121,24 @@ def test_nonfinite_metadata(tmp_path):
         load_dictionary(tmp_path, model=model)
 
 
+@pytest.mark.parametrize("section,field,value", [
+    ("training", "elapsed_seconds", "1e309"),
+    ("training", "peak_memory_bytes", "1e309"),
+    ("quality", "fvu", "1e309"), ("quality", "dead_fraction", "1e309"),
+    ("quality", "cross_entropy_delta", "-1e309"),
+    ("training", "elapsed_seconds", "-1"), ("training", "peak_memory_bytes", "-1"),
+    ("quality", "fvu", "-0.1"), ("quality", "dead_fraction", "-0.1"),
+    ("quality", "dead_fraction", "1.1"),
+])
+def test_metadata_numeric_ranges(tmp_path, section, field, value):
+    model, data = write_fixture(tmp_path)
+    data[section][field] = "REPLACE_NUMBER"
+    text = json.dumps(data).replace('"REPLACE_NUMBER"', value)
+    (tmp_path / "dictionary.json").write_text(text)
+    with pytest.raises(ValueError):
+        load_dictionary(tmp_path, model=model)
+
+
 def test_hf_identity_requires_resolved_checkpoint():
     revision = "a" * 40
     model = SimpleNamespace(config=SimpleNamespace(model_type="qwen3_5_text",

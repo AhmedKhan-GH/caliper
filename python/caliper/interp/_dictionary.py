@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 
@@ -143,7 +144,8 @@ def _manifest(data):
         raise ValueError("dictionary training requires document partitions")
     _integer(training.get("tokens"), "training.tokens", 0)
     for field in ("elapsed_seconds", "peak_memory_bytes"):
-        if type(training.get(field)) not in (int, float) or training[field] < 0:
+        if (type(training.get(field)) not in (int, float)
+                or not math.isfinite(training[field]) or training[field] < 0):
             raise ValueError(f"dictionary training requires nonnegative {field}")
     quality = data.get("quality")
     if not isinstance(quality, dict) or any(field not in quality for field in (
@@ -153,7 +155,10 @@ def _manifest(data):
     _integer(quality["evaluated_tokens"], "quality.evaluated_tokens", 0)
     for field in ("fvu", "dead_fraction", "cross_entropy_delta"):
         value = quality[field]
-        if value is not None and type(value) not in (float, int):
+        if value is not None and (type(value) not in (float, int) or not math.isfinite(value)):
+            raise ValueError(f"invalid quality metric {field}")
+        if value is not None and ((field == "fvu" and value < 0)
+                                  or (field == "dead_fraction" and not 0 <= value <= 1)):
             raise ValueError(f"invalid quality metric {field}")
     return data
 
