@@ -419,11 +419,22 @@ struct SpecPage::Impl {
         items["remove:" + f.id] = x;
         if (building()) builder->claim_canvas(SpecRect{x.Min.x, x.Min.y, x.GetWidth(), x.GetHeight()});
         // The cursor stays after the button: moving it back past the panel's
-        // content with nothing submitted there is an error in ImGui.
+        // content with nothing submitted there is an error in ImGui. The button
+        // is in a child window of its own, which takes the presses over it: the
+        // × of a panel without a title strip lies over the content, where a
+        // scene's picture, drawn before it, would take them otherwise.
         ImGui::SetCursorScreenPos(x.Min);
         ImGui::PushID(f.id.c_str());
-        const bool clicked = ImGui::InvisibleButton("##panel.remove", x.GetSize());
-        const bool on_x = ImGui::IsItemHovered();
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        bool clicked = false, on_x = false;
+        if (ImGui::BeginChild("##panel.remove.child", x.GetSize(), ImGuiChildFlags_None,
+                              ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+                                  ImGuiWindowFlags_NoBackground)) {
+            clicked = ImGui::InvisibleButton("##panel.remove", x.GetSize());
+            on_x = ImGui::IsItemHovered();
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
         ImGui::PopID();
         const bool menu = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
         const bool over = !menu && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&

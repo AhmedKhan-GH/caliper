@@ -1577,7 +1577,8 @@ TEST_CASE("app live: an orbit and a pan whose press comes before the pointer's m
 // press that wobbles a point puts the camera back and opens the panel's menu, as a right click does,
 // and a right drag of 3 points, or one that goes 30 points out and comes back within a point, pans
 // and opens no menu. On a panel without a scene a right click that slips 4 points still opens the
-// menu, within ImGui's drag threshold as before.
+// menu, within ImGui's drag threshold as before. The scene panel is a tab, whose × lies over its
+// picture: a click there removes the panel and moves no camera.
 
 namespace {
 
@@ -1643,8 +1644,9 @@ TEST_CASE("app live: a slow orbit and pan of a scene panel move the camera on th
                                "drag panel:world 60 0.5 to panel:world 61 0.5 right steps 1;wait 10;key escape;wait 5;"
                                "drag panel:world 60 0.5 to panel:world 90 0.5 then panel:world 61 0.5 right steps 30;"
                                "wait 10;menu panel:world;wait 10;key escape;wait 5;"
-                               "drag panel:heat 60 0.5 to panel:heat 64 0.5 right steps 4;wait 10;touch " +
-                               t.str("menu") + ";key escape;wait 5";
+                               "drag panel:heat 60 0.5 to panel:heat 64 0.5 right steps 4;wait 10;key escape;wait 5;"
+                               "click remove:world;wait 10;touch " +
+                               t.str("menu") + ";wait 5";
     std::vector<std::string> e = app_env(env, t, script, shots);
     e.push_back("CALIPER_FRAME_LOG=" + t.str("frames.tsv"));
     Proc app;
@@ -1673,12 +1675,20 @@ TEST_CASE("app live: a slow orbit and pan of a scene panel move the camera on th
        {{"id", "world"}, {"primitive", "scene"}, {"title", "Attention"},
         {"entity", json::array({{{"path", "attn"}, {"draw", "surface"}, {"bind", "attn"}}})}});
     ok(port, token, "panel.create", {{"id", "heat"}, {"primitive", "heatmap"}, {"title", "Map"}, {"bind", {{"values", "attn"}}}});
+    ok(port, token, "panel.create", {{"id", "spare"}, {"primitive", "heatmap"}, {"title", "Spare"}, {"bind", {{"values", "attn"}}}});
+    ok(port, token, "layout.set",
+       {{"layout", json::parse(R"({"root":"main","nodes":[{"id":"main","split":"horizontal","ratio":0.6,"children":["side","heat"]},)"
+                               R"({"id":"side","split":"tabs","children":["world","spare"]}]})")}});
     ok(port, token, "applet.save");
     ok(port, token, "applet.open", {{"id", "slow"}});
     std::ofstream(t.str("spec-ready")).put('\n');
     REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("menu")); }, 90000), app.text);
     REQUIRE(script_ended(app, 30000));
     CHECK_MESSAGE(app.text.find("[ui] done") != std::string::npos, app.text);
+    // The click on the tab's × removed the scene panel.
+    const std::string shown = ok(port, token, "spec.get").dump();
+    CHECK(shown.find("\"id\":\"world\"") == std::string::npos);
+    CHECK(shown.find("\"id\":\"heat\"") != std::string::npos);
     ::kill(app.pid, SIGTERM);
     CHECK_MESSAGE(app.wait(30000) == 0, app.text);
     ::kill(producer.pid, SIGTERM);
@@ -1687,7 +1697,13 @@ TEST_CASE("app live: a slow orbit and pan of a scene panel move the camera on th
     const std::vector<FrameRow> rows = frame_rows(t.str("frames.tsv"));
     REQUIRE(rows.size() > 100);
     const auto orbits = button_runs(rows, "world", 1), pans = button_runs(rows, "world", 2);
-    REQUIRE(orbits.size() == 1);
+    REQUIRE(orbits.size() == 2);   // the slow orbit, and the click on the tab's ×
+    // The scene never held the × click, and its camera stayed.
+    for (size_t i = orbits[1].first; i <= orbits[1].second; ++i) {
+        CAPTURE(i);
+        CHECK(rows[i].panel_down == 0);
+        CHECK(rows[i].camera == rows[orbits[1].first].camera);
+    }
     // The slow pan, the right drags of 3 points, of 1 point and out and back, and the right click.
     REQUIRE(pans.size() == 5);
     double pan_step = 0;

@@ -121,6 +121,19 @@ struct SceneRectOptions {
     std::string stage_message;
 };
 
+// A scene view as a camera press drives it (camera_drag.h): an orbit, or a pan of a picture
+// `view_height` points tall.
+struct ScenePress {
+    using State = SceneCameraState;
+    SceneView& view;
+    float view_height = 1.0f;
+    bool pan = false;
+    static bool same(const State& a, const State& b);
+    State state() const;
+    void restore(const State& s);
+    void move(float dx, float dy);
+};
+
 // What a scene drawn into a rectangle keeps between frames: the gesture in progress, a click's
 // pick in flight and a pick that a test seam asked for. The caller keeps one per rectangle.
 struct SceneRectState {
@@ -131,13 +144,7 @@ struct SceneRectState {
     bool selecting = false;  // the press was a shift-press: a rectangle selection
     int button = 0;          // the button held: 0 left, 1 right, 2 middle
     float x0 = 0, y0 = 0;    // where the press was, in screen pixels
-    float lx = 0, ly = 0;    // the pointer at the last frame
-    float max_d2 = 0;        // the largest squared distance of the pointer from the press
-    // The camera and the view's moved() at the press, which a click puts back, and the camera that
-    // the press's own motion left last; while it is the view's camera the press can put it back.
-    caliper_scene::ViewCamera press_camera, step_camera;
-    bool press_moved = false;
-    bool restorable = false;
+    CameraPress<SceneCameraState> press;   // a camera press (camera_drag.h)
     bool click = false;      // a click's pick is in flight, so its result is a pick event
     float seam_u = -1.0f;    // a pick asked for by pick_scene_rect(), in 0..1 of the rectangle; -1: none
     float seam_v = -1.0f;

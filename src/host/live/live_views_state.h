@@ -17,6 +17,7 @@
 #include "embed/embed_core.h"
 #include "gfx/gfx.h"
 #include "live/live_source.h"   // PayloadMap
+#include "live/camera_drag.h"        // CameraPress
 #include "scene/camera.h"            // ViewCamera, which a press keeps
 #include "scene/camera_defaults.h"   // the 3-D views' default camera
 #include "scene/scene.h"             // kPalette
@@ -131,6 +132,13 @@ using EventSink = std::function<void(const LiveEvent&)>;
 // moves the camera from its first point of motion, and it is a click when the
 // pointer stayed within kCameraClickTolerance points of the press all along
 // (camera_drag.h): the camera then goes back to the camera of the press.
+// What a camera press keeps (camera_drag.h): the view's camera and its moved() (a scene view's;
+// false for the points view, which has none).
+struct SceneCameraState {
+    caliper_scene::ViewCamera camera;
+    bool moved = false;
+};
+
 struct Gesture {
     bool down = false, moved = false, selecting = false;
     bool pressed = false;            // the press came in this frame
@@ -138,12 +146,7 @@ struct Gesture {
     int button = 0;                  // ImGuiMouseButton of the press
     float x0 = 0.0f, y0 = 0.0f;      // press position (screen)
     float lx = 0.0f, ly = 0.0f;      // the pointer when the drag last moved the view
-    float max_d2 = 0.0f;             // a camera press: the largest squared distance from the press
-    // A camera press: the camera and the view's moved() at the press, which a click puts back, and
-    // the camera that the press's own motion left last; while it is the view's camera the press can
-    // put it back.
-    caliper_scene::ViewCamera press_camera, step_camera;
-    bool press_moved = false, restorable = false;
+    CameraPress<SceneCameraState> press;   // a camera press (a scene's, the points view's)
     double d0x = 0.0, d0y = 0.0, d1x = 0.0, d1y = 0.0;   // drag ends in data coordinates
     std::vector<float> lasso;        // points: the lasso (x, y pairs, screen)
     bool rect = false;               // points: shift + alt selects a rectangle

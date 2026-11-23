@@ -219,9 +219,8 @@ bool linked_in(const View& v, int64_t a, int64_t b) {
 // A press, the drag and the release of a gesture on the item drawn just
 // before (an InvisibleButton). Returns true on the release frame. In a view
 // whose drag moves a camera (`camera`), a press that is not a selection is a
-// drag once its pointer went more than kCameraClickTolerance points from the
-// press (camera_drag.h), not past kClickSlop; its camera moves from the first
-// point of motion all the same.
+// camera press (camera_drag.h), which the view drives and which says whether
+// it was a drag; others are drags past kClickSlop.
 bool track_gesture(View& v, ImVec2 mouse, bool may_select, bool camera = false) {
     Gesture& g = v.gesture;
     ImGuiIO& io = ImGui::GetIO();
@@ -240,23 +239,35 @@ bool track_gesture(View& v, ImVec2 mouse, bool may_select, bool camera = false) 
         g.selecting = may_select && g.shift && g.button == 0;
         g.rect = g.alt;
     }
-    if (g.down) {
-        const float ox = mouse.x - g.x0, oy = mouse.y - g.y0;
-        if (camera && !g.selecting) {
-            if (ImGui::IsMousePosValid(&mouse)) {
-                g.max_d2 = std::max(g.max_d2, ox * ox + oy * oy);
-                g.moved = !camera_press_is_click(g.max_d2);
-            }
-        } else if (!g.moved && std::hypot(ox, oy) > kClickSlop) {
-            g.moved = true;
-        }
-    }
+    if (g.down && !(camera && !g.selecting) && !g.moved && std::hypot(mouse.x - g.x0, mouse.y - g.y0) > kClickSlop)
+        g.moved = true;
     if (g.down && ImGui::IsItemDeactivated()) {
         g.down = false;
         return true;
     }
     return false;
 }
+
+// The points view as a camera press drives it (camera_drag.h): an orbit in 3-D, else a pan of a
+// picture `view_height` points tall. The points view has no moved state.
+struct PointsPress {
+    using State = SceneCameraState;
+    PointsScene& sc;
+    View& v;
+    float view_height = 1.0f;
+    bool orbit = false;
+    static bool same(const State& a, const State& b) { return same_camera(a.camera, b.camera); }
+    State state() const { return {sc.camera(), false}; }
+    void restore(const State& s) {
+        sc.set_camera(s.camera);
+        v.dirty = v.hover_dirty = true;
+    }
+    void move(float dx, float dy) {
+        if (orbit) sc.orbit(dx, dy);
+        else sc.pan(dx, dy, view_height);
+        v.dirty = v.hover_dirty = true;
+    }
+};
 
 // First placement, tiled with the v1.2 views' cursor (core->tile_*): the same
 // wrap rules as embed_core.cpp's place_view, for a content area `content`.
@@ -1042,24 +1053,15 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
             g.lasso.insert(g.lasso.end(), {io.MousePos.x, io.MousePos.y});
     }
     // The camera follows the pointer from the first point of motion after
-    // the press, never while selecting, from where it last moved the camera,
-    // so a fast drag whose movement and release land in one frame still moves
-    // it. A press that ends as a click puts back the camera of the press
-    // (camera_drag.h).
+    // the press, never while selecting, so a fast drag whose movement and
+    // release land in one frame still moves it, and a press that ends as a
+    // click puts back the camera of the press (camera_drag.h).
     const bool valid = ImGui::IsMousePosValid();
-    if (g.pressed) {
-        g.press_camera = g.step_camera = sc->camera();
-        g.restorable = true;
-    }
-    const bool drag = (g.down || released) && !g.selecting;
-    float dx = 0.0f, dy = 0.0f;
-    if (drag && valid) {
-        // A fit, a zoom or a turn since the last step: the camera of the press stays away.
-        if (!same_camera(sc->camera(), g.step_camera)) g.restorable = false;
-        dx = io.MousePos.x - g.lx;
-        dy = io.MousePos.y - g.ly;
-        g.lx = io.MousePos.x;
-        g.ly = io.MousePos.y;
+    PointsPress press_view{*sc, v, avail.y, v.dims == 3 && !(g.button != 0 || g.alt || g.ctrl)};
+    if (g.pressed && !g.selecting) camera_press_begin(g.press, press_view, g.x0, g.y0);
+    if ((g.down || released) && !g.selecting) {
+        camera_press_frame(g.press, press_view, valid, io.MousePos.x, io.MousePos.y, released);
+        g.moved = !g.press.click();
     }
     // Any drag stops the slow turn, which the page hears for its header toggle.
     if (v.auto_rotate && (g.down || released) && g.moved) {
@@ -1072,33 +1074,20 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         v.dirty = true;
         v.hover_dirty = true;
     }
-    if (dx != 0.0f || dy != 0.0f) {
-        const bool pan = g.button != 0 || g.alt || g.ctrl;
-        if (v.dims == 3 && !pan) sc->orbit(dx, dy);
-        else sc->pan(dx, dy, avail.y);
-        v.dirty = true;
-        v.hover_dirty = true;
-    }
-    if (drag) g.step_camera = sc->camera();
-    if (released && !g.selecting && !g.moved && g.restorable) {   // a click: the camera of the press
-        sc->set_camera(g.press_camera);
-        v.dirty = true;
-        v.hover_dirty = true;
-    }
     if (hovered && io.MouseWheel != 0.0f) {
         const float mx = (io.MousePos.x - p0.x) / avail.x * 2.0f - 1.0f;
         const float my = 1.0f - (io.MousePos.y - p0.y) / avail.y * 2.0f;
-        sc->zoom(io.MouseWheel, mx, my, aspect);
-        v.dirty = true;
-        v.hover_dirty = true;
+        camera_press_change(g.press, press_view, [&] {
+            sc->zoom(io.MouseWheel, mx, my, aspect);
+            v.dirty = true;
+            v.hover_dirty = true;
+        });
     }
-    // F, or a double click on the points, fits the camera to them again; the second press of a
-    // double click keeps the fit at its release.
+    // F, or a double click on the points, fits the camera to them again; a click's release keeps
+    // the fit (camera_press_change).
     if ((((hovered || ImGui::IsWindowFocused()) && ImGui::IsKeyPressed(ImGuiKey_F, false)) ||
-         (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))) && v.have_cur) {
-        fit_points(v, aspect);
-        if (g.down) g.press_camera = g.step_camera = sc->camera();
-    }
+         (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))) && v.have_cur)
+        camera_press_change(g.press, press_view, [&] { fit_points(v, aspect); });
 
     float mvp[16];
     if (!sc->mvp((uint32_t)v.tex_w, (uint32_t)v.tex_h, mvp)) std::fill(mvp, mvp + 16, 0.0f);
@@ -1409,47 +1398,29 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     }
     // The camera follows the pointer from the first point of motion after the press, as the points
     // view's does, and a press that ends as a click puts back the camera of the press before the
-    // frame draws (camera_drag.h).
+    // frame draws (camera_drag.h). The view's own fits, zooms and up switches during a press stay.
     const bool valid = ImGui::IsMousePosValid();
-    if (g.pressed) {
-        g.press_camera = g.step_camera = sc->camera();
-        g.press_moved = sc->moved();
-        g.restorable = true;
+    ScenePress press_view{*sc, avail.y, g.button != 0 || g.alt || g.ctrl};
+    if (g.pressed && !g.selecting) camera_press_begin(g.press, press_view, g.x0, g.y0);
+    if ((g.down || released) && !g.selecting) {
+        camera_press_frame(g.press, press_view, valid, io.MousePos.x, io.MousePos.y, released);
+        g.moved = !g.press.click();
     }
-    const bool drag = (g.down || released) && !g.selecting;
-    if (drag && valid) {
-        // A fit, a zoom or an up switch since the last step: the camera of the press stays away.
-        if (!same_camera(sc->camera(), g.step_camera)) g.restorable = false;
-        const float dx = io.MousePos.x - g.lx, dy = io.MousePos.y - g.ly;
-        g.lx = io.MousePos.x;
-        g.ly = io.MousePos.y;
-        if (dx != 0.0f || dy != 0.0f) {
-            const bool pan = g.button != 0 || g.alt || g.ctrl;
-            if (pan) sc->pan(dx, dy, avail.y);
-            else sc->orbit(dx, dy);
-        }
-        g.step_camera = sc->camera();
-    }
-    if (released && !g.selecting && !g.moved && g.restorable) sc->restore_camera(g.press_camera, g.press_moved);
     if (hovered && io.MouseWheel != 0.0f) {
         const float mx = (io.MousePos.x - p0.x) / avail.x * 2.0f - 1.0f;
         const float my = 1.0f - (io.MousePos.y - p0.y) / avail.y * 2.0f;
-        sc->zoom(io.MouseWheel, mx, my, avail.x, avail.y);
+        camera_press_change(g.press, press_view, [&] { sc->zoom(io.MouseWheel, mx, my, avail.x, avail.y); });
     }
     if (((hovered || ImGui::IsWindowFocused()) && ImGui::IsKeyPressed(ImGuiKey_F, false)) ||
-        (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))) {
-        sc->fit();
-        if (g.down) {   // the second press of a double click: its release keeps the fit
-            g.press_camera = g.step_camera = sc->camera();
-            g.press_moved = sc->moved();
-        }
-    }
+        (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)))
+        camera_press_change(g.press, press_view, [&] { sc->fit(); });
     // U steps through the header's up-axis segments.
     if ((hovered || ImGui::IsWindowFocused()) && ImGui::IsKeyPressed(ImGuiKey_U, false)) {
         const std::vector<caliper_scene::Axis> c = sc->up_choices();
         if (!c.empty()) {
             auto at = std::find(c.begin(), c.end(), sc->up_mode());
-            sc->switch_up(at == c.end() || at + 1 == c.end() ? c.front() : *(at + 1));
+            camera_press_change(g.press, press_view,
+                                [&] { sc->switch_up(at == c.end() || at + 1 == c.end() ? c.front() : *(at + 1)); });
         }
     }
 

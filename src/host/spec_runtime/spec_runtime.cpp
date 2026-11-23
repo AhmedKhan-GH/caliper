@@ -649,8 +649,9 @@ void draw_points2d(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
 // A right press on a 3-D points panel's box, which ImPlot3D turns from the first point of motion
 // (as a scene panel's camera moves, live/camera_drag.h): after BeginPlot, before the box takes its
 // input, the press saves the turn, and a release whose pointer stayed within the click's tolerance
-// puts it back before the box draws, unless something else turned the box meanwhile (its own
-// animation after a double right click).
+// puts it back before the box draws. The second press of a double right click, which starts the
+// box's own animation to a reset or a plane, and a press while that animation runs keep the turn
+// they leave, as does a press whose box something else turned meanwhile.
 void turn_press_begin(SpecPanelView& v, ImPlot3DPlot* box, const ImRect& plot) {
     v.box_rect[0] = plot.Min.x, v.box_rect[1] = plot.Min.y, v.box_rect[2] = plot.GetWidth(), v.box_rect[3] = plot.GetHeight();
     if (!box) return;
@@ -659,13 +660,14 @@ void turn_press_begin(SpecPanelView& v, ImPlot3DPlot* box, const ImRect& plot) {
     auto same = [&](const double t[4]) { return q.x == t[0] && q.y == t[1] && q.z == t[2] && q.w == t[3]; };
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && ImGui::IsWindowHovered() &&
         ImGui::IsMouseHoveringRect(plot.Min, plot.Max)) {
-        v.turn_down = v.turn_restorable = true;
+        v.turn_down = true;
+        v.turn_restorable = !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Right);
         v.turn_max_d2 = 0.0f;
         v.turn_press[0] = q.x, v.turn_press[1] = q.y, v.turn_press[2] = q.z, v.turn_press[3] = q.w;
         for (int i = 0; i < 4; ++i) v.box_turn[i] = v.turn_press[i];
     }
     if (!v.turn_down) return;
-    if (!same(v.box_turn)) v.turn_restorable = false;
+    if (!same(v.box_turn) || box->AnimationTime > 0.0f) v.turn_restorable = false;
     if (ImGui::IsMousePosValid()) {
         const float dx = io.MousePos.x - io.MouseClickedPos[ImGuiMouseButton_Right].x;
         const float dy = io.MousePos.y - io.MouseClickedPos[ImGuiMouseButton_Right].y;
@@ -680,6 +682,7 @@ void turn_press_begin(SpecPanelView& v, ImPlot3DPlot* box, const ImRect& plot) {
 
 void turn_press_end(SpecPanelView& v, const ImPlot3DPlot* box) {
     if (!box) return;
+    if (v.turn_down && box->AnimationTime > 0.0f) v.turn_restorable = false;
     v.box_turn[0] = box->Rotation.x, v.box_turn[1] = box->Rotation.y, v.box_turn[2] = box->Rotation.z;
     v.box_turn[3] = box->Rotation.w;
 }

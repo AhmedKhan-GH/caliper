@@ -2340,6 +2340,133 @@ TEST_CASE("live/app: a scene view's slow orbit and pans move the camera on their
     a.detach();
 }
 
+// New data that reframes a live scene during a click stays: the click undoes only its own wobble,
+// leaves moved() false and the view following its data. Before the first motion the view frames
+// the new data at once; after it the wobble holds the framing until the release, which puts the
+// camera of the press back and frames the new data in the same frame.
+namespace {
+// The scene's points cloud again, wider: an update without a reset, which grows the bounds.
+void send_wider_cloud(FakeProducer& p, float half_width) {
+    const std::vector<float> pos = {-half_width, 0, 0, 0, 0, 0, half_width, 0, 0};
+    p.call([&](FakeProducer& f) {
+        wire::SceneUpdate u = f.scene_update("cloud", CALIPER_NET_PART_POINTS, pos, false);
+        u.params.set("radius", Json(0.12));
+        f.send(u);
+        return 0;
+    });
+}
+}  // namespace
+
+TEST_CASE("live/app: new data that reframes a live scene during a click stays, and the view keeps following its data; "
+          "a starting camera that arrives during a click applies") {
+    HostFrame host;
+    if (!host.ok) CALIPER_SKIP_NO_GPU("no Metal device for the host's offscreen canvas");
+    FakeProducer p;
+    p.welcome_caps = {CALIPER_NET_CAP_SELECTION};
+    p.script31 = true;
+    p.add_scene();
+    p.start();
+    caliper_live::Attachment a;
+    std::string err;
+    REQUIRE_MESSAGE(a.attach_url(host.renderer.get(), p.url(), &err), err);
+    auto frames_until = [&](const std::function<bool()>& done) {
+        for (int i = 0; i < 3000; ++i) {
+            host.frame(a, nullptr);
+            if (done()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return false;
+    };
+    REQUIRE(frames_until([&] { return p.call([](FakeProducer& f) { return f.sub_of.count("world"); }) == 1; }));
+    send_three_points(p);
+    caliper_live_views::SceneView* sv = nullptr;
+    REQUIRE(frames_until([&] {
+        sv = caliper_live_views::scene_view(a.core(), "world");
+        return sv && sv->counts().batches == 1 && sv->has_target();
+    }));
+    REQUIRE_FALSE(sv->moved());
+    const caliper_live_views::View* v = caliper_live_views::find(a.core(), "world");
+    REQUIRE(v != nullptr);
+    const float cx = std::round(v->geo_area[0] + 0.5f * v->geo_area[2]);
+    const float cy = std::round(v->geo_area[1] + 0.5f * v->geo_area[3]);
+    ImGuiIO& io = ImGui::GetIO();
+    auto frame = [&] { host.frame(a, nullptr); };
+    auto angles = [&] {
+        const std::vector<double> n = orbit_numbers(*sv);
+        return std::vector<double>{n[4], n[5]};
+    };
+    auto distance = [&] { return orbit_numbers(*sv)[3]; };
+    float half_width = 1.0f;
+    for (const bool before_motion : {true, false}) {
+        CAPTURE(before_motion);
+        io.AddMousePosEvent(cx, cy);
+        frame();
+        const std::vector<double> press_angles = angles();
+        const double press_distance = distance();
+        io.AddMouseButtonEvent(0, true);
+        frame();
+        if (!before_motion) {
+            io.AddMousePosEvent(cx + 1.0f, cy);
+            frame();
+        }
+        half_width *= 2.0f;
+        send_wider_cloud(p, half_width);
+        if (before_motion) {
+            REQUIRE(frames_until([&] { return distance() > press_distance * 1.2; }));   // framed at once
+            io.AddMousePosEvent(cx + 1.0f, cy);
+            frame();
+        } else {
+            for (int k = 0; k < 20; ++k) frame();
+            CHECK(distance() < press_distance * 1.2);   // the wobble holds the framing
+        }
+        CHECK(angles() != press_angles);
+        io.AddMouseButtonEvent(0, false);
+        frame();
+        REQUIRE(frames_until([&] { return distance() > press_distance * 1.2; }));
+        CHECK(angles() == press_angles);
+        CHECK_FALSE(sv->moved());
+        io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+        for (int k = 0; k < 40; ++k) frame();
+    }
+    // The view still follows its data.
+    const double followed = distance();
+    send_wider_cloud(p, half_width * 2.0f);
+    CHECK(frames_until([&] { return distance() > followed * 1.2; }));
+    CHECK_FALSE(sv->moved());
+    // A starting camera that arrives during a click applies: before the first motion at once, after
+    // it at the release, which a view that the wobble left moved would not do.
+    for (const bool before_motion : {true, false}) {
+        CAPTURE(before_motion);
+        caliper_scene::StartingCamera start;
+        start.form = caliper_scene::StartingCamera::Form::Orbit;
+        start.azimuth_deg = before_motion ? 30.0 : -40.0;
+        start.elevation_deg = before_motion ? 20.0 : 35.0;
+        io.AddMousePosEvent(cx, cy);
+        frame();
+        io.AddMouseButtonEvent(0, true);
+        frame();
+        if (before_motion) {
+            sv->set_starting(start);
+            frame();
+        }
+        io.AddMousePosEvent(cx + 1.0f, cy);
+        frame();
+        if (!before_motion) {
+            sv->set_starting(start);
+            frame();
+        }
+        io.AddMouseButtonEvent(0, false);
+        frame();
+        const std::vector<double> got = angles();
+        CHECK(got[0] == doctest::Approx(*start.azimuth_deg * caliper_scene::kPi / 180.0).epsilon(1e-9));
+        CHECK(got[1] == doctest::Approx(*start.elevation_deg * caliper_scene::kPi / 180.0).epsilon(1e-9));
+        CHECK_FALSE(sv->moved());
+        io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+        for (int k = 0; k < 40; ++k) frame();
+    }
+    a.detach();
+}
+
 TEST_CASE("live/app: against a server that refuses controls the bar's clicks send nothing; a selection still goes") {
     HostFrame host;
     if (!host.ok) CALIPER_SKIP_NO_GPU("no Metal device for the host's offscreen canvas");

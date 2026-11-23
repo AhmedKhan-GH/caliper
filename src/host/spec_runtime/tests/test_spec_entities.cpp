@@ -1337,6 +1337,7 @@ TEST_CASE("programs: a click in a scene panel with a point of wobble puts the ca
         p.events.got.clear();
         in.move(x, y);
         const std::vector<double> cam = orbit_numbers(*view);
+        const bool moved = view->moved();
         in.button(button, true);
         in.move(wx, wy);
         CHECK(orbit_numbers(*view) != cam);   // the wobble moved the camera on its first point
@@ -1344,6 +1345,7 @@ TEST_CASE("programs: a click in a scene panel with a point of wobble puts the ca
         CHECK(pick_events(p) == 0);   // no pick while the button is held
         in.button(button, false);
         CHECK(orbit_numbers(*view) == cam);   // exactly the camera of the press
+        CHECK(view->moved() == moved);
         for (int k = 0; k < 8 && !p.pick_event(); ++k) in.frame();
         if (button == 0) {
             REQUIRE(p.pick_event() != nullptr);
@@ -1464,6 +1466,66 @@ TEST_CASE("programs: a resting finger's jitter on a scene panel moves the camera
         in.rest();
     }
     CHECK(orbit_numbers(*view) == start);
+}
+
+// A change of the camera from outside during a click stays, and the click undoes only its own
+// wobble: camera.set.
+namespace {
+struct EntityPanel {
+    SpecOffscreen* c;
+    Source source;
+    Events events;
+    std::unique_ptr<SpecRuntime> rt;
+    explicit EntityPanel(SpecOffscreen* canvas) : c(canvas) {
+        c->with_context([&] { rt = std::make_unique<SpecRuntime>(c->textures()); });
+        rt->set_scene_layer(canvas_layer(c));
+        rt->set_source(&source);
+        rt->set_instruments(&events, nullptr);
+        rt->set_spec(parse(kSpec));
+        render(1200, 520, [&](const ImRect& area) { rt->draw(area, c->look()); }, 4);
+    }
+    ~EntityPanel() {
+        c->with_context([&] { rt.reset(); });
+    }
+    void input(const std::function<void(ImGuiIO&)>& fn) {
+        c->with_context([&] { fn(ImGui::GetIO()); });
+        std::string why;
+        REQUIRE_MESSAGE(c->render(1, [&](const ImRect& area) { rt->draw(area, c->look()); }, nullptr, &why), why);
+    }
+    void frames(int n) {
+        for (int k = 0; k < n; ++k) input([](ImGuiIO&) {});
+    }
+};
+}  // namespace
+
+TEST_CASE("entities: camera.set during a click stays, and the click's wobble after it goes") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) {
+        MESSAGE("skipped: no Metal device");
+        return;
+    }
+    EntityPanel p(c);
+    caliper_live_views::SceneView* view = p.rt->entity_view("world");
+    REQUIRE(view != nullptr);
+    float r[4];
+    REQUIRE(p.rt->scene_rect("world", r));
+    const float cx = std::round(r[0] + 0.5f * r[2]), cy = std::round(r[1] + 0.5f * r[3]);
+    const caliper_scene::Orbit* now = std::get_if<caliper_scene::Orbit>(&view->camera());
+    REQUIRE(now != nullptr);
+    caliper_scene::Orbit set = *now;
+    set.azimuth += 0.7;
+    set.elevation = 0.3;
+    set.distance *= 1.5;
+    p.input([&](ImGuiIO& io) { io.AddMousePosEvent(cx, cy); });
+    p.input([](ImGuiIO& io) { io.AddMouseButtonEvent(1, true); });
+    p.input([&](ImGuiIO& io) { io.AddMousePosEvent(cx + 1.0f, cy); });
+    REQUIRE(view->set_orbit(set));   // as camera.set does, between frames
+    const std::vector<double> want = orbit_numbers(*view);
+    p.input([&](ImGuiIO& io) { io.AddMousePosEvent(cx + 1.0f, cy + 1.0f); });
+    CHECK(orbit_numbers(*view) != want);
+    p.input([](ImGuiIO& io) { io.AddMouseButtonEvent(1, false); });
+    CHECK(orbit_numbers(*view) == want);
+    CHECK(view->moved());   // as camera.set leaves it
 }
 
 TEST_CASE("programs: a drag that starts while a click's pick is in flight moves the camera from its first point, and "
@@ -1618,6 +1680,20 @@ TEST_CASE("points3d: a right press that wobbles a point puts the box's turn back
     CHECK(turned != press);
     frame([](ImGuiIO& io) { io.AddMouseButtonEvent(1, false); });
     CHECK(turn() == turned);
+    // A double right click starts the box's own animation (a reset, or a turn onto a plane), which
+    // its second release keeps: the box does not jump back to the turn before the double click.
+    for (int k = 0; k < 40; ++k) frame([](ImGuiIO&) {});
+    const std::vector<double> before_double = turn();
+    frame([](ImGuiIO& io) { io.AddMouseButtonEvent(1, true); });
+    frame([](ImGuiIO& io) { io.AddMouseButtonEvent(1, false); });
+    frame([](ImGuiIO& io) { io.AddMouseButtonEvent(1, true); });
+    for (int k = 0; k < 30; ++k) frame([](ImGuiIO&) {});   // longer than the animation
+    const std::vector<double> animated = turn();
+    CHECK(animated != before_double);
+    frame([](ImGuiIO& io) { io.AddMouseButtonEvent(1, false); });
+    CHECK(turn() == animated);
+    for (int k = 0; k < 10; ++k) frame([](ImGuiIO&) {});
+    CHECK(turn() == animated);
     c->with_context([&] { rt.reset(); });
 }
 
