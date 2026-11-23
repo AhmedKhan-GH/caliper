@@ -84,7 +84,7 @@ entries:
   ids:
   - COR-16
 - heading: 'Phase 1: one core with versioned applets'
-  item: OpenGLlama comes back with the inspector work as an applet beside the inspector.
+  item: A new OpenGLlama applet is planned with the inspector work, beside the inspector.
   ids:
   - INT-24
 - heading: 'Phase 2: promote proven features'

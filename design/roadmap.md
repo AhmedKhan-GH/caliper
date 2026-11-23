@@ -22,7 +22,7 @@ Streaming to notebooks, browsers and the Caliper app, the hub, Caliper API v0 an
 8. Acceptance: the inspector and two existing scopes each build from their own repository against the installed SDK and load into a released Caliper. Two versions of one applet resolve correctly.
 9. Move the first-party scopes to a `caliper-applets` repository, and the inspector to its own repository.
 
-OpenGLlama comes back with the inspector work, as an applet beside the inspector. Nothing about it changes before then.
+A new OpenGLlama applet is planned with the inspector work, beside the inspector. Nothing about it changes before then.
 
 Plan: [Applets outside the core](applets-outside-the-core.md).
 
@@ -176,7 +176,7 @@ These ideas are not built. Each needs a decision before it enters a phase.
 - **Digital twins.** A population twin built on InstanceScope's unused per-variant reduction, and a machine thermal twin fed by `caliper.feed.v1`.
 - **Research publishing beyond export.** A Python DLPack path into the geometry bridge, and applets written in Python.
 - **Artifacts redesign.** A checkpoint browser with previews and resuming training from a checkpoint.
-- **Applet dependency packaging.** Whether an applet built outside the core may link its own heavy dependencies, such as DuckDB or llama.cpp, and what happens when two applets each carry a copy. The proposal for large runtimes such as libtorch is runtime packs: the host installs and manages each runtime once instead of every applet bundling its own multi-gigabyte copy, and a process loads one libtorch for the whole session. The stated limit is that two applets that need different torch versions cannot share a session. No pack manager exists; the build downloads torch directly.
+- **Applet dependency packaging.** Whether an applet built outside the core may link its own heavy dependencies, such as DuckDB, and what happens when two applets each carry a copy. The proposal for large runtimes such as libtorch is runtime packs: the host installs and manages each runtime once instead of every applet bundling its own multi-gigabyte copy, and a process loads one libtorch for the whole session. The stated limit is that two applets that need different torch versions cannot share a session. No pack manager exists; the build downloads torch directly.
 - **`.caliperapp` bundles.** A bundle folder with per-platform binaries, and manifest keys for platforms, authors, licence and runtimes.
 - **Hot reload.** Which entry points reloading a rebuilt applet needs, such as `save_state`, `load_state`, `on_suspend` and `on_resume`.
 - **SDK conformance.** A conformance checker, and a set of reference applets built against each SDK release.

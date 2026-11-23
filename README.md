@@ -96,10 +96,8 @@ it, and [SDK package](docs/applets/sdk-package.md) describes the package.
 | `CALIPER_BUILD_APPLETS` | OFF | Also build `applets/` inside the core build; forced OFF without LibTorch |
 | `CALIPER_BUILD_PYTHON` | OFF | Build the `caliper` Python extension (nanobind) |
 | `CALIPER_WITH_SLANG` | ON | Configure the vendored slang library |
-| `CALIPER_WITH_LLAMA` | ON | Configure the vendored llama.cpp library |
 | `CALIPER_BUILD_VIEWER` | ON | Build `caliper_viewer`, the live viewer process (macOS) |
 | `CALIPER_BUILD_EXAMPLES` | ON | Build the embedding example, `examples/embed_host`. The tutorial applets `hello` and `sine_scope` build with the tests instead. |
-| `CALIPER_BUILD_OPENGLLAMA` | OFF | Build the archived opengllama applet; needs `CALIPER_WITH_LLAMA` |
 | `CALIPER_WITH_BUILDER` | ON, but OFF on Windows | Build the builder under `src/builder/` (its libraries, `caliper-mcp`, `caliper-acp-harness`, `caliper-builder-host` and their tests) and link DuckDB's json extension into the host's DuckDB. The Python wheel sets it OFF. |
 | `CALIPER_STATIC_CRT` | OFF | Use the static MSVC runtime (`/MT`) instead of the dynamic one |
 
@@ -158,7 +156,7 @@ caliper/
 ├── src/                        # The caliper executable (main.cpp) and the host (src/host/)
 ├── sdk/                        # The applet SDK: headers, CMake package, test fixtures
 ├── include/caliper/            # The embedding and live-session C headers
-├── applets/                    # First-party applets, each built against the SDK (plus legacy/ and legacy-dev/)
+├── applets/                    # First-party applets, each built against the SDK
 ├── examples/                   # hello, sine_scope, embed_host and the Python example
 ├── python/                     # The caliper Python package and its extension
 ├── tests/                      # Test suites
@@ -184,7 +182,6 @@ caliper/
 - [ImTerm](https://github.com/Organic-Code/ImTerm) - Terminal widget
 - [ImGuiFileDialog](https://github.com/aiekick/ImGuiFileDialog) - File dialog
 - [DuckDB](https://github.com/duckdb/duckdb) - The host's query engine
-- [llama.cpp](https://github.com/ggerganov/llama.cpp) - GGUF inference, used by the archived opengllama applet
 - [slang](https://github.com/MikePopoloski/slang) - SystemVerilog front end
 
 **Vendored:**
@@ -268,7 +265,6 @@ Caliper uses the following open-source libraries. Their license texts can be fou
 | [ImGuiFileDialog](https://github.com/aiekick/ImGuiFileDialog) | MIT | 2018-2025 Stephane Cuillerdier (Aiekick) | Use, modify, and distribute freely provided the license notice is included. |
 | [DuckDB](https://github.com/duckdb/duckdb) | MIT | 2018-2026 Stichting DuckDB Foundation | Use, modify, and distribute freely provided the license notice is included. |
 | [LibTorch](https://pytorch.org) | BSD 3-Clause | 2016 Facebook Inc. | Use, modify, and distribute freely provided the license notice is included and the project name is not used for endorsement. |
-| [llama.cpp](https://github.com/ggerganov/llama.cpp) | MIT | The ggml authors | Use, modify, and distribute freely provided the license notice is included. |
 | [slang](https://github.com/MikePopoloski/slang) | MIT | Michael Popoloski | Use, modify, and distribute freely provided the license notice is included. |
 | [stb](https://github.com/nothings/stb) | MIT / public domain | Sean Barrett and contributors | Use, modify, and distribute freely. |
 | [toml++](https://github.com/marzer/tomlplusplus) | MIT | Mark Gillard | Use, modify, and distribute freely provided the license notice is included. |

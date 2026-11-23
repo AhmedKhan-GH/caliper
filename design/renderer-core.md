@@ -114,8 +114,6 @@ Every applet in this repository that draws in 3-D moves onto the scene service, 
 | `twin_scope` | Two textured meshes side by side, each sampling a bridge texture of its field, a toggle to per-vertex colours, wireframes, export | Two mesh entities placed by entity transforms, each textured from an RGBA image that the applet colormaps on its device or coloured by per-vertex values, edges as index-pair edges, export of the scene | A texture is an image in the scene model, so the field is colormapped by the applet, one gather in torch, instead of by the bridge | 13 | 2 |
 | `pulse_scope`, `examples/hello`, `examples/sine_scope` | No 3-D | Unchanged, apart from the manifest's epoch | | 13 | |
 
-The archived applets in `applets/legacy/` and `applets/legacy-dev/` draw no 3-D; only their manifests change.
-
 **The acceptance of each port.** Each port takes `caliper shot` captures of the applet's page before and after, offscreen. The pictures are not byte-identical, because the drawing path changes on purpose: hardware points become discs, hardware lines become quads, and the camera's defaults move to the shared ones. A reviewer compares them by eye, with every difference listed and explained in the port's report. The applet's own tests pass. Its info line reports the route that ran, and copies per frame on its zero-copy route stay exactly 0 against step 0's baseline. Its frame time and GPU time are measured before and after and reported, but the thresholds of [Fast Path Thresholds](#fast-path-thresholds) do not gate a port, because a port changes what is drawn; in particular, discs of six vertices cost more GPU time than hardware points for the largest particle clouds, and the report says by how much.
 
 ### Renderer Seam at Its Final Shape

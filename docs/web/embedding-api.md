@@ -307,13 +307,12 @@ In a torch-free build the core carries no libtorch at all. The libtorch row of t
 | `CALIPER_BUILD_APPLETS` | OFF | Also builds the `applets/*` folders inside the core build. Each also builds on its own against the installed SDK. Forced OFF when torch is OFF, because most applets link libtorch. |
 | `CALIPER_BUILD_PYTHON` | OFF | Adds the nanobind extensions `caliper._native` and `caliper._live`. The wheel build sets it ON. |
 | `CALIPER_WITH_SLANG` | ON | Configure the vendored slang (SystemVerilog) library. |
-| `CALIPER_WITH_LLAMA` | ON | Configure the vendored llama.cpp and apply its local patches. `CALIPER_BUILD_OPENGLLAMA=ON` stops the configure with an error when this is OFF. |
 | `CALIPER_BUILD_VIEWER` | ON | Builds `caliper_viewer`, the live-viewer process (Apple only). The wheel ships it as `caliper/bin/caliper-viewer`. |
 | `CALIPER_WITH_BUILDER` | ON, but OFF on Windows | Builds the builder, which `libcaliper` does not link and no package installs. It also links the DuckDB json extension into the host DuckDB, so `libcaliper`, the embedding library and the `caliper` exe carry that extension. The wheel sets it OFF. |
 
-slang and llama.cpp are configured `EXCLUDE_FROM_ALL`, and nothing that `libcaliper`, the `caliper` exe or the tests need links them. llama.cpp only backs the opt-in archived opengllama applet. At configure time slang clones boost_regex and mimalloc over the network, which a pip build should not do. The Python build and the `release-notorch` preset therefore set both OFF, and a fresh torch-free configure clones neither. Two FetchContent clones remain: tomlplusplus (`caliper_host_lib`) and doctest (tests only). With `CALIPER_WITH_BUILDER` on, the configure also downloads the nlohmann/json archive.
+slang is configured `EXCLUDE_FROM_ALL`, and nothing that `libcaliper`, the `caliper` exe or the tests need links it. At configure time slang clones boost_regex and mimalloc over the network, which a pip build should not do. The Python build and the `release-notorch` preset therefore set it OFF, and a fresh torch-free configure clones neither. Two FetchContent clones remain: tomlplusplus (`caliper_host_lib`) and doctest (tests only). With `CALIPER_WITH_BUILDER` on, the configure also downloads the nlohmann/json archive.
 
-The wheel build sets `CALIPER_BUILD_PYTHON` ON. It sets `CALIPER_WITH_TORCH`, `CALIPER_BUILD_APPLETS`, `CALIPER_BUILD_EXAMPLES`, `BUILD_TESTS`, `USE_CUDA`, `CALIPER_WITH_SLANG`, `CALIPER_WITH_LLAMA` and `CALIPER_WITH_BUILDER` OFF. It builds only the `_native`, `_live`, `_netio` and `caliper_viewer` targets.
+The wheel build sets `CALIPER_BUILD_PYTHON` ON. It sets `CALIPER_WITH_TORCH`, `CALIPER_BUILD_APPLETS`, `CALIPER_BUILD_EXAMPLES`, `BUILD_TESTS`, `USE_CUDA`, `CALIPER_WITH_SLANG` and `CALIPER_WITH_BUILDER` OFF. It builds only the `_native`, `_live`, `_netio` and `caliper_viewer` targets.
 
 ### Embedder Link Lists
 
@@ -323,7 +322,7 @@ The split matters because `libcaliper` is a static library, and its private depe
 
 ### `release-notorch` Preset
 
-`CMakePresets.json` has configure, build and test presets named `release-notorch`: binary dir `cmake-build-notorch`, `CMAKE_BUILD_TYPE=Release`, `BUILD_TESTS=ON`, `CALIPER_WITH_TORCH=OFF`, `CALIPER_WITH_SLANG=OFF`, `CALIPER_WITH_LLAMA=OFF` and `USE_CUDA=OFF`. The Python extension builds against this configuration.
+`CMakePresets.json` has configure, build and test presets named `release-notorch`: binary dir `cmake-build-notorch`, `CMAKE_BUILD_TYPE=Release`, `BUILD_TESTS=ON`, `CALIPER_WITH_TORCH=OFF`, `CALIPER_WITH_SLANG=OFF` and `USE_CUDA=OFF`. The Python extension builds against this configuration.
 
 ```sh
 cmake --preset release-notorch

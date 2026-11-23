@@ -118,7 +118,3 @@ These applets live in `examples/`. Each builds on its own against the installed 
 `examples/embed_host` is a second host of the core, not an applet. It is a bare native window (AppKit on macOS, Win32 on Windows) that makes the five embed calls. It loads one applet by manifest id, which defaults to `dev.caliper.instance-scope`.
 
 It links `caliper::embed` and none of the `caliper` executable. Outside the repository, it builds against the installed `caliper-embed` package with only `find_package(caliper-embed)`. `CALIPER_EMBED_OFFSCREEN=1` runs it in an offscreen mode that opens no window. `CALIPER_EMBED_EXIT_AFTER=<seconds>` closes it automatically. No Linux host exists. See [Embedding](../web/embedding-api.md) and [Embed Caliper in a program](../web/program-embedding.md).
-
-## Archived Applets
-
-`applets/legacy/` and `applets/legacy-dev/` hold archived applets that the default build skips. `CALIPER_BUILD_OPENGLLAMA` builds the archived OpenGLlama applet, which needs `CALIPER_WITH_LLAMA` on.
