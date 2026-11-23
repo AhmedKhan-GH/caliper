@@ -237,3 +237,6 @@ void draw_host_status_items(const char* renderer_name);
 // A fact of the app's that every page's status bar shows after the machine,
 // such as the address of Caliper API while it runs; "" shows nothing.
 void set_host_status_note(std::function<std::string()> note);
+// A setting that every page's status bar shows in the accent while it is on,
+// such as an agent's Allow all mode; "" shows nothing.
+void set_host_status_flag(std::function<std::string()> flag);

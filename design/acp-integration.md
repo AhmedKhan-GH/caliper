@@ -374,7 +374,7 @@ or not the agent asks on its own. Three parts are built:
   CONTROL is answered `forbidden`, and a producer's HELLO is refused with close code 4002 as `caliper.serve()` refuses
   producers, with no change to the protocol.
 - **Agent permissions.** The person sets how much the side chat's agent and `caliper-mcp`'s clients may do without a
-  card: Ask, Accept edits, Read only, and for the chat's session only, Allow all; a card's answer can also allow its
+  card: Ask, Accept edits, Read only and Allow all, each saved; a card's answer can also allow its
   command for this session or always. The command layer applies them by the token's client, so the widget agent
   (client `widget`) keeps its preview with Accept, and nothing an agent sends selects a mode or a rule
   ([Command layer](command-layer.md), Agent permissions).
@@ -707,7 +707,8 @@ claims the right column with `layout_chat_column()`, and calls `draw()` with tha
 - **Caliper's mode.** The header shows the session's mode for the chat's agent as a framed word after the title (Ask,
   Accept edits, Read only, Allow all); a click opens its menu, and Shift-Tab cycles the first three while the chat's
   input has the keyboard. Allow all is the menu's last item, under a rule, never in the cycle; while it is on, a
-  banner under the header says ALLOW ALL with End, and it ends with the agent's session (its token). A command that a
+  banner under the header says ALLOW ALL with End, which sets Ask. It is saved, and the end of the agent's session
+  (its token) leaves it on. A command that a
   mode or a rule let run without a card is an APPLIED row with what allowed it and Undo, which sends the person's
   `history.undo` while that command's step is the newest. The approval cards of the chat's agent and of `mcp` clients
   offer Allow once, Allow always for this session and Always allow `<command>`; the saved rules and the two saved
@@ -723,7 +724,7 @@ claims the right column with `layout_chat_column()`, and calls `draw()` with tha
   (the app started with `--api`, which the chat leaves alone), and one case that walks the modes: a card answered for
   this session and then always, the rule listed and revoked in the settings, Shift-Tab to Accept edits with an APPLIED
   edit undone, Read only refusing an edit, and Allow all with its banner, a removal without a card and an overwrite
-  that still asks; a saved `allow_all` in the file is not honoured. The hidden app's input driver
+  that still asks; a saved `allow_all` in the file applies at launch. The hidden app's input driver
   (`CALIPER_TEST_SPEC_UI`) gained steps for the chat.
 
 ## The manual check with a real agent

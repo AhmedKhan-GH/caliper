@@ -111,7 +111,7 @@ The API ignores `X-Caliper-Origin` for every token but the viewer token, so a re
 - Ask: the review described above.
 - Accept edits: an edit of the open spec applies at once, and stays journaled and undoable.
 - Read only: reads, dry runs and edits of a preview run. Every other change answers `command.denied` with a message that says so.
-- Allow all for its session: only for the side chat's agent, and the app never saves it.
+- Allow all: a command that would wait for your card runs at once. An overwrite of a saved applet and the replacement of a spec with unsaved changes still wait for your card. The app saves the mode, and it stays on until you choose another mode.
 
 A mode does not govern the widget agent, your session token or the viewer token. No endpoint and no command reads or sets a mode or a rule. In every mode, an overwrite of a saved applet and the replacement of a spec with unsaved changes still wait for your card, and a rule never lets a Python loader run.
 

@@ -405,8 +405,8 @@ struct SpecPage::Impl {
     // The × on a panel's strip, at its right end (a tab's panel, whose tab
     // carries the title, at its top right corner), drawn while the pointer
     // is over the panel; a click removes the panel after the frame is drawn,
-    // and a right click on the panel opens its menu. Inside the panel's own
-    // window, after its content.
+    // and a right click on the panel, released without a drag, opens its menu.
+    // Inside the panel's own window, after its content.
     void remove_control(const SpecPanelFrame& f) {
         if (f.preview || !can_remove(f.id)) return;
         const SpecLook L = house_spec_look();
@@ -438,7 +438,17 @@ struct SpecPage::Impl {
             if (on_x) ImGui::SetTooltip("Remove panel");
         }
         if (clicked) remove_request = f.id;
-        if (over && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) menu_request = f.id;
+        // A right click opens the menu when it is released without a drag, as the live scene's
+        // camera menu does: a right press on a scene panel starts a pan, and a menu opened by that
+        // press would take the next press, which then moves no camera.
+        // The release frame's own move is not in ImGui's drag distance yet, so the distance from the
+        // press to the pointer is checked too: a quick flick that ends in its last move is a drag.
+        if (over && ImGui::IsMouseReleased(ImGuiMouseButton_Right) && !ImGui::IsMouseDragPastThreshold(ImGuiMouseButton_Right)) {
+            const ImGuiIO& io = ImGui::GetIO();
+            const float dx = io.MousePos.x - io.MouseClickedPos[ImGuiMouseButton_Right].x;
+            const float dy = io.MousePos.y - io.MouseClickedPos[ImGuiMouseButton_Right].y;
+            if (dx * dx + dy * dy <= io.MouseDragThreshold * io.MouseDragThreshold) menu_request = f.id;
+        }
     }
 
     // A panel's menu, opened by a right click on it: Remove panel. In the

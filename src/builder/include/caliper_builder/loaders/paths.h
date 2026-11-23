@@ -54,4 +54,17 @@ ExpandResult expand_input(const std::string& pattern, const AllowedRoots& roots,
 // (with forward slashes), otherwise the canonical path.
 std::string display_path(const std::string& canonical, const std::string& workspace);
 
+// Protected files: the person's settings that set what an agent may do, such
+// as agent-permissions.json, which no command may write, replace or remove.
+// The list is process-wide; a session adds its files as it opens, and the
+// list only grows.
+void protect_file(const std::string& path);
+// Whether writing, replacing or removing `path` would change a protected
+// file. Both paths are compared resolved: symbolic links and ".." followed,
+// and the case of ASCII letters ignored, since the file systems of macOS and
+// Windows ignore it; and an existing `path` that is the same file as a
+// protected one (a hard link) counts. A folder that holds a protected file
+// counts too, for a removal of the folder.
+bool touches_protected_file(const std::string& path);
+
 }  // namespace caliper_builder

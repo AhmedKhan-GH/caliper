@@ -106,8 +106,8 @@ entries:
   - AGT-01
   - AGT-02
 - heading: Approvals and diffs for every agent
-  item: Agent permissions Ask, Accept edits, Read only and, for the chat's session only, Allow all, with
-    card answers that allow a command for the session or always.
+  item: Agent permissions Ask, Accept edits, Read only and Allow all, each saved, with card answers that
+    allow a command for the session or always.
   ids:
   - AGT-06
 - heading: Approvals and diffs for every agent

@@ -57,7 +57,7 @@ features:
     title: Permission Modes
     status: shipped
     scope: core
-    summary: The side chat's agent and caliper-mcp's clients run in a mode, Ask, Accept edits or Read only, that decides which commands wait for the person's approval, and the side chat's agent may also run with Allow all for its session.
+    summary: The side chat's agent and caliper-mcp's clients each run in a saved mode, Ask, Accept edits, Read only or Allow all, that decides which commands wait for the person's approval.
     depends_on: [AGT-03]
     docs: docs/agents/side-chat.md#modes
     design: design/acp-integration.md#approvals-and-diffs-for-every-agent
