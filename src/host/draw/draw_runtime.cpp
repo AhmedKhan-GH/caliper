@@ -370,7 +370,9 @@ bool read_manifest(const json& m, cs::Piece* p, std::string* why) {
                 const json& t = d["text"];
                 ok = t.is_object() ? (r.str(t, "anchors", &tt.anchors, true) && r.str(t, "position", &tt.position) &&
                                       r.str(t, "string", &tt.string) && r.opt_str(t, "priority", &tt.priority) &&
-                                      r.strings(t, "strings", &tt.strings))
+                                      r.strings(t, "strings", &tt.strings) &&
+                                      r.opt_str(t, "strings_from", &tt.strings_from) &&
+                                      r.enum_of(t, "align", cs::text_align_from_name, &tt.align))
                                    : r.fail("the key text is not a table");
                 if (ok) draw.text = tt;
             }
@@ -1096,6 +1098,7 @@ Verdict DrawRuntime::install(const caliper_builder::spec::Piece& piece, const In
     std::set<std::string> cpu_ids;
     if (draw.pick) cpu_ids.insert(draw.pick->resource);
     if (draw.text) cpu_ids.insert(draw.text->anchors);
+    if (draw.text && draw.text->strings_from) cpu_ids.insert(*draw.text->strings_from);
     for (const cs::Resource& res : piece.resources) {
         if (!res.publish) continue;
         Impl::Slot s;

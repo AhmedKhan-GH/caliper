@@ -623,6 +623,8 @@ std::string canonical_manifest(const spec::Piece& piece) {
             if (d.text->string != "string") t.str("string", d.text->string);
             if (d.text->priority) t.str("priority", *d.text->priority);
             t.set("strings", strings(d.text->strings));
+            if (d.text->strings_from) t.str("strings_from", *d.text->strings_from);
+            if (d.text->align != spec::TextAlign::placed) t.str("align", spec::text_align_name(d.text->align));
             o.set("text", t.text());
         }
         if (d.frame_ms) o.num("frame_ms", *d.frame_ms);

@@ -454,6 +454,41 @@ TEST_CASE("an indexed pass draws a u32 buffer from a vertex entry as a list, and
     CHECK(code_of(bad) == cp::kProgramUnknownResource);
 }
 
+TEST_CASE("a text table takes its strings from a published buffer of at most 4096 strings of 64 bytes") {
+    cs::Piece p = arcs_piece();
+    cs::Resource names;
+    names.id = "names";
+    names.layout = struct_layout("Name", {{"b0", "vec4<u32>"}, {"b1", "vec4<u32>"}, {"b2", "vec4<u32>"}, {"b3", "vec4<u32>"}});
+    names.count = 4096;
+    p.resources.push_back(names);
+    p.draw->text->strings.clear();
+    p.draw->text->strings_from = "names";
+    p.draw->text->align = cs::TextAlign::center;
+    CHECK(cp::check_piece_manifest(p).ok());
+    const std::string canon = cp::canonical_manifest(p);
+    CHECK(canon.find(R"("strings_from":"names")") != std::string::npos);
+    CHECK(canon.find(R"("align":"center")") != std::string::npos);
+    CHECK(cp::canonical_manifest(arcs_piece()).find("align") == std::string::npos);
+    cs::Piece bad = p;
+    bad.draw->text->strings = {"x"};   // two sources
+    CHECK(code_of(bad) == cp::kProgramBadText);
+    bad = p;
+    bad.draw->text->strings_from = "missing";
+    CHECK(code_of(bad) == cp::kProgramUnknownResource);
+    bad = p;
+    bad.resources.back().count = 4097;
+    CHECK(code_of(bad) == cp::kProgramBadText);
+    bad = p;
+    bad.resources.back().layout.fields.push_back({"b4", "vec4<u32>"});   // 80 bytes a string
+    CHECK(code_of(bad) == cp::kProgramBadText);
+    bad = p;
+    bad.draw->text->strings_from = "heads";   // f32 elements
+    CHECK(code_of(bad) == cp::kProgramBadText);
+    bad = p;
+    bad.resources.back().publish = false;
+    CHECK(code_of(bad) == cp::kProgramUnknownResource);
+}
+
 TEST_CASE("the manifest check refuses each breach with its code") {
     cs::Piece p = arcs_piece();
     p.name = "Arcs";

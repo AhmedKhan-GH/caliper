@@ -663,6 +663,32 @@ private:
             }
             if (t.strings.size() > pl::kStrings)
                 return fail(kProgramBadText, "The text table has at most 4096 strings.", "draw.text.strings");
+            if (t.strings_from) {
+                // The strings of a run: each element of a published buffer is one string of at most
+                // kStringBytes UTF-8 bytes, which the host checks again when it reads them.
+                if (!t.strings.empty())
+                    return fail(kProgramBadText, "The text table takes its strings from strings or strings_from, not both.",
+                                "draw.text.strings_from");
+                if (!countable(*t.strings_from))
+                    return fail(kProgramUnknownResource,
+                                "strings_from names " + quote(*t.strings_from) +
+                                    ", which is no published buffer resource or buffer input of the piece.",
+                                "draw.text.strings_from");
+                const spec::Resource* sr = find_resource(p_, *t.strings_from);
+                const spec::Layout& l = sr ? sr->layout : find_input(p_, *t.strings_from)->layout;
+                ElementLayout el;
+                bool bytes = element_layout(l, &el).ok() && el.stride > 0 && el.stride <= pl::kStringBytes;
+                for (const FieldLayout& f : el.fields)
+                    bytes = bytes && (f.type == "u32" || f.type == "vec2<u32>" || f.type == "vec4<u32>");
+                if (!bytes)
+                    return fail(kProgramBadText,
+                                "The strings of " + quote(*t.strings_from) +
+                                    " need elements of u32, vec2<u32> or vec4<u32> fields, at most 64 bytes each.",
+                                "draw.text.strings_from");
+                if (sr && sr->count > pl::kStrings)
+                    return fail(kProgramBadText, "The strings of " + quote(*t.strings_from) + " are at most 4096.",
+                                "draw.text.strings_from");
+            }
             for (std::size_t k = 0; k < t.strings.size(); ++k)
                 if (t.strings[k].size() > pl::kStringBytes)
                     return fail(kProgramBadText, "A string of the text table has at most 64 bytes.",

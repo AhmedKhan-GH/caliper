@@ -1287,13 +1287,15 @@
         "text": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["anchors", "strings"],
+          "required": ["anchors"],
           "properties": {
             "anchors": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
             "position": {"type": "string", "pattern": "^[a-z_][a-z0-9_]{0,31}$"},
             "string": {"type": "string", "pattern": "^[a-z_][a-z0-9_]{0,31}$"},
             "priority": {"type": "string", "pattern": "^[a-z_][a-z0-9_]{0,31}$"},
-            "strings": {"type": "array", "maxItems": 4096, "items": {"type": "string", "maxLength": 64}}
+            "strings": {"type": "array", "maxItems": 4096, "items": {"type": "string", "maxLength": 64}},
+            "strings_from": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
+            "align": {"type": "string", "enum": ["placed", "left", "right", "center"]}
           }
         },
         "frame_ms": {"type": "number", "minimum": 0.1, "maximum": 16},

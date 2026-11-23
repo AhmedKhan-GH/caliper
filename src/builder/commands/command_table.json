@@ -13056,6 +13056,16 @@
                     "additionalProperties": false,
                     "description": "Labels that the host draws and places.",
                     "properties": {
+                      "align": {
+                        "description": "placed: the placer chooses one of eight places around the anchor; left, right and center pin each label at its anchor with the start, the end or the middle of its text there. placed when absent.",
+                        "enum": [
+                          "placed",
+                          "left",
+                          "right",
+                          "center"
+                        ],
+                        "type": "string"
+                      },
                       "anchors": {
                         "description": "A buffer resource with a struct; one label at each valid element.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
@@ -13084,11 +13094,15 @@
                         },
                         "maxItems": 4096,
                         "type": "array"
+                      },
+                      "strings_from": {
+                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                        "type": "string"
                       }
                     },
                     "required": [
-                      "anchors",
-                      "strings"
+                      "anchors"
                     ],
                     "type": "object"
                   }
@@ -15693,6 +15707,16 @@
                     "additionalProperties": false,
                     "description": "Labels that the host draws and places.",
                     "properties": {
+                      "align": {
+                        "description": "placed: the placer chooses one of eight places around the anchor; left, right and center pin each label at its anchor with the start, the end or the middle of its text there. placed when absent.",
+                        "enum": [
+                          "placed",
+                          "left",
+                          "right",
+                          "center"
+                        ],
+                        "type": "string"
+                      },
                       "anchors": {
                         "description": "A buffer resource with a struct; one label at each valid element.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
@@ -15721,11 +15745,15 @@
                         },
                         "maxItems": 4096,
                         "type": "array"
+                      },
+                      "strings_from": {
+                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                        "type": "string"
                       }
                     },
                     "required": [
-                      "anchors",
-                      "strings"
+                      "anchors"
                     ],
                     "type": "object"
                   }
@@ -16784,6 +16812,16 @@
                     "additionalProperties": false,
                     "description": "Labels that the host draws and places.",
                     "properties": {
+                      "align": {
+                        "description": "placed: the placer chooses one of eight places around the anchor; left, right and center pin each label at its anchor with the start, the end or the middle of its text there. placed when absent.",
+                        "enum": [
+                          "placed",
+                          "left",
+                          "right",
+                          "center"
+                        ],
+                        "type": "string"
+                      },
                       "anchors": {
                         "description": "A buffer resource with a struct; one label at each valid element.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
@@ -16812,11 +16850,15 @@
                         },
                         "maxItems": 4096,
                         "type": "array"
+                      },
+                      "strings_from": {
+                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                        "type": "string"
                       }
                     },
                     "required": [
-                      "anchors",
-                      "strings"
+                      "anchors"
                     ],
                     "type": "object"
                   }
@@ -17749,6 +17791,16 @@
                     "additionalProperties": false,
                     "description": "Labels that the host draws and places.",
                     "properties": {
+                      "align": {
+                        "description": "placed: the placer chooses one of eight places around the anchor; left, right and center pin each label at its anchor with the start, the end or the middle of its text there. placed when absent.",
+                        "enum": [
+                          "placed",
+                          "left",
+                          "right",
+                          "center"
+                        ],
+                        "type": "string"
+                      },
                       "anchors": {
                         "description": "A buffer resource with a struct; one label at each valid element.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
@@ -17777,11 +17829,15 @@
                         },
                         "maxItems": 4096,
                         "type": "array"
+                      },
+                      "strings_from": {
+                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                        "type": "string"
                       }
                     },
                     "required": [
-                      "anchors",
-                      "strings"
+                      "anchors"
                     ],
                     "type": "object"
                   }

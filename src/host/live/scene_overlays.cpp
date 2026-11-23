@@ -82,6 +82,15 @@ void draw_scene_overlays(const SceneOverlayInput& in) {
         // An annotation's text first, then the item labels, nearest first.
         const bool first = in.annotations && i < in.annotations->size() && (*in.annotations)[i];
         b.priority = in.priorities && i < in.priorities->size() ? (*in.priorities)[i] : (first ? 0 : 1000) + (int)i;
+        // A label pinned at its anchor (a text table's align): the start, the end or the middle of
+        // its text there, centered on it vertically; the placer moves it nowhere else.
+        if (a.pin >= 1 && a.pin <= 3) {
+            b.pinned = true;
+            b.anchor_y = std::round(b.anchor_y - 0.5f * b.height);
+            b.anchor_x = a.pin == 1   ? b.anchor_x - pad
+                         : a.pin == 2 ? b.anchor_x - b.width + pad
+                                      : std::round(b.anchor_x - 0.5f * b.width);
+        }
         boxes.push_back(b);
     }
     // The markers' rings: drawn at their anchors over the picture, and kept free of labels.

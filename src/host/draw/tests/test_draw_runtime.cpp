@@ -753,6 +753,81 @@ TEST_CASE("a pick keeps the version of the frame it read, and a version at the s
     CHECK_FALSE(cd::DrawRuntime::pick_shown(1, cd::ShownItems{}));
 }
 
+// A piece whose labels take their strings from the published buffer `names`, 32 bytes a string,
+// pinned with the end of the text at the anchor.
+cs::Piece named_tags() {
+    cs::Piece p;
+    p.name = "tags";
+    cs::Resource anchors;
+    anchors.id = "anchors";
+    anchors.layout.type_name = "Tag";
+    anchors.layout.fields = {{"position", "vec4<f32>"}, {"string", "u32"}};
+    anchors.count = 8;
+    cs::Resource names;
+    names.id = "names";
+    names.layout.type_name = "Name";
+    names.layout.fields = {{"b0", "vec4<u32>"}, {"b1", "vec4<u32>"}};
+    names.count = 8;
+    p.resources = {anchors, names};
+    cs::Derive dv;
+    dv.passes = {cs::DerivePass{"place", {1, 1, 1}, {"anchors", "names"}}};
+    p.derive = dv;
+    cs::Draw d;
+    d.camera = cs::CameraMode::none;
+    cs::DrawPass back;
+    back.fragment = "back_fs";
+    d.passes = {back};
+    cs::TextTable t;
+    t.anchors = "anchors";
+    t.strings_from = "names";
+    t.align = cs::TextAlign::right;
+    d.text = t;
+    p.draw = d;
+    p.files = {{"derive.wgsl", "@compute @workgroup_size(1)\nfn place() {}\n"},
+               {"draw.wgsl", "@fragment\nfn back_fs(in: CaliperFullscreen) -> @location(0) vec4<f32> {\n"
+                             "    return vec4<f32>(f32(counts.names), in.uv, 1.0);\n}\n"}};
+    return p;
+}
+
+TEST_CASE("labels take their strings from a published buffer, checked as UTF-8, and keep the table's alignment") {
+    REQUIRE(cp::check_piece_manifest(named_tags()).ok());
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    cd::Instance in;
+    in.program = "tags";
+    REQUIRE(rt.install(named_tags(), in, 2).ok());
+    struct Tag {
+        float position[4];
+        std::uint32_t string, pad[3];
+    };
+    struct Name {
+        char bytes[32];
+    };
+    const std::vector<Tag> tags{{{0, 0, 0, 1}, 0, {}}, {{1, 0, 0, 1}, 1, {}}, {{2, 0, 0, 1}, 2, {}},
+                                {{3, 0, 0, 1}, 3, {}}};
+    std::vector<Name> names(3);
+    std::memcpy(names[0].bytes, "cat", 3);                               // ended by a zero byte
+    std::memcpy(names[1].bytes, "d\xC3\x28g", 4);                        // not UTF-8
+    std::memcpy(names[2].bytes, "abcdefghijklmnopqrstuvwxyz\xC3\xA9-\xE2\x82\xAC", 32);   // the whole stride
+    REQUIRE(rt.set_resource(version("anchors", tags, 1)).ok());
+    CHECK(rt.labels().empty());                                         // no frame showed a version yet
+    REQUIRE(rt.set_resource(version("names", names, 1)).ok());
+    REQUIRE(frame(h, rt).size() == 1);
+    const std::vector<cd::Label> labels = rt.labels();
+    REQUIRE(labels.size() == 2);                                        // tag 1 is not UTF-8, tag 3 has no string
+    CHECK(labels[0].text == "cat");
+    CHECK(labels[0].position[0] == 0.0f);
+    CHECK(labels[0].align == cs::TextAlign::right);
+    CHECK(labels[1].text == std::string("abcdefghijklmnopqrstuvwxyz\xC3\xA9-\xE2\x82\xAC"));
+    CHECK(labels[1].position[0] == 2.0f);
+    // A newer version of the strings names the labels anew at the next frame.
+    std::memcpy(names[0].bytes, "cow", 3);
+    REQUIRE(rt.set_resource(version("names", names, 2)).ok());
+    CHECK(rt.labels()[0].text == "cat");
+    REQUIRE(frame(h, rt).size() == 1);
+    CHECK(rt.labels()[0].text == "cow");
+}
+
 TEST_CASE("a refused frame is an error of its program only") {
     Host h;
     cd::DrawRuntime rt(h.gfx, true, checks());

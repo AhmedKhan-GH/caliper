@@ -847,13 +847,18 @@ public:
         if (auto it = o.find("text"); it != o.end()) {
             const std::string tp = key_path(path, "text");
             if (table(*it, tp, tp)) {
-                strict_keys(*it, tp, {"anchors", "position", "string", "priority", "strings"}, "the text table");
+                strict_keys(*it, tp, {"anchors", "position", "string", "priority", "strings", "strings_from", "align"},
+                            "the text table");
                 TextTable t;
                 t.anchors = required_string(*it, "anchors", tp, "The text table");
                 if (auto v = string(*it, "position", tp)) t.position = *v;
                 if (auto v = string(*it, "string", tp)) t.string = *v;
                 t.priority = string(*it, "priority", tp);
                 t.strings = string_list(*it, "strings", tp);
+                t.strings_from = string(*it, "strings_from", tp);
+                if (auto a = named<TextAlign>(*it, "align", tp, text_align_from_name, {"placed", "left", "right", "center"},
+                                              "an alignment"))
+                    t.align = *a;
                 d.text = std::move(t);
             }
         }

@@ -103,6 +103,11 @@ enum class DrawDepth { none, test, write };
 enum class CameraMode { orbit, pan_zoom, none };
 // When the draw half's buffers return to zero besides an install.
 enum class BufferReset { install, cursor, resource };
+// Where the host puts a label: `placed` lets the placer choose one of eight
+// places around the anchor, as for the other labels of the panel; `left`,
+// `right` and `center` pin the label at its anchor, with the start, the end or
+// the middle of its text there and the text centered on it vertically.
+enum class TextAlign { placed, left, right, center };
 
 inline const char* input_kind_name(InputKind k) { return k == InputKind::tensor ? "tensor" : "buffer"; }
 inline const char* param_type_name(ParamType t) { return t == ParamType::f32 ? "f32" : t == ParamType::i32 ? "i32" : "u32"; }
@@ -130,6 +135,9 @@ inline const char* camera_mode_name(CameraMode c) {
 }
 inline const char* buffer_reset_name(BufferReset r) {
     return r == BufferReset::install ? "install" : r == BufferReset::cursor ? "cursor" : "resource";
+}
+inline const char* text_align_name(TextAlign a) {
+    return a == TextAlign::placed ? "placed" : a == TextAlign::left ? "left" : a == TextAlign::right ? "right" : "center";
 }
 
 namespace detail {
@@ -181,6 +189,10 @@ inline std::optional<CameraMode> camera_mode_from_name(std::string_view s) {
 inline std::optional<BufferReset> buffer_reset_from_name(std::string_view s) {
     static const BufferReset all[] = {BufferReset::install, BufferReset::cursor, BufferReset::resource};
     return detail::from_name(s, all, buffer_reset_name);
+}
+inline std::optional<TextAlign> text_align_from_name(std::string_view s) {
+    static const TextAlign all[] = {TextAlign::placed, TextAlign::left, TextAlign::right, TextAlign::center};
+    return detail::from_name(s, all, text_align_name);
 }
 
 // One field of a layout, written "name: type" in the manifest. The types are
@@ -355,17 +367,22 @@ inline bool operator==(const PickMap& a, const PickMap& b) { return a.resource =
 // Text that the host draws: one label at each valid element of `anchors`,
 // whose `position` field (vec4<f32>, world xyz) places it and whose `string`
 // field (u32) indexes `strings`. An optional `priority` field (f32) orders
-// the labels when they overlap.
+// the labels when they overlap. With `strings_from`, the strings come from a
+// published buffer resource or buffer input instead: each valid element is one
+// string of UTF-8 bytes, ended by its stride (at most kStringBytes) or its
+// first zero byte.
 struct TextTable {
     std::string anchors;                     // a buffer resource
     std::string position = "position";
     std::string string = "string";
     std::optional<std::string> priority;
     std::vector<std::string> strings;        // at most kStrings, each at most kStringBytes
+    std::optional<std::string> strings_from; // a buffer of at most kStrings elements of at most kStringBytes
+    TextAlign align = TextAlign::placed;
 };
 inline bool operator==(const TextTable& a, const TextTable& b) {
     return a.anchors == b.anchors && a.position == b.position && a.string == b.string && a.priority == b.priority &&
-           a.strings == b.strings;
+           a.strings == b.strings && a.strings_from == b.strings_from && a.align == b.align;
 }
 
 // The table `draw`; its source is draw.wgsl.

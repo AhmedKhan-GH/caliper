@@ -102,7 +102,7 @@ The draw half runs in the viewer every frame, after the draws of the scene. The 
 | `targets` | At most 4 offscreen targets, each with `id`, `scale` (1, 0.5 or 0.25) and `clear` |
 | `passes` | 1 to 16 passes of one frame, in order |
 | `pick` | The item map, with `resource` and `fields` |
-| `text` | The text table, with `anchors`, `position`, `string`, `priority` and `strings` |
+| `text` | The text table, with `anchors`, `position`, `string`, `priority`, `strings` or `strings_from`, and `align` |
 | `frame_ms` | The most GPU time of one frame in milliseconds, 4 when absent and at most 16 |
 | `memory_mb` | The budget of the resources, buffer inputs, draw buffers and targets in the viewer, 64 when absent and at most 256 |
 
@@ -402,6 +402,10 @@ A pick in a panel with the option `select` writes a state variable from a field.
 
 The host owns text. A piece publishes the anchors of its labels in a buffer resource, and its text table names them. The table has `anchors`, the resource, and `position`, a `vec4<f32>` field whose xyz is the world position of the label. It has `string`, a `u32` field that indexes `strings`, and an optional `priority`, an `f32` field. The list `strings` holds at most 4,096 strings of at most 64 bytes each.
 
+The strings can also come from the run. With `strings_from`, the table names a published buffer resource or buffer input in place of `strings`, and each of its valid elements is one string. The layout of that buffer holds only `u32`, `vec2<u32>` and `vec4<u32>` fields, at most 64 bytes, and a resource of it holds at most 4,096 elements. The bytes of an element are UTF-8 text, and the first zero byte ends the string before the end of the element. The host reads the version of that buffer that the frame shows, and it checks each string again. A string that is not valid UTF-8 leaves its labels out. Thus the strings of a table are at most 4,096, each of at most 64 bytes and 256 KiB together, whichever source they come from. A derive half writes the strings of a run, such as the label of each box, from a tensor of packed bytes.
+
+The key `align` says where the host puts each label. With `placed`, the default, the placer chooses one of eight places around the anchor, as for the other labels of the panel. With `left`, `right` or `center`, the host pins each label at its anchor, with the start, the end or the middle of its text there and the text centered on the anchor vertically. A pinned label does not move away from a label that it overlaps, and the labels that the placer places after it keep clear of it. Axis labels use it.
+
 The scene view reads the anchors of the version that the frame shows and projects them with the camera. It places at most 512 labels with the overlap rule and the leader lines of the other labels of the panel. A label of a higher priority wins an overlap. When more than 512 anchors are valid, the anchors of the highest priority stay. A position or a priority that is not a finite number leaves the anchor out. A string index outside the table leaves it out too. The anchors come from a derive half only, because only the derive half output reaches the CPU. A table that breaks its limits gives `program.bad_text`.
 
 ## Camera
@@ -455,7 +459,7 @@ The editor, the script and the viewer refuse a piece with a stable code before a
 | `program.bad_pass` | The kind, entry, target or values of a pass |
 | `program.target_cycle` | A pass reads its own target, or a target before a pass writes it |
 | `program.bad_pick` | The item map names no field, or the piece has no pass with `pick` |
-| `program.bad_text` | The anchors lack their fields, or the strings break their limits |
+| `program.bad_text` | The anchors lack their fields, the strings break their limits, both `strings` and `strings_from` are given, or the buffer of `strings_from` has another layout or more than 4,096 elements |
 | `program.camera_conflict` | Two programs of a panel select two cameras. The editor, `spec.validate` and the viewer give it. |
 | `program.binding_not_allowed` | A file declares a binding, or a pass writes a tensor input |
 | `program.reserved_name` | A file declares a name of the host or a name with a double underscore |
