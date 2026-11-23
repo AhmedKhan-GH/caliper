@@ -22,6 +22,8 @@ import caliper
 from caliper import _programs as P
 from caliper import _wire as w
 
+import overhead_targets
+
 MPS = torch.backends.mps.is_available()
 try:
     import caliper._producer as _producer
@@ -368,7 +370,8 @@ def test_the_arcs_piece_publishes_its_resources_in_the_cadence(attached):
 
     # The cadence: every pass of the piece is a pass of the shared cadence, inside its share.
     assert st["every"] >= P.N_MIN
-    assert st["overhead_share"] is not None and 0 < st["overhead_share"] <= 2 * P.SHARE
+    failure = overhead_targets.overhead_share("tower_arcs", st["overhead_share"], P.SHARE)
+    assert failure is None, failure
     print(f"arcs: {st['runs']} runs in 600 steps, every {st['every']}, share {st['overhead_share']:.4f}, "
           f"step {st['step_ms']:.3f} ms, cost {st['last_cost_ms']:.3f} ms, pass {st['last_pass_ms']} ms")
     assert torch.equal(model.attn0, before)          # read in place, never written

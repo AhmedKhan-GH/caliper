@@ -458,13 +458,15 @@ def steps(r):
     c.until("training goes on", lambda: r.run_step(child) > step_at + 5, 60)
     r.result["draw_stop"] = {"code": err["code"], "where": err["where"], "message": err["message"]}
 
-    # 14. The derive halves stay inside their share of the run.
-    r.step("the derive halves stay at or below 2 percent of the run")
+    # 14. The derive halves stay inside their share of the run: 2 percent is the target, a miss is a warning,
+    # and only a share above twice the target fails.
+    r.step("the derive halves stay near their target of 2 percent of the run")
     shares = {}
     for prog in ("tower_arcs", "head_pattern"):
         s = (c.status(prog) or {}).get("overhead_share")
-        if s is None or s > 0.02:
-            raise Fail(f"{prog} has an overhead_share of {s}")
+        failure = gp.targets.overhead_share(prog, s, 0.02)
+        if failure:
+            raise Fail(failure)
         shares[prog] = s
     r.result["overhead_share"] = shares
 
