@@ -78,22 +78,20 @@ features:
 
   - id: STR-09
     title: Wire Protocol 3.2
-    status: built
+    status: shipped
     scope: core
     summary: Wire protocol 3.2 adds the scene, text and bar view kinds, timelines and stamps, the scene messages for points, lines, arrows, boxes, meshes, images, cameras, transforms, class tables and clears, and the recording and cursor messages, in the C++, Python and TypeScript codecs.
     depends_on: [STR-03]
-    sprint: 4
-    branches: [sprint4-integ3, sprint4-proto3]
+    docs: docs/reference/wire-protocol-3-2.md#implementation-status
     issue: null
 
   - id: STR-10
     title: caliper.scene
-    status: built
+    status: shipped
     scope: core
     summary: caliper.scene builds 3-D and 2-D scenes of points, lines, meshes, arrows, boxes, images and cameras, with entity transforms, a class table, clears and a starting camera, checked on the device and sent by both senders with the state a late viewer needs.
     depends_on: [STR-05, STR-09]
-    sprint: 4
-    branches: [sprint4-integ3, sprint4-proto3]
+    docs: docs/python/scene-calls.md#primitives
     issue: null
 
   - id: STR-11
