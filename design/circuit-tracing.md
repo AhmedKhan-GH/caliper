@@ -49,6 +49,7 @@ T1 adds semantic points without a CPU copy. Decoder block names come from the ac
 The fixture blocks use `layers.N`. The text-only Qwen wrapper uses `model.layers.N`.
 The probe suffixes are `resid_pre`, `mlp_in`, `mlp_out`, and `attn_pattern`.
 The Qwen DeltaNet pattern is a signed causal mixing operator, not a softmax probability matrix.
+Semantic probes retain the existing wire kind `module`. Their `probe` field identifies the semantic form.
 
 `_programs._resolve` reads parameters, buffers, gradients, and module outputs through `.act`.
 It has no arbitrary named-tensor registry. T1 adds that registry and connects it to this resolver.
@@ -65,6 +66,8 @@ The app already has a `text` control, but it binds only local values and shared 
 `_controls._param_spec` refuses a string without choices. T6 adds a free-text script parameter and `param:` text binding.
 Hosted runs currently start scripts through `run.start`. There is no `inference` run kind.
 T8 extends that runner contract and carries intervention state through its existing fork checkpoint.
+An optimizer-free watch also needs producer attachment, program capabilities, and intervention registration.
+T1 supplies producer attachment. T7 supplies the remaining capability and intervention lifecycle.
 
 ### Text And Registry
 
@@ -196,6 +199,11 @@ M7 commands are `feature.dictionary`, `feature.show`, `feature.examples`, `trace
 M8 extends the existing intervention commands and adds `patch.sweep` and `trace.validate`.
 Read commands do not mutate the model. Change commands use the existing approval and step-boundary paths.
 A missing dictionary gives a structured refusal.
+
+The outline reference `tests/scene/draw_reference.h` is absent on the base.
+The implemented cross-backend limits are in `web/test/draw_parity.spec.ts`.
+Interior pixels differ by at most two channel levels. Differing edge pixels occupy at most one percent of the image.
+Interior IDs must match exactly. The new piece checks retain these limits.
 
 ## Intervention Contract
 
