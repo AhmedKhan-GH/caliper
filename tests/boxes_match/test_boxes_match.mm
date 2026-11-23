@@ -113,11 +113,15 @@ std::vector<HostTensor> piece_tensors(const Boxes& b, caliper_net::Json* params)
     t.push_back(HostTensor::of("centers", "f32", {n, d}, b.centers));
     t.push_back(HostTensor::of("half_sizes", "f32", {n, d}, b.half));
     if (!b.rot.empty()) t.push_back(HostTensor::of("rotations", "f32", {n, 4}, b.rot));
-    if (!b.labels.empty()) {
-        std::vector<std::uint32_t> words(b.labels.size() * 16, 0u);
-        for (std::size_t i = 0; i < b.labels.size(); ++i)
-            std::memcpy(words.data() + i * 16, b.labels[i].data(), std::min<std::size_t>(b.labels[i].size(), 64));
-        t.push_back(HostTensor::of("labels", "u32", {std::int64_t(b.labels.size()), 16}, words));
+    std::vector<std::string> labels = b.labels;
+    // The scene view resolves class labels on the CPU. A direct piece draw takes these strings as its labels input.
+    if (labels.empty())
+        for (std::int32_t id : b.classes) labels.push_back(std::to_string(std::uint32_t(id)));
+    if (!labels.empty()) {
+        std::vector<std::uint32_t> words(labels.size() * 16, 0u);
+        for (std::size_t i = 0; i < labels.size(); ++i)
+            std::memcpy(words.data() + i * 16, labels[i].data(), std::min<std::size_t>(labels[i].size(), 64));
+        t.push_back(HostTensor::of("labels", "u32", {std::int64_t(labels.size()), 16}, words));
     }
     std::uint32_t mode = 0;
     if (!b.rgba.empty() && b.native_rgba) {
@@ -340,6 +344,7 @@ TEST_CASE("boxes_match: class ids through the palette, with ids outside the tabl
     const Outcome o = run(m, "classes", b, {0, 19});
     CHECK(o.c.lit_interior >= 2000);
     CHECK(o.picks == o.asked);
+    CHECK(o.labels == std::size_t(b.n()));
 }
 
 TEST_CASE("boxes_match: u8 colors of each box (N, 4) bound as bytes") {
@@ -368,6 +373,7 @@ TEST_CASE("boxes_match: class ids of i32 and of u16 through the palette") {
         const Outcome o = run(m, std::string("classes_") + type, b, {0, 19});
         CHECK(o.c.lit_interior >= 2000);
         CHECK(o.picks == o.asked);
+        CHECK(o.labels == std::size_t(b.n()));
     }
 }
 
