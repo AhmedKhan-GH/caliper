@@ -10,7 +10,7 @@ import { test, expect, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mockApp, openSpec, VIEWS_FILES, type Json, type MockApp } from './spec-mock.js';
-import { REPO } from './util.js';
+import { decodePng, REPO } from './util.js';
 
 const WASM = process.env.CALIPER_WASM_DIR ?? path.join(REPO, 'python', 'caliper', '_web');
 const FIXTURE = path.join(REPO, 'tests', 'draw_parity', 'dashboard');
@@ -39,9 +39,12 @@ async function openRecorded(page: Page, change?: (spec: Json) => void): Promise<
 }
 
 /** A panel's module canvas as RGBA bytes, read in the same task as the module's frame (two frames on). */
-function pixels(page: Page, panel: string): Promise<{ w: number; h: number; px: number[] }> {
-  return page.evaluate((id) => new Promise<{ w: number; h: number; px: number[] }>((done) => {
-    const c = (window as any).caliperSpec.programs.canvasOf(id) as HTMLCanvasElement;
+async function pixels(page: Page, panel: string): Promise<{ w: number; h: number; px: Uint8Array }> {
+  const capture = await page.evaluate((id) => new Promise<{
+    png: string; programs: { id: string; state: string; code: string; message: string }[];
+  }>((done) => {
+    const views = (window as any).caliperSpec.programs;
+    const c = views.canvasOf(id) as HTMLCanvasElement;
     const original = window.requestAnimationFrame.bind(window);
     original(() => original(() => {
       const probe = document.createElement('canvas');
@@ -49,9 +52,17 @@ function pixels(page: Page, panel: string): Promise<{ w: number; h: number; px: 
       probe.height = c.height;
       const g = probe.getContext('2d', { willReadFrequently: true })!;
       g.drawImage(c, 0, 0);
-      done({ w: c.width, h: c.height, px: Array.from(g.getImageData(0, 0, c.width, c.height).data) });
+      const raw = views.mounts.get(id)?.handle?.stats?.programs ?? [];
+      // Lossless PNG avoids a separate protocol value for every RGBA byte. That transfer can
+      // stall SwiftShader long enough for the program watchdog to stop both dashboard panels.
+      done({ png: probe.toDataURL('image/png'), programs: typeof raw === 'string' ? JSON.parse(raw) : raw });
     }));
   }), panel);
+  expect(capture.programs.length, `${panel}: programs at capture`).toBeGreaterThan(0);
+  for (const program of capture.programs)
+    expect(program, `${panel}: ${JSON.stringify(program)}`).toMatchObject({ state: 'running', code: '' });
+  const decoded = decodePng(Buffer.from(capture.png.split(',')[1], 'base64'));
+  return { w: decoded.width, h: decoded.height, px: decoded.data };
 }
 
 /** A number of the module's stats of a panel. */
@@ -110,6 +121,9 @@ test('a pick of an arc gives its fields, writes the page own state, highlights t
     throw new Error(`no pick from ${chosen.length} clicks on the arcs; the tower module counted ${JSON.stringify(stats)}`);
   }
   const s = await page.evaluate(() => (window as any).caliperSpec.debugState());
+  for (const panel of ['tower', 'pattern'])
+    for (const program of s.programs[panel].programs)
+      expect(program, `${panel}: ${JSON.stringify(program)}`).toMatchObject({ module: 'running', code: '' });
   const pick = s.picks.at(-1);
   expect(pick.panel).toBe('tower');
   expect(pick.detail.program).toBe('tower_arcs');
