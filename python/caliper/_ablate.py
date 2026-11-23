@@ -113,8 +113,10 @@ class Ablation:
         error (str | None): The text of the last failure, or None.
     """
 
-    def __init__(self, point: str):
+    def __init__(self, point: str, model=None):
         self.point = point
+        self._model = weakref.ref(model) if model is not None else lambda: None
+        self.on_error = None
         self.calls = 0
         self.errors = 0
         self.error = None
@@ -126,6 +128,7 @@ class Ablation:
         if h is not None:
             h.remove()
         self._masks.clear()
+        self.on_error = None
 
     @property
     def removed(self) -> bool:
@@ -135,6 +138,17 @@ class Ablation:
     def _failed(self, e: BaseException) -> None:
         self.errors += 1
         self.error = f"{type(e).__name__}: {e}"[:300]
+        callback = self.on_error
+        self()
+        if callback is not None:
+            try:
+                callback(self.error)
+            except Exception:
+                pass
+
+    def _suspended(self):
+        from .interp._intervene import selected_rows
+        return self.removed or selected_rows(self._model()) == ()
 
     def _zero(self, t, mask_key):
         import torch
@@ -144,6 +158,10 @@ class Ablation:
             mask = self._masks.get((t.device, mask_key))
             if mask is None:
                 mask = self._mask(t.device, mask_key)
+            from .interp._intervene import row_mask
+            selected = row_mask(self._model(), t)
+            if selected is not None:
+                mask = mask & selected
             return t.masked_fill(mask, 0)
         if isinstance(t, tuple) and hasattr(t, "_fields"):          # a named tuple
             return type(t)(*(self._zero(x, mask_key) for x in t))
@@ -165,6 +183,8 @@ class Ablation:
         return mask
 
     def _forward_hook(self, module, args, output):
+        if self._suspended():
+            return None
         self.calls += 1
         try:
             return self._zero(output, None)
@@ -176,6 +196,8 @@ class Ablation:
         key = (head, features)
 
         def hook(module, args):
+            if self._suspended():
+                return None
             self.calls += 1
             try:
                 if not args:
@@ -208,11 +230,13 @@ def ablate(model, point: str):
         if probe.event == "pattern":
             raise ValueError("attention patterns are read-only probe points")
         target = dict(model.named_modules())[probe.module]
-        a = Ablation(point)
+        a = Ablation(point, model)
         if probe.event == "output":
             a._handle = target.register_forward_hook(a._forward_hook)
         else:
             def hook(module, args, kwargs):
+                if a._suspended():
+                    return None
                 a.calls += 1
                 try:
                     value = a._zero(_input(args, kwargs), None)
@@ -225,7 +249,7 @@ def ablate(model, point: str):
                     return None
             a._handle = target.register_forward_pre_hook(hook, with_kwargs=True)
         return a
-    a = Ablation(point)
+    a = Ablation(point, model)
     if head is None:
         a._handle = target.register_forward_hook(a._forward_hook)
     else:
