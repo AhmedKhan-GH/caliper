@@ -3236,10 +3236,33 @@ TEST_CASE("live/net: every scene piece restores its source arrays and rejects ma
         for (const auto& before : source.arrays) {
             const auto after = std::find_if(arrays.begin(), arrays.end(), [&](const auto& a) { return a.name == before.name; });
             REQUIRE(after != arrays.end());
-            CHECK(before.dtype == after->dtype);
             CHECK(before.shape == after->shape);
-            REQUIRE(before.size == after->size);
-            CHECK(std::memcmp(before.data, after->data, before.size) == 0);
+            if (piece.piece.find("name")->as_string() == "depth") {
+                CHECK(after->dtype == CALIPER_NET_DTYPE_F32);
+                const size_t n = size_t(before.shape[0] * before.shape[1]);
+                REQUIRE(after->size == n * 4);
+                const auto* scale_key = source.params.find("scale");
+                const float scale = scale_key ? float(scale_key->as_double()) : before.dtype == CALIPER_NET_DTYPE_U16 ? .001f : 1.f;
+                for (size_t i = 0; i < n; ++i) {
+                    float raw;
+                    if (before.dtype == CALIPER_NET_DTYPE_U16) { uint16_t v; std::memcpy(&v, before.data + i * 2, 2); raw = float(v); }
+                    else std::memcpy(&raw, before.data + i * 4, 4);
+                    float depth; std::memcpy(&depth, after->data + i * 4, 4);
+                    CHECK(depth == raw * scale);
+                }
+            } else {
+                CHECK(before.dtype == after->dtype);
+                REQUIRE(before.size == after->size);
+                CHECK(std::memcmp(before.data, after->data, before.size) == 0);
+            }
+        }
+        // A forbidden optional column must fail before it can address bytes past a compact row.
+        if (piece.part == "mesh" || piece.part == "arrows") {
+            auto malformed = piece;
+            malformed.names.push_back("rotations");
+            arrays.clear(); owned.clear();
+            CHECK_FALSE(caliper_live::scene_piece_arrays(malformed, dims, &arrays, &owned, &why));
+            CHECK(owned.empty());
         }
         // The first drawing buffer is mandatory and its stride must match the library layout.
         const std::string name = piece.piece.find("name")->as_string();

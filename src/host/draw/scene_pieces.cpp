@@ -392,7 +392,9 @@ void shape_received(const wire::SceneUpdate& u, const Batch& b,
         const bool texture = declaration.kind == cs::ResourceKind::texture;
         uint64_t count = 0;
         uint32_t width = 0, height = 0;
-        if (texture && data->shape.size() == 3 && data->shape[2] == 4 && data->shape[0] > 0 && data->shape[1] > 0) {
+        if (texture && ((data->dtype == CALIPER_NET_DTYPE_U8 && data->shape.size() == 3 && data->shape[2] == 4) ||
+                        (data->dtype == CALIPER_NET_DTYPE_I32 && data->shape.size() == 2)) &&
+            data->shape[0] > 0 && data->shape[1] > 0) {
             width = uint32_t(data->shape[1]); height = uint32_t(data->shape[0]);
             count = uint64_t(width) * height;
             if (data->size != count * 4 || width > CALIPER_NET_MAX_IMAGE_SIDE || height > CALIPER_NET_MAX_IMAGE_SIDE)

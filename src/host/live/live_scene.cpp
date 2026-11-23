@@ -337,6 +337,7 @@ bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
     }
     wire::SceneUpdate cu = u;
     cu.arrays = std::move(arrays);
+    if (u.piece.find("name") && u.piece.find("name")->as_string() == "depth") cu.params.set("scale", 1.0);
     cu.program.reset();
     return decode_scene_update(cu, &u.paired, why);
 }

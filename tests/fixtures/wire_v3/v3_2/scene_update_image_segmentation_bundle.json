@@ -4,7 +4,7 @@
     "frame_len": 368,
     "magic": 1464615235,
     "major": 3,
-    "meta_len": 323,
+    "meta_len": 324,
     "minor": 2,
     "reserved": 0,
     "section_count": 1,
@@ -25,7 +25,7 @@
     "program": "scene.125",
     "resources": {
       "info": 1,
-      "palette": 4096,
+      "palette": 65536,
       "pixels": 6
     },
     "sections": [

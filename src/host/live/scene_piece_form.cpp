@@ -33,8 +33,9 @@ bool ScenePieceInbox::take(const wire::Resource& r, std::shared_ptr<const std::v
     h.count = r.count;
     h.stride = r.stride;
     const bool rgba8 = !r.format || *r.format == CALIPER_NET_TEXTURE_RGBA8;
-    h.width = r.width && rgba8 ? *r.width : 0;
-    h.height = r.height && rgba8 ? *r.height : 0;
+    h.uint_texels = r.format && *r.format == CALIPER_NET_TEXTURE_R32UINT;
+    h.width = r.width && (rgba8 || h.uint_texels) ? *r.width : 0;
+    h.height = r.height && (rgba8 || h.uint_texels) ? *r.height : 0;
     h.bytes = std::move(bytes);
     return true;
 }
@@ -61,7 +62,10 @@ std::shared_ptr<const void> ScenePieceInbox::pair(wire::SceneUpdate& u, std::sha
         wire::Section s;
         s.name = kv.first;
         s.dtype = CALIPER_NET_DTYPE_U8;
-        if (h.width)   // a texture's texels: (height, width, 4) bytes
+        if (h.width && h.uint_texels) {
+            s.dtype = CALIPER_NET_DTYPE_I32;
+            s.shape = {int64_t(h.height), int64_t(h.width)};
+        } else if (h.width)   // an RGBA texture has four bytes per texel
             s.shape = {int64_t(h.height), int64_t(h.width), 4};
         else
             s.shape = {int64_t(h.count), int64_t(h.stride)};
@@ -80,9 +84,22 @@ bool scene_piece_arrays(const wire::SceneUpdate& u, uint32_t dims, std::vector<w
     const std::string name = u.piece.is_object() && u.piece.find("name") ? u.piece.find("name")->as_string() : "";
     const caliper_net::Json* version = u.piece.is_object() ? u.piece.find("version") : nullptr;
     if (!version || version->as_double() != 1.0) return *why = "a piece " + name + " of another version", false;
+    const bool image_piece = name == "image" || name == "depth" || name == "segmentation";
+    const int part = wire::scene_part_index(u.part);
+    if (part < 0 || u.part != (image_piece ? "image" : name)) return *why = "piece and part differ", false;
+    const char* const* names = wire::scene_part_sections(part);
+    int last = -1;
+    if (u.names.empty()) return *why = "piece arrays are empty", false;
+    for (const auto& field : u.names) {
+        int at = -1;
+        for (int i = 0; names[i]; ++i) if (field == names[i]) at = i;
+        if (at <= last || (last < 0 && at != 0)) return *why = "piece arrays do not match the part", false;
+        last = at;
+    }
     if (name == "points") {
         const wire::Section* r = paired(u, "points");
-        if (!r || r->shape.size() != 2 || r->shape[1] != kScenePointStride ||
+        if (!r || r->shape.size() != 2 || r->shape[0] < 0 || r->shape[0] > CALIPER_NET_MAX_BATCH_POINTS ||
+            (r->size && !r->data) || r->shape[1] != kScenePointStride ||
             r->size != std::size_t(r->shape[0]) * kScenePointStride || (dims != 2 && dims != 3))
             return *why = "points@1's resource points of another layout", false;
         const std::size_t n = std::size_t(r->shape[0]);
@@ -268,30 +285,26 @@ bool scene_piece_arrays(const wire::SceneUpdate& u, uint32_t dims, std::vector<w
     }
     if (name == "depth" || name == "segmentation") {
         const bool depth = name == "depth";
-        const auto* pixels = buffer("pixels", 4, 33554432);
+        const auto* pixels = paired(u, "pixels");
         const auto* info = buffer("info", depth ? 96 : 80, 1);
-        if (!pixels || !info || info->shape[0] != 1) return *why = name + " resources have another layout", false;
+        if (!pixels || !info || info->shape[0] != 1 || pixels->dtype != CALIPER_NET_DTYPE_I32 || pixels->shape.size() != 2)
+            return *why = name + " resources have another layout", false;
         uint32_t size[4]; std::memcpy(size, info->data, 16);
         const uint64_t n = uint64_t(size[0]) * size[1];
         if (!size[0] || !size[1] || size[0] > CALIPER_NET_MAX_IMAGE_SIDE || size[1] > CALIPER_NET_MAX_IMAGE_SIDE ||
-            n != uint64_t(pixels->shape[0]) || size[2] != 1 || (depth ? size[3] != 2 && size[3] != 4 : size[3] != 1 && size[3] != 2))
+            pixels->shape != std::vector<int64_t>{int64_t(size[1]), int64_t(size[0])} || pixels->size != n * 4 ||
+            !pixels->data || size[2] != 1 || (depth ? size[3] != 4 : size[3] != 1 && size[3] != 2))
             return *why = name + " image size does not match its pixels", false;
-        const auto* source = depth ? buffer("source_pixels", 4, 33554432) : pixels;
-        if (!source || uint64_t(source->shape[0]) != n) return *why = "depth source pixels have another layout", false;
-        const int64_t dtype = depth && size[3] == 4 ? CALIPER_NET_DTYPE_F32 : size[3] == 2 ? CALIPER_NET_DTYPE_U16 : CALIPER_NET_DTYPE_U8;
+        if (depth) {
+            // Library pixels already hold depth in scene units. The caller sets scale to one.
+            copy("pixels", CALIPER_NET_DTYPE_F32, {int64_t(size[1]), int64_t(size[0])}, *pixels);
+            return true;
+        }
+        const int64_t dtype = size[3] == 2 ? CALIPER_NET_DTYPE_U16 : CALIPER_NET_DTYPE_U8;
         auto* to = add("pixels", dtype, {int64_t(size[1]), int64_t(size[0])}, size_t(n) * size[3]);
         for (uint64_t i = 0; i < n; ++i) {
-            uint32_t v;
-            if (depth) {
-                float f; std::memcpy(&f, source->data + i * 4, 4);
-                if (size[3] == 4) { std::memcpy(to + i * 4, &f, 4); continue; }
-                if (!std::isfinite(f) || f < 0 || f > 65535 || f != std::floor(f))
-                    return *why = "depth source is not a uint16 value", false;
-                v = uint32_t(f);
-            } else {
-                std::memcpy(&v, source->data + i * 4, 4);
-                if (v > (size[3] == 1 ? 255u : 65535u)) return *why = "mask class id exceeds its dtype", false;
-            }
+            uint32_t v; std::memcpy(&v, pixels->data + i * 4, 4);
+            if (v > (size[3] == 1 ? 255u : 65535u)) return *why = "mask class id exceeds its dtype", false;
             if (size[3] == 2) { uint16_t small = uint16_t(v); std::memcpy(to + i * 2, &small, 2); }
             else to[i] = uint8_t(v);
         }

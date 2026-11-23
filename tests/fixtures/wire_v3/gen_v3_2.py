@@ -1129,8 +1129,9 @@ def _scene_bundles(messages):
         program = f"scene.{index}"
         counts = {}
         for rid, count, stride, data, width, height in resources:
-            out[name.replace("scene_update_", "resource_scene_", 1) + "_bundle_" + rid] = w.Resource(program, rid, 7, count, stride, data, width, height)
+            out[name.replace("scene_update_", "resource_scene_", 1) + "_bundle_" + rid] = _scene_pieces.resource_message(piece, program, rid, 7, count, stride, data, width, height)
             counts[rid] = count
-        out[name + "_bundle"] = replace(message, arrays={}, program=program, piece=_scene_pieces.PINS[piece],
+        params = dict(message.params, scale=1.0) if piece == "depth" else message.params
+        out[name + "_bundle"] = replace(message, arrays={}, params=params, program=program, piece=_scene_pieces.PINS[piece],
                                          resources=counts, names=names)
     return out

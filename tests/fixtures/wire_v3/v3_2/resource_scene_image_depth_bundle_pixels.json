@@ -1,10 +1,10 @@
 {
   "header": {
     "flags": 0,
-    "frame_len": 184,
+    "frame_len": 224,
     "magic": 1464615235,
     "major": 3,
-    "meta_len": 129,
+    "meta_len": 169,
     "minor": 2,
     "reserved": 0,
     "section_count": 1,
@@ -12,6 +12,8 @@
   },
   "meta": {
     "count": 6,
+    "format": "r32uint",
+    "height": 2,
     "program": "scene.123",
     "resource": "pixels",
     "sections": [
@@ -24,7 +26,8 @@
       }
     ],
     "step": 7,
-    "stride": 4
+    "stride": 4,
+    "width": 3
   },
   "meta_offset": 28,
   "name": "v3_2/resource_scene_image_depth_bundle_pixels",
@@ -37,7 +40,7 @@
       "encoding": 0,
       "length": 24,
       "name": "resource",
-      "offset": 160,
+      "offset": 200,
       "shape": [
         24
       ],

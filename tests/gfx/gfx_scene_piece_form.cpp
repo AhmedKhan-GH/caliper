@@ -71,7 +71,7 @@ TEST_CASE("gfx/Metal scene piece resources: every part matches the recording con
                               "boxes_2d", "mesh", "mesh_normals", "mesh_textured", "mesh_colors", "image_depth",
                               "image_depth_f32", "image_segmentation", "image_segmentation_u16"}) {
         @autoreleasepool {
-            CAPTURE(suffix);
+            CAPTURE(std::string(suffix));
             const std::string base = std::string("scene_update_") + suffix;
             Frames frames;
             auto old_message = frames.load(base);
@@ -96,7 +96,7 @@ TEST_CASE("gfx/Metal scene piece resources: every part matches the recording con
             REQUIRE(before.size() == after.size());
             size_t different = 0;
             for (size_t i = 0; i < before.size(); i += 4) different += std::memcmp(before.data() + i, after.data() + i, 4) != 0;
-            MESSAGE("[scene-piece-resources] ", suffix, ": ", different, " of ", before.size() / 4, " pixels differ");
+            MESSAGE("[scene-piece-resources] ", std::string(suffix), ": ", different, " of ", before.size() / 4, " pixels differ");
             CHECK(different == 0);
             CHECK(b.scene->shape_counts().received == 1);
             size_t hits = 0;
@@ -121,7 +121,7 @@ TEST_CASE("gfx/Metal scene piece resources: every part matches the recording con
                 CHECK(ha.pixel[0] == hb.pixel[0]);
                 CHECK(ha.pixel[1] == hb.pixel[1]);
             }
-            MESSAGE("[scene-piece-resources] ", suffix, ": ", hits, " matching picks");
+            MESSAGE("[scene-piece-resources] ", std::string(suffix), ": ", hits, " matching picks");
             CHECK(hits > 0);
         }
     }

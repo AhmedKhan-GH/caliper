@@ -26,7 +26,7 @@ PINS = {name: {"name": name, "version": 1} for name in
         ("points", "lines", "arrows", "boxes", "mesh", "image", "depth", "segmentation")}
 POINT_STRIDE = 32           # points@1 resource "points": Point {position: vec4<f32>, bits: u32, index: u32}
 POINTS_MAX = 4194304        # its count
-PIXELS_MAX = 33554432       # image@1 resource "pixels": an rgba8unorm texture, its most texels
+PIXELS_MAX = 67108864       # image@1 resource "pixels": an rgba8unorm texture, its most texels
 INFO_STRIDE = 80            # image@1 resource "info": ImageInfo {size: vec4<u32>, c0..c3: vec4<f32>}
 NAN_BITS = 0x7FC00000       # the bits of a point without a color source, as the scene view writes them
 
@@ -178,6 +178,12 @@ def unpack_points(data, names: list, dims: int) -> dict:
     return out
 
 
+def resource_message(piece, program, resource, step, count, stride, data, width, height):
+    """A resource message with the texture format declared by its library piece."""
+    fmt = _wire.TEXTURE_R32UINT if piece in ("depth", "segmentation") and resource == "pixels" else None
+    return _wire.Resource(program, resource, step, count, stride, data, width, height, format=fmt)
+
+
 def bundle(sub: int, view: str, b, state: bool) -> list:
     """The frames of batch ``b`` in the piece form for one subscription: the RESOURCE versions of
     its scene program (in parts of 8 MiB when larger), then the SCENE_UPDATE that names them.
@@ -191,10 +197,11 @@ def bundle(sub: int, view: str, b, state: bool) -> list:
     step = int(getattr(b, "step", None) or 0)
     frames, counts = [], {}
     for rid, count, stride, data, width, height in resources:
-        r = _wire.Resource(pid, rid, step, count, stride, data, width, height)
+        r = resource_message(piece, pid, rid, step, count, stride, data, width, height)
         frames.extend(_wire.resource_parts(r, next(_programs._VERSIONS), _programs.PART_BYTES))
         counts[rid] = count
-    frames.append(_wire.SceneUpdate(sub, view, b.seq, b.stamp_ns, b.path, b.part, {}, b.params,
+    params = dict(b.params, scale=1.0) if piece == "depth" else b.params
+    frames.append(_wire.SceneUpdate(sub, view, b.seq, b.stamp_ns, b.path, b.part, {}, params,
                                     static=b.static, state=state, axes=b.axes, program=pid,
                                     piece=dict(PINS[piece]), resources=counts, names=names))
     return frames
@@ -344,11 +351,12 @@ def pack_pixels(b, piece):
     f = info.view("<f4")
     f[4:20] = np.eye(4, dtype="<f4").ravel()
     if piece == "depth":
-        source = px.astype("<f4").ravel()
-        pixels = source * np.float32(b.params.get("scale", 0.001 if px.dtype.itemsize == 2 else 1.0))
+        pixels = px.astype("<f4").ravel() * np.float32(b.params.get("scale", 0.001 if px.dtype.itemsize == 2 else 1.0))
         valid = pixels[np.isfinite(pixels) & (pixels != 0)]
         if valid.size:
             f[20:23] = (valid.min(), valid.max(), 1)
-        return [_resource("pixels", pixels), _resource("info", info, 96), _resource("source_pixels", source)]
-    return [_resource("pixels", px.astype("<u4").ravel()),
-            _resource("palette", np.zeros(4096, "<u4")), _resource("info", info, 80)]
+        info[3] = 4
+        return [("pixels", w*h, 4, memoryview(pixels).cast("B"), w, h), _resource("info", info, 96)]
+    pixels = px.astype("<u4").ravel()
+    return [("pixels", w*h, 4, memoryview(pixels).cast("B"), w, h),
+            _resource("palette", np.zeros(65536, "<u4")), _resource("info", info, 80)]

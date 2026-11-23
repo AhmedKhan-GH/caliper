@@ -49,8 +49,8 @@ def arrays(update, resources, dims=3):
         pixels = words("pixels").view(np.uint8).reshape(height, width, 4)
         return {"pixels": pixels[..., 0].copy() if channels == 1 else pixels.copy()}
     if piece == "depth":
-        pixels = words("source_pixels").view("<f4")
-        return {"pixels": pixels.astype("<u2" if size == 2 else "<f4").reshape(height, width)}
+        pixels = words("pixels").view("<f4")
+        return {"pixels": pixels.reshape(height, width).copy()}
     return {"pixels": words("pixels").astype(np.uint8 if size == 1 else "<u2").reshape(height, width)}
 
 

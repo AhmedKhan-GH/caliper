@@ -335,7 +335,10 @@ def test_every_library_layout_preserves_the_source_arrays():
         dims = first.shape[1] if source.part != "image" else 3
         back = arrays(update, resources, dims)
         for name, section in source.arrays.items():
-            np.testing.assert_array_equal(back[name], section.array(), err_msg=path.stem + ":" + name)
+            expected = section.array()
+            if update.piece["name"] == "depth":
+                expected = expected.astype("<f4") * np.float32(source.params.get("scale", 0.001 if expected.dtype.itemsize == 2 else 1.0))
+            np.testing.assert_array_equal(back[name], expected, err_msg=path.stem + ":" + name)
         checked.add(update.piece["name"])
     assert checked == set(_scene_pieces.PINS)
 
@@ -375,15 +378,16 @@ def test_encoded_images_become_bounded_texture_resources(format):
     assert resources[0][1:3] == (35, 4)
 
 
-def test_encoded_images_refuse_malformed_and_oversize_headers():
+@pytest.mark.parametrize("format", ["PNG", "JPEG"])
+def test_encoded_images_refuse_malformed_and_oversize_headers(format):
     import io
     from types import SimpleNamespace
     from PIL import Image
     stream = io.BytesIO()
-    Image.new("RGB", (8193, 1)).save(stream, format="PNG")
-    for data in (b"not an image", stream.getvalue()):
+    Image.new("RGB", (8193, 1)).save(stream, format=format)
+    for data in (b"not an image", stream.getvalue()[:40], stream.getvalue()):
         batch = SimpleNamespace(part="image", arrays={"pixels": np.frombuffer(data, np.uint8)},
-                                params={"form": "encoded", "format": "png"}, packed=None)
+                                params={"form": "encoded", "format": format.lower()}, packed=None)
         with pytest.raises(ValueError):
             _scene_pieces.route(batch)
 
@@ -403,3 +407,20 @@ def test_point_colors_preserve_class_ids_for_labels(server, device):
             np.testing.assert_array_equal(update.arrays["class_ids"].array(), ids.cpu().numpy())
             np.testing.assert_array_equal(update.arrays["colors"].array(), colors.cpu().numpy())
     run(body())
+
+
+@pytest.mark.parametrize("dtype,scale", [("<u2", .001), ("<f4", 2.5)])
+def test_depth_uses_one_scaled_texture(dtype, scale):
+    from types import SimpleNamespace
+    from scene_piece_reader import arrays
+    pixels = np.array([[0, 1], [100, 65535]], dtype=dtype)
+    batch = SimpleNamespace(part="image", arrays={"pixels": pixels}, params={"form": "depth", "scale": scale},
+                            packed=None, scene="depth", path="d", seq=1, stamp_ns=0, static=False, axes=None)
+    frames = _scene_pieces.bundle(1, "depth", batch, False)
+    resources = {r.resource: r for r in frames if isinstance(r, w.Resource)}
+    assert set(resources) == {"pixels", "info"}
+    texture = resources["pixels"]
+    assert (texture.width, texture.height, texture.format) == (2, 2, w.TEXTURE_R32UINT)
+    assert frames[-1].params["scale"] == 1
+    np.testing.assert_array_equal(arrays(frames[-1], resources)["pixels"], pixels.astype("<f4") * np.float32(scale))
+    assert _scene_pieces.PIXELS_MAX == 8192 * 8192
