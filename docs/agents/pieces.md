@@ -84,6 +84,10 @@ The passes run in their order in one submit, with a barrier between two passes. 
 
 The derive half reads tensors read-only and without a copy. A pass that writes a tensor input is refused. The watchdog, the timeout and the budget of the shared cadence apply to one run of all passes.
 
+Each derive pass is a program of its entry point alone. It binds only the tensor inputs, resources and counters that its entry point uses, and one pass binds at most 8 storage buffers, the default of WebGPU. A piece can thus hold more storage buffers than one pass, such as a mesh with a texture, when it gives the work to several passes. A pass over 8 gives `program.over_web_limits`, which names the pass.
+
+No compute pass of either half may use `var<workgroup>`. The Metal hosts give a compute pass no threadgroup memory, thus such a variable would read zero in the app and hold its values in a browser. `piece.check`, the script and the app refuse a pass whose entry point uses workgroup memory with `program.workgroup_memory`. A piece keeps partial results in a private resource or a draw buffer instead.
+
 ### Draw Half
 
 The draw half runs in the viewer every frame, after the draws of the scene. The table `draw` holds the camera, `buffers`, `targets`, `passes`, `pick`, `text`, `frame_ms` and `memory_mb`.
@@ -451,11 +455,12 @@ The editor, the script and the viewer refuse a piece with a stable code before a
 | `program.reserved_name` | A file declares a name of the host or a name with a double underscore |
 | `program.entry_stage` | An entry point of the wrong stage, none, or the name `main` |
 | `program.interface_mismatch` | A fragment entry reads a location that the vertex entry does not write, or with another type or interpolation, or a vertex entry reads a vertex attribute |
-| `program.over_web_limits` | A pass goes over a default limit of WebGPU |
+| `program.over_web_limits` | A pass goes over a default limit of WebGPU, such as a derive pass that binds more than 8 storage buffers |
+| `program.workgroup_memory` | An entry point of a compute pass uses `var<workgroup>` |
 | `program.resources_unavailable` | The attached script takes no pieces |
 | `program.browser_refused` | WebGPU refused a module or a pipeline of the browser viewer |
 
-The manifest check holds every pass to the default limits of WebGPU, thus a piece that runs in the app also runs in a browser. One stage binds at most 8 storage buffers. As a result, the published resources, buffer inputs and draw buffers of a piece number at most 7 beside the selection.
+The manifest check holds every pass to the default limits of WebGPU, thus a piece that runs in the app also runs in a browser. One stage binds at most 8 storage buffers. As a result, the published resources, buffer inputs and draw buffers of a piece number at most 7 beside the selection. The derive half counts the storage buffers of each pass after the compile, because a pass binds only what its entry point uses.
 
 ## Browser Viewer
 

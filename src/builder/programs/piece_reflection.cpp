@@ -27,6 +27,7 @@ namespace {
 constexpr std::uint32_t kInvocationsMax = 256;             // WebGPU's maxComputeInvocationsPerWorkgroup
 constexpr std::uint32_t kWorkgroupAxisMax[3] = {256, 256, 64};
 constexpr std::uint32_t kInterStageMax = 16;               // WebGPU's maxInterStageShaderVariables
+constexpr std::uint32_t kStageStorageMax = 8;              // WebGPU's maxStorageBuffersPerShaderStage
 
 Verdict refuse(const char* code, std::string message, std::string where) {
     Verdict v;
@@ -65,6 +66,14 @@ Verdict check_entry(const Reflection& r, const std::string& name, EntryStage sta
             return refuse(kProgramOverWebLimits,
                           "A workgroup of " + name + " has " + std::to_string(invocations) +
                               " invocations, above WebGPU's 256.",
+                          where);
+        // The Metal hosts give a compute pass no threadgroup memory, thus a var<workgroup> would
+        // read zero there and its values in a browser: the piece is refused in every host.
+        if (e.workgroup_memory > 0)
+            return refuse(kProgramWorkgroupMemory,
+                          "The entry point " + name + " uses " + std::to_string(e.workgroup_memory) +
+                              " bytes of var<workgroup>, which a pass of a piece cannot have; keep partial results "
+                              "in a private resource or a draw buffer.",
                           where);
         return {};
     }
@@ -192,6 +201,17 @@ Verdict check_piece_reflection(const spec::Piece& piece, Half half, std::size_t 
             return refuse(kProgramBadPass, "The derive half has no pass " + std::to_string(pass) + ".", where);
         const spec::DerivePass& p = piece.derive->passes[pass];
         if (Verdict v = check_entry(r, p.entry, EntryStage::compute, where); !v.ok()) return v;
+        // r is the reflection of the module that keeps only this pass's entry point, which is
+        // what the producer binds for the pass. One pass binds at most WebGPU's 8.
+        std::uint32_t storage = 0;
+        for (const ReflectedBinding& b : r.bindings)
+            if (b.kind == BindingKind::storage_buffer) ++storage;
+        if (storage > kStageStorageMax)
+            return refuse(kProgramOverWebLimits,
+                          "The entry point " + p.entry + " binds " + std::to_string(storage) +
+                              " storage buffers: its tensor inputs, resources and counters. One derive pass binds at "
+                              "most 8; give the work to two passes.",
+                          where);
         // The tensor inputs of group 1 are read-only: no program writes a model tensor.
         for (const ReflectedBinding& b : r.bindings)
             if (b.group == kGroupInputs && b.write)
