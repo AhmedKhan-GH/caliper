@@ -2121,6 +2121,19 @@ private:
         glfwSetWindowCloseCallback(window_, [](GLFWwindow* w) {
             if (auto* app = static_cast<CaliperApp*>(glfwGetWindowUserPointer(w))) app->on_close_request();
         });
+        // A press at the pointer's place: GLFW's macOS backend gives a mouse press without the
+        // place of its event (cocoa_window.m, mouseDown:), and the window gets no cursor moves
+        // while it is not the key window or while moves do not reach it, so ImGui would put the
+        // press at the last place it was given, often hundreds of points away, and the drag's
+        // first move would then carry that whole distance in one frame. The pointer's place goes
+        // to ImGui first: ImGui's GLFW backend (installed by the renderer below) calls the
+        // callback it finds here before it adds the button.
+        glfwSetMouseButtonCallback(window_, [](GLFWwindow* w, int, int action, int) {
+            if (action != GLFW_PRESS || !ImGui::GetCurrentContext()) return;
+            double x = 0.0, y = 0.0;
+            glfwGetCursorPos(w, &x, &y);
+            ImGui::GetIO().AddMousePosEvent(float(x), float(y));
+        });
         return renderer_->init(window_);
     }
 
