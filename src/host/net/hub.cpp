@@ -113,7 +113,11 @@ struct SceneMsg {
     std::string path, part;          // part: "" for a clear
     bool is_static = false, recursive = false, reset = false;
     std::vector<std::string> parts;  // a clear's parts; empty: all
-    std::vector<ScenePtr> pieces;    // a split update: its pieces, in order
+    std::vector<ScenePtr> pieces;    // a split update: its pieces, in order; or a bundle of the piece form
+    // The piece form (capability "scene_pieces"): `piece_form` marks a bundle, the RESOURCE frames of a
+    // scene program and then the update that names them, in `pieces`, sent only to a viewer that
+    // announced the capability; `raw` marks one of those RESOURCE frames, sent as it came.
+    bool piece_form = false, raw = false;
     size_t pieces_expected = 0;      // a split update being put together: the pieces it has
     std::shared_ptr<const TransformRows> rows;   // the entity transforms the hub keeps
     size_t bytes() const {
@@ -356,6 +360,16 @@ struct Session {
     // CALIPER_NET_RESOURCE_VERSION_MAX_BYTES.
     wire::SplitResources resource_parts{false};
     std::map<std::string, std::vector<SharedBytes>> resource_building;
+    // 3.2 draft, capability "scene_pieces": the newest whole version of each scene program's resource,
+    // "<program>/<resource>", with its count and its frames, until the update in the piece form that
+    // names it comes on the same connection and takes it into a bundle; and its parts being put together.
+    struct SceneVersion {
+        uint32_t count = 0;
+        std::vector<SharedBytes> frames;
+    };
+    std::map<std::string, SceneVersion> scene_versions;
+    wire::SplitResources scene_parts{false};
+    std::map<std::string, std::vector<SharedBytes>> scene_building;
 };
 
 // The most resources a session keeps, and a viewer has waiting: every resource of every program.
@@ -380,6 +394,7 @@ struct VSub {
     // each with whether it goes as state; then the newest batch of each entity
     // part, each part at most at `rate`.
     bool scene = false;
+    bool scene_pieces = false;          // its viewer announced "scene_pieces": it takes the bundles of the piece form
     std::deque<std::pair<ScenePtr, bool>> scene_first;
     std::map<SceneKey, ScenePtr> scene_pending;
     std::map<SceneKey, uint64_t> scene_last_us;
@@ -411,6 +426,7 @@ struct Peer {
     bool cap_programs = false;       // 3.2 draft: the viewer announced "programs"
     bool cap_interventions = false;  // 3.2 draft: the viewer announced "interventions"
     bool cap_resources = false;      // 3.2 draft: the viewer announced "resources"
+    bool cap_scene_pieces = false;   // 3.2 draft: the viewer announced "scene_pieces"
     // RESOURCEs waiting for the send queue: the newest of each "<program>/<resource>", with the order
     // in which it began to wait, so that a resource with frequent versions holds no other back.
     std::map<std::string, std::pair<uint64_t, ResourceVersion>> pending_resources;
@@ -925,6 +941,7 @@ struct Hub::Impl {
     // The parts of a version in parts wait until the version is whole, which the order checks of
     // wire::SplitResources decide; a part they drop or refuse is counted and goes nowhere.
     void producer_resource(Session& s, const wire::Resource& m, SharedBytes buf) {
+        if (wire::scene_program_id(m.program)) return scene_resource(s, m, std::move(buf));
         if (!s.resources_cap) return;
         const std::string key = m.program + "/" + m.resource;
         std::string err;
@@ -970,6 +987,70 @@ struct Hub::Impl {
             if (pt == peers.end() || pt->second.closing || !pt->second.cap_resources) continue;
             offer_resource(pt->second, key, version);
         }
+    }
+
+    // A scene program's RESOURCE (the piece form of SCENE_UPDATE): its whole version waits for the update
+    // that names it, in the place of an older one, and never takes the program route. At most every batch
+    // of a scene times the resources of a piece wait, so that updates that never come cannot grow it.
+    void scene_resource(Session& s, const wire::Resource& m, SharedBytes buf) {
+        const std::string key = m.program + "/" + m.resource;
+        std::string err;
+        const wire::SplitResources::Result got = s.scene_parts.add(m, nullptr, &err);
+        std::vector<SharedBytes> frames;
+        if (!m.split) {
+            frames.push_back(std::move(buf));
+        } else if (got == wire::SplitResources::Result::Pending) {
+            if (m.split->part == 0) s.scene_building[key].clear();
+            s.scene_building[key].push_back(std::move(buf));
+        } else if (got == wire::SplitResources::Result::Whole) {
+            frames = std::move(s.scene_building[key]);
+            frames.push_back(std::move(buf));
+            s.scene_building.erase(key);
+        } else {
+            ++c.resource_parts_dropped;
+        }
+        for (auto it = s.scene_building.begin(); it != s.scene_building.end();) {
+            const size_t slash = it->first.find('/');
+            if (!s.scene_parts.holds(it->first.substr(0, slash), it->first.substr(slash + 1)))
+                it = s.scene_building.erase(it);
+            else
+                ++it;
+        }
+        if (frames.empty()) return;
+        if (s.scene_versions.size() >= size_t(CALIPER_NET_MAX_BATCHES) * CALIPER_NET_MAX_RESOURCES &&
+            !s.scene_versions.count(key))
+            s.scene_versions.clear();
+        Session::SceneVersion& v = s.scene_versions[key];
+        v.count = m.count;
+        v.frames = std::move(frames);
+    }
+
+    // The update in the piece form takes the versions it names into one bundle: their frames as they came,
+    // then the update. Null when a version did not come or has another count, which drops the update.
+    std::shared_ptr<SceneMsg> scene_bundle(Session& s, const wire::SceneUpdate& up, const ScenePtr& update) {
+        auto group = std::make_shared<SceneMsg>();
+        group->type = CALIPER_NET_MSG_SCENE_UPDATE;
+        group->path = up.path;
+        group->part = up.part;
+        group->is_static = up.is_static;
+        group->piece_form = true;
+        group->meta = Json::object();
+        if (up.state) group->meta.set("state", true);
+        for (const auto& kv : up.resources.members()) {
+            auto it = s.scene_versions.find(*up.program + "/" + kv.first);
+            uint64_t count = 0;
+            if (it == s.scene_versions.end() || !kv.second.get_u64(&count) || it->second.count != count) return nullptr;
+            for (const SharedBytes& f : it->second.frames) {
+                auto raw = std::make_shared<SceneMsg>();
+                raw->type = CALIPER_NET_MSG_RESOURCE;
+                raw->raw = true;
+                raw->frame = f;
+                group->pieces.push_back(std::move(raw));
+            }
+        }
+        for (const auto& kv : up.resources.members()) s.scene_versions.erase(*up.program + "/" + kv.first);
+        group->pieces.push_back(update);
+        return group;
     }
 
     size_t live_count() const {
@@ -1213,6 +1294,7 @@ struct Hub::Impl {
         ch.members.insert({p.conn, v.sub});
         ch.used_ms = monotonic_ms();
         if (ch.kind == CALIPER_NET_KIND_SCENE) {   // 3.2 draft
+            v.scene_pieces = p.cap_scene_pieces;
             // The hub forgot the scene's state: it subscribes again for a fresh one, which
             // reaches this viewer as the producer's own state.
             if (ch.scene_forgotten && ch.up_sub && !ch.up_request && s.producer) {
@@ -1854,6 +1936,9 @@ struct Hub::Impl {
         s.resources_cap = has_cap(caps, CALIPER_NET_CAP_RESOURCES);
         s.resource_parts = wire::SplitResources(false);   // a new producer connection starts no version
         s.resource_building.clear();
+        s.scene_versions.clear();
+        s.scene_parts = wire::SplitResources(false);
+        s.scene_building.clear();
     }
 
     // The hub's WELCOME. 3.1: it announces `controls` and `selection`, and to a
@@ -1864,7 +1949,8 @@ struct Hub::Impl {
         w.role = CALIPER_NET_ROLE_HUB;
         w.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_SELECTION,
                           CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS,
-                          CALIPER_NET_CAP_RESOURCES};   // 3.2 draft: forwarded
+                          CALIPER_NET_CAP_RESOURCES,       // 3.2 draft: forwarded
+                          CALIPER_NET_CAP_SCENE_PIECES};   // 3.2 draft: bundled per entity part
         Json sw = Json::object();
         sw.set("name", "caliper-hub");
         sw.set("version", opt.software_version);
@@ -2350,6 +2436,13 @@ struct Hub::Impl {
             msg = group;
             state = group->meta.find("state") && group->meta.find("state")->is_bool() &&
                     group->meta.find("state")->as_bool();
+        } else if (up && up->program) {
+            std::shared_ptr<SceneMsg> group = scene_bundle(s, *up, msg);
+            if (!group) {   // its versions did not come just before it
+                ++c.scene_pieces_dropped;
+                return;
+            }
+            msg = group;
         }
         // The entity transforms of the message, as rows.
         TransformRows rows;
@@ -2418,6 +2511,7 @@ struct Hub::Impl {
         for (const SubKey& k : ch->members) {
             VSub* v = vsub(k);
             if (!v || !v->scene) continue;
+            if (msg->piece_form && !v->scene_pieces) continue;   // a viewer of the per-shape parts: the structure alone
             if (cl) {
                 if (cl->reset) {   // a new state: nothing queued before it matters
                     v->scene_first.clear();
@@ -2537,7 +2631,8 @@ struct Hub::Impl {
         v.transforms_pending.clear();
         // In the order of the keys: the class table, the entity transforms, then every camera and
         // batch in the byte order of their paths.
-        for (const auto& kv : ch.scene_held) v.scene_first.emplace_back(kv.second, true);
+        for (const auto& kv : ch.scene_held)
+            if (!kv.second->piece_form || v.scene_pieces) v.scene_first.emplace_back(kv.second, true);
     }
 
     // A viewer's in-order queue passed kSceneFirstMax, or its pending batches or entity transforms
@@ -2560,6 +2655,13 @@ struct Hub::Impl {
     }
 
     bool send_scene(Peer& p, VSub& v, const ScenePtr& msg, bool state) {
+        if (msg->raw) {   // a scene program's RESOURCE, as it came
+            if (!server.send(p.conn, msg->frame)) {
+                overflow(p.conn);
+                return false;
+            }
+            return true;
+        }
         if (msg->rows) {   // the entity transforms the hub keeps: SCENE_TRANSFORMS built now
             for (const ScenePtr& t : transform_messages(v.view, *msg->rows))
                 if (!send_scene(p, v, t, state)) return false;
@@ -2696,6 +2798,7 @@ struct Hub::Impl {
         p.cap_programs = has_cap(h.capabilities, CALIPER_NET_CAP_PROGRAMS);
         p.cap_interventions = has_cap(h.capabilities, CALIPER_NET_CAP_INTERVENTIONS);
         p.cap_resources = has_cap(h.capabilities, CALIPER_NET_CAP_RESOURCES);
+        p.cap_scene_pieces = p.cap_scenes && has_cap(h.capabilities, CALIPER_NET_CAP_SCENE_PIECES);
         wire::Welcome w = hub_welcome(p.cap_controls);
         if (p.cap_controls && p.watch_only) w.control = false;
         send(p.conn, w);

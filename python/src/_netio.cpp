@@ -1443,6 +1443,7 @@ private:
                         l.cap_controls = controls_ && announces(w->capabilities, CALIPER_NET_CAP_CONTROLS);
                         l.cap_selection = controls_ && announces(w->capabilities, CALIPER_NET_CAP_SELECTION);
                         l.cap_scenes = announces(w->capabilities, CALIPER_NET_CAP_SCENES);
+                        l.cap_scene_pieces = l.cap_scenes && announces(w->capabilities, CALIPER_NET_CAP_SCENE_PIECES);
                         l.cap_timelines = announces(w->capabilities, CALIPER_NET_CAP_TIMELINES);
                         l.cap_programs = controls_ && g_watch_caps.load() &&
                                          announces(w->capabilities, CALIPER_NET_CAP_PROGRAMS);

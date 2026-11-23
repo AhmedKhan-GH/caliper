@@ -181,7 +181,8 @@ struct HubStats {
     // 3.2 draft: scene messages in, out and replaced by a newer batch of the
     // same entity part while waiting, and the bytes of the batches kept
     uint64_t scenes_in = 0, scenes_out = 0, scenes_superseded = 0;
-    uint64_t scene_pieces_dropped = 0;   // pieces of a split update whose piece 0 the hub did not hold
+    uint64_t scene_pieces_dropped = 0;   // pieces of a split update whose piece 0 the hub did not hold, and updates
+                                         // in the piece form whose RESOURCE versions did not come before them
     uint64_t retained_scene_bytes = 0;
     // 3.2 draft, capability "resources": RESOURCE versions in, out and replaced by a newer version of
     // the same resource while waiting, the draw halves that producers relayed and the hub sent to
