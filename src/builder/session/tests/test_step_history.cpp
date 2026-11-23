@@ -125,18 +125,25 @@ TEST_CASE("a change of a source's chain clears its steps, and an unrelated edit 
 }
 
 TEST_CASE("the budget shortens the largest rings first") {
-    // 64 KiB values; the views share one buffer, so the test holds little
-    // memory while the history counts every value's bytes. Five rings of
-    // 125 MiB, each under the share of one source, and one of 4 MiB ask for
-    // more than the budget.
+    // Every view shares this 64 KiB buffer. The history counts each retained
+    // value, but the test allocates no large payload. Each large ring asks
+    // for 125 MiB, below the per-source cap. Add enough rings to exceed the
+    // total budget while the small ring retains all of its steps.
     const TensorData value = filled({16384}, 1);
+    constexpr std::int64_t large_steps = 2000, small_steps = 64;
+    const std::uint64_t step_bytes = value.nbytes();
+    const std::uint64_t small_bytes = small_steps * step_bytes;
+    const std::uint64_t large_bytes = large_steps * step_bytes;
+    REQUIRE(large_bytes < kHistorySourceBytes);
+    const std::size_t rings = (kHistoryBudgetBytes - small_bytes) / large_bytes + 1;
+    REQUIRE(rings * large_bytes + small_bytes > kHistoryBudgetBytes);
     std::string toml = std::string(kHead) + "[[source]]\nid = \"small\"\ncatalog = \"live:b\"\nhistory = 64\n";
-    for (int i = 1; i <= 5; ++i)
+    for (std::size_t i = 1; i <= rings; ++i)
         toml += "[[source]]\nid = \"big" + std::to_string(i) + "\"\ncatalog = \"live:a\"\nhistory = 2000\n";
     const spec::Spec s = parse(toml);
     StepHistory h;
     h.configure(s);
-    for (int step = 0; step < 2000; ++step) {
+    for (std::int64_t step = 0; step < large_steps; ++step) {
         h.append("live:a", step, value);
         h.append("live:b", step, value);
     }
@@ -146,20 +153,27 @@ TEST_CASE("the budget shortens the largest rings first") {
         kept[k.id] = k;
         total += k.bytes;
     }
+    REQUIRE(kept.size() == rings + 1);
     CHECK(total <= kHistoryBudgetBytes);
-    CHECK(kept["small"].steps == 64);
+    CHECK(kHistoryBudgetBytes - total < rings * step_bytes);
+    CHECK(kept["small"].steps == small_steps);
     CHECK(kept["small"].note.empty());
-    CHECK(kept["big1"].requested == 2000);
-    CHECK(kept["big1"].steps == (std::int64_t)((kHistoryBudgetBytes - 64 * 65536) / 5 / 65536));
-    CHECK(kept["big5"].steps == kept["big1"].steps);
-    CHECK(kept["big1"].last == 1999);
-    CHECK(kept["big1"].note.find("big1") != std::string::npos);
+    const auto expected = static_cast<std::int64_t>((kHistoryBudgetBytes - small_bytes) / rings / step_bytes);
+    REQUIRE(expected < large_steps);
+    for (std::size_t i = 1; i <= rings; ++i) {
+        const std::string id = "big" + std::to_string(i);
+        CAPTURE(id);
+        CHECK(kept[id].requested == large_steps);
+        CHECK(kept[id].steps == expected);
+        CHECK(kept[id].last == large_steps - 1);
+        CHECK(kept[id].note.find(id) != std::string::npos);
+    }
 }
 
 TEST_CASE("one raw source keeps at most 128 MiB and says which step keeps more") {
-    // A raw activation of 512 by 4096 values, 8 MiB a step, which alone
-    // would fill the whole budget at the default 64 steps. The views share
-    // one buffer; the reduced source makes 16 KiB values.
+    // A raw activation uses 8 MiB per step. Its default 64 steps request
+    // 512 MiB, above the per-source cap. The views share one buffer, and
+    // the reduced source makes 16 KiB values.
     const TensorData value = filled({512, 4096}, 1);
     const spec::Spec s = parse(std::string(kHead) +
                                "[[source]]\nid = \"raw\"\ncatalog = \"live:mlp.act\"\n"
