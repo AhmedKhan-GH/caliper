@@ -314,7 +314,9 @@ bool FramePick::request(Texture ids, Texture depth, uint32_t width, uint32_t hei
         if (why) *why = "the pick window lies outside the frame";
         return false;
     }
-    want_depth_ = bool(depth);
+    // A backend that copies a depth texture only whole (WebGPU) reads no region of it: the pick then has
+    // the item of the ID target without its depth, which a program's pick does not need.
+    want_depth_ = bool(depth) && !gfx_.caps().has(kCapDepthWholeCopy);
     rb_ids_ = gfx_.read_texture(ids, region_.x, region_.y, region_.width, region_.height);
     if (want_depth_) rb_depth_ = gfx_.read_texture(depth, region_.x, region_.y, region_.width, region_.height);
     if (!rb_ids_ || (want_depth_ && !rb_depth_)) {
