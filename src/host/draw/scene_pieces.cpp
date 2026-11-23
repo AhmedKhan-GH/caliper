@@ -812,9 +812,7 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
                                 fall("depth cloud in a moved pixel space");
                                 continue;
                             }
-                            const Mat4* pose = tree.transform(pcam);
                             pr->model = tree.world(pcam);
-                            (void)pose;
                             v.insert(v.end(), {{"placement", 1.0},
                                                {"fx", pin->fx},
                                                {"fy", pin->fy},
