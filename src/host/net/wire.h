@@ -510,7 +510,15 @@ struct Resource {                    // producer to viewer or hub, hub to viewer
     uint64_t step = 0;               // the run's step at the pass: the version's step stamp
     uint32_t count = 0;              // valid elements
     uint32_t stride = 0;             // bytes of one element: a multiple of 4 from 4 to CALIPER_NET_RESOURCE_STRIDE_MAX
-    std::optional<uint32_t> width, height;   // a texture: count == width * height and stride 4
+    // A texture: its size in this version, each side from 1 to CALIPER_NET_RESOURCE_SIDE_MAX, and its
+    // format, rgba8unorm when absent; stride 4 and count the 32-bit words of its texels in row order,
+    // width * height for rgba8unorm and r32uint and (width * height + 3) / 4 for r8unorm.
+    std::optional<uint32_t> width, height;
+    std::optional<std::string> format;   // CALIPER_NET_TEXTURE_RGBA8, _R8 or _R32UINT
+    // A buffer of narrow elements: "u8" or "u16", packed into 32-bit words from the low bits up, and the
+    // exact count of elements; stride 4 and count the words, (elements * bytes + 3) / 4.
+    std::optional<std::string> element;
+    std::optional<uint32_t> elements;
     // A part of a version in parts: the sender's counter of such versions, this part's number from 0, the
     // number of parts (2 to CALIPER_NET_MAX_PIECES) and the first element that `data` holds.
     struct Split {

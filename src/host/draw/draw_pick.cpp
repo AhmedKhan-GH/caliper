@@ -22,9 +22,10 @@ namespace {
 namespace cbp = caliper_builder::programs;
 
 // The slot of a buffer resource or buffer input, or null.
+// The slot of an item map: a buffer, or a texture whose texels have a field (rgba8unorm, r32uint).
 const DrawRuntime::Impl::Slot* buffer_slot(const DrawRuntime::Impl& m, const std::string& id) {
     for (const DrawRuntime::Impl::Slot& s : m.slots)
-        if (s.id == id && !s.texture) return &s;
+        if (s.id == id && (!s.texture || !s.layout.fields.empty())) return &s;
     return nullptr;
 }
 

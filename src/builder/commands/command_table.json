@@ -13155,16 +13155,12 @@
                   "additionalProperties": false,
                   "properties": {
                     "dtype": {
-                      "description": "tensor: the element type; f32 when absent. The bound tensor's dtype must match it.",
-                      "enum": [
-                        "f32",
-                        "i32",
-                        "u32"
-                      ],
+                      "description": "tensor: the element type, f32, i32, u32, u8 or u16, or two to five of them joined by |, each once; f32 when absent. The bound tensor holds one of them. A narrow type or several types bind the tensor's bytes as array<u32>, read through the checked accessor <name>_at().",
+                      "pattern": "^(f32|i32|u32|u8|u16)(\\|(f32|i32|u32|u8|u16)){0,4}$",
                       "type": "string"
                     },
                     "element": {
-                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "description": "buffer: a plain element type, or the narrow u8 or u16 packed four or two to a 32-bit word; give either element, or struct with fields.",
                       "enum": [
                         "f32",
                         "i32",
@@ -13172,7 +13168,9 @@
                         "vec2<f32>",
                         "vec4<f32>",
                         "vec2<u32>",
-                        "vec4<u32>"
+                        "vec4<u32>",
+                        "u8",
+                        "u16"
                       ],
                       "type": "string"
                     },
@@ -13297,8 +13295,8 @@
                       "type": "boolean"
                     },
                     "count": {
-                      "description": "buffer: the elements.",
-                      "maximum": 33554432,
+                      "description": "buffer: the elements, at most 33,554,432 words: 134,217,728 u8 or 67,108,864 u16 elements.",
+                      "maximum": 134217728,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -13307,7 +13305,7 @@
                       "type": "boolean"
                     },
                     "element": {
-                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "description": "buffer: a plain element type, or the narrow u8 or u16 packed four or two to a 32-bit word; give either element, or struct with fields.",
                       "enum": [
                         "f32",
                         "i32",
@@ -13315,7 +13313,9 @@
                         "vec2<f32>",
                         "vec4<f32>",
                         "vec2<u32>",
-                        "vec4<u32>"
+                        "vec4<u32>",
+                        "u8",
+                        "u16"
                       ],
                       "type": "string"
                     },
@@ -13329,9 +13329,18 @@
                       "minItems": 1,
                       "type": "array"
                     },
+                    "format": {
+                      "description": "texture: rgba8unorm when absent, r8unorm (one byte a texel) or r32uint (sampled with textureLoad).",
+                      "enum": [
+                        "rgba8unorm",
+                        "r8unorm",
+                        "r32uint"
+                      ],
+                      "type": "string"
+                    },
                     "height": {
-                      "description": "texture: the height in pixels.",
-                      "maximum": 4096,
+                      "description": "texture: the largest height of a version in pixels.",
+                      "maximum": 8192,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -13347,7 +13356,7 @@
                       "type": "integer"
                     },
                     "kind": {
-                      "description": "buffer: count elements of a layout; texture: an rgba8unorm image that the derive half writes as a packed array<u32> and the draw half samples as texture_2d<f32>.",
+                      "description": "buffer: count elements of a layout; texture: an image of a format and a size per version, which the derive half writes as a packed array<u32> with the size in <id>_size and the draw half samples as texture_2d<f32>, or texture_2d<u32> for r32uint.",
                       "enum": [
                         "buffer",
                         "texture"
@@ -13363,9 +13372,15 @@
                       "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$",
                       "type": "string"
                     },
+                    "texels": {
+                      "description": "texture: the most texels of a version, width times height when absent; the largest version holds at most 128 MiB when published.",
+                      "maximum": 67108864,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
                     "width": {
-                      "description": "texture: the width in pixels.",
-                      "maximum": 4096,
+                      "description": "texture: the largest width of a version in pixels.",
+                      "maximum": 8192,
                       "minimum": 1,
                       "type": "integer"
                     }
@@ -15806,16 +15821,12 @@
                   "additionalProperties": false,
                   "properties": {
                     "dtype": {
-                      "description": "tensor: the element type; f32 when absent. The bound tensor's dtype must match it.",
-                      "enum": [
-                        "f32",
-                        "i32",
-                        "u32"
-                      ],
+                      "description": "tensor: the element type, f32, i32, u32, u8 or u16, or two to five of them joined by |, each once; f32 when absent. The bound tensor holds one of them. A narrow type or several types bind the tensor's bytes as array<u32>, read through the checked accessor <name>_at().",
+                      "pattern": "^(f32|i32|u32|u8|u16)(\\|(f32|i32|u32|u8|u16)){0,4}$",
                       "type": "string"
                     },
                     "element": {
-                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "description": "buffer: a plain element type, or the narrow u8 or u16 packed four or two to a 32-bit word; give either element, or struct with fields.",
                       "enum": [
                         "f32",
                         "i32",
@@ -15823,7 +15834,9 @@
                         "vec2<f32>",
                         "vec4<f32>",
                         "vec2<u32>",
-                        "vec4<u32>"
+                        "vec4<u32>",
+                        "u8",
+                        "u16"
                       ],
                       "type": "string"
                     },
@@ -15948,8 +15961,8 @@
                       "type": "boolean"
                     },
                     "count": {
-                      "description": "buffer: the elements.",
-                      "maximum": 33554432,
+                      "description": "buffer: the elements, at most 33,554,432 words: 134,217,728 u8 or 67,108,864 u16 elements.",
+                      "maximum": 134217728,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -15958,7 +15971,7 @@
                       "type": "boolean"
                     },
                     "element": {
-                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "description": "buffer: a plain element type, or the narrow u8 or u16 packed four or two to a 32-bit word; give either element, or struct with fields.",
                       "enum": [
                         "f32",
                         "i32",
@@ -15966,7 +15979,9 @@
                         "vec2<f32>",
                         "vec4<f32>",
                         "vec2<u32>",
-                        "vec4<u32>"
+                        "vec4<u32>",
+                        "u8",
+                        "u16"
                       ],
                       "type": "string"
                     },
@@ -15980,9 +15995,18 @@
                       "minItems": 1,
                       "type": "array"
                     },
+                    "format": {
+                      "description": "texture: rgba8unorm when absent, r8unorm (one byte a texel) or r32uint (sampled with textureLoad).",
+                      "enum": [
+                        "rgba8unorm",
+                        "r8unorm",
+                        "r32uint"
+                      ],
+                      "type": "string"
+                    },
                     "height": {
-                      "description": "texture: the height in pixels.",
-                      "maximum": 4096,
+                      "description": "texture: the largest height of a version in pixels.",
+                      "maximum": 8192,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -15998,7 +16022,7 @@
                       "type": "integer"
                     },
                     "kind": {
-                      "description": "buffer: count elements of a layout; texture: an rgba8unorm image that the derive half writes as a packed array<u32> and the draw half samples as texture_2d<f32>.",
+                      "description": "buffer: count elements of a layout; texture: an image of a format and a size per version, which the derive half writes as a packed array<u32> with the size in <id>_size and the draw half samples as texture_2d<f32>, or texture_2d<u32> for r32uint.",
                       "enum": [
                         "buffer",
                         "texture"
@@ -16014,9 +16038,15 @@
                       "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$",
                       "type": "string"
                     },
+                    "texels": {
+                      "description": "texture: the most texels of a version, width times height when absent; the largest version holds at most 128 MiB when published.",
+                      "maximum": 67108864,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
                     "width": {
-                      "description": "texture: the width in pixels.",
-                      "maximum": 4096,
+                      "description": "texture: the largest width of a version in pixels.",
+                      "maximum": 8192,
                       "minimum": 1,
                       "type": "integer"
                     }
@@ -16911,16 +16941,12 @@
                   "additionalProperties": false,
                   "properties": {
                     "dtype": {
-                      "description": "tensor: the element type; f32 when absent. The bound tensor's dtype must match it.",
-                      "enum": [
-                        "f32",
-                        "i32",
-                        "u32"
-                      ],
+                      "description": "tensor: the element type, f32, i32, u32, u8 or u16, or two to five of them joined by |, each once; f32 when absent. The bound tensor holds one of them. A narrow type or several types bind the tensor's bytes as array<u32>, read through the checked accessor <name>_at().",
+                      "pattern": "^(f32|i32|u32|u8|u16)(\\|(f32|i32|u32|u8|u16)){0,4}$",
                       "type": "string"
                     },
                     "element": {
-                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "description": "buffer: a plain element type, or the narrow u8 or u16 packed four or two to a 32-bit word; give either element, or struct with fields.",
                       "enum": [
                         "f32",
                         "i32",
@@ -16928,7 +16954,9 @@
                         "vec2<f32>",
                         "vec4<f32>",
                         "vec2<u32>",
-                        "vec4<u32>"
+                        "vec4<u32>",
+                        "u8",
+                        "u16"
                       ],
                       "type": "string"
                     },
@@ -17053,8 +17081,8 @@
                       "type": "boolean"
                     },
                     "count": {
-                      "description": "buffer: the elements.",
-                      "maximum": 33554432,
+                      "description": "buffer: the elements, at most 33,554,432 words: 134,217,728 u8 or 67,108,864 u16 elements.",
+                      "maximum": 134217728,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -17063,7 +17091,7 @@
                       "type": "boolean"
                     },
                     "element": {
-                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "description": "buffer: a plain element type, or the narrow u8 or u16 packed four or two to a 32-bit word; give either element, or struct with fields.",
                       "enum": [
                         "f32",
                         "i32",
@@ -17071,7 +17099,9 @@
                         "vec2<f32>",
                         "vec4<f32>",
                         "vec2<u32>",
-                        "vec4<u32>"
+                        "vec4<u32>",
+                        "u8",
+                        "u16"
                       ],
                       "type": "string"
                     },
@@ -17085,9 +17115,18 @@
                       "minItems": 1,
                       "type": "array"
                     },
+                    "format": {
+                      "description": "texture: rgba8unorm when absent, r8unorm (one byte a texel) or r32uint (sampled with textureLoad).",
+                      "enum": [
+                        "rgba8unorm",
+                        "r8unorm",
+                        "r32uint"
+                      ],
+                      "type": "string"
+                    },
                     "height": {
-                      "description": "texture: the height in pixels.",
-                      "maximum": 4096,
+                      "description": "texture: the largest height of a version in pixels.",
+                      "maximum": 8192,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -17103,7 +17142,7 @@
                       "type": "integer"
                     },
                     "kind": {
-                      "description": "buffer: count elements of a layout; texture: an rgba8unorm image that the derive half writes as a packed array<u32> and the draw half samples as texture_2d<f32>.",
+                      "description": "buffer: count elements of a layout; texture: an image of a format and a size per version, which the derive half writes as a packed array<u32> with the size in <id>_size and the draw half samples as texture_2d<f32>, or texture_2d<u32> for r32uint.",
                       "enum": [
                         "buffer",
                         "texture"
@@ -17119,9 +17158,15 @@
                       "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$",
                       "type": "string"
                     },
+                    "texels": {
+                      "description": "texture: the most texels of a version, width times height when absent; the largest version holds at most 128 MiB when published.",
+                      "maximum": 67108864,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
                     "width": {
-                      "description": "texture: the width in pixels.",
-                      "maximum": 4096,
+                      "description": "texture: the largest width of a version in pixels.",
+                      "maximum": 8192,
                       "minimum": 1,
                       "type": "integer"
                     }
@@ -17890,16 +17935,12 @@
                   "additionalProperties": false,
                   "properties": {
                     "dtype": {
-                      "description": "tensor: the element type; f32 when absent. The bound tensor's dtype must match it.",
-                      "enum": [
-                        "f32",
-                        "i32",
-                        "u32"
-                      ],
+                      "description": "tensor: the element type, f32, i32, u32, u8 or u16, or two to five of them joined by |, each once; f32 when absent. The bound tensor holds one of them. A narrow type or several types bind the tensor's bytes as array<u32>, read through the checked accessor <name>_at().",
+                      "pattern": "^(f32|i32|u32|u8|u16)(\\|(f32|i32|u32|u8|u16)){0,4}$",
                       "type": "string"
                     },
                     "element": {
-                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "description": "buffer: a plain element type, or the narrow u8 or u16 packed four or two to a 32-bit word; give either element, or struct with fields.",
                       "enum": [
                         "f32",
                         "i32",
@@ -17907,7 +17948,9 @@
                         "vec2<f32>",
                         "vec4<f32>",
                         "vec2<u32>",
-                        "vec4<u32>"
+                        "vec4<u32>",
+                        "u8",
+                        "u16"
                       ],
                       "type": "string"
                     },
@@ -18032,8 +18075,8 @@
                       "type": "boolean"
                     },
                     "count": {
-                      "description": "buffer: the elements.",
-                      "maximum": 33554432,
+                      "description": "buffer: the elements, at most 33,554,432 words: 134,217,728 u8 or 67,108,864 u16 elements.",
+                      "maximum": 134217728,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -18042,7 +18085,7 @@
                       "type": "boolean"
                     },
                     "element": {
-                      "description": "buffer: a plain element type; give either element, or struct with fields.",
+                      "description": "buffer: a plain element type, or the narrow u8 or u16 packed four or two to a 32-bit word; give either element, or struct with fields.",
                       "enum": [
                         "f32",
                         "i32",
@@ -18050,7 +18093,9 @@
                         "vec2<f32>",
                         "vec4<f32>",
                         "vec2<u32>",
-                        "vec4<u32>"
+                        "vec4<u32>",
+                        "u8",
+                        "u16"
                       ],
                       "type": "string"
                     },
@@ -18064,9 +18109,18 @@
                       "minItems": 1,
                       "type": "array"
                     },
+                    "format": {
+                      "description": "texture: rgba8unorm when absent, r8unorm (one byte a texel) or r32uint (sampled with textureLoad).",
+                      "enum": [
+                        "rgba8unorm",
+                        "r8unorm",
+                        "r32uint"
+                      ],
+                      "type": "string"
+                    },
                     "height": {
-                      "description": "texture: the height in pixels.",
-                      "maximum": 4096,
+                      "description": "texture: the largest height of a version in pixels.",
+                      "maximum": 8192,
                       "minimum": 1,
                       "type": "integer"
                     },
@@ -18082,7 +18136,7 @@
                       "type": "integer"
                     },
                     "kind": {
-                      "description": "buffer: count elements of a layout; texture: an rgba8unorm image that the derive half writes as a packed array<u32> and the draw half samples as texture_2d<f32>.",
+                      "description": "buffer: count elements of a layout; texture: an image of a format and a size per version, which the derive half writes as a packed array<u32> with the size in <id>_size and the draw half samples as texture_2d<f32>, or texture_2d<u32> for r32uint.",
                       "enum": [
                         "buffer",
                         "texture"
@@ -18098,9 +18152,15 @@
                       "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$",
                       "type": "string"
                     },
+                    "texels": {
+                      "description": "texture: the most texels of a version, width times height when absent; the largest version holds at most 128 MiB when published.",
+                      "maximum": 67108864,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
                     "width": {
-                      "description": "texture: the width in pixels.",
-                      "maximum": 4096,
+                      "description": "texture: the largest width of a version in pixels.",
+                      "maximum": 8192,
                       "minimum": 1,
                       "type": "integer"
                     }

@@ -197,7 +197,10 @@ inline void add_image_pieces(std::vector<std::uint8_t>* frames, Plan* plan, std:
         Json values = Json::object();
         values.set("opacity", 1.0);
         program("image", "image_flat", values, bind);
-        add(resource("image_flat", "pixels", pixels, step));
+        caliper_net::wire::Resource texels = resource("image_flat", "pixels", pixels, step);
+        texels.width = w;   // image@1's pixels are an rgba8unorm texture of the image's size
+        texels.height = h;
+        add(texels);
         add(resource("image_flat", "info", std::vector<ip::Info>{info}, step));
         ProgramPlan p;
         p.id = "image_flat";

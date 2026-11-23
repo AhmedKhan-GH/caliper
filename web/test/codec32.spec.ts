@@ -1097,6 +1097,22 @@ test('a resource in parts carries its golden values and is put together whole', 
   }
 });
 
+test('a resource carries its texture format and narrow elements', () => {
+  const n = frame32('resource_narrow_u16') as ResourceMsg;
+  expect([n.element, n.elements, n.count, n.stride, n.width, n.format]).toEqual(['u16', 5, 3, 4, undefined, undefined]);
+  expect(Array.from(new Uint16Array(n.data.slice().buffer))).toEqual([1, 2, 3, 4, 5, 0]);
+  const t = frame32('resource_texture_r8') as ResourceMsg;
+  expect([t.format, t.width, t.height, t.count, t.stride, t.element]).toEqual(['r8unorm', 3, 3, 3, 4, undefined]);
+  expect(Array.from(t.data.slice(0, 9))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+});
+
+test('a resource part with another format than its part 0 is refused', () => {
+  const [p0, p1] = [0, 1].map((k) => frame32(`resource_split_${k}`) as ResourceMsg);
+  const sr = new SplitResources();
+  expect(sr.add(p0)).toBeNull();
+  expect(() => sr.add({ ...p1, format: 'r8unorm' })).toThrow(/differs from its part 0/);
+});
+
 test('a receiver drops or refuses the parts of a resource that break the order', () => {
   const [p0, p1, p2] = [0, 1, 2].map((k) => frame32(`resource_split_${k}`) as ResourceMsg);
   const orphan = frame32('resource_split_orphan') as ResourceMsg;

@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -166,6 +167,8 @@ struct ReceivedResource {
     uint32_t count = 0;                  // valid elements
     uint32_t stride = 0;                 // bytes of one element
     uint32_t width = 0, height = 0;      // a texture's size; 0 for a buffer
+    std::string format;                  // a texture's format; empty for rgba8unorm or a buffer
+    std::optional<uint32_t> elements;    // a buffer of narrow elements: their count, of which count holds the words
     std::shared_ptr<const std::vector<uint8_t>> bytes;   // count * stride bytes
 };
 

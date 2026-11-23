@@ -576,8 +576,13 @@ static inline uint32_t caliper_net_align(uint32_t n) {
  * with that section), and PROGRAM "remove" with request_id 0 after a
  * removal. RESOURCE holds "program", "resource", "step" (the run's step at
  * the pass), "count" (valid elements), "stride" (bytes of one element, a
- * multiple of 4) and, for a texture, "width" and "height" (count = width *
- * height, stride 4); its section holds exactly count * stride bytes.
+ * multiple of 4) and, for a texture, "width" and "height" (1 to
+ * CALIPER_NET_RESOURCE_SIDE_MAX each) with an optional "format" (rgba8unorm when
+ * absent), stride 4 and count the 32-bit words of its texels in row order:
+ * width * height for rgba8unorm and r32uint, (width * height + 3) / 4 for
+ * r8unorm. A buffer of narrow elements holds "element" ("u8" or "u16") and
+ * "elements", its exact element count, with stride 4 and count the words,
+ * (elements * bytes + 3) / 4. Its section holds exactly count * stride bytes.
  * A version larger than one frame travels as 2 to CALIPER_NET_MAX_PIECES
  * RESOURCE parts, in order, each with the whole version's keys and the key
  * "split" ({version, part, parts, first}): the sender's counter of versions
@@ -611,7 +616,12 @@ static inline uint32_t caliper_net_align(uint32_t n) {
 #define CALIPER_NET_RESOURCE_VERSION_MAX_BYTES 134217728u /* bytes of a whole version in parts */
 #define CALIPER_NET_RESOURCE_PART_WAIT   256u         /* RESOURCE frames a receiver waits for the next part */
 #define CALIPER_NET_RESOURCE_STRIDE_MAX  256u         /* "stride": the bytes of one element */
-#define CALIPER_NET_RESOURCE_SIDE_MAX    4096u        /* a texture's "width" and "height"   */
+#define CALIPER_NET_RESOURCE_SIDE_MAX    8192u        /* a texture's "width" and "height": WebGPU's default largest 2-D texture */
+#define CALIPER_NET_TEXTURE_RGBA8        "rgba8unorm" /* "format": four 8-bit channels, one word a texel */
+#define CALIPER_NET_TEXTURE_R8           "r8unorm"    /* "format": one 8-bit channel, four texels a word */
+#define CALIPER_NET_TEXTURE_R32UINT      "r32uint"    /* "format": one 32-bit unsigned integer a texel */
+#define CALIPER_NET_ELEMENT_U8           "u8"         /* "element": four elements a word     */
+#define CALIPER_NET_ELEMENT_U16          "u16"        /* "element": two elements a word      */
 #define CALIPER_NET_PIECE_NAME_MAX       32u          /* bytes of "piece" "name", [a-z][a-z0-9_]* */
 #define CALIPER_NET_PIECE_VERSION_MAX    1000000u     /* "piece" "version", from 1          */
 #define CALIPER_NET_PIECE_COMMON_MAX     589824u      /* bytes of "common": 8 lib modules and common.wgsl of 64 KiB each */

@@ -889,7 +889,15 @@ public:
             if (t.find("kind") == t.end()) missing(ip, "kind", "An input");
             if (auto k = named<InputKind>(t, "kind", ip, input_kind_from_name, {"tensor", "buffer"}, "a kind of input"))
                 in.kind = *k;
-            if (auto d = enumerated(t, "dtype", ip, {"f32", "i32", "u32"}, "a dtype")) in.dtype = *d;
+            if (auto d = string(t, "dtype", ip)) {
+                if (tensor_dtypes(*d).empty())
+                    sink_.error("spec.bad_value",
+                                quote(*d) + " is not a dtype; the choices are f32, i32, u32, u8 and u16, or two to "
+                                            "five of them joined by |, each once.",
+                                key_path(ip, "dtype"));
+                else
+                    in.dtype = *d;
+            }
             if (auto v = count(t, "rank_min", ip)) in.rank_min = *v;
             if (auto v = count(t, "rank_max", ip)) in.rank_max = *v;
             in.layout = piece_layout(t, ip);
@@ -911,8 +919,8 @@ public:
         });
         tables(o, "resources", path, [&](const json& t, const std::string& rp) {
             strict_keys(t, rp,
-                        {"id", "kind", "element", "struct", "fields", "count", "counted", "width", "height", "publish",
-                         "clear", "keep"},
+                        {"id", "kind", "element", "struct", "fields", "count", "counted", "width", "height", "format",
+                         "texels", "publish", "clear", "keep"},
                         "a resource");
             Resource r;
             r.id = required_string(t, "id", rp, "A resource");
@@ -925,6 +933,8 @@ public:
             if (auto v = boolean(t, "counted", rp)) r.counted = *v;
             if (auto v = count(t, "width", rp)) r.width = *v;
             if (auto v = count(t, "height", rp)) r.height = *v;
+            r.format = enumerated(t, "format", rp, {"rgba8unorm", "r8unorm", "r32uint"}, "a texture format");
+            r.texels = count(t, "texels", rp);
             if (auto v = boolean(t, "publish", rp)) r.publish = *v;
             if (auto v = boolean(t, "clear", rp)) r.clear = *v;
             r.keep = count(t, "keep", rp);

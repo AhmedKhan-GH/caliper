@@ -20,6 +20,7 @@ struct MeshOut {
     @location(0) color: vec4<f32>,
     @location(1) @interpolate(flat) item: u32,
     @location(2) obj: vec3<f32>,
+    @location(3) uv: vec2<f32>,
 }
 
 const MESH_DEPTH_UNIT: f32 = 1.0 / 8192.0;
@@ -72,7 +73,8 @@ fn mesh_translucent() -> bool {
     if ((params.color >> 24u) < 255u) {
         return true;
     }
-    return params.color_mode == 2u && vertices[0].normal.w != 0.0;
+    // The flag of vertex 0: a vertex RGBA, or a texel of a textured mesh, with an alpha below 255.
+    return (params.color_mode == 2u || counts.tex > 0u) && vertices[0].normal.w != 0.0;
 }
 
 // A normal in view space through the rotation of the view, normalized.
@@ -93,6 +95,7 @@ fn face_vertex(index: u32, shown: bool) -> MeshOut {
     var out: MeshOut;
     out.item = index;
     out.obj = v.position.xyz;
+    out.uv = v.uv;
     var c = mesh_color(v);
     if (params.shading == 1u) {
         c = lambert(c, normalize(v.normal.xyz));
@@ -110,8 +113,14 @@ fn face_vertex(index: u32, shown: bool) -> MeshOut {
     return out;
 }
 
-// The color of a fragment: a flat face, or the vertex color.
+// The color of a fragment: the texture times the vertex color's RGB with the texture's alpha, as the
+// built-in's textured fragment; else a flat face, or the vertex color.
 fn shade(in: MeshOut) -> vec4<f32> {
+    // `counts` is uniform, thus the sample stays in uniform control flow.
+    if (counts.tex > 0u) {
+        let s = textureSample(tex, caliper_linear, in.uv);
+        return vec4<f32>(s.rgb * in.color.rgb, s.a);
+    }
     let n = cross(dpdx(in.obj), dpdy(in.obj));
     if (params.shading == 0u) {
         let lit = 0.30 + 0.70 * abs(view_normal(n).z);

@@ -85,7 +85,8 @@ bool dtype_of(const DLDataType& t, uint32_t* out, uint32_t* item) {
     struct Row { uint8_t code, bits; uint32_t dtype; } const rows[] = {
         {kDLFloat, 32, CALIPER_PRODUCER_F32}, {kDLFloat, 16, CALIPER_PRODUCER_F16},
         {kDLBfloat, 16, CALIPER_PRODUCER_BF16}, {kDLInt, 32, CALIPER_PRODUCER_I32},
-        {kDLUInt, 32, CALIPER_PRODUCER_U32}, {kDLInt, 64, CALIPER_PRODUCER_I64}, {kDLUInt, 8, CALIPER_PRODUCER_U8}};
+        {kDLUInt, 32, CALIPER_PRODUCER_U32}, {kDLInt, 64, CALIPER_PRODUCER_I64}, {kDLUInt, 8, CALIPER_PRODUCER_U8},
+        {kDLUInt, 16, CALIPER_PRODUCER_U16}};
     for (const Row& r : rows)
         if (t.code == r.code && t.bits == r.bits) {
             *out = r.dtype;
@@ -271,12 +272,13 @@ public:
     // `inputs` holds (name, import handle or 0 for the place of a buffer input, dtype), and
     // `unbound` the names of optional tensor inputs that the program leaves unbound (handle 0);
     // `resources` (id, kind, element, struct name, fields, count, width, height, counted,
-    // publish, clear); `passes` (entry, workgroups, writes); `params` (name, type, value).
+    // publish, clear, format, texels), with format "" and texels 0 for a buffer or the defaults;
+    // `passes` (entry, workgroups, writes); `params` (name, type, value).
     uint32_t derive(const std::string& id, const std::string& wgsl, const std::string& common,
                     const std::vector<std::tuple<std::string, uint32_t, std::string>>& inputs,
                     const std::vector<std::tuple<std::string, std::string, std::string, std::string,
                                                  std::vector<std::string>, uint32_t, uint32_t, uint32_t, bool,
-                                                 bool, bool>>& resources,
+                                                 bool, bool, std::string, uint32_t>>& resources,
                     const std::vector<std::tuple<std::string, std::array<uint32_t, 3>, std::vector<std::string>>>&
                         passes,
                     const std::vector<std::tuple<std::string, std::string, double>>& params, double time_ms,
@@ -294,8 +296,8 @@ public:
         std::vector<std::vector<const char*>> fields(resources.size());
         std::vector<caliper_producer_resource_desc> res;
         for (size_t i = 0; i < resources.size(); ++i) {
-            const auto& [rid, kind, element, struct_name, fs, count, width, height, counted, publish, clear] =
-                resources[i];
+            const auto& [rid, kind, element, struct_name, fs, count, width, height, counted, publish, clear, format,
+                         texels] = resources[i];
             for (const std::string& f : fs) fields[i].push_back(f.c_str());
             caliper_producer_resource_desc r{};
             r.id = rid.c_str();
@@ -310,6 +312,8 @@ public:
             r.counted = counted;
             r.publish = publish;
             r.clear = clear;
+            r.format = format.empty() ? nullptr : format.c_str();
+            r.texels = texels;
             res.push_back(r);
         }
         std::vector<std::vector<const char*>> writes(passes.size());
@@ -358,7 +362,9 @@ public:
     }
 
     // The valid bytes of one published resource after the last pass, copied, as (bytes, count,
-    // stride): the next pass writes the runtime's buffer again while a sender still holds them.
+    // stride, width, height, elements): the next pass writes the runtime's buffer again while a
+    // sender still holds them. A texture gives its words as count and its version's size; a buffer
+    // of narrow elements its words and its valid elements, else elements is None.
     nb::tuple resource(uint32_t program, const std::string& name) {
         alive();
         caliper_producer_output o{};
@@ -369,7 +375,8 @@ public:
         const char* base = buffer ? static_cast<const char*>([buffer contents]) : nullptr;
         nb::bytes data(base && o.byte_size ? base + o.byte_offset : "", base ? size_t(o.byte_size) : 0);
         ++outputs_exported_;
-        return nb::make_tuple(data, o.count, o.words * 4);
+        return nb::make_tuple(data, o.count, o.words * 4, o.width, o.height,
+                              o.narrow ? nb::object(nb::int_(o.elements)) : nb::none());
     }
 
     // Binds the import `tensor` in place of `old` in the program, without a compile; raises

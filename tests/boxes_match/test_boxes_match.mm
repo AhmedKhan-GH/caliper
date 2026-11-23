@@ -30,7 +30,8 @@ using namespace match_rig;
 
 constexpr std::uint32_t kSize = 256;
 constexpr std::uint32_t kDefaultRgba = 0xffe6dcdcu;   // the scene's default color
-constexpr std::uint32_t kCapacity = 126976;
+constexpr std::uint32_t kCapacity = 126976;          // the boxes that the capacity case draws
+constexpr std::uint32_t kPieceCapacity = 1048576;    // the boxes that the piece publishes
 
 // One set of boxes with the built-in's options.
 struct Boxes {
@@ -40,6 +41,8 @@ struct Boxes {
     std::vector<std::uint8_t> rgba;     // n * 4, or none
     std::vector<std::int32_t> classes;  // n, or none
     std::vector<std::string> labels;    // n, one for all, or none
+    bool native_rgba = false;           // the colors reach the piece as u8 bytes, not as f32
+    std::string class_dtype = "f32";    // the class ids reach the piece as "f32", "i32" or "u16"
     std::uint32_t flat = kDefaultRgba;
     float width = 2.0f;
     bool fill = false;
@@ -134,11 +137,21 @@ std::vector<HostTensor> piece_tensors(const Boxes& b, caliper_net::Json* params)
         t.push_back(HostTensor::of("labels", "u32", {std::int64_t(b.labels.size()), 16}, words));
     }
     std::uint32_t mode = 0;
-    if (!b.rgba.empty()) {
+    if (!b.rgba.empty() && b.native_rgba) {
+        t.push_back(HostTensor::of("colors", "u8", {n, 4}, b.rgba));
+        mode = 1;
+    } else if (!b.rgba.empty()) {
         std::vector<float> c;
         for (std::uint8_t v : b.rgba) c.push_back(float(v) / 255.0f);
         t.push_back(HostTensor::of("colors", "f32", {n, 4}, c));
         mode = 1;
+    } else if (!b.classes.empty() && b.class_dtype == "i32") {
+        t.push_back(HostTensor::of("colors", "i32", {n}, b.classes));
+        mode = 2;
+    } else if (!b.classes.empty() && b.class_dtype == "u16") {
+        std::vector<std::uint16_t> c(b.classes.begin(), b.classes.end());
+        t.push_back(HostTensor::of("colors", "u16", {n}, c));
+        mode = 2;
     } else if (!b.classes.empty()) {
         std::vector<float> c(b.classes.begin(), b.classes.end());
         t.push_back(HostTensor::of("colors", "f32", {n}, c));
@@ -351,6 +364,35 @@ TEST_CASE("boxes_match: class ids through the palette, with ids outside the tabl
     CHECK(o.picks == o.asked);
 }
 
+TEST_CASE("boxes_match: u8 colors of each box (N, 4) bound as bytes") {
+    Metal m;
+    if (!m.backend) CALIPER_SKIP_NO_GPU(m.why);
+    Boxes b = scatter(16, 3, 4242u, false);
+    color_boxes(b, 120);
+    b.native_rgba = true;
+    b.fill = true;
+    b.width = 5.0f;
+    const Outcome o = run(m, "u8_colors", b, {0, 7, 15});
+    CHECK(o.c.lit_interior >= 2000);
+    CHECK(o.picks == o.asked);
+}
+
+TEST_CASE("boxes_match: class ids of i32 and of u16 through the palette") {
+    Metal m;
+    if (!m.backend) CALIPER_SKIP_NO_GPU(m.why);
+    for (const char* type : {"i32", "u16"}) {
+        Boxes b = scatter(20, 3, 31337u, false);
+        for (int i = 0; i < b.n(); ++i) b.classes.push_back(i == 3 ? 65535 : i == 4 ? 4096 : i * 5 + 1);
+        if (std::string(type) == "i32") b.classes[3] = -1;
+        b.class_dtype = type;
+        b.fill = true;
+        b.width = 1.0f;
+        const Outcome o = run(m, std::string("classes_") + type, b, {0, 19});
+        CHECK(o.c.lit_interior >= 2000);
+        CHECK(o.picks == o.asked);
+    }
+}
+
 TEST_CASE("boxes_match: wide edges at a pixel ratio of 2, and the depth offset of the edges") {
     Metal m;
     if (!m.backend) CALIPER_SKIP_NO_GPU(m.why);
@@ -477,17 +519,45 @@ TEST_CASE("boxes_match: the capacity of 126,976 boxes, and the first boxes of a 
     CHECK(o.picks == o.asked);
     CHECK(o.asked == 2);
 
-    // One box more than the capacity: the piece publishes the first 126,976.
+    // One box more than the capacity of the piece, 1,048,576: the piece publishes the first 1,048,576.
     cs::Piece piece;
     std::string why;
     REQUIRE_MESSAGE(load_piece("boxes", &piece, &why), why);
     caliper_net::Json params;
-    const Boxes over = grid(int(kCapacity) + 1);
+    const Boxes over = grid(int(kPieceCapacity) + 1);
     const std::vector<Published> res = run_derive(m.device, piece, piece_tensors(over, &params), as_map(params));
     REQUIRE(res.size() == 2);
-    CHECK(find(res, "boxes").count == kCapacity);
-    CHECK(find(res, "boxes").bytes.size() == std::size_t(kCapacity) * 64);
+    CHECK(find(res, "boxes").count == kPieceCapacity);
+    CHECK(find(res, "boxes").bytes.size() == std::size_t(kPieceCapacity) * 64);
     CHECK(find(res, "names").count == 0);
+}
+
+// The most boxes that the piece publishes, 1,048,576, or 1/CALIPER_CAPACITY_FRACTION of them, drawn
+// beside the built-in. Skipped unless run with --no-skip --test-case="*at its capacity".
+TEST_CASE("boxes_match: boxes@1 at its capacity" * doctest::skip()) {
+    Metal m;
+    if (!m.backend) CALIPER_SKIP_NO_GPU(m.why);
+    const int n = int(kPieceCapacity) / capacity_fraction();
+    Boxes b;
+    b.centers.reserve(std::size_t(n) * 3);
+    b.half.reserve(std::size_t(n) * 3);
+    for (int i = 0; i < n; ++i) {
+        const int x = i % 64, y = (i / 64) % 64, z = i / 4096;
+        b.centers.insert(b.centers.end(), {float(x) / 32.0f - 1.0f, float(y) / 32.0f - 1.0f, float(z % 32) / 16.0f - 1.0f});
+        b.half.insert(b.half.end(), {0.006f, 0.006f, 0.006f});
+    }
+    for (int i : {0, n - 1}) {   // the first and the last box large and in front
+        b.centers[std::size_t(3 * i)] = i == 0 ? -0.5f : 0.5f;
+        b.centers[std::size_t(3 * i + 1)] = 0.0f;
+        b.centers[std::size_t(3 * i + 2)] = 1.3f;
+        b.half[std::size_t(3 * i)] = b.half[std::size_t(3 * i + 1)] = b.half[std::size_t(3 * i + 2)] = 0.2f;
+    }
+    b.fill = true;
+    b.width = 1.0f;
+    color_boxes(b, 255);
+    const Outcome o = run(m, "at_capacity", b, {0, std::uint64_t(n - 1)});
+    CHECK(o.published == std::uint32_t(n));
+    CHECK(o.picks == o.asked);
 }
 
 CALIPER_GPU_TEST_MAIN()

@@ -83,9 +83,16 @@ struct Instance {
 struct ResourceVersion {
     std::string resource;            // the resource's id, or a buffer input's name
     std::int64_t step = -1;          // the step of the derive pass that wrote it
-    std::uint32_t count = 0;         // valid elements; a texture's width * height
+    std::uint32_t count = 0;         // valid elements; a texture's 32-bit words; a narrow buffer's words
     const std::uint8_t* bytes = nullptr;
-    std::size_t size = 0;            // count * stride, or width * height * 4
+    std::size_t size = 0;            // count * stride: the bytes
+    // A texture's size in this version and its format (rgba8unorm when empty), which must be the
+    // format of the manifest; both sides 0 for a version without texels.
+    std::uint32_t width = 0, height = 0;
+    std::string format;
+    // A buffer of narrow elements (u8 or u16): the exact element count of the version, of which `count`
+    // holds the words; unset for any other buffer, whose count is its elements.
+    std::optional<std::uint32_t> elements;
     // A number that the source gives each version, which differs for a version that replaces
     // another at the same step (the step history's ResourceVersion::serial); 0 when it has none.
     std::uint64_t serial = 0;

@@ -7,6 +7,7 @@
 #include "helpers.h"
 
 #include <caliper_builder/commands/command_table.h>
+#include <caliper_builder/programs/pieces.h>
 #include <caliper_builder/programs/sandbox.h>
 #include <caliper_builder/session/events.h>
 #include <caliper_builder/session/piece_commands.h>
@@ -759,4 +760,18 @@ TEST_CASE("pieces: selection.set picks an item of a program that pins a workspac
     const json out = event_json(pick);
     CHECK(out["program"] == "rows");
     CHECK(out["item"] == 1);
+}
+
+TEST_CASE("pieces: every piece of the built-in library passes piece.check, each pass composed and compiled") {
+    const PieceLibrary& lib = PieceLibrary::builtin();
+    REQUIRE(!lib.pieces().empty());
+    for (const spec::Piece& p : lib.pieces()) {
+        CAPTURE(p.name);
+        json j = json::parse(programs::canonical_manifest(p));
+        json files = json::object();
+        for (const auto& [file, text] : p.files) files[file.substr(0, file.find('.'))] = text;
+        j["files"] = files;
+        const json r = check_piece_json(j, false, nullptr);
+        CHECK_MESSAGE(r["ok"] == true, r["messages"].dump());
+    }
 }

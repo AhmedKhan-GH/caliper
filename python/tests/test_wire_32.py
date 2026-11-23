@@ -63,7 +63,7 @@ def test_frame_matches_description(name):
         h["magic"], h["major"], h["minor"], h["type"], h["flags"], h["frame_len"],
         h["meta_len"], h["section_count"], h["reserved"])
     # An instance of a piece carries its manifest and its WGSL, thus a larger frame.
-    most = 2048 if "_piece" in name else 600
+    most = 2048 if "_piece" in name else 9000 if name.endswith("_texture_wide") else 600
     assert h["minor"] == w.MINOR_3_2 == 2 and h["flags"] == 0 and len(buf) <= most
     f = w.decode_frame(buf)
     assert f.meta == desc["meta"]
@@ -791,6 +791,24 @@ def test_resource_codec_rules():
 
 def _golden(name):
     return w.decode((V32 / f"{name}.bin").read_bytes())
+
+
+def test_resource_formats_and_narrow_elements_decode():
+    n = _golden("resource_narrow_u16")
+    assert (n.element, n.elements, n.count, n.stride, n.width, n.format) == ("u16", 5, 3, 4, None, None)
+    assert np.frombuffer(n.data, np.uint16).tolist() == [1, 2, 3, 4, 5, 0]
+    t = _golden("resource_texture_r8")
+    assert (t.format, t.width, t.height, t.count, t.stride, t.element) == ("r8unorm", 3, 3, 3, 4, None)
+    assert bytes(t.data)[:9] == bytes(range(1, 10))
+
+
+def test_resource_part_with_another_format_is_refused():
+    import dataclasses
+    p0, p1, _ = (_golden(f"resource_split_{k}") for k in range(3))
+    sr = w.SplitResources()
+    assert sr.add(p0) is None
+    with pytest.raises(w.MessageError, match="differs from its part 0"):
+        sr.add(dataclasses.replace(p1, format="r8unorm"))
 
 
 WHOLE_SEGMENTS = np.array([[k, -k] for k in range(10)], np.float32).tobytes()

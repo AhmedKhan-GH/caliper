@@ -75,6 +75,14 @@ namespace sh = caliper_gfx::shaders;
 namespace wire = caliper_net::wire;
 
 constexpr std::uint32_t kSize = 256;   // the target, square
+// The divisor of a capacity case's count, from CALIPER_CAPACITY_FRACTION (1 for the full count), for
+// a run at a fraction of the count that measures the memory first.
+inline int capacity_fraction() {
+    const char* e = std::getenv("CALIPER_CAPACITY_FRACTION");
+    const int f = e ? std::atoi(e) : 1;
+    return f < 1 ? 1 : f;
+}
+
 constexpr std::uint32_t kPiecePick = 1u << 24;
 constexpr std::uint32_t kClear = dp::kBackground;
 
@@ -203,6 +211,9 @@ struct Version {
     std::string resource;
     std::uint32_t count = 0;
     std::vector<std::uint8_t> bytes;
+    std::uint32_t width = 0, height = 0;    // a texture's version
+    std::string format;                     // a texture's format, empty for rgba8unorm
+    std::optional<std::uint32_t> elements;  // a buffer of narrow elements
 };
 
 // Runs the derive half of the piece once in the producer runtime over the tensors, with the
@@ -239,7 +250,7 @@ inline bool run_derive(id<MTLDevice> device, const cs::Piece& piece, const std::
         }
         if (t == nullptr) return failed("no tensor for the input " + in.name);
         unbound.push_back(0);
-        id<MTLBuffer> b = [device newBufferWithLength:std::max<std::size_t>(16, t->bytes.size())
+        id<MTLBuffer> b = [device newBufferWithLength:std::max<std::size_t>(16, (t->bytes.size() + 15) / 16 * 16)
                                               options:MTLResourceStorageModeShared];
         if (!t->bytes.empty()) std::memcpy([b contents], t->bytes.data(), t->bytes.size());
         buffers.push_back(b);
@@ -275,6 +286,8 @@ inline bool run_derive(id<MTLDevice> device, const cs::Piece& piece, const std::
         d.count = r.count;
         d.width = r.width;
         d.height = r.height;
+        d.format = r.format ? r.format->c_str() : nullptr;
+        d.texels = r.texels.value_or(0);
         d.counted = r.counted ? 1 : 0;
         d.publish = r.publish ? 1 : 0;
         d.clear = r.clear ? 1 : 0;
@@ -341,6 +354,10 @@ inline bool run_derive(id<MTLDevice> device, const cs::Piece& piece, const std::
         Version v;
         v.resource = r.id;
         v.count = o.count;
+        v.width = o.width;
+        v.height = o.height;
+        if (r.kind == cs::ResourceKind::texture && r.format && *r.format != "rgba8unorm") v.format = *r.format;
+        if (o.narrow) v.elements = o.elements;
         if (o.byte_size) {
             const auto* base = static_cast<const std::uint8_t*>([(__bridge id<MTLBuffer>)o.buffer contents]);
             v.bytes.assign(base + o.byte_offset, base + o.byte_offset + o.byte_size);
@@ -538,6 +555,10 @@ inline bool draw_piece(gfx::Backend& g, const cs::Piece& piece, const std::vecto
         rv.resource = v.resource;
         rv.step = 1;
         rv.count = v.count;
+        rv.width = v.width;
+        rv.height = v.height;
+        rv.format = v.format;
+        rv.elements = v.elements;
         rv.bytes = v.bytes.empty() ? nullptr : v.bytes.data();
         rv.size = v.bytes.size();
         const cd::Verdict s = out->rt->set_resource(rv);
@@ -816,7 +837,10 @@ inline void check_refusals(Metal& m, const cs::Piece& piece, const std::vector<T
     const Version* info = find_version(versions, "info");
     REQUIRE(pixels);
     REQUIRE(info);
+    CHECK(pixels->bytes.empty());   // a version without texels, or without elements
     CHECK(pixels->count == 0);
+    CHECK(pixels->width == 0);
+    CHECK(pixels->height == 0);
     REQUIRE(info->bytes.size() == info_bytes);
     std::uint32_t size[2] = {1, 1};
     std::memcpy(size, info->bytes.data(), 8);

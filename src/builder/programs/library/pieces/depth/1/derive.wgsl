@@ -1,10 +1,11 @@
 // The derive half of depth@1: one element of `pixels` for each pixel of `depth`, row by row, the
-// value times `scale` in scene units, as the built-in draw holds a depth image. `info` holds the
+// value of an f32 or a u16 depth map times `scale` in scene units, as the built-in draw holds a
+// depth image. `info` holds the
 // width, the height, the pose and the range of the data: the least and the greatest depth that is
 // finite and not zero, as the producer's stats give it, and 1 in z when such a depth exists. A
 // depth map larger than `pixels` publishes no pixels and a size of 0.
 
-const THREADS: u32 = 4096u;   // 16 workgroups of 256, one span of the range each
+const THREADS: u32 = 65536u;   // 256 workgroups of 256, one span of the range each
 
 fn depth_dims() -> vec2<u32> {
     let s = shapes.depth;
@@ -49,7 +50,7 @@ fn copy_depth(@builtin(global_invocation_id) id: vec3<u32>) {
     var hi = 0.0;
     var seen = 0.0;
     for (var i = id.x; i < n; i = i + THREADS) {
-        let v = depth[i] * params.scale;
+        let v = depth_at(i) * params.scale;
         pixels[i] = DepthPixel(v);
         if (in_range(v)) {
             if (seen == 0.0) {

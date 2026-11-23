@@ -760,7 +760,11 @@ export const RESOURCE_PART_WAIT = 256;
 /** Most bytes of one element of a resource, the "stride" (a multiple of 4). */
 export const RESOURCE_STRIDE_MAX = 256;
 /** Most texels of the "width" and of the "height" of a texture resource. */
-export const RESOURCE_SIDE_MAX = 4096;
+export const RESOURCE_SIDE_MAX = 8192;
+/** The values of the key "format" of a texture resource. */
+export const TEXTURE_FORMATS = ['rgba8unorm', 'r8unorm', 'r32uint'] as const;
+/** The values of the key "element" of a buffer of narrow elements. */
+export const RESOURCE_ELEMENTS = ['u8', 'u16'] as const;
 /** Most bytes of the "name" of a piece pin, [a-z][a-z0-9_]*. */
 export const PIECE_NAME_MAX = 32;
 /** Most of the "version" of a piece pin, counted from 1. */
@@ -840,7 +844,7 @@ export interface ProgramMsg {
   draw?: string;
 }
 
-/** Producer to viewer or hub: one version of one published resource of a program, the valid elements that a derive pass wrote. A texture also has width and height, with a stride of 4 and a count of their product. */
+/** Producer to viewer or hub: one version of one published resource of a program, the valid elements that a derive pass wrote. A texture also has width and height, with a stride of 4 and a count of the 32-bit words of their texels. */
 export interface ResourceMsg {
   type: 'resource';
   /** The id of the program. */
@@ -859,6 +863,12 @@ export interface ResourceMsg {
   width?: number;
   /** A texture's height in texels. */
   height?: number;
+  /** A texture's format, rgba8unorm when absent: the count is the 32-bit words of its texels, (width * height + 3) / 4 for r8unorm. */
+  format?: 'rgba8unorm' | 'r8unorm' | 'r32uint';
+  /** A buffer of narrow elements: "u8" or "u16", packed into 32-bit words from the low bits up, with a stride of 4 and a count of (elements * bytes + 3) / 4. */
+  element?: 'u8' | 'u16';
+  /** The exact count of narrow elements, with `element`. */
+  elements?: number;
   /** A part of a version in parts: the sender's counter of such versions, this part's number from 0, the number of parts (2 to MAX_PIECES), and the first element that `data` holds. */
   split?: ResourceSplit;
 }

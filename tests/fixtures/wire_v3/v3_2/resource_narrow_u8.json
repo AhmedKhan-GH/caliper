@@ -1,0 +1,59 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 192,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 154,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 130
+  },
+  "meta": {
+    "count": 2,
+    "element": "u8",
+    "elements": 7,
+    "program": "heads",
+    "resource": "bytes",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "resource",
+        "shape": [
+          8
+        ]
+      }
+    ],
+    "step": 1260,
+    "stride": 4
+  },
+  "meta_offset": 28,
+  "name": "v3_2/resource_narrow_u8",
+  "section_lengths": [
+    8
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 8,
+      "name": "resource",
+      "offset": 184,
+      "shape": [
+        8
+      ],
+      "values": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        0
+      ]
+    }
+  ],
+  "type_name": "resource"
+}

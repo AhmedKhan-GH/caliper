@@ -5,7 +5,7 @@
 // without a row or with a red below 0. `info` holds the width, the height and the pose. A mask
 // larger than `pixels` publishes no pixels and a size of 0.
 
-const THREADS: u32 = 16384u;   // 64 workgroups of 256
+const THREADS: u32 = 65536u;   // 256 workgroups of 256
 
 fn mask_dims() -> vec2<u32> {
     let s = shapes.classes;
@@ -51,7 +51,7 @@ fn copy_classes(@builtin(global_invocation_id) id: vec3<u32>) {
         atomicStore(&pixels_count, n);
     }
     for (var i = id.x; i < n; i = i + THREADS) {
-        pixels[i] = MaskPixel(u32(clamp(classes[i], 0, 65535)));
+        pixels[i] = MaskPixel(u32(clamp(classes_at(i), 0, 65535)));
     }
 }
 

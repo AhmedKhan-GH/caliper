@@ -347,6 +347,139 @@ TEST_CASE("an indexed pass draws the valid indices of its version as an index bu
     }
 }
 
+// A texture of r8unorm of at most 8 by 4 texels and 20 texels, an r32uint texture, and a buffer of u16
+// elements, which one full-screen pass reads: textureLoad of each texture and the checked accessor.
+cs::Piece textured() {
+    cs::Piece p;
+    p.name = "textured";
+    cs::Resource grey;
+    grey.id = "grey";
+    grey.kind = cs::ResourceKind::texture;
+    grey.format = "r8unorm";
+    grey.width = 8;
+    grey.height = 4;
+    grey.texels = 20;
+    cs::Resource ids = grey;
+    ids.id = "ids";
+    ids.format = "r32uint";
+    ids.texels.reset();
+    cs::Resource depth;
+    depth.id = "depth";
+    depth.layout.element = "u16";
+    depth.count = 5;
+    p.resources = {grey, ids, depth};
+    cs::Draw d;
+    d.camera = cs::CameraMode::none;
+    cs::DrawPass full;
+    full.fragment = "full_fs";
+    d.passes = {full};
+    p.draw = d;
+    p.files = {{"draw.wgsl", R"(@fragment
+fn full_fs(in: CaliperFullscreen) -> @location(0) vec4<f32> {
+    let g = textureLoad(grey, vec2<i32>(0, 0), 0).r;
+    let k = textureLoad(ids, vec2<i32>(0, 0), 0).r;
+    return vec4<f32>(g, f32(k), f32(depth_at(4u)), f32(counts.grey + counts.depth));
+}
+)"}};
+    return p;
+}
+
+TEST_CASE("a texture takes the size and format of each version within its largest, and a narrow buffer its count") {
+    for (bool webgpu : modes()) {
+        CAPTURE(webgpu);
+        Host h;
+        cd::DrawRuntime rt(h.gfx, webgpu, checks());
+        cd::Instance in;
+        in.program = "textured";
+        const cp::Verdict v = rt.install(textured(), in, 3);
+        REQUIRE_MESSAGE(v.ok(), v.message);
+        // A 5 by 3 grey version: 15 texels in 4 words. The texture takes its size.
+        std::vector<std::uint8_t> g(16, 7);
+        cd::ResourceVersion grey;
+        grey.resource = "grey";
+        grey.step = 1;
+        grey.width = 5;
+        grey.height = 3;
+        grey.format = "r8unorm";
+        grey.count = 4;
+        grey.bytes = g.data();
+        grey.size = g.size();
+        const cp::Verdict gv = rt.set_resource(grey);
+        REQUIRE_MESSAGE(gv.ok(), gv.message);
+        const auto& slot = rt.internals().slots[0];
+        CHECK(slot.tex_width == 5);
+        CHECK(slot.tex_height == 3);
+        CHECK(slot.count == 15);   // the texels, as `counts` gives them
+        // An r32uint version of 2 by 2, and 5 u16 elements in 3 words.
+        const std::vector<std::uint32_t> k{1, 2, 3, 4};
+        cd::ResourceVersion ids = version("ids", k, 1);
+        ids.width = ids.height = 2;
+        ids.format = "r32uint";
+        REQUIRE(rt.set_resource(ids).ok());
+        const std::vector<std::uint32_t> words{0x00020001u, 0x00040003u, 0x00000005u};
+        cd::ResourceVersion depth = version("depth", words, 1);
+        depth.elements = 5;
+        REQUIRE(rt.set_resource(depth).ok());
+        CHECK(rt.internals().slots[2].count == 5);
+        CHECK(frame(h, rt).size() == 1);
+
+        // Refusals, each before anything is written: another format, a side past the largest, more
+        // texels than declared, words that do not match the size, and a narrow count that disagrees.
+        const std::size_t before = h.gfx.count(gfx::RecordingBackend::OpKind::WriteTexture);
+        cd::ResourceVersion bad = grey;
+        bad.format = "";   // rgba8unorm
+        CHECK(rt.set_resource(bad).code == cp::kProgramBadResource);
+        bad = grey;
+        bad.width = 9;
+        CHECK(rt.set_resource(bad).code == cp::kProgramResourceTooLarge);
+        bad = grey;
+        bad.width = 7;   // 21 texels, above the 20 of texels
+        bad.count = 6;
+        bad.size = 24;
+        std::vector<std::uint8_t> g24(24, 1);
+        bad.bytes = g24.data();
+        CHECK(rt.set_resource(bad).code == cp::kProgramResourceTooLarge);
+        bad = grey;
+        bad.count = 5;   // 15 texels fill 4 words
+        CHECK(rt.set_resource(bad).code == cp::kProgramBadResource);
+        bad = grey;
+        bad.height = 0;
+        CHECK(rt.set_resource(bad).code == cp::kProgramResourceTooLarge);
+        CHECK(h.gfx.count(gfx::RecordingBackend::OpKind::WriteTexture) == before);
+        cd::ResourceVersion d2 = depth;
+        d2.elements = 7;   // 7 u16 elements fill 4 words
+        CHECK(rt.set_resource(d2).code == cp::kProgramResourceTooLarge);
+        d2.elements = 4;   // 4 elements fill 2 words, and the version has 3
+        CHECK(rt.set_resource(d2).code == cp::kProgramBadResource);
+        d2.elements.reset();
+        CHECK(rt.set_resource(d2).code == cp::kProgramBadResource);
+        cd::ResourceVersion sized = depth;
+        sized.width = 1;
+        CHECK(rt.set_resource(sized).code == cp::kProgramBadResource);
+        // A version without texels keeps the texture and gives the count 0.
+        cd::ResourceVersion none;
+        none.resource = "grey";
+        none.step = 2;
+        none.format = "";   // RESOURCE gives a format only with a size
+        REQUIRE(rt.set_resource(none).ok());
+        CHECK(rt.internals().slots[0].count == 0);
+        // The same size again reuses the texture; another size makes a new one.
+        const std::size_t made = h.gfx.count(gfx::RecordingBackend::OpKind::Create, gfx::HandleKind::Texture);
+        grey.step = 3;
+        REQUIRE(rt.set_resource(grey).ok());
+        CHECK(h.gfx.count(gfx::RecordingBackend::OpKind::Create, gfx::HandleKind::Texture) == made);
+        std::vector<std::uint8_t> g8(8, 9);
+        grey.width = 2;
+        grey.height = 4;
+        grey.count = 2;
+        grey.bytes = g8.data();
+        grey.size = g8.size();
+        REQUIRE(rt.set_resource(grey).ok());
+        CHECK(h.gfx.count(gfx::RecordingBackend::OpKind::Create, gfx::HandleKind::Texture) == made + 1);
+        CHECK(frame(h, rt).size() == 1);
+    }
+}
+
 TEST_CASE("the checks run before anything is made") {
     Host h;
     const std::size_t before = h.gfx.ops().size();

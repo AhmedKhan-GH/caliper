@@ -3042,7 +3042,9 @@ RESOURCE_MAX_BYTES = 67043328      # 64 MiB less 64 KiB: the section fits one fr
 RESOURCE_VERSION_MAX_BYTES = 134217728   # a version in parts: 128 MiB, WebGPU's default largest storage binding
 RESOURCE_PART_WAIT = 256           # RESOURCE frames a receiver waits for the next part of a version
 RESOURCE_STRIDE_MAX = 256
-RESOURCE_SIDE_MAX = 4096
+RESOURCE_SIDE_MAX = 8192           # a texture's width and height: WebGPU's default largest 2-D texture
+TEXTURE_RGBA8, TEXTURE_R8, TEXTURE_R32UINT = "rgba8unorm", "r8unorm", "r32uint"   # "format"
+ELEMENT_U8, ELEMENT_U16 = "u8", "u16"   # "element": four or two elements a word
 PIECE_NAME_MAX = 32
 PIECE_VERSION_MAX = 1000000
 PIECE_COMMON_MAX = 589824          # 8 lib modules and common.wgsl of 64 KiB each
@@ -3474,8 +3476,11 @@ class Resource(_Msg):
     published resource of a program, the valid elements that a derive pass wrote
     (``design/programmable-graphics.md``, Resource Message). ``step`` is the run's
     step at the pass, ``count`` the valid elements and ``stride`` the bytes of one;
-    a texture also has ``width`` and ``height``, with a stride of 4 and ``count``
-    their product. The section ``resource`` holds exactly count * stride bytes,
+    a texture also has ``width`` and ``height`` (1 to RESOURCE_SIDE_MAX each) and
+    optionally ``format`` (rgba8unorm when absent), with a stride of 4 and ``count``
+    the 32-bit words of its texels: width * height, or (width * height + 3) // 4
+    for r8unorm. A buffer of narrow elements has ``element`` ("u8" or "u16") and
+    ``elements``, with a stride of 4 and ``count`` (elements * bytes + 3) // 4. The section ``resource`` holds exactly count * stride bytes,
     and ``data`` is a view of them. A part of a version in parts (:func:`resource_parts`)
     also has ``split`` ({version, part, parts, first}), and its section holds whole
     elements from element ``first`` on."""
@@ -3489,11 +3494,15 @@ class Resource(_Msg):
     width: int | None = None
     height: int | None = None
     split: dict | None = None
+    format: str | None = None
+    element: str | None = None
+    elements: int | None = None
 
     def to_meta(self):
         return _drop_none({"program": self.program, "resource": self.resource, "step": self.step,
                            "count": self.count, "stride": self.stride, "width": self.width,
-                           "height": self.height, "split": self.split})
+                           "height": self.height, "format": self.format, "element": self.element,
+                           "elements": self.elements, "split": self.split})
 
     def to_sections(self):
         mv = memoryview(self.data)
@@ -3513,8 +3522,25 @@ class Resource(_Msg):
         height = _opt(m, "height", side, f"an integer from 1 to {RESOURCE_SIDE_MAX}")
         if (width is None) != (height is None):
             _bad("a texture holds both 'width' and 'height'")
-        if width is not None and (stride != 4 or count != width * height):
-            _bad("a texture has a stride of 4 and width * height elements")
+        fmt = _opt(m, "format", lambda v: v in (TEXTURE_RGBA8, TEXTURE_R8, TEXTURE_R32UINT),
+                   "rgba8unorm, r8unorm or r32uint")
+        if fmt is not None and width is None:
+            _bad("'format' belongs to a texture, with 'width' and 'height'")
+        if width is not None:
+            texels = width * height
+            words = (texels + 3) // 4 if fmt == TEXTURE_R8 else texels
+            if stride != 4 or count != words:
+                _bad("a texture has a stride of 4 and the words of its texels as its count")
+        element = _opt(m, "element", lambda v: v in (ELEMENT_U8, ELEMENT_U16), "u8 or u16")
+        elements = _opt(m, "elements", _u32, "a uint32")
+        if (element is None) != (elements is None):
+            _bad("a buffer of narrow elements holds both 'element' and 'elements'")
+        if element is not None:
+            if width is not None:
+                _bad("a texture has no 'element'")
+            nbytes = 1 if element == ELEMENT_U8 else 2
+            if stride != 4 or count != (elements * nbytes + 3) // 4:
+                _bad("a buffer of narrow elements has a stride of 4 and the words of its elements as its count")
         split = _opt(m, "split", _obj, "an object")
         if split is not None:
             def need(key, ok, what):
@@ -3543,7 +3569,7 @@ class Resource(_Msg):
                 _bad("a part of a resource holds whole elements from 'split.first' up to the count")
         elif s.shape[0] != count * stride:
             _bad(f"'resource' holds count * stride = {count * stride} bytes, got {s.shape[0]}")
-        return cls(program, resource, step, count, stride, s.data, width, height, split)
+        return cls(program, resource, step, count, stride, s.data, width, height, split, fmt, element, elements)
 
 
 def resource_parts(r: Resource, version: int, part_bytes: int) -> list:
@@ -3571,7 +3597,8 @@ def resource_parts(r: Resource, version: int, part_bytes: int) -> list:
     for k in range(parts):
         a, b = k * per, min(r.count, (k + 1) * per)
         out.append(Resource(r.program, r.resource, r.step, r.count, r.stride, mv[a * r.stride:b * r.stride],
-                            r.width, r.height, {"version": version, "part": k, "parts": parts, "first": a}))
+                            r.width, r.height, {"version": version, "part": k, "parts": parts, "first": a},
+                            r.format, r.element, r.elements))
     return out
 
 
@@ -3628,8 +3655,8 @@ class SplitResources:
             del self.open[key]
             self.discarded += 1
             raise MessageError(ERR_BAD_REQUEST, why)
-        if (r.step, r.count, r.stride, r.width, r.height, sp["parts"]) != \
-                (h.step, h.count, h.stride, h.width, h.height, h.split["parts"]):
+        if (r.step, r.count, r.stride, r.width, r.height, r.format, r.element, r.elements, sp["parts"]) != \
+                (h.step, h.count, h.stride, h.width, h.height, h.format, h.element, h.elements, h.split["parts"]):
             refuse(f"a part of the resource {name} differs from its part 0")
         if sp["part"] != a[1] or sp["first"] != a[2]:
             refuse(f"a part of the resource {name} comes out of order")
@@ -3642,7 +3669,7 @@ class SplitResources:
         if not last:
             return None
         del self.open[key]
-        return Resource(h.program, h.resource, h.step, h.count, h.stride, memoryview(a[4]), h.width, h.height)
+        return Resource(h.program, h.resource, h.step, h.count, h.stride, memoryview(a[4]), h.width, h.height, None, h.format, h.element, h.elements)
 
 
 for _cls in (Program, ProgramState, Resource):

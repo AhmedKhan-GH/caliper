@@ -166,9 +166,18 @@ struct ElementLayout {
     std::uint32_t stride = 0;
     std::uint32_t align = 0;
     std::vector<FieldLayout> fields;
+    // A narrow element (u8 or u16, only as the `element` of a buffer resource or buffer input) packs this
+    // many elements into each 4-byte word, the stride of its layout; 1 for every other layout.
+    std::uint32_t per_word = 1;
 };
+// The bytes of `count` elements of a layout: count * stride, or the 4-byte words of narrow elements.
+// count is below 2^32 and stride at most 256, thus no product wraps.
+inline std::uint64_t layout_bytes(const ElementLayout& l, std::uint32_t count) {
+    return l.per_word > 1 ? (std::uint64_t(count) + l.per_word - 1) / l.per_word * 4 : std::uint64_t(count) * l.stride;
+}
 // A bad field type or a stride over kStrideMax is program.bad_layout. A plain
-// element has one field without a name.
+// element has one field without a name. The narrow elements u8 and u16 have
+// the stride 4 of the word that holds them and per_word 4 or 2.
 Verdict element_layout(const spec::Layout& layout, ElementLayout* out);
 
 // ---- composition
@@ -195,7 +204,16 @@ SourcePlace source_place(const Composed& composed, std::uint32_t line, std::uint
 // keeps its segment with every line blank, because the derive half has no
 // prelude; a call of it from common.wgsl or derive.wgsl is
 // piece.unknown_import.
-Composed compose_derive(const spec::Piece& piece, const Resolved& resolved);
+//
+// A tensor input whose dtype names u8 or u16, or several types joined by "|", is typed by its binding: the
+// header binds the tensor's bytes as array<u32> under the input's name, declares the constant
+// <name>_type (CALIPER_F32, CALIPER_I32, CALIPER_U32, CALIPER_U8 or CALIPER_U16) of the bound type, and
+// the accessor <name>_at(i: u32), which returns element i converted to f32 when the dtype names f32, else
+// to i32 when it names i32, else as u32, and zero at or past the element count, the field <name>__len of
+// `shapes` after the shapes of all tensor inputs. `bound` gives the bound type of such an input by name,
+// the first type of its dtype when absent; a bound type that the dtype does not name is piece.bad_binding.
+Composed compose_derive(const spec::Piece& piece, const Resolved& resolved,
+                        const std::map<std::string, std::string>& bound = {});
 // The section `common` of PROGRAM split back: its leading lib modules, which
 // the app put before common.wgsl in the order of imports, into lib_text and
 // lib_segments, and the rest into files["common.wgsl"]. A host that gets the

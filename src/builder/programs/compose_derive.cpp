@@ -7,7 +7,8 @@
 // has tensor inputs; group 1 each tensor input, read-only, at the input's
 // index; group 2 each resource at 2 x its index, read_write, and the counter
 // <id>_count of a counted buffer at 2 x its index + 1. A texture resource is a
-// packed array<u32>. Every name and type that reaches the text is checked
+// packed array<u32> with its size <id>_size: vec2<u32> at 2 x its index + 1, and
+// a buffer of the narrow element u8 or u16 is a packed array<u32> too. Every name and type that reaches the text is checked
 // here first, because the manifest can come from the wire: a name is a WGSL
 // identifier without "__" and without a host prefix, and a type is one of the
 // field types of the plan. This file needs only the standard library and
@@ -16,6 +17,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <map>
 #include <set>
 #include <vector>
 
@@ -52,6 +54,36 @@ bool field_type(const std::string& t) {
     return std::any_of(std::begin(kTypes), std::end(kTypes), [&](const char* k) { return t == k; });
 }
 
+// The WGSL constant of a tensor dtype in the generated header.
+const char* dtype_constant(const std::string& t) {
+    return t == "f32" ? "CALIPER_F32" : t == "i32" ? "CALIPER_I32" : t == "u32" ? "CALIPER_U32" : t == "u8" ? "CALIPER_U8"
+                                                                                                     : "CALIPER_U16";
+}
+
+// The body of the checked accessor <name>_at() of a typed tensor input: the element `i` of the bound type
+// `bound` from the words of the binding, converted to the read type `read`, and zero at or past the
+// element count that the runtime writes into shapes.<name>__len.
+std::string typed_accessor(const std::string& name, const std::string& bound, const std::string& read) {
+    std::string v;   // the element as a u32, i32 or f32 expression of the bound type
+    std::string type = bound;
+    if (bound == "u8") {
+        v = "(" + name + "[i >> 2u] >> ((i & 3u) * 8u)) & 0xffu";
+        type = "u32";
+    } else if (bound == "u16") {
+        v = "(" + name + "[i >> 1u] >> ((i & 1u) * 16u)) & 0xffffu";
+        type = "u32";
+    } else if (bound == "f32") {
+        v = "bitcast<f32>(" + name + "[i])";
+    } else if (bound == "i32") {
+        v = "bitcast<i32>(" + name + "[i])";
+    } else {
+        v = name + "[i]";
+    }
+    const std::string value = type == read ? v : read + "(" + v + ")";
+    return "fn " + name + "_at(i: u32) -> " + read + " {\n    if (i >= shapes." + name + "__len) {\n        return " +
+           read + "(0);\n    }\n    return " + value + ";\n}\n";
+}
+
 const char* param_type(spec::ParamType t) {
     return t == spec::ParamType::i32 ? "i32" : t == spec::ParamType::u32 ? "u32" : "f32";
 }
@@ -76,6 +108,10 @@ Verdict element_of(const spec::Resource& r, std::string* type, std::string* stru
     if (l.element && (l.type_name || !l.fields.empty()))
         return refuse(kProgramBadLayout, "The resource " + r.id + " has both `element` and a struct.");
     if (l.element) {
+        if (spec::narrow_per_word(*l.element) > 1) {   // u8 or u16, four or two to a word
+            *type = "u32";
+            return {};
+        }
         if (!field_type(*l.element))
             return refuse(kProgramBadLayout, "The resource " + r.id + " has the element type " + *l.element +
                                                  ", which is not f32, i32, u32, vec2<f32>, vec4<f32>, vec2<u32> or "
@@ -168,7 +204,8 @@ Resolved split_common(std::string_view common) {
     return r;
 }
 
-Composed compose_derive(const spec::Piece& piece, const Resolved& resolved) {
+Composed compose_derive(const spec::Piece& piece, const Resolved& resolved,
+                        const std::map<std::string, std::string>& bound) {
     Composed c;
     auto fail = [&](Verdict v) {
         c.verdict = std::move(v);
@@ -196,9 +233,20 @@ Composed compose_derive(const spec::Piece& piece, const Resolved& resolved) {
     };
     for (const spec::PieceInput& in : piece.inputs) {
         if (Verdict v = claim(in.name, kPieceBadManifest, "input"); !v.ok()) return fail(v);
-        if (in.kind == spec::InputKind::tensor && in.dtype != "f32" && in.dtype != "i32" && in.dtype != "u32")
+        if (in.kind != spec::InputKind::tensor) continue;
+        const std::vector<std::string> types = spec::tensor_dtypes(in.dtype);
+        if (types.empty())
             return fail(refuse(kPieceBadManifest, "The tensor input " + in.name + " has the dtype " + in.dtype +
-                                                      ", which is not f32, i32 or u32."));
+                                                      ", which is not f32, i32, u32, u8 or u16, or several of them "
+                                                      "joined by |."));
+        const auto b = bound.find(in.name);
+        if (b != bound.end() && std::find(types.begin(), types.end(), b->second) == types.end())
+            return fail(refuse(kPieceBadBinding, "The input " + in.name + " reads " + in.dtype +
+                                                     ", and the bound tensor holds " + b->second + "."));
+        if (spec::typed_tensor_input(in.dtype))
+            for (const char* suffix : {"_at", "_type"})
+                if (Verdict v = claim(in.name + suffix, kPieceBadManifest, "accessor of an input"); !v.ok())
+                    return fail(v);
     }
     std::set<std::string> param_names;
     for (const spec::PieceParam& p : piece.params)
@@ -210,11 +258,17 @@ Composed compose_derive(const spec::Piece& piece, const Resolved& resolved) {
     for (std::size_t i = 0; i < piece.resources.size(); ++i) {
         const spec::Resource& r = piece.resources[i];
         if (Verdict v = claim(r.id, kProgramBadResource, "resource"); !v.ok()) return fail(v);
-        if (r.kind == spec::ResourceKind::buffer && (r.count == 0 || r.count > pl::kCountMax))
-            return fail(refuse(kProgramBadResource, "The buffer " + r.id + " has a count outside 1 to 4,194,304."));
+        const std::uint64_t most = std::uint64_t(pl::kCountMax) *
+                                   (r.layout.element ? spec::narrow_per_word(*r.layout.element) : 1u);
+        if (r.kind == spec::ResourceKind::buffer && (r.count == 0 || r.count > most))
+            return fail(refuse(kProgramBadResource, "The buffer " + r.id + " has a count outside 1 to " +
+                                                        std::to_string(most) + "."));
         if (r.kind == spec::ResourceKind::texture &&
             (r.width == 0 || r.height == 0 || r.width > pl::kTextureSideMax || r.height > pl::kTextureSideMax))
-            return fail(refuse(kProgramBadResource, "The texture " + r.id + " has a side outside 1 to 4,096."));
+            return fail(refuse(kProgramBadResource, "The texture " + r.id + " has a side outside 1 to 8,192."));
+        if (r.kind == spec::ResourceKind::texture && r.format && !spec::texture_format_ok(*r.format))
+            return fail(refuse(kProgramBadResource, "The texture " + r.id + " has the format " + *r.format +
+                                                        ", which is not rgba8unorm, r8unorm or r32uint."));
         if (r.kind == spec::ResourceKind::texture && r.counted)
             return fail(refuse(kProgramBadResource, "The texture " + r.id + " cannot be counted."));
         std::string type, decl;
@@ -236,6 +290,12 @@ Composed compose_derive(const spec::Piece& piece, const Resolved& resolved) {
             resources += "@group(2) @binding(" + std::to_string(2 * i + 1) + ") var<storage, read_write> " + r.id +
                          "_count: atomic<u32>;\n";
         }
+        // A texture's size in this version, which the runtime sets to the largest sides before each run.
+        if (r.kind == spec::ResourceKind::texture) {
+            if (Verdict v = claim(r.id + "_size", kProgramBadResource, "texture size"); !v.ok()) return fail(v);
+            resources += "@group(2) @binding(" + std::to_string(2 * i + 1) + ") var<storage, read_write> " + r.id +
+                         "_size: vec2<u32>;\n";
+        }
     }
 
     // The header (design/programmable-graphics.md, Generated Header).
@@ -249,17 +309,33 @@ Composed compose_derive(const spec::Piece& piece, const Resolved& resolved) {
             h += (i ? ", " : "") + piece.params[i].name + ": " + param_type(piece.params[i].type);
         h += " }\n@group(0) @binding(1) var<uniform> params: Params;\n";
     }
-    std::string shapes, tensors;
+    // A typed input (a narrow type or several types) binds its tensor's bytes as array<u32>, with the
+    // constant <name>_type of the bound type, the accessor <name>_at() and its element count as the field
+    // <name>__len of `shapes`, after the shapes of all tensor inputs.
+    std::string shapes, lens, tensors, accessors;
     for (std::size_t i = 0; i < piece.inputs.size(); ++i) {
         const spec::PieceInput& in = piece.inputs[i];
         if (in.kind != spec::InputKind::tensor) continue;   // the draw half reads a buffer input
         shapes += (shapes.empty() ? "" : ", ") + in.name + ": vec4<u32>";
-        tensors += "@group(1) @binding(" + std::to_string(i) + ") var<storage, read> " + in.name + ": array<" +
-                   in.dtype + ">;\n";
+        if (!spec::typed_tensor_input(in.dtype)) {
+            tensors += "@group(1) @binding(" + std::to_string(i) + ") var<storage, read> " + in.name + ": array<" +
+                       in.dtype + ">;\n";
+            continue;
+        }
+        const auto b = bound.find(in.name);
+        const std::string type = b != bound.end() ? b->second : spec::tensor_dtypes(in.dtype).front();
+        lens += ", " + in.name + "__len: u32";
+        tensors += "@group(1) @binding(" + std::to_string(i) + ") var<storage, read> " + in.name + ": array<u32>;\n";
+        accessors += "const " + in.name + "_type: u32 = " + dtype_constant(type) + ";\n";
+        accessors += typed_accessor(in.name, type, spec::tensor_read_type(in.dtype));
     }
     if (!shapes.empty())
-        h += "struct CaliperShapes { " + shapes + " }\n@group(0) @binding(2) var<uniform> shapes: CaliperShapes;\n";
+        h += "struct CaliperShapes { " + shapes + lens +
+             " }\n@group(0) @binding(2) var<uniform> shapes: CaliperShapes;\n";
     h += tensors;
+    if (!accessors.empty())
+        h += "const CALIPER_F32: u32 = 0u;\nconst CALIPER_I32: u32 = 1u;\nconst CALIPER_U32: u32 = 2u;\n"
+             "const CALIPER_U8: u32 = 3u;\nconst CALIPER_U16: u32 = 4u;\n" + accessors;
     h += structs;
     h += resources;
 

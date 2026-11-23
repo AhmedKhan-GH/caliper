@@ -83,7 +83,8 @@ typedef enum caliper_producer_dtype {
     CALIPER_PRODUCER_I32 = 3,
     CALIPER_PRODUCER_U32 = 4,
     CALIPER_PRODUCER_I64 = 5,
-    CALIPER_PRODUCER_U8 = 6
+    CALIPER_PRODUCER_U8 = 6,
+    CALIPER_PRODUCER_U16 = 7
 } caliper_producer_dtype;
 
 #define CALIPER_PRODUCER_MAX_DIMS 8u
@@ -174,6 +175,10 @@ typedef struct caliper_producer_output {
     uint32_t count;        /* geometry: min(count, max_count); pixels: width*height;
                               tensor: the elements of its shape                    */
     uint32_t words;        /* 32-bit words of one item: 3 for positions, else 1     */
+    uint32_t width;        /* a derive texture: the version's size, 0 otherwise     */
+    uint32_t height;
+    uint32_t elements;     /* a derive buffer of narrow elements: its valid elements */
+    uint32_t narrow;       /* 1 for such a buffer, whose count is its words         */
 } caliper_producer_output;
 
 typedef enum caliper_producer_state {

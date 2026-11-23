@@ -10,7 +10,7 @@
 // box, or the one row of `labels` for all. Without `labels`, or with another count of rows or a
 // width other than 16, no box has a label.
 
-const BOX_CAPACITY: u32 = 126976u;
+const BOX_CAPACITY: u32 = 1048576u;
 const BOX_LABELS: u32 = 4096u;
 const BOX_NO_LABEL: u32 = 0xffffffffu;
 
@@ -74,6 +74,15 @@ fn box_byte(v: f32) -> u32 {
     return u32(min(v, 1.0) * 255.0 + 0.5);
 }
 
+// Channel k of `colors` from 0 to 255: the byte of u8 colors, or an f32 color from 0 to 1.
+fn box_channel(k: u32) -> u32 {
+    let v = colors_at(k);
+    if (colors_type == CALIPER_U8) {
+        return u32(v);
+    }
+    return box_byte(v);
+}
+
 // The RGBA of box i from the rows of `colors` (3 or 4 channels), packed r | g << 8 | b << 16 |
 // a << 24, with an alpha of 255 for 3 channels. A box without a row takes the one color.
 fn box_rgba(i: u32) -> u32 {
@@ -85,22 +94,22 @@ fn box_rgba(i: u32) -> u32 {
     let base = select(i, 0u, rows == 1u) * w;
     var a = 255u;
     if (w > 3u) {
-        a = box_byte(colors[base + 3u]);
+        a = box_channel(base + 3u);
     }
-    return box_byte(colors[base]) | (box_byte(colors[base + 1u]) << 8u) | (box_byte(colors[base + 2u]) << 16u) |
-           (a << 24u);
+    return box_channel(base) | (box_channel(base + 1u) << 8u) | (box_channel(base + 2u) << 16u) | (a << 24u);
 }
 
-// The class color of box i from element i of `colors`, a whole number from 0 to 65,535.
+// The class color of box i from element i of `colors`, a whole number from 0 to 65,535, of any of
+// its types.
 fn box_class(i: u32) -> u32 {
     if (shapes.colors.w == 0u) {
         return BOX_DEFAULT;
     }
-    let n = arrayLength(&colors);
+    let n = shapes.colors.z * shapes.colors.w;   // the elements of a tensor of rank 1 or 2
     if (n == 0u || (n != 1u && i >= n)) {
         return BOX_DEFAULT;
     }
-    let v = colors[select(i, 0u, n == 1u)];
+    let v = colors_at(select(i, 0u, n == 1u));
     if (!(v >= 0.0) || v >= 65536.0) {
         return BOX_DEFAULT;
     }

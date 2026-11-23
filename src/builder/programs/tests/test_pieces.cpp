@@ -263,8 +263,50 @@ TEST_CASE("a published resource holds at most 128 MiB, the published resources o
     p.resources[0].width = p.resources[0].height = 1024;
     CHECK(code_of(p).empty());
     p.resources[0].publish = false;
-    p.resources[0].width = p.resources[0].height = cs::piece_limits::kTextureSideMax;
+    p.resources[0].width = p.resources[0].height = 4096;
     CHECK(code_of(p).empty());
+    p.resources[0].width = 4097;   // a private resource holds at most 64 MiB
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    // A published texture of 8,192 by 8,192 rgba8unorm texels holds 256 MiB: refused, unless texels
+    // holds its versions to 128 MiB, or its format is r8unorm, one byte a texel.
+    p.resources[0].publish = true;
+    p.resources[0].width = p.resources[0].height = cs::piece_limits::kTextureSideMax;
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    p.resources[0].texels = 33554432u;
+    CHECK(code_of(p).empty());
+    p.resources[0].texels = 33554433u;
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    p.resources[0].texels.reset();
+    p.resources[0].format = "r8unorm";
+    CHECK(code_of(p).empty());
+    p.resources[0].format = "r32uint";
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    p.resources[0].format = "rgba16float";
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    p.resources[0].format.reset();
+    p.resources[0].width = p.resources[0].height = 2;
+    p.resources[0].texels = 5u;   // more than width times height
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    p.resources[0].texels = 0u;
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    p.resources[0].texels.reset();
+    p.resources[0].width = p.resources[0].height = cs::piece_limits::kTextureSideMax + 1;
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    // A narrow buffer counts its words: 134,217,728 u8 elements or 67,108,864 u16 elements fill 128 MiB.
+    p = arcs_piece();
+    p.resources[0].layout = {};
+    p.resources[0].layout.element = "u8";
+    p.resources[0].count = cs::piece_limits::kCountMax * 4;
+    CHECK(code_of(p).empty());
+    p.resources[0].count = cs::piece_limits::kCountMax * 4 + 1;
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    p.resources[0].layout.element = "u16";
+    p.resources[0].count = cs::piece_limits::kCountMax * 2;
+    CHECK(code_of(p).empty());
+    p.resources[0].count = cs::piece_limits::kCountMax * 2 + 1;
+    CHECK(code_of(p) == cp::kProgramBadResource);
+    p.resources[0].layout.element = "u4";
+    CHECK(code_of(p) == cp::kProgramBadLayout);
 }
 
 TEST_CASE("a piece name is a lowercase name of at most 32 bytes and a version from 1 to 1000000") {

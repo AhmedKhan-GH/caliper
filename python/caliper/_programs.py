@@ -1303,9 +1303,20 @@ PIECE_PASSES_MAX = 8
 PIECE_RESOURCES_MAX = 8
 PIECE_FIELDS_MAX = 16
 PIECE_COUNT_MAX = 33554432      # spec/piece.h, kCountMax: 128 MiB of 4-byte elements
-PIECE_SIDE_MAX = 4096
+PIECE_SIDE_MAX = 8192          # spec/piece.h, kTextureSideMax: WebGPU's default largest 2-D texture
+TEXTURE_FORMATS = ("rgba8unorm", "r8unorm", "r32uint")
 WORKGROUPS_MAX = 65535
 _DTYPES = ("f32", "i32", "u32")
+_TENSOR_DTYPES = ("f32", "i32", "u32", "u8", "u16")
+
+
+def _tensor_dtype_ok(dtype) -> bool:
+    """A tensor input's dtype: one of f32, i32, u32, u8 and u16, or two to five of them joined by "|",
+    each once; the bound tensor holds one of them."""
+    if not isinstance(dtype, str) or len(dtype) > 32:
+        return False
+    types = dtype.split("|")
+    return all(t in _TENSOR_DTYPES for t in types) and len(set(types)) == len(types)
 # The published resources of a piece hold at most PUBLISHED_BYTES_MAX bytes together, 256 MiB, and each at
 # most PUBLISHED_RESOURCE_MAX, 128 MiB, as the app's check of the manifest states (caliper_builder/spec/
 # piece.h, kPublishedBytesMax and kPublishedResourceBytesMax): one version of each fits the step history's
@@ -1437,8 +1448,9 @@ def _check_piece(p: _Program, values) -> None:
         if not isinstance(x, dict) or not isinstance(x.get("name"), str):
             bad("An input needs a name.")
         kind, dtype = x.get("kind", "tensor"), x.get("dtype", "f32")
-        if kind not in ("tensor", "buffer") or dtype not in _DTYPES:
-            bad(f"The input {x['name']} is a tensor of f32, i32 or u32, or a buffer.")
+        if kind not in ("tensor", "buffer") or not _tensor_dtype_ok(dtype):
+            bad(f"The input {x['name']} is a tensor of f32, i32, u32, u8 or u16, or several of them joined "
+                f"by |, or a buffer.")
         src = ""
         if kind == "tensor":
             src = p.bind.get(x["name"])
@@ -1477,14 +1489,25 @@ def _check_piece(p: _Program, values) -> None:
             bad(f"The resource {x['id']} has at most {PIECE_FIELDS_MAX} fields name: type.",
                 "program.bad_layout")
         texture = x.get("kind") == "texture"
+        element = str(x.get("element") or "")
+        per_word = {"u8": 4, "u16": 2}.get(element, 1) if not fields else 1   # narrow elements in a word
+        fmt = x.get("format")
+        if texture and fmt is not None and fmt not in TEXTURE_FORMATS:
+            bad(f"The texture {x['id']} has a format other than rgba8unorm, r8unorm or r32uint.",
+                "program.bad_resource")
         r = {"id": x["id"], "kind": "texture" if texture else "buffer",
-             "element": str(x.get("element") or ""), "struct": str(x.get("struct") or ""),
+             "element": element, "struct": str(x.get("struct") or ""),
              "fields": list(fields),
-             "count": 0 if texture else whole(x.get("count", 0), 1, PIECE_COUNT_MAX, f"{x['id']}.count"),
+             "count": 0 if texture else whole(x.get("count", 0), 1, PIECE_COUNT_MAX * per_word, f"{x['id']}.count"),
              "width": whole(x.get("width", 0), 1, PIECE_SIDE_MAX, f"{x['id']}.width") if texture else 0,
              "height": whole(x.get("height", 0), 1, PIECE_SIDE_MAX, f"{x['id']}.height") if texture else 0,
+             "format": (fmt or "rgba8unorm") if texture else "",
+             "texels": 0,
+             "narrow": element if per_word > 1 else "",
              "counted": bool(x.get("counted", False)), "publish": bool(x.get("publish", True)),
              "clear": bool(x.get("clear", False))}
+        if texture and x.get("texels") is not None:
+            r["texels"] = whole(x.get("texels"), 1, r["width"] * r["height"], f"{x['id']}.texels")
         p.resources.append(r)
     ids = {r["id"] for r in p.resources}
     d = m.get("derive")
@@ -1535,7 +1558,8 @@ def _compile_piece(p: _Program) -> None:
         inputs.append((name, bound[name].handle, dtype))
     rt = _runtime()
     resources = [(r["id"], r["kind"], r["element"], r["struct"], r["fields"], r["count"], r["width"],
-                  r["height"], r["counted"], r["publish"], r["clear"]) for r in p.resources]
+                  r["height"], r["counted"], r["publish"], r["clear"], r["format"], r["texels"])
+                 for r in p.resources]
     params = [(k, p.param_types[k], v) for k, v in p.params.items()]
     old = p.handle
     try:
@@ -1579,16 +1603,22 @@ def _resource_frames(rt, p: _Program) -> list:
     for r in p.resources:
         if not r["publish"] or (r["id"] not in p.written and not first):
             continue
-        data, count, stride = rt.resource(p.handle, r["id"])
+        data, count, stride, vw, vh, elements = rt.resource(p.handle, r["id"])
         total += len(data)
         if len(data) > PUBLISHED_RESOURCE_MAX or total > PUBLISHED_BYTES_MAX:
             raise _Refused("program.resource_too_large",
                            f"The published resources of {p.id} hold more than {PUBLISHED_RESOURCE_MAX} bytes "
                            f"in one resource or {PUBLISHED_BYTES_MAX} bytes together at a pass, more than a "
                            "viewer takes, thus no version could be sent. The program stopped.")
-        width, height = (r["width"], r["height"]) if r["kind"] == "texture" else (None, None)
+        # A texture's version carries its size (none for a version without texels) and its format, absent
+        # for rgba8unorm as before; a buffer of narrow elements carries the element and their count.
+        texture = r["kind"] == "texture"
+        width, height = (int(vw), int(vh)) if texture and count else (None, None)
+        fmt = r.get("format") if texture and count and r.get("format", "rgba8unorm") != "rgba8unorm" else None
+        narrow = r.get("narrow") or None
         msg = _wire.Resource(p.id, r["id"], int(p.last_step or 0), int(count), int(stride), memoryview(data),
-                             width, height)
+                             width=width, height=height, format=fmt, element=narrow,
+                             elements=int(elements) if narrow else None)
         parts = _wire.resource_parts(msg, next(_VERSIONS), PART_BYTES)
         out = [_wire.encode(msg)] if len(parts) == 1 else parts
         if r["id"] not in p.written:

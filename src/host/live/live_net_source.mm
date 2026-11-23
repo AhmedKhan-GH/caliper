@@ -464,6 +464,8 @@ public:
         out.stride = r.stride;
         out.width = r.width.value_or(0);
         out.height = r.height.value_or(0);
+        out.format = r.format.value_or(std::string());
+        out.elements = r.elements;
         out.bytes = whole.keep ? whole.keep
                                : std::make_shared<const std::vector<uint8_t>>(r.data.data, r.data.data + r.data.size);
         const std::string key = r.program + "/" + r.resource;

@@ -1530,7 +1530,11 @@ void SpecRuntime::set_instrument_state(caliper_builder::ValueStore* values, cali
                           out->resource = resource;
                           out->step = v->step;
                           out->serial = v->serial;   // a version that replaced another at its step
-                          out->count = v->width ? v->width * v->height : v->count;
+                          out->count = v->count;   // a texture's and a narrow buffer's words
+                          out->width = v->width;
+                          out->height = v->height;
+                          out->format = v->format;
+                          out->elements = v->elements;
                           out->bytes = (*held)->data();
                           out->size = (*held)->size();
                           if (epoch) *epoch = 0;

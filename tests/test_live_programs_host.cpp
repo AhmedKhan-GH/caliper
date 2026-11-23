@@ -294,6 +294,103 @@ TEST_CASE("live/programs: only a resource that the pinned piece publishes, in it
     CHECK(history.resource_at("tower/arcs", 100)->count == 100);
 }
 
+TEST_CASE("live/programs: a texture's version reaches the history with its format and a size within its largest, a "
+          "narrow buffer's with its elements") {
+    struct ResourceLink final : caliper_live::ProgramLink {
+        std::vector<caliper_live::ReceivedResource> incoming;
+        bool ready() override { return true; }
+        uint64_t epoch() override { return 1; }
+        uint32_t send(caliper_net::wire::Program) override { return 1; }
+        std::vector<caliper_live::ProgramAnswer> take() override { return {}; }
+        bool takes_pieces() override { return true; }
+        std::vector<caliper_live::ReceivedResource> take_resources() override {
+            std::vector<caliper_live::ReceivedResource> out;
+            out.swap(incoming);
+            return out;
+        }
+    };
+    cb::spec::Spec spec;
+    cb::spec::Piece arcs = caliper_test_pieces::attention_arcs();
+    cb::spec::Resource grey;   // r8unorm, at most 8 by 4 and 20 texels
+    grey.id = "grey";
+    grey.kind = cb::spec::ResourceKind::texture;
+    grey.format = "r8unorm";
+    grey.width = 8;
+    grey.height = 4;
+    grey.texels = 20;
+    cb::spec::Resource ids;    // 9 u16 elements
+    ids.id = "ids";
+    ids.layout.element = "u16";
+    ids.count = 9;
+    arcs.resources.push_back(grey);
+    arcs.resources.push_back(ids);
+    arcs.hash = cb::programs::piece_hash(arcs);
+    spec.pieces = {arcs};
+    cb::spec::Program instance;
+    instance.id = "tower";
+    cb::spec::PieceRef pin;
+    pin.name = arcs.name;
+    pin.version = arcs.version;
+    pin.hash = arcs.hash;
+    pin.from = cb::spec::PieceFrom::inline_piece;
+    instance.piece = pin;
+    instance.bind = {{"attn0", "live:0.attn"}, {"attn1", "live:1.attn"}};
+    spec.programs = {instance};
+    caliper_live::AppProgramHost host;
+    host.reconcile(spec);
+    cb::StepHistory history;
+    history.configure(spec);
+    auto texture = [](uint32_t w, uint32_t h, uint32_t words, const char* format, int64_t step) {
+        caliper_live::ReceivedResource r;
+        r.program = "tower";
+        r.resource = "grey";
+        r.step = step;
+        r.count = words;
+        r.stride = 4;
+        r.width = w;
+        r.height = h;
+        r.format = format;
+        r.bytes = std::make_shared<const std::vector<uint8_t>>(std::size_t(words) * 4, uint8_t(7));
+        return r;
+    };
+    auto narrow = [](std::optional<uint32_t> elements, uint32_t words, int64_t step) {
+        caliper_live::ReceivedResource r;
+        r.program = "tower";
+        r.resource = "ids";
+        r.step = step;
+        r.count = words;
+        r.stride = 4;
+        r.elements = elements;
+        r.bytes = std::make_shared<const std::vector<uint8_t>>(std::size_t(words) * 4, uint8_t(1));
+        return r;
+    };
+    ResourceLink link;
+    link.incoming = {texture(5, 3, 4, "r8unorm", 10),     // 15 texels in 4 words: kept
+                     texture(0, 0, 0, "", 11),            // a version without texels: kept
+                     texture(5, 3, 15, "", 12),           // rgba8unorm where r8unorm is declared
+                     texture(9, 1, 3, "r8unorm", 13),     // wider than the largest side
+                     texture(7, 3, 6, "r8unorm", 14),     // 21 texels, above 20
+                     texture(5, 3, 5, "r8unorm", 15),     // words that do not match the size
+                     narrow(5u, 3, 10),                   // 5 elements in 3 words: kept
+                     narrow(10u, 5, 11),                  // above 9 elements
+                     narrow(4u, 3, 12),                   // 4 elements fill 2 words
+                     narrow(std::nullopt, 3, 13)};        // no element count
+    host.deliver_resources(link, history);
+    CHECK(host.resources_received() == 10);
+    CHECK(host.resources_refused() == 7);
+    const auto kept = history.resource_at("tower/grey", 10);
+    REQUIRE(kept);
+    CHECK(kept->width == 5);
+    CHECK(kept->height == 3);
+    CHECK(kept->format == "r8unorm");
+    CHECK(kept->count == 4);
+    CHECK(history.resource_at("tower/grey", 11)->count == 0);
+    const auto n = history.resource_at("tower/ids", 100);
+    REQUIRE(n);
+    CHECK(n->elements == std::optional<uint32_t>(5));
+    CHECK(n->count == 3);
+}
+
 // A program of a foreign spec (design/gpu-programs.md, Provenance;
 // design/programmable-graphics.md, Piece Sources) never goes out to the
 // script, which would compile it and relay its draw half to the viewers,

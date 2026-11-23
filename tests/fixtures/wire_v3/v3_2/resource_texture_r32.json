@@ -1,0 +1,68 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 208,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 164,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 130
+  },
+  "meta": {
+    "count": 4,
+    "format": "r32uint",
+    "height": 2,
+    "program": "arcs",
+    "resource": "ids",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "resource",
+        "shape": [
+          16
+        ]
+      }
+    ],
+    "step": 1240,
+    "stride": 4,
+    "width": 2
+  },
+  "meta_offset": 28,
+  "name": "v3_2/resource_texture_r32",
+  "section_lengths": [
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 16,
+      "name": "resource",
+      "offset": 192,
+      "shape": [
+        16
+      ],
+      "values": [
+        1,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        3,
+        0,
+        0,
+        0,
+        0,
+        40,
+        107,
+        238
+      ]
+    }
+  ],
+  "type_name": "resource"
+}

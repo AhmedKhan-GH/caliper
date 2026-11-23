@@ -7,10 +7,10 @@ imports = ["pick@1"]
 [[inputs]]
 name = "classes"
 kind = "tensor"
-dtype = "i32"
+dtype = "i32|u8|u16"
 rank_min = 2
 rank_max = 2
-title = "Class Ids (H, W), each clamped to 0 to 65,535"
+title = "Class Ids (H, W) of i32, u8 or u16, each clamped to 0 to 65,535"
 
 [[inputs]]
 name = "colors"
@@ -81,7 +81,7 @@ id = "pixels"
 kind = "buffer"
 struct = "MaskPixel"
 fields = ["class_id: u32"]
-count = 2093024   # (8 MiB - 16 KiB - 128 bytes) / 4: 2,048 x 1,021 or 1,446 x 1,446 pixels
+count = 33554432   # 128 MiB, the most that a published resource holds: 8,192 x 4,096 or 5,792 x 5,792 pixels
 counted = true
 
 [[resources]]
@@ -98,9 +98,14 @@ struct = "MaskInfo"
 fields = ["size: vec4<u32>", "c0: vec4<f32>", "c1: vec4<f32>", "c2: vec4<f32>", "c3: vec4<f32>"]
 count = 1
 
+# The derive half holds the 128 MiB of pixels and reads the class ids in place.
+[derive]
+time_ms = 50
+memory_mb = 288
+
 [[derive.passes]]
 entry = "copy_classes"
-workgroups = [64, 1, 1]
+workgroups = [256, 1, 1]
 writes = ["pixels"]
 
 [[derive.passes]]
@@ -113,6 +118,7 @@ entry = "place_mask"
 writes = ["info"]
 
 [draw]
+memory_mb = 160
 camera = "orbit"
 pick = { resource = "pixels", fields = ["class_id"] }
 
