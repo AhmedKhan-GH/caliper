@@ -1800,35 +1800,9 @@ struct Session::Impl {
         return write_agent_permissions(options.permissions_file, perms);
     }
 
-    // Whether the workspace, or a folder in it that commands write (through
-    // a link), lies in the folder of the permissions file, Caliper's settings
-    // folder; false when the session keeps no file.
-    bool writes_into_settings() const {
-        if (options.permissions_file.empty()) return false;
-        std::error_code ec;
-        fs::path settings = fs::weakly_canonical(fs::absolute(fs::u8path(options.permissions_file), ec).parent_path(), ec);
-        if (ec || settings.empty()) return false;
-        for (const char* sub : {"", "applets", "loaders", "tensors", "loader-outputs", "runs", "journal"}) {
-            const fs::path p = fs::weakly_canonical(sub[0] ? ws() / sub : ws(), ec);
-            if (!ec && path_within(p.u8string(), settings.u8string())) return true;
-        }
-        return false;
-    }
-
     // The session's policy with the agent's mode and rules applied, and the
     // note the registry asks for next.
     ApprovalDecision policy(const CommandDescriptor& d, const CommandInvocation& inv) {
-        // No change from another origin than the person's own UI writes into
-        // the settings folder, whatever the mode: an agent cannot point a
-        // command at the permissions file.
-        if (!user_origin(inv.origin) && d.mutates && writes_into_settings()) {
-            std::lock_guard<std::mutex> lock(perm_mutex);
-            last_note = {invocation_key(inv),
-                         ApprovalNote{"The workspace, or a folder in it, lies in Caliper's settings folder, so " +
-                                          inv.name + " was not run. Only the person changes what is there.",
-                                      ""}};
-            return ApprovalDecision::deny;
-        }
         const ApprovalDecision base = base_policy(d, inv);
         const AgentPrincipal who = agent_principal(inv);
         if (who == AgentPrincipal::none) return base;
@@ -1918,6 +1892,10 @@ Session::Open Session::open(const std::string& workspace, SessionOptions options
         std::unique_ptr<Session> s(new Session());
         Impl& im = *s->impl_;
         im.options = std::move(options);
+        // The person's settings that set what an agent may do: no command
+        // writes, replaces or removes them (loaders/paths.h).
+        protect_file(im.options.permissions_file);
+        for (const std::string& f : im.options.protected_files) protect_file(f);
         StoreOpen opened = LoaderStore::open(workspace, im.options.store);
         if (opened.error) {
             out.error = opened.error;
@@ -1945,7 +1923,15 @@ Session::Open Session::open(const std::string& workspace, SessionOptions options
             self->reconcile_hosts();
             if (app) app(e);
         };
-        CommandJournal::Open j = CommandJournal::open((im.ws() / "journal" / "commands.jsonl").u8string(), im.options.journal);
+        const std::string journal_file = (im.ws() / "journal" / "commands.jsonl").u8string();
+        if (touches_protected_file(journal_file)) {
+            out.error = Error("session.protected_file",
+                              "The command journal would be written into a protected settings file, so the workspace "
+                              "was not opened.",
+                              journal_file);
+            return out;
+        }
+        CommandJournal::Open j = CommandJournal::open(journal_file, im.options.journal);
         if (j.error) {
             out.error = j.error;
             return out;

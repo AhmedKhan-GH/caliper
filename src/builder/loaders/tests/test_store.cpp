@@ -1,6 +1,7 @@
 // Tests of LoaderStore: the end-to-end path from dropped files to catalog
 // sources and back after reopening, saving and removing loaders, grants,
 // failed runs, name clashes, and every reader through a run.
+#include <caliper_builder/loaders/paths.h>
 #include <caliper_builder/loaders/store.h>
 
 #include <doctest/doctest.h>
@@ -474,4 +475,41 @@ TEST_CASE("the rows follow the loader files") {
     REQUIRE(store->rebuild().ok());
     CHECK(store->describe("table:hand").error.ok());
     CHECK(store->get("hand").record.last_status == "ok");
+}
+
+TEST_CASE("a protected file is found by its path resolved, by a link, a case variant or a hard link, and by its folder") {
+    const std::string root = fresh_dir("protected");
+    const fs::path settings = fs::path(root) / "settings";
+    const fs::path file = settings / "agent-permissions.json";
+    write_text(file.string(), "{\"version\": 1}");
+    protect_file(file.string());
+    CHECK(touches_protected_file(file.string()));
+    // A relative path with "..", and a case variant of the name and the folder.
+    CHECK(touches_protected_file((settings / "sub" / ".." / "agent-permissions.json").string()));
+    CHECK(touches_protected_file((fs::path(root) / "SETTINGS" / "Agent-Permissions.JSON").string()));
+    // The folder that holds it, and a folder above, count for a removal.
+    CHECK(touches_protected_file(settings.string()));
+    CHECK(touches_protected_file(root));
+    // Other names do not, nor a sibling whose name begins the same way.
+    CHECK_FALSE(touches_protected_file((settings / "agent-permissions.json.tmp").string()));
+    CHECK_FALSE(touches_protected_file((settings / "workspace" / "agent-permissions.json").string()));
+    CHECK_FALSE(touches_protected_file((fs::path(root) / "settings2").string()));
+    CHECK_FALSE(touches_protected_file((settings / "workspace").string()));
+#ifndef _WIN32
+    // A link to it, a link to its folder with its name, and a hard link.
+    const fs::path ws = fs::path(root) / "ws";
+    fs::create_directories(ws);
+    fs::create_symlink(file, ws / "link.spec.toml");
+    CHECK(touches_protected_file((ws / "link.spec.toml").string()));
+    fs::create_directory_symlink(settings, ws / "applets");
+    CHECK(touches_protected_file((ws / "applets" / "agent-permissions.json").string()));
+    CHECK_FALSE(touches_protected_file((ws / "applets" / "dash" / "dash.spec.toml").string()));
+    fs::create_hard_link(file, ws / "hard.spec.toml");
+    CHECK(touches_protected_file((ws / "hard.spec.toml").string()));
+    // A link to a file that does not exist yet, under a protected name.
+    const fs::path later = settings / "side-chat.json";
+    protect_file(later.string());
+    fs::create_symlink(later, ws / "later.loader.toml");
+    CHECK(touches_protected_file((ws / "later.loader.toml").string()));
+#endif
 }

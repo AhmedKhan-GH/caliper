@@ -243,6 +243,9 @@ public:
         // The saved agent permissions (Session's SessionOptions::
         // permissions_file): agent-permissions.json in the app-data folder.
         std::string permissions_file;
+        // Other settings files that no command may write
+        // (SessionOptions::protected_files).
+        std::vector<std::string> protected_files;
     };
 
     // The ticket under which the app's WindowCaptures serves the session's

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <functional>
+#include <mutex>
 
 namespace caliper_builder {
 
@@ -225,4 +226,69 @@ std::string display_path(const std::string& canonical, const std::string& worksp
     return canonical;
 }
 
+namespace {
+
+std::mutex g_protected_mutex;
+std::vector<fs::path> g_protected;
+
+// The path resolved as far as it exists (links and ".." followed, also a
+// link whose target does not exist yet), with the rest lexically normal, as a
+// string with ASCII letters in lower case.
+std::string resolved_key(const fs::path& p) {
+    std::error_code ec;
+    fs::path abs = fs::absolute(p, ec);
+    if (ec) abs = p;
+    for (int i = 0; i < 40; ++i) {
+        std::error_code lec;
+        if (!fs::is_symlink(fs::symlink_status(abs, lec))) break;
+        const fs::path target = fs::read_symlink(abs, lec);
+        if (lec) break;
+        abs = target.is_absolute() ? target : abs.parent_path() / target;
+    }
+    fs::path r = fs::weakly_canonical(abs, ec);
+    if (ec) r = abs.lexically_normal();
+    std::string s = r.lexically_normal().u8string();
+    while (s.size() > 1 && (s.back() == '/' || s.back() == '\\')) s.pop_back();
+    for (char& c : s) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+        if (c == '\\') c = '/';
+    }
+    return s;
+}
+
+}  // namespace
+
+void protect_file(const std::string& path) {
+    if (path.empty()) return;
+    std::error_code ec;
+    fs::path p = fs::absolute(fs::u8path(path), ec);
+    if (ec) return;
+    std::lock_guard<std::mutex> lock(g_protected_mutex);
+    if (std::find(g_protected.begin(), g_protected.end(), p) == g_protected.end()) g_protected.push_back(p);
+}
+
+bool touches_protected_file(const std::string& path) {
+    std::vector<fs::path> files;
+    {
+        std::lock_guard<std::mutex> lock(g_protected_mutex);
+        files = g_protected;
+    }
+    if (files.empty() || path.empty()) return false;
+    const fs::path p = fs::u8path(path);
+    const std::string key = resolved_key(p);
+    std::error_code ec;
+    const bool exists = fs::exists(p, ec);
+    for (const fs::path& f : files) {
+        const std::string fkey = resolved_key(f);
+        // The same path, or a folder that holds the file.
+        if (fkey == key || (fkey.size() > key.size() && fkey.compare(0, key.size(), key) == 0 && fkey[key.size()] == '/'))
+            return true;
+        // The same file by another name: a hard link, or a name whose case differs.
+        std::error_code eq;
+        if (exists && fs::exists(f, eq) && fs::equivalent(p, f, eq)) return true;
+    }
+    return false;
+}
+
 }  // namespace caliper_builder
+

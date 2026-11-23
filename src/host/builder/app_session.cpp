@@ -557,6 +557,7 @@ struct AppSession::Impl {
             cb::SessionOptions so;
             so.journal.on_append = [this](const cb::JournalEvent& e) { note(e); };
             so.permissions_file = opt.permissions_file;
+            so.protected_files = opt.protected_files;
             cb::Session::Open o = cb::Session::open(opt.workspace, std::move(so));
             std::lock_guard<std::mutex> lock(m);
             open_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();

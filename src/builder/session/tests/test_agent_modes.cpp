@@ -327,64 +327,112 @@ TEST_CASE("no command reads or sets a mode or a rule, from any origin") {
     CHECK(f.s->agent_mode(AgentPrincipal::chat) == AgentMode::ask);
 }
 
-TEST_CASE("no change from an agent writes into the settings folder, whatever the mode") {
-    // A workspace inside the folder of the permissions file.
-    const std::string root = fresh_dir("modes-settings-folder");
+TEST_CASE("a workspace in the settings folder, or that is the settings folder, works for agents") {
+    const std::string root = fresh_dir("modes-settings-workspace");
     const std::string settings = root + "/app-data";
-    const std::string ws = settings + "/workspace";
-    write_text(ws + "/data/metrics.csv", "step,loss\n0,1.0\n");
+    for (const std::string& ws : {settings + "/workspace", settings}) {
+        INFO(ws);
+        write_text(ws + "/data/metrics.csv", "step,loss\n0,1.0\n1,0.5\n");
+        SessionOptions o;
+        o.permissions_file = settings + "/agent-permissions.json";
+        o.protected_files = {settings + "/side-chat.json"};
+        auto opened = Session::open(ws, o);
+        REQUIRE(opened.error.ok());
+        Session& s = *opened.session;
+        REQUIRE(s.set_agent_mode(AgentPrincipal::chat, AgentMode::allow_all).ok());
+        REQUIRE(s.set_agent_mode(AgentPrincipal::mcp, AgentMode::allow_all).ok());
+        const std::string before = read_text(o.permissions_file);
+        REQUIRE(send(s, "data.import", {{"paths", {"data/metrics.csv"}}}, CommandOrigin::agent, "chat").ok);
+        REQUIRE(send(s, "spec.new", {{"id", "dash"}}, CommandOrigin::mcp, "").ok);
+        REQUIRE(send(s, "source.add", {{"id", "m"}, {"catalog", "table:metrics"}}, CommandOrigin::mcp, "").ok);
+        REQUIRE(send(s, "panel.create", {{"id", "loss"}, {"primitive", "series"}, {"bind", {{"x", "m.step"}, {"y", "m.loss"}}}},
+                     CommandOrigin::agent, "chat")
+                    .ok);
+        const CommandResult saved = send(s, "applet.save", json::object(), CommandOrigin::agent, "chat");
+        INFO(saved.error.code << ": " << saved.error.message);
+        CHECK(saved.ok);
+        CHECK(fs::exists(ws + "/applets/dash/dash.spec.toml"));
+        CHECK(read_text(o.permissions_file) == before);
+    }
+}
+
+TEST_CASE("no command writes a protected file, by its name, a relative path, a link, a case variant or a hard link") {
+    // The hardest case: the workspace is the settings folder itself.
+    const std::string root = fresh_dir("modes-protected-files");
+    const std::string settings = root + "/app-data";
+    const std::string perms = settings + "/agent-permissions.json";
+    const std::string chat_file = settings + "/side-chat.json";
+    write_text(settings + "/data/metrics.csv", "step,loss\n0,1.0\n1,0.5\n");
+    write_text(chat_file, "{\"agent\": \"claude\"}");
     SessionOptions o;
-    o.permissions_file = settings + "/agent-permissions.json";
-    auto opened = Session::open(ws, o);
+    o.permissions_file = perms;
+    o.protected_files = {chat_file};
+    auto opened = Session::open(settings, o);
     REQUIRE(opened.error.ok());
     Session& s = *opened.session;
     REQUIRE(s.set_agent_mode(AgentPrincipal::chat, AgentMode::allow_all).ok());
-    REQUIRE(s.set_agent_mode(AgentPrincipal::mcp, AgentMode::allow_all).ok());
-    const std::string before = read_text(o.permissions_file);
-    for (const auto& who : {std::pair{CommandOrigin::agent, "chat"}, std::pair{CommandOrigin::agent, "widget"},
-                            std::pair{CommandOrigin::mcp, ""}, std::pair{CommandOrigin::api, ""}}) {
-        const CommandOrigin origin = who.first;
-        const std::string client = who.second;
-        INFO(command_origin_name(origin) << " " << client);
-        for (const auto& [name, args] : std::vector<std::pair<std::string, json>>{
-                 {"data.import", {{"paths", {"data/metrics.csv"}}}},
-                 {"spec.new", {{"id", "x"}}},
-                 {"applet.save", json::object()}}) {
-            const CommandResult r = send(s, name, args, origin, client);
-            CHECK(r.error.code == "command.denied");
-            CHECK(r.error.message.find("settings folder") != std::string::npos);
-        }
-        // Reads still run.
-        CHECK(send(s, "loader.list", json::object(), origin, client).ok);
-    }
-    CHECK(s.registry().pending_approvals().empty());
-    CHECK(read_text(o.permissions_file) == before);
-    // The person's own UI is not refused.
+    const std::string perms_text = read_text(perms);
+    const std::string chat_text = read_text(chat_file);
+    auto unchanged = [&] {
+        CHECK(read_text(perms) == perms_text);
+        CHECK(read_text(chat_file) == chat_text);
+    };
     ok(s, "data.import", {{"paths", {"data/metrics.csv"}}});
-}
-
+    ok(s, "spec.new", {{"id", "dash"}});
+    // Under the protected names: every write has its own folder and suffix.
+    CHECK(chat(s, "applet.save", {{"id", "agent-permissions"}}).ok);
+    CHECK(fs::exists(settings + "/applets/agent-permissions/agent-permissions.spec.toml"));
+    unchanged();
+    // A relative path or ".." in an id is refused before anything is written.
+    for (const char* id : {"../agent-permissions", "../../app-data/side-chat", "applets/../agent-permissions"})
+        CHECK_FALSE(chat(s, "applet.save", {{"id", id}}).ok);
+    CHECK(chat(s, "loader.create", {{"text", "caliper_loader = 0\n[loader]\nid = \"../agent-permissions\"\n[input]\n"
+                                             "path = \"data/metrics.csv\"\n[[output]]\nname = \"x\"\n"}})
+              .error.code == "loader.invalid");
+    unchanged();
 #ifndef _WIN32
-TEST_CASE("a link from a folder of the workspace into the settings folder refuses an agent's change") {
-    Fixture f("modes-settings-link");
-    REQUIRE(f.s->set_agent_mode(AgentPrincipal::chat, AgentMode::allow_all).ok());
-    const std::string settings = fs::path(f.perms).parent_path().string();
-    const std::string before = read_text(f.perms);
-    for (const char* folder : {"applets", "loaders", "runs"}) {
-        INFO(folder);
-        const fs::path link = fs::path(f.ws) / folder;
-        const fs::path aside = fs::path(f.ws) / (std::string(folder) + ".aside");
-        if (fs::exists(link)) fs::rename(link, aside);
-        fs::create_directory_symlink(settings, link);
-        const CommandResult r = chat(*f.s, "applet.save", {{"id", "agent-permissions"}});
-        CHECK(r.error.code == "command.denied");
-        CHECK(r.error.message.find("settings folder") != std::string::npos);
-        CHECK(send(*f.s, "loader.delete", {{"id", "x"}}, CommandOrigin::mcp, "").error.code == "command.denied");
-        fs::remove(link);
-        if (fs::exists(aside)) fs::rename(aside, link);
+    // A link from an applet's spec file to each protected file, by its name
+    // and by a case variant: the save is refused even after the person
+    // approved the overwrite.
+    auto approve_save = [&](const std::string& id) {
+        const CommandResult r = chat(s, "applet.save", {{"id", id}, {"overwrite", true}});
+        if (r.error.code != "command.needs_approval") return r;
+        return s.registry().approve(r.approval);
+    };
+    const std::vector<std::pair<std::string, std::string>> links = {
+        {"linked", perms}, {"chatlink", chat_file}, {"casevariant", settings + "/AGENT-PERMISSIONS.JSON"}};
+    for (const auto& link : links) {
+        INFO(link.first);
+        fs::create_directories(settings + "/applets/" + link.first);
+        fs::create_symlink(link.second, settings + "/applets/" + link.first + "/" + link.first + ".spec.toml");
+        const CommandResult r = approve_save(link.first);
+        CHECK(r.error.code == "applet.write_failed");
+        CHECK(r.error.message.find("protected") != std::string::npos);
+        unchanged();
     }
-    CHECK(read_text(f.perms) == before);
-    CHECK_FALSE(fs::exists(fs::path(f.ws) / ".." / "app-data" / "agent-permissions"));
-    // Without the link, the same change runs.
-    CHECK(chat(*f.s, "applet.save", {{"id", "copy"}}).ok);
-}
+    // A hard link to the permissions file under an applet's name.
+    fs::create_directories(settings + "/applets/hard");
+    fs::create_hard_link(perms, settings + "/applets/hard/hard.spec.toml");
+    CHECK(approve_save("hard").error.code == "applet.write_failed");
+    unchanged();
+    // A loader file that is a link to the permissions file.
+    fs::create_directories(settings + "/loaders");
+    fs::create_symlink(perms, settings + "/loaders/linked.loader.toml");
+    const CommandResult made = chat(s, "loader.create", {{"text", "caliper_loader = 0\n[loader]\nid = \"linked\"\n[input]\n"
+                                                                  "path = \"data/metrics.csv\"\n[[output]]\nname = \"l\"\n"}});
+    CHECK(made.error.code == "loader.protected_file");
+    unchanged();
+    // A folder of loader outputs that leads to the folder above the settings
+    // folder: deleting the loader app-data, whose outputs folder would be the
+    // settings folder, leaves it in place.
+    write_text(settings + "/data/app-data.csv", "step,acc\n0,0.5\n");
+    const json imported = ok(s, "data.import", {{"paths", {"data/app-data.csv"}}});
+    REQUIRE(imported["loaders"][0]["id"] == "app-data");
+    fs::remove_all(settings + "/loader-outputs");
+    fs::create_directory_symlink(root, settings + "/loader-outputs");
+    CHECK(chat(s, "loader.delete", {{"id", "app-data"}}).ok);
+    CHECK(fs::exists(perms));
+    CHECK(fs::exists(settings + "/data/metrics.csv"));
+    unchanged();
 #endif
+}

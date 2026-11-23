@@ -222,6 +222,10 @@ struct SessionOptions {
     // The saved agent permissions (permissions.h): agent-permissions.json in
     // the app-data folder. Empty: modes and rules live in memory only.
     std::string permissions_file;
+    // Other settings files that set what an agent may do, which no command
+    // may write, replace or remove, as permissions_file (loaders/paths.h,
+    // protect_file()).
+    std::vector<std::string> protected_files;
 };
 
 // A rule's reach when the person answers a card: this session, or saved.
