@@ -28,8 +28,8 @@ title = "Values of the arrows, or one for all: a value for the colormap, or a pa
 [[params]]
 name = "width"
 default = 2.0
-min = 0.5
-max = 64.0
+min = 0.0
+max = 128.0
 title = "Width in Pixels"
 
 [[params]]

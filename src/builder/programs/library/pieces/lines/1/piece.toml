@@ -29,8 +29,8 @@ title = "Strip lengths (S) for strips, index pairs (E, 2) for edges; segments re
 [[params]]
 name = "width"
 default = 2.0
-min = 0.5
-max = 64.0
+min = 0.0
+max = 128.0
 title = "Width in Pixels"
 
 [[params]]

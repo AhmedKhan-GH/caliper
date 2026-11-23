@@ -16,7 +16,7 @@ name = "x"
 type = "i32"
 default = 0
 min = 0
-max = 255
+max = 65535
 title = "Column of x"
 
 [[params]]
@@ -24,7 +24,7 @@ name = "y"
 type = "i32"
 default = 1
 min = 0
-max = 255
+max = 65535
 title = "Column of y"
 
 [[params]]
@@ -32,7 +32,7 @@ name = "z"
 type = "i32"
 default = 2
 min = -1
-max = 255
+max = 65535
 title = "Column of z, or -1 or a column past the rows for z 0"
 
 [[params]]
@@ -46,8 +46,8 @@ title = "Most Vertices, at most 419,430 drawn"
 [[params]]
 name = "width"
 default = 2.0
-min = 0.5
-max = 64.0
+min = 0.0
+max = 128.0
 title = "Width in Pixels"
 
 [[params]]
