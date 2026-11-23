@@ -101,6 +101,11 @@ struct Options {
                                        // fragments of this size (tests, interop)
     int header_timeout_ms = 10000;     // the HTTP head must complete in this time
     int close_timeout_ms = 2000;       // wait this long for the peer's close frame
+    // The most bytes that one poll reads from one connection (fairness between
+    // connections). After a write that fails because the peer reset the
+    // connection, what the peer sent before is read up to this limit once more,
+    // before Closed.
+    size_t read_budget_bytes = size_t(4) << 20;
     size_t max_connections = 1024;     // server: TCP connections beyond are closed at once
     // Server: the most body bytes to read for a request head (see REQUEST
     // BODIES above); null or 0 reads no body. Called on the polling thread.

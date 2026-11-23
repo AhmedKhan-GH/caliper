@@ -15,8 +15,10 @@ given>, at its start.
 
 Arguments: the number of steps (default: run until stopped), then the seconds of each step, then
 optionally exit-after-checkpoint, which ends the process with exit code 0 at once after the step
-whose checkpoint it saved, as soon as the reply is out, so that the runner can see the reply and the
-exit in one pass.
+whose checkpoint it saved. It first calls caliper.close(), as the stop of a managed run does: the
+close writes the action's reply, the last run state and BYE before the stream ends, which no fixed
+wait can promise on a slow machine. Then os._exit(0) ends the process without the interpreter's
+shutdown, so that the runner can see the reply and the exit in one pass.
 """
 import json
 import os
@@ -85,8 +87,8 @@ def main() -> None:
             caliper.flush()
             raise SystemExit(0)
         if exit_after_checkpoint and state["saved"]:
-            time.sleep(0.002)          # the server's thread sends the reply
             print(f"exits after the checkpoint at step {state['step']}", flush=True)
+            caliper.close()            # the reply goes out before the stream ends
             os._exit(0)
         state["loss"] *= 1.0 - lr.value
         caliper.series(state["loss"], name="loss")
