@@ -122,7 +122,7 @@ A mode does not govern the widget agent, your session token or the viewer token.
 What `caliper info` prints, as JSON. `sdk`, `libtorch` and `ui_stack` are `null` when they are unknown or absent.
 
 ```json
-{"abi_epoch":2,"host":"0.6.0","libtorch":"2.5.1","sdk":"0.2.0","services":["caliper.artifacts.v1","caliper.data.v1","caliper.log.v1","caliper.ui.v1"],"ui_stack":"03c557182adc5cd9"}
+{"abi_epoch":3,"host":"0.6.0","libtorch":"2.5.1","sdk":"0.2.0","services":["caliper.artifacts.v1","caliper.data.v1","caliper.log.v1","caliper.ui.v1"],"ui_stack":"03c557182adc5cd9"}
 ```
 
 ### `GET /v0/applets`

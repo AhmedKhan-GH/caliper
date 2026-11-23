@@ -240,7 +240,7 @@ features:
     status: shipped
     scope: peripheral
     summary: EmbedScope trains a small MNIST network with a learned 3-D bottleneck and draws the test set's embeddings as a live scatter of ten classes, with SQL panels.
-    depends_on: [REN-04, RUN-01]
+    depends_on: [REN-08, RUN-01]
     docs: docs/applets/in-tree-applets.md#embedscope
     issue: null
 

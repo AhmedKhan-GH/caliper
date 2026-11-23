@@ -17,7 +17,7 @@ An applet runs with the privileges of the host and in its address space. Thus **
 
 ## Pre-Flight Checks
 
-The first line of defense runs before any applet code does. Each applet ships a manifest (`<stem>.caliper.toml`) that declares the ABI epoch it was built against, the minimum host version, and the services it requires. The host checks the manifest **before the `dlopen`**. An applet built for another ABI epoch, or one that needs a service the host cannot supply, never loads. The landing screen lists it as `REFUSED`, and the Inspector gives the reason ("Built for ABI epoch 1; this host speaks 2 — check for an applet update."). Thus a wrong-build applet gives a clear message and not a loader crash.
+The first line of defense runs before any applet code does. Each applet ships a manifest (`<stem>.caliper.toml`) that declares the ABI epoch it was built against, the minimum host version, and the services it requires. The host checks the manifest **before the `dlopen`**. An applet built for another ABI epoch, or one that needs a service the host cannot supply, never loads. The landing screen lists it as `REFUSED`, and the Inspector gives the reason ("Built for ABI epoch 2; this host speaks 3 — check for an applet update."). Thus a wrong-build applet gives a clear message and not a loader crash.
 
 Two more checks back up the manifest. The applet `id` names its data folder, so the parser and the loader both accept only path-safe ids (`[a-z0-9.-]`, see [Manifest](manifest.md)). An id such as `../../x` cannot reach outside the data root. After the `dlopen`, the loader checks the services in the binary's own list against the host. Thus a manifest that under-declares cannot start an applet that calls a missing service.
 

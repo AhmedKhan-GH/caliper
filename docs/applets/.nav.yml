@@ -29,8 +29,6 @@ nav:
       - services/caliper-device-v1.md
       - services/caliper-metrics-v1.md
       - services/caliper-tensor-bridge-v1.md
-      - services/caliper-geometry-v1.md
-      - services/caliper-export-v1.md
       - services/caliper-artifacts-v1.md
       - services/caliper-data-v1.md
       - services/caliper-feed-v1.md

@@ -2,7 +2,7 @@
 prefix: REN
 title: Rendering and 3-D
 order: 2
-summary: "This pillar covers how Caliper turns tensors and 3-D data into pixels: the Metal, Vulkan and OpenGL renderers, the geometry services, the graphics layer and scene core, and the scene features planned on them."
+summary: "This pillar covers how Caliper turns tensors and 3-D data into pixels: the Metal and Vulkan renderers, the graphics layer and scene core, and the scene features planned on them."
 features:
   - id: REN-01
     title: Metal Renderer
@@ -33,38 +33,38 @@ features:
 
   - id: REN-04
     title: geometry.v1
-    status: shipped
+    status: built
     scope: peripheral
-    summary: caliper.geometry.v1 draws instanced points from vertex data that an applet exports once from device memory, into an offscreen view texture, with no copy of the data.
+    summary: Removed in ABI epoch 3. caliper.geometry.v1 drew instanced points from imported device memory into an offscreen view texture.
     depends_on: [REN-08]
-    docs: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1-instanced-points
+    branches: [playground-m6geom]
     issue: null
 
   - id: REN-05
     title: geometry.v1_1
-    status: shipped
+    status: built
     scope: peripheral
-    summary: caliper.geometry.v1_1 adds general primitives (triangles, lines and indexed draws), depth views and one atomic gated frame to the geometry service.
+    summary: Removed in ABI epoch 3. caliper.geometry.v1_1 added general primitives, depth views and one atomic gated frame.
     depends_on: [REN-04]
-    docs: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1_1-general-primitives
+    branches: [playground-m6geom]
     issue: null
 
   - id: REN-06
     title: geometry.v1_2
-    status: shipped
+    status: built
     scope: peripheral
-    summary: caliper.geometry.v1_2 adds textures on meshes, drawn with a colour mode that samples an imported texture.
+    summary: Removed in ABI epoch 3. caliper.geometry.v1_2 added textures on meshes.
     depends_on: [REN-05]
-    docs: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1_2-textured-meshes
+    branches: [playground-m6geom]
     issue: null
 
   - id: REN-07
     title: geometry.v1_3
-    status: shipped
+    status: built
     scope: peripheral
-    summary: caliper.geometry.v1_3 adds instanced transforms, so one mesh draws many times with a transform for each instance.
+    summary: Removed in ABI epoch 3. caliper.geometry.v1_3 added instanced transforms.
     depends_on: [REN-06]
-    docs: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1_3-instanced-transforms
+    branches: [playground-m6geom]
     issue: null
 
   - id: REN-08
@@ -143,7 +143,7 @@ features:
     title: Applets on the Scene Service
     status: planned
     scope: supporting
-    summary: EmbedScope, GPTScope, InstanceScope, MeshScope and TwinScope draw through the scene service, export draws scenes, and the geometry service is deleted, so that every 3-D applet of the repository draws through one scene model.
+    summary: EmbedScope and GPTScope draw through the scene service, so that every 3-D applet of the repository draws through one scene model.
     depends_on: [REN-35]
     sprint: 4
     design: design/roadmap.md#renderers
@@ -317,7 +317,7 @@ features:
     title: Scene Service for Applets
     status: planned
     scope: supporting
-    summary: The scene service offers the scene model to applets through the ABI, with the shared camera, the up-axis switch, the scale bar and picks returned as events, and the particle applets FieldScope, FlowScope and SculptScope draw through it.
+    summary: The scene service offers the scene model to applets through the ABI, with the shared camera, the up-axis switch, the scale bar and picks returned as events.
     depends_on: [REN-15, REN-34]
     sprint: 4
     issue: null
@@ -489,7 +489,7 @@ features:
     title: Vulkan Backend of the Graphics Layer
     status: planned
     scope: core
-    summary: The graphics layer gains a Vulkan backend with the CUDA path, so that bridge textures, scenes and export, which Windows refuses until then, draw on Windows through the same layer as on macOS.
+    summary: The graphics layer gains a Vulkan backend with the CUDA path, so that bridge textures and scenes, which Windows refuses until then, draw on Windows through the same layer as on macOS.
     depends_on: [PLT-05, REN-10]
     issue: null
 
@@ -588,11 +588,11 @@ features:
 
   - id: REN-65
     title: Export Service
-    status: shipped
+    status: built
     scope: peripheral
-    summary: caliper.export.v1 draws a draw list again offscreen at any resolution into a pixel-exact PNG with a JSON provenance file, and into frame sequences.
+    summary: Removed in ABI epoch 3. caliper.export.v1 drew a geometry draw list offscreen into a PNG with a JSON provenance sidecar.
     depends_on: [REN-05]
-    docs: docs/applets/services/caliper-export-v1.md
+    branches: [playground-m6geom]
     issue: null
 
   - id: REN-66
@@ -618,7 +618,7 @@ features:
     status: shipped
     scope: supporting
     summary: Two adapters give an applet an OBJ mesh loader and an orbit camera with picking under the cursor.
-    depends_on: [REN-05]
+    depends_on: [COR-04]
     docs: docs/applets/adapters.md#objhpp
     issue: null
 
@@ -633,56 +633,56 @@ features:
 
   - id: REN-70
     title: FieldScope
-    status: shipped
+    status: built
     scope: peripheral
-    summary: FieldScope simulates charged particles in electromagnetic fields, 200,000 of them on a GPU, and draws them in place from device memory.
+    summary: Deleted demo applet (removed in epoch 3). Simulated charged particles in electromagnetic fields on a GPU.
     depends_on: [REN-04]
-    docs: docs/applets/in-tree-applets.md#fieldscope
+    branches: [playground-m6geom]
     issue: null
 
   - id: REN-71
     title: FlowScope
-    status: shipped
+    status: built
     scope: peripheral
-    summary: FlowScope drives a flow field of one million particles on a GPU, drawn in place from the simulation's buffers.
+    summary: Deleted demo applet (removed in epoch 3). Drove a flow field of one million particles on a GPU.
     depends_on: [REN-04]
-    docs: docs/applets/in-tree-applets.md#flowscope
+    branches: [playground-m6geom]
     issue: null
 
   - id: REN-72
     title: InstanceScope
-    status: shipped
+    status: built
     scope: peripheral
-    summary: InstanceScope draws a field of procedural gems with one instanced draw call, with poses and tints computed again on the device every frame.
+    summary: Deleted demo applet (removed in epoch 3). Drew a field of procedural gems with one instanced draw call.
     depends_on: [REN-07]
-    docs: docs/applets/in-tree-applets.md#instancescope
+    branches: [playground-m6geom]
     issue: null
 
   - id: REN-73
     title: MeshScope
-    status: shipped
+    status: built
     scope: peripheral
-    summary: MeshScope trains a small network on a 2-D surface while it runs and draws its prediction as lit triangles with a wireframe, with export of figures and recordings.
+    summary: Deleted demo applet (removed in epoch 3). Trained a small network on a 2-D surface drawn as lit triangles with a wireframe.
     depends_on: [REN-65]
-    docs: docs/applets/in-tree-applets.md#meshscope
+    branches: [playground-m6geom]
     issue: null
 
   - id: REN-74
     title: SculptScope
-    status: shipped
+    status: built
     scope: peripheral
-    summary: SculptScope trains a small network that maps latent codes to a cloud of 150,000 points fitted to a target shape, with the last layer writing the buffer the GPU draws.
+    summary: Deleted demo applet (removed in epoch 3). Trained a small network mapping latent codes to a 3-D point cloud.
     depends_on: [REN-04]
-    docs: docs/applets/in-tree-applets.md#sculptscope
+    branches: [playground-m6geom]
     issue: null
 
   - id: REN-75
     title: TwinScope
-    status: shipped
+    status: built
     scope: peripheral
-    summary: TwinScope runs a synthetic heat twin of a textured housing, with the simulated physics and the learned belief side by side.
+    summary: Deleted demo applet (removed in epoch 3). Ran a synthetic heat twin of a textured housing.
     depends_on: [REN-06, REN-65]
-    docs: docs/applets/in-tree-applets.md#twinscope
+    branches: [playground-m6geom]
     issue: null
 
   - id: REN-76

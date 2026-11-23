@@ -156,7 +156,7 @@ The script can set the selection of an item space, and every scene batch that ma
 
 ## Scene Service for Applets
 
-An applet draws in 3-D through the scene service, `caliper.scene.v1`, which offers the scene model of this page to the applet ABI: scenes with a space, an up axis and units; entity paths; entity transforms; points, lines as segments, strips and index-pair edges, arrows, boxes, meshes and images in their colour, depth and segmentation forms; pinhole cameras; clears and static items; the class table; the starting camera; and the scale bar. It replaces the geometry service by decision, and [Renderer Core](renderer-core.md#migration) orders the steps that build it, move the applets onto it and delete the geometry service. Nothing of it is built.
+An applet draws in 3-D through the scene service, `caliper.scene.v1`, which offers the scene model of this page to the applet ABI: scenes with a space, an up axis and units; entity paths; entity transforms; points, lines as segments, strips and index-pair edges, arrows, boxes, meshes and images in their colour, depth and segmentation forms; pinhole cameras; clears and static items; the class table; the starting camera; and the scale bar. The earlier geometry service (`caliper.geometry.v1` to `v1_3`) is already deleted, and [Renderer Core](renderer-core.md#migration) orders the steps that build `caliper.scene.v1` and move the remaining applets onto it. Nothing of `caliper.scene.v1` is built.
 
 The model is the one Caliper LIB logs, with four differences that follow from where an applet runs. Arrays name memory the applet already has, an imported allocation or a `CaliperTensor`, instead of a tensor in a Python process. An applet's updates carry no stamps of a script's timelines, because an applet has none. There are no rate limits or data views, because the applet draws in its own process at its own cadence and decides what to set. Encoded JPEG and PNG frames are not offered, because an applet holds pixels, not files.
 
@@ -166,7 +166,7 @@ The service id is `caliper.scene.v1`, declared in `sdk/include/caliper/services/
 
 ### Array Names
 
-Every array of a batch is one `CaliperSceneArray`. It names where the bytes are, as the geometry service's sources did with an allocation and a byte offset, and how to read them:
+Every array of a batch is one `CaliperSceneArray`. It names where the bytes are with an allocation and a byte offset, and how to read them:
 
 | Field | Meaning |
 |---|---|
@@ -177,7 +177,7 @@ Every array of a batch is one `CaliperSceneArray`. It names where the bytes are,
 | `stride` | The bytes from one row to the next, at most 2,048; 0 means packed. A stride lets an applet bind one column of a wider array without a copy |
 | `tensor` | With `SRC_TENSOR`: a CPU tensor, copied at the call so that the applet may free it on return, or a device tensor of the host's backend (`CALIPER_DEV_METAL` today), imported in place as the bridge imports it |
 
-An `SRC_ALLOC` array is imported through the graphics layer's `import_buffer` once per allocation and bound as a vertex, instance or index source at its offset, so the scene view draws the applet's memory in place and the zero-copy route of the geometry service is kept: the info line reports the route that ran, and the copy counters of the migration's step 0 read 0 on it. Index arrays may sit at any 4-byte offset: the index clamp binds the 256-byte-aligned offset below and starts at the remainder, so nothing is copied. Each role takes the dtypes and component counts that [Primitives](#primitives) gives after Caliper LIB's conversion: f32 positions, radii, values and depths, u8 colours and colour images, i32 indices and class ids, and u16 class ids and depths. Caliper LIB casts other dtypes on the device; the service converts nothing, so an applet gives these.
+An `SRC_ALLOC` array is imported through the graphics layer's `import_buffer` once per allocation and bound as a vertex, instance or index source at its offset, so the scene view draws the applet's memory in place: the info line reports the route that ran, and the copy counters of the migration's step 0 read 0 on it. Index arrays may sit at any 4-byte offset: the index clamp binds the 256-byte-aligned offset below and starts at the remainder, so nothing is copied. Each role takes the dtypes and component counts that [Primitives](#primitives) gives after Caliper LIB's conversion: f32 positions, radii, values and depths, u8 colours and colour images, i32 indices and class ids, and u16 class ids and depths. Caliper LIB casts other dtypes on the device; the service converts nothing, so an applet gives these.
 
 ### Service Table
 
@@ -404,7 +404,7 @@ An applet that moves from the geometry service to the scene service deletes its 
 
 ### Export
 
-`caliper.export.v1` draws a scene instead of geometry records. `view_png(path, width, height, scene, camera)` renders the scene offscreen at the requested size through the scene core, with the given starting camera or, when it is `NULL`, the camera of the scene's first view, reads it back with the graphics layer's `read_texture`, and writes the PNG and its sidecar as today; `begin_sequence`, `frame` and `end_sequence` take the scene in the same way. A second export of one scene and camera is byte-identical on the same backend. The export capability bit follows `CALIPER_SCENE_CAP_DRAW`.
+The applet-facing `caliper.export.v1` and `v1_1` service was deleted in epoch 3. If applet scene export returns later, a scene export entry point renders the scene offscreen at the requested size through the scene core, reads it back with the graphics layer's `read_texture`, and writes a PNG and its sidecar. A second export of one scene and camera is byte-identical on the same backend.
 
 ### Wire-Capable Scenes
 
@@ -429,7 +429,7 @@ The geometry service drew a fixed menu of draws into an offscreen texture, with 
 | Triangles, indexed or not | Meshes | Covered |
 | Triangle strips | None | Dropped. No applet draws one, and a scene model describes surfaces as indexed triangles; an applet with a strip writes its indices on its device |
 | Flat colour, per-vertex RGBA, per-vertex values through the shared colormaps | Colours, `colors` and `values` | Covered. The colormap decides by integer keys and matches the reference byte for byte |
-| Textured meshes: UVs and a bridge texture, with the fixed linear clamped sampler | Meshes with `uvs` and a `texture` image | Covered, with one change: the texture is an image array, not a bridge texture id, so that the scene is wire-capable. `twin_scope` colormaps its field into an RGBA image on its device, one gather in torch, before it sets the mesh |
+| Textured meshes: UVs and a bridge texture, with the fixed linear clamped sampler | Meshes with `uvs` and a `texture` image | Covered, with one change: the texture is an image array, not a bridge texture id, so that the scene is wire-capable |
 | The headlight, per vertex, from normals, `0.30 + 0.70 · max(n · l, 0)` | Meshes with `normals` | Covered as it is |
 | Unlit triangles | Meshes without normals are shaded flat | Dropped. No applet draws unlit triangles, and flat faces are the scene model's rule |
 | Opaque and alpha blending, chosen per draw | Opacity from the colours, translucent batches after opaque ones | Covered by the scene's rule instead of per-draw state |
@@ -463,7 +463,7 @@ The geometry service drew a fixed menu of draws into an offscreen texture, with 
 - **The text log is retained whether or not anything is attached.** Lines are cheap host strings and are often read after the fact.
 - **The names `caliper.text` and `caliper.bars`, beside the built `caliper.scene`.** Each view call of Caliper LIB is named after its kind, as `points`, `series` and `histogram` are, and none of the names collides with the package.
 - **The shared-memory protocol keeps version 2.** Its append-only rules allow the additions, and a viewer from before refuses only the new views.
-- **A scene service for applets, replacing the geometry service.** Applets get the scene model, its camera, picking, overlays and export through one service instead of a fixed menu of draws with their own cameras, at about 25.5 builder days of migration in place of about 8.5 for moving the geometry service onto the graphics layer and giving it one version, with eight applets rewritten, seven from the geometry service and one from ImPlot3D, the geometry service deleted and the graphics contract for applets changed from byte-exact rows to the parity rules; [Renderer Core](renderer-core.md#migration) gives the steps.
+- **A scene service for applets.** Applets get the scene model, its camera, picking and overlays through one service, with the remaining 3-D applets rewritten onto it and the graphics contract for applets using the parity rules; [Renderer Core](renderer-core.md#migration) gives the steps.
 - **The view as an ImGui item that the host draws in the applet's window.** The host then owns the input, so the camera, the switch, picking and the overlays come for nothing, and the applet keeps its layout. No texture id is handed out.
 - **Refusal per part, not per frame.** A scene keeps every part it holds, so a refused part cannot blank the picture, and the parts that were accepted still apply.
 - **Tokens for memory stability.** An applet learns without waiting when the bytes of a replaced batch may be rewritten, which fits the triple-buffered slots the applets already use.

@@ -54,7 +54,7 @@ When no device path applies, the bridge converts on the CPU and uploads. CPU ten
 
 `alloc_shared` on Vulkan returns a device-backed tensor. `HostRenderer::alloc_device_shared` makes the texture's shared buffer the tensor's memory and returns its CUDA pointer. The applet's kernels write the texture's memory directly, and the update runs the buffer-to-image pass with no copy. An optimally tiled image cannot alias linear buffer memory the way a unified-memory buffer can back a Metal texture. Thus zero-copy here means zero copies of the data, not zero GPU work. Without interop (CUDA unpaired), `alloc_shared` falls back to a CPU vector.
 
-An [imported allocation](../python/zero-copy-tensors.md#imported-allocations) is a block that the applet exports with `cuMemCreate` and a shareable handle. `import_allocation` duplicates the handle and imports the block into Vulkan with `VkImportMemoryWin32HandleInfoKHR`. On failure it unwinds fully. `update_texture_from_alloc` then reads the block at a byte offset with no copy. It uses a descriptor offset for the f32 compute pass and a `bufferOffset` for the u8 blit, and reports `compute-imported` and `blit-imported`. The f32 offset must be a multiple of the device's `minStorageBufferOffsetAlignment`, and the u8 offset must be a multiple of four. Torch sub-allocations are 512-byte aligned, so real offsets pass. Geometry draws from the same imports.
+An [imported allocation](../python/zero-copy-tensors.md#imported-allocations) is a block that the applet exports with `cuMemCreate` and a shareable handle. `import_allocation` duplicates the handle and imports the block into Vulkan with `VkImportMemoryWin32HandleInfoKHR`. On failure it unwinds fully. `update_texture_from_alloc` then reads the block at a byte offset with no copy. It uses a descriptor offset for the f32 compute pass and a `bufferOffset` for the u8 blit, and reports `compute-imported` and `blit-imported`. The f32 offset must be a multiple of the device's `minStorageBufferOffsetAlignment`, and the u8 offset must be a multiple of four. Torch sub-allocations are 512-byte aligned, so real offsets pass.
 
 ### Caching Allocator Limits
 
@@ -108,7 +108,6 @@ The backend prints one-time lines to stderr, each tagged `[vulkan] device path:`
 | `CUDA interop OK — GPU-resident (no CPU staging)` | The first update took the buffer path, with one in-VRAM copy |
 | `CUDA interop OK — zero-copy (alloc_shared in place)` | An `alloc_shared` tensor was updated in place |
 | `import path OK — zero-copy (imported allocation in place)` | An update read an imported allocation |
-| `geometry path OK — primitives drawn from imported allocations in place` | Geometry drew from imported memory |
 | `direct image: ... using the buffer path` | The direct path failed to set up for a texture |
 | `external-memory interop unavailable`, `tensor not CUDA-resident` | The update falls back to CPU staging |
 
@@ -119,16 +118,4 @@ Two environment variables change the backend's behavior:
 
 There is no fallback renderer: when Vulkan cannot start, the app refuses with a message that names the reason ([No Fallback Renderer](../applets/rendering.md#no-fallback-renderer)). [Verify on Windows hardware](windows-verification.md) gives the full procedure.
 
-## Renderer Caches
-
-Vulkan keeps a pipeline cache keyed by topology, blend mode, depth state and textured flag. It has a descriptor set for each draw and a ring of parameter slots, aligned to 256 bytes, that grows as necessary. Metal keeps pipelines by topology class, blend mode, depth state and textured flag, plus a depth-stencil state for each pair of test and write settings.
-
 On WebGPU, Caliper destroys a released texture at once. It releases the view of that texture at the end of the frame, after ImGui drops its bind groups. Caliper reuses released point buffers for the next snapshot of the same size.
-
-## Geometry Backend
-
-The `PrimParams` record has 192 bytes. Four places keep its layout by hand: the `std140` block in `geom.vert`, `PrimParams` in `vulkan_renderer.cpp`, and the MSL struct and its C++ mirror in `metal_renderer.mm`. Two `static_assert(sizeof(PrimParams) == 192)` lines lock the size. A change to the record must change all four places.
-
-Torch MPS tensors import as `MTLStorageModePrivate`, and the host cannot read that memory. For gate G14, the Metal backend copies private instance buffers with one blit into a staging buffer that only grows. It waits once, before a render encoder exists. Vulkan stages with `vkCmdCopyBuffer`.
-
-Indexed draws go out as non-indexed draws, so no index buffer is bound. On Metal, creating the encoder does the clear, and thus all gates run before the encoder exists.

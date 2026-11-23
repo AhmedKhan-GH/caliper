@@ -247,18 +247,16 @@ entries:
   ids:
   - REN-34
 - heading: Remaining Steps
-  item: Step 11, the scene service and the particle applets field_scope, flow_scope and sculpt_scope on
-    it; 12.5 days.
+  item: Step 11, the scene service; 12.5 days.
   ids:
-  - REN-16
   - REN-35
 - heading: Remaining Steps
-  item: Step 12, embed_scope, gpt_scope and instance_scope on the scene service; 4 days.
+  item: Step 12, embed_scope and gpt_scope on the scene service; 4 days.
   ids:
   - REN-16
 - heading: Remaining Steps
-  item: Step 13, mesh_scope and twin_scope on the scene service, export of scenes, geometry service deleted,
-    one version of each graphics service and the epoch bump; 11 days.
+  item: Step 13, geometry and export services deleted and epoch bumped to 3 (built); one version of the
+    tensor bridge and embed views remain.
   ids:
   - REN-16
   - COR-25
@@ -286,13 +284,13 @@ entries:
   ids:
   - REN-09
 - heading: One Version of Each Graphics Service
-  item: Each graphics service keeps one version under plain v1 ids, with one ABI epoch bump from 2 to
-    3 in step 13 and a simplified epoch check.
+  item: Geometry and export services deleted in epoch 3; one version of the tensor bridge and embed views
+    planned under plain v1 ids.
   ids:
   - COR-25
 - heading: Applets on the Scene Service
-  item: 'Eight applets in the repository move onto the scene service: field_scope, flow_scope, sculpt_scope,
-    embed_scope, gpt_scope, instance_scope, mesh_scope and twin_scope.'
+  item: Remaining 3-D applets (embed_scope, gpt_scope) move onto the scene service; the six geometry demo
+    applets are deleted.
   ids:
   - REN-16
 - heading: Renderer Seam at Its Final Shape

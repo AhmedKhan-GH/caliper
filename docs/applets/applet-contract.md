@@ -16,7 +16,7 @@ The contract uses C types only. It has no STL, exceptions, or third-party types.
 
 ## Calls
 
-Every epoch-2 applet exports exactly one symbol. The `CALIPER_APPLET` macro in `caliper.hpp` generates it, or you can write it by hand in C. The `CALIPER_DESCRIPTOR_SYMBOL` macro holds the name of the symbol. The header declares the symbol only in a comment, thus the generated tables do not list it.
+Every epoch-3 applet exports exactly one symbol. The `CALIPER_APPLET` macro in `caliper.hpp` generates it, or you can write it by hand in C. The `CALIPER_DESCRIPTOR_SYMBOL` macro holds the name of the symbol. The header declares the symbol only in a comment, thus the generated tables do not list it.
 
 | Call | Signature | Description |
 |---|---|---|

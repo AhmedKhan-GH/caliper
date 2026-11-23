@@ -335,8 +335,8 @@ entries:
   ids:
   - REN-35
 - heading: Export
-  item: caliper.export.v1 renders a scene offscreen at any size through the scene core instead of geometry
-    records.
+  item: The applet-facing caliper.export.v1 and v1_1 service was deleted in epoch 3; future scene export
+    would render a scene offscreen through the scene core.
   ids:
   - REN-16
 - heading: Wire-Capable Scenes
