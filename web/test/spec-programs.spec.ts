@@ -6,11 +6,11 @@
 // not run state.set or selection.set, so the selection stays in the page. The programs' text tables give their
 // labels, and a panel's view_camera starts the scene's camera as in the app. Needs WebGPU.
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type JSHandle, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mockApp, openSpec, VIEWS_FILES, type Json, type MockApp } from './spec-mock.js';
-import { decodePng, REPO } from './util.js';
+import { REPO } from './util.js';
 
 const WASM = process.env.CALIPER_WASM_DIR ?? path.join(REPO, 'python', 'caliper', '_web');
 const FIXTURE = path.join(REPO, 'tests', 'draw_parity', 'dashboard');
@@ -38,11 +38,16 @@ async function openRecorded(page: Page, change?: (spec: Json) => void): Promise<
   return { spec, app };
 }
 
-/** A panel's module canvas as RGBA bytes, read in the same task as the module's frame (two frames on). */
-async function pixels(page: Page, panel: string): Promise<{ w: number; h: number; px: Uint8Array }> {
-  const capture = await page.evaluate((id) => new Promise<{
-    png: string; programs: { id: string; state: string; code: string; message: string }[];
-  }>((done) => {
+interface PixelCapture {
+  w: number;
+  h: number;
+  px: Uint8ClampedArray;
+  programs: { id: string; state: string; code: string; message: string }[];
+}
+
+/** A panel's RGBA bytes, read two frames on and kept in the page. The caller disposes the handle. */
+async function pixels(page: Page, panel: string): Promise<JSHandle<PixelCapture>> {
+  const capture = await page.evaluateHandle((id) => new Promise<PixelCapture>((done) => {
     const views = (window as any).caliperSpec.programs;
     const c = views.canvasOf(id) as HTMLCanvasElement;
     const original = window.requestAnimationFrame.bind(window);
@@ -53,16 +58,21 @@ async function pixels(page: Page, panel: string): Promise<{ w: number; h: number
       const g = probe.getContext('2d', { willReadFrequently: true })!;
       g.drawImage(c, 0, 0);
       const raw = views.mounts.get(id)?.handle?.stats?.programs ?? [];
-      // Lossless PNG avoids a separate protocol value for every RGBA byte. That transfer can
-      // stall SwiftShader long enough for the program watchdog to stop both dashboard panels.
-      done({ png: probe.toDataURL('image/png'), programs: typeof raw === 'string' ? JSON.parse(raw) : raw });
+      // Pixel buffers stay in the page. The tests return only coordinates, counters, and state.
+      done({ w: c.width, h: c.height, px: g.getImageData(0, 0, c.width, c.height).data,
+        programs: typeof raw === 'string' ? JSON.parse(raw) : raw });
     }));
   }), panel);
-  expect(capture.programs.length, `${panel}: programs at capture`).toBeGreaterThan(0);
-  for (const program of capture.programs)
-    expect(program, `${panel}: ${JSON.stringify(program)}`).toMatchObject({ state: 'running', code: '' });
-  const decoded = decodePng(Buffer.from(capture.png.split(',')[1], 'base64'));
-  return { w: decoded.width, h: decoded.height, px: decoded.data };
+  try {
+    const programs = await capture.evaluate((image) => image.programs);
+    expect(programs.length, `${panel}: programs at capture`).toBeGreaterThan(0);
+    for (const program of programs)
+      expect(program, `${panel}: ${JSON.stringify(program)}`).toMatchObject({ state: 'running', code: '' });
+    return capture;
+  } catch (error) {
+    await capture.dispose();
+    throw error;
+  }
 }
 
 /** A number of the module's stats of a panel. */
@@ -85,84 +95,113 @@ test('a pick of an arc gives its fields, writes the page own state, highlights t
 
   // Wait for arc pixels as well as the program state, then keep that image as the baseline.
   // Coloured pixels of the arcs (not the white token labels), at most 24 at least 12 pixels apart.
-  let before!: Awaited<ReturnType<typeof pixels>>;
-  const chosen: [number, number][] = [];
-  await expect.poll(async () => {
-    before = await pixels(page, 'tower');
-    const all: [number, number, number][] = [];
-    for (let y = 0; y < before.h; y += 2)
-      for (let x = 0; x < before.w; x += 2) {
-        const i = 4 * (y * before.w + x), d = before.px;
-        const mx = Math.max(d[i], d[i + 1], d[i + 2]), mn = Math.min(d[i], d[i + 1], d[i + 2]);
-        if (mx - mn > 50 && mx > 120) all.push([2 * mx - mn, x, y]);
+  let before: JSHandle<PixelCapture> | undefined;
+  let chosen: [number, number][] = [];
+  let size = { w: 0, h: 0 };
+  try {
+    await expect.poll(async () => {
+      const image = await pixels(page, 'tower');
+      let keep = false;
+      try {
+        const candidates = await image.evaluate((before) => {
+          const all: [number, number, number][] = [];
+          for (let y = 0; y < before.h; y += 2)
+            for (let x = 0; x < before.w; x += 2) {
+              const i = 4 * (y * before.w + x), d = before.px;
+              const mx = Math.max(d[i], d[i + 1], d[i + 2]), mn = Math.min(d[i], d[i + 1], d[i + 2]);
+              if (mx - mn > 50 && mx > 120) all.push([2 * mx - mn, x, y]);
+            }
+          all.sort((a, b) => b[0] - a[0]);
+          const chosen: [number, number][] = [];
+          for (const [, x, y] of all) {
+            if (chosen.some((q) => Math.abs(q[0] - x) < 12 && Math.abs(q[1] - y) < 12)) continue;
+            chosen.push([x, y]);
+            if (chosen.length >= 24) break;
+          }
+          return { chosen, w: before.w, h: before.h };
+        });
+        if (candidates.chosen.length > 0) {
+          before = image;
+          chosen = candidates.chosen;
+          size = { w: candidates.w, h: candidates.h };
+          keep = true;
+        }
+        return candidates.chosen.length;
+      } finally {
+        if (!keep) await image.dispose();
       }
-    all.sort((a, b) => b[0] - a[0]);
-    chosen.length = 0;
-    for (const [, x, y] of all) {
-      if (chosen.some((q) => Math.abs(q[0] - x) < 12 && Math.abs(q[1] - y) < 12)) continue;
-      chosen.push([x, y]);
-      if (chosen.length >= 24) break;
-    }
-    return chosen.length;
-  }, { timeout: 10_000, message: 'the tower canvas contains its rendered arcs' }).toBeGreaterThan(0);
-  // From the canvas's pixels to the page's CSS pixels, through the device pixel ratio of the canvas.
-  const box = await page.evaluate(() => {
-    const r = ((window as any).caliperSpec.programs.canvasOf('tower') as HTMLCanvasElement).getBoundingClientRect();
-    return { left: r.left, top: r.top, width: r.width, height: r.height };
-  });
-  let picked = false;
-  for (const [x, y] of chosen) {
-    await page.mouse.click(box.left + (x + 0.5) * box.width / before.w, box.top + (y + 0.5) * box.height / before.h);
-    picked = await page.waitForFunction(() => (window as any).caliperSpec.debugState().picks.length > 0, null, { timeout: 3000 })
-      .then(() => true, () => false);
-    if (picked) break;
-  }
-  if (!picked) {
-    const stats = await page.evaluate(() => {
-      const s = (window as any).caliperSpec.programs.mounts.get('tower')?.handle?.stats ?? {};
-      return { inputPointer: s.inputPointer, inputButtons: s.inputButtons, pageEvents: s.pageEvents, pageLastEvent: s.pageLastEvent,
-        gfxErrors: s.gfxErrors };
+    }, { timeout: 10_000, message: 'the tower canvas contains its rendered arcs' }).toBeGreaterThan(0);
+    if (!before) throw new Error('no baseline capture of the rendered arcs');
+    const baseline = before;
+    // From the canvas's pixels to the page's CSS pixels, through the device pixel ratio of the canvas.
+    const box = await page.evaluate(() => {
+      const r = ((window as any).caliperSpec.programs.canvasOf('tower') as HTMLCanvasElement).getBoundingClientRect();
+      return { left: r.left, top: r.top, width: r.width, height: r.height };
     });
-    throw new Error(`no pick from ${chosen.length} clicks on the arcs; the tower module counted ${JSON.stringify(stats)}`);
-  }
-  const s = await page.evaluate(() => (window as any).caliperSpec.debugState());
-  for (const panel of ['tower', 'pattern'])
-    for (const program of s.programs[panel].programs)
-      expect(program, `${panel}: ${JSON.stringify(program)}`).toMatchObject({ module: 'running', code: '' });
-  const pick = s.picks.at(-1);
-  expect(pick.panel).toBe('tower');
-  expect(pick.detail.program).toBe('tower_arcs');
-  // The item's fields, as the piece's pick names them.
-  for (const f of ['layer', 'head', 'from_token', 'to_token', 'weight', 'score']) expect(typeof pick.detail.fields[f]).toBe('number');
-  // The panel's select writes the head into the page's own state, and the grid's params follow the pick.
-  expect(s.localState.head).toBe(pick.detail.fields.head);
-  expect(s.programs.tower.pick.item).toBe(pick.detail.item);
-  await expect.poll(async () => {
-    const d = await page.evaluate(() => (window as any).caliperSpec.debugState().programs.pattern.programs[0].params);
-    return d && [d.head, d.layer];
-  }, { timeout: 5000 }).toEqual([pick.detail.fields.head, pick.detail.fields.layer]);
-
-  // The picked arc draws highlighted: the selection reaches the tower's program, and only the highlight changes
-  // its picture (its data and params stay), in the warm colour of the piece's selected arcs.
-  let changed = 0, warm = 0;
-  await expect.poll(async () => {
-    const after = await pixels(page, 'tower');
-    changed = 0;
-    warm = 0;
-    for (let i = 0; i < after.px.length; i += 4) {
-      const d = Math.max(Math.abs(after.px[i] - before.px[i]), Math.abs(after.px[i + 1] - before.px[i + 1]),
-        Math.abs(after.px[i + 2] - before.px[i + 2]));
-      if (d <= 24) continue;
-      ++changed;
-      if (after.px[i] >= 200 && after.px[i + 1] >= 170 && after.px[i] - after.px[i + 2] >= 30) ++warm;
+    let picked = false;
+    for (const [x, y] of chosen) {
+      await page.mouse.click(box.left + (x + 0.5) * box.width / size.w, box.top + (y + 0.5) * box.height / size.h);
+      picked = await page.waitForFunction(() => (window as any).caliperSpec.debugState().picks.length > 0, null, { timeout: 3000 })
+        .then(() => true, () => false);
+      if (picked) break;
     }
-    return warm;
-  }, { timeout: 5000, message: 'the picked arc is drawn in its highlight colour' }).toBeGreaterThan(20);
-  console.log(`pick: item ${pick.detail.item} head ${pick.detail.fields.head} layer ${pick.detail.fields.layer}; ` +
-    `highlight: ${changed} pixels changed, ${warm} in the highlight colour`);
+    if (!picked) {
+      const stats = await page.evaluate(() => {
+        const s = (window as any).caliperSpec.programs.mounts.get('tower')?.handle?.stats ?? {};
+        return { inputPointer: s.inputPointer, inputButtons: s.inputButtons, pageEvents: s.pageEvents, pageLastEvent: s.pageLastEvent,
+          gfxErrors: s.gfxErrors };
+      });
+      throw new Error(`no pick from ${chosen.length} clicks on the arcs; the tower module counted ${JSON.stringify(stats)}`);
+    }
+    const s = await page.evaluate(() => (window as any).caliperSpec.debugState());
+    for (const panel of ['tower', 'pattern'])
+      for (const program of s.programs[panel].programs)
+        expect(program, `${panel}: ${JSON.stringify(program)}`).toMatchObject({ module: 'running', code: '' });
+    const pick = s.picks.at(-1);
+    expect(pick.panel).toBe('tower');
+    expect(pick.detail.program).toBe('tower_arcs');
+    // The item's fields, as the piece's pick names them.
+    for (const f of ['layer', 'head', 'from_token', 'to_token', 'weight', 'score']) expect(typeof pick.detail.fields[f]).toBe('number');
+    // The panel's select writes the head into the page's own state, and the grid's params follow the pick.
+    expect(s.localState.head).toBe(pick.detail.fields.head);
+    expect(s.programs.tower.pick.item).toBe(pick.detail.item);
+    await expect.poll(async () => {
+      const d = await page.evaluate(() => (window as any).caliperSpec.debugState().programs.pattern.programs[0].params);
+      return d && [d.head, d.layer];
+    }, { timeout: 5000 }).toEqual([pick.detail.fields.head, pick.detail.fields.layer]);
 
-  // Nothing went to the app but reads.
-  expect(app.requests.every((r) => r.name === 'spec.get' || r.name === 'panel.data' || r.name.startsWith('GET caliper-views'))).toBe(true);
+    // The picked arc draws highlighted: the selection reaches the tower's program, and only the highlight changes
+    // its picture (its data and params stay), in the warm colour of the piece's selected arcs.
+    let changed = 0, warm = 0;
+    await expect.poll(async () => {
+      const after = await pixels(page, 'tower');
+      try {
+        const count = await after.evaluate((after, before) => {
+          let changed = 0, warm = 0;
+          for (let i = 0; i < after.px.length; i += 4) {
+            const d = Math.max(Math.abs(after.px[i] - before.px[i]), Math.abs(after.px[i + 1] - before.px[i + 1]),
+              Math.abs(after.px[i + 2] - before.px[i + 2]));
+            if (d <= 24) continue;
+            ++changed;
+            if (after.px[i] >= 200 && after.px[i + 1] >= 170 && after.px[i] - after.px[i + 2] >= 30) ++warm;
+          }
+          return { changed, warm };
+        }, baseline);
+        changed = count.changed;
+        warm = count.warm;
+        return warm;
+      } finally {
+        await after.dispose();
+      }
+    }, { timeout: 5000, message: 'the picked arc is drawn in its highlight colour' }).toBeGreaterThan(20);
+    console.log(`pick: item ${pick.detail.item} head ${pick.detail.fields.head} layer ${pick.detail.fields.layer}; ` +
+      `highlight: ${changed} pixels changed, ${warm} in the highlight colour`);
+
+    // Nothing went to the app but reads.
+    expect(app.requests.every((r) => r.name === 'spec.get' || r.name === 'panel.data' || r.name.startsWith('GET caliper-views'))).toBe(true);
+  } finally {
+    await before?.dispose();
+  }
 });
 
 test('a panel view_camera starts the scene camera with its angles, target and distance, as in the app', async ({ page }) => {
@@ -207,20 +246,30 @@ test('removing the last program hides its canvas and clears its resources', asyn
 test('a resource replacement at the same step changes the dashboard pixels', async ({ page }) => {
   const { spec, app } = await openRecorded(page);
   const before = await pixels(page, 'pattern');
-  const changed = structuredClone(app.data[spec.applet.id].pattern);
-  const resource = changed.data.programs[0].resources.find((r: Json) => r.resource === 'pattern');
-  const bytes = Buffer.from(resource.base64, 'base64');
-  for (let offset = 0; offset < bytes.length - 64; offset += 4) bytes.writeFloatLE(1, offset);
-  resource.base64 = bytes.toString('base64');
-  resource.version = 'replacement-at-current-step';
-  changed.version = 'replacement-panel';
-  app.data[spec.applet.id].pattern = changed;
-  await expect.poll(async () => {
-    const after = await pixels(page, 'pattern');
-    let changedPixels = 0;
-    for (let i = 0; i < after.px.length; i += 4)
-      if (Math.abs(after.px[i] - before.px[i]) + Math.abs(after.px[i + 1] - before.px[i + 1]) +
-          Math.abs(after.px[i + 2] - before.px[i + 2]) > 30) ++changedPixels;
-    return changedPixels;
-  }, { timeout: 10_000 }).toBeGreaterThan(100);
+  try {
+    const changed = structuredClone(app.data[spec.applet.id].pattern);
+    const resource = changed.data.programs[0].resources.find((r: Json) => r.resource === 'pattern');
+    const bytes = Buffer.from(resource.base64, 'base64');
+    for (let offset = 0; offset < bytes.length - 64; offset += 4) bytes.writeFloatLE(1, offset);
+    resource.base64 = bytes.toString('base64');
+    resource.version = 'replacement-at-current-step';
+    changed.version = 'replacement-panel';
+    app.data[spec.applet.id].pattern = changed;
+    await expect.poll(async () => {
+      const after = await pixels(page, 'pattern');
+      try {
+        return await after.evaluate((after, before) => {
+          let changedPixels = 0;
+          for (let i = 0; i < after.px.length; i += 4)
+            if (Math.abs(after.px[i] - before.px[i]) + Math.abs(after.px[i + 1] - before.px[i + 1]) +
+                Math.abs(after.px[i + 2] - before.px[i + 2]) > 30) ++changedPixels;
+          return changedPixels;
+        }, before);
+      } finally {
+        await after.dispose();
+      }
+    }, { timeout: 10_000 }).toBeGreaterThan(100);
+  } finally {
+    await before.dispose();
+  }
 });
