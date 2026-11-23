@@ -16,6 +16,7 @@
 #include "spec_runtime/spec_annotations.h"
 #include "spec_runtime/spec_offscreen.h"
 #include "spec_runtime/spec_runtime.h"
+#include "live/camera_drag.h"   // a right click within the tolerance of a scene panel's pan opens the menu
 #include "live/live_scene.h"   // camera.get and camera.set read and move a panel's scene view
 #include "export_service.h"     // export_encode_png
 #if defined(__APPLE__)
@@ -441,13 +442,17 @@ struct SpecPage::Impl {
         // A right click opens the menu when it is released without a drag, as the live scene's
         // camera menu does: a right press on a scene panel starts a pan, and a menu opened by that
         // press would take the next press, which then moves no camera.
-        // The release frame's own move is not in ImGui's drag distance yet, so the distance from the
-        // press to the pointer is checked too: a quick flick that ends in its last move is a drag.
-        if (over && ImGui::IsMouseReleased(ImGuiMouseButton_Right) && !ImGui::IsMouseDragPastThreshold(ImGuiMouseButton_Right)) {
+        // Without a drag means within the tolerance at which a scene panel's pan starts
+        // (live/camera_drag.h), so that a right drag that panned opens no menu. The release frame's
+        // own move is not in ImGui's drag distance yet, so the distance from the press to the pointer
+        // is checked too: a quick flick that ends in its last move is a drag.
+        if (over && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
             const ImGuiIO& io = ImGui::GetIO();
             const float dx = io.MousePos.x - io.MouseClickedPos[ImGuiMouseButton_Right].x;
             const float dy = io.MousePos.y - io.MouseClickedPos[ImGuiMouseButton_Right].y;
-            if (dx * dx + dy * dy <= io.MouseDragThreshold * io.MouseDragThreshold) menu_request = f.id;
+            if (!caliper_live_views::camera_drag_started_sqr(io.MouseDragMaxDistanceSqr[ImGuiMouseButton_Right]) &&
+                !caliper_live_views::camera_drag_started(dx, dy))
+                menu_request = f.id;
         }
     }
 

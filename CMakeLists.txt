@@ -1068,7 +1068,8 @@ if(TARGET caliper_builder_session)
             # caliper.serve() from its stream file, the attachment kept across
             # Home and the spec page until Detach, a second stream and a
             # stream that ends, files dropped on the live page, a pan and an orbit
-            # of a scene panel read from the frame log, and "Save
+            # of a scene panel read from the frame log, the slow start of each and
+            # the right click's tolerance, and "Save
             # changes to <name>?" before F3, an open from the landing and a
             # close over unsaved changes, and an agent's launch over unsaved
             # changes held on an approval card.
@@ -1080,6 +1081,7 @@ if(TARGET caliper_builder_session)
                     "live_drop|app live: files dropped on the live page*"
                     "live_scene_pan|app live: a right-button pan of a scene panel*"
                     "live_scene_stale|app live: an orbit and a pan whose press comes before*"
+                    "live_scene_slow|app live: a slow orbit and pan of a scene panel*"
                     "save_new|app save: F3 New dashboard over unsaved changes*"
                     "save_open|app save: opening another dashboard*"
                     "save_close|app save: closing the window*"

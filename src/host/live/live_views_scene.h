@@ -125,11 +125,12 @@ struct SceneRectOptions {
 // pick in flight and a pick that a test seam asked for. The caller keeps one per rectangle.
 struct SceneRectState {
     bool down = false;       // a button is held on the picture
-    bool moved = false;      // the pointer moved past the drag threshold since the press
+    bool moved = false;      // the press became a drag: a camera drag kCameraDragStart points from the
+                             // press (camera_drag.h), a selection past ImGui's drag threshold
     bool selecting = false;  // the press was a shift-press: a rectangle selection
     int button = 0;          // the button held: 0 left, 1 right, 2 middle
     float x0 = 0, y0 = 0;    // where the press was, in screen pixels
-    float lx = 0, ly = 0;    // the pointer at the last frame
+    float lx = 0, ly = 0;    // where the camera drag last moved the camera from: the press, until it starts
     bool click = false;      // a click's pick is in flight, so its result is a pick event
     float seam_u = -1.0f;    // a pick asked for by pick_scene_rect(), in 0..1 of the rectangle; -1: none
     float seam_v = -1.0f;

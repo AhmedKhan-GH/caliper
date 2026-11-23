@@ -5,6 +5,7 @@
 #include "caliper/live_views.h"
 #include "embed/embed_core.h"
 #include "embed/render_stats.h"   // copy counters
+#include "live/camera_drag.h"
 #include "live/live_scene.h"
 #include "live/scene_overlays.h"
 #include "scene/pick.h"   // PickPass::Result
@@ -496,15 +497,22 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
     }
     bool released = false;
     if (state.down) {
-        if (valid && (std::fabs(io.MousePos.x - state.x0) > io.MouseDragThreshold ||
-                      std::fabs(io.MousePos.y - state.y0) > io.MouseDragThreshold))
-            state.moved = true;
-        const float dx = valid ? io.MousePos.x - state.lx : 0.0f, dy = valid ? io.MousePos.y - state.ly : 0.0f;
-        if (valid) {
+        // A selection's rectangle starts past ImGui's drag threshold. A camera drag starts on the first
+        // frame that the pointer is kCameraDragStart points from the press (camera_drag.h), and its
+        // first step goes from the press, so the motion inside that tolerance moves the camera too.
+        if (valid && !state.moved) {
+            const float ox = io.MousePos.x - state.x0, oy = io.MousePos.y - state.y0;
+            state.moved = state.selecting
+                              ? std::fabs(ox) > io.MouseDragThreshold || std::fabs(oy) > io.MouseDragThreshold
+                              : camera_drag_started(ox, oy);
+        }
+        const bool camera = state.moved && !state.selecting && valid;
+        const float dx = camera ? io.MousePos.x - state.lx : 0.0f, dy = camera ? io.MousePos.y - state.ly : 0.0f;
+        if (camera) {
             state.lx = io.MousePos.x;
             state.ly = io.MousePos.y;
         }
-        if (state.moved && !state.selecting && (dx != 0.0f || dy != 0.0f)) {
+        if (dx != 0.0f || dy != 0.0f) {
             if (state.button != 0 || io.KeyAlt || io.KeyCtrl) sc->pan(dx, dy, size.y);
             else sc->orbit(dx, dy);
         }

@@ -45,6 +45,7 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <variant>
 #include <map>
 #include <memory>
 #include <cstdlib>
@@ -1157,6 +1158,162 @@ TEST_CASE("programs: a drag in a panel of programs draws each frame with that fr
     check_each_frame(frames);
     CHECK(step == 4);
     CHECK(view->draw_runtimes()[0]->resource_step("arcs") == step);
+}
+
+// ---- The start of a camera drag in a scene panel (live/camera_drag.h) ---------------------------
+// A camera drag starts at the first frame that its pointer is 2 points from the press and moves the
+// camera by the whole way from the press. A drag of a point a frame thus moves the camera within one
+// frame of its first move and as far as a drag with no tolerance, for the orbit of the left button
+// and the pans of the right and middle buttons. A click, and a press that moves one point before its
+// release, pick and leave the camera.
+
+namespace {
+
+// The numbers of the view's orbit: target x, y, z, distance, azimuth and elevation.
+std::vector<double> orbit_numbers(const caliper_live_views::SceneView& view) {
+    const caliper_scene::Orbit* o = std::get_if<caliper_scene::Orbit>(&view.camera());
+    if (!o) return {};
+    return {o->target[0], o->target[1], o->target[2], o->distance, o->azimuth, o->elevation};
+}
+
+double camera_distance(const std::vector<double>& a, const std::vector<double>& b) {
+    double d = 0;
+    for (std::size_t k = 0; k < a.size() && k < b.size(); ++k) d += (a[k] - b[k]) * (a[k] - b[k]);
+    return std::sqrt(d);
+}
+
+// Queues input into the canvas's context and draws one frame of the panel, with no read back.
+struct PanelInput {
+    ArcsPanel& p;
+    void operator()(const std::function<void(ImGuiIO&)>& fn) const {
+        p.c->with_context([&] { fn(ImGui::GetIO()); });
+        std::string why;
+        REQUIRE_MESSAGE(p.c->render(1, [&](const ImRect& area) { p.rt->draw(area, p.c->look()); }, nullptr, &why), why);
+    }
+};
+
+// A point of the view, from 0 to 1 across it, whose ID texel and the texels to its right up to
+// `reach` texels hold the program's pick id, so that a press there and a release `reach` texels to
+// the right both hit the program.
+bool program_span(caliper_live_views::SceneView& view, std::uint32_t pick_id, std::uint32_t reach, float* u, float* v) {
+    caliper_gfx::Backend& gfx = view.backend();
+    if (!view.id_target()) return false;
+    const caliper_gfx::Readback rb = gfx.read_texture(view.id_target(), 0, 0, view.width(), view.height());
+    if (!rb) return false;
+    std::vector<std::uint8_t> ids;
+    for (int k = 0; k < 200 && !gfx.take_readback(rb, &ids); ++k) gfx.wait(gfx.last_use(view.id_target()));
+    if (ids.size() != std::size_t(view.width()) * view.height() * 8) return false;
+    auto id_at = [&](std::uint32_t x, std::uint32_t y) {
+        std::uint32_t texel[2];
+        std::memcpy(texel, ids.data() + (std::size_t(y) * view.width() + x) * 8, 8);
+        return texel[0];
+    };
+    for (std::uint32_t y = 0; y < view.height(); ++y)
+        for (std::uint32_t x = 1; x + reach + 1 < view.width(); ++x) {
+            bool all = true;
+            for (std::uint32_t k = 0; k <= reach + 1 && all; ++k) all = id_at(x - 1 + k, y) == pick_id;
+            if (!all) continue;
+            *u = (float(x) + 0.5f) / float(view.width());
+            *v = (float(y) + 0.5f) / float(view.height());
+            return true;
+        }
+    return false;
+}
+
+}  // namespace
+
+TEST_CASE("programs: a slow drag in a scene panel moves the camera from its first points by the pointer's whole way") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) {
+        MESSAGE("skipped: no Metal device");
+        return;
+    }
+    ArcsPanel p(c, arcs_spec(false), canvas_layer(c));
+    caliper_live_views::SceneView* view = p.running();
+    REQUIRE(view != nullptr);
+    float r[4];
+    REQUIRE(p.rt->scene_rect("world", r));
+    const PanelInput input{p};
+    const float x0 = std::round(r[0] + 0.5f * r[2]), y = std::round(r[1] + 0.5f * r[3]);
+    constexpr int kMoves = 30;
+    for (const int button : {0, 1, 2}) {
+        CAPTURE(button);
+        input([&](ImGuiIO& io) { io.AddMousePosEvent(x0, y); });
+        const caliper_scene::ViewCamera before = view->camera();
+        input([&](ImGuiIO& io) { io.AddMouseButtonEvent(button, true); });
+        std::vector<std::vector<double>> cams = {orbit_numbers(*view)};
+        REQUIRE(cams[0].size() == 6);
+        for (int k = 1; k <= kMoves; ++k) {
+            input([&](ImGuiIO& io) { io.AddMousePosEvent(x0 + float(k), y); });
+            cams.push_back(orbit_numbers(*view));
+        }
+        input([&](ImGuiIO& io) { io.AddMouseButtonEvent(button, false); });
+        input([&](ImGuiIO& io) { io.AddMousePosEvent(-FLT_MAX, -FLT_MAX); });
+        int first = 0;
+        std::vector<double> steps;
+        for (int k = 1; k <= kMoves; ++k) {
+            const double d = camera_distance(cams[std::size_t(k)], cams[std::size_t(k) - 1]);
+            if (d > 0 && !first) first = k;
+            if (d > 0) steps.push_back(d);
+        }
+        MESSAGE("button " << button << ": the camera first moved " << first - 1 << " frames after the first move");
+        CHECK(first >= 1);
+        CHECK(first <= 2);
+        REQUIRE(steps.size() >= 20);
+        std::vector<double> sorted = steps;
+        std::sort(sorted.begin(), sorted.end());
+        CHECK(steps[0] <= 3.0 * sorted[sorted.size() / 2]);
+        // The same drag with no tolerance: a step of one point at each move.
+        const caliper_scene::ViewCamera after = view->camera();
+        view->camera() = before;
+        for (int k = 0; k < kMoves; ++k) {
+            if (button == 0) view->orbit(1.0f, 0.0f);
+            else view->pan(1.0f, 0.0f, r[3]);
+        }
+        const std::vector<double> want = orbit_numbers(*view);
+        view->camera() = after;
+        REQUIRE(want.size() == 6);
+        for (std::size_t k = 0; k < 6; ++k) {
+            CAPTURE(k);
+            CHECK(cams.back()[k] == doctest::Approx(want[k]).epsilon(1e-6));
+        }
+    }
+}
+
+TEST_CASE("programs: a click in a scene panel picks, and so does a press that moves one point before its release, "
+          "which leaves the camera") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) {
+        MESSAGE("skipped: no Metal device");
+        return;
+    }
+    ArcsPanel p(c, arcs_spec(false), canvas_layer(c));
+    caliper_live_views::SceneView* view = p.running();
+    REQUIRE(view != nullptr);
+    float r[4];
+    REQUIRE(p.rt->scene_rect("world", r));
+    // A point of the arcs with one point of arcs to its right, in the ID target's texels.
+    const float kx = float(view->width()) / r[2];
+    float u = 0, v = 0;
+    REQUIRE(program_span(*view, view->draw_runtimes()[0]->pick_id(), std::uint32_t(std::ceil(kx)), &u, &v));
+    const float x = r[0] + u * r[2], y = r[1] + v * r[3];
+    const PanelInput input{p};
+    for (const int moved : {0, 1}) {
+        CAPTURE(moved);
+        p.events.got.clear();
+        input([&](ImGuiIO& io) { io.AddMousePosEvent(x, y); });
+        const std::vector<double> cam = orbit_numbers(*view);
+        input([&](ImGuiIO& io) { io.AddMouseButtonEvent(0, true); });
+        if (moved) input([&](ImGuiIO& io) { io.AddMousePosEvent(x + 1.0f, y); });
+        input([&](ImGuiIO& io) { io.AddMouseButtonEvent(0, false); });
+        for (int k = 0; k < 8 && !p.pick_event(); ++k) input([](ImGuiIO&) {});
+        CHECK(orbit_numbers(*view) == cam);
+        REQUIRE(p.pick_event() != nullptr);
+        CHECK(p.pick_event()->fields.value("program", std::string()) == "tower_arcs");
+        // Past the double-click time, so that the next press is a click of its own.
+        input([&](ImGuiIO& io) { io.AddMousePosEvent(-FLT_MAX, -FLT_MAX); });
+        for (int k = 0; k < 40; ++k) input([](ImGuiIO&) {});
+    }
 }
 
 TEST_CASE("programs: a runtime that goes takes its history back also after another runtime gave the event sink") {
