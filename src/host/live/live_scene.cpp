@@ -1006,13 +1006,17 @@ std::vector<const caliper_draw::DrawRuntime*> SceneView::draw_runtimes() const {
 
 uint64_t SceneView::program_frames() const {
     uint64_t n = 0;
+#if defined(CALIPER_HAVE_DRAW)
     for (const caliper_draw::DrawRuntime* rt : draw_runtimes()) n += rt->status().frames;
+#endif
     return n;
 }
 
 int64_t SceneView::program_step() const {
     int64_t step = -1;
+#if defined(CALIPER_HAVE_DRAW)
     for (const caliper_draw::DrawRuntime* rt : draw_runtimes()) step = std::max<int64_t>(step, rt->status().resource_step);
+#endif
     return step;
 }
 
