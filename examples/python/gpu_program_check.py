@@ -4,7 +4,8 @@
 It runs the transcript of the GPU programs acceptance test (tests/gpu_programs/transcript.jsonl): the hidden app
 with no script, and caliper-mcp as the agent's only way in. The agent starts a training script as a managed run
 and writes WGSL programs over its live tensors. A geometry program draws points in a scene panel, a pixels program
-shows in an image panel, and a material stage changes the look of the points. A program that declares a model
+shows in an image panel, and a piece that the agent writes restyles the points in orange and yellow after its first
+version, which has an error in its draw half, is refused with the file and line of the error. A program that declares a model
 tensor writable is refused, and a program over its time limit stops while training goes on. A toggle bound to an
 intervention raises the loss while it is on and releases it. No window opens.
 

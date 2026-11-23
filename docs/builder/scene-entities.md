@@ -36,7 +36,7 @@ options = { mode = "strip", y = "max", own = ["z"], width_px = 2.0 }
 | `options` | Table | No | The options of the draw kind |
 | `pose` | `{ position, rotation, scale }` | No | A translation, a quaternion `[x, y, z, w]` and a scale, all literals |
 
-The entities stand under the root `spec/` of the scene of the panel. A stage names the entity `terrain` as `spec/terrain`. The commands `entity.set` and `entity.remove` edit one entity. `panel.create` and `panel.patch` also take the array `entity`.
+The entities stand under the root `spec/` of the scene of the panel, thus the entity `terrain` has the path `spec/terrain` there. The commands `entity.set` and `entity.remove` edit one entity. `panel.create` and `panel.patch` also take the array `entity`.
 
 ## Draw Kinds
 

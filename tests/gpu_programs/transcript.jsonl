@@ -21,10 +21,16 @@
 {"step": "heat_passes", "passes": {"id": "heat", "more": 3}}
 {"step": "capture_pixels", "capture": "pixels", "panel": "heat"}
 {"step": "pixels_shown", "differs": {"a": "geometry", "b": "pixels", "min_pixels": 1000}}
-{"step": "material", "tool": "stage_set", "wgsl_file": "material.wgsl", "arguments": {"panel": "world", "entity": "programs/grid", "kind": "material"}}
-{"step": "material_compiled", "wait_program": {"id": "world/programs/grid/material", "states": ["compiled", "running"], "runs": 0}}
+{"step": "material_refused", "expect_error": {"tool": "piece_update", "code": "program.compile_failed", "names": ["draw.wgsl"], "piece_files": {"manifest": "material_piece.json", "derive": "material_derive.wgsl", "draw": "material_draw.wgsl"}, "piece_edit": {"draw": ["p.value * 4.0", "p.weight * 4.0"]}, "arguments": {}}}
+{"step": "material_piece", "tool": "piece_update", "piece_files": {"manifest": "material_piece.json", "derive": "material_derive.wgsl", "draw": "material_draw.wgsl"}, "arguments": {}}
+{"step": "material", "tool": "program_create", "arguments": {"id": "material", "title": "Material", "piece": {"name": "grid_material", "from": "workspace"}, "bind": {"w": "live:0.weight"}, "panel": "world"}}
+{"step": "material_derive", "wait_event": {"kind": "program", "program": "material", "change": "compiled", "host": "script", "half": "derive"}, "limit_s": 90}
+{"step": "material_draw", "wait_event": {"kind": "program", "program": "material", "change": "compiled", "host": "viewer", "half": "draw"}, "limit_s": 90}
+{"step": "material_running", "wait_program": {"id": "material", "states": ["running"], "runs": 2}}
+{"step": "material_drawn", "wait_draw": {"id": "material"}}
 {"step": "capture_material", "capture": "material"}
 {"step": "material_changed", "yellow_gain": {"before": "pixels", "after": "material", "min_after": 50, "ratio": 10}}
+{"step": "material_budget", "piece_budget": {"id": "material"}}
 {"step": "writer", "expect_error": {"tool": "program_create", "code": "program.writes_input", "wgsl_file": "writer.wgsl", "arguments": {"id": "writer", "inputs": [{"var": "w", "source": "live:0.weight"}], "output": {"kind": "geometry", "panel": "world", "part": "points", "max_count": 512, "arrays": ["positions", "values"]}}}}
 {"step": "writer_absent", "no_status": "writer"}
 {"step": "slow", "over_time": {"id": "slow", "wgsl_file": "slow.wgsl", "arguments": {"id": "slow", "inputs": [{"var": "w", "source": "live:2.weight"}], "output": {"kind": "pixels", "width": 16, "height": 16}, "limits": {"time_ms": 0.5}}, "steps_after": 20}}
