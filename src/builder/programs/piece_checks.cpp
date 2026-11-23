@@ -313,6 +313,7 @@ private:
     }
 
     Verdict resources() {
+        std::uint64_t published = 0;   // bytes of all published resources: what one pass sends to a viewer
         for (std::size_t i = 0; i < p_.resources.size(); ++i) {
             const spec::Resource& r = p_.resources[i];
             const std::string where = at("resources", i);
@@ -330,7 +331,7 @@ private:
                                 "The buffer " + quote(r.id) + " has count " + std::to_string(r.count) +
                                     "; a buffer has 1 to " + std::to_string(pl::kCountMax) + " elements.",
                                 where + ".count");
-                // A published buffer goes out in one RESOURCE frame, thus the wire's bound.
+                // A published buffer goes out with each pass that writes it, thus the bound of what the script sends.
                 const std::uint64_t max_bytes = r.publish ? pl::kPublishedBytesMax : pl::kResourceBytesMax;
                 if (bytes_of(r.count, l.stride) > max_bytes)
                     return fail(kProgramBadResource,
@@ -340,6 +341,7 @@ private:
                                 where + ".count");
                 if (r.width || r.height)
                     return fail(kProgramBadResource, "A buffer has no width or height.", where + ".width");
+                if (r.publish) published += bytes_of(r.count, l.stride);
             } else {
                 if (has_layout(r.layout) || r.count || r.counted)
                     return fail(kProgramBadResource,
@@ -349,7 +351,7 @@ private:
                                 "A texture's width and height are from 1 to " + std::to_string(pl::kTextureSideMax) +
                                     " pixels.",
                                 where + ".width");
-                // Four bytes a texel; a published texture fits one RESOURCE frame (4,096 by 4,096 does not).
+                // Four bytes a texel; a published texture of 1,448 by 1,448 fits, one of 2,048 by 2,048 does not.
                 const std::uint64_t bytes = std::uint64_t(r.width) * r.height * 4;
                 if (r.publish && bytes > pl::kPublishedBytesMax)
                     return fail(kProgramBadResource,
@@ -357,8 +359,15 @@ private:
                                     " bytes; a published resource holds at most " +
                                     std::to_string(pl::kPublishedBytesMax) + " bytes.",
                                 where + ".height");
+                if (r.publish) published += bytes;
             }
         }
+        if (published > pl::kPublishedBytesMax)
+            return fail(kProgramBadResource,
+                        "The published resources of the piece hold " + std::to_string(published) +
+                            " bytes together; a pass sends at most " + std::to_string(pl::kPublishedBytesMax) +
+                            " bytes to a viewer.",
+                        "resources");
         return {};
     }
 

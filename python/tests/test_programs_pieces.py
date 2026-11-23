@@ -254,24 +254,59 @@ def test_a_piece_without_a_derive_half_is_only_relayed(monkeypatch):
     assert ctl.posts[-1][1].meta["op"] == "remove"
 
 
-def test_a_viewer_behind_skips_versions_and_a_version_above_its_queue_goes_nowhere(monkeypatch):
+def _resource_frame(rid, data, pid="r", stride=4):
+    return w.encode_frame(P.RESOURCE_TYPE, {"program": pid, "resource": rid, "step": 1,
+                                            "count": len(data) // stride, "stride": stride},
+                          [w.Section(w.SECTION_RESOURCE, int(w.DType.U8), (len(data),), memoryview(data))])
+
+
+def test_a_viewer_behind_skips_a_whole_pass_and_gets_a_later_one_whole(monkeypatch):
     ctl = FakeControls()
     behind = FakeLink((w.CAP_PROGRAMS, w.CAP_RESOURCES))
-    behind.backlog = lambda: P.RESOURCE_BACKLOG_BYTES - 100
     ctl.server.producer.links.append(behind)
     monkeypatch.setattr(P, "_controls_ports", lambda: [ctl])
     p = P._Program("r", {}, "", None, "")
-    small = w.encode_frame(P.RESOURCE_TYPE, {"program": "r", "resource": "a", "step": 1, "count": 1, "stride": 4},
-                           [w.Section(w.SECTION_RESOURCE, int(w.DType.U8), (4,), memoryview(b"abcd"))])
-    P._send_resources(p, [small])
-    got = [(ln, f.type) for ln, f, _c in ctl.posts]
-    assert (ctl.link, P.RESOURCE_TYPE) in got and (behind, P.RESOURCE_TYPE) not in got
+    frames = [_resource_frame("a", b"abcd" * 64), _resource_frame("b", b"efgh" * 64)]
+    queued = [P.RESOURCE_BACKLOG_BYTES - len(frames[0]) - 10]   # room for the first frame only
+    behind.backlog = lambda: queued[0]
+    P._send_resources(p, frames)
+    got = [(ln, f.type, f.meta.get("resource")) for ln, f, _c in ctl.posts]
     assert got[0][1] == w.MsgType.PROGRAM            # the draw half first, to both viewers
+    assert [r for ln, t, r in got if ln is ctl.link and t == P.RESOURCE_TYPE] == ["a", "b"]
+    assert [r for ln, t, r in got if ln is behind and t == P.RESOURCE_TYPE] == []   # no pass in part
     assert p.skipped == 1 and p.error is None
-    big = b"x" * (P.RESOURCE_BACKLOG_BYTES + 1)
+    queued[0] = 0                                    # it caught up: the next pass goes whole
     ctl.posts.clear()
-    P._send_resources(p, [big])
-    assert not ctl.posts and p.error["code"] == "program.resource_too_large"
+    P._send_resources(p, frames)
+    assert [f.meta["resource"] for ln, f, _c in ctl.posts if ln is behind] == ["a", "b"]
+
+
+def test_the_published_bytes_that_a_manifest_passes_reach_a_viewer_with_an_empty_queue(monkeypatch):
+    """The library's points piece publishes 262,144 points of 32 bytes, 8 MiB, the most that the app's
+    check of a manifest passes (kPublishedBytesMax)."""
+    ctl = FakeControls()
+    monkeypatch.setattr(P, "_controls_ports", lambda: [ctl])
+    p = P._Program("points", {}, "", None, "")
+    P._send_resources(p, [_resource_frame("points", bytes(262144 * 32), "points", 32)])
+    res = [f for _l, f, _c in ctl.posts if f.type == P.RESOURCE_TYPE]
+    assert len(res) == 1 and res[0].meta["count"] == 262144
+    assert len(res[0].section(w.SECTION_RESOURCE).data) == 262144 * 32
+    assert p.error is None and p.skipped == 0
+    assert P.PUBLISHED_BYTES_MAX == 8 << 20 == 262144 * 32
+
+
+def test_versions_above_the_published_bytes_are_a_named_refusal_not_a_silent_drop():
+    class Runtime:
+        def resource(self, handle, rid):
+            return bytearray(P.PUBLISHED_BYTES_MAX // 2 + 4), (P.PUBLISHED_BYTES_MAX // 2 + 4) // 4, 4
+    p = P._Program("big", {}, "", None, "")
+    p.resources = [{"id": i, "kind": "buffer", "publish": True} for i in ("a", "b")]
+    p.written, p.sent_static, p.last_step = {"a", "b"}, True, 3
+    with pytest.raises(P._Refused) as e:
+        P._resource_frames(Runtime(), p)
+    assert e.value.error["code"] == "program.resource_too_large"
+    p.resources = p.resources[:1]                    # one of them alone fits
+    assert len(P._resource_frames(Runtime(), p)) == 1
 
 
 def test_a_relay_frame_carries_common_derive_and_draw_in_order():
@@ -368,6 +403,29 @@ fn add(@builtin(global_invocation_id) id: vec3<u32>) {
     to_late = [(f.type, f.meta.get("resource")) for ln, f, _c in ctl.posts if ln is late]
     assert to_late[0] == (w.MsgType.PROGRAM, None)  # the draw half, then the static labels
     assert (P.RESOURCE_TYPE, "labels") in to_late
+
+
+@needs_device
+def test_a_piece_whose_versions_no_viewer_takes_stops_with_a_named_error(attached):
+    """A manifest that skipped the app's check: a published buffer above PUBLISHED_BYTES_MAX."""
+    model, opt, ctl = attached
+    count = P.PUBLISHED_BYTES_MAX // 4 + 1024
+    big = {"name": "big", "version": 1, "inputs": [{"name": "t", "kind": "tensor"}],
+           "resources": [{"id": "v", "kind": "buffer", "element": "f32", "count": count}],
+           "derive": {"passes": [{"entry": "fill", "workgroups": [1, 1, 1], "writes": ["v"]}]}}
+    derive = """@compute @workgroup_size(64)
+fn fill(@builtin(global_invocation_id) id: vec3<u32>) {
+    v[id.x] = t[id.x];
+}
+"""
+    item = P.install_piece("big", piece=dict(PIN, name="big"), manifest=big, bind={"t": "live:attn0"},
+                           derive=derive)
+    assert item["state"] in ("compiled", "waiting"), item["error"]
+    _train(model, opt, 300)
+    st = next(x for x in P.status() if x["id"] == "big")
+    assert st["state"] == "stopped"
+    assert st["error"]["code"] == "program.resource_too_large"
+    assert not [f for _l, f, _c in ctl.posts if f.type == P.RESOURCE_TYPE]
 
 
 # ---- both senders -------------------------------------------------------------------------------
