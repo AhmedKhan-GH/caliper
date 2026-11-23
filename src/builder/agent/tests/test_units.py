@@ -120,6 +120,7 @@ def test_every_command_of_the_real_table_becomes_a_tool_strict_within_the_limits
     assert 10 <= len(strict) <= 20
     assert exceeded_limit([t.input_schema for t in strict], None) is None
     assert exceeded_limit([t.input_schema for t in tools], None) is not None
+    assert {"spec_set_text", "loader_run", "applet_open"} <= {t.name for t in strict}
     # A schema that exceeds the SDK budget alone remains available without strict mode.
     for tool in tools:
         if exceeded_limit([tool.input_schema], None) is not None:
