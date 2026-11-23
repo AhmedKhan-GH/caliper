@@ -292,3 +292,38 @@ def test_each_entity_part_keeps_its_scene_program():
     assert _scene_pieces.program_id("s", "y", "points") != a
     assert _scene_pieces.program_id("t", "x", "points") != a
     assert w.scene_program_id(a)
+
+
+def test_color_and_grey_images_in_the_piece_form(server):
+    flat = caliper.scene("flat", space="2d")
+    g = torch.Generator().manual_seed(4)
+    rgb = torch.rand(5, 7, 3, generator=g)                       # floats: converted to RGBA u8
+    grey = (torch.rand(4, 6, generator=g) * 255).to(torch.uint8)
+
+    async def body():
+        async with Viewer(server) as v:
+            await v.subscribe(1, "flat")
+            assert flat.image("rgb", rgb, opacity=0.5)
+            assert flat.image("grey", grey)
+            for path, h, wd, ch in (("rgb", 5, 7, 4), ("grey", 4, 6, 1)):
+                u = await v.update(path, "image")
+                assert u.piece == {"name": "image", "version": 1} and u.names == ["pixels"]
+                assert u.resources == {"pixels": h * wd, "info": 1} and u.arrays == {}
+                i = v.got.index(u)
+                info, pixels = v.got[i - 1], v.got[i - 2]
+                assert (pixels.resource, pixels.count, pixels.stride) == ("pixels", h * wd, 4)
+                assert (info.resource, info.count, info.stride) == ("info", 1, 80)
+                assert pixels.program == info.program == u.program
+                size = np.frombuffer(bytes_of(info), dtype="<u4")
+                assert size[:4].tolist() == [wd, h, ch, 0]
+                np.testing.assert_array_equal(np.frombuffer(bytes_of(info), dtype="<f4")[4:].reshape(4, 4), np.eye(4))
+                px = np.frombuffer(bytes_of(pixels), dtype=np.uint8).reshape(h, wd, 4)
+                if ch == 1:
+                    np.testing.assert_array_equal(px[..., 0], grey.numpy())
+                    np.testing.assert_array_equal(px[..., 1], grey.numpy())
+                    assert (px[..., 3] == 255).all()
+                else:
+                    want = (rgb.clamp(0, 1) * 255 + 0.5).to(torch.uint8).numpy()
+                    np.testing.assert_array_equal(px[..., :3], want)
+                    assert (px[..., 3] == 255).all() and u.params["opacity"] == 0.5
+    run(body())

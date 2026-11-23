@@ -24,9 +24,11 @@ __all__ = ["enabled", "program_id", "route", "pack", "unpack_points", "PINS"]
 
 # The library pieces of the parts that have a piece route, by name: the version whose resource
 # layout the packers write (src/builder/programs/library/pieces/<name>/<version>/piece.toml).
-PINS = {"points": {"name": "points", "version": 1}}
+PINS = {"points": {"name": "points", "version": 1}, "image": {"name": "image", "version": 1}}
 POINT_STRIDE = 32           # points@1 resource "points": Point {position: vec4<f32>, bits: u32, index: u32}
 POINTS_MAX = 4194304        # its count
+PIXELS_MAX = 2097120        # image@1 resource "pixels": Pixel {rgba: u32}, its count
+INFO_STRIDE = 80            # image@1 resource "info": ImageInfo {size: vec4<u32>, c0..c3: vec4<f32>}
 NAN_BITS = 0x7FC00000       # the bits of a point without a color source, as the scene view writes them
 
 _ids: dict = {}
@@ -56,6 +58,11 @@ def route(b) -> str | None:
         pos = (b.arrays or {}).get("positions")
         if pos is not None and pos.ndim == 2 and pos.shape[0] <= POINTS_MAX:
             return "points"
+    elif b.part == _wire.PART_IMAGE and b.params.get("form") == _wire.FORM_COLOR:
+        px = (b.arrays or {}).get("pixels")
+        if px is not None and px.dtype.itemsize == 1 and (px.ndim == 2 or (px.ndim == 3 and px.shape[2] == 4)) \
+                and 0 < px.shape[0] * px.shape[1] <= PIXELS_MAX:
+            return "image"
     return None
 
 
@@ -67,6 +74,9 @@ def pack(b, piece: str) -> tuple:
         return got
     if piece == "points":
         got = (_names(b), [("points", int(b.arrays["positions"].shape[0]), POINT_STRIDE, pack_points(b))])
+    elif piece == "image":
+        pixels, info = pack_image(b)
+        got = (_names(b), [("pixels", len(pixels) // 4, 4, pixels), ("info", 1, INFO_STRIDE, info)])
     else:
         raise ValueError(f"no piece route for {piece!r}")
     b.packed = got
@@ -108,6 +118,30 @@ def pack_points(b):
         out[:, 4] = NAN_BITS
     out[:, 5] = np.arange(n, dtype="<u4")
     return memoryview(out).cast("B")
+
+
+def pack_image(b):
+    """image@1's resources of a color image, as its derive half and the scene view write them:
+    ``pixels`` one packed RGBA (r | g << 8 | b << 16 | a << 24) a pixel, row by row, a grey image
+    (H, W) repeating its value in red, green and blue with alpha 255; ``info`` the width, the height,
+    the channels (1 or 4) and 0 as u32, then the identity pose as four f32 columns (the entity's
+    transform places the image)."""
+    import numpy as np
+    px = np.ascontiguousarray(b.arrays["pixels"], dtype=np.uint8)
+    h, w = int(px.shape[0]), int(px.shape[1])
+    if px.ndim == 2:
+        g = px.reshape(-1).astype("<u4")
+        pixels = memoryview(g | (g << 8) | (g << 16) | np.uint32(0xFF000000)).cast("B")
+        channels = 1
+    else:
+        pixels = memoryview(px.reshape(-1)).cast("B")
+        channels = 4
+    info = np.zeros(INFO_STRIDE // 4, dtype="<u4")
+    info[:4] = (w, h, channels, 0)
+    f = info.view("<f4")
+    for k in range(4):
+        f[4 + 4 * k + k] = 1.0
+    return pixels, memoryview(info).cast("B")
 
 
 def unpack_points(data, names: list, dims: int) -> dict:
