@@ -424,3 +424,71 @@ def test_depth_uses_one_scaled_texture(dtype, scale):
     assert frames[-1].params["scale"] == 1
     np.testing.assert_array_equal(arrays(frames[-1], resources)["pixels"], pixels.astype("<f4") * np.float32(scale))
     assert _scene_pieces.PIXELS_MAX == 8192 * 8192
+
+
+@pytest.mark.parametrize("delivery", ["python", "native"])
+@pytest.mark.parametrize("split", [False, True])
+def test_initial_bundles_stay_atomic_across_subscriptions(monkeypatch, delivery, split):
+    """Two subscriptions share program IDs, so each update must consume its own whole bundle."""
+    import collections
+    import threading
+    from types import SimpleNamespace
+    from caliper import _net_scene, _programs
+    from scene_piece_reader import Inbox
+
+    monkeypatch.setattr(_programs, "PART_BYTES", 64 if split else 8 << 20)
+    state = _scene.SceneState("shared", "3d", "+z", "", None)
+    monkeypatch.setitem(_scene.SCENES, state.name, state)
+    points = np.arange(24, dtype="<f4").reshape(8, 3)
+    for path, part, arrays, params in (("points", "points", {"positions": points}, {}),
+                                      ("lines", "lines", {"positions": points[:4]}, {"mode": "segments"})):
+        batch = _scene.Batch(state.name, path, part, 1, 0, True, params, {}, None, arrays=arrays)
+        state.static[(path, part)] = batch
+
+    sent = []
+    class NativeQueue:
+        def queued(self, conn):
+            return _net_scene.NATIVE_BACKLOG - 1  # One frame per pump turn.
+        def send(self, conn, frame, scene=False):
+            assert scene
+            sent.append(frame)
+            return True
+    class Link:
+        caps = PIECES
+        scenes = None
+        wake = threading.Event()
+        stats = collections.Counter()
+        conn = 1
+        p = SimpleNamespace(nio=NativeQueue())
+    link = Link()
+    route = _net_scene.SceneRoute(SimpleNamespace(_wake=lambda: None))
+    for sub in (1, 2):
+        route.join(link, SimpleNamespace(sub=sub, view=state.name, interval=0.0))
+    for _ in range(100):
+        if delivery == "python":
+            frame, _ = link.scenes.next_frame(0.0)
+            if frame is None:
+                break
+            sent.append(b"".join(bytes(part) for part in frame[0]))
+        else:
+            before = len(sent)
+            route.pump_native([link], 0.0)
+            if len(sent) == before:
+                break
+    else:
+        pytest.fail("startup state did not finish")
+
+    inbox, updates, split_parts = Inbox(), {}, 0
+    for frame in sent:
+        message = w.decode(frame)
+        split_parts += isinstance(message, w.Resource) and message.split is not None
+        inbox.take(message)
+        if isinstance(message, w.SceneUpdate):
+            assert message.state
+            updates[(message.sub, message.path)] = message
+    assert len(updates) == 4
+    assert bool(split_parts) == split
+    assert not inbox.held and not inbox.parts.open
+    for sub in (1, 2):
+        for path, expected in (("points", points), ("lines", points[:4])):
+            np.testing.assert_array_equal(updates[(sub, path)].arrays["positions"].array(), expected)

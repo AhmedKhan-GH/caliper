@@ -184,9 +184,13 @@ class SubQueue:
         """(message, None) for the next frame, else (None, seconds until one is due)."""
         if self.pieces:
             return self.pieces.popleft(), None
-        if self.state:
-            msg = self.state.popleft()
-            return msg, None
+        while self.state:
+            item = self.state.popleft()
+            # Initial batches use the same bundle continuation as live batches. A link must finish
+            # their resources and update before another subscription can use the same program ID.
+            msg = self.emit(item, True) if isinstance(item, Batch) else item
+            if msg is not None:
+                return msg, None
         if self.classes is not None:
             k, self.classes = self.classes, None
             return self.table(k, False), None
@@ -397,7 +401,7 @@ class SceneRoute:
             if b.arrays is None and b.ready() and not finish(b):
                 continue                               # refused: no receiver would take it
             if b.arrays is not None:
-                q.state.extend(q.frames(b, True))
+                q.state.append(b)
             else:
                 late.append(b)                         # the pump offers it once its copy is done
         if late:
