@@ -17,7 +17,7 @@ include(FetchContent)
 
 FetchContent_Declare(sternbild_tokens
     GIT_REPOSITORY https://github.com/AhmedKhan-GH/organization.git
-    GIT_TAG design-v1.1.0
+    GIT_TAG design-v2.0.0
     GIT_SHALLOW TRUE
     SOURCE_SUBDIR packages/sternbild-tokens-c)
 FetchContent_MakeAvailable(sternbild_tokens)
