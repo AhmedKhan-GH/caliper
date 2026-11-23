@@ -3,8 +3,11 @@
 // the instance form of PROGRAM set, with one version of each published resource as RESOURCE,
 // written here as the pieces' derive halves write them, thus no training runs:
 //
-//   library_boxes  twelve boxes in 3-D, some rotated, with RGBA of each box and translucent faces,
-//                  edges 3 pixels wide at a pixel ratio of 1.5
+//   library_boxes  twelve boxes in 3-D, some rotated, with RGBA of each box, edges 3 pixels wide at a
+//                  pixel ratio of 1.5 and a depth offset of 2. Without faces: the edges and the
+//                  faces of a box have one ID, the box, thus the comparison would hold the border of
+//                  an edge over a face to the levels of an interior pixel, and two renderers
+//                  rasterize that border a pixel apart
 //   library_mesh   a height field of 32 by 32 vertices lit from its normals, colored by values
 //                  through viridis
 //
@@ -210,8 +213,9 @@ inline void add_boxes_mesh(std::vector<std::uint8_t>* frames, Plan* plan, std::s
     caliper_net::wire::Program m;
     Json values = Json::object();
     values.set("width", 3.0);
-    values.set("fill", 1);
+    values.set("fill", 0);
     values.set("color_mode", 1);
+    values.set("depth_offset", 2);
     if (!bm::library_piece("boxes", &boxes, &why) || !bm::program(boxes, "library_boxes", "boxes", values, &m, &why)) {
         if (error->empty()) *error = why;
         return;
