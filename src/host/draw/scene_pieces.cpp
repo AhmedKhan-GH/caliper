@@ -650,6 +650,7 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
     bool changed = false;
     std::vector<std::uint32_t> texels;
     const bool through = bool(state.through);
+    bool overlay_fell = false;   // an entity of the looked-through camera's pixel space keeps the built-in
     if (!frustum_) {
         frustum_ = std::make_shared<Converted>();
         frustum_->piece = "frustum";
@@ -669,11 +670,9 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
         const std::string& path = tree.path(e);
         // A camera entity's frustum: frustum@1, with the camera's frame and image plane in its
         // matrix as the scene core composes them; none in 2-D, as the scene core draws none.
-        if (const caliper_scene::Pinhole* pin = tree.camera(e); pin && state.three_d) {
-            if (through) {
-                ++counts_.builtin;
-                ++counts_.fallbacks["view through a camera"];
-            } else if (!frustum_->fallback.empty()) {
+        // The camera looked through draws no frustum, as in the scene core.
+        if (const caliper_scene::Pinhole* pin = tree.camera(e); pin && state.three_d && e != state.through) {
+            if (!frustum_->fallback.empty()) {
                 ++counts_.builtin;
                 ++counts_.fallbacks[frustum_->fallback];
             } else {
@@ -709,9 +708,13 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
             const Primitive prim = Primitive(k);
             const Batch* b = tree.batch(e, prim);
             if (!b || b->count() == 0) continue;
+            const EntityId pcam = tree.pixel_space_of(e);
+            // Looking through a camera, the entities of its pixel space lie flat over the picture.
+            const bool overlay = through && pcam && pcam == state.through;
             auto fall = [&](const std::string& kind) {
                 ++counts_.builtin;
                 ++counts_.fallbacks[kind];
+                overlay_fell = overlay_fell || overlay;
             };
             std::shared_ptr<Converted> c;
             if (auto o = overrides_.find({path, k}); o != overrides_.end()) c = o->second;
@@ -722,11 +725,6 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
             }
             if (!c->fallback.empty()) {
                 fall(c->fallback);
-                continue;
-            }
-            const EntityId pcam = tree.pixel_space_of(e);
-            if (through) {
-                fall("view through a camera");
                 continue;
             }
             if (state.stage && state.stage(path, prim)) {
@@ -745,8 +743,9 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
             pr->primitive = prim;
             pr->conv = c;
             pr->piece = piece;
-            pr->model = tree.world(e);
-            pr->depth_offset = state.three_d ? b->depth_offset : 0;
+            pr->overlay = overlay;
+            pr->model = overlay ? tree.pixel_local(e) : tree.world(e);
+            pr->depth_offset = state.three_d && !overlay ? b->depth_offset : 0;
             pr->is_image = prim == Primitive::Image;
             pr->camera = pcam ? pcam.index + 1 : 0;
             pr->translucent = b->translucent || (prim == Primitive::Image && b->opacity < 1.0f) ||
@@ -801,7 +800,7 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
                 case Primitive::Image: {
                     v = {{"opacity", b->opacity}, {"scale", 1.0}, {"placement", 0.0}};
                     if (c->piece == "depth") {
-                        const bool cloud = b->cloud && bool(pcam);
+                        const bool cloud = b->cloud && bool(pcam) && !overlay;
                         v.insert(v.end(), {{"colormap", double(b->colormap)}, {"vmin", b->vmin}, {"vmax", b->vmax},
                                            {"auto_range", 0.0}, {"cloud", cloud ? 1.0 : 0.0}});
                         if (cloud) {
@@ -862,6 +861,16 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
             next.push_back(std::move(pr));
         }
     }
+    // The scene core draws the pixel space of a camera looked through flat over everything, in its
+    // own order and without a depth test; a piece draws after the scene core's frame. Thus when one
+    // entity there keeps the built-in draw, every shape keeps it, so that nothing a piece draws
+    // lands over that flat layer or under it out of order.
+    if (overlay_fell && !next.empty()) {
+        counts_.fallbacks["view through a camera with a built-in overlay"] += std::uint32_t(next.size());
+        counts_.builtin += std::uint32_t(next.size());
+        counts_.pieces = 0;
+        next.clear();
+    }
     // The scene core's order: opaque, then translucent, in path order within each; a camera's
     // plane with a translucent image draws with the translucent group, its images first.
     std::vector<std::uint32_t> translucent_planes;
@@ -870,7 +879,7 @@ void ScenePieces::sync(const caliper_scene::SceneTree& tree, const SyncState& st
     for (auto& pr : next) {
         const bool plane = pr->camera && std::find(translucent_planes.begin(), translucent_planes.end(), pr->camera) !=
                                              translucent_planes.end();
-        pr->group = plane || pr->translucent ? 1 : 0;
+        pr->group = pr->overlay ? 2 : plane || pr->translucent ? 1 : 0;
         pr->sub = pr->camera && !pr->is_image ? 1 : 0;
     }
     std::stable_sort(next.begin(), next.end(), [](const std::unique_ptr<Program>& a, const std::unique_ptr<Program>& b) {
@@ -925,6 +934,11 @@ bool ScenePieces::owns(std::uint32_t pick_id) const {
 
 bool ScenePieces::hit(const caliper_scene::FrameHit& fh, const caliper_scene::PickWindow& w, caliper_scene::Hit* out) const {
     if (!tree_) return false;
+    // Outside the picture of a camera looked through, the scene core picks nothing.
+    const int32_t px = w.x0 + fh.texel[0], py = w.y0 + fh.texel[1];
+    if (px < int32_t(cm_.scissor[0]) || py < int32_t(cm_.scissor[1]) || px >= int32_t(cm_.scissor[0]) + cm_.scissor[2] ||
+        py >= int32_t(cm_.scissor[1]) + cm_.scissor[3])
+        return false;
     for (const auto& pr : programs_) {
         if (pr->pick_id != fh.pick_id) continue;
         const Converted& c = *pr->conv;
@@ -945,8 +959,9 @@ bool ScenePieces::hit(const caliper_scene::FrameHit& fh, const caliper_scene::Pi
             h.pixel[1] = fh.item / c.width;
         }
         h.depth = fh.depth;
+        h.overlay = pr->overlay;
         Mat4 inv;
-        if (h.depth < 1.0f && w.view_width > 0 && w.view_height > 0 && caliper_scene::inverse(cm_.proj * cm_.view, &inv)) {
+        if (!pr->overlay && h.depth < 1.0f && w.view_width > 0 && w.view_height > 0 && caliper_scene::inverse(cm_.proj * cm_.view, &inv)) {
             const double cx = w.x0 + fh.texel[0] + 0.5, cy = w.y0 + fh.texel[1] + 0.5;
             const double X = 2.0 * cx / w.view_width - 1.0, Y = 1.0 - 2.0 * cy / w.view_height, Z = h.depth;
             double p[4];
@@ -1008,8 +1023,12 @@ void ScenePieces::frame(DrawRuntime& runtime, FrameInputs* in) {
     in->live = true;
     // The batch's matrix as the scene core composes it: in double, the depth offset in clip space,
     // rounded to f32 once.
-    const Mat4 vm = cm_.view * pr->model;
-    Mat4 mvp = cm_.proj * vm;
+    const Mat4 vm = pr->overlay ? pr->model : cm_.view * pr->model;
+    Mat4 mvp = pr->overlay ? cm_.pixel_to_clip * pr->model : cm_.proj * vm;
+    // An overlay is drawn flat over the picture without a depth test in the scene core: at clip
+    // depth 0 it passes the test of every piece and draws over what the frame drew before it.
+    if (pr->overlay)
+        for (int c = 0; c < 4; ++c) mvp.at(2, c) = 0.0;
     if (pr->depth_offset != 0) {
         Mat4 d;
         d.m[14] = -double(pr->depth_offset) * caliper_scene::kDepthOffsetUnit;

@@ -470,6 +470,9 @@ private:
     bool shape_has_hit_ = false;
     uint64_t shape_generation_ = 0;   // the frame the shapes' pick reads; a newer one drops it
     void sync_shapes();
+    // The letterbox's bars over the shapes' pieces while the view looks through a pinhole.
+    caliper_scene::SceneCompiler bar_compiler_;
+    void paint_bars(const caliper_scene::CameraMatrices& cm);
     bool external_draws() const;
     caliper_draw::DrawFeed* slot_feed(const ProgramSlot& slot) const;
     caliper_draw::DrawFeed* draw_feed_ = nullptr;

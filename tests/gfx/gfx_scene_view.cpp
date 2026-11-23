@@ -1579,13 +1579,27 @@ void compare_fixture(const std::string& name, ViewRig& pieces, ViewRig& builtin,
 // Every fixture of the primitive rows and the demo's scene, drawn by the library pieces and by the
 // built-in draw through the switch of the scene view (ShapeDraw), compare under the rules of the
 // pieces' match tests, and their picks agree. Images take 1 level inside, as image@1's match does
-// (its bilinear filter is written in WGSL). The view through a camera draws every shape with the
-// built-in draw, counted as a fallback. CALIPER_GFX_CAPTURE_DIR=<folder> writes each pair and its
+// (its bilinear filter is written in WGSL). The fixture "through" looks through a camera entity
+// whose pixel space holds points of radii in scene units, which no piece draws, thus every shape
+// keeps the built-in draw; "through-pieces" is the same view without them. CALIPER_GFX_CAPTURE_DIR=<folder> writes each pair and its
 // difference times 32 there.
 TEST_CASE("gfx/Metal scene view: shapes drawn by the library pieces match the built-in draw, with the same picks") {
     ViewRig probe;
     if (!probe.init()) CALIPER_SKIP_NO_GPU("no Metal device");
-    for (const primitive_fixtures::Fixture& f : primitive_fixtures::all()) {
+    std::vector<primitive_fixtures::Fixture> fixtures = primitive_fixtures::all();
+    // The view through a camera without the points of radii in scene units, which keep the built-in
+    // draw and with it every shape of a view through a camera: the pinhole frames the pieces, the
+    // camera's pixel space lies flat over the picture, and the letterbox's bars keep the ground.
+    primitive_fixtures::Fixture flat = primitive_fixtures::through();
+    flat.name = "through-pieces";
+    flat.messages.erase(std::remove_if(flat.messages.begin(), flat.messages.end(),
+                                       [](const wire::Message& m) {
+                                           const auto* u = std::get_if<wire::SceneUpdate>(&m);
+                                           return u && u->array("radii") != nullptr;
+                                       }),
+                        flat.messages.end());
+    fixtures.push_back(flat);
+    for (const primitive_fixtures::Fixture& f : fixtures) {
         CAPTURE(f.name);
         ViewRig pr, br;
         REQUIRE(pr.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str(), caliper_live_views::ShapeDraw::pieces));
@@ -1596,8 +1610,8 @@ TEST_CASE("gfx/Metal scene view: shapes drawn by the library pieces match the bu
         REQUIRE_MESSAGE(rp.draw(*pr.view), rp.error);
         REQUIRE_MESSAGE(rb.draw(*br.view), rb.error);
         const SceneShapeCounts counts = pr.view->shape_counts();
-        if (f.look_through.empty()) CHECK_MESSAGE(counts.pieces > 0, f.name, " draws no shape with a piece");
-        else CHECK(counts.pieces == 0);
+        if (f.name == "through") CHECK(counts.fallbacks.count("view through a camera with a built-in overlay") == 1);
+        else CHECK_MESSAGE(counts.pieces > 0, f.name, " draws no shape with a piece");
         compare_fixture(f.name, pr, br, int(primitive_fixtures::kSize), f.name == "images" ? 1 : 0);
     }
     {

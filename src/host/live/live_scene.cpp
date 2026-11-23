@@ -1294,12 +1294,20 @@ void SceneView::draw_programs() {
     target.width = width_;
     target.height = height_;
     target.colormaps = program_colormaps_;
+    const caliper_scene::CameraMatrices shape_cm = caliper_scene::camera_matrices(cam, tree_, width_, height_);
 #if defined(CALIPER_SCENE_PIECES)
     // The shapes' matrices are the scene core's, of the camera it drew with.
-    if (shapes_) shapes_->set_camera(caliper_scene::camera_matrices(cam, tree_, width_, height_));
+    if (shapes_) shapes_->set_camera(shape_cm);
 #endif
+    bool shapes_drawn = false;
     for (auto& d : draws_) {
         if (!d->runtime) continue;
+        // After the last shape's piece, the letterbox's bars of a pinhole looked through.
+        if (!d->shape && shapes_drawn) {
+            paint_bars(shape_cm);
+            shapes_drawn = false;
+        }
+        shapes_drawn = shapes_drawn || d->shape;
         caliper_draw::DrawFeed* feed = slot_feed(*d);
         caliper_draw::FrameInputs in = base;
         in.time_s = std::chrono::duration<double>(now - d->installed).count();
@@ -1317,7 +1325,60 @@ void SceneView::draw_programs() {
         }
         report_state(feed, &d->reported, &d->reported_step, *d->runtime);
     }
+    if (shapes_drawn) paint_bars(shape_cm);
 #endif
+}
+
+void SceneView::paint_bars(const caliper_scene::CameraMatrices& cm) {
+    const uint32_t x0 = cm.scissor[0], y0 = cm.scissor[1];
+    const uint32_t x1 = std::min<uint32_t>(width_, x0 + cm.scissor[2]), y1 = std::min<uint32_t>(height_, y0 + cm.scissor[3]);
+    if (!cm.through || (x0 == 0 && y0 == 0 && x1 >= width_ && y1 >= height_)) return;
+    if (!dim_texture_ || dim_rgba_ != clear_) {
+        if (!dim_texture_)
+            dim_texture_ = gfx_.create_texture({1, 1, caliper_gfx::Format::RGBA8Unorm,
+                                                caliper_gfx::kSampled | caliper_gfx::kCopyDstTex, "scene dim"});
+        const uint32_t ground = clear_ | 0xff000000u;
+        if (dim_texture_ && gfx_.write_texture(dim_texture_, &ground, 4)) dim_rgba_ = clear_;
+    }
+    if (!dim_texture_) return;
+    // The scene core scissors its draws to the picture and a piece draws the whole target, thus the
+    // bars take the ground again: the rectangles above, below, left of and right of the picture.
+    const uint32_t rects[4][4] = {{0, 0, width_, y0}, {0, y1, width_, height_ - std::min(height_, y1)},
+                                  {0, y0, x0, y1 - std::min(y1, y0)}, {x1, y0, width_ - std::min(width_, x1), y1 - std::min(y1, y0)}};
+    SceneTree bars(Space::k2D);
+    std::string err;
+    for (int k = 0; k < 4; ++k) {
+        if (rects[k][2] == 0 || rects[k][3] == 0) continue;
+        const EntityId e = bars.ensure("bar" + std::to_string(k), &err);
+        if (!e) continue;
+        bars.set_transform(e, caliper_scene::translation({double(rects[k][0]), double(rects[k][1]), 0.0}), false, &err);
+        Batch q;
+        q.primitive = Primitive::Image;
+        q.texture = dim_texture_;
+        q.image_width = rects[k][2];
+        q.image_height = rects[k][3];
+        q.opacity = 1.0f;
+        bars.set_batch(e, q, false, &err);
+    }
+    bars.update();
+    PanZoom pz;
+    pz.center[0] = width_ * 0.5;
+    pz.center[1] = height_ * 0.5;
+    pz.half_height = height_ * 0.5;
+    pz.y_down = true;
+    caliper_gfx::RenderTarget over;
+    over.color = color_;
+    over.clear = false;
+    caliper_gfx::DrawList dl(over);
+    CompileOptions o;
+    o.width = width_;
+    o.height = height_;
+    o.pixel_scale = scale_;
+    o.clear_rgba = clear_;
+    if (!bar_compiler_.compile(bars, pz, o, *res_, dl, nullptr).ok) return;
+    caliper_gfx::Frame f;
+    f.render(std::move(dl));
+    if (gfx_.submit(std::move(f)) == 0) note("the layer refused the letterbox: " + gfx_.last_error());
 }
 
 void SceneView::poll_programs() {
