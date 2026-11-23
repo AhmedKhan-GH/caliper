@@ -422,6 +422,10 @@ def steps(r):
     slow = dict(pieces["attention_arcs"])
     slow["name"] = "attention_arcs_slow"
     slow["params"] = list(slow["params"]) + [{"name": "burn", "default": 20000.0, "min": 0.0, "max": 100000.0}]
+    # The draw half's loop holds the GPU that the script's derive half shares, which can put a derive pass of 4 ms,
+    # the default, over its limit three times in a row before the draw half's 30 frames: the copy's derive half
+    # takes the highest limit, and the wait below takes the draw half's stop only.
+    slow["derive"] = dict(slow["derive"], time_ms=50.0)
     d = re.sub(r"( *)return (sum \* [0-9.]+ \* params\.glow);",
                r"\1var burn = 0.0;\n\1for (var i = 0u; i < u32(params.burn); i = i + 1u) {\n"
                r"\1    burn = burn + sin(f32(i) * 0.001 + in.uv.x) * 0.0000001;\n\1}\n"
@@ -436,7 +440,8 @@ def steps(r):
     r.call("program_create", {"id": "slow_arcs", "title": "Slow Arcs", "piece": {"name": "attention_arcs_slow",
            "version": 1, "from": "workspace"}, "panel": "slow", "bind": binds, "params": {"threshold": 0.05}})
     r.call("panel_patch", {"id": "slow", "patch": {"bind": {"scene": None}, "options": {"exclude": None}}})
-    stop = c.event("the slow draw stopped", {"kind": "program", "program": "slow_arcs", "change": "stopped"}, 180)
+    stop = c.event("the slow draw stopped",
+                   {"kind": "program", "program": "slow_arcs", "change": "stopped", "half": "draw"}, 180)
     st = c.status("slow_arcs") or {}
     draw = st.get("draw") or {}
     err = draw.get("error") or {}
