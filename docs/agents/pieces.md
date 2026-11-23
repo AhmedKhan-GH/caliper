@@ -178,11 +178,11 @@ The hash identifies what runs. It is the SHA-256 of these bytes, in lowercase he
 2. The manifest as RFC 8785 canonical JSON, without `hash` and without the files.
 3. For each imported module in the order of `imports`, and then for each of `common.wgsl`, `derive.wgsl` and `draw.wgsl` that the piece has, a line `--- <part> <bytes>` and the text with LF line ends.
 
-The hash covers the text of the imported modules, because they run. It does not cover the samples. The canonical JSON and the LF line ends make the hash the same on every platform and in every language that computes it. The editor, the script and the browser module all compute it.
+The hash covers the text of the imported modules, because they run. It does not cover the samples. The canonical JSON and the LF line ends make the hash the same on every platform and in every language that computes it. The editor, the app and the browser module compute it.
 
 A program pins its piece by name, version, hash and source. The pin is `piece = { name = "...", version = 1, hash = "sha256:...", from = "workspace" }`. The editor writes the hash when the pin has none. A program keeps its pinned version until `program.patch` pins another one, and `piece.update` never changes a saved version.
 
-When the source of a pin lacks the piece, the state of the program is `refused` with `piece.missing`. When the piece has another hash than the pin, the state is `refused` with `piece.hash_mismatch`. In both cases the spec still opens, and the app never pins another version on its own. The person or the agent restores the folder, or pins an existing version with `program.patch`. A script and a browser viewer compute the hash again from what they receive. A hash that differs from the pin refuses the program.
+When the source of a pin lacks the piece, the state of the program is `refused` with `piece.missing`. When the piece has another hash than the pin, the state is `refused` with `piece.hash_mismatch`. In both cases the spec still opens, and the app never pins another version on its own. The person or the agent restores the folder, or pins an existing version with `program.patch`. The app computes the hash from the files that it sends, and it sends a program to the script only when that hash equals the pin. The script checks only the form of the pin's hash, because the derive half comes with its imports resolved and without the manifest. A browser viewer computes the hash again from the sections that it receives, and a hash that differs from the pin refuses the program.
 
 ### Foreign Specs
 

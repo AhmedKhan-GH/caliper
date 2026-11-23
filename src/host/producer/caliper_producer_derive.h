@@ -77,7 +77,9 @@ typedef struct caliper_producer_derive_pass {
  * parse of its PROGRAM declaration. */
 typedef struct caliper_producer_derive_desc {
     const char* id;                   /* the program's id                                     */
-    const char* piece_hash;           /* "sha256:<hex>", which the runtime checks again       */
+    const char* piece_hash;           /* "sha256:<hex>" of the pin; the runtime checks its    */
+                                      /* form only, and the app compared the hash of the      */
+                                      /* files with the pin before it sent the program        */
     const char* wgsl;                 /* derive.wgsl, imports resolved                        */
     size_t wgsl_size;
     const char* common;               /* the lib modules and common.wgsl, or NULL             */
