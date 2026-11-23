@@ -162,3 +162,25 @@ test('a panel view_camera starts the scene camera with its angles, target and di
   expect(orbit[4]).toBeCloseTo(40 * deg, 9);
   expect(orbit[5]).toBeCloseTo(25 * deg, 9);
 });
+
+
+test('removing the last program hides its canvas and clears its resources', async ({ page }) => {
+  const { spec, app } = await openRecorded(page);
+  const panels = app.data[spec.applet.id];
+  const original = panels.tower;
+  panels.tower = { ...original, version: 'empty-programs', data: { ...original.data, programs: [] } };
+  await page.waitForFunction(() => {
+    const views = (window as any).caliperSpec.programs;
+    const mount = views.mounts.get('tower');
+    return mount && !views.has('tower') && mount.fed.size === 0 && mount.versions.size === 0 &&
+      mount.box.style.display === 'none';
+  });
+  panels.tower = { ...original, version: 'restored-programs' };
+  await page.waitForFunction(() => {
+    const views = (window as any).caliperSpec.programs;
+    const mount = views.mounts.get('tower');
+    const programs = (window as any).caliperSpec.debugState().programs.tower.programs;
+    return views.has('tower') && mount.box.style.display === 'block' &&
+      programs.length > 0 && programs.every((p: any) => p.module === 'running' && p.frames >= 1);
+  });
+});

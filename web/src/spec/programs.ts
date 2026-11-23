@@ -140,7 +140,11 @@ export class ProgramViews {
   update(panel: SpecPanel, programs: ViewerProgram[]): void {
     let m = this.mounts.get(panel.id);
     if (!programs.length) {
-      if (m) m.programs = [];
+      if (m) {
+        m.programs = [];
+        m.box.style.display = 'none';
+        this.feed(m);
+      }
       return;
     }
     if (!m) {
@@ -197,6 +201,7 @@ export class ProgramViews {
       if (!wanted.has(id) && h.feedProgram({ op: 'remove', id })) {
         m.fed.delete(id);
         m.params.delete(id);
+        for (const key of [...m.versions.keys()]) if (key.startsWith(`${id}/`)) m.versions.delete(key);
       }
     for (const p of m.programs) {
       if (p.state !== 'ready' || !p.instance) continue;
