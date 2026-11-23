@@ -307,7 +307,7 @@ TEST_CASE("arrows_match: NaN, length 0, the depth offset, one arrow and the edge
 TEST_CASE("arrows_match: the most arrows that the piece publishes, and the count above them") {
     Metal m;
     if (!m.backend) CALIPER_SKIP_NO_GPU(m.why);
-    constexpr std::uint32_t kMost = 262143;
+    constexpr std::uint32_t kMost = 1048576;
     Arrows l;
     Lcg r(9);
     l.origins.reserve(std::size_t(kMost) * 3);
@@ -333,9 +333,9 @@ TEST_CASE("arrows_match: the most arrows that the piece publishes, and the count
         make_program(m, "arrows", tensors_of(l), params_of(l), kPick, &p);
         CHECK(find_published(p.published, "arrows")->count == kMost);
         const Drawn drawn = draw_programs(*m.backend, {&p}, mvp);
-        check_case("262,143 arrows", b, builtin, drawn, p, {0, kMost - 1}, index_of, 1);
+        check_case("1,048,576 arrows", b, builtin, drawn, p, {0, kMost - 1}, index_of, 1);
     }
-    {   // Above the published limit the piece draws its first 262,143 arrows.
+    {   // Above the published limit the piece draws its first 1,048,576 arrows.
         Arrows more = l;
         for (int k = 0; k < 10; ++k) {
             more.origins.insert(more.origins.end(), {0.0f, 0.0f, 0.0f});
@@ -345,7 +345,7 @@ TEST_CASE("arrows_match: the most arrows that the piece publishes, and the count
         Program p;
         make_program(m, "arrows", tensors_of(more), params_of(more), kPick, &p);
         CHECK(find_published(p.published, "arrows")->count == kMost);
-        MESSAGE("262,153 arrows publish ", find_published(p.published, "arrows")->count);
+        MESSAGE("1,048,586 arrows publish ", find_published(p.published, "arrows")->count);
     }
 }
 
