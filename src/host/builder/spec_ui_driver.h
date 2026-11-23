@@ -70,7 +70,7 @@
 //                        opens the panel's menu ("menu:remove" is its Remove
 //                        panel); the page's "remove:<panel>" is the × on a
 //                        panel's strip, which a click works without hovering
-//   drag <item> [fx fy] to <item> [fx fy] [right] [stale] [hold]
+//   drag <item> [fx fy] to <item> [fx fy] [right] [stale] [steps <n>] [hold]
 //                        a press on the first, a move in steps to the second
 //                        and a release there, or none with `hold`; with
 //                        `right`, of the right button (a scene panel's pan)
@@ -78,7 +78,10 @@
 //                        that got no cursor moves before the press: the
 //                        pointer was last seen at the second item, and the
 //                        press on the first comes through the platform's
-//                        callback (set_platform_button)
+//                        callback (set_platform_button); with `steps`, in n
+//                        moves, one each frame, instead of 14 (a fraction
+//                        above 1 is points from the item's left or top edge,
+//                        so that a drag of n points moves one point a frame)
 //   release              lets go of a held drag
 //   selection <path>     writes the page's selection as JSON to <path>
 //                        (SpecPage::selection_json()), once there is one
@@ -388,14 +391,17 @@ public:
             return;
         }
         if (s.verb == "drag") {
-            // drag <a> [fx fy] to <b> [fx fy] [right] [hold]
+            // drag <a> [fx fy] to <b> [fx fy] [right] [stale] [steps <n>] [hold]
             std::stringstream words(s.arg);
             std::vector<std::string> w;
             bool right = false, stale = false;
+            int steps = 14;
             for (std::string t; words >> t;) {
                 if (t == "right") right = true;
                 else if (t == "stale") stale = true;
-                else w.push_back(t);
+                else if (t == "steps") {
+                    if (!(words >> steps) || steps < 1) return void(error_ = "drag steps needs a count of 1 or more");
+                } else w.push_back(t);
             }
             if (stale && !platform_button_) return void(error_ = "drag stale: the app gave no platform press");
             const int button = right ? 1 : 0;
@@ -407,7 +413,6 @@ public:
             const bool b_frac = b + 2 < w.size() || (b + 2 == w.size() && w.back() != "hold");
             const float bfx = b_frac ? (float)std::atof(w[b + 1].c_str()) : 0.5f, bfy = b_frac ? (float)std::atof(w[b + 2].c_str()) : 0.5f;
             const bool hold = w.back() == "hold" && !right;
-            constexpr int kSteps = 14;
             if (drag_frame_ == 0) {
                 if (!item_point(page, w[0], afx, afy, &drag_a_[0], &drag_a_[1]) ||
                     !item_point(page, w[b], bfx, bfy, &drag_b_[0], &drag_b_[1]))
@@ -423,12 +428,12 @@ public:
             } else if (drag_frame_ == -1) {
                 platform_button_(button, true, drag_a_[0], drag_a_[1]);
                 drag_frame_ = 1;
-            } else if (drag_frame_ <= kSteps) {
-                const float t = (float)drag_frame_ / (float)kSteps;
+            } else if (drag_frame_ <= steps) {
+                const float t = (float)drag_frame_ / (float)steps;
                 io.AddMousePosEvent(std::round(drag_a_[0] + (drag_b_[0] - drag_a_[0]) * t),
                                     std::round(drag_a_[1] + (drag_b_[1] - drag_a_[1]) * t));
                 ++drag_frame_;
-            } else if (drag_frame_ == kSteps + 1) {
+            } else if (drag_frame_ == steps + 1) {
                 ++drag_frame_;   // one more frame at the target, so the drop's zone is read there
             } else {
                 if (!hold) io.AddMouseButtonEvent(button, false);
