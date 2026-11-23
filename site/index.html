@@ -45,9 +45,9 @@
   .wrap { max-width: var(--max); margin: 0 auto; padding: 0 28px; }
   .caps { font-family: var(--text); text-transform: uppercase; font-weight: normal; }
 
-  /* Corners: the 45-degree cut is kept for what matters, the mark and the primary action, as in the app marks'
-     frames. Everything else, buttons, chips, cards, code and figures, takes a small radius, and the app's own
-     window keeps the desktop's rounded corners. */
+  /* Corners: the 45-degree cut belongs to the mark only, as in the app marks' frames. Everything else, buttons,
+     chips, cards, code and figures, takes a small radius, and the app's own window keeps the desktop's rounded
+     corners. */
 
   /* Buttons: inscriptional caps on a ruled plate. */
   .btn { --c: 8px; display: inline-flex; align-items: center; gap: 10px; padding: 12px 22px 11px; font: 14px/1 var(--text);
@@ -197,8 +197,6 @@
   .two { display: grid; grid-template-columns: 1fr 1.1fr; gap: 56px; align-items: start; }
   .link { font: 13px/1 var(--text); letter-spacing: .18em; text-transform: uppercase; color: var(--bronze); }
   .link:hover { color: var(--bronze-hover); }
-
-  /* The pipeline figure: three cut plates joined by rules. */
 
   /* The VRAM-path figures: memory as bands, the data path in bronze, the path not taken faint. */
   .mech-fig { margin: 0 0 72px; scroll-margin-top: 90px; }

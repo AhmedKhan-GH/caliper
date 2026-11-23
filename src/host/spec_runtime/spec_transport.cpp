@@ -4,6 +4,7 @@
 // into the value store, so that references to the state `cursor` and the
 // panels that read kept steps follow it. A hold never pauses the run.
 #include "spec_runtime/spec_transport.h"
+#include "ui/sternbild_theme.h"
 
 #include <caliper_builder/session/events.h>
 #include <caliper_builder/session/history.h>
@@ -208,7 +209,7 @@ void draw_cursor_line(const spec::Panel& panel, const SpecInstrumentHost& host) 
     ImDrawList* dl = ImPlot::GetPlotDrawList();
     const ImVec2 top = ImPlot::PlotToPixels(x, limits.Y.Max);
     const ImVec2 bottom = ImPlot::PlotToPixels(x, limits.Y.Min);
-    const ImU32 color = ImGui::GetColorU32(ImVec4(0xb3 / 255.0f, 0x8b / 255.0f, 0x59 / 255.0f, 1.0f));
+    const ImU32 color = ImGui::GetColorU32(sternbild::col::bronze);
     ImPlot::PushPlotClipRect();
     dl->AddLine(ImVec2(std::round(top.x) + 0.5f, top.y), ImVec2(std::round(bottom.x) + 0.5f, bottom.y), color, 1.5f);
     const std::string label = std::to_string(c.step);

@@ -1,6 +1,6 @@
 // ============================================================================
 // Sternbild house style for the Caliper chrome: the ImGui style table, the
-// draw-list primitives (rules, cut plate, star, diamond, mark, tracked text)
+// draw-list primitives (rules, star, diamond, mark, tracked text)
 // and the dense workstation widgets declared in sternbild_theme.h.
 //
 // UX patterns this file leans on, named where they apply:
@@ -33,23 +33,32 @@ namespace {
 constexpr float half_floor(float v) {
     return static_cast<float>(static_cast<int>(v * 0.5f));
 }
-constexpr ImVec2 kCellPadding(6.0f, half_floor(metric::row - font_size::mono));
-constexpr ImVec2 kFramePadding(6.0f, half_floor(metric::pane_header - font_size::ui));
+// BEGIN values without a token
+// Metrics the app draws that the design tokens do not cover. Each one is
+// Caliper's own constant; a token that names the same metric replaces it here.
+// The 4 px spacing scale of the tokens has no 6 px step. Caliper keeps this
+// metric: the gap of a key to its action, the side padding of cells and frames,
+// the inner item spacing and the vertical window padding.
+constexpr float kTightGap = 6.0f;
+constexpr float kPlateHeight = 24.0f;  // primary_button default height
+constexpr float kChevronW    = 8.0f;   // sort chevron: two 45° strokes,
+constexpr float kChevronH    = 4.0f;   //   8 wide × 4 tall (SPEC §6.7)
+// END values without a token
 
-constexpr float kPlateHeight   = 24.0f;  // primary_button default height
-constexpr float kPlatePadX     = 12.0f;  // primary_button label inset
-constexpr float kFocusOffset   = 3.0f;   // keyboard focus outline, outside the plate
-constexpr float kKeyPadX       = 8.0f;   // key_button content inset
-constexpr float kKeyGap        = 6.0f;   // a button's key to its action
-constexpr float kChevronGap    = 4.0f;   // header label to its sort chevron
-constexpr float kReasonGap     = 12.0f;  // disabled action to its reason
-constexpr float kStripPadX     = 12.0f;  // command bar / status bar side inset
-constexpr float kPaneInsetX    = 12.0f;  // pane header title / shortcut inset
-constexpr float kMarkSize      = 18.0f;  // the Caliper mark in the masthead
-constexpr float kMarkGap       = 8.0f;   // mark to wordmark
-constexpr float kWordmarkTrack = 0.10f;  // em; Display's em equals its size
-constexpr float kChevronW      = 8.0f;   // sort chevron: two 45° strokes,
-constexpr float kChevronH      = 4.0f;   //   8 wide × 4 tall (SPEC §6.7)
+constexpr ImVec2 kCellPadding(kTightGap, half_floor(metric::row - font_size::mono));
+constexpr ImVec2 kFramePadding(kTightGap, half_floor(metric::pane_header - font_size::ui));
+
+constexpr float kPlatePadX     = tokens::space::s3;            // primary_button label inset
+constexpr float kFocusOffset   = tokens::app::focus_offset;    // keyboard focus outline, outside the plate
+constexpr float kKeyPadX       = tokens::space::s2;            // key_button content inset
+constexpr float kKeyGap        = kTightGap;                    // a button's key to its action
+constexpr float kChevronGap    = tokens::space::s1;            // header label to its sort chevron
+constexpr float kReasonGap     = tokens::space::s3;            // disabled action to its reason
+constexpr float kStripPadX     = tokens::space::s3;            // command bar / status bar side inset
+constexpr float kPaneInsetX    = tokens::space::s3;            // pane header title / shortcut inset
+constexpr float kMarkSize      = tokens::app::mark;            // the Caliper mark in the masthead
+constexpr float kMarkGap       = tokens::space::s2;            // mark to wordmark
+constexpr float kWordmarkTrack = tokens::tracking::app_wordmark;  // em; Display's em equals its size
 
 // The strips are fixed furniture: no title, no moving, no saved position,
 // never docked into and never raised over the panes when clicked.
@@ -260,13 +269,6 @@ void reason_tooltip(const char* reason) {
 
 // ---- Colour -------------------------------------------------------------------
 
-ImVec4 to_vec4(ImU32 c) { return ImGui::ColorConvertU32ToFloat4(c); }
-
-ImU32 with_alpha(ImU32 c, int alpha) {
-    const ImU32 a = static_cast<ImU32>(ImClamp(alpha, 0, 255));
-    return (c & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT);
-}
-
 // ---- Style --------------------------------------------------------------------
 
 void apply_style() {
@@ -280,44 +282,44 @@ void apply_style() {
         st._NextFrameFontSizeBase = font_size::ui;
     }
 
-    // Square corners everywhere (SPEC §3.5); the only cut corners are drawn
-    // by cut_plate() and caliper_mark().
-    st.WindowRounding = 0.0f;
-    st.ChildRounding = 0.0f;
-    st.PopupRounding = 0.0f;
-    st.FrameRounding = 0.0f;
-    st.ScrollbarRounding = 0.0f;
-    st.GrabRounding = 0.0f;
-    st.ImageRounding = 0.0f;
-    st.TabRounding = 0.0f;
-    st.TreeLinesRounding = 0.0f;
-    st.MenuItemRounding = 0.0f;
-    st.SelectableRounding = 0.0f;
-    st.DragDropTargetRounding = 0.0f;
+    // Square corners everywhere (SPEC §3.5); the only cut corners are the
+    // logo's, drawn by caliper_mark().
+    st.WindowRounding = tokens::RADIUS;
+    st.ChildRounding = tokens::RADIUS;
+    st.PopupRounding = tokens::RADIUS;
+    st.FrameRounding = tokens::RADIUS;
+    st.ScrollbarRounding = tokens::RADIUS;
+    st.GrabRounding = tokens::RADIUS;
+    st.ImageRounding = tokens::RADIUS;
+    st.TabRounding = tokens::RADIUS;
+    st.TreeLinesRounding = tokens::RADIUS;
+    st.MenuItemRounding = tokens::RADIUS;
+    st.SelectableRounding = tokens::RADIUS;
+    st.DragDropTargetRounding = tokens::RADIUS;
 
     // 1 px rules. Panes are separated by the docking separators, so child
     // windows carry no border of their own (no box inside a box).
-    st.WindowBorderSize = 1.0f;
+    st.WindowBorderSize = tokens::rule::width;
     st.ChildBorderSize = 0.0f;
-    st.PopupBorderSize = 1.0f;
+    st.PopupBorderSize = tokens::rule::width;
     st.FrameBorderSize = 0.0f;
     st.TabBorderSize = 0.0f;
-    st.TabBarBorderSize = 1.0f;
-    st.TabBarOverlineSize = 1.0f;
-    st.DockingSeparatorSize = 1.0f;
-    st.SeparatorTextBorderSize = 1.0f;
-    st.DragDropTargetBorderSize = 1.0f;
-    st.TreeLinesSize = 1.0f;
+    st.TabBarBorderSize = tokens::rule::width;
+    st.TabBarOverlineSize = tokens::rule::width;
+    st.DockingSeparatorSize = tokens::rule::width;
+    st.SeparatorTextBorderSize = tokens::rule::width;
+    st.DragDropTargetBorderSize = tokens::rule::width;
+    st.TreeLinesSize = tokens::rule::width;
 
     // Workstation density: default widgets land on metric::row and the
     // docked tab bar on metric::pane_header.
-    st.WindowPadding = ImVec2(metric::pad, 6.0f);
+    st.WindowPadding = ImVec2(metric::pad, kTightGap);
     st.FramePadding = kFramePadding;
     st.CellPadding = kCellPadding;
-    st.ItemSpacing = ImVec2(8.0f, 4.0f);
-    st.ItemInnerSpacing = ImVec2(6.0f, 4.0f);
-    st.ScrollbarSize = 8.0f;
-    st.GrabMinSize = 8.0f;
+    st.ItemSpacing = ImVec2(tokens::space::s2, tokens::space::s1);
+    st.ItemInnerSpacing = ImVec2(kTightGap, tokens::space::s1);
+    st.ScrollbarSize = tokens::app::scrollbar;
+    st.GrabMinSize = tokens::space::s2;
     st.WindowMenuButtonPosition = ImGuiDir_None;
 
     // Disabled text reads as `faint`: parchment over ground at this alpha
@@ -393,7 +395,7 @@ void apply_style() {
     set(st, ImGuiCol_DragDropTarget, col::bronze);
     set(st, ImGuiCol_DragDropTargetBg, clear);
     set(st, ImGuiCol_UnsavedMarker, col::parchment);
-    set(st, ImGuiCol_NavCursor, col::bronze);
+    set(st, ImGuiCol_NavCursor, col::focus);
     set(st, ImGuiCol_NavWindowingHighlight, with_alpha(col::bronze, 178));
     set(st, ImGuiCol_NavWindowingDimBg, with_alpha(col::deep, 153));
     set(st, ImGuiCol_ModalWindowDimBg, with_alpha(col::deep, 153));
@@ -420,24 +422,6 @@ void rule_v(ImDrawList* dl, float x, float y0, float y1, ImU32 c) {
     if (y1 < y0)
         ImSwap(y0, y1);
     dl->AddRectFilled(ImVec2(x, y0), ImVec2(x + 1.0f, y1), c);
-}
-
-void cut_plate(ImDrawList* dl, ImVec2 p_min, ImVec2 p_max, ImU32 outline,
-               ImU32 fill, float cut) {
-    // SPEC §6.7 on half pixels: 6.5,0.5  W-6.5,0.5  W-0.5,6.5  W-0.5,H-6.5
-    // W-6.5,H-0.5  6.5,H-0.5  0.5,H-6.5  0.5,6.5 (clockwise, as AA fill needs).
-    const float x0 = ImFloor(p_min.x) + 0.5f;
-    const float y0 = ImFloor(p_min.y) + 0.5f;
-    const float x1 = ImFloor(p_max.x) - 0.5f;
-    const float y1 = ImFloor(p_max.y) - 0.5f;
-    const float c = ImMin(ImFloor(cut), ImFloor(ImMin(x1 - x0, y1 - y0) * 0.5f));
-    const ImVec2 pts[8] = {
-        ImVec2(x0 + c, y0), ImVec2(x1 - c, y0), ImVec2(x1, y0 + c), ImVec2(x1, y1 - c),
-        ImVec2(x1 - c, y1), ImVec2(x0 + c, y1), ImVec2(x0, y1 - c), ImVec2(x0, y0 + c),
-    };
-    if (fill != 0)
-        dl->AddConvexPolyFilled(pts, 8, fill);
-    dl->AddPolyline(pts, 8, outline, 1.0f, ImDrawFlags_Closed);
 }
 
 void open_star(ImDrawList* dl, ImVec2 centre, float tip_radius, ImU32 fill, ImU32 halo) {
@@ -486,7 +470,7 @@ void caliper_mark(ImDrawList* dl, ImVec2 p_min, float size, ImU32 c) {
     const float y0 = o.y + 0.5f;
     const float x1 = o.x + s - 0.5f;
     const float y1 = o.y + s - 0.5f;
-    const float cut = IM_ROUND(0.2f * (s - 1.0f));
+    const float cut = IM_ROUND(0.2f * (s - 1.0f));   // the logo's own frame cut
     const ImVec2 frame[8] = {
         ImVec2(x0 + cut, y0), ImVec2(x1 - cut, y0),
         ImVec2(x1, y0 + cut), ImVec2(x1, y1 - cut),
@@ -639,8 +623,9 @@ bool key_button(const char* key, const char* action, bool enabled,
         const bool disabled = (ImGui::GetItemFlags() & ImGuiItemFlags_Disabled) != 0;
 
         // Bronze only under the pointer (the key) and on keyboard focus (the
-        // outline); at rest the key reads as secondary metadata. Disabled uses
-        // its own tokens rather than the style alpha, like primary_button.
+        // ring outside the plate); at rest the key reads as secondary
+        // metadata. Disabled uses its own tokens rather than the style alpha,
+        // like primary_button.
         ImU32 outline = styled(col::rule);
         ImU32 fill = 0;
         ImU32 key_ink = styled(col::secondary);
@@ -658,13 +643,17 @@ bool key_button(const char* key, const char* action, bool enabled,
             fill = styled(col::plate_hover);
             key_ink = styled(col::bronze);
         }
-        if (!disabled && g.NavId == id && g.NavCursorVisible)
-            outline = styled(col::bronze);
-
         ImDrawList* dl = window->DrawList;
         if (fill != 0)
             dl->AddRectFilled(bb.Min, bb.Max, fill);
         box(dl, bb, outline);
+        // Keyboard focus: a square outline 3 px outside the plate, as on
+        // primary_button. Replaces ImGui's nav rectangle.
+        if (!disabled && g.NavId == id && g.NavCursorVisible) {
+            const ImVec2 d(kFocusOffset, kFocusOffset);
+            box(dl, ImRect(ImVec2(bb.Min.x - d.x, bb.Min.y - d.y), ImVec2(bb.Max.x + d.x, bb.Max.y + d.y)),
+                styled(col::focus));
+        }
         const ImVec2 text_pos(pos.x + ImFloor((size.x - run.width) * 0.5f),
                               pos.y + text_y);
         draw_key_run(dl, text_pos, run, key, action, nullptr, font_size::ui, key_ink,
@@ -814,16 +803,17 @@ bool primary_button(const char* label, ImVec2 size_arg, const char* key) {
         fill = styled(col::plate_hover);
     }
     ImDrawList* dl = window->DrawList;
-    cut_plate(dl, bb.Min, bb.Max, outline, fill);
+    // Whole-pixel corners: ImGui puts a 1 px outline of a rectangle on the half pixel inside them.
+    const ImVec2 pmin(ImFloor(bb.Min.x), ImFloor(bb.Min.y)), pmax(ImFloor(bb.Max.x), ImFloor(bb.Max.y));
+    if (fill != 0) dl->AddRectFilled(pmin, pmax, fill);
+    dl->AddRect(pmin, pmax, outline, 0.0f, 0, tokens::rule::width);
 
-    // Keyboard focus: a second cut outline 3 px outside, in bronze (the focus
-    // accent). Its cut grows by about 3 × (√2 − 1) to keep the diagonals
-    // parallel. Replaces ImGui's square nav rectangle.
+    // Keyboard focus: a square outline 3 px outside the plate, in the focus
+    // colour. Replaces ImGui's nav rectangle.
     if (!disabled && g.NavId == id && g.NavCursorVisible) {
         const ImVec2 d(kFocusOffset, kFocusOffset);
-        cut_plate(dl, ImVec2(bb.Min.x - d.x, bb.Min.y - d.y),
-                  ImVec2(bb.Max.x + d.x, bb.Max.y + d.y), styled(col::bronze), 0,
-                  metric::cut + 1.0f);
+        dl->AddRect(ImVec2(pmin.x - d.x, pmin.y - d.y), ImVec2(pmax.x + d.x, pmax.y + d.y),
+                    styled(col::focus), 0.0f, 0, tokens::rule::width);
     }
 
     const ImVec2 text_pos(pos.x + ImFloor((size.x - run.width) * 0.5f), pos.y + text_y);
@@ -872,7 +862,7 @@ bool word_button(const char* label) {
     if (hovered || focused) {
         const float base = baseline_of(nullptr, font_size::ui);
         rule_h(dl, text_pos.x, text_pos.x + text.x, text_pos.y + base + 2.0f,
-               styled(focused && !hovered ? col::bronze : col::parchment));
+               styled(focused && !hovered ? col::focus : col::parchment));
     }
     ImGui::PopFont();
     return pressed;

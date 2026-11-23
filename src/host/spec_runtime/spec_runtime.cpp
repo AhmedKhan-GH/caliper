@@ -120,7 +120,7 @@ ImPlotColormap implot_colormap(int cm) {
 
 // The house's plot style for one plot, popped by pop_plot_style().
 void push_plot_style(const SpecLook& L) {
-    ImPlot::PushStyleColor(ImPlotCol_FrameBg, IM_COL32(0, 0, 0, 0));
+    ImPlot::PushStyleColor(ImPlotCol_FrameBg, IM_COL32_BLACK_TRANS);
     ImPlot::PushStyleColor(ImPlotCol_PlotBg, L.deep);
     ImPlot::PushStyleColor(ImPlotCol_PlotBorder, L.rule);
     ImPlot::PushStyleColor(ImPlotCol_LegendBg, with_alpha(L.ground, 230));
@@ -148,7 +148,7 @@ void pop_plot_style() {
 }
 
 void push_plot3d_style(const SpecLook& L) {
-    ImPlot3D::PushStyleColor(ImPlot3DCol_FrameBg, IM_COL32(0, 0, 0, 0));
+    ImPlot3D::PushStyleColor(ImPlot3DCol_FrameBg, IM_COL32_BLACK_TRANS);
     ImPlot3D::PushStyleColor(ImPlot3DCol_PlotBg, L.deep);
     ImPlot3D::PushStyleColor(ImPlot3DCol_PlotBorder, L.rule);
     ImPlot3D::PushStyleColor(ImPlot3DCol_AxisText, L.faint);
@@ -1573,7 +1573,7 @@ void SpecRuntime::bind_entity_scene(Entry& e) {
         for (const EntityDraw& d : spec_scene_content(ep.scene).draws)
             if (d.error && d.error.code != "entity.no_data") {
                 const char* label = d.error.code == "entity.limit" ? "Over limit" : "Wrong shape";
-                ImGui::GetWindowDrawList()->AddText(ImVec2(content.Min.x + 8, content.Max.y - 22), IM_COL32(230, 120, 90, 255),
+                ImGui::GetWindowDrawList()->AddText(ImVec2(content.Min.x + 8, content.Max.y - 22), sternbild::col::error_text,
                                                     (std::string(label) + " " + d.entity + " (" + d.error.code + ")").c_str());
                 break;
             }
