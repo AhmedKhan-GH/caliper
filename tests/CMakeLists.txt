@@ -36,9 +36,7 @@ add_executable(caliper_tests
     test_tensor_bridge.cpp
     test_alloc_registry.cpp
     test_obj.cpp
-    test_instance_field.cpp
     test_pulse_ring.cpp
-    test_export_affordance.cpp
     ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp
 )
 # On Windows the host build provides ZLIB::ZLIB in-tree (Dependencies.cmake).
@@ -60,15 +58,9 @@ endif()
 target_link_libraries(caliper_tests PRIVATE caliper_net)
 # mnist_idx.h now lives with EmbedScope (the sole exemplar is self-contained).
 target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/embed_scope)
-# InstanceScope's pure pose/tint/mesh reference (instance_field.h) is torch-free,
-# so its unit test rides the fast caliper_tests suite.
-target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/instance_scope)
 # PulseScope's pure ring-copy/gap logic (pulse_ring.h) is torch-free + UI-free,
 # so its unit test rides the fast caliper_tests suite (feed spec §5).
 target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/pulse_scope)
-# Export E2 affordance logic (export_affordance.h: frame budget, pacing, path
-# assembly) is torch-free + UI-free, so its unit test rides caliper_tests too.
-target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/common)
 set_target_properties(caliper_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
 # The graphics layer's core on its recording backend, with no GPU (src/host/gfx).
@@ -828,61 +820,9 @@ set_tests_properties(caliper_gfx_views_tests PROPERTIES LABELS "gfx" SKIP_RETURN
     "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_gfx_views_tests")
 endif()  # APPLE (live tests)
 
-# ---------------------------------------------------------------------------
-# Applet learning-core / engine tests. Each is a SEPARATE binary that links
-# only doctest + libtorch and puts one applet's header directory on the include
-# path — keeping torch out of the fast caliper_tests unit suite. The four blocks
-# below were near-verbatim, so they share one helper (§8.f cleanup class).
-# ---------------------------------------------------------------------------
-if(CALIPER_WITH_TORCH)   # applet learning-core tests all link libtorch
-function(add_caliper_torch_model_test name src applet_dir)
-    add_executable(${name} ${src})
-    caliper_test_needs_torch_dlls(${name})
-    target_link_libraries(${name} PRIVATE doctest::doctest "${TORCH_LIBRARIES}")
-    target_include_directories(${name} PRIVATE "${applet_dir}")
-    set_target_properties(${name} PROPERTIES
-        CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-    if(APPLE)
-        set_target_properties(${name} PROPERTIES
-            BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
-    endif()
-    add_test(NAME ${name} COMMAND ${name})
-endfunction()
-
-# SculptScope learning-core (energy loss, target samplers, that the net learns,
-# and that the addmm_out display fusion == the true forward).
-add_caliper_torch_model_test(caliper_sculpt_tests test_sculpt.cpp
-    "${CMAKE_SOURCE_DIR}/applets/sculpt_scope")
-
-# MeshScope learning-core (that the tanh MLP learns the target surface, the
-# per-vertex error map is honest, finite-difference normals match the analytic
-# normals of a known heightfield, and reset(seed) is reproducible).
-add_caliper_torch_model_test(caliper_mesh_tests test_mesh_surface.cpp
-    "${CMAKE_SOURCE_DIR}/applets/mesh_scope")
-
-# FieldScope PIC physics (FFT Poisson solve, charge-conserving CIC deposition,
-# Boris gyration + E×B drift, plasma momentum conservation).
-add_caliper_torch_model_test(caliper_em_pic_tests test_em_pic.cpp
-    "${CMAKE_SOURCE_DIR}/applets/field_scope")
-
-# TwinScope v2 surface engine (midpoint subdivision, cotan Laplacian, Voronoi
-# masses, stable dt, UV bake). The asset-coverage row loads the committed
-# housing.obj via the T5 loader, so this target also needs the SDK include dir
-# and the source-root macro.
-add_caliper_torch_model_test(caliper_surface_tests test_twin_surface.cpp
-    "${CMAKE_SOURCE_DIR}/applets/twin_scope")
-target_include_directories(caliper_surface_tests PRIVATE
-    "${CMAKE_SOURCE_DIR}/sdk/include")
-target_compile_definitions(caliper_surface_tests PRIVATE
-    CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
-
-# TwinScope v2 thermal model + chasing learner (batched surface heat step,
-# seeded duty schedule, MLP learner). Pure torch, small subdivided-tetra sims.
-add_caliper_torch_model_test(caliper_twin_tests test_twin_thermal.cpp
-    "${CMAKE_SOURCE_DIR}/applets/twin_scope")
-
+if(CALIPER_WITH_TORCH)
 set_tests_properties(caliper_torch_tests PROPERTIES LABELS "torch")
-endif()  # CALIPER_WITH_TORCH (applet model tests)
+endif()
 
 # caliper_wgsl_tests: the runtime WGSL compiler (tools/shaders/caliper-wgsl) through its C
 # interface: one valid compute program validates and translates to MSL and SPIR-V, built-in

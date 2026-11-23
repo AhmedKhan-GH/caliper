@@ -5,8 +5,7 @@
 //
 // STATUS: RUN-PROVEN on Windows hardware (2026-07-11, RTX 500 Ada / driver
 // 596.47, branch feat/embed-vulkan-windows). It compiles only on _WIN32 (CMake
-// gates it); it drew the Vulkan WINDOW canvas live — instance_scope zero-copy
-// instanced (1000 objects, 1 draw call, 0 mesh copies) and mesh_scope. This
+// gates it); it drew the Vulkan WINDOW canvas live with an applet. This
 // mirrors the macOS half (main.mm) structure so the two hosts stay in step.
 // ===========================================================================
 #ifdef _WIN32
