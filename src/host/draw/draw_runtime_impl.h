@@ -128,6 +128,11 @@ struct DrawRuntime::Impl {
     std::string measure_code;                        // what a measured frame stops with
     std::string measure_message;
     std::vector<double> measured;                    // per pass of the measuring frame; < 0 none
+    // A frame that is not done after kTimeoutMs by the wall clock is late: the program submits
+    // no frame until it is done, and is then judged by its GPU time, or, where the backend gives
+    // none, by kLateFrames late frames in a row (draw_runtime.cpp).
+    bool late = false;
+    std::uint32_t late_frames = 0;
 };
 
 }  // namespace caliper_draw

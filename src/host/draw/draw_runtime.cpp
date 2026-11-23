@@ -31,7 +31,13 @@ namespace gfx = caliper_gfx;
 namespace {
 
 constexpr std::uint32_t kWindowFrames = 30;      // frames in a row over draw.frame_ms before a stop
-constexpr double kTimeoutMs = 1000.0;            // a frame not done after this stops at once
+// A frame not done after kTimeoutMs by the wall clock is late. A training run on the same GPU can
+// delay a correct frame that long, thus a late frame stops its program only when its GPU time is
+// over kTimeoutMs too, or where the backend gives no GPU time, when kLateFrames frames in a row are
+// late. A frame not done after kHangMs stops it at once: its pass may never end.
+constexpr double kTimeoutMs = 1000.0;
+constexpr std::uint32_t kLateFrames = 3;
+constexpr double kHangMs = 5000.0;
 constexpr std::uint64_t kMiB = 1ull << 20;
 constexpr std::uint32_t kFallbackColormaps = 4;   // the rows of colormap@1: viridis, magma, rdbu, greys
 
@@ -1264,6 +1270,8 @@ void DrawRuntime::remove() {
     m.measure = false;
     m.measured.clear();
     m.epoch_known = false;
+    m.late = false;
+    m.late_frames = 0;
 }
 
 // ---- resources ---------------------------------------------------------------------------
@@ -1346,6 +1354,7 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
     Impl& m = *impl_;
     if (!m.installed || frames == nullptr) return false;
     if (m.status.state != DrawState::compiled && m.status.state != DrawState::running) return false;
+    if (m.late) return false;   // nothing piles up behind a frame that is not done
     if (!target.color || target.width == 0 || target.height == 0) return false;
     for (const Impl::Slot& s : m.slots)
         if (!s.has_version) return false;   // waiting for the run's resources
@@ -1528,12 +1537,39 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
 
 // ---- timing and removal ------------------------------------------------------------------
 
-void DrawRuntime::frame_done(double gpu_ms) {
+void DrawRuntime::frame_done(double gpu_ms, double wall_ms) {
     Impl& m = *impl_;
     if (m.expected.empty()) return;
     const Impl::Expected e = m.expected.front();
     m.expected.pop_front();
+    const bool late = m.late;   // the oldest frame, which this is, was late
+    m.late = false;
     if (m.status.state != DrawState::running) return;
+    // A late frame: its GPU time judges it where the backend gives one, and a backend with
+    // timestamps that gives none for it reports work that the driver ended. Without timestamps,
+    // late frames in a row stop it, and a frame done in time ends the row.
+    const bool timed = m.gfx->caps().has(gfx::kCapTimestamps);
+    if (late && ((gpu_ms >= 0 && gpu_ms > kTimeoutMs) || (gpu_ms < 0 && timed))) {
+        stop(m, cp::kProgramDrawTimeout,
+             "Stopped " + m.instance.program + ": " +
+                 (e.pass >= 0 ? pass_name(m, e.pass) : std::string("a frame of its draw passes")) +
+                 (gpu_ms >= 0 ? " took " + fmt_ms(gpu_ms) + " ms of GPU time, above 1 s"
+                              : " did not finish, and the driver ended it"),
+             e.pass);
+        return;
+    }
+    if (late && gpu_ms < 0) {
+        if (++m.late_frames >= kLateFrames) {
+            stop(m, cp::kProgramDrawTimeout,
+                 "Stopped " + m.instance.program + ": " + std::to_string(kLateFrames) +
+                     " frames of its draw passes in a row did not finish in 1 s",
+                 e.pass);
+            return;
+        }
+    } else if (late || (gpu_ms >= 0 ? gpu_ms : wall_ms) <= kTimeoutMs) {
+        m.late_frames = 0;
+    }
+    if (gpu_ms < 0) gpu_ms = wall_ms;   // the upper bound, where the backend gives no GPU time
     const double limit = m.status.frame_limit_ms;
     if (e.pass < 0) {
         if (gpu_ms < 0) return;
@@ -1575,11 +1611,13 @@ void DrawRuntime::frame_done(double gpu_ms) {
 void DrawRuntime::frame_pending(double waited_ms) {
     Impl& m = *impl_;
     if (m.status.state != DrawState::running || waited_ms <= kTimeoutMs) return;
+    m.late = true;
+    if (waited_ms <= kHangMs) return;
     const int pass = m.expected.empty() ? -1 : m.expected.front().pass;
     stop(m, cp::kProgramDrawTimeout,
          "Stopped " + m.instance.program + ": " +
              (pass >= 0 ? pass_name(m, pass) : std::string("a frame of its draw passes")) +
-             " did not finish in 1 s; the GPU runs it until the driver ends it",
+             " did not finish in 5 s; the GPU runs it until the driver ends it",
          pass);
 }
 

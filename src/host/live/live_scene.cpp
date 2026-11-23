@@ -1179,13 +1179,13 @@ void SceneView::poll_programs() {
     bool completed = false;
     for (auto& d : draws_) {
         if (!d->runtime) continue;
-        // Never a wait: the completed submits give their GPU time, or without timestamps the time
-        // from the submit until the work was done, an upper bound.
+        // Never a wait: the completed submits give their GPU time, or < 0 without timestamps, and
+        // the time from the submit until the work was seen done, an upper bound. A frame not done
+        // after 1 s is late, and the runtime judges it by its GPU time once it is done.
         while (!d->pending.empty()) {
             double ms = -1;
             if (!gfx_.submit_gpu_ms(d->pending.front().first, &ms)) break;
-            if (ms < 0) ms = ms_since(d->pending.front().second);
-            d->runtime->frame_done(ms);
+            d->runtime->frame_done(ms, ms_since(d->pending.front().second));
             d->pending.pop_front();
             completed = true;
         }

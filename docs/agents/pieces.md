@@ -366,12 +366,16 @@ The host owns the camera. A piece selects `orbit` for the 3-D orbit camera of th
 
 A draw half writes only the color, ID and depth of its panel and its own targets. The host records the passes of each program in a submit of its own after the frame of the scene. The GPU time of that submit is the frame time of the program. Where the backend has no timestamps, the host measures the time from the submit until the work is done, which is an upper bound.
 
+A training run on the same GPU can delay a correct frame by a second or more. Thus a frame that is not done 1 s after its submit is late, and the program submits no new frame until the late frame is done. Then the GPU time of the late frame decides. Where the backend has no timestamps, three late frames in a row decide.
+
 The host cannot stop a pass that runs on the GPU. Thus it removes a draw that goes over its budget and reports it. The other programs of the panel keep drawing, and the derive half keeps its own limits.
 
 | Condition | Result |
 |---|---|
 | A program is over `frame_ms` on 30 frames in a row | `program.draw_over_time`, naming the costliest pass |
-| A frame of a program is not done after 1 s | `program.draw_timeout`, at once |
+| A late frame took more than 1 s of GPU time, or the driver ended it | `program.draw_timeout` |
+| Three frames in a row are late, on a backend without timestamps | `program.draw_timeout` |
+| A frame of a program is not done after 5 s | `program.draw_timeout`, at once |
 | The programs of one panel together are over 16.7 ms on 30 frames in a row | `program.draw_over_time` for the costliest program |
 | A resource, a draw buffer or a target would pass `memory_mb` | `program.draw_over_memory` |
 | The graphics layer refuses a submitted frame | `program.layer_refused` |

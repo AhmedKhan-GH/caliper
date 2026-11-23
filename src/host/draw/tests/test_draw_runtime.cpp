@@ -37,10 +37,18 @@ std::vector<bool> modes() {
     return m;
 }
 
+// The recording backend's capabilities with GPU timestamps, as Metal has them.
+gfx::Caps timed_caps() {
+    gfx::Caps c = gfx::RecordingBackend::default_caps();
+    c.bits |= gfx::kCapTimestamps;
+    return c;
+}
+
 struct Host {
     gfx::RecordingBackend gfx;
     cd::HostTarget target;
-    explicit Host(std::uint32_t w = 64, std::uint32_t h = 48) {
+    explicit Host(std::uint32_t w = 64, std::uint32_t h = 48, const gfx::Caps& caps = gfx::RecordingBackend::default_caps())
+        : gfx(caps) {
         gfx::TextureDesc c;
         c.width = w;
         c.height = h;
@@ -375,7 +383,7 @@ TEST_CASE("a measured frame back under the limit keeps the program") {
     CHECK(frame(h, rt).size() == 1);
 }
 
-TEST_CASE("a frame not done after 1 s stops its program at once, and the other program of the panel goes on") {
+TEST_CASE("a frame still pending after 5 s stops its program at once, and the other program of the panel goes on") {
     Host h;
     h.gfx.set_auto_complete(false);
     cd::DrawRuntime slow(h.gfx, true, checks()), other(h.gfx, true, checks());
@@ -391,12 +399,86 @@ TEST_CASE("a frame not done after 1 s stops its program at once, and the other p
     REQUIRE(frame(h, other).size() == 1);
     slow.frame_pending(400.0);
     CHECK(slow.status().state == cd::DrawState::running);
-    slow.frame_pending(1000.5);
+    slow.frame_pending(1000.5);   // late, not stopped
+    CHECK(slow.status().state == cd::DrawState::running);
+    slow.frame_pending(5000.5);
     CHECK(slow.status().state == cd::DrawState::stopped);
     CHECK(slow.status().error.code == cp::kProgramDrawTimeout);
     CHECK(slow.status().error.message.find("Stopped slow:") == 0);
+    CHECK(slow.status().error.message.find("5 s") != std::string::npos);
     CHECK(frame(h, other).size() == 1);
     CHECK(other.status().state == cd::DrawState::running);
+}
+
+TEST_CASE("a late frame waits for its GPU time: a busy GPU keeps the program, over 1 s of GPU time stops it") {
+    Host h(64, 48, timed_caps());
+    h.gfx.set_auto_complete(false);
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    cd::Instance a;
+    a.program = "arcs";
+    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    give_arcs(rt, ex::arc_resources(), 1);
+    REQUIRE(frame(h, rt).size() == 1);
+    // A training run holds the GPU: the frame waits 1.5 s by the wall clock but took 2 ms on it.
+    rt.frame_pending(1500.0);
+    CHECK(rt.status().state == cd::DrawState::running);
+    CHECK(frame(h, rt).empty());   // nothing more is submitted while the frame is late
+    rt.frame_done(2.0, 1600.0);
+    CHECK(rt.status().state == cd::DrawState::running);
+    CHECK(rt.status().frame_ms == doctest::Approx(2.0));
+    // Late again and again under the same load: each frame is judged by its own GPU time.
+    for (int k = 0; k < 4; ++k) {
+        REQUIRE(frame(h, rt).size() == 1);
+        rt.frame_pending(1200.0);
+        rt.frame_done(2.0, 1300.0);
+    }
+    CHECK(rt.status().state == cd::DrawState::running);
+    // A frame whose own GPU time is over 1 s stops the program.
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_pending(1100.0);
+    rt.frame_done(1250.0, 1300.0);
+    CHECK(rt.status().state == cd::DrawState::stopped);
+    CHECK(rt.status().error.code == cp::kProgramDrawTimeout);
+    CHECK(rt.status().error.message.find("of GPU time") != std::string::npos);
+    // A late frame that the driver ended gives no GPU time on a device that has timestamps.
+    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    give_arcs(rt, ex::arc_resources(), 1);
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_pending(1500.0);
+    rt.frame_done(-1.0, 2500.0);
+    CHECK(rt.status().state == cd::DrawState::stopped);
+    CHECK(rt.status().error.code == cp::kProgramDrawTimeout);
+}
+
+TEST_CASE("without GPU time, three late frames in a row stop the program, and a frame in time ends the row") {
+    Host h;
+    h.gfx.set_auto_complete(false);
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    cd::Instance a;
+    a.program = "arcs";
+    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    give_arcs(rt, ex::arc_resources(), 1);
+    const auto late = [&] {
+        REQUIRE(frame(h, rt).size() == 1);
+        rt.frame_pending(1100.0);
+        rt.frame_done(-1.0, 1200.0);
+    };
+    late();
+    late();
+    CHECK(rt.status().state == cd::DrawState::running);
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_done(-1.0, 3.0);   // in time: the row starts again
+    late();
+    late();
+    CHECK(rt.status().state == cd::DrawState::running);
+    // A frame that waited behind a late one, and was never seen late, neither counts nor ends the row.
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_done(-1.0, 1100.0);
+    CHECK(rt.status().state == cd::DrawState::running);
+    late();
+    CHECK(rt.status().state == cd::DrawState::stopped);
+    CHECK(rt.status().error.code == cp::kProgramDrawTimeout);
+    CHECK(rt.status().error.message.find("3 frames") != std::string::npos);
 }
 
 TEST_CASE("a pick keeps the version of the frame it read, and a version at the same step replaces the copy") {
@@ -700,7 +782,7 @@ TEST_CASE("the draw host gives each panel its programs, packs params and refuses
     host.feed("pattern")->status(rt);
     host.feed("pattern")->status(rt);
     REQUIRE(frame(h, rt).size() == 1);
-    rt.frame_pending(1500);
+    rt.frame_pending(5000.5);
     host.feed("pattern")->status(rt);
     REQUIRE(sink.events.size() == 3);
     CHECK(sink.events[1].fields["change"] == "compiled");

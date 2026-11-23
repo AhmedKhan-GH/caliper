@@ -26,9 +26,13 @@
 // reports each submit's GPU time with frame_done() and the age of the oldest
 // pending one with frame_pending(). A program over draw.frame_ms on 30 frames
 // in a row records one more frame with each pass in a submit of its own, and
-// then stops with program.draw_over_time, naming its costliest pass; a frame
-// still pending after 1 s stops it at once with program.draw_timeout; a
-// resource, draw buffer or target over draw.memory_mb stops it with
+// then stops with program.draw_over_time, naming its costliest pass. A frame
+// still pending after 1 s by the wall clock is late, and the program submits
+// no frame until it is done: a training run on the same GPU can delay a
+// correct frame that long. A late frame stops it with program.draw_timeout
+// when its GPU time is over 1 s too, or, where the backend gives no GPU time,
+// when 3 frames in a row are late; a frame still pending after 5 s stops it
+// at once. A resource, draw buffer or target over draw.memory_mb stops it with
 // program.draw_over_memory. A stopped program releases its objects and draws
 // nothing; the other programs of the panel keep drawing. Nothing here throws.
 #include "gfx/gfx.h"
@@ -225,13 +229,20 @@ public:
     // installed, stopped, a resource without a version, or a refusal, which
     // stops it). Applies the reset rules of the draw buffers.
     bool encode(std::vector<caliper_gfx::Frame>* frames, const FrameInputs& in, const HostTarget& target);
-    // Reports the GPU time of one submitted frame, in the order of encode()'s
-    // frames: from the layer's timestamps, or the time from the submit until
-    // the work was done where the backend has none. Over draw.frame_ms on 30
-    // frames in a row stops the program with program.draw_over_time.
-    void frame_done(double gpu_ms);
+    // Reports one submitted frame that is done, in the order of encode()'s
+    // frames: `gpu_ms` from the layer's timestamps, < 0 where the backend gave
+    // none, and `wall_ms`, the time from the submit until the host saw the
+    // work done, which stands in for a missing GPU time as an upper bound.
+    // Over draw.frame_ms on 30 frames in a row stops the program with
+    // program.draw_over_time. A late frame (frame_pending) stops it with
+    // program.draw_timeout when its GPU time is over 1 s, when the backend has
+    // timestamps and gave it none (the driver ended it), or, without
+    // timestamps, when it is the third late frame in a row.
+    void frame_done(double gpu_ms, double wall_ms = -1);
     // The oldest submitted frame of the program that is not done has waited
-    // this long; after 1 s the program stops at once with program.draw_timeout.
+    // this long by the wall clock: after 1 s the frame is late and the
+    // program submits no frame until it is done; after 5 s the program stops
+    // at once with program.draw_timeout.
     void frame_pending(double waited_ms);
     // The layer refused a submitted frame (Backend::last_error()): the program
     // stops with program.layer_refused; the panel's other programs go on.
