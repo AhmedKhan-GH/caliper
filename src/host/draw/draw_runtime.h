@@ -81,6 +81,19 @@ struct ResourceVersion {
     std::uint32_t count = 0;         // valid elements; a texture's width * height
     const std::uint8_t* bytes = nullptr;
     std::size_t size = 0;            // count * stride, or width * height * 4
+    // A number that the source gives each version, which differs for a version that replaces
+    // another at the same step (the step history's ResourceVersion::serial); 0 when it has none.
+    std::uint64_t serial = 0;
+};
+
+// What one frame showed of a program's item map: the copy of the version of its resource, with
+// the program, the map and the element layout that drew it. A pick keeps it from the frame that
+// its readback reads until the readback answers, so that the item's fields come from that frame's
+// version, not from a newer one that arrived since (DrawRuntime::pick_shown). Empty when the
+// program has no item map or no frame showed a version.
+struct ShownItems {
+    std::shared_ptr<const void> state;   // draw_pick.cpp
+    explicit operator bool() const { return state != nullptr; }
 };
 
 // One entry of the linked selection (CaliperSelected of the prelude).
@@ -238,6 +251,11 @@ public:
     // The item map's fields of `item` in the version of the last frame, or
     // nothing when the program has no map or no such element.
     std::optional<PickedItem> pick(std::uint32_t item) const;
+    // What the last frame showed of the item map, for a pick that reads that frame.
+    ShownItems shown_items() const;
+    // The item map's fields of `item` in the version that `shown` holds, or nothing when it is
+    // empty or holds no such element.
+    static std::optional<PickedItem> pick_shown(std::uint32_t item, const ShownItems& shown);
     // The labels of the text table in the version of the last frame.
     std::vector<Label> labels() const;
 

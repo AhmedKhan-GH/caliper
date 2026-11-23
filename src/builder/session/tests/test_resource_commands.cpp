@@ -170,6 +170,19 @@ TEST_CASE("resources: one resource keeps at most a source's share of bytes, and 
     CHECK(kept_steps_of(h, "tower/heads") == std::vector<std::int64_t>{20});
 }
 
+TEST_CASE("resources: a version that replaces another at the same step has a new serial") {
+    StepHistory h;
+    h.configure(instance_spec("tower"));
+    h.append_resource("tower", "arcs", 0, {}, version_at(100));
+    const std::uint64_t first = h.resource_at("tower/arcs", 100)->serial;
+    CHECK(first != 0);
+    h.append_resource("tower", "arcs", 0, {}, version_at(100, 3));
+    const std::optional<ResourceVersion> again = h.resource_at("tower/arcs", 100);
+    REQUIRE(again);
+    CHECK(again->count == 3);
+    CHECK(again->serial != first);
+}
+
 TEST_CASE("resources: program.read reads each field of the version at the step, inside its bytes") {
     StepHistory h;
     spec::Spec s = instance_spec("tower");

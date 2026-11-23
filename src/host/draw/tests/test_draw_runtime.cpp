@@ -399,6 +399,57 @@ TEST_CASE("a frame not done after 1 s stops its program at once, and the other p
     CHECK(other.status().state == cd::DrawState::running);
 }
 
+TEST_CASE("a pick keeps the version of the frame it read, and a version at the same step replaces the copy") {
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    cd::Instance a;
+    a.program = "tower_arcs";
+    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    ex::ArcResources res = ex::arc_resources();
+    REQUIRE(res.arcs.size() > 2);
+    REQUIRE(res.labels.size() > 1);
+    give_arcs(rt, res, 1);
+    REQUIRE(frame(h, rt).size() == 1);
+    const cd::ShownItems first = rt.shown_items();
+    REQUIRE(first);
+    const float w1 = res.arcs[1].weight;
+    // A newer version arrives while a pick of the first frame waits for its readback.
+    std::vector<ex::Arc> arcs2 = res.arcs;
+    for (ex::Arc& arc : arcs2) arc.weight += 100.0f;
+    REQUIRE(rt.set_resource(version("arcs", arcs2, 2)).ok());
+    REQUIRE(frame(h, rt).size() == 1);
+    auto weight = [](const std::optional<cd::PickedItem>& p) {
+        for (const auto& [name, value] : p->fields)
+            if (name == "weight") return value;
+        return -1.0;
+    };
+    const std::optional<cd::PickedItem> old = cd::DrawRuntime::pick_shown(1, first);
+    REQUIRE(old);
+    CHECK(old->step == 1);
+    CHECK(weight(old) == doctest::Approx(w1));
+    const std::optional<cd::PickedItem> now = rt.pick(1);
+    REQUIRE(now);
+    CHECK(now->step == 2);
+    CHECK(weight(now) == doctest::Approx(w1 + 100.0f));
+    // A version that replaces another at the same step, as after a fork from the shown step: the
+    // pick and the labels read the new bytes.
+    std::vector<ex::Arc> arcs3 = res.arcs;
+    for (ex::Arc& arc : arcs3) arc.weight += 200.0f;
+    std::vector<ex::Label> labels3 = res.labels;
+    labels3[0].string = res.labels[1].string;
+    labels3[0].position[0] += 1.0f;
+    REQUIRE(rt.set_resource(version("arcs", arcs3, 2)).ok());
+    REQUIRE(rt.set_resource(version("labels", labels3, 1)).ok());
+    REQUIRE(frame(h, rt).size() == 1);
+    CHECK(weight(rt.pick(1)) == doctest::Approx(w1 + 200.0f));
+    const std::vector<cd::Label> labels = rt.labels();
+    REQUIRE(!labels.empty());
+    CHECK(labels[0].position[0] == doctest::Approx(res.labels[0].position[0] + 1.0f));
+    // The pick of the first frame still reads its own version.
+    CHECK(weight(cd::DrawRuntime::pick_shown(1, first)) == doctest::Approx(w1));
+    CHECK_FALSE(cd::DrawRuntime::pick_shown(1, cd::ShownItems{}));
+}
+
 TEST_CASE("a refused frame is an error of its program only") {
     Host h;
     cd::DrawRuntime rt(h.gfx, true, checks());

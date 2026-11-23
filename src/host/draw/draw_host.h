@@ -86,7 +86,8 @@ public:
                                            caliper_builder::spec::Piece* piece)>;
     // The newest kept version at or before `cursor` of a program's published resource, and the
     // epoch of the attachment that sent it; false when there is none. The bytes stay valid until
-    // the next call.
+    // the next call. The version's serial tells a version that replaced another at the same
+    // step, which the host gives again.
     using Resources = std::function<bool(const std::string& program, const std::string& resource,
                                          std::int64_t cursor, ResourceVersion* out, std::uint64_t* epoch)>;
     // The value of a params' reference (a control, a selection or a state), as the session's

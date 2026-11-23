@@ -229,6 +229,7 @@ struct StepHistory::Impl {
     std::map<std::string, ResourceRing> resources;   // by "<program>/<resource>"
     std::map<std::string, std::string> pins;  // the open spec's instances of pieces: id to piece hash
     std::uint64_t resource_bytes = 0;
+    std::uint64_t resource_serial = 0;        // the serial of the newest version kept
     CursorState cursor;
     std::optional<double> spec_speed;         // the transport's speed at the last configure
     double play = 0;                          // the fraction of a step that play has moved
@@ -595,6 +596,7 @@ void StepHistory::append_resource(const std::string& program, const std::string&
     const auto seen = impl_->newest.find(seen_key);
     if (seen != impl_->newest.end() && step < seen->second) impl_->new_epoch(step);
     impl_->newest[seen_key] = step;
+    version.serial = ++impl_->resource_serial;
     impl_->keep_version(r, std::move(version));
     std::uint64_t source_bytes = 0;
     for (const auto& [id, ring] : impl_->rings) source_bytes += ring.bytes;

@@ -1406,6 +1406,7 @@ void SpecRuntime::set_instrument_state(caliper_builder::ValueStore* values, cali
                           *held = v->bytes;   // the bytes stay valid until the next call
                           out->resource = resource;
                           out->step = v->step;
+                          out->serial = v->serial;   // a version that replaced another at its step
                           out->count = v->width ? v->width * v->height : v->count;
                           out->bytes = (*held)->data();
                           out->size = (*held)->size();

@@ -1336,6 +1336,7 @@ Verdict DrawRuntime::set_resource(const ResourceVersion& version) {
     s->has_version = true;
     s->step = version.step;
     s->count = version.count;
+    s->serial = ++m.versions;   // a version at the same step is another version
     return {};
 }
 
@@ -1362,7 +1363,7 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
     m.epoch_known = true;
     bool changed = false;
     for (const Impl::Slot& s : m.slots)
-        if (s.drawn_step != -1 && s.step != s.drawn_step) changed = true;
+        if (s.drawn_serial != 0 && s.serial != s.drawn_serial) changed = true;
     bool reset = false;
     for (Impl::DrawBufferSlot& b : m.buffers) {
         const bool zero = all || (b.reset == cs::BufferReset::cursor && in.cursor_moved) ||
@@ -1495,13 +1496,18 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
     }
     if (frames->size() == first_frame) return false;
 
-    // What the frame shows, for the item map, the text table and the reset rules.
+    // What the frame shows, for the item map, the text table and the reset rules: a new copy for
+    // each new version, also one at the same step, and the copy a pick of an earlier frame holds
+    // stays as it was.
     for (Impl::Slot& s : m.slots) {
-        if (s.drawn_step == s.step && s.shown.step == s.step) continue;
-        s.drawn_step = s.step;
-        s.shown.step = s.step;
-        s.shown.count = s.count;
-        if (s.keep_cpu) s.shown.bytes = s.cpu;
+        if (s.drawn_serial == s.serial && s.shown) continue;
+        s.drawn_serial = s.serial;
+        auto shown = std::make_shared<Impl::Shown>();
+        shown->step = s.step;
+        shown->count = s.count;
+        if (s.keep_cpu) shown->bytes = std::move(s.cpu);
+        s.cpu.clear();
+        s.shown = std::move(shown);
     }
     m.status.resource_step = resource_step;
     ++m.frame_no;

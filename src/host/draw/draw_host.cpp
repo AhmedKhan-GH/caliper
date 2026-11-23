@@ -123,11 +123,12 @@ public:
             std::uint64_t e = 0;
             if (!host_.resources_(program, resource, host_.cursor_.step, &v, &e)) return;
             epoch = std::max(epoch, e);
-            // A runtime installed again, in this view or another, holds no version yet.
-            auto& last = given.epochs[as];
-            if (rt.resource_step(as) == v.step && last == e) return;
+            // A runtime installed again, in this view or another, holds no version yet, and a
+            // version that replaced another at the same step has another serial.
+            Given::Version& last = given.versions[as];
+            if (rt.resource_step(as) == v.step && last.epoch == e && last.serial == v.serial) return;
             v.resource = as;
-            if (rt.set_resource(v).ok()) last = e;
+            if (rt.set_resource(v).ok()) last = {e, v.serial};
         };
         for (const cs::Resource& res : r->draw.piece.resources)
             if (res.publish) give(r->program, res.id, res.id);
@@ -152,7 +153,10 @@ public:
 
 private:
     struct Given {
-        std::map<std::string, std::uint64_t> epochs;   // resource: the epoch of the version given
+        struct Version {
+            std::uint64_t epoch = 0, serial = 0;
+        };
+        std::map<std::string, Version> versions;   // resource: the epoch and serial of the version given
         std::uint64_t moves = 0;
     };
     DrawHost& host_;
