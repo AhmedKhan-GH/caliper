@@ -993,3 +993,39 @@ TEST_CASE("programs: a runtime that goes takes its history back from the program
     CHECK(view->draw_runtimes()[0]->resource_step("arcs") == -1);
     c->with_context([&] { rt.reset(); });
 }
+
+TEST_CASE("programs: a runtime that goes takes its history back also after another runtime gave the event sink") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) return;
+    const spec::Spec s = arcs_spec(false);
+    // The history and the values outlive the runtime that gave them, thus a host that still read
+    // them would draw the arcs.
+    caliper_builder::StepHistory kept;
+    kept.configure(s);
+    caliper_builder::ValueStore values;
+    values.reset(s);
+    const ex::ArcResources res = ex::arc_resources();
+    keep_version(kept, "heads", res.heads, 0);
+    keep_version(kept, "arcs", res.arcs, 0);
+    keep_version(kept, "labels", res.labels, 0);
+    auto first = std::make_unique<ArcsPanel>(c, s, canvas_layer(c));
+    REQUIRE(first->running() != nullptr);
+    first->rt->set_instrument_state(&values, &kept);
+    // A second runtime gives the host its event sink, and no values or history.
+    NoData source;
+    Events events;
+    std::unique_ptr<SpecRuntime> rt;
+    c->with_context([&] { rt = std::make_unique<SpecRuntime>(c->textures()); });
+    rt->set_scene_layer(canvas_layer(c));
+    rt->set_source(&source);
+    rt->set_instruments(&events, nullptr);
+    first.reset();   // the first runtime goes: its history and values leave the host, the sink stays
+    rt->set_spec(s);
+    for (int k = 0; k < 4; ++k) render(1200, 520, [&](const ImRect& area) { rt->draw(area, c->look()); }, 2);
+    caliper_live_views::SceneView* view = rt->scene_view_of("world");
+    REQUIRE(view != nullptr);
+    REQUIRE(view->draw_runtimes().size() == 1);
+    CHECK(view->draw_runtimes()[0]->status().state != caliper_draw::DrawState::running);
+    CHECK(view->draw_runtimes()[0]->resource_step("arcs") == -1);
+    c->with_context([&] { rt.reset(); });
+}
