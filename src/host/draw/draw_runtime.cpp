@@ -686,6 +686,7 @@ Verdict compile_pass(DrawRuntime::Impl& m, std::size_t k, const cp::Composed& c,
         r.name = e.name ? e.name : "";
         r.stage = cp::EntryStage(e.stage);
         for (int a = 0; a < 3; ++a) r.workgroup_size[a] = e.workgroup_size[a];
+        r.workgroup_memory = e.workgroup_memory;
         // The inputs and outputs, for the check of the stage interfaces (Check Order 7).
         for (std::size_t k = 0, nio = caliper_wgsl_module_entry_io_count(module, i); k < nio; ++k) {
             caliper_wgsl_io io{};
