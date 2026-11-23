@@ -277,3 +277,110 @@ def test_existing_index_is_not_overwritten(indexed):
         build_index(index.root, documents, model=index.model, tokenizer=index.tokenizer,
                     provenance={"partition": "fixture"})
     assert (index.root / "index" / "index.json").read_bytes() == before
+
+
+def test_t2_stream_restores_documents_and_skips_duplicates():
+    from tools.interp.build_index import stream_documents
+    from tools.interp.text_stream import TextStream, document_identity
+    source = [{"text": f"Example document {i} describes a blue square and a green circle."} for i in range(100)]
+    selected = [row for row in source if document_identity(row["text"])[0] == "index"]
+    assert len(selected) >= 2
+    source = [selected[0], selected[0], *source, selected[-1]]
+    expected = {}
+    tokenizer = TinyTokenizer()
+    for row in source:
+        partition, document_id = document_identity(row["text"])
+        if partition == "index":
+            expected[str(document_id)] = tokenizer.encode(row["text"], add_special_tokens=False) + [tokenizer.eos_token_id]
+    stream = TextStream(source, tokenizer, "index")
+    assert dict(stream_documents(stream, batch_tokens=7)) == expected
+    assert stream.emitted > sum(map(len, expected.values()))
+    with pytest.raises(ValueError, match="index partition"):
+        list(stream_documents(TextStream(source, tokenizer, "quality")))
+    stream = TextStream(selected, tokenizer, "index")
+    stream.next_tokens(1)
+    with pytest.raises(ValueError, match="contiguous"):
+        list(stream_documents(stream, batch_tokens=7))
+
+
+@pytest.mark.parametrize("option,value", [("--tokens", "2000001"), ("--tokens", "0"),
+                                         ("--memory-gb", "12.1"), ("--memory-gb", "nan"),
+                                         ("--memory-gb", "0"), ("--partition", "train"),
+                                         ("--partition", "quality"), ("--context", "257")])
+def test_cli_caps(option, value):
+    from tools.interp.build_index import parser
+    with pytest.raises(SystemExit) as error:
+        parser().parse_args(["--dictionary", "dictionary", option, value])
+    assert error.value.code == 2
+
+
+def _t2_source_manifest(folder, model):
+    import json
+    from tools.interp.text_stream import DATASET_CONFIG, DATASET_ID, DATASET_REVISION, partition_metadata
+    _, metadata = write_fixture(folder, model)
+    metadata["training"].update(dataset_id=DATASET_ID, dataset_config=DATASET_CONFIG,
+                                 dataset_revision=DATASET_REVISION, split="train", partitions=partition_metadata())
+    (folder / "dictionary.json").write_text(json.dumps(metadata))
+    return metadata
+
+
+def test_cli_fixture_build_and_query(tmp_path, monkeypatch, capsys):
+    import json
+    from tools.interp import build_index as command
+    from .fixture import TinyLM
+    model = TinyLM()
+    _t2_source_manifest(tmp_path, model)
+    source = tmp_path / "source.jsonl"
+    source.write_text("\n".join(json.dumps({"text": f"Example document {i} describes a blue square and a green circle."}) for i in range(100)))
+    monkeypatch.setattr(command, "load_text_model", lambda **kwargs: (model, TinyTokenizer()))
+    stages = []
+    class Memory:
+        peak = 0
+        def __init__(self, gb, device):
+            assert gb == 12 and device == "cpu"
+        def check(self, stage, **kwargs):
+            stages.append(stage)
+    monkeypatch.setattr(command, "MemoryGuard", Memory)
+    args = ["--dictionary", str(tmp_path), "--device", "cpu"]
+    assert command.main([*args, "--text-jsonl", str(source), "--tokens", "73", "--context", "17"]) == 0
+    index = FeatureIndex(tmp_path, model=model, tokenizer=TinyTokenizer())
+    assert index.metadata["tokens"] == 73
+    assert index.metadata["provenance"]["partition"] == "index"
+    assert index.metadata["provenance"]["source_kind"] == "staged_jsonl"
+    assert "before batch" in stages and "model batch" in stages and "table" in stages
+    assert command.main([*args, "--query", "0", "0", "--limit", "1"]) == 0
+    response = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert response["show"]["feature"] == 0
+    assert len(response["examples"]) <= 1
+    with pytest.raises(ValueError, match="already has an index"):
+        command.main(args)
+
+
+def test_training_and_quality_partition_overlap_refusal(tmp_path, monkeypatch):
+    import json
+    from tools.interp import build_index as command
+    from .fixture import TinyLM
+    metadata = _t2_source_manifest(tmp_path, TinyLM())
+    metadata["training"]["partitions"]["index"] = [9400, 10000]
+    (tmp_path / "dictionary.json").write_text(json.dumps(metadata))
+    monkeypatch.setattr(command, "load_text_model", lambda **kwargs: pytest.fail("model load before partition validation"))
+    with pytest.raises(ValueError, match="partitions differ"):
+        command.main(["--dictionary", str(tmp_path), "--device", "cpu"])
+
+
+def test_cli_clean_memory_stop(tmp_path, monkeypatch):
+    from tools.interp import build_index as command
+    from .fixture import TinyLM
+    model = TinyLM()
+    _t2_source_manifest(tmp_path, model)
+    monkeypatch.setattr(command, "load_text_model", lambda **kwargs: (model, TinyTokenizer()))
+    monkeypatch.setattr(command, "fineweb_documents", lambda **kwargs: [{"text": "fixture"}])
+    class Memory:
+        def __init__(self, *args):
+            pass
+        def check(self, stage, **kwargs):
+            if stage == "dictionary":
+                raise command.CleanStop("fixture memory limit")
+    monkeypatch.setattr(command, "MemoryGuard", Memory)
+    assert command.main(["--dictionary", str(tmp_path), "--device", "cpu"]) == 2
+    assert not (tmp_path / "index" / "index.json").exists()
