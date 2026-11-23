@@ -205,7 +205,7 @@ TEST_CASE("runner commands: run.start takes only a file of the workspace and che
     CHECK(list["runs"][0]["id"] == "base");
 }
 
-TEST_CASE("runner commands: a start and a fork show a card in every mode, and no rule removes it") {
+TEST_CASE("runner commands: a start and a fork show a card in every mode but Allow all, and no rule removes it") {
     Fixture f("runner_card");
     f.runner.runs.push_back(running("train-1"));
     const json start{{"script", "scripts/train.py"}};
@@ -219,11 +219,21 @@ TEST_CASE("runner commands: a start and a fork show a card in every mode, and no
     REQUIRE(f.s->registry().approve(p.approval).ok);
     CHECK(f.runner.starts.size() == 1);
 
-    // Allow all of the chat and Accept edits still show the card.
+    // Allow all runs them without a card, for the chat's agent and for mcp clients.
     REQUIRE(f.s->set_agent_mode(AgentPrincipal::chat, AgentMode::allow_all).ok());
-    CHECK(send(*f.s, "run.start", start, CommandOrigin::agent, "chat").error.code == "command.needs_approval");
-    CHECK(send(*f.s, "run.fork", {{"run", "train-1"}}, CommandOrigin::agent, "chat").error.code ==
-          "command.needs_approval");
+    CHECK(send(*f.s, "run.start", start, CommandOrigin::agent, "chat").ok);
+    CHECK(send(*f.s, "run.fork", {{"run", "train-1"}}, CommandOrigin::agent, "chat").ok);
+    CHECK(f.runner.starts.size() == 2);
+    CHECK(f.runner.forks.size() == 1);
+    REQUIRE(f.s->set_agent_mode(AgentPrincipal::mcp, AgentMode::allow_all).ok());
+    CHECK(send(*f.s, "run.start", start, CommandOrigin::mcp, "").ok);
+    CHECK(f.runner.starts.size() == 3);
+    CHECK(f.s->registry().pending_approvals().empty());
+    // The widget agent is not governed: its start still asks.
+    CHECK(send(*f.s, "run.start", start, CommandOrigin::agent, "widget").error.code == "command.needs_approval");
+    f.s->registry().cancel_pending();
+    // Accept edits does not cover them.
+    REQUIRE(f.s->set_agent_mode(AgentPrincipal::chat, AgentMode::ask).ok());
     REQUIRE(f.s->set_agent_mode(AgentPrincipal::mcp, AgentMode::accept_edits).ok());
     CHECK(send(*f.s, "run.start", start, CommandOrigin::mcp, "").error.code == "command.needs_approval");
     // The API asks too, and so does the person's own panel (origin ui).
@@ -232,10 +242,10 @@ TEST_CASE("runner commands: a start and a fork show a card in every mode, and no
     CHECK(send(*f.s, "run.fork", {{"run", "train-1"}}, CommandOrigin::builder, "").error.code ==
           "command.needs_approval");
     f.s->registry().cancel_pending();
-    CHECK(f.runner.starts.size() == 1);
-    CHECK(f.runner.forks.empty());
+    CHECK(f.runner.starts.size() == 3);
+    CHECK(f.runner.forks.size() == 1);
     approved(*f.s, "run.start", start, CommandOrigin::builder);
-    CHECK(f.runner.starts.size() == 2);
+    CHECK(f.runner.starts.size() == 4);
     // A request that its handler refuses gets no card: the reason comes at once.
     CHECK(send(*f.s, "run.start", {{"script", "missing.py"}}, CommandOrigin::mcp, "").error.code == kRunScriptRefused);
     CHECK(send(*f.s, "run.fork", {{"run", "gone"}}, CommandOrigin::mcp, "").error.code == kRunNotFound);
@@ -244,7 +254,7 @@ TEST_CASE("runner commands: a start and a fork show a card in every mode, and no
     // Read only refuses them.
     REQUIRE(f.s->set_agent_mode(AgentPrincipal::mcp, AgentMode::read_only).ok());
     CHECK(send(*f.s, "run.start", start, CommandOrigin::mcp, "").error.code == "command.denied");
-    CHECK(f.runner.starts.size() == 2);
+    CHECK(f.runner.starts.size() == 4);
 
     // run.stop is a run command of M1's kind: it asks, and a rule can allow it.
     REQUIRE(f.s->set_agent_mode(AgentPrincipal::mcp, AgentMode::ask).ok());

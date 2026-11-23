@@ -37,8 +37,8 @@
 //
 // With them, Permissions (design/command-layer.md, Agent permissions): the
 // mode of the side chat's agent and of caliper-mcp's clients (Ask, Accept
-// edits, Read only; Allow all is the chat's own, for one session, and is not
-// here), and the saved rules, each "<agent> · <command>" with Revoke. The
+// edits, Read only, Allow all; each saved and held across launches), and the
+// saved rules, each "<agent> · <command>" with Revoke. The
 // session keeps them in agent-permissions.json in the app-data folder; this
 // surface reads and changes them only through PermissionHooks, as the
 // person's own UI.
@@ -212,6 +212,7 @@ struct AgentSettingsLayoutInput {
     std::string cache_note;                // "Context cache about 18 GB", or ""
     bool permissions = false;              // the Permissions section
     int rules = 0;                         // its saved rules (at most kMaxRulesShown are laid out)
+    std::string perm_note;                 // the note of a failed save, wrapped under the title; "" for none
 };
 
 struct AgentSettingsLayout {
@@ -240,8 +241,9 @@ struct AgentSettingsLayout {
     // Permissions: in the left column under the key with two columns, else
     // across the window under the rest; empty without them.
     WidgetRect perm_title;
+    WidgetRect perm_note;                            // a failed save's note; empty without one
     WidgetRect chat_label, mcp_label;
-    std::vector<WidgetRect> chat_modes, mcp_modes;   // Ask, Accept edits, Read only
+    std::vector<WidgetRect> chat_modes, mcp_modes;   // Ask, Accept edits, Read only, Allow all
     WidgetRect rules_label;
     std::vector<WidgetRect> rules, revokes;          // a rule's text and its Revoke
     WidgetRect rules_more;                           // "+N" past kMaxRulesShown, or the "None" line
@@ -257,13 +259,15 @@ AgentSettingsLayout layout_agent_settings(const AgentSettingsLayoutInput& in, co
 
 // What the Permissions section reads and changes, through the session
 // (Session::agent_mode() and its neighbours). "chat" and "mcp" name whose
-// mode; a mode is "ask", "accept_edits" or "read_only". Unset hooks hide the
-// section.
+// mode; a mode is "ask", "accept_edits", "read_only" or "allow_all". Unset
+// hooks hide the section.
 struct AgentPermissionHooks {
     std::function<std::string(const std::string& who)> mode;
     std::function<void(const std::string& who, const std::string& mode)> set_mode;
     std::function<std::vector<std::pair<std::string, std::string>>()> rules;   // agent, command
     std::function<void(const std::string& agent, const std::string& command)> revoke;
+    // The note of a failed save (permission_save_note() of app_session.h), "" for none.
+    std::function<std::string()> note;
 };
 
 class AgentSettings {

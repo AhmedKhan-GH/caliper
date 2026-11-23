@@ -557,6 +557,7 @@ struct AppSession::Impl {
             cb::SessionOptions so;
             so.journal.on_append = [this](const cb::JournalEvent& e) { note(e); };
             so.permissions_file = opt.permissions_file;
+            so.protected_files = opt.protected_files;
             cb::Session::Open o = cb::Session::open(opt.workspace, std::move(so));
             std::lock_guard<std::mutex> lock(m);
             open_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
@@ -616,6 +617,11 @@ struct AppSession::Impl {
         std::snprintf(took, sizeof took, "%.0f ms", ms);
         say("workspace " + opt.workspace + " (" + opt.from + ") opened in " + took);
         log("workspace", shown_path(opt.workspace), opt.from);
+        // Said once where it shows in every run, also one with no status bar.
+        if (const std::string allow_all = allow_all_status(*raw); !allow_all.empty()) {
+            say(allow_all + ", as saved in agent-permissions.json");
+            log("allow all", allow_all, "");
+        }
         if (!opt.script.empty()) script = std::thread([this, raw] { run_script(*raw); });
     }
 
@@ -1167,6 +1173,36 @@ std::shared_ptr<caliper_api::CommandGateway> AppSession::command_gateway() {
         im.gateway->im = &im;
     }
     return std::make_shared<AppGateway>(im.gateway);
+}
+
+std::string allow_all_status(const caliper_builder::Session& s) {
+    namespace cb = caliper_builder;
+    std::vector<std::string> on, kept;
+    for (const auto& who : {std::pair<cb::AgentPrincipal, const char*>{cb::AgentPrincipal::chat, "side chat"},
+                            std::pair<cb::AgentPrincipal, const char*>{cb::AgentPrincipal::mcp, "MCP clients"}}) {
+        if (s.agent_mode(who.first) == cb::AgentMode::allow_all) on.push_back(who.second);
+        else if (s.saved_agent_mode(who.first) == cb::AgentMode::allow_all) kept.push_back(who.second);
+    }
+    auto names = [](const std::vector<std::string>& v) { return v.size() == 2 ? v[0] + " and " + v[1] : v[0]; };
+    std::string out;
+    if (!on.empty()) out = "allow all for " + names(on);
+    if (!kept.empty()) out += (out.empty() ? "" : "  \xc2\xb7  ") + ("allow all in the saved file for " + names(kept));
+    return out;
+}
+
+std::string permission_save_note(const caliper_builder::Session& s) {
+    namespace cb = caliper_builder;
+    std::string out = s.permission_save_error();
+    if (out.empty()) return out;
+    if (out.back() != '.') out += '.';
+    for (const auto& who : {std::pair<cb::AgentPrincipal, const char*>{cb::AgentPrincipal::chat, "Side chat"},
+                            std::pair<cb::AgentPrincipal, const char*>{cb::AgentPrincipal::mcp, "MCP clients"}}) {
+        const cb::AgentMode saved = s.saved_agent_mode(who.first);
+        if (saved != s.agent_mode(who.first))
+            out += std::string(" The file still says ") + cb::agent_mode_label(saved) + " for " + who.second +
+                   ", which returns at the next launch.";
+    }
+    return out + " Choose the mode again to save it.";
 }
 
 #else  // !CALIPER_WITH_BUILDER

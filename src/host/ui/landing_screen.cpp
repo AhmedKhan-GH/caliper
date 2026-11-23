@@ -1728,9 +1728,22 @@ std::function<std::string()>& host_status_note() {
 
 void set_host_status_note(std::function<std::string()> note) { host_status_note() = std::move(note); }
 
+namespace {
+std::function<std::string()>& host_status_flag() {
+    static std::function<std::string()> flag;
+    return flag;
+}
+}  // namespace
+
+void set_host_status_flag(std::function<std::string()> flag) { host_status_flag() = std::move(flag); }
+
 void draw_host_status_items(const char* renderer_name) {
     sternbild::status_item(upper(renderer_name ? renderer_name : "").c_str());
     sternbild::status_item(caliper_host::device_info().name.c_str());
+    if (host_status_flag()) {
+        const std::string flag = host_status_flag()();
+        if (!flag.empty()) sternbild::status_item(flag.c_str(), sternbild::col::bronze);
+    }
     if (host_status_note()) {
         const std::string note = host_status_note()();
         if (!note.empty()) sternbild::status_item(note.c_str());

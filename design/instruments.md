@@ -145,7 +145,7 @@ The session's policy asks the person about a `run` command from the origins `age
 | Ask | Runs | Asks when review is on | Asks | Asks when destructive |
 | Accept edits | Runs | Runs | Asks | Asks when destructive |
 | Read only | Runs | Dry runs and previews only | Refused | Refused |
-| Allow all (side chat only) | Runs | Runs | Runs | Runs |
+| Allow all | Runs | Runs | Runs | Runs, except a data-loss card |
 
 A rule of the session or a saved rule allows a `run` command without a card. The key of a rule is `permission_rule_key()`. For `run.set_param` and `run.action`, the key is the command and its target, such as `run.set_param:lr`. Thus a rule allows one parameter or one action, and not the whole command. For `run.pause`, the key is the command name.
 

@@ -13,6 +13,7 @@
 
 #ifndef _WIN32
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 using namespace caliper_builder;
@@ -164,20 +165,36 @@ TEST_CASE("Read only refuses every change with a plain message and lets reads an
           ApprovalDecision::allow);
 }
 
-TEST_CASE("Allow all removes the card and nothing more") {
+TEST_CASE("Allow all removes every card but a data-loss card, for the chat's agent and for mcp clients") {
     const auto v = decide("loader.delete", AgentMode::allow_all, ApprovalDecision::ask);
     CHECK(v.decision == ApprovalDecision::allow);
     CHECK(v.allowed_by == "allow_all");
+    // Running Python code, which no rule covers: a loader, a managed run's start or fork.
+    PermissionContext python;
+    python.python = true;
+    for (const char* name : {"loader.run", "run.start", "run.fork"})
+        CHECK(decide(name, AgentMode::allow_all, ApprovalDecision::ask, json::object(), python).decision ==
+              ApprovalDecision::allow);
+    CHECK(decide("panel.patch", AgentMode::allow_all, ApprovalDecision::deny).decision == ApprovalDecision::deny);
+    // Every command of the table, for both principals: what asks runs, unless
+    // its card is bound to the content it would lose. A destructive command
+    // declared later keeps its card by binding it.
     PermissionContext bound;
     bound.bound = true;
-    CHECK(decide("applet.save", AgentMode::allow_all, ApprovalDecision::ask, json::object(), bound).decision ==
-          ApprovalDecision::ask);
-    CHECK(decide("panel.patch", AgentMode::allow_all, ApprovalDecision::deny).decision == ApprovalDecision::deny);
-    // It is the chat's only: an mcp client's call under it still asks.
-    CommandInvocation mcp = chat("loader.delete");
-    mcp.origin = CommandOrigin::mcp;
-    CHECK(decide_agent_permission(cmd("loader.delete"), mcp, ApprovalDecision::ask, {AgentMode::allow_all}).decision ==
-          ApprovalDecision::ask);
+    for (const auto& d : command_table()) {
+        if (!d.agents) continue;
+        INFO(d.name);
+        CommandInvocation c = chat(d.name.c_str());
+        CommandInvocation m = c;
+        m.origin = CommandOrigin::mcp;
+        m.client.clear();
+        for (const CommandInvocation& inv : {c, m}) {
+            CHECK(decide_agent_permission(d, inv, ApprovalDecision::ask, {AgentMode::allow_all}).decision ==
+                  ApprovalDecision::allow);
+            bound.mode = AgentMode::allow_all;
+            CHECK(decide_agent_permission(d, inv, ApprovalDecision::ask, bound).decision == ApprovalDecision::ask);
+        }
+    }
 }
 
 TEST_CASE("rules allow their command; Read only, content binding and a Python run beat them") {
@@ -212,7 +229,7 @@ TEST_CASE("the saved permissions round-trip owner-only, and a bad file grants no
     CHECK(read_agent_permissions(path).problems.empty());  // missing: the defaults
     AgentPermissionsFile f;
     f.chat = AgentMode::accept_edits;
-    f.mcp = AgentMode::allow_all;  // never saved: written as ask
+    f.mcp = AgentMode::allow_all;
     f.rules = {{"claude", "panel.patch"}, {"mcp", "loader.delete"}};
     REQUIRE(write_agent_permissions(path, f).ok());
 #ifndef _WIN32
@@ -223,10 +240,11 @@ TEST_CASE("the saved permissions round-trip owner-only, and a bad file grants no
     AgentPermissionsRead r = read_agent_permissions(path);
     CHECK(r.problems.empty());
     CHECK(r.file.chat == AgentMode::accept_edits);
-    CHECK(r.file.mcp == AgentMode::ask);
+    CHECK(r.file.mcp == AgentMode::allow_all);
     CHECK(r.file.rules == f.rules);
 
-    // Allow all, unknown fields, bad agents and commands that are no agent's are ignored and reported.
+    // Unknown fields, bad agents and commands that are no agent's are ignored
+    // and reported, and Allow all with them, in a file with a problem.
     write(path, R"({"version": 1, "extra": 1, "modes": {"chat": "allow_all", "mcp": "read_only", "x": "ask"},
                    "rules": [{"agent": "claude", "command": "history.undo"}, {"agent": "../x", "command": "panel.patch"},
                              {"agent": "codex", "command": "panel.patch", "more": 1}, "no",
@@ -367,4 +385,70 @@ TEST_CASE("saved rules with a target round-trip, and a run rule without its targ
     r = read_agent_permissions(path);
     CHECK(r.file.rules == std::vector<AgentRule>{{"mcp", "run.set_param:momentum"}});
     CHECK(r.problems.size() == 3);
+}
+
+TEST_CASE("Allow all is read only from a clean file, and every other file leaves it at Ask") {
+    const std::string d = dir("allow-all");
+    const std::string path = d + "/agent-permissions.json";
+    auto read = [&](const std::string& text) {
+        write(path, text);
+#ifndef _WIN32
+        ::chmod(path.c_str(), 0600);
+#endif
+        return read_agent_permissions(path);
+    };
+    // A clean file: Allow all for each principal, at launch as it was saved.
+    AgentPermissionsRead r = read(R"({"version": 1, "modes": {"chat": "allow_all", "mcp": "allow_all"}, "rules": []})");
+    CHECK(r.problems.empty());
+    CHECK(r.file.chat == AgentMode::allow_all);
+    CHECK(r.file.mcp == AgentMode::allow_all);
+
+    // Unknown keys, wrong types, other spellings and a malformed file never turn it on.
+    for (const char* text : {
+             R"({"version": 1, "modes": {"chat": "allow_all", "mcp": "allow_all"}, "allow_all": true})",
+             R"({"version": 1, "modes": {"chat": "allow_all", "mcp": "allow_all", "widget": "allow_all"}})",
+             R"({"version": 1, "modes": {"chat": "allow_all", "mcp": 1}})",
+             R"({"version": 1, "modes": {"chat": "allow_all", "mcp": "allow_all"}, "rules": {"agent": "mcp"}})",
+             R"({"version": 1, "modes": {"chat": "allow_all", "mcp": "allow_all"}, "rules": ["x"]})",
+             R"({"version": 1, "modes": {"chat": true, "mcp": ["allow_all"]}})",
+             R"({"version": 1, "modes": {"chat": "Allow all", "mcp": "ALLOW_ALL"}})",
+             R"({"version": 1, "modes": {"chat": "allow-all", "mcp": "allow_all "}})",
+             R"({"version": 1, "modes": [["chat", "allow_all"]]})",
+             R"({"version": "1", "modes": {"chat": "allow_all", "mcp": "allow_all"}})",
+             R"({"modes": {"chat": "allow_all", "mcp": "allow_all"}})",
+             R"({"version": 1, "modes": {"chat": "allow_all", "mcp": "allow_all"})",
+             R"({"version": 1, "modes": {"chat": "allow_all", "mcp": "allow_all"}} trailing)",
+             "",
+             "null"}) {
+        INFO(text);
+        r = read(text);
+        CHECK(r.file.chat == AgentMode::ask);
+        CHECK(r.file.mcp == AgentMode::ask);
+        CHECK_FALSE(r.problems.empty());
+    }
+#ifndef _WIN32
+    // A clean file that others may write grants nothing.
+    write(path, R"({"version": 1, "modes": {"chat": "allow_all", "mcp": "allow_all"}})");
+    ::chmod(path.c_str(), 0620);
+    r = read_agent_permissions(path);
+    CHECK(r.file.chat == AgentMode::ask);
+    CHECK(r.file.mcp == AgentMode::ask);
+    // A clean file that another user owns grants nothing.
+    write(path, R"({"version": 1, "modes": {"chat": "allow_all", "mcp": "allow_all"}})");
+    ::chmod(path.c_str(), 0600);
+    REQUIRE(read_agent_permissions(path).file.chat == AgentMode::allow_all);
+    r = read_agent_permissions(path, static_cast<long>(::geteuid()) + 1);
+    CHECK(r.file.chat == AgentMode::ask);
+    CHECK(r.file.mcp == AgentMode::ask);
+    CHECK(r.problems == std::vector<std::string>{"The agent permissions file belongs to another user, so it grants nothing."});
+    // Saving over a file of another mode leaves it owner-only.
+    ::chmod(path.c_str(), 0644);
+    AgentPermissionsFile f;
+    f.chat = AgentMode::allow_all;
+    REQUIRE(write_agent_permissions(path, f).ok());
+    struct stat st {};
+    REQUIRE(::stat(path.c_str(), &st) == 0);
+    CHECK((st.st_mode & 0777) == 0600);
+    CHECK(read_agent_permissions(path).file.chat == AgentMode::allow_all);
+#endif
 }
