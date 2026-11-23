@@ -48,6 +48,13 @@ export class HeatmapView implements LiveView {
         this.plot.pan(dx, dy);
         this.host.request('data');
       },
+      press: () => {
+        const plot = this.plot.keep();
+        return () => {
+          plot();
+          this.host.request('data');
+        };
+      },
       wheel: (x, y, k) => {
         const reg = this.plot.region(x, y);
         if (reg === 'none') return;

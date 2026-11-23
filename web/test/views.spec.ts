@@ -163,6 +163,39 @@ test.describe('heatmap', () => {
     await expect.poll(async () => (await dbg(page, 'h')).window).toEqual({ x0: 0, x1: Cn, y0: 0, y1: R });
   });
 
+  test('a drag pans from the first pixel of motion, and a press released within 2 pixels is a pick that puts the window back', async ({ harness: page }) => {
+    // The rule of the app's camera press (src/host/live/camera_drag.h), which web/src/views/interact.ts follows.
+    await mount(page, 'h', 'heatmap');
+    await push(page, 'h', { data: values(1), shape: [R, Cn], vmin: 0, vmax: 31 });
+    const d = await dbg(page, 'h');
+    const box = await bodyBox(page, 'h');
+    const p = toPage(d, box, 5.5, 2.5, true);
+    const picks = async () => (await sent(page, 'h')).filter((e) => e.event.type === 'pick');
+    const hovers = async () => (await sent(page, 'h')).filter((e) => e.event.type === 'hover').length;
+    await page.mouse.move(p.x, p.y);
+    await page.mouse.down();
+    // One pixel of motion already pans the window by one pixel's width of data.
+    await page.mouse.move(p.x + 1, p.y);
+    const px = (d.window.x1 - d.window.x0) / d.area.w;
+    await expect.poll(async () => (await dbg(page, 'h')).window.x0).toBeCloseTo(d.window.x0 - px, 6);
+    // Released 1 pixel from the press: a pick of the cell at the press point, with the window put back.
+    await page.mouse.up();
+    await expect.poll(async () => (await picks()).length).toBe(1);
+    expect((await picks())[0]).toMatchObject({ event: { type: 'pick', detail: { row: 2, col: 5, value: 21 } } });
+    await expect.poll(async () => (await dbg(page, 'h')).window).toEqual(d.window);
+    // A press that goes 3 pixels out and comes back stays a drag: no pick, and the release reports a hover.
+    const h0 = await hovers();
+    await page.mouse.down();
+    await page.mouse.move(p.x + 3, p.y, { steps: 3 });
+    await page.mouse.move(p.x, p.y, { steps: 3 });
+    await page.mouse.up();
+    await expect.poll(hovers).toBeGreaterThan(h0);
+    expect((await picks()).length).toBe(1);
+    const back = (await dbg(page, 'h')).window;
+    expect(back.x0).toBeCloseTo(d.window.x0, 6);
+    expect(back.x1).toBeCloseTo(d.window.x1, 6);
+  });
+
   test('shift-drag selects a block of cells and reports it', async ({ harness: page }) => {
     await mount(page, 'h', 'heatmap');
     await push(page, 'h', { data: values(1), shape: [R, Cn], vmin: 0, vmax: 31 });
@@ -384,6 +417,23 @@ test.describe('points', () => {
     expect(cam.az).toBeGreaterThan((d.camera as { az: number }).az + 0.5);
     const after = await bodyPixels(page, '#p3');
     expect(Buffer.compare(Buffer.from(before.px.data), Buffer.from(after.px.data))).not.toBe(0);
+  });
+
+  test('3-D points turn from the first pixel of a drag, and a click within 2 pixels puts the camera back', async ({ harness: page }) => {
+    await mount(page, 'p3', 'points');
+    const n = 500;
+    const data: number[] = [];
+    for (let i = 0; i < n; i++) data.push(Math.cos(i), Math.sin(i), i / n * 2 - 1);
+    await push(page, 'p3', { data, shape: [n, 3], points_dims: 3, label_count: 0 });
+    const cam0 = (await dbg(page, 'p3')).camera as { az: number; el: number; dist: number };
+    const box = await bodyBox(page, 'p3');
+    const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.mouse.move(cx + 1, cy + 1);
+    await expect.poll(async () => ((await dbg(page, 'p3')).camera as { az: number }).az).toBeCloseTo(cam0.az + 0.01, 6);
+    await page.mouse.up();
+    await expect.poll(async () => (await dbg(page, 'p3')).camera).toEqual(cam0);
   });
 });
 

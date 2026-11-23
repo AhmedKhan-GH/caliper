@@ -47,6 +47,14 @@ export class HistogramView implements LiveView {
         this.plot.pan(dx, dy);
         host.request('data');
       },
+      press: () => {
+        const plot = this.plot.keep(), auto = this.auto;
+        return () => {
+          plot();
+          this.auto = auto;
+          host.request('data');
+        };
+      },
       wheel: (x, y, k) => {
         const reg = this.plot.region(x, y);
         if (reg === 'none') return;
