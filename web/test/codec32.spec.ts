@@ -1151,3 +1151,74 @@ test('the parts of a resource bound every size before a product', () => {
   expect(() => decode(frame)).toThrow(/in parts holds at most 134217728 bytes/);
   expect(RESOURCE_VERSION_MAX_BYTES).toBe(128 * 1024 * 1024);
 });
+
+// --- the piece form of SCENE_UPDATE and the ids scene.<n>, mirroring python/tests/test_wire_32.py ---
+
+const PIECE_BASE = { sub: 2, view: 's', seq: 1, stamp_ns: 1, path: 'p' };
+const PIECE_KEYS = { program: 'scene.1', piece: { name: 'points', version: 1 }, resources: { points: 3 }, arrays: ['positions', 'values'] };
+const pieceFrame = (part: string, change: Record<string, unknown> = {}, sections: Section[] = []) => {
+  const meta: Record<string, unknown> = { ...PIECE_BASE, part, ...PIECE_KEYS, ...change };
+  for (const k of Object.keys(meta)) if (meta[k] === undefined) delete meta[k];
+  return encodeFrame(MSG.scene_update, meta, sections, PROTOCOL_MINOR_3_2);
+};
+const pieceRefused = (buf: Uint8Array) => {
+  const err = catchError(() => decode(buf));
+  expect(err).toBeInstanceOf(MessageError);
+  expect((err as MessageError).code).toBe('bad_request');
+};
+
+test('the piece form carries its golden values and round-trips', () => {
+  const m = upd('scene_update_points_piece');
+  expect(m.program).toBe('scene.1');
+  expect(m.arrays).toEqual({});
+  expect(m.split).toBeUndefined();
+  expect(m.piece).toEqual({ name: 'points', version: 1 });
+  expect(m.resources).toEqual({ points: 3 });
+  expect(m.names).toEqual(['positions', 'values']);
+  expect(m.stamp).toBeDefined();
+  const r = frame32('resource_scene_points') as { program: string; resource: string; step: number; count: number; stride: number; data: Uint8Array };
+  expect([r.program, r.resource, r.step, r.count, r.stride, r.data.length]).toEqual(['scene.1', 'points', 7, 3, 32, 96]);
+  const buf = pieceFrame('points');
+  expect(encode(decode(buf), PROTOCOL_MINOR_3_2)).toEqual(buf);
+  const hash = `sha256:${'ab'.repeat(32)}`;
+  expect((decode(pieceFrame('points', { piece: { name: 'points', version: 1, hash } })) as SceneUpdateMsg).piece!.hash).toBe(hash);
+  const pins: [string, string, Record<string, unknown>][] = [
+    ['lines', 'lines', { mode: 'segments' }], ['arrows', 'arrows', { arrays: ['origins', 'vectors'] }], ['boxes', 'boxes', { arrays: ['centers'] }],
+    ['mesh', 'mesh', { arrays: ['positions', 'indices'] }],
+  ];
+  for (const [part, name, extra] of pins) expect(() => decode(pieceFrame(part, { piece: { name, version: 1 }, ...extra }))).not.toThrow();
+  for (const [form, name] of [['color', 'image'], ['depth', 'depth'], ['segmentation', 'segmentation']]) {
+    expect(() => decode(pieceFrame('image', { piece: { name, version: 1 }, arrays: ['pixels'], form }))).not.toThrow();
+  }
+});
+
+test('the piece form refuses what the rules refuse', () => {
+  const pin = (o: Record<string, unknown>) => ({ piece: { name: 'points', version: 1, ...o } });
+  const cases: [string, Record<string, unknown>][] = [
+    ['points', { program: 'scene.0123456789' }], ['points', { program: 'scene.x' }], ['points', { program: 5 }],
+    ['points', { piece: undefined }], ['points', pin({ hash: 'sha256:xyz' })], ['points', pin({ hash: `sha256:${'AB'.repeat(32)}` })],
+    ['points', pin({ version: 0 })], ['points', { piece: { name: 'lines', version: 1 } }],
+    ['camera', { piece: { name: 'camera', version: 1 }, arrays: ['x'] }],
+    ['points', { resources: undefined }], ['points', { resources: {} }],
+    ['points', { resources: Object.fromEntries('abcdefghi'.split('').map((k) => [k, 1])) }],
+    ['points', { resources: { __x: 1 } }], ['points', { resources: { points: -1 } }], ['points', { resources: { points: 2 ** 32 } }],
+    ['points', { arrays: undefined }], ['points', { arrays: [] }], ['points', { arrays: ['values'] }],
+    ['points', { arrays: ['positions', 'positions'] }], ['points', { arrays: ['values', 'positions'] }],
+    ['points', { arrays: ['positions', 'nope'] }], ['points', { arrays: ['positions', 3] }],
+    ['points', { split: { update: 1, piece: 0, pieces: 2 } }], ['points', { colormap: 'x' }],
+    ['image', { piece: { name: 'depth', version: 1 }, arrays: ['pixels'], form: 'color' }],
+    ['image', { piece: { name: 'image', version: 1 }, arrays: ['pixels'], form: 'encoded' }],
+  ];
+  for (const [part, change] of cases) pieceRefused(pieceFrame(part, change));
+  const f32 = new Float32Array(9);
+  pieceRefused(pieceFrame('points', {}, [{ name: 'positions', dtype: DTYPE.f32, shape: [3, 3], encoding: 0, bytes: new Uint8Array(f32.buffer) }]));
+});
+
+test('RESOURCE and PROGRAM take the ids scene.<n>', () => {
+  const resource = (program: string) => encodeFrame(MSG.resource, { program, resource: 'points', step: 1, count: 1, stride: 4 },
+    [{ name: 'resource', dtype: DTYPE.u8, shape: [4], encoding: 0, bytes: new Uint8Array(4) }], PROTOCOL_MINOR_3_2);
+  for (const ok of ['scene.0', 'scene.1', 'scene.123456789']) expect((decode(resource(ok)) as { program: string }).program).toBe(ok);
+  for (const bad of ['scene.', 'scene.x', 'scene.0123456789', 'scene.1a', 'scene.-1', 'scene.1.2']) pieceRefused(resource(bad));
+  expect((decode(encodeFrame(MSG.program, { request_id: 0, op: 'remove', id: 'scene.7' }, [], PROTOCOL_MINOR_3_2)) as { id: string }).id).toBe('scene.7');
+  pieceRefused(encodeFrame(MSG.program, { request_id: 0, op: 'remove', id: 'scene.x' }, [], PROTOCOL_MINOR_3_2));
+});

@@ -2052,7 +2052,14 @@ class SceneUpdate(_Msg):
     TIME_STATE a recorded message answers; ``split`` the key of a piece of a
     split update, whose ``arrays`` then hold the piece's rows, checked against
     the part only once :class:`SplitUpdates` has put the update together, and
-    whose ``params`` are the part's keys in piece 0 and empty in the others."""
+    whose ``params`` are the part's keys in piece 0 and empty in the others.
+
+    The piece form (capability "scene_pieces") has ``program``, the scene program
+    (``scene.<n>``) whose RESOURCE versions came just before it and hold the batch's
+    arrays as the resources of the library piece ``piece`` (the pin: name, version and
+    hash); ``resources`` maps each resource id to the count of that version, and
+    ``names`` lists the part's arrays that the batch held (the key "arrays" on the
+    wire). It carries no array section and no ``split``, thus ``arrays`` is empty."""
     TYPE: ClassVar[MsgType] = MsgType.SCENE_UPDATE
     sub: int
     view: str
@@ -2069,10 +2076,18 @@ class SceneUpdate(_Msg):
     stamp: Any = None
     cursor: int | None = None
     split: dict | None = None
+    program: str | None = None
+    piece: dict | None = None
+    resources: dict | None = None
+    names: list | None = None
 
     def to_meta(self):
         meta = {"sub": self.sub, "view": self.view, "seq": self.seq, "stamp_ns": self.stamp_ns,
                 "path": self.path, "part": self.part}
+        if self.program is not None:
+            meta.update(program=self.program, piece=dict(self.piece),
+                        resources={k: int(v) for k, v in self.resources.items()},
+                        arrays=list(self.names))
         camera = self.part == PART_CAMERA
         for key, v in self.params.items():
             if v is None:
@@ -2116,7 +2131,19 @@ class SceneUpdate(_Msg):
         axes = _opt(m, "axes", lambda v: isinstance(v, list), "a list")
         items = _opt(m, "items", _name, "an item space name")
         split = _opt(m, "split", _obj, "an object")
-        if split is not None:
+        program = piece = resources = names = None
+        if "program" in m:
+            program, piece, resources, names = _piece_form(m, part)
+            if split is not None:
+                _bad("an update in the piece form is never split")
+            params = _part_keys(m, part)
+            if part == PART_IMAGE and FORM_PIECE.get(params.get("form")) != piece["name"]:
+                _bad(f"an image of the form {params.get('form')!r} has no piece {piece['name']!r}")
+            for name in PART_SECTIONS[part]:
+                if f.section(name) is not None:
+                    _bad(f"an update in the piece form carries no array section, got {name!r}")
+            arrays = {}
+        elif split is not None:
             params, arrays = _piece(f, m, part, split)
         else:
             params = _part_keys(m, part)
@@ -2125,7 +2152,27 @@ class SceneUpdate(_Msg):
         if "stats" in params:
             params["stats"] = [math.nan if x is None else float(x) for x in params["stats"]]
         return cls(sub, view, seq, stamp_ns, path, part, arrays, params, static, state, axes,
-                   items, stamp, cursor, split)
+                   items, stamp, cursor, split, program, piece, resources, names)
+
+
+def _piece_form(m: dict, part: str) -> tuple:
+    """The keys of the piece form of SCENE_UPDATE, checked in this order: ``program``,
+    ``piece``, ``resources``, ``arrays``."""
+    program = _req(m, "program", scene_program_id, "a scene program id scene.<n> of 1 to 9 digits")
+    piece = _req(m, "piece", _library_pin, "a library pin {name, version} with an optional hash")
+    if piece["name"] not in SCENE_PIECES.get(part, ()):
+        _bad(f"the part {part!r} has no library piece {piece['name']!r}")
+    resources = _req(m, "resources", lambda v: _obj(v) and 1 <= len(v) <= MAX_RESOURCES and all(
+        _param_name(k) and _u32(n) for k, n in v.items()),
+        f"an object of 1 to {MAX_RESOURCES} resource ids, each with a uint32 count")
+    table = PART_SECTIONS[part]
+    names = _req(m, "arrays", lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v),
+                 "a list of array names")
+    if not names or names[0] != table[0] or any(x not in table for x in names) or \
+            [table.index(x) for x in names] != sorted({table.index(x) for x in names}):
+        _bad(f"'arrays' must list the arrays of {part!r} in their order from {table[0]!r}, "
+             f"each once, got {names!r}")
+    return program, dict(piece), dict(resources), list(names)
 
 
 @dataclass
@@ -2980,6 +3027,15 @@ TENSOR_ELEMENTS_MAX = 1000000
 # 3.2 draft, programmable graphics (design/programmable-graphics.md, Resource Message):
 # the capability "resources", RESOURCE and the instance form of PROGRAM.
 CAP_RESOURCES = "resources"
+# The piece form of SCENE_UPDATE: the arrays of an entity part travel as the RESOURCE versions of
+# a scene program, an instance of the part's library piece, and the update names them.
+CAP_SCENE_PIECES = "scene_pieces"
+SCENE_PROGRAM_PREFIX = "scene."
+# The library piece of each part, and of each form of an image.
+SCENE_PIECES = {PART_POINTS: ("points",), PART_LINES: ("lines",), PART_ARROWS: ("arrows",),
+                PART_BOXES: ("boxes",), PART_MESH: ("mesh",),
+                PART_IMAGE: ("image", "depth", "segmentation")}
+FORM_PIECE = {FORM_COLOR: "image", FORM_DEPTH: "depth", FORM_SEGMENTATION: "segmentation"}
 SECTION_DERIVE, SECTION_DRAW, SECTION_COMMON, SECTION_RESOURCE = "derive", "draw", "common", "resource"
 MAX_RESOURCES = 8
 RESOURCE_MAX_BYTES = 67043328      # 64 MiB less 64 KiB: the section fits one frame with its metadata
@@ -3015,14 +3071,27 @@ def _spec_id(v: str) -> bool:
 
 
 def _program_id(v) -> bool:
-    """A program id: 1 to 55 bytes of [a-z0-9_-], the first a letter, or the id of an
-    operator, ``operator.<id>.<n>``: a spec id, a dot and 1 to 5 digits."""
+    """A program id: 1 to 55 bytes of [a-z0-9_-], the first a letter, the id of an
+    operator, ``operator.<id>.<n>``: a spec id, a dot and 1 to 5 digits, or the id of a
+    scene program, ``scene.<n>`` with 1 to 9 digits (:func:`scene_program_id`)."""
     if not (isinstance(v, str) and 0 < len(v) <= PROGRAM_ID_MAX and v.isascii()):
         return False
+    if v.startswith(SCENE_PROGRAM_PREFIX):
+        return scene_program_id(v)
     if v.startswith("operator."):
         spec, dot, n = v[len("operator."):].rpartition(".")
         return bool(dot) and _spec_id(spec) and 1 <= len(n) <= 5 and all(c in _DIGITS for c in n)
     return _spec_id(v)
+
+
+def scene_program_id(v) -> bool:
+    """The id of a scene program, ``scene.<n>`` with n of 1 to 9 digits: the program whose
+    RESOURCE versions hold the arrays of one entity part of a scene in the piece form of
+    SCENE_UPDATE. No spec program takes such an id, since spec ids hold no dot."""
+    if not (isinstance(v, str) and v.startswith(SCENE_PROGRAM_PREFIX)):
+        return False
+    n = v[len(SCENE_PROGRAM_PREFIX):]
+    return 1 <= len(n) <= 9 and all(c in _DIGITS for c in n)
 
 
 def _param_name(v) -> bool:
@@ -3320,6 +3389,15 @@ def _piece_pin(v) -> bool:
             and name[0] in _PIECE_HEAD and all(c in _PIECE_TAIL for c in name)
             and _int_in(1, PIECE_VERSION_MAX)(v.get("version"))
             and isinstance(h, str) and h.startswith("sha256:") and _sha256_hex(h[len("sha256:"):]))
+
+
+def _library_pin(v) -> bool:
+    """The pin of a library piece in the piece form of SCENE_UPDATE: ``name`` and ``version``
+    as in :func:`_piece_pin`, and ``hash`` optional. The viewer draws its own library piece of
+    that name and version, whose version names the layout of its resources."""
+    if not _obj(v):
+        return False
+    return _piece_pin(dict(v, hash=v.get("hash", "sha256:" + "0" * 64)))
 
 
 def _binding(v) -> bool:

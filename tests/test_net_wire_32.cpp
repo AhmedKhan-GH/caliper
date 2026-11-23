@@ -1027,6 +1027,144 @@ TEST_CASE("net/wire 3.2: a split piece whose rows pass the update's rows is refu
     CHECK(su.add(last, &whole, &err) == SplitUpdates::Result::Pending);
 }
 
+TEST_CASE("net/wire 3.2: the piece form of SCENE_UPDATE and the ids scene.<n>") {
+    std::vector<std::vector<uint8_t>> keep;   // a decoded Section points into its buffer
+    auto load = [&](const char* name) {
+        keep.push_back(read_bytes(v32_dir() / (std::string(name) + ".bin")));
+        Message m;
+        const DecodeResult r = decode_bytes(keep.back(), &m);
+        REQUIRE_MESSAGE(r.ok(), name << ": " << r.error_code << ": " << r.message);
+        return m;
+    };
+    {   // the golden frames
+        const SceneUpdate u = std::get<SceneUpdate>(load("scene_update_points_piece"));
+        CHECK(u.program == std::optional<std::string>("scene.1"));
+        CHECK(u.arrays.empty());
+        CHECK(u.split.is_null());
+        CHECK(u.piece.find("name")->as_string() == "points");
+        CHECK(u.resources.size() == 1);
+        REQUIRE(u.names.size() == 2);
+        CHECK(u.names[0] == "positions");
+        CHECK(u.names[1] == "values");
+        const Resource r = std::get<Resource>(load("resource_scene_points"));
+        CHECK(r.program == "scene.1");
+        CHECK(r.resource == "points");
+        CHECK(r.step == 7);
+        CHECK(r.count == 3);
+        CHECK(r.stride == 32);
+        CHECK(r.data.size == 96);
+    }
+    const std::string pin = "{\"name\":\"points\",\"version\":1}";   // the hash is optional
+    // A piece-form update of `part`, each key replaced by `change` (a null value removes the key).
+    auto frame = [&](const std::string& part, std::vector<std::pair<std::string, std::string>> change,
+                     const std::vector<Section>& sections = {}) {
+        std::vector<std::pair<std::string, std::string>> keys = {
+            {"program", "\"scene.1\""}, {"piece", pin}, {"resources", "{\"points\":3}"},
+            {"arrays", "[\"positions\",\"values\"]"}};
+        for (const auto& c : change) {
+            bool found = false;
+            for (auto& k : keys) if (k.first == c.first) { k.second = c.second; found = true; }
+            if (!found) keys.push_back(c);
+        }
+        std::string meta = std::string("{") + kBase + ",\"part\":\"" + part + "\"";
+        for (const auto& k : keys) if (k.second != "null") meta += ",\"" + k.first + "\":" + k.second;
+        return update_frame(meta + "}", sections);
+    };
+    auto refused = [&](const std::vector<uint8_t>& bin, const char* why) {
+        CAPTURE(why);
+        Message m;
+        const DecodeResult r = decode_bytes(bin, &m);
+        CHECK(r.status == DecodeResult::Status::BadMessage);
+        CHECK(r.error_code == "bad_request");
+    };
+    {   // a whole update round-trips
+        const std::vector<uint8_t> bin = frame("points", {});
+        Message m;
+        REQUIRE(decode_bytes(bin, &m).ok());
+        std::vector<uint8_t> again;
+        std::string err;
+        REQUIRE_MESSAGE(encode(m, &again, &err, CALIPER_NET_MINOR_3_2), err);
+        CHECK(again == bin);
+    }
+    {   // each part has its own piece, an image the piece of its form
+        const std::vector<std::pair<std::string, std::string>> parts = {
+            {"lines", "lines"}, {"arrows", "arrows"}, {"boxes", "boxes"}, {"mesh", "mesh"}};
+        for (const auto& p : parts) {
+            const std::string name = "{\"name\":\"" + p.second + "\",\"version\":1,\"hash\":\"sha256:" + std::string(64, 'a') + "\"}";
+            std::vector<std::pair<std::string, std::string>> change = {{"piece", name}};
+            if (p.first == "lines") change.push_back({"mode", "\"segments\""});
+            if (p.first == "arrows") change.push_back({"arrays", "[\"origins\"]"});
+            if (p.first == "boxes") change.push_back({"arrays", "[\"centers\"]"});
+            Message m;
+            CHECK_MESSAGE(decode_bytes(frame(p.first, change), &m).ok(), p.first);
+        }
+        auto image = [&](const char* piece, const char* form) {
+            const std::string name = std::string("{\"name\":\"") + piece + "\",\"version\":1,\"hash\":\"sha256:" + std::string(64, 'a') + "\"}";
+            return frame("image", {{"piece", name}, {"arrays", "[\"pixels\"]"}, {"form", std::string("\"") + form + "\""}});
+        };
+        Message m;
+        CHECK(decode_bytes(image("image", "color"), &m).ok());
+        CHECK(decode_bytes(image("depth", "depth"), &m).ok());
+        CHECK(decode_bytes(image("segmentation", "segmentation"), &m).ok());
+        refused(image("depth", "color"), "image form and piece differ");
+        refused(image("image", "encoded"), "encoded has no piece");
+    }
+    const std::string lines_pin = "{\"name\":\"lines\",\"version\":1,\"hash\":\"sha256:" + std::string(64, 'a') + "\"}";
+    refused(frame("points", {{"program", "\"scene.0123456789\""}}), "program id of 10 digits");
+    refused(frame("points", {{"program", "\"scene.x\""}}), "program id");
+    refused(frame("points", {{"program", "5"}}), "program not a string");
+    refused(frame("points", {{"piece", "null"}}), "piece missing");
+    refused(frame("points", {{"piece", "{\"name\":\"points\",\"version\":1,\"hash\":\"sha256:xyz\"}"}}), "malformed hash");
+    {
+        Message m;
+        CHECK(decode_bytes(frame("points", {{"piece", "{\"name\":\"points\",\"version\":1,\"hash\":\"sha256:" + std::string(64, 'a') + "\"}"}}), &m).ok());
+    }
+    refused(frame("points", {{"piece", "{\"name\":\"points\",\"version\":0,\"hash\":\"sha256:" + std::string(64, 'a') + "\"}"}}), "pin version");
+    refused(frame("points", {{"piece", lines_pin}}), "piece name does not fit the part");
+    refused(frame("camera", {{"piece", "{\"name\":\"camera\",\"version\":1,\"hash\":\"sha256:" + std::string(64, 'a') + "\"}"}, {"arrays", "[\"x\"]"}}), "camera has no piece");
+    refused(frame("points", {{"resources", "null"}}), "resources missing");
+    refused(frame("points", {{"resources", "{}"}}), "resources empty");
+    refused(frame("points", {{"resources", "{\"a\":1,\"b\":1,\"c\":1,\"d\":1,\"e\":1,\"f\":1,\"g\":1,\"h\":1,\"i\":1}"}}), "nine resources");
+    refused(frame("points", {{"resources", "{\"__x\":1}"}}), "resource name");
+    refused(frame("points", {{"resources", "{\"points\":4294967296}"}}), "resource count");
+    refused(frame("points", {{"arrays", "null"}}), "arrays missing");
+    refused(frame("points", {{"arrays", "[]"}}), "arrays empty");
+    refused(frame("points", {{"arrays", "[\"values\"]"}}), "arrays not from the first");
+    refused(frame("points", {{"arrays", "[\"positions\",\"positions\"]"}}), "arrays twice");
+    refused(frame("points", {{"arrays", "[\"values\",\"positions\"]"}}), "arrays out of order");
+    refused(frame("points", {{"arrays", "[\"positions\",\"nope\"]"}}), "arrays unknown name");
+    refused(frame("points", {{"arrays", "[\"positions\",3]"}}), "arrays not strings");
+    refused(frame("points", {{"split", "{\"update\":1,\"piece\":0,\"pieces\":2}"}}), "split");
+    {
+        std::vector<float> pos(9, 0.f);
+        const Section p = Section::make("positions", CALIPER_NET_DTYPE_F32, {3, 3}, pos.data(), pos.size() * 4);
+        refused(frame("points", {}, {p}), "an array section");
+    }
+    {   // RESOURCE and PROGRAM take the ids scene.<n>
+        auto resource = [&](const std::string& program) {
+            Json meta;
+            const std::string text = "{\"program\":\"" + program + "\",\"resource\":\"points\",\"step\":1,\"count\":1,\"stride\":4}";
+            std::string err;
+            REQUIRE_MESSAGE(Json::parse(text.data(), text.size(), &meta, &err), err);
+            std::vector<uint8_t> zero(4, 0);
+            std::vector<uint8_t> out;
+            FrameError fe;
+            const Section s = Section::make("resource", CALIPER_NET_DTYPE_U8, {4}, zero.data(), 4);
+            REQUIRE_MESSAGE(encode_frame(CALIPER_NET_MSG_RESOURCE, meta, {s}, &out, &fe, CALIPER_NET_MINOR_3_2), fe.message);
+            return out;
+        };
+        Message m;
+        for (const char* ok : {"scene.0", "scene.1", "scene.123456789"}) {
+            CHECK_MESSAGE(decode_bytes(resource(ok), &m).ok(), ok);
+            CHECK(scene_program_id(ok));
+        }
+        for (const char* bad : {"scene.", "scene.x", "scene.0123456789", "scene.1a", "scene.-1", "scene.1.2"}) {
+            refused(resource(bad), bad);
+            CHECK_FALSE(scene_program_id(bad));
+        }
+    }
+}
+
 TEST_CASE("net/wire 3.2: every invalid golden frame is refused as expect.json says") {
     const Json expect = read_json(v32_dir() / "invalid" / "expect.json");
     REQUIRE(expect.size() >= 93);

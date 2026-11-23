@@ -504,6 +504,11 @@ export interface SceneUpdateMsg {
   cursor?: number;
   axes?: PayloadAxis[];
   items?: string;
+  /** The piece form (capability "scene_pieces"): the scene program, the library piece pin, the count of each resource, and the arrays the batch held (the wire key is "arrays"). No section, no split, so `arrays` is empty. */
+  program?: string;
+  piece?: { name: string; version: number; hash?: string };
+  resources?: Record<string, number>;
+  names?: string[];
   /** The key of a piece of a split update; its `arrays` then hold the piece's rows, and `params` the part's keys in piece 0 only. */
   split?: SplitKey;
   /** The i64 (T,) stamp section. */
@@ -735,6 +740,10 @@ export const PROGRAM_WORKGROUPS_MAX = 65535;
 
 /** Capability: RESOURCE, and PROGRAM of an instance of a piece with the sections "derive", "draw" and "common". */
 export const CAP_RESOURCES = 'resources';
+/** Capability: the piece form of SCENE_UPDATE, whose arrays travel as RESOURCE versions of a scene program "scene.<n>". */
+export const CAP_SCENE_PIECES = 'scene_pieces';
+/** The prefix of the id of a scene program: "scene." and 1 to 9 decimal digits. */
+export const SCENE_PROGRAM_PREFIX = 'scene.';
 /** PROGRAM sections of an instance of a piece, and the section of RESOURCE. */
 export const SECTION_DERIVE = 'derive';
 export const SECTION_DRAW = 'draw';
@@ -814,7 +823,7 @@ export interface ProgramMsg {
   /** set: the scene of a geometry output's panel. */
   scene?: string;
   /** Instance of a piece, set: the pin {name, version, hash}, where the hash is "sha256:" and 64 lowercase hex digits. */
-  piece?: { name: string; version: number; hash: string };
+  piece?: { name: string; version: number; hash?: string };
   /** Instance of a piece, set: the piece's manifest. */
   manifest?: Record<string, unknown>;
   /** Instance of a piece, set: an input name to "live:<tensor>" or "program:<id>/<resource>". */

@@ -592,6 +592,12 @@ static inline uint32_t caliper_net_align(uint32_t n) {
  * PROGRAM_STATE gives an instance the status kind "piece".
  * docs/reference/wire-protocol-3-2.md states the keys and checks. */
 #define CALIPER_NET_CAP_RESOURCES        "resources"  /* RESOURCE, and PROGRAM of a piece          */
+/* 3.2 draft, the piece form of SCENE_UPDATE: an entity part's arrays travel as the RESOURCE
+ * versions of a scene program "scene.<n>" (1 to 9 digits), an instance of the part's library
+ * piece, sent just before the update that names them with the keys program, piece, resources
+ * and arrays. A producer sends the form only to a peer that announced the capability. */
+#define CALIPER_NET_CAP_SCENE_PIECES     "scene_pieces" /* the piece form of SCENE_UPDATE   */
+#define CALIPER_NET_SCENE_PROGRAM_PREFIX "scene."     /* the id of a scene program: scene.<n> */
 #define CALIPER_NET_MSG_RESOURCE         0x0082u      /* P -> V/H, H -> V   one version of one published resource */
 #define CALIPER_NET_SECTION_DERIVE       "derive"     /* u8 (B,): the derive half's WGSL    */
 #define CALIPER_NET_SECTION_DRAW         "draw"       /* u8 (B,): the draw half's WGSL      */

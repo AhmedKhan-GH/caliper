@@ -906,3 +906,92 @@ def test_instance_codec_rules():
                                     draw=src)))
     # A params op of an instance keeps the params form.
     assert w.decode(w.encode(w.Program(5, "params", "dots", params={"gain": 1}))).piece is None
+
+
+# The piece form of SCENE_UPDATE (capability "scene_pieces") and the ids "scene.<n>".
+PIECE_PIN = {"name": "points", "version": 1, "hash": "sha256:" + "ab" * 32}
+PIECE_KEYS = {"program": "scene.1", "piece": PIECE_PIN, "resources": {"points": 3},
+              "arrays": ["positions", "values"]}
+
+
+def _piece_update(part="points", sections=None, **change):
+    keys = {k: v for k, v in {**PIECE_KEYS, **change}.items() if v is not None}
+    return _update(part, sections or {}, **keys)
+
+
+def test_scene_pieces_capability_and_prefix():
+    assert w.CAP_SCENE_PIECES == "scene_pieces" and w.SCENE_PROGRAM_PREFIX == "scene."
+
+
+def test_piece_form_golden_frames():
+    m = _d("scene_update_points_piece")
+    assert m.program == "scene.1" and m.arrays == {} and m.split is None
+    assert m.piece == {"name": "points", "version": 1} and m.resources == {"points": 3}
+    assert m.names == ["positions", "values"] and m.stamp is not None
+    r = _d("resource_scene_points")
+    assert (r.program, r.resource, r.step, r.count, r.stride, len(r.data)) == ("scene.1", "points", 7, 3, 32, 96)
+    rows = np.frombuffer(r.data, dtype=[("p", "<f4", 4), ("bits", "<u4"), ("index", "<u4"), ("pad", "V8")])
+    assert rows["p"][:, 3].tolist() == [1.0, 1.0, 1.0] and rows["index"].tolist() == [0, 1, 2]
+
+
+def test_piece_form_round_trips():
+    for part, piece, names in [("points", "points", ["positions"]), ("lines", "lines", ["positions", "colors"]),
+                               ("arrows", "arrows", ["origins", "vectors"]), ("boxes", "boxes", ["centers"]),
+                               ("mesh", "mesh", ["positions", "indices", "uvs"])]:
+        kw = {"mode": "segments"} if part == "lines" else {}
+        buf = _piece_update(part, piece=dict(PIECE_PIN, name=piece), arrays=names, **kw)
+        m = w.decode(buf)
+        assert m.names == names and m.arrays == {} and m.piece["name"] == piece
+        assert w.encode(m) == buf
+    for form, piece in [("color", "image"), ("depth", "depth"), ("segmentation", "segmentation")]:
+        buf = _piece_update("image", piece=dict(PIECE_PIN, name=piece), arrays=["pixels"], form=form)
+        assert w.encode(w.decode(buf)) == buf
+
+
+def test_piece_form_refusals():
+    _refused(_piece_update(program="scene.0123456789"), match="program")
+    _refused(_piece_update(piece=None), match="piece")
+    _refused(_piece_update(piece=dict(PIECE_PIN, name="lines")), match="library piece")
+    _refused(_piece_update(piece=dict(PIECE_PIN, hash="sha256:xyz")), match="pin")
+    _refused(_piece_update(piece=dict(PIECE_PIN, hash="sha256:" + "AB" * 32)), match="pin")
+    assert w.decode(_piece_update(piece={"name": "points", "version": 1})).piece == {"name": "points", "version": 1}
+    _refused(_piece_update("camera", piece=dict(PIECE_PIN, name="camera"), arrays=["x"]))
+    _refused(_piece_update(resources=None), match="resources")
+    _refused(_piece_update(resources={}), match="resources")
+    _refused(_piece_update(resources={f"r{k}": 1 for k in range(9)}), match="resources")
+    _refused(_piece_update(resources={"__x": 1}), match="resources")
+    _refused(_piece_update(resources={"points": -1}), match="resources")
+    _refused(_piece_update(resources={"points": 2**32}), match="resources")
+    _refused(_piece_update(arrays=None), match="arrays")
+    _refused(_piece_update(arrays=[]), match="arrays")
+    _refused(_piece_update(arrays=["values"]), match="arrays")
+    _refused(_piece_update(arrays=["positions", "positions"]), match="arrays")
+    _refused(_piece_update(arrays=["values", "positions"]), match="arrays")
+    _refused(_piece_update(arrays=["positions", "nope"]), match="arrays")
+    _refused(_piece_update(arrays=["positions", 3]), match="arrays")
+    _refused(_piece_update(split={"update": 1, "piece": 0, "pieces": 2}), match="split")
+    _refused(_piece_update(sections={"positions": np.zeros((3, 3), np.float32)}), match="array section")
+    _refused(_piece_update(sections={"colors": np.zeros((3, 4), np.uint8)}), match="array section")
+    # An image takes the piece of its form.
+    _refused(_piece_update("image", piece=dict(PIECE_PIN, name="depth"), arrays=["pixels"], form="color"))
+    _refused(_piece_update("image", piece=dict(PIECE_PIN, name="image"), arrays=["pixels"], form="encoded"))
+    # The part's keys are still checked.
+    _refused(_piece_update(colormap="x"))
+    # The stamp is read as usual.
+    ok = _piece_update(sections={"stamp": np.array([1, 2], np.int64)})
+    assert w.decode(ok).stamp is not None
+
+
+def test_scene_program_ids():
+    def res(program):
+        return w.encode_frame(w.MsgType.RESOURCE, {"program": program, "resource": "points", "step": 1,
+                                                   "count": 1, "stride": 4},
+                              [w.Section.from_array("resource", np.zeros(4, np.uint8))])
+    for ok in ("scene.0", "scene.1", "scene.123456789"):
+        assert w.decode(res(ok)).program == ok and w.scene_program_id(ok)
+    for bad in ("scene.", "scene.x", "scene.0123456789", "scene.1a", "scene.-1", "scene.1.2"):
+        _refused(res(bad), match="program")
+        assert not w.scene_program_id(bad)
+    prog = w.Program(0, w.PROGRAM_REMOVE, "scene.7")
+    assert w.decode(w.encode(prog)).id == "scene.7"
+    _refused(w.encode_frame(w.MsgType.PROGRAM, {"request_id": 0, "op": "remove", "id": "scene.x"}))

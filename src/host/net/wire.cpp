@@ -1310,6 +1310,87 @@ void scene_flags(const Json& m, M& out) {
     if (const Json* v = opt(m, "cursor", is_u32, "a uint32")) out.cursor = u32(*v);
 }
 
+bool program_id_ok(const Json* v);
+bool piece_pin_ok(const Json& v);
+bool param_name_ok(const std::string& s);
+
+// The library piece of each part, and of each form of an image (the piece form of SCENE_UPDATE).
+bool scene_piece_fits(int part, const std::string& name, const Json& params) {
+    switch (part) {
+        case kPoints: return name == "points";
+        case kLines: return name == "lines";
+        case kArrows: return name == "arrows";
+        case kBoxes: return name == "boxes";
+        case kMesh: return name == "mesh";
+        case kImage: {
+            const Json* form = params.find("form");
+            const std::string f = form && form->is_string() ? form->as_string() : "";
+            return (f == CALIPER_NET_FORM_COLOR && name == "image") || (f == CALIPER_NET_FORM_DEPTH && name == "depth") ||
+                   (f == CALIPER_NET_FORM_SEGMENTATION && name == "segmentation");
+        }
+        default: return false;
+    }
+}
+
+// The keys of the piece form, in the order program, piece, resources, arrays; then the part's keys, and no
+// array section.
+void scene_piece_form(const Frame& f, const Json& m, int part, SceneUpdate& u) {
+    u.program = req(m, "program", [](const Json& v) { return v.is_string() && scene_program_id(v.as_string()); },
+                    "a scene program id scene.<n> of 1 to 9 digits")
+                    .as_string();
+    u.piece = req(
+        m, "piece",
+        [](const Json& v) {
+            // A library pin: name and version as a pin's, and the hash optional.
+            if (!v.is_object()) return false;
+            Json p = v;
+            if (!p.find("hash")) p.set("hash", Json(std::string("sha256:") + std::string(64, '0')));
+            return piece_pin_ok(p);
+        },
+        "a library pin {name, version} with an optional hash");
+    const std::string name = u.piece.find("name")->as_string();
+    const bool image_piece = name == "image" || name == "depth" || name == "segmentation";
+    if (part == kCamera || (part == kImage ? !image_piece : !scene_piece_fits(part, name, Json::object())))
+        bad("the part '" + u.part + "' has no library piece '" + name + "'");
+    u.resources = req(
+        m, "resources",
+        [](const Json& v) {
+            if (!v.is_object() || v.size() < 1 || v.size() > CALIPER_NET_MAX_RESOURCES) return false;
+            for (const auto& kv : v.members())
+                if (!param_name_ok(kv.first) || !is_u32(kv.second)) return false;
+            return true;
+        },
+        "an object of 1 to 8 resource ids, each with a uint32 count");
+    const Json& names = req(
+        m, "arrays",
+        [](const Json& v) {
+            if (!v.is_array()) return false;
+            for (const Json& x : v.items())
+                if (!x.is_string()) return false;
+            return true;
+        },
+        "a list of array names");
+    const char* const* table = scene_part_sections(part);
+    int last = -1;
+    bool ok = names.size() > 0;
+    for (const Json& x : names.items()) {
+        int at = -1;
+        for (int k = 0; table[k]; ++k)
+            if (x.as_string() == table[k]) at = k;
+        ok = ok && at > last && (last >= 0 || at == 0);
+        last = at;
+        u.names.push_back(x.as_string());
+    }
+    if (!ok) bad("'arrays' must list the arrays of '" + u.part + "' in their order from its first, each once");
+    if (!u.split.is_null()) bad("an update in the piece form is never split");
+    u.params = scene_part_keys(m, part);
+    if (part == kImage && !scene_piece_fits(part, name, u.params))
+        bad("this form of an image has no piece '" + name + "'");
+    for (int k = 0; table[k]; ++k)
+        if (f.section(table[k])) bad(std::string("an update in the piece form carries no array section, got '") +
+                                     table[k] + "'");
+}
+
 SceneUpdate scene_update(const Frame& f) {
     const Json& m = f.meta;
     SceneUpdate u;
@@ -1321,8 +1402,11 @@ SceneUpdate scene_update(const Frame& f) {
     scene_flags(m, u);
     if (const Json* v = opt(m, "axes", is_list, "a list")) u.axes = *v;
     if (const Json* v = opt(m, "items", is_name, "an item space name")) u.items = v->as_string();
-    if (const Json* sp = opt(m, "split", is_obj, "an object")) {
-        u.split = *sp;
+    const Json* sp = opt(m, "split", is_obj, "an object");
+    if (sp) u.split = *sp;
+    if (m.find("program")) {
+        scene_piece_form(f, m, part, u);
+    } else if (sp) {
         scene_piece(f, m, part, u);
     } else {
     u.params = scene_part_keys(m, part);
@@ -1439,6 +1523,14 @@ void scene_update_to_meta(const SceneUpdate& u, Json& m, std::vector<Section>& s
     scene_write_common(m, u);
     m.set("path", u.path);
     m.set("part", u.part);
+    if (u.program) {
+        m.set("program", *u.program);
+        m.set("piece", u.piece);
+        m.set("resources", u.resources);
+        Json names = Json::array();
+        for (const std::string& n : u.names) names.push(Json(n));
+        m.set("arrays", names);
+    }
     const bool camera = u.part == CALIPER_NET_PART_CAMERA;
     for (const auto& kv : u.params.members()) {
         const std::string& k = kv.first;
@@ -1794,6 +1886,7 @@ bool program_id_ok(const Json* v) {
     if (!v || !v->is_string()) return false;
     const std::string& s = v->as_string();
     if (s.empty() || s.size() > CALIPER_NET_PROGRAM_ID_MAX) return false;
+    if (s.compare(0, 6, CALIPER_NET_SCENE_PROGRAM_PREFIX) == 0) return scene_program_id(s);
     if (s.compare(0, 9, "operator.") == 0) return operator_id_ok(s);
     if (!lower(s[0])) return false;
     for (char c : s)
@@ -3036,6 +3129,15 @@ SplitResources::Result SplitResources::add(const Resource& r, WholeResource* out
     }
     open_.erase(held);
     return Result::Whole;
+}
+
+bool scene_program_id(const std::string& id) {
+    static const std::string kPrefix = CALIPER_NET_SCENE_PROGRAM_PREFIX;
+    if (id.size() <= kPrefix.size() || id.size() > kPrefix.size() + 9 || id.compare(0, kPrefix.size(), kPrefix) != 0)
+        return false;
+    for (size_t i = kPrefix.size(); i < id.size(); ++i)
+        if (id[i] < '0' || id[i] > '9') return false;
+    return true;
 }
 
 }  // namespace wire
