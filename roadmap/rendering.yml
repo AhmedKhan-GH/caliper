@@ -695,3 +695,130 @@ features:
     depends_on: [REN-06, REN-65]
     docs: docs/applets/in-tree-applets.md#twinscope
     issue: null
+
+  - id: REN-76
+    title: Program Sandbox
+    status: shipped
+    scope: core
+    summary: The sandbox checks each program in the editor, the script and the viewer, keeps model tensors read-only, translates the WGSL with a bounds check on every access, and stops a program at its time limit and memory budget.
+    depends_on: [SPC-14]
+    docs: docs/agents/gpu-programs.md#sandbox-rules
+    issue: null
+
+  - id: REN-77
+    title: Programmable Graphics
+    status: built
+    scope: core
+    summary: An agent writes the graphics of an instrument as pieces with its own buffers, textures, state between frames and WGSL passes, which read live tensors without a copy, draw into a scene panel with the camera given, keep picking and run inside the sandbox.
+    depends_on: [REN-11, REN-76, SPC-50]
+    docs: docs/agents/pieces.md
+    branches: [playground]
+    issue: null
+
+  - id: REN-78
+    title: Derive Half of a Piece
+    status: built
+    scope: core
+    summary: The derive half runs compute passes in the training script at the shared cadence, over live tensors that it reads without a copy, and publishes named typed resources that keep their contents from one run to the next.
+    depends_on: [REN-77, STR-54]
+    docs: docs/agents/pieces.md#derive-half
+    branches: [playground]
+    issue: null
+
+  - id: REN-79
+    title: Draw Half of a Piece
+    status: built
+    scope: core
+    summary: The draw half runs in the viewer every frame as a render graph over the published resources, with its own targets, blending and depth, and the host removes a draw that goes over its time or memory budget.
+    depends_on: [REN-77]
+    docs: docs/agents/pieces.md#draw-half
+    branches: [playground]
+    issue: null
+
+  - id: REN-80
+    title: Piece Library
+    status: built
+    scope: core
+    summary: The built-in library holds the piece points@1 and the shader modules camera, colormap, easing and pick, which pieces import by name, and points@1 draws the same pixels and returns the same picks as the built-in points.
+    depends_on: [REN-32, REN-79]
+    docs: docs/agents/pieces.md#piece-sources
+    branches: [playground]
+    issue: null
+
+  - id: REN-81
+    title: Picking of Program Items
+    status: built
+    scope: core
+    summary: A pick pass of a draw half returns the item of a program under the pointer with its fields, a selection command can set the same item, and the host places the text labels that a program publishes.
+    depends_on: [REN-15, REN-79]
+    docs: docs/agents/pieces.md#selection-and-picking
+    branches: [playground]
+    issue: null
+
+  - id: REN-82
+    title: Browser Draw Runtime
+    status: built
+    scope: core
+    summary: The browser module runs the draw half on WebGPU from the same WGSL and declaration, with the same hash checks and refusals, and a test compares its pictures with the pictures of the app.
+    depends_on: [REN-13, REN-69, REN-79]
+    docs: docs/agents/pieces.md#browser-viewer
+    branches: [playground]
+    issue: null
+
+  - id: REN-83
+    title: Attention Arc Tower Demo
+    status: built
+    scope: peripheral
+    summary: A small transformer trains while an agent writes the pieces that draw the attention arcs of its tokens on rings, the induction score of each head and the attention grid, and an ablation and a fork test whether the induction heads cause the loss to fall.
+    depends_on: [INT-34, REN-80, RUN-15]
+    docs: docs/agents/pieces.md#attention-arc-tower
+    branches: [playground]
+    issue: null
+
+  - id: REN-84
+    title: Lines Arrows and Paths as Library Pieces
+    status: built
+    scope: core
+    summary: Lines, arrows and paths become pieces of the library that match the pixels and the picks of the built-in shapes.
+    depends_on: [REN-80]
+    branches: [playground-m6lines]
+    in_progress: true
+    issue: null
+
+  - id: REN-85
+    title: Boxes and Meshes as Library Pieces
+    status: built
+    scope: core
+    summary: Boxes and meshes become pieces of the library that match the pixels and the picks of the built-in shapes.
+    depends_on: [REN-80]
+    branches: [playground-m6boxes]
+    in_progress: true
+    issue: null
+
+  - id: REN-86
+    title: Images Depth Maps and Segmentation Masks as Library Pieces
+    status: built
+    scope: core
+    summary: Images, depth maps and segmentation masks become pieces of the library that match the pixels and the picks of the built-in shapes.
+    depends_on: [REN-80]
+    branches: [playground-m6images]
+    in_progress: true
+    issue: null
+
+  - id: REN-87
+    title: Surface as a Library Piece
+    status: built
+    scope: core
+    summary: The surface becomes a piece of the library that matches the pixels and the picks of the built-in surface.
+    depends_on: [REN-80, SPC-43]
+    branches: [playground-m6surface]
+    in_progress: true
+    issue: null
+
+  - id: REN-88
+    title: Removal of Per-Shape Draw Code
+    status: planned
+    scope: core
+    summary: When every built-in shape is a library piece, the per-shape shaders, draw code, wire parts and browser drawers are deleted, so that one rendering path remains.
+    depends_on: [REN-84, REN-85, REN-86, REN-87]
+    issue: null
