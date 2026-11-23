@@ -41,6 +41,22 @@ function(caliper_draw_parity_targets)
     add_test(NAME caliper_draw_parity_app
         COMMAND caliper_draw_parity_app "${CMAKE_BINARY_DIR}/tests/draw_parity/out")
     set_tests_properties(caliper_draw_parity_app PROPERTIES LABELS "gfx;draw_parity" SKIP_RETURN_CODE 77 TIMEOUT 120)
+    # The whole dashboard: the recorded run of the Attention Arc Tower in tests/draw_parity/dashboard,
+    # drawn by the app's spec runtime offscreen on Metal into <build>/tests/draw_parity/dashboard_out,
+    # which web/test/draw_parity_dashboard.spec.ts compares with the browser's spec page
+    # (CALIPER_DASHBOARD_PARITY_DIR). Without a Metal device it exits 77, a skip.
+    if(TARGET caliper_spec_runtime)
+        add_executable(caliper_dashboard_parity_app "${_dir}/dashboard_parity_app.cpp")
+        target_include_directories(caliper_dashboard_parity_app PRIVATE "${CMAKE_SOURCE_DIR}/src/host")
+        target_link_libraries(caliper_dashboard_parity_app PRIVATE caliper_spec_runtime)
+        set_target_properties(caliper_dashboard_parity_app PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+        caliper_spec_runtime_fonts(caliper_dashboard_parity_app)
+        add_test(NAME caliper_dashboard_parity_app
+            COMMAND caliper_dashboard_parity_app "${_dir}/dashboard" "${CMAKE_SOURCE_DIR}/demos/arc_tower"
+                    "${CMAKE_BINARY_DIR}/tests/draw_parity/dashboard_out")
+        set_tests_properties(caliper_dashboard_parity_app PROPERTIES
+            LABELS "gfx;draw_parity" SKIP_RETURN_CODE 77 TIMEOUT 180)
+    endif()
 endfunction()
 
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL caliper_draw_parity_targets)

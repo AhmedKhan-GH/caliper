@@ -55,6 +55,26 @@ export function textWidth(ctx: CanvasRenderingContext2D, face: Face, size: numbe
   return ctx.measureText(s).width;
 }
 
+/**
+ * The text the page drew, when a test asks for it (globalThis.caliperTextLog
+ * set to an array): each string with its box in CSS pixels. A picture
+ * comparison masks these boxes, because a browser and the app rasterize text
+ * differently, and checks the strings and their places on their own.
+ */
+function logText(ctx: CanvasRenderingContext2D, s: string, x: number, top: number, size: number): void {
+  const log = (globalThis as { caliperTextLog?: { s: string; x: number; y: number; w: number; h: number }[] }).caliperTextLog;
+  if (!log) return;
+  // The box's corners through the canvas's transform (a rotated axis title too), in CSS pixels.
+  const t = ctx.getTransform(), d = window.devicePixelRatio || 1, w = ctx.measureText(s).width;
+  const xs: number[] = [], ys: number[] = [];
+  for (const [u, v] of [[x, top], [x + w, top], [x, top + size], [x + w, top + size]]) {
+    xs.push((t.a * u + t.c * v + t.e) / d);
+    ys.push((t.b * u + t.d * v + t.f) / d);
+  }
+  const x0 = Math.min(...xs), y0 = Math.min(...ys);
+  log.push({ s, x: x0, y: y0, w: Math.max(...xs) - x0, h: Math.max(...ys) - y0 });
+}
+
 /** Text with the top of its line at `top`, at a whole pixel as ImGui's text_at puts it. */
 export function text(ctx: CanvasRenderingContext2D, face: Face, size: number, x: number, top: number, color: string, s: string): void {
   if (!s) return;
@@ -63,6 +83,7 @@ export function text(ctx: CanvasRenderingContext2D, face: Face, size: number, x:
   ctx.textBaseline = 'alphabetic';
   ctx.textAlign = 'left';
   ctx.fillText(s, Math.round(x), Math.round(top) + size * ASCENT[face]);
+  logText(ctx, s, Math.round(x), Math.round(top), size);
 }
 
 /** Text with `tracking` pixels after each character (the house's tracked capitals). */
@@ -83,6 +104,7 @@ export function trackedText(ctx: CanvasRenderingContext2D, face: Face, size: num
     ctx.fillText(ch, at, Math.round(top) + size * ASCENT[face]);
     at += ctx.measureText(ch).width + tracking;
   }
+  logText(ctx, s, x, Math.round(top), size);
 }
 
 /** `s` cut to `w` with an ellipsis, "" when not even that fits (fit_text). */
