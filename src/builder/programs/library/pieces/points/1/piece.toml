@@ -99,6 +99,24 @@ name = "proj_y"
 default = 1.0
 title = "Projection's Vertical Scale"
 
+# The depth cues of the live points view, off at 0: with att_ref above 0 a point's size is its size times
+# clamp(att_ref / w, 0.5, 2), w being its clip-space w, and past fade_w0 its color falls linearly to half at
+# fade_w1, its hue and alpha kept, as the built-in computes them.
+[[params]]
+name = "att_ref"
+default = 0.0
+title = "Clip W of the Size in Pixels"
+
+[[params]]
+name = "fade_w0"
+default = 0.0
+title = "Clip W of the Fade Start"
+
+[[params]]
+name = "fade_w1"
+default = 0.0
+title = "Clip W of the Fade End"
+
 [[resources]]
 id = "points"
 kind = "buffer"
