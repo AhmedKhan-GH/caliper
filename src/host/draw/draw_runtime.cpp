@@ -251,27 +251,33 @@ bool read_manifest(const json& m, cs::Piece* p, std::string* why) {
         }
     }
     if (ok) {
+        // The canonical form (programs/pieces.cpp, canonical_manifest): an array of {input, shape}, whose
+        // file is sample/<input>.bin, as the JSON form of a piece reads it.
         const auto it = m.find("sample");
         if (it != m.end()) {
-            if (!it->is_object()) ok = r.fail("the key sample is not a table");
-            for (auto s = it->begin(); ok && s != it->end(); ++s) {
+            if (!it->is_array()) ok = r.fail("the key sample is not an array");
+            for (std::size_t k = 0; ok && k < it->size(); ++k) {
+                const json& s = (*it)[k];
                 cs::SampleInput in;
-                if (s->is_string()) {
-                    in.file = s->get<std::string>();
-                } else if (s->is_object()) {
-                    ok = r.str(*s, "file", &in.file);
-                    const auto shape = s->find("shape");
-                    if (ok && shape != s->end()) {
-                        if (!shape->is_array()) ok = r.fail("a sample's shape is not an array");
-                        for (std::size_t i = 0; ok && i < shape->size(); ++i) {
-                            if (!(*shape)[i].is_number_integer()) ok = r.fail("a sample's shape is not integers");
-                            else in.shape.push_back(std::uint32_t((*shape)[i].get<std::int64_t>()));
-                        }
-                    }
-                } else {
-                    ok = r.fail("a sample is neither a string nor a table");
+                std::string input;
+                if (!s.is_object()) {
+                    ok = r.fail("a sample is not a table");
+                    break;
                 }
-                if (ok) p->sample[s.key()] = in;
+                ok = r.str(s, "input", &input, true);
+                const auto shape = s.find("shape");
+                if (ok && shape == s.end()) ok = r.fail("a sample has no shape");
+                if (ok && !shape->is_array()) ok = r.fail("a sample's shape is not an array");
+                for (std::size_t i = 0; ok && i < shape->size(); ++i) {
+                    const json& v = (*shape)[i];
+                    if (!v.is_number_integer() || v.get<std::int64_t>() < 0 || v.get<std::int64_t>() > 0xFFFFFFFFll)
+                        ok = r.fail("a sample's shape is not axis lengths");
+                    else
+                        in.shape.push_back(std::uint32_t(v.get<std::int64_t>()));
+                }
+                if (ok && p->sample.count(input)) ok = r.fail("two samples name the input " + input);
+                in.file = "sample/" + input + ".bin";
+                if (ok) p->sample[input] = std::move(in);
             }
         }
     }
