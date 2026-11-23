@@ -217,56 +217,84 @@ The editor checks each binding against the catalog. It checks the dtype and rank
 
 A buffer input makes the programs of a spec a graph. Only the draw half reads a buffer input. The viewer gives it the version of the other resource at the cursor.
 
-This example is the piece `attention_field`. It draws the attention pattern of one head as a field with contour lines. Its derive half copies the first batch row of two attention tensors into one resource, and its draw half has one full-screen pass.
+This example is the piece `attention_grid` of `demos/arc_tower/`. It draws the attention weights of one head as a grid with one cell for each pair of tokens. Its derive half copies the first batch row of two attention tensors into one resource. It also places one label anchor for each token at the left of its row. Its draw half has one full-screen pass, and its text table holds the words of the sentence.
 
 ```toml
-name = "attention_field"
+name = "attention_grid"
 version = 1
-description = "The attention pattern of one head of a two-layer model, as a field with contour lines"
+description = "The attention grid of one head of a two-layer model, one cell for each pair of tokens, with the words of the rows"
 imports = ["colormap@1"]
 
 [[inputs]]
 name = "attn0"
 kind = "tensor"
-rank_min = 4
-rank_max = 4
+rank_min = 2
+rank_max = 2
+title = "Attention Weights of Layer 0"
 
 [[inputs]]
 name = "attn1"
 kind = "tensor"
-rank_min = 4
-rank_max = 4
+rank_min = 2
+rank_max = 2
+title = "Attention Weights of Layer 1"
 
 [[params]]
 name = "layer"
 type = "i32"
 min = 0
 max = 1
+title = "Layer"
 
 [[params]]
 name = "head"
 type = "i32"
 min = 0
 max = 3
+title = "Head"
 
 [[params]]
 name = "gain"
 default = 1.0
 min = 0.1
 max = 10.0
+title = "Gain"
 
 [[resources]]
 id = "pattern"
 kind = "buffer"
 element = "f32"
-count = 8192
+count = 8192      # 2 layers, 4 heads, 32 by 32 tokens
 
-[derive]
-passes = [{ entry = "copy_rows", workgroups = [16, 1, 1], writes = ["pattern"] }]
+[[resources]]
+id = "labels"
+kind = "buffer"
+struct = "Label"
+fields = ["position: vec4<f32>", "string: u32"]
+count = 32
+
+[[derive.passes]]
+entry = "copy_rows"
+workgroups = [16, 1, 1]
+writes = ["pattern"]
+
+[[derive.passes]]
+entry = "place_labels"
 
 [draw]
 camera = "none"
-passes = [{ kind = "render", fragment = "field" }]
+
+[draw.text]
+anchors = "labels"
+strings = [
+  "the", "old", "map", "shows", "red", "fox", "jumps", "over", "lazy", "dogs", "near", "green",
+  "hills", "under", "blue", "skies", "red", "fox", "jumps", "over", "lazy", "dogs", "near", "green",
+  "hills", "under", "blue", "skies", "and", "then", "it", "ends",
+]
+
+[[draw.passes]]
+kind = "render"
+fragment = "grid"
 ```
 
 A program then places the piece in the panel `pattern`, and it follows the head that a pick selects through two state variables.
@@ -274,7 +302,7 @@ A program then places the piece in the panel `pattern`, and it follows the head 
 ```toml
 [[program]]
 id = "head_pattern"
-piece = { name = "attention_field", version = 1, from = "workspace", hash = "sha256:..." }
+piece = { name = "attention_grid", version = 1, from = "workspace", hash = "sha256:..." }
 panel = "pattern"
 bind = { attn0 = "live:blocks.0.attn.weights.act", attn1 = "live:blocks.1.attn.weights.act" }
 params = { layer = { state = "layer" }, head = { state = "head" }, gain = 2.0 }
@@ -440,9 +468,9 @@ The script `examples/python/arc_tower_train.py` trains an attention-only transfo
 
 The watch publishes the attention weights of each layer as `live:blocks.<i>.attn.weights.act`, as rows of batch, head and query token against the key tokens. It publishes `live:token_loss.act`, the loss of each token, and one intervention point `blocks.<i>.attn#<h>` for each head. The in-context loss is the mean of the loss of row 0 over the second copy, which only a copy from the first occurrence predicts.
 
-The pieces are in `demos/arc_tower/`. The piece `attention_arcs` scores each head for induction in its derive half and publishes `heads`, one score for each head. It also publishes the arcs, one for each attention weight above the threshold, with `from_token`, `to_token`, `layer`, `head`, `weight` and `score`. Its draw half draws the arcs instanced and additive with an ID for each arc, a glow target and a bloom pass, and it labels the tokens. Its item map holds the six fields of an arc. The piece `attention_field` is the second graphic. It is fragment-only, has the camera `none`, and draws the pattern of one head with contour lines. Its parameters follow the state `head` and the layer of the last pick in `tower`.
+The pieces are in `demos/arc_tower/`. The piece `attention_arcs` scores each head for induction in its derive half and publishes `heads`, one score for each head. It also publishes the arcs, one for each attention weight above the threshold, with `from_token`, `to_token`, `layer`, `head`, `weight` and `score`. Its draw half draws the arcs instanced and additive with an ID for each arc, a glow target and a bloom pass, and it labels the tokens. Its item map holds the six fields of an arc. The piece `attention_grid` is the second graphic. It is fragment-only and has the camera `none`. It draws the weights of one head as flat cells in magma, with the words of the rows in a left margin. It leaves the half above the diagonal empty, because a token never attends to a later token. It outlines the cells that an induction head fills, and it lights the row and the column under the pointer. Its parameters follow the state `head` and the layer of the last pick in `tower`.
 
-The agent starts the run, writes both pieces with `piece_check` and `piece_update`, and places them with `program_create`. It adds the loss series, the in-context loss, and a toggle bound to `intervene:blocks.1.attn#0`. After the bump, `program_read` shows the head scores rise from below 0.2 at the first kept version to above 0.4. A pick of an arc with `selection_set` gives its layer, head and token pair, and the pattern panel follows the head. The toggle raises the in-context loss at once. A fork from the first kept step with the same head ablated through `run_fork` never forms that head.
+The agent starts the run, writes both pieces with `piece_check` and `piece_update`, and places them with `program_create`. It adds the loss series, the in-context loss, and a toggle bound to `intervene:blocks.1.attn#0`. After the bump, `program_read` shows the head scores rise from below 0.2 at the first kept version to above 0.4. A pick of an arc with `selection_set` gives its layer, head and token pair, and the attention grid follows the head. The toggle raises the in-context loss at once. A fork from the first kept step with the same head ablated through `run_fork` never forms that head.
 
 ## Limits
 
