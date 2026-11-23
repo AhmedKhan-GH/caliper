@@ -21,6 +21,7 @@
 #include "scene/scene.h"             // kPalette
 
 #include <imgui.h>
+#include "ui/sternbild_theme.h"
 
 #include <cstdint>
 #include <functional>
@@ -63,10 +64,10 @@ struct Look {
     ImFont* mono = nullptr;
     float   mono_size = 0.0f;               // 0: the current size
     float   small_size = 0.0f;              // 0: the current size
-    ImU32   text = IM_COL32(230, 230, 235, 255);
-    ImU32   faint = IM_COL32(140, 140, 150, 255);
-    ImU32   rule = IM_COL32(90, 90, 100, 255);
-    ImU32   accent = IM_COL32(110, 170, 255, 255);   // a pressed tool, the live dot
+    ImU32   text = sternbild::col::look_text;
+    ImU32   faint = sternbild::col::look_faint;
+    ImU32   rule = sternbild::col::look_rule;
+    ImU32   accent = sternbild::col::look_accent;   // a pressed tool, the live dot
     ImU32   plot = 0;                                // a series' line and a histogram's bars (0: ImPlot's)
 };
 

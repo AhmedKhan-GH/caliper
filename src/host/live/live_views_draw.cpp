@@ -87,8 +87,8 @@ std::string window_label(const View& v) { return v.name + "###caliper.view." + v
 constexpr float  kClickSlop = 3.0f;              // px a press may move and still be a click
 constexpr double kHoverMs = 1000.0 / 30.0;       // at most 30 hovers a second reach the sink
 constexpr size_t kMaxEventIndices = 32768;       // wire protocol v3, Events
-const ImU32 kSelLine = IM_COL32(0xb3, 0x8b, 0x59, 255);   // bronze, as the browser views
-const ImU32 kSelFill = IM_COL32(0xb3, 0x8b, 0x59, 41);
+const ImU32 kSelLine = sternbild::col::bronze;   // as the browser views
+const ImU32 kSelFill = sternbild::with_alpha(sternbild::col::bronze, 41);
 const ImU32 kSelText = kSelLine;
 
 double now_ms() { return (double)now_ns() * 1e-6; }
@@ -1159,12 +1159,12 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         const bool house = !core->views_bare;
         const Look& L = S->look;
         // The browser element's inks on a page (web/src/views/box3d.ts), the host's in a window.
-        const ImU32 rule = house ? L.rule : IM_COL32(0x5a, 0x57, 0x51, 255);
+        const ImU32 rule = house ? L.rule : sternbild::col::plot_rule;
         ink.edge = rule;
         ink.tick = rule;
         ink.back = (rule & 0x00ffffffu) | (150u << 24);
         ink.grid = (rule & 0x00ffffffu) | (70u << 24);
-        ink.text = house ? L.faint : IM_COL32(0xa4, 0x9d, 0x8f, 255);
+        ink.text = house ? L.faint : sternbild::col::plot_faint;
         const float afs = core->views_bare ? 10.5f
                           : L.mono_size > 0.0f ? L.mono_size - 1.0f
                                                : std::max(10.5f, ImGui::GetFontSize() * 0.85f);
@@ -1239,7 +1239,7 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
             }
             if (v.hover_idx >= 0 && (uint64_t)v.hover_idx < v.cur.n) {
                 const float* q = (const float*)v.cur.pos_cpu + 3 * v.hover_idx;
-                dl->AddCircle(ImVec2(v.hover_sx, v.hover_sy), 6.0f, IM_COL32(255, 255, 255, 230), 0, 1.5f);
+                dl->AddCircle(ImVec2(v.hover_sx, v.hover_sy), 6.0f, sternbild::col::hover_ring, 0, 1.5f);
                 char line[96] = "";
                 if (v.cur.aux && v.cur.aux_cpu) {
                     const float a = ((const float*)v.cur.aux_cpu)[v.hover_idx];
@@ -1522,7 +1522,7 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         in.scale_y = avail.y / float(sc->height());
         in.labels = &labels;
         in.ink = ImGui::GetColorU32(ImGuiCol_Text);
-        in.shade = IM_COL32(0, 0, 0, 160);
+        in.shade = sternbild::col::shade(160);
         in.keep_clear = &keep_clear;
         dl->PushClipRect(p0, ImVec2(p0.x + avail.x, p0.y + avail.y), true);
         caliper_live_views::draw_scene_overlays(in);
@@ -2060,8 +2060,8 @@ void draw_cell_axes(const View& v, const TensorView& tv, ImDrawList* dl, float a
                     double x0, double x1, double y0, double y1, float fs, float text_px, ImFont* font,
                     ImU32 faint_ink, ImU32 rule_ink) {
     // The given ink, else the browser element's.
-    const ImU32 rule = rule_ink ? rule_ink : IM_COL32(0x5a, 0x57, 0x51, 255);
-    const ImU32 faint = faint_ink ? faint_ink : IM_COL32(0xa4, 0x9d, 0x8f, 255);
+    const ImU32 rule = rule_ink ? rule_ink : sternbild::col::plot_rule;
+    const ImU32 faint = faint_ink ? faint_ink : sternbild::col::plot_faint;
     ImFont* mono = font ? font : mono_face();   // else the current face
     // fs sets the layout (10.5 is the browser's), text_px the type's ImGui size.
     const float k = fs / 10.5f;
