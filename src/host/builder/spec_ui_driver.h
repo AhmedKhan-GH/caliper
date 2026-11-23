@@ -70,8 +70,10 @@
 //                        opens the panel's menu ("menu:remove" is its Remove
 //                        panel); the page's "remove:<panel>" is the × on a
 //                        panel's strip, which a click works without hovering
-//   drag <item> [fx fy] to <item> [fx fy] [right] [stale] [steps <n>] [hold]
-//                        a press on the first, a move in steps to the second
+//   drag <item> [fx fy] to <item> [fx fy] [then <item> [fx fy]] [right] [stale]
+//        [steps <n>] [hold]
+//                        a press on the first, a move in steps to the second,
+//                        with `then` a move in as many steps on to the third,
 //                        and a release there, or none with `hold`; with
 //                        `right`, of the right button (a scene panel's pan)
 //                        and released there always; with `stale`, as a window
@@ -391,32 +393,41 @@ public:
             return;
         }
         if (s.verb == "drag") {
-            // drag <a> [fx fy] to <b> [fx fy] [right] [stale] [steps <n>] [hold]
+            // drag <a> [fx fy] to <b> [fx fy] [then <c> [fx fy]] [right] [stale] [steps <n>] [hold]
             std::stringstream words(s.arg);
             std::vector<std::string> w;
-            bool right = false, stale = false;
+            bool right = false, stale = false, held = false;
             int steps = 14;
             for (std::string t; words >> t;) {
                 if (t == "right") right = true;
                 else if (t == "stale") stale = true;
+                else if (t == "hold") held = true;
                 else if (t == "steps") {
                     if (!(words >> steps) || steps < 1) return void(error_ = "drag steps needs a count of 1 or more");
                 } else w.push_back(t);
             }
             if (stale && !platform_button_) return void(error_ = "drag stale: the app gave no platform press");
             const int button = right ? 1 : 0;
+            // The points: an item and its fractions, before "to", between "to" and "then", after "then".
             size_t to = 0;
             while (to < w.size() && w[to] != "to") ++to;
-            if (to == 0 || to + 1 >= w.size()) return void(error_ = "drag needs <item> to <item>");
-            const float afx = to >= 3 ? (float)std::atof(w[1].c_str()) : 0.5f, afy = to >= 3 ? (float)std::atof(w[2].c_str()) : 0.5f;
-            const size_t b = to + 1;
-            const bool b_frac = b + 2 < w.size() || (b + 2 == w.size() && w.back() != "hold");
-            const float bfx = b_frac ? (float)std::atof(w[b + 1].c_str()) : 0.5f, bfy = b_frac ? (float)std::atof(w[b + 2].c_str()) : 0.5f;
-            const bool hold = w.back() == "hold" && !right;
+            size_t then = to;
+            while (then < w.size() && w[then] != "then") ++then;
+            if (to == 0 || to + 1 >= then || (then < w.size() && then + 1 >= w.size()))
+                return void(error_ = "drag needs <item> to <item> [then <item>]");
+            auto fraction = [&](size_t item, size_t end, int k) {
+                return end - item >= 3 ? (float)std::atof(w[item + 1 + size_t(k)].c_str()) : 0.5f;
+            };
+            const size_t b = to + 1, c = then + 1;
+            const bool legs2 = then < w.size();
+            const bool hold = held && !right;
+            const int legs = legs2 ? 2 : 1;
             if (drag_frame_ == 0) {
-                if (!item_point(page, w[0], afx, afy, &drag_a_[0], &drag_a_[1]) ||
-                    !item_point(page, w[b], bfx, bfy, &drag_b_[0], &drag_b_[1]))
-                    return patience("no builder item " + w[0] + " or " + w[b]);
+                if (!item_point(page, w[0], fraction(0, to, 0), fraction(0, to, 1), &drag_a_[0], &drag_a_[1]) ||
+                    !item_point(page, w[b], fraction(b, then, 0), fraction(b, then, 1), &drag_b_[0], &drag_b_[1]) ||
+                    (legs2 && !item_point(page, w[c], fraction(c, w.size(), 0), fraction(c, w.size(), 1), &drag_c_[0],
+                                          &drag_c_[1])))
+                    return patience("no builder item " + w[0] + " or " + w[b] + (legs2 ? " or " + w[c] : ""));
                 if (stale) {   // the pointer last seen at the far end; the press at the first item
                     io.AddMousePosEvent(drag_b_[0], drag_b_[1]);
                     drag_frame_ = -1;
@@ -428,17 +439,20 @@ public:
             } else if (drag_frame_ == -1) {
                 platform_button_(button, true, drag_a_[0], drag_a_[1]);
                 drag_frame_ = 1;
-            } else if (drag_frame_ <= steps) {
-                const float t = (float)drag_frame_ / (float)steps;
-                io.AddMousePosEvent(std::round(drag_a_[0] + (drag_b_[0] - drag_a_[0]) * t),
-                                    std::round(drag_a_[1] + (drag_b_[1] - drag_a_[1]) * t));
+            } else if (drag_frame_ <= steps * legs) {
+                const bool second = drag_frame_ > steps;   // the leg from the second point to the third
+                const float* from = second ? drag_b_ : drag_a_;
+                const float* to_pt = second ? drag_c_ : drag_b_;
+                const float t = (float)(drag_frame_ - (second ? steps : 0)) / (float)steps;
+                io.AddMousePosEvent(std::round(from[0] + (to_pt[0] - from[0]) * t),
+                                    std::round(from[1] + (to_pt[1] - from[1]) * t));
                 ++drag_frame_;
-            } else if (drag_frame_ == steps + 1) {
+            } else if (drag_frame_ == steps * legs + 1) {
                 ++drag_frame_;   // one more frame at the target, so the drop's zone is read there
             } else {
                 if (!hold) io.AddMouseButtonEvent(button, false);
                 next(std::string(hold ? "dragged and held " : right ? "dragged with the right button " : "dragged ") +
-                     w[0] + " to " + w[b]);
+                     w[0] + " to " + w[b] + (legs2 ? " then " + w[c] : ""));
             }
             return;
         }
@@ -899,7 +913,7 @@ private:
     std::function<int()> cards_;
     SavePrompt* save_prompt_ = nullptr;
     std::function<void()> close_;
-    float drag_a_[2] = {0, 0}, drag_b_[2] = {0, 0};
+    float drag_a_[2] = {0, 0}, drag_b_[2] = {0, 0}, drag_c_[2] = {0, 0};
     int drag_frame_ = 0;   // the frame of a drag in progress, 0 before its press
     std::optional<std::chrono::steady_clock::time_point> started_;   // a step's first frame, for a wait in seconds
     int idle_frames_ = 0;   // frames in a row without a list or a probe running
