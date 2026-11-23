@@ -381,9 +381,10 @@ private:
 void gate_command_script(AppSession::Options* o, bool scripts_allowed, std::string* refused);
 
 // What every page's status bar says about Allow all, "" for nothing: "allow
-// all for side chat", "allow all for MCP clients" or both, and "allow all
-// still saved for ..." while a principal's file still holds Allow all after a
-// failed save of another mode (Session::saved_agent_mode()). The session also
+// all for side chat", "allow all for MCP clients" or both, and "allow all in
+// the saved file for ..." while the file holds Allow all for a principal that
+// this app runs in another mode: after a failed save of that mode, or when a
+// second app turned it on (Session::saved_agent_mode()). The session also
 // says it on standard error when it opens, for a run with no status bar.
 // Built with the builder only.
 std::string allow_all_status(const caliper_builder::Session& s);

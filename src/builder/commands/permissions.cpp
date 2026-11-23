@@ -4,14 +4,19 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <system_error>
 
+#ifdef _WIN32
+#include <process.h>
+#endif
 #ifndef _WIN32
 #include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -187,23 +192,31 @@ AgentPermissionsRead read_agent_permissions(const std::string& path, long owner)
     AgentPermissionsRead out;
     std::error_code ec;
     const fs::path p = fs::u8path(path);
-    if (!fs::exists(p, ec)) return out;
     auto give_up = [&](std::string why) {
         out.file = {};
         out.problems.push_back(std::move(why));
         return out;
     };
+    auto unreadable = [&]() {
+        out.readable = false;
+        return give_up("The agent permissions file cannot be read, so it grants nothing.");
+    };
+    const bool exists = fs::exists(p, ec);
+    if (ec) return unreadable();
+    if (!exists) return out;
 #ifndef _WIN32
     struct stat st {};
-    if (::stat(p.c_str(), &st) != 0) return give_up("The agent permissions file cannot be read, so it grants nothing.");
+    if (::stat(p.c_str(), &st) != 0) return unreadable();
     if (st.st_mode & (S_IWGRP | S_IWOTH))
         return give_up("The agent permissions file may be written by others, so it grants nothing.");
     if (static_cast<long>(st.st_uid) != owner)
         return give_up("The agent permissions file belongs to another user, so it grants nothing.");
 #endif
     const auto size = fs::file_size(p, ec);
-    if (ec || size > kMaxFileBytes) return give_up("The agent permissions file is too large or unreadable, so it grants nothing.");
+    if (ec) return unreadable();
+    if (size > kMaxFileBytes) return give_up("The agent permissions file is too large, so it grants nothing.");
     std::ifstream f(p, std::ios::binary);
+    if (!f) return unreadable();
     std::stringstream ss;
     ss << f.rdbuf();
     const json j = json::parse(ss.str(), nullptr, false);
@@ -296,9 +309,15 @@ Error write_agent_permissions(const std::string& path, const AgentPermissionsFil
     const fs::path p = fs::u8path(path);
     std::error_code ec;
     if (!p.parent_path().empty()) fs::create_directories(p.parent_path(), ec);
+    // A temporary name of this process, so that two apps never share one.
+    static std::atomic<unsigned> counter{0};
+#ifndef _WIN32
+    const long pid = static_cast<long>(::getpid());
+#else
+    const long pid = static_cast<long>(_getpid());
+#endif
     fs::path tmp = p;
-    tmp += ".tmp";
-    fs::remove(tmp, ec);
+    tmp += ".tmp-" + std::to_string(pid) + "-" + std::to_string(counter++);
     auto failed = [&](const std::string& why) {
         fs::remove(tmp, ec);
         return Error("permissions.write_failed", "The agent permissions could not be saved: " + why, path);
@@ -327,6 +346,38 @@ Error write_agent_permissions(const std::string& path, const AgentPermissionsFil
     fs::rename(tmp, p, ec);
     if (ec) return failed(ec.message());
     return {};
+}
+
+AgentPermissionsLock::AgentPermissionsLock(const std::string& path) {
+#ifndef _WIN32
+    const std::string lock = path + ".lock";
+    std::error_code ec;
+    const fs::path parent = fs::u8path(path).parent_path();
+    if (!parent.empty()) fs::create_directories(parent, ec);
+    fd_ = ::open(lock.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd_ < 0) {
+        error_ = Error("permissions.lock_failed", "The agent permissions could not be saved: their lock file cannot be opened.",
+                       lock);
+        return;
+    }
+    if (::flock(fd_, LOCK_EX) != 0) {
+        ::close(fd_);
+        fd_ = -1;
+        error_ = Error("permissions.lock_failed", "The agent permissions could not be saved: their lock cannot be taken.",
+                       lock);
+    }
+#else
+    (void)path;
+#endif
+}
+
+AgentPermissionsLock::~AgentPermissionsLock() {
+#ifndef _WIN32
+    if (fd_ >= 0) {
+        ::flock(fd_, LOCK_UN);
+        ::close(fd_);
+    }
+#endif
 }
 
 }  // namespace caliper_builder

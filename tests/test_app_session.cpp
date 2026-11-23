@@ -1493,16 +1493,17 @@ TEST_CASE("app session: the status bar and the settings say when the file still 
     CHECK(caliper_host::allow_all_status(s) == "allow all for side chat and MCP clients");
     // The person ends the chat's Allow all and the save fails: both places say
     // that the file still holds it.
-    fs::create_directories(o.permissions_file + ".tmp/keep");
+    std::error_code ec;
+    fs::remove(o.permissions_file + ".lock", ec);
+    fs::create_directories(o.permissions_file + ".lock/keep");
     CHECK_FALSE(s.set_agent_mode(cb::AgentPrincipal::chat, cb::AgentMode::ask).ok());
-    CHECK(caliper_host::allow_all_status(s) == "allow all for MCP clients  \xc2\xb7  allow all still saved for side chat");
+    CHECK(caliper_host::allow_all_status(s) == "allow all for MCP clients  \xc2\xb7  allow all in the saved file for side chat");
     const std::string note = caliper_host::permission_save_note(s);
     CHECK(note.find("could not be saved") != std::string::npos);
     CHECK(note.find("The file still says Allow all for Side chat, which returns at the next launch.") != std::string::npos);
     CHECK(note.find("Choose the mode again to save it.") != std::string::npos);
     // Choosing the mode again once the save works clears both.
-    std::error_code ec;
-    fs::remove_all(o.permissions_file + ".tmp", ec);
+    fs::remove_all(o.permissions_file + ".lock", ec);
     REQUIRE(s.set_agent_mode(cb::AgentPrincipal::chat, cb::AgentMode::ask).ok());
     CHECK(caliper_host::allow_all_status(s) == "allow all for MCP clients");
     CHECK(caliper_host::permission_save_note(s).empty());

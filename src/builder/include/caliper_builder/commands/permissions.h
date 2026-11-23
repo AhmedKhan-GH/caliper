@@ -153,6 +153,7 @@ struct AgentPermissionsFile {
 struct AgentPermissionsRead {
     AgentPermissionsFile file;
     std::vector<std::string> problems;  // one plain sentence for each thing ignored
+    bool readable = true;               // false when the file is there but could not be read
 };
 AgentPermissionsRead read_agent_permissions(const std::string& path);
 // The same, with the user id that must own the file on POSIX (the process's
@@ -160,7 +161,25 @@ AgentPermissionsRead read_agent_permissions(const std::string& path);
 AgentPermissionsRead read_agent_permissions(const std::string& path, long owner);
 // The file's JSON text.
 std::string agent_permissions_text(const AgentPermissionsFile& file);
-// Writes it owner-only through a temporary file in the same folder.
+// Writes it owner-only through a temporary file of this process in the same
+// folder, made with an exclusive create, and a rename.
 Error write_agent_permissions(const std::string& path, const AgentPermissionsFile& file);
+
+// An advisory lock between apps on the permissions file, taken on the
+// sibling file "<path>.lock" while the object lives, so that the read, merge
+// and write of one app's save never interleave with another's. error() says
+// why it could not be taken; a save then fails. On Windows it takes nothing.
+class AgentPermissionsLock {
+public:
+    explicit AgentPermissionsLock(const std::string& path);
+    ~AgentPermissionsLock();
+    AgentPermissionsLock(const AgentPermissionsLock&) = delete;
+    AgentPermissionsLock& operator=(const AgentPermissionsLock&) = delete;
+    const Error& error() const { return error_; }
+
+private:
+    int fd_ = -1;
+    Error error_;
+};
 
 }  // namespace caliper_builder

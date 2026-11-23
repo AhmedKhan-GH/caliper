@@ -1186,7 +1186,7 @@ std::string allow_all_status(const caliper_builder::Session& s) {
     auto names = [](const std::vector<std::string>& v) { return v.size() == 2 ? v[0] + " and " + v[1] : v[0]; };
     std::string out;
     if (!on.empty()) out = "allow all for " + names(on);
-    if (!kept.empty()) out += (out.empty() ? "" : "  \xc2\xb7  ") + ("allow all still saved for " + names(kept));
+    if (!kept.empty()) out += (out.empty() ? "" : "  \xc2\xb7  ") + ("allow all in the saved file for " + names(kept));
     return out;
 }
 

@@ -183,7 +183,8 @@ struct ChatPane::Impl {
         };
         h.permission_note = [this]() -> std::string {
             namespace cb = caliper_builder;
-            if (!session || session->saved_agent_mode(cb::AgentPrincipal::chat) != cb::AgentMode::allow_all ||
+            if (!session || session->permission_save_error().empty() ||
+                session->saved_agent_mode(cb::AgentPrincipal::chat) != cb::AgentMode::allow_all ||
                 session->agent_mode(cb::AgentPrincipal::chat) == cb::AgentMode::allow_all)
                 return {};
             return "Still saved: ending it was not saved, so it returns at the next launch";

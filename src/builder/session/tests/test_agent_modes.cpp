@@ -36,10 +36,12 @@ struct Fixture {
     std::string perms;
     std::unique_ptr<Session> s;
 
-    explicit Fixture(const std::string& name) {
+    // `shared_perms` names the permissions file of another fixture, as a
+    // second app on the same app-data folder has it.
+    explicit Fixture(const std::string& name, const std::string& shared_perms = {}) {
         const std::string root = fresh_dir(name);
         ws = root + "/workspace";
-        perms = root + "/app-data/agent-permissions.json";
+        perms = shared_perms.empty() ? root + "/app-data/agent-permissions.json" : shared_perms;
         write_text(ws + "/data/metrics.csv", "step,loss\n0,1.0\n1,0.5\n");
         reopen();
         ok(*s, "data.import", {{"paths", {"data/metrics.csv"}}});
@@ -438,16 +440,17 @@ TEST_CASE("no command writes a protected file, by its name, a relative path, a l
 #endif
 }
 
-TEST_CASE("a failed save never leaves Allow all in the file while the session shows another mode") {
+TEST_CASE("a failed save of Allow all's end keeps the stricter mode and says the file still holds Allow all") {
     Fixture f("modes-failed-save");
     REQUIRE(f.s->set_agent_mode(AgentPrincipal::chat, AgentMode::allow_all).ok());
-    // A folder at the temporary file's name makes every save fail.
-    const std::string blocker = f.perms + ".tmp";
+    // A folder at the lock file's name makes every save fail.
+    const std::string blocker = f.perms + ".lock";
+    fs::remove(blocker);
     write_text(blocker + "/keep", "x");
     // Ending Allow all: the stricter mode holds at once, and the session says
     // that the file still holds Allow all.
     const Error ended = f.s->set_agent_mode(AgentPrincipal::chat, AgentMode::ask);
-    CHECK(ended.code == "permissions.write_failed");
+    CHECK(ended.code == "permissions.lock_failed");
     CHECK(f.s->agent_mode(AgentPrincipal::chat) == AgentMode::ask);
     CHECK(f.s->saved_agent_mode(AgentPrincipal::chat) == AgentMode::allow_all);
     CHECK_FALSE(f.s->permission_save_error().empty());
@@ -455,7 +458,7 @@ TEST_CASE("a failed save never leaves Allow all in the file while the session sh
     CHECK(chat(*f.s, "panel.patch", retitle("Held")).error.code == "command.needs_approval");
     f.s->registry().cancel_pending();
     // Turning Allow all on: it takes effect only after a successful save.
-    CHECK(f.s->set_agent_mode(AgentPrincipal::mcp, AgentMode::allow_all).code == "permissions.write_failed");
+    CHECK(f.s->set_agent_mode(AgentPrincipal::mcp, AgentMode::allow_all).code == "permissions.lock_failed");
     CHECK(f.s->agent_mode(AgentPrincipal::mcp) == AgentMode::ask);
     // Once the save works, choosing the mode again writes it, and a new launch agrees.
     fs::remove_all(blocker);
@@ -479,7 +482,7 @@ TEST_CASE("a second app's save changes only what it changed, so Allow all ended 
     REQUIRE(opened.error.ok());
     Session& b = *opened.session;
     CHECK(b.agent_mode(AgentPrincipal::chat) == AgentMode::allow_all);
-    // The person ends Allow all in the first app and adds a rule there.
+    // The person ends Allow all in the first app.
     REQUIRE(a.s->set_agent_mode(AgentPrincipal::chat, AgentMode::ask).ok());
     // The second app's next save keeps that, and takes it on.
     REQUIRE(b.set_agent_mode(AgentPrincipal::mcp, AgentMode::accept_edits).ok());
@@ -518,3 +521,79 @@ TEST_CASE("a journal or a workspace database that leads to the permissions file 
     }
 }
 #endif
+
+TEST_CASE("the mode the person chooses is always written, and a re-read of the file never raises a mode") {
+    Fixture a("modes-chosen-a");
+    Fixture b("modes-chosen-b", a.perms);
+    // Both show Ask. The person turns Allow all on in the first app, then
+    // chooses Ask in the second, which shows Ask already.
+    REQUIRE(a.s->set_agent_mode(AgentPrincipal::chat, AgentMode::allow_all).ok());
+    REQUIRE(b.s->set_agent_mode(AgentPrincipal::chat, AgentMode::ask).ok());
+    CHECK(b.s->agent_mode(AgentPrincipal::chat) == AgentMode::ask);
+    CHECK(read_text(a.perms).find("\"chat\": \"ask\"") != std::string::npos);
+    // A looser mode that the first app saves never enters the second at its save.
+    REQUIRE(a.s->set_agent_mode(AgentPrincipal::mcp, AgentMode::allow_all).ok());
+    REQUIRE(b.s->set_agent_mode(AgentPrincipal::chat, AgentMode::read_only).ok());
+    CHECK(b.s->agent_mode(AgentPrincipal::mcp) == AgentMode::ask);
+    CHECK(b.s->saved_agent_mode(AgentPrincipal::mcp) == AgentMode::allow_all);
+    CHECK(read_text(a.perms).find("\"mcp\": \"allow_all\"") != std::string::npos);
+    // Choosing Allow all in the second app writes it, also over another app's Ask.
+    REQUIRE(a.s->set_agent_mode(AgentPrincipal::mcp, AgentMode::ask).ok());
+    REQUIRE(b.s->set_agent_mode(AgentPrincipal::mcp, AgentMode::allow_all).ok());
+    CHECK(b.s->agent_mode(AgentPrincipal::mcp) == AgentMode::allow_all);
+    CHECK(read_text(a.perms).find("\"mcp\": \"allow_all\"") != std::string::npos);
+}
+
+TEST_CASE("an app that holds Allow all lowers it before its next card-free decision once the file ends it") {
+    Fixture a("modes-stale-a");
+    REQUIRE(a.s->set_agent_mode(AgentPrincipal::chat, AgentMode::allow_all).ok());
+    Fixture b("modes-stale-b", a.perms);
+    REQUIRE(b.s->agent_mode(AgentPrincipal::chat) == AgentMode::allow_all);
+    REQUIRE(chat(*b.s, "panel.patch", retitle("Free")).ok);
+    // The person ends Allow all in the first app.
+    REQUIRE(a.s->set_agent_mode(AgentPrincipal::chat, AgentMode::ask).ok());
+    // The second app's next edit that Allow all would run without a card asks.
+    CHECK(chat(*b.s, "panel.patch", retitle("Asked")).error.code == "command.needs_approval");
+    CHECK(b.s->agent_mode(AgentPrincipal::chat) == AgentMode::ask);
+    CHECK(b.title() == "Free");
+    b.s->registry().cancel_pending();
+    // The check only lowers: Allow all that the first app turns on for mcp
+    // clients does not reach the second app this way.
+    REQUIRE(a.s->set_agent_mode(AgentPrincipal::mcp, AgentMode::allow_all).ok());
+    CHECK(send(*b.s, "panel.patch", retitle("Mcp"), CommandOrigin::mcp, "").error.code == "command.needs_approval");
+    CHECK(b.s->agent_mode(AgentPrincipal::mcp) == AgentMode::ask);
+    b.s->registry().cancel_pending();
+}
+
+TEST_CASE("saved rules merge between two apps: each app's added and revoked rules are written, and none is taken over") {
+    Fixture a("modes-rules-a");
+    Fixture b("modes-rules-b", a.perms);
+    // Always allow on a card of the chat's agent for this command.
+    auto always = [](Fixture& f, const std::string& name, const json& args) {
+        CommandInvocation inv;
+        inv.name = name;
+        inv.args = args;
+        inv.origin = CommandOrigin::agent;
+        inv.client = "chat";
+        return f.s->allow_always(inv, RuleScope::saved);
+    };
+    const AgentRule patch{"claude", "panel.patch"};
+    const AgentRule create{"claude", "panel.create"};
+    REQUIRE(always(a, "panel.patch", retitle("A")).ok());
+    REQUIRE(always(b, "panel.create", {{"id", "note"}, {"primitive", "text"}, {"options", {{"text", "B"}}}}).ok());
+    // The file holds both; neither app took the other's rule.
+    a.reopen();
+    CHECK(a.s->saved_agent_rules() == std::vector<AgentRule>{patch, create});
+    CHECK(b.s->saved_agent_rules() == std::vector<AgentRule>{create});
+    // The first app revokes the rule that the second also holds now.
+    b.reopen();
+    REQUIRE(a.s->revoke_agent_rule(create));
+    // The second app's Always allow of the same rule writes it again.
+    REQUIRE(always(b, "panel.create", {{"id", "note"}, {"primitive", "text"}, {"options", {{"text", "B"}}}}).ok());
+    a.reopen();
+    CHECK(a.s->saved_agent_rules() == std::vector<AgentRule>{patch, create});
+    // A revoke in one app removes the rule from the file, and the other drops it at its next save.
+    REQUIRE(b.s->revoke_agent_rule(patch));
+    REQUIRE(a.s->set_agent_mode(AgentPrincipal::chat, AgentMode::ask).ok());
+    CHECK(a.s->saved_agent_rules() == std::vector<AgentRule>{create});
+}
