@@ -106,12 +106,10 @@ option(CALIPER_WITH_TORCH   "Download/link the vendored libtorch for torch apple
 # through the same caliper_add_applet() that builds them against the installed SDK.
 option(CALIPER_BUILD_APPLETS "Also build the applets/* tree in the core build" OFF)
 option(CALIPER_BUILD_PYTHON  "Build the caliper Python extension (python/, nanobind)" OFF)
-# slang + llama.cpp are configured EXCLUDE_FROM_ALL and linked by nothing that
-# libcaliper / the caliper exe / the tests need (only the opt-in opengllama
-# applet links llama). OFF skips their configure (~2/3 of a fresh configure,
-# plus slang's boost_regex/mimalloc network clones).
+# slang is configured EXCLUDE_FROM_ALL and linked by nothing that
+# libcaliper / the caliper exe / the tests need. OFF skips its configure
+# (slang's boost_regex/mimalloc network clones).
 option(CALIPER_WITH_SLANG "Configure the vendored slang (SystemVerilog) library" ON)
-option(CALIPER_WITH_LLAMA "Configure the vendored llama.cpp (+ apply its local patches)" ON)
 # The builder (src/builder, design/builder-overview.md): the spec, catalog,
 # command, loaders, ACP, session, MCP and agent libraries, caliper-mcp,
 # caliper-acp-harness, caliper-builder-host and their tests. ON also links
@@ -761,9 +759,7 @@ endif()
 # Applets build in their own repositories against the installed SDK with
 # caliper_add_applet(), and every folder under applets/ and examples/ builds
 # standalone the same way (cmake -S <folder> -DCMAKE_PREFIX_PATH=<sdk prefix>).
-# CALIPER_BUILD_APPLETS=ON also builds the applets/* tree here. Archived applets
-# live under applets/legacy/ and applets/legacy-dev/; neither has a top-level
-# CMakeLists, so the glob below never descends into them.
+# CALIPER_BUILD_APPLETS=ON also builds the applets/* tree here.
 if(CALIPER_BUILD_APPLETS)
     file(GLOB applet_dirs LIST_DIRECTORIES true CONFIGURE_DEPENDS applets/*)
     foreach(dir ${applet_dirs})
@@ -792,20 +788,6 @@ endif()
 option(CALIPER_BUILD_EXAMPLES "Build the embedder example (examples/embed_host)" ON)
 if(CALIPER_BUILD_EXAMPLES)
     add_subdirectory(examples/embed_host)
-endif()
-
-# Opt-in resurrection of the archived GGUF-inference applet (applets/legacy/):
-# needs the patched llama.cpp submodule (caliper-patches: Qwen3.5/3.6 loading,
-# GPT-OSS). OFF by default — legacy stays archived; flip for inference testing.
-option(CALIPER_BUILD_OPENGLLAMA "Build the archived opengllama applet (GGUF inference via llama.cpp)" OFF)
-if(CALIPER_BUILD_OPENGLLAMA)
-    if(NOT CALIPER_WITH_LLAMA)
-        message(FATAL_ERROR "CALIPER_BUILD_OPENGLLAMA=ON needs llama.cpp: set CALIPER_WITH_LLAMA=ON")
-    endif()
-    add_subdirectory(applets/legacy/opengllama)
-    add_dependencies(caliper opengllama)
-    list(APPEND _active_applet_libs
-        "${CMAKE_BINARY_DIR}/applets/${CMAKE_SHARED_LIBRARY_PREFIX}opengllama${CMAKE_SHARED_LIBRARY_SUFFIX}")
 endif()
 
 # ============================================================================

@@ -120,7 +120,7 @@ jobs:
         run: |
           set -e
           cmake -S . -B cmake-build-python -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
-            -DCALIPER_WITH_SLANG=OFF -DCALIPER_WITH_LLAMA=OFF -DCALIPER_WITH_TORCH=OFF \
+            -DCALIPER_WITH_SLANG=OFF -DCALIPER_WITH_TORCH=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DCMAKE_OBJC_COMPILER_LAUNCHER=sccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=sccache \
             -DCALIPER_WGSL_LIBRARY="$PWD/cmake-build-release/caliper-wgsl/source/lib/libcaliper_wgsl.a" \

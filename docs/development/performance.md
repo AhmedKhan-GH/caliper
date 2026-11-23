@@ -151,7 +151,7 @@ A 64x48 f32 METAL update takes 0.129 ms with `WAIT_GPU` and 0.009 ms without it.
 
 ## Torch-Free Build
 
-Slang and llama.cpp take about two thirds of a 12.7 s configure. A fresh torch-free configure takes 6.5 s. A cold torch-free build of all targets has 462 steps and takes 120 s at `-j 8`. Then `libcaliper.a` is 276 KB, in six objects. A cold `libcaliper` build with torch on takes 123 s. An offscreen Caliper Embed run of `hello` draws 43 frames in 1.02 s.
+Slang takes most of a 12.7 s configure. A fresh torch-free configure takes 6.5 s. A cold torch-free build of all targets has 462 steps and takes 120 s at `-j 8`. Then `libcaliper.a` is 276 KB, in six objects. A cold `libcaliper` build with torch on takes 123 s. An offscreen Caliper Embed run of `hello` draws 43 frames in 1.02 s.
 
 ## Widget Agent Models
 

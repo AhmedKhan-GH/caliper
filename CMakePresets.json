@@ -34,7 +34,6 @@
         "BUILD_TESTS": "ON",
         "CALIPER_WITH_TORCH": "OFF",
         "CALIPER_WITH_SLANG": "OFF",
-        "CALIPER_WITH_LLAMA": "OFF",
         "USE_CUDA": "OFF"
       }
     }
