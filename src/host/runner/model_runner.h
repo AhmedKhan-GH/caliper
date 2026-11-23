@@ -55,6 +55,11 @@ public:
         // The size at which output.log moves to output.log.1 and starts again
         // (design/hosted-runs.md, Process Contract).
         std::uint64_t output_limit_bytes = 8ull << 20;
+        // Tests only: the runner's thread calls it before each pass, without
+        // the runner's lock, so that a test can hold the passes and force an
+        // order of events, such as a child's exit and its last reply seen in
+        // one pass. It must return before shutdown() can end the thread.
+        std::function<void()> before_pass;
     };
 
     explicit ModelRunner(Options options);
