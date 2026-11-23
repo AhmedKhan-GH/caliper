@@ -1000,7 +1000,8 @@ endif()
 # test, the match of points@1 with the built-in draw, and the pixel
 # comparison of the app and the browser module.
 foreach(_caliper_pg_dir programmable_graphics points_match draw_parity surface_match
-        lines_match arrows_match path_match image_match depth_match segmentation_match)
+        lines_match arrows_match path_match image_match depth_match segmentation_match
+        boxes_match mesh_match)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_caliper_pg_dir}/CMakeLists.txt")
         add_subdirectory(${_caliper_pg_dir})
     endif()

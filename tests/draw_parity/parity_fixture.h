@@ -12,6 +12,7 @@
 #include "../gfx/example_pieces.h"
 #include "line_fixtures.h"
 #include "image_fixture.h"
+#include "boxes_mesh_fixture.h"
 
 #include <caliper_builder/programs/pieces.h>
 
@@ -212,6 +213,7 @@ inline Fixture make_fixture(std::uint32_t size = 512) {
     add_surface_program(&fx);
     add_line_pieces(fx, add, instance_message);
     add_image_pieces(&fx.frames, &fx.plan, &fx.error);
+    add_boxes_mesh(&fx.frames, &fx.plan, &fx.error);
     return fx;
 }
 

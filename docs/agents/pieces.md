@@ -204,6 +204,8 @@ The pieces `lines@1` and `arrows@1` draw as the built-in `lines` and `arrows` pr
 
 The pieces `image@1`, `depth@1` and `segmentation@1` draw the three forms of the built-in image. They draw a color or grey image, a depth map with its colormap and cloud, and a mask of class ids in class colors. Each one lies flat at a pose or on the image plane of a camera. With the same image, camera and options, it draws the pixels of the built-in image within the tolerances of the scene tests. A pick returns the same pixel.
 
+The piece `boxes@1` draws boxes as the built-in `boxes` primitive draws them, up to 131,072 boxes. It draws edges of a width in pixels and optional translucent faces, and it colors a box by one color, by RGBA or by a class id. The piece `mesh@1` draws a triangle mesh as the built-in `mesh` primitive draws it, up to 98,304 vertices and 196,608 triangles. It lights the mesh from its normals or with flat faces, and it colors a vertex by one color, by RGBA or by a value through a colormap. Neither piece draws labels, and `mesh@1` takes no texture.
+
 A workspace piece with the name of a library piece replaces it only in a program that says `from = "workspace"`. `caliper-mcp` serves each file of the library as a read-only resource under `caliper://library/`. Thus an agent can read a piece before it pins, copies or imitates it.
 
 ## Program Instances
