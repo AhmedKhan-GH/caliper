@@ -1,0 +1,198 @@
+name = "attribution_graph"
+version = 1
+description = "A graph of signed direct effects with deterministic feature positions and node picks"
+imports = ["pick@1", "camera@1"]
+
+[[inputs]]
+name = "graph_counts"
+kind = "tensor"
+dtype = "i32"
+rank_min = 1
+rank_max = 1
+title = "Trace Counts (4)"
+optional = false
+
+[[inputs]]
+name = "node_i"
+kind = "tensor"
+dtype = "i32"
+rank_min = 2
+rank_max = 2
+title = "Node Integers (512, 4)"
+optional = false
+
+[[inputs]]
+name = "node_f"
+kind = "tensor"
+dtype = "f32"
+rank_min = 2
+rank_max = 2
+title = "Node Values (512, 4)"
+optional = false
+
+[[inputs]]
+name = "edge_i"
+kind = "tensor"
+dtype = "i32"
+rank_min = 2
+rank_max = 2
+title = "Edge Indices (8192, 2)"
+optional = false
+
+[[inputs]]
+name = "edge_f"
+kind = "tensor"
+dtype = "f32"
+rank_min = 2
+rank_max = 2
+title = "Edge Values (8192, 2)"
+optional = false
+
+[[inputs]]
+name = "label_text"
+kind = "tensor"
+dtype = "u32"
+rank_min = 2
+rank_max = 2
+title = "Packed UTF-8 Labels (544, 16)"
+optional = true
+
+[[params]]
+name = "selected_node"
+type = "i32"
+default = -1
+min = -1
+max = 511
+title = "Selected Node"
+
+[[params]]
+name = "hovered_node"
+type = "i32"
+default = -1
+min = -1
+max = 511
+title = "Hovered Node"
+
+[[resources]]
+id = "nodes"
+kind = "buffer"
+struct = "Node"
+fields = ["position: vec4<f32>", "index: u32", "kind: u32", "layer: i32", "token_position: i32", "feature: i32", "influence: f32"]
+count = 512
+counted = true
+publish = true
+
+[[resources]]
+id = "curves"
+kind = "buffer"
+struct = "Curve"
+fields = ["start_control: vec4<f32>", "control_end: vec4<f32>", "weight: f32", "normalized: f32", "source_node: u32", "target_node: u32"]
+count = 8192
+counted = true
+publish = true
+
+[[resources]]
+id = "labels"
+kind = "buffer"
+struct = "Label"
+fields = ["position: vec4<f32>", "string: u32", "priority: f32"]
+count = 34
+counted = false
+publish = true
+
+[[resources]]
+id = "strings"
+kind = "buffer"
+struct = "Text"
+fields = ["a: vec4<u32>", "b: vec4<u32>", "c: vec4<u32>", "d: vec4<u32>"]
+count = 544
+counted = false
+publish = true
+
+[[resources]]
+id = "cells"
+kind = "buffer"
+struct = "Cell"
+fields = ["center: vec2<f32>", "width: f32", "influence: f32", "key: u32"]
+count = 512
+counted = false
+publish = false
+
+[[resources]]
+id = "offset_a"
+kind = "buffer"
+element = "vec4<f32>"
+count = 512
+publish = false
+
+[[resources]]
+id = "offset_b"
+kind = "buffer"
+element = "vec4<f32>"
+count = 512
+publish = false
+
+[derive]
+time_ms = 50
+memory_mb = 64
+
+[[derive.passes]]
+entry = "assign_cells"
+workgroups = [8, 1, 1]
+writes = ["nodes", "cells"]
+
+[[derive.passes]]
+entry = "order_influence"
+workgroups = [8, 1, 1]
+writes = ["offset_a", "strings", "labels"]
+
+[[derive.passes]]
+entry = "relax_one"
+workgroups = [8, 1, 1]
+writes = ["offset_b"]
+
+[[derive.passes]]
+entry = "relax_two"
+workgroups = [8, 1, 1]
+writes = ["offset_a"]
+
+[[derive.passes]]
+entry = "relax_three"
+workgroups = [8, 1, 1]
+writes = ["offset_b"]
+
+[[derive.passes]]
+entry = "relax_four"
+workgroups = [8, 1, 1]
+writes = ["offset_a", "nodes", "labels"]
+
+[[derive.passes]]
+entry = "edge_curves"
+workgroups = [128, 1, 1]
+writes = ["curves"]
+
+[draw]
+camera = "pan_zoom"
+frame_ms = 4
+memory_mb = 64
+pick = { resource = "nodes", fields = ["index", "kind", "layer", "token_position", "feature", "influence"] }
+text = { anchors = "labels", position = "position", string = "string", priority = "priority", strings_from = "strings", align = "center" }
+
+[[draw.passes]]
+kind = "render"
+vertex = "edge_vs"
+fragment = "edge_fs"
+instances = "curves"
+vertices = 72
+blend = "additive"
+depth = "none"
+
+[[draw.passes]]
+kind = "render"
+vertex = "node_vs"
+fragment = "node_fs"
+instances = "nodes"
+vertices = 6
+blend = "alpha"
+depth = "none"
+pick = true
