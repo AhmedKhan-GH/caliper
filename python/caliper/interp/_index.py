@@ -1,0 +1,405 @@
+"""Bounded feature examples with exact top-k order and document boundaries."""
+from __future__ import annotations
+
+from collections import Counter, OrderedDict
+from copy import deepcopy
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+import torch
+
+from ._dictionary import load_dictionary, model_identity, weights_hash
+from ._points import capture
+
+INDEX_VERSION = 1
+TOP_EXAMPLES = 16
+WINDOW_TOKENS = 33
+CACHE_FEATURES = 256
+MAX_TOKENS = 2_000_000
+_TABLE = np.dtype([("activation", "<f8"), ("offset", "<i8")])
+_DOCUMENT = np.dtype([("id", "S128"), ("start", "<i8"), ("length", "<i8"),
+                      ("truncated", "?")])
+_FILES = ("table.npy", "counts.npy", "tokens.bin", "documents.bin")
+
+
+def _json(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _hash_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _dictionary_hash(dictionary):
+    digest = hashlib.sha256(_json(dictionary.metadata).encode())
+    digest.update(weights_hash(dictionary).encode())
+    return digest.hexdigest()
+
+
+def _source_hash(folder, layers):
+    names = ["dictionary.json"] + [f"layer_{i:02d}.safetensors" for i in range(layers)]
+    return hashlib.sha256(_json({name: _hash_file(folder / name) for name in names}).encode()).hexdigest()
+
+
+def _tokenizer_hash(tokenizer, vocab):
+    """Include token text, special IDs, and the tokenizer pipeline when available."""
+    digest = hashlib.sha256()
+    backend = getattr(tokenizer, "backend_tokenizer", None)
+    if backend is not None:
+        digest.update(backend.to_str().encode())
+    digest.update(_json([getattr(tokenizer, name, None) for name in
+                        ("bos_token_id", "eos_token_id", "pad_token_id")]).encode())
+    for token_id in range(vocab):
+        digest.update(_json([token_id, tokenizer.convert_ids_to_tokens(token_id)]).encode())
+    return digest.hexdigest()
+
+
+def _positive_integer(value, name, maximum=None, minimum=1):
+    if type(value) is not int or value < minimum or (maximum is not None and value > maximum):
+        raise ValueError(f"invalid {name}")
+    return value
+
+
+def _compatible(model, dictionary):
+    data = dictionary.metadata
+    if model_identity(model) != data["model_hash"]:
+        raise ValueError("index model identity mismatch")
+    if model.training:
+        raise ValueError("index requires a model in eval mode")
+    if len(dictionary.layers) != data["layers"]:
+        raise ValueError("index dictionary layer count mismatch")
+    from ._points import semantic_points
+    expected = [p["point"] for p in semantic_points(model) if p["probe"] == "mlp_in"]
+    if data["read_points"] != expected:
+        raise ValueError("index dictionary probe mismatch")
+    for layer in dictionary.layers:
+        if tuple(layer.W_dec.shape) != (data["latents"], data["width"]):
+            raise ValueError("index dictionary dimensions mismatch")
+    return data
+
+
+def _stable_topk(values, offsets, k=TOP_EXAMPLES):
+    """Use topk, repair boundary ties, then order only the bounded candidates.
+
+    Rows represent features. Ties use the smallest global token offset.
+    No epsilon changes an activation. Float64 fixture values stay exact.
+    """
+    if values.ndim != 2 or values.shape[1] == 0:
+        raise ValueError("topk requires nonempty feature rows")
+    if not torch.isfinite(values).all().item():
+        raise ValueError("index activations must be finite")
+    offsets = torch.broadcast_to(offsets, values.shape)
+    take = min(k, values.shape[1])
+    best, indices = values.topk(take, dim=1)
+    threshold = best.min(dim=1, keepdim=True).values
+    best_offsets = offsets.gather(1, indices)
+    # topk may choose arbitrary boundary ties. Replace all of them explicitly.
+    boundary = values == threshold
+    sentinel = torch.iinfo(torch.int64).max
+    tied_offsets = torch.where(boundary, offsets, sentinel)
+    tied, tied_indices = tied_offsets.topk(take, dim=1, largest=False)
+    tied_values = values.gather(1, tied_indices).masked_fill(tied == sentinel, -torch.inf)
+    best = best.masked_fill(best == threshold, -torch.inf)
+    candidates = torch.cat((best, tied_values), dim=1).cpu().double().numpy()
+    locations = torch.cat((best_offsets, tied), dim=1).cpu().numpy()
+    order = np.lexsort((locations, -candidates), axis=1)[:, :take]
+    selected = np.take_along_axis(candidates, order, axis=1)
+    selected_offsets = np.take_along_axis(locations, order, axis=1)
+    return selected, selected_offsets
+
+
+class _TopTable:
+    def __init__(self, folder, layers, features):
+        self.table = np.lib.format.open_memmap(folder / "table.npy", mode="w+", dtype=_TABLE,
+                                               shape=(layers, features, TOP_EXAMPLES))
+        self.table["activation"] = 0
+        self.table["offset"] = -1
+        self.counts = np.lib.format.open_memmap(folder / "counts.npy", mode="w+", dtype="<u8",
+                                                shape=(layers, features))
+        self.counts[:] = 0
+
+    def update(self, layer, activations, start):
+        values = activations.reshape(-1, activations.shape[-1]).T
+        positions = torch.arange(start, start + values.shape[1], device=values.device)
+        best, offsets = _stable_topk(values, positions)
+        old = self.table[layer]
+        candidates = torch.from_numpy(np.concatenate((old["activation"], best), axis=1))
+        locations = torch.from_numpy(np.concatenate((old["offset"], offsets), axis=1))
+        best, offsets = _stable_topk(candidates, locations)
+        valid = best > 0
+        old["activation"] = np.where(valid, best, 0)
+        old["offset"] = np.where(valid, offsets, -1)
+        self.counts[layer] += (values > 0).sum(dim=1).cpu().numpy().astype(np.uint64)
+
+    def flush(self):
+        self.table.flush()
+        self.counts.flush()
+
+
+def _forward(model, input_ids, attention_mask):
+    if model.config.model_type == "qwen3_5_text":
+        # The decoder supplies MLP probes without a vocabulary-sized logit tensor.
+        return model.model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
+    return model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
+
+
+def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
+                dictionary=None, max_tokens=MAX_TOKENS, context_length=256, memory_guard=None):
+    """Index ``(document_id, token_ids)`` pairs in source order.
+
+    IDs must be unique UTF-8 strings of at most 128 bytes. Each pair is one document.
+    Context blocks reset within each document. The last document can end at the token cap.
+    The caller supplies disjoint partition provenance. The tool validates T2 partitions.
+    An existing index is never overwritten. A failed build has no completion manifest.
+    """
+    _positive_integer(max_tokens, "max_tokens", MAX_TOKENS)
+    _positive_integer(context_length, "context_length", 256)
+    if not isinstance(provenance, dict) or not provenance:
+        raise ValueError("index requires text partition provenance")
+    _json(provenance)
+    check = memory_guard if memory_guard is not None else lambda stage: None
+    root = Path(dictionary_path)
+    dictionary = dictionary if dictionary is not None else load_dictionary(root, model=model)
+    data = _compatible(model, dictionary)
+    check("dictionary")
+    identity = _dictionary_hash(dictionary)
+    source_hash = _source_hash(root, data["layers"])
+    vocab = model.get_output_embeddings().weight.shape[0]
+    tokenizer_hash = _tokenizer_hash(tokenizer, vocab)
+    folder = root / "index"
+    folder.mkdir()  # An incomplete prior build also requires explicit removal by its owner.
+    table = _TopTable(folder, data["layers"], data["latents"])
+    device = next(model.parameters()).device
+    total, document_count = 0, 0
+    seen = set()
+    with (folder / "tokens.bin").open("wb") as token_file, (folder / "documents.bin").open("wb") as doc_file:
+        for document_id, token_ids in documents:
+            if not isinstance(document_id, str) or not document_id or len(document_id.encode()) > 128 or "\0" in document_id:
+                raise ValueError("invalid document ID")
+            if document_id in seen:
+                raise ValueError("duplicate document ID")
+            seen.add(document_id)
+            tokens = np.asarray(token_ids)
+            if tokens.ndim != 1 or (tokens.size and (tokens.dtype.kind not in "iu" or
+                                                    tokens.min() < 0 or tokens.max() >= min(vocab, 2**32))):
+                raise ValueError("invalid document token IDs")
+            length = min(len(tokens), max_tokens - total)
+            if not length:
+                continue
+            truncated = length < len(tokens)
+            tokens = tokens[:length].astype("<u4", copy=False)
+            token_file.write(tokens.tobytes())
+            doc_file.write(np.array([(document_id.encode(), total, length, truncated)], dtype=_DOCUMENT).tobytes())
+            for begin in range(0, length, context_length):
+                check("before batch")
+                ids = torch.tensor(tokens[begin:begin + context_length].astype(np.int64), device=device).unsqueeze(0)
+                with torch.inference_mode(), capture(model, data["read_points"]) as saved:
+                    _forward(model, ids, torch.ones_like(ids))
+                    check("model batch")
+                    for layer, point in enumerate(data["read_points"]):
+                        weights = dictionary.layers[layer].W_enc
+                        x = saved.pop(point).to(device=weights.device, dtype=weights.dtype)
+                        activations = dictionary.encode(layer, x)
+                        table.update(layer, activations, total + begin)
+                        del x, activations
+                        check("dictionary batch")
+                del ids
+            total += length
+            document_count += 1
+            if total == max_tokens:
+                break
+    table.flush()
+    check("table")
+    manifest = {
+        "format_version": INDEX_VERSION, "complete": True, "top_examples": TOP_EXAMPLES,
+        "window_tokens": WINDOW_TOKENS, "model_hash": data["model_hash"],
+        "dictionary_hash": identity, "dictionary_source_hash": source_hash,
+        "tokenizer_hash": tokenizer_hash, "layers": data["layers"], "features": data["latents"],
+        "vocab_size": vocab, "tokens": total, "documents": document_count,
+        "context_length": context_length, "token_budget": max_tokens,
+        "provenance": provenance, "tie_order": "activation_desc,global_offset_asc",
+        "files": {name: {"bytes": (folder / name).stat().st_size,
+                         "sha256": _hash_file(folder / name)} for name in _FILES},
+    }
+    manifest["index_hash"] = hashlib.sha256(_json(manifest).encode()).hexdigest()
+    # Write the completion record last. A partial or malformed record is refused.
+    (folder / "index.json").write_text(_json(manifest) + "\n", encoding="utf-8")
+    return manifest
+
+
+class FeatureIndex:
+    """Read an index with an LRU cache of 256 feature results.
+
+    ``show(layer, feature)`` returns JSON data with label, count, maximum, and token lists.
+    ``examples(layer, feature, limit=16)`` returns rows sorted by indexed activation.
+    Each row has 33 token slots. Missing document-edge slots contain null values.
+    The first query recomputes all retained windows in one real forward pass.
+    A window has fresh context, thus its center value can differ from the indexed maximum.
+    Model and dictionary weights must remain fixed for the lifetime of this object.
+    """
+
+    def __init__(self, dictionary_path, *, model, tokenizer, dictionary=None):
+        self.root = Path(dictionary_path)
+        self.model, self.tokenizer = model, tokenizer
+        self.dictionary = dictionary if dictionary is not None else load_dictionary(self.root, model=model)
+        data = _compatible(model, self.dictionary)
+        folder = self.root / "index"
+        try:
+            manifest = json.loads((folder / "index.json").read_text(encoding="utf-8"))
+            claimed = manifest.pop("index_hash")
+            if claimed != hashlib.sha256(_json(manifest).encode()).hexdigest():
+                raise ValueError("index hash mismatch")
+            manifest["index_hash"] = claimed
+            if (manifest["format_version"] != INDEX_VERSION or manifest["complete"] is not True or
+                    manifest["top_examples"] != TOP_EXAMPLES or manifest["window_tokens"] != WINDOW_TOKENS):
+                raise ValueError("incomplete or unsupported index")
+            if (manifest["dictionary_source_hash"] != _source_hash(self.root, data["layers"]) or
+                    manifest["dictionary_hash"] != _dictionary_hash(self.dictionary) or
+                    manifest["model_hash"] != data["model_hash"]):
+                raise ValueError("index dictionary identity mismatch")
+            vocab = model.get_output_embeddings().weight.shape[0]
+            if manifest["vocab_size"] != vocab or manifest["tokenizer_hash"] != _tokenizer_hash(tokenizer, vocab):
+                raise ValueError("index tokenizer identity mismatch")
+            if manifest["layers"] != data["layers"] or manifest["features"] != data["latents"]:
+                raise ValueError("index dimensions mismatch")
+            for name in _FILES:
+                record = manifest["files"][name]
+                if (folder / name).stat().st_size != record["bytes"] or _hash_file(folder / name) != record["sha256"]:
+                    raise ValueError(f"incomplete or corrupt index file {name}")
+            self.table = np.load(folder / "table.npy", mmap_mode="r", allow_pickle=False)
+            self.counts = np.load(folder / "counts.npy", mmap_mode="r", allow_pickle=False)
+            shape = (data["layers"], data["latents"])
+            if self.table.dtype != _TABLE or self.table.shape != (*shape, TOP_EXAMPLES):
+                raise ValueError("index table layout mismatch")
+            if self.counts.dtype != np.dtype("<u8") or self.counts.shape != shape:
+                raise ValueError("index counts layout mismatch")
+            for field in ("tokens", "documents"):
+                _positive_integer(manifest[field], field, MAX_TOKENS, minimum=0)
+            self.tokens = self._map(folder / "tokens.bin", "<u4", manifest["tokens"])
+            self.documents = self._map(folder / "documents.bin", _DOCUMENT, manifest["documents"])
+            if len(self.documents):
+                ends = self.documents["start"] + self.documents["length"]
+                if (self.documents[0]["start"] != 0 or np.any(self.documents["length"] <= 0) or
+                        not np.array_equal(self.documents["start"][1:], ends[:-1]) or ends[-1] != len(self.tokens)):
+                    raise ValueError("index document boundaries mismatch")
+            elif len(self.tokens):
+                raise ValueError("index lacks document boundaries")
+        except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+            raise ValueError("incomplete or malformed feature index") from error
+        self.metadata = manifest
+        self._cache = OrderedDict()
+
+    @staticmethod
+    def _map(path, dtype, count):
+        dtype = np.dtype(dtype)
+        if path.stat().st_size != count * dtype.itemsize:
+            raise ValueError("index token or document layout mismatch")
+        return np.memmap(path, mode="r", dtype=dtype, shape=(count,)) if count else np.empty(0, dtype=dtype)
+
+    def _entry(self, layer, feature):
+        _positive_integer(layer, "layer", self.metadata["layers"] - 1, minimum=0)
+        _positive_integer(feature, "feature", self.metadata["features"] - 1, minimum=0)
+        key = (layer, feature)
+        if key not in self._cache:
+            self._cache[key] = {}
+            if len(self._cache) > CACHE_FEATURES:
+                self._cache.popitem(last=False)
+        self._cache.move_to_end(key)
+        return self._cache[key]
+
+    def clear_cache(self):
+        """Discard feature summaries and window activations."""
+        self._cache.clear()
+
+    def _token(self, token_id):
+        # Tokenizer vocabulary spellings retain special tokens and whitespace markers.
+        return str(self.tokenizer.convert_ids_to_tokens(int(token_id)))
+
+    def _windows(self, layer, feature):
+        rows = []
+        for rank, item in enumerate(self.table[layer, feature]):
+            if item["activation"] <= 0:
+                break
+            offset = int(item["offset"])
+            document_row = int(np.searchsorted(self.documents["start"], offset, side="right") - 1)
+            if document_row < 0 or offset >= len(self.tokens):
+                raise ValueError("index example offset outside token store")
+            doc = self.documents[document_row]
+            position = offset - int(doc["start"])
+            begin, end = max(0, position - 16), min(int(doc["length"]), position + 17)
+            left = 16 - (position - begin)
+            ids = self.tokens[int(doc["start"]) + begin:int(doc["start"]) + end].astype(np.int64).tolist()
+            slots = [None] * WINDOW_TOKENS
+            slots[left:left + len(ids)] = ids
+            positions = [None] * WINDOW_TOKENS
+            positions[left:left + len(ids)] = list(range(begin, end))
+            rows.append({"example_id": rank, "document_id": bytes(doc["id"]).decode("utf-8"),
+                         "position": position, "activation": float(item["activation"]),
+                         "window_start": begin, "center": 16, "token_ids": slots,
+                         "tokens": [self._token(i) if i is not None else None for i in slots],
+                         "positions": positions, "valid": [i is not None for i in slots],
+                         "document_truncated": bool(doc["truncated"])})
+        return rows
+
+    def _promoted(self, layer, feature, chunk_size=4096):
+        output = self.model.get_output_embeddings().weight
+        direction = self.dictionary.layers[layer].W_dec[feature].to(device=output.device, dtype=output.dtype)
+        best, ids = np.empty((1, 0)), np.empty((1, 0), dtype=np.int64)
+        with torch.inference_mode():
+            for start in range(0, output.shape[0], chunk_size):
+                values = (output[start:start + chunk_size] @ direction).unsqueeze(0)
+                positions = torch.arange(start, start + values.shape[1], device=output.device)
+                values, positions = _stable_topk(values, positions, k=3)
+                best, ids = _stable_topk(torch.from_numpy(np.concatenate((best, values), axis=1)),
+                                        torch.from_numpy(np.concatenate((ids, positions), axis=1)), k=3)
+        return [{"token_id": int(i), "token": self._token(i), "score": float(v)} for i, v in zip(ids[0], best[0])]
+
+    def show(self, layer, feature):
+        entry = self._entry(layer, feature)
+        if "show" not in entry:
+            promoted = self._promoted(layer, feature)
+            frequency = Counter(i for row in self._windows(layer, feature) for i in row["token_ids"] if i is not None)
+            common = [{"token_id": i, "token": self._token(i), "count": count}
+                      for i, count in sorted(frequency.items(), key=lambda item: (-item[1], item[0]))[:3]]
+            label = "Output: " + " | ".join(t["token"] for t in promoted)
+            label += " / Examples: " + (" | ".join(t["token"] for t in common) or "none")
+            entry["show"] = {"layer": layer, "feature": feature, "label": label,
+                             "count": int(self.counts[layer, feature]),
+                             "maximum": float(self.table[layer, feature, 0]["activation"]),
+                             "promoted_tokens": promoted, "example_tokens": common}
+        return deepcopy(entry["show"])
+
+    def examples(self, layer, feature, limit=TOP_EXAMPLES):
+        entry = self._entry(layer, feature)
+        _positive_integer(limit, "limit", TOP_EXAMPLES, minimum=0)
+        if limit == 0:
+            return []
+        if "examples" not in entry:
+            rows = self._windows(layer, feature)
+            if rows:
+                device = next(self.model.parameters()).device
+                pad = getattr(self.tokenizer, "pad_token_id", None)
+                pad = 0 if pad is None else pad
+                ids = torch.full((len(rows), WINDOW_TOKENS), pad, dtype=torch.long, device=device)
+                mask = torch.zeros_like(ids)
+                for row_number, row in enumerate(rows):
+                    valid = [i for i in row["token_ids"] if i is not None]
+                    ids[row_number, :len(valid)] = torch.tensor(valid, device=device)
+                    mask[row_number, :len(valid)] = 1
+                point = self.dictionary.metadata["read_points"][layer]
+                with torch.inference_mode(), capture(self.model, [point]) as saved:
+                    _forward(self.model, ids, mask)
+                    weights = self.dictionary.layers[layer].W_enc
+                    values = self.dictionary.encode(layer, saved[point].to(device=weights.device, dtype=weights.dtype))
+                    values = values[..., feature].cpu().tolist()
+                for row, values_row in zip(rows, values):
+                    iterator = iter(values_row)
+                    row["activations"] = [next(iterator) if valid else None for valid in row["valid"]]
+            entry["examples"] = rows
+        return deepcopy(entry["examples"][:limit])
