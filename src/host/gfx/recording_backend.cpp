@@ -201,6 +201,16 @@ void RecordingBackend::retire(Serial s) {
     else pending_.push_back(s);
 }
 
+void RecordingBackend::end_by_driver(Serial s) {
+    for (size_t i = 0; i < pending_.size(); ++i)
+        if (pending_[i] == s) {
+            ended(s);
+            pending_.erase(pending_.begin() + long(i));
+            break;
+        }
+    poll();
+}
+
 void RecordingBackend::finish(Serial s) {
     for (size_t i = 0; i < pending_.size();) {
         if (pending_[i] <= s) {
