@@ -441,7 +441,8 @@ def test_invalid_31_message_is_bad_request(type_, meta):
     {"name": "p", "type": "choice", "value": "c", "choices": ["a", "b"]},
     {"name": "p", "type": "choice", "value": "a", "choices": []},
     {"name": "p", "type": "choice", "value": "a", "choices": ["a", "a"]},
-    {"name": "p", "type": "text", "value": "a"},
+    {"name": "p", "type": "unknown", "value": "a"},
+    {"name": "p", "type": "text", "value": 1},
     {"name": "p", "type": "number", "value": 1.0, "pending": True},
     {"name": "p", "type": "number"},
 ])

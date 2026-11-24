@@ -32,6 +32,7 @@ import math
 import os
 import threading
 import time
+import weakref
 
 from . import _wire
 from ._net import (MAX_CONNECTIONS, SERIES_RETAIN, Link, NetServer, NetTransport, _Producer,
@@ -43,6 +44,18 @@ __all__ = ["NativeServer"]
 
 POLL_MS = 4             # the pump's event poll while snapshots or chunks are in flight
 IDLE_MS = 250           # otherwise: retained series of unwatched views drain this often
+_SERVERS = weakref.WeakSet()
+
+
+def refresh_interpretation() -> None:
+    """Apply the current service capability to future native handshakes."""
+    from ._controls import CONTROLS
+    enabled = CONTROLS.interpretation_service is not None
+    for server in list(_SERVERS):
+        if not server.closed:
+            server.nio.enable_interpretation(enabled)
+
+
 PUMP_END_S = 2.0        # the longest close() waits for the pump thread to hand over and end
 _DTYPE = {"torch.float32": _wire.DType.F32, "torch.uint8": _wire.DType.U8,
           "float32": _wire.DType.F32, "uint8": _wire.DType.U8}
@@ -277,6 +290,10 @@ class NativeServer(NetServer):
         self.transport.producer = self.producer
         from ._net_controls import ControlsPort
         self.nio.enable_controls(bool(control))
+        from ._controls import CONTROLS
+        with CONTROLS.interpretation_registration_lock:
+            _SERVERS.add(self)
+            self.nio.enable_interpretation(CONTROLS.interpretation_service is not None)
         self.producer.controls = ControlsPort(self, control, native=True)
         self._events_thread = None
         self.port = 0
@@ -300,6 +317,9 @@ class NativeServer(NetServer):
         """Start listening for viewers (a producer that connect() started)."""
         self.producer.controls.allow = bool(control)
         self.nio.enable_controls(bool(control))
+        from ._controls import CONTROLS
+        with CONTROLS.interpretation_registration_lock:
+            self.nio.enable_interpretation(CONTROLS.interpretation_service is not None)
         if not self.nio.listening:
             self.nio.listen(int(port))
         self._set_urls()
@@ -353,7 +373,7 @@ class NativeServer(NetServer):
                 info = json.loads(frame)
                 link.caps = frozenset(c for c in (_wire.CAP_CONTROLS, _wire.CAP_SELECTION,
                                                   _wire.CAP_SCENES, _wire.CAP_PROGRAMS,
-                                                  _wire.CAP_INTERVENTIONS, _wire.CAP_RESOURCES,
+                                                  _wire.CAP_INTERVENTIONS, _wire.CAP_INTERPRETATION, _wire.CAP_TEXT_PARAMS, _wire.CAP_RESOURCES,
                                                   _wire.CAP_SCENE_PIECES)
                                       if info.get(c))
                 link.may_control = bool(info.get("control"))
@@ -424,6 +444,7 @@ class NativeServer(NetServer):
             except Exception:
                 pass
         self.closed = True
+        _SERVERS.discard(self)
         self.ring.close()
         self.transport.n_attached = 0
         _unroute(self)

@@ -300,6 +300,12 @@ std::vector<cb::InterventionPoint> intervention_points_of(const json& interventi
         q.kind = p.value("kind", std::string("module"));
         q.module = p.value("module", q.point);
         q.head = opt_int(p, "head");
+        if (p.contains("probe") && p["probe"].is_string()) q.probe = p["probe"].get<std::string>();
+        q.layer = opt_int(p, "layer");
+        if (p.contains("pattern")) {
+            if (p["pattern"].is_null()) q.pattern.emplace(std::nullopt);
+            else if (p["pattern"].is_string()) q.pattern.emplace(p["pattern"].get<std::string>());
+        }
         q.type = p.is_object() && p.contains("type") && p["type"].is_string() ? p["type"].get<std::string>() : "";
         if (p.contains("shape") && p["shape"].is_array()) {
             std::vector<std::int64_t> shape;
@@ -330,6 +336,16 @@ std::vector<cb::Intervention> interventions_of(const json& interventions) {
     }
     pending.insert(pending.end(), std::make_move_iterator(rest.begin()), std::make_move_iterator(rest.end()));
     return pending;
+}
+
+cb::CommandOutput AppRunControl::interpret(const std::string& method, const json& params, std::uint32_t request) {
+    if (!link_ || !link_->attached()) return cb::CommandOutput::fail(cb::Error(cb::kRunNotAttached, "No stream is attached."));
+    const auto result = from_net_json(link_->interpret(method, to_net_json(params), request));
+    if (result.contains("error")) {
+        const auto& error = result["error"];
+        return cb::CommandOutput::fail(cb::Error(error.value("code", "interpret.refused"), error.value("message", "The request failed.")));
+    }
+    return cb::CommandOutput::ok(result);
 }
 
 bool AppRunControl::interventions_supported() {

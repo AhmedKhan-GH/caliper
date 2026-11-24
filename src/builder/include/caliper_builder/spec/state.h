@@ -25,6 +25,7 @@ namespace limits {
 inline constexpr std::size_t kStates = 64;            // spec.too_many
 inline constexpr std::size_t kStateChoices = 1024;
 inline constexpr std::size_t kStateTextBytes = 1024;
+inline constexpr std::size_t kParamTextBytes = 4096;
 inline constexpr std::size_t kStateListItems = 256;
 }  // namespace limits
 

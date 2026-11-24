@@ -29,6 +29,7 @@
 #include <stb_image_write.h>
 #pragma clang diagnostic pop
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -548,7 +549,11 @@ TEST_CASE("gfx/Metal pieces: the scene view draws its programs after its scene, 
     const cd::DrawStatus s = rig.view->draw_runtimes()[0]->status();
     CHECK_MESSAGE(s.state == cd::DrawState::running, s.error.message);
     CHECK(s.frames == 3);
-    CHECK(feed.states["tower_arcs"] == std::vector<cd::DrawState>{cd::DrawState::compiled, cd::DrawState::running});
+    // The feed also reports resource steps and completed draw times. Remove only consecutive repeats.
+    // Require both states in order, with no later failure or state regression.
+    std::vector<cd::DrawState> transitions = feed.states["tower_arcs"];
+    transitions.erase(std::unique(transitions.begin(), transitions.end()), transitions.end());
+    CHECK(transitions == std::vector<cd::DrawState>{cd::DrawState::compiled, cd::DrawState::running});
     std::vector<std::uint8_t> rgba;
     std::string why;
     REQUIRE_MESSAGE(rig.view->read_pixels(&rgba, &why), why);

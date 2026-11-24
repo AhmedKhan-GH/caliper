@@ -16,8 +16,14 @@
 #include "runner/child_process.h"
 #include "runner/model_runner.h"
 #include "runner/run_connection.h"
+#include "net/wire.h"
+#include "net/ws.h"
+#include "../../../../tests/probe_metadata.h"
 
 #include <caliper_builder/session/events.h>
+#include <caliper_builder/session/session.h>
+#include <caliper_builder/commands/command_table.h>
+#include <caliper_builder/commands/schema.h>
 
 #include <doctest/doctest.h>
 
@@ -45,6 +51,202 @@ namespace cb = caliper_builder;
 namespace cr = caliper_runner;
 namespace fs = std::filesystem;
 using nlohmann::json;
+
+TEST_CASE("runner: native interpretation validation and protocol errors need no model") {
+    namespace wire = caliper_net::wire;
+    caliper_net::Server server;
+    std::string why;
+    REQUIRE(server.listen(0, &why));
+    cr::RunConnection connection;
+    REQUIRE(connection.open("ws://127.0.0.1:" + std::to_string(server.port()) +
+        "/v3/stream?token=native_fixture_0123456789", &why));
+    caliper_net::ConnId peer = 0;
+    std::uint32_t pong = 0;
+    bool closure_announced = false;
+    std::vector<wire::Control> received;
+    const auto send = [&](const wire::Message& message) {
+        std::vector<std::uint8_t> bytes;
+        REQUIRE(wire::encode(message, &bytes));
+        REQUIRE(server.send(peer, bytes.data(), bytes.size()));
+    };
+    const auto pump = [&] {
+        const auto state_before = connection.state();
+        const bool first_change = connection.poll(0);
+        for (auto& event : server.poll(5)) {
+            if (event.type == caliper_net::Event::Type::Request) REQUIRE(server.accept(event.conn));
+            if (event.type != caliper_net::Event::Type::Message) continue;
+            peer = event.conn;
+            wire::Message message;
+            REQUIRE(wire::decode(event.data.data(), event.data.size(), &message).ok());
+            if (std::holds_alternative<wire::Hello>(message)) {
+                wire::Welcome welcome;
+                welcome.role = CALIPER_NET_ROLE_PRODUCER;
+                welcome.session = wire::Identity{"native-fixture", "fixture.py", 1, 1}.to_json();
+                welcome.capabilities = {CALIPER_NET_CAP_INTERPRETATION, CALIPER_NET_CAP_CONTROLS};
+                welcome.control = true;
+                send(welcome);
+            } else if (auto* control = std::get_if<wire::Control>(&message)) received.push_back(*control);
+            else if (auto* reply = std::get_if<wire::Pong>(&message)) pong = reply->nonce;
+        }
+        const bool last_change = connection.poll(5);
+        if (state_before != cr::RunConnection::State::closed && connection.state() == cr::RunConnection::State::closed)
+            closure_announced = first_change || last_change;
+    };
+    const auto until = [&](const std::function<bool()>& ready) {
+        for (unsigned i = 0; i < 200 && !ready(); ++i) pump();
+        REQUIRE(ready());
+    };
+    until([&] { return !connection.session().empty(); });
+    CHECK(connection.send_control(CALIPER_NET_OP_SET, "prompt", json(std::string("\xc3\x28", 2)), 0, &why) == 0);
+    CHECK(why.find("UTF-8") != std::string::npos);
+    const auto raw_reply = [&](const caliper_net::Json& meta) {
+        std::vector<std::uint8_t> bytes;
+        REQUIRE(wire::encode_frame(CALIPER_NET_MSG_CONTROL_REPLY, meta, {}, &bytes));
+        REQUIRE(server.send(peer, bytes.data(), bytes.size()));
+    };
+    std::string prompt;
+    for (unsigned i = 0; i < 2048; ++i) prompt += "\xc3\xa9";
+    for (const auto& invalid : {std::string("a\0b", 3), prompt + "\xc3\xa9", std::string("\xc3\x28", 2)}) {
+        const auto result = connection.interpret("trace.run", {{"prompt", invalid}}, 0);
+        REQUIRE(result.contains("error"));
+        CHECK(result["error"]["code"] == "interpret.refused");
+        CHECK(result["error"]["message"].get<std::string>().size() <= CALIPER_NET_TEXT_MAX);
+    }
+    const auto queued = connection.interpret("trace.run", {{"prompt", prompt}}, 0);
+    REQUIRE(queued.contains("request_id"));
+    const auto id = queued["request_id"].get<std::uint32_t>();
+    CHECK(connection.interpret("trace.run", json::object(), id + 1)["error"]["code"] == "interpret.unknown_request");
+    CHECK(connection.interpret("trace.validate", json::object(), id)["error"]["code"] == "interpret.unknown_request");
+    CHECK(connection.interpret("trace.run", {{"prompt", "new"}}, id)["error"]["code"] == "command.invalid_args");
+    until([&] { return !received.empty(); });
+    REQUIRE(received.size() == 1);
+    CHECK(received.front().request_id == id);
+    CHECK(received.front().interpretation.find("params")->find("prompt")->as_string() == prompt);
+    std::size_t expected_received = 1;
+    SUBCASE("text parameters require the producer capability") {
+        expected_received = 3;
+        wire::Controls controls;
+        controls.run = caliper_net::Json::object();
+        controls.run.set("state", "running");
+        controls.run.set("step", 1);
+        auto parameter = caliper_net::Json::object();
+        parameter.set("name", "prompt");
+        parameter.set("type", "text");
+        parameter.set("value", "initial");
+        controls.params.push(parameter);
+        send(controls);
+        until([&] { return !connection.controls().is_null(); });
+        for (const auto& value : {std::string("short"), std::string(), prompt}) {
+            CHECK(connection.send_control("set", "prompt", value, 0, &why) == 0);
+            CHECK(why.find("text_params") != std::string::npos);
+        }
+        const auto choice = connection.send_control("set", "choice", "line\n\tbreak", 0, &why);
+        REQUIRE(choice != 0);
+        until([&] { return received.size() == 2; });
+        wire::Welcome welcome;
+        welcome.role = CALIPER_NET_ROLE_PRODUCER;
+        welcome.session = wire::Identity{"native-fixture", "fixture.py", 1, 1}.to_json();
+        welcome.capabilities = {CALIPER_NET_CAP_INTERPRETATION, CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_TEXT_PARAMS};
+        welcome.control = true;
+        send(welcome);
+        send(wire::Ping{19});
+        until([&] { return pong == 19; });
+        REQUIRE(connection.send_control("set", "prompt", prompt, 0, &why) != 0);
+        until([&] { return received.size() == 3; });
+        CHECK(received.back().value.as_string() == prompt);
+        wire::Error error;
+        error.in_reply_to = CALIPER_NET_MSG_CONTROL;
+        error.request_id = id;
+        error.code = CALIPER_NET_ERR_BAD_REQUEST;
+        error.message = "The fixture ended this request.";
+        send(error);
+    }
+    SUBCASE("CONTROL ERROR") {
+        wire::Error error;
+        error.in_reply_to = CALIPER_NET_MSG_CONTROL;
+        error.request_id = id;
+        error.code = CALIPER_NET_ERR_BAD_REQUEST;
+        error.message = "The fixture refused this request.";
+        send(error);
+    }
+    SUBCASE("malformed CONTROL_REPLY") {
+        auto meta = caliper_net::Json::object();
+        meta.set("request_id", id); meta.set("op", "interpret"); meta.set("status", "ok");
+        raw_reply(meta);
+    }
+    SUBCASE("malformed CONTROL_REPLY without an operation") {
+        auto meta = caliper_net::Json::object();
+        meta.set("request_id", id); meta.set("status", "ok");
+        raw_reply(meta);
+    }
+    SUBCASE("malformed CONTROL_REPLY with a non-string operation") {
+        auto meta = caliper_net::Json::object();
+        meta.set("request_id", id); meta.set("op", 7); meta.set("status", "ok");
+        raw_reply(meta);
+    }
+    SUBCASE("malformed CONTROL_REPLY with an empty operation") {
+        auto meta = caliper_net::Json::object();
+        meta.set("request_id", id); meta.set("op", ""); meta.set("status", "ok");
+        raw_reply(meta);
+    }
+    SUBCASE("malformed CONTROL_REPLY without a usable request ID") {
+        auto meta = caliper_net::Json::object();
+        meta.set("request_id", "invalid"); meta.set("op", "interpret"); meta.set("status", "ok");
+        raw_reply(meta);
+    }
+    SUBCASE("unrelated errors preserve the pending request") {
+        for (const auto& request : {caliper_net::Json(id + 100), caliper_net::Json("invalid"), caliper_net::Json()}) {
+            auto meta = caliper_net::Json::object();
+            if (!request.is_null()) meta.set("request_id", request);
+            meta.set("status", "invalid");
+            raw_reply(meta);
+        }
+        for (const auto* op : {"set", "run", "pause", "intervene"}) {
+            for (const auto& request : {caliper_net::Json(id), caliper_net::Json("invalid"), caliper_net::Json()}) {
+                auto meta = caliper_net::Json::object();
+                if (!request.is_null()) meta.set("request_id", request);
+                meta.set("op", op); meta.set("status", "invalid");
+                raw_reply(meta);
+            }
+        }
+        wire::Error error;
+        error.code = CALIPER_NET_ERR_BAD_REQUEST;
+        error.message = "The fixture refused an unrelated message.";
+        send(error);
+        error.in_reply_to = CALIPER_NET_MSG_CONTROL;
+        send(error);
+        error.request_id = id;
+        error.sub = 1;
+        send(error);
+        send(wire::Ping{17});
+        until([&] { return pong == 17; });
+        CHECK(connection.interpret("trace.run", json::object(), id) == queued);
+        error.sub.reset();
+        send(error);
+    }
+    SUBCASE("BYE ends pending queries before the socket closes") {
+        send(wire::Bye{CALIPER_NET_BYE_NORMAL, "The fixture ended."});
+        until([&] { return connection.state() == cr::RunConnection::State::closed; });
+        CHECK(closure_announced);
+        CHECK(connection.interpret("trace.run", json::object(), id)["error"]["code"] == "run.not_attached");
+        return;
+    }
+    until([&] { return connection.interpret("trace.run", json::object(), id).contains("error"); });
+    const auto final = connection.interpret("trace.run", json::object(), id);
+    CHECK(final["error"]["code"] == CALIPER_NET_ERR_BAD_REQUEST);
+    wire::ControlReply late;
+    late.request_id = id; late.op = CALIPER_NET_OP_INTERPRET; late.status = "queued";
+    send(late);
+    pump();
+    CHECK(connection.interpret("trace.run", json::object(), id) == final);
+    connection.close();
+    CHECK(connection.interpret("trace.status", json::object(), 0)["error"]["code"] == "run.not_attached");
+    REQUIRE(connection.open("ws://127.0.0.1:" + std::to_string(server.port()) +
+        "/v3/stream?token=native_fixture_0123456789", &why));
+    until([&] { return connection.interpret("trace.run", json::object(), id).value("error", json::object())
+        .value("code", std::string()) == "interpret.unknown_request"; });
+    CHECK(received.size() == expected_received);
+}
 
 namespace {
 
@@ -843,4 +1045,178 @@ TEST_CASE("runner: a symbolic link among the kept checkpoints is never used for 
     REQUIRE(runner.wait_for(state_is(fork.id, "exited"), 60000));
     REQUIRE(runner.wait_for(state_is("base", "exited"), 60000));
     CHECK(runner.running_pids().empty());
+}
+
+TEST_CASE("runner: semantic probe metadata survives the managed connection") {
+    const std::string pythonpath = std::getenv("PYTHONPATH") ? std::getenv("PYTHONPATH") : "";
+    Workspace workspace("probe-metadata");
+    // Retain an external CPU guard before the checkout path in child processes.
+    if (!pythonpath.empty()) setenv("PYTHONPATH", pythonpath.c_str(), 1);
+    REQUIRE(!workspace.python.empty());
+    const json expected = caliper_test::probe_descriptors();
+    std::ofstream script(workspace.ws + "/scripts/stand_in_run.py");
+    script << "import json, os, threading\nfrom pathlib import Path\nimport torch\nimport caliper\n"
+              "from caliper._controls import CONTROLS\n"
+              "from caliper import _net_programs\n"
+              "class Descriptors:\n"
+              "    def points(self, unused):\n"
+              "        return json.loads(" << json(expected.dump()).dump() << ")\n"
+              "fixture = torch.nn.Module().to('cpu')\n"
+              "CONTROLS.interventions_on(fixture, adapter=Descriptors())\n"
+              // Announce the watch capability without a program manager or device.
+              "_net_programs.enable()\n"
+              "done = threading.Event()\n"
+              "caliper.action('caliper.stop', done.set)\n"
+              "server = caliper.serve(control=True)\n"
+              "Path(os.environ['CALIPER_RUN_LINK_FILE']).write_text(server.url)\n"
+              "while not done.wait(0.01):\n"
+              "    caliper.step()\n"
+              "caliper.close()\n"
+              "_net_programs.disable()\n";
+    script.close();
+    cr::ModelRunner::Options options;
+    options.workspace = workspace.ws;
+    options.python = workspace.python;
+    cr::ModelRunner runner(options);
+    struct Guard { cr::ModelRunner& runner; ~Guard() { runner.shutdown(); } } guard{runner};
+    cb::RunEntry entry;
+    REQUIRE(!runner.start(workspace.start({}, json::object(), "probe-metadata"), &entry));
+    REQUIRE(runner.wait_for(state_is(entry.id, "running"), 30000));
+    cb::Error error;
+    auto* control = runner.control_of(entry.id, &error);
+    REQUIRE(control);
+    REQUIRE(runner.wait_for([&](const auto&) { return control->intervention_points().size() == expected.size(); }, 30000));
+    CHECK(runner.intervention_points(entry.id).size() == expected.size());
+    auto opened = cb::Session::open(workspace.ws);
+    REQUIRE(opened.session);
+    opened.session->set_run_control(control);
+    cb::CommandInvocation command;
+    command.name = "intervene.points";
+    command.args = json::object();
+    command.origin = cb::CommandOrigin::mcp;
+    const auto reply = opened.session->invoke(command);
+    REQUIRE_MESSAGE(reply.ok, reply.error.message);
+    CHECK(reply.result.at("points") == expected);
+    const auto* descriptor = cb::find_command_descriptor(command.name);
+    REQUIRE(descriptor);
+    CHECK(cb::validate_command_value(descriptor->result, reply.result).ok());
+}
+
+TEST_CASE("runner: interpretation uses the managed connection without attachment") {
+    Workspace w("interpretation");
+    if (const char* python = std::getenv("CALIPER_INTERPRET_PYTHON")) w.python = python;
+    REQUIRE(!w.python.empty());
+    std::ofstream script(w.ws + "/scripts/stand_in_run.py");
+    script << R"PY(import os
+from pathlib import Path
+import caliper
+from caliper._controls import CONTROLS
+from caliper.interp._service import register_service
+service = register_service()
+server = caliper.serve(control=True)
+Path(os.environ["CALIPER_RUN_LINK_FILE"]).write_text(server.url)
+while True:
+    with CONTROLS.cond:
+        CONTROLS.cond.wait_for(lambda: service.pending, timeout=1)
+    if service.pending:
+        caliper.step()
+)PY";
+    script.close();
+    cr::ModelRunner::Options options;
+    options.workspace = w.ws;
+    options.python = w.python;
+    cr::ModelRunner runner(options);
+    struct Guard { cr::ModelRunner& runner; ~Guard() { runner.shutdown(); } } guard{runner};
+    cb::RunEntry entry;
+    REQUIRE(!runner.start(w.start({}, json::object(), "interpretation"), &entry));
+    REQUIRE(runner.wait_for(state_is(entry.id, "running"), 30000));
+    cb::Error error;
+    auto* control = runner.control_of(entry.id, &error);
+    REQUIRE(control);
+    REQUIRE(runner.wait_for([&](const auto&) { return control->state().control; }, 30000));
+    auto output = control->interpret("trace.status", json::object(), 0);
+    REQUIRE(!output.error);
+    const auto request = output.result.at("request_id").get<std::uint32_t>();
+    REQUIRE(runner.wait_for([&](const auto&) {
+        output = control->interpret("trace.status", json::object(), request);
+        return output.error || !output.result.at("pending").get<bool>();
+    }, 30000));
+    REQUIRE(!output.error);
+    CHECK(output.result.at("result").at("state") == "idle");
+    output = control->interpret("feature.dictionary", json::object(), 0);
+    REQUIRE(!output.error);
+    const auto missing = output.result.at("request_id").get<std::uint32_t>();
+    REQUIRE(runner.wait_for([&](const auto&) {
+        output = control->interpret("feature.dictionary", json::object(), missing);
+        return static_cast<bool>(output.error);
+    }, 30000));
+    CHECK(output.error.code == "interpret.missing_dictionary");
+    CHECK(control->interpret("trace.read", json::object(), request).error.code == "interpret.unknown_request");
+}
+
+TEST_CASE("runner: interpretation final replies survive reordered transport replies") {
+    Workspace w("interpretation-replies");
+    if (const char* python = std::getenv("CALIPER_INTERPRET_PYTHON")) w.python = python;
+    REQUIRE(!w.python.empty());
+    std::ofstream script(w.ws + "/scripts/stand_in_run.py");
+    script << R"PY(import os
+import threading
+from pathlib import Path
+import caliper
+from caliper import _wire
+from caliper._controls import CONTROLS
+from caliper.interp._service import register_service
+register_service()
+original = CONTROLS._on_control
+
+def reordered(route, conn, meta, **kwargs):
+    if meta["op"] != "interpret":
+        return original(route, conn, meta, **kwargs)
+    rid = meta["request_id"]
+    method = meta["interpretation"]["method"]
+    # These deferred frames follow the final reply returned to the sender.
+    route._reply(conn, _wire.ControlReply(rid, "interpret", "queued").to_meta())
+    route._reply(conn, _wire.ControlReply(rid, "interpret", "error",
+        error={"code": "interpret.closed", "message": "late duplicate"}).to_meta())
+    if method == "feature.dictionary":
+        return _wire.ControlReply(rid, "interpret", "error",
+            error={"code": "interpret.missing_dictionary", "message": "fixture refusal"}).to_meta()
+    return _wire.ControlReply(rid, "interpret", "ok", result={"state": "idle"}).to_meta()
+
+CONTROLS._on_control = reordered
+server = caliper.serve(control=True)
+Path(os.environ["CALIPER_RUN_LINK_FILE"]).write_text(server.url)
+threading.Event().wait()
+)PY";
+    script.close();
+    cr::ModelRunner::Options options;
+    options.workspace = w.ws;
+    options.python = w.python;
+    cr::ModelRunner runner(options);
+    struct Guard { cr::ModelRunner& runner; ~Guard() { runner.shutdown(); } } guard{runner};
+    cb::RunEntry entry;
+    REQUIRE(!runner.start(w.start({}, json::object(), "interpretation-replies"), &entry));
+    REQUIRE(runner.wait_for(state_is(entry.id, "running"), 30000));
+    cb::Error error;
+    auto* control = runner.control_of(entry.id, &error);
+    REQUIRE(control);
+    REQUIRE(runner.wait_for([&](const auto&) { return control->state().control; }, 30000));
+    std::vector<std::pair<std::string, std::uint32_t>> requests;
+    for (const auto* method : {"trace.status", "feature.dictionary", "trace.read"}) {
+        auto output = control->interpret(method, json::object(), 0);
+        REQUIRE(!output.error);
+        const auto request = output.result.at("request_id").get<std::uint32_t>();
+        requests.emplace_back(method, request);
+        REQUIRE(runner.wait_for([&](const auto&) {
+            output = control->interpret(method, json::object(), request);
+            return output.error || !output.result.at("pending").get<bool>();
+        }, 30000));
+    }
+    // The third reply fences the late frames for the first two requests.
+    auto success = control->interpret(requests[0].first, json::object(), requests[0].second);
+    REQUIRE(!success.error);
+    CHECK_FALSE(success.result.at("pending").get<bool>());
+    CHECK(success.result.at("result").at("state") == "idle");
+    auto refused = control->interpret(requests[1].first, json::object(), requests[1].second);
+    CHECK(refused.error.code == "interpret.missing_dictionary");
 }

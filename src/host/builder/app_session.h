@@ -85,6 +85,7 @@
 #include <caliper_builder/commands/registry.h>
 #include <caliper_builder/session/events.h>
 #include <caliper_builder/session/run_control.h>
+#include "live/live_attach.h"
 
 #include <map>
 #endif
@@ -141,6 +142,12 @@ public:
 
     caliper_builder::RunState state() override;
     caliper_builder::Error set_param(const std::string& name, const nlohmann::json& value) override;
+    std::string param_error(const std::string& name) const override {
+        return link_ ? link_->param_error(name) : std::string();
+    }
+    std::string control_session() const override {
+        return link_ ? link_->control_session() : std::string();
+    }
     caliper_builder::Error run_action(const std::string& name) override;
     caliper_builder::Error pause(caliper_builder::RunPauseOp op, std::int64_t count) override;
 
@@ -149,6 +156,8 @@ public:
     // "interventions", which a script sends only when it announced the
     // capability "interventions"; a change goes out as CONTROL op
     // "intervene" through the link, and fails as the requests above do.
+    caliper_builder::CommandOutput interpret(const std::string& method, const nlohmann::json& params,
+                                               std::uint32_t request) override;
     bool interventions_supported() override;
     std::vector<caliper_builder::InterventionPoint> intervention_points() override;
     std::vector<caliper_builder::Intervention> interventions() override;

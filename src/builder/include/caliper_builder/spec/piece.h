@@ -455,6 +455,21 @@ inline bool operator==(const PickMap& a, const PickMap& b) { return a.resource =
 // published buffer resource or buffer input instead: each valid element is one
 // string of UTF-8 bytes, ended by its stride (at most kStringBytes) or its
 // first zero byte.
+struct TextHover {
+    std::uint32_t anchor = 0;
+    std::uint32_t string_offset = 0;
+};
+inline bool operator==(const TextHover& a, const TextHover& b) {
+    return a.anchor == b.anchor && a.string_offset == b.string_offset;
+}
+struct TextSelected {
+    std::uint32_t anchor = 0;
+    std::string param;
+    std::uint32_t string_offset = 0;
+};
+inline bool operator==(const TextSelected& a, const TextSelected& b) {
+    return a.anchor == b.anchor && a.param == b.param && a.string_offset == b.string_offset;
+}
 struct TextTable {
     std::string anchors;                     // a buffer resource
     std::string position = "position";
@@ -463,10 +478,13 @@ struct TextTable {
     std::vector<std::string> strings;        // at most kStrings, each at most kStringBytes
     std::optional<std::string> strings_from; // a buffer of at most kStrings elements of at most kStringBytes
     TextAlign align = TextAlign::placed;
+    std::optional<TextHover> hover;          // local ID hit: string_offset + item at one anchor
+    std::optional<TextSelected> selected;   // frame parameter: string_offset + item at one anchor
 };
 inline bool operator==(const TextTable& a, const TextTable& b) {
     return a.anchors == b.anchors && a.position == b.position && a.string == b.string && a.priority == b.priority &&
-           a.strings == b.strings && a.strings_from == b.strings_from && a.align == b.align;
+           a.strings == b.strings && a.strings_from == b.strings_from && a.align == b.align && a.hover == b.hover &&
+           a.selected == b.selected;
 }
 
 // The table `draw`; its source is draw.wgsl.

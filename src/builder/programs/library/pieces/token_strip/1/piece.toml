@@ -1,0 +1,134 @@
+name = "token_strip"
+version = 1
+description = "Eight rows of 25 tokens with activation colors, example picks, and two pages"
+imports = ["pick@1", "camera@1"]
+
+[[inputs]]
+name = "tokens"
+kind = "tensor"
+dtype = "i32"
+rank_min = 2
+rank_max = 2
+title = "Token IDs (16, 25)"
+optional = false
+
+[[inputs]]
+name = "activations"
+kind = "tensor"
+dtype = "f32"
+rank_min = 2
+rank_max = 2
+title = "Activations (16, 25)"
+optional = false
+
+[[inputs]]
+name = "example_ids"
+kind = "tensor"
+dtype = "i32"
+rank_min = 1
+rank_max = 1
+title = "Example IDs (16)"
+optional = false
+
+[[inputs]]
+name = "valid_tokens"
+kind = "tensor"
+dtype = "i32"
+rank_min = 1
+rank_max = 1
+title = "Valid Tokens Per Example (16)"
+optional = false
+
+[[inputs]]
+name = "label_text"
+kind = "tensor"
+dtype = "u32"
+rank_min = 2
+rank_max = 2
+title = "Packed UTF-8 Tokens (400, 16)"
+optional = false
+
+[[params]]
+# A page change requires a derive publication for rows, cells, and labels.
+name = "page"
+type = "u32"
+default = 0
+min = 0
+max = 1
+title = "Example Page"
+
+[[params]]
+name = "activation_max"
+type = "f32"
+default = 1.0
+min = 1e-06
+max = 1e+20
+title = "Activation Maximum"
+
+[[resources]]
+id = "rows"
+kind = "buffer"
+struct = "Row"
+fields = ["example_id: i32", "example: u32", "visible_row: u32", "token_count: u32"]
+count = 8
+counted = false
+
+[[resources]]
+id = "cells"
+kind = "buffer"
+struct = "Cell"
+fields = ["rect: vec4<f32>", "activation: f32", "token: i32", "row: u32", "valid: u32"]
+count = 200
+counted = false
+
+[[resources]]
+id = "labels"
+kind = "buffer"
+struct = "Label"
+fields = ["position: vec4<f32>", "string: u32"]
+count = 200
+counted = false
+
+[[resources]]
+id = "strings"
+kind = "buffer"
+struct = "Text"
+fields = ["a: vec4<u32>", "b: vec4<u32>", "c: vec4<u32>", "d: vec4<u32>"]
+count = 200
+counted = false
+
+[derive]
+time_ms = 50
+memory_mb = 64
+
+[[derive.passes]]
+entry = "example_rows"
+workgroups = [1, 1, 1]
+writes = ["rows"]
+
+[[derive.passes]]
+entry = "token_cells"
+workgroups = [4, 1, 1]
+writes = ["cells", "labels"]
+
+[[derive.passes]]
+entry = "token_text"
+workgroups = [4, 1, 1]
+writes = ["strings"]
+
+[draw]
+camera = "pan_zoom"
+frame_ms = 4
+memory_mb = 64
+pick = { resource = "rows", fields = ["example_id", "example", "visible_row", "token_count"] }
+text = { anchors = "labels", position = "position", string = "string", strings_from = "strings", align = "center" }
+
+[[draw.passes]]
+kind = "render"
+vertex = "panel_vs"
+fragment = "panel_fs"
+instances = "cells"
+vertices = 6
+blend = "alpha"
+depth = "none"
+pick = true

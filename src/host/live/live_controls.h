@@ -25,7 +25,8 @@
 //     turn, so the value where the drag stops is always sent last.
 //   - A value that was set shows as pending until a CONTROLS that arrived
 //     after its `ok` reply confirms it (as the value, or as the script's own
-//     `pending`). A refused value is dropped and the reason shown.
+//     `pending`). A refusal removes the pending request and shows the reason.
+//     A text draft stays in its field until acceptance or session teardown.
 //
 // The drawing functions use plain ImGui widgets with a ControlsLook, so the
 // app draws them in its house style and caliper-viewer in ImGui's own.
@@ -81,10 +82,16 @@ public:
     // script applies it at its next step; a refusal in its CONTROL_REPLY
     // shows in notice().
     bool intervene(const caliper_net::Json& body);
+    caliper_net::Json interpret(const std::string& method, const caliper_net::Json& params, uint32_t request);
 
     // What a parameter's control shows: the value set here until the script
     // confirms it, else the script's pending value, else its value.
     caliper_net::Json shown_value(const ControlParam& p) const;
+    // Draw the text field within the caller's ImGui ID and disabled scopes.
+    // Submit on Return or focus loss. Keep the draft until acceptance.
+    void draw_text_param(const ControlParam& p);
+    std::string param_error(const std::string& name) const;
+    uint32_t text_epoch() const { return text_epoch_; }
     // A value set here waits for its reply or for CONTROLS to confirm it.
     bool param_waiting(const ControlParam& p) const;
     // The script holds a pending value it reads at its next checkpoint.
@@ -141,9 +148,10 @@ private:
         bool replied = false;          // its `ok` arrived
         uint64_t reply_controls = 0;   // Controls::version when it did
     };
-    void send_set(const std::string& name, Local& l);
+    bool send_set(const std::string& name, Local& l);
     void on_reply(const ControlReply& r);
     void on_controls(const Controls& before);
+    void sync_interpretation_session(Source* src);
     uint32_t send(const char* op, const std::string& name, const caliper_net::Json& value, uint32_t count);
     void refuse(const std::string& what, const std::string& why);
 
@@ -153,7 +161,14 @@ private:
     Controls controls_;
     ControlAccess access_{false, "not attached to a session"};
     std::map<std::string, Local> locals_;
+    std::map<ImGuiID, std::string> text_edits_;
+    std::map<std::string, std::string> param_errors_;
+    uint32_t text_epoch_ = 0;
     std::map<uint32_t, std::string> runs_;     // run request -> action
+    std::map<uint32_t, std::pair<std::string, ControlReply>> interpretations_;
+    std::string interpretation_session_;
+    uint64_t interpretation_start_ = 0;
+    int32_t interpretation_pid_ = 0;
     std::map<uint32_t, std::string> ops_;      // pause/resume/step request -> op
     std::map<std::string, Result> results_;
     Result notice_;
@@ -269,6 +284,9 @@ public:
     std::string send(const std::string& op, const std::string& name, const caliper_net::Json& value,
                      uint32_t count) override;
     ActionResult action_result(const std::string& name) const override;
+    std::string param_error(const std::string& name) const override;
+    std::string control_session() const override;
+    caliper_net::Json interpret(const std::string& method, const caliper_net::Json& params, uint32_t request) override;
 
 private:
     const Attachment& att_;

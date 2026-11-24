@@ -4,6 +4,7 @@
 
 #include "spec_runtime/label_layout.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -175,6 +176,104 @@ TEST_CASE("a panel places at most 512 labels, the first in priority") {
     // The lowest priorities are the last boxes, and those are shown.
     CHECK(placed[599].shown);
     CHECK_FALSE(placed[0].shown);
+}
+
+TEST_CASE("pinned slots retain the priority winner at coincident anchors") {
+    const LabelRect panel{20, 20, 220, 120};
+    std::vector<LabelBox> boxes = {{120, 60, 40, 10, 0, true}, {120, 60, 40, 10, 1, true}};
+    std::size_t winner = 0;
+    SUBCASE("the first label has priority") {}
+    SUBCASE("the second label has priority") {
+        boxes[1].priority = -1;
+        winner = 1;
+    }
+    SUBCASE("equal priorities retain input order") { boxes[1].priority = 0; }
+
+    const auto slots = pinned_label_slots(boxes, panel);
+    REQUIRE(slots.size() == boxes.size());
+    CHECK(slots[winner].x0 == panel.x0);
+    CHECK(slots[winner].x1 == panel.x1);
+    CHECK(slots[1 - winner].x0 == boxes[0].anchor_x);
+    CHECK(slots[1 - winner].x1 == boxes[0].anchor_x);
+
+    // Each alignment keeps text for the winner and no text for the loser.
+    const auto bytes = [](std::string_view text) { return (float)text.size(); };
+    for (std::size_t i = 0; i < boxes.size(); ++i) {
+        const float left = boxes[i].anchor_x - slots[i].x0;
+        const float right = slots[i].x1 - boxes[i].anchor_x;
+        for (float available : {right, left, 2 * std::min(left, right)}) {
+            const auto text = fit_with_ellipsis("coincident text", available - 6, bytes);
+            if (i == winner) CHECK(text == "coincident text");
+            else CHECK(text.empty());
+        }
+    }
+}
+
+TEST_CASE("pinned slots discard only conflicts with retained priority winners") {
+    const LabelRect panel{20, 20, 220, 120};
+    // The middle row overlaps both others, but the outer rows do not overlap.
+    const std::vector<LabelBox> boxes = {
+        {120, 48, 40, 10, 1, true}, {120, 56, 40, 10, 2, true}, {120, 40, 40, 10, 0, true}};
+    const auto slots = pinned_label_slots(boxes, panel);
+    REQUIRE(slots.size() == boxes.size());
+    CHECK(slots[0].x0 == slots[0].x1);
+    CHECK(slots[1].x0 == panel.x0);
+    CHECK(slots[1].x1 == panel.x1);
+    CHECK(slots[2].x0 == panel.x0);
+    CHECK(slots[2].x1 == panel.x1);
+}
+
+TEST_CASE("pinned slots retain separate rows and ignore unpinned anchors") {
+    const LabelRect panel{20, 20, 220, 120};
+    const std::vector<LabelBox> boxes = {
+        {120, 40, 40, 10, 1, true}, {120, 50, 40, 10, 2, true}, {120, 40, 40, 10, 0, false}};
+    const auto slots = pinned_label_slots(boxes, panel);
+    REQUIRE(slots.size() == boxes.size());
+    for (const auto& slot : slots) {
+        CHECK(slot.x0 == panel.x0);
+        CHECK(slot.y0 == panel.y0);
+        CHECK(slot.x1 == panel.x1);
+        CHECK(slot.y1 == panel.y1);
+    }
+}
+
+TEST_CASE("pinned slots preserve midpoint fits around coincident anchors") {
+    const LabelRect panel{20, 20, 220, 120};
+    const std::vector<LabelBox> boxes = {{60, 60, 100, 10, 3, true}, {120, 60, 100, 10, 2, true},
+                                          {180, 60, 100, 10, 1, true}, {120, 60, 100, 10, 0, true}};
+    const auto slots = pinned_label_slots(boxes, panel);
+    const auto again = pinned_label_slots(boxes, panel);
+    REQUIRE(slots.size() == boxes.size());
+    REQUIRE(again.size() == slots.size());
+    CHECK(slots[0].x0 == 20);
+    CHECK(slots[0].x1 == 90);
+    CHECK(slots[1].x0 == 120);
+    CHECK(slots[1].x1 == 120);
+    CHECK(slots[2].x0 == 150);
+    CHECK(slots[2].x1 == 220);
+    CHECK(slots[3].x0 == 90);
+    CHECK(slots[3].x1 == 150);
+    const auto bytes = [](std::string_view text) { return (float)text.size(); };
+    const std::string full(100, 'x');
+    for (std::size_t i = 0; i < boxes.size(); ++i) {
+        CHECK(slots[i].x0 == again[i].x0);
+        CHECK(slots[i].x1 == again[i].x1);
+        CHECK(slots[i].x0 >= panel.x0);
+        CHECK(slots[i].x1 <= panel.x1);
+        const float available = 2 * std::min(boxes[i].anchor_x - slots[i].x0, slots[i].x1 - boxes[i].anchor_x);
+        const auto text = fit_with_ellipsis(full, available - 6, bytes);
+        if (i == 1) {
+            CHECK(text.empty());
+            continue;
+        }
+        REQUIRE_FALSE(text.empty());
+        const float width = bytes(text) + 4;
+        const LabelRect rect{boxes[i].anchor_x - width / 2, 55, boxes[i].anchor_x + width / 2, 65};
+        CHECK(rect.x0 >= slots[i].x0);
+        CHECK(rect.x1 <= slots[i].x1);
+        for (std::size_t j = 0; j < boxes.size(); ++j)
+            if (j != i && j != 1) CHECK_FALSE(meet(rect, {slots[j].x0, 55, slots[j].x1, 65}));
+    }
 }
 
 TEST_CASE("a cut text keeps the longest prefix that fits, ends on a whole character and on no space") {

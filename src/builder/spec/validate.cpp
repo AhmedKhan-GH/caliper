@@ -333,7 +333,7 @@ private:
         if (target && !control_takes_target(c.kind, *target))
             sink_.error("spec.control_mismatch",
                         "A " + kind + " cannot bind " + quote(c.bind) + "; a " + kind + " binds " +
-                            (c.kind == ControlKind::slider      ? "param:<name>, value or state:<id>."
+                            ((c.kind == ControlKind::slider || c.kind == ControlKind::text) ? "param:<name>, value or state:<id>."
                              : c.kind == ControlKind::toggle    ? "intervene:<point>, param:<name>, value or state:<id>."
                              : c.kind == ControlKind::button    ? "action:<name> or run:pause."
                              : c.kind == ControlKind::transport ? "cursor."

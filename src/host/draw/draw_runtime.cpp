@@ -375,6 +375,23 @@ bool read_manifest(const json& m, cs::Piece* p, std::string* why) {
                                       r.opt_str(t, "strings_from", &tt.strings_from) &&
                                       r.enum_of(t, "align", cs::text_align_from_name, &tt.align))
                                    : r.fail("the key text is not a table");
+                if (ok && t.contains("hover")) {
+                    const json& h = t["hover"];
+                    cs::TextHover hover;
+                    ok = h.is_object() && h.contains("anchor") &&
+                         r.u32(h, "anchor", &hover.anchor) && r.u32(h, "string_offset", &hover.string_offset);
+                    if (!ok) r.fail("the hover label needs an anchor and an optional string_offset");
+                    else tt.hover = hover;
+                }
+                if (ok && t.contains("selected")) {
+                    const json& s = t["selected"];
+                    cs::TextSelected selected;
+                    ok = s.is_object() && s.contains("anchor") &&
+                         r.u32(s, "anchor", &selected.anchor) && r.str(s, "param", &selected.param, true) &&
+                         r.u32(s, "string_offset", &selected.string_offset);
+                    if (!ok) r.fail("the selected label needs an anchor, param, and optional string_offset");
+                    else tt.selected = selected;
+                }
                 if (ok) draw.text = tt;
             }
             ok = ok && r.opt_num(d, "frame_ms", &draw.frame_ms) && r.opt_u32(d, "memory_mb", &draw.memory_mb);
@@ -1556,8 +1573,8 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
         }
         g.write_buffer(m.selection, 0, sel.data(), sel.size());
     }
+    std::vector<std::uint8_t> params = m.params_default;
     if (m.params_bytes) {
-        std::vector<std::uint8_t> params = m.params_default;
         std::memcpy(params.data(), in.params.data(), std::min<std::size_t>(params.size(), in.params.size()));
         g.write_buffer(m.params, 0, params.data(), params.size());
     }
@@ -1646,6 +1663,7 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
         frame_for(int(k)).render(std::move(list));
     }
     if (frames->size() == first_frame) return false;
+    m.params_shown = std::move(params);
 
     // What the frame shows, for the item map, the text table and the reset rules: a new copy for
     // each new version, also one at the same step, and the copy a pick of an earlier frame holds

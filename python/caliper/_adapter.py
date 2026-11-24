@@ -192,6 +192,8 @@ class TorchAdapter:
             list[dict]: One item for each point, in the model's order, with the keys ``point``,
             ``kind`` (``"module"`` or ``"head"``), ``module``, ``head`` (an index or ``None``),
             ``type`` (the module's class name) and ``shape`` (``None`` until a forward pass).
+            Supported decoders also expose residual, MLP, and attention pattern probes.
+            Semantic points use kind ``"module"`` and add ``probe``, ``layer``, and ``pattern`` fields.
         """
         from ._ablate import points
         return points(model)

@@ -104,6 +104,10 @@ struct InterventionPoint {
     std::optional<std::int64_t> head;          // a head's index
     std::string type;                          // the module's class name
     std::optional<std::vector<std::int64_t>> shape;   // the last output's shape; null before the first step
+    std::optional<std::string> probe;           // semantic form; kind stays "module"
+    std::optional<std::int64_t> layer;          // decoder layer index
+    // The outer optional preserves absence. The inner optional preserves JSON null.
+    std::optional<std::optional<std::string>> pattern;
 };
 
 // One intervention, as intervene.set sends it and as CONTROLS key
@@ -125,10 +129,17 @@ public:
     // Sends {op: "set", name, value}. The value applies at the script's next
     // step; until then state() lists it as the parameter's pending value.
     virtual Error set_param(const std::string& name, const nlohmann::json& value) = 0;
+    // Text drafts read refusals and session changes without another request.
+    virtual std::string param_error(const std::string&) const { return {}; }
+    virtual std::string control_session() const { return {}; }
     // Sends {op: "run", name}. The script runs the action at its next step.
     virtual Error run_action(const std::string& name) = 0;
     // Sends {op: "pause"}, {op: "resume"} or {op: "step", count}.
     virtual Error pause(RunPauseOp op, std::int64_t count) = 0;
+
+    virtual CommandOutput interpret(const std::string&, const nlohmann::json&, std::uint32_t) {
+        return CommandOutput::fail(Error("interpret.unsupported", "This run has no interpretation transport."));
+    }
 
     // The interventions (design/gpu-programs.md, Intervention Wire). A script
     // that announced the capability `interventions` sends its points and its

@@ -135,8 +135,8 @@ bool control_takes_target(ControlKind kind, const ControlTarget& target) {
         case ControlKind::toggle: return holds || target.kind == K::intervene || target.kind == K::param;
         case ControlKind::range:
         case ControlKind::picker:
-        case ControlKind::text:
         case ControlKind::segmented: return holds;
+        case ControlKind::text: return holds || target.kind == K::param;
         case ControlKind::readout: return false;   // a readout binds nothing
         case ControlKind::transport: return target.kind == K::cursor;
     }

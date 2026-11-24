@@ -537,3 +537,149 @@ def test_step_stays_cheap_with_a_viewer(server, ctl):
             print(f"caliper.step() with a viewer attached: {best * 1e9:.1f} ns per call")
             assert best < 1e-6
     run(go())
+
+
+def test_interpretation_capability_and_real_service_round_trip(mode, ctl, make_server, tmp_path, monkeypatch):
+    from tests.interp.test_dictionary import write_fixture
+    from tests.interp.fixture import TinyTokenizer
+    from caliper.interp import load_dictionary
+    from caliper.interp._index import FeatureIndex, build_index
+    from caliper.interp._service import register_service, unregister_service
+    import caliper.interp
+
+    model, _ = write_fixture(tmp_path)
+    tokenizer = TinyTokenizer()
+    dictionary = load_dictionary(tmp_path, model=model)
+    build_index(tmp_path, [("fixture", [65, 66, 67] * 16)], model=model, tokenizer=tokenizer,
+                dictionary=dictionary, provenance={"partition": "fixture"}, context_length=17)
+    index = FeatureIndex(tmp_path, model=model, tokenizer=tokenizer, dictionary=dictionary)
+    feature = int(index.counts[0].argmax())
+    published = {}
+    monkeypatch.setattr("caliper.interp._publish._TENSORS", published)
+    service = register_service(model=model, tokenizer=tokenizer, dictionary=dictionary, index=index, controls=ctl)
+    server = make_server()
+
+    async def check():
+        async with Viewer(server, CAPS + [w.CAP_INTERPRETATION]) as viewer:
+            assert w.CAP_INTERPRETATION in viewer.welcome.capabilities
+            requests = [("feature.dictionary", {}), ("feature.show", {"layer": 0, "feature": feature}),
+                        ("feature.examples", {"layer": 0, "feature": feature}),
+                        ("trace.run", {"prompt": "AB", "max_targets": 4, "max_nodes": 64, "max_edges": 128}),
+                        ("trace.status", {}), ("trace.read", {"node_limit": 2})]
+            for rid, (method, params) in enumerate(requests, 1):
+                await viewer.send(w.Control(rid, "interpret", interpretation={"version": 1, "method": method, "params": params}))
+                reply = await viewer.expect(w.ControlReply, lambda x: x.request_id == rid)
+                if method != "trace.status":
+                    assert reply.status == "queued"
+                    # The socket thread has returned. Execute only at a run boundary.
+                    ctl.step(rid)
+                    reply = await viewer.expect(w.ControlReply, lambda x: x.request_id == rid and x.status != "queued")
+                assert reply.status == "ok", reply.error
+                assert reply.result
+        async with Viewer(server) as old:
+            await old.send(w.Control(20, "interpret", interpretation={"version": 1, "method": "trace.status", "params": {}}))
+            reply = await old.expect(w.ControlReply, lambda x: x.request_id == 20)
+            assert reply.status == "error" and reply.error["code"] == "interpret.unsupported"
+            await old.send(w.Control(21, "resume"))
+            assert (await old.expect(w.ControlReply, lambda x: x.request_id == 21)).status == "ok"
+
+    try:
+        run(check())
+        assert published["examples.example_ids"].tolist() == list(range(16))
+    finally:
+        unregister_service(service, controls=ctl)
+        index.close()
+        published.clear()
+
+
+def test_free_text_capability_round_trip(mode, ctl, make_server):
+    parameter = caliper.param("prompt", "é" * 2048)
+    server = make_server()
+
+    async def check():
+        async with Viewer(server, CAPS + [w.CAP_TEXT_PARAMS]) as viewer:
+            controls = await viewer.expect(w.Controls)
+            assert controls.params[0]["type"] == "text"
+            assert controls.params[0]["value"] == "é" * 2048
+            await viewer.send(w.Control(1, "set", name="prompt", value="river " * 682 + "leaf"))
+            answer = await viewer.expect(w.ControlReply)
+            assert answer.status == "ok" and parameter.value == "river " * 682 + "leaf"
+        async with Viewer(server) as old:
+            controls = await old.expect(w.Controls)
+            assert controls.params == []
+            for request, value in enumerate(["short", "", "é" * 2048], 1):
+                await old.send(w.Control(request, "set", name="prompt", value=value))
+                answer = await old.expect(w.ControlReply)
+                assert answer.status == "error" and answer.error["code"] == w.ERR_UNSUPPORTED
+                assert answer.value is None
+                assert parameter.value == "river " * 682 + "leaf"
+    run(check())
+
+
+def test_legacy_choice_controls_keep_short_text(mode, ctl, make_server):
+    parameter = caliper.param("mode", "first", choices=["first", "line\n\tbreak"])
+    server = make_server()
+
+    async def check():
+        async with Viewer(server) as viewer:
+            await viewer.expect(w.Controls)
+            await viewer.send(w.Control(1, "set", name="mode", value="line\n\tbreak"))
+            answer = await viewer.expect(w.ControlReply)
+            assert answer.status == "ok" and parameter.value == "line\n\tbreak"
+    run(check())
+
+
+def test_interpretation_ack_precedes_early_completion(mode, ctl, make_server, tmp_path, monkeypatch):
+    from caliper import _net_controls
+    from caliper.interp import load_dictionary
+    from caliper.interp._service import register_service, unregister_service
+    from tests.interp.test_dictionary import write_fixture
+
+    model, _ = write_fixture(tmp_path)
+    dictionary = load_dictionary(tmp_path, model=model)
+    acknowledged = threading.Event()
+    sent = []
+    original_send = _net_controls.ControlsPort._send
+
+    def send(port, link, frame):
+        message = w.decode(frame)
+        original_send(port, link, frame)
+        if isinstance(message, w.ControlReply) and message.op == "interpret":
+            sent.append(message.status)
+            if message.status == "queued":
+                acknowledged.set()
+
+    def factory():
+        assert acknowledged.is_set(), "The run saw work before the queue acknowledgment."
+        return dictionary
+
+    monkeypatch.setattr(_net_controls.ControlsPort, "_send", send)
+    service = register_service(dictionary_factory=factory, controls=ctl)
+    original_submit = service.submit
+
+    def complete_before_return(*args, **kwargs):
+        result = original_submit(*args, **kwargs)
+        worker = threading.Thread(target=service.step)
+        worker.start()
+        worker.join(5)
+        assert not worker.is_alive()
+        return result
+
+    monkeypatch.setattr(service, "submit", complete_before_return)
+    server = make_server()
+
+    async def check():
+        async with Viewer(server, CAPS + [w.CAP_INTERPRETATION]) as viewer:
+            await viewer.send(w.Control(1, "interpret", interpretation={
+                "version": 1, "method": "feature.dictionary", "params": {}}))
+            first = await viewer.expect(w.ControlReply, lambda x: x.request_id == 1)
+            second = await viewer.expect(w.ControlReply, lambda x: x.request_id == 1)
+            assert first.status == "queued"
+            assert second.status == "ok", second.error
+            assert second.result["metadata"] == dictionary.metadata
+
+    try:
+        run(check())
+        assert sent == ["queued", "ok"]
+    finally:
+        unregister_service(service, controls=ctl)

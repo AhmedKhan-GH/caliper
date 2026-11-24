@@ -397,6 +397,9 @@ private:
     void sync_shapes();
     void refresh_piece_notes();
     bool external_draws() const;
+    bool program_pan_zoom() const;
+    bool normalized_program_camera() const;
+    bool program_camera_active_ = false;
     caliper_draw::DrawFeed* slot_feed(const ProgramSlot& slot) const;
     caliper_draw::DrawFeed* draw_feed_ = nullptr;
     uint64_t draw_revision_ = ~0ull;

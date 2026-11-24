@@ -63,7 +63,10 @@ def _type_name(module) -> str:
 
 
 def points(model) -> list:
-    """List the intervention points of ``model``; see ``TorchAdapter.points``."""
+    """List intervention points with semantic probes first for bounded advertisements.
+
+    Module and head rows retain their relative traversal order. See ``TorchAdapter.points``.
+    """
     shapes = _shapes.get(model, {})
     out = []
     for name, mod in model.named_modules():
@@ -76,7 +79,8 @@ def points(model) -> list:
         if _projection(mod, heads) is not None:
             out += [{"point": f"{name}{HEAD_SEPARATOR}{h}", "kind": "head", "module": name, "head": h,
                      "type": _type_name(mod), "shape": None} for h in range(heads)]
-    return out
+    from .interp._points import semantic_points
+    return semantic_points(model, required=False) + out
 
 
 def _find(model, point: str):
@@ -194,7 +198,36 @@ def ablate(model, point: str):
     """Ablate one point of ``model`` and return the function that removes it; see
     ``TorchAdapter.ablate``. The returned :class:`Ablation` also counts the hook's calls and
     failures."""
-    target, head = _find(model, point)
+    try:
+        target, head = _find(model, point)
+    except KeyError:
+        from .interp._points import _architecture, _input
+        try:
+            probe = _architecture(model).get(point)
+        except NotImplementedError:
+            raise KeyError(point) from None
+        if probe is None:
+            raise KeyError(point)
+        if probe.event == "pattern":
+            raise ValueError("attention patterns are read-only probe points")
+        target = dict(model.named_modules())[probe.module]
+        a = Ablation(point)
+        if probe.event == "output":
+            a._handle = target.register_forward_hook(a._forward_hook)
+        else:
+            def hook(module, args, kwargs):
+                a.calls += 1
+                try:
+                    value = a._zero(_input(args, kwargs), None)
+                    if args:
+                        return (value,) + args[1:], kwargs
+                    key = "hidden_states" if "hidden_states" in kwargs else "x"
+                    return args, dict(kwargs, **{key: value})
+                except Exception as e:
+                    a._failed(e)
+                    return None
+            a._handle = target.register_forward_pre_hook(hook, with_kwargs=True)
+        return a
     a = Ablation(point)
     if head is None:
         a._handle = target.register_forward_hook(a._forward_hook)

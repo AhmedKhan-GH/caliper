@@ -105,6 +105,43 @@ std::vector<PlacedLabel> place_labels(const std::vector<LabelBox>& boxes, const 
     return out;
 }
 
+std::vector<LabelRect> pinned_label_slots(const std::vector<LabelBox>& boxes, const LabelRect& panel) {
+    std::vector<LabelRect> slots(boxes.size(), panel);
+    std::vector<std::size_t> order(boxes.size());
+    std::iota(order.begin(), order.end(), std::size_t(0));
+    std::stable_sort(order.begin(), order.end(),
+                     [&](std::size_t a, std::size_t b) { return boxes[a].priority < boxes[b].priority; });
+
+    // Equal horizontal anchors share one slot on each row. Keep the first
+    // label in priority order, and let only retained labels divide rows.
+    std::vector<std::size_t> retained;
+    for (const std::size_t i : order) {
+        const auto& a = boxes[i];
+        if (!a.pinned) continue;
+        const bool coincident = std::any_of(retained.begin(), retained.end(), [&](std::size_t j) {
+            const auto& b = boxes[j];
+            return a.anchor_x == b.anchor_x && std::fabs(a.anchor_y - b.anchor_y) < 0.5f * (a.height + b.height);
+        });
+        if (coincident) {
+            slots[i].x0 = slots[i].x1 = std::clamp(a.anchor_x, panel.x0, panel.x1);
+        } else {
+            retained.push_back(i);
+        }
+    }
+    for (const std::size_t i : retained) {
+        const auto& a = boxes[i];
+        auto& slot = slots[i];
+        for (const std::size_t j : retained) {
+            const auto& b = boxes[j];
+            if (i == j || std::fabs(a.anchor_y - b.anchor_y) >= 0.5f * (a.height + b.height)) continue;
+            const float mid = 0.5f * (a.anchor_x + b.anchor_x);
+            if (b.anchor_x <= a.anchor_x) slot.x0 = std::max(slot.x0, mid);
+            if (b.anchor_x >= a.anchor_x) slot.x1 = std::min(slot.x1, mid);
+        }
+    }
+    return slots;
+}
+
 std::string fit_with_ellipsis(std::string_view text, float width,
                               const std::function<float(std::string_view)>& width_of) {
     if (!width_of || !(width >= 0.0f)) return {};

@@ -118,7 +118,8 @@ public:
     }
     void send(const wire::Message& m) {
         std::vector<uint8_t> b;
-        REQUIRE(wire::encode(m, &b));
+        std::string error;
+        REQUIRE_MESSAGE(wire::encode(m, &b, &error), wire::type_name(wire::message_type(m)), ": ", error);
         client_.send(b.data(), b.size());
     }
     void hello_viewer(std::vector<std::string> caps = {}) {
@@ -453,6 +454,7 @@ protected:
                 queued_runs.push_back(c->request_id);
             } else {
                 r.status = CALIPER_NET_STATUS_OK;
+                if (c->op == CALIPER_NET_OP_INTERPRET) { r.result = Json::object(); r.result.set("state", "idle"); }
                 if (c->op == CALIPER_NET_OP_SET) r.value = Json(std::min(0.1, c->value.as_double()));
             }
             send(r);
@@ -1346,6 +1348,7 @@ const std::vector<std::string> kCaps31 = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_
 // The hub forwards controls, scenes and selections, and the 3.2 draft's programs and interventions.
 const std::vector<std::string> kHubCaps = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_SELECTION,
                                            CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS,
+                                           CALIPER_NET_CAP_INTERPRETATION, CALIPER_NET_CAP_TEXT_PARAMS,
                                            CALIPER_NET_CAP_RESOURCES, CALIPER_NET_CAP_SCENE_PIECES};
 const std::vector<std::string> kProducer31 = {CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_CONTROLS,
                                               CALIPER_NET_CAP_SELECTION};
@@ -2278,3 +2281,177 @@ TEST_CASE("app: the hidden app's run bar controls a script through a hub with --
     CHECK(selected);
 }
 #endif
+
+TEST_CASE("net/hub: text parameters follow viewer capabilities on attach and update") {
+    HubRunner hub;
+    World world;
+    auto caps = kProducer31;
+    caps.push_back(CALIPER_NET_CAP_TEXT_PARAMS);
+    auto producer_link = producer(world, hub, "text-params", 1, 1, caps);
+    wire::Controls controls;
+    controls.run = obj({{"state", "running"}, {"step", 1}});
+    controls.params.push(obj({{"name", "clamp"}, {"type", "number"}, {"value", 0.},
+                              {"min", -4.}, {"max", 4.}}));
+    controls.params.push(obj({{"name", "prompt"}, {"type", "text"}, {"value", "AB"}}));
+    controls.params.push(obj({{"name", "retrace"}, {"type", "boolean"}, {"value", false}}));
+    controls.actions.push(obj({{"name", "apply_clamp"}, {"running", false}, {"queued", false}}));
+    const int64_t stamp[] = {17, 23};
+    controls.stamp = wire::Section::make("stamp", CALIPER_NET_DTYPE_I64, {2}, stamp, sizeof(stamp));
+    producer_link->send(controls);
+    sync(world, *producer_link);
+
+    auto legacy = viewer(world, hub, kCaps31);
+    auto text_reader = viewer(world, hub, caps);
+    REQUIRE(world.until([&] { return legacy->last<wire::Controls>() && text_reader->last<wire::Controls>(); }));
+    const auto check_controls = [&](const wire::Controls& expected) {
+        const auto* plain = legacy->last<wire::Controls>();
+        const auto* full = text_reader->last<wire::Controls>();
+        REQUIRE(plain);
+        REQUIRE(full);
+        REQUIRE(plain->params.size() == 2);
+        CHECK(plain->params.at(0).dump() == expected.params.at(0).dump());
+        CHECK(plain->params.at(1).dump() == expected.params.at(2).dump());
+        CHECK(full->params.dump() == expected.params.dump());
+        CHECK(plain->run.dump() == expected.run.dump());
+        CHECK(full->run.dump() == expected.run.dump());
+        CHECK(plain->actions.dump() == expected.actions.dump());
+        CHECK(full->actions.dump() == expected.actions.dump());
+        for (const auto* value : {plain, full}) {
+            REQUIRE(value->stamp);
+            CHECK(value->stamp->dtype == expected.stamp->dtype);
+            CHECK(value->stamp->shape == expected.stamp->shape);
+            REQUIRE(value->stamp->size == expected.stamp->size);
+            CHECK(std::memcmp(value->stamp->data, expected.stamp->data, expected.stamp->size) == 0);
+        }
+    };
+    CHECK(legacy->first_index(CALIPER_NET_MSG_CONTROLS) > legacy->first_index(CALIPER_NET_MSG_VIEWS));
+    CHECK(text_reader->first_index(CALIPER_NET_MSG_CONTROLS) > text_reader->first_index(CALIPER_NET_MSG_VIEWS));
+    check_controls(controls);
+
+    controls.run = obj({{"state", "paused"}, {"step", 2}});
+    controls.params = Json::array();
+    controls.params.push(obj({{"name", "clamp"}, {"type", "number"}, {"value", 2.},
+                              {"min", -4.}, {"max", 4.}}));
+    controls.params.push(obj({{"name", "prompt"}, {"type", "text"}, {"value", "AC"}}));
+    controls.params.push(obj({{"name", "retrace"}, {"type", "boolean"}, {"value", true}}));
+    producer_link->send(controls);
+    REQUIRE(world.until([&] {
+        return legacy->count<wire::Controls>() == 2 && text_reader->count<wire::Controls>() == 2;
+    }));
+    check_controls(controls);
+}
+
+TEST_CASE("net/hub: text sets require both peer capabilities and preserve legacy choices") {
+    HubOptions options;
+    options.allow_control = true;
+    HubRunner hub(options);
+    World world;
+    auto caps = kProducer31;
+    bool text = false;
+    bool viewer_text = true;
+    SUBCASE("legacy producer") {}
+    SUBCASE("text producer") { caps.push_back(CALIPER_NET_CAP_TEXT_PARAMS); text = true; }
+    SUBCASE("legacy viewer") { caps.push_back(CALIPER_NET_CAP_TEXT_PARAMS); viewer_text = false; }
+    auto source = producer(world, hub, "text-admission", 1, 1, caps, true);
+    auto viewer_caps = kCaps31;
+    if (viewer_text) viewer_caps.push_back(CALIPER_NET_CAP_TEXT_PARAMS);
+    auto client = viewer(world, hub, viewer_caps);
+    REQUIRE(world.until([&] { return client->views() && client->views()->session; }));
+    uint32_t id = 0;
+    size_t forwarded = 0;
+    for (const auto& value : {std::string("mode"), std::string("line\n\tbreak"), std::string(63, 'x'), std::string(),
+                              std::string(64, 'x'), std::string(4096, 'x')}) {
+        client->control(++id, "set", "mode", Json(value));
+        REQUIRE(world.until([&] { return client->control_replies(id).size() == 1; }));
+        const bool admitted = text || (!value.empty() && value.size() <= 63);
+        if (admitted) {
+            ++forwarded;
+            REQUIRE(source->controls_in.size() == forwarded);
+            CHECK(source->controls_in.back().value.as_string() == value);
+            CHECK(client->control_replies(id)[0]->status == "ok");
+        } else {
+            CHECK(source->controls_in.size() == forwarded);
+            CHECK(client->control_replies(id)[0]->error.find("code")->as_string() == CALIPER_NET_ERR_UNSUPPORTED);
+        }
+    }
+    client->control(++id, "set", "lr", Json(0.01));
+    REQUIRE(world.until([&] { return client->control_replies(id).size() == 1; }));
+    CHECK(source->controls_in.size() == forwarded + 1);
+    CHECK(client->control_replies(id)[0]->status == "ok");
+
+    wire::Controls controls;
+    controls.run = obj({{"state", "running"}, {"step", 1}});
+    controls.params.push(obj({{"name", "prompt"}, {"type", "text"}, {"value", "initial"}}));
+    source->send(controls);
+    sync(world, *source);
+    client->control(++id, "set", "prompt", Json("short"));
+    REQUIRE(world.until([&] { return client->control_replies(id).size() == 1; }));
+    CHECK(client->control_replies(id)[0]->status == (text ? "ok" : "error"));
+    CHECK(source->controls_in.size() == forwarded + 1 + (text ? 1 : 0));
+
+    controls.params = Json::array();
+    Json choices = Json::array();
+    choices.push("initial");
+    choices.push("short");
+    controls.params.push(obj({{"name", "prompt"}, {"type", "choice"}, {"value", "initial"},
+                              {"choices", choices}}));
+    source->send(controls);
+    sync(world, *source);
+    client->control(++id, "set", "prompt", Json("short"));
+    REQUIRE(world.until([&] { return client->control_replies(id).size() == 1; }));
+    CHECK(client->control_replies(id)[0]->status == "ok");
+}
+
+TEST_CASE("net/hub: interpretation reads preserve capability gates and write permissions") {
+    HubRunner hub;
+    World world;
+    auto caps = kProducer31;
+    caps.push_back(CALIPER_NET_CAP_INTERPRETATION);
+    auto producer_link = producer(world, hub, "interpretation", 1, 1, caps, true);
+    auto reader = viewer(world, hub, caps);
+    const auto* welcome = reader->last<wire::Welcome>();
+    REQUIRE(welcome);
+    CHECK(std::find(welcome->capabilities.begin(), welcome->capabilities.end(),
+                    CALIPER_NET_CAP_INTERPRETATION) != welcome->capabilities.end());
+    CHECK(std::find(welcome->capabilities.begin(), welcome->capabilities.end(),
+                    CALIPER_NET_CAP_TEXT_PARAMS) != welcome->capabilities.end());
+    REQUIRE(world.until([&] { return reader->views() && reader->views()->session; }));
+    wire::Control request;
+    request.request_id = 1;
+    request.op = CALIPER_NET_OP_INTERPRET;
+    request.interpretation = obj({{"version",1},{"method","trace.status"},{"params",Json::object()}});
+    reader->send(request);
+    REQUIRE(world.until([&] { return reader->control_replies(1).size() == 1; }));
+    CHECK(reader->control_replies(1)[0]->result.find("state")->as_string() == "idle");
+    request.request_id = 2;
+    request.interpretation = obj({{"version",1},{"method","trace.run"},{"params",obj({{"prompt","A"}})}});
+    reader->send(request);
+    REQUIRE(world.until([&] { return reader->control_replies(2).size() == 1; }));
+    CHECK(reader->control_replies(2)[0]->error.find("code")->as_string() == CALIPER_NET_ERR_FORBIDDEN);
+    auto legacy = viewer(world, hub, kCaps31);
+    REQUIRE(world.until([&] { return legacy->views() && legacy->views()->session; }));
+    request.request_id = 3;
+    request.interpretation = obj({{"version",1},{"method","trace.status"},{"params",Json::object()}});
+    legacy->send(request);
+    REQUIRE(world.until([&] { return legacy->control_replies(3).size() == 1; }));
+    CHECK(legacy->control_replies(3)[0]->error.find("code")->as_string() == "interpret.unsupported");
+    CHECK(producer_link->controls_in.size() == 1);
+}
+
+TEST_CASE("net/hub: interpretation refuses a producer without the capability") {
+    HubRunner hub;
+    World world;
+    auto producer_link = producer(world, hub, "legacy-interpretation", 1, 1, kProducer31, true);
+    auto caps = kCaps31;
+    caps.push_back(CALIPER_NET_CAP_INTERPRETATION);
+    auto reader = viewer(world, hub, caps);
+    REQUIRE(world.until([&] { return reader->views() && reader->views()->session; }));
+    wire::Control request;
+    request.request_id = 1;
+    request.op = CALIPER_NET_OP_INTERPRET;
+    request.interpretation = obj({{"version",1},{"method","trace.status"},{"params",Json::object()}});
+    reader->send(request);
+    REQUIRE(world.until([&] { return reader->control_replies(1).size() == 1; }));
+    CHECK(reader->control_replies(1)[0]->error.find("code")->as_string() == "interpret.unsupported");
+    CHECK(producer_link->controls_in.empty());
+}

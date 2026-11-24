@@ -312,6 +312,8 @@ struct Session {
     std::vector<std::string> capabilities;
     bool controls_cap = false, selection_cap = false, events_cap = false;   // the producer's
     bool programs_cap = false;       // 3.2 draft: the producer announced "programs"
+    bool interpretation_cap = false;
+    bool text_params_cap = false;
     bool interventions_cap = false;  // 3.2 draft: the producer announced "interventions"
     ConnId producer = 0;
     bool live = true;
@@ -332,6 +334,7 @@ struct Session {
     // waiting for the producer's reply, by the hub's own request_id.
     Json views_plain = Json::array();
     SharedBytes controls;
+    std::set<std::string> text_params;
     std::map<std::string, SelectionState> selections;
     std::map<uint32_t, ControlRoute> routes;
     uint32_t next_control = 1;
@@ -431,6 +434,8 @@ struct Peer {
     bool cap_controls = false, cap_selection = false;
     bool cap_scenes = false;         // 3.2 draft: the viewer announced "scenes"
     bool cap_programs = false;       // 3.2 draft: the viewer announced "programs"
+    bool cap_text_params = false;
+    bool cap_interpretation = false;
     bool cap_interventions = false;  // 3.2 draft: the viewer announced "interventions"
     bool cap_resources = false;      // 3.2 draft: the viewer announced "resources"
     bool cap_scene_pieces = false;   // 3.2 draft: the viewer announced "scene_pieces"
@@ -823,8 +828,20 @@ struct Hub::Impl {
 
     // The session's latest CONTROLS as one viewer may see it: without the key
     // "interventions" unless the viewer announced that capability (3.2 draft).
-    static const SharedBytes& controls_for(const Peer& p, const Session& s) {
-        return (!p.cap_interventions && s.controls_plain) ? s.controls_plain : s.controls;
+    static SharedBytes controls_for(const Peer& p, const Session& s) {
+        const auto frame = (!p.cap_interventions && s.controls_plain) ? s.controls_plain : s.controls;
+        if (p.cap_text_params || !frame) return frame;
+        wire::Message message;
+        if (wire::decode(frame->data(), frame->size(), &message).status != wire::DecodeResult::Status::Ok) return {};
+        auto* controls = std::get_if<wire::Controls>(&message);
+        if (!controls) return {};
+        Json params = Json::array();
+        for (const auto& param : controls->params.items())
+            if (param.find("type")->as_string() != CALIPER_NET_PARAM_TEXT) params.push(param);
+        controls->params = std::move(params);
+        Bytes bytes;
+        if (!wire::encode(message, &bytes)) return {};
+        return std::make_shared<const Bytes>(std::move(bytes));
     }
 
     // Right after the VIEWS of an attachment: the session's latest CONTROLS and
@@ -1573,11 +1590,14 @@ struct Hub::Impl {
             ++c.controls_refused;
             control_error(p, ctl.request_id, ctl.op, ctl.name, code, text);
         };
-        if (!opt.allow_control) {
+        const auto* method = ctl.interpretation.find("method");
+        const bool read = ctl.op == CALIPER_NET_OP_INTERPRET && method &&
+            (method->as_string().rfind("feature.",0) == 0 || method->as_string() == "trace.read" || method->as_string() == "trace.status");
+        if (!opt.allow_control && !read) {
             refuse(CALIPER_NET_ERR_FORBIDDEN, "this hub does not allow control; start it with --allow-control");
             return;
         }
-        if (p.watch_only) {
+        if (p.watch_only && !read) {
             refuse(CALIPER_NET_ERR_FORBIDDEN, "this connection's token may watch the stream, not control a run");
             return;
         }
@@ -1590,9 +1610,21 @@ struct Hub::Impl {
             refuse(CALIPER_NET_ERR_UNSUPPORTED, "session " + s->id + " has ended");
             return;
         }
+        if (ctl.op == CALIPER_NET_OP_INTERPRET && !(p.cap_interpretation && s->interpretation_cap)) {
+            refuse("interpret.unsupported", "Both peers must announce interpretation.");
+            return;
+        }
         if (!s->controls_cap) {
             refuse(CALIPER_NET_ERR_UNSUPPORTED, "the producer of session " + s->id + " does not take controls");
             return;
+        }
+        if (ctl.op == CALIPER_NET_OP_SET && !(p.cap_text_params && s->text_params_cap)) {
+            const bool text_parameter = ctl.name && s->text_params.count(*ctl.name);
+            if (text_parameter || (ctl.value.is_string() &&
+                (ctl.value.as_string().empty() || ctl.value.as_string().size() > CALIPER_NET_NAME_MAX))) {
+                refuse(CALIPER_NET_ERR_UNSUPPORTED, "Both peers must announce text_params for text parameters.");
+                return;
+            }
         }
         if (ctl.op == "intervene" && !(p.cap_interventions && s->interventions_cap)) {
             refuse(CALIPER_NET_ERR_UNSUPPORTED, p.cap_interventions
@@ -1651,6 +1683,10 @@ struct Hub::Impl {
     // the hub received before it (deliver_controls).
     // 3.2 draft: a viewer without `interventions` gets the CONTROLS without that key.
     void producer_controls(Session& s, const wire::Controls& m, SharedBytes buf) {
+        s.text_params.clear();
+        for (const auto& param : m.params.items())
+            if (param.find("type")->as_string() == CALIPER_NET_PARAM_TEXT)
+                s.text_params.insert(param.find("name")->as_string());
         if (s.controls) meta_bytes -= s.controls->size();
         if (s.controls_plain) meta_bytes -= s.controls_plain->size();
         s.controls = buf;
@@ -1941,6 +1977,8 @@ struct Hub::Impl {
         s.events_cap = has_cap(caps, CALIPER_NET_CAP_EVENTS);
         s.programs_cap = has_cap(caps, CALIPER_NET_CAP_PROGRAMS);
         s.interventions_cap = has_cap(caps, CALIPER_NET_CAP_INTERVENTIONS);
+        s.interpretation_cap = has_cap(caps, CALIPER_NET_CAP_INTERPRETATION);
+        s.text_params_cap = has_cap(caps, CALIPER_NET_CAP_TEXT_PARAMS);
         s.resources_cap = has_cap(caps, CALIPER_NET_CAP_RESOURCES);
         s.resource_parts = wire::SplitResources(false);   // a new producer connection starts no version
         s.resource_building.clear();
@@ -1956,7 +1994,7 @@ struct Hub::Impl {
         wire::Welcome w;
         w.role = CALIPER_NET_ROLE_HUB;
         w.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_SELECTION,
-                          CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS,
+                          CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS, CALIPER_NET_CAP_INTERPRETATION, CALIPER_NET_CAP_TEXT_PARAMS,
                           CALIPER_NET_CAP_RESOURCES,       // 3.2 draft: forwarded
                           CALIPER_NET_CAP_SCENE_PIECES};   // 3.2 draft: bundled per entity part
         Json sw = Json::object();
@@ -2147,6 +2185,7 @@ struct Hub::Impl {
     void forget_meta(Session& s) {
         if (s.controls) meta_bytes -= s.controls->size();
         s.controls.reset();
+        s.text_params.clear();
         if (s.controls_plain) meta_bytes -= s.controls_plain->size();
         s.controls_plain.reset();
         if (s.program_state) meta_bytes -= s.program_state->size();
@@ -2825,6 +2864,8 @@ struct Hub::Impl {
         p.cap_scenes = has_cap(h.capabilities, CALIPER_NET_CAP_SCENES);
         p.cap_programs = has_cap(h.capabilities, CALIPER_NET_CAP_PROGRAMS);
         p.cap_interventions = has_cap(h.capabilities, CALIPER_NET_CAP_INTERVENTIONS);
+        p.cap_interpretation = has_cap(h.capabilities, CALIPER_NET_CAP_INTERPRETATION);
+        p.cap_text_params = has_cap(h.capabilities, CALIPER_NET_CAP_TEXT_PARAMS);
         p.cap_resources = has_cap(h.capabilities, CALIPER_NET_CAP_RESOURCES);
         p.cap_scene_pieces = p.cap_scenes && has_cap(h.capabilities, CALIPER_NET_CAP_SCENE_PIECES);
         wire::Welcome w = hub_welcome(p.cap_controls);

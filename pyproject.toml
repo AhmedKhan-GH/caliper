@@ -15,8 +15,9 @@ classifiers = [
 
 [project.optional-dependencies]
 torch = ["torch"]
-test = ["pytest", "torch"]
+test = ["pytest", "torch>=2.15.0", "safetensors", "transformers==5.24.0", "psutil", "datasets"]
 notebook = ["anywidget"]
+interp = ["torch>=2.15.0", "safetensors", "transformers==5.24.0", "psutil", "datasets"]
 
 [tool.scikit-build]
 minimum-version = "0.10"
@@ -54,4 +55,8 @@ CMAKE_OSX_DEPLOYMENT_TARGET = "14.0"
 CALIPER_WITH_BUILDER = "OFF"
 
 [tool.pytest.ini_options]
-testpaths = ["python/tests", "tests/demos"]
+testpaths = ["python/tests", "tests/demos", "tests/interp"]
+markers = [
+    "local_model: requires a downloaded model and never runs in CI",
+    "gpu: requires an explicit accelerator test run",
+]

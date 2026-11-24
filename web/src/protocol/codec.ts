@@ -5,10 +5,10 @@
 // of 8. This module is the only one that knows the bytes.
 
 import {
-  CLOSE, CONTROL_OPS, DTYPE, DTYPE_SIZE, LIMITS, LIMITS_31, MSG, PROTOCOL_MAJOR, PROTOCOL_MINOR, PROTOCOL_MINOR_3_2, RUN_STATES,
+  CLOSE, CONTROL_OPS, DTYPE, DTYPE_SIZE, INTERPRET_LIMITS, LIMITS, LIMITS_31, MSG, PROTOCOL_MAJOR, PROTOCOL_MINOR, PROTOCOL_MINOR_3_2, RUN_STATES,
   type ActionInfo, type ControlOp, type ControlReplyMsg, type ControlsMsg, type SeriesMsg, type TimelineInfo, type DataView as DataViewSpec, type ErrorMsg, type Message,
   type MessageType, type ParamInfo, type ParamValue, type PayloadAxis, type RunInfo, type SelectionDetails,
-  type SessionIdentity, type SnapshotMsg, type UnknownMsg, type ViewEntry,
+  type SessionIdentity, type SnapshotMsg, type UnknownMsg, type ViewEntry, type InterpretationRequest, type InterpretationResult,
 } from './messages.js';
 import {
   INTERVENTION_STATES, MAX_INTERVENTIONS, MAX_POINTS_LISTED, MAX_PROGRAMS, OUTPUT_GEOMETRY, OUTPUT_PIXELS, OUTPUT_TENSOR, POINT_MAX, PROGRAM_ARRAYS,
@@ -23,9 +23,20 @@ export const MAGIC = 0x574c4143; // "CALW" read as a little-endian uint32
 export const HEADER_BYTES = 24;
 export const SECTION_ALIGN = 8;
 
+import { isParamText } from './param-text.js';
+
 const LITTLE = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
+
 const utf8 = new TextEncoder();
 const utf8Strict = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+
+// JSON.parse erases the distinction between 1 and 1.0. Interpretation integer
+// fields must retain that distinction, as in the Python and C++ codecs.
+const numberSources = new WeakMap<object, Record<string, unknown>>();
+function numericSources(json: string): Record<string, unknown> {
+  return JSON.parse(json.replace(/"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
+    (token) => token.startsWith('"') ? token : JSON.stringify(token)));
+}
 
 /** A frame that is not well formed; the receiver closes with closeCode. */
 export class WireError extends Error {
@@ -102,14 +113,22 @@ export function decodeFrame(buf: ArrayBuffer | Uint8Array): Frame {
   }
   if (pos !== frameLen) throw new WireError('malformed', `layout ends at ${pos}, frame_len ${frameLen}`);
   let meta: unknown;
+  let metaJson: string;
   try {
-    meta = JSON.parse(utf8Strict.decode(bytes.subarray(tableEnd, metaEnd)));
+    metaJson = utf8Strict.decode(bytes.subarray(tableEnd, metaEnd));
+    meta = JSON.parse(metaJson);
   } catch (e) {
     throw new WireError('malformed', `metadata: ${(e as Error).message}`);
   }
   if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) throw new WireError('malformed', 'metadata is not a JSON object');
   if (depth(meta) > LIMITS.maxJsonDepth) throw new WireError('malformed', `metadata nested deeper than ${LIMITS.maxJsonDepth}`);
   const m = meta as Record<string, unknown>;
+  if (type === MSG.controls || type === MSG.control || type === MSG.control_reply) {
+    const sources = numericSources(metaJson!);
+    numberSources.set(m, sources);
+    const key = type === MSG.control ? 'interpretation' : 'result';
+    if (isObj(m[key])) numberSources.set(m[key] as object, sources[key] as Record<string, unknown>);
+  }
   const sections: Section[] = [];
   const descs = m.sections;
   if (count) {
@@ -136,15 +155,33 @@ export function decodeFrame(buf: ArrayBuffer | Uint8Array): Frame {
   return { type, flags, major, minor, meta: m, sections };
 }
 
-/** The canonical metadata text: compact, keys sorted, no NaN. */
-export function canonicalJson(v: unknown): string {
+// Match Python and net/json.cpp for float exponents, integral floats and -0.0.
+function canonicalFloat(value: number): string {
+  if (value === 0) return Object.is(value, -0) ? '-0.0' : '0.0';
+  const [mantissa, exponent] = value.toExponential().split('e');
+  const power = Number(exponent);
+  if (power < -4 || power >= 16)
+    return `${mantissa}e${power < 0 ? '-' : '+'}${String(Math.abs(power)).padStart(2, '0')}`;
+  const text = JSON.stringify(value);
+  return text.includes('.') ? text : `${text}.0`;
+}
+
+function canonicalObject(v: Record<string, unknown>, valueText: (value: unknown, key: string) => string): string {
+  const keys = Object.keys(v).filter((k) => v[k] !== undefined).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${valueText(v[k], k)}`).join(',')}}`;
+}
+
+/** Canonical JSON has sorted keys. Only interpretation data infers unsafe integers as floats. */
+export function canonicalJson(v: unknown, source?: unknown, interpretation = false): string {
   if (v === null || typeof v !== 'object') {
     if (typeof v === 'number' && !Number.isFinite(v)) throw new TypeError('NaN and the infinities are not JSON');
-    return JSON.stringify(v);
+    const text = JSON.stringify(v);
+    return typeof v === 'number' && (/[.eE]/.test(text) || (typeof source === 'string' ? /[.eE]/.test(source) : interpretation && (!Number.isSafeInteger(v) || Object.is(v, -0))))
+      ? canonicalFloat(v) : text;
   }
-  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
-  const keys = Object.keys(v).filter((k) => (v as Record<string, unknown>)[k] !== undefined).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson((v as Record<string, unknown>)[k])}`).join(',')}}`;
+  source ??= numberSources.get(v);
+  if (Array.isArray(v)) return `[${v.map((x, i) => canonicalJson(x, sourceField(source, i), interpretation)).join(',')}]`;
+  return canonicalObject(v as Record<string, unknown>, (value, key) => canonicalJson(value, sourceField(source, key), interpretation));
 }
 
 /**
@@ -162,7 +199,10 @@ function frameAt(type: number, meta: Record<string, unknown>, sections: Section[
   if (sections.length) {
     m.sections = sections.map((s) => ({ name: s.name, dtype: s.dtype, shape: s.shape, ...(s.encoding ? { encoding: s.encoding } : {}) }));
   }
-  const mbytes = utf8.encode(canonicalJson(m));
+  const source = numberSources.get(meta);
+  const interpretationKey = meta.op === 'interpret'
+    ? (type === MSG.control ? 'interpretation' : type === MSG.control_reply ? 'result' : undefined) : undefined;
+  const mbytes = utf8.encode(canonicalObject(m, (value, key) => canonicalJson(value, sourceField(source, key), key === interpretationKey)));
   if (mbytes.length > LIMITS.maxMetaBytes) throw new WireError('too_big', `metadata of ${mbytes.length} bytes`, CLOSE.tooBig);
   let pos = HEADER_BYTES + 4 * sections.length + mbytes.length;
   const offsets: number[] = [];
@@ -267,12 +307,13 @@ const fitsType = (p: ParamInfo, v: unknown) => {
   if (p.type === 'number') return isFinite(v);
   if (p.type === 'integer') return isInt(v) && Math.abs(v) <= INT_EXACT;
   if (p.type === 'boolean') return isBool(v);
+  if (p.type === 'text') return isParamText(v);
   return typeof v === 'string' && !!p.choices?.includes(v);
 };
 const isParam = (v: unknown) => {
   if (!isObj(v)) return false;
   const p = v as ParamInfo;
-  if (!isName(p.name) || !['number', 'integer', 'boolean', 'choice'].includes(p.type)) return false;
+  if (!isName(p.name) || !['number', 'integer', 'boolean', 'choice', 'text'].includes(p.type)) return false;
   if (p.type === 'number' || p.type === 'integer') {
     const bound = p.type === 'number' ? isFinite : (x: unknown) => isInt(x) && Math.abs(x) <= INT_EXACT;
     for (const x of [p.min, p.max]) if (x !== undefined && x !== null && !bound(x)) return false;
@@ -297,7 +338,68 @@ const isRun = (v: unknown) => {
   return RUN_STATES.includes(r.state) && (r.step == null || isUint(r.step)) && (r.steps_left == null || isUint(r.steps_left));
 };
 const uniqueNames = (v: { name: string }[]) => new Set(v.map((x) => x.name)).size === v.length;
-const isSetValue = (v: unknown) => isFinite(v) || isBool(v) || isName(v);
+const isSetValue = (v: unknown) => isFinite(v) || isBool(v) || isParamText(v);
+
+const interpretationText = (v: unknown, limit: number = INTERPRET_LIMITS.maxString, empty = true) => {
+  if (typeof v !== 'string' || (!empty && !v.length) || v.includes('\0')) return false;
+  const bytes = utf8.encode(v);
+  return bytes.length <= limit && utf8Strict.decode(bytes) === v;
+};
+const numericSource = (v: number, source: unknown) => typeof source === 'string' ? source : JSON.stringify(v);
+const interpretationInteger = (v: unknown, source: unknown, low: number, high: number) =>
+  isInt(v) && v >= low && v <= high && !/[.eE]/.test(numericSource(v, source));
+const sourceField = (source: unknown, key: string | number): unknown =>
+  source !== null && typeof source === 'object' ? (source as Record<string, unknown>)[key] : undefined;
+
+function isInterpretationObject(v: unknown, source?: unknown): boolean {
+  if (isObj(v)) source ??= numberSources.get(v as object);
+  let count = 0;
+  const visit = (value: unknown, depth: number, raw: unknown): boolean => {
+    if (depth > INTERPRET_LIMITS.maxDepth || ++count > INTERPRET_LIMITS.maxValues) return false;
+    if (value === null || isBool(value)) return true;
+    if (typeof value === 'number')
+      // Only a decoded integer token has integer semantics. Plain JS numbers
+      // outside the safe integer range use the finite float representation.
+      return Number.isFinite(value) && (typeof raw !== 'string' || /[.eE]/.test(raw) || Number.isSafeInteger(value));
+    if (typeof value === 'string') return interpretationText(value);
+    if (Array.isArray(value))
+      return value.length <= INTERPRET_LIMITS.maxList && value.every((x, i) => visit(x, depth + 1, sourceField(raw, i)));
+    if (!isObj(value)) return false;
+    const entries = Object.entries(value as Record<string, unknown>);
+    return entries.length <= INTERPRET_LIMITS.maxFields && entries.every(([key, x]) =>
+      interpretationText(key, 63, false) && visit(x, depth + 1, sourceField(raw, key)));
+  };
+  return isObj(v) && visit(v, 0, source) && utf8.encode(canonicalJson(v, source, true)).length <= INTERPRET_LIMITS.maxBytes;
+}
+
+const INTERPRET_PARAMS: Record<string, readonly string[]> = {
+  'feature.dictionary': [], 'trace.status': [],
+  'feature.show': ['layer', 'feature', 'node'],
+  'feature.examples': ['layer', 'feature', 'node', 'limit'],
+  'trace.run': ['prompt', 'max_targets', 'max_nodes', 'max_edges'],
+  'trace.read': ['node_offset', 'node_limit', 'edge_offset', 'edge_limit'],
+};
+const INTERPRET_BOUNDS: Record<string, readonly [number, number]> = {
+  layer: [0, 4095], feature: [0, 2147483647], node: [0, 511], limit: [0, 16],
+  max_targets: [0, 512], max_nodes: [1, 512], max_edges: [0, 8192],
+  node_offset: [0, 512], edge_offset: [0, 8192], node_limit: [0, 256], edge_limit: [0, 256],
+};
+function isInterpretationRequest(v: unknown, source?: unknown): boolean {
+  if (!isInterpretationObject(v, source)) return false;
+  const o = v as Record<string, unknown>;
+  if (Object.keys(o).length !== 3 || !interpretationInteger(o.version, sourceField(source, 'version'), 1, 1)
+    || typeof o.method !== 'string' || !Object.hasOwn(INTERPRET_PARAMS, o.method) || !isObj(o.params)) return false;
+  const params = o.params as Record<string, unknown>;
+  if (Object.keys(params).some((k) => !INTERPRET_PARAMS[o.method as string].includes(k))) return false;
+  const rawParams = sourceField(source, 'params');
+  for (const [key, [low, high]] of Object.entries(INTERPRET_BOUNDS))
+    if (Object.hasOwn(params, key) && !interpretationInteger(params[key], sourceField(rawParams, key), low, high)) return false;
+  if (o.method === 'feature.show' || o.method === 'feature.examples')
+    return ('node' in params && !('layer' in params) && !('feature' in params))
+      || (!('node' in params) && 'layer' in params && 'feature' in params);
+  return o.method !== 'trace.run' || interpretationText(params.prompt, INTERPRET_LIMITS.maxString, false);
+}
+
 const isAscending = (v: number[]) => v.every((x, i) => i === 0 || v[i - 1] < x);
 const isCell = (v: unknown) => v === null || isBool(v) || isFinite(v) || (typeof v === 'string' && utf8.encode(v).length <= LIMITS_31.detailTextMax);
 const isDetails = (v: unknown) => {
@@ -393,6 +495,13 @@ function decodeSnapshot(f: Frame): SnapshotMsg {
 /** Decodes one message. Throws WireError or MessageError. */
 export function decode(buf: ArrayBuffer | Uint8Array): Message | UnknownMsg {
   const f = decodeFrame(buf);
+  const message = decodeMessage(f);
+  const source = numberSources.get(f.meta);
+  if (source) numberSources.set(message, source);
+  return message;
+}
+
+function decodeMessage(f: Frame): Message | UnknownMsg {
   const t = f.type;
   switch (t) {
     case MSG.hello:
@@ -545,20 +654,25 @@ export function decode(buf: ArrayBuffer | Uint8Array): Message | UnknownMsg {
       return c;
     }
     case MSG.control: {
-      const op = req<ControlOp>(f, 'op', (v) => CONTROL_OPS.includes(v as ControlOp), 'pause, resume, step, set, run or intervene');
+      const op = req<ControlOp>(f, 'op', (v) => CONTROL_OPS.includes(v as ControlOp), 'pause, resume, step, set, run, intervene or interpret');
       const name = opt<string | undefined>(f, 'name', isName, 'a parameter or action name', undefined);
       if ((op === 'set' || op === 'run') && name === undefined) bad(t, `'${op}' needs 'name'`);
       const intervene = op === 'intervene'
         ? req<InterveneRequest>(f, 'intervene', isInterveneRequest, 'exactly one of {set: {point, op, from_step, until_step}}, {clear: point} and {clear_all: true}')
         : undefined;
+      const interpretation = op === 'interpret'
+        ? req<InterpretationRequest>(f, 'interpretation', (v) => isInterpretationRequest(v, numberSources.get(f.meta)?.interpretation), 'a version 1 interpretation request')
+        : undefined;
+      if (op !== 'interpret' && 'interpretation' in f.meta) bad(t, 'interpretation requires op interpret');
       return {
         type: 'control',
         request_id: req(f, 'request_id', isU32, 'a uint32'),
         op,
         name: op === 'set' || op === 'run' ? name : undefined,
-        value: op === 'set' ? req<ParamValue>(f, 'value', isSetValue, 'a number, a boolean or a choice') : undefined,
+        value: op === 'set' ? req<ParamValue>(f, 'value', isSetValue, 'a number, a boolean or bounded text') : undefined,
         count: op === 'step' ? opt<number | undefined>(f, 'count', (v) => isU32(v) && (v as number) >= 1, 'a positive uint32', undefined) : undefined,
         intervene,
+        interpretation,
       };
     }
     case MSG.control_reply: {
@@ -567,16 +681,20 @@ export function decode(buf: ArrayBuffer | Uint8Array): Message | UnknownMsg {
       const error = opt<{ code: string; message?: string } | undefined>(f, 'error', (v) => isObj(v) && isStr((v as Record<string, unknown>).code)
         && ((v as Record<string, unknown>).message == null || isText((v as Record<string, unknown>).message)), '{code, message}', undefined);
       if ((error === undefined) === (status === 'error')) bad(t, "a control_reply carries 'error' exactly when its status is 'error'");
-      if (status === 'queued' && op !== 'run') bad(t, "only 'run' is queued");
+      if (status === 'queued' && op !== 'run' && op !== 'interpret') bad(t, "only 'run' or 'interpret' is queued");
+      const result = opt<InterpretationResult | undefined>(f, 'result', (v) => isInterpretationObject(v, numberSources.get(f.meta)?.result), 'a bounded structured result', undefined);
+      if ('result' in f.meta && (op !== 'interpret' || status !== 'ok')) bad(t, 'result requires a successful interpretation reply');
+      if (op === 'interpret' && status === 'ok' && result === undefined) bad(t, 'a successful interpretation reply requires result');
       return {
         type: 'control_reply',
         request_id: req(f, 'request_id', isU32, 'a uint32'),
         op,
         status,
         name: opt(f, 'name', isName, 'a parameter or action name', undefined),
-        value: opt(f, 'value', isSetValue, 'a number, a boolean or a choice', undefined),
+        value: opt(f, 'value', isSetValue, 'a number, a boolean or bounded text', undefined),
         message: opt(f, 'message', isText, `a string of at most ${LIMITS_31.textMax} bytes`, undefined),
         error,
+        result,
       };
     }
     case MSG.selection:
@@ -631,7 +749,11 @@ const drop = (o: Record<string, unknown>) => {
  */
 export function encode(msg: Message, minor: number = PROTOCOL_MINOR): Uint8Array {
   const id = MSG[msg.type as MessageType];
-  const encodeFrame = (type: number, meta: Record<string, unknown>, sections: Section[] = []) => frameAt(type, meta, sections, minor);
+  const encodeFrame = (type: number, meta: Record<string, unknown>, sections: Section[] = []) => {
+    const source = numberSources.get(msg);
+    if (source) numberSources.set(meta, source);
+    return frameAt(type, meta, sections, minor);
+  };
   switch (msg.type) {
     case 'hello':
       return encodeFrame(id, drop({ role: msg.role, capabilities: msg.capabilities, software: msg.software, session: msg.session }));
@@ -694,12 +816,19 @@ export function encode(msg: Message, minor: number = PROTOCOL_MINOR): Uint8Array
       }), sections);
     }
     case 'controls':
+      if (msg.params.some((p) => p.type === 'text' && (!isParamText(p.value) || (p.pending != null && !isParamText(p.pending))))) bad(id, 'invalid text parameter');
       return encodeFrame(id, drop({ run: msg.run, params: msg.params, actions: msg.actions, interventions: msg.interventions }), msg.stamp ? [stampSection('stamp', msg.stamp, [msg.stamp.length])] : []);
     case 'control':
-      return encodeFrame(id, drop({ request_id: msg.request_id, op: msg.op, name: msg.name, value: msg.value, count: msg.count, intervene: msg.intervene }));
+      if (msg.op === 'set' && !isSetValue(msg.value)) bad(id, 'invalid parameter value');
+      if (msg.op === 'interpret' && !isInterpretationRequest(msg.interpretation)) bad(id, 'invalid interpretation request');
+      if (msg.op !== 'interpret' && msg.interpretation !== undefined) bad(id, 'interpretation requires op interpret');
+      return encodeFrame(id, drop({ request_id: msg.request_id, op: msg.op, name: msg.name, value: msg.value, count: msg.count, intervene: msg.intervene, interpretation: msg.interpretation }));
     case 'control_reply':
+      if (msg.value != null && !isSetValue(msg.value)) bad(id, 'invalid parameter value');
+      if (msg.result !== undefined && (msg.op !== 'interpret' || msg.status !== 'ok')) bad(id, 'result requires a successful interpretation reply');
+      if (msg.op === 'interpret' && msg.status === 'ok' && !isInterpretationObject(msg.result)) bad(id, 'invalid interpretation result');
       return encodeFrame(id, drop({
-        request_id: msg.request_id, op: msg.op, status: msg.status, name: msg.name, value: msg.value, message: msg.message, error: msg.error,
+        request_id: msg.request_id, op: msg.op, status: msg.status, name: msg.name, value: msg.value, message: msg.message, error: msg.error, result: msg.result,
       }));
     case 'selection':
       return encodeFrame(id, drop({

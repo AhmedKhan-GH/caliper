@@ -119,6 +119,7 @@ MAX_PARAMS = 64
 MAX_ACTIONS = 64
 MAX_CHOICES = 64
 TEXT_MAX = 1024
+PARAM_TEXT_MAX = 4096
 MAX_ITEM_SPACES = 16
 MAX_SELECTION = 32768                  # CALIPER_NET_MAX_EVENT_INDICES
 MAX_DETAIL_ITEMS = 32
@@ -242,7 +243,7 @@ class Param:
 
     Attributes:
         name (str): The name of the parameter.
-        type (str): `"boolean"`, `"integer"`, `"number"` or `"choice"`.
+        type (str): `"boolean"`, `"integer"`, `"number"`, `"choice"`, or `"text"`.
         min (int | float | None): The lower end of the range, or `None`.
         max (int | float | None): The upper end of the range, or `None`.
         log (bool): Whether a viewer draws the slider on a log scale.
@@ -345,7 +346,12 @@ def _param_spec(name, value, lo, hi, log, choices, help):
             raise ValueError(f"parameter {name!r}: a boolean takes no min, max or log")
         return "boolean", value, None, None, False, None, help
     if isinstance(value, str):
-        raise TypeError(f"parameter {name!r}: a str value needs choices=[...]")
+        from ._interpret_protocol import text
+        if not text(value, PARAM_TEXT_MAX):
+            raise ValueError(f"parameter {name!r}: text must be valid UTF-8 without NUL within {PARAM_TEXT_MAX} bytes")
+        if lo is not None or hi is not None or log:
+            raise ValueError(f"parameter {name!r}: text takes no min, max or log")
+        return "text", value, None, None, False, None, help
     if isinstance(value, numbers.Integral):
         type_, conv = "integer", int
         ok = (lambda x: isinstance(x, numbers.Integral) and not isinstance(x, bool)
@@ -733,8 +739,8 @@ class Route:
         self.transport = transport
         self.attached = True
 
-    def on_control(self, conn, meta) -> dict:
-        return self.ctl._on_control(self, conn, meta)
+    def on_control(self, conn, meta, *, acknowledge=None):
+        return self.ctl._on_control(self, conn, meta, acknowledge=acknowledge)
 
     def on_select(self, conn, meta, axes=None) -> None:
         try:
@@ -797,6 +803,8 @@ class Controls:
         self._steps_reported = 0.0
         self.params: dict[str, Param] = {}
         self.actions: dict[str, Action] = {}
+        self.interpretation_service = None
+        self.interpretation_registration_lock = threading.Lock()
         self.queue: collections.deque = collections.deque()
         self.spaces: dict[str, ItemSpace] = {}
         self.view_items: dict[str, dict] = {}    # view -> {dim, _FIRST, _LAST or None: space}
@@ -857,7 +865,8 @@ class Controls:
     def _update_busy(self) -> None:
         self.busy = (self.state in (RUN_NONE, RUN_PAUSING, RUN_STEPPING)
                      or self._npending > 0 or bool(self.queue) or self._report_due
-                     or self._iv_due)
+                     or self._iv_due or (self.interpretation_service is not None
+                                        and self.interpretation_service.pending))
 
     def _arm_report(self) -> None:
         """While the run runs, have the first checkpoint after RUN_REPORT_S send
@@ -884,7 +893,44 @@ class Controls:
         self._npending = 0
         return True
 
+    def _resource_stop(self, error) -> bool:
+        service = self.interpretation_service
+        return service is not None and isinstance(error, getattr(service, "stop_exception", ()))
+
+    def _raise_resource_stop(self) -> None:
+        failure = getattr(self.interpretation_service, "failure", None)
+        if failure is not None:
+            raise failure
+
     def _service(self) -> None:
+        """End queued actions when an interpretation resource stop reaches the owner."""
+        try:
+            self._raise_resource_stop()
+            self._service_work()
+        except Exception as error:
+            if self._resource_stop(error):
+                self.interpretation_service.stop(error, self.n)
+                self._terminate_actions(error)
+            raise
+
+    @staticmethod
+    def _stop_message(error):
+        text = str(error).replace("\0", "").encode("utf-8", errors="replace").decode("utf-8")
+        return _cut(text, TEXT_MAX)
+
+    def _terminate_actions(self, error):
+        with self.lock:
+            pending = []
+            while self.queue:
+                action = self.queue.popleft()
+                pending.append((action, action.waiters))
+                action.queued, action.waiters = False, []
+            self._update_busy()
+        self._publish()
+        for action, waiters in pending:
+            self._action_replies(action, waiters, False, self._stop_message(error))
+
+    def _service_work(self) -> None:
         """Set pending values and interventions, then run the queued actions in order."""
         controllers = self._controllers_due()
         with self.lock:
@@ -892,7 +938,11 @@ class Controls:
             changed = self._apply_interventions(controllers) or changed
         if changed:
             self._publish()
+        self._raise_resource_stop()
+        if self.interpretation_service is not None:
+            self.interpretation_service.step(self.n)
         while True:
+            self._raise_resource_stop()
             with self.lock:
                 if not self.queue:
                     return
@@ -901,25 +951,35 @@ class Controls:
                 waiters, a.waiters = a.waiters, []
                 self._update_busy()
             self._publish()
-            ok, text = self._run_action(a)
-            with self.lock:
-                a.running = False
-            self._publish()
-            w = _w()
-            for route, conn, rid in waiters:
-                if ok:
-                    meta = w.ControlReply(rid, w.OP_RUN, w.STATUS_OK, a.name,
-                                          message=text or None).to_meta()
-                else:
-                    meta = w.ControlReply(rid, w.OP_RUN, w.STATUS_ERROR, a.name, error={
-                        "code": w.ERR_ACTION_FAILED, "message": text}).to_meta()
-                route._reply(conn, meta)
+            try:
+                ok, text = self._run_action(a)
+                self._raise_resource_stop()
+            except BaseException as error:
+                if self._resource_stop(error):
+                    self.interpretation_service.stop(error, self.n)
+                    self._action_replies(a, waiters, False, self._stop_message(error))
+                raise
+            finally:
+                with self.lock:
+                    a.running = False
+                self._publish()
+            self._action_replies(a, waiters, ok, text)
+
+    def _action_replies(self, action, waiters, ok, text):
+        w = _w()
+        for route, conn, rid in waiters:
+            meta = w.ControlReply(rid, w.OP_RUN, w.STATUS_OK if ok else w.STATUS_ERROR, action.name,
+                message=(text or None) if ok else None,
+                error=None if ok else {"code": w.ERR_ACTION_FAILED, "message": text}).to_meta()
+            route._reply(conn, meta)
 
     def _run_action(self, a: Action):
         self.counters["actions_run"] += 1
         try:
             r = a.fn()
         except Exception as e:
+            if self._resource_stop(e):
+                raise
             text = _cut(f"{type(e).__name__}: {e}", TEXT_MAX)
             warnings.warn(f"caliper: action {a.name!r} raised {text}", RuntimeWarning,
                           stacklevel=2)
@@ -1183,7 +1243,7 @@ class Controls:
         return out
 
     # -- requests (the transport's thread) -------------------------------------------
-    def _on_control(self, route: Route, conn, meta) -> dict:
+    def _on_control(self, route: Route, conn, meta, *, acknowledge=None):
         w = _w()
         if not isinstance(meta, dict):
             raise w.MessageError(w.ERR_BAD_REQUEST, "a control's metadata is an object")
@@ -1195,6 +1255,33 @@ class Controls:
             return w.ControlReply(rid, op, w.STATUS_ERROR, name,
                                   error={"code": code, "message": text}).to_meta()
 
+        if op == "interpret":
+            from . import _interpret_protocol as protocol
+            from .interp._service import Refused
+            if msg.interpretation["method"] not in protocol.READ_METHODS:
+                if not route.transport.may_control(conn):
+                    return error(w.ERR_FORBIDDEN, "This connection may not change the run.")
+            service = self.interpretation_service
+            if service is None:
+                return error("interpret.unsupported", "The run has no interpretation service.")
+
+            def completed(status, result, refused):
+                route._reply(conn, w.ControlReply(rid, op, status, result=result, error=refused).to_meta())
+
+            try:
+                queued = (lambda: acknowledge(w.ControlReply(rid, op, w.STATUS_QUEUED).to_meta())) \
+                    if acknowledge is not None else None
+                status, result = service.submit(msg.interpretation, completed, acknowledge=queued)
+            except Refused as exc:
+                return error(exc.code, str(exc))
+            with self.lock:
+                self._update_busy()
+                if status == w.STATUS_QUEUED:
+                    self.cond.notify_all()
+            if status == w.STATUS_QUEUED and acknowledge is not None:
+                return None
+            return w.ControlReply(rid, op, status, result=result).to_meta()
+
         try:
             allowed = bool(route.transport.may_control(conn))
         except Exception:
@@ -1204,6 +1291,8 @@ class Controls:
         reply = None
         timer = None
         with self.lock:
+            if getattr(self.interpretation_service, "failure", None) is not None:
+                return error("interpret.stopped", "The interpretation run stopped.")
             if op in (w.OP_PAUSE, w.OP_STEP) and self.state == RUN_NONE:
                 return error(w.ERR_UNSUPPORTED, "the script has called no checkpoint "
                                                 "(caliper.step()) yet")
@@ -1554,6 +1643,10 @@ class Controls:
                 try:
                     iv.hook = m.adapter.ablate(m.model, iv.point)
                 except Exception as e:
+                    if self._resource_stop(e):
+                        self._unhook(iv)
+                        iv.state = IV_ENDED
+                        raise
                     iv.error = f"{type(e).__name__}: {e}"[:TEXT_MAX]
                     ended, on = True, False
                     warnings.warn(f"caliper: the ablation of {iv.point!r} failed: {iv.error}",

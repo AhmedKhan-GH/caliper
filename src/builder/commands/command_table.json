@@ -7889,7 +7889,7 @@
         "additionalProperties": false,
         "properties": {
           "bind": {
-            "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, value for a value the spec holds, state:<id> for a state variable of the spec, cursor for the time cursor, or intervene:<point> for an intervention point that intervene.points lists. A slider binds param:, value or state:; a range, a picker, a text and a segmented group bind value or state:; a button binds action: or run:pause; a toggle binds intervene:<point>, param:<name>, value or state:; a transport binds cursor. run.state lists the names of parameters and actions.",
+            "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, value for a value the spec holds, state:<id> for a state variable of the spec, cursor for the time cursor, or intervene:<point> for an intervention point that intervene.points lists. A slider or text binds param:, value or state:; a range, a picker and a segmented group bind value or state:; a button binds action: or run:pause; a toggle binds intervene:<point>, param:<name>, value or state:; a transport binds cursor. run.state lists the names of parameters and actions.",
             "maxLength": 320,
             "minLength": 5,
             "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|state:[a-z][a-z0-9_-]{0,63}|cursor|intervene:.{1,255})$",
@@ -8002,8 +8002,8 @@
                 ]
               },
               "max_length": {
-                "description": "text: the most bytes of the value, at most 1024.",
-                "maximum": 1024,
+                "description": "Text byte limit. A param binding permits at most 4096 UTF-8 bytes. Value and state bindings permit at most 1024.",
+                "maximum": 4096,
                 "minimum": 1,
                 "type": "integer"
               },
@@ -8223,7 +8223,7 @@
             "description": "The keys to change; null removes one.",
             "properties": {
               "bind": {
-                "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, value for a value the spec holds, state:<id> for a state variable of the spec, cursor for the time cursor, or intervene:<point> for an intervention point that intervene.points lists. A slider binds param:, value or state:; a range, a picker, a text and a segmented group bind value or state:; a button binds action: or run:pause; a toggle binds intervene:<point>, param:<name>, value or state:; a transport binds cursor. run.state lists the names of parameters and actions.",
+                "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, value for a value the spec holds, state:<id> for a state variable of the spec, cursor for the time cursor, or intervene:<point> for an intervention point that intervene.points lists. A slider or text binds param:, value or state:; a range, a picker and a segmented group bind value or state:; a button binds action: or run:pause; a toggle binds intervene:<point>, param:<name>, value or state:; a transport binds cursor. run.state lists the names of parameters and actions.",
                 "maxLength": 320,
                 "minLength": 5,
                 "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|state:[a-z][a-z0-9_-]{0,63}|cursor|intervene:.{1,255})$",
@@ -8358,8 +8358,8 @@
                     ]
                   },
                   "max_length": {
-                    "description": "text: the most bytes of the value, at most 1024.",
-                    "maximum": 1024,
+                    "description": "Text byte limit. A param binding permits at most 4096 UTF-8 bytes. Value and state bindings permit at most 1024.",
+                    "maximum": 4096,
                     "minimum": 1,
                     "type": [
                       "integer",
@@ -8623,8 +8623,8 @@
                     ]
                   },
                   "max_length": {
-                    "description": "text: the most bytes of the value, at most 1024.",
-                    "maximum": 1024,
+                    "description": "Text byte limit. A param binding permits at most 4096 UTF-8 bytes. Value and state bindings permit at most 1024.",
+                    "maximum": 4096,
                     "minimum": 1,
                     "type": "integer"
                   },
@@ -10579,7 +10579,8 @@
                     "number",
                     "integer",
                     "boolean",
-                    "choice"
+                    "choice",
+                    "text"
                   ],
                   "type": "string"
                 },
@@ -10668,7 +10669,7 @@
             "type": "string"
           },
           "value": {
-            "description": "The new value: a number for a number or integer parameter, true or false for a boolean, one of the choices for a choice.",
+            "description": "The value must match the parameter type. Text accepts at most 4096 UTF-8 bytes without NUL. A choice accepts one listed value.",
             "type": [
               "number",
               "integer",
@@ -12581,6 +12582,28 @@
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
                         "type": "string"
                       },
+                      "hover": {
+                        "additionalProperties": false,
+                        "description": "A local item hit selects this label's text.",
+                        "properties": {
+                          "anchor": {
+                            "description": "The anchor index for the local hover label.",
+                            "maximum": 511,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "string_offset": {
+                            "description": "The string index offset for a local item hit. Zero when absent.",
+                            "maximum": 4095,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "anchor"
+                        ],
+                        "type": "object"
+                      },
                       "position": {
                         "description": "The vec4<f32> field whose xyz is the label's world position; position when absent.",
                         "pattern": "^[a-z_][a-z0-9_]{0,31}$",
@@ -12590,6 +12613,34 @@
                         "description": "An f32 field; a label of a higher priority wins an overlap.",
                         "pattern": "^[a-z_][a-z0-9_]{0,31}$",
                         "type": "string"
+                      },
+                      "selected": {
+                        "additionalProperties": false,
+                        "description": "The current draw parameter selects this label from the shown item map.",
+                        "properties": {
+                          "anchor": {
+                            "description": "The anchor index for the selected label.",
+                            "maximum": 511,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "param": {
+                            "description": "An i32 or u32 draw parameter with the selected item index.",
+                            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                            "type": "string"
+                          },
+                          "string_offset": {
+                            "description": "The string index offset for a selected item. Zero when absent.",
+                            "maximum": 4095,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "anchor",
+                          "param"
+                        ],
+                        "type": "object"
                       },
                       "string": {
                         "description": "The u32 field that indexes strings; string when absent.",
@@ -14944,6 +14995,28 @@
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
                         "type": "string"
                       },
+                      "hover": {
+                        "additionalProperties": false,
+                        "description": "A local item hit selects this label's text.",
+                        "properties": {
+                          "anchor": {
+                            "description": "The anchor index for the local hover label.",
+                            "maximum": 511,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "string_offset": {
+                            "description": "The string index offset for a local item hit. Zero when absent.",
+                            "maximum": 4095,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "anchor"
+                        ],
+                        "type": "object"
+                      },
                       "position": {
                         "description": "The vec4<f32> field whose xyz is the label's world position; position when absent.",
                         "pattern": "^[a-z_][a-z0-9_]{0,31}$",
@@ -14953,6 +15026,34 @@
                         "description": "An f32 field; a label of a higher priority wins an overlap.",
                         "pattern": "^[a-z_][a-z0-9_]{0,31}$",
                         "type": "string"
+                      },
+                      "selected": {
+                        "additionalProperties": false,
+                        "description": "The current draw parameter selects this label from the shown item map.",
+                        "properties": {
+                          "anchor": {
+                            "description": "The anchor index for the selected label.",
+                            "maximum": 511,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "param": {
+                            "description": "An i32 or u32 draw parameter with the selected item index.",
+                            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                            "type": "string"
+                          },
+                          "string_offset": {
+                            "description": "The string index offset for a selected item. Zero when absent.",
+                            "maximum": 4095,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "anchor",
+                          "param"
+                        ],
+                        "type": "object"
                       },
                       "string": {
                         "description": "The u32 field that indexes strings; string when absent.",
@@ -16064,6 +16165,28 @@
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
                         "type": "string"
                       },
+                      "hover": {
+                        "additionalProperties": false,
+                        "description": "A local item hit selects this label's text.",
+                        "properties": {
+                          "anchor": {
+                            "description": "The anchor index for the local hover label.",
+                            "maximum": 511,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "string_offset": {
+                            "description": "The string index offset for a local item hit. Zero when absent.",
+                            "maximum": 4095,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "anchor"
+                        ],
+                        "type": "object"
+                      },
                       "position": {
                         "description": "The vec4<f32> field whose xyz is the label's world position; position when absent.",
                         "pattern": "^[a-z_][a-z0-9_]{0,31}$",
@@ -16073,6 +16196,34 @@
                         "description": "An f32 field; a label of a higher priority wins an overlap.",
                         "pattern": "^[a-z_][a-z0-9_]{0,31}$",
                         "type": "string"
+                      },
+                      "selected": {
+                        "additionalProperties": false,
+                        "description": "The current draw parameter selects this label from the shown item map.",
+                        "properties": {
+                          "anchor": {
+                            "description": "The anchor index for the selected label.",
+                            "maximum": 511,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "param": {
+                            "description": "An i32 or u32 draw parameter with the selected item index.",
+                            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                            "type": "string"
+                          },
+                          "string_offset": {
+                            "description": "The string index offset for a selected item. Zero when absent.",
+                            "maximum": 4095,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "anchor",
+                          "param"
+                        ],
+                        "type": "object"
                       },
                       "string": {
                         "description": "The u32 field that indexes strings; string when absent.",
@@ -17058,6 +17209,28 @@
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
                         "type": "string"
                       },
+                      "hover": {
+                        "additionalProperties": false,
+                        "description": "A local item hit selects this label's text.",
+                        "properties": {
+                          "anchor": {
+                            "description": "The anchor index for the local hover label.",
+                            "maximum": 511,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "string_offset": {
+                            "description": "The string index offset for a local item hit. Zero when absent.",
+                            "maximum": 4095,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "anchor"
+                        ],
+                        "type": "object"
+                      },
                       "position": {
                         "description": "The vec4<f32> field whose xyz is the label's world position; position when absent.",
                         "pattern": "^[a-z_][a-z0-9_]{0,31}$",
@@ -17067,6 +17240,34 @@
                         "description": "An f32 field; a label of a higher priority wins an overlap.",
                         "pattern": "^[a-z_][a-z0-9_]{0,31}$",
                         "type": "string"
+                      },
+                      "selected": {
+                        "additionalProperties": false,
+                        "description": "The current draw parameter selects this label from the shown item map.",
+                        "properties": {
+                          "anchor": {
+                            "description": "The anchor index for the selected label.",
+                            "maximum": 511,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "param": {
+                            "description": "An i32 or u32 draw parameter with the selected item index.",
+                            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                            "type": "string"
+                          },
+                          "string_offset": {
+                            "description": "The string index offset for a selected item. Zero when absent.",
+                            "maximum": 4095,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "anchor",
+                          "param"
+                        ],
+                        "type": "object"
                       },
                       "string": {
                         "description": "The u32 field that indexes strings; string when absent.",
@@ -17737,6 +17938,429 @@
       "args": {
         "additionalProperties": false,
         "properties": {
+          "request_id": {
+            "description": "Poll a prior request of this command without another model operation.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "read",
+      "examples": [
+        {}
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "feature.dictionary",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "pending": {
+            "description": "True until the deferred reply arrives.",
+            "type": "boolean"
+          },
+          "request_id": {
+            "description": "The transport request ID.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "result": {
+            "additionalProperties": true,
+            "description": "The bounded structured result, or null while pending.",
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "request_id",
+          "pending",
+          "result"
+        ],
+        "type": "object"
+      },
+      "summary": "Reads the registered dictionary metadata at a run boundary."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "feature": {
+            "description": "The feature index.",
+            "maximum": 2147483647,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "layer": {
+            "description": "The dictionary layer.",
+            "maximum": 4095,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "node": {
+            "description": "The selected graph row. Supply node or layer and feature.",
+            "maximum": 511,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "request_id": {
+            "description": "Poll a prior request of this command without another model operation.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "read",
+      "examples": [
+        {
+          "feature": 0,
+          "layer": 0
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "feature.show",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "pending": {
+            "description": "True until the deferred reply arrives.",
+            "type": "boolean"
+          },
+          "request_id": {
+            "description": "The transport request ID.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "result": {
+            "additionalProperties": true,
+            "description": "The bounded structured result, or null while pending.",
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "request_id",
+          "pending",
+          "result"
+        ],
+        "type": "object"
+      },
+      "summary": "Reads the real feature label, count, maximum, and promoted tokens."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "feature": {
+            "description": "The feature index.",
+            "maximum": 2147483647,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "layer": {
+            "description": "The dictionary layer.",
+            "maximum": 4095,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "limit": {
+            "description": "The maximum example count. The default is 16.",
+            "maximum": 16,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "node": {
+            "description": "The selected graph row. Supply node or layer and feature.",
+            "maximum": 511,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "request_id": {
+            "description": "Poll a prior request of this command without another model operation.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "read",
+      "examples": [
+        {
+          "node": 1
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "feature.examples",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "pending": {
+            "description": "True until the deferred reply arrives.",
+            "type": "boolean"
+          },
+          "request_id": {
+            "description": "The transport request ID.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "result": {
+            "additionalProperties": true,
+            "description": "The bounded structured result, or null while pending.",
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "request_id",
+          "pending",
+          "result"
+        ],
+        "type": "object"
+      },
+      "summary": "Reads up to sixteen 33-token windows and publishes real rows and UTF-8 labels for token_strip."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "max_edges": {
+            "description": "The edge cap.",
+            "maximum": 8192,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_nodes": {
+            "description": "The node cap.",
+            "maximum": 512,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_targets": {
+            "description": "The feature target cap.",
+            "maximum": 512,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "prompt": {
+            "description": "The prompt, at most 4096 UTF-8 bytes and 32 model tokens.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "request_id": {
+            "description": "Poll a prior request of this command without another model operation.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "run",
+      "examples": [
+        {
+          "prompt": "The capital of France is"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "trace.run",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "pending": {
+            "description": "True until the deferred reply arrives.",
+            "type": "boolean"
+          },
+          "request_id": {
+            "description": "The transport request ID.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "result": {
+            "additionalProperties": true,
+            "description": "The bounded structured result, or null while pending.",
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "request_id",
+          "pending",
+          "result"
+        ],
+        "type": "object"
+      },
+      "summary": "Queues a trace for the next run boundary. Poll its request_id or use trace.status to read progress."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "description": "Poll a prior request of this command without another model operation.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "read",
+      "examples": [
+        {}
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "trace.status",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "pending": {
+            "description": "True until the deferred reply arrives.",
+            "type": "boolean"
+          },
+          "request_id": {
+            "description": "The transport request ID.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "result": {
+            "additionalProperties": true,
+            "description": "The bounded structured result, or null while pending.",
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "request_id",
+          "pending",
+          "result"
+        ],
+        "type": "object"
+      },
+      "summary": "Reads the last trace state without a model forward or a wait on the model."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "edge_limit": {
+            "description": "The edge page size. The default is 256.",
+            "maximum": 256,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "edge_offset": {
+            "description": "The first edge.",
+            "maximum": 8192,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "node_limit": {
+            "description": "The node page size. The default is 128.",
+            "maximum": 256,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "node_offset": {
+            "description": "The first node.",
+            "maximum": 512,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "request_id": {
+            "description": "Poll a prior request of this command without another model operation.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "read",
+      "examples": [
+        {
+          "node_limit": 128
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "trace.read",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "pending": {
+            "description": "True until the deferred reply arrives.",
+            "type": "boolean"
+          },
+          "request_id": {
+            "description": "The transport request ID.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "result": {
+            "additionalProperties": true,
+            "description": "The bounded structured result, or null while pending.",
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "request_id",
+          "pending",
+          "result"
+        ],
+        "type": "object"
+      },
+      "summary": "Reads a bounded page from the completed graph."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
           "match": {
             "description": "Only the points whose names match this glob, such as blocks.*.attn*; every point when absent.",
             "maxLength": 255,
@@ -17773,19 +18397,46 @@
                   ]
                 },
                 "kind": {
-                  "description": "module for a module's output, head for one head of an attention module.",
+                  "description": "module for a module or semantic probe, head for one attention head.",
                   "enum": [
                     "module",
                     "head"
                   ],
                   "type": "string"
                 },
+                "layer": {
+                  "description": "The optional decoder layer index, from zero.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
                 "module": {
                   "description": "The module's dotted name.",
                   "type": "string"
                 },
+                "pattern": {
+                  "description": "The optional attention pattern form, or null for another semantic probe.",
+                  "enum": [
+                    "softmax",
+                    "signed_value_mixing",
+                    null
+                  ],
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "point": {
-                  "description": "The point's name: a module's dotted name, or <module>#<h> for a head.",
+                  "description": "The point's name: a module's dotted name, <module>#<h> for a head, or <block>.<probe> for a semantic probe.",
+                  "type": "string"
+                },
+                "probe": {
+                  "description": "The optional semantic form. attn_pattern is read-only.",
+                  "enum": [
+                    "resid_pre",
+                    "mlp_in",
+                    "mlp_out",
+                    "attn_pattern"
+                  ],
                   "type": "string"
                 },
                 "shape": {
@@ -17829,7 +18480,7 @@
         ],
         "type": "object"
       },
-      "summary": "Lists the intervention points of the model that the attached script watches: each module's output by its dotted name, and each head of an attention module as <module>#<h>, with the module's class and the shape of its last output. It changes nothing."
+      "summary": "Lists the intervention points of the model that the attached script watches: each module's output by its dotted name, and each head of an attention module as <module>#<h>, with the module's class and the shape of its last output. Semantic probes retain kind module and add probe, layer and pattern metadata. It changes nothing."
     },
     {
       "agents": true,

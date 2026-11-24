@@ -231,6 +231,59 @@ const SchemaChecker& checker_v1() {
 
 }  // namespace
 
+TEST_CASE("the text control schema accepts parameter bindings at the byte limit") {
+    const auto document = [](const char* bind, int limit) {
+        return json{{"caliper_spec", 1}, {"applet", {{"id", "text-control"}}},
+                    {"control", json::array({{{"id", "prompt"}, {"kind", "text"}, {"bind", bind},
+                        {"options", {{"max_length", limit}}}}})}};
+    };
+    auto prompt = document("param:prompt", 4096);
+    std::string value;
+    for (int i = 0; i < 2048; ++i) value += "\xc3\xa9";
+    REQUIRE(value.size() == 4096);
+    prompt["control"][0]["options"]["value"] = value;
+    REQUIRE(library_accepts(prompt));
+    const auto parsed = cs::from_json(prompt);
+    REQUIRE(parsed.ok());
+    for (const auto& doc : {prompt, cs::to_json(parsed.spec), document("value", 1024)}) {
+        CHECK(library_accepts(doc));
+        const auto errors = checker_v1().errors(doc);
+        CHECK_MESSAGE(errors.empty(), join_errors(errors));
+        keep(doc, true);
+    }
+    // The runtime validator enforces byte limits for each binding target.
+    CHECK_FALSE(library_accepts(document("param:prompt", 4097)));
+    CHECK_FALSE(library_accepts(document("value", 1025)));
+    prompt["control"][0]["options"]["value"] = value + "\xc3\xa9";
+    CHECK_FALSE(library_accepts(prompt));
+    for (const char* bind : {"param:", "action:save", "intervene:head"}) {
+        CHECK_FALSE(checker_v1().passes(document(bind, 4096)));
+        CHECK_FALSE(library_accepts(document(bind, 4096)));
+    }
+}
+
+TEST_CASE("the selected label schema accepts integer references and refuses malformed declarations") {
+    const auto root = json::parse(read_file(std::string(CALIPER_SPEC_FIXTURES) + "/../../schema/caliper-spec-v1.schema.json"));
+    const SchemaChecker selected(root.at("$defs").at("piece_draw").at("properties").at("text").at("properties").at("selected"));
+    json value = {{"anchor", 32}, {"param", "selected_node"}, {"string_offset", 32}};
+    REQUIRE(selected.passes(value));
+    SUBCASE("required anchor") { value.erase("anchor"); }
+    SUBCASE("required parameter") { value.erase("param"); }
+    SUBCASE("negative anchor") { value["anchor"] = -1; }
+    SUBCASE("fractional anchor") { value["anchor"] = 1.5; }
+    SUBCASE("anchor limit") { value["anchor"] = 512; }
+    SUBCASE("string limit") { value["string_offset"] = 4096; }
+    SUBCASE("invalid parameter name") { value["param"] = "unknown.field"; }
+    SUBCASE("unknown key") { value["other"] = 1; }
+    SUBCASE("non-table selected") { value = false; }
+    SUBCASE("optional offset") {
+        value.erase("string_offset");
+        CHECK(selected.passes(value));
+        return;
+    }
+    CHECK_FALSE(selected.passes(value));
+}
+
 TEST_CASE("the schema of version 1 accepts the version 1 fixture and every version 0 fixture raised to 1") {
     auto v1 = cs::parse_toml(fixture("instruments.spec.toml"));
     REQUIRE(v1.ok());

@@ -144,6 +144,12 @@ fs.writeFileSync(path.join(dist, 'spec.html'),
   specTemplate.replace('/*@FONTS@*/', () => fonts).replace('/*@SCRIPT@*/', () => specScript));
 
 if (process.argv.includes('--test')) {
+  const protocolTest = at('test-dist/text-params.mjs');
+  await esbuild.build({
+    bundle: true, platform: 'node', format: 'esm', logLevel: 'warning',
+    entryPoints: [at('test/text-params.node.ts')], outfile: protocolTest,
+  });
+  execFileSync(process.execPath, ['--test', protocolTest], { stdio: 'inherit' });
   await esbuild.build({
     bundle: true, format: 'esm', target: 'es2022', logLevel: 'warning', sourcemap: 'inline',
     entryPoints: [at('test/harness.ts')], outfile: at('test-dist/harness.js'),

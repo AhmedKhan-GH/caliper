@@ -32,6 +32,7 @@
 #include <cstdlib>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -45,12 +46,19 @@ namespace {
 
 struct FakeRun final : cb::RunControl {
     cb::RunState run;
+    cb::Error set_error;
+    std::string producer_error;
+    std::string session = "first";
     std::vector<std::pair<std::string, json>> sent;   // (op or param, value)
     cb::RunState state() override { return run; }
     cb::Error set_param(const std::string& name, const json& value) override {
         sent.push_back({"set " + name, value});
+        if (set_error) return set_error;
+        producer_error.clear();
         return {};
     }
+    std::string param_error(const std::string&) const override { return producer_error; }
+    std::string control_session() const override { return session; }
     cb::Error run_action(const std::string& name) override {
         sent.push_back({"run " + name, json()});
         return {};
@@ -117,6 +125,7 @@ struct Ui {
     ImGuiContext* ctx;
     Ui() {
         ctx = ImGui::CreateContext();
+        ImGui::SetCurrentContext(ctx);
         ImGuiIO& io = ImGui::GetIO();
         io.IniFilename = nullptr;
         io.LogFilename = nullptr;
@@ -130,6 +139,7 @@ struct Ui {
     ~Ui() { ImGui::DestroyContext(ctx); }
     // One frame that draws `inside` in a window over the display.
     void frame(const std::function<void()>& inside) {
+        ImGui::SetCurrentContext(ctx);
         ImGui::NewFrame();
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(ImVec2(800, 200));
@@ -141,6 +151,7 @@ struct Ui {
     // A click at (x, y): the move, the press and the release in three frames;
     // returns how many frames reported a change.
     int click(float x, float y, const std::function<bool()>& draw) {
+        ImGui::SetCurrentContext(ctx);
         int changes = 0;
         ImGuiIO& io = ImGui::GetIO();
         io.AddMousePosEvent(x, y);
@@ -155,6 +166,33 @@ struct Ui {
 };
 
 const ImRect kRow(0, 0, 400, 30);
+
+// This owner precedes function-static draft storage and outlives it at exit.
+// A context shutdown callback must not depend on that storage.
+std::unique_ptr<Ui> exit_ui;
+
+// Count context allocations, including the draft store owned by a hook.
+struct ImGuiAllocations {
+    ImGuiMemAllocFunc allocate;
+    ImGuiMemFreeFunc release;
+    void* user_data;
+    int live = 0;
+
+    ImGuiAllocations() {
+        ImGui::GetAllocatorFunctions(&allocate, &release, &user_data);
+        ImGui::SetAllocatorFunctions([](std::size_t size, void* data) -> void* {
+            auto& self = *static_cast<ImGuiAllocations*>(data);
+            void* ptr = self.allocate(size, self.user_data);
+            if (ptr) ++self.live;
+            return ptr;
+        }, [](void* ptr, void* data) {
+            auto& self = *static_cast<ImGuiAllocations*>(data);
+            if (ptr) --self.live;
+            self.release(ptr, self.user_data);
+        }, this);
+    }
+    ~ImGuiAllocations() { ImGui::SetAllocatorFunctions(allocate, release, user_data); }
+};
 
 }  // namespace
 
@@ -833,3 +871,281 @@ TEST_CASE("spec controls: texts wider than a narrow row end in an ellipsis in th
     CHECK(rec.events.empty());
 }
 }  // TEST_SUITE("gpu")
+
+TEST_CASE("spec controls: a text parameter sends UTF-8 on Return") {
+    Ui ui;
+    Recorder rec;
+    FakeRun run;
+    run.run = training();
+    cb::RunParam prompt;
+    prompt.name = "prompt"; prompt.type = "text"; prompt.value = "";
+    run.run.params.push_back(prompt);
+    auto control = make("prompt", spec::ControlKind::text, "param:prompt");
+    const auto sp = instrument_spec({control});
+    cb::ValueStore values;
+    values.reset(sp);
+    SpecInstrumentHost host{&rec, &run, &values, nullptr, &sp};
+    const SpecLook look;
+    auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
+    ui.click(300, 15, draw);
+    ImGui::GetIO().AddInputCharactersUTF8("A café");
+    ui.frame([&] { draw(); });
+    CHECK(run.sent.empty());
+    press(ui, ImGuiKey_Enter, [&] { draw(); });
+    REQUIRE(run.sent.size() == 1);
+    CHECK(run.sent[0] == std::make_pair(std::string("set prompt"), json("A café")));
+    REQUIRE(rec.events.size() == 1);
+    CHECK(rec.events[0].fields["value"] == "A café");
+}
+
+TEST_CASE("spec controls: a text parameter preserves a long current value") {
+    Ui ui;
+    Recorder rec;
+    FakeRun run;
+    run.run = training();
+    std::string text;
+    for (unsigned i = 0; i < 2048; ++i) text += "\xc3\xa9";
+    cb::RunParam prompt;
+    prompt.name = "prompt"; prompt.type = "text"; prompt.value = text;
+    run.run.params.push_back(prompt);
+    auto control = make("long_prompt", spec::ControlKind::text, "param:prompt");
+    SUBCASE("default bound") {}
+    SUBCASE("explicit smaller bound") { control.options.max_length = 1024; }
+    SUBCASE("existing multiline value") {
+        text = "first line\nsecond line";
+        run.run.params.back().value = text;
+    }
+    const auto sp = instrument_spec({control});
+    cb::ValueStore values;
+    values.reset(sp);
+    SpecInstrumentHost host{&rec, &run, &values, nullptr, &sp};
+    const SpecLook look;
+    auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
+    ui.click(300, 15, draw);
+    press(ui, ImGuiKey_Enter, [&] { draw(); });
+    CHECK(run.sent.empty());
+    CHECK(rec.events.empty());
+    CHECK(run.run.params.back().value == text);
+}
+
+TEST_CASE("spec controls: an oversized parameter edit is refused without a truncated send") {
+    Ui ui;
+    Recorder rec;
+    FakeRun run;
+    run.run = training();
+    cb::RunParam prompt;
+    prompt.name = "prompt"; prompt.type = "text"; prompt.value = "";
+    run.run.params.push_back(prompt);
+    auto control = make("oversized_prompt", spec::ControlKind::text, "param:prompt");
+    std::size_t limit = 4096;
+    SUBCASE("protocol limit on Return") {}
+    SUBCASE("protocol limit with a larger option") { control.options.max_length = 8192; }
+    SUBCASE("smaller limit on focus loss") { limit = 32; control.options.max_length = limit; }
+    const auto sp = instrument_spec({control});
+    cb::ValueStore values;
+    values.reset(sp);
+    SpecInstrumentHost host{&rec, &run, &values, nullptr, &sp};
+    const SpecLook look;
+    auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
+    ui.click(300, 15, draw);
+    ImGui::GetIO().AddInputCharactersUTF8(std::string(limit + 1, 'a').c_str());
+    ui.frame([&] { draw(); });
+    if (limit == 4096) press(ui, ImGuiKey_Enter, [&] { draw(); });
+    ui.click(500, 100, draw);
+    CHECK(run.sent.empty());
+    CHECK(rec.events.empty());
+    CHECK(run.run.params.back().value == "");
+    ui.click(230, 15, draw);
+    const auto& input = ImGui::GetCurrentContext()->InputTextState;
+    REQUIRE(input.TextA.Data);
+    CHECK(std::string(input.TextA.Data) == std::string(limit + 1, 'a'));
+    press(ui, ImGuiKey_End, [&] { draw(); });
+    press(ui, ImGuiKey_Backspace, [&] { draw(); });
+    press(ui, ImGuiKey_Enter, [&] { draw(); });
+    REQUIRE(run.sent.size() == 1);
+    CHECK(run.sent.back().second == std::string(limit, 'a'));
+    CHECK(rec.events.size() == 1);
+}
+
+TEST_CASE("spec controls: text drafts survive refusals and wait for producer confirmation") {
+    Ui ui;
+    Recorder rec;
+    FakeRun run;
+    run.run = training();
+    cb::RunParam prompt;
+    prompt.name = "prompt"; prompt.type = "text"; prompt.value = "";
+    run.run.params.push_back(prompt);
+    auto control = make("refused_prompt", spec::ControlKind::text, "param:prompt");
+    SpecInstrumentHost host{&rec, &run};
+    const SpecLook look;
+    auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
+    bool asynchronous = false;
+    SUBCASE("local refusal on Return") {}
+    SUBCASE("producer refusal after focus loss") { asynchronous = true; }
+    if (!asynchronous) run.set_error = cb::Error("run.refused", "The request queue is full.");
+    ui.click(180, 15, draw);
+    ImGui::GetIO().AddInputCharactersUTF8("A caf\xc3\xa9");
+    ui.frame([&] { draw(); });
+    if (asynchronous) ui.click(500, 100, draw);
+    else press(ui, ImGuiKey_Enter, [&] { draw(); });
+    REQUIRE(run.sent.size() == 1);
+    if (asynchronous) run.producer_error = "The producer refused the prompt.";
+    ui.click(500, 100, draw);
+    ImGui::GetIO().AddMousePosEvent(380, 15);
+    ui.frame([&] { draw(); });
+    ui.frame([&] {
+        draw();
+        const auto* tooltip = ImGui::FindWindowByName("##Tooltip_00");
+        CHECK((tooltip && tooltip->Active));
+    });
+    run.run.params.back().value = "A caf\xc3\xa9";
+    ui.frame([&] { draw(); });
+    run.run.params.back().value = "background";
+    ui.frame([&] { draw(); });
+    ui.click(180, 15, draw);
+    REQUIRE(ImGui::GetCurrentContext()->InputTextState.TextA.Data);
+    CHECK(std::string(ImGui::GetCurrentContext()->InputTextState.TextA.Data) == "A caf\xc3\xa9");
+    CHECK(rec.events.size() == (asynchronous ? 1 : 0));
+    run.set_error = {};
+    press(ui, ImGuiKey_Enter, [&] { draw(); });
+    REQUIRE(run.sent.size() == 2);
+    CHECK(run.sent.back().second == "A caf\xc3\xa9");
+    ui.click(500, 100, draw);
+    ui.click(180, 15, draw);
+    press(ui, ImGuiKey_Enter, [&] { draw(); });
+    CHECK(run.sent.size() == 2);
+    CHECK(rec.events.size() == (asynchronous ? 2 : 1));
+    ui.click(500, 100, draw);
+    run.run.params.back().pending = "A caf\xc3\xa9";
+    ui.frame([&] { draw(); });
+    run.run.params.back().pending = nullptr;
+    run.run.params.back().value = "accepted then changed";
+    ui.frame([&] { draw(); });
+    ui.click(180, 15, draw);
+    REQUIRE(ImGui::GetCurrentContext()->InputTextState.TextA.Data);
+    CHECK(std::string(ImGui::GetCurrentContext()->InputTextState.TextA.Data) == "accepted then changed");
+    ImGui::GetCurrentContext()->InputTextState.SelectAll();
+    ImGui::GetIO().AddInputCharactersUTF8("A caf\xc3\xa9");
+    ui.frame([&] { draw(); });
+    press(ui, ImGuiKey_Enter, [&] { draw(); });
+    REQUIRE(run.sent.size() == 3);
+    CHECK(run.sent.back().second == "A caf\xc3\xa9");
+}
+
+TEST_CASE("spec controls: session teardown discards an active text draft") {
+    Ui ui;
+    FakeRun run;
+    run.run = training();
+    cb::RunParam prompt;
+    prompt.name = "prompt"; prompt.type = "text"; prompt.value = "";
+    run.run.params.push_back(prompt);
+    auto control = make("session_prompt", spec::ControlKind::text, "param:prompt");
+    SpecInstrumentHost host{nullptr, &run};
+    const SpecLook look;
+    auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
+    ui.click(180, 15, draw);
+    ImGui::GetIO().AddInputCharactersUTF8("old draft");
+    ui.frame([&] { draw(); });
+    SUBCASE("source identity") { run.session = "second"; }
+    SUBCASE("detach") {
+        run.run.attached = false;
+        ui.frame([&] { draw(); });
+        run.run.attached = true;
+    }
+    run.run.params.back().value = "new prompt";
+    ui.frame([&] { draw(); });
+    press(ui, ImGuiKey_Enter, [&] { draw(); });
+    ui.click(500, 100, draw);
+    CHECK(run.sent.empty());
+    ui.click(180, 15, draw);
+    REQUIRE(ImGui::GetCurrentContext()->InputTextState.TextA.Data);
+    CHECK(std::string(ImGui::GetCurrentContext()->InputTextState.TextA.Data) == "new prompt");
+}
+
+TEST_CASE("spec controls: a text context survives until process exit") {
+    struct RestoreContext {
+        ImGuiContext* previous = ImGui::GetCurrentContext();
+        ~RestoreContext() { ImGui::SetCurrentContext(previous); }
+    } restore;
+    exit_ui = std::make_unique<Ui>();
+    FakeRun run;
+    run.run = training();
+    cb::RunParam prompt;
+    prompt.name = "prompt";
+    prompt.type = "text";
+    prompt.value = "";
+    run.run.params.push_back(prompt);
+    auto control = make("exit_prompt", spec::ControlKind::text, "param:prompt");
+    control.options.max_length = 4;
+    SpecInstrumentHost host{nullptr, &run};
+    const SpecLook look;
+    auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
+    exit_ui->click(180, 15, draw);
+    ImGui::GetIO().AddInputCharactersUTF8("retained draft");
+    exit_ui->frame([&] { draw(); });
+    press(*exit_ui, ImGuiKey_Enter, [&] { draw(); });
+    CHECK(run.sent.empty());
+    REQUIRE(exit_ui->ctx->InputTextState.TextA.Data);
+    CHECK(std::string(exit_ui->ctx->InputTextState.TextA.Data) == "retained draft");
+    // The process exit status covers shutdown after all test cases finish.
+    // The draft must also release without access to the run or host.
+}
+
+TEST_CASE("spec controls: context destruction releases isolated text drafts") {
+    ImGuiAllocations allocations;
+    FakeRun run;
+    run.run = training();
+    cb::RunParam prompt;
+    prompt.name = "prompt";
+    prompt.type = "text";
+    prompt.value = "base";
+    run.run.params.push_back(prompt);
+    auto control = make("context_prompt", spec::ControlKind::text, "param:prompt");
+    control.options.max_length = 4;
+    SpecInstrumentHost host{nullptr, &run};
+    const SpecLook look;
+    auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
+    auto draft = [&](Ui& ui, const char* text) {
+        ui.click(180, 15, draw);
+        auto& input = ui.ctx->InputTextState;
+        REQUIRE(input.TextA.Data);
+        CHECK(std::string(input.TextA.Data) == "base");
+        input.SelectAll();
+        ImGui::GetIO().AddInputCharactersUTF8(text);
+        ui.frame([&] { draw(); });
+        press(ui, ImGuiKey_Enter, [&] { draw(); });
+        ui.click(500, 100, draw);
+    };
+    {
+        auto first = std::make_unique<Ui>();
+        draft(*first, "first draft");
+        auto second = std::make_unique<Ui>();
+        draft(*second, "second draft");
+        Ui* survivor = nullptr;
+        std::string expected;
+        SUBCASE("first context closes first") {
+            first.reset();
+            survivor = second.get();
+            expected = "second draft";
+        }
+        SUBCASE("second context closes first") {
+            second.reset();
+            survivor = first.get();
+            expected = "first draft";
+        }
+        REQUIRE(survivor);
+        survivor->click(180, 15, draw);
+        REQUIRE(survivor->ctx->InputTextState.TextA.Data);
+        CHECK(std::string(survivor->ctx->InputTextState.TextA.Data) == expected);
+        CHECK(run.sent.empty());
+    }
+    CHECK(allocations.live == 0);
+    // A new context starts with the producer value after both drafts close.
+    {
+        Ui fresh;
+        fresh.click(180, 15, draw);
+        REQUIRE(fresh.ctx->InputTextState.TextA.Data);
+        CHECK(std::string(fresh.ctx->InputTextState.TextA.Data) == "base");
+    }
+    CHECK(allocations.live == 0);
+}

@@ -105,6 +105,8 @@ struct ResourceVersion {
 // program has no item map or no frame showed a version.
 struct ShownItems {
     std::shared_ptr<const void> state;   // draw_pick.cpp
+    // Identity of the immutable resource version, including replacements at the same step.
+    std::shared_ptr<const void> version;
     explicit operator bool() const { return state != nullptr; }
 };
 
@@ -282,8 +284,11 @@ public:
     // The item map's fields of `item` in the version that `shown` holds, or nothing when it is
     // empty or holds no such element.
     static std::optional<PickedItem> pick_shown(std::uint32_t item, const ShownItems& shown);
-    // The labels of the text table in the version of the last frame.
-    std::vector<Label> labels() const;
+    // Whether the text table declares a local hover label.
+    bool has_hover_label() const;
+    // The labels of the last frame. A local ID hit supplies the declared hover label.
+    // It does not change a parameter, the selection, or a resource in the run.
+    std::vector<Label> labels(const PickedItem* hovered = nullptr) const;
 
     DrawStatus status() const;
 

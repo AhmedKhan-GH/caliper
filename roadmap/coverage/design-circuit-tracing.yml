@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=schema.json
+title: Circuit Tracing Design
+kind: page
+source: design/circuit-tracing.md
+summary: The circuit tracing design maps model probes, dictionaries, examples, graphs, and interventions to their registry entries.
+not_features:
+  - Purpose
+  - Verified Base
+entries:
+  - heading: Model And Dictionary
+    item: The exact Qwen checkpoint and per-layer transcoder artifact define dictionary identity.
+    ids: [INT-36]
+  - heading: Existing Interfaces
+    item: Semantic probes, text parameters, and intervention commands extend the existing interfaces.
+    ids: [INT-35, INT-40, INT-42]
+  - heading: Text And Registry
+    item: Text limits require two pages of eight examples in the graph instrument.
+    ids: [INT-37, INT-39]
+  - heading: Dictionary Contract
+    item: Bounded tools train and qualify per-layer dictionaries and index their top examples.
+    ids: [INT-36, INT-37]
+  - heading: Replacement Model
+    item: Frozen routing and normalization produce direct effects with explicit error nodes.
+    ids: [INT-38]
+  - heading: Tensor Contract
+    item: Fixed tensor shapes publish graph counts, nodes, and edges with bounded identities.
+    ids: [INT-38]
+  - heading: Pieces And Commands
+    item: Shared graph, example, and probability pieces expose dictionary and trace commands.
+    ids: [INT-37, INT-38, INT-39]
+  - heading: Intervention Contract
+    item: Live feature edits, activation patches, paired outputs, and hosted inference extend the control route.
+    ids: [INT-40, INT-41, INT-42]
+    note: INT-40 promotes the former feature-steering candidate into the registry.
+  - heading: Validation And Delivery
+    item: Fixture identities, hidden acceptance, resource limits, and platform checks verify delivery.
+    reason: test

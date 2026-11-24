@@ -3,14 +3,18 @@
 
 import { decode, encode, MessageError, WireError } from '../protocol/codec.js';
 import {
-  CAP, CAP_SCENES, CLOSE, LIMITS, LIMITS_31, type ControlReplyMsg, type ControlsMsg, type DataView, type Message, type SelectionMsg,
+  CAP, CAP_SCENES, CLOSE, LIMITS, LIMITS_31, type ControlMsg, type ControlReplyMsg, type ControlsMsg, type DataView, type Message, type SelectionMsg,
   type SessionIdentity, type ViewEntry, type ViewerEvent,
 } from '../protocol/messages.js';
 import {
-  emit, type ConnectionState, type ControlAccess, type ControlRequest, type StreamClient, type StreamListener,
+  emit, type ConnectionState, type ControlAccess, type StreamClient, type StreamListener,
 } from './stream.js';
 
 const VERSION = '0.1.0';
+type ControlRequest = Omit<ControlMsg, 'type' | 'request_id'>;
+const INTERPRETATION_READS = new Set<string>([
+  'feature.dictionary', 'feature.show', 'feature.examples', 'trace.status', 'trace.read',
+]);
 
 interface Sub {
   view: string;
@@ -142,7 +146,7 @@ export class SocketClient implements StreamClient {
   }
 
   control(req: ControlRequest, onReply?: (reply: ControlReplyMsg) => void): number | null {
-    if (!this.controlAccess().allowed) return null;
+    if (!this.canControl(req)) return null;
     if (req.op !== 'set' || !req.name) return this.sendControl(req, onReply);
     // At most 30 sets a second for one parameter, ending with the last value.
     const name = req.name;
@@ -169,11 +173,26 @@ export class SocketClient implements StreamClient {
     return 0;
   }
 
+  private canControl(req: ControlRequest): boolean {
+    if (!this.ready || this.state !== 'open' || this.ended || this.session?.state === 'ended'
+      || this.ws?.readyState !== WebSocket.OPEN
+      || (this.hub && (!this.attached || this.session?.id !== this.attached))) return false;
+    if (req.op === 'interpret' && (!this.capabilities.includes(CAP.interpretation)
+      || (this.hub && !this.session?.capabilities?.includes(CAP.interpretation)))) return false;
+    if (req.op === 'interpret' && INTERPRETATION_READS.has(req.interpretation?.method ?? '')) return true;
+    return this.controlAccess().allowed;
+  }
+
   private sendControl(req: ControlRequest, onReply?: (reply: ControlReplyMsg) => void): number | null {
-    if (!this.controlAccess().allowed) return null;
+    if (!this.canControl(req)) return null;
     const id = this.nextRequest++;
     if (onReply) this.replies.set(id, onReply);
-    this.send({ type: 'control', request_id: id, op: req.op, name: req.name, value: req.value, count: req.count });
+    try {
+      this.send({ ...req, type: 'control', request_id: id });
+    } catch (error) {
+      this.replies.delete(id);
+      throw error;
+    }
     return id;
   }
 
@@ -217,7 +236,7 @@ export class SocketClient implements StreamClient {
       this.lastInput = performance.now();
       // 3.1: this viewer shows controls and draws linked selections.
       // 3.2 draft: scenes, so that the producer lists its scene views; the WebAssembly views draw them.
-      this.send({ type: 'hello', role: 'viewer', capabilities: [CAP.controls, CAP.selection, CAP_SCENES], software: { name: 'caliper-view', version: VERSION } });
+      this.send({ type: 'hello', role: 'viewer', capabilities: [CAP.controls, CAP.selection, CAP.textParams, CAP.interpretation, CAP_SCENES], software: { name: 'caliper-view', version: VERSION } });
       this.startTimers();
     };
     ws.onmessage = (ev) => {

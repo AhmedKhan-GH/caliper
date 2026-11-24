@@ -46,6 +46,7 @@ public:
         std::string op;
         std::string name;
         std::string status;          // ok, queued or error
+        nlohmann::json result;
         std::string message;         // an action's text
         std::string error_code;      // status error
         std::string error_message;
@@ -90,6 +91,7 @@ public:
     // when the connection is not open or the message breaks a limit.
     std::uint32_t send_control(const std::string& op, const std::string& name, const nlohmann::json& value,
                                std::uint32_t count, std::string* error);
+    nlohmann::json interpret(const std::string& method, const nlohmann::json& params, std::uint32_t request = 0);
     // The replies that came since the last call, oldest first.
     std::vector<Reply> take_replies();
     // The series views by name.
@@ -103,6 +105,10 @@ private:
     State state_ = State::idle;
     std::string close_reason_;
     bool control_allowed_ = false;
+    bool interpretation_ = false;
+    bool text_params_ = false;
+    std::uint64_t interpretation_revision_ = 0;
+    std::map<std::uint32_t, std::pair<std::string, Reply>> interpretation_replies_;
     std::string session_;
     nlohmann::json controls_;
     std::vector<Reply> replies_;

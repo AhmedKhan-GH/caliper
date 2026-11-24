@@ -226,3 +226,23 @@ TEST_CASE("run commands: the effect run asks an agent and an mcp client, and run
     for (CommandOrigin o : {CommandOrigin::ui, CommandOrigin::builder, CommandOrigin::api}) ok(*s, "run.set_param", args, o);
     CHECK(fake.sent.size() == 3);
 }
+
+TEST_CASE("run commands: free-text parameters preserve 4096 UTF-8 bytes") {
+    auto s = open_session(fresh_dir("run_prompt_bytes") + "/workspace");
+    FakeRun fake;
+    fake.run = training();
+    RunParam prompt;
+    prompt.name = "prompt"; prompt.type = "text"; prompt.value = "";
+    fake.run.params.push_back(prompt);
+    s->set_run_control(&fake);
+    std::string text;
+    for (unsigned i = 0; i < 2048; ++i) text += "\xc3\xa9";
+    REQUIRE(text.size() == 4096);
+    const auto reply = ok(*s, "run.set_param", {{"name", "prompt"}, {"value", text}});
+    CHECK(reply["value"] == text);
+    REQUIRE(fake.sent.size() == 1);
+    CHECK(fake.sent.back().value == text);
+    for (const auto& value : {text + "a", std::string("a\0b", 3), std::string("\xc3\x28", 2)})
+        CHECK(err(*s, "run.set_param", {{"name", "prompt"}, {"value", value}}) == kRunBadValue);
+    CHECK(fake.sent.size() == 1);
+}

@@ -20,12 +20,15 @@
 #include "live/live_programs.h"
 #include "job_system.h"
 #include "test_temp.h"
+#include "probe_metadata.h"
 #ifndef _WIN32
 #include "test_proc.h"
 #endif
 
 #include <caliper_builder/commands/approval.h>
 #include <caliper_builder/commands/journal.h>
+#include <caliper_builder/commands/command_table.h>
+#include <caliper_builder/commands/schema.h>
 #include <caliper_builder/operators/operators.h>
 #include <caliper_builder/session/session.h>
 #include <caliper_builder/spec/format.h>
@@ -1067,6 +1070,13 @@ struct FakeLink final : caliper_live::RunLink {
     };
     std::vector<Sent> sent;
     std::map<std::string, ActionResult> results;
+    std::map<std::string, std::string> param_errors;
+    std::string session = "first";
+    std::string param_error(const std::string& name) const override {
+        const auto it = param_errors.find(name);
+        return it == param_errors.end() ? std::string() : it->second;
+    }
+    std::string control_session() const override { return session; }
 
     FakeLink() {
         ctl.run_state = "running";
@@ -1231,6 +1241,25 @@ TEST_CASE("app session: the run control sends CONTROL requests and maps the refu
     CHECK(e.message == "The stream takes no control.");
 }
 
+TEST_CASE("app session: the run control exposes parameter refusals and session changes") {
+    caliper_host::AppRunControl rc;
+    FakeLink link;
+    CHECK(rc.param_error("prompt").empty());
+    rc.set_link(&link);
+    CHECK(rc.set_param("prompt", "draft").ok());
+    link.param_errors["prompt"] = "bad_value: refused";
+    CHECK(rc.param_error("prompt") == "bad_value: refused");
+    CHECK(rc.param_error("other").empty());
+    const auto session = rc.control_session();
+    link.session = "second";
+    link.param_errors.clear();
+    CHECK(rc.control_session() != session);
+    CHECK(rc.param_error("prompt").empty());
+    CHECK(link.sent.size() == 1);
+    rc.set_link(nullptr);
+    CHECK(rc.control_session().empty());
+}
+
 TEST_CASE("app session: the run control turns CONTROLS and action results into run events") {
     caliper_host::AppRunControl rc;
     FakeLink link;
@@ -1370,6 +1399,40 @@ TEST_CASE("app session: the run control reads the CONTROLS key interventions in 
     CHECK(ivs[1].since_step == std::optional<std::int64_t>(1190));
     CHECK(caliper_host::intervention_points_of(json()).empty());
     CHECK(caliper_host::interventions_of(json::array()).empty());
+}
+
+TEST_CASE("app session: semantic probe metadata survives native commands") {
+    TempDir temp("probe-metadata");
+    FakeLink link;
+    caliper_host::AppRunControl control;
+    control.set_link(&link);
+    auto opened = cb::Session::open(temp.str("workspace"));
+    REQUIRE(opened.session);
+    opened.session->set_run_control(&control);
+    json expected = caliper_test::probe_descriptors();
+    SUBCASE("Complete Metadata") {}
+    SUBCASE("Metadata Fields Are Optional") {
+        expected[2].erase("pattern");
+        expected[3].erase("probe");
+        expected[4].erase("layer");
+    }
+    const std::string text = json{{"points", expected}, {"active", json::array()}}.dump();
+    std::string why;
+    REQUIRE(caliper_net::Json::parse(text.data(), text.size(), &link.ctl.interventions, &why));
+    cb::CommandInvocation command;
+    command.name = "intervene.points";
+    command.args = json::object();
+    command.origin = cb::CommandOrigin::mcp;
+    const auto reply = opened.session->invoke(command);
+    REQUIRE_MESSAGE(reply.ok, reply.error.message);
+    CHECK(reply.result.at("points") == expected);
+    const auto* descriptor = cb::find_command_descriptor(command.name);
+    REQUIRE(descriptor);
+    CHECK(cb::validate_command_value(descriptor->result, reply.result).ok());
+    command.args = {{"match", "model.layers.*"}};
+    const auto filtered = opened.session->invoke(command);
+    REQUIRE(filtered.ok);
+    CHECK(filtered.result.at("points") == json::array({expected[6], expected[7]}));
 }
 
 TEST_CASE("app session: the run control reports each applied and each stopped intervention as a run event") {

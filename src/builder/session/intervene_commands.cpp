@@ -12,6 +12,7 @@
 // step range is not empty or past. The script checks again.
 #include <caliper_builder/session/intervene_commands.h>
 
+#include "../../../include/caliper/live_net.h"
 #include <algorithm>
 #include <cstdint>
 #include <exception>
@@ -67,8 +68,12 @@ json opt_json(const std::optional<std::int64_t>& v) { return v ? json(*v) : json
 json point_json(const InterventionPoint& p) {
     json shape = json();
     if (p.shape) shape = *p.shape;
-    return json{{"point", p.point}, {"kind", p.kind},       {"module", p.module},
-                {"head", opt_json(p.head)}, {"type", p.type}, {"shape", std::move(shape)}};
+    json out{{"point", p.point}, {"kind", p.kind},       {"module", p.module},
+             {"head", opt_json(p.head)}, {"type", p.type}, {"shape", std::move(shape)}};
+    if (p.probe) out["probe"] = *p.probe;
+    if (p.layer) out["layer"] = *p.layer;
+    if (p.pattern) out["pattern"] = *p.pattern ? json(**p.pattern) : json();
+    return out;
 }
 
 json intervention_json(const Intervention& i) {
@@ -177,6 +182,47 @@ CommandOutput clear(const json& args, RunControl& control) {
 }
 
 }  // namespace
+
+CommandOutput interpretation_command(const CommandContext& context, RunControl* control) {
+    if (!control) return CommandOutput::fail(fail("interpret.unsupported", "This session has no run transport."));
+    const auto state = control->state();
+    if (!state.attached) return CommandOutput::fail(fail(kRunNotAttached, "No run is attached."));
+    const auto& name = context.invocation.name;
+    const bool change = name == "trace.run" || name == "trace.validate" || name == "patch.sweep";
+    if (change && !state.control) return CommandOutput::fail(fail(kRunControlNotAllowed, state.why_not));
+    json params = context.invocation.args;
+    const auto request = params.value("request_id", std::uint32_t(0));
+    params.erase("request_id");
+    if (request && !params.empty())
+        return CommandOutput::fail(fail("command.invalid_args", "A reply query accepts only request_id."));
+    if (!request && (name == "feature.show" || name == "feature.examples")) {
+        const bool node = params.contains("node"), layer = params.contains("layer"), feature = params.contains("feature");
+        if (!((node && !layer && !feature) || (!node && layer && feature)))
+            return CommandOutput::fail(fail("command.invalid_args", "Supply node or both layer and feature."));
+    }
+    if (!request && name == "trace.run" && !params.contains("prompt"))
+        return CommandOutput::fail(fail("command.invalid_args", "A trace requires a prompt."));
+    for (const auto* key : {"prompt"}) {
+        const auto it = params.find(key);
+        if (it == params.end()) continue;
+        if (!it->is_string())
+            return CommandOutput::fail(fail("command.invalid_args", "The prompt must be text.", std::string("args.") + key));
+        const auto& text = it->get_ref<const std::string&>();
+        if (text.empty() || text.size() > CALIPER_NET_INTERPRET_STRING_MAX || text.find('\0') != std::string::npos)
+            return CommandOutput::fail(fail("command.invalid_args",
+                "Use a nonempty UTF-8 prompt without NUL and at most " +
+                    std::to_string(CALIPER_NET_INTERPRET_STRING_MAX) + " bytes.", std::string("args.") + key));
+    }
+    try {
+        if (params.dump().size() > CALIPER_NET_INTERPRET_MAX_BYTES)
+            return CommandOutput::fail(fail("command.invalid_args", "Reduce the interpretation request to 256 KiB."));
+    } catch (const json::exception&) {
+        return CommandOutput::fail(fail("command.invalid_args", "The interpretation request must contain valid UTF-8."));
+    }
+    auto output = control->interpret(name, params, request);
+    if (request) output.no_effect = true;
+    return output;
+}
 
 CommandOutput intervene_command(const CommandContext& context, RunControl* control) {
     const std::string& name = context.invocation.name;

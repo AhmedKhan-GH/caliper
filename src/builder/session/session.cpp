@@ -1742,6 +1742,8 @@ struct Session::Impl {
     }
 
     // The intervention commands (design/gpu-programs.md).
+    CommandOutput interpretation_cmd(const CommandContext& ctx) { return interpretation_command(ctx, run_control.load()); }
+
     CommandOutput intervene_cmd(const CommandContext& ctx) { return intervene_command(ctx, run_control.load()); }
 
     // ---- the approval feed
@@ -1845,6 +1847,8 @@ struct Session::Impl {
         bind("program.read", &Impl::resource_cmd);
         for (const char* name : {"intervene.points", "intervene.set", "intervene.clear", "intervene.list"})
             bind(name, &Impl::intervene_cmd);
+        for (const char* name : {"feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read"})
+            bind(name, &Impl::interpretation_cmd);
         // The run commands and events.wait (design/instruments.md).
         for (const char* name : {"run.state", "run.set_param", "run.action", "run.pause"}) bind(name, &Impl::run_cmd);
         for (const char* name : {"run.list", "run.start", "run.fork", "run.stop", "run.logs"})
@@ -2119,6 +2123,15 @@ struct Session::Impl {
         // With review on for its origin, an edit that changes the open spec
         // waits for the person, with its diff.
         if (!review_of(inv).is_null()) return ApprovalDecision::ask;
+        // A request ID alone reads a retained reply. The transport verifies
+        // the method and run, and an unknown ID cannot submit an operation.
+        if (inv.name == "trace.run" &&
+            inv.args.is_object() && inv.args.size() == 1) {
+            const auto request = inv.args.find("request_id");
+            if (request != inv.args.end() && request->is_number_integer() &&
+                request->get<std::uint64_t>() > 0 && request->get<std::uint64_t>() <= 0xffffffffu)
+                return ApprovalDecision::allow;
+        }
         // Acting on the running script waits for the person when an agent
         // asks (design/instruments.md, Run Effect Class); the modes and the
         // rules then apply.

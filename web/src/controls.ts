@@ -17,6 +17,7 @@ import { acquire, release } from './client/socket.js';
 import type { StreamClient, StreamListener } from './client/stream.js';
 import { RunBar, sendControl } from './controls/run.js';
 import type { ActionInfo, ControlReplyMsg, ControlsMsg, ParamInfo, ParamValue } from './protocol/messages.js';
+import { isParamText } from './protocol/param-text.js';
 import { C, FONT_MONO, FONT_TEXT, fmt } from './views/theme.js';
 
 const STYLE = `
@@ -34,17 +35,18 @@ const STYLE = `
 .note[data-kind="pending"] { color: ${C.bronze}; }
 .note[data-kind="error"] { color: ${C.secondary}; }
 input[type="range"] { width: 100%; accent-color: ${C.bronze}; margin: 0; }
-input[type="number"], select { font: 12px ${FONT_MONO}; color: ${C.parchment}; background: #1c1b18; border: 1px solid ${C.rule};
+input[type="number"], select, textarea { font: 12px ${FONT_MONO}; color: ${C.parchment}; background: #1c1b18; border: 1px solid ${C.rule};
   border-radius: 3px; padding: 1px 4px; height: 22px; width: 8em; }
+textarea { width: 100%; height: 4em; resize: vertical; }
 select { font-family: ${FONT_TEXT}; width: auto; }
 .tool { font: 11px ${FONT_TEXT}; letter-spacing: .06em; color: ${C.faint}; background: transparent; border: 1px solid ${C.rule};
   border-radius: 3px; padding: 1px 8px; height: 22px; cursor: pointer; }
 .tool:hover { color: ${C.parchment}; }
 .tool[aria-pressed="true"] { color: ${C.bronze}; border-color: ${C.bronze}; }
-.tool:disabled, input:disabled, select:disabled { opacity: .45; cursor: default; }
+.tool:disabled, input:disabled, select:disabled, textarea:disabled { opacity: .45; cursor: default; }
 .tool:disabled:hover { color: ${C.faint}; }
 .tool[aria-busy="true"] { color: ${C.bronze}; border-color: ${C.bronze}; }
-button:focus-visible, input:focus-visible, select:focus-visible { outline: 1px solid ${C.bronze}; outline-offset: 1px; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 1px solid ${C.bronze}; outline-offset: 1px; }
 .run { display: inline-flex; align-items: center; gap: 6px; }
 .run[hidden], .run [hidden], [hidden] { display: none !important; }
 .badge { font: 11px ${FONT_MONO}; color: ${C.faint}; border: 1px solid ${C.rule}; border-radius: 3px; padding: 1px 6px; white-space: nowrap; }
@@ -59,6 +61,7 @@ const MAX_SLIDER_STEPS = 10000;
 
 /** What a parameter's control shows while a request of this element is open. */
 interface Local { value: ParamValue; error?: string }
+interface TextDraft { value: string; submitted?: string }
 
 export class CaliperControls extends HTMLElement {
   static get observedAttributes(): string[] {
@@ -79,6 +82,7 @@ export class CaliperControls extends HTMLElement {
   private readonly msg = document.createElement('div');
   private readonly runBar = new RunBar(() => this.client, true, (r) => this.replied(r));
   private readonly local = new Map<string, Local>();
+  private readonly textDrafts = new Map<string, TextDraft>();
   private readonly results = new Map<string, { text: string; error: boolean }>();
   private readonly dragging = new Set<string>();
   /** The parameter and action lists the rows were built for (rebuilt when they change). */
@@ -128,6 +132,7 @@ export class CaliperControls extends HTMLElement {
   /** Sets a parameter; resolves with the reply, or null when it could not be sent. */
   setParam(name: string, value: ParamValue): Promise<ControlReplyMsg | null> {
     if (!this.client?.controlAccess?.().allowed) return Promise.resolve(null);
+    if (this.param(name)?.type === 'text' && !isParamText(value)) return Promise.resolve(null);
     this.local.set(name, { value });
     this.render();
     return sendControl(this.client, { op: 'set', name, value }, (r) => {
@@ -221,6 +226,7 @@ export class CaliperControls extends HTMLElement {
     if (this.acquired) release(this.acquired);
     this.acquired = null;
     this.client = null;
+    this.textDrafts.clear();
     this.built = '';
   }
 
@@ -239,6 +245,9 @@ export class CaliperControls extends HTMLElement {
     this.msg.textContent = !c ? 'Not connected' : c.state === 'connecting' ? 'Connecting' : 'The script has no controls';
     this.runRow.hidden = !ctl;
     const params = ctl?.params ?? [], actions = ctl?.actions ?? [];
+    for (const name of this.textDrafts.keys()) {
+      if (!params.some((p) => p.name === name && p.type === 'text')) this.textDrafts.delete(name);
+    }
     this.paramsHead.hidden = this.params.hidden = !params.length;
     this.actionsHead.hidden = this.actions.hidden = !actions.length;
     // Rebuild the rows when the lists change; otherwise update them in place,
@@ -258,11 +267,14 @@ export class CaliperControls extends HTMLElement {
       // then shows as the producer holds it (pending or applied).
       const l = this.local.get(p.name);
       if (l && !l.error && (p.pending === l.value || (p.pending === undefined && p.value === l.value))) this.local.delete(p.name);
+      const draft = this.textDrafts.get(p.name);
+      if (draft && draft.submitted === draft.value && !l?.error
+        && (p.pending ?? p.value) === draft.value) this.textDrafts.delete(p.name);
       this.rows.get(p.name)?.update(p);
     }
     for (const a of actions) this.actionRows.get(a.name)?.update(a);
     const off = !access.allowed;
-    for (const el of this.root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('.grid input, .grid select, .grid button, .actions button')) {
+    for (const el of this.root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement | HTMLTextAreaElement>('.grid input, .grid select, .grid button, .grid textarea, .actions button')) {
       el.disabled = off;
       if (off) el.title = access.reason;
     }
@@ -326,6 +338,62 @@ export class CaliperControls extends HTMLElement {
         update: (p2) => {
           const s = show(p2);
           sel.value = String(s.value);
+          value.textContent = '';
+        },
+      };
+    }
+    if (p.type === 'text') {
+      const field = document.createElement('textarea');
+      field.dataset.param = p.name;
+      field.setAttribute('aria-label', p.name);
+      field.title = 'Return submits. Shift+Return inserts a new line.';
+      const validate = () => {
+        const valid = isParamText(field.value);
+        field.setCustomValidity(valid ? '' : 'Text accepts at most 4096 UTF-8 bytes without NUL or unpaired surrogates.');
+        return valid;
+      };
+      field.addEventListener('input', () => {
+        this.textDrafts.set(p.name, { value: field.value });
+        this.render();
+      });
+      const submit = (report: boolean) => {
+        const draft = this.textDrafts.get(p.name);
+        if (!validate()) {
+          if (report) field.reportValidity();
+          return;
+        }
+        if (!draft || draft.submitted === draft.value || !this.client?.controlAccess?.().allowed) return;
+        if (!this.local.get(p.name)?.error && draft.value === this.shown(this.param(p.name) ?? p).value) {
+          this.textDrafts.delete(p.name);
+          return;
+        }
+        draft.submitted = draft.value;
+        void this.setParam(p.name, draft.value).then((reply) => {
+          if (!reply || reply.status === 'error') delete draft.submitted;
+        }).catch((error: unknown) => {
+          delete draft.submitted;
+          if (this.textDrafts.get(p.name) !== draft) return;
+          this.local.set(p.name, { value: draft.value, error: error instanceof Error ? error.message : 'The value was not sent.' });
+          this.render();
+        });
+      };
+      field.addEventListener('blur', () => submit(false));
+      field.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return;
+        event.preventDefault();
+        event.stopPropagation();
+        submit(true);
+      });
+      control.append(field);
+      return {
+        update: (p2) => {
+          const s = show(p2);
+          const draft = this.textDrafts.get(p.name);
+          if (this.root.activeElement !== field) field.value = draft?.value ?? String(s.value);
+          if (!validate()) {
+            note.textContent = field.validationMessage;
+            note.dataset.kind = 'error';
+          }
           value.textContent = '';
         },
       };

@@ -49,7 +49,7 @@ from . import _controls, _net_programs, _wire
 __all__ = ["ControlsPort", "capabilities"]
 
 _CAPS = frozenset((_wire.CAP_CONTROLS, _wire.CAP_SELECTION, _wire.CAP_PROGRAMS,
-                   _wire.CAP_INTERVENTIONS))
+                   _wire.CAP_INTERVENTIONS, _wire.CAP_INTERPRETATION, _wire.CAP_TEXT_PARAMS))
 ORDER_WAIT_S = _wire.ORDER_WAIT_MS / 1000    # the longest a pause's run state waits for data
 COPY_WAIT_S = 1.0                            # the longest a pause waits for the device's copies
 RECHECK_S = 0.002                            # how often a held run state looks again
@@ -60,8 +60,9 @@ def capabilities(controls: bool) -> list:
     ``interventions`` while a ``caliper.watch(model, optimizer)`` is on."""
     if not controls:
         return [_wire.CAP_EVENTS]
-    return sorted([_wire.CAP_CONTROLS, _wire.CAP_EVENTS, _wire.CAP_SELECTION]
-                  + _net_programs.capabilities())
+    return sorted([_wire.CAP_CONTROLS, _wire.CAP_EVENTS, _wire.CAP_SELECTION, _wire.CAP_TEXT_PARAMS]
+                  + _net_programs.capabilities()
+                  + ([_wire.CAP_INTERPRETATION] if _controls.CONTROLS.interpretation_service is not None else []))
 
 
 def peer_caps(announced) -> frozenset:
@@ -72,9 +73,13 @@ def peer_caps(announced) -> frozenset:
 def _for_peer(meta: dict, link) -> dict:
     """A CONTROLS meta for ``link``: without the key ``interventions`` when the peer did not
     announce the capability (any other meta unchanged)."""
+    out = meta
     if "interventions" in meta and _wire.CAP_INTERVENTIONS not in link.caps:
-        return {k: v for k, v in meta.items() if k != "interventions"}
-    return meta
+        out = {k: v for k, v in out.items() if k != "interventions"}
+    if "params" in out and _wire.CAP_TEXT_PARAMS not in link.caps:
+        out = {**out, "params": [p for p in out["params"] if p["type"] != _wire.PARAM_TEXT]}
+    return out
+
 
 
 class ControlsPort:
@@ -156,13 +161,29 @@ class ControlsPort:
                                    in_reply_to=int(_wire.MsgType.CONTROL),
                                    request_id=msg.request_id))
             return
+        if msg.op == _wire.OP_INTERPRET and _wire.CAP_INTERPRETATION not in link.caps:
+            link.queue(_wire.ControlReply(msg.request_id, msg.op, _wire.STATUS_ERROR,
+                                          error={"code": "interpret.unsupported",
+                                                 "message": "The peer did not announce interpretation."}))
+            return
+        if msg.op == _wire.OP_SET and _wire.CAP_TEXT_PARAMS not in link.caps:
+            with self.route.ctl.lock:
+                parameter = self.route.ctl.params.get(msg.name)
+                text_parameter = parameter is not None and parameter.type == _wire.PARAM_TEXT
+            if text_parameter or (isinstance(msg.value, str) and not _wire._name(msg.value)):
+                link.queue(_wire.ControlReply(msg.request_id, msg.op, _wire.STATUS_ERROR,
+                                              error={"code": _wire.ERR_UNSUPPORTED,
+                                                     "message": "The peer did not announce text_params."}))
+                return
         try:
-            reply = self.route.on_control(link, msg.to_meta())
+            reply = self.route.on_control(link, msg.to_meta(), acknowledge=lambda meta:
+                self._send(link, _wire.encode_frame(_wire.MsgType.CONTROL_REPLY, meta)))
         except _wire.MessageError as e:
             link.queue(_wire.Error(e.code, e.message, in_reply_to=int(_wire.MsgType.CONTROL),
                                    request_id=msg.request_id))
             return
-        self._send(link, _wire.encode_frame(_wire.MsgType.CONTROL_REPLY, reply))
+        if reply is not None:
+            self._send(link, _wire.encode_frame(_wire.MsgType.CONTROL_REPLY, reply))
 
     def on_select(self, link, msg: _wire.Event) -> None:
         """A select EVENT from ``link`` (it also goes to Python's handlers)."""
@@ -227,7 +248,7 @@ class ControlsPort:
             for ln in links:
                 if _wire.CAP_CONTROLS in ln.caps:
                     meta = _for_peer(controls, ln)
-                    key = meta is controls
+                    key = (_wire.CAP_INTERVENTIONS in ln.caps, _wire.CAP_TEXT_PARAMS in ln.caps)
                     if key not in frames:
                         frames[key] = _wire.encode_frame(_wire.MsgType.CONTROLS, meta)
                     self._send(ln, frames[key])

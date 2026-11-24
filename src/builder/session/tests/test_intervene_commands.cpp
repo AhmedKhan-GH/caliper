@@ -36,6 +36,8 @@ struct FakeRun final : RunControl {
     std::vector<Intervention> sets;
     std::vector<std::string> clears;
     Error answer;
+    std::vector<json> interpretations;
+    std::map<std::uint32_t, std::string> interpretation_methods;
 
     RunState state() override { return run; }
     Error set_param(const std::string&, const json&) override { return {}; }
@@ -51,6 +53,17 @@ struct FakeRun final : RunControl {
     Error intervene_clear(const std::string& point) override {
         clears.push_back(point);
         return answer;
+    }
+    CommandOutput interpret(const std::string& method, const json& params, std::uint32_t request) override {
+        if (!request) {
+            interpretations.push_back(params);
+            request = static_cast<std::uint32_t>(interpretations.size());
+            interpretation_methods[request] = method;
+        }
+        const auto found = interpretation_methods.find(request);
+        if (found == interpretation_methods.end() || found->second != method)
+            return CommandOutput::fail(Error("interpret.unknown_request", "No matching request is retained."));
+        return CommandOutput::ok({{"request_id", request}, {"pending", true}, {"result", nullptr}});
     }
 };
 
@@ -248,3 +261,70 @@ TEST_CASE("interventions: the effect run asks an agent, with a rule key for one 
 }
 
 #endif
+
+TEST_CASE("interpretation: every command binds with bounded schema and correct effects") {
+    auto session = open_session(fresh_dir("interpret_bound") + "/workspace");
+    for (const char* name : {"feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read"}) {
+        CAPTURE(name);
+        const auto* descriptor = find_command_descriptor(name);
+        REQUIRE(descriptor);
+        CHECK(descriptor->effect == (std::string(name) == "trace.run" ? CommandEffect::run : CommandEffect::read));
+        CHECK(descriptor->frame_thread);
+        auto result = invoke(*session, name, descriptor->examples.front());
+        CHECK_FALSE(result.ok);
+        CHECK(result.error.code == "interpret.unsupported");
+    }
+    CHECK(err(*session, "trace.read", {{"node_limit", 257}}) == "command.invalid_args");
+    CHECK(err(*session, "feature.examples", {{"layer", 0}, {"feature", 0}, {"limit", 17}}) == "command.invalid_args");
+    CHECK(err(*session, "trace.run", {{"prompt", "x"}, {"max_nodes", true}}) == "command.invalid_args");
+}
+
+TEST_CASE("interpretation: invalid prompt bytes stop before the run transport") {
+    auto session = open_session(fresh_dir("interpret_bytes") + "/workspace");
+    auto run = training();
+    session->set_run_control(&run);
+    std::string multibyte;
+    for (unsigned i = 0; i < 2048; ++i) multibyte += "\xc3\xa9";
+    CHECK(ok(*session, "trace.run", {{"prompt", multibyte}})["pending"] == true);
+    REQUIRE(run.interpretations.size() == 1);
+    for (const auto& prompt : {std::string("a\0b", 3), multibyte + "\xc3\xa9", std::string("\xc3\x28", 2)}) {
+        const auto result = invoke(*session, "trace.run", {{"prompt", prompt}});
+        CHECK_FALSE(result.ok);
+        CHECK(result.error.code == "command.invalid_args");
+        CHECK(result.error.message.size() <= 1024);
+        CHECK(run.interpretations.size() == 1);
+    }
+    session->set_run_control(nullptr);
+}
+
+TEST_CASE("interpretation: one approval admits a request and polling cannot submit work") {
+    auto session = open_session(fresh_dir("interpret_poll") + "/workspace");
+    auto run = training();
+    session->set_run_control(&run);
+    const auto requested = invoke(*session, "trace.run", {{"prompt", "fixture"}}, CommandOrigin::mcp);
+    REQUIRE(requested.error.code == "command.needs_approval");
+    CHECK(run.interpretations.empty());
+    const auto approved = session->registry().approve(requested.approval);
+    REQUIRE(approved.ok);
+    REQUIRE(run.interpretations.size() == 1);
+    const auto id = approved.result["request_id"];
+    CHECK(ok(*session, "trace.run", {{"request_id", id}}, CommandOrigin::mcp)["pending"] == true);
+    CHECK(ok(*session, "trace.run", {{"request_id", id}}, CommandOrigin::agent)["pending"] == true);
+    CHECK(session->registry().pending_approvals().empty());
+    CHECK(run.interpretations.size() == 1);
+    CHECK(err(*session, "trace.run", {{"request_id", 99}}, CommandOrigin::mcp) == "interpret.unknown_request");
+    CHECK(err(*session, "feature.dictionary", {{"request_id", id}}, CommandOrigin::mcp) == "interpret.unknown_request");
+    const auto mixed = invoke(*session, "trace.run", {{"request_id", id}, {"prompt", "new"}}, CommandOrigin::mcp);
+    REQUIRE(mixed.error.code == "command.needs_approval");
+    CHECK(session->registry().approve(mixed.approval).error.code == "command.invalid_args");
+    CHECK(err(*session, "trace.run", {{"request_id", 0}, {"prompt", "new"}}, CommandOrigin::mcp) == "command.invalid_args");
+    CHECK(err(*session, "trace.run", {{"prompt", "new"}}, CommandOrigin::mcp) == "command.needs_approval");
+    CHECK(run.interpretations.size() == 1);
+    auto other = training();
+    session->set_run_control(&other);
+    CHECK(err(*session, "trace.run", {{"request_id", id}}, CommandOrigin::mcp) == "interpret.unknown_request");
+    CHECK(other.interpretations.empty());
+    REQUIRE(session->set_agent_mode(AgentPrincipal::mcp, AgentMode::read_only).ok());
+    CHECK(err(*session, "trace.run", {{"request_id", id}}, CommandOrigin::mcp) == "command.denied");
+    session->set_run_control(nullptr);
+}

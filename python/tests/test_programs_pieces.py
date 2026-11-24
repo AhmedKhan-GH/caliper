@@ -813,8 +813,10 @@ class _Reader(threading.Thread):
         self.url = url
         self.got = []
         self.wholes = []                             # (program, step, bytes, sha256) of each whole version
+        self.programs = []                           # (id, op) of each draw declaration
         self.parts = w.SplitResources()
         self.closed = None
+        self.ready = threading.Event()
         self.stop = threading.Event()
 
     def run(self):
@@ -833,6 +835,10 @@ class _Reader(threading.Thread):
                         f = w.decode_frame(await asyncio.wait_for(ws.recv(), 0.05))
                     except asyncio.TimeoutError:
                         continue
+                    if f.type == w.MsgType.PROGRAM_STATE:
+                        self.ready.set()
+                    if f.type == w.MsgType.PROGRAM:
+                        self.programs.append((f.meta["id"], f.meta["op"]))
                     if f.type == P.RESOURCE_TYPE:
                         self.got.append((f.meta["program"], f.meta["step"]))
                         r = self.parts.add(w.Resource.from_frame(f))
@@ -878,17 +884,19 @@ def test_both_senders_carry_a_version_in_parts_to_a_viewer_whole(server, watchin
         reader.join(10)
 
 
-def test_two_programs_of_one_chunk_each_reach_one_viewer_in_turn(server, watching, monkeypatch):
-    """Two instances that publish 8 MiB each at one pass, as two of the library's points@1 do. The frames
-    posted for the viewer and not queued yet count toward its bound, thus the second program skips the
-    pass where both would overflow the 16 MiB queue, the viewer stays connected, and the program that it
-    skipped goes first at the next pass."""
+def _check_two_programs_share_admission(server, monkeypatch, payload_bytes, *, bounded=False):
+    """Verify complete resource delivery and fairness at a stated admission limit."""
+    monkeypatch.setattr(P, "_OUTBOX", {})
     reader = _Reader(server.stream_url)
     reader.start()
     try:
-        _wait(lambda: [ln for c in P._controls_ports() if c.server is server for ln in P._resource_links(c)],
-              "the viewer attaches")
+        _wait(lambda: reader.ready.is_set() or reader.closed is not None or not reader.is_alive(),
+              "the viewer receives its initial program state")
+        assert reader.closed is None, f"the server closed the viewer before initial state with {reader.closed}"
+        assert reader.ready.is_set(), "the viewer reader ended before initial program state"
         ctl, = [c for c in P._controls_ports() if c.server is server]
+        link, = P._resource_links(ctl)
+        _wait(lambda: P._backlog(ctl, link) == 0, "the initial control frames leave the queue")
         gate = threading.Lock()
         flush = ctl.flush
 
@@ -896,21 +904,57 @@ def test_two_programs_of_one_chunk_each_reach_one_viewer_in_turn(server, watchin
             with gate:
                 return flush(*a, **kw)
         monkeypatch.setattr(ctl, "flush", gated)
-        progs = [P._Program(pid, {}, "", None, "") for pid in ("a", "b")]
+        progs = [_piece_program(pid, ["points"], monkeypatch) for pid in ("a", "b")]
         for p in progs:
             p.kind = "piece"
+        frame_bytes = len(_resource_frame("points", bytes(payload_bytes), "a", 32, 1))
+        draw_bytes = sum(len(P._relay_frame(p)) for p in progs)
+        if bounded:
+            monkeypatch.setattr(P, "RESOURCE_BACKLOG_BYTES", frame_bytes + draw_bytes)
+        budget = P.RESOURCE_BACKLOG_BYTES
+        assert frame_bytes + draw_bytes <= budget < 2 * frame_bytes
+        hashes = {}
         for step in range(1, 5):
+            frames = []
+            for index, p in enumerate(progs):
+                p.last_step = step
+                pattern = bytes((value + 4 * index + step) % 256 for value in range(256))
+                data = (pattern * ((payload_bytes + 255) // 256))[:payload_bytes]
+                hashes[p.id, step] = hashlib.sha256(data).hexdigest()
+                frame = _resource_frame("points", data, p.id, 32, step)
+                assert len(frame) == frame_bytes
+                frames.append((p, [frame]))
             with gate:                                   # the whole pass is posted before one flush
-                P._publish_pass([(p, [_resource_frame("points", bytes(P.PART_BYTES), p.id, 32, step)])
-                                 for p in progs])
-            _wait(lambda: reader.closed is not None or any(s == step for _p, s in reader.got),
-                  f"the viewer gets a version of step {step}")
+                P._publish_pass(frames)
+                unsent = ctl.unsent(link)
+                assert unsent == frame_bytes + (draw_bytes if step == 1 else 0)
+                assert unsent <= P._backlog(ctl, link) <= budget
+                assert [p.skipped for p in progs] == [step // 2, (step + 1) // 2]
+            _wait(lambda: reader.closed is not None or not reader.is_alive() or (
+                any(s == step for _p, s, _n, _sha in reader.wholes) and P._backlog(ctl, link) == 0),
+                f"the viewer gets the whole version of step {step} and the queue drains")
             assert reader.closed is None, f"the server closed the viewer with {reader.closed}"
-        assert reader.got == [("a", 1), ("b", 2), ("a", 3), ("b", 4)]
+            assert reader.is_alive(), "the viewer reader ended before resource completion"
+        expected = [("a", 1), ("b", 2), ("a", 3), ("b", 4)]
+        assert reader.got == expected
+        assert reader.programs == [("a", "set"), ("b", "set")]
+        assert reader.wholes == [(pid, step, payload_bytes, hashes[pid, step]) for pid, step in expected]
+        assert reader.parts.dropped == reader.parts.discarded == 0
         assert [p.skipped for p in progs] == [2, 2]
     finally:
         reader.stop.set()
         reader.join(10)
+        assert not reader.is_alive(), "the viewer reader did not stop"
+
+
+def test_two_programs_of_one_chunk_each_reach_one_viewer_in_turn(server, watching, monkeypatch):
+    """Two full resource parts share the unchanged production admission budget."""
+    _check_two_programs_share_admission(server, monkeypatch, P.PART_BYTES)
+
+
+def test_two_programs_share_a_bounded_admission_budget(server, watching, monkeypatch):
+    """Small resources exercise the same fairness and complete-delivery assertions."""
+    _check_two_programs_share_admission(server, monkeypatch, 1024, bounded=True)
 
 
 def test_published_textures_have_a_separate_byte_limit(monkeypatch):

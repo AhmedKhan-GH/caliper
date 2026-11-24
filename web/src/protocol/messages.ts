@@ -90,7 +90,10 @@ export const LIMITS = {
 } as const;
 
 /** Capabilities in HELLO and WELCOME. */
-export const CAP = { events: 'events', controls: 'controls', selection: 'selection' } as const;
+export const CAP = {
+  events: 'events', controls: 'controls', selection: 'selection', textParams: 'text_params',
+  interventions: 'interventions', interpretation: 'interpretation',
+} as const;
 
 /** 3.1 limits of controls and linked selection. */
 export const LIMITS_31 = {
@@ -287,11 +290,27 @@ export interface EventMsg extends Omit<ViewerEvent, 'type'> {
 
 export type RunState = 'none' | 'running' | 'pausing' | 'paused' | 'stepping';
 export const RUN_STATES: readonly RunState[] = ['none', 'running', 'pausing', 'paused', 'stepping'];
-export type ParamType = 'number' | 'integer' | 'boolean' | 'choice';
+export const PARAM_TEXT_MAX = 4096;
+export type ParamType = 'number' | 'integer' | 'boolean' | 'choice' | 'text';
 export type ParamValue = number | boolean | string;
-/** The control ops; 'intervene' is the 3.2 draft's, under the capability "interventions". */
-export type ControlOp = 'pause' | 'resume' | 'step' | 'set' | 'run' | 'intervene';
-export const CONTROL_OPS: readonly ControlOp[] = ['pause', 'resume', 'step', 'set', 'run', 'intervene'];
+/** The extension ops require the corresponding peer capability. */
+export type ControlOp = 'pause' | 'resume' | 'step' | 'set' | 'run' | 'intervene' | 'interpret';
+export const CONTROL_OPS: readonly ControlOp[] = ['pause', 'resume', 'step', 'set', 'run', 'intervene', 'interpret'];
+
+/** M7 structured metadata limits (python/caliper/_interpret_protocol.py). */
+export const INTERPRET_LIMITS = {
+  maxBytes: 262144, maxString: 4096, maxList: 512, maxFields: 64, maxDepth: 8, maxValues: 16384,
+} as const;
+export type InterpretationValue = null | boolean | number | string | InterpretationValue[] | InterpretationResult;
+export interface InterpretationResult { [key: string]: InterpretationValue }
+type FeatureSelector = { node: number; layer?: never; feature?: never } | { node?: never; layer: number; feature: number };
+export type InterpretationRequest = { version: 1 } & (
+  | { method: 'feature.dictionary' | 'trace.status'; params: Record<string, never> }
+  | { method: 'feature.show'; params: FeatureSelector }
+  | { method: 'feature.examples'; params: FeatureSelector & { limit?: number } }
+  | { method: 'trace.run'; params: { prompt: string; max_targets?: number; max_nodes?: number; max_edges?: number } }
+  | { method: 'trace.read'; params: { node_offset?: number; node_limit?: number; edge_offset?: number; edge_limit?: number } }
+);
 
 export interface RunInfo { state: RunState; step?: number; steps_left?: number }
 export interface ParamInfo {
@@ -319,6 +338,8 @@ export interface ControlMsg {
   count?: number;
   /** 3.2 draft, op 'intervene': exactly one of set, clear and clear_all. */
   intervene?: InterveneRequest;
+  /** M7, capability 'interpretation': a version 1 request. */
+  interpretation?: InterpretationRequest;
 }
 export interface ControlReplyMsg {
   type: 'control_reply';
@@ -329,6 +350,8 @@ export interface ControlReplyMsg {
   value?: ParamValue;
   message?: string;
   error?: { code: string; message?: string };
+  /** Required on a successful 'interpret' reply. */
+  result?: InterpretationResult;
 }
 
 // --- 3.1: linked selection -------------------------------------------------------

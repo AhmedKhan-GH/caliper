@@ -261,17 +261,23 @@ struct Check {
 
     void text_options(const Control& ctl, const std::string& op) {
         const ControlOptions& o = ctl.options;
-        if (o.max_length && (*o.max_length < 1 || *o.max_length > static_cast<std::int64_t>(limits::kStateTextBytes)))
-            c.sink.error("spec.out_of_range", op + ".max_length must be from 1 to 1,024.", op + ".max_length");
+        const auto target = parse_control_target(ctl.bind);
+        const std::size_t text_limit = target && target->kind == ControlTarget::Kind::param
+                                           ? limits::kParamTextBytes : limits::kStateTextBytes;
+        if (o.max_length && (*o.max_length < 1 || *o.max_length > static_cast<std::int64_t>(text_limit)))
+            c.sink.error("spec.out_of_range", op + ".max_length must be from 1 to " + std::to_string(text_limit) + ".",
+                         op + ".max_length");
         if (o.placeholder &&
             (code_points(*o.placeholder) > kPlaceholderChars || has_control(*o.placeholder, TextKind::line)))
             c.sink.error("spec.bad_value", op + ".placeholder must be one line of at most 256 characters.",
                          op + ".placeholder");
         if (o.value_other.is_null()) return;
         const std::size_t limit = o.max_length ? static_cast<std::size_t>(std::max<std::int64_t>(*o.max_length, 0))
-                                               : limits::kStateTextBytes;
+                                               : text_limit;
         if (!o.value_other.is_string())
             c.sink.error("spec.bad_value", op + ".value of a text control must be a text.", op + ".value");
+        else if (o.value_other.get_ref<const std::string&>().find('\0') != std::string::npos)
+            c.sink.error("spec.bad_value", op + ".value must not contain NUL bytes.", op + ".value");
         else if (o.value_other.get_ref<const std::string&>().size() > limit)
             c.sink.error("spec.out_of_range", op + ".value is longer than max_length.", op + ".value");
     }

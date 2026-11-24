@@ -68,8 +68,15 @@ public:
     // in RunControls' words.
     virtual std::string send(const std::string& op, const std::string& name, const caliper_net::Json& value,
                              uint32_t count) = 0;
+    virtual caliper_net::Json interpret(const std::string&, const caliper_net::Json&, uint32_t) {
+        auto out = caliper_net::Json::object(), error = caliper_net::Json::object();
+        error.set("code", "interpret.unsupported"); error.set("message", "This link does not support interpretation.");
+        out.set("error", error); return out;
+    }
     // The last result of the action `name`.
     virtual ActionResult action_result(const std::string& name) const = 0;
+    virtual std::string param_error(const std::string&) const { return {}; }
+    virtual std::string control_session() const { return {}; }
 };
 
 // The state column of a session row: "running", "starting", "closing",

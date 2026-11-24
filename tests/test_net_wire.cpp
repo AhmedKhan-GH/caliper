@@ -17,6 +17,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <random>
 #include <string>
 #include <vector>
@@ -69,6 +70,20 @@ std::vector<uint8_t> frame_of(uint16_t type, const std::string& meta_json, const
     REQUIRE_MESSAGE(Json::parse(meta_json.data(), meta_json.size(), &meta, &err), err);
     std::vector<uint8_t> out;
     REQUIRE(encode_frame(type, meta, sections, &out));
+    return out;
+}
+
+// Preserve raw number tokens instead of canonicalizing them through Json::dump().
+std::vector<uint8_t> raw_frame_of(uint16_t type, const std::string& meta_json) {
+    Json placeholder = Json::object();
+    placeholder.set("", "");
+    const auto base_size = placeholder.dump().size();
+    REQUIRE(meta_json.size() >= base_size);
+    placeholder.set("", std::string(meta_json.size() - base_size, 'x'));
+    std::vector<uint8_t> out;
+    REQUIRE(encode_frame(type, placeholder, {}, &out));
+    REQUIRE(out.size() == CALIPER_NET_HEADER_BYTES + meta_json.size());
+    std::copy(meta_json.begin(), meta_json.end(), out.begin() + CALIPER_NET_HEADER_BYTES);
     return out;
 }
 
@@ -808,4 +823,341 @@ TEST_CASE("net/wire: encode_head gives existing sections a new head, as the hub 
     }
     std::vector<uint8_t> head;
     CHECK_FALSE(encode_head(CALIPER_NET_MSG_SNAPSHOT, Json::object(), {}, 0, &head));
+}
+
+TEST_CASE("net/wire: interpretation metadata preserves framing and rejects malformed extensions") {
+    auto status = [](uint16_t type, const std::string& metadata) {
+        const auto bytes = frame_of(type, metadata);
+        Message message;
+        return decode(bytes.data(), bytes.size(), &message).status;
+    };
+    const auto valid = DecodeResult::Status::Ok;
+    const auto bad = DecodeResult::Status::BadMessage;
+    CHECK(status(CALIPER_NET_MSG_CONTROL, R"({"request_id":1,"op":"interpret","interpretation":{"version":1,"method":"feature.show","params":{"layer":0,"feature":2}}})") == valid);
+    CHECK(status(CALIPER_NET_MSG_CONTROL, R"({"request_id":1,"op":"interpret","interpretation":{"version":true,"method":"trace.status","params":{}}})") == bad);
+    CHECK(status(CALIPER_NET_MSG_CONTROL, R"({"request_id":1,"op":"interpret","interpretation":{"version":1,"method":"trace.read","params":{"node_limit":257}}})") == bad);
+    CHECK(status(CALIPER_NET_MSG_CONTROL, R"({"request_id":1,"op":"interpret","interpretation":{"version":1,"method":"feature.show","params":{"layer":0,"feature":true}}})") == bad);
+    CHECK(status(CALIPER_NET_MSG_CONTROL, R"({"request_id":1,"op":"interpret","interpretation":{"version":1,"method":"trace.run","params":{"prompt":"x","unknown":1}}})") == bad);
+    CHECK(status(CALIPER_NET_MSG_CONTROL, R"({"request_id":1,"op":"pause","interpretation":{}})") == bad);
+    CHECK(status(CALIPER_NET_MSG_CONTROL_REPLY, R"({"request_id":1,"op":"interpret","status":"queued"})") == valid);
+    CHECK(status(CALIPER_NET_MSG_CONTROL_REPLY, R"({"request_id":1,"op":"interpret","status":"ok","result":{"nodes":[{"id":"a"}],"next":null}})") == valid);
+    CHECK(status(CALIPER_NET_MSG_CONTROL_REPLY, R"({"request_id":1,"op":"interpret","status":"ok"})") == bad);
+    CHECK(status(CALIPER_NET_MSG_CONTROL_REPLY, R"({"request_id":1,"op":"pause","status":"ok","result":{}})") == bad);
+    CHECK(status(CALIPER_NET_MSG_CONTROL_REPLY, R"({"request_id":1,"op":"interpret","status":"ok","result":{"too_large":9007199254740992}})") == bad);
+    Control request;
+    request.request_id = 7;
+    request.op = "interpret";
+    const std::string envelope = R"({"version":1,"method":"trace.status","params":{}})";
+    std::string error;
+    REQUIRE(Json::parse(envelope.data(), envelope.size(), &request.interpretation, &error));
+    std::vector<uint8_t> bytes;
+    REQUIRE(encode(request, &bytes));
+    Message message;
+    REQUIRE(decode(bytes.data(), bytes.size(), &message).status == valid);
+    CHECK(std::get<Control>(message).interpretation.dump() == request.interpretation.dump());
+}
+
+TEST_CASE("net/wire: interpretation encoding rejects invalid UTF-8 prompt bytes locally") {
+    Control request;
+    request.request_id = 1;
+    request.op = CALIPER_NET_OP_INTERPRET;
+    request.interpretation = Json::object();
+    request.interpretation.set("version", 1);
+    request.interpretation.set("method", "trace.run");
+    std::string multibyte;
+    for (unsigned i = 0; i < CALIPER_NET_INTERPRET_STRING_MAX / 2; ++i) multibyte += "\xc3\xa9";
+    for (const auto& prompt : {std::string("a\0b", 3), multibyte + "\xc3\xa9", std::string("\xc3\x28", 2)}) {
+        Json params = Json::object(); params.set("prompt", prompt);
+        request.interpretation.set("params", params);
+        std::vector<uint8_t> bytes{1, 2, 3};
+        std::string reason;
+        CHECK_FALSE(encode(request, &bytes, &reason));
+        CHECK(bytes.empty());
+        CHECK_FALSE(reason.empty());
+        CHECK(reason.size() <= CALIPER_NET_TEXT_MAX);
+    }
+    Json params = Json::object(); params.set("prompt", multibyte);
+    request.interpretation.set("params", params);
+    std::vector<uint8_t> bytes;
+    REQUIRE(encode(request, &bytes));
+    Message decoded;
+    REQUIRE(decode_bytes(bytes, &decoded).ok());
+    CHECK(std::get<Control>(decoded).interpretation == request.interpretation);
+}
+
+TEST_CASE("net/wire: outbound interpretation results enforce structured limits") {
+    ControlReply reply;
+    reply.request_id = 1; reply.op = "interpret"; reply.status = "ok";
+    Json valid = Json::object(), invalid = Json::object();
+    SUBCASE("string bytes") {
+        valid.set("x", std::string(4096, 'x'));
+        invalid.set("x", std::string(4097, 'x'));
+    }
+    SUBCASE("fields") {
+        for (unsigned i = 0; i < 64; ++i) valid.set("k" + std::to_string(i), Json());
+        invalid = valid; invalid.set("extra", Json());
+    }
+    SUBCASE("list") {
+        Json list = Json::array();
+        for (unsigned i = 0; i < 512; ++i) list.push(Json());
+        valid.set("x", list); list.push(Json()); invalid.set("x", list);
+    }
+    SUBCASE("depth") {
+        valid.set("x", Json());
+        for (unsigned i = 1; i < 8; ++i) {
+            Json parent = Json::object(); parent.set("x", valid); valid = std::move(parent);
+        }
+        invalid.set("x", valid);
+    }
+    SUBCASE("values") {
+        Json last;
+        for (unsigned i = 0; i < 32; ++i) {
+            last = Json::array();
+            for (unsigned j = 0; j < (i == 31 ? 479u : 512u); ++j) last.push(Json());
+            valid.set("k" + std::to_string(i), last);
+        }
+        invalid = valid; last.push(Json()); invalid.set("k31", last);
+    }
+    SUBCASE("canonical bytes") {
+        for (unsigned i = 0; i < 64; ++i) valid.set("k" + std::to_string(i), std::string(4096, 'x'));
+        const auto size = 4096 - (valid.dump().size() - CALIPER_NET_INTERPRET_MAX_BYTES);
+        valid.set("k0", std::string(size, 'x'));
+        REQUIRE(valid.dump().size() == CALIPER_NET_INTERPRET_MAX_BYTES);
+        invalid = valid; invalid.set("k0", std::string(size + 1, 'x'));
+    }
+    SUBCASE("integer tokens") {
+        valid.set("x", uint64_t(9007199254740991)); invalid.set("x", uint64_t(9007199254740992));
+    }
+    SUBCASE("finite floats") {
+        valid.set("x", 1e20); invalid.set("x", std::numeric_limits<double>::infinity());
+    }
+    SUBCASE("NUL") { valid.set("x", "text"); invalid.set("x", std::string("a\0b", 3)); }
+    SUBCASE("UTF-8") { valid.set("x", "text"); invalid.set("x", std::string("\xc3\x28", 2)); }
+    SUBCASE("object root") { invalid = Json::array(); }
+    SUBCASE("missing result") { invalid = Json(); }
+    std::vector<uint8_t> bytes;
+    reply.result = valid;
+    REQUIRE(encode(reply, &bytes));
+    Message decoded;
+    REQUIRE(decode_bytes(bytes, &decoded).ok());
+    CHECK(std::get<ControlReply>(decoded).result == valid);
+    reply.result = invalid;
+    std::string error;
+    CHECK_FALSE(encode(reply, &bytes, &error));
+    CHECK(bytes.empty());
+    CHECK_FALSE(error.empty());
+}
+
+TEST_CASE("net/wire: outbound interpretation fields require their operation and reply state") {
+    Control request;
+    request.request_id = 1; request.op = "pause"; request.interpretation = Json::object();
+    std::vector<uint8_t> bytes{1};
+    std::string error;
+    CHECK_FALSE(encode(request, &bytes, &error));
+    CHECK(bytes.empty());
+    CHECK_FALSE(error.empty());
+    for (const auto* status : {"ok", "queued", "error"}) {
+        ControlReply reply;
+        reply.request_id = 1; reply.op = "interpret"; reply.status = status;
+        reply.result = Json::object();
+        if (std::string(status) == "ok") reply.op = "pause";
+        bytes = {1};
+        CHECK_FALSE(encode(reply, &bytes, &error));
+        CHECK(bytes.empty());
+        CHECK_FALSE(error.empty());
+    }
+}
+
+TEST_CASE("net/json: integer token metadata preserves legacy double semantics") {
+    for (const char* token : {"100000000000000000000", "-100000000000000000000",
+                             "18446744073709551616", "-9223372036854775809"}) {
+        CAPTURE(token);
+        Json value;
+        std::string error;
+        REQUIRE(Json::parse(token, std::strlen(token), &value, &error));
+        CHECK(value.type() == Json::Type::Double);
+        CHECK_FALSE(value.is_int());
+        CHECK(value.is_integer_token());
+        CHECK(value == Json(value.as_double()));
+        CHECK(value.dump() == format_double(value.as_double()));
+        Json list = Json::array();
+        list.push(value);
+        Json object = Json::object();
+        object.set("values", std::move(list));
+        CHECK(object.find("values")->at(0).is_integer_token());
+        const auto canonical = value.dump();
+        REQUIRE(Json::parse(canonical.data(), canonical.size(), &value, &error));
+        CHECK_FALSE(value.is_integer_token());
+    }
+    Json value;
+    std::string error;
+    const std::string repeated = R"({"value":100000000000000000000,"value":1e20})";
+    REQUIRE(Json::parse(repeated.data(), repeated.size(), &value, &error));
+    CHECK_FALSE(value.find("value")->is_integer_token());
+    CHECK(value.dump() == R"({"value":1e+20})");
+}
+
+TEST_CASE("net/wire: interpretation preserves integer and floating-point token limits") {
+    const struct { const char* token; bool valid; } cases[] = {
+        {"9007199254740991", true}, {"-9007199254740991", true},
+        {"9007199254740992", false}, {"-9007199254740992", false},
+        {"9223372036854775807", false}, {"-9223372036854775808", false},
+        {"18446744073709551615", false}, {"18446744073709551616", false},
+        {"-9223372036854775809", false},
+        {"100000000000000000000", false}, {"-100000000000000000000", false},
+        {"1e20", true}, {"-1E+20", true},
+        {"100000000000000000000.0", true}, {"-100000000000000000000.0", true},
+        {"9007199254740992.0", true}, {"1.7976931348623157e308", true},
+        {"1e309", false}, {"-1e309", false},
+    };
+    for (const auto& item : cases) {
+        CAPTURE(item.token);
+        // Check direct values and traversal through arrays and objects.
+        for (const bool nested : {false, true}) {
+            CAPTURE(nested);
+            const std::string value = nested ? "[{\"number\":" + std::string(item.token) + "}]" : item.token;
+            const std::string result = "{\"value\":" + value + "}";
+            const auto bytes = raw_frame_of(CALIPER_NET_MSG_CONTROL_REPLY,
+                "{\"request_id\":1,\"op\":\"interpret\",\"status\":\"ok\",\"result\":" + result + "}");
+            Message decoded;
+            CHECK(decode_bytes(bytes, &decoded).status ==
+                  (item.valid ? DecodeResult::Status::Ok : DecodeResult::Status::BadMessage));
+            ControlReply reply;
+            reply.request_id = 1; reply.op = "interpret"; reply.status = "ok";
+            std::string error;
+            REQUIRE(Json::parse(result.data(), result.size(), &reply.result, &error));
+            std::vector<uint8_t> encoded;
+            CHECK(encode(reply, &encoded, &error) == item.valid);
+        }
+    }
+}
+
+TEST_CASE("net/wire: legacy number fields still accept oversized integer tokens") {
+    const auto bytes = raw_frame_of(CALIPER_NET_MSG_CONTROL_REPLY,
+        R"({"request_id":1,"op":"set","status":"ok","value":100000000000000000000})");
+    Message decoded;
+    REQUIRE(decode_bytes(bytes, &decoded).ok());
+    const auto& value = std::get<ControlReply>(decoded).value;
+    CHECK(value.type() == Json::Type::Double);
+    CHECK(value.as_double() == 1e20);
+    CHECK(value.dump() == "1e+20");
+    std::vector<uint8_t> encoded;
+    REQUIRE(encode(decoded, &encoded));
+    Message round_trip;
+    REQUIRE(decode_bytes(encoded, &round_trip).ok());
+    CHECK(std::get<ControlReply>(round_trip).value == value);
+}
+
+TEST_CASE("net/wire: free-text parameters preserve exact byte limits") {
+    std::string multibyte;
+    for (unsigned i = 0; i < 2048; ++i) multibyte += "\xc3\xa9";
+    REQUIRE(multibyte.size() == 4096);
+    for (const auto& value : {std::string(), std::string(1025, 'a'), std::string(4096, 'a'), multibyte,
+                             std::string("\xed\x9f\xbf\xee\x80\x80\xf4\x8f\xbf\xbf")}) {
+        Control request;
+        request.request_id = 1; request.op = "set"; request.name = "prompt"; request.value = value;
+        std::vector<uint8_t> bytes;
+        REQUIRE(encode(request, &bytes));
+        Message decoded;
+        REQUIRE(decode_bytes(bytes, &decoded).ok());
+        CHECK(std::get<Control>(decoded).value.as_string() == value);
+        const std::string quoted = Json(value).dump();
+        const auto meta = "{\"run\":{\"state\":\"running\"},\"params\":[{\"name\":\"prompt\",\"type\":\"text\",\"value\":" + quoted +
+                          ",\"pending\":" + quoted + "}],\"actions\":[]}";
+        const auto state = frame_of(CALIPER_NET_MSG_CONTROLS, meta);
+        REQUIRE(decode_bytes(state, &decoded).ok());
+        CHECK(std::get<Controls>(decoded).params.items()[0].find("value")->as_string() == value);
+        ControlReply reply;
+        reply.request_id = 1; reply.op = "set"; reply.status = "ok"; reply.value = value;
+        REQUIRE(encode(reply, &bytes));
+        REQUIRE(decode_bytes(bytes, &decoded).ok());
+        CHECK(std::get<ControlReply>(decoded).value.as_string() == value);
+    }
+    for (const auto& value : {multibyte + "a", std::string(4097, 'a'), std::string("a\0b", 3),
+                             std::string("\xc3\x28"), std::string("\xc0\xaf"), std::string("\x80"),
+                             std::string("\xe2\x82"), std::string("\xed\xa0\x80"), std::string("\xf4\x90\x80\x80")}) {
+        Control request;
+        request.request_id = 1; request.op = "set"; request.name = "prompt"; request.value = value;
+        ControlReply reply;
+        reply.request_id = 1; reply.op = "set"; reply.status = "ok"; reply.value = value;
+        for (const Message& message : {Message(request), Message(reply)}) {
+            CAPTURE(message_type(message));
+            CAPTURE(value.size());
+            std::vector<uint8_t> bytes{1};
+            std::string error;
+            CHECK_FALSE(encode(message, &bytes, &error));
+            CHECK(bytes.empty());
+            CHECK(error == "invalid parameter value");
+            // Bypass outbound message validation to check the inbound rejection.
+            Json meta = Json::object();
+            meta.set("request_id", 1); meta.set("op", "set");
+            meta.set("name", "prompt"); meta.set("value", value);
+            if (std::holds_alternative<ControlReply>(message)) meta.set("status", "ok");
+            REQUIRE(encode_frame(message_type(message), meta, {}, &bytes));
+            Message decoded;
+            CHECK_FALSE(decode_bytes(bytes, &decoded).ok());
+        }
+    }
+    CHECK(CALIPER_NET_TEXT_MAX == 1024);
+    CHECK(CALIPER_NET_NAME_MAX == 63);
+}
+
+TEST_CASE("net/wire: outbound set values reject invalid scalars and containers") {
+    for (const Json& value : {Json(), Json(std::numeric_limits<double>::quiet_NaN()),
+                             Json(std::numeric_limits<double>::infinity()),
+                             Json(-std::numeric_limits<double>::infinity()), Json::array(), Json::object()}) {
+        CAPTURE(static_cast<int>(value.type()));
+        Control request;
+        request.request_id = 1; request.op = "set"; request.name = "value"; request.value = value;
+        std::vector<uint8_t> bytes{1};
+        std::string error;
+        CHECK_FALSE(encode(request, &bytes, &error));
+        CHECK(bytes.empty());
+        CHECK(error == "invalid parameter value");
+        for (const char* op : {"set", "run"}) {
+            CAPTURE(op);
+            ControlReply reply;
+            reply.request_id = 1; reply.op = op; reply.status = "ok"; reply.value = value;
+            bytes = {1};
+            if (value.is_null()) {
+                // A null reply value means that the optional field is absent.
+                REQUIRE(encode(reply, &bytes));
+                Message decoded;
+                const auto result = decode_bytes(bytes, &decoded);
+                REQUIRE(result.ok());
+                CHECK(std::get<ControlReply>(decoded).value.is_null());
+                CHECK_FALSE(result.frame.meta.has("value"));
+            } else {
+                error.clear();
+                CHECK_FALSE(encode(reply, &bytes, &error));
+                CHECK(bytes.empty());
+                CHECK(error == "invalid parameter value");
+                bytes = {1};
+                CHECK_FALSE(encode(reply, &bytes));
+                CHECK(bytes.empty());
+            }
+        }
+    }
+}
+
+TEST_CASE("net/wire: legacy set values retain v3.1 round trips") {
+    for (const Json& value : {Json(0), Json(-42), Json(1.25), Json(1e20),
+                             Json(std::numeric_limits<int64_t>::min()),
+                             Json(std::numeric_limits<uint64_t>::max()),
+                             Json(std::numeric_limits<double>::max()), Json(true), Json(false),
+                             Json("choice"), Json(std::string(CALIPER_NET_NAME_MAX, 'x'))}) {
+        CAPTURE(value.dump());
+        Control request;
+        request.request_id = 1; request.op = "set"; request.name = "value"; request.value = value;
+        ControlReply reply;
+        reply.request_id = 1; reply.op = "set"; reply.status = "ok"; reply.value = value;
+        std::vector<uint8_t> bytes;
+        REQUIRE(encode(request, &bytes, nullptr, 1));
+        Message decoded;
+        REQUIRE(decode_bytes(bytes, &decoded).ok());
+        CHECK(std::get<Control>(decoded).value == value);
+        REQUIRE(encode(reply, &bytes, nullptr, 1));
+        REQUIRE(decode_bytes(bytes, &decoded).ok());
+        CHECK(std::get<ControlReply>(decoded).value == value);
+    }
 }

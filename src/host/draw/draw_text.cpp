@@ -72,7 +72,12 @@ bool valid_utf8(std::string_view s) {
 
 }  // namespace
 
-std::vector<Label> DrawRuntime::labels() const {
+bool DrawRuntime::has_hover_label() const {
+    const Impl& m = *impl_;
+    return m.installed && m.piece.draw && m.piece.draw->text && m.piece.draw->text->hover.has_value();
+}
+
+std::vector<Label> DrawRuntime::labels(const PickedItem* hovered) const {
     std::vector<Label> out;
     const Impl& m = *impl_;
     if (!m.installed || !m.piece.draw || !m.piece.draw->text) return out;
@@ -93,6 +98,8 @@ std::vector<Label> DrawRuntime::labels() const {
     // The strings of the table: the manifest's, or those of the version that this frame showed.
     std::vector<std::string_view> table;
     std::vector<bool> usable;
+    bool strings_current = true;
+    std::optional<std::int64_t> strings_step;
     if (t.strings_from) {
         const Impl::Slot* from = nullptr;
         for (const Impl::Slot& slot : m.slots)
@@ -101,6 +108,8 @@ std::vector<Label> DrawRuntime::labels() const {
         const std::uint64_t width = from->layout.stride;
         if (width == 0 || width > pl::kStringBytes) return out;
         const Impl::Shown& sv = *from->shown;
+        strings_step = sv.step;
+        strings_current = hovered && sv.step == hovered->step;
         const std::uint64_t count = std::min<std::uint64_t>({sv.count, sv.bytes.size() / width, pl::kStrings});
         for (std::uint64_t i = 0; i < count; ++i) {
             const char* at = reinterpret_cast<const char*>(sv.bytes.data() + i * width);
@@ -115,10 +124,43 @@ std::vector<Label> DrawRuntime::labels() const {
         }
     }
     const std::size_t strings = table.size();
+    // The hover anchor is local to the viewer. A published derive anchor cannot follow
+    // its pointer. Read the ID hit against the shown node map and the matching text version.
+    std::optional<PickedItem> node;
+    if (t.hover && hovered && hovered->program == m.instance.program)
+        node = pick(hovered->item);
+    const bool hover_current = node && node->step == hovered->step && node->fields == hovered->fields &&
+                               v.step == hovered->step && strings_current;
+    // Use the same parameter bytes as the draw frame. No new resource or derive pass is needed.
+    std::optional<std::uint32_t> selected_index;
+    if (t.selected) {
+        for (std::size_t k = 0; k < m.piece.params.size(); ++k) {
+            const auto& param = m.piece.params[k];
+            if (param.name != t.selected->param || 4 * (k + 1) > m.params_shown.size()) continue;
+            std::uint32_t item;
+            std::memcpy(&item, m.params_shown.data() + 4 * k, 4);
+            if (param.type == caliper_builder::spec::ParamType::i32 && item > 0x7fffffffu) break;
+            const auto selected = pick(item);
+            const std::uint64_t index = std::uint64_t(t.selected->string_offset) + item;
+            if (selected && selected->step == v.step && (!strings_step || *strings_step == selected->step) && index < strings)
+                selected_index = std::uint32_t(index);
+            break;
+        }
+    }
     for (std::uint64_t i = 0; i < n; ++i) {
         const std::uint8_t* e = v.bytes.data() + i * stride;
         std::uint32_t index;
         std::memcpy(&index, e + str->offset, 4);
+        if (t.hover && i == t.hover->anchor) {
+            if (!hover_current) continue;
+            const std::uint64_t hover_index = std::uint64_t(t.hover->string_offset) + hovered->item;
+            if (hover_index >= strings) continue;
+            index = std::uint32_t(hover_index);
+        }
+        if (t.selected && i == t.selected->anchor) {
+            if (!selected_index) continue;
+            index = *selected_index;
+        }
         if (index >= strings || !usable[index] || table[index].empty()) continue;   // no text, no label, as the built-in
         Label l;
         l.align = t.align;

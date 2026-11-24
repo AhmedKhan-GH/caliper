@@ -741,40 +741,138 @@ bool draw_picker(const spec::Control& c, const Row& row, SpecInstrumentHost& hos
     return changed;
 }
 
-// The text a field shows while the person edits it, by window and control.
-std::map<std::string, std::string>& text_edits() {
-    static std::map<std::string, std::string> m;
-    return m;
+struct TextEdit {
+    std::string text;
+    std::optional<std::string> submitted;
+    std::string refusal;
+    cb::RunControl* run = nullptr;
+    cb::ValueStore* values = nullptr;
+    std::string session;
+    unsigned epoch = 0;
+    bool retained = false;
+};
+
+using TextEdits = std::map<std::string, TextEdit>;
+
+void destroy_text_edits(ImGuiContext*, ImGuiContextHook* hook) {
+    IM_DELETE(static_cast<TextEdits*>(hook->UserData));
+    hook->UserData = nullptr;
+}
+
+// The context hook owns its drafts. A static context owner can outlive
+// function-static storage, so shutdown must not access a static registry.
+TextEdits& text_edits() {
+    ImGuiContext* context = ImGui::GetCurrentContext();
+    for (const auto& hook : context->Hooks)
+        if (hook.Type == ImGuiContextHookType_Shutdown && hook.Callback == destroy_text_edits)
+            return *static_cast<TextEdits*>(hook.UserData);
+
+    ImGuiContextHook hook;
+    hook.Type = ImGuiContextHookType_Shutdown;
+    hook.Callback = destroy_text_edits;
+    hook.UserData = IM_NEW(TextEdits)();
+    ImGui::AddContextHook(context, &hook);
+    return *static_cast<TextEdits*>(hook.UserData);
 }
 
 // A text field: the person's edit applies on Return or when the field loses
-// focus, cut at `max_length` bytes.
+// focus. Parameter edits over max_length are refused without truncation.
 bool draw_text_field(const spec::Control& c, const Row& row, SpecInstrumentHost& host) {
     const std::string key = key_of(c);
-    const json now = current(host, c);
-    const std::size_t limit = c.options.max_length
+    const auto target = spec::parse_control_target(c.bind);
+    const bool script = target && target->kind == spec::ControlTarget::Kind::param;
+    const cb::RunState state = script && host.run ? host.run->state() : cb::RunState{};
+    const auto* param = script ? find_param(state, target->name) : nullptr;
+    std::string why = script ? why_disabled(host, state) : std::string();
+    if (script && why.empty() && (!param || param->type != "text")) why = "The script has no text parameter with this name.";
+    const json now = param ? (param->pending.is_null() ? param->value : param->pending) : current(host, c);
+    const std::size_t requested_limit = c.options.max_length
                                   ? static_cast<std::size_t>(std::max<std::int64_t>(*c.options.max_length, 0))
-                                  : spec::limits::kStateTextBytes;
-    // The edit buffer: limit bytes and the terminating zero, filled from the
-    // session's value whenever the field is not being edited.
+                                  : (script ? spec::limits::kParamTextBytes : spec::limits::kStateTextBytes);
+    const std::size_t limit = script ? std::min(requested_limit, spec::limits::kParamTextBytes) : requested_limit;
+    // Keep the full parameter draft. Fixed value and state buffers retain their limits.
     auto& edits = text_edits();
     auto it = edits.find(key);
+    const std::string session = script && host.run ? host.run->control_session() : std::string();
+    unsigned epoch = 0;
+    if (it != edits.end() && script && (!state.attached || it->second.run != host.run ||
+        it->second.values != host.values || it->second.session != session)) {
+        epoch = it->second.epoch + 1;
+        edits.erase(it);
+        it = edits.end();
+    }
     if (it == edits.end()) {
         std::string start = now.is_string() ? now.get<std::string>() : std::string();
-        if (start.size() > limit) start.resize(limit);
-        start.resize(limit + 1, '\0');
-        it = edits.emplace(key, std::move(start)).first;
+        if (!script && start.size() > limit) {
+            auto end = limit;
+            while (end && (static_cast<unsigned char>(start[end]) & 0xc0) == 0x80) --end;
+            start.resize(end);
+        }
+        if (!script) start.resize(limit + 1, '\0');
+        it = edits.emplace(key, TextEdit{std::move(start), {}, {}, host.run, host.values, session, epoch}).first;
     }
-    std::string& buf = it->second;
+    TextEdit& edit = it->second;
+    if (script && !edit.retained) edit.text = now.is_string() ? now.get<std::string>() : std::string();
+    if (script && host.run) {
+        const auto error = host.run->param_error(target->name);
+        if (!error.empty()) {
+            edit.refusal = error;
+            edit.submitted.reset();
+        }
+    }
+    std::string& buf = edit.text;
+    const bool invalid = script && buf.size() > limit;
+    const std::string refusal = invalid ? "Text exceeds " + std::to_string(limit) + " bytes. The draft was retained."
+                                        : edit.refusal;
+    const float notice_width = !refusal.empty() ? std::min(row.widget.GetWidth() * 0.6f,
+        ImGui::CalcTextSize(refusal.c_str()).x + ImGui::GetStyle().ItemSpacing.x) : 0.0f;
     ImGui::SetCursorScreenPos(row.widget.Min);
-    ImGui::SetNextItemWidth(row.widget.GetWidth());
+    ImGui::SetNextItemWidth(row.widget.GetWidth() - notice_width);
     const std::string hint = c.options.placeholder.value_or("");
-    ImGui::InputTextWithHint("##text", hint.c_str(), buf.data(), buf.size());
-    const bool done = ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::PushID(static_cast<int>(edit.epoch));
+    ImGui::BeginDisabled(!why.empty());
+    auto resize = [](ImGuiInputTextCallbackData* data) {
+        auto* text = static_cast<std::string*>(data->UserData);
+        text->resize(static_cast<std::size_t>(data->BufTextLen));
+        data->Buf = text->data();
+        return 0;
+    };
+    const bool enter = script
+        ? ImGui::InputTextWithHint("##text", hint.c_str(), buf.data(), buf.capacity() + 1,
+            ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackResize, resize, &buf)
+        : ImGui::InputTextWithHint("##text", hint.c_str(), buf.data(), buf.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+    if (script && buf.size() > limit && ImGui::IsItemHovered())
+        ImGui::SetTooltip("Text accepts at most %zu UTF-8 bytes. The value was not sent.", limit);
+    const bool done = enter || ImGui::IsItemDeactivatedAfterEdit();
     const bool editing = ImGui::IsItemActive();
+    ImGui::EndDisabled();
+    disabled_tooltip(why);
     bool changed = false;
-    if (done) changed = write(host, c, std::string(buf.c_str()), true);
-    if (!editing) edits.erase(key);   // shows the session's value again
+    if (done && why.empty()) {
+        const std::string value(buf.c_str());
+        if (script) {
+            if (value.size() <= limit && (value != now || !edit.refusal.empty()) && edit.submitted != value) {
+                const cb::Error error = host.run->set_param(target->name, value);
+                edit.refusal = error ? (error.message.empty() ? error.code : error.message) : std::string();
+                if (!error) {
+                    edit.submitted = value;
+                    changed = true;
+                    push_control_event(host, c, value);
+                }
+            }
+        } else changed = write(host, c, value, true);
+    }
+    ImGui::PopID();
+    if (!refusal.empty()) {
+        const auto shown = fit_row_text(refusal, notice_width - ImGui::GetStyle().ItemSpacing.x);
+        ImGui::GetWindowDrawList()->AddText(ImVec2(row.widget.Max.x - notice_width,
+            row.widget.Min.y + ImGui::GetStyle().FramePadding.y), ImGui::GetColorU32(ImGuiCol_Text), shown.c_str());
+        cut_text_tooltip(refusal, shown, ImRect(ImVec2(row.widget.Max.x - notice_width, row.widget.Min.y), row.widget.Max));
+    }
+    if (script) {
+        edit.retained = editing || buf.size() > limit || !edit.refusal.empty() || buf != now;
+        if (!edit.retained) edit.submitted.reset();
+    } else if (!editing) edits.erase(key);
     return changed;
 }
 

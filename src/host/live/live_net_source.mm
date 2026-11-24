@@ -356,12 +356,33 @@ public:
         return access_locked();
     }
 
+    bool supports_interpretation() override {
+        std::lock_guard<std::mutex> g(mu_);
+        return has_cap(session_caps_, CALIPER_NET_CAP_INTERPRETATION);
+    }
+
     uint32_t send_control(const std::string& op, const std::string& name, const Json& value, uint32_t count,
                           std::string* err) override {
         {
             std::lock_guard<std::mutex> g(mu_);
             const ControlAccess a = access_locked();
-            if (!a.allowed) {
+            const bool read = op == CALIPER_NET_OP_INTERPRET && value.find("method") &&
+                (value.find("method")->as_string().rfind("feature.", 0) == 0 ||
+                 value.find("method")->as_string() == "trace.read" || value.find("method")->as_string() == "trace.status");
+            if (op == CALIPER_NET_OP_INTERPRET && !has_cap(session_caps_, CALIPER_NET_CAP_INTERPRETATION)) {
+                if (err) *err = "The script did not announce interpretation.";
+                return 0;
+            }
+            if (op == CALIPER_NET_OP_SET && !has_cap(session_caps_, CALIPER_NET_CAP_TEXT_PARAMS)) {
+                const bool text_parameter = std::any_of(controls_.params.begin(), controls_.params.end(),
+                    [&](const ControlParam& p) { return p.name == name && p.type == CALIPER_NET_PARAM_TEXT; });
+                if (text_parameter || (value.is_string() &&
+                    (value.as_string().empty() || value.as_string().size() > CALIPER_NET_NAME_MAX))) {
+                    if (err) *err = "The script did not announce text_params.";
+                    return 0;
+                }
+            }
+            if ((!a.allowed && !read) || failed_ || !connected_ || !attached_ || ended_) {
                 if (err) *err = a.why;
                 return 0;
             }
@@ -375,6 +396,11 @@ public:
         if (op == CALIPER_NET_OP_SET) o.control.value = value;
         if (op == CALIPER_NET_OP_STEP && count > 0) o.control.count = count;
         if (op == CALIPER_NET_OP_INTERVENE) o.control.intervene = value;
+        if (op == CALIPER_NET_OP_INTERPRET) o.control.interpretation = value;
+        if (op == CALIPER_NET_OP_INTERPRET || op == CALIPER_NET_OP_SET) {
+            std::vector<uint8_t> bytes;
+            if (!wire::encode(o.control, &bytes, err)) return 0;
+        }
         const uint32_t id = o.control.request_id;
         if (!enqueue(std::move(o))) {
             if (err) *err = "too many controls wait to be sent";
@@ -754,7 +780,7 @@ private:
                         wire::Hello h;
                         h.role = CALIPER_NET_ROLE_VIEWER;
                         h.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_SCENES,
-                                          CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS,
+                                          CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS, CALIPER_NET_CAP_INTERPRETATION, CALIPER_NET_CAP_TEXT_PARAMS,
                                           CALIPER_NET_CAP_TIMELINES, CALIPER_NET_CAP_RESOURCES, CALIPER_NET_CAP_SCENE_PIECES};
                         Json sw = Json::object();
                         sw.set("name", "caliper-app");
@@ -834,6 +860,12 @@ private:
             connected_ = false;
             attached_ = false;
         }
+        ControlReply closed;
+        closed.op = CALIPER_NET_OP_INTERPRET;
+        closed.status = CALIPER_NET_STATUS_ERROR;
+        closed.error_code = CALIPER_NET_ERR_NOT_ATTACHED;
+        closed.error_message = "The run connection closed.";
+        push_reply(std::move(closed));
         if (stop_) return true;
         if (e.http_status == 403)
             return fail_final("the server refused the connection (HTTP 403): the session token is wrong, or it "
@@ -878,6 +910,21 @@ private:
             return;
         }
         if (r.status == wire::DecodeResult::Status::BadMessage) {
+            if (r.type == CALIPER_NET_MSG_CONTROL_REPLY) {
+                ControlReply reply;
+                const auto* op = r.frame.meta.find("op");
+                if (op && op->is_string()) reply.op = op->as_string();
+                const auto* id = r.frame.meta.find("request_id");
+                uint64_t request = 0;
+                const bool identified = id && id->get_u64(&request) && request <= UINT32_MAX;
+                if (identified) reply.request_id = uint32_t(request);
+                reply.status = CALIPER_NET_STATUS_ERROR;
+                reply.error_code = CALIPER_NET_ERR_BAD_REQUEST;
+                reply.error_message = "The producer sent an invalid control reply. Check its protocol version.";
+                if ((!identified && reply.op == CALIPER_NET_OP_INTERPRET) ||
+                    (identified && request != 0))
+                    push_reply(std::move(reply));
+            }
             wire::Error e;
             e.code = r.error_code;
             e.message = r.message;
@@ -1063,6 +1110,7 @@ private:
         out.status = r.status;
         out.name = r.name.value_or("");
         out.value = r.value;
+        out.result = r.result;
         out.message = r.message.value_or("");
         if (!r.error.is_null()) {
             out.error_code = str_or(r.error.find("code"), "");
@@ -1299,11 +1347,31 @@ private:
 
     void on_bye(const wire::Bye& b) {
         bye_reason_ = b.reason;
-        std::lock_guard<std::mutex> g(mu_);
-        if (b.reason == CALIPER_NET_BYE_SHUTDOWN || b.reason == CALIPER_NET_BYE_NORMAL) ended_ = true;
+        if (b.reason == CALIPER_NET_BYE_SHUTDOWN || b.reason == CALIPER_NET_BYE_NORMAL) {
+            {
+                std::lock_guard<std::mutex> g(mu_);
+                ended_ = true;
+            }
+            ControlReply closed;
+            closed.op = CALIPER_NET_OP_INTERPRET;
+            closed.status = CALIPER_NET_STATUS_ERROR;
+            closed.error_code = CALIPER_NET_ERR_NOT_ATTACHED;
+            closed.error_message = "The session has ended.";
+            push_reply(std::move(closed));
+        }
     }
 
     void on_error(const wire::Error& e) {
+        if (e.in_reply_to && *e.in_reply_to == CALIPER_NET_MSG_CONTROL && e.request_id &&
+            !e.sub && !e.view && !e.session) {
+            ControlReply r;
+            r.request_id = *e.request_id;
+            r.status = CALIPER_NET_STATUS_ERROR;
+            r.error_code = e.code;
+            r.error_message = e.message;
+            push_reply(std::move(r));
+            return;
+        }
         if (e.in_reply_to && *e.in_reply_to == CALIPER_NET_MSG_PROGRAM && e.request_id) {
             ProgramAnswer a;   // a refused PROGRAM: its program's error, not the stream's
             a.request_id = e.request_id;

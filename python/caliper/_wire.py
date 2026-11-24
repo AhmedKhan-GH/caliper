@@ -27,6 +27,18 @@ from typing import Any, ClassVar
 
 import numpy as np
 
+if __package__:
+    from . import _interpret_protocol
+else:
+    # Browser fixtures and codec clients load this file without the package.
+    import importlib.util as _import_util
+    from pathlib import Path as _Path
+
+    _protocol_spec = _import_util.spec_from_file_location(
+        f"{__name__}_interpret_protocol", _Path(__file__).with_name("_interpret_protocol.py"))
+    _interpret_protocol = _import_util.module_from_spec(_protocol_spec)
+    _protocol_spec.loader.exec_module(_interpret_protocol)
+
 __all__ = [
     "MAJOR", "MINOR", "MAGIC", "MsgType", "Kind", "DType", "Encoding", "WireError",
     "MessageError", "Section", "Frame", "encode_frame", "decode_frame", "canonical_json",
@@ -165,9 +177,15 @@ RUN_NONE, RUN_RUNNING, RUN_PAUSING, RUN_PAUSED, RUN_STEPPING = (
 RUN_STATES = (RUN_NONE, RUN_RUNNING, RUN_PAUSING, RUN_PAUSED, RUN_STEPPING)
 OP_PAUSE, OP_RESUME, OP_STEP, OP_SET, OP_RUN = "pause", "resume", "step", "set", "run"
 OP_INTERVENE = "intervene"                 # 3.2 draft, capability "interventions"
-OPS = (OP_PAUSE, OP_RESUME, OP_STEP, OP_SET, OP_RUN, OP_INTERVENE)
+OP_INTERPRET = "interpret"
+CAP_INTERPRETATION = "interpretation"
+CAP_TEXT_PARAMS = "text_params"
+PARAM_TEXT = "text"
+INTERPRET_MAX_BYTES = 262144
+INTERPRET_STRING_MAX = 4096
+OPS = (OP_PAUSE, OP_RESUME, OP_STEP, OP_SET, OP_RUN, OP_INTERVENE, OP_INTERPRET)
 PARAM_NUMBER, PARAM_INTEGER, PARAM_BOOLEAN, PARAM_CHOICE = "number", "integer", "boolean", "choice"
-PARAM_TYPES = (PARAM_NUMBER, PARAM_INTEGER, PARAM_BOOLEAN, PARAM_CHOICE)
+PARAM_TYPES = (PARAM_NUMBER, PARAM_INTEGER, PARAM_BOOLEAN, PARAM_CHOICE, PARAM_TEXT)
 STATUS_OK, STATUS_QUEUED, STATUS_ERROR = "ok", "queued", "error"
 STATUSES = (STATUS_OK, STATUS_QUEUED, STATUS_ERROR)
 
@@ -202,6 +220,7 @@ MAX_PARAMS = 64                            # 3.1
 MAX_ACTIONS = 64
 MAX_CHOICES = 64
 TEXT_MAX = 1024
+PARAM_TEXT_MAX = 4096
 CONTROL_RATE_HZ = 30
 ACTION_WAIT_MS = 600_000
 MAX_ITEM_SPACES = 16
@@ -1051,6 +1070,8 @@ def _fits_type(p: dict, v) -> bool:
         return _is_int(v) and abs(v) <= _INT_EXACT
     if t == PARAM_BOOLEAN:
         return _bool(v)
+    if t == PARAM_TEXT:
+        return _interpret_protocol.text(v, PARAM_TEXT_MAX)
     return isinstance(v, str) and v in p["choices"]
 
 
@@ -1142,7 +1163,7 @@ class Controls(_Msg):
 
 
 def _set_value(v) -> bool:
-    return _finite(v) or _bool(v) or _name(v)
+    return _finite(v) or _bool(v) or _interpret_protocol.text(v, PARAM_TEXT_MAX)
 
 
 @dataclass
@@ -1160,11 +1181,18 @@ class Control(_Msg):
     value: Any = None                            # set
     count: int | None = None                     # step: default 1
     intervene: dict | None = None                # intervene
+    interpretation: dict | None = None
 
     def to_meta(self):
+        if self.op == OP_SET and not _set_value(self.value):
+            _bad("invalid set value")
+        if self.op == OP_INTERPRET and not _interpret_protocol.request(self.interpretation):
+            _bad("invalid interpretation request")
+        if self.op != OP_INTERPRET and self.interpretation is not None:
+            _bad("interpretation requires op interpret")
         return _drop_none({"request_id": self.request_id, "op": self.op, "name": self.name,
                            "value": self.value, "count": self.count,
-                           "intervene": self.intervene})
+                           "intervene": self.intervene, "interpretation": self.interpretation})
 
     @classmethod
     def from_frame(cls, f):
@@ -1185,7 +1213,13 @@ class Control(_Msg):
             intervene = _req(m, "intervene", _intervene_request,
                              "exactly one of {set: {point, op, from_step, until_step}}, "
                              "{clear: point} and {clear_all: true}")
-        return cls(rid, op, name if op in (OP_SET, OP_RUN) else None, value, count, intervene)
+        interpretation = None
+        if op == OP_INTERPRET:
+            interpretation = _req(m, "interpretation", _interpret_protocol.request,
+                                  "a version 1 interpretation request")
+        elif "interpretation" in m:
+            _bad("interpretation requires op interpret")
+        return cls(rid, op, name if op in (OP_SET, OP_RUN) else None, value, count, intervene, interpretation)
 
 
 def _reply_error(v) -> bool:
@@ -1206,11 +1240,18 @@ class ControlReply(_Msg):
     value: Any = None
     message: str | None = None
     error: dict | None = None
+    result: dict | None = None
 
     def to_meta(self):
+        if self.value is not None and not _set_value(self.value):
+            _bad("invalid control reply value")
+        if self.result is not None and (self.op != OP_INTERPRET or self.status != STATUS_OK):
+            _bad("result requires a successful interpretation reply")
+        if self.op == OP_INTERPRET and self.status == STATUS_OK and not _interpret_protocol.bounded(self.result):
+            _bad("invalid interpretation result")
         return _drop_none({"request_id": self.request_id, "op": self.op, "status": self.status,
                            "name": self.name, "value": self.value, "message": self.message,
-                           "error": self.error})
+                           "error": self.error, "result": self.result})
 
     @classmethod
     def from_frame(cls, f):
@@ -1220,12 +1261,17 @@ class ControlReply(_Msg):
         err = _opt(m, "error", _reply_error, "{code, message}")
         if (err is None) == (status == STATUS_ERROR):
             _bad("a control_reply carries 'error' exactly when its status is 'error'")
-        if status == STATUS_QUEUED and op != OP_RUN:
+        if status == STATUS_QUEUED and op not in (OP_RUN, OP_INTERPRET):
             _bad("only 'run' is queued")
+        result = _opt(m, "result", _interpret_protocol.bounded, "bounded structured result")
+        if "result" in m and (op != OP_INTERPRET or status != STATUS_OK):
+            _bad("result requires a successful interpretation reply")
+        if op == OP_INTERPRET and status == STATUS_OK and result is None:
+            _bad("a successful interpretation reply requires result")
         return cls(_req(m, "request_id", _u32, "a uint32"), op, status,
                    _opt(m, "name", _name, "a parameter or action name"),
                    _opt(m, "value", _set_value, "a number, a boolean or a choice"),
-                   _opt(m, "message", _text, f"a string of at most {TEXT_MAX} bytes"), err)
+                   _opt(m, "message", _text, f"a string of at most {TEXT_MAX} bytes"), err, result)
 
 
 def _ascending(v) -> bool:
@@ -1291,11 +1337,11 @@ def param_value(param: dict, value):
     for a value of another type, a fraction for an integer, or an unknown
     choice."""
     t = param["type"]
-    if t == PARAM_BOOLEAN or t == PARAM_CHOICE:
+    if t in (PARAM_BOOLEAN, PARAM_CHOICE, PARAM_TEXT):
         if not _fits_type(param, value):
             raise MessageError(ERR_BAD_VALUE, f"{param['name']!r} takes "
                                + ("true or false" if t == PARAM_BOOLEAN else
-                                  f"one of {param['choices']}") + f", not {value!r}")
+                                  "UTF-8 text" if t == PARAM_TEXT else f"one of {param['choices']}") + f", not {value!r}")
         return value
     if t == PARAM_NUMBER:
         if not _finite(value):
