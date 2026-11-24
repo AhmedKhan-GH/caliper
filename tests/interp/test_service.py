@@ -308,3 +308,40 @@ def test_service_refuses_recursive_close_without_detachment():
     with pytest.raises(Refused, match="closed"):
         register_service(service, controls=controls)
     assert controls.interpretation_service is None
+
+
+@pytest.mark.parametrize("legacy_owner", [True, False])
+def test_default_tracer_uses_registered_owner(actual, monkeypatch, legacy_owner):
+    import torch
+    if legacy_owner:
+        monkeypatch.delattr(_controls.Controls, "intervention_service", raising=False)
+    owner, transport = _controls.Controls(), Transport()
+    monkeypatch.setattr(_controls, "CONTROLS", _controls.Controls())
+    route = owner.attach(transport)
+    watched = owner.interventions_on(actual.model)
+    register_service(actual, controls=owner)
+    params = {"prompt": "AB", "max_targets": 0}
+    try:
+        assert call(route, "trace.run", params)["status"] == "queued"
+        owner.step()
+        assert transport.replies[-1].status == "ok", transport.replies[-1].error
+        assert actual.tracer.controls is owner
+        baseline = actual.graph
+        logits = actual.tracer._forward_cache[1].logits.clone()
+        route.on_control(None, {"request_id": 2, "op": "intervene",
+            "intervene": {"set": {"point": "layers.0.mlp", "op": "ablate"}}})
+        owner.step()
+        assert call(route, "trace.run", params)["status"] == "queued"
+        owner.step()
+        assert transport.replies[-1].status == "ok", transport.replies[-1].error
+        assert actual.graph is not baseline
+        assert not torch.equal(actual.tracer._forward_cache[1].logits, logits)
+        route.on_control(None, {"request_id": 3, "op": "intervene", "intervene": {"clear_all": True}})
+        owner.step()
+        assert call(route, "trace.run", params)["status"] == "queued"
+        owner.step()
+        assert transport.replies[-1].status == "ok", transport.replies[-1].error
+        assert actual.graph is baseline
+    finally:
+        unregister_service(actual, controls=owner)
+        watched.remove()

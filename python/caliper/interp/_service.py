@@ -74,7 +74,8 @@ class InterpretationService:
                 if self.model is None or self.tokenizer is None:
                     raise Refused("interpret.missing_model", "A model and tokenizer are required.")
                 from . import Tracer
-                value = Tracer(self.model, self.tokenizer, self._resource("dictionary"))
+                value = Tracer(self.model, self.tokenizer, self._resource("dictionary"),
+                               controls=getattr(self, "controls", None))
             if value is None:
                 raise Refused("interpret.missing_" + name, "The run has no " + name + ".")
             setattr(self, name, value)
