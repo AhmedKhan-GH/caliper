@@ -89,7 +89,7 @@ def test_legacy_mixed_precision_threshold_index_requires_rebuild(tmp_path, monke
         build_index(tmp_path, [("first", [65, 66, 67, 68])], model=model, tokenizer=TinyTokenizer(),
                     dictionary=dictionary, provenance={"partition": "fixture"}, context_length=4)
     assert not np.load(tmp_path / "index" / "counts.npy").any()
-    rewrite_manifest(tmp_path, format_version=1, encoder_policy=None)
+    rewrite_manifest(tmp_path, format_version=1, encoder_policy=None, model_encoding=None)
     with pytest.raises(ValueError, match="legacy index encoder precision differs; rebuild"):
         FeatureIndex(tmp_path, model=model, tokenizer=TinyTokenizer(), dictionary=dictionary)
 
@@ -114,6 +114,65 @@ def test_legacy_uniform_precision_preserves_results(tmp_path):
     with FeatureIndex(tmp_path, model=model, tokenizer=TinyTokenizer(), dictionary=dictionary) as index:
         layer, feature = map(int, np.argwhere(index.counts > 0)[0])
         expected = index.examples(layer, feature)
-    rewrite_manifest(tmp_path, format_version=1, encoder_policy=None)
+    rewrite_manifest(tmp_path, format_version=1, encoder_policy=None, model_encoding=None)
     with FeatureIndex(tmp_path, model=model, tokenizer=TinyTokenizer(), dictionary=dictionary) as index:
         assert index.examples(layer, feature) == expected
+
+
+def test_verified_checkpoint_precision_change_refuses_stale_threshold_counts(tmp_path, monkeypatch):
+    from caliper.interp._dictionary import model_identity, verify_hf_model
+    from caliper.interp._frozen import _trace_features
+    from .test_gemma_runtime import gemma_model, local_gemma, runtime_dictionary
+    model = gemma_model()
+    with torch.no_grad():
+        model.model.embed_tokens.weight.fill_(1)
+        model.model.layers[0].self_attn.o_proj.weight.zero_()
+        norm = model.model.layers[0].pre_feedforward_layernorm
+        norm.weight.fill_((1 + 2**-12) * math.sqrt(16 + norm.eps) / 4 - 1)
+    snapshot = local_gemma(tmp_path, model)
+    verify_hf_model(model, snapshot)
+    dictionary = runtime_dictionary(model).half()
+    with torch.no_grad():
+        for layer in dictionary.layers:
+            layer.W_enc.zero_()
+            layer.W_enc[0, 0] = 1
+            layer.b_enc.zero_()
+            layer.threshold.fill_(1)
+    (tmp_path / "dictionary.json").write_text(json.dumps(dictionary.metadata))
+    for i, layer in enumerate(dictionary.layers):
+        save_file(layer.state_dict(), tmp_path / f"layer_{i:02d}.safetensors")
+    tokens, point = [3, 4, 5, 6], "model.layers.0.mlp_in"
+    with torch.no_grad(), capture(model, [point]) as saved:
+        model(torch.tensor([tokens]), use_cache=False)
+    assert saved[point][..., 0].gt(1).all()
+    build_index(tmp_path, [("first", tokens)], model=model, tokenizer=TinyTokenizer(),
+                dictionary=dictionary, provenance={"partition": "fixture"})
+    assert np.load(tmp_path / "index" / "counts.npy")[0, 0] == 4
+    half = gemma_model().half()
+    half.load_state_dict(model.state_dict())
+    verify_hf_model(half, snapshot)
+    assert model_identity(half) == model_identity(model)
+    with torch.no_grad(), capture(half, [point]) as saved:
+        half(torch.tensor([tokens]), use_cache=False)
+    assert saved[point][..., 0].eq(1).all()
+    assert not _trace_features(dictionary.layers[0], saved[point])[..., 0].any()
+    monkeypatch.setattr(np, "load", lambda *a, **kw: pytest.fail("stale index maps opened"))
+    with pytest.raises(ValueError, match="index model encoding differs; rebuild"):
+        FeatureIndex(tmp_path, model=half, tokenizer=TinyTokenizer(), dictionary=dictionary)
+
+
+@pytest.mark.parametrize("change", ["missing", "matmul", "autocast"])
+def test_index_requires_matching_execution_evidence(tmp_path, monkeypatch, change):
+    from contextlib import nullcontext
+    model, dictionary, _ = precision_fixture(tmp_path, "topk")
+    build_index(tmp_path, [("first", [65])], model=model, tokenizer=TinyTokenizer(),
+                dictionary=dictionary, provenance={"partition": "fixture"})
+    if change == "missing":
+        rewrite_manifest(tmp_path, model_encoding=None)
+    elif change == "matmul":
+        original = torch.get_float32_matmul_precision()
+        monkeypatch.setattr(torch, "get_float32_matmul_precision", lambda: "high" if original != "high" else "highest")
+    monkeypatch.setattr(np, "load", lambda *a, **kw: pytest.fail("stale index maps opened"))
+    context = torch.autocast("cpu", dtype=torch.bfloat16) if change == "autocast" else nullcontext()
+    with context, pytest.raises(ValueError, match="index model encoding differs; rebuild"):
+        FeatureIndex(tmp_path, model=model, tokenizer=TinyTokenizer(), dictionary=dictionary)

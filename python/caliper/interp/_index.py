@@ -34,18 +34,35 @@ def _json(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
-def _encoding_policy(manifest, model, dictionary):
+def _model_encoding(model, memory):
+    from ._evaluation_identity import _evaluation_settings, _settings_digest
+    device = next(model.parameters()).device.type
+    autocast = torch.is_autocast_enabled(device)
+    tensors = [("parameter:" + name, value) for name, value in model.named_parameters()]
+    tensors.extend(("buffer:" + name, value) for name, value in model.named_buffers())
+    return {"version": 1, "autocast_dtype": str(torch.get_autocast_dtype(device)) if autocast else None,
+            "float32_matmul_precision": torch.get_float32_matmul_precision(),
+            "tensors": [[name, str(value.dtype), str(_canonical_device(value.device))] for name, value in tensors],
+            "forward_settings_hash": _settings_digest(model, _evaluation_settings(model, memory)),
+            "attention_backends": [[name, module.config._attn_implementation]
+                                   for name, module in model.named_modules()
+                                   if hasattr(getattr(module, "config", None), "_attn_implementation")]}
+
+
+def _encoding_policy(manifest, model, dictionary, memory):
     version = manifest["format_version"]
     if type(version) is not int or version not in (1, INDEX_VERSION):
         raise ValueError("incomplete or unsupported index")
     if version == INDEX_VERSION:
         if manifest.get("encoder_policy") != ENCODER_POLICY:
             raise ValueError("unsupported index encoder policy; rebuild the index")
+        if manifest.get("model_encoding") != _model_encoding(model, memory):
+            raise ValueError("index model encoding differs; rebuild the index")
         return
     # Version 1 cast captured inputs to encoder storage precision. The two
     # policies agree only when the admitted model and encoder use one dtype.
     dtypes = {value.dtype for value in model.state_dict().values() if value.is_floating_point()}
-    if ("encoder_policy" in manifest or len(dtypes) != 1 or
+    if ("encoder_policy" in manifest or "model_encoding" in manifest or len(dtypes) != 1 or
             any(value.dtype not in dtypes for layer in dictionary.layers
                 for value in (layer.W_enc, layer.b_enc))):
         raise ValueError("legacy index encoder precision differs; rebuild the index")
@@ -245,6 +262,7 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
     source_hash = _source_hash(root, data["layers"])
     vocab = model.get_output_embeddings().weight.shape[0]
     tokenizer_hash = _tokenizer_hash(tokenizer, vocab)
+    model_encoding = _model_encoding(model, memory)
     folder = root / "index"
     folder.mkdir()  # An incomplete prior build also requires explicit removal by its owner.
     table = _TopTable(folder, data["layers"], data["latents"])
@@ -290,8 +308,11 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
                 break
         table.flush()
     check("table")
+    if _model_encoding(model, memory) != model_encoding:
+        raise ValueError("model encoding changed during index construction")
     manifest = {
         "format_version": INDEX_VERSION, "encoder_policy": ENCODER_POLICY,
+        "model_encoding": model_encoding,
         "complete": True, "top_examples": TOP_EXAMPLES,
         "window_tokens": WINDOW_TOKENS, "model_hash": data["model_hash"],
         "dictionary_hash": identity, "dictionary_source_hash": source_hash,
@@ -346,7 +367,7 @@ class FeatureIndex:
             if claimed != hashlib.sha256(_json(manifest).encode()).hexdigest():
                 raise ValueError("index hash mismatch")
             manifest["index_hash"] = claimed
-            _encoding_policy(manifest, model, self.dictionary)
+            _encoding_policy(manifest, model, self.dictionary, self.memory)
             if (manifest["complete"] is not True or
                     manifest["top_examples"] != TOP_EXAMPLES or manifest["window_tokens"] != WINDOW_TOKENS):
                 raise ValueError("incomplete or unsupported index")
