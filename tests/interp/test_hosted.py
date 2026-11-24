@@ -756,7 +756,7 @@ def test_hosted_resource_stop_blocks_patch_installation_and_replay(hosted_run, m
     spec = {"kind": "patch", "point": "layers.1.resid_pre", "source_prompt": "AC"}
     try:
         run.interventions.set(spec)
-        with pytest.warns(RuntimeWarning, match="fixture hosted stop"):
+        with pytest.raises(CleanStop, match="fixture hosted stop"):
             run._apply()
         assert not calls
         assert run.interventions.state_dict()["interventions"][0]["state"] == "ended"

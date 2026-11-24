@@ -21,7 +21,7 @@ publish path of ``caliper.scene`` and each pixels output to ``caliper.show`` as 
 ``caliper.show`` as the same live view, in the declared shape, and :func:`set_params` gives new
 values to the uniform ``params`` of a program, which its next pass reads without a compile. A
 program of a built-in operator reports the kind ``operator``. A refused or stopped program is an
-error of its panel, never of the script: no function here raises for it.
+error of its panel. Installation raises only when output admission has no free slot.
 
 PIECES. :func:`install_piece` installs an instance of a piece (``design/programmable-graphics.md``):
 its derive half runs several compute passes in their order in one submit at a pass of the same
@@ -110,6 +110,11 @@ TENSOR_AXES_MAX, TENSOR_ELEMENTS_MAX = 4, 1000000
 _ARRAYS = ("positions", "colors", "values", "radii")
 
 _LOCK = threading.RLock()
+_OUTPUT_EVENTS = deque()  # callbacks in program state order, protected by _LOCK
+_OUTPUT_DRAINING = False
+_OUTPUT_PENDING_MAX = 16  # the wire's MAX_PROGRAMS
+_OUTPUT_CONTROL_MAX = 16  # installed programs plus pending removals reserve control slots
+_OUTPUT_BYTES_MAX = 64 << 20  # the default program memory budget
 _PROGS: dict = {}       # id -> _Program, in the order of installation
 _DRAWN: dict = {}       # id -> _Program of a piece without a derive half, only relayed
 _IMPORTS: dict = {}     # input name -> its newest _Import
@@ -321,7 +326,7 @@ class _Program:
                  "last_pass_ms", "memory_bytes", "warm", "every", "t0", "bound", "pass_times",
                  "params", "builtin", "shape", "piece", "manifest", "bind", "panel", "segments",
                  "common", "draw", "types", "resources", "passes", "param_types", "written",
-                 "sent_static", "static_frames", "relayed", "skipped", "behind")
+                 "sent_static", "static_frames", "relayed", "skipped", "behind", "output_retry")
 
     def __init__(self, pid, decl, wgsl, scene, sha256):
         self.id = pid
@@ -366,6 +371,7 @@ class _Program:
         self.relayed = _LinkSet()  # the viewers that got the draw half
         self.skipped = 0        # passes whose RESOURCE frames a viewer behind did not get
         self.behind = _LinkSet()  # the viewers whose last pass of it was skipped
+        self.output_retry = False  # a discarded pass must resend its static resources
 
     def passes_per_s(self):
         """The passes a second on the run's wall clock over the last ``RATE_PASSES`` passes, or
@@ -403,18 +409,34 @@ class _Waiting(Exception):
     a module's output before its first forward pass."""
 
 
+class _OutputRemoval:
+    """An output address without tensors, resource frames, or a retired program reference."""
+    __slots__ = ("id", "kind", "runs", "scene", "output")
+
+    def __init__(self, p):
+        self.id, self.kind, self.runs, self.scene = p.id, p.kind, p.runs, p.scene
+        self.output = {"entity": p.output.get("entity")}
+
+    def target(self):
+        if self.kind == "piece":
+            return "piece", self.id
+        if self.kind in ("tensor", "pixels"):
+            return "view", self.id
+        return "scene", self.scene, _entity(self)
+
+
 # ---- the watched model --------------------------------------------------------------------------
 def attach(model, optimizer, handle=None) -> None:
     """Give the facade the model and the optimizer of ``caliper.watch(model, optimizer)``.
 
     Loads no native module. With ``handle`` (a WatchHandle), its ``remove()`` detaches again.
     """
-    removed, conflict = [], None
+    conflict = None
     with _LOCK:
         from .interp import _publish
         # A watch replacement must not expose tensors from the previous model.
         if _STATE["model"] is not None and _STATE["model"] is not model:
-            removed = _detach_locked()
+            _detach_locked()
         for name in _publish._TENSORS:
             if _publish._model_name(model, name):
                 conflict = name
@@ -424,8 +446,7 @@ def attach(model, optimizer, handle=None) -> None:
             _STATE["optimizer"] = optimizer
             if handle is not None and hasattr(handle, "_handles"):
                 handle._handles.append(_Detach(model))
-    for program in removed:
-        _remove_output(program)
+    _drain_outputs()
     if conflict is not None:
         if handle is not None:
             handle.remove()
@@ -447,14 +468,14 @@ def detach(model=None) -> None:
     with _LOCK:
         if model is not None and _STATE["model"] is not model:
             return
-        removed = _detach_locked()
-    for program in removed:
-        _remove_output(program)
+        _detach_locked()
+    _drain_outputs()
 
 
 def _detach_locked():
     """Remove watch-owned state under _LOCK and defer external output callbacks."""
-    removed = [_remove(pid) for pid in list(_PROGS) + list(_DRAWN)]
+    for pid in list(_PROGS) + list(_DRAWN):
+        _remove(pid, clear_output=True)
     _drop_act_hooks()
     from .interp import _publish
     from .interp._points import clear_captures
@@ -465,7 +486,6 @@ def _detach_locked():
     _release_unused()
     _STATE["model"] = None
     _STATE["optimizer"] = None
-    return removed
 
 
 def _drop_act_hooks() -> None:
@@ -726,6 +746,45 @@ def _warn_once(key, text) -> None:
         warnings.warn(text, RuntimeWarning, stacklevel=3)
 
 
+def _drain_outputs(first=None) -> None:
+    """Run ordered output callbacks without _LOCK. Concurrent callers leave work for this drain."""
+    global _OUTPUT_DRAINING
+    if first is None:
+        with _LOCK:
+            if _OUTPUT_DRAINING:
+                return
+            _OUTPUT_DRAINING = True
+    try:
+        while True:
+            if first is None:
+                with _LOCK:
+                    if not _OUTPUT_EVENTS:
+                        _OUTPUT_DRAINING = False
+                        return
+                    first = _OUTPUT_EVENTS.popleft()
+            callback, args = first
+            first = None
+            try:
+                callback(*args)
+            except Exception as e:
+                _warn_once(("output", args[0].id),
+                           f"caliper: an output callback for {args[0].id} failed: {e!r}")
+    except BaseException:
+        with _LOCK:
+            _OUTPUT_DRAINING = False
+        raise
+
+
+def _check_output_capacity(program_id) -> None:
+    """Reserve cleanup capacity before installation under _LOCK. Replacement reuses its slot."""
+    if str(program_id) in _PROGS or str(program_id) in _DRAWN:
+        return
+    removals = sum(isinstance(args[0], _OutputRemoval) for _, args in _OUTPUT_EVENTS)
+    if len(_PROGS) + len(_DRAWN) + removals >= _OUTPUT_CONTROL_MAX:
+        raise RuntimeError("program.over_limits: installed programs and pending output removals "
+                           f"occupy all {_OUTPUT_CONTROL_MAX} slots; retry after removal completes")
+
+
 # ---- the facade ---------------------------------------------------------------------------------
 def install(program_id: str, declaration: dict, wgsl: str, *, scene: str | None = None,
             sha256: str = "") -> dict:
@@ -743,10 +802,14 @@ def install(program_id: str, declaration: dict, wgsl: str, *, scene: str | None 
         dict: The program's status item (the keys of ``program_status`` without ``host``), with
         the state ``compiled`` or ``refused`` and, for a refusal, the ``error``. The state is
         ``waiting`` while an input is a gradient or a module output that does not exist yet.
+
+    Raises:
+        RuntimeError: Installed programs and pending output removals occupy all 16 admission slots.
     """
-    _remove(program_id)
     _prepare(str(wgsl), (declaration or {}).get("entry"))
     with _LOCK:
+        _check_output_capacity(program_id)
+        _remove(program_id)
         if _ABANDONED:
             _reap()
         if not ACTIVE:
@@ -814,11 +877,14 @@ def set_params(program_id: str, params: dict) -> None:
         _notify([item])
 
 
-def _remove(program_id: str):
+def _remove(program_id: str, *, clear_output=False):
     with _LOCK:
         p = _PROGS.pop(str(program_id), None)
         if p is None:
-            return _DRAWN.pop(str(program_id), None)
+            p = _DRAWN.pop(str(program_id), None)
+            if p is not None:
+                _retire_output(p, clear_output)
+            return p
         rt = _STATE["rt"]
         if rt is not None and p.handle is not None:
             rt.remove(p.handle)
@@ -828,18 +894,36 @@ def _remove(program_id: str):
         _set_active()
         if not _PROGS:
             _drop_act_hooks()
+        _retire_output(p, clear_output)
     return p
+
+
+def _retire_output(p, clear_output) -> None:
+    """Drop queued instance data under _LOCK and retain only the necessary removal address."""
+    kept = [event for event in _OUTPUT_EVENTS if event[1][0] is not p]
+    _OUTPUT_EVENTS.clear()
+    _OUTPUT_EVENTS.extend(kept)
+    if p.kind == "piece":
+        _drop_outbox(p)
+    if clear_output and (p.kind == "piece" or p.runs):
+        removal = _OutputRemoval(p)
+        kept = [event for event in _OUTPUT_EVENTS
+                if not (isinstance(event[1][0], _OutputRemoval)
+                        and event[1][0].target() == removal.target())]
+        _OUTPUT_EVENTS.clear()
+        _OUTPUT_EVENTS.extend(kept)
+        _OUTPUT_EVENTS.append((_remove_output, (removal,)))
 
 
 def remove(program_id: str) -> None:
     """Stop and remove a program, and clear its output; an unknown id does nothing."""
-    _remove_output(_remove(program_id))
+    _remove(program_id, clear_output=True)
+    _drain_outputs()
 
 
 def _remove_output(p) -> None:
     """Clear an old output outside _LOCK because its listeners can call other services."""
     if p is not None and p.kind == "piece":
-        _drop_outbox(p)
         _relay_removal(p)
         return
     if p is None or p.runs == 0:
@@ -1315,6 +1399,58 @@ def _publish_pass(published: list) -> None:
 
 
 def _publish(p: _Program, outs: dict) -> None:
+    """Order this pass with removal before its output callbacks run outside _LOCK."""
+    global _OUTPUT_DRAINING
+    first = None
+    with _LOCK:
+        if _PROGS.get(p.id) is not p:
+            return
+        pending = [event for event in _OUTPUT_EVENTS if event[0] is _publish_output]
+        for event in pending:
+            if event[1][0] is p:
+                _OUTPUT_EVENTS.remove(event)
+                p.output_retry = True
+        deferred = _OUTPUT_DRAINING or bool(_OUTPUT_EVENTS)
+        if p.kind == "piece" and (p.output_retry or deferred):
+            # A coalesced pass can contain the first version of a static resource.
+            statics = [frame for frames in p.static_frames.values() for frame in frames]
+            identities = {id(frame) for frame in statics}
+            outs = statics + [frame for frame in outs if id(frame) not in identities]
+        if deferred:
+            size = _output_bytes(outs)
+            if size > _OUTPUT_BYTES_MAX:
+                p.output_retry = True
+                p.skipped += 1
+                return
+            pending = [event for event in _OUTPUT_EVENTS if event[0] is _publish_output]
+            total = sum(_output_bytes(event[1][1]) for event in pending)
+            while pending and (len(pending) >= _OUTPUT_PENDING_MAX or total + size > _OUTPUT_BYTES_MAX):
+                event = pending.pop(0)
+                _OUTPUT_EVENTS.remove(event)
+                total -= _output_bytes(event[1][1])
+                event[1][0].output_retry = True
+                event[1][0].skipped += 1
+        p.output_retry = False
+        event = (_publish_output, (p, outs))
+        if deferred:
+            _OUTPUT_EVENTS.append(event)
+        else:
+            # Reserve the sole active callback before another thread can enqueue a pass.
+            _OUTPUT_DRAINING = True
+            first = event
+    _drain_outputs(first)
+
+
+def _output_bytes(outs) -> int:
+    """Count retained storage without a device transfer. Shared tensor storage counts once."""
+    if isinstance(outs, list):
+        return sum(_size(frame) for frame in outs)
+    storages = {value.untyped_storage().data_ptr(): value.untyped_storage().nbytes()
+                for value in outs.values() if hasattr(value, "untyped_storage")}
+    return sum(storages.values())
+
+
+def _publish_output(p: _Program, outs: dict) -> None:
     """Give the outputs to the publish path of caliper.scene or caliper.show; a piece's
     resources go to the viewers that announced ``resources``."""
     if p.kind == "piece":
@@ -1445,9 +1581,13 @@ def install_piece(program_id: str, *, piece: dict, manifest: dict, bind: dict | 
 
     Returns:
         dict: The program's status item, as :func:`install` returns it, with the kind ``piece``.
+
+    Raises:
+        RuntimeError: Installed programs and pending output removals occupy all 16 admission slots.
     """
-    _remove(program_id)
     with _LOCK:
+        _check_output_capacity(program_id)
+        _remove(program_id)
         if _ABANDONED:
             _reap()
         if not ACTIVE:
@@ -1479,8 +1619,9 @@ def install_piece(program_id: str, *, piece: dict, manifest: dict, bind: dict | 
             p.error = r.error
         _set_active()
         item = p.item()
-    if p.state != "refused":
-        _relay(p)
+        if p.state != "refused":
+            _OUTPUT_EVENTS.append((_relay, (p,)))
+    _drain_outputs()
     _notify([item])
     return item
 
