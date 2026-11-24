@@ -475,6 +475,7 @@ class ManagedRun:
 
     def _intervene(self) -> None:
         """Restore saved effects after resource binding and before the first script forward."""
+        from .interp._intervene import InterventionError
         from .interp._output import internal_forward
         if self._first is None or self._intervening:
             return
@@ -485,7 +486,10 @@ class ManagedRun:
                     service = self._pkg._CTL.intervention_service
                     if service is None:
                         raise RuntimeError("the fork has no intervention service for its saved state")
-                    service.load_state_dict(self._restored_interventions, restore_active=True)
+                    try:
+                        service.load_state_dict(self._restored_interventions, restore_active=True)
+                    except InterventionError as error:
+                        raise RuntimeError(f"the fork's saved interventions cannot restore: {error}") from error
                 if self.interventions:
                     self._apply_fork_overrides()
             self._restored_interventions = NONE
@@ -505,6 +509,7 @@ class ManagedRun:
         from .interp._intervene import InterventionError
         service = self._pkg._CTL.intervention_service
         error = None
+        cause = None
         if service is None:
             error = "the script watches no model with caliper.watch(model, optimizer)"
         else:
@@ -512,9 +517,10 @@ class ManagedRun:
                 service.apply_overrides(self.interventions)
             except InterventionError as exc:
                 error = str(exc)
+                cause = exc
         if error is not None:
             print(f"caliper: run {self.id} cannot apply its interventions: {error}", flush=True)
-            raise RuntimeError(f"the fork's interventions cannot apply: {error}")
+            raise RuntimeError(f"the fork's interventions cannot apply: {error}") from cause
         print(f"caliper: run {self.id} applies "
               + ", ".join(f"{iv.get('kind', iv.get('op'))} {iv.get('point')}" for iv in self.interventions)
               + " from its first step", flush=True)

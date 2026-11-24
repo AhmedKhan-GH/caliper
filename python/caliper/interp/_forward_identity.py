@@ -59,6 +59,8 @@ def _activation_callable(function, owner=None):
                 for key, value in function.keywords.items())):
             raise ValueError("unsupported effective activation callable options")
         return {"function": name, "keywords": dict(function.keywords)}
+    if owner is None or type(owner).__module__ != "transformers.activations":
+        raise ValueError("unsupported effective activation callable")
     from transformers.activations import GELUActivation, GELUTanh, MishActivation
 
     for cls, name in ((GELUTanh, "_gelu_tanh_python"), (GELUActivation, "_gelu_python"),
@@ -73,13 +75,15 @@ def _activation_settings(function, prefix, record):
     if not isinstance(function, torch.nn.Module):
         record(prefix, _activation_callable(function))
         return
-    from transformers import activations
-
     # Known activation modules use public scalar options or a supported `act`.
     # The stateful kernel module requires a separate implementation contract.
-    supported = {value[0] if isinstance(value, tuple) else value
-                 for key, value in activations.ACT2CLS.items() if key != "xielu"}
-    supported.update((torch.nn.GELU, torch.nn.Identity))
+    supported = {torch.nn.GELU, torch.nn.Identity, torch.nn.Hardswish, torch.nn.LeakyReLU,
+                 torch.nn.ReLU, torch.nn.ReLU6, torch.nn.Sigmoid, torch.nn.SiLU,
+                 torch.nn.Tanh, torch.nn.PReLU}
+    if type(function).__module__ == "transformers.activations":
+        from transformers import activations
+        supported.update(value[0] if isinstance(value, tuple) else value
+                         for key, value in activations.ACT2CLS.items() if key != "xielu")
     if type(function) not in supported:
         raise ValueError("unsupported effective activation module")
     if any(key in vars(function) for key in ("forward", "_call_impl", "_compiled_call_impl")):

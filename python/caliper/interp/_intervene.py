@@ -642,8 +642,8 @@ class InterventionService:
         # no version counter, but their materialized bytes obey the same contract.
         state = {"parameter:" + name: value for name, value in self.model.named_parameters()}
         state.update({"buffer:" + name: value for name, value in self.model.named_buffers()})
-        content = _content_identity(state, self.resource_guard)
         settings = source_settings(self.model, tensor_hash=lambda values: _content_identity(values, self.resource_guard))
+        content = _content_identity(state, self.resource_guard)
         return (id(self.model), id(self.tokenizer),
                 tuple((id(m), m.training) for m in self.model.modules()),
                 tuple((name, id(value), value.device) for name, value in state.items()), content,
@@ -729,6 +729,16 @@ class InterventionService:
                 values.close(clear=True)
 
     def _source(self, spec):
+        """Report source admission failures through the intervention protocol."""
+        try:
+            return self._prepare_source(spec)
+        except InterventionError:
+            raise
+        except (TypeError, ValueError) as error:
+            raise InterventionError("patch source refused: " + str(error)[:256],
+                                    "intervene.not_supported") from error
+
+    def _prepare_source(self, spec):
         identity = self._identity()
         if self._cache_identity is None or identity != self._cache_identity[0]:
             self.invalidate_cache()
