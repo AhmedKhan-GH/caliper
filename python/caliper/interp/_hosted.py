@@ -425,7 +425,8 @@ class HostedInference:
         self.handle = caliper.watch(self.model, activations=False)
         try:
             self.interventions = self.controls.intervention_service
-            self.interventions.configure(dictionary=self.dictionary, tokenizer=self.tokenizer)
+            self.interventions.configure(dictionary=self.dictionary, tokenizer=self.tokenizer,
+                                         resource_guard=self.guard)
             self.output = Output(self.model, self.tokenizer, self.interventions, guard=self.guard)
             def param(name, value, **kwargs):
                 result = caliper.param(name, value, **kwargs)

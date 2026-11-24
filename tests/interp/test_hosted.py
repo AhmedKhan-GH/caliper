@@ -532,7 +532,7 @@ def test_resource_stop_remains_latched_after_a_caught_action_error():
 
 
 @pytest.fixture
-def hosted_run(tmp_path, monkeypatch):
+def hosted_run(tmp_path, monkeypatch, request):
     import caliper
     from caliper import _net
     from caliper.interp import load_dictionary
@@ -561,7 +561,8 @@ def hosted_run(tmp_path, monkeypatch):
     managed = _managed.ManagedRun("controls", str(run_folder), str(run_folder / "link"))
     monkeypatch.setattr(_managed, "current", lambda: managed)
     monkeypatch.setattr(_managed, "watch_parent", lambda: None)
-    run = HostedInference("tiny-lm", folder, "AB", resources=(model, tokenizer, dictionary, index, None))
+    guard = SimpleNamespace(check=lambda *args, **kwargs: None) if getattr(request, "param", False) else None
+    run = HostedInference("tiny-lm", folder, "AB", resources=(model, tokenizer, dictionary, index, guard))
     transport = Transport()
     route = controls.attach(transport)
     try:
@@ -711,3 +712,29 @@ def test_reset_with_retrace_has_one_public_boundary(hosted_run, monkeypatch):
     assert calls == [before + 1]
     assert not run.interventions.specifications()
     assert not run.service.running and not run.service.boundary_running
+
+
+@pytest.mark.parametrize("hosted_run", [True], indirect=True)
+def test_hosted_resource_stop_blocks_patch_installation_and_replay(hosted_run, monkeypatch):
+    from caliper.interp._memory import CleanStop
+    run, _ = hosted_run
+    def stop(*args, **kwargs):
+        raise CleanStop("fixture hosted stop")
+    monkeypatch.setattr(run.guard.guard, "check", stop)
+    with pytest.raises(CleanStop, match="fixture hosted stop"):
+        run.guard.check("test stop")
+    calls = []
+    hook = run.model.register_forward_pre_hook(lambda *args: calls.append(1))
+    spec = {"kind": "patch", "point": "layers.1.resid_pre", "source_prompt": "AC"}
+    try:
+        run.interventions.set(spec)
+        with pytest.warns(RuntimeWarning, match="fixture hosted stop"):
+            run._apply()
+        assert not calls
+        assert run.interventions.state_dict()["interventions"][0]["state"] == "ended"
+        with pytest.raises(CleanStop, match="fixture hosted stop"):
+            with run.interventions.temporary_state([spec]):
+                pytest.fail("a stopped patch replay entered its body")
+        assert not calls
+    finally:
+        hook.remove()
