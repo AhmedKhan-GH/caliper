@@ -95,11 +95,11 @@ def test_evaluation_resume_keeps_pending_partition_batch(tmp_path, monkeypatch):
 def test_evaluator_refuses_unbounded_work_before_model_load(tmp_path, monkeypatch, arguments):
     monkeypatch.setattr(evaluation, "load_text_model", lambda **_: pytest.fail("model load ran"))
     with pytest.raises(ValueError):
-        evaluation.main(["--dictionary", str(tmp_path), *arguments])
+        evaluation.main(["--dictionary", str(tmp_path), "--device", "cpu", *arguments])
 
 
 @pytest.mark.parametrize("stop_at", ["before_batch", "pending_batch", "one_token", "restore"])
-def test_early_all_layer_stop_replaces_prior_passed_quality(tmp_path, monkeypatch, capsys, stop_at):
+def test_stop_after_artifact_admission_records_partial_quality(tmp_path, monkeypatch, capsys, stop_at):
     from caliper._interpret_protocol import bounded
     from tools.interp.checkpoint_state import dictionary_fingerprint, write_json
     from tools.interp.text_stream import TokenBatch

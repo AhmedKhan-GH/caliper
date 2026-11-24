@@ -146,14 +146,20 @@ Every lower block precedes every active block, which preserves the intended erro
 The evaluator restores every replaced module after success or an exception.
 
 A complete evaluation reports `fallback_passed` or `fallback_failed`.
-A shorter or interrupted evaluation reports `fallback_partial`, including an interruption before the first batch.
+After artifact admission, a shorter or interrupted evaluation reports `fallback_partial`, including an interruption before the first batch.
 A fallback never receives the original `passed` status.
 Its acceptance scope remains `upper_half`, separate from full MLP acceptance.
 
-Evaluation resume binds the dictionary fingerprint, active layer indices, scope, and evaluation dimensions.
+Evaluation admission compares each runtime tensor with bounded artifact slices after conversion to the runtime dtype.
+Resume binds the tensor digest, dictionary fingerprint, active layer indices, scope, and evaluation dimensions.
+A legacy cursor without the tensor digest cannot resume. The public dictionary fingerprint format remains unchanged.
+The caller must keep exclusive ownership of the dictionary throughout evaluation.
+
+A stop before artifact admission preserves the prior quality report and cursor. Stream creation alone does not admit evaluation.
+After admission, an all-layer evaluation that stops before two tokens records `partial`, null metrics, and the current dictionary fingerprint.
+Both scopes emit `quality_end` and replace an earlier report only when final artifact verification succeeds.
+If memory admission prevents final verification, the evaluator preserves the last published evidence.
 All-layer thresholds remain unchanged for dictionaries without fallback metadata.
-An all-layer evaluation that stops before two tokens records `partial`, null metrics, and the current dictionary fingerprint.
-Both scopes emit `quality_end` for this incomplete result and replace any earlier passed report.
 
 ## Graph Coverage
 
