@@ -544,8 +544,13 @@ class Tracer:
                 path = self._forward_cache[1]
             else:
                 self._forward_cache = None
+                def check_forward(stage):
+                    check(stage)
+                    # A failed live hook invalidates the recording before frozen arithmetic.
+                    if stage == "record complete" and self._intervention_state() != identity["interventions"]:
+                        raise RuntimeError("intervention state changed during the trace forward")
                 path = FrozenPath(self.model, ids.to(self.guard.device), self.dictionary,
-                                  guard=self.guard, interventions=specifications, check=check)
+                                  guard=self.guard, interventions=specifications, check=check_forward)
                 self._validate_forward_settings(check)
                 if self._intervention_state() != identity["interventions"]:
                     raise RuntimeError("intervention state changed during the trace forward")

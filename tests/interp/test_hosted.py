@@ -773,11 +773,13 @@ def test_hosted_resource_stop_blocks_patch_installation_and_replay(hosted_run, m
     hook = run.model.register_forward_pre_hook(lambda *args: calls.append(1))
     spec = {"kind": "patch", "point": "layers.1.resid_pre", "source_prompt": "AC"}
     try:
-        run.interventions.set(spec)
-        with pytest.raises(CleanStop, match="fixture hosted stop"):
-            run._apply()
-        assert not calls
-        assert run.interventions.state_dict()["interventions"][0]["state"] == "ended"
+        from caliper.interp._intervene import InterventionError
+        before = run.interventions.state_dict()
+        with pytest.raises(InterventionError) as refused:
+            run.interventions.set(spec)
+        assert refused.value.code == "interpret.stopped"
+        assert not calls and run.interventions.state_dict() == before
+        assert not run.interventions.specifications()
         with pytest.raises(CleanStop, match="fixture hosted stop"):
             with run.interventions.temporary_state([spec]):
                 pytest.fail("a stopped patch replay entered its body")
