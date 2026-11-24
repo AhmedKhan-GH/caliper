@@ -49,7 +49,13 @@ def setup(*, jump=False, dtype=torch.float32, softcap=.15):
     model.config._commit_hash = "b" * 40
     dictionary = random_dictionary(model, latents=19, k=4)
     if jump:
-        dictionary.layers = nn.ModuleList(JumpLayer(layer) for layer in dictionary.layers)
+        from caliper.interp import _dictionary
+        jump_class = getattr(_dictionary, "JumpReLUTranscoder", None)
+        layers = [JumpLayer(layer) for layer in dictionary.layers]
+        if jump_class is not None:
+            layers = [jump_class(**{name: getattr(layer, name) for name in
+                                  ("W_enc", "W_dec", "b_enc", "b_dec", "threshold")}) for layer in layers]
+        dictionary.layers = nn.ModuleList(layers)
         dictionary.metadata.update(activation="jumprelu", k=None)
     dictionary.to(dtype=dtype)
     return model, dictionary, torch.tensor([[1, 2, 3, 4, 5]])
@@ -199,16 +205,16 @@ def test_jumprelu_all_active_features_padding_edits_and_mixed_precision(monkeypa
     assert (sparse.indices[:, 1:] != sparse.indices[:, :-1]).all()
 
 
-@pytest.mark.parametrize("defect", ["shape", "negative", "zero", "nonfinite", "activation", "k"])
+@pytest.mark.parametrize("defect", ["shape", "zero", "negative", "nonfinite", "activation", "k"])
 def test_jump_dictionary_admission_rejects_invalid_threshold_and_metadata(defect):
     model, dictionary, _ = setup(jump=True, dtype=torch.float16)
     layer = dictionary.layers[0]
     if defect == "shape":
-        layer.threshold = layer.threshold[:1]
-    elif defect == "negative":
-        layer.threshold[0] = -.1
+        layer.threshold.data = layer.threshold.data[:1]
     elif defect == "zero":
         layer.threshold[0] = 0
+    elif defect == "negative":
+        layer.threshold[0] = -.1
     elif defect == "nonfinite":
         layer.threshold[0] = float("nan")
     elif defect == "activation":
@@ -337,3 +343,40 @@ def test_dense_jump_sources_refuse_budget_before_node_allocation(monkeypatch):
     monkeypatch.setattr(path.guard, "check", lambda stage: path.guard.limit - 1)
     with pytest.raises(CleanStop, match="source nodes allocation"):
         _DirectEffects(path, dictionary, ids[0].tolist(), Tokenizer())
+
+
+def test_feature_read_edges_match_live_independent_writes():
+    model, dictionary, ids = setup(jump=True)
+    path = FrozenPath(model, ids, dictionary)
+    effects = _DirectEffects(path, dictionary, ids[0].tolist(), Tokenizer())
+    source = next(i for i in effects.feature_nodes if effects.nodes[i]["layer"] == 0)
+    target = next(i for i in effects.feature_nodes if effects.nodes[i]["layer"] == 1)
+    weights, diagnostics = effects.backward([target])
+    assert diagnostics[0]["absolute_residual"] < 2e-5
+    node = effects.nodes[source]
+    target_node = effects.nodes[target]
+    amplitude = torch.zeros((), requires_grad=True)
+    perturbation = torch.zeros_like(path.embedding)
+    perturbation[:, node["position"]] = node["activation"] * dictionary.layers[0].W_dec[node["feature"]]
+    reads = []
+    with frozen_live(model, path), ExitStack() as stack:
+        for i, block in enumerate(model.model.layers):
+            def write(module, args, output, i=i):
+                return path.outputs[i] + amplitude * perturbation if i == 0 else path.outputs[i]
+            stack.callback(block.post_feedforward_layernorm.register_forward_hook(write).remove)
+        stack.callback(model.model.layers[1].mlp.register_forward_pre_hook(
+            lambda module, args: reads.append(args[0])).remove)
+        model(input_ids=ids, use_cache=False)
+        actual = dictionary.layers[1].encode(reads[0])[0, target_node["position"], target_node["feature"]]
+        derivative = torch.autograd.grad(actual, amplitude)[0]
+    torch.testing.assert_close(weights[source, 0], derivative, atol=2e-5, rtol=2e-5)
+
+
+def test_softcap_centered_rows_use_bounded_blocks(monkeypatch):
+    import caliper.interp._frozen as frozen
+    model, dictionary, ids = setup()
+    monkeypatch.setattr(frozen, "_ENCODER_BLOCK_ELEMENTS", 32)
+    path = FrozenPath(model, ids, dictionary)
+    expected = (path.logit_scale[:, None] * model.lm_head.weight).mean(0)
+    torch.testing.assert_close(path.unembedding_mean, expected, atol=1e-8, rtol=1e-5)
+    assert path.forward_residual < 2e-5

@@ -87,12 +87,19 @@ def _trace_reconstruction(layer, features):
     """Decode in model precision with bounded copies of decoder rows."""
     if layer.W_dec.dtype == features.dtype and layer.b_dec.dtype == features.dtype:
         return layer.decode(features)
-    result = features.new_zeros(*features.shape[:-1], layer.W_dec.shape[1])
-    rows = max(1, _ENCODER_BLOCK_ELEMENTS // layer.W_dec.shape[1])
-    for start in range(0, layer.W_dec.shape[0], rows):
-        with autorelease_scope(features.device):
-            result += features[..., start:start + rows] @ layer.W_dec.detach()[start:start + rows].to(features.dtype)
-    return result + layer.b_dec.detach().to(features.dtype)
+    flat = features.reshape(-1, features.shape[-1])
+    indices = _active_columns(flat)
+    result = _decode_selected(layer, indices, flat.gather(-1, indices))
+    return result.reshape(*features.shape[:-1], layer.W_dec.shape[1]) + layer.b_dec.detach().to(features.dtype)
+
+
+def _active_columns(values, edited=()):
+    """Select all active columns, with distinct inactive columns as padding."""
+    included = values != 0
+    if edited:
+        included[:, edited] = True
+    count = int(included.sum(-1).max())
+    return included.to(torch.int32).topk(count, dim=-1).indices.sort(dim=-1).values
 
 
 def _decode_selected(layer, indices, activations, *, check=_no_check):
@@ -444,12 +451,8 @@ class FrozenFeatures:
     def __init__(self, original, layer, specifications):
         # Select every nonzero activation and every explicit edit. Each row has
         # unique indices, including inactive padding. JumpReLU has no fixed k.
-        included = original[0] != 0
         edited = sorted({s["feature"] for s in specifications if s["op"] in ("scale", "clamp")})
-        if edited:
-            included[:, edited] = True
-        count = int(included.sum(-1).max())
-        self.indices = included.to(torch.int32).topk(count, dim=-1).indices.sort(dim=-1).values
+        self.indices = _active_columns(original[0], edited)
         self.original = original[0].gather(-1, self.indices)
         self.region = (self.original != 0).detach()
         self.coefficients = self.region.to(original.dtype)
@@ -598,6 +601,8 @@ class FrozenPath:
             for i, block in enumerate(self.blocks):
                 install(block.register_forward_pre_hook(pre(f"{i}.residual_source"), with_kwargs=True, prepend=True))
                 install(block.mlp.register_forward_pre_hook(pre(f"{i}.mlp_source"), with_kwargs=True, prepend=True))
+                # Gemma's actual GeGLU forward and fourth norm produce the
+                # residual write. Replacement writes must not traverse that norm again.
                 write_module = getattr(block, self.family.mlp_write_module)
                 install(write_module.register_forward_hook(out(f"{i}.mlp_raw"), prepend=True))
                 if self.family.attention_write_norm is not None:
