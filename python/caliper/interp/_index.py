@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 from ._dictionary import load_dictionary, model_identity, weights_hash
-from ._memory import CleanStop, MemoryGuard, autorelease_scope as _device_scope
+from ._memory import CleanStop, MemoryGuard, allocation_bytes, autorelease_scope as _device_scope
 from ._points import capture
 
 INDEX_VERSION = 1
@@ -279,7 +279,7 @@ class FeatureIndex:
     ``show(layer, feature)`` returns JSON data with label, count, maximum, and token lists.
     ``examples(layer, feature, limit=16)`` returns rows sorted by indexed activation.
     Each row has 33 token slots. Missing document-edge slots contain null values.
-    The first query recomputes all retained windows in one real forward pass.
+    The first query recomputes all retained windows in admitted forward batches.
     A window has fresh context, thus its center value can differ from the indexed maximum.
     Model weights, dictionary weights, tokenizer, and forward settings must remain fixed.
     Admission verifies identity once. Queries do not hash these immutable resources again.
@@ -503,7 +503,7 @@ class FeatureIndex:
             workspace = (len(missing) * (4 * output.shape[1] + 16 * min(
                 LABEL_VOCAB_CHUNK, output.shape[0])) * size + 64_000_000)
             self.memory.check("feature labels admission")
-            if self.memory.peak + workspace > self.memory.limit:
+            if allocation_bytes(self.memory) + workspace > self.memory.limit:
                 raise CleanStop("feature label allocation exceeds the process memory limit")
 
             def progress(stage):
@@ -568,8 +568,33 @@ class FeatureIndex:
 
     def _admit_examples(self, rows):
         self.memory.check("example windows admission")
-        if self.memory.peak + self._example_bytes(rows) > self.memory.limit:
-            raise CleanStop("example allocation exceeds the process memory limit")
+        available = self.memory.limit - allocation_bytes(self.memory)
+        for count in range(min(rows, TOP_EXAMPLES), 0, -1):
+            if self._example_bytes(count) <= available:
+                return count
+        raise CleanStop("example allocation exceeds the process memory limit")
+
+    def _example_values(self, rows, layer, feature, device):
+        """Return CPU values and release batch tensors before the next admission."""
+        pad = getattr(self.tokenizer, "pad_token_id", None)
+        pad = 0 if pad is None else pad
+        ids = torch.full((len(rows), WINDOW_TOKENS), pad, dtype=torch.long, device=device)
+        mask = torch.zeros_like(ids)
+        for row_number, row in enumerate(rows):
+            valid = [i for i in row["token_ids"] if i is not None]
+            ids[row_number, :len(valid)] = torch.tensor(valid, device=device)
+            mask[row_number, :len(valid)] = 1
+        point = self.dictionary.metadata["read_points"][layer]
+        with torch.inference_mode(), capture(self.model, [point]) as saved:
+            _forward(self.model, ids, mask)
+            weights = self.dictionary.layers[layer].W_enc
+            values = self.dictionary.encode(layer, saved[point].to(device=weights.device, dtype=weights.dtype))
+            if not torch.isfinite(values).all().item():
+                raise ValueError("index window activations must be finite")
+            result = values[..., feature].cpu().tolist()
+            # Measure while batch tensors and captured probes still exist.
+            self.memory.check("example windows complete")
+        return result
 
     def examples(self, layer, feature, limit=TOP_EXAMPLES):
         entry = self._entry(layer, feature)
@@ -579,27 +604,17 @@ class FeatureIndex:
         if "examples" not in entry:
             rows = self._windows(layer, feature)
             if rows:
-                self._admit_examples(len(rows))
                 device = next(self.model.parameters()).device
-                pad = getattr(self.tokenizer, "pad_token_id", None)
-                pad = 0 if pad is None else pad
-                ids = torch.full((len(rows), WINDOW_TOKENS), pad, dtype=torch.long, device=device)
-                mask = torch.zeros_like(ids)
-                for row_number, row in enumerate(rows):
-                    valid = [i for i in row["token_ids"] if i is not None]
-                    ids[row_number, :len(valid)] = torch.tensor(valid, device=device)
-                    mask[row_number, :len(valid)] = 1
-                point = self.dictionary.metadata["read_points"][layer]
-                with _device_scope(device), torch.inference_mode(), capture(self.model, [point]) as saved:
-                    _forward(self.model, ids, mask)
-                    weights = self.dictionary.layers[layer].W_enc
-                    values = self.dictionary.encode(layer, saved[point].to(device=weights.device, dtype=weights.dtype))
-                    if not torch.isfinite(values).all().item():
-                        raise ValueError("index window activations must be finite")
-                    values = values[..., feature].cpu().tolist()
-                self.memory.check("example windows complete")
-                for row, values_row in zip(rows, values):
-                    iterator = iter(values_row)
-                    row["activations"] = [next(iterator) if valid else None for valid in row["valid"]]
+                start = 0
+                while start < len(rows):
+                    count = self._admit_examples(len(rows) - start)
+                    batch = rows[start:start + count]
+                    with _device_scope(device):
+                        values = self._example_values(batch, layer, feature, device)
+                    self.memory.check("example windows released")
+                    for row, values_row in zip(batch, values):
+                        iterator = iter(values_row)
+                        row["activations"] = [next(iterator) if valid else None for valid in row["valid"]]
+                    start += count
             entry["examples"] = rows
         return deepcopy(entry["examples"][:limit])
