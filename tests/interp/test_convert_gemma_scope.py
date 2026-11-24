@@ -242,6 +242,14 @@ def test_atomic_publication_and_layer_release(tmp_path, monkeypatch, fail):
     blocks = [SimpleNamespace(pre_feedforward_layernorm=SimpleNamespace(weight=torch.zeros(conversion.WIDTH)))
               for _ in conversion.L0]
     admissions = []
+    fsync = conversion.os.fsync
+
+    def writable_fsync(descriptor):
+        # A zero-byte write verifies Windows-compatible descriptor access.
+        conversion.os.write(descriptor, b"")
+        fsync(descriptor)
+
+    monkeypatch.setattr(conversion.os, "fsync", writable_fsync)
 
     def admitted(model, limit):
         admissions.append(True)

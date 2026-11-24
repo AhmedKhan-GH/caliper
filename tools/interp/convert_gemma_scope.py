@@ -323,7 +323,8 @@ def convert_gemma_scope(source, output, *, model, memory_limit_gb=12, evaluation
             destination = staging / f"layer_{index:02d}.safetensors"
             save_file(tensors, destination)
             del tensors
-            with destination.open("rb") as saved:
+            # Windows requires a writable descriptor for fsync.
+            with destination.open("r+b") as saved:
                 os.fsync(saved.fileno())
                 converted_hash = _hash_file(saved, memory)
             rows.append({"layer": index, "width": WIDTH, "latents": LATENTS, "average_l0": L0[index],
