@@ -679,16 +679,18 @@ def test_bridge_sets_selection_and_queries_examples():
 
 
 @pytest.mark.parametrize("kind", [0, 2, 3])
-def test_bridge_clears_shared_state_for_non_feature_picks(tmp_path, kind):
+def test_bridge_clears_shared_state_for_non_feature_picks(tmp_path, kind, monkeypatch):
     from unittest.mock import Mock
     session = Mock(out=tmp_path)
+    edit = Mock()
+    monkeypatch.setattr(driver, "scene_programs", edit)
     bridge = driver.Bridge(session)
     bridge.last_selection, bridge.examples_present = 10, True
     bridge.handle({"kind": "pick", "panel": "graph", "fields": {"kind": kind, "index": 12}})
     bridge.handle({"kind": "run", "change": "param", "name": "selected_node", "value": -1})
     session.mcp.body.assert_any_call("state.set", id="selected_node", value=-1)
     session.parameter.assert_called_once_with("selected_node", -1)
-    session.mcp.body.assert_any_call("program.remove", id="example_tokens")
+    edit.assert_called_once_with(session, [], remove_examples=True)
     assert bridge.last_selection is None and bridge.examples_present is False
 
 
@@ -719,16 +721,18 @@ def test_visible_bridge_continues_after_first_event():
     assert bridge.consume.call_count == 2
 
 
-def test_bridge_reconciles_run_selection_without_parameter_feedback(tmp_path):
+def test_bridge_reconciles_run_selection_without_parameter_feedback(tmp_path, monkeypatch):
     from unittest.mock import Mock, patch
     session = Mock(out=tmp_path)
+    edit = Mock()
+    monkeypatch.setattr(driver, "scene_programs", edit)
     bridge = driver.Bridge(session)
     bridge.last_selection = 10
     bridge.examples_present = True
     session.events.pending = [{"kind": "run", "change": "param", "name": "selected_node", "value": -1}]
     bridge.consume()
     session.mcp.body.assert_any_call("state.set", id="selected_node", value=-1)
-    session.mcp.body.assert_any_call("program.remove", id="example_tokens")
+    edit.assert_called_once_with(session, [], remove_examples=True)
     assert bridge.last_selection is None and bridge.examples_present is False
     session.events.pending = [{"kind": "run", "change": "param", "name": "selected_node", "value": 12}]
     session.events.complete.side_effect = [{"maximum": 2}, {"examples": []}, {"examples": []}]
@@ -946,6 +950,7 @@ def test_acceptance_uses_explicit_ablation_and_retains_selection_gate(tmp_path, 
         return None, None
     session.capture.side_effect = capture
     monkeypatch.setattr(driver, "read_graph", lambda s: graph)
+    monkeypatch.setattr(driver, "programs", Mock())
     monkeypatch.setattr(driver.Bridge, "select", lambda bridge, row: {})
     monkeypatch.setattr(driver, "program_budget_checks", lambda snapshot: [])
     monkeypatch.setattr(driver, "time", SimpleNamespace(monotonic=lambda: 0))
@@ -1077,6 +1082,17 @@ def test_instrument_uses_three_panels_and_confirmed_bindings(override):
     import jsonschema
     record = failed_quality_override()[1] if override else None
     session = Mock(quality_override=record)
+    import tomllib
+    spec = {"caliper_spec": 1, "panel": []}
+    def body(method, **args):
+        if method == "panel.create":
+            spec["panel"].append(deepcopy(args))
+        elif method == "spec.get":
+            return {"json": deepcopy(spec)}
+        elif method == "spec.set_text":
+            spec.clear()
+            spec.update(tomllib.loads(args["text"]))
+    session.mcp.body.side_effect = body
     driver.instrument(session)
     driver.programs(session)
     driver.programs(session, examples=True)
@@ -1122,11 +1138,15 @@ def test_instrument_uses_three_panels_and_confirmed_bindings(override):
     assert len(leaves) == len(set(leaves))
     assert set(leaves) == set(panels) | (set(controls) - {"clamp_status_value"})
     assert nodes["status_body"]["children"] == ["clamp_status", "body"]
-    assert nodes["clamp_actions"]["children"] == ["apply_clamp", "reset"]
-    graph = next(call.kwargs for call in calls if call.args[0] == "program.create" and call.kwargs["id"] == "attribution")
+    assert nodes["controls"]["children"][1:3] == ["apply_clamp", "reset"]
+    graph = next(program for program in spec["program"] if program["id"] == "attribution")
     assert graph["bind"]["graph_counts"] == "live:trace.counts"
-    bars = next(call.kwargs for call in calls if call.args[0] == "program.create" and call.kwargs["id"] == "probabilities")
+    bars = next(program for program in spec["program"] if program["id"] == "probabilities")
     assert set(bars["bind"].values()) == {"live:output.probs", "live:output.tokens", "live:output.label_text"}
+    assert all(panel["primitive"] == "scene" for panel in spec["panel"])
+    driver.scene_programs(session, [], remove_examples=True)
+    assert next(panel for panel in spec["panel"] if panel["id"] == "examples")["primitive"] == "text"
+    assert {program["id"] for program in spec["program"]} == {"attribution", "probabilities"}
 
 
 def headless_executable():

@@ -20,6 +20,7 @@ from _checks import (FIXTURE_HASH, FIXTURE_PROMPT, QWEN_PROMPT, bar_rows, captur
 from _inference_evidence import (bound_completion, comparison_evidence, generation_baseline,
                                  generation_evidence, inference_state)
 from _qualification import dictionary_qualification, validate_quality_override
+from _spec import scene_programs
 
 ROOT = Path(__file__).resolve().parents[2]
 METHOD_DISCLOSURES = {
@@ -341,10 +342,8 @@ def instrument(session):
         m.body("state.create", id=identifier, type="integer", default=default, min=default, max=maximum)
     m.body("state.create", id="activation_max", type="number", default=1., min=1e-6, max=1e20)
     for identifier, title in (("graph", "Attribution Graph"), ("examples", "Feature Examples"), ("output", "Output Probabilities")):
-        options = {"axes": False, "labels": True, "scale_bar": False}
-        if identifier == "graph":
-            options["select"] = {"state": "selected_node", "field": "index"}
-        m.body("panel.create", id=identifier, primitive="scene", title=title, options=options)
+        m.body("panel.create", id=identifier, primitive="text", title=title,
+               options={"text": "No feature is selected." if identifier == "examples" else "The trace is not available."})
     controls = [("prompt", "text", "param:prompt", "Prompt", {}),
                 ("clamp", "slider", "param:clamp", "Feature Clamp", {"min": -4, "max": 4}),
                 ("apply_clamp", "button", "action:apply_clamp", "Apply Clamp", {}),
@@ -364,41 +363,32 @@ def instrument(session):
     for name, text in disclosures.items():
         m.body("control.create", id="method_" + name, kind="readout", title=name.replace("_", " ").title(),
                options={"format": text})
-    # The status spans the instrument width. Buttons share one control row.
+    # Flat control groups stay within the spec's eight-level layout limit.
     nodes = [{"id": "instrument", "split": "vertical", "ratio": .74 if override else .82, "children": ["main", "methods"]},
              {"id": "main", "split": "vertical", "ratio": .08, "children": ["prompt", "status_body"]},
              {"id": "status_body", "split": "vertical", "ratio": .06, "children": ["clamp_status", "body"]},
              {"id": "body", "split": "horizontal", "ratio": .66, "children": ["graph", "right"]},
              {"id": "right", "split": "vertical", "ratio": .37, "children": ["examples", "lower"]},
-             {"id": "lower", "split": "vertical", "ratio": .48, "children": ["output", "controls"]},
-             {"id": "clamp_actions", "split": "horizontal", "ratio": .5, "children": ["apply_clamp", "reset"]}]
-    control_ids = ["clamp", "clamp_actions", "retrace", "generate", "page", "baseline_text", "steered_text"]
-    for index in range(len(control_ids) - 1):
-        nodes.append({"id": "controls" if index == 0 else f"controls-{index}", "split": "vertical",
-                      "ratio": 1 / (len(control_ids) - index),
-                      "children": [control_ids[index], control_ids[index + 1] if index + 2 == len(control_ids)
-                                   else f"controls-{index + 1}"]})
+             {"id": "lower", "split": "vertical", "ratio": .48, "children": ["output", "controls"]}]
+    control_ids = ["clamp", "apply_clamp", "reset", "retrace", "generate", "page", "baseline_text", "steered_text"]
+    nodes.append({"id": "controls", "split": "vertical", "children": control_ids})
     method_ids = ["method_" + name for name in disclosures]
-    for index in range(len(method_ids) - 1):
-        nodes.append({"id": "methods" if index == 0 else f"methods-{index}", "split": "vertical",
-                      "ratio": 1 / (len(method_ids) - index),
-                      "children": [method_ids[index], method_ids[index + 1] if index + 2 == len(method_ids)
-                                   else f"methods-{index + 1}"]})
+    nodes.append({"id": "methods", "split": "vertical", "children": method_ids})
     m.body("layout.set", layout={"root": "instrument", "nodes": nodes})
 
 
 def programs(session, *, examples=False):
     if examples:
-        session.mcp.body("program.create", id="example_tokens", panel="examples", piece={"name": "token_strip", "version": 1},
+        scene_programs(session, [dict(id="example_tokens", panel="examples", piece={"name": "token_strip", "version": 1},
                          bind={key: "live:examples." + key for key in ("tokens", "activations", "example_ids", "valid_tokens", "label_text")},
-                         params={"page": {"state": "example_page"}, "activation_max": {"state": "activation_max"}})
+                         params={"page": {"state": "example_page"}, "activation_max": {"state": "activation_max"}})])
         return
-    session.mcp.body("program.create", id="attribution", panel="graph", piece={"name": "attribution_graph", "version": 1},
+    scene_programs(session, [dict(id="attribution", panel="graph", piece={"name": "attribution_graph", "version": 1},
                      bind={"graph_counts": "live:trace.counts", **{k: "live:trace." + k for k in
                            ("node_i", "node_f", "edge_i", "edge_f", "label_text")}},
-                     params={"selected_node": {"state": "selected_node"}})
-    session.mcp.body("program.create", id="probabilities", panel="output", piece={"name": "logit_bars", "version": 1},
-                     bind={key: "live:output." + key for key in ("probs", "tokens", "label_text")})
+                     params={"selected_node": {"state": "selected_node"}}),
+                  dict(id="probabilities", panel="output", piece={"name": "logit_bars", "version": 1},
+                     bind={key: "live:output." + key for key in ("probs", "tokens", "label_text")})])
 
 
 class Bridge:
@@ -410,7 +400,7 @@ class Bridge:
 
     def clear_examples(self):
         if self.examples_present:
-            self.session.mcp.body("program.remove", id="example_tokens")
+            scene_programs(self.session, [], remove_examples=True)
             self.examples_present = False
         self.last_selection = self.last_examples = None
 

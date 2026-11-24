@@ -155,6 +155,25 @@ def test_offline_command_sidecar(actual, tmp_path, monkeypatch):
             reply = tool("feature.dictionary", {"request_id": reply["structuredContent"]["request_id"]})
         error = json.loads(reply["content"][0]["text"])["error"]
         assert error["code"] == "interpret.missing_dictionary"
+        # Exercise every instrument edit through the native spec validator.
+        from types import SimpleNamespace
+        monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "demos/circuit_trace"))
+        import run as demo
+        def body(name, **params):
+            reply = tool(name, params)
+            assert not reply.get("isError"), json.dumps(reply.get("content"))
+            return reply["structuredContent"]
+        session = SimpleNamespace(mcp=SimpleNamespace(body=body), quality_override=None)
+        demo.instrument(session)
+        demo.programs(session)
+        demo.programs(session, examples=True)
+        spec = body("spec.get")["json"]
+        assert all(panel["primitive"] == "scene" for panel in spec["panel"])
+        demo.scene_programs(session, [], remove_examples=True)
+        spec = body("spec.get")["json"]
+        assert next(panel for panel in spec["panel"] if panel["id"] == "examples")["primitive"] == "text"
+        demo.programs(session, examples=True)
+        assert body("spec.validate")["valid"]
         assert not failures
 
 
