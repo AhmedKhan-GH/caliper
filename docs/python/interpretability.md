@@ -35,6 +35,7 @@ An explicit `model_hash` can supply the expected identity instead.
 The loader refuses an absent identity or a mismatch.
 Its `memory_limit_gb` argument caps total process memory at 12 GB by default and refuses larger limits.
 Header checks precede allocation, and memory admission includes the model, dictionary, and conversion buffers.
+
 The returned object exposes `encode(layer, x)`, `decode(layer, a)`, and `error(layer, x, y)`.
 Its `metadata` contains the manifest, and its `layers` contain the weights.
 
@@ -147,7 +148,7 @@ Edges refer to displayed node rows.
 Bind its `graph_counts` input to `live:trace.counts` and its other structural inputs to the corresponding tensors above.
 Signed edges show direct effects, and node picks identify graph rows.
 The `selected_node` parameter reads shared state with the same name.
-Prompt tokens and selected or hovered labels appear as host text.
+Prompt tokens appear as host text, and the `selected_node` and `hovered_node` parameters select additional labels.
 
 `token_strip@1` uses the five `live:examples.*` sources documented in the [example bindings](../agents/interpretation.md#example-panel-bindings).
 Its `page` parameter selects zero or one.
@@ -158,6 +159,150 @@ M7 `logit_bars@1` reads `live:trace.probs`, `live:trace.logit_tokens`, and `live
 Both probability rows describe the traced baseline.
 These sources do not describe a steered output distribution.
 The app and browser use the same piece files.
+
+## Feature Steering
+
+`caliper.watch(model, optimizer=None)` registers inference controls and intervention points.
+The hosted inference run also binds its dictionary and tokenizer to the intervention service.
+Caliper MCP applies `intervene.set` requests at run boundaries.
+The [intervention schemas](../agents/interpretation.md#m8-command-schemas) define their fields and limits.
+
+An `add` intervention writes a vector times its coefficient at the selected point.
+A `scale` intervention adds `(multiplier - 1) * activation * decoder` at the feature's MLP output.
+A `clamp` intervention adds `(value - activation) * decoder` at that output.
+Feature activations come from the current model input at the selected token positions.
+The original module and head ablation operations remain available.
+
+An absent `positions` field selects every token, and an empty list selects none.
+Optional `from_step` and `until_step` fields bound the active interval, with an exclusive end.
+The runtime refuses incompatible dimensions, unknown features, invalid positions, and nonfinite values.
+Hook failures remove the failed hook and expose an error in intervention metadata.
+
+## Activation Patching
+
+A `patch` intervention replaces selected values with values from a clean source prompt.
+`source_position` selects one source token when the destination positions need a fixed mapping.
+The runtime preserves the current intervention state around clean source capture.
+Generation refuses a patch whose implicit source mapping exceeds the clean prompt.
+
+`patch.sweep` compares clean and corrupted prompts with equal token counts.
+Its metric specifies distinct `positive_token` and `negative_token` IDs.
+The sweep patches residual inputs across layers and positions, with at most 32 cells in each batch.
+It publishes `patch.grid` and returns normalized recovery from actual model outputs.
+The circuit demo uses three panels, and the sweep has separate tests.
+
+`trace.validate` replays the latest trace's intervention snapshot.
+It zero-clamps up to ten influential features and measures changes in the centered top-token logit.
+The reply contains sign agreement, Spearman correlation, individual measurements, and explicit failure reasons.
+Insufficient features and zero variance do not produce a passing result.
+
+## Inference Runs
+
+`run.start` with `kind = "inference"` starts the installed hosted runner.
+It requires a local model, dictionary, and prompt.
+The model is either `tiny-lm` or the exact pinned Qwen snapshot folder in the Hugging Face cache.
+The dictionary folder must also contain its compatible example index.
+The loader uses local safe weights and refuses missing or incompatible resources.
+
+The `prompt` parameter accepts text, and `selected_node` accepts a graph row or minus one for no selection.
+Selection alone applies no clamp.
+The `clamp` parameter ranges from minus four through four times the selected feature's indexed maximum.
+It applies at that feature's traced token position.
+Zero removes the selected feature contribution.
+The `reset` action removes that feature clamp and preserves other intervention kinds.
+
+The `retrace` Boolean enables a new trace after prompt or intervention changes.
+The `generate` action returns 24 greedy tokens for each of the baseline and steered outputs.
+The text parameters `output.baseline` and `output.steered` expose these results.
+Inference checkpoints store resource identities, parameters, selection, and intervention lifecycle state.
+They contain no model weights or executable objects.
+
+M8 output bars use the sources below.
+Row zero is the baseline, and row one is the steered distribution.
+Both rows share ten token IDs, including the baseline top token.
+
+| Source | Type | Shape |
+|---|---|---|
+| `live:output.probs` | `float32` | `(2,10)` |
+| `live:output.tokens` | `int32` | `(10,)` |
+| `live:output.label_text` | `uint32` | `(10,16)` |
+
+## Hidden Demo
+
+The driver is `demos/circuit_trace/run.py` in the source checkout.
+It requires the built app, `caliper-mcp`, and the native Python sender and producer modules.
+The fixture comparison also requires `caliper_circuit_parity`, the browser WebAssembly files, and local headless Chromium from the web test setup.
+`CALIPER_APP_EXE`, `CALIPER_MCP_EXE`, `CALIPER_CIRCUIT_PARITY_EXE`, and `CALIPER_WASM_DIR` can override the corresponding resource paths.
+
+Create fixture resources once in an empty task folder:
+
+```sh
+PYTHONPATH=python:. .venv/bin/python -m caliper.interp._hosted \
+  --fixture-dir "$FIXTURE_DICTIONARY"
+```
+
+Set `HEAVY_WRAPPER` to the task's resource wrapper and `DEMO_OUT` to a new folder within task scratch.
+Run the hidden fixture after exclusive graphics access becomes available:
+
+```sh
+"$HEAVY_WRAPPER" 'GPU circuit fixture' "${DEMO_OUT}.log" \
+  env CALIPER_AGENT_OFFLINE=1 PYTHONPATH=python:. \
+  .venv/bin/python demos/circuit_trace/run.py --model tiny-lm \
+  --dictionary "$FIXTURE_DICTIONARY" --hidden --out "$DEMO_OUT"
+```
+
+For Qwen, set `MODEL` to the pinned snapshot folder and `DICTIONARY` to its prepared dictionary folder.
+Use a separate output folder and a `GPU MODEL` wrapper description:
+
+```sh
+"$HEAVY_WRAPPER" 'GPU MODEL Qwen circuit trace' "${DEMO_OUT}.log" \
+  env CALIPER_AGENT_OFFLINE=1 PYTHONPATH=python:. \
+  .venv/bin/python demos/circuit_trace/run.py --model "$MODEL" \
+  --dictionary "$DICTIONARY" --hidden --out "$DEMO_OUT"
+```
+
+The fixture prompt is `The red cube is beside a tree.`
+The Qwen prompt is `Paris is the capital of`.
+`--prompt` supplies another prompt within the token limit.
+Every control operation uses Caliper MCP, including feature selection, examples, clamps, validation, and window capture.
+The driver waits for file events, run events, and published steps.
+
+Only the founder uses `--show` in place of `--hidden`.
+The visible form retains its MCP event bridge until its own app closes.
+A graph pick updates `selected_node`, requests the feature examples, and fills the example strip.
+Enable Automatic Trace for prompt edits that also update the graph.
+The visible result records that hidden pixel evidence was not collected and makes no Qwen acceptance claim.
+
+## Acceptance Evidence
+
+The driver saves `result.json` and each available graph, command log, event log, example page, validation result, generated text, and instrument specification.
+Hidden runs also save `before.png`, `after.png`, and the second example page capture under the acceptance folder.
+A bounded hidden diagnostic reads actual renderer IDs, color pixels, panel rectangles, generations, and text anchors from those captures.
+The fixture comparison uses the actual published graph resources with the existing native and browser parity harness.
+The process exits with code one when a required check fails.
+
+Qwen acceptance requires feature share of at least 0.30, between 20 and 512 nodes, and a token path to the top logit.
+It also requires 16 positive sorted examples, at least eight correct signs among ten features, and Spearman correlation of at least 0.6.
+The top-token probability must fall by at least 0.05, or the top token must change.
+Every target residual must remain at most 0.02.
+The trace limit is 20 seconds, the steering limit is one second, and the process limit is 12 GB.
+
+Pixel checks require all visible node IDs and bar heights within two pixels of probability times scale.
+The top bar must become shorter after the Qwen clamp.
+Fixture parity requires exact interior IDs, at most two color levels of interior difference, and at most one percent differing edge pixels.
+Full native captures also retain prompt and selected labels for inspection.
+
+Fixture results separate mathematical and display checks from learned-model semantics.
+The unchanged fixture requires a positive measured clamp effect and records the stricter steering result without a Qwen acceptance claim.
+It retains the sign and rank thresholds from validation.
+A probability change smaller than one pixel can leave the fixture bar height unchanged.
+The selected fixture examples have 13 valid tokens and 12 padding slots in each 25-slot display row.
+The two pages retain all 16 example IDs and verify each token slot against the API response.
+
+The normal fixture test is `tests/demos/test_circuit_trace.py::test_hidden_fixture` in Native Build CI.
+Missing Python modules or resources fail setup, while verified absence of Metal permits a platform skip.
+The opt-in `local_model` test uses the same driver with `CALIPER_QWEN_MODEL` and `CALIPER_QWEN_DICTIONARY`.
+That test runs only outside CI, with explicit local paths and no downloads.
 
 ## Refusals And Limits
 

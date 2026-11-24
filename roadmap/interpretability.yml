@@ -354,24 +354,27 @@ features:
 
   - id: INT-40
     title: Feature Steering
-    status: planned
+    status: built
     scope: core
     summary: Feature interventions add vectors, scale activations, or clamp features on the live model at selected positions.
     depends_on: [INT-34, INT-36]
+    docs: docs/python/interpretability.md#feature-steering
     issue: null
 
   - id: INT-41
     title: Activation Patching
-    status: planned
+    status: built
     scope: core
     summary: Activation patches replace selected values from a clean prompt, and a bounded sweep measures recovery across layers and positions.
     depends_on: [INT-35, INT-40]
+    docs: docs/python/interpretability.md#activation-patching
     issue: null
 
   - id: INT-42
     title: Inference Runs
-    status: planned
+    status: built
     scope: core
     summary: Hosted inference runs expose prompt controls, traced features, paired output probabilities, and greedy generation.
     depends_on: [INT-38, INT-39, INT-40, INT-41]
+    docs: docs/python/interpretability.md#inference-runs
     issue: null
