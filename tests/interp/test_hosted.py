@@ -559,6 +559,22 @@ def test_resource_stop_remains_latched_after_a_caught_action_error():
         guard.check("boundary", force=False)
 
 
+def test_hosted_service_exists_before_watch_starts_stream(monkeypatch, request):
+    import caliper
+    original = caliper.watch
+    seen = []
+
+    def watch(model, *args, **kwargs):
+        service = caliper._CTL.interpretation_service
+        assert service is not None and service.owner.model is model
+        seen.append(service)
+        return original(model, *args, **kwargs)
+
+    monkeypatch.setattr(caliper, "watch", watch)
+    run, _ = request.getfixturevalue("hosted_run")
+    assert seen == [run.service]
+
+
 @pytest.fixture
 def hosted_run(tmp_path, monkeypatch, request):
     import caliper

@@ -650,8 +650,11 @@ class HostedInference:
         if self.managed is not None:
             self.managed.inference = self
             self.managed.kept.extension = ".json"
-        self.handle = caliper.watch(self.model, activations=False)
         try:
+            # Managed watch starts the stream. Its first handshake must advertise
+            # interpretation even when dictionary identity takes time to compute.
+            self.service = register_service(HostedService(self), controls=self.controls)
+            self.handle = caliper.watch(self.model, activations=False)
             self.interventions = self.controls.intervention_service
             self.interventions.configure(dictionary=self.dictionary, tokenizer=self.tokenizer,
                                          resource_guard=self.guard)
@@ -670,7 +673,6 @@ class HostedInference:
             self.status = param("output.status", "ready")
             self.actions = [caliper.action("generate", self.generate), caliper.action("reset", self.reset),
                             caliper.action("apply_clamp", self.apply_clamp)]
-            self.service = register_service(HostedService(self), controls=self.controls)
             if self.restored is not None:
                 self.interventions.load_state_dict(self.restored["interventions"])
                 self.selection = deepcopy(self.restored.get("selection"))
