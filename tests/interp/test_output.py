@@ -147,7 +147,7 @@ def test_comparison_labels_preserve_sparse_rows_and_shared_display_text(output_c
     monkeypatch.setattr(_output, "forward_logits", lambda *a, **k: logits)
     result = output.compare("A")
     assert result["tokens"] == list(range(10))
-    assert result["labels"] == [r"A\x00B", "[unmapped token 1]", "None", "", "é" * 31,
+    assert result["labels"] == [r"A\x00B", "[unmapped token 1]", "None", "[empty token 3]", "é" * 31,
                                 "?", "<eos>", " tail", r"\x00", "word"]
     packed = _resolve("output.label_text").tolist()
     for token, label, row in zip(result["tokens"], result["labels"], packed):

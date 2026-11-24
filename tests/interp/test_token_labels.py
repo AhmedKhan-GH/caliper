@@ -62,6 +62,11 @@ def test_token_labels_support_ids_only_decoders_without_vocabulary_lookup():
     assert token_label(tokenizer, 17) == " decoded "
 
 
+def test_token_labels_identify_an_empty_decode_without_vocabulary_lookup():
+    tokenizer = SimpleNamespace(decode=lambda ids: "")
+    assert token_label(tokenizer, 17) == "[empty token 17]"
+
+
 def test_token_labels_support_special_token_option_without_cleanup_option():
     def decode(ids, skip_special_tokens=True):
         assert ids == [17]
@@ -101,7 +106,7 @@ def test_token_labels_propagate_vocabulary_errors():
 
 
 @pytest.mark.parametrize("token_id,expected", [
-    (0, r"\x00"), (1, ""), (2, "None"), (65, "A"), (256, "<bos>"),
+    (0, r"\x00"), (1, "[empty token 1]"), (2, "None"), (65, "A"), (256, "<bos>"),
     (500, " tail"), (66, "[unmapped token 66]"), (511, "[unmapped token 511]"),
 ])
 def test_sparse_token_labels_decode_text_and_identify_absent_rows(token_id, expected):
@@ -294,7 +299,7 @@ def test_trace_read_escapes_nul_without_changing_prompt_ids(monkeypatch):
 
 def test_trace_axes_nodes_and_bars_use_decoded_text(byte_level_tokenizer, monkeypatch):
     source_ids = list(range(10)) + [11]
-    expected = [" France", " Belgium", r"\n", r"\t", " .", "café", "  ", r"\x00", "<special>", ""]
+    expected = [" France", " Belgium", r"\n", r"\t", " .", "café", "  ", r"\x00", "<special>", "[empty token 9]"]
 
     class Tokenizer:
         def __call__(self, text, **kwargs):
