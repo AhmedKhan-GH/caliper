@@ -49,7 +49,7 @@ def byte_level_tokenizer():
 
 
 @pytest.mark.parametrize("token_id,expected", [
-    (0, " France"), (1, " Belgium"), (2, "\n"), (3, "\t"), (4, " ."),
+    (0, " France"), (1, " Belgium"), (2, r"\n"), (3, r"\t"), (4, " ."),
     (5, "café"), (6, "  "), (7, r"\x00"), (8, "<special>"),
 ])
 def test_byte_level_decoder_controls_display_text(byte_level_tokenizer, token_id, expected):
@@ -76,7 +76,7 @@ def test_token_labels_pass_both_options_to_keyword_decoder():
         assert kwargs == {"skip_special_tokens": False, "clean_up_tokenization_spaces": False}
         return " \n "
 
-    assert token_label(SimpleNamespace(decode=decode), 17) == " \n "
+    assert token_label(SimpleNamespace(decode=decode), 17) == r" \n "
 
 
 @pytest.mark.parametrize("error", [TypeError, ValueError, RuntimeError])
@@ -239,6 +239,15 @@ def test_display_labels_escape_nul_and_keep_utf8_boundaries():
     assert not protocol.request({"version": 1, "method": "trace.run", "params": {"prompt": value}})
 
 
+def test_control_character_labels_remain_visible_after_repacking():
+    value = " \n\r\t\0 "
+    expected = r" \n\r\t\x00 "
+    assert display_text(value) == expected
+    assert display_text(expected) == expected
+    assert unpack_label(pack_labels([value], 1)[0]) == expected
+    assert unpack_label(pack_labels([display_text(value)], 1)[0]) == expected
+
+
 def test_dead_feature_show_and_examples_keep_zero_token_id(tmp_path, monkeypatch):
     model, tokenizer = TinyLM(layers=1, width=8, heads=2, latents=8, k=2), TinyTokenizer()
     with torch.no_grad():
@@ -285,7 +294,7 @@ def test_trace_read_escapes_nul_without_changing_prompt_ids(monkeypatch):
 
 def test_trace_axes_nodes_and_bars_use_decoded_text(byte_level_tokenizer, monkeypatch):
     source_ids = list(range(10)) + [11]
-    expected = [" France", " Belgium", "\n", "\t", " .", "café", "  ", r"\x00", "<special>", ""]
+    expected = [" France", " Belgium", r"\n", r"\t", " .", "café", "  ", r"\x00", "<special>", ""]
 
     class Tokenizer:
         def __call__(self, text, **kwargs):
