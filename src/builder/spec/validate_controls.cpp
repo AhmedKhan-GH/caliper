@@ -276,6 +276,8 @@ struct Check {
                                                : text_limit;
         if (!o.value_other.is_string())
             c.sink.error("spec.bad_value", op + ".value of a text control must be a text.", op + ".value");
+        else if (o.value_other.get_ref<const std::string&>().find('\0') != std::string::npos)
+            c.sink.error("spec.bad_value", op + ".value must not contain NUL bytes.", op + ".value");
         else if (o.value_other.get_ref<const std::string&>().size() > limit)
             c.sink.error("spec.out_of_range", op + ".value is longer than max_length.", op + ".value");
     }

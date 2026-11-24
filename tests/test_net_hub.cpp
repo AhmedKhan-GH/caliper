@@ -118,7 +118,8 @@ public:
     }
     void send(const wire::Message& m) {
         std::vector<uint8_t> b;
-        REQUIRE(wire::encode(m, &b));
+        std::string error;
+        REQUIRE_MESSAGE(wire::encode(m, &b, &error), wire::type_name(wire::message_type(m)), ": ", error);
         client_.send(b.data(), b.size());
     }
     void hello_viewer(std::vector<std::string> caps = {}) {
@@ -2340,23 +2341,25 @@ TEST_CASE("net/hub: text parameters follow viewer capabilities on attach and upd
     check_controls(controls);
 }
 
-TEST_CASE("net/hub: wide set text requires the producer text capability") {
+TEST_CASE("net/hub: text sets require both peer capabilities and preserve legacy choices") {
     HubOptions options;
     options.allow_control = true;
     HubRunner hub(options);
     World world;
     auto caps = kProducer31;
     bool text = false;
+    bool viewer_text = true;
     SUBCASE("legacy producer") {}
     SUBCASE("text producer") { caps.push_back(CALIPER_NET_CAP_TEXT_PARAMS); text = true; }
+    SUBCASE("legacy viewer") { caps.push_back(CALIPER_NET_CAP_TEXT_PARAMS); viewer_text = false; }
     auto source = producer(world, hub, "text-admission", 1, 1, caps, true);
     auto viewer_caps = kCaps31;
-    viewer_caps.push_back(CALIPER_NET_CAP_TEXT_PARAMS);
+    if (viewer_text) viewer_caps.push_back(CALIPER_NET_CAP_TEXT_PARAMS);
     auto client = viewer(world, hub, viewer_caps);
     REQUIRE(world.until([&] { return client->views() && client->views()->session; }));
     uint32_t id = 0;
     size_t forwarded = 0;
-    for (const auto& value : {std::string("mode"), std::string(63, 'x'), std::string(),
+    for (const auto& value : {std::string("mode"), std::string("line\n\tbreak"), std::string(63, 'x'), std::string(),
                               std::string(64, 'x'), std::string(4096, 'x')}) {
         client->control(++id, "set", "mode", Json(value));
         REQUIRE(world.until([&] { return client->control_replies(id).size() == 1; }));
@@ -2374,6 +2377,28 @@ TEST_CASE("net/hub: wide set text requires the producer text capability") {
     client->control(++id, "set", "lr", Json(0.01));
     REQUIRE(world.until([&] { return client->control_replies(id).size() == 1; }));
     CHECK(source->controls_in.size() == forwarded + 1);
+    CHECK(client->control_replies(id)[0]->status == "ok");
+
+    wire::Controls controls;
+    controls.run = obj({{"state", "running"}, {"step", 1}});
+    controls.params.push(obj({{"name", "prompt"}, {"type", "text"}, {"value", "initial"}}));
+    source->send(controls);
+    sync(world, *source);
+    client->control(++id, "set", "prompt", Json("short"));
+    REQUIRE(world.until([&] { return client->control_replies(id).size() == 1; }));
+    CHECK(client->control_replies(id)[0]->status == (text ? "ok" : "error"));
+    CHECK(source->controls_in.size() == forwarded + 1 + (text ? 1 : 0));
+
+    controls.params = Json::array();
+    Json choices = Json::array();
+    choices.push("initial");
+    choices.push("short");
+    controls.params.push(obj({{"name", "prompt"}, {"type", "choice"}, {"value", "initial"},
+                              {"choices", choices}}));
+    source->send(controls);
+    sync(world, *source);
+    client->control(++id, "set", "prompt", Json("short"));
+    REQUIRE(world.until([&] { return client->control_replies(id).size() == 1; }));
     CHECK(client->control_replies(id)[0]->status == "ok");
 }
 

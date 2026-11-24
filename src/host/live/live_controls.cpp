@@ -256,6 +256,17 @@ void RunControls::sync_interpretation_session(Source* src) {
     interpretation_session_ = session;
     interpretation_start_ = start;
     interpretation_pid_ = pid;
+    if (src && !src->producer_alive()) {
+        for (const auto& reply : src->take_control_replies()) on_reply(reply);
+        for (auto& [id, entry] : interpretations_) {
+            auto& reply = entry.second;
+            if (reply.status != CALIPER_NET_STATUS_QUEUED) continue;
+            reply.op = CALIPER_NET_OP_INTERPRET;
+            reply.status = CALIPER_NET_STATUS_ERROR;
+            reply.error_code = CALIPER_NET_ERR_NOT_ATTACHED;
+            reply.error_message = "The run connection closed.";
+        }
+    }
 }
 
 void RunControls::update(Source* src, uint64_t now_ns) {
@@ -473,6 +484,7 @@ caliper_net::Json RunControls::interpret(const std::string& method, const Json& 
     if (request && (!params.is_object() || params.size() != 0))
         return error("command.invalid_args", "A reply query accepts only request_id.");
     if (!request) {
+        if (!src_->producer_alive()) return error("run.not_attached", "The run connection closed.");
         caliper_net::wire::Control outbound;
         outbound.request_id = 1; // Validate before the source allocates a transport ID.
         outbound.op = CALIPER_NET_OP_INTERPRET;
@@ -514,7 +526,7 @@ caliper_net::Json RunControls::interpret(const std::string& method, const Json& 
 }
 
 void RunControls::on_reply(const ControlReply& r) {
-    if (r.request_id == 0 && r.op.empty() && r.status == CALIPER_NET_STATUS_ERROR) {
+    if (r.request_id == 0 && r.op == CALIPER_NET_OP_INTERPRET && r.status == CALIPER_NET_STATUS_ERROR) {
         for (auto& [id, entry] : interpretations_) {
             if (entry.second.status != CALIPER_NET_STATUS_QUEUED) continue;
             entry.second = r;
@@ -523,6 +535,7 @@ void RunControls::on_reply(const ControlReply& r) {
         }
         return;
     }
+    if (r.request_id == 0) return;
     if (r.op == CALIPER_NET_OP_INTERPRET || (r.op.empty() && r.status == CALIPER_NET_STATUS_ERROR)) {
         auto it = interpretations_.find(r.request_id);
         if (it != interpretations_.end()) {
@@ -607,11 +620,12 @@ void RunControls::draw_text_param(const ControlParam& p) {
     if (!valid && ImGui::IsItemHovered())
         ImGui::SetTooltip("Text accepts at most 4096 UTF-8 bytes. The value was not sent.");
     const bool done = enter || ImGui::IsItemDeactivatedAfterEdit();
+    if (done && !valid) refuse("set " + p.name, "Text accepts at most 4096 UTF-8 bytes. The draft was retained.");
     if (done && valid && why_not(CALIPER_NET_OP_SET).empty()) {
         const Json value{buffer};
         if (value != shown) set(p.name, value);
     }
-    if (!ImGui::IsItemActive()) text_edits_.erase(it);
+    if (!ImGui::IsItemActive() && valid) text_edits_.erase(it);
     ImGui::PopID();
 }
 

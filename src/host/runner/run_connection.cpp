@@ -76,6 +76,7 @@ bool RunConnection::open(const std::string& link, std::string* error) {
     const std::string url = stream_url_of(link, error);
     if (url.empty()) return false;
     interpretation_ = false;
+    text_params_ = false;
     interpretation_replies_.clear();
     client_ = std::make_unique<caliper_net::Client>();
     std::string err;
@@ -158,7 +159,9 @@ void RunConnection::on_message(const std::vector<std::uint8_t>& bytes) {
     wire::Message msg;
     const wire::DecodeResult r = wire::decode(bytes.data(), bytes.size(), &msg);
     if (!r.ok()) {
-        if (r.type == CALIPER_NET_MSG_CONTROL_REPLY) {
+        const auto* op = r.frame.meta.find("op");
+        if (r.type == CALIPER_NET_MSG_CONTROL_REPLY && op && op->is_string() &&
+            op->as_string() == CALIPER_NET_OP_INTERPRET) {
             const auto* id = r.frame.meta.find("request_id");
             std::uint64_t request = 0;
             const bool identified = id && id->get_u64(&request) && request <= std::numeric_limits<std::uint32_t>::max();
@@ -176,6 +179,7 @@ void RunConnection::on_message(const std::vector<std::uint8_t>& bytes) {
     if (const auto* w = std::get_if<wire::Welcome>(&msg)) {
         control_allowed_ = w->control.value_or(false);
         interpretation_ = std::find(w->capabilities.begin(), w->capabilities.end(), CALIPER_NET_CAP_INTERPRETATION) != w->capabilities.end();
+        text_params_ = std::find(w->capabilities.begin(), w->capabilities.end(), CALIPER_NET_CAP_TEXT_PARAMS) != w->capabilities.end();
         if (const Json* id = w->session.find("id"); id && id->is_string()) session_ = id->as_string();
     } else if (const auto* v = std::get_if<wire::Views>(&msg)) {
         for (const wire::ViewInfo& info : v->list) {
@@ -251,17 +255,6 @@ void RunConnection::on_message(const std::vector<std::uint8_t>& bytes) {
         std::vector<std::uint8_t> out;
         if (wire::encode(wire::Pong{p->nonce}, &out)) send_bytes(out);
     } else if (const auto* e = std::get_if<wire::Error>(&msg)) {
-        if (!e->request_id && !e->sub && !e->view && !e->session &&
-            (!e->in_reply_to || *e->in_reply_to == CALIPER_NET_MSG_CONTROL)) {
-            for (auto& [id, entry] : interpretation_replies_) {
-                auto& reply = entry.second;
-                if (reply.status != CALIPER_NET_STATUS_QUEUED) continue;
-                reply.status = CALIPER_NET_STATUS_ERROR;
-                reply.error_code = e->code;
-                reply.error_message = e->message;
-                ++interpretation_revision_;
-            }
-        }
         if (e->sub) {   // a refused subscription: the next VIEWS tries again
             const auto it = sub_views_.find(*e->sub);
             if (it != sub_views_.end()) {
@@ -269,7 +262,8 @@ void RunConnection::on_message(const std::vector<std::uint8_t>& bytes) {
                 sub_views_.erase(it);
             }
         }
-        if (e->request_id && e->in_reply_to && *e->in_reply_to == CALIPER_NET_MSG_CONTROL) {
+        if (e->request_id && e->in_reply_to && *e->in_reply_to == CALIPER_NET_MSG_CONTROL &&
+            !e->sub && !e->view && !e->session) {
             Reply rep;
             rep.request_id = *e->request_id;
             rep.status = "error";
@@ -286,6 +280,7 @@ void RunConnection::on_message(const std::vector<std::uint8_t>& bytes) {
         }
     } else if (std::get_if<wire::Bye>(&msg)) {
         close_reason_ = "The run's stream said goodbye.";
+        close();
     }
 }
 
@@ -294,6 +289,18 @@ std::uint32_t RunConnection::send_control(const std::string& op, const std::stri
     if (!client_ || state_ != State::open) {
         if (error) *error = "The runner's connection to the run is not open.";
         return 0;
+    }
+    if (op == CALIPER_NET_OP_SET && !text_params_) {
+        bool text_parameter = false;
+        if (controls_.contains("params"))
+            for (const auto& param : controls_["params"])
+                if (param.value("name", "") == name && param.value("type", "") == CALIPER_NET_PARAM_TEXT)
+                    text_parameter = true;
+        if (text_parameter || (value.is_string() &&
+            (value.get_ref<const std::string&>().empty() || value.get_ref<const std::string&>().size() > CALIPER_NET_NAME_MAX))) {
+            if (error) *error = "The producer did not announce text_params.";
+            return 0;
+        }
     }
     wire::Control c;
     c.request_id = next_request_++;

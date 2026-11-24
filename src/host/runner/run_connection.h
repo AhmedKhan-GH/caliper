@@ -106,6 +106,7 @@ private:
     std::string close_reason_;
     bool control_allowed_ = false;
     bool interpretation_ = false;
+    bool text_params_ = false;
     std::uint64_t interpretation_revision_ = 0;
     std::map<std::uint32_t, std::pair<std::string, Reply>> interpretation_replies_;
     std::string session_;
