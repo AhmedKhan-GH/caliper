@@ -1,12 +1,15 @@
 """Bounded CPU checks for intervention transactions and control traffic."""
 from copy import deepcopy
 from contextlib import contextmanager
+import os
+import signal
 from threading import Event, Thread
 
 import pytest
 import torch
 
 from caliper.interp._intervene import InterventionError
+from tests.interp.concurrency_isolation import isolated_test, run_isolated_test
 from tests.interp.test_intervene import add_spec, controlled
 from tests.interp.test_intervention_replay import ReplayTransport, hook_objects, snapshot
 
@@ -58,8 +61,10 @@ def source_gate(model, function):
         yield job
     finally:
         release.set()
-        job.join()
-        observer.remove()
+        try:
+            job.join()
+        finally:
+            observer.remove()
 
 
 def other_thread(function):
@@ -79,6 +84,70 @@ def operation_call(ctl, service, operation, specs):
     if operation == "restore":
         return lambda: service.load_state_dict(snapshot(*deepcopy(specs)), restore_active=True)
     return lambda: service.apply_overrides(deepcopy(specs))
+
+
+@pytest.mark.parametrize("blocked_teardown", [False, True])
+def test_isolation_retains_failure_and_stops_child(tmp_path, blocked_teardown):
+    probe = tmp_path / "test_isolation_probe.py"
+    probe.write_text('''from threading import Event, Lock, Thread
+import os
+import signal
+import pytest
+
+@pytest.fixture
+def held_lock():
+    if BLOCKED_TEARDOWN and os.name != "nt":
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    lock, entered, release = Lock(), Event(), Event()
+
+    def hold():
+        with lock:
+            entered.set()
+            release.wait(30)
+
+    thread = Thread(target=hold)
+    thread.start()
+    assert entered.wait(2), "injected worker did not start"
+    yield lock
+    print("child fixture teardown entered", flush=True)
+    if BLOCKED_TEARDOWN:
+        assert lock.acquire(timeout=30), "injected cleanup wait expired"
+        lock.release()
+    print("child fixture teardown finished", flush=True)
+
+def test_failure(held_lock):
+    assert False, "injected child assertion survives"
+'''.replace("BLOCKED_TEARDOWN", repr(blocked_teardown)), encoding="utf-8")
+    result = run_isolated_test(f"{probe}::test_failure", tmp_path / "probe", timeout=10)
+    assert result.timed_out, result.output
+    assert result.returncode != 0, result.output
+    if os.name != "nt":
+        assert result.returncode == -(signal.SIGKILL if blocked_teardown else signal.SIGTERM)
+    assert "injected child assertion survives" in result.output
+    assert "child fixture teardown entered" in result.output
+    assert "Timeout (" in result.output and "in hold" in result.output
+    if blocked_teardown:
+        assert "child fixture teardown finished" not in result.output
+    else:
+        assert "child fixture teardown finished" in result.output
+        assert "1 failed" in result.output
+
+
+@isolated_test("controlled", "monkeypatch")
+def test_source_gate_removes_observer_when_join_fails(controlled, monkeypatch):
+    model, tokenizer, _, _ = controlled
+    hooks = hook_objects(model)
+    with pytest.raises(AssertionError, match="injected join failure"):
+        with source_gate(model, lambda: model(**tokenizer("ABC"))) as job:
+            join = job.join
+
+            def fail_join():
+                join()
+                raise AssertionError("injected join failure")
+
+            monkeypatch.setattr(job, "join", fail_join)
+    assert hook_objects(model) == hooks
+    assert job.done.is_set() and job.error is None
 
 
 @pytest.mark.parametrize("operation", ["boundary", "restore", "override"])
@@ -108,6 +177,7 @@ def test_source_forward_can_inspect_controls(controlled, operation):
 
 
 @pytest.mark.parametrize("operation", ["boundary", "restore", "override"])
+@isolated_test("controlled")
 def test_reads_and_harmless_network_control_complete_during_source(controlled, operation):
     model, _, ctl, service = controlled
     ctl.step()
@@ -136,6 +206,7 @@ def test_reads_and_harmless_network_control_complete_during_source(controlled, o
 
 
 @pytest.mark.parametrize("edit", ["replace", "clear", "clear_all", "new"])
+@isolated_test("controlled")
 def test_boundary_conflict_keeps_old_effect_and_queues_next_boundary(controlled, edit):
     model, tokenizer, ctl, service = controlled
     old = dict(PATCH, source_prompt="abc")
@@ -179,6 +250,7 @@ def test_boundary_conflict_keeps_old_effect_and_queues_next_boundary(controlled,
 
 @pytest.mark.parametrize("operation", ["restore", "override"])
 @pytest.mark.parametrize("edit", ["replace", "clear", "new"])
+@isolated_test("controlled")
 def test_restore_conflict_rolls_back_and_retains_concurrent_requests(controlled, operation, edit):
     model, tokenizer, ctl, service = controlled
     service.set(add_spec())
@@ -219,6 +291,7 @@ def test_restore_conflict_rolls_back_and_retains_concurrent_requests(controlled,
 
 
 @pytest.mark.parametrize("operation", ["boundary", "restore", "override"])
+@isolated_test("controlled")
 def test_detach_cancels_preparation_and_owns_deferred_cleanup(controlled, operation):
     model, _, ctl, service = controlled
     ctl.step()
@@ -277,6 +350,7 @@ def test_source_failure_restores_exact_hooks_records_and_cache(controlled, opera
 
 
 @pytest.mark.parametrize("action", ["configure", "restore", "override", "replay", "watch", "invalidate"])
+@isolated_test("controlled")
 def test_conflicting_lifecycle_operations_refuse_without_wait(controlled, action):
     model, _, ctl, service = controlled
     ctl.step()
@@ -305,6 +379,7 @@ def test_conflicting_lifecycle_operations_refuse_without_wait(controlled, action
 
 
 @pytest.mark.parametrize("detach", [False, True])
+@isolated_test("controlled", "monkeypatch")
 def test_network_dictionary_validation_releases_lock_and_pins_resources(controlled, monkeypatch, detach):
     _, tokenizer, ctl, service = controlled
     service.configure(dictionary=service.dictionary, tokenizer=tokenizer)
@@ -338,8 +413,10 @@ def test_network_dictionary_validation_releases_lock_and_pins_resources(controll
         other_thread(controls)
     finally:
         release.set()
-        job.join()
-        route.detach()
+        try:
+            job.join()
+        finally:
+            route.detach()
     reply = job.success()
     if detach:
         assert reply["status"] == "error" and "no longer attached" in reply["error"]["message"]
@@ -351,6 +428,7 @@ def test_network_dictionary_validation_releases_lock_and_pins_resources(controll
 
 
 @pytest.mark.parametrize("operation", ["restore", "override"])
+@isolated_test("controlled", "monkeypatch")
 def test_restore_rechecks_metadata_after_concurrent_parameter_admission(controlled, monkeypatch, operation):
     from caliper import _controls
     from python.tests.test_controls_budget import fill_budget
@@ -370,6 +448,7 @@ def test_restore_rechecks_metadata_after_concurrent_parameter_admission(controll
         ctl._check_metadata_budget()
 
 
+@isolated_test("controlled")
 def test_cancelled_late_activation_retains_overlap_order_at_next_boundary(controlled):
     model, tokenizer, ctl, service = controlled
     ablation = {"kind": "ablate", "point": "layers.0.mlp_out", "from_step": 10}
@@ -418,6 +497,7 @@ def test_boundary_source_failure_ends_only_failed_record(controlled):
     torch.testing.assert_close(model(**tokenizer("ABC")).logits, before, rtol=0, atol=0)
 
 
+@isolated_test("controlled", "monkeypatch")
 def test_cancelled_boundary_does_not_report_or_reset_linger(controlled, monkeypatch):
     _, _, ctl, service = controlled
     service.set(add_spec())

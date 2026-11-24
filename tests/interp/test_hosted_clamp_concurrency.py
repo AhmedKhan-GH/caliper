@@ -6,12 +6,14 @@ import pytest
 
 from caliper import _wire
 from caliper.interp._intervene import InterventionError
+from .concurrency_isolation import isolated_test
 from .test_controls_concurrency import Job, other_thread, source_gate
 from .test_hosted import hosted_run
 from .test_hosted_controls import _feature_rows, _queue_action
 
 
 @pytest.mark.parametrize("change", ["read", "clear", "replace", "detach", "configure"])
+@isolated_test("hosted_run", "monkeypatch")
 def test_unchanged_clamp_validation_releases_lock_and_retains_resources(hosted_run, monkeypatch, change):
     run, route = hosted_run
     run.selected.set(_feature_rows(run)[0])
@@ -76,6 +78,7 @@ def test_unchanged_clamp_validation_releases_lock_and_retains_resources(hosted_r
             assert service.state_dict() == queued and owned.hook is hook and not hook.removed
 
 
+@isolated_test("hosted_run")
 def test_owned_clamp_clear_invalidates_inflight_preparation(hosted_run):
     run, _ = hosted_run
     run.selected.set(_feature_rows(run)[0])
