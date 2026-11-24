@@ -160,13 +160,15 @@ def test_hf_identity_requires_resolved_checkpoint():
     revision = "a" * 40
     model = SimpleNamespace(config=SimpleNamespace(model_type="qwen3_5_text",
                             _name_or_path="Qwen/Qwen3.5-0.8B", _commit_hash=revision))
-    assert model_identity(model) == f"hf:Qwen/Qwen3.5-0.8B@{revision}"
+    assert _dictionary._hf_identity(model.config) == f"hf:Qwen/Qwen3.5-0.8B@{revision}"
+    with pytest.raises(ValueError, match="configuration does not verify"):
+        model_identity(model)
     model.config._commit_hash = "main"
     with pytest.raises(ValueError, match="exact HF"):
         model_identity(model)
     model.config._name_or_path = f"cache/models--Qwen--Qwen3.5-0.8B/snapshots/{revision}"
     model.config._commit_hash = None
-    assert model_identity(model).endswith("@" + revision)
+    assert _dictionary._hf_identity(model.config).endswith("@" + revision)
     model.config._commit_hash = "b" * 40
     with pytest.raises(ValueError, match="conflicts"):
         model_identity(model)
@@ -179,7 +181,9 @@ def test_hf_snapshot_separators_and_revision_conflict(separator, prefix):
     name = f"{prefix}/models--Qwen--Qwen3.5-0.8B/snapshots/{revision}".replace("/", separator)
     model = SimpleNamespace(config=SimpleNamespace(model_type="qwen3_5_text",
                             _name_or_path=name, _commit_hash=None))
-    assert model_identity(model) == f"hf:Qwen/Qwen3.5-0.8B@{revision}"
+    assert _dictionary._hf_identity(model.config) == f"hf:Qwen/Qwen3.5-0.8B@{revision}"
+    with pytest.raises(ValueError, match="configuration does not verify"):
+        model_identity(model)
     model.config._commit_hash = "b" * 40
     with pytest.raises(ValueError, match="conflicts"):
         model_identity(model)

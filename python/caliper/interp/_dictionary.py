@@ -6,6 +6,8 @@ import json
 import math
 from pathlib import Path
 import re
+from dataclasses import dataclass
+import weakref
 
 import torch
 from torch import nn
@@ -21,35 +23,74 @@ _STORED_DTYPES = {"F16": torch.float16, "BF16": torch.bfloat16,
 _FINITE_CHUNK_ELEMENTS = 65_536
 
 
-def weights_hash(model):
-    """Hash every named parameter and persistent buffer, including shape and dtype.
+# One digest chunk retains at most one CPU copy and one byte view.
+_HASH_CHUNK_BYTES = 1024 * 1024
+_UNVERIFIED_CPU_BYTES = 64 * 1024 * 1024
+_VERIFIED_MODELS = weakref.WeakKeyDictionary()
 
-    The byte order is little endian. Tensor names sort lexically. No forward sample
-    or subset of weights establishes the fixture identity.
-    """
+
+@dataclass(frozen=True)
+class _VerifiedWeights:
+    identity: str
+    digest: str
+    memory: object
+
+
+def _dense_state(state):
+    for tensor in state.values():
+        if (not isinstance(tensor, torch.Tensor) or tensor.layout != torch.strided
+                or tensor.device.type == "meta" or not tensor.is_contiguous()
+                or tensor.is_conj() or tensor.is_neg()):
+            raise ValueError("model identity requires materialized contiguous dense tensors")
+    return state
+
+
+def _hash_admission(memory, limit_gb=None, *, force=False):
+    if memory is None:
+        return
+    memory.check("model_identity", force=force)
+    limit = memory.limit if limit_gb is None else min(memory.limit, int(limit_gb * 1e9))
+    if memory.peak + 4 * _HASH_CHUNK_BYTES > limit:
+        raise CleanStop("model identity allocation exceeds the process memory limit")
+
+
+def _state_hash(state, *, memory=None, limit_gb=None):
+    _dense_state(state)
+    _hash_admission(memory, limit_gb, force=True)
     digest = hashlib.sha256(b"caliper.weights.v1\0")
-    for name, tensor in sorted(model.state_dict().items()):
-        if tensor.layout != torch.strided or tensor.device.type == "meta":
-            raise ValueError("model identity requires materialized dense tensors")
+    for name, tensor in sorted(state.items()):
+        if tensor.device.type != "cpu" and memory is None:
+            raise ValueError("device weight identity requires a process memory guard")
+        if tensor.device.type != "cpu" and tensor.device != memory.device:
+            raise ValueError("verify HF weights again after a model device change")
         header = json.dumps([name, str(tensor.dtype), list(tensor.shape)],
                             separators=(",", ":")).encode("utf-8")
         digest.update(len(header).to_bytes(8, "little"))
         digest.update(header)
-        raw = tensor.detach().cpu().contiguous().reshape(-1).view(torch.uint8).numpy()
-        digest.update(memoryview(raw))
+        # Contiguity was checked before flattening. This view cannot copy weights.
+        flat = tensor.detach().view(-1)
+        count = max(1, _HASH_CHUNK_BYTES // tensor.element_size())
+        for start in range(0, flat.numel(), count):
+            _hash_admission(memory, limit_gb)
+            with autorelease_scope(tensor.device):
+                chunk = flat[start:start + count].to(device="cpu")
+                raw = chunk.view(torch.uint8).numpy()
+                digest.update(memoryview(raw))
+                del raw, chunk
     return "sha256:" + digest.hexdigest()
 
 
-def model_identity(model):
-    """Return the fixture weights hash or an exact HF checkpoint identity.
+def weights_hash(model, *, memory=None):
+    """Hash every named parameter and persistent buffer, with bounded CPU copies.
 
-    HF models must retain their resolved commit and repository name. A local HF
-    snapshot path also supplies both fields. A branch name is not a revision.
+    Tensor names sort lexically. The bytes match the original fixture digest.
+    Noncontiguous tensors are refused before any flatten or device copy.
     """
-    config = getattr(model, "config", None)
-    family = getattr(config, "model_type", None)
-    if family == "caliper_tiny" or config is None:
-        return weights_hash(model)
+    return _state_hash(model.state_dict(), memory=memory)
+
+
+def _hf_identity(config):
+    """Parse checkpoint metadata without a claim about the actual weights."""
     name = str(getattr(config, "_name_or_path", "")).replace("\\", "/")
     revision = getattr(config, "_commit_hash", None)
     snapshot = re.search(r"(?:^|/)models--([^/]+)/snapshots/([0-9a-f]{40})(?:/|$)", name)
@@ -62,6 +103,147 @@ def model_identity(model):
     if not re.fullmatch(r"[^/\s]+/[^/\s]+", name) or not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("model identity requires an exact HF repository and commit")
     return f"hf:{name}@{revision}"
+
+
+def _hf_digest(model, *, memory=None, limit_gb=None):
+    state = model.state_dict()
+    # Nonpersistent buffers can affect the forward but do not occur in state_dict.
+    buffers = {name: value for name, value in model.named_buffers() if name not in state}
+    persistent = _state_hash(state, memory=memory, limit_gb=limit_gb)
+    transient = _state_hash(buffers, memory=memory, limit_gb=limit_gb)
+    return hashlib.sha256((persistent + transient).encode("ascii")).hexdigest()
+
+
+def _record_verified_hf_load(model, *, memory):
+    """Record a baseline only after the trusted loader verifies complete weights."""
+    identity = _hf_identity(model.config)
+    digest = _hf_digest(model, memory=memory)
+    _VERIFIED_MODELS[model] = _VerifiedWeights(identity, digest, memory)
+
+
+def model_identity(model, *, memory_limit_gb=None):
+    """Return a verified checkpoint identity or a bounded CPU content identity.
+
+    Configuration fields never prove weights. A trusted local load supplies the
+    baseline. Every later check reads all weights in fixed-size chunks, including
+    changes through ``.data`` aliases. A device or large external model requires
+    ``verify_hf_model`` before it can use a pinned HF dictionary.
+    """
+    config = getattr(model, "config", None)
+    if getattr(config, "model_type", None) == "caliper_tiny" or config is None:
+        return weights_hash(model)
+    identity = _hf_identity(config)
+    if not isinstance(model, nn.Module):
+        raise ValueError("HF configuration does not verify model weights")
+    verified = _VERIFIED_MODELS.get(model)
+    if verified is not None:
+        if (identity != verified.identity
+                or _hf_digest(model, memory=verified.memory, limit_gb=memory_limit_gb) != verified.digest):
+            raise ValueError("dictionary model identity mismatch: verified checkpoint weights changed")
+        return identity
+    state = _dense_state(model.state_dict())
+    buffers = _dense_state(dict(model.named_buffers()))
+    tensors = [*state.values(), *buffers.values()]
+    if (any(value.device.type != "cpu" for value in tensors)
+            or sum(value.numel() * value.element_size() for value in tensors) > _UNVERIFIED_CPU_BYTES):
+        raise ValueError("unverified HF weights: call verify_hf_model with the local checkpoint first")
+    content = _hf_digest(model)
+    return "sha256:" + hashlib.sha256((identity + content).encode("utf-8")).hexdigest()
+
+
+def _checkpoint_slices(shape, maximum, prefix=()):
+    """Yield row-major slices whose materialized size stays within the cap."""
+    if not shape:
+        yield prefix
+    elif math.prod(shape[1:]) <= maximum:
+        step = max(1, maximum // max(1, math.prod(shape[1:])))
+        for start in range(0, shape[0], step):
+            yield prefix + (slice(start, start + step),) + (slice(None),) * (len(shape) - 1)
+    else:
+        for index in range(shape[0]):
+            yield from _checkpoint_slices(shape[1:], maximum, prefix + (index,))
+
+
+def verify_hf_model(model, snapshot, *, key_mapping=None, memory_limit_gb=12):
+    """Verify an external model against a local HF safetensors snapshot.
+
+    The snapshot path must identify the same repository and exact commit as the
+    model configuration. This function does not download or accept a claimed
+    digest. It reads the local checkpoint as trusted source data. Each optional
+    ``key_mapping`` entry maps a literal checkpoint prefix to a model prefix.
+    Missing or extra tensors, ambiguous mappings, and changed weights are errors.
+    Tied parameters can share one checkpoint entry. Nonpersistent buffers form
+    part of the baseline for subsequent checks.
+
+    Converted slices and CPU transfers stay within fixed chunk limits. The
+    function returns the verified HF identity and records private provenance for
+    this model instance. Every later identity check reads all current weights.
+    """
+    from types import SimpleNamespace
+    from safetensors import safe_open
+
+    if type(memory_limit_gb) not in (int, float) or not 0 < memory_limit_gb <= 12:
+        raise ValueError("verification memory limit must be positive and at most 12 GB")
+    identity = _hf_identity(model.config)
+    snapshot = Path(snapshot)
+    source_identity = _hf_identity(SimpleNamespace(_name_or_path=str(snapshot), _commit_hash=None))
+    if identity != source_identity:
+        raise ValueError("checkpoint snapshot identity differs from the model")
+    state = _dense_state(model.state_dict(keep_vars=True))
+    if not state:
+        raise ValueError("checkpoint verification requires model weights")
+    devices = {value.device for value in state.values()}
+    if len(devices) != 1:
+        raise ValueError("checkpoint verification requires one model device")
+    memory = MemoryGuard(memory_limit_gb, next(iter(devices)))
+    _hash_admission(memory)
+    mapping = {} if key_mapping is None else key_mapping
+    if (not isinstance(mapping, dict) or any(not isinstance(k, str) or not k
+            or not isinstance(v, str) for k, v in mapping.items())):
+        raise ValueError("checkpoint key mappings require nonempty literal prefixes")
+    files = sorted(snapshot.glob("*.safetensors"))
+    if not files:
+        raise ValueError("local checkpoint has no safetensors files")
+    entries = {}
+    for path in files:
+        with safe_open(path, framework="pt", device="cpu") as source:
+            for key in source.keys():
+                prefixes = [prefix for prefix in mapping if key.startswith(prefix)]
+                if len(prefixes) > 1:
+                    raise ValueError("ambiguous checkpoint key mapping")
+                name = mapping[prefixes[0]] + key[len(prefixes[0]):] if prefixes else key
+                if name not in state or name in entries:
+                    raise ValueError("checkpoint has unexpected or duplicate model weights")
+                view = source.get_slice(key)
+                stored = _STORED_DTYPES.get(view.get_dtype())
+                if stored is None or state[name].dtype not in _DTYPES or tuple(view.get_shape()) != tuple(state[name].shape):
+                    raise ValueError("checkpoint tensor shape or dtype differs from the model")
+                entries[name] = (path, key, stored)
+                del view
+    # Only an actual shared Parameter object can justify an omitted tied key.
+    for name, value in state.items():
+        if name not in entries:
+            tied = next((other for other in entries if state[other] is value), None)
+            if tied is None:
+                raise ValueError("checkpoint is missing model weights")
+            entries[name] = entries[tied]
+    before = _hf_digest(model, memory=memory)
+    for name, value in state.items():
+        path, key, stored = entries[name]
+        maximum = _HASH_CHUNK_BYTES // max(stored.itemsize, value.element_size())
+        for selection in _checkpoint_slices(tuple(value.shape), maximum):
+            _hash_admission(memory)
+            # Close each mapping after its bounded slice to release source pages.
+            with autorelease_scope(value.device), safe_open(path, framework="pt", device="cpu") as source:
+                expected = source.get_slice(key)[selection].to(dtype=value.dtype).reshape(-1).view(torch.uint8)
+                actual = value.detach()[selection].to(device="cpu").reshape(-1).view(torch.uint8)
+                if not torch.equal(expected, actual):
+                    raise ValueError("model weights differ from the local checkpoint")
+                del expected, actual
+    if _hf_identity(model.config) != identity or _hf_digest(model, memory=memory) != before:
+        raise ValueError("model weights changed during checkpoint verification")
+    _VERIFIED_MODELS[model] = _VerifiedWeights(identity, before, memory)
+    return identity
 
 
 class TopKTranscoder(nn.Module):
@@ -224,6 +406,8 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
     ``memory_limit_gb`` uses decimal GB and includes current process/model memory,
     destination weights, and temporary conversion storage. All headers pass byte
     admission before tensor materialization. Resource refusal raises ``CleanStop``.
+    An external HF model requires ``verify_hf_model(model, snapshot)`` to match a
+    pinned HF manifest. The snapshot is a trusted local safetensors checkpoint.
     """
     from safetensors import safe_open
 
@@ -234,13 +418,16 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
         model = _programs._STATE.get("model")
     if model is None and model_hash is None:
         raise ValueError("supply a model or expected model_hash, or watch a model first")
-    actual = model_identity(model) if model is not None else model_hash
+    actual = model_identity(model, memory_limit_gb=memory_limit_gb) if model is not None else model_hash
     if model_hash is not None and actual != model_hash:
         raise ValueError("supplied model and expected model_hash differ")
     folder = Path(path)
     data = _manifest(json.loads((folder / "dictionary.json").read_text(encoding="utf-8"),
                                 parse_constant=_reject_constant))
     if actual != data["model_hash"]:
+        if model is not None and data["model_hash"].startswith("hf:") and model not in _VERIFIED_MODELS:
+            raise ValueError("dictionary model identity mismatch: verify_hf_model(model, snapshot) "
+                             "must verify external HF weights against the local checkpoint first")
         raise ValueError("dictionary model identity mismatch")
     if model is not None:
         config = getattr(model, "config", None)

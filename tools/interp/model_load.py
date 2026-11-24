@@ -7,6 +7,9 @@ from pathlib import Path
 
 import torch
 
+from caliper.interp._dictionary import _record_verified_hf_load
+from caliper.interp._memory import MemoryGuard
+
 
 MODEL_ID = "Qwen/Qwen3.5-0.8B"
 MODEL_REVISION = "2fc06364715b967f1860aea9cf38778875588b17"
@@ -21,6 +24,8 @@ def load_text_model(*, device="mps", memory=None):
     from huggingface_hub import snapshot_download
     from transformers import AutoTokenizer, Qwen3_5ForCausalLM, Qwen3_5TextConfig
 
+    if memory is None:
+        memory = MemoryGuard(12, device)
     snapshot = Path(snapshot_download(MODEL_ID, revision=MODEL_REVISION, local_files_only=True))
     config = Qwen3_5TextConfig(**json.loads((snapshot / "config.json").read_text())["text_config"])
     if (config.num_hidden_layers, config.hidden_size) != (24, 1024):
@@ -40,6 +45,8 @@ def load_text_model(*, device="mps", memory=None):
     model.requires_grad_(False).eval()
     if memory:
         memory.check("after_model_cpu_load")
+    # The complete CPU load establishes the digest in the final float32 dtype.
+    _record_verified_hf_load(model, memory=memory)
     model.to(device=device, dtype=torch.float32)
     if memory:
         memory.check("after_model_device_load")
