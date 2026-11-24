@@ -149,7 +149,8 @@ If memory admission prevents that verification, the evaluator preserves the prio
 The 23 November decision accepts the 8,192-feature dictionary and supersedes the earlier quality fallback plan.
 This run completes 40 million tokens and then evaluates quality, builds the example index, and captures the hidden Qwen demo.
 No new dictionary run or upper-half retraining is authorized. Failed causal checks remain failures and retain their captures.
-The feature-share, graph-validation, steering, pixel, parity, and budget checks remain unchanged.
+The feature-share, graph-validation, parity, and budget checks remain unchanged.
+The later 24 November decision revises the steering and bar direction rules in Validation And Delivery.
 
 The library retains upper-half dictionary support for existing artifacts.
 Such a dictionary represents the lower half through error nodes.
@@ -258,6 +259,7 @@ Fork checkpoints carry the full intervention specification.
 
 Output comparison uses one batch of two: baseline and intervention. It publishes `output.probs` with shape `(2, 10)`.
 `output.tokens` has shape `(10,)`. The bars share token IDs and retain a baseline ghost bar.
+The comparison reserves slots for both baseline and intervention argmax token IDs, even when either leaves the other row's top ten.
 The generate action emits 24 greedy tokens for each case as bound text.
 The feature slider spans negative four to positive four times the indexed maximum, with zero as ablation.
 A reset removes the intervention. A retrace toggle controls whether the graph also updates.
