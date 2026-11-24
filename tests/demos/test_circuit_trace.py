@@ -286,7 +286,8 @@ def test_session_event_and_mcp_close_faults_preserve_app_cleanup(tmp_path):
         app.stdin.close()
 
 
-def test_session_ready_failure_reaps_owned_standard_library_child(tmp_path):
+@pytest.mark.parametrize("model,display", [("tiny-lm", "1"), ("local-qwen", None)])
+def test_session_ready_failure_reaps_owned_standard_library_child(tmp_path, monkeypatch, model, display):
     from types import SimpleNamespace
     from unittest.mock import patch
     import psutil
@@ -294,7 +295,7 @@ def test_session_ready_failure_reaps_owned_standard_library_child(tmp_path):
     child.write_text(f"#!{sys.executable}\n" + "\n".join([
         "import json, os, pathlib, signal",
         "folder = pathlib.Path(os.environ['CALIPER_DATA_DIR'])",
-        "(folder / 'probe.json').write_text(json.dumps({'pid': os.getpid()}))",
+        "(folder / 'probe.json').write_text(json.dumps({'pid': os.getpid(), 'display': os.getenv('CALIPER_FIXTURE_DISPLAY_MPS')}))",
         "signal.pause()",
     ]) + "\n")
     child.chmod(0o700)
@@ -302,12 +303,14 @@ def test_session_ready_failure_reaps_owned_standard_library_child(tmp_path):
     def fail_ready(path, **kwargs):
         actual_wait(path.parent / "probe.json", timeout=5, **kwargs)
         raise Failure("injected ready-file failure")
-    args = SimpleNamespace(model="tiny-lm", dictionary=str(tmp_path), prompt=FIXTURE_PROMPT)
+    monkeypatch.setenv("CALIPER_FIXTURE_DISPLAY_MPS", "1")
+    args = SimpleNamespace(model=model, dictionary=str(tmp_path), prompt=FIXTURE_PROMPT)
     with patch.object(driver, "executable", return_value=child), patch.object(driver, "wait_file", side_effect=fail_ready):
         with pytest.raises(Failure, match="injected ready-file failure"):
             driver.Session(args, tmp_path / "owned")
-    pid = json.loads((tmp_path / "owned/data/probe.json").read_text())["pid"]
-    assert not psutil.pid_exists(pid)
+    probe = json.loads((tmp_path / "owned/data/probe.json").read_text())
+    assert probe["display"] == display
+    assert not psutil.pid_exists(probe["pid"])
 
 
 def test_instrument_uses_three_panels_and_confirmed_bindings():

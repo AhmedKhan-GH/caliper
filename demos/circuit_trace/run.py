@@ -75,6 +75,10 @@ class Session:
                    CALIPER_USER_APPLETS_DIR=str(out / "user-applets"), CALIPER_WINDOW_SIZE="1600x1000",
                    CALIPER_HIDDEN="0" if show else "1", TMPDIR=str(out / "temp"),
                    PYTHONPYCACHEPREFIX=str(out / "pycache"))
+        if args.model == "tiny-lm":
+            env["CALIPER_FIXTURE_DISPLAY_MPS"] = "1"
+        else:
+            env.pop("CALIPER_FIXTURE_DISPLAY_MPS", None)
         env["PYTHONPATH"] = os.pathsep.join([str(ROOT / "python"), str(ROOT), *[
             str(Path(entry).resolve()) for entry in env.get("PYTHONPATH", "").split(os.pathsep) if entry]])
         # This mode applies only to the task's new data folder.

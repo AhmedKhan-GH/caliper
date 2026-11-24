@@ -259,7 +259,7 @@ Set `HEAVY_WRAPPER` to the task's resource wrapper and `DEMO_OUT` to a new folde
 Run the hidden fixture after exclusive graphics access becomes available:
 
 ```sh
-"$HEAVY_WRAPPER" 'GPU circuit fixture' "${DEMO_OUT}.log" \
+"$HEAVY_WRAPPER" 'GPU MODEL circuit fixture' "${DEMO_OUT}.log" \
   env CALIPER_AGENT_OFFLINE=1 PYTHONPATH=python:. \
   .venv/bin/python demos/circuit_trace/run.py --model tiny-lm \
   --dictionary "$FIXTURE_DICTIONARY" --hidden --out "$DEMO_OUT"
@@ -281,9 +281,19 @@ The Qwen prompt is `Paris is the capital of`.
 Every control operation uses Caliper MCP, including feature selection, examples, clamps, validation, and window capture.
 The driver waits for file events, run events, and published steps.
 
+For `tiny-lm`, the driver sets `CALIPER_FIXTURE_DISPLAY_MPS=1` in its child environment.
+This option copies only 18 fixed display tensors to MPS, with a total limit of 256 KiB.
+The copies use the shared 12 GB process guard, and a resource stop remains in effect.
+The model, dictionary, attribution math, and reference hash stay on the unchanged CPU fixture.
+Ordinary CPU fixture runs leave this option disabled.
+The driver removes this option for Qwen.
+
 Only the founder uses `--show` in place of `--hidden`.
 The visible form retains its MCP event bridge until its own app closes.
 A graph pick updates `selected_node`, requests the feature examples, and fills the example strip.
+After a trace changes the selected node, the bridge updates the graph state and examples through MCP.
+When the run clears selection, the bridge clears the strip.
+
 Enable Automatic Trace for prompt edits that also update the graph.
 The visible result records that hidden pixel evidence was not collected and makes no Qwen acceptance claim.
 
