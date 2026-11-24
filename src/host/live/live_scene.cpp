@@ -147,6 +147,7 @@ struct SceneView::ProgramSlot {
     std::deque<std::pair<caliper_gfx::Serial, std::chrono::steady_clock::time_point>> pending;
     int reported = -1;
     int64_t reported_step = -2;   // the resource step of the last report
+    double reported_ms = -1;     // the completed draw timing of the last report
     std::chrono::steady_clock::time_point installed;
 };
 
@@ -635,17 +636,16 @@ Aabb program_box() {
     return b;
 }
 
-// Gives the feed the program's status at a change of its state and at each
-// new step of the resources that a frame drew, so that program.status shows
-// that step, the frame time and the memory of the newest version, not those
-// of the last change of state; the host makes an event only at a change of
-// state.
-void report_state(caliper_draw::DrawFeed* feed, int* reported, int64_t* reported_step,
+// The feed receives changes of state, resource step, and completed draw timing.
+// A timing can arrive after the report of its resource step. The host emits
+// an event only when the state changes.
+void report_state(caliper_draw::DrawFeed* feed, int* reported, int64_t* reported_step, double* reported_ms,
                   const caliper_draw::DrawRuntime& rt) {
     const caliper_draw::DrawStatus st = rt.status();
-    if (int(st.state) == *reported && st.resource_step == *reported_step) return;
+    if (int(st.state) == *reported && st.resource_step == *reported_step && st.frame_ms == *reported_ms) return;
     *reported = int(st.state);
     *reported_step = st.resource_step;
+    *reported_ms = st.frame_ms;
     if (feed) feed->status(rt);
 }
 
@@ -693,7 +693,7 @@ void SceneView::reconcile_programs() {
 #if defined(CALIPER_SCENE_PIECES)
                 if (shape) shapes_->installed(p.instance.program);
 #endif
-                report_state(feed, &slot->reported, &slot->reported_step, *slot->runtime);
+                report_state(feed, &slot->reported, &slot->reported_step, &slot->reported_ms, *slot->runtime);
             }
             next.push_back(std::move(slot));
         }
@@ -817,7 +817,7 @@ void SceneView::draw_programs() {
                 d->pending.emplace_back(s, std::chrono::steady_clock::now());
             }
         }
-        report_state(feed, &d->reported, &d->reported_step, *d->runtime);
+        report_state(feed, &d->reported, &d->reported_step, &d->reported_ms, *d->runtime);
     }
     refresh_piece_notes();
 #endif
@@ -841,7 +841,7 @@ void SceneView::poll_programs() {
             completed = true;
         }
         if (!d->pending.empty()) d->runtime->frame_pending(ms_since(d->pending.front().second));
-        report_state(slot_feed(*d), &d->reported, &d->reported_step, *d->runtime);
+        report_state(slot_feed(*d), &d->reported, &d->reported_step, &d->reported_ms, *d->runtime);
     }
     refresh_piece_notes();
     // The programs of the panel together: over 16.7 ms a frame on 30 polls in a row stops the

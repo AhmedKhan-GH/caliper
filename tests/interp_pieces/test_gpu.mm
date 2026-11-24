@@ -434,6 +434,8 @@ TEST_CASE("native scene pointer hover shows labels without a click or derive upd
             cs::Piece piece = ip::load("attribution_graph");
             std::vector<Published> data;
             std::uint64_t resource_revision = 1, sent = 0;
+            bool unmeasured = false;
+            double reported_ms = -1;
             std::uint64_t revision() const override { return 1; }
             std::vector<cd::PanelProgram> programs() const override {
                 return {{piece, {"graph", {}, "graph"}, mr::kPiecePick, 1, {}}};
@@ -451,7 +453,14 @@ TEST_CASE("native scene pointer hover shows labels without a click or derive upd
                 Json params = Json::object(); params.set("selected_node", 4);
                 in->params = caliper_web::pack_params(piece, params);
             }
-            void status(const cd::DrawRuntime& rt) override { CHECK_MESSAGE(rt.status().error.ok(), rt.status().error.message); }
+            void status(const cd::DrawRuntime& rt) override {
+                const auto status = rt.status();
+                CHECK_MESSAGE(status.error.ok(), status.error.message);
+                if (status.resource_step == 1) {
+                    unmeasured = unmeasured || status.frame_ms < 0;
+                    reported_ms = status.frame_ms;
+                }
+            }
         } feed;
         feed.data = mr::run_derive((__bridge id<MTLDevice>)canvas->native_device(), feed.piece, graph_tensors(), {{"selected_node",4}});
         caliper_live_views::SceneView view(*backend, caliper_gfx::shaders::kMetalPrograms);
@@ -493,6 +502,9 @@ TEST_CASE("native scene pointer hover shows labels without a click or derive upd
         };
         move(-100, -100);
         until([&] { return has("label 36"); });
+        until([&] { return feed.reported_ms >= 0; });
+        CHECK(feed.unmeasured);
+        CHECK(feed.sent == 1);
         REQUIRE(std::holds_alternative<caliper_scene::PanZoom>(view.camera()));
         CHECK_FALSE(std::get<caliper_scene::PanZoom>(view.camera()).y_down);
         const auto clip = view.program_clip();
