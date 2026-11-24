@@ -15,6 +15,38 @@ from ._points import _architecture, capture
 from ._memory import MemoryGuard as ProcessMemoryGuard, CleanStop, free_percent, autorelease_scope
 
 
+# Mixed storage precision needs at most this many converted encoder elements,
+# or one row when the residual width exceeds the block limit.
+_ENCODER_BLOCK_ELEMENTS = 1_048_576
+
+
+def _trace_features(layer, x, guard):
+    """Evaluate TopK in model precision without a converted dictionary copy."""
+    if layer.W_enc.dtype == x.dtype and layer.b_enc.dtype == x.dtype:
+        return layer.encode(x).detach()
+    latents, width = layer.W_enc.shape
+    rows = max(1, _ENCODER_BLOCK_ELEMENTS // width)
+    preactivation = x.new_empty(*x.shape[:-1], latents)
+    for start in range(0, latents, rows):
+        with autorelease_scope(x.device):
+            guard.check("dictionary encoder block")
+            stop = min(start + rows, latents)
+            preactivation[..., start:stop] = F.linear(
+                x, layer.W_enc.detach()[start:stop].to(x.dtype),
+                layer.b_enc.detach()[start:stop].to(x.dtype))
+    values, indices = preactivation.relu_().topk(layer.k, dim=-1)
+    return torch.zeros_like(preactivation).scatter_(-1, indices, values)
+
+
+def _trace_reconstruction(layer, features):
+    """Decode in model precision with copies of only the selected TopK rows."""
+    if layer.W_dec.dtype == features.dtype and layer.b_dec.dtype == features.dtype:
+        return layer.decode(features)
+    values, indices = features[0].topk(layer.k, dim=-1)
+    decoders = layer.W_dec.detach()[indices].to(features.dtype)
+    return torch.einsum("tk,tkw->tw", values, decoders)[None] + layer.b_dec.detach().to(features.dtype)
+
+
 def _validate_dictionary(model, dictionary):
     """Check identity, dimensions, and probes before any model forward."""
     data = dictionary.metadata
@@ -488,19 +520,25 @@ class FrozenPath:
                     x = values[f"{base}.mlp_in"]
                     y = values[f"{base}.mlp_out"]
                     layer = dictionary.layers[i]
-                    a = dictionary.encode(i, x.to(layer.W_enc.dtype)).detach()
+                    a = _trace_features(layer, x, self.guard)
                     raw = recorded[f"{i}.mlp_raw"]
-                    output = FrozenFeatures(a.to(self.dtype), layer, [s for s in interventions
+                    output = FrozenFeatures(a, layer, [s for s in interventions
                         if s["point"] in (f"{base}.mlp", f"{base}.mlp_out")])
                     self.feature_outputs.append(output)
-                    transformed = torch.zeros_like(a, dtype=self.dtype).scatter_add(
+                    transformed = torch.zeros_like(a).scatter_add(
                         -1, output.indices[None], output.activations[None])
-                    reconstruction = dictionary.decode(i, a).to(self.dtype)
+                    reconstruction = _trace_reconstruction(layer, a)
                     error = output.scale * (raw - reconstruction)
                     decoder_bias = output.scale * layer.b_dec.detach().to(self.dtype)
+                    # Explicit edits can add signed features outside the original TopK.
+                    if layer.W_dec.dtype == self.dtype:
+                        decoded = transformed @ layer.W_dec.detach()
+                    else:
+                        self.guard.check("edited dictionary decoder rows")
+                        rows = layer.W_dec.detach()[output.indices].to(self.dtype)
+                        decoded = torch.einsum("tk,tkw->tw", output.activations, rows)[None]
                     # Only known output constants enter this term. Errors describe the raw MLP.
-                    decoded = transformed.to(layer.W_dec.dtype) @ layer.W_dec.detach()
-                    offset = y - decoded.to(self.dtype) - decoder_bias - error
+                    offset = y - decoded - decoder_bias - error
                     self.inputs.append(x)
                     self.outputs.append(y)
                     self.features.append(transformed)
