@@ -1,6 +1,7 @@
 """Frozen value paths for the fixture and the Qwen3.5 text decoder."""
 from __future__ import annotations
 
+from collections import deque
 from contextlib import ExitStack
 import json
 import time
@@ -8,18 +9,54 @@ import time
 import torch
 from torch.nn import functional as F
 
+from ._dictionary import model_identity
 from ._points import _architecture, capture
 from ._memory import MemoryGuard as ProcessMemoryGuard, CleanStop, free_percent, autorelease_scope
 
 
+def _validate_dictionary(model, dictionary):
+    """Check identity, dimensions, and probes before any model forward."""
+    data = dictionary.metadata
+    if not isinstance(data, dict) or data.get("model_hash") != model_identity(model):
+        raise ValueError("dictionary model identity mismatch")
+    config = model.config
+    if (data.get("layers"), data.get("width")) != (config.num_hidden_layers, config.hidden_size):
+        raise ValueError("dictionary dimensions differ from the model")
+    if len(dictionary.layers) != data["layers"]:
+        raise ValueError("dictionary layer count differs from the model")
+    probes = _architecture(model)
+    for field, suffix in (("read_points", "mlp_in"), ("write_points", "mlp_out")):
+        expected = [name for name in probes if name.endswith("." + suffix)]
+        if data.get(field) != expected:
+            raise ValueError(f"dictionary {field} differ from model probes")
+    latents, k = data.get("latents"), data.get("k")
+    if (data.get("activation") != "topk" or type(latents) is not int or type(k) is not int
+            or not 1 <= k <= latents):
+        raise ValueError("dictionary requires valid TopK metadata")
+    shapes = {"W_enc": (latents, config.hidden_size), "W_dec": (latents, config.hidden_size),
+              "b_enc": (latents,), "b_dec": (config.hidden_size,)}
+    device = next(model.parameters()).device
+    for layer in dictionary.layers:
+        if layer.k != k:
+            raise ValueError("dictionary TopK differs from its metadata")
+        for name, shape in shapes.items():
+            value = getattr(layer, name)
+            if tuple(value.shape) != shape:
+                raise ValueError(f"dictionary {name} shape differs from its metadata")
+            if value.device != device:
+                raise ValueError("dictionary and model must share one device")
+    return probes
+
+
 class MemoryGuard:
-    """Record MPS allocation at stage boundaries and enforce the demo limit."""
+    """Keep recent stage records and the process peak, and enforce the demo limit."""
 
     limit = 12_000_000_000
+    record_limit = 128
 
     def __init__(self, device):
         self.device = torch.device(device)
-        self.records = []
+        self.records = deque(maxlen=self.record_limit)
         self._pressure_time = -float("inf")
         self._pressure_value = 100.
         self._guard = ProcessMemoryGuard(12, self.device, pressure=self._pressure)
@@ -188,6 +225,7 @@ class FrozenPath:
     """
 
     def __init__(self, model, input_ids, dictionary, *, guard=None):
+        probes = _validate_dictionary(model, dictionary)
         parameter = next(model.parameters())
         self.device, self.dtype = parameter.device, parameter.dtype
         self.guard = guard or MemoryGuard(self.device)
@@ -195,7 +233,6 @@ class FrozenPath:
             raise ValueError("trace requires an evaluation model")
         if self.dtype not in (torch.float32, torch.float64):
             raise ValueError("trace requires float32 or float64 model weights")
-        probes = _architecture(model)
         self.qwen = model.config.model_type == "qwen3_5_text"
         if self.qwen and self.dtype != torch.float32:
             raise ValueError("Qwen tracing requires float32 model weights")
@@ -203,8 +240,6 @@ class FrozenPath:
         prefix = next(iter(probes)).rsplit(".", 2)[0]
         self.blocks = modules[prefix]
         root = model.model if self.qwen else model
-        if len(dictionary.layers) != len(self.blocks):
-            raise ValueError("dictionary layer count differs from the model")
         self.layers = len(self.blocks)
         self.tokens = input_ids.shape[1]
         self.width = model.config.hidden_size
@@ -271,10 +306,6 @@ class FrozenPath:
                     x = values[f"{base}.mlp_in"]
                     y = values[f"{base}.mlp_out"]
                     layer = dictionary.layers[i]
-                    if layer.W_enc.shape[1] != self.width or layer.W_dec.shape != layer.W_enc.shape:
-                        raise ValueError("dictionary width or decoder shape differs from the model")
-                    if layer.W_enc.device != self.device:
-                        raise ValueError("dictionary and model must share one device")
                     a = dictionary.encode(i, x.to(layer.W_enc.dtype)).detach()
                     reconstruction = dictionary.decode(i, a).to(self.dtype)
                     self.inputs.append(x)

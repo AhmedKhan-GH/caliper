@@ -227,7 +227,10 @@ void RunConnection::on_message(const std::vector<std::uint8_t>& bytes) {
         }
         if (rep.op == CALIPER_NET_OP_INTERPRET) {
             auto it = interpretation_replies_.find(rep.request_id);
-            if (it != interpretation_replies_.end()) { it->second.second = rep; ++interpretation_revision_; }
+            if (it != interpretation_replies_.end() && it->second.second.status == CALIPER_NET_STATUS_QUEUED) {
+                it->second.second = rep;
+                ++interpretation_revision_;
+            }
         } else replies_.push_back(std::move(rep));
     } else if (const auto* p = std::get_if<wire::Ping>(&msg)) {
         std::vector<std::uint8_t> out;
@@ -248,9 +251,11 @@ void RunConnection::on_message(const std::vector<std::uint8_t>& bytes) {
             rep.error_message = e->message;
             auto it = interpretation_replies_.find(rep.request_id);
             if (it != interpretation_replies_.end()) {
-                rep.op = CALIPER_NET_OP_INTERPRET;
-                it->second.second = rep;
-                ++interpretation_revision_;
+                if (it->second.second.status == CALIPER_NET_STATUS_QUEUED) {
+                    rep.op = CALIPER_NET_OP_INTERPRET;
+                    it->second.second = rep;
+                    ++interpretation_revision_;
+                }
             } else replies_.push_back(std::move(rep));
         }
     } else if (std::get_if<wire::Bye>(&msg)) {

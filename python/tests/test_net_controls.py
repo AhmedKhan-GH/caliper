@@ -616,3 +616,59 @@ def test_free_text_capability_round_trip(mode, ctl, make_server):
             controls = await old.expect(w.Controls)
             assert controls.params == []
     run(check())
+
+
+def test_interpretation_ack_precedes_early_completion(mode, ctl, make_server, tmp_path, monkeypatch):
+    from caliper import _net_controls
+    from caliper.interp import load_dictionary
+    from caliper.interp._service import register_service, unregister_service
+    from tests.interp.test_dictionary import write_fixture
+
+    model, _ = write_fixture(tmp_path)
+    dictionary = load_dictionary(tmp_path, model=model)
+    acknowledged = threading.Event()
+    sent = []
+    original_send = _net_controls.ControlsPort._send
+
+    def send(port, link, frame):
+        message = w.decode(frame)
+        original_send(port, link, frame)
+        if isinstance(message, w.ControlReply) and message.op == "interpret":
+            sent.append(message.status)
+            if message.status == "queued":
+                acknowledged.set()
+
+    def factory():
+        assert acknowledged.is_set(), "The run saw work before the queue acknowledgment."
+        return dictionary
+
+    monkeypatch.setattr(_net_controls.ControlsPort, "_send", send)
+    service = register_service(dictionary_factory=factory, controls=ctl)
+    original_submit = service.submit
+
+    def complete_before_return(*args, **kwargs):
+        result = original_submit(*args, **kwargs)
+        worker = threading.Thread(target=service.step)
+        worker.start()
+        worker.join(5)
+        assert not worker.is_alive()
+        return result
+
+    monkeypatch.setattr(service, "submit", complete_before_return)
+    server = make_server()
+
+    async def check():
+        async with Viewer(server, CAPS + [w.CAP_INTERPRETATION]) as viewer:
+            await viewer.send(w.Control(1, "interpret", interpretation={
+                "version": 1, "method": "feature.dictionary", "params": {}}))
+            first = await viewer.expect(w.ControlReply, lambda x: x.request_id == 1)
+            second = await viewer.expect(w.ControlReply, lambda x: x.request_id == 1)
+            assert first.status == "queued"
+            assert second.status == "ok", second.error
+            assert second.result["metadata"] == dictionary.metadata
+
+    try:
+        run(check())
+        assert sent == ["queued", "ok"]
+    finally:
+        unregister_service(service, controls=ctl)

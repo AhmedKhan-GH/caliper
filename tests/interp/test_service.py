@@ -169,3 +169,179 @@ def test_lazy_factory_runs_only_at_boundary_and_status_does_not_wait():
     release.set()
     thread.join(5)
     assert not thread.is_alive() and replies[0][0] == "error"
+
+
+@pytest.mark.parametrize("method", ["feature.show", "feature.examples"])
+def test_legacy_ablation_refuses_before_index_access(actual, monkeypatch, method):
+    import torch
+    controls, transport = _controls.Controls(), Transport()
+    route = controls.attach(transport)
+    handle = controls.interventions_on(actual.model)
+    # M7 has no public suspension property. Keep its actual hook lifecycle.
+    monkeypatch.delattr(_controls.Controls, "intervention_service", raising=False)
+    register_service(actual, controls=controls)
+    index, factories = actual.index, []
+    feature = int(index.counts[1].argmax())
+    expected = index.examples(1, feature)
+    index.clear_cache()
+    actual.index = None
+    actual.factories["index"] = lambda: factories.append("index") or index
+    ids = actual.tokenizer("AB")["input_ids"]
+    baseline = actual.model(ids).logits.detach()
+    try:
+        route.on_control(None, {"request_id": 1, "op": "intervene",
+            "intervene": {"set": {"point": "layers.0.mlp_out", "op": "ablate"}}})
+        controls.step()
+        assert not torch.equal(actual.model(ids).logits, baseline)
+        assert call(route, method, {"layer": 1, "feature": feature})["status"] == "queued"
+        controls.step()
+        assert transport.replies[-1].error["code"] == "interpret.baseline_required"
+        assert not factories
+        assert actual.index is None
+        route.on_control(None, {"request_id": 2, "op": "intervene", "intervene": {"clear_all": True}})
+        controls.step()
+        assert call(route, "feature.examples", {"layer": 1, "feature": feature})["status"] == "queued"
+        controls.step()
+        assert transport.replies[-1].status == "ok", transport.replies[-1].error
+        assert transport.replies[-1].result["examples"] == expected
+        assert factories == ["index"]
+    finally:
+        unregister_service(actual, controls=controls)
+        handle.remove()
+
+
+@pytest.mark.parametrize("method", ["feature.examples", "trace.run"])
+@pytest.mark.parametrize("replace", [False, True])
+def test_service_close_waits_for_real_work_and_publication(actual, monkeypatch, method, replace):
+    import caliper.interp
+    controls = _controls.Controls()
+    register_service(actual, controls=controls)
+    index = actual.index
+    name = "index" if method == "feature.examples" else "tracer"
+    resource = actual._resource(name)
+    setattr(actual, name, None)
+    entered, release, waiting, finished = (threading.Event() for _ in range(4))
+    publications, replies, failures = [], [], []
+    replacement = InterpretationService()
+
+    def factory():
+        entered.set()
+        assert release.wait(5)
+        assert not index._closed
+        return resource
+
+    def publish(name, tensor):
+        assert controls.interpretation_service is actual
+        assert not finished.is_set()
+        publications.append(name)
+
+    wait = actual.idle.wait
+
+    def close_wait(timeout=None):
+        waiting.set()
+        return wait(timeout)
+
+    def close():
+        try:
+            if replace:
+                register_service(replacement, controls=controls)
+            else:
+                unregister_service(actual, controls=controls)
+            index.close()
+            finished.set()
+        except BaseException as exc:
+            failures.append(exc)
+
+    actual.factories[name] = factory
+    monkeypatch.setattr(actual.idle, "wait", close_wait)
+    monkeypatch.setattr(caliper.interp, "publish", publish)
+    params = {"layer": 1, "feature": int(index.counts[1].argmax())} if name == "index" else {
+        "prompt": "AB", "max_targets": 4, "max_nodes": 64, "max_edges": 128}
+    actual.submit({"version": 1, "method": method, "params": params}, lambda *args: replies.append(args))
+    worker = threading.Thread(target=actual.step)
+    closer = threading.Thread(target=close)
+    worker.start()
+    try:
+        assert entered.wait(5)
+        actual.submit({"version": 1, "method": "feature.dictionary", "params": {}},
+                      lambda *args: replies.append(args))
+        closer.start()
+        assert waiting.wait(5)
+        assert not finished.is_set()
+        assert controls.interpretation_service is actual
+        assert not index._closed
+    finally:
+        release.set()
+        worker.join(5)
+        if closer.ident is not None:
+            closer.join(5)
+    assert not worker.is_alive() and not closer.is_alive()
+    assert not failures
+    assert finished.is_set() and index._closed
+    assert controls.interpretation_service is (replacement if replace else None)
+    assert replies[0][0] == "ok", replies
+    assert replies[1][2]["code"] == "interpret.closed"
+    assert publications
+    before = list(publications)
+    assert actual.step() == 0
+    assert publications == before
+    if replace:
+        unregister_service(replacement, controls=controls)
+
+
+def test_service_refuses_recursive_close_without_detachment():
+    from caliper.interp._service import Refused
+    controls = _controls.Controls()
+    service = register_service(controls=controls)
+    replies = []
+
+    def factory():
+        unregister_service(service, controls=controls)
+
+    service.factories["dictionary"] = factory
+    service.submit({"version": 1, "method": "feature.dictionary", "params": {}}, lambda *args: replies.append(args))
+    service.step()
+    assert replies[0][2]["code"] == "interpret.busy"
+    assert controls.interpretation_service is service
+    assert not service.closed
+    unregister_service(service, controls=controls)
+    with pytest.raises(Refused, match="closed"):
+        register_service(service, controls=controls)
+    assert controls.interpretation_service is None
+
+
+@pytest.mark.parametrize("legacy_owner", [True, False])
+def test_default_tracer_uses_registered_owner(actual, monkeypatch, legacy_owner):
+    import torch
+    if legacy_owner:
+        monkeypatch.delattr(_controls.Controls, "intervention_service", raising=False)
+    owner, transport = _controls.Controls(), Transport()
+    monkeypatch.setattr(_controls, "CONTROLS", _controls.Controls())
+    route = owner.attach(transport)
+    watched = owner.interventions_on(actual.model)
+    register_service(actual, controls=owner)
+    params = {"prompt": "AB", "max_targets": 0}
+    try:
+        assert call(route, "trace.run", params)["status"] == "queued"
+        owner.step()
+        assert transport.replies[-1].status == "ok", transport.replies[-1].error
+        assert actual.tracer.controls is owner
+        baseline = actual.graph
+        logits = actual.tracer._forward_cache[1].logits.clone()
+        route.on_control(None, {"request_id": 2, "op": "intervene",
+            "intervene": {"set": {"point": "layers.0.mlp", "op": "ablate"}}})
+        owner.step()
+        assert call(route, "trace.run", params)["status"] == "queued"
+        owner.step()
+        assert transport.replies[-1].status == "ok", transport.replies[-1].error
+        assert actual.graph is not baseline
+        assert not torch.equal(actual.tracer._forward_cache[1].logits, logits)
+        route.on_control(None, {"request_id": 3, "op": "intervene", "intervene": {"clear_all": True}})
+        owner.step()
+        assert call(route, "trace.run", params)["status"] == "queued"
+        owner.step()
+        assert transport.replies[-1].status == "ok", transport.replies[-1].error
+        assert actual.graph is baseline
+    finally:
+        unregister_service(actual, controls=owner)
+        watched.remove()

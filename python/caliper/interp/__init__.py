@@ -24,10 +24,12 @@ def publish(name, tensor):
     return implementation(name, tensor)
 
 
-def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=None):
-    """Load a dictionary after its model hash matches the supplied model identity."""
+def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=None,
+                    memory_limit_gb=12):
+    """Load a matching dictionary within a total process limit of at most 12 GB."""
     from ._dictionary import load_dictionary as implementation
-    return implementation(path, model=model, model_hash=model_hash, device=device, dtype=dtype)
+    return implementation(path, model=model, model_hash=model_hash, device=device, dtype=dtype,
+                          memory_limit_gb=memory_limit_gb)
 
 
 def __getattr__(name):

@@ -957,8 +957,8 @@ class Route:
         self.transport = transport
         self.attached = True
 
-    def on_control(self, conn, meta) -> dict:
-        return self.ctl._on_control(self, conn, meta)
+    def on_control(self, conn, meta, *, acknowledge=None):
+        return self.ctl._on_control(self, conn, meta, acknowledge=acknowledge)
 
     def on_select(self, conn, meta, axes=None) -> None:
         try:
@@ -1022,6 +1022,7 @@ class Controls:
         self.params: dict[str, Param] = {}
         self.actions: dict[str, Action] = {}
         self.interpretation_service = None
+        self.interpretation_registration_lock = threading.Lock()
         self.queue: collections.deque = collections.deque()
         self.spaces: dict[str, ItemSpace] = {}
         self.view_items: dict[str, dict] = {}    # view -> {dim, _FIRST, _LAST or None: space}
@@ -1413,7 +1414,7 @@ class Controls:
         return out
 
     # -- requests (the transport's thread) -------------------------------------------
-    def _on_control(self, route: Route, conn, meta) -> dict:
+    def _on_control(self, route: Route, conn, meta, *, acknowledge=None):
         w = _w()
         if not isinstance(meta, dict):
             raise w.MessageError(w.ERR_BAD_REQUEST, "a control's metadata is an object")
@@ -1439,12 +1440,16 @@ class Controls:
                 route._reply(conn, w.ControlReply(rid, op, status, result=result, error=refused).to_meta())
 
             try:
-                status, result = service.submit(msg.interpretation, completed)
+                queued = (lambda: acknowledge(w.ControlReply(rid, op, w.STATUS_QUEUED).to_meta())) \
+                    if acknowledge is not None else None
+                status, result = service.submit(msg.interpretation, completed, acknowledge=queued)
             except Refused as exc:
                 return error(exc.code, str(exc))
             with self.lock:
                 self.busy = True
                 self.cond.notify_all()
+            if status == w.STATUS_QUEUED and acknowledge is not None:
+                return None
             return w.ControlReply(rid, op, status, result=result).to_meta()
 
         try:

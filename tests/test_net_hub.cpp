@@ -2288,6 +2288,12 @@ TEST_CASE("net/hub: interpretation reads preserve capability gates and write per
     caps.push_back(CALIPER_NET_CAP_INTERPRETATION);
     auto producer_link = producer(world, hub, "interpretation", 1, 1, caps, true);
     auto reader = viewer(world, hub, caps);
+    const auto* welcome = reader->last<wire::Welcome>();
+    REQUIRE(welcome);
+    CHECK(std::find(welcome->capabilities.begin(), welcome->capabilities.end(),
+                    CALIPER_NET_CAP_INTERPRETATION) != welcome->capabilities.end());
+    CHECK(std::find(welcome->capabilities.begin(), welcome->capabilities.end(),
+                    CALIPER_NET_CAP_TEXT_PARAMS) != welcome->capabilities.end());
     REQUIRE(world.until([&] { return reader->views() && reader->views()->session; }));
     wire::Control request;
     request.request_id = 1;

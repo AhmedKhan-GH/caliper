@@ -30,8 +30,10 @@ class InterpretationService:
         self.graph = None
         self.status = {"state": "idle", "seconds": 0., "step": None}
         self.lock = threading.RLock()
+        self.idle = threading.Condition(self.lock)
         self.queue = deque()
         self.running = False
+        self.running_thread = None
         self.closed = False
 
     @property
@@ -39,7 +41,7 @@ class InterpretationService:
         with self.lock:
             return bool(self.queue)
 
-    def submit(self, metadata, reply):
+    def submit(self, metadata, reply, *, acknowledge=None):
         """Return a status and result; send deferred results through ``reply``."""
         if not protocol.request(metadata):
             raise Refused("interpret.bad_request", "Invalid interpretation request.")
@@ -54,6 +56,10 @@ class InterpretationService:
             if method == "trace.run":
                 if self.status["state"] in ("pending", "running"):
                     raise Refused("interpret.busy", "A trace already waits for completion.")
+            # The transport queues its acknowledgment before the run can see work.
+            if acknowledge is not None:
+                acknowledge()
+            if method == "trace.run":
                 self.status = {"state": "pending", "seconds": 0., "step": None}
             self.queue.append((method, params, reply))
         return "queued", None
@@ -68,7 +74,8 @@ class InterpretationService:
                 if self.model is None or self.tokenizer is None:
                     raise Refused("interpret.missing_model", "A model and tokenizer are required.")
                 from . import Tracer
-                value = Tracer(self.model, self.tokenizer, self._resource("dictionary"))
+                value = Tracer(self.model, self.tokenizer, self._resource("dictionary"),
+                               controls=getattr(self, "controls", None))
             if value is None:
                 raise Refused("interpret.missing_" + name, "The run has no " + name + ".")
             setattr(self, name, value)
@@ -86,20 +93,25 @@ class InterpretationService:
         return record["layer"], record["feature"]
 
     def _baseline(self):
-        # M7 has no intervention dependency. M8 supplies this optional owner.
         from .._controls import CONTROLS
         owner = getattr(self, "controls", CONTROLS)
         service = getattr(owner, "intervention_service", None)
-        return service.suspend() if service is not None else nullcontext()
+        if service is not None:
+            return service.suspend()
+        # Legacy M7 hooks have no suspension API. Refuse before any index access.
+        with owner.lock:
+            if any(iv.hook is not None for iv in owner._ivs.values()):
+                raise Refused("interpret.baseline_required", "Clear active ablations before a baseline feature query.")
+        return nullcontext()
 
     def _execute(self, method, params, step):
         if method == "feature.dictionary":
             return {"metadata": deepcopy(self._resource("dictionary").metadata)}
         if method in ("feature.show", "feature.examples"):
-            self._resource("dictionary")
-            index = self._resource("index")
-            layer, feature = self._feature(params)
             with self._baseline():
+                self._resource("dictionary")
+                index = self._resource("index")
+                layer, feature = self._feature(params)
                 if method == "feature.show":
                     return index.show(layer, feature)
                 rows = index.examples(layer, feature, limit=params.get("limit", 16))
@@ -139,6 +151,7 @@ class InterpretationService:
             if self.running or self.closed:
                 return 0
             self.running = True
+            self.running_thread = threading.get_ident()
             count = len(self.queue)
         try:
             for _ in range(count):
@@ -163,11 +176,22 @@ class InterpretationService:
         finally:
             with self.lock:
                 self.running = False
+                self.running_thread = None
+                self.idle.notify_all()
+
+    def _check_close_thread(self):
+        with self.lock:
+            if self.running_thread == threading.get_ident():
+                raise Refused("interpret.busy", "An active service request cannot close its own service.")
 
     def close(self):
-        with self.lock:
+        """Wait for active work before the caller disposes of external resources."""
+        with self.idle:
+            self._check_close_thread()
             self.closed = True
             requests, self.queue = self.queue, deque()
+            while self.running:
+                self.idle.wait()
         for _, _, reply in requests:
             reply("error", None, {"code": "interpret.closed", "message": "The interpretation service closed."})
 
@@ -240,11 +264,20 @@ def register_service(service=None, *, controls=None, **resources):
     service = service or InterpretationService(**resources)
     with controls.lock:
         old = controls.interpretation_service
-        controls.interpretation_service = service
-        service.controls = controls
-        controls.busy = True
     if old is not None and old is not service:
-        old.close()
+        old._check_close_thread()
+    with controls.interpretation_registration_lock:
+        with service.lock:
+            if service.closed:
+                raise Refused("interpret.closed", "The interpretation service is closed.")
+        with controls.lock:
+            old = controls.interpretation_service
+        if old is not None and old is not service:
+            old.close()
+        with controls.lock:
+            controls.interpretation_service = service
+            service.controls = controls
+            controls.busy = True
     return service
 
 
@@ -252,7 +285,9 @@ def unregister_service(service, *, controls=None):
     if controls is None:
         from .._controls import CONTROLS
         controls = CONTROLS
-    with controls.lock:
-        if controls.interpretation_service is service:
-            controls.interpretation_service = None
-    service.close()
+    service._check_close_thread()
+    with controls.interpretation_registration_lock:
+        service.close()
+        with controls.lock:
+            if controls.interpretation_service is service:
+                controls.interpretation_service = None

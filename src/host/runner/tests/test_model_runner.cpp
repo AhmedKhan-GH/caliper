@@ -896,3 +896,70 @@ while True:
     CHECK(output.error.code == "interpret.missing_dictionary");
     CHECK(control->interpret("trace.read", json::object(), request).error.code == "interpret.unknown_request");
 }
+
+TEST_CASE("runner: interpretation final replies survive reordered transport replies") {
+    Workspace w("interpretation-replies");
+    if (const char* python = std::getenv("CALIPER_INTERPRET_PYTHON")) w.python = python;
+    REQUIRE(!w.python.empty());
+    std::ofstream script(w.ws + "/scripts/stand_in_run.py");
+    script << R"PY(import os
+import threading
+from pathlib import Path
+import caliper
+from caliper import _wire
+from caliper._controls import CONTROLS
+from caliper.interp._service import register_service
+register_service()
+original = CONTROLS._on_control
+
+def reordered(route, conn, meta, **kwargs):
+    if meta["op"] != "interpret":
+        return original(route, conn, meta, **kwargs)
+    rid = meta["request_id"]
+    method = meta["interpretation"]["method"]
+    # These deferred frames follow the final reply returned to the sender.
+    route._reply(conn, _wire.ControlReply(rid, "interpret", "queued").to_meta())
+    route._reply(conn, _wire.ControlReply(rid, "interpret", "error",
+        error={"code": "interpret.closed", "message": "late duplicate"}).to_meta())
+    if method == "feature.dictionary":
+        return _wire.ControlReply(rid, "interpret", "error",
+            error={"code": "interpret.missing_dictionary", "message": "fixture refusal"}).to_meta()
+    return _wire.ControlReply(rid, "interpret", "ok", result={"state": "idle"}).to_meta()
+
+CONTROLS._on_control = reordered
+server = caliper.serve(control=True)
+Path(os.environ["CALIPER_RUN_LINK_FILE"]).write_text(server.url)
+threading.Event().wait()
+)PY";
+    script.close();
+    cr::ModelRunner::Options options;
+    options.workspace = w.ws;
+    options.python = w.python;
+    cr::ModelRunner runner(options);
+    struct Guard { cr::ModelRunner& runner; ~Guard() { runner.shutdown(); } } guard{runner};
+    cb::RunEntry entry;
+    REQUIRE(!runner.start(w.start({}, json::object(), "interpretation-replies"), &entry));
+    REQUIRE(runner.wait_for(state_is(entry.id, "running"), 30000));
+    cb::Error error;
+    auto* control = runner.control_of(entry.id, &error);
+    REQUIRE(control);
+    REQUIRE(runner.wait_for([&](const auto&) { return control->state().control; }, 30000));
+    std::vector<std::pair<std::string, std::uint32_t>> requests;
+    for (const auto* method : {"trace.status", "feature.dictionary", "trace.read"}) {
+        auto output = control->interpret(method, json::object(), 0);
+        REQUIRE(!output.error);
+        const auto request = output.result.at("request_id").get<std::uint32_t>();
+        requests.emplace_back(method, request);
+        REQUIRE(runner.wait_for([&](const auto&) {
+            output = control->interpret(method, json::object(), request);
+            return output.error || !output.result.at("pending").get<bool>();
+        }, 30000));
+    }
+    // The third reply fences the late frames for the first two requests.
+    auto success = control->interpret(requests[0].first, json::object(), requests[0].second);
+    REQUIRE(!success.error);
+    CHECK_FALSE(success.result.at("pending").get<bool>());
+    CHECK(success.result.at("result").at("state") == "idle");
+    auto refused = control->interpret(requests[1].first, json::object(), requests[1].second);
+    CHECK(refused.error.code == "interpret.missing_dictionary");
+}
