@@ -178,7 +178,7 @@ def test_retained_storage_floor_counts_aliases_once(decoder_source, monkeypatch,
     assert hook_objects(model) == hooks and model not in _points._ACTIVE
 
 
-@pytest.mark.parametrize("failure", ["forward", "copy", "growth", "nonfinite"])
+@pytest.mark.parametrize("failure", ["forward", "copy", "growth", "guard", "nonfinite"])
 def test_failure_preserves_cache_and_removes_only_temporary_hooks(decoder_source, monkeypatch, failure):
     model, tokenizer, service = decoder_source
     prepare_sources(service, monkeypatch, eviction=True)
@@ -219,15 +219,97 @@ def test_failure_preserves_cache_and_removes_only_temporary_hooks(decoder_source
             monkeypatch.setattr(model.norm, "forward", fail)
         elif failure == "nonfinite":
             monkeypatch.setattr(model.embed_tokens, "forward", lambda ids: torch.full((*ids.shape, 4), float("nan")))
-        error = CleanStop if failure == "growth" else (_intervene.InterventionError if failure == "nonfinite" else RuntimeError)
-        match = {"growth": "patch source allocation exceeds", "copy": "decoder copy failed",
-                 "forward": "decoder forward failed", "nonfinite": "finite batch-token-width"}[failure]
-        with pytest.raises(error, match=match):
+        elif failure == "guard":
+            check = guard.check
+
+            def stop(stage):
+                current = check(stage)
+                if stage == "patch source copy" and copies:
+                    raise CleanStop("decoder guard stop")
+                return current
+
+            monkeypatch.setattr(guard, "check", stop)
+        error, match = {
+            "growth": (CleanStop, "patch source allocation exceeds"),
+            "guard": (CleanStop, "decoder guard stop"),
+            "copy": (RuntimeError, "decoder copy failed"),
+            "forward": (RuntimeError, "decoder forward failed"),
+            "nonfinite": (_intervene.InterventionError, "finite batch-token-width"),
+        }[failure]
+        with pytest.raises(error, match=match) as refused:
             service._source(specification(POINTS[0]))
         assert_retained(service, cache, identity)
-        assert len(copies) == (1 if failure in ("copy", "growth") else 0)
+        assert len(copies) == (1 if failure in ("copy", "growth", "guard") else 0)
+        # The exception retains its frames while the partial copies must disappear.
+        assert refused.value.__traceback__ is not None
         assert all(reference() is None for reference in copies)
         assert len(captures) == 1 and captures[0]._closed and not captures[0]._handles and not captures[0]
         assert list(_points._ACTIVE[model].values()) == [existing]
         assert existing[POINTS[0]] is observed and hook_objects(model) == hooks
         assert not service.preparing_source
+
+
+@pytest.mark.parametrize("lower", ["outer", "inner"])
+@pytest.mark.parametrize("retiring", [False, True])
+def test_returned_readings_admit_single_copy_before_source_retirement(
+        decoder_source, monkeypatch, lower, retiring):
+    model, tokenizer, service = decoder_source
+    old = service.install(specification(POINTS[0], "CD")) if retiring else None
+    cache, identity, hooks = list(service._cache.items()), service._cache_identity, hook_objects(model)
+    monkeypatch.setattr(_intervene, "MAX_SOURCE_ENTRIES", 1)
+    clone = torch.Tensor.clone
+
+    class ReturnedBudget:
+        def __init__(self, capacity):
+            low = 8 * 1024 * 1024
+            self.limit = low if lower == "outer" else 2 * low
+            self._guard = SimpleNamespace(limit=low if lower == "inner" else 2 * low)
+            self.baseline = low - capacity
+            self.complete = False
+            self.stages = []
+
+        def check(self, stage):
+            self.stages.append(stage)
+            if stage == "patch source forward complete":
+                self.complete = True
+            return self.baseline if self.complete else 0
+
+    def forbid_copy(tensor, *args, **kwargs):
+        assert tensor.ndim != 3, "decoder source allocation preceded the returned memory check"
+        return clone(tensor, *args, **kwargs)
+
+    with service._retire_sources([old]):
+        service.resource_guard = ReturnedBudget(SOURCE_BYTES - 1)
+        with monkeypatch.context() as patch:
+            patch.setattr(torch.Tensor, "clone", forbid_copy)
+            with pytest.raises(CleanStop, match="patch source allocation exceeds"):
+                service.install(specification(POINTS[0]))
+        assert_retained(service, cache, identity)
+        assert hook_objects(model) == hooks and model not in _points._ACTIVE
+        assert not service.preparing_source and (old is None or not old.removed)
+        service.resource_guard = ReturnedBudget(SOURCE_BYTES)
+        copies = []
+
+        def record_copy(tensor, *args, **kwargs):
+            if tensor.ndim == 3:
+                assert_retained(service, cache, identity)
+                assert old is None or not old.removed
+            result = clone(tensor, *args, **kwargs)
+            if tensor.ndim == 3:
+                copies.append(weakref.ref(result))
+            return result
+
+        monkeypatch.setattr(torch.Tensor, "clone", record_copy)
+        new = service.install(specification(POINTS[0]))
+        assert len(copies) == 1 and service.resource_guard.stages.count("patch source copy") == 1
+        assert list(service._cache) == [("AB", POINTS[0])]
+        source = service._cache["AB", POINTS[0]]
+        assert copies[0]() is source
+        with torch.no_grad():
+            expected = model.embed_tokens(tokenizer("AB")["input_ids"])
+        torch.testing.assert_close(source, expected, rtol=0, atol=0)
+        if old is not None:
+            assert not old.removed
+            old()
+    assert not new.removed and not service._retiring_sources and not service.preparing_source
+    assert model not in _points._ACTIVE
