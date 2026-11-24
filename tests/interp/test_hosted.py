@@ -52,6 +52,21 @@ def test_fixture_dictionary_and_index_load_locally(resource_folder):
         index.close()
 
 
+def test_module_fixture_creation_preserves_imported_resource_identity(tmp_path):
+    folder = tmp_path / "module-fixture"
+    subprocess.run([sys.executable, "-m", "caliper.interp._hosted", "--fixture-dir", str(folder)],
+                   cwd=tmp_path, check=True, capture_output=True, text=True, timeout=30)
+    model, _, dictionary, index, _ = load_resources("tiny-lm", folder)
+    try:
+        from caliper.interp._dictionary import model_identity
+        assert dictionary.metadata["model_hash"] == model_identity(model)
+        feature = int(index.counts[0].argmax())
+        assert index.show(0, feature)["maximum"] > 0
+        assert len(index.examples(0, feature)) == 16
+    finally:
+        index.close()
+
+
 def test_remote_or_unpinned_model_resources_are_refused(resource_folder):
     for model in ("https://example.invalid/model", str(resource_folder)):
         with pytest.raises((ValueError, OSError)):
