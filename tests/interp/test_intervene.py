@@ -620,3 +620,47 @@ def test_managed_clean_source_skips_public_step_and_program_execution(public_wat
     finally:
         callback.remove()
         watch.remove()
+
+
+@pytest.mark.parametrize("identifier", ["", 0, False, "\ud800"])
+def test_invalid_dictionary_identifier_preserves_active_hook(controlled, identifier):
+    _, tokenizer, ctl, service = controlled
+    service.set(add_spec())
+    ctl.step()
+    previous = service.state_dict()
+    hook = next(iter(ctl._ivs.values())).hook
+    with pytest.raises(InterventionError):
+        service.configure(dictionary=service.dictionary, tokenizer=tokenizer, dictionary_id=identifier)
+    assert service.state_dict() == previous and not hook.removed
+
+
+@pytest.mark.parametrize("specification", [add_spec(point="\ud800"),
+    {"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "\ud800"}])
+def test_invalid_utf8_refuses_as_a_structured_error(controlled, specification):
+    _, _, ctl, service = controlled
+    service.set(add_spec())
+    ctl.step()
+    prior = service.state_dict()
+    with ctl.lock:
+        refused = ctl._intervene({"set": specification})
+    assert refused[0] in ("intervene.unknown_point", "intervene.bad_request")
+    assert service.state_dict() == prior
+
+
+@pytest.mark.parametrize("mutation", ["bool_version", "float_version", "active_without_step", "pending_with_step"])
+def test_invalid_fork_lifecycle_refuses_before_replacement(controlled, mutation):
+    _, _, ctl, service = controlled
+    service.set(add_spec())
+    ctl.step()
+    prior = service.state_dict()
+    invalid = deepcopy(prior)
+    if mutation.endswith("version"):
+        invalid["version"] = True if mutation == "bool_version" else 1.0
+    elif mutation == "active_without_step":
+        invalid["interventions"][0]["since_step"] = None
+    else:
+        invalid["interventions"][0]["state"] = "pending"
+    hook = next(iter(ctl._ivs.values())).hook
+    with pytest.raises(InterventionError):
+        service.load_state_dict(invalid)
+    assert service.state_dict() == prior and not hook.removed

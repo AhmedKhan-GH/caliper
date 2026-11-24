@@ -18,8 +18,8 @@ tensor of the output as zeros. A head's ablation is a forward pre-hook on the ou
 that zeroes that head's slice of the last dimension of its input. Both use ``masked_fill``, which
 keeps the autograd graph (``backward()`` still works when the ablated output is all that the loss
 sees, and an in-place operation after it is still allowed) and gives exact zeros where the input
-holds NaN or infinity. A hook never raises: an error leaves the tensor as it was, counts in
-:attr:`Ablation.errors` with its text, and the caller ends the ablation at its next step.
+holds NaN or infinity. A failed hook leaves the tensor unchanged and removes itself.
+The error text remains in :attr:`Ablation.error`. The caller reports it at the next step.
 """
 from __future__ import annotations
 

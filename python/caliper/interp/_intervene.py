@@ -36,6 +36,16 @@ def _indices(value, name, *, limit=None):
     return tuple(value)
 
 
+def _text(value, name, maximum, *, code="intervene.bad_request"):
+    try:
+        valid = isinstance(value, str) and 0 < len(value.encode("utf-8")) <= maximum
+    except UnicodeEncodeError:
+        valid = False
+    if not valid:
+        raise InterventionError(f"{name} must contain 1 to {maximum} UTF-8 bytes", code)
+    return value
+
+
 def _finite(value, name):
     if type(value) not in (int, float):
         raise InterventionError(f"{name} must be a finite number")
@@ -146,9 +156,8 @@ class InterventionService:
                         or layer.b_enc.shape != (layer.W_enc.shape[0],)
                         or layer.b_dec.shape != (width,)):
                     raise InterventionError("dictionary weight dimensions differ from its probes")
-            dictionary_id = dictionary_id or meta["model_hash"]
-            if not isinstance(dictionary_id, str) or not dictionary_id or len(dictionary_id.encode("utf-8")) > 255:
-                raise InterventionError("dictionary identifier must contain 1 to 255 UTF-8 bytes")
+            dictionary_id = meta["model_hash"] if dictionary_id is None else dictionary_id
+            _text(dictionary_id, "dictionary identifier", 255)
         elif dictionary_id is not None:
             raise InterventionError("dictionary identifier requires a dictionary", "intervene.unknown_dictionary")
         if tokenizer is not None and not callable(tokenizer):
@@ -209,8 +218,7 @@ class InterventionService:
         if set(request) - fields:
             raise InterventionError("unexpected intervention fields")
         point = request.get("point")
-        if not isinstance(point, str) or not point or len(point.encode("utf-8")) > 255:
-            raise InterventionError("point must contain 1 to 255 UTF-8 bytes", "intervene.unknown_point")
+        _text(point, "point", 255, code="intervene.unknown_point")
         spec = deepcopy(request)
         spec.update(op=kind, kind=kind)
         for key in ("from_step", "until_step"):
@@ -251,8 +259,7 @@ class InterventionService:
             spec["dictionary"] = self.dictionary_id
         elif kind == "patch":
             prompt = spec.get("source_prompt")
-            if not isinstance(prompt, str) or not prompt or len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
-                raise InterventionError("source_prompt must contain 1 to 4096 UTF-8 bytes")
+            _text(prompt, "source_prompt", MAX_PROMPT_BYTES)
             if self.tokenizer is None:
                 raise InterventionError("patch requires a configured tokenizer")
             if "source_position" in spec:

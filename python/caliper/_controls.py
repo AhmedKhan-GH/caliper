@@ -712,7 +712,7 @@ class _Intervention:
 
 
 class Interventions:
-    """The interventions of the model of ``caliper.watch(model, optimizer)``, as
+    """The interventions of the model of ``caliper.watch(model)``, as
     :meth:`Controls.interventions_on` starts them.
 
     ``remove()`` takes every hook of the interventions off the model and stops announcing them,
@@ -814,7 +814,8 @@ class Interventions:
     def load_state_dict(self, state):
         """Validate all fork records before replacement. Hooks resume at a boundary."""
         from .interp._intervene import InterventionError
-        if not isinstance(state, dict) or state.get("version") != 1 or set(state) != {"version", "interventions"}:
+        if (not isinstance(state, dict) or type(state.get("version")) is not int
+                or state["version"] != 1 or set(state) != {"version", "interventions"}):
             raise InterventionError("unsupported intervention state")
         records = state["interventions"]
         if not isinstance(records, list) or len(records) > MAX_INTERVENTIONS:
@@ -831,6 +832,8 @@ class Interventions:
                 spec = self.executor.validate(record["specification"])
                 if (record["state"] not in (IV_PENDING, IV_ACTIVE, IV_ENDED)
                         or not _step_ok(record["since_step"]) or type(record["clear"]) is not bool
+                        or (record["state"] == IV_ACTIVE and record["since_step"] is None)
+                        or (record["state"] == IV_PENDING and record["since_step"] is not None)
                         or any(value is not None and (not isinstance(value, str) or len(value) > TEXT_MAX)
                                for value in (record["error"], record["error_code"]))):
                     raise InterventionError("invalid intervention lifecycle state")
@@ -1485,7 +1488,7 @@ class Controls:
     def interventions_on(self, model, handle=None, adapter=None) -> Interventions:
         """Take interventions on ``model`` from now on (the training thread).
 
-        ``caliper.watch(model, optimizer)`` calls this. CONTROLS then holds the key
+        ``caliper.watch(model)`` calls this with or without an optimizer. CONTROLS holds the key
         ``interventions`` with the points of ``model`` and its interventions, and a CONTROL of op
         ``intervene`` sets or clears one, applied at the next checkpoint through the hooks of
         ``adapter`` (``caliper._adapter.TORCH`` by default). A later call replaces the model and
