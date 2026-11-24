@@ -555,7 +555,7 @@ def test_interpretation_capability_and_real_service_round_trip(mode, ctl, make_s
     index = FeatureIndex(tmp_path, model=model, tokenizer=tokenizer, dictionary=dictionary)
     feature = int(index.counts[0].argmax())
     published = {}
-    monkeypatch.setattr(caliper.interp, "publish", lambda name, tensor: published.update({name: tensor}))
+    monkeypatch.setattr("caliper.interp._publish._TENSORS", published)
     service = register_service(model=model, tokenizer=tokenizer, dictionary=dictionary, index=index, controls=ctl)
     server = make_server()
 
@@ -599,6 +599,7 @@ def test_interpretation_capability_and_real_service_round_trip(mode, ctl, make_s
     finally:
         unregister_service(service, controls=ctl)
         index.close()
+        published.clear()
 
 
 def test_free_text_capability_round_trip(mode, ctl, make_server):
