@@ -123,6 +123,33 @@ The optional graph `label_text` input uses `live:trace.label_text`, with shape `
 Rows zero through 31 contain prompt tokens. Row `32 + index` contains the node label.
 The graph exposes at most 34 labels, and the token strip exposes 200 per page.
 
+### Graph Density
+
+The graph uses an orthographic camera that fits both panel axes.
+Token positions run across the panel, and layers run upward.
+Each cell contains a grid of nodes in descending influence order, across each row and then down.
+Equal influence uses node index order.
+The grid stays inside its token column and layer band, and edge endpoints follow the node centers.
+
+The node radius is one quarter of the smaller grid spacing.
+Horizontal relaxation moves a center at most 15 percent of its column spacing.
+The draw shader projects this radius without a minimum size.
+At a radius below two physical pixels, the node becomes a density marker at the pixel that contains its center.
+The marker retains the node color and ID, occupies one pixel, and never enlarges the projected radius.
+Zoom restores the square, disc, diamond, or triangle when the radius reaches two pixels.
+
+Distinct center picks require distinct center pixels.
+Raster tests require all 512 IDs in one cell at both 512 by 512 and 256 by 256 pixels.
+They also require 16 distinct center picks with 32 token columns and 24 layers at 256 by 256 pixels.
+Smaller panels, more token columns, or more layers can place multiple centers in one pixel.
+At that limit, raster order determines the pixel ID. Enlarge the panel or zoom to separate the centers before individual selection.
+
+All node records and IDs remain in the published resource.
+The Qwen acceptance capture still requires every visible node ID in its raster buffer.
+Token, hover, and selected labels retain the existing bounds and overlap checks.
+
+### Output Bars
+
 Use `logit_bars@1` for the traced baseline distribution:
 
 | Input | Source | Shape |

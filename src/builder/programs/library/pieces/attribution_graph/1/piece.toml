@@ -136,7 +136,7 @@ writes = ["nodes", "cells"]
 [[derive.passes]]
 entry = "order_influence"
 workgroups = [8, 1, 1]
-writes = ["offset_a", "strings", "labels"]
+writes = ["offset_a", "nodes", "strings", "labels"]
 
 [[derive.passes]]
 entry = "relax_one"

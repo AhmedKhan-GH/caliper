@@ -48,9 +48,10 @@ function compare(size: number, app: Uint8Array, aIds: Uint32Array, web: Uint8Arr
 }
 
 export function registerInterpPieceTests(test: typeof import('../../web/node_modules/@playwright/test/index').test, expect: Expect) {
-  test('interpretation pieces preserve native colors and picks in the browser', async ({ page }, info) => {
+  for (const variant of ['', 'density', 'density_narrow', 'narrow_cells']) test(
+    `interpretation pieces preserve native colors and picks in the browser${variant ? ` (${variant})` : ''}`, async ({ page }, info) => {
     test.skip(info.project.name === 'canvas2d', 'Piece draws require WebGPU.');
-    const fixture = process.env.CALIPER_INTERP_PIECES_OUT ?? path.join(REPO, 'cmake-build-release/tests/interp_pieces/out');
+    const fixture = path.join(process.env.CALIPER_INTERP_PIECES_OUT ?? path.join(REPO, 'cmake-build-release/tests/interp_pieces/out'), variant);
     const wasm = process.env.CALIPER_WASM_DIR ?? path.join(REPO, 'python/caliper/_web');
     const files = ['caliper-views-loader.js', 'caliper-views.js', 'caliper-views.wasm'];
     const hasFixture = fs.existsSync(path.join(fixture, 'frames.bin'));
@@ -65,8 +66,14 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
     const plan = JSON.parse(fs.readFileSync(path.join(fixture, 'plan.json'), 'utf8'));
     const picks = JSON.parse(fs.readFileSync(path.join(fixture, 'picks.json'), 'utf8'));
     const frames = fs.readFileSync(path.join(fixture, 'frames.bin')).toString('base64');
+    const rasterCount = variant === 'narrow_cells' ? 16 : 512;
     expect(plan.programs.map((p: { id: string }) => p.id).sort()).toEqual(
-      ['examples_0', 'examples_1', 'graph', 'graph_selected', 'logits', 'recovery']);
+      variant ? ['graph_dense'] : ['examples_0', 'examples_1', 'graph', 'graph_selected', 'logits', 'recovery']);
+    if (variant) {
+      expect(plan.size).toBe(variant === 'density' ? 512 : 256);
+      expect(picks.graph_dense).toHaveLength(rasterCount);
+      expect(new Set(picks.graph_dense.map(([x, y]: number[]) => `${x},${y}`)).size).toBe(rasterCount);
+    }
     page.on('console', (message) => console.log(`browser: ${message.text()}`));
     const site = await serve(WEB, (name) => files.includes(name.slice(1)) ? path.join(wasm, name.slice(1)) : null);
     try {
@@ -125,6 +132,15 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
         expect.soft(comparison.interiorOver, `${pp.id}: ${comparison.first}`).toBe(0);
         expect.soft(comparison.edgeShare, pp.id).toBeLessThanOrEqual(0.01);
         expect.soft(comparison.idMismatch, pp.id).toBe(0);
+        if (variant) {
+          const visible = new Map<number, number>();
+          for (let p = 0; p < webIds.length; p += 2) {
+            if (webIds[p] !== pp.pick_id) continue;
+            visible.set(webIds[p + 1], (visible.get(webIds[p + 1]) ?? 0) + 1);
+          }
+          expect([...visible.keys()].sort((a, b) => a - b)).toEqual(Array.from({ length: rasterCount }, (_, i) => i));
+          expect([...visible.values()].every((count) => count === 1), 'Each density marker occupies one pixel.').toBe(true);
+        }
         for (const [x, y, item] of picks[pp.id]) {
           const p = 2 * (y * plan.size + x);
           expect(webIds[p], `${pp.id} program at ${x},${y}`).toBe(pp.pick_id);
