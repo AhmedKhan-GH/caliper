@@ -2,7 +2,18 @@
 import json
 import math
 
-from ._interpret_protocol import integer, text
+if __package__:
+    from ._interpret_protocol import integer, text
+else:
+    # The standalone wire codec loads this sibling without the Caliper package.
+    import importlib.util as _import_util
+    from pathlib import Path as _Path
+
+    _spec = _import_util.spec_from_file_location(
+        f"{__name__}_interpret_protocol", _Path(__file__).with_name("_interpret_protocol.py"))
+    _protocol = _import_util.module_from_spec(_spec)
+    _spec.loader.exec_module(_protocol)
+    integer, text = _protocol.integer, _protocol.text
 
 KINDS = ("ablate", "add", "scale", "clamp", "patch")
 MAX_VECTOR = 16384

@@ -27,6 +27,23 @@ from typing import Any, ClassVar
 
 import numpy as np
 
+if __package__:
+    from . import _interpret_protocol, _intervention_protocol
+else:
+    # Browser fixtures and codec clients load this file without the package.
+    import importlib.util as _import_util
+    from pathlib import Path as _Path
+
+    def _load_protocol(name):
+        spec = _import_util.spec_from_file_location(
+            f"{__name__}{name}", _Path(__file__).with_name(name + ".py"))
+        module = _import_util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    _interpret_protocol = _load_protocol("_interpret_protocol")
+    _intervention_protocol = _load_protocol("_intervention_protocol")
+
 __all__ = [
     "MAJOR", "MINOR", "MAGIC", "MsgType", "Kind", "DType", "Encoding", "WireError",
     "MessageError", "Section", "Frame", "encode_frame", "decode_frame", "canonical_json",
@@ -1059,8 +1076,7 @@ def _fits_type(p: dict, v) -> bool:
     if t == PARAM_BOOLEAN:
         return _bool(v)
     if t == PARAM_TEXT:
-        from ._interpret_protocol import text
-        return text(v, PARAM_TEXT_MAX)
+        return _interpret_protocol.text(v, PARAM_TEXT_MAX)
     return isinstance(v, str) and v in p["choices"]
 
 
@@ -1152,8 +1168,7 @@ class Controls(_Msg):
 
 
 def _set_value(v) -> bool:
-    from ._interpret_protocol import text
-    return _finite(v) or _bool(v) or text(v, PARAM_TEXT_MAX)
+    return _finite(v) or _bool(v) or _interpret_protocol.text(v, PARAM_TEXT_MAX)
 
 
 @dataclass
@@ -1174,8 +1189,7 @@ class Control(_Msg):
     interpretation: dict | None = None
 
     def to_meta(self):
-        from ._interpret_protocol import request
-        if self.op == OP_INTERPRET and not request(self.interpretation):
+        if self.op == OP_INTERPRET and not _interpret_protocol.request(self.interpretation):
             _bad("invalid interpretation request")
         if self.op != OP_INTERPRET and self.interpretation is not None:
             _bad("interpretation requires op interpret")
@@ -1202,10 +1216,10 @@ class Control(_Msg):
             intervene = _req(m, "intervene", _intervene_request,
                              "exactly one of {set: {point, op, from_step, until_step}}, "
                              "{clear: point} and {clear_all: true}")
-        from ._interpret_protocol import request
         interpretation = None
         if op == OP_INTERPRET:
-            interpretation = _req(m, "interpretation", request, "a version 1 interpretation request")
+            interpretation = _req(m, "interpretation", _interpret_protocol.request,
+                                  "a version 1 interpretation request")
         elif "interpretation" in m:
             _bad("interpretation requires op interpret")
         return cls(rid, op, name if op in (OP_SET, OP_RUN) else None, value, count, intervene, interpretation)
@@ -1232,10 +1246,9 @@ class ControlReply(_Msg):
     result: dict | None = None
 
     def to_meta(self):
-        from ._interpret_protocol import bounded
         if self.result is not None and (self.op != OP_INTERPRET or self.status != STATUS_OK):
             _bad("result requires a successful interpretation reply")
-        if self.op == OP_INTERPRET and self.status == STATUS_OK and not bounded(self.result):
+        if self.op == OP_INTERPRET and self.status == STATUS_OK and not _interpret_protocol.bounded(self.result):
             _bad("invalid interpretation result")
         return _drop_none({"request_id": self.request_id, "op": self.op, "status": self.status,
                            "name": self.name, "value": self.value, "message": self.message,
@@ -1251,8 +1264,7 @@ class ControlReply(_Msg):
             _bad("a control_reply carries 'error' exactly when its status is 'error'")
         if status == STATUS_QUEUED and op not in (OP_RUN, OP_INTERPRET):
             _bad("only 'run' is queued")
-        from ._interpret_protocol import bounded
-        result = _opt(m, "result", bounded, "bounded structured result")
+        result = _opt(m, "result", _interpret_protocol.bounded, "bounded structured result")
         if "result" in m and (op != OP_INTERPRET or status != STATUS_OK):
             _bad("result requires a successful interpretation reply")
         if op == OP_INTERPRET and status == STATUS_OK and result is None:
@@ -3310,15 +3322,13 @@ def _opt_step(v) -> bool:
 
 
 def _intervene_request(v) -> bool:
-    from ._intervention_protocol import specification
     if (not _obj(v) or set(v) - {"set", "clear", "clear_all"}
             or sum(v.get(k) is not None for k in ("set", "clear", "clear_all")) != 1):
         return False
     if v.get("set") is not None:
-        return specification(v["set"])
+        return _intervention_protocol.specification(v["set"])
     if v.get("clear") is not None:
-        from ._interpret_protocol import text
-        return text(v["clear"], POINT_MAX, False)
+        return _interpret_protocol.text(v["clear"], POINT_MAX, False)
     return v["clear_all"] is True
 
 
@@ -3331,8 +3341,7 @@ def _point_entry(v) -> bool:
 
 
 def _active_entry(v) -> bool:
-    from ._intervention_protocol import specification
-    return specification(v, lifecycle=True)
+    return _intervention_protocol.specification(v, lifecycle=True)
 
 
 def _interventions(v) -> bool:
