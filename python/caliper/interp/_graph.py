@@ -3,8 +3,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import math
 
 import torch
+
+from ._labels import pack_labels
 
 
 NODE_CAP = 512
@@ -39,10 +42,11 @@ class Graph:
     trace_id: str
     tensors: dict = field(repr=False)
     status: str = "done"
+    logits: list[dict] | None = field(default=None, repr=False)
 
     @classmethod
     def build(cls, *, nodes, edges, tokens, layers, completeness, omitted_influence,
-              error_share, feature_share, trace_id, device):
+              error_share, feature_share, trace_id, device, logits=None):
         bounded_integer(len(nodes), "nodes", 0, NODE_CAP)
         bounded_integer(len(edges), "edges", 0, EDGE_CAP)
         bounded_integer(len(tokens), "tokens", 1, TOKEN_CAP)
@@ -66,12 +70,35 @@ class Graph:
         tensors = dict(zip(("trace.counts", "trace.node_i", "trace.node_f", "trace.edge_i", "trace.edge_f"),
                            (counts, node_i, node_f, edge_i, edge_f)))
         return cls(nodes, edges, tokens, layers, completeness, omitted_influence, error_share,
-                   feature_share, trace_id, tensors)
+                   feature_share, trace_id, tensors, logits=logits)
+
+    def _panel_tensors(self):
+        """Prepare labels and traced probabilities on the structural tensors' device."""
+        device = self.tensors["trace.counts"].device
+        labels = [token["text"] for token in self.tokens]
+        labels.extend([""] * (TOKEN_CAP - len(labels)))
+        labels.extend(node.get("label") or node["id"] for node in self.nodes)
+        # The bars retain all traced logits even when display pruning removes nodes.
+        logits = self.logits if self.logits is not None else [n for n in self.nodes if n["kind"] == "logit"]
+        logits = logits[:10]
+        probabilities = [float(node["probability"]) for node in logits]
+        if any(not math.isfinite(p) or not 0 <= p <= 1 for p in probabilities):
+            raise ValueError("Traced probabilities must be finite values from zero to one.")
+        probs = torch.zeros((2, 10), dtype=torch.float32)
+        tokens = torch.full((10,), -1, dtype=torch.int32)
+        if logits:
+            probs[:, :len(logits)] = torch.tensor(probabilities, dtype=torch.float32)
+            tokens[:len(logits)] = torch.tensor([node["token_id"] for node in logits], dtype=torch.int32)
+        values = {"trace.label_text": pack_labels(labels, TOKEN_CAP + NODE_CAP), "trace.probs": probs,
+                  "trace.logit_tokens": tokens,
+                  "trace.logit_label_text": pack_labels([node["label"] for node in logits], 10)}
+        return {name: value.to(device) for name, value in values.items()}
 
     def publish(self):
-        """Replace all five named tensors on their existing device."""
+        """Publish structural tensors and all graph and bar inputs on their existing device."""
         from . import publish
-        for name, tensor in self.tensors.items():
+        values = {**self.tensors, **self._panel_tensors()}
+        for name, tensor in values.items():
             publish(name, tensor)
         return self
 

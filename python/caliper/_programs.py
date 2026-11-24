@@ -409,20 +409,27 @@ def attach(model, optimizer, handle=None) -> None:
 
     Loads no native module. With ``handle`` (a WatchHandle), its ``remove()`` detaches again.
     """
+    removed, conflict = [], None
     with _LOCK:
         from .interp import _publish
         # A watch replacement must not expose tensors from the previous model.
         if _STATE["model"] is not None and _STATE["model"] is not model:
-            detach(_STATE["model"])
+            removed = _detach_locked()
         for name in _publish._TENSORS:
             if _publish._model_name(model, name):
-                if handle is not None:
-                    handle.remove()
-                raise ValueError(f"publication {name!r} conflicts with a model tensor")
-        _STATE["model"] = model
-        _STATE["optimizer"] = optimizer
-    if handle is not None and hasattr(handle, "_handles"):
-        handle._handles.append(_Detach(model))
+                conflict = name
+                break
+        if conflict is None:
+            _STATE["model"] = model
+            _STATE["optimizer"] = optimizer
+            if handle is not None and hasattr(handle, "_handles"):
+                handle._handles.append(_Detach(model))
+    for program in removed:
+        _remove_output(program)
+    if conflict is not None:
+        if handle is not None:
+            handle.remove()
+        raise ValueError(f"publication {conflict!r} conflicts with a model tensor")
 
 
 class _Detach:
@@ -440,20 +447,25 @@ def detach(model=None) -> None:
     with _LOCK:
         if model is not None and _STATE["model"] is not model:
             return
-        ids = list(_PROGS) + list(_DRAWN)
-    for pid in ids:
-        remove(pid)
-    with _LOCK:
-        _drop_act_hooks()
-        from .interp import _publish
-        from .interp._points import clear_captures
-        current = _STATE["model"]
-        if current is not None:
-            clear_captures(current)
-        _publish._clear()
-        _release_unused()
-        _STATE["model"] = None
-        _STATE["optimizer"] = None
+        removed = _detach_locked()
+    for program in removed:
+        _remove_output(program)
+
+
+def _detach_locked():
+    """Remove watch-owned state under _LOCK and defer external output callbacks."""
+    removed = [_remove(pid) for pid in list(_PROGS) + list(_DRAWN)]
+    _drop_act_hooks()
+    from .interp import _publish
+    from .interp._points import clear_captures
+    current = _STATE["model"]
+    if current is not None:
+        clear_captures(current)
+    _publish._clear()
+    _release_unused()
+    _STATE["model"] = None
+    _STATE["optimizer"] = None
+    return removed
 
 
 def _drop_act_hooks() -> None:
@@ -469,14 +481,18 @@ def _torch_adapter():
 
 
 def _resolve(name: str):
-    """The tensor of an input name, or None for no such name; raises _Waiting for a gradient or an
-    output that does not exist yet."""
-    from .interp._publish import _resolve as published
+    """Return a known tensor or None for an unknown name.
+
+    Gradients, module outputs, and fixed interpretation names can await their first value.
+    """
+    from .interp._publish import INTERPRETATION_TENSORS, _resolve as published
     tensor = published(name)
     if tensor is not None:
         return tensor
     model = _STATE["model"]
     if model is None:
+        if name in INTERPRETATION_TENSORS:
+            raise _Waiting(name)
         return None
     if name.endswith(".grad"):
         p = dict(model.named_parameters()).get(name[:-5])
@@ -500,6 +516,8 @@ def _resolve(name: str):
     t = dict(model.named_parameters()).get(name)
     if t is None:
         t = dict(model.named_buffers()).get(name)
+    if t is None and name in INTERPRETATION_TENSORS:
+        raise _Waiting(name)
     return t
 
 
@@ -612,18 +630,34 @@ def _check(p: _Program) -> None:
                            "which is not live:<name>.")
 
 
+def _resolve_inputs(inputs):
+    """Check every input name before a known but absent tensor delays compilation."""
+    tensors, waiting = {}, None
+    for var, src in inputs:
+        name = src[len("live:"):]
+        try:
+            tensor = _resolve(name)
+        except _Waiting as exc:
+            waiting = exc
+            continue
+        if tensor is None:
+            raise _Refused("program.unknown_input", f"The script has no tensor named {name}.")
+        tensors[var] = tensor
+    if waiting is not None:
+        raise waiting
+    return tensors
+
+
 def _compile(p: _Program) -> None:
     """Import the inputs and compile the program; raises _Refused or _Waiting."""
     if p.kind == "piece":
         _compile_piece(p)
         return
+    tensors = _resolve_inputs(p.inputs)
     bound = {}
     for var, src in p.inputs:
         name = src[len("live:"):]
-        t = _resolve(name)
-        if t is None:
-            raise _Refused("program.unknown_input", f"The script has no tensor named {name}.")
-        bound[var] = _import(name, t)
+        bound[var] = _import(name, tensors[var])
     rt = _runtime()
     out = p.output
     wg = p.decl.get("workgroups") or (0, 0, 0)
@@ -799,7 +833,11 @@ def _remove(program_id: str):
 
 def remove(program_id: str) -> None:
     """Stop and remove a program, and clear its output; an unknown id does nothing."""
-    p = _remove(program_id)
+    _remove_output(_remove(program_id))
+
+
+def _remove_output(p) -> None:
+    """Clear an old output outside _LOCK because its listeners can call other services."""
     if p is not None and p.kind == "piece":
         _drop_outbox(p)
         _relay_removal(p)
@@ -1562,6 +1600,8 @@ def _check_piece(p: _Program, values) -> None:
 
 def _compile_piece(p: _Program) -> None:
     """Import the tensor inputs and compile the derive half; raises _Refused or _Waiting."""
+    tensors = _resolve_inputs([(name, src) for name, src in p.inputs
+                               if p.types[name][0] == "tensor" and src])
     bound, inputs, unbound = {}, [], []
     for name, src in p.inputs:
         kind, dtype = p.types[name]
@@ -1571,10 +1611,7 @@ def _compile_piece(p: _Program) -> None:
                 unbound.append(name)
             continue
         tname = src[len("live:"):]
-        t = _resolve(tname)
-        if t is None:
-            raise _Refused("program.unknown_input", f"The script has no tensor named {tname}.")
-        bound[name] = _import(tname, t)
+        bound[name] = _import(tname, tensors[name])
         inputs.append((name, bound[name].handle, dtype))
     rt = _runtime()
     resources = [(r["id"], r["kind"], r["element"], r["struct"], r["fields"], r["count"], r["width"],
