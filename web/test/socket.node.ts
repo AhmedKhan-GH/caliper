@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import { SocketClient } from '../src/client/socket.js';
 import { decode, encode, MessageError } from '../src/protocol/codec.js';
-import { CAP, type ControlReplyMsg, type InterpretationRequest, type Message } from '../src/protocol/messages.js';
+import { CAP, CLOSE, type ControlMsg, type ControlReplyMsg, type InterpretationRequest, type Message } from '../src/protocol/messages.js';
 
 // Exercise the public client through encoded peer frames without a network.
 class PeerSocket {
@@ -28,7 +28,17 @@ class PeerSocket {
 }
 
 const caps = [CAP.controls, CAP.interpretation];
-function connected(t: TestContext, serverCaps: string[] = caps, sessionCaps: string[] = caps, hub = true) {
+const reads: InterpretationRequest[] = [
+  { version: 1, method: 'feature.dictionary', params: {} },
+  { version: 1, method: 'feature.show', params: { node: 1 } },
+  { version: 1, method: 'feature.examples', params: { layer: 0, feature: 1, limit: 2 } },
+  { version: 1, method: 'trace.status', params: {} },
+  { version: 1, method: 'trace.read', params: { node_offset: 0, node_limit: 8 } },
+];
+const read = { op: 'interpret', interpretation: reads[3] } as const;
+function connected(t: TestContext, {
+  serverCaps = caps, sessionCaps = caps, hub = true, control = true, controls = true, ready = true,
+}: { serverCaps?: readonly string[]; sessionCaps?: readonly string[]; hub?: boolean; control?: boolean; controls?: boolean; ready?: boolean } = {}) {
   const original = Object.getOwnPropertyDescriptor(globalThis, 'WebSocket');
   Object.defineProperty(globalThis, 'WebSocket', { configurable: true, value: PeerSocket });
   const client = new SocketClient('ws://localhost/v3/stream');
@@ -40,14 +50,15 @@ function connected(t: TestContext, serverCaps: string[] = caps, sessionCaps: str
   client.connect();
   const peer = PeerSocket.current;
   peer.onopen?.();
-  const session = { id: 'fixture', script: 'fixture.py', pid: 1, start_unix_ms: 1, state: 'live' as const, views: 0, capabilities: sessionCaps };
-  peer.receive({ type: 'welcome', role: hub ? 'hub' : 'producer', capabilities: serverCaps, control: true, minor: 2, session });
+  const session = { id: 'fixture', script: 'fixture.py', pid: 1, start_unix_ms: 1, state: 'live' as const, views: 0, capabilities: [...sessionCaps] };
+  peer.receive({ type: 'welcome', role: hub ? 'hub' : 'producer', capabilities: [...serverCaps], control, minor: 2, session });
   if (hub) peer.receive({ type: 'sessions', sessions: [session] });
-  peer.receive({ type: 'views', session: session.id, views: [] });
-  peer.receive({ type: 'controls', run: { state: 'running' }, params: [], actions: [] });
+  if (ready) peer.receive({ type: 'views', session: session.id, views: [] });
+  if (controls) peer.receive({ type: 'controls', run: { state: 'running' }, params: [], actions: [] });
   assert.equal(peer.sent.some((m) => m.type === 'error'), false);
-  assert.equal(client.controlAccess().allowed, true);
-  return { client, peer };
+  assert.equal(client.controlAccess().allowed, control && controls && ready
+    && serverCaps.includes(CAP.controls) && (!hub || sessionCaps.includes(CAP.controls)));
+  return { client, peer, session };
 }
 
 test('Socket Interpretation Handshake and Payloads', (t) => {
@@ -73,8 +84,8 @@ test('Socket Interpretation Handshake and Payloads', (t) => {
   }
 });
 
-test('Socket Interpretation Replies Retain Queued Callbacks Until Completion', (t) => {
-  const { client, peer } = connected(t);
+test('Socket Read-Only Queued Callbacks and Final Results', (t) => {
+  const { client, peer } = connected(t, { control: false });
   const replies: ControlReplyMsg[] = [];
   const id = client.control({ op: 'interpret', interpretation: { version: 1, method: 'trace.status', params: {} } }, (r) => replies.push(r))!;
   peer.receive({ type: 'control_reply', request_id: id, op: 'interpret', status: 'queued' });
@@ -90,7 +101,7 @@ for (const [label, serverCaps, sessionCaps, hub] of [
   ['Direct Producer Capability', [CAP.controls], caps, false],
 ] as const) {
   test(`Socket Interpretation Requires ${label}`, (t) => {
-    const { client, peer } = connected(t, [...serverCaps], [...sessionCaps], hub);
+    const { client, peer } = connected(t, { serverCaps, sessionCaps, hub });
     const before = peer.sent.length;
     assert.equal(client.control({ op: 'interpret', interpretation: { version: 1, method: 'trace.status', params: {} } }), null);
     assert.equal(peer.sent.length, before);
@@ -100,12 +111,159 @@ for (const [label, serverCaps, sessionCaps, hub] of [
 }
 
 test('Socket Direct Producer Interpretation', (t) => {
-  const { client, peer } = connected(t, caps, [], false);
+  const { client, peer } = connected(t, { sessionCaps: [], hub: false });
   const interpretation = { version: 1, method: 'trace.status', params: {} } as const;
   assert.ok(client.control({ op: 'interpret', interpretation }));
   const sent = peer.sent.at(-1);
   if (sent?.type === 'control') assert.deepEqual(sent.interpretation, interpretation);
   else assert.fail('Expected a control frame');
+});
+
+for (const hub of [false, true]) {
+  for (const controls of [false, true]) {
+    test(`Socket ${hub ? 'Hub' : 'Direct'} Read-Only Reads ${controls ? 'With' : 'Without'} Controls`, (t) => {
+      const { client, peer } = connected(t, { hub, control: false, controls,
+        serverCaps: controls ? caps : [CAP.interpretation],
+        sessionCaps: controls ? caps : [CAP.interpretation] });
+      // Check the public entry and the deferred-send gate independently.
+      for (const method of ['control', 'sendControl'] as const) {
+        for (const interpretation of reads) {
+          let calls = 0;
+          const id = client[method]({ op: 'interpret', interpretation }, () => calls++);
+          assert.ok(id && id > 0);
+          const sent = peer.sent.at(-1);
+          if (sent?.type !== 'control') assert.fail('Expected a control frame');
+          assert.equal(sent.request_id, id);
+          assert.equal(sent.op, 'interpret');
+          assert.deepEqual(sent.interpretation, interpretation);
+          peer.receive({ type: 'control_reply', request_id: id, op: 'interpret', status: 'ok', result: {} });
+          assert.equal(calls, 1);
+        }
+      }
+      assert.equal(client.controlAccess().allowed, false);
+    });
+  }
+
+  test(`Socket ${hub ? 'Hub' : 'Direct'} Read-Only Change Rejection`, (t) => {
+    const { client, peer } = connected(t, { hub, control: false });
+    const changes: Omit<ControlMsg, 'type' | 'request_id'>[] = [
+      { op: 'interpret', interpretation: { version: 1, method: 'trace.run', params: { prompt: 'test' } } },
+      { op: 'pause' }, { op: 'resume' }, { op: 'step', count: 1 },
+      { op: 'set', name: 'rate', value: 1 }, { op: 'run', name: 'action' },
+      { op: 'intervene', intervene: { clear_all: true } },
+      { op: 'interpret' },
+      // Future methods must not gain read permission by their prefix.
+      { op: 'interpret', interpretation: { version: 1, method: 'feature.change', params: {} } as unknown as InterpretationRequest },
+    ];
+    const before = peer.sent.length;
+    let calls = 0;
+    for (const method of ['control', 'sendControl'] as const) {
+      for (const change of changes) assert.equal(client[method](change, () => calls++), null);
+    }
+    assert.equal(peer.sent.length, before);
+    peer.receive({ type: 'control_reply', request_id: 1, op: 'interpret', status: 'ok', result: {} });
+    assert.equal(calls, 0);
+    assert.equal(client.control(read), 1);
+  });
+
+  test(`Socket ${hub ? 'Hub' : 'Direct'} Read Readiness`, (t) => {
+    const { client, peer, session } = connected(t, { hub, control: false, ready: false });
+    const before = peer.sent.length;
+    assert.equal(client.control(read), null);
+    assert.equal(client['sendControl'](read), null);
+    assert.equal(peer.sent.length, before);
+    peer.receive({ type: 'views', session: session.id, views: [] });
+    assert.ok(client.control(read));
+    peer.readyState = 2;
+    const sent = peer.sent.length;
+    assert.equal(client.control(read), null);
+    assert.equal(client['sendControl'](read), null);
+    assert.equal(peer.sent.length, sent);
+    peer.close(CLOSE.normal);
+    assert.equal(client.control(read), null);
+    assert.equal(client['sendControl'](read), null);
+  });
+}
+
+for (const [label, serverCaps, sessionCaps, hub] of [
+  ['Hub', [CAP.controls], caps, true],
+  ['Hub Session', caps, [CAP.controls], true],
+  ['Direct', [CAP.controls], caps, false],
+] as const) {
+  test(`Socket Read-Only ${label} Capability Rejection`, (t) => {
+    const { client, peer } = connected(t, { serverCaps, sessionCaps, hub, control: false });
+    const before = peer.sent.length;
+    let calls = 0;
+    for (const method of ['control', 'sendControl'] as const) {
+      for (const interpretation of reads) {
+        assert.equal(client[method]({ op: 'interpret', interpretation }, () => calls++), null);
+      }
+    }
+    assert.equal(peer.sent.length, before);
+    peer.receive({ type: 'control_reply', request_id: 1, op: 'interpret', status: 'ok', result: {} });
+    assert.equal(calls, 0);
+  });
+}
+
+test('Socket Read-Only Session Callback Isolation', (t) => {
+  const { client, peer, session } = connected(t, { control: false });
+  let calls = 0;
+  const oldId = client.control(read, () => calls++)!;
+  peer.receive({ type: 'views', views: [] });
+  const before = peer.sent.length;
+  assert.equal(client.control(read), null);
+  assert.equal(client['sendControl'](read), null);
+  assert.equal(peer.sent.length, before);
+  peer.receive({ type: 'control_reply', request_id: oldId, op: 'interpret', status: 'ok', result: {} });
+  assert.equal(calls, 0);
+  const nextSession = { ...session, id: 'next' };
+  peer.receive({ type: 'sessions', sessions: [nextSession] });
+  peer.receive({ type: 'views', session: nextSession.id, views: [] });
+  const id = client.control(read, () => calls++)!;
+  assert.ok(id > oldId);
+  peer.receive({ type: 'control_reply', request_id: oldId, op: 'interpret', status: 'ok', result: {} });
+  peer.receive({ type: 'control_reply', request_id: id, op: 'interpret', status: 'error', error: { code: 'refused' } });
+  peer.receive({ type: 'control_reply', request_id: id, op: 'interpret', status: 'ok', result: {} });
+  assert.equal(calls, 1);
+  peer.receive({ type: 'sessions', sessions: [{ ...nextSession, state: 'ended' }] });
+  assert.equal(client.control(read), null);
+  assert.equal(client['sendControl'](read), null);
+});
+
+test('Socket Read-Only Attached Session Capabilities', (t) => {
+  const { client, peer, session } = connected(t, { control: false });
+  peer.receive({ type: 'views', session: 'next', views: [] });
+  const before = peer.sent.length;
+  assert.equal(client.control(read), null);
+  assert.equal(client['sendControl'](read), null);
+  peer.receive({ type: 'sessions', sessions: [{ ...session, id: 'next', capabilities: [CAP.controls] }] });
+  assert.equal(client.control(read), null);
+  assert.equal(client['sendControl'](read), null);
+  assert.equal(peer.sent.length, before);
+  peer.receive({ type: 'sessions', sessions: [{ ...session, id: 'next' }] });
+  assert.ok(client.control(read));
+  assert.ok(client['sendControl'](read));
+});
+
+test('Socket Read-Only Encoding and Send Callback Cleanup', (t) => {
+  const { client, peer } = connected(t, { control: false });
+  let calls = 0;
+  assert.throws(() => client.control({ op: 'interpret', interpretation: {
+    version: 1, method: 'feature.show', params: { node: -1 },
+  } }, () => calls++), MessageError);
+  peer.failSend = true;
+  assert.throws(() => client.control(read, () => calls++), /Socket send failed/);
+  peer.failSend = false;
+  for (const id of [1, 2]) {
+    peer.receive({ type: 'control_reply', request_id: id, op: 'interpret', status: 'ok', result: {} });
+  }
+  assert.equal(calls, 0);
+  assert.equal(client.control(read, () => calls++), 3);
+  client.close();
+  peer.receive({ type: 'control_reply', request_id: 3, op: 'interpret', status: 'ok', result: {} });
+  assert.equal(calls, 0);
+  assert.equal(client.control(read), null);
+  assert.equal(client['sendControl'](read), null);
 });
 
 test('Socket Encoding Failure Removes the Callback and Permits the Next Request', (t) => {
