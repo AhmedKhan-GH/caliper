@@ -15,7 +15,7 @@ classifiers = [
 
 [project.optional-dependencies]
 torch = ["torch"]
-test = ["pytest", "torch"]
+test = ["pytest", "torch>=2.15.0", "safetensors", "transformers==5.24.0", "psutil", "datasets"]
 notebook = ["anywidget"]
 interp = ["torch>=2.15.0", "safetensors", "transformers==5.24.0", "psutil", "datasets"]
 
