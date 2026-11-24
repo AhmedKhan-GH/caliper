@@ -16,8 +16,7 @@ from .test_trace import exact_dictionary
 
 @pytest.fixture
 def resources(monkeypatch):
-    import caliper.interp
-    monkeypatch.setattr(caliper.interp, "publish", lambda *args: None)
+    monkeypatch.setattr("caliper.interp._publish._TENSORS", {})
     monkeypatch.setattr(_controls, "CONTROLS", _controls.Controls())
     model = TinyLM(layers=2, width=8, heads=2, latents=8, k=2).to("cpu")
     return model, TinyTokenizer(), exact_dictionary(model)

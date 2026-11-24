@@ -110,6 +110,7 @@ TENSOR_AXES_MAX, TENSOR_ELEMENTS_MAX = 4, 1000000
 _ARRAYS = ("positions", "colors", "values", "radii")
 
 _LOCK = threading.RLock()
+_WATCH_EPOCH = 0  # publication admission, protected by _LOCK
 _OUTPUT_EVENTS = deque()  # callbacks in program state order, protected by _LOCK
 _OUTPUT_DRAINING = False
 _OUTPUT_PENDING_MAX = 16  # the wire's MAX_PROGRAMS
@@ -431,6 +432,7 @@ def attach(model, optimizer, handle=None) -> None:
 
     Loads no native module. With ``handle`` (a WatchHandle), its ``remove()`` detaches again.
     """
+    global _WATCH_EPOCH
     conflict = None
     with _LOCK:
         from .interp import _publish
@@ -442,6 +444,8 @@ def attach(model, optimizer, handle=None) -> None:
                 conflict = name
                 break
         if conflict is None:
+            if _STATE["model"] is not model:
+                _WATCH_EPOCH += 1
             _STATE["model"] = model
             _STATE["optimizer"] = optimizer
             if handle is not None and hasattr(handle, "_handles"):
@@ -474,6 +478,8 @@ def detach(model=None) -> None:
 
 def _detach_locked():
     """Remove watch-owned state under _LOCK and defer external output callbacks."""
+    global _WATCH_EPOCH
+    _WATCH_EPOCH += 1
     for pid in list(_PROGS) + list(_DRAWN):
         _remove(pid, clear_output=True)
     _drop_act_hooks()

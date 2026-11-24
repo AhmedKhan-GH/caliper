@@ -390,6 +390,11 @@ class Tracer:
     @torch.inference_mode(False)
     def trace(self, prompt, max_targets=512, max_nodes=512, max_edges=8192):
         """Publish and return one graph without truncation or model downloads."""
+        from ._publish import _publication_scope
+        with _publication_scope(self.model):
+            return self._trace(prompt, max_targets, max_nodes, max_edges)
+
+    def _trace(self, prompt, max_targets, max_nodes, max_edges):
         state = self._intervention_state()
         specifications = state["specifications"] if isinstance(state, dict) else [
             spec for spec in state if spec.get("state") == "active"]

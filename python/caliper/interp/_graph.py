@@ -96,10 +96,10 @@ class Graph:
 
     def publish(self):
         """Publish structural tensors and all graph and bar inputs on their existing device."""
-        from . import publish
-        values = {**self.tensors, **self._panel_tensors()}
-        for name, tensor in values.items():
-            publish(name, tensor)
+        from ._publish import _publication_scope, _publish_many
+        with _publication_scope():
+            values = {**self.tensors, **self._panel_tensors()}
+            _publish_many(values)
         return self
 
     def read(self, *, node_offset=0, node_limit=128, edge_offset=0, edge_limit=256):
