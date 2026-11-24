@@ -23,6 +23,32 @@ A new publication replaces the previous tensor for that name.
 The tensor retains its device and storage.
 Watch removal clears the model's publications and capture hooks.
 
+### Publication Lifetime
+
+A publication belongs to the current watch, or to the next watch if no watch exists.
+Completed publications before the first watch remain available when that watch attaches.
+Watch removal or replacement clears all publications.
+Attachment of the same model without removal preserves the current lifetime.
+
+A trace or example request captures the watch lifetime before model work or resolution of lazy resources.
+The request checks that lifetime under the program lock before it publishes a complete tensor group.
+The check also requires the request model to match the watched model.
+Removal, replacement, or first attachment during the request invalidates its publication lease.
+Removal followed by attachment of the same model also invalidates the lease.
+A stale request raises `RuntimeError` with code `interpret.watch_changed`, which the interpretation service returns as an error.
+
+Each graph group contains all structural tensors, labels, and probability bars.
+Each example group contains tokens, activations, example IDs, valid lengths, and labels.
+The producer sees the complete previous group or the complete new group.
+A refused publication changes no tensor in the group.
+Model work and service waits never hold the program lock.
+
+Watch removal does not cancel model work or wait for a service request.
+A result can complete before removal and reach its caller after removal clears the tensors.
+Concurrent model mutation and concurrent traces through one tracer remain unsupported.
+An explicit `publish` or standalone `Graph.publish` call assigns supplied tensors to the current lifetime.
+These explicit calls do not establish the tensors' model identity.
+
 ## Feature Dictionaries
 
 A dictionary contains one transcoder for each MLP layer.
