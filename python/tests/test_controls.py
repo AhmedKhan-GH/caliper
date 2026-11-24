@@ -720,6 +720,66 @@ def test_an_action_that_raises(ctl):
     assert len(ok["message"].encode("utf-8")) <= 1024 and ok["message"] == "é" * 512
 
 
+@pytest.mark.parametrize("terminal", ["expire", "remove"])
+@pytest.mark.parametrize("late_join", [False, True])
+def test_deferred_action_keeps_deadline_and_exact_terminal_replies(ctl, monkeypatch, terminal, late_join):
+    transport = Fake()
+    route = ctl.attach(transport)
+    ran, timers, requests = [], [], []
+    evaluate = ctl.action("evaluate", lambda: ran.append("evaluate"))
+    ctl.action("after", lambda: ran.append("after"))
+    ctl.step()
+    monkeypatch.setattr(ctl._timers, "at", lambda when, fn, *args: timers.append((when, fn, args)))
+    before = time.monotonic()
+    requests.extend(control(route, "run", name="evaluate", conn=conn) for conn in ("a", "b"))
+    after = time.monotonic()
+    follower = control(route, "run", name="after", conn="c")
+    deadline, expire, args = next(item for item in timers if item[2] == (evaluate, evaluate.run_id))
+    assert before + C.ACTION_WAIT_S <= deadline <= after + C.ACTION_WAIT_S
+    original_timers = list(timers)
+    run_id = evaluate.run_id
+    results = iter([True, False, True])
+    monkeypatch.setattr(ctl, "_intervention_boundary", lambda *args: (False, next(results)))
+
+    def nested(step):
+        with ctl.lock:
+            ctl._apply_interventions()
+            ctl._apply_interventions()
+        if late_join:
+            requests.append(control(route, "run", name="evaluate", conn="d"))
+
+    ctl.interpretation_service = types.SimpleNamespace(pending=False, step=nested)
+    try:
+        ctl.step()
+        assert not ran and not transport.replies
+        assert evaluate.queued and evaluate.run_id == run_id
+        assert len(evaluate.waiters) == len(requests)
+        assert timers == original_timers
+        if terminal == "expire":
+            expire(*args)
+            code, message = "timeout", f"no checkpoint ran the action within {C.ACTION_WAIT_S:g} s"
+        else:
+            assert evaluate.remove()
+            code, message = "unknown_control", "the action 'evaluate' was removed"
+        expected = [(conn, w.ControlReply(request["request_id"], "run", "error", "evaluate",
+                    error={"code": code, "message": message}).to_meta())
+                    for conn, request in zip(("a", "b", "d"), requests)]
+        assert transport.replies == expected
+        assert not evaluate.queued and not evaluate.waiters and not evaluate.running
+        expire(*args)
+        assert transport.replies == expected
+        ctl.interpretation_service = None
+        monkeypatch.setattr(ctl, "_intervention_boundary", lambda *args: (False, True))
+        ctl.step()
+        expected.append(("c", w.ControlReply(follower["request_id"], "run", "ok", "after").to_meta()))
+        assert transport.replies == expected and ran == ["after"] and not ctl.queue
+        expire(*args)
+        ctl.step()
+        assert transport.replies == expected
+    finally:
+        ctl.interpretation_service = None
+
+
 def test_actions_wait_for_a_checkpoint_and_time_out(ctl, fast):
     t = Fake()
     r = ctl.attach(t)

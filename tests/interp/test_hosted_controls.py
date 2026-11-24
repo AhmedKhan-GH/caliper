@@ -10,6 +10,70 @@ from caliper.interp._publish import _resolve
 from .test_hosted import hosted_run, _trace_at_boundary
 
 
+@pytest.fixture(autouse=True)
+def in_process_transport(monkeypatch):
+    monkeypatch.setattr("caliper.serve", lambda: SimpleNamespace(url="in-process"))
+
+
+@pytest.mark.parametrize("later_success", [False, True])
+def test_slider_conflict_defers_generate_and_follower_for_the_whole_pass(hosted_run, monkeypatch, later_success):
+    run, route = hosted_run
+    run.selected.set(_feature_rows(run)[0])
+    run.boundary()
+    completed, boundaries, injected = [], [], []
+    run.actions.append(run.controls.action(
+        "after_generate", lambda: completed.append(run.inference_status()["generation"]["id"])))
+    install = run.controls._install_intervention
+    boundary = run.controls._intervention_boundary
+
+    def installed(service, iv, spec, **kwargs):
+        install(service, iv, spec, **kwargs)
+        if iv.op == "clamp" and not injected:
+            injected.append(spec)
+            reply = route.on_control(None, _wire.Control(5, "intervene", intervene={
+                "set": {"kind": "ablate", "point": "layers.0.mlp_out"}}).to_meta())
+            assert reply["status"] == "ok"
+
+    def applied(*args, **kwargs):
+        result = boundary(*args, **kwargs)
+        boundaries.append(result[1])
+        return result
+
+    update = run.update_controls
+
+    def updated():
+        update()
+        if later_success:
+            run._apply()
+
+    monkeypatch.setattr(run.controls, "_install_intervention", installed)
+    monkeypatch.setattr(run.controls, "_intervention_boundary", applied)
+    monkeypatch.setattr(run, "update_controls", updated)
+    reply = route.on_control(None, _wire.Control(1, "set", name="clamp", value=2.).to_meta())
+    assert reply["status"] == "ok" and run.clamp.pending == 2.
+    _queue_action(route, "generate", 2)
+    _queue_action(route, "after_generate", 3)
+    action = run.controls.actions["generate"]
+    run_id = action.run_id
+    run.boundary()
+    assert boundaries == ([True, False, True] if later_success else [True, False])
+    assert len(injected) == 1
+    assert action.queued and action.run_id == run_id
+    assert run.inference_status()["generation"]["id"] == 0
+    assert not route.transport.replies and not completed
+    assert bool(run.interventions.specifications()) == later_success
+    run.boundary()
+    assert [(reply.request_id, reply.status) for reply in route.transport.replies] == [(2, "ok"), (3, "ok")]
+    assert completed == [1] and not run.controls.queue
+    generation = run.inference_status()["generation"]
+    assert generation["counts"] == [24, 24]
+    assert generation["interventions_hash"] == run.inference_status()["interventions_hash"]
+    assert generation["completed_step"] == run.controls.n
+    assert run.interventions.specifications()[0] == injected[0]
+    run.boundary()
+    assert completed == [1] and len(route.transport.replies) == 2
+
+
 @pytest.mark.parametrize("refusal", ["selection", "maximum", "intervention", "row", "prompt"])
 def test_refused_slider_edit_cannot_clamp_a_later_selection(hosted_run, monkeypatch, refusal):
     run, route = hosted_run
