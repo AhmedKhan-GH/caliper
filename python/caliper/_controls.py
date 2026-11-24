@@ -93,7 +93,7 @@ the data of the step the run paused at goes out before the run state).
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import collections
 import heapq
 import itertools
@@ -765,6 +765,36 @@ class Interventions:
         self._shapes_off = None           # removes the shape hooks at the next step
         from .interp._intervene import InterventionService
         self.executor = InterventionService(model, adapter=adapter)
+        self._operation_owner = None
+        self._operation_depth = 0
+        self._readers = 0
+        self._retired = None
+
+    @contextmanager
+    def _operation(self, kind):
+        """Reserve executor mutation without a wait, with the controls lock held.
+
+        Only nested replay on the same thread shares ownership. Requests can still
+        validate and queue during hook preparation. Configuration requires no readers.
+        """
+        from .interp._intervene import InterventionError
+        if self._ctl._iv_model is not self:
+            raise InterventionError("the intervention service is no longer attached")
+        owner = (kind, threading.get_ident())
+        if ((self._operation_owner is not None
+             and not (kind == "replay" and self._operation_owner == owner))
+                or (self._ctl._iv_attaching and kind != "watch")
+                or (kind in ("configure", "watch") and self._readers)):
+            raise InterventionError("an intervention lifecycle operation is in progress", ERR_NOT_SUPPORTED)
+        self._operation_owner = owner
+        self._operation_depth += 1
+        try:
+            yield
+        finally:
+            self._operation_depth -= 1
+            if not self._operation_depth:
+                self._operation_owner = None
+                self._ctl._finish_retired(self)
 
     @property
     def dictionary(self):
@@ -782,21 +812,29 @@ class Interventions:
 
     def invalidate_source_cache(self):
         """Release clean patch sources after an external prompt or model change."""
-        self.executor.invalidate_cache()
+        with self._ctl.lock, self._operation("cache"):
+            with self._ctl._outside_lock():
+                self.executor.invalidate_cache()
 
     def configure(self, *, dictionary=None, tokenizer=None, dictionary_id=None, resource_guard=None):
         """Bind resources and end prior interventions after validation succeeds."""
-        with self._ctl.lock:
+        with self._ctl.lock, self._operation("configure"):
+            records = list(self._ctl._ivs.values())
+            with self._ctl._outside_lock():
+                self.executor.configure(dictionary=dictionary, tokenizer=tokenizer,
+                                        dictionary_id=dictionary_id, resource_guard=resource_guard)
+                for iv in records:
+                    if iv.hook is not None:
+                        iv.hook()
             if self._ctl._iv_model is not self:
                 raise ValueError("the intervention service is no longer attached")
-            self.executor.configure(dictionary=dictionary, tokenizer=tokenizer,
-                                    dictionary_id=dictionary_id, resource_guard=resource_guard)
-            for iv in self._ctl._ivs.values():
-                self._ctl._unhook(iv)
+            for iv in records:
+                iv.hook, iv.applied_spec = None, None
                 if iv.state != IV_ENDED:
                     iv.state = IV_ENDED
                     iv.error = "intervention resources changed"
                     iv.error_code = "intervene.configuration_changed"
+            self._ctl._iv_revision += 1
             self._ctl._iv_due = True
             self._ctl._update_busy()
         self._ctl._publish()
@@ -820,6 +858,8 @@ class Interventions:
         with self._ctl.lock:
             if self._ctl._iv_model is not self:
                 raise InterventionError("the intervention service is no longer attached")
+            if self._operation_owner is not None and self._operation_owner[0] in ("configure", "watch"):
+                raise InterventionError("an intervention lifecycle operation is in progress", ERR_NOT_SUPPORTED)
             if not isinstance(point, str) or point not in self.names:
                 raise InterventionError("unknown intervention point", "intervene.unknown_point")
             if kind not in ("clamp", "scale") or type(feature) is not int or feature < 0:
@@ -828,6 +868,7 @@ class Interventions:
             if iv is None or iv.state == IV_ENDED or iv.clear or iv.spec.get("feature") != feature:
                 return False
             iv.clear = True
+            self._ctl._iv_revision += 1
             self._ctl._iv_due = True
             self._ctl.counters["interventions_in"] += 1
             self._ctl._update_busy()
@@ -903,28 +944,26 @@ class Interventions:
         records = state["interventions"]
         if not isinstance(records, list) or len(records) > MAX_INTERVENTIONS:
             raise InterventionError("invalid intervention records")
-        with self._ctl.lock:
-            if self._ctl._iv_model is not self:
-                raise InterventionError("the intervention service is no longer attached")
+        with self._ctl.lock, self._operation("replay"):
             hooks = [iv.hook for iv in self._ctl._ivs.values() if iv.hook is not None]
-            replay = _InterventionReplay(self.executor)
-
-        # Validate every record before any hook installation or patch-source forward.
-        specifications, keys = [], set()
-        for record in records:
-            spec, applied = _record_specifications(record, replay.executor)
-            key = spec["point"], spec["op"]
-            if key in keys:
-                raise InterventionError("duplicate intervention record")
-            keys.add(key)
-            if record["state"] == IV_ACTIVE:
-                # A queued clear does not remove an effect until the next boundary.
-                spec = applied
-                spec.pop("from_step", None)
-                spec.pop("until_step", None)
-                specifications.append(spec)
-        with replay._scope(hooks, specifications):
-            yield replay
+            with self._ctl._outside_lock():
+                replay = _InterventionReplay(self.executor)
+                # Validate every record before any hook or patch-source forward.
+                specifications, keys = [], set()
+                for record in records:
+                    spec, applied = _record_specifications(record, replay.executor)
+                    key = spec["point"], spec["op"]
+                    if key in keys:
+                        raise InterventionError("duplicate intervention record")
+                    keys.add(key)
+                    if record["state"] == IV_ACTIVE:
+                        # A queued clear retains its effect until the next boundary.
+                        spec = applied
+                        spec.pop("from_step", None)
+                        spec.pop("until_step", None)
+                        specifications.append(spec)
+                with replay._scope(hooks, specifications):
+                    yield replay
 
     def load_state_dict(self, state, *, restore_active=False):
         """Restore queued records, with optional applied hooks before a script forward.
@@ -939,9 +978,7 @@ class Interventions:
         records = state["interventions"]
         if not isinstance(records, list) or len(records) > MAX_INTERVENTIONS:
             raise InterventionError("invalid intervention records")
-        with self._ctl.lock:
-            if self._ctl._iv_model is not self:
-                raise InterventionError("the intervention service is no longer attached")
+        with self._ctl.lock, self._operation("restore"):
             self._restore_records(records, restore_active=restore_active)
 
     def apply_overrides(self, specifications):
@@ -950,17 +987,17 @@ class Interventions:
         from .interp._intervene import InterventionError
         if not isinstance(specifications, list) or len(specifications) > MAX_INTERVENTIONS:
             raise InterventionError("invalid intervention overrides")
-        with self._ctl.lock:
-            if self._ctl._iv_model is not self:
-                raise InterventionError("the intervention service is no longer attached")
+        with self._ctl.lock, self._operation("restore"):
             if not specifications:
                 return
+            revision = self._ctl._iv_revision
             records = {(record["specification"]["point"], record["specification"]["op"]): record
                        for record in self._state_dict()["interventions"]}
             keys = set()
             step = self._ctl._next_step()
             for request in specifications:
-                spec = self.executor.validate(request)
+                with self._ctl._outside_lock():
+                    spec = self.executor.validate(request)
                 key = spec["point"], spec["op"]
                 if key in keys:
                     raise InterventionError("duplicate intervention override")
@@ -977,43 +1014,67 @@ class Interventions:
                 if old is None:
                     raise InterventionError("too many live intervention records", _w().ERR_LIMIT)
                 del records[old]
+            self._check_revision(revision)
             self._restore_records(list(records.values()), restore_active=True, evict_ended=True)
         self._ctl._publish()
 
     def _restore_records(self, records, *, restore_active, evict_ended=False):
-        """Restore validated records while the controls lock is held."""
+        """Prepare a complete replacement, then commit if its input still owns the state."""
         from .interp._intervene import InterventionError
+        revision = self._ctl._iv_revision
         restored = {}
-        for record in records:
-            spec, applied = _record_specifications(record, self.executor)
-            key = spec["point"], spec["op"]
-            if key in restored:
-                raise InterventionError("duplicate intervention record")
-            iv = _Intervention(*key, spec.get("from_step"), spec.get("until_step"), spec)
-            iv.state, iv.since_step = record["state"], record["since_step"]
-            iv.clear, iv.error, iv.error_code = record["clear"], record["error"], record["error_code"]
-            iv.applied_spec = applied
-            iv.replace = applied is not None and spec != applied
-            restored[key] = iv
+        with self._ctl._outside_lock():
+            for record in records:
+                spec, applied = _record_specifications(record, self.executor)
+                key = spec["point"], spec["op"]
+                if key in restored:
+                    raise InterventionError("duplicate intervention record")
+                iv = _Intervention(*key, spec.get("from_step"), spec.get("until_step"), spec)
+                iv.state, iv.since_step = record["state"], record["since_step"]
+                iv.clear, iv.error, iv.error_code = record["clear"], record["error"], record["error_code"]
+                iv.applied_spec = applied
+                iv.replace = applied is not None and spec != applied
+                restored[key] = iv
+        self._check_revision(revision)
         try:
             restored = self._ctl._admit_interventions(restored, evict_ended=evict_ended)
         except ValueError as error:
             raise InterventionError(str(error), _w().ERR_LIMIT) from None
-        if restore_active:
+        cache, identity = self.executor._cache.copy(), self.executor._cache_identity
+        try:
+            if restore_active:
+                with self._ctl._outside_lock():
+                    for iv in restored.values():
+                        if iv.applied_spec is not None:
+                            self._ctl._install_intervention(self, iv, iv.applied_spec)
+            self._check_revision(revision)
+            # Other controls can consume metadata space during preparation.
             try:
+                restored = self._ctl._admit_interventions(restored, evict_ended=evict_ended)
+            except ValueError as error:
+                raise InterventionError(str(error), _w().ERR_LIMIT) from None
+        except BaseException:
+            with self._ctl._outside_lock():
                 for iv in restored.values():
-                    if iv.applied_spec is not None:
-                        self._ctl._install_intervention(self, iv, iv.applied_spec)
-            except BaseException:
-                for iv in restored.values():
-                    self._ctl._unhook(iv)
-                raise
-        for iv in self._ctl._ivs.values():
-            self._ctl._unhook(iv)
-        self.executor._discard_unused_sources()
+                    self._ctl._unhook(iv, retain_source=True)
+                self.executor._cache.clear()
+                self.executor._cache.update(cache)
+                self.executor._cache_identity = identity
+            raise
+        old = list(self._ctl._ivs.values())
         self._ctl._ivs = restored
+        self._ctl._iv_revision += 1
         self._ctl._iv_due = True
         self._ctl._update_busy()
+        with self._ctl._outside_lock():
+            for iv in old:
+                self._ctl._unhook(iv, retain_source=True)
+            self.executor._discard_unused_sources()
+
+    def _check_revision(self, revision):
+        from .interp._intervene import InterventionError
+        if self._ctl._iv_model is not self or self._ctl._iv_revision != revision:
+            raise InterventionError("intervention state changed during preparation", ERR_NOT_SUPPORTED)
 
     def remove(self) -> None:
         self._ctl._interventions_off(self)
@@ -1145,9 +1206,21 @@ class Controls:
         self._iv_model: Interventions | None = None   # the watched model of the interventions
         self._ivs: dict = {}                     # (point, op) -> _Intervention, oldest first
         self._iv_due = False                     # the next checkpoint has intervention work
+        self._iv_revision = 0                    # cancels preparation after a lifecycle edit
+        self._iv_retiring = set()                # detached executors with work still in flight
+        self._iv_attaching = False
         self._alone_since = None                 # no connection that may control since then,
                                                  # while an intervention acts or waits
         self._linger_next = 0.0                  # the next count of those connections
+
+    @contextmanager
+    def _outside_lock(self):
+        """Release the caller's controls lock for executor work, then reacquire it."""
+        self.lock.release()
+        try:
+            yield
+        finally:
+            self.lock.acquire()
 
     # -- the checkpoint (the training thread) ----------------------------------
     def step(self, step=None) -> None:
@@ -1809,18 +1882,37 @@ class Controls:
         m.names = frozenset(p["point"] for p in pts)
         m.executor._ablation_points = m.names
         with self.lock:
+            from .interp._intervene import InterventionError
+            if self._iv_attaching or self._iv_retiring:
+                raise InterventionError("an intervention lifecycle operation is in progress", ERR_NOT_SUPPORTED)
             self._check_metadata_budget(points=m.points, ivs={})
             old = self._iv_model
-            if old is not None:
-                self._close_interventions(old, self._ivs.values())
-            self._ivs = {}
-            try:
-                m._shapes_off = _ablate.record_shapes(model)
-            except Exception:
-                _log.debug("the shape hooks failed", exc_info=True)
-            self._iv_model = m
-            self._iv_due = m._shapes_off is not None
-            self._update_busy()
+            with old._operation("watch") if old is not None else nullcontext():
+                self._iv_attaching = True
+                try:
+                    try:
+                        with self._outside_lock():
+                            m._shapes_off = _ablate.record_shapes(model)
+                    except Exception:
+                        _log.debug("the shape hooks failed", exc_info=True)
+                    if self._iv_model is not old:
+                        raise InterventionError("intervention state changed during preparation", ERR_NOT_SUPPORTED)
+                    self._check_metadata_budget(points=m.points, ivs={})
+                    ivs = list(self._ivs.values())
+                    self._ivs = {}
+                    self._iv_model = m
+                    self._iv_revision += 1
+                    self._iv_due = m._shapes_off is not None
+                    self._update_busy()
+                    if old is not None:
+                        with self._outside_lock():
+                            self._close_interventions(old, ivs)
+                except BaseException:
+                    with self._outside_lock():
+                        self._close_interventions(m, ())
+                    raise
+                finally:
+                    self._iv_attaching = False
         if handle is not None and hasattr(handle, "_handles"):
             handle._handles.append(m)
         self._publish()
@@ -1833,10 +1925,24 @@ class Controls:
                 return
             self._iv_model = None
             ivs, self._ivs = list(self._ivs.values()), {}
+            self._iv_revision += 1
             self._iv_due = False
             self._update_busy()
-        self._close_interventions(m, ivs)
+            m._retired = ivs
+            self._iv_retiring.add(m)
+            self._finish_retired(m)
         self._publish()
+
+    def _finish_retired(self, m):
+        """Close detached resources only after their last executor call returns."""
+        if m._retired is None or m._operation_owner is not None or m._readers:
+            return
+        ivs, m._retired = m._retired, None
+        try:
+            with self._outside_lock():
+                self._close_interventions(m, ivs)
+        finally:
+            self._iv_retiring.discard(m)
 
     def _close_interventions(self, m, ivs):
         shapes_off, m._shapes_off = m._shapes_off, None
@@ -1861,10 +1967,10 @@ class Controls:
             except Exception:                     # a hook handle's remove() does not fail
                 _log.debug("removing the hook of %s failed", iv.point, exc_info=True)
 
-    def _install_intervention(self, service, iv, spec):
+    def _install_intervention(self, service, iv, spec, *, owner=None):
         """Install one effect with the same error callback on restore and at a boundary."""
         from copy import deepcopy
-        callback = lambda message, iv=iv: self._intervention_failed(iv, message)
+        callback = lambda message, iv=iv if owner is None else owner: self._intervention_failed(iv, message)
         if iv.op == "ablate":
             iv.hook = service.adapter.ablate(service.model, iv.point)
             if hasattr(iv.hook, "on_error"):
@@ -1883,13 +1989,24 @@ class Controls:
         if (not isinstance(req, dict) or set(req) - {"set", "clear", "clear_all"}
                 or sum(req.get(k) is not None for k in ("set", "clear", "clear_all")) != 1):
             return (_w().ERR_BAD_REQUEST, "intervene holds exactly one of set, clear or clear_all")
-        nxt = self._next_step()
+        if m._operation_owner is not None and m._operation_owner[0] in ("configure", "watch"):
+            return (ERR_NOT_SUPPORTED, "an intervention lifecycle operation is in progress")
         if req.get("set") is not None:
             from .interp._intervene import InterventionError
+            m._readers += 1
             try:
-                spec = m.executor.validate(req["set"])
+                with self._outside_lock():
+                    spec = m.executor.validate(req["set"])
             except InterventionError as error:
                 return error.code, str(error)
+            finally:
+                m._readers -= 1
+                self._finish_retired(m)
+            if self._iv_model is not m:
+                return (ERR_NOT_SUPPORTED, "the intervention service is no longer attached")
+            if getattr(self.interpretation_service, "failure", None) is not None:
+                return ("interpret.stopped", "The interpretation run stopped.")
+            nxt = self._next_step()
             point, op = spec["point"], spec["op"]
             frm, until = spec.get("from_step"), spec.get("until_step")
             if until is not None and until <= nxt:
@@ -1927,6 +2044,7 @@ class Controls:
         else:
             return (_w().ERR_BAD_REQUEST, "intervene holds set, clear or clear_all")
         self._iv_due = True
+        self._iv_revision += 1
         self.counters["interventions_in"] += 1
         return None
 
@@ -1950,7 +2068,7 @@ class Controls:
             routes = list(self.routes)
         return sum(r._controllers() for r in routes) if routes else 0
 
-    def _linger(self, controllers: int) -> bool:
+    def _linger(self, controllers: int, records=None) -> bool:
         """End every intervention once no connection that may control stayed connected for the
         linger time that also removes the GPU programs (``caliper._net_programs.LINGER_S``):
         nobody could see or clear it any more (lock held). True if one ended."""
@@ -1963,77 +2081,151 @@ class Controls:
             self._alone_since = now
         if now - self._alone_since < LINGER_S:
             return False
-        self._alone_since = None
-        ended = []
-        for iv in self._ivs.values():
+        if records is None:
+            self._alone_since = None
+        from copy import copy
+        ended, removed = [], []
+        for iv in (self._ivs if records is None else records).values():
             if iv.state == IV_ENDED or iv.clear:
                 continue
-            self._unhook(iv)
+            removed.append(copy(iv))
+            iv.hook, iv.applied_spec = None, None
             iv.state = IV_ENDED
             iv.error = self._stop_message(
                 f"ended: no connection that may control the run stayed for {LINGER_S:g} s")
             iv.error_code = "intervene.no_controller"
             ended.append(iv.point)
         if ended:
-            self.counters["interventions_lingered"] += len(ended)
-            warnings.warn(f"caliper: no connection that may control the run stayed for {LINGER_S:g} s, "
-                          f"so the interventions on {', '.join(ended)} ended", RuntimeWarning,
-                          stacklevel=2)
+            if records is None:
+                self._iv_revision += 1
+                with self._outside_lock():
+                    for iv in removed:
+                        self._unhook(iv)
+                    self._report_linger(ended)
         return bool(ended)
+
+    def _report_linger(self, ended):
+        from ._net_programs import LINGER_S
+        self.counters["interventions_lingered"] += len(ended)
+        warnings.warn(f"caliper: no connection that may control the run stayed for {LINGER_S:g} s, "
+                      f"so the interventions on {', '.join(ended)} ended", RuntimeWarning,
+                      stacklevel=2)
 
     def _intervention_failed(self, iv, message):
         """End a failed hook now and publish its error at the next boundary."""
+        from copy import copy
         with self.lock:
             if self._ivs.get((iv.point, iv.op)) is not iv:
                 return
-            self._unhook(iv)
+            removed = copy(iv)
+            iv.hook, iv.applied_spec = None, None
             iv.state, iv.error = IV_ENDED, self._stop_message(message)
             iv.error_code, iv.report = "intervene.hook_failed", True
+            self._iv_revision += 1
             self._iv_due = True
             self._update_busy()
+            with self._outside_lock():
+                self._unhook(removed)
 
     def _apply_interventions(self, controllers=None) -> bool:
-        """At a checkpoint (the training thread, lock held): put on or take off the hooks so that
-        each intervention acts from its first step until the step it ends before, end one whose
-        hook failed, and end each one when ``controllers`` (a count of the connections that may
-        control, or None for no count now) stayed 0 for the linger time. True if a state
-        changed."""
+        """Prepare boundary effects outside the lock and commit one unchanged revision.
+
+        Concurrent requests cancel this attempt and remain queued for the next boundary.
+        Existing hooks stay installed until commit. A failed attempt removes only its hooks.
+        """
+        from copy import copy
         if not self._iv_due:
             return False
         m = self._iv_model
         if m is None:
             self._iv_due = False
             return False
-        changed = controllers is not None and self._linger(controllers)
-        if m._shapes_off is not None and self.state != RUN_NONE:
-            shapes_off, m._shapes_off = m._shapes_off, None
+        if m._operation_owner is not None or self._iv_attaching:
+            return False
+        with m._operation("boundary"):
+            revision = self._iv_revision
+            originals = dict(self._ivs)
+            records = {key: copy(iv) for key, iv in originals.items()}
+            previous = {key: copy(iv) for key, iv in originals.items()}
+            changed = controllers is not None and self._linger(controllers, records)
+            lingered = [iv.point for key, iv in records.items()
+                        if changed and iv.state == IV_ENDED and previous[key].state != IV_ENDED]
+            step = self._next_step()
+            cache, identity = m.executor._cache.copy(), m.executor._cache_identity
+            committed = False
+            reports = []
             try:
-                shapes_off()
-                points = list(m.adapter.points(m.model))[:MAX_POINTS_LISTED]
-                self._check_metadata_budget(points=points)
-                m.points = points
-            except ValueError as error:
-                warnings.warn(f"caliper: point metadata update refused: {error}",
-                              RuntimeWarning, stacklevel=2)
-            except Exception:
-                _log.debug("the shapes of the points failed", exc_info=True)
-            changed = True
-        s = self._next_step()
+                if m._shapes_off is not None and self.state != RUN_NONE:
+                    shapes_off, m._shapes_off = m._shapes_off, None
+                    try:
+                        with self._outside_lock():
+                            shapes_off()
+                            points = list(m.adapter.points(m.model))[:MAX_POINTS_LISTED]
+                        m._check_revision(revision)
+                        self._check_metadata_budget(points=points)
+                        m.points = points
+                    except ValueError as error:
+                        warnings.warn(f"caliper: point metadata update refused: {error}",
+                                      RuntimeWarning, stacklevel=2)
+                    except Exception:
+                        _log.debug("the shapes of the points failed", exc_info=True)
+                    changed = True
+                with self._outside_lock():
+                    prepared, reports = self._prepare_interventions(m, records, originals, step)
+                    changed = prepared or changed
+                if self._iv_model is not m or self._iv_revision != revision:
+                    return False
+                self._check_metadata_budget(ivs=records)
+                for key, iv in originals.items():
+                    if key not in records:
+                        del self._ivs[key]
+                    else:
+                        prepared = records[key]
+                        for field in _Intervention.__slots__:
+                            setattr(iv, field, getattr(prepared, field))
+                self._iv_revision += 1
+                self._iv_due = m._shapes_off is not None or any(
+                    iv.clear or iv.state != IV_ENDED for iv in self._ivs.values())
+                if lingered:
+                    self._alone_since = None
+                committed = True
+                return changed
+            finally:
+                with self._outside_lock():
+                    if committed:
+                        for key, iv in previous.items():
+                            if key not in records or iv.hook is not records[key].hook:
+                                self._unhook(iv, retain_source=True)
+                        m.executor._discard_unused_sources()
+                        if lingered:
+                            self._report_linger(lingered)
+                        for message in reports:
+                            warnings.warn(message, RuntimeWarning, stacklevel=2)
+                    else:
+                        for key, iv in records.items():
+                            if iv.hook is not previous[key].hook:
+                                self._unhook(iv, retain_source=True)
+                        m.executor._cache.clear()
+                        m.executor._cache.update(cache)
+                        m.executor._cache_identity = identity
+
+    def _prepare_interventions(self, m, records, originals, s):
+        """Build the next hook sequence without changes to the published records."""
+        changed = False
         reinstall = False
-        for key in list(self._ivs):
-            iv = self._ivs[key]
+        reports = []
+        for key in list(records):
+            iv = records[key]
             if iv.report:
                 iv.report = False
                 changed = True
-                warnings.warn(f"caliper: the intervention at {iv.point!r} failed and ended: {iv.error}",
-                              RuntimeWarning, stacklevel=2)
+                reports.append(f"caliper: the intervention at {iv.point!r} failed and ended: {iv.error}")
             if iv.replace:
-                self._unhook(iv, retain_source=True)
+                iv.hook, iv.applied_spec = None, None
                 iv.replace = False
                 changed = True
             if iv.clear:
-                self._unhook(iv)
-                del self._ivs[key]
+                del records[key]
                 changed = True
                 continue
             if iv.state == IV_ENDED:
@@ -2047,34 +2239,27 @@ class Controls:
             if on and (iv.hook is None or reinstall):
                 # Keep registration order equal to record order, including a late
                 # activation or replacement before an existing overlapping effect.
-                self._unhook(iv, retain_source=True)
+                iv.hook, iv.applied_spec = None, None
                 try:
-                    self._install_intervention(m, iv, iv.spec)
+                    self._install_intervention(m, iv, iv.spec, owner=originals[key])
                     reinstall = True
                 except Exception as e:
                     if self._resource_stop(e):
-                        self._unhook(iv)
-                        iv.state = IV_ENDED
                         raise
                     iv.error = self._stop_message(f"{type(e).__name__}: {e}")
                     iv.error_code = "intervene.hook_failed"
                     ended, on = True, False
-                    warnings.warn(f"caliper: the intervention at {iv.point!r} failed: {iv.error}",
-                                  RuntimeWarning, stacklevel=2)
+                    reports.append(f"caliper: the intervention at {iv.point!r} failed: {iv.error}")
             if not on:
-                self._unhook(iv)
+                iv.hook, iv.applied_spec = None, None
             state = IV_ACTIVE if on else IV_ENDED if ended else IV_PENDING
             if state != iv.state:
                 iv.state = state
                 iv.since_step = s if on else iv.since_step if ended else None
                 changed = True
                 if failed:
-                    warnings.warn(f"caliper: the intervention at {iv.point!r} failed and ended: "
-                                  f"{iv.error}", RuntimeWarning, stacklevel=2)
-        m.executor._discard_unused_sources()
-        self._iv_due = m._shapes_off is not None or any(
-            iv.clear or iv.state != IV_ENDED for iv in self._ivs.values())
-        return changed
+                    reports.append(f"caliper: the intervention at {iv.point!r} failed and ended: {iv.error}")
+        return changed, reports
 
     # -- messages ------------------------------------------------------------------
     def _run_obj(self) -> dict:

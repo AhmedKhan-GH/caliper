@@ -52,10 +52,12 @@ def measured(tmp_path_factory):
     before = output.compare(FIXTURE_PROMPT)
     service.set({"kind": "clamp", "point": dictionary.metadata["write_points"][selected["layer"]],
                  "feature": selected["feature"], "positions": [selected["position"]], "value": 0.})
-    owner._apply_interventions()
+    with owner.lock:
+        owner._apply_interventions()
     after = output.compare(FIXTURE_PROMPT)
     service.clear()
-    owner._apply_interventions()
+    with owner.lock:
+        owner._apply_interventions()
     validation = validate_trace(model, tokenizer, dictionary, service, graph, prompt=FIXTURE_PROMPT)
     def bars(output):
         return [{"token": token, "baseline": output["probabilities"][0][i],
