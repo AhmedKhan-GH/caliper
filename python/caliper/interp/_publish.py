@@ -5,6 +5,13 @@ import re
 
 _TENSORS = {}
 _NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\Z")
+# These documented inputs can await their first trace or example query.
+INTERPRETATION_TENSORS = frozenset({
+    "trace.counts", "trace.node_i", "trace.node_f", "trace.edge_i", "trace.edge_f",
+    "trace.label_text", "trace.probs", "trace.logit_tokens", "trace.logit_label_text",
+    "examples.tokens", "examples.activations", "examples.example_ids",
+    "examples.valid_tokens", "examples.label_text",
+})
 
 
 def publish(name, tensor):

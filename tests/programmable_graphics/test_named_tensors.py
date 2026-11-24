@@ -66,7 +66,9 @@ def test_republication_releases_old_reference_and_watch_replacement_clears():
     assert old() is None
     current = weakref.ref(P._resolve("trace.counts"))
     second_handle = attach(second)
-    assert current() is None and P._resolve("trace.counts") is None
+    assert current() is None
+    with pytest.raises(P._Waiting):
+        P._resolve("trace.counts")
     interp.publish("output.probs", torch.ones(2, 10))
     first_handle.remove()
     assert P._resolve("output.probs") is not None

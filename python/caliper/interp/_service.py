@@ -133,7 +133,6 @@ class InterpretationService:
                       **{k: v for k, v in summary.items() if k not in ("nodes", "edges", "tokens")}}
             if not protocol.bounded(result):
                 raise Refused("interpret.result_limit", "The trace result exceeds the metadata limits.")
-            self._publish_trace_panels(graph)
             with self.lock:
                 self.graph, self.status = graph, result
             return result
@@ -217,35 +216,6 @@ class InterpretationService:
         for name, value in zip(("tokens", "activations", "example_ids", "valid_tokens", "label_text"),
                                (tokens, activations, ids, valid, labels)):
             publish("examples." + name, value.to(device))
-
-    @staticmethod
-    def _pack_labels(values, count):
-        return pack_labels(values, count)
-
-    def _publish_trace_panels(self, graph):
-        """Publish display labels and the existing traced probabilities without a forward."""
-        import math
-        import torch
-        from . import publish
-        device = graph.tensors["trace.counts"].device
-        labels = [token["text"] for token in graph.tokens]
-        labels.extend([""] * (32 - len(labels)))
-        for node in graph.nodes:
-            labels.append(node.get("label") or node["id"])
-        logits = [node for node in graph.nodes if node["kind"] == "logit"][:10]
-        probabilities = [float(node["probability"]) for node in logits]
-        if any(not math.isfinite(p) or not 0 <= p <= 1 for p in probabilities):
-            raise Refused("interpret.result_limit", "Traced probabilities must be finite values from zero to one.")
-        probs = torch.zeros((2, 10), dtype=torch.float32)
-        tokens = torch.full((10,), -1, dtype=torch.int32)
-        if logits:
-            probs[:, :len(logits)] = torch.tensor(probabilities, dtype=torch.float32)
-            tokens[:len(logits)] = torch.tensor([node["token_id"] for node in logits], dtype=torch.int32)
-        values = {"label_text": self._pack_labels(labels, 544), "probs": probs,
-                  "logit_tokens": tokens,
-                  "logit_label_text": self._pack_labels([node["label"] for node in logits], 10)}
-        for name, value in values.items():
-            publish("trace." + name, value.to(device))
 
 
 def _refresh_native_capability(controls):

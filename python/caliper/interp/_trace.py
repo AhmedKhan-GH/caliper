@@ -411,7 +411,7 @@ class Tracer:
             graph = Graph.build(nodes=display_nodes, edges=display_edges, tokens=effects.tokens,
                                 layers=path.layers, completeness=completeness, omitted_influence=omitted,
                                 error_share=error_share, feature_share=feature_share, trace_id=state_key,
-                                device=path.device)
+                                device=path.device, logits=[effects.nodes[index] for index in effects.logit_nodes])
             self.guard.check("graph publication")
             if self._intervention_state() != identity["interventions"]:
                 self._forward_cache = None

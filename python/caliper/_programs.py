@@ -469,9 +469,11 @@ def _torch_adapter():
 
 
 def _resolve(name: str):
-    """The tensor of an input name, or None for no such name; raises _Waiting for a gradient or an
-    output that does not exist yet."""
-    from .interp._publish import _resolve as published
+    """Return a known tensor or None for an unknown name.
+
+    Gradients, module outputs, and fixed interpretation names can await their first value.
+    """
+    from .interp._publish import INTERPRETATION_TENSORS, _resolve as published
     tensor = published(name)
     if tensor is not None:
         return tensor
@@ -500,6 +502,8 @@ def _resolve(name: str):
     t = dict(model.named_parameters()).get(name)
     if t is None:
         t = dict(model.named_buffers()).get(name)
+    if t is None and name in INTERPRETATION_TENSORS:
+        raise _Waiting(name)
     return t
 
 
@@ -612,18 +616,34 @@ def _check(p: _Program) -> None:
                            "which is not live:<name>.")
 
 
+def _resolve_inputs(inputs):
+    """Check every input name before a known but absent tensor delays compilation."""
+    tensors, waiting = {}, None
+    for var, src in inputs:
+        name = src[len("live:"):]
+        try:
+            tensor = _resolve(name)
+        except _Waiting as exc:
+            waiting = exc
+            continue
+        if tensor is None:
+            raise _Refused("program.unknown_input", f"The script has no tensor named {name}.")
+        tensors[var] = tensor
+    if waiting is not None:
+        raise waiting
+    return tensors
+
+
 def _compile(p: _Program) -> None:
     """Import the inputs and compile the program; raises _Refused or _Waiting."""
     if p.kind == "piece":
         _compile_piece(p)
         return
+    tensors = _resolve_inputs(p.inputs)
     bound = {}
     for var, src in p.inputs:
         name = src[len("live:"):]
-        t = _resolve(name)
-        if t is None:
-            raise _Refused("program.unknown_input", f"The script has no tensor named {name}.")
-        bound[var] = _import(name, t)
+        bound[var] = _import(name, tensors[var])
     rt = _runtime()
     out = p.output
     wg = p.decl.get("workgroups") or (0, 0, 0)
@@ -1562,6 +1582,8 @@ def _check_piece(p: _Program, values) -> None:
 
 def _compile_piece(p: _Program) -> None:
     """Import the tensor inputs and compile the derive half; raises _Refused or _Waiting."""
+    tensors = _resolve_inputs([(name, src) for name, src in p.inputs
+                               if p.types[name][0] == "tensor" and src])
     bound, inputs, unbound = {}, [], []
     for name, src in p.inputs:
         kind, dtype = p.types[name]
@@ -1571,10 +1593,7 @@ def _compile_piece(p: _Program) -> None:
                 unbound.append(name)
             continue
         tname = src[len("live:"):]
-        t = _resolve(tname)
-        if t is None:
-            raise _Refused("program.unknown_input", f"The script has no tensor named {tname}.")
-        bound[name] = _import(tname, t)
+        bound[name] = _import(tname, tensors[name])
         inputs.append((name, bound[name].handle, dtype))
     rt = _runtime()
     resources = [(r["id"], r["kind"], r["element"], r["struct"], r["fields"], r["count"], r["width"],
