@@ -45,6 +45,8 @@ std::vector<PlacedLabel> place_labels(const std::vector<LabelBox>& boxes, const 
 
 // Horizontal slots for pinned labels, with unshifted center anchors. Adjacent
 // anchors divide a row at their midpoint. Each slot stays inside the panel.
+// Coincident anchors on overlapping rows retain the first label in priority
+// order, with input order as the tie-break. Suppressed labels get zero width.
 std::vector<LabelRect> pinned_label_slots(const std::vector<LabelBox>& boxes, const LabelRect& panel);
 
 // The ellipsis that ends a cut text, U+2026 in UTF-8.
