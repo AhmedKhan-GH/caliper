@@ -144,8 +144,11 @@ def test_fractional_scale_keeps_the_model_coefficient_precision():
                                    atol=1e-15, rtol=0)
 
 
-def test_pending_replacement_rows_and_cold_source_cache_keep_applied_edges():
+@pytest.mark.parametrize("legacy_owner", [False, True])
+def test_pending_replacement_rows_and_cold_source_cache_keep_applied_edges(legacy_owner, monkeypatch):
     with setup() as (model, tokenizer, dictionary, owner, service):
+        if legacy_owner:
+            monkeypatch.delattr(Controls, "intervention_service", raising=False)
         tracer = Tracer(model, tokenizer, dictionary, controls=owner)
         tracer._new_prompt("AB")
         ids = tokenizer("AB")["input_ids"]

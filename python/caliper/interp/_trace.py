@@ -284,6 +284,9 @@ class Tracer:
 
     def _service(self):
         service = getattr(self.controls, "intervention_service", None)
+        if service is None:
+            owner = getattr(self.controls, "_iv_model", None)
+            service = owner if callable(getattr(owner, "specifications", None)) else None
         return service if service is not None and service.model is self.model else None
 
     def _intervention_state(self):
@@ -294,7 +297,10 @@ class Tracer:
             feature_effect = any(spec.get("op", spec.get("kind")) in ("scale", "clamp") for spec in specifications)
             patch_effect = any(spec.get("op", spec.get("kind")) == "patch" for spec in specifications)
             bound = service.dictionary if feature_effect else None
-            return {"specifications": specifications, "rows": selected_rows(self.model),
+            rows = selected_rows(self.model)
+            if feature_effect and (rows is None or 0 in rows) and bound is not self.dictionary:
+                raise ValueError("feature interventions require the same dictionary instance as the trace")
+            return {"specifications": specifications, "rows": rows,
                     "dictionary": None if bound is None else (id(bound), _versions(bound)),
                     "tokenizer": id(service.executor.tokenizer) if patch_effect else None}
         with self.controls.lock:
