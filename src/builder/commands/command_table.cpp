@@ -1661,11 +1661,11 @@ const Row kRows[] = {
         "runs": {"type": "array", "items": {"$use": "run_entry"}, "description": "The runs, managed runs first in the order of their start."}}})json",
      "{}"},
     {"run.start", false, false, true,
-     "Starts a Python script of the workspace as a managed run, for training or for inference, with arguments and "
-     "parameter values, and attaches the app to it. It always waits for the person's approval on a review card, "
-     "because the script runs as Python code. The result comes when the process starts, in the state starting; a run "
-     "event of change runner, through events.wait, or run.list says when it runs. The script's caliper.watch() line "
-     "writes the stream link that the app attaches to.",
+     "Starts a managed workspace script or local inference through the fixed Caliper module. "
+     "Script runs take script, args, and params, with optional kind:script. "
+     "Inference runs require kind:inference, model, dictionary, and prompt. The two forms cannot mix fields. "
+     "Both forms wait for approval on a review card. The result has state starting when the process starts. "
+     "A runner event through events.wait, or run.list, reports later state changes.",
      R"json({"type": "object", "additionalProperties": false, "required": [], "properties": {"script": {"type": "string", "minLength": 1, "maxLength": 1024, "description": "The script's path relative to the workspace, with / between folders and no ., .. or link in it, such as scripts/train.py, so that the review card names the file that runs; another path to a file of the workspace fails with run.script_refused, whose message gives the path to use."}, "args": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 256}, "description": "The script's command-line arguments, each at most 256 bytes and at most 1024 bytes in all, so that the review card shows them in full; none when absent."}, "params": {"$use": "run_params"}, "id": {"$use": "run_id", "description": "The new run's id, unique in the workspace; the script's file name and a number, such as train-1, when absent."}, "kind": {"type": "string", "description": "The run kind. Script is the default.", "enum": ["script", "inference"]}, "model": {"type": "string", "description": "The local inference model resource, at most 1024 UTF-8 bytes.", "minLength": 1, "maxLength": 1024}, "dictionary": {"type": "string", "description": "The local inference dictionary resource, at most 1024 UTF-8 bytes.", "minLength": 1, "maxLength": 1024}, "prompt": {"type": "string", "description": "The initial inference prompt, at most 4096 UTF-8 bytes.", "minLength": 1, "maxLength": 4096}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["run"],
       "properties": {

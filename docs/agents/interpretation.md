@@ -225,4 +225,8 @@ The optional `id` sets the managed run ID.
 Model and dictionary resource names have at most 1,024 UTF-8 bytes. The prompt has at most 4,096 UTF-8 bytes.
 These fields require the hosted inference runner.
 The existing script form retains `script`, `args`, `params`, and `id`, with an optional `kind` value of `script`.
+Script starts refuse `model`, `dictionary`, and `prompt` fields. Inference starts refuse `script`, `args`, and `params` fields.
+Both forms require run approval.
+The inference adapter accepts a local model folder or the `tiny-lm` fixture identifier, and a local dictionary folder.
+Relative resource paths start at the workspace. The adapter refuses missing folders before it requests approval.
 The hosted runner owns resource checks, model loading, inference output, and checkpoint restoration.

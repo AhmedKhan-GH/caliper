@@ -623,3 +623,31 @@ TEST_CASE("runner inference refuses mixed or nonlocal start data") {
     }
     CHECK(f.runner.starts.empty());
 }
+
+TEST_CASE("runner commands: explicit script kind preserves script arguments and refuses mixed fields") {
+    Fixture f("runner_explicit_script");
+    const json args{{"kind", "script"}, {"script", "scripts/train.py"}, {"args", {"--epochs", "3"}},
+                    {"params", json::array({{{"name", "prompt"}, {"value", "A café"}}})}};
+    const auto pending = send(*f.s, "run.start", args, CommandOrigin::mcp, "");
+    CHECK(pending.error.code == "command.needs_approval");
+    CHECK(f.runner.starts.empty());
+    approved(*f.s, "run.start", args);
+    REQUIRE(f.runner.starts.size() == 1);
+    const auto& request = f.runner.starts[0];
+    CHECK(request.kind == "script");
+    CHECK(request.script == "scripts/train.py");
+    CHECK(request.args == std::vector<std::string>{"--epochs", "3"});
+    CHECK(request.params == json{{"prompt", "A café"}});
+    for (const bool explicit_kind : {false, true}) {
+        for (const char* field : {"model", "dictionary", "prompt"}) {
+            auto mixed = args;
+            if (!explicit_kind) mixed.erase("kind");
+            mixed[field] = "fixture";
+            CHECK(err(*f.s, "run.start", mixed) == "command.invalid_args");
+        }
+    }
+    auto unknown = args;
+    unknown["kind"] = "unknown";
+    CHECK(err(*f.s, "run.start", unknown) == "command.invalid_args");
+    CHECK(f.runner.starts.size() == 1);
+}

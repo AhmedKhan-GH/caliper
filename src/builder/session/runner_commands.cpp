@@ -280,9 +280,15 @@ Error script_arg(const json& args, const std::string& workspace, RunStartRequest
 
 // Inference uses a fixed installed module. Request strings remain data.
 Error start_source(const json& args, const std::string& workspace, RunStartRequest* out) {
-    if (!args.contains("kind")) return script_arg(args, workspace, out);
+    if (!args.contains("kind") || str_arg(args, "kind") == "script") {
+        for (const char* key : {"model", "dictionary", "prompt"})
+            if (args.contains(key))
+                return fail("command.invalid_args", "Script runs do not take inference resource fields.",
+                            std::string("args.") + key);
+        return script_arg(args, workspace, out);
+    }
     if (str_arg(args, "kind") != "inference")
-        return fail("command.invalid_args", "kind must be inference when present.", "args.kind");
+        return fail("command.invalid_args", "kind must be script or inference when present.", "args.kind");
     for (const char* key : {"script", "args", "params"})
         if (args.contains(key))
             return fail("command.invalid_args", "Inference takes model, dictionary, and prompt.", std::string("args.") + key);
