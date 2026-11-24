@@ -869,3 +869,39 @@ TEST_CASE("net/wire: interpretation encoding rejects invalid UTF-8 prompt bytes 
     REQUIRE(decode_bytes(bytes, &decoded).ok());
     CHECK(std::get<Control>(decoded).interpretation == request.interpretation);
 }
+
+TEST_CASE("net/wire: free-text parameters preserve exact byte limits") {
+    std::string multibyte;
+    for (unsigned i = 0; i < 2048; ++i) multibyte += "\xc3\xa9";
+    REQUIRE(multibyte.size() == 4096);
+    for (const auto& value : {std::string(), std::string(1025, 'a'), std::string(4096, 'a'), multibyte}) {
+        Control request;
+        request.request_id = 1; request.op = "set"; request.name = "prompt"; request.value = value;
+        std::vector<uint8_t> bytes;
+        REQUIRE(encode(request, &bytes));
+        Message decoded;
+        REQUIRE(decode_bytes(bytes, &decoded).ok());
+        CHECK(std::get<Control>(decoded).value.as_string() == value);
+        const std::string quoted = Json(value).dump();
+        const auto meta = "{\"run\":{\"state\":\"running\"},\"params\":[{\"name\":\"prompt\",\"type\":\"text\",\"value\":" + quoted +
+                          ",\"pending\":" + quoted + "}],\"actions\":[]}";
+        const auto state = frame_of(CALIPER_NET_MSG_CONTROLS, meta);
+        REQUIRE(decode_bytes(state, &decoded).ok());
+        CHECK(std::get<Controls>(decoded).params.items()[0].find("value")->as_string() == value);
+        ControlReply reply;
+        reply.request_id = 1; reply.op = "set"; reply.status = "ok"; reply.value = value;
+        REQUIRE(encode(reply, &bytes));
+        REQUIRE(decode_bytes(bytes, &decoded).ok());
+        CHECK(std::get<ControlReply>(decoded).value.as_string() == value);
+    }
+    for (const auto& value : {multibyte + "a", std::string(4097, 'a'), std::string("a\0b", 3), std::string("\xc3\x28", 2)}) {
+        Control request;
+        request.request_id = 1; request.op = "set"; request.name = "prompt"; request.value = value;
+        std::vector<uint8_t> bytes;
+        REQUIRE(encode(request, &bytes));
+        Message decoded;
+        CHECK_FALSE(decode_bytes(bytes, &decoded).ok());
+    }
+    CHECK(CALIPER_NET_TEXT_MAX == 1024);
+    CHECK(CALIPER_NET_NAME_MAX == 63);
+}

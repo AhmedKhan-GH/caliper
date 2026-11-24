@@ -572,19 +572,23 @@ void RunControls::draw_text_param(const ControlParam& p) {
     const ImGuiID key = ImGui::GetID("##v");
     const Json shown = shown_value(p);
     auto it = text_edits_.find(key);
-    if (it == text_edits_.end()) {
-        const std::string text = shown.is_string() ? shown.as_string() : std::string();
-        const char* end = ImTextFindValidUtf8CodepointEnd(text.data(), text.data() + text.size(),
-            text.data() + std::min<std::size_t>(text.size(), CALIPER_NET_TEXT_MAX));
-        std::string buffer = text.substr(0, static_cast<std::size_t>(end - text.data()));
-        buffer.resize(CALIPER_NET_TEXT_MAX + 1, '\0');
-        it = text_edits_.emplace(key, std::move(buffer)).first;
-    }
+    if (it == text_edits_.end())
+        it = text_edits_.emplace(key, shown.is_string() ? shown.as_string() : std::string()).first;
     auto& buffer = it->second;
-    const bool enter = ImGui::InputText("##v", buffer.data(), buffer.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+    auto resize = [](ImGuiInputTextCallbackData* data) {
+        auto* text = static_cast<std::string*>(data->UserData);
+        text->resize(static_cast<std::size_t>(data->BufTextLen));
+        data->Buf = text->data();
+        return 0;
+    };
+    const bool enter = ImGui::InputText("##v", buffer.data(), buffer.capacity() + 1,
+        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackResize, resize, &buffer);
+    const bool valid = buffer.size() <= CALIPER_NET_PARAM_TEXT_MAX;
+    if (!valid && ImGui::IsItemHovered())
+        ImGui::SetTooltip("Text accepts at most 4096 UTF-8 bytes. The value was not sent.");
     const bool done = enter || ImGui::IsItemDeactivatedAfterEdit();
-    if (done && why_not(CALIPER_NET_OP_SET).empty()) {
-        const Json value{std::string(buffer.c_str())};
+    if (done && valid && why_not(CALIPER_NET_OP_SET).empty()) {
+        const Json value{buffer};
         if (value != shown) set(p.name, value);
     }
     if (!ImGui::IsItemActive()) text_edits_.erase(it);

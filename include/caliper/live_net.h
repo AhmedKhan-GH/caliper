@@ -347,6 +347,7 @@ typedef enum CaliperNetEncoding {
 #define CALIPER_NET_MAX_ACTIONS         64u          /* actions of a session               */
 #define CALIPER_NET_MAX_CHOICES         64u          /* choices of a choice parameter      */
 #define CALIPER_NET_TEXT_MAX            1024u        /* bytes: help texts, reply messages  */
+#define CALIPER_NET_PARAM_TEXT_MAX      4096u        /* UTF-8 bytes: free-text values      */
 #define CALIPER_NET_CONTROL_RATE_HZ     30u          /* "set" requests per parameter, at most */
 #define CALIPER_NET_ACTION_WAIT_MS      600000u      /* a queued action not started by then fails */
 #define CALIPER_NET_MAX_ITEM_SPACES     16u          /* item spaces of a session           */

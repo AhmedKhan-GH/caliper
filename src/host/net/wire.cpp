@@ -481,7 +481,7 @@ bool utf8_ok(const uint8_t* p, size_t n);
 bool param_text(const Json& v) {
     if (!v.is_string()) return false;
     const auto& s = v.as_string();
-    return s.size() <= CALIPER_NET_TEXT_MAX && s.find('\0') == std::string::npos &&
+    return s.size() <= CALIPER_NET_PARAM_TEXT_MAX && s.find('\0') == std::string::npos &&
            utf8_ok(reinterpret_cast<const uint8_t*>(s.data()), s.size());
 }
 bool is_set_value(const Json& v) { return is_finite(v) || v.is_bool() || param_text(v); }

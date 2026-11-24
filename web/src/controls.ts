@@ -17,6 +17,7 @@ import { acquire, release } from './client/socket.js';
 import type { StreamClient, StreamListener } from './client/stream.js';
 import { RunBar, sendControl } from './controls/run.js';
 import type { ActionInfo, ControlReplyMsg, ControlsMsg, ParamInfo, ParamValue } from './protocol/messages.js';
+import { isParamText } from './protocol/param-text.js';
 import { C, FONT_MONO, FONT_TEXT, fmt } from './views/theme.js';
 
 const STYLE = `
@@ -34,17 +35,18 @@ const STYLE = `
 .note[data-kind="pending"] { color: ${C.bronze}; }
 .note[data-kind="error"] { color: ${C.secondary}; }
 input[type="range"] { width: 100%; accent-color: ${C.bronze}; margin: 0; }
-input[type="number"], select { font: 12px ${FONT_MONO}; color: ${C.parchment}; background: #1c1b18; border: 1px solid ${C.rule};
+input[type="number"], select, textarea { font: 12px ${FONT_MONO}; color: ${C.parchment}; background: #1c1b18; border: 1px solid ${C.rule};
   border-radius: 3px; padding: 1px 4px; height: 22px; width: 8em; }
+textarea { width: 100%; height: 4em; resize: vertical; }
 select { font-family: ${FONT_TEXT}; width: auto; }
 .tool { font: 11px ${FONT_TEXT}; letter-spacing: .06em; color: ${C.faint}; background: transparent; border: 1px solid ${C.rule};
   border-radius: 3px; padding: 1px 8px; height: 22px; cursor: pointer; }
 .tool:hover { color: ${C.parchment}; }
 .tool[aria-pressed="true"] { color: ${C.bronze}; border-color: ${C.bronze}; }
-.tool:disabled, input:disabled, select:disabled { opacity: .45; cursor: default; }
+.tool:disabled, input:disabled, select:disabled, textarea:disabled { opacity: .45; cursor: default; }
 .tool:disabled:hover { color: ${C.faint}; }
 .tool[aria-busy="true"] { color: ${C.bronze}; border-color: ${C.bronze}; }
-button:focus-visible, input:focus-visible, select:focus-visible { outline: 1px solid ${C.bronze}; outline-offset: 1px; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 1px solid ${C.bronze}; outline-offset: 1px; }
 .run { display: inline-flex; align-items: center; gap: 6px; }
 .run[hidden], .run [hidden], [hidden] { display: none !important; }
 .badge { font: 11px ${FONT_MONO}; color: ${C.faint}; border: 1px solid ${C.rule}; border-radius: 3px; padding: 1px 6px; white-space: nowrap; }
@@ -128,6 +130,7 @@ export class CaliperControls extends HTMLElement {
   /** Sets a parameter; resolves with the reply, or null when it could not be sent. */
   setParam(name: string, value: ParamValue): Promise<ControlReplyMsg | null> {
     if (!this.client?.controlAccess?.().allowed) return Promise.resolve(null);
+    if (this.param(name)?.type === 'text' && !isParamText(value)) return Promise.resolve(null);
     this.local.set(name, { value });
     this.render();
     return sendControl(this.client, { op: 'set', name, value }, (r) => {
@@ -262,7 +265,7 @@ export class CaliperControls extends HTMLElement {
     }
     for (const a of actions) this.actionRows.get(a.name)?.update(a);
     const off = !access.allowed;
-    for (const el of this.root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('.grid input, .grid select, .grid button, .actions button')) {
+    for (const el of this.root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement | HTMLTextAreaElement>('.grid input, .grid select, .grid button, .grid textarea, .actions button')) {
       el.disabled = off;
       if (off) el.title = access.reason;
     }
@@ -326,6 +329,28 @@ export class CaliperControls extends HTMLElement {
         update: (p2) => {
           const s = show(p2);
           sel.value = String(s.value);
+          value.textContent = '';
+        },
+      };
+    }
+    if (p.type === 'text') {
+      const field = document.createElement('textarea');
+      field.dataset.param = p.name;
+      field.setAttribute('aria-label', p.name);
+      field.addEventListener('input', () => {
+        field.setCustomValidity(isParamText(field.value) ? '' : 'Text accepts at most 4096 UTF-8 bytes without NUL.');
+      });
+      field.addEventListener('change', () => {
+        if (field.reportValidity() && isParamText(field.value)) send(field.value);
+      });
+      control.append(field);
+      return {
+        update: (p2) => {
+          const s = show(p2);
+          if (this.shadowRoot?.activeElement !== field) {
+            field.value = String(s.value);
+            field.setCustomValidity('');
+          }
           value.textContent = '';
         },
       };

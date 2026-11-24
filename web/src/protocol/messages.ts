@@ -90,7 +90,7 @@ export const LIMITS = {
 } as const;
 
 /** Capabilities in HELLO and WELCOME. */
-export const CAP = { events: 'events', controls: 'controls', selection: 'selection' } as const;
+export const CAP = { events: 'events', controls: 'controls', selection: 'selection', textParams: 'text_params' } as const;
 
 /** 3.1 limits of controls and linked selection. */
 export const LIMITS_31 = {
@@ -287,7 +287,8 @@ export interface EventMsg extends Omit<ViewerEvent, 'type'> {
 
 export type RunState = 'none' | 'running' | 'pausing' | 'paused' | 'stepping';
 export const RUN_STATES: readonly RunState[] = ['none', 'running', 'pausing', 'paused', 'stepping'];
-export type ParamType = 'number' | 'integer' | 'boolean' | 'choice';
+export const PARAM_TEXT_MAX = 4096;
+export type ParamType = 'number' | 'integer' | 'boolean' | 'choice' | 'text';
 export type ParamValue = number | boolean | string;
 /** The control ops; 'intervene' is the 3.2 draft's, under the capability "interventions". */
 export type ControlOp = 'pause' | 'resume' | 'step' | 'set' | 'run' | 'intervene';

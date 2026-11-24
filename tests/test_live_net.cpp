@@ -3477,20 +3477,32 @@ TEST_CASE("live/controls: text drafts submit once on Return or focus loss") {
     CHECK(ui.source.sent.size() == 1);
 }
 
-TEST_CASE("live/controls: text byte caps preserve complete UTF-8 characters") {
-    std::string prefix(CALIPER_NET_TEXT_MAX - 1, 'x');
+TEST_CASE("live/controls: text byte caps refuse oversized UTF-8 edits without truncation") {
+    std::string prefix(CALIPER_NET_PARAM_TEXT_MAX - 1, 'x');
     std::string suffix = "\xc3\xa9";
     SUBCASE("two byte character") {}
     SUBCASE("three byte character") { prefix.pop_back(); suffix = "\xe2\x82\xac"; }
-    ControlsUi ui(prefix + suffix);
+    ControlsUi ui;
     ui.focus();
+    ImGui::GetIO().AddInputCharactersUTF8((prefix + suffix).c_str());
+    ui.frame();
     CHECK(ui.source.sent.empty());
     ui.enter();
-    REQUIRE(ui.source.sent.size() == 1);
-    const auto& value = ui.source.sent.front().value.as_string();
-    CHECK(value == prefix);
-    CHECK(value.size() <= CALIPER_NET_TEXT_MAX);
-    CHECK(caliper_net::valid_utf8(value.data(), value.size()));
+    CHECK(ui.source.sent.empty());
+    ui.click(30, 110);
+    CHECK(ui.source.sent.empty());
+    CHECK(ui.source.ctl.params.front().value.as_string().empty());
+}
+
+TEST_CASE("live/controls: full text values survive focus and commit unchanged") {
+    std::string value;
+    for (unsigned i = 0; i < 2048; ++i) value += "\xc3\xa9";
+    ControlsUi ui(value);
+    ui.focus();
+    ui.enter();
+    ui.click(30, 110);
+    CHECK(ui.source.sent.empty());
+    CHECK(ui.source.ctl.params.front().value.as_string() == value);
 }
 
 TEST_CASE("live/controls: reply queries stay within their admitted method and run") {

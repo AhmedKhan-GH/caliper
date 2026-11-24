@@ -208,6 +208,7 @@ MAX_PARAMS = 64                            # 3.1
 MAX_ACTIONS = 64
 MAX_CHOICES = 64
 TEXT_MAX = 1024
+PARAM_TEXT_MAX = 4096
 CONTROL_RATE_HZ = 30
 ACTION_WAIT_MS = 600_000
 MAX_ITEM_SPACES = 16
@@ -1059,7 +1060,7 @@ def _fits_type(p: dict, v) -> bool:
         return _bool(v)
     if t == PARAM_TEXT:
         from ._interpret_protocol import text
-        return text(v, TEXT_MAX)
+        return text(v, PARAM_TEXT_MAX)
     return isinstance(v, str) and v in p["choices"]
 
 
@@ -1152,7 +1153,7 @@ class Controls(_Msg):
 
 def _set_value(v) -> bool:
     from ._interpret_protocol import text
-    return _finite(v) or _bool(v) or text(v, TEXT_MAX)
+    return _finite(v) or _bool(v) or text(v, PARAM_TEXT_MAX)
 
 
 @dataclass

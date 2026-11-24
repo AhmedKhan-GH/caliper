@@ -748,7 +748,7 @@ std::map<std::string, std::string>& text_edits() {
 }
 
 // A text field: the person's edit applies on Return or when the field loses
-// focus, cut at `max_length` bytes.
+// focus. Parameter edits over max_length are refused without truncation.
 bool draw_text_field(const spec::Control& c, const Row& row, SpecInstrumentHost& host) {
     const std::string key = key_of(c);
     const auto target = spec::parse_control_target(c.bind);
@@ -760,19 +760,18 @@ bool draw_text_field(const spec::Control& c, const Row& row, SpecInstrumentHost&
     const json now = param ? (param->pending.is_null() ? param->value : param->pending) : current(host, c);
     const std::size_t limit = c.options.max_length
                                   ? static_cast<std::size_t>(std::max<std::int64_t>(*c.options.max_length, 0))
-                                  : spec::limits::kStateTextBytes;
-    // The edit buffer: limit bytes and the terminating zero, filled from the
-    // session's value whenever the field is not being edited.
+                                  : (script ? spec::limits::kParamTextBytes : spec::limits::kStateTextBytes);
+    // Keep the full parameter draft. Fixed value and state buffers retain their limits.
     auto& edits = text_edits();
     auto it = edits.find(key);
     if (it == edits.end()) {
         std::string start = now.is_string() ? now.get<std::string>() : std::string();
-        if (start.size() > limit) {
+        if (!script && start.size() > limit) {
             auto end = limit;
             while (end && (static_cast<unsigned char>(start[end]) & 0xc0) == 0x80) --end;
             start.resize(end);
         }
-        start.resize(limit + 1, '\0');
+        if (!script) start.resize(limit + 1, '\0');
         it = edits.emplace(key, std::move(start)).first;
     }
     std::string& buf = it->second;
@@ -780,7 +779,18 @@ bool draw_text_field(const spec::Control& c, const Row& row, SpecInstrumentHost&
     ImGui::SetNextItemWidth(row.widget.GetWidth());
     const std::string hint = c.options.placeholder.value_or("");
     ImGui::BeginDisabled(!why.empty());
-    const bool enter = ImGui::InputTextWithHint("##text", hint.c_str(), buf.data(), buf.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+    auto resize = [](ImGuiInputTextCallbackData* data) {
+        auto* text = static_cast<std::string*>(data->UserData);
+        text->resize(static_cast<std::size_t>(data->BufTextLen));
+        data->Buf = text->data();
+        return 0;
+    };
+    const bool enter = script
+        ? ImGui::InputTextWithHint("##text", hint.c_str(), buf.data(), buf.capacity() + 1,
+            ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackResize, resize, &buf)
+        : ImGui::InputTextWithHint("##text", hint.c_str(), buf.data(), buf.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+    if (script && buf.size() > limit && ImGui::IsItemHovered())
+        ImGui::SetTooltip("Text accepts at most %zu UTF-8 bytes. The value was not sent.", limit);
     const bool done = enter || ImGui::IsItemDeactivatedAfterEdit();
     const bool editing = ImGui::IsItemActive();
     ImGui::EndDisabled();
@@ -789,7 +799,7 @@ bool draw_text_field(const spec::Control& c, const Row& row, SpecInstrumentHost&
     if (done && why.empty()) {
         const std::string value(buf.c_str());
         if (script) {
-            changed = host.run->set_param(target->name, value).ok();
+            changed = value.size() <= limit && host.run->set_param(target->name, value).ok();
             if (changed) push_control_event(host, c, value);
         } else changed = write(host, c, value, true);
     }

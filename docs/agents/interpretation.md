@@ -140,7 +140,7 @@ The graph, strip, and bars use at most 244 visible labels together.
 
 `caliper.param("prompt", "")` registers a free-text parameter.
 A string with `choices` retains the existing choice behavior.
-A free-text value accepts at most 1,024 UTF-8 bytes, including spaces and an empty value.
+A free-text value accepts at most 4,096 UTF-8 bytes, including spaces and an empty value.
 Invalid UTF-8 and embedded zero characters are refused.
 A text parameter does not accept numeric bounds or a logarithmic scale.
 
@@ -149,7 +149,11 @@ It shows the script value or its pending value.
 Return or loss of focus submits the edit at the next run boundary.
 The control is disabled when the parameter is absent, has another type, or the connection cannot change the run.
 The existing `value` and `state:` text bindings retain their behavior.
-The text control limit is 1,024 bytes, while a direct `trace.run` prompt accepts 4,096 bytes.
+`trace.run` and text parameters share the 4,096-byte limit.
+The executor also checks the 32-token limit, including special tokens.
+No path truncates the prompt. Invalid UTF-8 and NUL are refused.
+A spec text field bound to `param:prompt` uses this limit. An explicit smaller `max_length` rejects longer edits without truncation.
+Help, error, name, choice, and spec text fields bound to `value` or `state:` retain their limits.
 
 ## Structured Wire Metadata
 

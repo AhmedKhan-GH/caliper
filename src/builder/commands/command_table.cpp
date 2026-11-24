@@ -277,7 +277,7 @@ const std::pair<const char*, const char*> kFragments[] = {
         "choices_from": {"type": "string", "minLength": 3, "maxLength": 320, "description": "picker: <source>.<column>, the column whose distinct values are the choices, at most 1024."},
         "multiple": {"type": "boolean", "description": "segmented: whether any number of buttons are on and the value is a list; false when absent."},
         "placeholder": {"type": "string", "maxLength": 256, "description": "text: the hint that shows while the field is empty."},
-        "max_length": {"type": "integer", "minimum": 1, "maximum": 1024, "description": "text: the most bytes of the value, at most 1024."},
+        "max_length": {"type": "integer", "minimum": 1, "maximum": 4096, "description": "Text byte limit. A param binding permits at most 4096 UTF-8 bytes. Value and state bindings permit at most 1024."},
         "min_span": {"type": "number", "minimum": 0, "description": "range: the least distance between lo and hi."},
         "follow": {"type": "boolean", "description": "range: whether the range moves with its upper bound while its upper end equals it; false when absent."},
         "speed": {"type": "number", "minimum": 0.1, "maximum": 1000, "description": "transport: the play speed at open, in steps per second; 10 when absent."},
@@ -1620,7 +1620,7 @@ const Row kRows[] = {
      R"json({"type": "object", "additionalProperties": false, "required": ["name", "value"],
       "properties": {
         "name": {"type": "string", "minLength": 1, "maxLength": 63, "description": "The parameter's name, from run.state."},
-        "value": {"type": ["number", "integer", "boolean", "string"], "description": "The new value: a number for a number or integer parameter, true or false for a boolean, one of the choices for a choice."},
+        "value": {"type": ["number", "integer", "boolean", "string"], "description": "The value must match the parameter type. Text accepts at most 4096 UTF-8 bytes without NUL. A choice accepts one listed value."},
         "run": {"$use": "run_id", "description": "The run to act on: a managed run's id from run.list, or user for the person's own script; the attached script when absent. The app switches to a run it does not show."}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["name", "value", "pending"],
       "properties": {
