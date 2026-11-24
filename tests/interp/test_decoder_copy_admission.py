@@ -229,13 +229,17 @@ def test_pending_copies_refuse_one_byte_below_and_accept_exact_capacity(
 
 @pytest.mark.parametrize("eviction", [False, True])
 @pytest.mark.parametrize("aliases", [False, True])
-def test_retained_storage_floor_counts_aliases_once(decoder_source, monkeypatch, eviction, aliases):
+@pytest.mark.parametrize("views", [False, True])
+def test_retained_storage_floor_counts_aliases_once(decoder_source, monkeypatch, eviction, aliases, views):
     model, _, service = decoder_source
+    if views:
+        use_capture_views(model, monkeypatch)
     points = ("layers.0.resid_pre", "embed_tokens") if aliases else POINTS
     prepare_sources(service, monkeypatch, eviction=eviction, points=points)
     cache, identity, hooks = list(service._cache.items()), service._cache_identity, hook_objects(model)
     # Captures can share storage. Each cache destination owns a separate copy.
-    retained = (1 if aliases else 2) * SOURCE_BYTES + (2 * SOURCE_BYTES if eviction else 0)
+    retained = (1 if aliases else 2) * SOURCE_BYTES * (4 if views else 1)
+    retained += 2 * SOURCE_BYTES if eviction else 0
     capacity = retained + 2 * SOURCE_BYTES
     clone = torch.Tensor.clone
 
