@@ -14,6 +14,8 @@ from caliper.interp import _gemma_import_identity as imported
 from caliper.interp._dictionary import _state_hash, dictionary_fingerprint, verify_hf_model
 from caliper.interp._index import FeatureIndex, build_index
 from caliper.interp._qualification import dictionary_response
+from caliper.interp._service import InterpretationService
+from demos.circuit_trace._qualification import dictionary_qualification
 from tools.interp import convert_gemma_scope, eval_dictionary
 from tools.interp.evaluation_binding import EvaluationBinding
 from tools.interp.text_stream import TextStream
@@ -62,6 +64,77 @@ def test_import_evidence_uses_actual_files_and_one_plus_verified_gain(artifact):
     binding = EvaluationBinding(folder, dictionary, dictionary_fingerprint(folder, dictionary.metadata), model=model)
     assert binding.import_evidence == result
     binding.verify()
+
+
+@pytest.fixture
+def random_artifact(tmp_path):
+    # No checkpoint verification or pinned import dimension overrides apply here.
+    model = gemma_model()
+    dictionary = runtime_dictionary(model)
+    dictionary.metadata.update(
+        format_version=1,
+        training={"dataset_id": "fixture", "dataset_config": "random-inputs",
+                  "dataset_revision": "seed-51", "split": "train", "partitions": {},
+                  "tokens": 0, "elapsed_seconds": 0, "peak_memory_bytes": 0},
+        quality={"fvu": None, "dead_fraction": None, "cross_entropy_delta": None, "evaluated_tokens": 0})
+    for i, layer in enumerate(dictionary.layers):
+        save_file(layer.state_dict(), tmp_path / f"layer_{i:02d}.safetensors")
+    (tmp_path / "dictionary.json").write_text(json.dumps(dictionary.metadata))
+    return tmp_path, model, load_dictionary(tmp_path, model=model)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_random_gemma_dictionary_inspection_uses_ordinary_service(random_artifact, lazy):
+    folder, model, dictionary = random_artifact
+    assert dictionary.metadata["model_hash"].startswith("sha256:")
+    assert imported.verified_import_binding(folder, dictionary.metadata, model=model) is None
+    tokenizer = SimpleNamespace(eos_token_id=2, convert_ids_to_tokens=lambda value: str(value))
+    build_index(folder, [("fixture", [3, 4, 5, 6])], model=model, tokenizer=tokenizer,
+                dictionary=dictionary, provenance={"partition": "fixture"}, context_length=4)
+    with FeatureIndex(folder, model=model, tokenizer=tokenizer, dictionary=dictionary) as index:
+        service = InterpretationService(**({"index_factory": lambda: index} if lazy else {"index": index}))
+        replies = []
+        try:
+            service.submit({"version": 1, "method": "feature.dictionary", "params": {}},
+                           lambda *args: replies.append(args))
+            assert service.step() == 1
+            status, result, error = replies[0]
+            assert status == "ok", error
+            assert result["identity"]["model_hash"] == dictionary.metadata["model_hash"]
+            assert result["identity"]["index_hash"] == index.metadata["index_hash"]
+            assert "import_binding" not in result
+            assert not dictionary_qualification(result, family="gemma")["qualified"]
+        finally:
+            service.close()
+
+
+@pytest.mark.parametrize("claim", ["identity", "import"])
+def test_random_gemma_cannot_claim_pinned_import(random_artifact, claim):
+    folder, model, dictionary = random_artifact
+    metadata = deepcopy(dictionary.metadata)
+    if claim == "identity":
+        metadata["model_hash"] = imported._GEMMA_IDENTITY
+    else:
+        metadata["import_source"] = {"kind": "gemma_scope"}
+    with pytest.raises(ValueError, match="import binding"):
+        imported.verified_import_binding(folder, metadata, model=model)
+
+
+@pytest.mark.parametrize("declaration", ["missing", "changed"])
+@pytest.mark.parametrize("identity", ["pinned", "content", "missing"])
+def test_verified_pinned_model_cannot_skip_import_checks(artifact, declaration, identity):
+    folder, model, dictionary, _ = artifact
+    metadata = deepcopy(dictionary.metadata)
+    if declaration == "missing":
+        del metadata["import_source"]
+    else:
+        metadata["import_source"]["kind"] = "unchecked"
+    if identity == "content":
+        metadata["model_hash"] = "sha256:" + "a" * 64
+    elif identity == "missing":
+        del metadata["model_hash"]
+    with pytest.raises(ValueError, match="import binding"):
+        imported.verified_import_binding(folder, metadata, model=model)
 
 
 def corrupt(folder, dictionary, fault):

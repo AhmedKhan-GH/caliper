@@ -57,7 +57,8 @@ def _file_digest(path, memory):
 def verified_import_binding(folder, metadata, *, model, memory=None):
     """Bind import records to local bytes and the exact verified float32 gain.
 
-    Model family and identity require this check independently of import metadata.
+    The verified pinned identity requires this check independently of import metadata.
+    A pinned identity claim or import declaration also requires this check.
     This evidence checks local consistency. It does not authenticate remote files.
     """
     family = getattr(getattr(model, "config", None), "model_type", None)
@@ -65,6 +66,8 @@ def verified_import_binding(folder, metadata, *, model, memory=None):
         return None
     _require(family == "gemma2")
     identity = model_identity(model, memory_limit_gb=memory.limit / 1e9 if memory else None)
+    if identity != _GEMMA_IDENTITY and metadata.get("model_hash") != _GEMMA_IDENTITY and "import_source" not in metadata:
+        return None
     _require(identity == metadata.get("model_hash") == _GEMMA_IDENTITY)
     blocks = model.model.layers
     _require(len(blocks) == len(_L0) and metadata.get("layers") == len(_L0)
