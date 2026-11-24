@@ -113,6 +113,9 @@ def _positive_integer(value, name, maximum=None, minimum=1):
 
 def _compatible(model, dictionary, *, memory_limit_gb=None, memory=None):
     data = dictionary.metadata
+    device = _canonical_device(next(model.parameters()).device)
+    if any(_canonical_device(value.device) != device for value in dictionary.state_dict().values()):
+        raise ValueError("index dictionary and model must share one device")
     identity = model_identity(model, memory_limit_gb=memory_limit_gb, memory=memory)
     if memory_limit_gb is not None:
         _memory_limit(memory_limit_gb, identity, "index")

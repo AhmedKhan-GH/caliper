@@ -193,6 +193,7 @@ Evaluation and index tools select Gemma with `--model google/gemma-2-2b` and req
 ## Example Index
 
 `FeatureIndex` in `caliper.interp._index` reads the index under the dictionary folder.
+The model and every dictionary tensor must use the same device at build and load admission.
 The index retains the 16 largest activations for each feature, with document IDs and token positions.
 It also records activation counts and maxima.
 Queries calculate real window activations and retain up to 256 feature results in a cache.

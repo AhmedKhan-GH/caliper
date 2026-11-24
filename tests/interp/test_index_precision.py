@@ -176,3 +176,22 @@ def test_index_requires_matching_execution_evidence(tmp_path, monkeypatch, chang
     context = torch.autocast("cpu", dtype=torch.bfloat16) if change == "autocast" else nullcontext()
     with context, pytest.raises(ValueError, match="index model encoding differs; rebuild"):
         FeatureIndex(tmp_path, model=model, tokenizer=TinyTokenizer(), dictionary=dictionary)
+
+
+@pytest.mark.parametrize("route", ["build", "load"])
+def test_index_refuses_a_different_dictionary_device_before_identity_or_maps(tmp_path, monkeypatch, route):
+    from caliper.interp import _index
+    model, dictionary, _ = precision_fixture(tmp_path, "jumprelu")
+    if route == "load":
+        build_index(tmp_path, [("first", [65])], model=model, tokenizer=TinyTokenizer(),
+                    dictionary=dictionary, provenance={"partition": "fixture"})
+    # Meta tensors exercise device admission without accelerator access.
+    dictionary.to("meta")
+    monkeypatch.setattr(_index, "model_identity", lambda *a, **kw: pytest.fail("device refusal followed model hash"))
+    monkeypatch.setattr(np, "load", lambda *a, **kw: pytest.fail("device refusal followed map admission"))
+    with pytest.raises(ValueError, match="dictionary and model must share one device"):
+        if route == "build":
+            build_index(tmp_path, [("first", [65])], model=model, tokenizer=TinyTokenizer(),
+                        dictionary=dictionary, provenance={"partition": "fixture"})
+        else:
+            FeatureIndex(tmp_path, model=model, tokenizer=TinyTokenizer(), dictionary=dictionary)

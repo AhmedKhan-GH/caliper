@@ -247,6 +247,7 @@ Version 2 binds the `live_input_v1` encoder policy in its manifest hash.
 It also binds tensor precision, device, effective forward settings, autocast, and float32 matmul precision.
 The builder checks this evidence again before completion, and the loader checks it before data maps open.
 Missing or different evidence requires a rebuild.
+The model and dictionary must use one shared device at build and load admission.
 Version 1 remains readable only when model and encoder floating tensors use one dtype.
 Other legacy indexes require a rebuild because their encoder used storage precision.
 Window queries run at most 16 windows together and use an LRU cache of 256 features.
