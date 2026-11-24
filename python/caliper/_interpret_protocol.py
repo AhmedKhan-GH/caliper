@@ -12,7 +12,7 @@ MAX_FIELDS = 64
 MAX_DEPTH = 8
 MAX_VALUES = 16384
 READ_METHODS = frozenset(("feature.dictionary", "feature.show", "feature.examples", "trace.status", "trace.read"))
-METHODS = READ_METHODS | {"trace.run"}
+METHODS = READ_METHODS | {"trace.run", "patch.sweep", "trace.validate"}
 
 
 def text(value, limit=MAX_STRING, empty=True):
@@ -64,7 +64,8 @@ def request(value):
     if not isinstance(method, str) or method not in METHODS or type(p) is not dict:
         return False
     allowed = {
-        "feature.dictionary": set(), "trace.status": set(),
+        "feature.dictionary": set(), "trace.status": set(), "trace.validate": set(),
+        "patch.sweep": {"clean_prompt", "corrupted_prompt", "metric"},
         "feature.show": {"layer", "feature", "node"},
         "feature.examples": {"layer", "feature", "node", "limit"},
         "trace.run": {"prompt", "max_targets", "max_nodes", "max_edges"},
@@ -81,6 +82,12 @@ def request(value):
     if method in ("feature.show", "feature.examples"):
         return (("node" in p and "layer" not in p and "feature" not in p)
                 or ("node" not in p and "layer" in p and "feature" in p))
+    if method == "patch.sweep":
+        metric = p.get("metric")
+        return (text(p.get("clean_prompt"), empty=False) and text(p.get("corrupted_prompt"), empty=False)
+                and type(metric) is dict and set(metric) == {"positive_token", "negative_token"}
+                and all(integer(v, 0, 2**31 - 1) for v in metric.values())
+                and metric["positive_token"] != metric["negative_token"])
     if method == "trace.run":
         return text(p.get("prompt"), empty=False)
     return True

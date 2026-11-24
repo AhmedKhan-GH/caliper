@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <random>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -840,4 +841,53 @@ TEST_CASE("net/wire: interpretation metadata preserves framing and rejects malfo
     Message message;
     REQUIRE(decode(bytes.data(), bytes.size(), &message).status == valid);
     CHECK(std::get<Control>(message).interpretation.dump() == request.interpretation.dump());
+}
+
+TEST_CASE("net/wire: M8 intervention cases match the shared Python fixtures") {
+    const auto cases = read_json(fixtures() / "m8_interventions.json");
+    for (const auto& item : cases.items()) {
+        INFO(item.find("name")->as_string());
+        Control request;
+        request.request_id = 1;
+        request.op = "intervene";
+        request.intervene = Json::object();
+        request.intervene.set("set", *item.find("specification"));
+        std::vector<uint8_t> bytes;
+        Message message;
+        const bool accepted = encode(request, &bytes) && decode_bytes(bytes,&message).ok();
+        CHECK(accepted == item.find("accepted")->as_bool());
+        if (accepted) {
+            CHECK(std::get<Control>(message).intervene == request.intervene);
+        }
+    }
+    Control request;
+    request.request_id = 2; request.op = "intervene";
+    Json spec = Json::object();
+    spec.set("point","layers.0.mlp_out"); spec.set("kind","add"); spec.set("coefficient",1.);
+    Json vector = Json::array(); vector.push(Json(std::numeric_limits<double>::quiet_NaN()));
+    spec.set("vector",vector); request.intervene = Json::object(); request.intervene.set("set",spec);
+    std::vector<uint8_t> bytes;
+    Message result;
+    CHECK_FALSE((encode(request,&bytes) && decode_bytes(bytes,&result).ok()));
+    vector = Json::array();
+    for (int i = 0; i < 16385; ++i) vector.push(1.);
+    spec.set("vector",vector); request.intervene.set("set",spec);
+    CHECK_FALSE((encode(request,&bytes) && decode_bytes(bytes,&result).ok()));
+    vector = Json::array(); vector.push(1.); spec.set("vector",vector);
+    spec.set("point",std::string(256,'x')); request.intervene.set("set",spec);
+    CHECK_FALSE((encode(request,&bytes) && decode_bytes(bytes,&result).ok()));
+}
+
+TEST_CASE("net/wire: M8 operations require bounded prompts and distinct metric token IDs") {
+    const auto accepted = [](const std::string& envelope) {
+        Message message;
+        const auto bytes = frame_of(CALIPER_NET_MSG_CONTROL,
+            "{\"request_id\":1,\"op\":\"interpret\",\"interpretation\":" + envelope + "}");
+        return decode_bytes(bytes,&message).ok();
+    };
+    CHECK(accepted(R"({"version":1,"method":"trace.validate","params":{}})"));
+    CHECK_FALSE(accepted(R"({"version":1,"method":"trace.validate","params":{"prompt":"A"}})"));
+    CHECK(accepted(R"({"version":1,"method":"patch.sweep","params":{"clean_prompt":"AB","corrupted_prompt":"AC","metric":{"positive_token":1,"negative_token":2}}})"));
+    CHECK_FALSE(accepted(R"({"version":1,"method":"patch.sweep","params":{"clean_prompt":"AB","corrupted_prompt":"AC","metric":{"positive_token":1,"negative_token":1}}})"));
+    CHECK_FALSE(accepted(R"({"version":1,"method":"patch.sweep","params":{"clean_prompt":"AB","corrupted_prompt":"AC","metric":{"positive_token":true,"negative_token":1}}})"));
 }

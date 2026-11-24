@@ -170,3 +170,53 @@ Both native and Python codecs enforce these limits.
 The separate `text_params` capability enables the text parameter type.
 A producer or hub omits text parameters from CONTROLS for an older peer.
 Numeric, Boolean, and choice parameters retain their original types and behavior.
+
+## M8 Command Schemas
+
+The command table also describes the M8 operations.
+`intervene.set` and each `run.fork` intervention accept the same specification.
+Supply `point` and either `op` or `kind`. When both discriminators are present, their values must match.
+The `steer` value stays reserved and produces `intervene.op_reserved`.
+
+| Kind | Required Fields | Optional Fields |
+|---|---|---|
+| `ablate` | None | Step range |
+| `add` | `vector`, `coefficient` | `positions`, step range |
+| `scale` | `feature`, `multiplier` | `dictionary`, `positions`, step range |
+| `clamp` | `feature`, `value` | `dictionary`, `positions`, step range |
+| `patch` | `source_prompt` | `source_position`, `positions`, step range |
+
+A step range uses `from_step` and `until_step`. The end step is exclusive and must exceed the start step.
+Null or absent steps use the next boundary and an indefinite end.
+A vector has one through 16,384 finite values, and its length must match the point width.
+Positions contains at most 32 unique integers from zero through 31.
+Its omission selects all positions. An empty list selects none.
+A patch prompt has at most 4,096 UTF-8 bytes and 32 model tokens.
+A dictionary identifier has at most 255 UTF-8 bytes.
+Each specification and each fork specification list has a 256 KiB limit.
+Integer magnitudes cannot exceed `2**53 - 1`. The executor also checks model dimensions and numeric range.
+
+`patch.sweep` accepts `clean_prompt`, `corrupted_prompt`, and `metric`.
+The metric has distinct integer `positive_token` and `negative_token` IDs from zero through `2**31 - 1`.
+Both prompts have at most 4,096 UTF-8 bytes. The executor checks their token counts.
+`trace.validate` accepts no operation fields and uses the latest trace snapshot.
+Both commands have the `run` effect and use the same pending request protocol as `trace.run`.
+A reply query contains only `request_id`.
+
+The Python service dispatches these two commands through its `handlers` mapping.
+A handler receives the exact request fields as keyword arguments and returns a bounded JSON object.
+The service calls it on the run thread at a step boundary.
+Without a registered handler, the service returns `interpret.unsupported`.
+The transport does not calculate a sweep or invent validation results.
+
+An inference start has the form below:
+
+```json
+{"kind": "inference", "model": "local-model", "dictionary": "local-dictionary", "prompt": "AB"}
+```
+
+The optional `id` sets the managed run ID.
+Model and dictionary resource names have at most 1,024 UTF-8 bytes. The prompt has at most 4,096 UTF-8 bytes.
+These fields require the hosted inference runner.
+The existing script form retains `script`, `args`, `params`, and `id`, with an optional `kind` value of `script`.
+The hosted runner owns resource checks, model loading, inference output, and checkpoint restoration.

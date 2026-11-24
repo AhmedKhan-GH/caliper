@@ -12,6 +12,10 @@
 // step range is not empty or past. The script checks again.
 #include <caliper_builder/session/intervene_commands.h>
 
+#include <caliper_builder/commands/command_table.h>
+#include <caliper_builder/commands/schema.h>
+#include <set>
+#include <cmath>
 #include <algorithm>
 #include <cstdint>
 #include <exception>
@@ -72,12 +76,10 @@ json point_json(const InterventionPoint& p) {
 }
 
 json intervention_json(const Intervention& i) {
-    return json{{"point", i.point},
-                {"op", i.op},
-                {"from_step", opt_json(i.from_step)},
-                {"until_step", opt_json(i.until_step)},
-                {"since_step", opt_json(i.since_step)},
-                {"state", i.state}};
+    json result = i.specification.is_object() ? i.specification : json::object();
+    result.update(json{{"point", i.point}, {"op", i.op}, {"from_step", opt_json(i.from_step)},
+                       {"until_step", opt_json(i.until_step)}, {"since_step", opt_json(i.since_step)}, {"state", i.state}});
+    return result;
 }
 
 // The refusal of any intervention command without an attached script that
@@ -131,12 +133,11 @@ CommandOutput set(const json& args, RunControl& control) {
     if (Error e = check(state, control, true)) return CommandOutput::fail(std::move(e));
     Intervention i;
     i.point = str_arg(args, "point");
-    i.op = str_arg(args, "op");
+    i.op = str_arg(args, args.contains("kind") ? "kind" : "op");
+    i.specification = args;
     i.from_step = step_arg(args, "from_step");
     i.until_step = step_arg(args, "until_step");
-    if (i.op != "ablate")
-        return CommandOutput::fail(fail(kInterveneOpReserved,
-                                        "The op " + i.op + " comes later; ablate is the only op built.", "args.op"));
+    if (Error e = check_intervention_spec(args, "args")) return CommandOutput::fail(std::move(e));
     if (Error e = check_point(control.intervention_points(), i.point, "args.point"))
         return CommandOutput::fail(std::move(e));
     if (i.from_step && i.until_step && *i.until_step <= *i.from_step)
@@ -178,6 +179,57 @@ CommandOutput clear(const json& args, RunControl& control) {
 
 }  // namespace
 
+Error check_intervention_spec(const nlohmann::json& spec, const std::string& where) {
+    const auto* descriptor = find_command_descriptor("intervene.set");
+    if (auto error = validate_command_value(descriptor->args, spec, where)) return error;
+    const std::string op = str_arg(spec,"op"), kind = str_arg(spec,"kind");
+    if ((!op.empty() && !kind.empty() && op != kind) || (op.empty() && kind.empty()))
+        return fail("command.invalid_args", "Supply matching op or kind discriminators.", where);
+    const std::string name = kind.empty() ? op : kind;
+    if (name == "steer") return fail(kInterveneOpReserved, "Steer remains reserved.", where);
+    std::set<std::string> fields = {"point","op","kind","from_step","until_step"};
+    std::vector<std::string> required;
+    if (name == "add") { fields.insert({"vector","coefficient","positions"}); required = {"vector","coefficient"}; }
+    if (name == "scale") { fields.insert({"feature","multiplier","positions","dictionary"}); required = {"feature","multiplier"}; }
+    if (name == "clamp") { fields.insert({"feature","value","positions","dictionary"}); required = {"feature","value"}; }
+    if (name == "patch") { fields.insert({"source_prompt","source_position","positions"}); required = {"source_prompt"}; }
+    for (const auto& key : required)
+        if (!spec.contains(key)) return fail("command.invalid_args", "The operation requires " + key + ".", where + "." + key);
+    for (auto it = spec.begin(); it != spec.end(); ++it)
+        if (!fields.count(it.key())) return fail("command.invalid_args", "The operation does not accept " + it.key() + ".", where + "." + it.key());
+    for (const auto* key : {"from_step","until_step","feature","source_position"})
+        if (spec.contains(key) && !spec[key].is_null() && !spec[key].is_number_integer())
+            return fail("command.invalid_args", "The field requires an integer.", where + "." + key);
+    const auto finite = [](const json& value) {
+        return value.is_number() && std::isfinite(value.get<double>()) &&
+            (!value.is_number_integer() || std::abs(value.get<double>()) <= 9007199254740991.);
+    };
+    for (const auto* key : {"coefficient","multiplier","value"})
+        if (spec.contains(key) && !finite(spec[key]))
+            return fail("command.invalid_args", "The value must be finite and representable.", where + "." + key);
+    if (spec.contains("vector"))
+        for (const auto& value : spec["vector"])
+            if (!finite(value)) return fail("command.invalid_args", "Vector values must be finite and representable.", where + ".vector");
+    if (spec.contains("positions")) {
+        std::set<int> seen;
+        for (const auto& value : spec["positions"])
+            if (!value.is_number_integer() || !seen.insert(value.get<int>()).second) return fail("command.invalid_args", "Positions must be unique.", where + ".positions");
+    }
+    for (const auto* key : {"point","dictionary","source_prompt"}) {
+        if (!spec.contains(key)) continue;
+        const auto& value = spec[key].get_ref<const std::string&>();
+        const std::size_t limit = std::string(key) == "source_prompt" ? 4096 : 255;
+        if (value.size() > limit || value.find('\0') != std::string::npos)
+            return fail("command.invalid_args", "Text exceeds its UTF-8 byte limit or contains a zero character.", where + "." + key);
+    }
+    try {
+        if (spec.dump().size() > 262144) return fail("command.invalid_args", "The specification exceeds 256 KiB.", where);
+    } catch (const std::exception&) { return fail("command.invalid_args", "The specification must contain valid UTF-8.", where); }
+    const auto start = step_arg(spec,"from_step"), end = step_arg(spec,"until_step");
+    if (start && end && *end <= *start) return fail(kInterveneBadRange,"until_step must exceed from_step.",where);
+    return {};
+}
+
 CommandOutput interpretation_command(const CommandContext& context, RunControl* control) {
     if (!control) return CommandOutput::fail(fail("interpret.unsupported", "This session has no run transport."));
     const auto state = control->state();
@@ -197,6 +249,12 @@ CommandOutput interpretation_command(const CommandContext& context, RunControl* 
     }
     if (!request && name == "trace.run" && !params.contains("prompt"))
         return CommandOutput::fail(fail("command.invalid_args", "A trace requires a prompt."));
+    if (!request && name == "patch.sweep") {
+        if (!params.contains("clean_prompt") || !params.contains("corrupted_prompt") || !params.contains("metric"))
+            return CommandOutput::fail(fail("command.invalid_args", "A sweep requires both prompts and its metric."));
+        if (params["metric"]["positive_token"] == params["metric"]["negative_token"])
+            return CommandOutput::fail(fail("command.invalid_args", "The metric token IDs must differ."));
+    }
     return control->interpret(name, params, request);
 }
 

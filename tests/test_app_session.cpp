@@ -1528,3 +1528,26 @@ TEST_CASE("app session: the status bar and the settings say when the file still 
     opened.session.reset();
     fs::remove_all(root, ec);
 }
+
+TEST_CASE("app session: structured intervention fields survive both adapters") {
+    caliper_host::AppRunControl control;
+    FakeLink link;
+    control.set_link(&link);
+    const json specification{{"point","layers.0.mlp_out"},{"kind","clamp"},{"feature",3},{"value",-.5},
+                             {"positions",{1}},{"dictionary","fixture"}};
+    json entry = specification;
+    entry.update(json{{"op","clamp"},{"from_step",nullptr},{"until_step",nullptr},
+                      {"since_step",12},{"state","active"}});
+    const auto metadata = json{{"points",json::array()},{"active",json::array({entry})}}.dump();
+    std::string error;
+    REQUIRE(caliper_net::Json::parse(metadata.data(),metadata.size(),&link.ctl.interventions,&error));
+    const auto list = control.interventions();
+    REQUIRE(list.size() == 1);
+    CHECK(list[0].specification == entry);
+    CHECK_FALSE(control.intervene_set(list[0]));
+    REQUIRE(link.sent.size() == 1);
+    const auto sent = json::parse(link.sent[0].value).at("set");
+    for (auto it = specification.begin(); it != specification.end(); ++it) CHECK(sent[it.key()] == it.value());
+    CHECK_FALSE(sent.contains("state"));
+    CHECK_FALSE(sent.contains("since_step"));
+}

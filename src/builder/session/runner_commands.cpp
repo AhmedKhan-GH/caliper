@@ -1,3 +1,4 @@
+#include <caliper_builder/session/intervene_commands.h>
 // The model runner's commands (runner_commands.h, design/hosted-runs.md).
 //
 // The handlers check what needs no child process: the script is a file in the
@@ -297,7 +298,7 @@ std::optional<std::uint64_t> step_value(const json& v) {
 }
 
 // The step and the interventions of a fork: each intervention an object with
-// a point, the op ablate and optional steps, with until_step above
+// a point, a supported op or kind and optional steps, with until_step above
 // from_step, at most kRunMaxForkInterventions of them, and their points
 // together at most kRunMaxInterventionsBytes. A point that the parent does
 // not list is intervene.unknown_point when `runner` gives the parent's points;
@@ -322,7 +323,8 @@ Error fork_args(const json& args, ModelRunner* runner, RunForkRequest* out) {
         const std::string where = "args.interventions[" + std::to_string(i) + "]";
         if (!iv.is_object()) return fail("command.invalid_args", "An intervention is an object.", where);
         const std::string point = str_arg(iv, "point");
-        const std::string op = str_arg(iv, "op");
+        const std::string op = str_arg(iv, iv.contains("kind") ? "kind" : "op");
+        if (Error e = check_intervention_spec(iv, where)) return e;
         if (point.empty() || !valid_utf8(point))
             return fail("command.invalid_args", "An intervention names its point.", where + ".point");
         bytes += point.size();
@@ -331,12 +333,10 @@ Error fork_args(const json& args, ModelRunner* runner, RunForkRequest* out) {
                         "The points of the interventions hold at most " + std::to_string(kRunMaxInterventionsBytes) +
                             " bytes together.",
                         where + ".point");
-        if (op != "ablate")
-            return fail(kInterveneOpReserved, "The op " + op + " comes later; ablate is the only op built.", where + ".op");
         std::optional<std::uint64_t> steps[2];
         const char* keys[2] = {"from_step", "until_step"};
         for (int k = 0; k < 2; ++k)
-            if (const auto s = iv.find(keys[k]); s != iv.end()) {
+            if (const auto s = iv.find(keys[k]); s != iv.end() && !s->is_null()) {
                 steps[k] = step_value(*s);
                 if (!steps[k]) return fail("command.invalid_args", std::string(keys[k]) + " is a step.", where + "." + keys[k]);
             }
@@ -349,10 +349,13 @@ Error fork_args(const json& args, ModelRunner* runner, RunForkRequest* out) {
             return fail(kInterveneUnknownPoint,
                         "The run " + str_arg(args, "run") + " has no point " + point + "; intervene.points lists them.",
                         where + ".point");
-        json one = {{"point", point}, {"op", op}};
+        json one = iv;
+        one["op"] = op;
         if (steps[0]) one["from_step"] = *steps[0];
         if (steps[1]) one["until_step"] = *steps[1];
         out->interventions.push_back(std::move(one));
+        if (out->interventions.dump().size() > 262144)
+            return fail("command.invalid_args", "Fork specifications exceed 256 KiB.", where);
     }
     return {};
 }
@@ -492,7 +495,7 @@ std::string run_card_text(const CommandInvocation& inv, const std::string& scrip
         if (const auto it = a.find("interventions"); it != a.end() && it->is_array())
             for (const json& iv : *it) {
                 if (!iv.is_object()) continue;
-                ivs += (ivs.empty() ? "" : ", ") + shown(str_arg(iv, "op")) + " " + shown(str_arg(iv, "point"));
+                ivs += (ivs.empty() ? "" : ", ") + shown(str_arg(iv, iv.contains("kind") ? "kind" : "op")) + " " + shown(str_arg(iv, "point"));
                 const auto f = iv.find("from_step");
                 const auto u = iv.find("until_step");
                 const std::optional<std::uint64_t> from_step = f != iv.end() ? step_value(*f) : std::nullopt;

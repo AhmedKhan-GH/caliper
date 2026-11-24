@@ -576,6 +576,16 @@ def test_interpretation_capability_and_real_service_round_trip(mode, ctl, make_s
                     reply = await viewer.expect(w.ControlReply, lambda x: x.request_id == rid and x.status != "queued")
                 assert reply.status == "ok", reply.error
                 assert reply.result
+            for rid, method, params in (
+                (10, "trace.validate", {}),
+                (11, "patch.sweep", {"clean_prompt": "AB", "corrupted_prompt": "AC",
+                                     "metric": {"positive_token": 1, "negative_token": 2}}),
+            ):
+                await viewer.send(w.Control(rid, "interpret", interpretation={"version": 1, "method": method, "params": params}))
+                assert (await viewer.expect(w.ControlReply, lambda x: x.request_id == rid)).status == "queued"
+                ctl.step(rid)
+                refused = await viewer.expect(w.ControlReply, lambda x: x.request_id == rid and x.status != "queued")
+                assert refused.status == "error" and refused.error["code"] == "interpret.unsupported"
         async with Viewer(server) as old:
             await old.send(w.Control(20, "interpret", interpretation={"version": 1, "method": "trace.status", "params": {}}))
             reply = await old.expect(w.ControlReply, lambda x: x.request_id == 20)

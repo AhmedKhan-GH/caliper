@@ -11012,11 +11012,31 @@
             "maxItems": 64,
             "type": "array"
           },
+          "dictionary": {
+            "description": "The local inference dictionary resource, at most 1024 UTF-8 bytes.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
           "id": {
             "description": "The new run's id, unique in the workspace; the script's file name and a number, such as train-1, when absent.",
             "maxLength": 40,
             "minLength": 1,
             "pattern": "^[a-z0-9-]{1,40}$",
+            "type": "string"
+          },
+          "kind": {
+            "description": "The run kind. Script is the default.",
+            "enum": [
+              "script",
+              "inference"
+            ],
+            "type": "string"
+          },
+          "model": {
+            "description": "The local inference model resource, at most 1024 UTF-8 bytes.",
+            "maxLength": 1024,
+            "minLength": 1,
             "type": "string"
           },
           "params": {
@@ -11050,6 +11070,12 @@
             "maxItems": 64,
             "type": "array"
           },
+          "prompt": {
+            "description": "The initial inference prompt, at most 4096 UTF-8 bytes.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
           "script": {
             "description": "The script's path relative to the workspace, with / between folders and no ., .. or link in it, such as scripts/train.py, so that the review card names the file that runs; another path to a file of the workspace fails with run.script_refused, whose message gives the path to use.",
             "maxLength": 1024,
@@ -11057,9 +11083,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "script"
-        ],
+        "required": [],
         "type": "object"
       },
       "destructive": false,
@@ -11228,36 +11252,112 @@
             "items": {
               "additionalProperties": false,
               "properties": {
-                "from_step": {
-                  "description": "The first step it acts on; the fork's first step when absent.",
-                  "minimum": 0,
-                  "type": "integer"
+                "coefficient": {
+                  "description": "The finite coefficient for add.",
+                  "type": "number"
                 },
-                "op": {
-                  "description": "What to do; scale, steer and patch are reserved.",
-                  "enum": [
-                    "ablate",
-                    "scale",
-                    "steer",
-                    "patch"
-                  ],
-                  "type": "string"
-                },
-                "point": {
-                  "description": "The point's name, from intervene.points.",
+                "dictionary": {
+                  "description": "The configured dictionary identifier for scale or clamp.",
                   "maxLength": 255,
                   "minLength": 1,
                   "type": "string"
                 },
-                "until_step": {
-                  "description": "The step it ends before; it lasts when absent.",
-                  "minimum": 1,
+                "feature": {
+                  "description": "The feature for scale or clamp.",
+                  "maximum": 2147483647,
+                  "minimum": 0,
                   "type": "integer"
+                },
+                "from_step": {
+                  "description": "The first step, or null for the next step.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "description": "The operation discriminator. It must equal op when both are present.",
+                  "enum": [
+                    "ablate",
+                    "add",
+                    "scale",
+                    "clamp",
+                    "patch",
+                    "steer"
+                  ],
+                  "type": "string"
+                },
+                "multiplier": {
+                  "description": "The finite multiplier for scale.",
+                  "type": "number"
+                },
+                "op": {
+                  "description": "The legacy discriminator. Supply op or kind. Steer stays reserved.",
+                  "enum": [
+                    "ablate",
+                    "add",
+                    "scale",
+                    "clamp",
+                    "patch",
+                    "steer"
+                  ],
+                  "type": "string"
+                },
+                "point": {
+                  "description": "The point name from intervene.points.",
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "positions": {
+                  "description": "Selected token positions. Omission selects all, and an empty list selects none.",
+                  "items": {
+                    "maximum": 31,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxItems": 32,
+                  "type": "array"
+                },
+                "source_position": {
+                  "description": "The one source position, or matching positions when absent.",
+                  "maximum": 31,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "source_prompt": {
+                  "description": "The clean patch source, at most 4096 UTF-8 bytes and 32 model tokens.",
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "until_step": {
+                  "description": "The exclusive end step, or null until cleared.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "value": {
+                  "description": "The finite activation for clamp.",
+                  "type": "number"
+                },
+                "vector": {
+                  "description": "The add vector. Its length must match the point width.",
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 16384,
+                  "minItems": 1,
+                  "type": "array"
                 }
               },
               "required": [
-                "point",
-                "op"
+                "point"
               ],
               "type": "object"
             },
@@ -18161,6 +18261,156 @@
       "args": {
         "additionalProperties": false,
         "properties": {
+          "clean_prompt": {
+            "description": "The clean prompt, at most 4096 UTF-8 bytes and 32 model tokens.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "corrupted_prompt": {
+            "description": "The corrupted prompt with the same token count.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "metric": {
+            "additionalProperties": false,
+            "description": "Distinct output token IDs for the logit difference.",
+            "properties": {
+              "negative_token": {
+                "description": "The output token ID.",
+                "maximum": 2147483647,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "positive_token": {
+                "description": "The output token ID.",
+                "maximum": 2147483647,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "positive_token",
+              "negative_token"
+            ],
+            "type": "object"
+          },
+          "request_id": {
+            "description": "Poll a prior request without another model operation.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "run",
+      "examples": [
+        {
+          "clean_prompt": "AB",
+          "corrupted_prompt": "AC",
+          "metric": {
+            "negative_token": 66,
+            "positive_token": 65
+          }
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "patch.sweep",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "pending": {
+            "description": "True until the final reply arrives.",
+            "type": "boolean"
+          },
+          "request_id": {
+            "description": "Poll a prior request without another model operation.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "result": {
+            "additionalProperties": true,
+            "description": "The bounded result, or null while pending.",
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "request_id",
+          "pending",
+          "result"
+        ],
+        "type": "object"
+      },
+      "summary": "Queues a patch sweep at the next run boundary."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "description": "Poll a prior request without another model operation.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "run",
+      "examples": [
+        {}
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "trace.validate",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "pending": {
+            "description": "True until the final reply arrives.",
+            "type": "boolean"
+          },
+          "request_id": {
+            "description": "Poll a prior request without another model operation.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "result": {
+            "additionalProperties": true,
+            "description": "The bounded result, or null while pending.",
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "request_id",
+          "pending",
+          "result"
+        ],
+        "type": "object"
+      },
+      "summary": "Queues validation of the latest trace and intervention snapshot."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
           "match": {
             "description": "Only the points whose names match this glob, such as blocks.*.attn*; every point when absent.",
             "maxLength": 255,
@@ -18260,36 +18510,112 @@
       "args": {
         "additionalProperties": false,
         "properties": {
-          "from_step": {
-            "description": "The first step it acts on; the next step when absent.",
-            "minimum": 0,
-            "type": "integer"
+          "coefficient": {
+            "description": "The finite coefficient for add.",
+            "type": "number"
           },
-          "op": {
-            "description": "What to do: ablate sets the output to zero; scale, steer and patch are reserved and refused with intervene.op_reserved.",
-            "enum": [
-              "ablate",
-              "scale",
-              "steer",
-              "patch"
-            ],
-            "type": "string"
-          },
-          "point": {
-            "description": "The point's name, from intervene.points.",
+          "dictionary": {
+            "description": "The configured dictionary identifier for scale or clamp.",
             "maxLength": 255,
             "minLength": 1,
             "type": "string"
           },
-          "until_step": {
-            "description": "The step it ends before; it lasts until it is cleared when absent.",
-            "minimum": 1,
+          "feature": {
+            "description": "The feature for scale or clamp.",
+            "maximum": 2147483647,
+            "minimum": 0,
             "type": "integer"
+          },
+          "from_step": {
+            "description": "The first step, or null for the next step.",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "The operation discriminator. It must equal op when both are present.",
+            "enum": [
+              "ablate",
+              "add",
+              "scale",
+              "clamp",
+              "patch",
+              "steer"
+            ],
+            "type": "string"
+          },
+          "multiplier": {
+            "description": "The finite multiplier for scale.",
+            "type": "number"
+          },
+          "op": {
+            "description": "The legacy discriminator. Supply op or kind. Steer stays reserved.",
+            "enum": [
+              "ablate",
+              "add",
+              "scale",
+              "clamp",
+              "patch",
+              "steer"
+            ],
+            "type": "string"
+          },
+          "point": {
+            "description": "The point name from intervene.points.",
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "positions": {
+            "description": "Selected token positions. Omission selects all, and an empty list selects none.",
+            "items": {
+              "maximum": 31,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "type": "array"
+          },
+          "source_position": {
+            "description": "The one source position, or matching positions when absent.",
+            "maximum": 31,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source_prompt": {
+            "description": "The clean patch source, at most 4096 UTF-8 bytes and 32 model tokens.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "until_step": {
+            "description": "The exclusive end step, or null until cleared.",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "value": {
+            "description": "The finite activation for clamp.",
+            "type": "number"
+          },
+          "vector": {
+            "description": "The add vector. Its length must match the point width.",
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 16384,
+            "minItems": 1,
+            "type": "array"
           }
         },
         "required": [
-          "point",
-          "op"
+          "point"
         ],
         "type": "object"
       },
@@ -18327,7 +18653,7 @@
         ],
         "type": "object"
       },
-      "summary": "Sets one intervention on a point of the attached model, applied at the script's next step through the module hooks: ablate sets the point's output to zero, or one head's part where the point is a head. scale, steer and patch are reserved. It lasts until intervene.clear, or from from_step until until_step. The result says it is pending; a run event of change intervene reports the step the script applied it at. intervene.points lists the points."
+      "summary": "Sets one intervention on a point of the attached model, applied at the script's next step through the module hooks. Kinds are ablate, add, scale, clamp, and patch. Steer stays reserved. It lasts until intervene.clear, or from from_step until until_step. The result says it is pending; a run event of change intervene reports the step the script applied it at. intervene.points lists the points."
     },
     {
       "agents": true,
@@ -18405,23 +18731,84 @@
             "items": {
               "additionalProperties": false,
               "properties": {
+                "coefficient": {
+                  "description": "The finite coefficient for add.",
+                  "type": "number"
+                },
+                "dictionary": {
+                  "description": "The configured dictionary identifier for scale or clamp.",
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "error": {
+                  "description": "The execution refusal, when present.",
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                "error_code": {
+                  "description": "The structured refusal code, when present.",
+                  "maxLength": 63,
+                  "type": "string"
+                },
+                "feature": {
+                  "description": "The feature for scale or clamp.",
+                  "maximum": 2147483647,
+                  "minimum": 0,
+                  "type": "integer"
+                },
                 "from_step": {
-                  "description": "The first step it acts on, or null for the next step.",
+                  "description": "The first step, or null for the next step.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "type": [
                     "integer",
                     "null"
                   ]
                 },
-                "op": {
-                  "description": "What it does: ablate sets the point's output to zero.",
+                "kind": {
+                  "description": "The operation discriminator. It must equal op when both are present.",
                   "enum": [
-                    "ablate"
+                    "ablate",
+                    "add",
+                    "scale",
+                    "clamp",
+                    "patch",
+                    "steer"
+                  ],
+                  "type": "string"
+                },
+                "multiplier": {
+                  "description": "The finite multiplier for scale.",
+                  "type": "number"
+                },
+                "op": {
+                  "description": "The legacy discriminator. Supply op or kind. Steer stays reserved.",
+                  "enum": [
+                    "ablate",
+                    "add",
+                    "scale",
+                    "clamp",
+                    "patch",
+                    "steer"
                   ],
                   "type": "string"
                 },
                 "point": {
-                  "description": "The point it acts on.",
+                  "description": "The point name from intervene.points.",
+                  "maxLength": 255,
+                  "minLength": 1,
                   "type": "string"
+                },
+                "positions": {
+                  "description": "Selected token positions. Omission selects all, and an empty list selects none.",
+                  "items": {
+                    "maximum": 31,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxItems": 32,
+                  "type": "array"
                 },
                 "since_step": {
                   "description": "The step the script applied it at, or null while it is pending.",
@@ -18429,6 +18816,18 @@
                     "integer",
                     "null"
                   ]
+                },
+                "source_position": {
+                  "description": "The one source position, or matching positions when absent.",
+                  "maximum": 31,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "source_prompt": {
+                  "description": "The clean patch source, at most 4096 UTF-8 bytes and 32 model tokens.",
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
                 },
                 "state": {
                   "description": "pending until the script's next step, active, or ended after until_step.",
@@ -18440,11 +18839,26 @@
                   "type": "string"
                 },
                 "until_step": {
-                  "description": "The step it ends before, or null until it is cleared.",
+                  "description": "The exclusive end step, or null until cleared.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "type": [
                     "integer",
                     "null"
                   ]
+                },
+                "value": {
+                  "description": "The finite activation for clamp.",
+                  "type": "number"
+                },
+                "vector": {
+                  "description": "The add vector. Its length must match the point width.",
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 16384,
+                  "minItems": 1,
+                  "type": "array"
                 }
               },
               "required": [

@@ -160,9 +160,7 @@ public:
     cb::Error intervene_set(const cb::Intervention& i) override {
         if (!interventions_supported())
             return fail(cb::kInterveneNotSupported, "The script of " + id_ + " takes no interventions.");
-        json set{{"point", i.point}, {"op", i.op}};
-        set["from_step"] = i.from_step ? json(*i.from_step) : json();
-        set["until_step"] = i.until_step ? json(*i.until_step) : json();
+        json set = cb::intervention_set_spec(i);
         return send("intervene", "", json{{"set", std::move(set)}}, 1);
     }
     cb::Error intervene_clear(const std::string& point) override {
@@ -349,6 +347,7 @@ std::vector<cb::Intervention> ConnectionControl::interventions() {
     for (const json& a : iv["active"]) {
         if (!a.is_object() || !a.contains("point") || !a["point"].is_string()) continue;
         cb::Intervention i;
+        i.specification = a;
         i.point = a["point"].get<std::string>();
         i.op = a.value("op", std::string("ablate"));
         i.from_step = opt_int(a, "from_step");

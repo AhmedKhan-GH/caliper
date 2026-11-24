@@ -183,7 +183,7 @@ TEST_CASE("interventions: intervene.set checks the op, the point and the range, 
     CHECK(fake.sets[1].from_step == 1300);
     CHECK(fake.sets[1].until_step == 1400);
 
-    for (const char* op : {"scale", "steer", "patch"})
+    for (const char* op : {"steer"})
         CHECK(err(*s, "intervene.set", {{"point", "head"}, {"op", op}}) == kInterveneOpReserved);
     CHECK(err(*s, "intervene.set", {{"point", "blocks.9"}, {"op", "ablate"}}) == kInterveneUnknownPoint);
     CHECK(err(*s, "intervene.set", {{"point", "head"}, {"op", "ablate"}, {"from_step", 1500}, {"until_step", 1500}}) ==
@@ -251,11 +251,11 @@ TEST_CASE("interventions: the effect run asks an agent, with a rule key for one 
 
 TEST_CASE("interpretation: every command binds with bounded schema and correct effects") {
     auto session = open_session(fresh_dir("interpret_bound") + "/workspace");
-    for (const char* name : {"feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read"}) {
+    for (const char* name : {"feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read", "patch.sweep", "trace.validate"}) {
         CAPTURE(name);
         const auto* descriptor = find_command_descriptor(name);
         REQUIRE(descriptor);
-        CHECK(descriptor->effect == (std::string(name) == "trace.run" ? CommandEffect::run : CommandEffect::read));
+        CHECK(descriptor->effect == (std::string(name) == "trace.run" || std::string(name) == "patch.sweep" || std::string(name) == "trace.validate" ? CommandEffect::run : CommandEffect::read));
         CHECK(descriptor->frame_thread);
         auto result = invoke(*session, name, descriptor->examples.front());
         CHECK_FALSE(result.ok);
@@ -264,4 +264,39 @@ TEST_CASE("interpretation: every command binds with bounded schema and correct e
     CHECK(err(*session, "trace.read", {{"node_limit", 257}}) == "command.invalid_args");
     CHECK(err(*session, "feature.examples", {{"layer", 0}, {"feature", 0}, {"limit", 17}}) == "command.invalid_args");
     CHECK(err(*session, "trace.run", {{"prompt", "x"}, {"max_nodes", true}}) == "command.invalid_args");
+}
+
+TEST_CASE("interventions: all supported kinds retain their fields and reject incompatible fields") {
+    auto session = open_session(fresh_dir("intervene_m8") + "/workspace");
+    auto run = training();
+    run.pts.clear();
+    session->set_run_control(&run);
+    std::vector<json> specifications = {
+        {{"point","layers.0.mlp"},{"kind","ablate"}},
+        {{"point","layers.0.mlp_out"},{"kind","add"},{"vector",{1.,-1.}},{"coefficient",.5}},
+        {{"point","layers.0.mlp_out"},{"kind","scale"},{"feature",0},{"multiplier",2.},{"positions",{0,1}},{"dictionary","fixture"}},
+        {{"point","layers.0.mlp_out"},{"kind","clamp"},{"feature",0},{"value",0.}},
+        {{"point","layers.0.mlp_out"},{"kind","patch"},{"source_prompt","AB"},{"source_position",1}}};
+    for (const auto& spec : specifications) {
+        ok(*session,"intervene.set",spec);
+        CHECK(run.sets.back().specification == spec);
+        const auto sent = intervention_set_spec(run.sets.back());
+        CHECK(sent["kind"] == spec["kind"]);
+        CHECK(sent["op"] == spec["kind"]);
+        CHECK_FALSE(check_intervention_spec(sent,"args"));
+    }
+    auto invalid = specifications[1];
+    invalid["positions"] = {0,0};
+    CHECK(err(*session,"intervene.set",invalid) == "command.invalid_args");
+    invalid = specifications[3]; invalid["value"] = true;
+    CHECK(err(*session,"intervene.set",invalid) == "command.invalid_args");
+    invalid = specifications[4]; invalid["source_prompt"] = std::string(4097,'x');
+    CHECK(err(*session,"intervene.set",invalid) == "command.invalid_args");
+    invalid = specifications[1]; invalid["op"] = "scale";
+    CHECK(err(*session,"intervene.set",invalid) == "command.invalid_args");
+    CHECK(run.sets.size() == 5);
+    CHECK(err(*session,"patch.sweep",{{"clean_prompt","A"}},CommandOrigin::ui) == "command.invalid_args");
+    CHECK(err(*session,"patch.sweep",{{"request_id",1}},CommandOrigin::mcp) == "command.needs_approval");
+    CHECK(err(*session,"trace.validate",json::object(),CommandOrigin::agent) == "command.needs_approval");
+    session->set_run_control(nullptr);
 }

@@ -43,7 +43,7 @@ const char* const kV0[] = {
     "run.stop",        "run.logs",        "events.wait",
     "program.create",  "program.patch",   "program.remove", "program.status", "piece.check",    "piece.list",
     "piece.show",      "piece.save",      "piece.copy",     "piece.update",  "piece.remove",     "program.read",
-    "feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read",
+    "feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read", "patch.sweep", "trace.validate",
     "intervene.points", "intervene.set",
     "intervene.clear", "intervene.list",  "history.undo",   "history.redo",  "history.list",
 };
@@ -130,7 +130,7 @@ TEST_CASE("no command takes or returns a value named like a secret") {
     for (const auto& n : names) {
         CAPTURE(n);
         // The event key `key` and the control option `keys` name keyboard shortcuts, not secrets.
-        if (n == "key" || n == "keys") continue;
+        if (n == "key" || n == "keys" || n == "positive_token" || n == "negative_token") continue;
         for (const char* bad : {"token", "secret", "password", "api_key", "apikey", "authorization", "key"})
             CHECK(n.find(bad) == std::string::npos);
     }
@@ -161,7 +161,7 @@ TEST_CASE("the flags follow the design page") {
                                 "cursor.step", "camera.get", "camera.set", "camera.save", "run.state", "run.set_param", "run.action", "run.pause",
                                 "run.list", "run.start", "run.fork", "run.stop", "run.logs",
                                 "program.create", "program.patch", "program.remove", "program.status",
-                                "feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read",
+                                "feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read", "patch.sweep", "trace.validate",
                                 "piece.list", "piece.show", "piece.save", "program.read", "intervene.points", "intervene.set", "intervene.clear", "intervene.list",
                                 "history.undo", "history.redo", "history.list"});
     // Every destructive command mutates.
@@ -269,5 +269,19 @@ TEST_CASE("command_table.json is exactly the table's JSON, so the sidecar sees t
                               "agents", "effect"})
             CHECK(c.contains(k));
         CHECK(c["agents"] == (c["name"] != "history.undo" && c["name"] != "history.redo"));
+    }
+}
+
+TEST_CASE("M8 command schemas retain inference resources and structured intervention fields") {
+    const auto* start = cb::find_command_descriptor("run.start");
+    REQUIRE(start);
+    CHECK_FALSE(cb::validate_command_value(start->args,{{"kind","inference"},{"model","fixture"},{"dictionary","dict"},{"prompt","AB"}},"args"));
+    CHECK(cb::validate_command_value(start->args,{{"kind","inference"},{"model",true}},"args"));
+    CHECK(cb::validate_command_value(start->args,{{"kind","inference"},{"prompt",std::string(4097,'x')}},"args"));
+    for (const auto* name : {"patch.sweep","trace.validate"}) {
+        const auto* descriptor = cb::find_command_descriptor(name);
+        REQUIRE(descriptor);
+        CHECK(descriptor->effect == cb::CommandEffect::run);
+        CHECK_FALSE(cb::validate_command_value(descriptor->args,descriptor->examples.front(),"args"));
     }
 }

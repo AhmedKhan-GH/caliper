@@ -90,7 +90,7 @@ inline constexpr const char* kRunRefused = "run.refused";                     //
 // ---- interventions (design/gpu-programs.md, Interventions)
 // The error codes of the intervention commands.
 inline constexpr const char* kInterveneUnknownPoint = "intervene.unknown_point";  // the model has no such point
-inline constexpr const char* kInterveneOpReserved = "intervene.op_reserved";      // scale, steer or patch
+inline constexpr const char* kInterveneOpReserved = "intervene.op_reserved";      // steer remains reserved
 inline constexpr const char* kInterveneBadRange = "intervene.bad_range";          // until_step not above from_step
 inline constexpr const char* kInterveneNotSupported = "intervene.not_supported";  // no capability interventions
 
@@ -110,12 +110,23 @@ struct InterventionPoint {
 // interventions.active gives it back.
 struct Intervention {
     std::string point;
-    std::string op = "ablate";                 // the only op built; scale, steer and patch are reserved
+    std::string op = "ablate";                 // ablate, add, scale, clamp, or patch
     std::optional<std::int64_t> from_step;     // null: the next step
     std::optional<std::int64_t> until_step;    // null: until cleared
     std::optional<std::int64_t> since_step;    // the step the script applied it at; null while pending
     std::string state = "pending";             // "pending", "active" or "ended"
+    nlohmann::json specification = nlohmann::json::object();
 };
+
+inline nlohmann::json intervention_set_spec(const Intervention& i) {
+    auto result = i.specification.is_object() ? i.specification : nlohmann::json::object();
+    for (const auto* key : {"since_step", "state", "error", "error_code"}) result.erase(key);
+    result["point"] = i.point;
+    result["op"] = i.op;
+    result["from_step"] = i.from_step ? nlohmann::json(*i.from_step) : nlohmann::json();
+    result["until_step"] = i.until_step ? nlohmann::json(*i.until_step) : nlohmann::json();
+    return result;
+}
 
 class RunControl {
 public:

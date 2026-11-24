@@ -195,7 +195,17 @@ def test_intervention_strings_and_limits_mirror_the_codec():
     if not hasattr(w, "OP_INTERVENE"):
         pytest.skip("this codec has no CONTROL op intervene (protocol 3.2 draft)")
     assert C.OP_INTERVENE == w.OP_INTERVENE
-    assert C.INTERVENE_OPS == (w.INTERVENE_ABLATE,)
+    from caliper._intervention_protocol import KINDS, specification
+    from caliper.interp._intervene import KINDS as EXECUTOR_KINDS
+    assert C.INTERVENE_OPS == w.INTERVENE_OPS == KINDS == EXECUTOR_KINDS
+    for fields in ({"op": "ablate"}, {"kind": "add", "vector": [1., -1.], "coefficient": .5},
+                   {"kind": "scale", "feature": 1, "multiplier": 2.},
+                   {"kind": "clamp", "feature": 1, "value": 0.},
+                   {"kind": "patch", "source_prompt": "AB", "positions": [0], "source_position": 1}):
+        spec = {"point": "layers.0.mlp_out", **fields}
+        assert specification(spec)
+        control = w.Control(1, "intervene", intervene={"set": spec})
+        assert w.decode(w.encode(control)).intervene == {"set": spec}
     assert (C.IV_PENDING, C.IV_ACTIVE, C.IV_ENDED) == w.INTERVENTION_STATES
     for name in ("MAX_POINTS_LISTED", "MAX_INTERVENTIONS", "POINT_MAX"):
         assert getattr(C, name) == getattr(w, name), name

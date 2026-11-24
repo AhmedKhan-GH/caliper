@@ -1847,7 +1847,7 @@ struct Session::Impl {
         bind("program.read", &Impl::resource_cmd);
         for (const char* name : {"intervene.points", "intervene.set", "intervene.clear", "intervene.list"})
             bind(name, &Impl::intervene_cmd);
-        for (const char* name : {"feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read"})
+        for (const char* name : {"feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read", "patch.sweep", "trace.validate"})
             bind(name, &Impl::interpretation_cmd);
         // The run commands and events.wait (design/instruments.md).
         for (const char* name : {"run.state", "run.set_param", "run.action", "run.pause"}) bind(name, &Impl::run_cmd);

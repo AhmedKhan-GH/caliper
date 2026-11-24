@@ -319,6 +319,7 @@ std::vector<cb::Intervention> interventions_of(const json& interventions) {
     for (const json& a : interventions["active"]) {
         if (!a.is_object()) continue;
         cb::Intervention i;
+        i.specification = a;
         i.point = a.value("point", std::string());
         i.op = a.value("op", std::string("ablate"));
         i.from_step = opt_int(a, "from_step");
@@ -359,9 +360,7 @@ std::vector<cb::Intervention> AppRunControl::interventions() {
 cb::Error AppRunControl::intervene_set(const cb::Intervention& i) {
     if (link_ && link_->attached() && !interventions_supported())
         return cb::Error(cb::kInterveneNotSupported, "The script " + link_->script() + " takes no interventions.");
-    json set{{"point", i.point}, {"op", i.op}};
-    set["from_step"] = i.from_step ? json(*i.from_step) : json();
-    set["until_step"] = i.until_step ? json(*i.until_step) : json();
+    json set = cb::intervention_set_spec(i);
     return send_net(kOpIntervene, "", to_net_json(json{{"set", std::move(set)}}), 0);
 }
 

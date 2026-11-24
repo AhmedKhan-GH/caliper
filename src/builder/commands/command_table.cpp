@@ -540,15 +540,9 @@ const std::pair<const char*, const char*> kFragments[] = {
         "type": {"type": "string", "description": "The module's class name, such as Linear or MultiheadAttention."},
         "shape": {"type": ["array", "null"], "items": {"type": "integer"}, "description": "The shape of the module's last output, or null before the first step."}}})json"},
 
-    {"intervention", R"json({
-      "type": "object", "additionalProperties": false, "required": ["point", "op", "from_step", "until_step", "since_step", "state"],
-      "properties": {
-        "point": {"type": "string", "description": "The point it acts on."},
-        "op": {"type": "string", "enum": ["ablate"], "description": "What it does: ablate sets the point's output to zero."},
-        "from_step": {"type": ["integer", "null"], "description": "The first step it acts on, or null for the next step."},
-        "until_step": {"type": ["integer", "null"], "description": "The step it ends before, or null until it is cleared."},
-        "since_step": {"type": ["integer", "null"], "description": "The step the script applied it at, or null while it is pending."},
-        "state": {"type": "string", "enum": ["pending", "active", "ended"], "description": "pending until the script's next step, active, or ended after until_step."}}})json"},
+    {"intervention_spec", R"json({"type": "object", "additionalProperties": false, "required": ["point"], "properties": {"point": {"type": "string", "description": "The point name from intervene.points.", "minLength": 1, "maxLength": 255}, "op": {"type": "string", "description": "The legacy discriminator. Supply op or kind. Steer stays reserved.", "enum": ["ablate", "add", "scale", "clamp", "patch", "steer"]}, "kind": {"type": "string", "description": "The operation discriminator. It must equal op when both are present.", "enum": ["ablate", "add", "scale", "clamp", "patch", "steer"]}, "from_step": {"type": ["integer", "null"], "description": "The first step, or null for the next step.", "minimum": 0, "maximum": 9007199254740991}, "until_step": {"type": ["integer", "null"], "description": "The exclusive end step, or null until cleared.", "minimum": 0, "maximum": 9007199254740991}, "positions": {"type": "array", "description": "Selected token positions. Omission selects all, and an empty list selects none.", "maxItems": 32, "items": {"type": "integer", "minimum": 0, "maximum": 31}}, "vector": {"type": "array", "description": "The add vector. Its length must match the point width.", "minItems": 1, "maxItems": 16384, "items": {"type": "number"}}, "coefficient": {"type": "number", "description": "The finite coefficient for add."}, "feature": {"type": "integer", "description": "The feature for scale or clamp.", "minimum": 0, "maximum": 2147483647}, "multiplier": {"type": "number", "description": "The finite multiplier for scale."}, "value": {"type": "number", "description": "The finite activation for clamp."}, "source_prompt": {"type": "string", "description": "The clean patch source, at most 4096 UTF-8 bytes and 32 model tokens.", "minLength": 1, "maxLength": 4096}, "source_position": {"type": "integer", "description": "The one source position, or matching positions when absent.", "minimum": 0, "maximum": 31}, "dictionary": {"type": "string", "description": "The configured dictionary identifier for scale or clamp.", "minLength": 1, "maxLength": 255}}})json"},
+
+    {"intervention", R"json({"type": "object", "additionalProperties": false, "required": ["point", "op", "from_step", "until_step", "since_step", "state"], "properties": {"point": {"type": "string", "description": "The point name from intervene.points.", "minLength": 1, "maxLength": 255}, "op": {"type": "string", "description": "The legacy discriminator. Supply op or kind. Steer stays reserved.", "enum": ["ablate", "add", "scale", "clamp", "patch", "steer"]}, "kind": {"type": "string", "description": "The operation discriminator. It must equal op when both are present.", "enum": ["ablate", "add", "scale", "clamp", "patch", "steer"]}, "from_step": {"type": ["integer", "null"], "description": "The first step, or null for the next step.", "minimum": 0, "maximum": 9007199254740991}, "until_step": {"type": ["integer", "null"], "description": "The exclusive end step, or null until cleared.", "minimum": 0, "maximum": 9007199254740991}, "positions": {"type": "array", "description": "Selected token positions. Omission selects all, and an empty list selects none.", "maxItems": 32, "items": {"type": "integer", "minimum": 0, "maximum": 31}}, "vector": {"type": "array", "description": "The add vector. Its length must match the point width.", "minItems": 1, "maxItems": 16384, "items": {"type": "number"}}, "coefficient": {"type": "number", "description": "The finite coefficient for add."}, "feature": {"type": "integer", "description": "The feature for scale or clamp.", "minimum": 0, "maximum": 2147483647}, "multiplier": {"type": "number", "description": "The finite multiplier for scale."}, "value": {"type": "number", "description": "The finite activation for clamp."}, "source_prompt": {"type": "string", "description": "The clean patch source, at most 4096 UTF-8 bytes and 32 model tokens.", "minLength": 1, "maxLength": 4096}, "source_position": {"type": "integer", "description": "The one source position, or matching positions when absent.", "minimum": 0, "maximum": 31}, "dictionary": {"type": "string", "description": "The configured dictionary identifier for scale or clamp.", "minLength": 1, "maxLength": 255}, "since_step": {"type": ["integer", "null"], "description": "The step the script applied it at, or null while it is pending."}, "state": {"type": "string", "enum": ["pending", "active", "ended"], "description": "pending until the script's next step, active, or ended after until_step."}, "error": {"type": "string", "description": "The execution refusal, when present.", "maxLength": 1024}, "error_code": {"type": "string", "description": "The structured refusal code, when present.", "maxLength": 63}}})json"},
 
     // Pieces of the instrument commands (design/instrument-interface.md, Commands).
     {"orbit", R"json({
@@ -1672,12 +1666,7 @@ const Row kRows[] = {
      "because the script runs as Python code. The result comes when the process starts, in the state starting; a run "
      "event of change runner, through events.wait, or run.list says when it runs. The script's caliper.watch() line "
      "writes the stream link that the app attaches to.",
-     R"json({"type": "object", "additionalProperties": false, "required": ["script"],
-      "properties": {
-        "script": {"type": "string", "minLength": 1, "maxLength": 1024, "description": "The script's path relative to the workspace, with / between folders and no ., .. or link in it, such as scripts/train.py, so that the review card names the file that runs; another path to a file of the workspace fails with run.script_refused, whose message gives the path to use."},
-        "args": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 256}, "description": "The script's command-line arguments, each at most 256 bytes and at most 1024 bytes in all, so that the review card shows them in full; none when absent."},
-        "params": {"$use": "run_params"},
-        "id": {"$use": "run_id", "description": "The new run's id, unique in the workspace; the script's file name and a number, such as train-1, when absent."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": [], "properties": {"script": {"type": "string", "minLength": 1, "maxLength": 1024, "description": "The script's path relative to the workspace, with / between folders and no ., .. or link in it, such as scripts/train.py, so that the review card names the file that runs; another path to a file of the workspace fails with run.script_refused, whose message gives the path to use."}, "args": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 256}, "description": "The script's command-line arguments, each at most 256 bytes and at most 1024 bytes in all, so that the review card shows them in full; none when absent."}, "params": {"$use": "run_params"}, "id": {"$use": "run_id", "description": "The new run's id, unique in the workspace; the script's file name and a number, such as train-1, when absent."}, "kind": {"type": "string", "description": "The run kind. Script is the default.", "enum": ["script", "inference"]}, "model": {"type": "string", "description": "The local inference model resource, at most 1024 UTF-8 bytes.", "minLength": 1, "maxLength": 1024}, "dictionary": {"type": "string", "description": "The local inference dictionary resource, at most 1024 UTF-8 bytes.", "minLength": 1, "maxLength": 1024}, "prompt": {"type": "string", "description": "The initial inference prompt, at most 4096 UTF-8 bytes.", "minLength": 1, "maxLength": 4096}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["run"],
       "properties": {
         "run": {"$use": "run_entry", "description": "The run as run.list gives it."}}})json",
@@ -1687,19 +1676,7 @@ const Row kRows[] = {
      "parent: the parent saves a checkpoint through its caliper.checkpoint action, and the fork runs the same script "
      "and arguments from it. It always waits for the person's approval on a review card. The result comes at once, "
      "in the state starting; a run event of change runner or run.list says when the fork runs.",
-     R"json({"type": "object", "additionalProperties": false, "required": ["run"],
-      "properties": {
-        "run": {"$use": "run_id", "description": "The parent: a managed run that runs or is paused."},
-        "params": {"$use": "run_params", "description": "The parameters that change in the fork; the checkpoint holds the others."},
-        "id": {"$use": "run_id", "description": "The fork's id, unique in the workspace; the parent's script name and a number when absent."},
-        "step": {"type": "integer", "minimum": 0, "description": "Start from the parent's newest kept checkpoint at or before this step, in place of its next checkpoint."},
-        "interventions": {"type": "array", "maxItems": 16, "description": "Interventions that the fork applies before its first step, each as intervene.set takes it.",
-                          "items": {"type": "object", "additionalProperties": false, "required": ["point", "op"],
-                                    "properties": {
-                                      "point": {"type": "string", "minLength": 1, "maxLength": 255, "description": "The point's name, from intervene.points."},
-                                      "op": {"type": "string", "enum": ["ablate", "scale", "steer", "patch"], "description": "What to do; scale, steer and patch are reserved."},
-                                      "from_step": {"type": "integer", "minimum": 0, "description": "The first step it acts on; the fork's first step when absent."},
-                                      "until_step": {"type": "integer", "minimum": 1, "description": "The step it ends before; it lasts when absent."}}}}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["run"], "properties": {"run": {"$use": "run_id", "description": "The parent: a managed run that runs or is paused."}, "params": {"$use": "run_params", "description": "The parameters that change in the fork; the checkpoint holds the others."}, "id": {"$use": "run_id", "description": "The fork's id, unique in the workspace; the parent's script name and a number when absent."}, "step": {"type": "integer", "minimum": 0, "description": "Start from the parent's newest kept checkpoint at or before this step, in place of its next checkpoint."}, "interventions": {"type": "array", "maxItems": 16, "description": "Interventions that the fork applies before its first step, each as intervene.set takes it.", "items": {"$use": "intervention_spec"}}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["run"],
       "properties": {
         "run": {"$use": "run_entry", "description": "The run as run.list gives it."}}})json",
@@ -1925,6 +1902,17 @@ const Row kRows[] = {
      R"json({"type": "object", "additionalProperties": false, "required": ["request_id", "pending", "result"], "properties": {"request_id": {"type": "integer", "minimum": 1, "maximum": 4294967295, "description": "The transport request ID."}, "pending": {"type": "boolean", "description": "True until the deferred reply arrives."}, "result": {"type": ["object", "null"], "additionalProperties": true, "description": "The bounded structured result, or null while pending."}}})json",
      R"json({"node_limit": 128})json"},
 
+    {"patch.sweep", false, false, true,
+     "Queues a patch sweep at the next run boundary.",
+     R"json({"type": "object", "additionalProperties": false, "required": [], "properties": {"clean_prompt": {"type": "string", "description": "The clean prompt, at most 4096 UTF-8 bytes and 32 model tokens.", "minLength": 1, "maxLength": 4096}, "corrupted_prompt": {"type": "string", "description": "The corrupted prompt with the same token count.", "minLength": 1, "maxLength": 4096}, "metric": {"type": "object", "description": "Distinct output token IDs for the logit difference.", "additionalProperties": false, "required": ["positive_token", "negative_token"], "properties": {"positive_token": {"type": "integer", "description": "The output token ID.", "minimum": 0, "maximum": 2147483647}, "negative_token": {"type": "integer", "description": "The output token ID.", "minimum": 0, "maximum": 2147483647}}}, "request_id": {"type": "integer", "minimum": 1, "maximum": 4294967295, "description": "Poll a prior request without another model operation."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["request_id", "pending", "result"], "properties": {"request_id": {"type": "integer", "minimum": 1, "maximum": 4294967295, "description": "Poll a prior request without another model operation."}, "pending": {"type": "boolean", "description": "True until the final reply arrives."}, "result": {"type": ["object", "null"], "description": "The bounded result, or null while pending.", "additionalProperties": true}}})json",
+     R"json({"clean_prompt": "AB", "corrupted_prompt": "AC", "metric": {"positive_token": 65, "negative_token": 66}})json"},
+    {"trace.validate", false, false, true,
+     "Queues validation of the latest trace and intervention snapshot.",
+     R"json({"type": "object", "additionalProperties": false, "required": [], "properties": {"request_id": {"type": "integer", "minimum": 1, "maximum": 4294967295, "description": "Poll a prior request without another model operation."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["request_id", "pending", "result"], "properties": {"request_id": {"type": "integer", "minimum": 1, "maximum": 4294967295, "description": "Poll a prior request without another model operation."}, "pending": {"type": "boolean", "description": "True until the final reply arrives."}, "result": {"type": ["object", "null"], "description": "The bounded result, or null while pending.", "additionalProperties": true}}})json",
+     R"json({})json"},
+
     // interventions (design/gpu-programs.md)
     {"intervene.points", false, false, true,
      "Lists the intervention points of the model that the attached script watches: each module's output by its dotted "
@@ -1940,16 +1928,11 @@ const Row kRows[] = {
      R"json({"match": "blocks.0.*"})json"},
     {"intervene.set", false, false, true,
      "Sets one intervention on a point of the attached model, applied at the script's next step through the module "
-     "hooks: ablate sets the point's output to zero, or one head's part where the point is a head. scale, steer and "
-     "patch are reserved. It lasts until intervene.clear, or from from_step until until_step. The result says it is "
+     "hooks. Kinds are ablate, add, scale, clamp, and patch. Steer stays reserved. "
+     "It lasts until intervene.clear, or from from_step until until_step. The result says it is "
      "pending; a run event of change intervene reports the step the script applied it at. intervene.points lists the "
      "points.",
-     R"json({"type": "object", "additionalProperties": false, "required": ["point", "op"],
-      "properties": {
-        "point": {"type": "string", "minLength": 1, "maxLength": 255, "description": "The point's name, from intervene.points."},
-        "op": {"type": "string", "enum": ["ablate", "scale", "steer", "patch"], "description": "What to do: ablate sets the output to zero; scale, steer and patch are reserved and refused with intervene.op_reserved."},
-        "from_step": {"type": "integer", "minimum": 0, "description": "The first step it acts on; the next step when absent."},
-        "until_step": {"type": "integer", "minimum": 1, "description": "The step it ends before; it lasts until it is cleared when absent."}}})json",
+     R"json({"$use": "intervention_spec"})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["point", "op", "pending"],
       "properties": {
         "point": {"type": "string", "description": "The point."},
@@ -2134,6 +2117,8 @@ const std::pair<const char*, CommandEffect> kEffects[] = {
     {"trace.run", E::run},
     {"trace.status", E::read},
     {"trace.read", E::read},
+    {"patch.sweep", E::run},
+    {"trace.validate", E::run},
     {"intervene.set", E::run},  // acts on the running script at its next step
     {"intervene.clear", E::run},
     {"intervene.list", E::read},
@@ -2220,7 +2205,8 @@ std::vector<std::pair<std::string, std::string>> command_table_open_paths() {
     return {{"spec.get", "result.json"}, {"panel.data", "result.data"},
             {"feature.dictionary", "result.result"}, {"feature.show", "result.result"},
             {"feature.examples", "result.result"}, {"trace.run", "result.result"},
-            {"trace.status", "result.result"}, {"trace.read", "result.result"}};
+            {"trace.status", "result.result"}, {"trace.read", "result.result"},
+            {"patch.sweep", "result.result"}, {"trace.validate", "result.result"}};
 }
 
 }  // namespace caliper_builder

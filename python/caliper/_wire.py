@@ -1187,7 +1187,7 @@ class Control(_Msg):
             _bad(f"'{op}' needs 'name'")
         value = None
         if op == OP_SET:
-            value = _req(m, "value", _set_value, "a number, a boolean or a choice")
+            value = _req(m, "value", _set_value, "a finite number, a boolean, or bounded text")
         count = None
         if op == OP_STEP:
             count = _opt(m, "count", lambda v: _u32(v) and v >= 1, "a positive uint32")
@@ -1248,7 +1248,7 @@ class ControlReply(_Msg):
             _bad("a successful interpretation reply requires result")
         return cls(_req(m, "request_id", _u32, "a uint32"), op, status,
                    _opt(m, "name", _name, "a parameter or action name"),
-                   _opt(m, "value", _set_value, "a number, a boolean or a choice"),
+                   _opt(m, "value", _set_value, "a finite number, a boolean, or bounded text"),
                    _opt(m, "message", _text, f"a string of at most {TEXT_MAX} bytes"), err, result)
 
 
@@ -2956,6 +2956,7 @@ CAP_INTERVENTIONS = "interventions"
 PROGRAM_SET, PROGRAM_REMOVE, PROGRAM_PARAMS = "set", "remove", "params"
 SECTION_WGSL = "wgsl"
 INTERVENE_ABLATE = "ablate"
+INTERVENE_OPS = ("ablate", "add", "scale", "clamp", "patch")
 MAX_PROGRAMS = 16
 PROGRAM_ID_MAX = 55
 PROGRAM_SOURCE_MAX = 65536
@@ -3298,15 +3299,15 @@ def _opt_step(v) -> bool:
 
 
 def _intervene_request(v) -> bool:
-    """CONTROL's ``intervene``: exactly one of ``set``, ``clear`` and ``clear_all``."""
-    if not _obj(v) or sum(v.get(k) is not None for k in ("set", "clear", "clear_all")) != 1:
+    from ._intervention_protocol import specification
+    if (not _obj(v) or set(v) - {"set", "clear", "clear_all"}
+            or sum(v.get(k) is not None for k in ("set", "clear", "clear_all")) != 1):
         return False
     if v.get("set") is not None:
-        st = v["set"]
-        return (_obj(st) and _point(st.get("point")) and _name(st.get("op"))
-                and _opt_step(st.get("from_step")) and _opt_step(st.get("until_step")))
+        return specification(v["set"])
     if v.get("clear") is not None:
-        return _point(v["clear"])
+        from ._interpret_protocol import text
+        return text(v["clear"], POINT_MAX, False)
     return v["clear_all"] is True
 
 
@@ -3319,9 +3320,8 @@ def _point_entry(v) -> bool:
 
 
 def _active_entry(v) -> bool:
-    return (_obj(v) and _point(v.get("point")) and _name(v.get("op"))
-            and all(_opt_step(v.get(k)) for k in ("from_step", "until_step", "since_step"))
-            and v.get("state") in INTERVENTION_STATES)
+    from ._intervention_protocol import specification
+    return specification(v, lifecycle=True)
 
 
 def _interventions(v) -> bool:
