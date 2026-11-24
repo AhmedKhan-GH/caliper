@@ -196,6 +196,14 @@ def initial_progress():
     return {"tokens": 0, "steps": 0, "next_layer": 0, "pending_ids": None, "elapsed_seconds": 0.0}
 
 
+def _save_reserve(progress):
+    """Retain the admission floor and twice the observed final write costs."""
+    costs = [progress.get(key, 0.0) for key in ("checkpoint_seconds", "export_seconds")]
+    if any(type(value) not in (int, float) or not math.isfinite(value) or value < 0 for value in costs):
+        raise ValueError("invalid checkpoint or export reserve")
+    return max(60.0, 2 * sum(costs))
+
+
 def train_online(model, trainer, stream, output, *, token_budget, progress=None, memory=None,
                  stop=None, save_seconds=240, max_wall_seconds=36_000, run_seconds=None,
                  started=None, clock=time.monotonic):
@@ -224,11 +232,9 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
         raise ValueError("invalid fallback elapsed time")
     elapsed = lambda: elapsed_before + clock() - start
     invocation_limit = min(max_wall_seconds - prior_wall - elapsed_before, run_seconds or max_wall_seconds)
-    # A bounded reserve covers a final checkpoint and dictionary export.
-    reserve = min(60.0, invocation_limit / 4)
     last_save = clock()
     checkpoint_seconds = progress.get("checkpoint_seconds", 0.0)
-    if invocation_limit <= max(reserve, 2 * checkpoint_seconds):
+    if invocation_limit - (clock() - start) <= _save_reserve(progress):
         raise ValueError("wall time budget has no checkpoint reserve")
     last_metrics = {}
     model.requires_grad_(False).eval()
@@ -236,7 +242,7 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
     def health():
         if stop:
             stop.check()
-        if clock() - start >= invocation_limit - max(reserve, 2 * checkpoint_seconds):
+        if clock() - start >= invocation_limit - _save_reserve(progress):
             raise CleanStop("wall time reserve")
         if clock() - last_save >= 270:
             raise CleanStop("checkpoint deadline")
@@ -303,6 +309,7 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
                 captured.pop(read)
                 captured.pop(write)
                 if clock() - last_save >= save_seconds:
+                    health()
                     save()
             captured.close(clear=True)
             progress["tokens"] += count
@@ -329,13 +336,16 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
         )
     save()
     progress["elapsed_seconds"] = elapsed()
+    before_export = clock()
     export_dictionary(output, trainer, progress)
     progress["elapsed_seconds"] = elapsed()
     trainer.metadata["training"]["elapsed_seconds"] = elapsed()
     write_json(output / "dictionary.json", trainer.metadata)
+    progress["export_seconds"] = max(progress.get("export_seconds", 0.0), clock() - before_export)
     generation = json.loads((output / "checkpoints" / "latest.json").read_text())["generation"]
     write_json(output / "runtime.json", {"generation": generation, "elapsed_seconds": elapsed(),
-                                         "checkpoint_seconds": checkpoint_seconds})
+                                         "checkpoint_seconds": checkpoint_seconds,
+                                         "export_seconds": progress["export_seconds"]})
     print(json.dumps({"stage": "train_end", "reason": reason, "tokens": progress["tokens"],
                       "status": "complete" if progress["tokens"] == token_budget else "interrupted",
                       **({"status": trainer.metadata["training"]["status"],
@@ -377,11 +387,9 @@ _TEXT_FIELDS = ("dataset_id", "dataset_config", "dataset_revision", "split", "pa
 
 def _fallback_reserve(args, progress, started):
     elapsed = progress.get("elapsed_seconds", 0)
-    checkpoint_seconds = progress.get("checkpoint_seconds", 0)
-    if any(type(value) not in (int, float) or not math.isfinite(value) or value < 0
-           for value in (elapsed, checkpoint_seconds)):
+    if type(elapsed) not in (int, float) or not math.isfinite(elapsed) or elapsed < 0:
         raise ValueError("invalid fallback elapsed time or checkpoint reserve")
-    reserve = max(60, 2 * checkpoint_seconds)
+    reserve = _save_reserve(progress)
     remaining = min(args.max_wall_seconds - args.prior_wall_seconds - elapsed,
                     args.run_seconds or args.max_wall_seconds) - (time.monotonic() - started)
     if remaining <= reserve:
@@ -554,8 +562,9 @@ def _run(args, started, stop, resources):
         _fallback_reserve(args, record["progress"] if record else {}, started)
     if args.resume:
         prior = record["progress"]
-        reserve = max(60, 2 * prior.get("checkpoint_seconds", 0))
-        if args.max_wall_seconds - prior["elapsed_seconds"] <= reserve:
+        remaining = min(args.max_wall_seconds - prior["elapsed_seconds"],
+                        args.run_seconds or args.max_wall_seconds) - (time.monotonic() - started)
+        if remaining <= _save_reserve(prior):
             raise ValueError("wall time budget has no model-load and checkpoint reserve")
     random.seed(args.seed)
     np.random.seed(args.seed)
