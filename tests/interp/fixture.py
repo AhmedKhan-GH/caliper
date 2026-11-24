@@ -174,11 +174,15 @@ def make_fixture(**kwargs):
     return TinyLM(**kwargs), TinyTokenizer()
 
 
-def forward_hash(model=None):
-    """Hash rounded float64 logits to tolerate CPU kernel roundoff."""
+def forward_logits(model=None):
+    """Return the fixed prompt logits for numerical reference checks."""
     model = model if model is not None else TinyLM()
     with torch.no_grad():
-        values = model(torch.tensor([[256, 65, 66, 67, 32, 68]])).logits
-    rounded = (values * 1e8).round().to(torch.int64).tolist()
+        return model(torch.tensor([[256, 65, 66, 67, 32, 68]])).logits
+
+
+def forward_hash(model=None):
+    """Hash rounded logits for local diagnostics, without platform tolerance."""
+    rounded = (forward_logits(model) * 1e8).round().to(torch.int64).tolist()
     data = json.dumps(rounded, separators=(",", ":")).encode("ascii")
     return hashlib.sha256(data).hexdigest()
