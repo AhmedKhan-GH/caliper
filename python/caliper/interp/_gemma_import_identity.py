@@ -35,11 +35,16 @@ def _stamp(info):
 def _file_digest(path, memory):
     """Hash a bounded regular file without a tensor allocation."""
     maximum = 8 * (2 * _WIDTH * _LATENTS + 2 * _LATENTS + _WIDTH) + 65_536
-    _require(stat.S_ISREG(path.stat().st_mode))
+    path_before = path.stat()
+    _require(stat.S_ISREG(path_before.st_mode))
     _hash_admission(memory, force=True)
     with path.open("rb") as source:
         before = os.fstat(source.fileno())
         _require(stat.S_ISREG(before.st_mode) and before.st_size <= maximum)
+        # CPython 3.12 on Windows uses creation time for stat() ctime and
+        # change time for fstat() ctime. Compare ctime only within each API.
+        _require(all(getattr(before, name) == getattr(path_before, name)
+                     for name in ("st_dev", "st_ino", "st_size", "st_mtime_ns")))
         digest = hashlib.sha256()
         remaining = before.st_size
         while remaining:
@@ -50,7 +55,7 @@ def _file_digest(path, memory):
             remaining -= len(chunk)
             del chunk
         _require(not source.read(1) and _stamp(before) == _stamp(os.fstat(source.fileno()))
-                 and _stamp(before) == _stamp(path.stat()))
+                 and _stamp(path_before) == _stamp(path.stat()))
     return digest.hexdigest()
 
 
