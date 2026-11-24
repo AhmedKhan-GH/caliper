@@ -589,6 +589,7 @@ def test_index_identity_checks_the_supplied_memory_limit_before_export_and_open(
         FeatureIndex(tmp_path, model=model, tokenizer=tokenizer, dictionary=dictionary, memory=memory)
 
 
+@pytest.mark.gpu
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="device dictionary identity requires MPS")
 def test_device_dictionary_hash_retains_cpu_identity(tmp_path):
     from caliper.interp._index import _dictionary_hash

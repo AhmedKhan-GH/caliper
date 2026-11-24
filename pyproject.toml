@@ -56,4 +56,7 @@ CALIPER_WITH_BUILDER = "OFF"
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests", "tests/demos", "tests/interp"]
-markers = ["local_model: requires a downloaded model and never runs in CI"]
+markers = [
+    "local_model: requires a downloaded model and never runs in CI",
+    "gpu: requires an explicit accelerator test run",
+]
