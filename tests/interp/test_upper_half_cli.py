@@ -1,10 +1,8 @@
 """Synthetic fallback admission, resume identity, and aggregate time checks."""
-import copy
 import json
 import shutil
 
 import pytest
-import torch
 
 from tools.interp import checkpoint_state, train_transcoders as training
 from tools.interp.text_stream import TextStream
@@ -31,6 +29,16 @@ def synthetic_source(folder):
                            "evaluated_tokens": 200_000, "status": "failed", "partition": "quality",
                            "stop_reason": "complete", "all_mlps_replaced": 4}
     checkpoint_state.write_json(folder / "dictionary.json", metadata)
+    # Artificial completed quality state for source-admission checks only.
+    evaluation = folder / "evaluation"
+    evaluation.mkdir()
+    quality_stream = TextStream(documents(), TinyTokenizer(), "quality")
+    checkpoint_state.write_json(evaluation / "state.json", {
+        "version": 1, "count": 200_000, "pending_ids": None,
+        "identity": checkpoint_state.dictionary_fingerprint(folder, metadata),
+        "settings": {"tokens": 200_000, "context": 4, "batch_tokens": 8, "chunk_tokens": 2},
+        "stream": quality_stream.state_dict(),
+    })
     return model, metadata, stream.source_id
 
 
@@ -248,4 +256,57 @@ def test_invalid_fallback_cursor_refuses_before_model_load(tmp_path, monkeypatch
     monkeypatch.setattr(training, "fineweb_documents", lambda **_: documents())
     monkeypatch.setattr(training, "load_text_model", lambda **_: pytest.fail("model allocation ran"))
     with pytest.raises(ValueError, match="progress|initialization"):
+        training.main([*argv, "--resume"])
+
+
+@pytest.mark.parametrize("change", ["weights", "identity", "count", "pending", "source", "partition", "partitions",
+                                   "scope", "tokens", "missing", "report_hash"])
+def test_stale_or_incomplete_quality_refuses_initial_admission(tmp_path, monkeypatch, change):
+    source, _, _, metadata, _, argv, _, _ = setup_fallback(tmp_path)
+    state_path = source / "evaluation" / "state.json"
+    state = json.loads(state_path.read_text())
+    if change == "weights":
+        from safetensors.torch import load_file, save_file
+        values = load_file(source / "layer_02.safetensors")
+        values["W_dec"][0, 0] += 1
+        save_file(values, source / "layer_02.safetensors")
+    elif change == "report_hash":
+        metadata["quality"]["dictionary_hash"] = "0" * 64
+        checkpoint_state.write_json(source / "dictionary.json", metadata)
+    elif change == "missing":
+        state_path.unlink()
+    else:
+        if change in ("identity", "count", "pending"):
+            key, value = {"identity": ("identity", "0" * 64), "count": ("count", 199_999),
+                          "pending": ("pending_ids", [1, 2])}[change]
+            state[key] = value
+        elif change in ("scope", "tokens"):
+            state["settings"][change] = "upper_half" if change == "scope" else 100
+        else:
+            key, value = {"source": ("source_id", "different"), "partition": ("partition", "train"),
+                          "partitions": ("partitions", {})}[change]
+            state["stream"][key] = value
+        checkpoint_state.write_json(state_path, state)
+    monkeypatch.setattr(training, "fineweb_documents", lambda **_: documents())
+    monkeypatch.setattr(training, "load_text_model", lambda **_: pytest.fail("model allocation ran"))
+    with pytest.raises(ValueError, match="evaluation"):
+        training.main(argv)
+
+
+def test_matching_optional_report_hash_preserves_legacy_admission(tmp_path):
+    source, _, _, metadata, source_id, _, args, before = setup_fallback(tmp_path)
+    metadata["quality"]["dictionary_hash"] = before["training"]["fallback"]["source_dictionary_hash"]
+    checkpoint_state.write_json(source / "dictionary.json", metadata)
+    assert training.prepare_upper_half(args, source_id=source_id) == before
+
+
+@pytest.mark.parametrize("value", [-1, float("nan"), float("inf")])
+def test_invalid_elapsed_time_refuses_before_model_load(tmp_path, monkeypatch, value):
+    _, _, folder, argv = fallback_checkpoint(tmp_path)
+    state_path = folder / "state.json"
+    record = json.loads(state_path.read_text())
+    record["progress"]["elapsed_seconds"] = value
+    state_path.write_text(json.dumps(record))
+    monkeypatch.setattr(training, "load_text_model", lambda **_: pytest.fail("model allocation ran"))
+    with pytest.raises(ValueError, match="elapsed"):
         training.main([*argv, "--resume"])

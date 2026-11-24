@@ -214,6 +214,9 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
     progress = initial_progress() if progress is None else progress
     start = clock() if started is None else started
     elapsed_before = progress["elapsed_seconds"]
+    if fallback and (type(elapsed_before) not in (int, float)
+                     or not math.isfinite(elapsed_before) or elapsed_before < 0):
+        raise ValueError("invalid fallback elapsed time")
     elapsed = lambda: elapsed_before + clock() - start
     invocation_limit = min(max_wall_seconds - prior_wall - elapsed_before, run_seconds or max_wall_seconds)
     # A bounded reserve covers a final checkpoint and dictionary export.
@@ -367,11 +370,34 @@ _TEXT_FIELDS = ("dataset_id", "dataset_config", "dataset_revision", "split", "pa
 
 def _fallback_reserve(args, progress, started):
     elapsed = progress.get("elapsed_seconds", 0)
-    reserve = max(60, 2 * progress.get("checkpoint_seconds", 0))
+    checkpoint_seconds = progress.get("checkpoint_seconds", 0)
+    if any(type(value) not in (int, float) or not math.isfinite(value) or value < 0
+           for value in (elapsed, checkpoint_seconds)):
+        raise ValueError("invalid fallback elapsed time or checkpoint reserve")
+    reserve = max(60, 2 * checkpoint_seconds)
     remaining = min(args.max_wall_seconds - args.prior_wall_seconds - elapsed,
                     args.run_seconds or args.max_wall_seconds) - (time.monotonic() - started)
     if remaining <= reserve:
         raise ValueError("aggregate wall time has no model-load and checkpoint reserve")
+
+
+def _source_quality_state(folder, metadata, identity):
+    """Bind failed quality to the exact dictionary in the completed evaluation."""
+    try:
+        state = json.loads((folder / "evaluation" / "state.json").read_text())
+    except (OSError, ValueError) as error:
+        raise ValueError("fallback requires completed source evaluation state") from error
+    stream, settings = state.get("stream", {}), state.get("settings", {})
+    if (state.get("version") != 1 or state.get("count") != 200_000
+            or "pending_ids" not in state or state["pending_ids"] is not None
+            or state.get("identity") != identity or settings.get("tokens") != 200_000
+            or settings.get("scope", "all_layers") != "all_layers"
+            or settings.get("active_layers", list(range(metadata["layers"]))) != list(range(metadata["layers"]))
+            or stream.get("partition") != "quality"
+            or stream.get("source_id") != metadata["training"]["source_id"]
+            or stream.get("partitions") != metadata["training"]["partitions"]
+            or metadata["quality"].get("dictionary_hash", identity) != identity):
+        raise ValueError("source held-out evaluation identity or completed cursor differs")
 
 
 def prepare_upper_half(args, *, source_id, record=None):
@@ -432,12 +458,14 @@ def prepare_upper_half(args, *, source_id, record=None):
     for i in range(source["layers"]):
         with safe_open(source_folder / f"layer_{i:02d}.safetensors", framework="pt", device="cpu") as tensors:
             _layer_header(tensors, i, shapes, torch.float32)
+    source_hash = dictionary_fingerprint(source_folder, source)
+    _source_quality_state(source_folder, source, source_hash)
     metadata = copy.deepcopy(source)
     metadata["training"] = {**expected_text, "tokens": 0, "elapsed_seconds": 0,
                             "peak_memory_bytes": 0, "seed": args.seed, "fallback": {
         "version": 1, "mode": "upper_half", "active_layers": list(range(source["layers"] // 2, source["layers"])),
         "zero_layers": list(range(source["layers"] // 2)),
-        "source_dictionary_hash": dictionary_fingerprint(source_folder, source),
+        "source_dictionary_hash": source_hash,
         "source_checkpoint_generation": generation.name, "source_training_tokens": budget,
         "source_elapsed_seconds": source_elapsed, "prior_wall_seconds": args.prior_wall_seconds,
         "aggregate_wall_limit_seconds": args.max_wall_seconds, "token_budget": args.tokens,

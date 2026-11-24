@@ -274,12 +274,12 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
     save_evaluation(state_folder, stats, stream, pending, identity, settings, elapsed_before + time.monotonic() - started)
     if stats.count >= 2 and stats.ce_tokens:
         quality = stats.metrics()
-        quality.update(elapsed_seconds=elapsed_before + time.monotonic() - started, stop_reason=reason)
-        quality["partition"] = "quality"
+        quality.update(elapsed_seconds=elapsed_before + time.monotonic() - started, stop_reason=reason,
+                       dictionary_hash=identity)
         if stats.scope == "upper_half":
-            quality["replaced_mlps"] = len(stats.active_layers)
+            quality.update(replaced_mlps=len(stats.active_layers), partition="quality")
         else:
-            quality["all_mlps_replaced"] = len(dictionary.layers)
+            quality.update(all_mlps_replaced=len(dictionary.layers), partition="quality")
         if memory:
             quality["peak_memory_bytes"] = memory.peak
         metadata["quality"] = quality
@@ -291,7 +291,7 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
                    "fvu": None, "dead_fraction": None, "cross_entropy_delta": None,
                    "per_layer_fvu": [None] * len(dictionary.layers),
                    "per_layer_dead_fraction": [None] * len(dictionary.layers),
-                   "partition": "quality", "replaced_mlps": len(stats.active_layers),
+                   "partition": "quality", "replaced_mlps": len(stats.active_layers), "dictionary_hash": identity,
                    "elapsed_seconds": elapsed_before + time.monotonic() - started, **stats.scope_fields()}
         metadata["quality"] = quality
         write_json(folder / "dictionary.json", metadata)

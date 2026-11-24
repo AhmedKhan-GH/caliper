@@ -15,6 +15,12 @@ A partial evaluation or a diagnostic from a training batch cannot establish elig
 The source and fallback must use the same model identity, dimensions, activation, `k`, and text source.
 The source files remain unchanged.
 
+The completed `evaluation/state.json` must identify the current source dictionary bytes and metadata.
+It must record 200,000 tokens, no pending batch, and the same text source and quality partition.
+New quality reports also include `dictionary_hash`, which must agree with that identity.
+An older report without this field can qualify through its completed evaluation state.
+A source weight change invalidates that evidence and causes refusal before model allocation.
+
 The trainer requires `--upper-half-from PATH` and `--prior-wall-seconds NUMBER` together.
 The `--output` folder must be separate from the source folder.
 A new fallback requires an empty output folder.
@@ -112,7 +118,7 @@ A complete evaluation reports `fallback_passed` or `fallback_failed`.
 A shorter or interrupted evaluation reports `fallback_partial`, including an interruption before the first batch.
 A fallback never receives the original `passed` status.
 Evaluation resume binds the dictionary fingerprint, active layer indices, scope, and evaluation dimensions.
-The original evaluator and checkpoint settings remain unchanged for dictionaries without fallback metadata.
+All-layer thresholds, statuses, and checkpoint settings remain unchanged for dictionaries without fallback metadata.
 
 The CPU tests use tiny synthetic tensors and artificial status records.
 Those checks establish implementation behavior and provide no quality evidence for a trained dictionary.

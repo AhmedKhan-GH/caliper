@@ -138,6 +138,7 @@ def test_upper_evaluation_resume_preserves_metrics_and_scope(tmp_path, monkeypat
                 "scope", "active_layers", "status", "per_layer_fvu", "per_layer_dead_fraction"):
         assert resumed[key] == expected[key]
     assert resumed["replaced_mlps"] == 2 and "all_mlps_replaced" not in resumed
+    assert resumed["dictionary_hash"] == checkpoint_state.dictionary_fingerprint(folder, dictionary.metadata)
     assert json.loads((folder / "dictionary.json").read_text())["quality"] == resumed
 
 
@@ -177,4 +178,18 @@ def test_interruption_before_first_batch_is_fallback_partial(tmp_path):
     assert result["scope"] == "upper_half" and result["active_layers"] == [2, 3]
     assert result["fvu"] is result["dead_fraction"] is result["cross_entropy_delta"] is None
     assert result["per_layer_fvu"] == [None] * 4
+    assert result["dictionary_hash"] == checkpoint_state.dictionary_fingerprint(folder, dictionary.metadata)
     assert load_dictionary(folder, model=model).metadata["quality"] == result
+
+
+def test_all_layer_report_exports_hash_without_scope_changes(tmp_path):
+    model, _ = write_fixture(tmp_path, tiny_model())
+    dictionary = load_dictionary(tmp_path, model=model)
+    result = evaluation.evaluate(model, dictionary, quality_stream(), tmp_path,
+                                 tokens=8, context=4, batch_tokens=8, chunk_tokens=2)
+    assert result["dictionary_hash"] == checkpoint_state.dictionary_fingerprint(tmp_path, dictionary.metadata)
+    assert result["status"] == "partial" and result["all_mlps_replaced"] == 4
+    assert "scope" not in result and "replaced_mlps" not in result
+    state = json.loads((tmp_path / "evaluation" / "state.json").read_text())
+    assert state["identity"] == result["dictionary_hash"]
+    assert set(state["settings"]) == {"tokens", "context", "batch_tokens", "chunk_tokens"}
