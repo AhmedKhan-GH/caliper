@@ -384,6 +384,12 @@ def test_real_hosted_fork_carries_active_feature_and_text(resource_folder, tmp_p
             "clean_prompt": "AB", "corrupted_prompt": "AC", "metric": {"positive_token": 65, "negative_token": 66}}})
         assert swept.status == "ok", swept.error
         assert swept.result["layers"] == 4 and swept.result["positions"] == 3
+        ablation = {"kind": "ablate", "point": "layers.3.mlp_out"}
+        assert parent.control("intervene", intervene={"set": ablation}).status == "ok"
+        assert parent.control("intervene", intervene={"set": {"kind": "add", "point": "layers.3.mlp_out",
+                              "vector": ReferenceLM().lm_head.weight[65].detach().tolist(), "coefficient": 2.}}).status == "ok"
+        assert parent.control("intervene", intervene={"set": dict(ablation, until_step=100)}).status == "ok"
+        assert parent.control("run", name="generate").status == "ok"
         checkpoint, saved = parent.checkpoint()
         assert saved["interventions"]["interventions"][0]["state"] == "active"
         child = HostedChild(tmp_path, resource_folder, "fork", resume=checkpoint)
@@ -399,6 +405,8 @@ def test_real_hosted_fork_carries_active_feature_and_text(resource_folder, tmp_p
         assert set(generated["params"]) >= {"output.baseline", "output.steered"}
         for name in ("output.baseline", "output.steered"):
             assert 0 < len(generated["params"][name].encode("utf-8")) <= 1024
+            assert generated["params"][name] == saved["params"][name]
+        assert generated["params"]["output.baseline"] != generated["params"]["output.steered"]
         assert generated["step"] == forked["step"] + 2
         assert child.control("run", name="caliper.stop").status == "ok"
         assert child.process.wait(10) == 0
