@@ -1,4 +1,4 @@
-"""Forward settings for trusted checkpoint compatibility, without trace imports."""
+"""Effective settings for checkpoint compatibility and clean patch sources."""
 from __future__ import annotations
 
 import json
@@ -29,8 +29,9 @@ _CONFIG_FIELDS = (
     "attention_dropout", "attention_bias", "linear_num_value_heads", "linear_num_key_heads",
     "linear_key_head_dim", "linear_value_head_dim", "linear_conv_kernel_dim",
     "sliding_window", "query_pre_attn_scalar", "attn_logit_softcapping", "final_logit_softcapping",
-    "tie_word_embeddings",
+    "tie_word_embeddings", "use_bidirectional_attention",
 )
+_SOURCE_MODULE_FIELDS = ("batch_first", "norm_first", "activation_relu_or_gelu", "dropout", "p")
 
 
 def _type_name(value):
@@ -39,8 +40,6 @@ def _type_name(value):
 
 def _activation_callable(function, owner=None):
     """Bind supported callables and options without process-specific addresses."""
-    from transformers.activations import GELUActivation, GELUTanh, MishActivation
-
     functions = (
         (torch.nn.functional.gelu, {"approximate": ("none", "tanh")}),
         (torch.nn.functional.relu, {"inplace": (False, True)}),
@@ -60,6 +59,8 @@ def _activation_callable(function, owner=None):
                 for key, value in function.keywords.items())):
             raise ValueError("unsupported effective activation callable options")
         return {"function": name, "keywords": dict(function.keywords)}
+    from transformers.activations import GELUActivation, GELUTanh, MishActivation
+
     for cls, name in ((GELUTanh, "_gelu_tanh_python"), (GELUActivation, "_gelu_python"),
                       (MishActivation, "_mish_python")):
         if (type(owner) is cls and getattr(function, "__self__", None) is owner
@@ -101,6 +102,19 @@ def forward_settings(model, *, tensor_hash):
     Qwen permits eager and SDPA attention. Gemma requires eager attention for
     its softcap. Cache outputs and placement are absent from this signature.
     """
+    return _settings(model, tensor_hash=tensor_hash, source=False)
+
+
+def source_settings(model, *, tensor_hash):
+    """Bind generic source settings without checkpoint backend admission.
+
+    Known decoder families retain their backend restrictions. Callable activation
+    fields accept only the bounded functions and modules above.
+    """
+    return _settings(model, tensor_hash=tensor_hash, source=True)
+
+
+def _settings(model, *, tensor_hash, source):
     settings = {}
 
     def record(name, value):
@@ -113,15 +127,28 @@ def forward_settings(model, *, tensor_hash):
         record(prefix + "type", _type_name(module))
         for field in _MODULE_FIELDS:
             if hasattr(module, field):
-                record(prefix + field, getattr(module, field))
+                value = getattr(module, field)
+                if source and field == "activation" and callable(value):
+                    _activation_settings(value, prefix + field, record)
+                else:
+                    record(prefix + field, value)
+        if source:
+            for field in _SOURCE_MODULE_FIELDS:
+                value = getattr(module, field, None)
+                # Dropout modules appear separately in named_modules.
+                if hasattr(module, field) and not isinstance(value, torch.nn.Module):
+                    record(prefix + field, value)
         if hasattr(module, "act_fn"):
             _activation_settings(module.act_fn, prefix + "act_fn", record)
         config = getattr(module, "config", None)
         backend = getattr(config, "_attn_implementation", None)
-        if getattr(config, "model_type", None) == "gemma2" and backend != "eager":
+        family = getattr(config, "model_type", None)
+        if family == "gemma2" and backend != "eager":
             raise ValueError("Gemma checkpoint identity requires eager attention for its softcap")
-        if backend not in (None, "eager", "sdpa"):
+        if (not source or family in ("gemma2", "qwen3_5_text")) and backend not in (None, "eager", "sdpa"):
             raise ValueError("checkpoint identity supports eager or sdpa attention")
+        if source and hasattr(config, "_attn_implementation"):
+            record(prefix + "config._attn_implementation", backend)
         for field in _CONFIG_FIELDS:
             if hasattr(config, field):
                 record(prefix + "config." + field, getattr(config, field))

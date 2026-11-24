@@ -637,22 +637,17 @@ class InterventionService:
 
     def _identity(self):
         """Check exact state at each lookup, including writes between point hooks."""
-        from ._forward_identity import forward_settings
+        from ._forward_identity import source_settings
         # Include nonpersistent buffers and alias writes. Inference tensors have
         # no version counter, but their materialized bytes obey the same contract.
         state = {"parameter:" + name: value for name, value in self.model.named_parameters()}
         state.update({"buffer:" + name: value for name, value in self.model.named_buffers()})
         content = _content_identity(state, self.resource_guard)
-        settings = forward_settings(self.model, tensor_hash=lambda values: _content_identity(values, self.resource_guard))
+        settings = source_settings(self.model, tensor_hash=lambda values: _content_identity(values, self.resource_guard))
         return (id(self.model), id(self.tokenizer),
                 tuple((id(m), m.training) for m in self.model.modules()),
                 tuple((name, id(value), value.device) for name, value in state.items()), content,
                 tuple(sorted(settings.items())),
-                # Checkpoint identity permits both Qwen backends. A clean source
-                # must still belong to the backend that produced its values.
-                tuple((name, module.config._attn_implementation)
-                      for name, module in self.model.named_modules()
-                      if hasattr(getattr(module, "config", None), "_attn_implementation")),
                 tuple((name, id(module.act_fn)) for name, module in self.model.named_modules()
                       if hasattr(module, "act_fn")))
 
@@ -702,6 +697,37 @@ class InterventionService:
             del self._cache[key]
         self._trim_source_inputs()
 
+    @contextmanager
+    def _capture_sources(self, points):
+        """Capture generic tensor outputs without decoder or trace admission."""
+        try:
+            values = capture(self.model, points)
+        except NotImplementedError:
+            values, handles = {}, []
+            try:
+                for point in points:
+                    module, event, _, probe = self._target(point)
+                    if event != "output" or probe is not None:
+                        raise InterventionError("generic patch sources require module outputs")
+
+                    def save(module, args, output, point=point):
+                        if not isinstance(output, torch.Tensor):
+                            raise InterventionError("patch source point must produce a tensor")
+                        values[point] = output.detach()
+
+                    handles.append(module.register_forward_hook(save))
+                yield values
+            finally:
+                for handle in reversed(handles):
+                    handle.remove()
+                values.clear()
+        else:
+            try:
+                with values:
+                    yield values
+            finally:
+                values.close(clear=True)
+
     def _source(self, spec):
         identity = self._identity()
         if self._cache_identity is None or identity != self._cache_identity[0]:
@@ -731,7 +757,7 @@ class InterventionService:
             try:
                 with (internal_forward(), self.suspend(), torch.no_grad(), autorelease_scope(device),
                       _preserve_captures(self.model)):
-                    with capture(self.model, sorted(item[1] for item in missing)) as values:
+                    with self._capture_sources(sorted(item[1] for item in missing)) as values:
                         if self.resource_guard is not None:
                             self.resource_guard.check("patch source forward start")
                         try:
@@ -739,6 +765,8 @@ class InterventionService:
                         finally:
                             if self.resource_guard is not None:
                                 self.resource_guard.check("patch source forward complete")
+                        if any(item[1] not in values for item in missing):
+                            raise InterventionError("patch source point did not run")
                         sources = {item: values[item[1]] for item in sorted(missing)}
                         if any(value.ndim != 3 or not torch.isfinite(value).all().item()
                                for value in sources.values()):
@@ -746,7 +774,6 @@ class InterventionService:
                         self._source_space(sources)
                         # Admission precedes clones, and a failed capture retains no partial entries.
                         sources = {item: value.detach().clone() for item, value in sources.items()}
-                    values.close(clear=True)
             finally:
                 self.preparing_source = False
             self._cache.update(sources)
