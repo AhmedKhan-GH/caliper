@@ -94,6 +94,12 @@ def checkpoint_record(root):
     record = json.loads((folder / "state.json").read_text())
     if record.get("version") != 1:
         raise ValueError("unsupported checkpoint version")
+    runtime = root.parent / "runtime.json"
+    if runtime.exists():
+        saved = json.loads(runtime.read_text())
+        if saved["generation"] == folder.name:
+            record["progress"]["elapsed_seconds"] = max(record["progress"]["elapsed_seconds"], saved["elapsed_seconds"])
+            record["progress"]["checkpoint_seconds"] = saved.get("checkpoint_seconds", 0)
     return folder, record
 
 
@@ -137,11 +143,6 @@ def restore_checkpoint(root, trainer, stream):
         np.random.set_state((algorithm, source.get_tensor("numpy").numpy(), position, has_gauss, cached))
         if trainer.device.type == "mps":
             torch.mps.set_rng_state(source.get_tensor("torch_mps"))
-    runtime = Path(root).parent / "runtime.json"
-    if runtime.exists():
-        saved = json.loads(runtime.read_text())
-        if saved["generation"] == folder.name:
-            record["progress"]["elapsed_seconds"] = max(record["progress"]["elapsed_seconds"], saved["elapsed_seconds"])
     return record["progress"]
 
 
