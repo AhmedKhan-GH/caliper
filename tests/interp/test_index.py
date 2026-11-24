@@ -270,7 +270,9 @@ def test_sparse_promoted_chunks_keep_exact_scores_and_ties(monkeypatch, chunk_si
     scores[8] = torch.nextafter(scores[8], torch.tensor(3., dtype=torch.float64))
     output = SimpleNamespace(weight=scores[:, None])
     dictionary = SimpleNamespace(layers=[SimpleNamespace(W_dec=torch.ones(1, 1, dtype=torch.float64))])
-    tokenizer = SimpleNamespace(convert_ids_to_tokens=lambda i: {3: "three", 6: "six"}.get(i))
+    vocabulary = {3: "three", 6: "six"}
+    tokenizer = SimpleNamespace(convert_ids_to_tokens=vocabulary.get,
+                                decode=lambda ids: "".join(vocabulary[i] for i in ids))
     index = SimpleNamespace(model=SimpleNamespace(get_output_embeddings=lambda: output),
                             dictionary=dictionary, _token=lambda i: token_label(tokenizer, i))
     original = _index._stable_topk

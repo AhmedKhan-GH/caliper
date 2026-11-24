@@ -77,7 +77,7 @@ class Graph:
         device = self.tensors["trace.counts"].device
         labels = [token["text"] for token in self.tokens]
         labels.extend([""] * (TOKEN_CAP - len(labels)))
-        labels.extend(node.get("label") or node["id"] for node in self.nodes)
+        labels.extend(node["id"] if node.get("label") is None else node["label"] for node in self.nodes)
         # The bars retain all traced logits even when display pruning removes nodes.
         logits = self.logits if self.logits is not None else [n for n in self.nodes if n["kind"] == "logit"]
         logits = logits[:10]
