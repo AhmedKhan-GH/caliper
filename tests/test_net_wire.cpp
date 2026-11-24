@@ -73,6 +73,20 @@ std::vector<uint8_t> frame_of(uint16_t type, const std::string& meta_json, const
     return out;
 }
 
+// Preserve raw number tokens instead of canonicalizing them through Json::dump().
+std::vector<uint8_t> raw_frame_of(uint16_t type, const std::string& meta_json) {
+    Json placeholder = Json::object();
+    placeholder.set("", "");
+    const auto base_size = placeholder.dump().size();
+    REQUIRE(meta_json.size() >= base_size);
+    placeholder.set("", std::string(meta_json.size() - base_size, 'x'));
+    std::vector<uint8_t> out;
+    REQUIRE(encode_frame(type, placeholder, {}, &out));
+    REQUIRE(out.size() == CALIPER_NET_HEADER_BYTES + meta_json.size());
+    std::copy(meta_json.begin(), meta_json.end(), out.begin() + CALIPER_NET_HEADER_BYTES);
+    return out;
+}
+
 }  // namespace
 
 TEST_CASE("net/json: strict reader, canonical writer") {
@@ -954,22 +968,84 @@ TEST_CASE("net/wire: outbound interpretation fields require their operation and 
     }
 }
 
-TEST_CASE("net/wire: native oversized integer tokens become finite doubles") {
-    const std::string placeholder = "\"xxxxxxxxxxxxxxxxxxx\"";
-    const std::string token = "100000000000000000000";
-    auto bytes = frame_of(CALIPER_NET_MSG_CONTROL_REPLY,
-        "{\"request_id\":1,\"op\":\"interpret\",\"status\":\"ok\",\"result\":{\"value\":" + placeholder + "}}");
-    auto at = std::search(bytes.begin(), bytes.end(), placeholder.begin(), placeholder.end());
-    REQUIRE(at != bytes.end());
-    REQUIRE(token.size() == placeholder.size());
-    std::copy(token.begin(), token.end(), at);
+TEST_CASE("net/json: integer token metadata preserves legacy double semantics") {
+    for (const char* token : {"100000000000000000000", "-100000000000000000000",
+                             "18446744073709551616", "-9223372036854775809"}) {
+        CAPTURE(token);
+        Json value;
+        std::string error;
+        REQUIRE(Json::parse(token, std::strlen(token), &value, &error));
+        CHECK(value.type() == Json::Type::Double);
+        CHECK_FALSE(value.is_int());
+        CHECK(value.is_integer_token());
+        CHECK(value == Json(value.as_double()));
+        CHECK(value.dump() == format_double(value.as_double()));
+        Json list = Json::array();
+        list.push(value);
+        Json object = Json::object();
+        object.set("values", std::move(list));
+        CHECK(object.find("values")->at(0).is_integer_token());
+        const auto canonical = value.dump();
+        REQUIRE(Json::parse(canonical.data(), canonical.size(), &value, &error));
+        CHECK_FALSE(value.is_integer_token());
+    }
+    Json value;
+    std::string error;
+    const std::string repeated = R"({"value":100000000000000000000,"value":1e20})";
+    REQUIRE(Json::parse(repeated.data(), repeated.size(), &value, &error));
+    CHECK_FALSE(value.find("value")->is_integer_token());
+    CHECK(value.dump() == R"({"value":1e+20})");
+}
+
+TEST_CASE("net/wire: interpretation preserves integer and floating-point token limits") {
+    const struct { const char* token; bool valid; } cases[] = {
+        {"9007199254740991", true}, {"-9007199254740991", true},
+        {"9007199254740992", false}, {"-9007199254740992", false},
+        {"9223372036854775807", false}, {"-9223372036854775808", false},
+        {"18446744073709551615", false}, {"18446744073709551616", false},
+        {"-9223372036854775809", false},
+        {"100000000000000000000", false}, {"-100000000000000000000", false},
+        {"1e20", true}, {"-1E+20", true},
+        {"100000000000000000000.0", true}, {"-100000000000000000000.0", true},
+        {"9007199254740992.0", true}, {"1.7976931348623157e308", true},
+        {"1e309", false}, {"-1e309", false},
+    };
+    for (const auto& item : cases) {
+        CAPTURE(item.token);
+        // Check direct values and traversal through arrays and objects.
+        for (const bool nested : {false, true}) {
+            CAPTURE(nested);
+            const std::string value = nested ? "[{\"number\":" + std::string(item.token) + "}]" : item.token;
+            const std::string result = "{\"value\":" + value + "}";
+            const auto bytes = raw_frame_of(CALIPER_NET_MSG_CONTROL_REPLY,
+                "{\"request_id\":1,\"op\":\"interpret\",\"status\":\"ok\",\"result\":" + result + "}");
+            Message decoded;
+            CHECK(decode_bytes(bytes, &decoded).status ==
+                  (item.valid ? DecodeResult::Status::Ok : DecodeResult::Status::BadMessage));
+            ControlReply reply;
+            reply.request_id = 1; reply.op = "interpret"; reply.status = "ok";
+            std::string error;
+            REQUIRE(Json::parse(result.data(), result.size(), &reply.result, &error));
+            std::vector<uint8_t> encoded;
+            CHECK(encode(reply, &encoded, &error) == item.valid);
+        }
+    }
+}
+
+TEST_CASE("net/wire: legacy number fields still accept oversized integer tokens") {
+    const auto bytes = raw_frame_of(CALIPER_NET_MSG_CONTROL_REPLY,
+        R"({"request_id":1,"op":"set","status":"ok","value":100000000000000000000})");
     Message decoded;
     REQUIRE(decode_bytes(bytes, &decoded).ok());
-    const auto* value = std::get<ControlReply>(decoded).result.find("value");
-    REQUIRE(value);
-    CHECK_FALSE(value->is_int());
-    CHECK(value->as_double() == 1e20);
-    CHECK(value->dump() == "1e+20");
+    const auto& value = std::get<ControlReply>(decoded).value;
+    CHECK(value.type() == Json::Type::Double);
+    CHECK(value.as_double() == 1e20);
+    CHECK(value.dump() == "1e+20");
+    std::vector<uint8_t> encoded;
+    REQUIRE(encode(decoded, &encoded));
+    Message round_trip;
+    REQUIRE(decode_bytes(encoded, &round_trip).ok());
+    CHECK(std::get<ControlReply>(round_trip).value == value);
 }
 
 TEST_CASE("net/wire: free-text parameters preserve exact byte limits") {

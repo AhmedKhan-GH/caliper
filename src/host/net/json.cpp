@@ -65,9 +65,11 @@ void shortest_digits(double v, std::string* digits, int* exp10) {
     while (digits->size() > 1 && digits->back() == '0') digits->pop_back();
 }
 
+}  // namespace
+
 // ---- the reader ---------------------------------------------------------------------
 
-struct Parser {
+struct JsonParser {
     const char* p;
     const char* end;
     unsigned max_depth;
@@ -237,6 +239,7 @@ struct Parser {
             }
         }
         *out = Json(strtod_c(text.c_str(), nullptr));
+        out->integer_token_ = is_int;
         return true;
     }
 
@@ -310,8 +313,6 @@ struct Parser {
         }
     }
 };
-
-}  // namespace
 
 // ---- Json -------------------------------------------------------------------------------
 
@@ -543,7 +544,7 @@ bool Json::parse(const char* p, size_t n, Json* out, std::string* err, unsigned 
         if (err) *err = "a byte order mark";
         return false;
     }
-    Parser ps{p, p + n, max_depth, {}};
+    JsonParser ps{p, p + n, max_depth, {}};
     Json v;
     if (!ps.value(&v, 0)) {
         if (err) *err = ps.err;

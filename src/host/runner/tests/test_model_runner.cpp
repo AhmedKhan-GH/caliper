@@ -124,9 +124,12 @@ TEST_CASE("runner: native interpretation validation and protocol errors need no 
         send(error);
     }
     SUBCASE("malformed CONTROL_REPLY") {
-        wire::ControlReply reply;
-        reply.request_id = id; reply.op = CALIPER_NET_OP_INTERPRET; reply.status = "ok";
-        send(reply); // A successful interpretation reply requires a result object.
+        auto meta = caliper_net::Json::object();
+        meta.set("request_id", id); meta.set("op", "interpret"); meta.set("status", "ok");
+        // Send the missing result through the decoder without message validation at the encoder.
+        std::vector<std::uint8_t> bytes;
+        REQUIRE(wire::encode_frame(CALIPER_NET_MSG_CONTROL_REPLY, meta, {}, &bytes));
+        REQUIRE(server.send(peer, bytes.data(), bytes.size()));
     }
     SUBCASE("malformed CONTROL_REPLY without a usable request ID") {
         auto meta = caliper_net::Json::object();
