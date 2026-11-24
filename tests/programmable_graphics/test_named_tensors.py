@@ -52,7 +52,7 @@ def test_publication_preserves_name_storage_dtype_and_device(monkeypatch):
     assert set(_publish._TENSORS) == {"trace.node_f"}
     assert P._resolve("weight") is model.weight
     handle.remove()
-    assert P._resolve("trace.node_f") is None
+    assert _publish._resolve("trace.node_f") is None
     assert not _publish._TENSORS
 
 
@@ -82,7 +82,7 @@ def test_publication_before_watch_joins_its_lifecycle():
     handle = attach(torch.nn.Linear(2, 2))
     assert P._resolve("trace.counts") is not None
     handle.remove()
-    assert P._resolve("trace.counts") is None
+    assert _publish._resolve("trace.counts") is None
 
 
 @pytest.mark.parametrize("name", ["", "live:trace.x", "trace x", "trace\nx", 3, None])

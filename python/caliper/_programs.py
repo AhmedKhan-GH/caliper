@@ -491,6 +491,8 @@ def _resolve(name: str):
         return tensor
     model = _STATE["model"]
     if model is None:
+        if name in INTERPRETATION_TENSORS:
+            raise _Waiting(name)
         return None
     if name.endswith(".grad"):
         p = dict(model.named_parameters()).get(name[:-5])

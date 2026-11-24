@@ -67,13 +67,15 @@ def mock_producer(monkeypatch):
     return imports, compiled
 
 
-def test_piece_creation_waits_then_compiles_after_real_queries(registry, monkeypatch, tmp_path):
+@pytest.mark.parametrize("watched", [False, True])
+def test_piece_creation_waits_then_compiles_after_real_queries(registry, monkeypatch, tmp_path, watched):
     model, tokenizer = TinyLM(layers=1, width=8, heads=2, latents=8, k=2), TinyTokenizer()
     write_fixture(tmp_path, model)
     dictionary = exact_dictionary(model)
     build_index(tmp_path, [("fixture", [65, 66, 67, 68])], model=model, tokenizer=tokenizer,
                 dictionary=dictionary, provenance={"partition": "fixture"})
-    P.attach(model, None)
+    if watched:
+        P.attach(model, None)
     imports, compiled = mock_producer(monkeypatch)
     controls = _controls.Controls()
     with FeatureIndex(tmp_path, model=model, tokenizer=tokenizer, dictionary=dictionary) as index:
@@ -110,8 +112,9 @@ def test_unknown_input_refuses_even_after_known_pending_input(registry, name):
     assert P._resolve(name) is None
 
 
-def test_fixed_names_wait_only_with_a_watch_and_cpu_import_still_refuses(registry):
-    assert P._resolve("trace.probs") is None
+def test_fixed_names_wait_without_a_tensor_and_cpu_import_still_refuses(registry):
+    with pytest.raises(P._Waiting):
+        P._resolve("trace.probs")
     model = torch.nn.Linear(2, 2)
     P.attach(model, None)
     for name in _publish.INTERPRETATION_TENSORS:
@@ -126,7 +129,9 @@ def test_fixed_names_wait_only_with_a_watch_and_cpu_import_still_refuses(registr
     assert refused.value.error["code"] == "program.import_refused"
     assert P._STATE["rt"] is None
     P.detach(model)
-    assert P._resolve("trace.probs") is None
+    assert _publish._resolve("trace.probs") is None
+    with pytest.raises(P._Waiting):
+        P._resolve("trace.probs")
 
 
 def test_standalone_trace_and_cache_publish_all_piece_inputs_before_pruning(registry):
