@@ -4,6 +4,7 @@ from contextlib import contextmanager
 
 import torch
 
+from ._frozen import _trace_features
 from ._memory import MemoryGuard, autorelease_scope
 from ._output import forward_logits, prompt_inputs
 from ._points import _architecture, capture
@@ -77,6 +78,8 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
 
     Temporary output hooks leave the intervention lifecycle and caches intact.
     Ordered output resets, scale effects, and clamp effects define the live value.
+    An independent secondary measurement retains the original demo selection.
+    It never contributes to the ten-feature score.
     """
     rows = selected_rows(model)
     if rows is not None and 0 not in rows:
@@ -92,6 +95,11 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
     position, token_id = top["position"], top["token_id"]
     features = sorted((n for n in graph.nodes if n["kind"] == "feature" and n["activation"] != 0),
                       key=lambda n: (-n["influence"], n["layer"], n["position"], n["feature"]))[:10]
+    layers = getattr(graph, "layers", model.config.num_hidden_layers)
+    secondary = max(((n, index) for index, n in enumerate(graph.nodes)
+                     if n["kind"] == "feature" and n["layer"] < layers - 1),
+                    key=lambda item: (item[0]["influence"], -item[0].get("index", item[1])), default=None)
+    secondary = secondary[0] if secondary is not None else None
     architecture = _architecture(model)
     probes = {p.layer: p for p in architecture.values() if p.point.endswith(".mlp_out")}
     specifications = interventions.specifications()
@@ -123,8 +131,7 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
                 autorelease_scope(next(model.parameters()).device):
             with captured:
                 baseline = centered(forward_logits(model, inputs, last_token=position == inputs["input_ids"].shape[1] - 1, guard=guard))
-            measurements = []
-            for node in features:
+            def measure(node):
                 with autorelease_scope(next(model.parameters()).device):
                     layer, feature, selected = node["layer"], node["feature"], node["position"]
                     probe = probes[layer]
@@ -132,9 +139,9 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
                                and selected in s.get("positions", range(inputs["input_ids"].shape[1]))]
                     weights = dictionary.layers[layer]
 
-                    x = captured[read_points[layer]][0, selected].to(device=weights.W_enc.device, dtype=weights.W_enc.dtype)
+                    x = captured[read_points[layer]][0, selected].to(device=weights.W_enc.device)
                     with torch.no_grad():
-                        activation = float(dictionary.encode(layer, x)[feature])
+                        activation = float(_trace_features(weights, x, guard)[feature])
                     coefficient, constant = 1., 0.
                     for spec in related:
                         if spec["op"] in ("patch", "ablate"):
@@ -146,7 +153,7 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
                             elif spec["op"] == "scale":
                                 coefficient += spec["multiplier"] - 1
                     effective = coefficient * activation + constant
-                    precision = max(torch.finfo(weights.W_enc.dtype).eps, torch.finfo(next(model.parameters()).dtype).eps)
+                    precision = torch.finfo(x.dtype).eps
                     if not math.isclose(float(node["activation"]), effective, rel_tol=64 * precision, abs_tol=64 * precision):
                         raise ValueError("validation feature differs from its current output contribution; retrace first")
                     hook = None
@@ -162,9 +169,10 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
                     predicted = -float(node["effect"])
                     if not math.isfinite(predicted) or not math.isfinite(measured):
                         raise ValueError("validation produced a nonfinite measurement")
-                    measurements.append({"layer": layer, "position": selected, "feature": feature,
-                                         "predicted": predicted, "measured": measured,
-                                         "sign_match": (predicted > 0) - (predicted < 0) == (measured > 0) - (measured < 0)})
+                    return {"layer": layer, "position": selected, "feature": feature,
+                            "predicted": predicted, "measured": measured,
+                            "sign_match": (predicted > 0) - (predicted < 0) == (measured > 0) - (measured < 0)}
+            measurements = [measure(node) for node in features]
             correlation = spearman([r["predicted"] for r in measurements], [r["measured"] for r in measurements])
             signs = sum(row["sign_match"] for row in measurements)
             reasons = []
@@ -176,9 +184,16 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
                 reasons.append("spearman_below_0.6")
             if signs < 8:
                 reasons.append("fewer_than_eight_correct_signs")
+            secondary_measurement = None
+            if secondary is not None:
+                secondary_measurement = next((row for row in measurements
+                    if all(row[key] == secondary[key] for key in ("layer", "position", "feature"))), None)
+                if secondary_measurement is None:
+                    secondary_measurement = measure(secondary)
             return {"trace_id": graph.trace_id, "token": token_id, "position": position,
                     "baseline_centered_logit": baseline, "count": len(measurements), "required": 10,
                     "spearman": correlation, "sign_agreement": signs / len(measurements) if measurements else None,
-                    "correct_signs": signs, "passed": not reasons, "reasons": reasons, "measurements": measurements}
+                    "correct_signs": signs, "passed": not reasons, "reasons": reasons, "measurements": measurements,
+                    "secondary_measurement": secondary_measurement}
     finally:
         captured.close(clear=True)

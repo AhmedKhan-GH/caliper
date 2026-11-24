@@ -124,7 +124,10 @@ def test_affine_effects_preserve_precision_forward_and_every_target(model_dtype,
                 assert diagnostic["biases"]["intervention"] == pytest.approx(-.4, abs=tolerance, rel=0)
         if case == "empty_output":
             assert all(row["biases"]["intervention"] == 0 for row in diagnostics)
-        elif case != "scale":
+        elif case == "scale":
+            assert all(torch.count_nonzero(offset) == 0 for offset in path.output_offsets)
+            assert all(row["biases"]["intervention"] == 0 for row in diagnostics)
+        else:
             assert any(abs(row["biases"]["intervention"]) > 1e-9 for row in diagnostics)
         graph = Tracer(model, tokenizer, dictionary, controls=owner).trace("AB", max_targets=64)
         assert graph.completeness["target_count"] == len(targets)

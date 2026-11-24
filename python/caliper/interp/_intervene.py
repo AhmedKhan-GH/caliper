@@ -15,6 +15,7 @@ import weakref
 import torch
 
 from .. import _intervention_protocol as metadata
+from ._frozen import _trace_features
 from ._points import _architecture, _input, capture
 
 MAX_POSITIONS = 32
@@ -517,18 +518,17 @@ class InterventionService:
         return spec
 
     def _source_inputs(self, spec):
+        from ._output import prompt_inputs
         try:
-            inputs = self.tokenizer(spec["source_prompt"], return_tensors="pt")
-            ids = inputs.get("input_ids")
+            inputs = prompt_inputs(self.model, self.tokenizer, spec["source_prompt"])
+        except ValueError as error:
+            raise InterventionError("invalid patch source: " + str(error)) from error
         except Exception as error:
             raise InterventionError("source prompt tokenization failed") from error
-        if not isinstance(ids, torch.Tensor) or ids.ndim != 2 or ids.shape[0] != 1 or not 0 < ids.shape[1] <= MAX_POSITIONS:
-            raise InterventionError("patch source must contain 1 to 32 tokens in one row")
+        ids = inputs["input_ids"]
         positions = [spec["source_position"]] if "source_position" in spec else spec.get("positions", [])
         if positions and max(positions) >= ids.shape[1]:
             raise InterventionError("source position is outside the clean prompt")
-        if not all(isinstance(value, torch.Tensor) for value in inputs.values()):
-            raise InterventionError("tokenizer output values must be tensors")
         return inputs
 
     def _identity(self):
@@ -755,11 +755,11 @@ class Intervention:
             layer = self.probe.layer
             dictionary = self.service.dictionary
             weights = dictionary.layers[layer]
-            x = live_input[b, p].to(device=weights.W_enc.device, dtype=weights.W_enc.dtype)
-            activation = dictionary.encode(layer, x)[..., self.spec["feature"]]
+            x = live_input[b, p].to(device=weights.W_enc.device)
+            activation = _trace_features(weights, x, self.service.resource_guard)[..., self.spec["feature"]]
             amount = ((self.spec["multiplier"] - 1) * activation if kind == "scale" else
                       self.spec["value"] - activation)
-            decoder = weights.W_dec[self.spec["feature"]]
+            decoder = weights.W_dec[self.spec["feature"]].to(x.dtype)
             delta = (amount.unsqueeze(-1) * decoder).to(device=value.device, dtype=value.dtype)
             changed = selected + delta
         else:

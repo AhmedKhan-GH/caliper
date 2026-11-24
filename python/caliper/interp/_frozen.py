@@ -54,16 +54,21 @@ def _finite_max(values, name):
     return largest
 
 
-def _trace_features(layer, x, guard, check=_no_check):
-    """Evaluate TopK in model precision without a converted dictionary copy."""
+def _trace_features(layer, x, guard=None, check=_no_check):
+    """Encode features in live input precision with bounded weight copies.
+
+    Storage precision defines the weight values. Live input precision defines
+    encoder arithmetic and TopK identity in hooks, traces, and validation.
+    """
     if layer.W_enc.dtype == x.dtype and layer.b_enc.dtype == x.dtype:
-        return layer.encode(x).detach()
+        return layer.encode(x)
     latents, width = layer.W_enc.shape
     rows = max(1, _ENCODER_BLOCK_ELEMENTS // width)
     preactivation = x.new_empty(*x.shape[:-1], latents)
     for start in range(0, latents, rows):
         with autorelease_scope(x.device):
-            guard.check("dictionary encoder block")
+            if guard is not None:
+                guard.check("dictionary encoder block")
             check("dictionary encoder block")
             stop = min(start + rows, latents)
             preactivation[..., start:stop] = F.linear(
@@ -591,8 +596,10 @@ class FrozenPath:
                         self.guard.check("edited dictionary decoder rows")
                         rows = layer.W_dec.detach()[output.indices].to(self.dtype)
                         decoded = torch.einsum("tk,tkw->tw", output.activations, rows)[None]
-                    # Untouched outputs must not label arithmetic roundoff as an intervention.
-                    offset = y - decoded - decoder_bias - error if output_specs else torch.zeros_like(y)
+                    # Only external vector writes need an output constant. Feature edits
+                    # already have affine coefficients and constants in FrozenFeatures.
+                    external = any(s["op"] in ("add", "patch") for s in output_specs)
+                    offset = y - decoded - decoder_bias - error if external else torch.zeros_like(y)
                     self.inputs.append(x)
                     self.outputs.append(y)
                     self.features.append(transformed)

@@ -574,7 +574,7 @@ def test_feature_encoder_failure_preserves_forward_and_ends_hook(controlled, mon
     def fail(*args):
         raise RuntimeError("fixture encoder failure")
 
-    monkeypatch.setattr(service.dictionary, "encode", fail)
+    monkeypatch.setattr(service.dictionary.layers[0], "encode", fail)
     torch.testing.assert_close(model(ids).logits, baseline, rtol=0, atol=0)
     assert hook.removed and ctl.summary()["interventions"][0]["state"] == "ended"
     torch.testing.assert_close(model(ids).logits, baseline, rtol=0, atol=0)
