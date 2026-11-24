@@ -118,9 +118,10 @@ def test_gemma_hidden_forward_preserves_masks_without_head_projection(monkeypatc
 
 def mock_gemma_load(tmp_path, monkeypatch, *, info=None):
     import huggingface_hub
-    import transformers
     model = gemma_model()
     snapshot = local_gemma(tmp_path, model)
+    # Fixture imports can replace the lazy module. Patch its current instance.
+    import transformers
     calls = []
 
     def cached(repo, *, revision, local_files_only):

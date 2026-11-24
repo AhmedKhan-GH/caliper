@@ -17,15 +17,21 @@ MODEL_ID = "Qwen/Qwen3.5-0.8B"
 MODEL_REVISION = "2fc06364715b967f1860aea9cf38778875588b17"
 
 
-def load_text_model(*, device="mps", memory=None, model_id=MODEL_ID):
+def load_text_model(*, device="mps", memory=None, model_id=MODEL_ID, mode="inference"):
     """Load only the text class from the complete cached snapshot.
 
     Transformers resolves the shard index. It applies the same prefix mapping
     as the lead preflight. Missing, unexpected, and mismatched keys are errors.
+    Qwen inference has a 12 GB ceiling. Explicit Qwen training uses 24 GB.
+    Gemma inference uses 28 GB. Supplied lower limits remain active.
     """
     if model_id not in (MODEL_ID, GEMMA_ID):
         raise ValueError("unsupported text model selection")
-    ceiling = 28 if model_id == GEMMA_ID else 12
+    if mode not in ("inference", "training"):
+        raise ValueError("unsupported text model load mode")
+    if mode == "training" and model_id != MODEL_ID:
+        raise ValueError("training mode requires the Qwen text model")
+    ceiling = 24 if mode == "training" else 28 if model_id == GEMMA_ID else 12
     memory = MemoryGuard(ceiling, device) if memory is None else BudgetMemory(memory, ceiling)
     if _canonical_device(memory.device) != _canonical_device(device):
         raise ValueError("text model requires a memory guard for its device")
