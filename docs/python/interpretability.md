@@ -34,9 +34,19 @@ The manifest records model identity, probe points, dimensions, activation type, 
 An explicit `model_hash` can supply the expected identity instead.
 The loader refuses an absent identity or a mismatch.
 Its `memory_limit_gb` argument caps total process memory at 12 GB by default and refuses larger limits.
-Header checks precede allocation, and memory admission includes the model, dictionary, and conversion buffers.
+The loader admits metadata before the read and JSON parse.
+Metadata has a 1 MiB byte limit and a maximum depth of 64 containers.
+
+Header checks precede tensor allocation, and memory admission includes the model, dictionary, metadata, and conversion buffers.
 The returned object exposes `encode(layer, x)`, `decode(layer, a)`, and `error(layer, x, y)`.
 Its `metadata` contains the manifest, and its `layers` contain the weights.
+
+An external HF model requires `caliper.interp.verify_hf_model(model, snapshot)` before admission against a pinned HF dictionary.
+The local snapshot must contain the checkpoint tensors and `config.json` for the same repository and commit.
+Verification compares weights and forward settings with that trusted snapshot, including normalization epsilon, activation functions, rotary settings, and layer types.
+The model must use evaluation mode.
+Eager and SDPA attention are supported backend choices and preserve the checkpoint identity.
+Later identity checks refuse changes to weights or forward settings, including changes before dictionary admission or tracer construction.
 
 Each encoder and decoder has shape `(latents, width)`.
 TopK encoding applies ReLU, then retains the largest `k` feature activations.

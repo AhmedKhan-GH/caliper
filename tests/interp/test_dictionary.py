@@ -286,7 +286,9 @@ def test_oversized_headers_refuse_before_tensor_or_device_allocation(
     tmp_path, monkeypatch, latents, stored_dtype, dtype,
 ):
     data, calls = header_only_dictionary(tmp_path, monkeypatch, latents=latents, stored_dtype=stored_dtype)
-    monkeypatch.setattr(_dictionary, "MemoryGuard", lambda *_: pytest.fail("device setup ran"))
+    guard = _dictionary.MemoryGuard
+    monkeypatch.setattr(_dictionary, "MemoryGuard", lambda limit, device:
+                        guard(limit, device) if device == "cpu" else pytest.fail("device setup ran"))
     monkeypatch.setattr(torch.Tensor, "to", lambda *_a, **_k: pytest.fail("tensor conversion ran"))
     with pytest.raises(CleanStop, match="memory limit"):
         load_dictionary(tmp_path, model_hash=data["model_hash"], dtype=dtype, device="mps")
@@ -305,7 +307,8 @@ def test_qwen_header_envelopes_fit_without_materialization(
 
     def record(memory, required, stage):
         admission(memory, required, stage)
-        admitted.append(required)
+        if stage != "dictionary_metadata_admission":
+            admitted.append(required)
 
     monkeypatch.setattr(_dictionary, "_admit", record)
     # The header mock stops at the first tensor request after full admission.
@@ -347,12 +350,13 @@ def test_explicit_cap_reserves_conversion_copies(tmp_path, memory_readers):
     assert converted
     assert destination == 1120
     assert temporary == 2240 + 512 + 2560
+    metadata_bytes = _dictionary._metadata_budget((tmp_path / "dictionary.json").stat().st_size)
     with pytest.raises(CleanStop, match="memory limit"):
         load_dictionary(tmp_path, model_hash=data["model_hash"], dtype=torch.float32,
                         memory_limit_gb=(10_000 + 2 * destination) / 1e9)
     dictionary = load_dictionary(
         tmp_path, model_hash=data["model_hash"], dtype=torch.float32,
-        memory_limit_gb=(10_000 + 2 * destination + temporary + 1) / 1e9,
+        memory_limit_gb=(10_000 + metadata_bytes + 2 * destination + temporary + 1) / 1e9,
     )
     for layer, block in zip(dictionary.layers, model.layers):
         for name, value in block.mlp.named_parameters():
@@ -426,3 +430,116 @@ def test_conversion_releases_sources_and_rechecks_memory_between_layers(tmp_path
                         memory_limit_gb=0.001)
     assert reads == [("layer_00.safetensors", name) for name in _dictionary._WEIGHTS]
     assert all(reference() is None for reference in sources)
+
+
+def forbid_metadata_consumers(monkeypatch):
+    import safetensors
+
+    monkeypatch.setattr(_dictionary.json, "loads", lambda *_a, **_k: pytest.fail("JSON parser ran"))
+    monkeypatch.setattr(safetensors, "safe_open", lambda *_a, **_k: pytest.fail("tensor header access ran"))
+
+
+def forbid_metadata_read(monkeypatch):
+    from contextlib import contextmanager
+    from pathlib import Path
+
+    original = Path.open
+
+    @contextmanager
+    def open_source(path, *args, **kwargs):
+        with original(path, *args, **kwargs) as source:
+            yield SimpleNamespace(fileno=source.fileno,
+                                  read=lambda *_: pytest.fail("metadata byte allocation ran"))
+
+    monkeypatch.setattr(Path, "open", open_source)
+
+
+def test_metadata_size_refuses_before_read_parse_or_headers(tmp_path, monkeypatch):
+    import stat
+
+    (tmp_path / "dictionary.json").write_text("{}")
+    # Report a large size without an oversized file, string, or sparse fixture.
+    monkeypatch.setattr(_dictionary.os, "fstat", lambda _: SimpleNamespace(st_mode=stat.S_IFREG, st_size=2**32))
+    forbid_metadata_consumers(monkeypatch)
+    forbid_metadata_read(monkeypatch)
+    with pytest.raises(CleanStop, match="metadata exceeds the byte limit"):
+        load_dictionary(tmp_path, model_hash="unused", memory_limit_gb=1)
+
+
+def test_metadata_reserve_refuses_before_read_parse_or_headers(tmp_path, monkeypatch, memory_readers):
+    path = tmp_path / "dictionary.json"
+    path.write_text('{"extra":"small"}')
+    reserve = _dictionary._metadata_budget(path.stat().st_size)
+    memory_readers["footprint"] = 1_000_000_000 - reserve + 1
+    forbid_metadata_consumers(monkeypatch)
+    forbid_metadata_read(monkeypatch)
+    with pytest.raises(CleanStop, match="process memory limit"):
+        load_dictionary(tmp_path, model_hash="unused", memory_limit_gb=1)
+
+
+def test_metadata_nesting_refuses_before_parse_or_headers(tmp_path, monkeypatch):
+    (tmp_path / "dictionary.json").write_text('{"extra":' + '[' * 64 + '0' + ']' * 64 + '}')
+    forbid_metadata_consumers(monkeypatch)
+    with pytest.raises(CleanStop, match="nesting limit"):
+        load_dictionary(tmp_path, model_hash="unused")
+
+
+def test_metadata_growth_refuses_with_bounded_read(tmp_path, monkeypatch):
+    import stat
+    from contextlib import contextmanager
+    from pathlib import Path
+
+    (tmp_path / "dictionary.json").write_text('{"extra":"append"}')
+    monkeypatch.setattr(_dictionary.os, "fstat", lambda _: SimpleNamespace(st_mode=stat.S_IFREG, st_size=2))
+    original = Path.open
+    reads = []
+
+    @contextmanager
+    def open_source(path, *args, **kwargs):
+        with original(path, *args, **kwargs) as source:
+            def read(size):
+                reads.append(size)
+                return source.read(size)
+            yield SimpleNamespace(fileno=source.fileno, read=read)
+
+    monkeypatch.setattr(Path, "open", open_source)
+    forbid_metadata_consumers(monkeypatch)
+    with pytest.raises(ValueError, match="size changed"):
+        load_dictionary(tmp_path, model_hash="unused")
+    assert reads == [3]
+
+
+def test_metadata_budget_remains_in_tensor_admission(tmp_path, memory_readers, monkeypatch):
+    import safetensors
+
+    model, data = write_fixture(tmp_path, TinyLM(layers=1, width=8, heads=2, latents=16, k=2))
+    data["extra"] = '["escaped brackets\\\\\\"' * 8
+    path = tmp_path / "dictionary.json"
+    path.write_text(json.dumps(data))
+    reserve = _dictionary._metadata_budget(path.stat().st_size)
+    # Metadata fits alone, but the retained object and the tensors do not fit together.
+    memory_readers.update(footprint=10_000, resident=10_000)
+    original = safetensors.safe_open
+
+    class HeadersOnly:
+        def __init__(self, *args, **kwargs):
+            self.source = original(*args, **kwargs)
+
+        def __enter__(self):
+            source = self.source.__enter__()
+            return SimpleNamespace(keys=source.keys, get_slice=source.get_slice,
+                                   get_tensor=lambda *_: pytest.fail("tensor allocation ran"))
+
+        def __exit__(self, *args):
+            self.source.__exit__(*args)
+
+    monkeypatch.setattr(safetensors, "safe_open", HeadersOnly)
+    with pytest.raises(CleanStop, match="process memory limit"):
+        load_dictionary(tmp_path, model_hash=data["model_hash"], memory_limit_gb=(10_000 + reserve + 1) / 1e9)
+
+
+def test_metadata_depth_ignores_escaped_string_contents(tmp_path):
+    model, data = write_fixture(tmp_path, TinyLM(layers=1, width=8, heads=2, latents=16, k=2))
+    data["extra"] = '["\\]' * 100
+    (tmp_path / "dictionary.json").write_text(json.dumps(data))
+    assert load_dictionary(tmp_path, model_hash=data["model_hash"]).metadata == data

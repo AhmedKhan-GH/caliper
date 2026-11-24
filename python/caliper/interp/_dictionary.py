@@ -4,9 +4,11 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
 from dataclasses import dataclass
+import stat
 import weakref
 
 import torch
@@ -22,6 +24,8 @@ _DTYPES = {torch.float16, torch.bfloat16, torch.float32, torch.float64}
 _STORED_DTYPES = {"F16": torch.float16, "BF16": torch.bfloat16,
                   "F32": torch.float32, "F64": torch.float64}
 _FINITE_CHUNK_ELEMENTS = 65_536
+_MAX_METADATA_BYTES = 1024 * 1024
+_MAX_METADATA_DEPTH = 64
 
 
 # One digest chunk retains at most one CPU copy and one byte view.
@@ -155,8 +159,8 @@ def model_identity(model, *, memory_limit_gb=None):
 
     Configuration fields never prove weights. A trusted local load supplies the
     baseline for weights and forward settings. Every later check reads all weights
-    in fixed-size chunks, including changes through ``.data`` aliases. A device or large external model requires
-    ``verify_hf_model`` before it can use a pinned HF dictionary.
+    in fixed-size chunks, including changes through ``.data`` aliases. A device or
+    large external model requires ``verify_hf_model`` before it can use a pinned HF dictionary.
     """
     config = getattr(model, "config", None)
     if getattr(config, "model_type", None) == "caliper_tiny" or config is None:
@@ -263,14 +267,12 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None
         raise ValueError("checkpoint verification requires one model device")
     memory = MemoryGuard(memory_limit_gb, next(iter(devices)))
     _hash_admission(memory)
-    with (snapshot / "config.json").open("rb") as source:
-        config_bytes = source.read(1024 * 1024 + 1)
-    if len(config_bytes) > 1024 * 1024:
-        raise ValueError("checkpoint config exceeds the metadata byte limit")
-    config_data = json.loads(config_bytes)
+    config_data, _ = _read_metadata(snapshot / "config.json", memory)
     settings = checkpoint_settings(model, config_data, tensor_hash=_state_hash)
-    current_settings = lambda: forward_settings(
-        model, tensor_hash=lambda state: _state_hash(state, memory=memory))
+
+    def current_settings():
+        return forward_settings(model, tensor_hash=lambda state: _state_hash(state, memory=memory))
+
     if current_settings() != settings:
         raise ValueError("model forward settings differ from the local checkpoint")
     mapping, excluded = _checkpoint_subset(model, identity, checkpoint_subset, key_mapping)
@@ -483,6 +485,57 @@ def _reject_constant(value):
     raise ValueError(f"nonfinite dictionary metadata: {value}")
 
 
+def _metadata_budget(size):
+    # Reserve raw bytes, Unicode decode, parser containers, and retained objects.
+    # Small JSON values have much more Python overhead than their source bytes.
+    return 4096 + 64 * (size + 1)
+
+
+def _metadata_depth(raw):
+    """Bound parser recursion before JSON object allocation, with no token copies."""
+    depth, quoted, escaped = 0, False, False
+    for value in raw:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif value == 92:
+                escaped = True
+            elif value == 34:
+                quoted = False
+        elif value == 34:
+            quoted = True
+        elif value in (91, 123):
+            depth += 1
+            if depth > _MAX_METADATA_DEPTH:
+                raise CleanStop("dictionary metadata exceeds the nesting limit")
+        elif value in (93, 125):
+            depth -= 1
+
+
+def _read_metadata(path, memory):
+    """Admit bounded UTF-8 metadata before the read and JSON parser allocation."""
+    if not stat.S_ISREG(path.stat().st_mode):
+        raise ValueError("dictionary metadata requires a regular file")
+    with path.open("rb") as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("dictionary metadata requires a regular file")
+        if info.st_size > _MAX_METADATA_BYTES:
+            raise CleanStop("dictionary metadata exceeds the byte limit")
+        reserve = _metadata_budget(info.st_size)
+        _admit(memory, reserve, "dictionary_metadata_admission")
+        # A concurrent append cannot turn this into an unbounded read.
+        raw = source.read(info.st_size + 1)
+        if len(raw) != info.st_size:
+            raise ValueError("dictionary metadata size changed during the read")
+    _metadata_depth(raw)
+    data = json.loads(raw.decode("utf-8"), parse_constant=_reject_constant)
+    if not isinstance(data, dict):
+        raise ValueError("dictionary metadata requires an object")
+    memory.check("dictionary_metadata_parsed")
+    return data, reserve
+
+
 def _layer_header(source, index, shapes, dtype):
     if set(source.keys()) != set(_WEIGHTS):
         raise ValueError(f"dictionary layer {index} has unexpected tensor names")
@@ -542,8 +595,10 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
     """Load a matching dictionary within a total process limit of at most 12 GB.
 
     ``memory_limit_gb`` uses decimal GB and includes current process/model memory,
-    destination weights, and temporary conversion storage. All headers pass byte
-    admission before tensor materialization. Resource refusal raises ``CleanStop``.
+    destination weights, metadata, and temporary conversion storage. Metadata has
+    a 1 MiB byte cap and 64 nesting levels. Admission precedes its read and parse.
+    All headers pass byte admission before tensor materialization.
+    Resource refusal raises ``CleanStop``.
     An external HF model requires ``verify_hf_model(model, snapshot)`` to match a
     pinned HF manifest. The snapshot is a trusted local safetensors checkpoint.
     """
@@ -560,8 +615,10 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
     if model_hash is not None and actual != model_hash:
         raise ValueError("supplied model and expected model_hash differ")
     folder = Path(path)
-    data = _manifest(json.loads((folder / "dictionary.json").read_text(encoding="utf-8"),
-                                parse_constant=_reject_constant))
+    # Metadata admission needs no device initialization or tensor header access.
+    metadata_memory = MemoryGuard(memory_limit_gb, "cpu")
+    data, metadata_bytes = _read_metadata(folder / "dictionary.json", metadata_memory)
+    data = _manifest(data)
     fallback = fallback_metadata(data)
     zero_layers = set(fallback["zero_layers"]) if fallback else set()
     if actual != data["model_hash"]:
@@ -596,13 +653,13 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
         budgets.append(_layer_bytes(stored, shapes, device, dtype))
     remaining = sum(budget[0] for budget in budgets)
     temporary = max(budget[1] for budget in budgets)
-    if remaining + temporary > int(memory_limit_gb * 1_000_000_000):
+    if metadata_memory.peak + metadata_bytes + remaining + temporary > int(memory_limit_gb * 1_000_000_000):
         raise CleanStop("dictionary allocation exceeds the process memory limit")
     memory = MemoryGuard(memory_limit_gb, device)
-    _admit(memory, remaining + temporary, "dictionary_admission")
+    _admit(memory, metadata_bytes + remaining + temporary, "dictionary_admission")
     layers = []
     for index in range(data["layers"]):
-        _admit(memory, remaining + temporary, f"dictionary_layer_{index}")
+        _admit(memory, metadata_bytes + remaining + temporary, f"dictionary_layer_{index}")
         tensors = {}
         with autorelease_scope(device), safe_open(
             folder / f"layer_{index:02d}.safetensors", framework="pt", device="cpu",
