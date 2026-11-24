@@ -2206,14 +2206,28 @@ class Controls:
                     changed = True
                 with (self._outside_lock(), m.executor._retire_sources(
                         self._boundary_retirements(records, step))):
-                    prepared, reports = self._prepare_interventions(m, records, originals, step)
-                    if prepared is None:
-                        for message in reports:
-                            warnings.warn(message, RuntimeWarning, stacklevel=2)
-                        return points_changed or completed, False
-                    changed = prepared or changed
+                    prepared, reports, refused = self._prepare_interventions(m, records, originals, step)
                 if self._iv_model is not m or self._iv_revision != revision:
                     return points_changed or completed, False
+                if prepared is None:
+                    # Resolve the failed request against its unchanged revision.
+                    # Keep the valid effect and publish the refusal through existing fields.
+                    retained = copy(previous[refused])
+                    retained.spec = retained.applied_spec
+                    retained.from_step = retained.spec.get("from_step")
+                    retained.until_step = retained.spec.get("until_step")
+                    retained.replace = False
+                    retained.error, retained.error_code = records[refused].error, records[refused].error_code
+                    self._check_metadata_budget(ivs={**self._ivs, refused: retained})
+                    for field in _Intervention.__slots__:
+                        setattr(originals[refused], field, getattr(retained, field))
+                    self._iv_revision += 1
+                    with self._outside_lock():
+                        for message in reports:
+                            warnings.warn(message, RuntimeWarning, stacklevel=2)
+                    # Roll back speculative hooks and cache, then admit actions next pass.
+                    return True, False
+                changed = prepared or changed
                 self._check_metadata_budget(ivs=records)
                 for key, iv in originals.items():
                     if key not in records:
@@ -2305,7 +2319,7 @@ class Controls:
         try:
             with (self._outside_lock(), m.executor._retire_sources(
                     self._boundary_retirements(records, step))):
-                prepared, reports = self._prepare_interventions(m, records, originals, step)
+                prepared, reports, _ = self._prepare_interventions(m, records, originals, step)
             if self._iv_model is not m:
                 return changed, True
             if prepared is None:
@@ -2367,7 +2381,7 @@ class Controls:
         return retired
 
     def _prepare_interventions(self, m, records, originals, s):
-        """Build the next hook sequence without changes to the published records."""
+        """Return the change flag, reports, and failed replacement key for speculative hooks."""
         from .interp._memory import CleanStop
 
         changed = False
@@ -2411,7 +2425,7 @@ class Controls:
                     reports.append(f"caliper: the intervention at {iv.point!r} failed: {iv.error}")
                     if originals[key].hook is not None:
                         # A replacement failure rolls back the complete hook sequence.
-                        return None, reports
+                        return None, reports, key
             if not on:
                 iv.hook, iv.applied_spec = None, None
             state = IV_ACTIVE if on else IV_ENDED if ended else IV_PENDING
@@ -2421,7 +2435,7 @@ class Controls:
                 changed = True
                 if failed:
                     reports.append(f"caliper: the intervention at {iv.point!r} failed and ended: {iv.error}")
-        return changed, reports
+        return changed, reports, None
 
     # -- messages ------------------------------------------------------------------
     def _run_obj(self) -> dict:

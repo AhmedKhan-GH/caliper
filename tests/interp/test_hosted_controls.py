@@ -74,6 +74,72 @@ def test_slider_conflict_defers_generate_and_follower_for_the_whole_pass(hosted_
     assert completed == [1] and len(route.transport.replies) == 2
 
 
+@pytest.mark.parametrize("resource_stop", [False, True])
+def test_hosted_replacement_refusal_and_resource_stop_have_distinct_outcomes(hosted_run, resource_stop):
+    from caliper.interp._memory import CleanStop
+
+    run, route = hosted_run
+    old = {"kind": "patch", "point": "layers.1.resid_pre", "source_prompt": "AB"}
+    run.interventions.set(old)
+    run.boundary()
+    record = run.controls._ivs[(old["point"], "patch")]
+    hook, specification = record.hook, record.applied_spec
+    cache = dict(run.interventions.executor._cache)
+    identity = run.interventions.executor._cache_identity
+    attempts, recovered = [], []
+    failure = CleanStop("source resource stop") if resource_stop else RuntimeError("source refusal")
+
+    def fail(*args):
+        if run.interventions.executor.preparing_source:
+            attempts.append(1)
+            raise failure
+
+    def recover():
+        run.interventions.clear(old["point"])
+        run._apply()
+        recovered.append(1)
+
+    run.actions.append(run.controls.action("recover", recover))
+    run.interventions.set(dict(old, source_prompt="AC"))
+    _queue_action(route, "recover", 1)
+    _queue_action(route, "generate", 2)
+    _queue_action(route, "generate", 3)
+    observer = run.model.register_forward_pre_hook(fail)
+    try:
+        if resource_stop:
+            with pytest.raises(CleanStop) as caught:
+                run.boundary()
+            assert caught.value is failure and run.service.failure is failure
+            assert record.replace and record.spec["source_prompt"] == "AC" and record.error is None
+            replies = route.transport.replies
+            assert [(reply.request_id, reply.status) for reply in replies] == [(1, "error"), (2, "error"), (3, "error")]
+            assert all(reply.error == {"code": "action_failed", "message": "source resource stop"}
+                       for reply in replies)
+            with pytest.raises(CleanStop) as repeated:
+                run.boundary()
+            assert repeated.value is failure and len(replies) == 3 and not run.controls.queue
+        else:
+            with pytest.warns(RuntimeWarning, match="source refusal"):
+                run.boundary()
+            assert not record.replace and record.spec == specification
+            assert record.error_code == "intervene.hook_failed" and run.service.failure is None
+            assert not route.transport.replies
+        assert not recovered and run.inference_status()["generation"]["id"] == 0
+        assert record.hook is hook and record.applied_spec is specification and not hook.removed
+        assert run.interventions.executor._cache_identity is identity
+        assert list(run.interventions.executor._cache) == list(cache)
+        assert all(run.interventions.executor._cache[key] is value for key, value in cache.items())
+        if not resource_stop:
+            run.boundary()
+            assert recovered == [1] and hook.removed and not run.interventions.specifications()
+            assert [(reply.request_id, reply.status) for reply in route.transport.replies] == [(1, "ok"), (2, "ok"), (3, "ok")]
+            assert run.inference_status()["generation"]["id"] == 1
+            assert not run.controls.queue
+        assert attempts == [1]
+    finally:
+        observer.remove()
+
+
 @pytest.mark.parametrize("refusal", ["selection", "maximum", "intervention", "row", "prompt"])
 def test_refused_slider_edit_cannot_clamp_a_later_selection(hosted_run, monkeypatch, refusal):
     run, route = hosted_run
