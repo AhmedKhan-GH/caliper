@@ -86,7 +86,7 @@ def test_separate_index_admission_stop_reaches_hosted_owner(hosted_run, monkeypa
     from caliper import _wire
     run, route = hosted_run
     memory = guard()
-    memory.peak = memory.limit - 1
+    memory.footprint = lambda: memory.limit - 1
     run.index.memory = memory
     saved = []
     monkeypatch.setattr(run.managed, "checkpoint", lambda *args: saved.append(1))
@@ -94,7 +94,9 @@ def test_separate_index_admission_stop_reaches_hosted_owner(hosted_run, monkeypa
     reply = route.on_control(None, _wire.Control(7, "interpret", interpretation={"version": 1,
         "method": "feature.examples", "params": {"layer": 0, "feature": feature}}).to_meta())
     assert reply["status"] == "queued"
+    # One real boundary suffices. A missing stop must fail instead of entering
+    # the hosted idle loop and leaving this regression unbounded.
     with pytest.raises(CleanStop, match="example allocation") as caught:
-        run.run()
+        run.boundary()
     assert run._failure is caught.value and saved == [1]
     assert route.transport.replies[-1].error["code"] == "interpret.stopped"
