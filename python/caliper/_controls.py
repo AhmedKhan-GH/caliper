@@ -1185,7 +1185,36 @@ class Controls:
         self._npending = 0
         return True
 
+    def _resource_stop(self, error) -> bool:
+        service = self.interpretation_service
+        return service is not None and isinstance(error, getattr(service, "stop_exception", ()))
+
+    def _raise_resource_stop(self) -> None:
+        failure = getattr(self.interpretation_service, "failure", None)
+        if failure is not None:
+            raise failure
+
     def _service(self) -> None:
+        """End queued actions when an interpretation resource stop reaches the owner."""
+        try:
+            self._raise_resource_stop()
+            self._service_work()
+        except Exception as error:
+            if self._resource_stop(error):
+                self.interpretation_service.stop(error, self.n)
+                with self.lock:
+                    pending = []
+                    while self.queue:
+                        action = self.queue.popleft()
+                        pending.append((action, action.waiters))
+                        action.queued, action.waiters = False, []
+                    self._update_busy()
+                self._publish()
+                for action, waiters in pending:
+                    self._action_replies(action, waiters, False, _cut(str(error), TEXT_MAX))
+            raise
+
+    def _service_work(self) -> None:
         """Set pending values and interventions, then run the queued actions in order."""
         controllers = self._controllers_due()
         with self.lock:
@@ -1193,9 +1222,11 @@ class Controls:
             changed = self._apply_interventions(controllers) or changed
         if changed:
             self._publish()
+        self._raise_resource_stop()
         if self.interpretation_service is not None:
             self.interpretation_service.step(self.n)
         while True:
+            self._raise_resource_stop()
             with self.lock:
                 if not self.queue:
                     return
@@ -1204,25 +1235,35 @@ class Controls:
                 waiters, a.waiters = a.waiters, []
                 self._update_busy()
             self._publish()
-            ok, text = self._run_action(a)
-            with self.lock:
-                a.running = False
-            self._publish()
-            w = _w()
-            for route, conn, rid in waiters:
-                if ok:
-                    meta = w.ControlReply(rid, w.OP_RUN, w.STATUS_OK, a.name,
-                                          message=text or None).to_meta()
-                else:
-                    meta = w.ControlReply(rid, w.OP_RUN, w.STATUS_ERROR, a.name, error={
-                        "code": w.ERR_ACTION_FAILED, "message": text}).to_meta()
-                route._reply(conn, meta)
+            try:
+                ok, text = self._run_action(a)
+                self._raise_resource_stop()
+            except BaseException as error:
+                if self._resource_stop(error):
+                    self.interpretation_service.stop(error, self.n)
+                    self._action_replies(a, waiters, False, _cut(str(error), TEXT_MAX))
+                raise
+            finally:
+                with self.lock:
+                    a.running = False
+                self._publish()
+            self._action_replies(a, waiters, ok, text)
+
+    def _action_replies(self, action, waiters, ok, text):
+        w = _w()
+        for route, conn, rid in waiters:
+            meta = w.ControlReply(rid, w.OP_RUN, w.STATUS_OK if ok else w.STATUS_ERROR, action.name,
+                message=(text or None) if ok else None,
+                error=None if ok else {"code": w.ERR_ACTION_FAILED, "message": text}).to_meta()
+            route._reply(conn, meta)
 
     def _run_action(self, a: Action):
         self.counters["actions_run"] += 1
         try:
             r = a.fn()
         except Exception as e:
+            if self._resource_stop(e):
+                raise
             text = _cut(f"{type(e).__name__}: {e}", TEXT_MAX)
             warnings.warn(f"caliper: action {a.name!r} raised {text}", RuntimeWarning,
                           stacklevel=2)
@@ -1533,6 +1574,8 @@ class Controls:
         reply = None
         timer = None
         with self.lock:
+            if getattr(self.interpretation_service, "failure", None) is not None:
+                return error("interpret.stopped", "The interpretation run stopped.")
             if op in (w.OP_PAUSE, w.OP_STEP) and self.state == RUN_NONE:
                 return error(w.ERR_UNSUPPORTED, "the script has called no checkpoint "
                                                 "(caliper.step()) yet")
@@ -1932,6 +1975,10 @@ class Controls:
                     self._install_intervention(m, iv, iv.spec)
                     reinstall = True
                 except Exception as e:
+                    if self._resource_stop(e):
+                        self._unhook(iv)
+                        iv.state = IV_ENDED
+                        raise
                     iv.error = f"{type(e).__name__}: {e}"[:TEXT_MAX]
                     iv.error_code = "intervene.hook_failed"
                     ended, on = True, False
